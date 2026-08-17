@@ -1,7 +1,7 @@
 # Signed Path-Tree Denial Implementation Review
 
 This guide covers implementation commit
-`6a0f389e430bcc366439af2233be40239f035dd9`. The commit is based on the
+`d38248f70c9f3180fbcd2ecd54ea43fe6304d23b`. The commit is based on the
 policy definition in `4875862804b64c003927b60e634b7989dd3897f7`.
 
 The design source is the
@@ -11,6 +11,8 @@ The external algorithm source is the
 SHA-256 is
 `81dca098d1ed96e19fd89b48b78be63c504f9f52f9f25b662e4a94c14a5209f6`.
 Slides 16 through 21 describe the Meta mount and dentry walk.
+Berkeley Packet Filter (BPF) programs run the kernel checks. Linux Security
+Module (LSM) hooks call the BPF programs before the covered effects.
 
 ## Review route
 
@@ -34,15 +36,15 @@ Read the implementation in this order:
    activation.
 5. Read
    [`canonical_mount_cache_build_step`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L304),
-   [`canonical_mount_path_walk_step`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L524),
+   [`canonical_mount_path_walk_step`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L522),
    and
-   [`collect_mount_components`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L610).
+   [`collect_mount_components`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L608).
    These functions inspect the task's live mount namespace, select the oldest
    mount, and walk from the leaf to the namespace root.
 6. Read
-   [`canonical_path_match_step`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L742)
+   [`canonical_path_match_step`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L741)
    and
-   [`canonical_path_candidate`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L811).
+   [`canonical_path_candidate`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L810).
    These functions reverse the collected components and traverse only the
    task's active profile generation.
 7. Read
@@ -51,8 +53,10 @@ Read the implementation in this order:
 8. Read
    [`path_tree_deny_uses_the_live_bpf_mount_path_before_object_lookup`](../../../crates/erebor-interceptor/src/bundled.rs#L500)
    and
-   [`EffectTestRunner::physical_probe`](../../../crates/mithril-e2e/src/effect.rs#L704).
-   These tests check the source order and the physical result.
+   [`bpf_path_walks_use_meta_component_and_namespace_budgets`](../../../crates/erebor-interceptor/src/bundled.rs#L1217).
+   These tests check decision order and the compiled BPF loop limits.
+9. Read [`EffectTestRunner::physical_probe`](../../../crates/mithril-e2e/src/effect.rs#L705).
+   This test checks the physical result at the 255-component limit.
 
 ## Implemented result
 
@@ -91,13 +95,13 @@ source.
 
 | Meta property | Implementation | Review source |
 | --- | --- | --- |
-| Walk from the target leaf toward the head. | BPF records `d_name` and follows `d_parent` until the current mount root. | [`canonical_mount_path_walk_step`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L524) |
+| Walk from the target leaf toward the head. | BPF records `d_name` and follows `d_parent` until the current mount root. | [`canonical_mount_path_walk_step`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L522) |
 | Resolve repeated mount roots through the oldest mount. | BPF scans `mnt_namespace.mounts` and retains the lowest nonzero `mnt_id_unique` for each root dentry. | [`canonical_mount_cache_build_step`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L304) |
-| Continue across mount boundaries. | At a mount root, BPF uses the selected mount's `mnt_parent` and `mnt_mountpoint`. | [`canonical_mount_path_walk_step`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L524) |
-| Stop at the task's namespace root. | The walk succeeds only after the selected mount equals `mnt_namespace.root`. | [`collect_mount_components`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L610) |
-| Reverse leaf-first components before graph lookup. | The graph callback reads `component_count - offset - 1`. | [`canonical_path_match_step`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L742) |
-| Use a bounded component graph. | Rust determinizes the static graph. BPF holds one state ID and performs one exact lookup with one wildcard fallback per component. | [`CanonicalPathGraphV1::determinize`](../../../crates/mithril-control/src/policy/path.rs#L388), [`canonical_path_match_step`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L742) |
-| Reject a topology race. | BPF checks the global mutation epoch, pending count, namespace event, and mount count before and after cache construction and path collection. | [`ensure_canonical_mount_cache`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L387), [`collect_mount_components`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L610) |
+| Continue across mount boundaries. | At a mount root, BPF uses the selected mount's `mnt_parent` and `mnt_mountpoint`. | [`canonical_mount_path_walk_step`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L522) |
+| Stop at the task's namespace root. | The walk succeeds only after the selected mount equals `mnt_namespace.root`. | [`collect_mount_components`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L608) |
+| Reverse leaf-first components before graph lookup. | The graph callback reads `component_count - offset - 1`. | [`canonical_path_match_step`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L741) |
+| Use a bounded component graph. | Rust determinizes the static graph. BPF holds one state ID and performs one exact lookup with one wildcard fallback per component. | [`CanonicalPathGraphV1::determinize`](../../../crates/mithril-control/src/policy/path.rs#L388), [`canonical_path_match_step`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L741) |
+| Reject a topology race. | BPF checks the global mutation epoch, pending count, namespace event, and mount count before and after cache construction and path collection. | [`ensure_canonical_mount_cache`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L387), [`collect_mount_components`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L608) |
 
 The old split did not meet this table. Rust previously resolved the namespace
 mount chain and installed a graph prefix. BPF walked only from the leaf to the
@@ -270,21 +274,29 @@ engine, or userspace namespace helper.
 
 One per-CPU `identity_scratch_v1` value owns cache-build, path-walk, component,
 and graph-match state. `bpf_loop` callbacks receive only a pointer to this
-state. The checked object at commit `6a0f389` has these maximum stack offsets:
+state. The checked object at commit `d38248f` has these maximum stack offsets:
 
 | Function | Stack bytes |
 | --- | ---: |
-| `resolved_identity_effect_gate` | 328 |
+| `resolved_identity_effect_gate` | 264 |
 | `canonical_mount_cache_build_step` | 16 |
-| `canonical_mount_path_walk_step` | 16 |
+| `canonical_mount_path_walk_step` | 8 |
 | `canonical_path_match_step` | 0 |
 
-The deepest measured function leaves 184 bytes below the Linux 512-byte BPF
+The deepest measured function leaves 248 bytes below the Linux 512-byte BPF
 stack limit. The production object also loaded in the qualified VM.
 
-The bounds are 4,096 mounts, a 64-entry mount-tree traversal stack, 64 path
-components, and 255 bytes per component. A larger or malformed input fails
-closed. The bounds do not truncate to a valid path.
+The mount enumeration loop accepts at most 4,096 mounts. The red-black-tree
+scan stack accepts 255 entries. A 4,096-node Linux red-black tree has a maximum
+height below 25, so the scan stack does not reduce the mount-count limit. The
+path vector accepts 255 components of at most 255 bytes each. The combined
+live path walk accepts 4,351 callbacks. This count covers 4,096 mount steps and
+255 dentry steps. A larger or malformed input fails closed. The resolver does
+not truncate the input to a valid path.
+
+The scan stack and component vector each use one extra array slot for the
+verifier-safe `& 0xff` index. The semantic limit remains 255. The source has no
+separate 64-entry mount-depth constant and no duplicate path-walk limit.
 
 ## Map lifecycle
 
@@ -302,10 +314,19 @@ closed. The bounds do not truncate to a valid path.
 | `effect_observations` | Ring buffer of `EffectObservationV1`. | None. | BPF effect programs. | `EffectObservationReader` and `EffectObservationStore`. | Pinned with the object. Ring loss cannot change enforcement. |
 
 The graph maps and BPF caches are declared in
-[`identity_maps.h`](../../../bpf/erebor-interceptor/programs/identity_maps.h#L565).
-Generation retirement deletes the graph rows. The mount caches are
-policy-neutral live-kernel caches. Their keys include kernel namespace and
-mount-generation identity. Stale rows cannot match a new namespace event.
+[`identity_maps.h`](../../../bpf/erebor-interceptor/programs/identity_maps.h#L564).
+Generation retirement deletes exact transitions, wildcard transitions, and
+terminals for the retired generation. The
+[`generation_retirement_waits_for_async_io_authority`](../../../crates/mithril-node/src/policy.rs#L4071)
+test checks these three cleanup targets. The node does not delete policy rows
+while a task or asynchronous request retains the generation.
+
+The mount caches are policy-neutral live-kernel caches. Their keys include
+kernel namespace and mount-generation identity. An obsolete row cannot match
+a new namespace event. The hash map does not delete a row when an event
+changes. Obsolete rows remain until pin-root shutdown or map replacement. A
+full cache fails closed. Mount-cache churn and saturation remain an explicit
+qualification limit.
 
 A Berkeley Packet Filter filesystem (bpffs) pin keeps a map or link alive
 after the loader process exits. Generation retirement removes only the
@@ -327,7 +348,7 @@ an unresolved decision. It does not authorize from a stale address alone.
 [`retire_generation_rows`](../../../crates/mithril-node/src/policy.rs#L2656)
 removes the retired generation's exact transitions, wildcard transitions, and
 terminals after the generation has no retained authority. Cache rows are not
-generation rows. They remain bounded and policy-neutral.
+generation rows. They remain policy-neutral and bounded by map capacity.
 
 ## ABI boundary
 
@@ -354,24 +375,28 @@ typed identity or policy error before activation.
 | --- | --- |
 | `path_tree_rules_are_signed_denial_floors_only` | Checks the signed restriction boundary and rejects positive or ambiguous forms. |
 | `recursive_path_tree_deny_covers_the_root_and_descendants` | Checks the root, descendants, and outside path in the deterministic graph. |
+| `canonical_path_accepts_meta_depth_and_rejects_one_more` | Accepts 255 canonical components and rejects 256 components. |
 | `path_tree_floor_lowers_without_a_live_mount_view` | Checks that Rust lowers the floor with no exact object, mount namespace, or mount root row. |
 | `path_graph_rows_are_scoped_to_the_bound_generation` | Checks that two generations have disjoint graph keys. |
 | `exact_file_lookup_uses_the_bpf_selected_oldest_mount` | Checks BPF namespace filtering, minimum unique mount ID, cross-mount walk, and absence of the userspace mount-root map in path collection. |
 | `path_tree_deny_uses_the_live_bpf_mount_path_before_object_lookup` | Checks leaf-to-head collection, reversal, state-zero traversal, and decision order. |
+| `bpf_path_walks_use_meta_component_and_namespace_budgets` | Inspects the compiled object for the 255-component and 4,351-callback `bpf_loop` limits. It also checks the 255-entry scan-stack source bound. |
+| `generation_retirement_waits_for_async_io_authority` | Checks retained asynchronous authority and removal of all three generation-scoped path maps. |
 | Cross-architecture compile | The production object compiles with `-Wall -Werror` against checked x86, arm64, arm, and RISC-V kernel headers. This is not non-x86 physical proof. |
 | Repository Rust CI | `bash .github/scripts/verify-rust-ci.sh` passed for the implementation source. It ran formatting, workspace check, warnings-as-errors clippy, and the full workspace tests. |
-| Disposable VM | The full kernel, identity, observation, and protect harness passed at exact commit `6a0f389`. |
+| Disposable VM | The full kernel, identity, observation, and protect harness passed at exact commit `d38248f`. |
 
 The exact-commit VM evidence directory is
-`/tmp/mithril-path-tree-6a0f389`. The production BPF object SHA-256 is
-`b80388fcce6e6afeb73b700fc8b6f2e23322cce9858b41c3e4823af6dbdce204`.
+`/tmp/mithril-path-tree-d38248f`. The production BPF object SHA-256 is
+`edf9d9941e8bd3bbc8ec0a04f32e5fec1adc1571b8b1b508b8c4ab8a994d6943`.
 The platform was x86_64 Ubuntu with Linux `6.8.0-137-generic` and BPF in the
 active LSM order.
 
 The local-enforcement artifact SHA-256 is
-`951c12344e7c4a3199c10ff70d52289a058979b8e2f243e4306cf3e2fa74bd5e`.
+`fa91e8f1a3ee179285ec0d6ad7f592cc5a612d1d030d3f70ffefd9cec6898a3b`.
 It records these true results:
 
+- `path_tree_meta_depth_denied`
 - `path_tree_future_namespace_denied`
 - `path_tree_preexisting_child_denied`
 - `path_tree_later_child_denied`
