@@ -19,7 +19,7 @@ Completed-row evidence remains in the phase result and acceptance record:
 | `ENTRY-EXEC-002` | One direct CRI exec subcase. | Runner fixture and row JSON. |
 | `ENTRY-EXTERNAL-AMBIGUITY-001` | No fixture. | Concurrent indistinguishable-root case. |
 | `ENTRY-LOSS-001` | No fixture. | Independent runtime, audit, and entry-loss cases. |
-| `ENTRY-MIGRATE-001` | Namespace-only entry, cgroup move, and labeled native mount-namespace entry passed. | Protected-effect and restore cases. |
+| `ENTRY-MIGRATE-001` | Blocked. Namespace-only entry, cgroup movement, and labeled native mount-namespace entry passed. The Phase 2 identity owner has no effect permission table, so an unlabeled moved root is restricted but has no first-effect denial oracle. No owned restore operation exists. | Add a Phase-2-compatible first-effect and restore mechanism before adding the remaining fixture, VM result, and manual shell. |
 | `ENTRY-NETPROBE-001` | No fixture. | HTTP, TCP, and gRPC cases. |
 | `ENTRY-POSTSTART-001` | No fixture. | Both start orders. |
 | `ENTRY-POSTSTART-002` | No fixture. | Kubelet-restart lifecycle case. |
