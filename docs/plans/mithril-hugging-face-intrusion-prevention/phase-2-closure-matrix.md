@@ -38,7 +38,7 @@ Completed-row evidence remains in the phase result and acceptance record:
 | `ID-CLONE-CGROUP-002` | Direct `CLONE_INTO_CGROUP` root, child, and post-namespace snapshot passed. | First-effect proof. |
 | `ID-CLONE-CGROUP-FAIL-003` | No fixture. | Allocation, finalization, and placement fault injection. |
 | `ID-CREATOR-PARENT-007` | Creator exit, double fork, subreaper, and PID-namespace-init reparenting passed. | Blocked: current owners have a `PTRACE_ATTACH` denial fixture, not a permitted ptrace transition. A ptrace topology needs an approved permitted transition. The existing fixture has no bounded way to require a real host-PID collision; a PID-reuse case needs an approved deterministic collision design. |
-| `ID-TASK-COORD-FINALIZE-006` | Allocation and runnable snapshots exist. | Retained coordinate history for allocation, finalization, visibility, and exit. |
+| `ID-TASK-COORD-FINALIZE-006` | Blocked. Allocation and runnable snapshots exist. The current fixture has no allocation or finalization fault-injection protocol, missing-`PIDFD_THREAD` control, or leader-first-exit/TID-reuse oracle. | Add the required coordinate-failure controls before adding retained allocation, finalization, visibility, and exit evidence. |
 | `NATIVE-STATE-REF-LIFETIME-001` | Final task-reference count is zero. | Socket, object, and generation-reference cases. |
 | `STATE-FORK-IPC-002` | Native fork passed. | Inherited IPC state case. |
 | `STATE-THREAD-RACE-001` | Serial non-leader exec passed. | Concurrent restriction-transition race. |
