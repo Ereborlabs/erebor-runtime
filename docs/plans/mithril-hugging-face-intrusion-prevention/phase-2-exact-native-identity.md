@@ -471,6 +471,71 @@ subcase of `ENTRY-MIGRATE-001`. It does not test a protected effect, movement
 of an already labeled task through a namespace boundary, restore, or the full
 fixture. The phase remains **Blocked**.
 
+## Labeled Native Mount-Namespace Entry — 2026-08-17
+
+At source commit `da4e1996c8e3ec4450d5b9e0ca5da7d6bacd6f89`, the retained
+x86_64 Ubuntu 24.04 VM, kernel `6.8.0-137-generic`, ran the production
+identity probe with these unique paths:
+
+```sh
+/mnt/mithril-source/target/debug/mithril-identity-test \
+  --repo-root /mnt/mithril-source \
+  --output-directory /tmp/mithril-phase2-labelled-ns-20260817-1450 \
+  physical-probe \
+  --pin-root /sys/fs/bpf/erebor-mithril-phase2-labelled-ns-20260817-1450 \
+  --lease-path /tmp/mithril-phase2-labelled-ns-20260817-1450.lock \
+  --cgroup-path /sys/fs/cgroup/erebor-mithril-phase2-labelled-ns-20260817-1450
+```
+
+The source SHA-256 values were
+`identity.rs=30d1d88ba42b35f9fe1e7c6e42c938fd1b44cad87722c89f0e427c10437636e1`
+and
+`clone3.rs=aa80e796f0553792e5d4cca54f023acfc02d08da085275fa9524cb5112db992b`.
+The BPF object SHA-256 was
+`69ee79417f875f7c7a7065d18e08918e9d9bc32359711b57013eba77879fbcbe`.
+The schema-8 JSON was
+`/tmp/mithril-phase2-labelled-ns-20260817-1450/identity-physical-probe.json`.
+Its SHA-256 was
+`a079d291aa17bf7a19d8ef281b37ce773f325e2a014014072e75d6761d34c161`.
+
+The existing `CloneIntoCgroupFixture` stopped its native child before entry.
+It released the child into a distinct mount namespace through `nsenter`. The
+JSON records the same task cookie `15`, creator and real-parent cookie `12`,
+process state `00000000000000010000000000000013`, and active role `11`
+before and after entry. The active execution changed from
+`00000000000000010000000000000010` to
+`00000000000000010000000000000019`. The image provenance changed from
+`0000000000000001000000000000000e` to
+`0000000000000001000000000000001a`. The final task was `Runnable`, both
+process records were active, and the exec guard was none. The JSON records
+pin, lease, and cgroup removal.
+
+At source commit `af1e1c3eae202354b413beda085032930776fee3`, the same VM ran
+this root-shell command:
+
+```sh
+examples/mithril-identity-manual/nsenter-move.sh --labeled-task
+```
+
+The shell SHA-256 was
+`6cda64a4e3c62e61ee24f05f301e6ff627e722d9f4525d601434ea4c0f12cbcd`.
+The shell uses `identity_prepare_k3s_case`. It creates its Pod and fixture
+directory, obtains the live CRI binding and cgroup, and owns node, pin, lease,
+state, and cleanup setup. It moves a staging Bash into the configured cgroup,
+executes Bash in that cgroup, and requires the restricted external-root record.
+That root creates one stopped native child. The child enters only the Pod mount
+namespace and executes `sleep 300`.
+
+The manual records kept one task cookie, creator cookie, real-parent cookie,
+process state, and restricted role. They recorded changed execution and image
+provenance IDs, `Runnable`, active process execution and state-vector records,
+and no exec guard. The shell printed `PASS`. Postflight found no case namespace,
+fixture directory, Mithril pin, node process, lease, or cgroup.
+
+This qualifies the labeled native mount-namespace subcase of
+`ENTRY-MIGRATE-001`. It does not test a protected effect or restore. The phase
+remains **Blocked**.
+
 ## Current Moved-Native Rows — 2026-08-17
 
 At source commit `c1b15be02553ae6cd18210d23f9e2bb2447a9511`, the retained

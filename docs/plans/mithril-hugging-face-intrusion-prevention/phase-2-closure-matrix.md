@@ -19,7 +19,7 @@ Completed-row evidence remains in the phase result and acceptance record:
 | `ENTRY-EXEC-002` | One direct CRI exec subcase. | Runner fixture and row JSON. |
 | `ENTRY-EXTERNAL-AMBIGUITY-001` | No fixture. | Concurrent indistinguishable-root case. |
 | `ENTRY-LOSS-001` | No fixture. | Independent runtime, audit, and entry-loss cases. |
-| `ENTRY-MIGRATE-001` | Namespace-only host entry and cgroup move passed. | Labeled-task namespace move. |
+| `ENTRY-MIGRATE-001` | Namespace-only entry, cgroup move, and labeled native mount-namespace entry passed. | Protected-effect and restore cases. |
 | `ENTRY-NETPROBE-001` | No fixture. | HTTP, TCP, and gRPC cases. |
 | `ENTRY-POSTSTART-001` | No fixture. | Both start orders. |
 | `ENTRY-POSTSTART-002` | No fixture. | Kubelet-restart lifecycle case. |

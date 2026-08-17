@@ -350,6 +350,52 @@ cgroup-move subcase only. It does not prove a protected effect, an already
 labeled task that crosses a namespace boundary, restore, or complete
 `ENTRY-MIGRATE-001`. The phase remains **Blocked**.
 
+## Labeled Native Mount-Namespace Entry Result — 2026-08-17
+
+The retained x86_64 Ubuntu 24.04 VM, kernel `6.8.0-137-generic`, passed the
+production probe at source commit `da4e1996c8e3ec4450d5b9e0ca5da7d6bacd6f89`.
+It used unique output, pin, lease, and cgroup paths with suffix
+`phase2-labelled-ns-20260817-1450`. The schema-8 JSON was
+`/tmp/mithril-phase2-labelled-ns-20260817-1450/identity-physical-probe.json`.
+Its SHA-256 was
+`a079d291aa17bf7a19d8ef281b37ce773f325e2a014014072e75d6761d34c161`.
+The BPF object SHA-256 was
+`69ee79417f875f7c7a7065d18e08918e9d9bc32359711b57013eba77879fbcbe`.
+
+`CloneIntoCgroupFixture` created a restricted external root and stopped its
+native child. The runner required a different target mount namespace before it
+released the child. After `nsenter`, the child kept task cookie `15`, creator
+and real-parent cookie `12`, process state
+`00000000000000010000000000000013`, and active role `11`. Its execution ID
+changed from `00000000000000010000000000000010` to
+`00000000000000010000000000000019`. Its image provenance changed from
+`0000000000000001000000000000000e` to
+`0000000000000001000000000000001a`. The final record was `Runnable`, both
+process records were active, and the exec guard was none. The JSON records
+pin-root, lease, and cgroup removal.
+
+The same retained VM ran this command as root at source commit
+`af1e1c3eae202354b413beda085032930776fee3`:
+
+```sh
+examples/mithril-identity-manual/nsenter-move.sh --labeled-task
+```
+
+The shell SHA-256 was
+`6cda64a4e3c62e61ee24f05f301e6ff627e722d9f4525d601434ea4c0f12cbcd`.
+The shell created a restricted external Bash root, then one stopped native
+child. The child entered only the Pod mount namespace and executed `sleep`.
+The before and after records kept the task, creator, real-parent, process, and
+restricted-role identities. The execution and image identities changed. The
+shell required `Runnable`, active process records, and no exec guard. It
+printed `PASS`. The shared runtime owner removed its Pod, CRI binding, fixture
+directory, node, pin, lease, state, and cgroup. Postflight found no case
+namespace, fixture directory, Mithril pin, node process, lease, or cgroup.
+
+This qualifies the labeled native mount-namespace subcase of
+`ENTRY-MIGRATE-001`. Protected-effect and restore cases remain required. The
+phase remains **Blocked**.
+
 ## Current Moved-Native VM Result — 2026-08-17
 
 The retained x86_64 Ubuntu 24.04 VM ran the current

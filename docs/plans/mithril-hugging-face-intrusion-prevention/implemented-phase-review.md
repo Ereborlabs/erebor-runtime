@@ -66,6 +66,70 @@ The BPF object SHA-256 is
 This closes only the normal two-worker subcase. Exec versus fork, vfork, and
 thread creation remain open in the Phase 2 matrix.
 
+## Labeled Native Mount-Namespace Entry — 2026-08-17
+
+This review update covers source commit `da4e1996c8e3ec4450d5b9e0ca5da7d6bacd6f89`
+for the automated fixture and commit
+`af1e1c3eae202354b413beda085032930776fee3` for the manual shell. The
+automation adds one JSON field to the existing physical bundle. It adds no BPF
+map, BPF program, runner, role, or durable type.
+
+Review this path in order:
+
+1. [`CloneIntoCgroupFixture`](../../../crates/mithril-e2e/src/identity/clone3.rs#L18)
+   owns the external root, stopped native child, mount-namespace target, and
+   release pipe. It starts the target with `unshare --mount`, verifies that the
+   namespace is distinct, and removes all three child processes on failure or
+   shutdown.
+2. [`IdentityTestRunner::physical_probe`](../../../crates/mithril-e2e/src/identity.rs#L276)
+   starts that fixture through the existing physical runner. It snapshots the
+   stopped child, releases its namespace entry, and requires preserved task,
+   creator, parent, process, and role identities with changed execution and
+   image identities.
+3. [`IdentityPhysicalProbeBundleV1`](../../../crates/mithril-e2e/src/identity.rs#L145)
+   records the post-entry snapshot in the existing JSON bundle. The command
+   entry point writes that bundle only after the complete probe returns.
+4. [`NativeIdentityInspector::snapshot`](../../../crates/mithril-node/src/identity/inspection.rs#L54)
+   reads existing pinned task, process, execution, image, coordinate, parent,
+   and classification records through a pidfd. It does not create state.
+5. [`nsenter-move.sh`](../../../examples/mithril-identity-manual/nsenter-move.sh#L17)
+   provides the operator form. It uses the shared runtime owner, creates a
+   restricted external Bash root by exec in the configured cgroup, and starts
+   one stopped child only after that root has a task record.
+
+```mermaid
+sequenceDiagram
+    participant R as IdentityTestRunner
+    participant F as CloneIntoCgroupFixture
+    participant B as existing BPF hooks
+    participant I as NativeIdentityInspector
+
+    R->>F: start root and mount target
+    F->>B: clone root and native child
+    R->>I: snapshot stopped child
+    R->>F: release child to nsenter mount entry
+    F->>B: exec sleep in target mount namespace
+    R->>I: require preserved identity and changed exec/image
+    R->>F: stop root, child, and target
+```
+
+The existing [`task_alloc` hook](../../../bpf/erebor-interceptor/programs/identity_lifecycle.bpf.h#L35)
+creates the child identity before it runs. The existing
+[`wake_up_new_task` hook](../../../bpf/erebor-interceptor/programs/identity_lifecycle.bpf.h#L181)
+finalizes its coordinate. The existing
+[`security_bprm_committing_creds` hook](../../../bpf/erebor-interceptor/programs/identity_exec.bpf.h#L677)
+commits the new execution and image identity. This change does not alter those
+hooks or their maps.
+
+The physical VM used kernel `6.8.0-137-generic`. Its schema-8 JSON SHA-256 is
+`a079d291aa17bf7a19d8ef281b37ce773f325e2a014014072e75d6761d34c161`.
+The BPF object SHA-256 is
+`69ee79417f875f7c7a7065d18e08918e9d9bc32359711b57013eba77879fbcbe`.
+The physical runner and the root-only manual shell removed their pin, lease,
+cgroup, node, fixture, and K3s namespace resources. This evidence covers a
+labeled native child that enters one mount namespace. It does not cover a
+protected effect or restore. Phase 2 remains **Blocked**.
+
 ## Manual VM Controller
 
 Review this flow in this order:
