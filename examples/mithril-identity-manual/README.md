@@ -20,6 +20,18 @@ The command creates one Python Pod and live CRI binding. It starts a Python
 root with one non-leader thread. That thread executes `sleep`. The command
 removes its Pod and fixture directory at exit.
 
+Run this self-contained namespace-entry case from the same root shell:
+
+```sh
+examples/mithril-identity-manual/nsenter-move.sh
+```
+
+The command creates one Pod and live CRI binding. It starts and verifies one
+namespace-only `sleep 300` child. It moves that child into the configured
+cgroup and requires the restricted external-root identity. The command removes
+the child, Pod, node process, pin root, lease, state, and fixture directory at
+exit.
+
 ## Operator Cases
 
 Outside the manual VM, build the real node and inspector once:
@@ -41,7 +53,7 @@ Then run only the case being checked:
 | Moved native-child exec | `sudo examples/mithril-identity-manual/native-child.sh NODE_CONFIG CONTAINER_OR_FULL_CRI_ID --moved-exec` |
 | Pre-PONR failed native exec | `sudo examples/mithril-identity-manual/native-child.sh NODE_CONFIG CONTAINER_OR_FULL_CRI_ID --failed-exec` |
 | Non-leader Python thread exec | `sudo examples/mithril-identity-manual/native-child.sh --thread-exec` in the manual VM; otherwise `sudo examples/mithril-identity-manual/native-child.sh NODE_CONFIG CONTAINER_OR_FULL_CRI_ID --thread-exec` |
-| `nsenter` and cgroup movement | `sudo examples/mithril-identity-manual/nsenter-move.sh NODE_CONFIG CONTAINER_OR_FULL_CRI_ID` |
+| `nsenter` and cgroup movement | `sudo examples/mithril-identity-manual/nsenter-move.sh` in the manual VM |
 | Node restart | `sudo examples/mithril-identity-manual/restart.sh NODE_CONFIG CONTAINER_OR_FULL_CRI_ID` |
 
 Kubernetes is optional, not excluded: only `kubernetes-exec.sh` requires it.
@@ -83,25 +95,18 @@ and failure-injection matrix.
 
 ## Namespace Entry And Cgroup Movement Check
 
-Use this check with a live configured container and a second terminal that is
-already root:
+Use this check in the retained manual VM as root:
 
 ```bash
-sudo examples/mithril-identity-manual/nsenter-move.sh \
-  NODE_CONFIG CONTAINER_OR_FULL_CRI_ID
+sudo examples/mithril-identity-manual/nsenter-move.sh
 ```
 
-The script prints an `nsenter` command. Run it in the second root terminal as
-a background command. Its next command saves and prints the helper PID. Then
-read its only direct child from `/proc/$helper/task/$helper/children`. Enter
-the helper PID and the child PID when the script asks.
-
-The script accepts the child only when it is live, is the helper's only direct
-child, has command `sleep 300`, and has the target container's mount, UTS, IPC,
-network, and PID namespaces. It also requires the child to be outside the
-configured cgroup and requires the exact inspector result that it has no
-Mithril task identity. The script then moves only that verified child into the
-configured cgroup.
+The script creates one Python Pod and a live CRI binding. It starts the
+`nsenter` helper and finds its only direct child. The script accepts the child
+only when it is live, has command `sleep 300`, and has the target container's
+mount, UTS, IPC, network, and PID namespaces. It also requires the child to be
+outside the configured cgroup and to have no Mithril task identity. The script
+then moves only that verified child into the configured cgroup.
 
 The moved child must have no creator task cookie, `external_runtime_root`,
 `runtime_external_restricted`, the configured external role, and `Runnable`.

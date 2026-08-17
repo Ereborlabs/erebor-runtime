@@ -2,31 +2,34 @@
 set -Eeuo pipefail
 source "$(dirname "$0")/identity-runtime.sh"
 
-[[ $# -eq 2 ]] || {
-  echo "usage: sudo $0 NODE_CONFIG DOCKER_CONTAINER_OR_FULL_CRI_ID" >&2
+[[ $# -eq 0 ]] || {
+  echo "usage: sudo $0" >&2
   exit 2
 }
 
 identity_require_command nsenter
-identity_prepare_auto "$1" "$2"
+identity_prepare_k3s_case \
+  docker.io/library/python@sha256:78098ea6a3a9c6a7727a5d4674e4a44e57e01fac878ee9cb4d24a86bd93916ff
 identity_start_node
 
-echo "Run in another root terminal; namespace entry alone stays outside:"
-printf "  nsenter -t %q -m -u -i -n -p sh -c %q &\n" \
-  "$identity_init_pid" 'echo nsenter-ready; exec sleep 300'
-printf '  helper=$!; echo "nsenter helper host PID: $helper"\n'
-printf '  cat /proc/$helper/task/$helper/children\n'
-identity_read_host_pid "nsenter helper host PID: "
-nsenter_helper_pid=$identity_read_pid
-identity_read_host_pid "nsenter sleep host PID: "
-nsenter_pid=$identity_read_pid
+nsenter -t "$identity_init_pid" -m -u -i -n -p sh -c 'exec sleep 300' &
+nsenter_helper_pid=$!
+identity_task_pids+=("$nsenter_helper_pid")
+for ((attempt = 0; attempt < 100; attempt++)); do
+  read -r -a nsenter_children \
+    <"/proc/$nsenter_helper_pid/task/$nsenter_helper_pid/children" || true
+  [[ ${#nsenter_children[@]} -eq 1 ]] && break
+  sleep 0.1
+done
 nsenter_children=()
 read -r -a nsenter_children \
   <"/proc/$nsenter_helper_pid/task/$nsenter_helper_pid/children" || true
-[[ ${#nsenter_children[@]} -eq 1 && ${nsenter_children[0]} == "$nsenter_pid" ]] || {
+[[ ${#nsenter_children[@]} -eq 1 ]] || {
   echo "nsenter sleep is not the helper's only direct child" >&2
   exit 1
 }
+nsenter_pid=${nsenter_children[0]}
+identity_task_pids+=("$nsenter_pid")
 [[ $(<"/proc/$nsenter_pid/comm") == sleep ]] || {
   echo "nsenter child is not sleep" >&2
   exit 1
@@ -36,9 +39,10 @@ read -r -a nsenter_children \
   exit 1
 }
 for namespace in mnt uts ipc net pid; do
-  [[ $(readlink "/proc/$nsenter_pid/ns/$namespace") == \
-    $(readlink "/proc/$identity_init_pid/ns/$namespace") ]] || {
-    echo "nsenter sleep is outside the target $namespace namespace" >&2
+  nsenter_namespace=$(readlink "/proc/$nsenter_pid/ns/$namespace")
+  target_namespace=$(readlink "/proc/$identity_init_pid/ns/$namespace")
+  [[ $nsenter_namespace == "$target_namespace" ]] || {
+    echo "nsenter sleep is outside the target $namespace namespace: $nsenter_namespace != $target_namespace" >&2
     exit 1
   }
 done
