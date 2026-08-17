@@ -2195,25 +2195,39 @@ second.join()
     }
 
     fn release_exec(&mut self, native_pid: u32) -> Result<()> {
+        self.wait_for_stopped_native_child(native_pid)?;
         let pidfd = self
             .native_pidfd
             .as_ref()
             .ok_or_else(|| invalid_state("native child has no pidfd"))?;
-        self.wait_for_stopped_native_child(native_pid)?;
-
         pidfd_send_signal(pidfd, Signal::CONT)
             .map_err(|error| invalid_state(format!("release native child exec: {error}")))
     }
 
-    fn wait_for_stopped_native_child(&self, native_pid: u32) -> Result<()> {
+    fn wait_for_stopped_native_child(&mut self, native_pid: u32) -> Result<()> {
         let status_path = PathBuf::from(format!("/proc/{native_pid}/status"));
         let deadline = Instant::now() + WAIT_LIMIT;
         loop {
             let status = match fs::read_to_string(&status_path) {
                 Ok(status) => status,
                 Err(source) if source.kind() == std::io::ErrorKind::NotFound => {
+                    let outer = self.outer.try_wait().context(IoSnafu {
+                        path: Path::new("identity test shell"),
+                    })?;
+                    let stderr = if outer.is_some() {
+                        self.stdin.take();
+                        let mut stderr = String::new();
+                        if let Some(mut pipe) = self.stderr.take() {
+                            pipe.read_to_string(&mut stderr).context(IoSnafu {
+                                path: Path::new("identity test shell stderr"),
+                            })?;
+                        }
+                        format!("; outer {outer:?}; stderr {}", stderr.trim())
+                    } else {
+                        String::from("; outer still running")
+                    };
                     return Err(invalid_state(format!(
-                        "native child {native_pid} exited before it stopped for exec release"
+                        "native child {native_pid} exited before it stopped for exec release{stderr}"
                     )));
                 }
                 Err(source) => return Err(source).context(IoSnafu { path: &status_path }),
