@@ -168,9 +168,9 @@ State: **Done** for `FILE-PATH-TREE-DENY-001`. The broader phase remains
 The disposable x86_64 VM harness ran from a worktree based on `4875862`. The
 kernel was `6.8.0-137-generic`, and the active LSM order included `bpf`. The
 local-enforcement artifact is
-`/tmp/mithril-path-tree-vm-20260817-v8/local-enforcement-physical-probe.json`.
+`/tmp/mithril-path-tree-vm-20260817-v9-2872526/local-enforcement-physical-probe.json`.
 Its SHA-256 is
-`f029aea87ed30aa38da79c8946dca5d78b3a9c63811a71971256bd3c85bffe8d`.
+`20c34a1afbfad23d5d8940fb190f2228b57b614fd814c6555eafd9a1b5707e37`.
 
 The artifact records these true fields:
 
