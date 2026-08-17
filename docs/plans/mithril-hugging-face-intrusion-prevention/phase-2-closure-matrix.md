@@ -37,7 +37,7 @@ Completed-row evidence remains in the phase result and acceptance record:
 | `ID-CGROUP-ESCAPE-001` | Moved root becomes fail closed. | Unmoved control and first-effect denial proof. |
 | `ID-CLONE-CGROUP-002` | Direct `CLONE_INTO_CGROUP` root, child, and post-namespace snapshot passed. | First-effect proof. |
 | `ID-CLONE-CGROUP-FAIL-003` | No fixture. | Allocation, finalization, and placement fault injection. |
-| `ID-CREATOR-PARENT-007` | Creator exit, double fork, and subreaper reparenting passed. | Namespace-init, ptrace, and PID-reuse cases. |
+| `ID-CREATOR-PARENT-007` | Creator exit, double fork, subreaper, and PID-namespace-init reparenting passed. | Ptrace reparenting and PID-reuse cases. |
 | `ID-TASK-COORD-FINALIZE-006` | Allocation and runnable snapshots exist. | Retained coordinate history for allocation, finalization, visibility, and exit. |
 | `NATIVE-STATE-REF-LIFETIME-001` | Final task-reference count is zero. | Socket, object, and generation-reference cases. |
 | `STATE-FORK-IPC-002` | Native fork passed. | Inherited IPC state case. |

@@ -2700,3 +2700,82 @@ command printed `PASS` and removed its namespace, fixture, node, pin, lease,
 and cgroup. This qualifies the subreaper subcase only. Namespace-init
 reparenting, ptrace reparenting, and PID reuse remain open. Phase 2 remains
 **Blocked**.
+
+## PID-Namespace-Init Reparenting Fixture Review — 2026-08-17
+
+This update covers source commit `6b1cf72`. It extends the existing
+`NativeProcessFixture`, `IdentityTestRunner`, physical result bundle, and
+manual shell. It adds no map, role, generic runner, or durable owner.
+
+Review this path in order:
+
+1. [`NativeProcessFixture::start_namespace_init_reparenting`](../../../crates/mithril-e2e/src/identity.rs#L1701)
+   starts `unshare` with a user and PID namespace. PID 1 stops before it forks
+   a native intermediate or child. The fixture owns the pidfds and process
+   shutdown.
+2. [`IdentityTestRunner::physical_probe`](../../../crates/mithril-e2e/src/identity.rs#L1211)
+   finds the stopped PID 1, moves that task into the configured cgroup, checks
+   namespace PID 1, snapshots its restricted external-root identity, and then
+   resumes it through the pidfd.
+3. [`IdentityPhysicalProbeBundleV1`](../../../crates/mithril-e2e/src/identity.rs#L145)
+   records the namespace init, intermediate, and child snapshots in the
+   existing physical evidence bundle. It does not add a generic result type.
+4. [`refresh_real_parent`](../../../bpf/erebor-interceptor/programs/identity_task_helpers.h#L270)
+   compares the live parent coordinates with the current interval. A changed
+   parent closes the old interval, writes the next interval, and increments the
+   coordinate transition version. The exec hook calls this helper before it
+   commits an exec transition.
+5. [`NativeIdentityInspector::snapshot`](../../../crates/mithril-node/src/identity/inspection.rs#L54)
+   reads the current interval from the existing pinned map. It exposes the
+   parent TID, TGID, PID namespace inode, and start time without user-space
+   parent inference.
+6. [`native-child.sh --namespace-init`](../../../examples/mithril-identity-manual/native-child.sh#L334)
+   is the root-only operator case. `identity-runtime.sh` owns the Pod, CRI
+   binding, node, pin, lease, and cleanup.
+7. [`native_process_fixture_executes_after_namespace_init_reparenting`](../../../crates/mithril-e2e/src/identity.rs#L2515)
+   proves the Linux process topology before the physical runner loads Mithril.
+
+```mermaid
+sequenceDiagram
+    participant F as NativeProcessFixture
+    participant R as IdentityTestRunner
+    participant P as namespace PID 1
+    participant M as native intermediate
+    participant C as stopped native child
+
+    F->>P: create user and PID namespace; stop PID 1
+    R->>P: move PID 1 into cgroup and inspect restricted root
+    R->>P: resume through pidfd
+    P->>M: fork
+    M->>C: fork and stop
+    R->>M: inspect creator and parent
+    R->>M: terminate through pidfd
+    M-->>P: Linux reparents C to PID 1
+    R->>C: resume through pidfd
+    C->>C: exec sleep
+```
+
+The fixture creates the namespace before it moves PID 1 into the cgroup. A
+restricted task therefore does not request the user namespace capability. The
+runner labels the stopped PID 1 as the restricted external root. Its native
+children inherit the restricted role. The final child record keeps its task
+cookie, creator cookie, process state, and role. It changes its real-parent
+coordinates and interval after the intermediate exit. The recorded parent
+cookie is `0` because the new parent is represented by exact coordinates.
+
+The privileged VM passed on kernel `6.8.0-137-generic`. Its schema-9 JSON
+SHA-256 is `c4fac47027dd4d2e46b50ecb8fcd8fd2716d798db1347cc73b6317ef1b06a624`.
+The BPF object SHA-256 is
+`69ee79417f875f7c7a7065d18e08918e9d9bc32359711b57013eba77879fbcbe`.
+The final child had task cookie `155`, creator cookie `149`, real-parent TID
+and TGID `3488`, parent interval `2`, role `11`, runnable coordinates, active
+process records, and no exec guard. The manual command printed `PASS` and
+postflight found no case namespace, fixture, pin, node process, lease, cgroup,
+or manual work directory.
+
+`cargo test -p mithril-e2e native_process_fixture --all-features -- --nocapture`
+passed all nine native fixture tests. The required repository CI reached the
+Mithril e2e suite and stopped at the pre-existing readable-architecture digest
+mismatch in `spec/qualification/v1/fixtures.yaml`. This row does not change
+that registry. This result qualifies the PID-namespace-init subcase only.
+Ptrace reparenting and PID reuse remain open. Phase 2 remains **Blocked**.

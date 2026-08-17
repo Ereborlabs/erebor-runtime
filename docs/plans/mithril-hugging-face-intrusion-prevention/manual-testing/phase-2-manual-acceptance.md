@@ -468,6 +468,58 @@ This is physical and manual evidence for the subreaper subcase of
 `ID-CREATOR-PARENT-007`. Namespace-init reparenting, ptrace reparenting, and
 PID reuse remain unqualified. The phase remains **Blocked**.
 
+## PID-Namespace-Init Reparenting VM Result — 2026-08-17
+
+Source commit `6b1cf72` qualified this subcase on the retained x86_64 Ubuntu
+24.04 VM, kernel `6.8.0-137-generic`. The production probe used unique paths
+under `/tmp/mithril-phase2-namespace-init-20260817-1630`,
+`/sys/fs/bpf/erebor-mithril-phase2-namespace-init-20260817-1630`, and
+`/sys/fs/cgroup/erebor-mithril-phase2-namespace-init-20260817-1630`.
+
+The schema-9 JSON is
+`/tmp/mithril-phase2-namespace-init-20260817-1630/identity-physical-probe.json`.
+Its SHA-256 is
+`c4fac47027dd4d2e46b50ecb8fcd8fd2716d798db1347cc73b6317ef1b06a624`.
+The BPF object SHA-256 is
+`69ee79417f875f7c7a7065d18e08918e9d9bc32359711b57013eba77879fbcbe`.
+
+The fixture stopped an unlabelled user and PID namespace, then moved its PID-1
+init into the bound cgroup. The init had task cookie `146`, host TID and TGID
+`3488`, namespace PID `1`, `external_runtime_root`,
+`runtime_external_restricted`, and role `11`. Its intermediate had task cookie
+`149` and creator and real-parent cookie `146`. The stopped child had task
+cookie `155`, creator and real-parent cookie `149`, parent TID and TGID `3489`,
+and parent interval `1`.
+
+After the intermediate exit and child `sleep` exec, the child retained task
+cookie `155`, creator cookie `149`, process state
+`0000000000000001000000000000009f`, and role `11`. It recorded real-parent
+cookie `0`, real-parent TID and TGID `3488`, and parent interval `2`. Its
+execution changed from `0000000000000001000000000000009c` to
+`000000000000000100000000000000a2`. Its image changed from
+`00000000000000010000000000000094` to
+`000000000000000100000000000000a3`. Its coordinate was `Runnable`; process
+execution and process state-vector records were active; and its exec guard was
+none. The JSON records `pin_root_removed=true`, `lease_removed=true`,
+`cgroup_removed=true`, and `profile_task_refs_after_exit=0`.
+
+The same VM ran this command as root:
+
+```sh
+examples/mithril-identity-manual/native-child.sh --namespace-init
+```
+
+The shell printed `PASS`. `identity_prepare_k3s_case` owned the Pod, CRI
+binding, node, pin, lease, and cleanup. The shell created the namespace before
+the cgroup move. It then verified the same creator, parent-coordinate,
+execution, image, role, and active-state limits. Postflight found no case
+namespace, fixture directory, Mithril pin, node process, lease, cgroup, or
+manual work directory.
+
+This is physical and manual evidence for the PID-namespace-init subcase of
+`ID-CREATOR-PARENT-007`. Ptrace reparenting and PID reuse remain unqualified.
+The phase remains **Blocked**.
+
 ## Native Identity Fixture Matrix
 
 | Fixture | Operator action | Required oracle and legitimate control |
@@ -478,7 +530,7 @@ PID reuse remain unqualified. The phase remains **Blocked**.
 | `ID-CGROUP-ESCAPE-001` | move a labeled task to host/unprotected placement | task storage still resolves and denies mismatch; unmoved allowed control works |
 | `ID-CLONE-CGROUP-002` | clone into expected and changed placement | child state exists before effect and placement is verified |
 | `ID-CLONE-CGROUP-FAIL-003` | force child allocation/finalization/placement failure | no unlabeled runnable child gains authority; normal clone succeeds |
-| `ID-CREATOR-PARENT-007` | reparent or orphan a child after native creation. Use [`native-child.sh --orphan`](../../../../examples/mithril-identity-manual/native-child.sh) for creator exit, [`native-child.sh --double-fork`](../../../../examples/mithril-identity-manual/native-child.sh) for double fork, and [`native-child.sh --subreaper`](../../../../examples/mithril-identity-manual/native-child.sh) for subreaper reparenting. | immutable creator edge stays exact while the real-parent interval changes. The qualified branches do not cover namespace-init reparenting, ptrace reparenting, or PID reuse. |
+| `ID-CREATOR-PARENT-007` | reparent or orphan a child after native creation. Use [`native-child.sh --orphan`](../../../../examples/mithril-identity-manual/native-child.sh) for creator exit, [`native-child.sh --double-fork`](../../../../examples/mithril-identity-manual/native-child.sh) for double fork, [`native-child.sh --subreaper`](../../../../examples/mithril-identity-manual/native-child.sh) for subreaper reparenting, and [`native-child.sh --namespace-init`](../../../../examples/mithril-identity-manual/native-child.sh) for PID-namespace-init reparenting. | The immutable creator edge stays exact while the real-parent interval changes. The qualified branches do not cover ptrace reparenting or PID reuse. |
 | `ID-MOVED-PARENT-FORK-004` | move parent, then fork | child inherits actual task authority and placement floor, not cgroup-derived role |
 | `ID-MOVED-TASK-EXEC-005` | move labeled task, then exec | task-first old identity and placement mismatch constrain transition |
 | `ID-TASK-COORD-FINALIZE-006` | inspect task at allocation, pre-wake finalization, visibility, and exit | opaque state precedes effect; PID/TGID/start coordinates finalize later without granting permission |

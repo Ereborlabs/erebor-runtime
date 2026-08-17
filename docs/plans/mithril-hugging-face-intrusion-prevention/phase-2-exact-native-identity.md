@@ -613,3 +613,75 @@ node process, lease, or cgroup. The JSON records
 This qualifies the subreaper reparenting subcase of
 `ID-CREATOR-PARENT-007` only. Namespace-init, ptrace reparenting, and PID reuse
 remain required. The phase remains **Blocked**.
+
+## PID-Namespace-Init Reparenting Qualification — 2026-08-17
+
+Source commit `6b1cf72` adds this subcase to the existing
+`NativeProcessFixture` and `IdentityTestRunner`. It adds no runner, role, or
+durable map. The retained x86_64 Ubuntu 24.04 VM ran kernel
+`6.8.0-137-generic` and this command with unique paths:
+
+```sh
+"$MITHRIL_BIN_DIRECTORY/mithril-identity-test" \
+  --repo-root "$MITHRIL_MANUAL_SOURCE" \
+  --output-directory /tmp/mithril-phase2-namespace-init-20260817-1630 \
+  physical-probe \
+  --pin-root /sys/fs/bpf/erebor-mithril-phase2-namespace-init-20260817-1630 \
+  --lease-path /tmp/mithril-phase2-namespace-init-20260817-1630/owner.lock \
+  --cgroup-path /sys/fs/cgroup/erebor-mithril-phase2-namespace-init-20260817-1630
+```
+
+The schema-9 JSON is
+`/tmp/mithril-phase2-namespace-init-20260817-1630/identity-physical-probe.json`.
+Its SHA-256 is
+`c4fac47027dd4d2e46b50ecb8fcd8fd2716d798db1347cc73b6317ef1b06a624`.
+The test binary SHA-256 is
+`eb8e7e591b3a5dc379bc9e4428904f6edff65d316096852ebf16e7b7d6ff348d`.
+The `identity.rs` source SHA-256 is
+`604be2b2f62c1ca5687dfccc0c4f1999939cfa69be93fe57a27f3e1e09ede993`.
+The BPF object SHA-256 is
+`69ee79417f875f7c7a7065d18e08918e9d9bc32359711b57013eba77879fbcbe`.
+
+The fixture created and stopped a user and PID namespace before it entered the
+configured cgroup. The moved namespace init had host TID and TGID `3488`, task
+cookie `146`, and namespace PID `1`. It was an `external_runtime_root` with
+`runtime_external_restricted` and active role `11`. Its native intermediate
+had task cookie `149`, creator and real-parent cookie `146`, and parent TID and
+TGID `3488`. The stopped native child had task cookie `155`, creator and
+real-parent cookie `149`, parent TID and TGID `3489`, and parent interval `1`.
+
+After the runner terminated the intermediate, the child had the same task
+cookie `155`, creator cookie `149`, process state
+`0000000000000001000000000000009f`, and active role `11`. Its real-parent
+cookie was `0`. Its real-parent TID and TGID were `3488`. Its parent interval
+was `2`. Its execution changed from
+`0000000000000001000000000000009c` to
+`000000000000000100000000000000a2`. Its image changed from
+`00000000000000010000000000000094` to
+`000000000000000100000000000000a3`. Its coordinate was `Runnable`; both
+process records were active; and its exec guard was none.
+
+The same VM ran this readable root-shell command:
+
+```sh
+examples/mithril-identity-manual/native-child.sh --namespace-init
+```
+
+The shell calls `identity_prepare_k3s_case`. It creates the Pod and CRI
+binding. It starts and stops the namespace outside the Pod cgroup. It moves
+only PID 1 into that cgroup before it creates its native children. The shell
+printed `PASS`. Postflight found no case namespace, fixture directory, Mithril
+pin, node process, lease, cgroup, or manual work directory.
+
+`cargo test -p mithril-e2e native_process_fixture --all-features -- --nocapture`
+passed all nine native fixture tests. `bash -n` passed for the manual shell.
+The required `bash .github/scripts/verify-rust-ci.sh` ran twice. The second run
+passed the unrelated browser-CDP test that first reported a resource error. It
+then reached the Mithril e2e suite and stopped with 58 tests passed and four
+tests failed. Each failure reports the pre-existing mismatch between the
+current readable-architecture digest and the digest in
+`spec/qualification/v1/fixtures.yaml`. This source record does not change that
+user-owned registry.
+This qualifies the PID-namespace-init reparenting subcase of
+`ID-CREATOR-PARENT-007`. Ptrace reparenting and PID reuse remain required. The
+phase remains **Blocked**.
