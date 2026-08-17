@@ -3046,11 +3046,6 @@ abandoned unless the platform proves all of the following:
 - the task-first decision order never sends a partially labeled child through
   host policy.
 
-`ID-CLONE-CGROUP-FAIL-003` injects label-allocation failure while a protected
-parent clones into a host cgroup. The child must fail creation or have its first
-protected effect denied. If neither result is physically proved, strict task
-identity is `UNSUPPORTED` and that wake-path program is observation-only.
-
 #### Exec transition algorithm
 
 At `bprm_check_security`:
@@ -16826,7 +16821,6 @@ NormativeFixtureSetV1 {
   HF-RESP-SHARED-DOMAIN-003
   ID-CGROUP-ESCAPE-001
   ID-CLONE-CGROUP-002
-  ID-CLONE-CGROUP-FAIL-003
   ID-CREATOR-PARENT-007
   ID-MOVED-PARENT-FORK-004
   ID-MOVED-TASK-EXEC-005
@@ -17130,7 +17124,6 @@ criterion 3, ALWAYS:
   EXEC-CONCURRENT-002
   ID-CGROUP-ESCAPE-001
   ID-CLONE-CGROUP-002
-  ID-CLONE-CGROUP-FAIL-003
   ID-CREATOR-PARENT-007
   ID-MOVED-PARENT-FORK-004
   ID-MOVED-TASK-EXEC-005

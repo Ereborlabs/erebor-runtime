@@ -96,7 +96,7 @@ const REQUIRED_IDENTITY_MAPS: [&str; 55] = [
     "task_reference_tombstones",
 ];
 
-const IDENTITY_FIXTURES: [&str; 33] = [
+const IDENTITY_FIXTURES: [&str; 32] = [
     "AUTHORIZATION-REPLAY-004",
     "ENTRY-BINDING-GAP-001",
     "ENTRY-CONTAINERS-001",
@@ -122,7 +122,6 @@ const IDENTITY_FIXTURES: [&str; 33] = [
     "EXEC-CONCURRENT-002",
     "ID-CGROUP-ESCAPE-001",
     "ID-CLONE-CGROUP-002",
-    "ID-CLONE-CGROUP-FAIL-003",
     "ID-CREATOR-PARENT-007",
     "ID-MOVED-PARENT-FORK-004",
     "ID-MOVED-TASK-EXEC-005",

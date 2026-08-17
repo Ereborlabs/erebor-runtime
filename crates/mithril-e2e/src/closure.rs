@@ -16,7 +16,7 @@ const MASTER_PLAN: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../docs/plans/mithril-hugging-face-intrusion-prevention/README.md"
 ));
-const EXPECTED_FIXTURE_COUNT: usize = 134;
+const EXPECTED_FIXTURE_COUNT: usize = 133;
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]

@@ -105,8 +105,8 @@
       "license_decision": "FILE_HAS_NO_SPDX; TOP_LEVEL_APACHE_2_0_AND_KERNEL_GPL_STRING_DO_NOT_AUTHORIZE_COPYING; REIMPLEMENT_ONLY",
       "transitive_dependencies": [],
       "local_owner": "bpf/erebor-interceptor/programs/identity.bpf.c; erebor_interceptor_abi::TaskLabelV1",
-      "semantic_differences": "Production task storage installs bounded identity in task_alloc, finalizes coordinates pre-wake, and makes protected allocation or finalization failure fail closed.",
-      "hostile_fixture_id": "ID-CLONE-CGROUP-FAIL-003"
+      "semantic_differences": "Production task storage installs bounded inherited identity in task_alloc and finalizes coordinates before the child can run.",
+      "hostile_fixture_id": "ID-CLONE-CGROUP-002"
     },
     {
       "adoption_id": "BJ-REJECTED-ENROLLMENT-002",

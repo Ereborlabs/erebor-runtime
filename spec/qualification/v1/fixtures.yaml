@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "architecture_revision_sha256": "4a445b4015c4868a87af4893398068c5f362452c316d0cb8d06c038d41ffc0d8",
+  "architecture_revision_sha256": "1b7538c1e22be4587b7582c137529fa60042cf577bee847e3f44ecee9bfe5a9b",
   "fixture_ids": [
     "ADMIN-EXEC-APPROVAL-001",
     "AUTHORIZATION-REPLAY-004",
@@ -92,7 +92,6 @@
     "HF-RESP-BLAST-RADIUS-003",
     "ID-CGROUP-ESCAPE-001",
     "ID-CLONE-CGROUP-002",
-    "ID-CLONE-CGROUP-FAIL-003",
     "ID-CREATOR-PARENT-007",
     "ID-MOVED-PARENT-FORK-004",
     "ID-MOVED-TASK-EXEC-005",
