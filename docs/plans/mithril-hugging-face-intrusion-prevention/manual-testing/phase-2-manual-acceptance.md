@@ -237,6 +237,32 @@ manual work directory, or case cgroup.
 This qualifies `ID-CGROUP-ESCAPE-001` only. The remaining required rows are
 open. The phase remains **Blocked**.
 
+## Recorded Clone-Into-Cgroup Native-Child First Effect — 2026-08-17
+
+The retained Ubuntu 24.04 VM ran `manual.sh start`, then `manual.sh ssh`. As
+root, it ran the schema-13 `mithril-identity-test physical-probe` with unique
+output, pin, lease, and cgroup paths ending in
+`mithril-phase2-clone-first-effect-20260817-1706`. The copied JSON is
+`/tmp/mithril-phase2-clone-first-effect-20260817-1706.json`. Its SHA-256 is
+`d690be264034dad636dd64e97e4830ae24b0a11f0ed5077dc525da303069fd44`.
+
+The stopped `CLONE_INTO_CGROUP` root had task cookie `228`, process state
+`000000000000000100000000000000e2`, no creator, restricted external-root
+classes, role `11`, and coordinate `3`. The stopped native child had task
+cookie `231`, process state `000000000000000100000000000000eb`, creator and
+real-parent cookie `228`, role `11`, no root or installed-role class,
+coordinate `3`, and active process records. The fixture released that child
+through its pidfd. `clone_into_cgroup_native_child_first_effect_allowed=true`
+records the direct sentinel open.
+
+No manual shell ran for this row. A shell cannot own the exact
+`CLONE_INTO_CGROUP` file descriptor, stopped root and child, pidfd release,
+and status pipe without adding another fixture runner. The runner removed its
+pin, lease, and cgroup. Postflight found no case namespace, fixture, Mithril
+pin, node process, lease, or cgroup. This qualifies
+`ID-CLONE-CGROUP-002` only. The remaining required rows are open. The phase
+remains **Blocked**.
+
 ## Procedure
 
 1. Start the unchanged worker, legitimate controller, and all configured
@@ -606,7 +632,7 @@ The phase remains **Blocked**.
 | `EXEC-COMMIT-STATE-001` | run success, pre-PONR failure, and post-PONR fatal/unknown exec | success commits once; early failure keeps exact prior state; later failure never restores broad authority |
 | `EXEC-CONCURRENT-002` | run [`native-child.sh --concurrent-thread-exec`](../../../../examples/mithril-identity-manual/native-child.sh) in the manual VM | serial and two-worker normal exec passed. Exec versus fork, vfork, and thread creation remain required. |
 | `ID-CGROUP-ESCAPE-001` | move a labeled task to host/unprotected placement | task storage still resolves and denies mismatch; unmoved allowed control works |
-| `ID-CLONE-CGROUP-002` | clone into expected and changed placement | child state exists before effect and placement is verified |
+| `ID-CLONE-CGROUP-002` | fixture-owned physical probe; no manual shell is valid | stopped clone child has exact inherited identity before one direct first effect |
 | `ID-CLONE-CGROUP-FAIL-003` | force child allocation/finalization/placement failure | no unlabeled runnable child gains authority; normal clone succeeds |
 | `ID-CREATOR-PARENT-007` | reparent or orphan a child after native creation. Use [`native-child.sh --orphan`](../../../../examples/mithril-identity-manual/native-child.sh) for creator exit, [`native-child.sh --double-fork`](../../../../examples/mithril-identity-manual/native-child.sh) for double fork, [`native-child.sh --subreaper`](../../../../examples/mithril-identity-manual/native-child.sh) for subreaper reparenting, and [`native-child.sh --namespace-init`](../../../../examples/mithril-identity-manual/native-child.sh) for PID-namespace-init reparenting. | The immutable creator edge stays exact while the real-parent interval changes. The qualified branches do not cover ptrace reparenting or PID reuse. |
 | `ID-MOVED-PARENT-FORK-004` | move parent, then fork | child inherits actual task authority and placement floor, not cgroup-derived role |

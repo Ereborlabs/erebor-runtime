@@ -9,7 +9,8 @@ approved administrative-exec physical path, which Phase 4 owns.
 
 Completed-row evidence remains in the phase result and acceptance record:
 `ENTRY-BINDING-GAP-001`, `ENTRY-EXTERNAL-AMBIGUITY-001`,
-`ID-CGROUP-ESCAPE-001`, `ID-MOVED-PARENT-FORK-004`, and
+`ID-CGROUP-ESCAPE-001`, `ID-CLONE-CGROUP-002`,
+`ID-MOVED-PARENT-FORK-004`, and
 `ID-MOVED-TASK-EXEC-005`.
 
 | Fixture ID | Current proof | Missing closure proof |
@@ -34,7 +35,6 @@ Completed-row evidence remains in the phase result and acceptance record:
 | `ENTRY-STOCK-HOOK-FAILURE-002` | No fixture. | Stock-hook failure cases. |
 | `EXEC-COMMIT-STATE-001` | Success and pre-PONR recovery passed. | Post-PONR fatal and unknown outcomes. |
 | `EXEC-CONCURRENT-002` | Serial and two-worker normal exec passed in the VM. | Blocked: the current fixture has no control that holds real exec staging. A shared barrier loses the creator sibling to Linux `de_thread` before it reaches fork, vfork, or thread creation. |
-| `ID-CLONE-CGROUP-002` | Direct `CLONE_INTO_CGROUP` root, child, and post-namespace snapshot passed. | First-effect proof. |
 | `ID-CLONE-CGROUP-FAIL-003` | No fixture. | Allocation, finalization, and placement fault injection. |
 | `ID-CREATOR-PARENT-007` | Creator exit, double fork, subreaper, and PID-namespace-init reparenting passed. | Blocked: current owners have a `PTRACE_ATTACH` denial fixture, not a permitted ptrace transition. A ptrace topology needs an approved permitted transition. The existing fixture has no bounded way to require a real host-PID collision; a PID-reuse case needs an approved deterministic collision design. |
 | `ID-TASK-COORD-FINALIZE-006` | Blocked. Allocation and runnable snapshots exist. The current fixture has no allocation or finalization fault-injection protocol, missing-`PIDFD_THREAD` control, or leader-first-exit/TID-reuse oracle. | Add the required coordinate-failure controls before adding retained allocation, finalization, visibility, and exit evidence. |

@@ -2905,3 +2905,56 @@ node process, lease work, manual work, or case cgroup.
 
 This qualifies `ID-CGROUP-ESCAPE-001` only. The remaining required rows are
 open. Phase 2 remains **Blocked**.
+
+## Clone-Into-Cgroup Native-Child First-Effect Review — 2026-08-17
+
+Source commits `bae628d` and `4b4d669` extend existing fixture owners only.
+They add no map, role, runner, or durable type.
+
+1. [`CloneIntoCgroupFixture`](../../../crates/mithril-e2e/src/identity/clone3.rs)
+   opens the configured cgroup and calls `clone3` with
+   `CLONE_INTO_CGROUP`. It stops the root, then its native child.
+2. The same fixture owns the child pidfd and a non-blocking one-byte status
+   pipe. It releases the child only after inspection. The child makes its
+   direct sentinel `open(2)` and sends zero only when that open succeeds.
+3. [`IdentityTestRunner::physical_probe`](../../../crates/mithril-e2e/src/identity.rs)
+   requires the root's restricted external identity and the child's immutable
+   creator and real-parent edge before it releases the child. It stores both
+   snapshots and the open result in the existing physical bundle.
+4. [`erebor_task_alloc`](../../../bpf/erebor-interceptor/programs/identity_lifecycle.bpf.h)
+   creates task state before the child can run. The physical child snapshot
+   and direct open prove that this clone path has that state before its first
+   controlled effect.
+
+```mermaid
+sequenceDiagram
+    participant R as IdentityTestRunner
+    participant P as clone root
+    participant C as stopped native child
+    participant I as NativeIdentityInspector
+    participant S as sentinel
+
+    R->>P: clone3 with CLONE_INTO_CGROUP
+    P->>C: fork and stop child
+    R->>I: inspect root and child
+    R->>C: pidfd CONT
+    C->>S: direct open(2)
+    C-->>R: zero on fixture status pipe
+```
+
+The retained Ubuntu 24.04 VM passed on Linux `6.8.0-137-generic`. Its
+schema-13 JSON SHA-256 is
+`d690be264034dad636dd64e97e4830ae24b0a11f0ed5077dc525da303069fd44`.
+The root had task cookie `228`, process state
+`000000000000000100000000000000e2`, no creator, role `11`, restricted
+external-root classes, and coordinate `3`. The child had task cookie `231`,
+process state `000000000000000100000000000000eb`, creator and real-parent
+cookie `228`, role `11`, no root or installed-role class, coordinate `3`, and
+active process records. The JSON records
+`clone_into_cgroup_native_child_first_effect_allowed=true`, zero profile task
+references after exit, and removed pin, lease, and cgroup paths. Postflight
+found no case namespace, fixture, pin, node process, lease, or cgroup.
+
+No manual shell is valid for this fixture-owned synchronization. This
+qualifies `ID-CLONE-CGROUP-002` only. The remaining required rows are open.
+Phase 2 remains **Blocked**.

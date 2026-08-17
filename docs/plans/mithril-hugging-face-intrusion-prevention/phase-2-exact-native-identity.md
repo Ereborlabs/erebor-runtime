@@ -826,3 +826,57 @@ case cgroup.
 
 This qualifies `ID-CGROUP-ESCAPE-001` only. The remaining required fixtures
 are open. The phase remains **Blocked**.
+
+## Clone-Into-Cgroup Native-Child First-Effect Qualification — 2026-08-17
+
+Source commit `bae628d` extends the existing `CloneIntoCgroupFixture`. It
+stops the native child after `fork`, before the child has an effect. The
+existing `IdentityTestRunner` inspects the clone root and stopped child, then
+releases the child by pidfd. The child makes one direct sentinel `open(2)` and
+writes its one-byte result to the fixture-owned status pipe. Source commit
+`4b4d669` adds bounded stderr to an existing stopped-child failure report. It
+does not change identity, permission, or fixture ownership.
+
+The retained x86_64 Ubuntu 24.04 VM ran Linux `6.8.0-137-generic` and this
+root command with unique paths:
+
+```sh
+/mnt/mithril-source/target/debug/mithril-identity-test \
+  --repo-root /mnt/mithril-source \
+  --output-directory /var/tmp/mithril-phase2-clone-first-effect-20260817-1706 \
+  physical-probe \
+  --pin-root /sys/fs/bpf/mithril-phase2-clone-first-effect-20260817-1706 \
+  --lease-path /run/mithril-phase2-clone-first-effect-20260817-1706.lock \
+  --cgroup-path /sys/fs/cgroup/mithril-phase2-clone-first-effect-20260817-1706
+```
+
+The copied schema-13 JSON is
+`/tmp/mithril-phase2-clone-first-effect-20260817-1706.json`. Its SHA-256 is
+`d690be264034dad636dd64e97e4830ae24b0a11f0ed5077dc525da303069fd44`.
+The test binary SHA-256 is
+`fdf84da58ad0f1ad150dfc184015b2b5ab1415cee1b00c601db3a77900a8adf6`.
+The BPF object SHA-256 is
+`3269516fcd2714ab7fbe29df26386c40f0c912b6284007b641d8bbf68842b876`.
+
+The stopped clone root had task cookie `228`, process state
+`000000000000000100000000000000e2`, no creator, role `11`,
+`external_runtime_root`, `runtime_external_restricted`, and coordinate `3`.
+The stopped native child had task cookie `231`, process state
+`000000000000000100000000000000eb`, creator and real-parent cookie `228`,
+role `11`, no root or installed-role class, coordinate `3`, and active process
+records. `clone_into_cgroup_native_child_first_effect_allowed=true` records
+the child sentinel open. The JSON also records
+`profile_task_refs_after_exit=0`, `pin_root_removed=true`,
+`lease_removed=true`, and `cgroup_removed=true`. Postflight found no case
+namespace, fixture, Mithril pin, node process, lease, or cgroup.
+
+No manual shell is valid for this case. The fixture alone owns the exact
+`CLONE_INTO_CGROUP` file descriptor, stopped root and child, pidfd release,
+and status pipe. A second shell or runner could not reproduce that controlled
+first-effect boundary without violating fixture ownership.
+
+This qualifies `ID-CLONE-CGROUP-002` only. The required repository check ran
+after the source changes: 58 tests passed and four registry tests failed only
+because the user-owned `spec/qualification/v1/fixtures.yaml` architecture
+revision digest does not match its validated document. The remaining required
+fixtures are open. The phase remains **Blocked**.
