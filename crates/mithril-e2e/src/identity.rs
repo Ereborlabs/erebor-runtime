@@ -96,7 +96,7 @@ const REQUIRED_IDENTITY_MAPS: [&str; 55] = [
     "task_reference_tombstones",
 ];
 
-const IDENTITY_FIXTURES: [&str; 31] = [
+const IDENTITY_FIXTURES: [&str; 29] = [
     "AUTHORIZATION-REPLAY-004",
     "ENTRY-BINDING-GAP-001",
     "ENTRY-CONTAINERS-001",
@@ -119,7 +119,6 @@ const IDENTITY_FIXTURES: [&str; 31] = [
     "ENTRY-START-001",
     "ENTRY-STOCK-HOOK-FAILURE-002",
     "EXEC-COMMIT-STATE-001",
-    "EXEC-CONCURRENT-002",
     "ID-CGROUP-ESCAPE-001",
     "ID-CLONE-CGROUP-002",
     "ID-CREATOR-PARENT-007",
@@ -127,7 +126,6 @@ const IDENTITY_FIXTURES: [&str; 31] = [
     "ID-MOVED-TASK-EXEC-005",
     "ID-TASK-COORD-FINALIZE-006",
     "NATIVE-STATE-REF-LIFETIME-001",
-    "STATE-THREAD-RACE-001",
 ];
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]

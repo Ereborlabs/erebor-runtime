@@ -193,6 +193,8 @@ phase remains **Not done**.
 | `IPC-RELATIONSHIP-ALLOW-003` | declared independent roots communicate | configured channel operation succeeds without merging identities |
 | `IPC-RELATIONSHIP-UNMATCHED-005` | unknown/wildcard/reused peer communicates | configured unmatched deny/restriction occurs; declared peer control still works |
 | `STATE-FORK-IPC-002` | fork while pipe/socket state is inherited | inherited family restriction remains active; the later public send receives the configured result |
+| `EXEC-CONCURRENT-002` | race exec attempts with real source and target policy roles | one staged decision; no losing thread or child completes the forbidden effect |
+| `STATE-THREAD-RACE-001` | race a policy role transition with a protected effect | each effect sees one complete policy state; no stale authority completes |
 | `LSM-DENY-SATURATION-001` | fill event path during repeated forbidden effect | every syscall remains denied while loss rises; allowed control remains correct |
 | `MEM-EXEC-001` | execute memfd/deleted/file/anonymous mapping or mprotect transition | forbidden executable memory/image never begins; approved immutable image/mapping succeeds |
 | `MEM-KERNEL-MAP-002` | exhaust/corrupt/race mm/VMA state | missing required state denies; full valid state allows control |

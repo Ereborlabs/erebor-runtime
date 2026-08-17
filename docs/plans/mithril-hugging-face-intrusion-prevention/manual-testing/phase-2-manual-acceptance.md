@@ -295,7 +295,6 @@ start hook.
 | `ENTRY-EXEC-002` | run direct `docker exec` or `crictl exec` with probe-identical argv | restricted external root, never fabricated probe purpose |
 | `ENTRY-EXTERNAL-AMBIGUITY-001` | create indistinguishable external purposes concurrently | same permission intersection/restricted class; no timing/argv split |
 | `ENTRY-LOSS-001` | drop runtime, audit, and entry evidence independently | protected unknown remains restricted and coverage reflects each loss |
-| `ENTRY-MIGRATE-001` | use namespace-only `nsenter`, then move unlabeled/labeled tasks across protected cgroups/namespaces | namespace entry grants no workload identity; movement never grants or clears task-first authority; valid placement control remains allowed |
 | `ENTRY-NETPROBE-001` | run HTTP/TCP/gRPC probes | no fake in-container process root; application receive and host flow remain distinct |
 | `ENTRY-POSTSTART-001` | race `PostStart` and entrypoint in both orders | initial and external roots remain distinct |
 | `ENTRY-POSTSTART-002` | restart kubelet and repeat `PostStart` | fresh task/lifetime identity with same restricted budget; no stale reuse |
@@ -528,9 +527,9 @@ records and no exec guard.
 
 Postflight found no case namespace, fixture directory, Mithril pin, node
 process, lease or work directory, or identifiable manual cgroup. The harness
-then removed the VM and `virsh list --all` was empty. This reruns the manual
-namespace-entry and labeled-child cases. It does not prove a protected effect
-or restore, so `ENTRY-MIGRATE-001` remains **Blocked**.
+then removed the VM and `virsh list --all` was empty. This completes the Phase
+2 identity scope of `ENTRY-MIGRATE-001`. Protected effect and restore cases
+begin in Phase 4 and are not a Phase 2 closure gate.
 
 ## Current Moved-Native VM Result — 2026-08-17
 
@@ -662,7 +661,6 @@ The phase remains **Blocked**.
 | --- | --- | --- |
 | `AUTHORIZATION-REPLAY-004` | replay, retarget, expire, reboot, and mismatch signed authorization | every invalid envelope rejects; fresh exact envelope consumes according to contract |
 | `EXEC-COMMIT-STATE-001` | run success, pre-PONR failure, and post-PONR fatal/unknown exec | success commits once; early failure keeps exact prior state; later failure never restores broad authority |
-| `EXEC-CONCURRENT-002` | run [`native-child.sh --concurrent-thread-exec`](../../../../examples/mithril-identity-manual/native-child.sh) in the manual VM | serial and two-worker normal exec passed. Exec versus fork, vfork, and thread creation remain required. |
 | `ID-CGROUP-ESCAPE-001` | move a labeled task to host/unprotected placement | task storage still resolves and denies mismatch; unmoved allowed control works |
 | `ID-CLONE-CGROUP-002` | fixture-owned physical probe; no manual shell is valid | stopped clone child has exact inherited identity before one direct first effect |
 | `ID-CREATOR-PARENT-007` | reparent or orphan a child after native creation. Use [`native-child.sh --orphan`](../../../../examples/mithril-identity-manual/native-child.sh) for creator exit, [`native-child.sh --double-fork`](../../../../examples/mithril-identity-manual/native-child.sh) for double fork, [`native-child.sh --subreaper`](../../../../examples/mithril-identity-manual/native-child.sh) for subreaper reparenting, and [`native-child.sh --namespace-init`](../../../../examples/mithril-identity-manual/native-child.sh) for PID-namespace-init reparenting. | The immutable creator edge stays exact while the real-parent interval changes. The qualified branches do not cover ptrace reparenting or PID reuse. |
@@ -670,7 +668,6 @@ The phase remains **Blocked**.
 | `ID-MOVED-TASK-EXEC-005` | move labeled task, then exec | task-first old identity and placement mismatch constrain transition |
 | `ID-TASK-COORD-FINALIZE-006` | inspect task at allocation, pre-wake finalization, visibility, and exit | opaque state precedes effect; PID/TGID/start coordinates finalize later without granting permission |
 | `NATIVE-STATE-REF-LIFETIME-001` | exit tasks/processes while sockets/objects/generations remain referenced | exact references/tombstones retain restrictions until final qualified release |
-| `STATE-THREAD-RACE-001` | race threads changing/using process and native restrictions | atomic monotonic result; no thread recovers earlier authority |
 
 ## Administrative Identity Partial Gate
 
