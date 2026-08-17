@@ -163,6 +163,7 @@ pub struct IdentityPhysicalProbeBundleV1 {
     pub concurrent_thread_exec_after_exec: NativeTaskSnapshotV1,
     pub clone_into_cgroup_external_root: NativeTaskSnapshotV1,
     pub clone_into_cgroup_native_child: NativeTaskSnapshotV1,
+    pub clone_into_cgroup_native_child_after_namespace_move: NativeTaskSnapshotV1,
     pub external_root: NativeTaskSnapshotV1,
     pub native_child_before_exec: NativeTaskSnapshotV1,
     pub native_child_after_exec: NativeTaskSnapshotV1,
@@ -422,7 +423,8 @@ impl IdentityTestRunner {
         );
         escape_fixture.stop();
 
-        let mut clone_fixture = CloneIntoCgroupFixture::start(&cgroup_path)?;
+        let mut clone_fixture =
+            CloneIntoCgroupFixture::start_with_mount_namespace_target(&cgroup_path)?;
         let clone_external_root = self.wait_for(
             "pre-wake CLONE_INTO_CGROUP external root identity",
             &procs_path,
@@ -453,6 +455,54 @@ impl IdentityTestRunner {
             InvalidInputSnafu {
                 path: &procs_path,
                 reason: "CLONE_INTO_CGROUP root or its native child has the wrong identity",
+            }
+        );
+        let clone_child_mount_namespace = fs::read_link(format!("/proc/{clone_child_pid}/ns/mnt"))
+            .context(IoSnafu {
+                path: PathBuf::from(format!("/proc/{clone_child_pid}/ns/mnt")),
+            })?;
+        let clone_target_mount_namespace = clone_fixture.target_mount_namespace()?;
+        ensure!(
+            clone_child_mount_namespace != clone_target_mount_namespace,
+            InvalidInputSnafu {
+                path: PathBuf::from(format!("/proc/{clone_child_pid}/ns/mnt")),
+                reason: "native child already has the target mount namespace",
+            }
+        );
+        clone_fixture.release_child_into_mount_namespace()?;
+        let clone_native_child_after_namespace_move = self.wait_for(
+            "CLONE_INTO_CGROUP native child mount-namespace entry",
+            &procs_path,
+            || {
+                let snapshot = inspector.snapshot(clone_child_pid).context(NodeSnafu)?;
+                Ok(snapshot.filter(|snapshot| {
+                    snapshot.task_cookie == clone_native_child.task_cookie
+                        && snapshot.creator_task_cookie == clone_native_child.creator_task_cookie
+                        && snapshot.real_parent_task_cookie
+                            == clone_native_child.real_parent_task_cookie
+                        && snapshot.process_state_id == clone_native_child.process_state_id
+                        && snapshot.active_execution_id != clone_native_child.active_execution_id
+                        && snapshot.image_provenance_id != clone_native_child.image_provenance_id
+                        && snapshot.active_role_id == clone_native_child.active_role_id
+                        && snapshot.root_class.is_none()
+                        && snapshot.installed_role_class.is_none()
+                        && snapshot.coordinate_state == TaskCoordinateStateV1::Runnable as u8
+                        && snapshot.process_execution_state == ProcessExecutionStateV1::Active as u8
+                        && snapshot.process_state_vector_state
+                            == ProcessStateVectorStateV1::Active as u8
+                        && snapshot.exec_guard_state == ExecGuardStateV1::None as u8
+                }))
+            },
+        )?;
+        let clone_child_mount_namespace_after =
+            fs::read_link(format!("/proc/{clone_child_pid}/ns/mnt")).context(IoSnafu {
+                path: PathBuf::from(format!("/proc/{clone_child_pid}/ns/mnt")),
+            })?;
+        ensure!(
+            clone_child_mount_namespace_after == clone_target_mount_namespace,
+            InvalidInputSnafu {
+                path: PathBuf::from(format!("/proc/{clone_child_pid}/ns/mnt")),
+                reason: "native child did not enter the target mount namespace",
             }
         );
         clone_fixture.stop();
@@ -1224,7 +1274,7 @@ impl IdentityTestRunner {
             }
         );
         Ok(IdentityPhysicalProbeBundleV1 {
-            schema_version: 7,
+            schema_version: 8,
             object_sha256,
             first_start,
             distinct_pin_root_owner_rejected,
@@ -1244,6 +1294,8 @@ impl IdentityTestRunner {
             concurrent_thread_exec_after_exec,
             clone_into_cgroup_external_root: clone_external_root,
             clone_into_cgroup_native_child: clone_native_child,
+            clone_into_cgroup_native_child_after_namespace_move:
+                clone_native_child_after_namespace_move,
             external_root,
             native_child_before_exec: before_exec,
             native_child_after_exec: after_exec,

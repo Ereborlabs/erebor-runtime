@@ -43,6 +43,18 @@ cgroup and requires the restricted external-root identity. The command removes
 the child, Pod, node process, pin root, lease, state, and fixture directory at
 exit.
 
+Run this labeled native-child namespace-entry case from the same root shell:
+
+```sh
+examples/mithril-identity-manual/nsenter-move.sh --labeled-task
+```
+
+The command creates one restricted external root in the Pod cgroup. Its stopped
+native child enters only the Pod mount namespace, then executes `sleep`. The
+child must keep its task, creator, parent, process, and role identities. Its
+execution and image identities must change. The command removes the child,
+Pod, node process, pin root, lease, state, and fixture directory at exit.
+
 ## Operator Cases
 
 Outside the manual VM, build the real node and inspector once:
@@ -66,6 +78,7 @@ Then run only the case being checked:
 | Non-leader Python thread exec | `sudo examples/mithril-identity-manual/native-child.sh --thread-exec` in the manual VM; otherwise `sudo examples/mithril-identity-manual/native-child.sh NODE_CONFIG CONTAINER_OR_FULL_CRI_ID --thread-exec` |
 | Concurrent Python thread exec | `sudo examples/mithril-identity-manual/native-child.sh --concurrent-thread-exec` in the manual VM |
 | `nsenter` and cgroup movement | `sudo examples/mithril-identity-manual/nsenter-move.sh` in the manual VM |
+| Labeled native-child mount entry | `sudo examples/mithril-identity-manual/nsenter-move.sh --labeled-task` in the manual VM |
 | Node restart | `sudo examples/mithril-identity-manual/restart.sh NODE_CONFIG CONTAINER_OR_FULL_CRI_ID` |
 
 Kubernetes is optional, not excluded: only `kubernetes-exec.sh` requires it.
@@ -125,6 +138,29 @@ The moved child must have no creator task cookie, `external_runtime_root`,
 This is one namespace-entry and cgroup-move identity subcase. It does not test
 a protected effect, movement of an already labeled task, restore, or the full
 entry-migration matrix.
+
+## Labeled Native-Child Mount-Namespace Entry Check
+
+Use this check in the retained manual VM as root:
+
+```bash
+sudo examples/mithril-identity-manual/nsenter-move.sh --labeled-task
+```
+
+The script creates one Python Pod and a live CRI binding. It moves one waiting
+host Bash root into the configured cgroup and requires the restricted external
+root identity. The root creates one stopped native child. The child enters only
+the Pod mount namespace and executes `sleep 300`.
+
+Before entry, the child must name the root as creator and current real parent.
+After entry, it must keep its task cookie, creator cookie, real-parent cookie,
+process state, and restricted role. Its active execution and image provenance
+identities must change. It must stay `Runnable` with active process execution
+and state-vector records. The script removes the child, Pod, node process, pin
+root, lease, state, and fixture directory at exit.
+
+This is one labeled namespace-entry subcase. It does not test a protected
+effect, restore, or the full entry-migration matrix.
 
 ## Creator-Exit Native Child Check
 

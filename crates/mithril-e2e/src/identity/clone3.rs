@@ -1,12 +1,16 @@
 #![allow(unsafe_code)]
 
 use std::fs::File;
-use std::os::fd::{AsRawFd as _, OwnedFd};
+use std::io::Write as _;
+use std::os::fd::{AsRawFd as _, FromRawFd as _, OwnedFd};
 use std::path::{Path, PathBuf};
+use std::process::{Child, Command, Stdio};
+use std::thread;
+use std::time::Duration;
 
 use linux_raw_sys::general::clone_args;
 use rustix::process::{pidfd_open, pidfd_send_signal, Pid, PidfdFlags, Signal};
-use snafu::ResultExt as _;
+use snafu::{ensure, ResultExt as _};
 
 use crate::error::{InvalidInputSnafu, IoSnafu};
 use crate::Result;
@@ -15,11 +19,42 @@ pub(super) struct CloneIntoCgroupFixture {
     root_pid: u32,
     root_pidfd: OwnedFd,
     child_pidfd: Option<OwnedFd>,
+    namespace_target: Option<Child>,
+    namespace_target_pipe: Option<File>,
 }
 
 impl CloneIntoCgroupFixture {
     pub(super) fn start(cgroup_path: &Path) -> Result<Self> {
-        let cgroup = File::open(cgroup_path).context(IoSnafu { path: cgroup_path })?;
+        Self::start_with_namespace_target(cgroup_path, None)
+    }
+
+    pub(super) fn start_with_mount_namespace_target(cgroup_path: &Path) -> Result<Self> {
+        let target = start_mount_namespace_target()?;
+        Self::start_with_namespace_target(cgroup_path, Some(target))
+    }
+
+    fn start_with_namespace_target(
+        cgroup_path: &Path,
+        mut namespace_target: Option<Child>,
+    ) -> Result<Self> {
+        let cgroup = match File::open(cgroup_path).context(IoSnafu { path: cgroup_path }) {
+            Ok(cgroup) => cgroup,
+            Err(error) => {
+                stop_namespace_target(&mut namespace_target);
+                return Err(error);
+            }
+        };
+        let (namespace_target_read, namespace_target_pipe) = if namespace_target.is_some() {
+            match namespace_target_pipe() {
+                Ok((read, write)) => (Some(read), Some(write)),
+                Err(error) => {
+                    stop_namespace_target(&mut namespace_target);
+                    return Err(error);
+                }
+            }
+        } else {
+            (None, None)
+        };
         let args = clone_args {
             flags: linux_raw_sys::general::CLONE_INTO_CGROUP,
             pidfd: 0,
@@ -36,21 +71,35 @@ impl CloneIntoCgroupFixture {
         let result =
             unsafe { libc::syscall(libc::SYS_clone3, &raw const args, size_of::<clone_args>()) };
         if result == 0 {
-            run_child();
+            run_child(namespace_target_read.as_ref().map(|file| file.as_raw_fd()));
         }
         if result < 0 {
+            stop_namespace_target(&mut namespace_target);
             return Err(invalid_state(format!(
                 "clone3(CLONE_INTO_CGROUP) failed: {}",
                 std::io::Error::last_os_error()
             )));
         }
+        drop(namespace_target_read);
         let root_pid = u32::try_from(result)
             .map_err(|error| invalid_state(format!("clone3 returned an invalid PID: {error}")))?;
-        let root_pidfd = open_pidfd(root_pid)?;
+        let root_pidfd = match open_pidfd(root_pid) {
+            Ok(root_pidfd) => root_pidfd,
+            Err(error) => {
+                unsafe {
+                    libc::kill(result as libc::pid_t, libc::SIGKILL);
+                    libc::waitpid(result as libc::pid_t, std::ptr::null_mut(), 0);
+                }
+                stop_namespace_target(&mut namespace_target);
+                return Err(error);
+            }
+        };
         Ok(Self {
             root_pid,
             root_pidfd,
             child_pidfd: None,
+            namespace_target,
+            namespace_target_pipe,
         })
     }
 
@@ -101,6 +150,69 @@ impl CloneIntoCgroupFixture {
             self.child_pidfd = Some(open_pidfd(pid)?);
         }
         Ok(Some(pid))
+    }
+
+    pub(super) fn target_mount_namespace(&mut self) -> Result<PathBuf> {
+        let target = self
+            .namespace_target
+            .as_mut()
+            .ok_or_else(|| invalid_state("clone fixture has no mount-namespace target"))?;
+        ensure!(
+            target
+                .try_wait()
+                .context(IoSnafu {
+                    path: Path::new("mount-namespace target"),
+                })?
+                .is_none(),
+            InvalidInputSnafu {
+                path: Path::new("mount-namespace target"),
+                reason: "mount-namespace target exited before native entry",
+            }
+        );
+        let path = PathBuf::from(format!("/proc/{}/ns/mnt", target.id()));
+        std::fs::read_link(&path).context(IoSnafu { path: &path })
+    }
+
+    pub(super) fn release_child_into_mount_namespace(&mut self) -> Result<()> {
+        let target = self
+            .namespace_target
+            .as_mut()
+            .ok_or_else(|| invalid_state("clone fixture has no mount-namespace target"))?;
+        ensure!(
+            target
+                .try_wait()
+                .context(IoSnafu {
+                    path: Path::new("mount-namespace target"),
+                })?
+                .is_none(),
+            InvalidInputSnafu {
+                path: Path::new("mount-namespace target"),
+                reason: "mount-namespace target exited before native entry",
+            }
+        );
+        let mut target_argument = [0_u8; 16];
+        let target_pid = target.id().to_string();
+        ensure!(
+            target_pid.len() < target_argument.len(),
+            InvalidInputSnafu {
+                path: Path::new("mount-namespace target"),
+                reason: "mount-namespace target PID does not fit the fixture protocol",
+            }
+        );
+        target_argument[..target_pid.len()].copy_from_slice(target_pid.as_bytes());
+        self.namespace_target_pipe
+            .as_mut()
+            .ok_or_else(|| invalid_state("clone fixture has no namespace-target pipe"))?
+            .write_all(&target_argument)
+            .context(IoSnafu {
+                path: Path::new("mount-namespace target pipe"),
+            })?;
+        let child_pidfd = self
+            .child_pidfd
+            .as_ref()
+            .ok_or_else(|| invalid_state("clone fixture has no native child pidfd"))?;
+        pidfd_send_signal(child_pidfd, Signal::CONT)
+            .map_err(|error| invalid_state(format!("release native namespace entry: {error}")))
     }
 
     pub(super) fn moved_parent_fork_denied(&mut self) -> Result<Option<()>> {
@@ -157,6 +269,7 @@ impl CloneIntoCgroupFixture {
         unsafe {
             libc::waitpid(self.root_pid as libc::pid_t, &raw mut status, 0);
         }
+        stop_namespace_target(&mut self.namespace_target);
     }
 }
 
@@ -182,7 +295,60 @@ fn invalid_state(reason: impl Into<String>) -> crate::Error {
     .build()
 }
 
-fn run_child() -> ! {
+fn namespace_target_pipe() -> Result<(File, File)> {
+    let mut descriptors = [-1; 2];
+    let result = unsafe { libc::pipe2(descriptors.as_mut_ptr(), libc::O_CLOEXEC) };
+    if result != 0 {
+        return Err(invalid_state(format!(
+            "create namespace-target pipe: {}",
+            std::io::Error::last_os_error()
+        )));
+    }
+    let read = unsafe { File::from_raw_fd(descriptors[0]) };
+    let write = unsafe { File::from_raw_fd(descriptors[1]) };
+    Ok((read, write))
+}
+
+fn start_mount_namespace_target() -> Result<Child> {
+    let current = std::fs::read_link("/proc/self/ns/mnt").context(IoSnafu {
+        path: Path::new("/proc/self/ns/mnt"),
+    })?;
+    let mut target = Command::new("/usr/bin/unshare")
+        .args(["--mount", "--propagation", "private", "/bin/sleep", "30"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .context(IoSnafu {
+            path: Path::new("/usr/bin/unshare"),
+        })?;
+    let path = PathBuf::from(format!("/proc/{}/ns/mnt", target.id()));
+    for _ in 0..100 {
+        if let Some(status) = target.try_wait().context(IoSnafu { path: &path })? {
+            return Err(invalid_state(format!(
+                "mount-namespace target exited before setup: {status}"
+            )));
+        }
+        if std::fs::read_link(&path).context(IoSnafu { path: &path })? != current {
+            return Ok(target);
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+    let _result = target.kill();
+    let _result = target.wait();
+    Err(invalid_state(
+        "mount-namespace target did not enter a distinct mount namespace",
+    ))
+}
+
+fn stop_namespace_target(target: &mut Option<Child>) {
+    if let Some(target) = target {
+        let _result = target.kill();
+        let _result = target.wait();
+    }
+}
+
+fn run_child(namespace_target_fd: Option<i32>) -> ! {
     unsafe {
         libc::raise(libc::SIGSTOP);
     }
@@ -190,7 +356,38 @@ fn run_child() -> ! {
     if native_child == 0 {
         unsafe {
             libc::raise(libc::SIGSTOP);
-            libc::_exit(0);
+        }
+        let Some(namespace_target_fd) = namespace_target_fd else {
+            unsafe { libc::_exit(0) }
+        };
+        let mut target = [0_u8; 16];
+        let mut read = 0;
+        while read < target.len() {
+            let result = unsafe {
+                libc::read(
+                    namespace_target_fd,
+                    target[read..].as_mut_ptr().cast(),
+                    target.len() - read,
+                )
+            };
+            if result <= 0 {
+                unsafe { libc::_exit(126) }
+            }
+            read += result as usize;
+        }
+        unsafe {
+            libc::execl(
+                c"/usr/bin/nsenter".as_ptr(),
+                c"nsenter".as_ptr(),
+                c"-t".as_ptr(),
+                target.as_ptr().cast::<libc::c_char>(),
+                c"-m".as_ptr(),
+                c"--".as_ptr(),
+                c"/bin/sleep".as_ptr(),
+                c"30".as_ptr(),
+                std::ptr::null::<libc::c_char>(),
+            );
+            libc::_exit(127);
         }
     }
     if native_child < 0 {
@@ -230,6 +427,8 @@ mod tests {
             root_pid,
             root_pidfd: open_pidfd(root_pid)?,
             child_pidfd: None,
+            namespace_target: None,
+            namespace_target_pipe: None,
         };
         for _ in 0..100 {
             if fixture.moved_parent_fork_denied()?.is_some() {
