@@ -266,9 +266,7 @@ pub struct DeterministicPathTerminalV1 {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PathTreeDenyPatternV1 {
-    pub rule_id: String,
     pub components: Vec<Vec<u8>>,
-    pub recursive: bool,
     pub operations: Vec<u16>,
 }
 
@@ -558,8 +556,7 @@ impl CanonicalPathGraphV1 {
     ) -> Result<()> {
         ensure_path(
             policy_id,
-            !pattern.rule_id.is_empty()
-                && !pattern.components.is_empty()
+            !pattern.components.is_empty()
                 && pattern.components.len() <= MAX_CANONICAL_PATH_COMPONENTS_V1
                 && !pattern.operations.is_empty()
                 && pattern.operations.windows(2).all(|pair| pair[0] < pair[1])
@@ -597,9 +594,7 @@ impl CanonicalPathGraphV1 {
         self.states[state_id]
             .path_tree_deny_operations
             .extend(&pattern.operations);
-        if pattern.recursive {
-            self.states[state_id].wildcards.insert(state_id);
-        }
+        self.states[state_id].wildcards.insert(state_id);
         Ok(())
     }
 }
@@ -878,9 +873,7 @@ mod tests {
             "test",
             &[],
             &[PathTreeDenyPatternV1 {
-                rule_id: "deny-secret-tree".to_owned(),
                 components: canonical_path_components("test", "/tmp/secret-dir")?,
-                recursive: true,
                 operations: vec![2],
             }],
         )?

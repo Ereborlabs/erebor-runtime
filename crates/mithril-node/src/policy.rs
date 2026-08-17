@@ -3374,13 +3374,11 @@ fn lower_path_tables(
                 .collect::<Result<Vec<_>>>()?;
             operations.sort_unstable();
             Ok(PathTreeDenyPatternV1 {
-                rule_id: floor.rule_id.clone(),
                 components: canonical_path_components(
                     artifact.header.profile_id.as_str(),
                     &floor.canonical_path,
                 )
                 .context(PolicySnafu)?,
-                recursive: floor.recursive,
                 operations,
             })
         })
