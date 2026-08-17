@@ -2,7 +2,7 @@
 
 use std::ffi::CString;
 use std::fs::File;
-use std::io::Write as _;
+use std::io::{ErrorKind, Read as _, Write as _};
 use std::os::fd::{AsRawFd as _, FromRawFd as _, OwnedFd};
 use std::os::unix::ffi::OsStrExt as _;
 use std::path::{Path, PathBuf};
@@ -23,26 +23,35 @@ pub(super) struct CloneIntoCgroupFixture {
     child_pidfd: Option<OwnedFd>,
     namespace_target: Option<Child>,
     namespace_target_pipe: Option<File>,
+    native_child_effect_status: Option<File>,
 }
 
 impl CloneIntoCgroupFixture {
     pub(super) fn start(cgroup_path: &Path) -> Result<Self> {
-        Self::start_with_namespace_target(cgroup_path, None, None)
+        Self::start_with_namespace_target(cgroup_path, None, None, None)
     }
 
     pub(super) fn start_with_root_first_effect(cgroup_path: &Path, path: &Path) -> Result<Self> {
-        Self::start_with_namespace_target(cgroup_path, None, Some(path))
+        Self::start_with_namespace_target(cgroup_path, None, Some(path), None)
+    }
+
+    pub(super) fn start_with_native_child_first_effect(
+        cgroup_path: &Path,
+        path: &Path,
+    ) -> Result<Self> {
+        Self::start_with_namespace_target(cgroup_path, None, None, Some(path))
     }
 
     pub(super) fn start_with_mount_namespace_target(cgroup_path: &Path) -> Result<Self> {
         let target = start_mount_namespace_target()?;
-        Self::start_with_namespace_target(cgroup_path, Some(target), None)
+        Self::start_with_namespace_target(cgroup_path, Some(target), None, None)
     }
 
     fn start_with_namespace_target(
         cgroup_path: &Path,
         mut namespace_target: Option<Child>,
         first_effect_path: Option<&Path>,
+        native_child_first_effect_path: Option<&Path>,
     ) -> Result<Self> {
         let cgroup = match File::open(cgroup_path).context(IoSnafu { path: cgroup_path }) {
             Ok(cgroup) => cgroup,
@@ -62,6 +71,18 @@ impl CloneIntoCgroupFixture {
         } else {
             (None, None)
         };
+        let (native_child_effect_status, native_child_effect_status_write) =
+            if native_child_first_effect_path.is_some() {
+                match native_child_effect_status_pipe() {
+                    Ok((read, write)) => (Some(read), Some(write)),
+                    Err(error) => {
+                        stop_namespace_target(&mut namespace_target);
+                        return Err(error);
+                    }
+                }
+            } else {
+                (None, None)
+            };
         let args = clone_args {
             flags: linux_raw_sys::general::CLONE_INTO_CGROUP,
             pidfd: 0,
@@ -81,6 +102,10 @@ impl CloneIntoCgroupFixture {
             run_child(
                 namespace_target_read.as_ref().map(|file| file.as_raw_fd()),
                 first_effect_path,
+                native_child_first_effect_path,
+                native_child_effect_status_write
+                    .as_ref()
+                    .map(|file| file.as_raw_fd()),
             );
         }
         if result < 0 {
@@ -91,6 +116,7 @@ impl CloneIntoCgroupFixture {
             )));
         }
         drop(namespace_target_read);
+        drop(native_child_effect_status_write);
         let root_pid = u32::try_from(result)
             .map_err(|error| invalid_state(format!("clone3 returned an invalid PID: {error}")))?;
         let root_pidfd = match open_pidfd(root_pid) {
@@ -110,6 +136,7 @@ impl CloneIntoCgroupFixture {
             child_pidfd: None,
             namespace_target,
             namespace_target_pipe,
+            native_child_effect_status,
         })
     }
 
@@ -223,6 +250,38 @@ impl CloneIntoCgroupFixture {
             .ok_or_else(|| invalid_state("clone fixture has no native child pidfd"))?;
         pidfd_send_signal(child_pidfd, Signal::CONT)
             .map_err(|error| invalid_state(format!("release native namespace entry: {error}")))
+    }
+
+    pub(super) fn release_child_first_effect(&self) -> Result<()> {
+        let child_pidfd = self
+            .child_pidfd
+            .as_ref()
+            .ok_or_else(|| invalid_state("clone fixture has no native child pidfd"))?;
+        pidfd_send_signal(child_pidfd, Signal::CONT)
+            .map_err(|error| invalid_state(format!("release native child first effect: {error}")))
+    }
+
+    pub(super) fn native_child_first_effect_allowed(&mut self) -> Result<Option<()>> {
+        let status = self
+            .native_child_effect_status
+            .as_mut()
+            .ok_or_else(|| invalid_state("clone fixture has no native-child effect status pipe"))?;
+        let mut result = [0_u8; 1];
+        match status.read(&mut result) {
+            Ok(1) if result[0] == 0 => Ok(Some(())),
+            Ok(1) => Err(invalid_state(format!(
+                "native child first effect exited with status {}",
+                result[0]
+            ))),
+            Ok(0) => Err(invalid_state(
+                "native child first effect closed without an exit status",
+            )),
+            Ok(_) => Err(invalid_state("native child effect status is malformed")),
+            Err(source) if source.kind() == ErrorKind::WouldBlock => Ok(None),
+            Err(source) => Err(source).context(IoSnafu {
+                path: Path::new("native-child first-effect status pipe"),
+            }),
+        }
     }
 
     pub(super) fn moved_parent_fork_denied(&mut self) -> Result<Option<()>> {
@@ -377,6 +436,21 @@ fn namespace_target_pipe() -> Result<(File, File)> {
     Ok((read, write))
 }
 
+fn native_child_effect_status_pipe() -> Result<(File, File)> {
+    let mut descriptors = [-1; 2];
+    let result =
+        unsafe { libc::pipe2(descriptors.as_mut_ptr(), libc::O_CLOEXEC | libc::O_NONBLOCK) };
+    if result != 0 {
+        return Err(invalid_state(format!(
+            "create native-child first-effect status pipe: {}",
+            std::io::Error::last_os_error()
+        )));
+    }
+    let read = unsafe { File::from_raw_fd(descriptors[0]) };
+    let write = unsafe { File::from_raw_fd(descriptors[1]) };
+    Ok((read, write))
+}
+
 fn start_mount_namespace_target() -> Result<Child> {
     let current = std::fs::read_link("/proc/self/ns/mnt").context(IoSnafu {
         path: Path::new("/proc/self/ns/mnt"),
@@ -416,29 +490,28 @@ fn stop_namespace_target(target: &mut Option<Child>) {
     }
 }
 
-fn run_child(namespace_target_fd: Option<i32>, first_effect_path: Option<&Path>) -> ! {
+fn run_child(
+    namespace_target_fd: Option<i32>,
+    first_effect_path: Option<&Path>,
+    native_child_first_effect_path: Option<&Path>,
+    native_child_effect_status_fd: Option<i32>,
+) -> ! {
     unsafe {
         libc::raise(libc::SIGSTOP);
     }
     if let Some(path) = first_effect_path {
-        let path = CString::new(path.as_os_str().as_bytes())
-            .unwrap_or_else(|_| unsafe { libc::_exit(126) });
-        let descriptor = unsafe { libc::open(path.as_ptr(), libc::O_RDONLY | libc::O_CLOEXEC) };
-        if descriptor >= 0 {
-            unsafe {
-                libc::close(descriptor);
-                libc::_exit(0);
-            }
-        }
-        let status = std::io::Error::last_os_error()
-            .raw_os_error()
-            .unwrap_or(127);
-        unsafe { libc::_exit(status) }
+        direct_open_exit(path);
     }
     let native_child = unsafe { libc::fork() };
     if native_child == 0 {
         unsafe {
             libc::raise(libc::SIGSTOP);
+        }
+        if let Some(path) = native_child_first_effect_path {
+            let Some(status_fd) = native_child_effect_status_fd else {
+                unsafe { libc::_exit(125) }
+            };
+            direct_open_with_status_exit(path, status_fd);
         }
         let Some(namespace_target_fd) = namespace_target_fd else {
             unsafe { libc::_exit(0) }
@@ -485,6 +558,43 @@ fn run_child(namespace_target_fd: Option<i32>, first_effect_path: Option<&Path>)
     }
 }
 
+fn direct_open_exit(path: &Path) -> ! {
+    let path =
+        CString::new(path.as_os_str().as_bytes()).unwrap_or_else(|_| unsafe { libc::_exit(126) });
+    let descriptor = unsafe { libc::open(path.as_ptr(), libc::O_RDONLY | libc::O_CLOEXEC) };
+    if descriptor >= 0 {
+        unsafe {
+            libc::close(descriptor);
+            libc::_exit(0);
+        }
+    }
+    let status = std::io::Error::last_os_error()
+        .raw_os_error()
+        .unwrap_or(127);
+    unsafe { libc::_exit(status) }
+}
+
+fn direct_open_with_status_exit(path: &Path, status_fd: i32) -> ! {
+    let path =
+        CString::new(path.as_os_str().as_bytes()).unwrap_or_else(|_| unsafe { libc::_exit(126) });
+    let descriptor = unsafe { libc::open(path.as_ptr(), libc::O_RDONLY | libc::O_CLOEXEC) };
+    let status = if descriptor >= 0 {
+        unsafe {
+            libc::close(descriptor);
+        }
+        0
+    } else {
+        std::io::Error::last_os_error()
+            .raw_os_error()
+            .unwrap_or(127)
+    };
+    let byte = [u8::try_from(status).unwrap_or(127)];
+    if unsafe { libc::write(status_fd, byte.as_ptr().cast(), byte.len()) } != 1 {
+        unsafe { libc::_exit(125) }
+    }
+    unsafe { libc::_exit(status) }
+}
+
 #[cfg(test)]
 mod tests {
     use std::thread;
@@ -512,6 +622,7 @@ mod tests {
             child_pidfd: None,
             namespace_target: None,
             namespace_target_pipe: None,
+            native_child_effect_status: None,
         };
         for _ in 0..100 {
             if fixture.moved_parent_fork_denied()?.is_some() {

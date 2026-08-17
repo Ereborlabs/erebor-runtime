@@ -172,6 +172,9 @@ pub struct IdentityPhysicalProbeBundleV1 {
     pub clone_into_cgroup_external_root: NativeTaskSnapshotV1,
     pub clone_into_cgroup_native_child: NativeTaskSnapshotV1,
     pub clone_into_cgroup_native_child_after_namespace_move: NativeTaskSnapshotV1,
+    pub clone_into_cgroup_first_effect_root: NativeTaskSnapshotV1,
+    pub clone_into_cgroup_first_effect_child: NativeTaskSnapshotV1,
+    pub clone_into_cgroup_native_child_first_effect_allowed: bool,
     pub external_root: NativeTaskSnapshotV1,
     pub native_child_before_exec: NativeTaskSnapshotV1,
     pub native_child_after_exec: NativeTaskSnapshotV1,
@@ -1655,6 +1658,75 @@ impl IdentityTestRunner {
             }
         );
         cgroup_escape_fixture.stop();
+
+        let mut clone_first_effect_fixture =
+            CloneIntoCgroupFixture::start_with_native_child_first_effect(
+                &cgroup_path,
+                &cgroup_escape_sentinel_path,
+            )?;
+        let clone_into_cgroup_first_effect_root = self.wait_for(
+            "CLONE_INTO_CGROUP first-effect root identity",
+            &procs_path,
+            || {
+                inspector
+                    .snapshot(clone_first_effect_fixture.root_pid())
+                    .context(NodeSnafu)
+            },
+        )?;
+        clone_first_effect_fixture.release_root()?;
+        let clone_into_cgroup_first_effect_child_pid = self.wait_for(
+            "CLONE_INTO_CGROUP first-effect native child",
+            &procs_path,
+            || clone_first_effect_fixture.child_pid(),
+        )?;
+        let clone_into_cgroup_first_effect_child = self.wait_for(
+            "CLONE_INTO_CGROUP first-effect native child identity",
+            &procs_path,
+            || {
+                inspector
+                    .snapshot(clone_into_cgroup_first_effect_child_pid)
+                    .context(NodeSnafu)
+            },
+        )?;
+        ensure!(
+            clone_into_cgroup_first_effect_root
+                .creator_task_cookie
+                .is_none()
+                && clone_into_cgroup_first_effect_root.root_class == Some("external_runtime_root")
+                && clone_into_cgroup_first_effect_root.installed_role_class
+                    == Some("runtime_external_restricted")
+                && clone_into_cgroup_first_effect_root.active_role_id == binding.external_role_id
+                && clone_into_cgroup_first_effect_root.coordinate_state
+                    == TaskCoordinateStateV1::Runnable as u8
+                && clone_into_cgroup_first_effect_child.creator_task_cookie
+                    == Some(clone_into_cgroup_first_effect_root.task_cookie)
+                && clone_into_cgroup_first_effect_child.real_parent_task_cookie
+                    == clone_into_cgroup_first_effect_root.task_cookie
+                && clone_into_cgroup_first_effect_child.root_class.is_none()
+                && clone_into_cgroup_first_effect_child
+                    .installed_role_class
+                    .is_none()
+                && clone_into_cgroup_first_effect_child.active_role_id
+                    == clone_into_cgroup_first_effect_root.active_role_id
+                && clone_into_cgroup_first_effect_child.coordinate_state
+                    == TaskCoordinateStateV1::Runnable as u8
+                && clone_into_cgroup_first_effect_child.process_execution_state
+                    == ProcessExecutionStateV1::Active as u8
+                && clone_into_cgroup_first_effect_child.process_state_vector_state
+                    == ProcessStateVectorStateV1::Active as u8,
+            InvalidInputSnafu {
+                path: &procs_path,
+                reason:
+                    "CLONE_INTO_CGROUP first-effect root or native child has the wrong identity",
+            }
+        );
+        clone_first_effect_fixture.release_child_first_effect()?;
+        self.wait_for(
+            "CLONE_INTO_CGROUP native-child first-effect success",
+            &procs_path,
+            || clone_first_effect_fixture.native_child_first_effect_allowed(),
+        )?;
+        clone_first_effect_fixture.stop();
         cgroup_escape_sentinel_cleanup.cleanup()?;
 
         let profile_task_refs_after_exit =
@@ -1741,7 +1813,7 @@ impl IdentityTestRunner {
             }
         );
         Ok(IdentityPhysicalProbeBundleV1 {
-            schema_version: 12,
+            schema_version: 13,
             object_sha256,
             first_start,
             distinct_pin_root_owner_rejected,
@@ -1771,6 +1843,9 @@ impl IdentityTestRunner {
             clone_into_cgroup_native_child: clone_native_child,
             clone_into_cgroup_native_child_after_namespace_move:
                 clone_native_child_after_namespace_move,
+            clone_into_cgroup_first_effect_root,
+            clone_into_cgroup_first_effect_child,
+            clone_into_cgroup_native_child_first_effect_allowed: true,
             external_root,
             native_child_before_exec: before_exec,
             native_child_after_exec: after_exec,
