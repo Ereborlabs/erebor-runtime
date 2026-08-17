@@ -1,0 +1,330 @@
+api_version: mithril.erebor.dev/v1
+kind: ProtectionPolicy
+metadata:
+  profile_id: 11111111-1111-4111-8111-111111111111
+  profile_version: 1
+  trust_domain_id: 22222222-2222-4222-8222-222222222222
+  valid_from_utc: 2026-01-01T00:00:00Z
+  valid_until_utc: 2030-01-01T00:00:00Z
+required_capability_ids: [EXACT_NATIVE_IDENTITY, LOCAL_EFFECT_OBSERVATION]
+protected_universe:
+  workload_selector_ids: [worker]
+  protected_scope_ids: [33333333-3333-4333-8333-333333333333]
+  execution_set_ids: [44444444-4444-4444-8444-444444444444]
+  role_ids: [converter, runtime-external]
+  entry_kind_ids: [CONTAINER_START, EXTERNAL_RUNTIME_UNKNOWN]
+  object_class_ids: [MANUAL_BENIGN, MANUAL_EXEC, MANUAL_SECRET]
+  provider_account_ids: []
+workload_selectors:
+  - workload_selector_id: worker
+    cluster_uids: [55555555-5555-4555-8555-555555555555]
+    namespace_uids: [66666666-6666-4666-8666-666666666666]
+    controller_uids: []
+    service_account_uids: []
+    pod_label_requirements: []
+    container_names: []
+    container_kinds: [APPLICATION]
+    image_digests: []
+classifier_bindings:
+  - classifier_binding_id: manual-benign
+    object_class_id: MANUAL_BENIGN
+    selector:
+      kind: FILESYSTEM_OBJECT
+      workload_selector_ids: [worker]
+      mount_source_class_ids: [manual-source]
+      relative_component_bytes: []
+      filesystem_type_ids: []
+      required_object_type: REGULAR_FILE
+    required_capability_ids: [EXACT_FILE_OBJECT]
+    unknown_result: DENY
+  - classifier_binding_id: manual-secret
+    object_class_id: MANUAL_SECRET
+    selector:
+      kind: FILESYSTEM_OBJECT
+      workload_selector_ids: [worker]
+      mount_source_class_ids: [manual-source]
+      relative_component_bytes: []
+      filesystem_type_ids: []
+      required_object_type: REGULAR_FILE
+    required_capability_ids: [EXACT_FILE_OBJECT]
+    unknown_result: DENY
+  - classifier_binding_id: manual-exec
+    object_class_id: MANUAL_EXEC
+    selector:
+      kind: FILESYSTEM_OBJECT
+      workload_selector_ids: [worker]
+      mount_source_class_ids: [manual-source]
+      relative_component_bytes: []
+      filesystem_type_ids: []
+      required_object_type: REGULAR_FILE
+    required_capability_ids: [EXACT_FILE_OBJECT]
+    unknown_result: DENY
+roles:
+  - role_id: converter
+    maximum_native_depth: 32
+    default_process_state_id: base
+    permitted_entry_kinds: [CONTAINER_START]
+    description_artifact_digest: null
+  - role_id: runtime-external
+    maximum_native_depth: 1
+    default_process_state_id: base
+    permitted_entry_kinds: [EXTERNAL_RUNTIME_UNKNOWN]
+    description_artifact_digest: null
+entry_role_assignments:
+  - assignment_id: initial-worker
+    workload_selector_ids: [worker]
+    entry_kinds: [CONTAINER_START]
+    container_kinds: [APPLICATION]
+    immutable_definition_digests: []
+    accepted_classifications: [EXACT_INITIAL]
+    required_purpose_source_capability_id: null
+    required_administrative_exec_approval: false
+    resulting_role_id: converter
+    on_missing_or_unequal_ambiguity: DENY_PROTECTED_EFFECTS
+    unknown_restricted_role_id: null
+  - assignment_id: external-worker
+    workload_selector_ids: [worker]
+    entry_kinds: [EXTERNAL_RUNTIME_UNKNOWN]
+    container_kinds: [APPLICATION]
+    immutable_definition_digests: []
+    accepted_classifications: [CONSERVATIVE_EXTERNAL_UNKNOWN]
+    required_purpose_source_capability_id: null
+    required_administrative_exec_approval: false
+    resulting_role_id: runtime-external
+    on_missing_or_unequal_ambiguity: RESTRICT_EXTERNAL
+    unknown_restricted_role_id: runtime-external
+native_transition_rules: []
+state_bit_definitions: []
+process_state_definitions:
+  - process_state_id: base
+    state_bits: []
+native_authority_state_rules: []
+ipc_relationship_rules: []
+unmatched_ipc_disposition: DENY
+effect_family_defaults:
+  - role_ids: [converter, runtime-external]
+    effect_family: PRIVILEGE
+    operations: [IO_URING_SETUP]
+    requested_disposition: ALLOW
+    errno: null
+    finding: null
+authority_behavior_rules: []
+correlation_package_bindings: []
+default_postures:
+  missing_task_identity:
+    requested_disposition: DENY
+    finding:
+      reason_code: MISSING_TASK_IDENTITY
+      severity: HIGH
+      route_ids: []
+      evidence_level: STANDARD
+      title_template_id: null
+    unknown_restricted_role_id: null
+  required_classifier_unknown:
+    requested_disposition: DENY
+    finding:
+      reason_code: CLASSIFIER_UNKNOWN
+      severity: HIGH
+      route_ids: []
+      evidence_level: STANDARD
+      title_template_id: null
+    unknown_restricted_role_id: null
+  unresolved_or_external_root:
+    requested_disposition: DENY
+    finding:
+      reason_code: UNRESOLVED_EXTERNAL_ROOT
+      severity: HIGH
+      route_ids: []
+      evidence_level: STANDARD
+      title_template_id: null
+    unknown_restricted_role_id: runtime-external
+notification_routes: []
+response_bindings: []
+exceptions: []
+rules:
+  - schema_version: 1
+    rule_id: allow-manual-benign-read
+    enabled: true
+    priority: 0
+    evaluation_stage: LOCAL_PRE_EFFECT
+    match:
+      kind: LOCAL_PRE_EFFECT
+      subject:
+        workload_selector_ids: [worker]
+        protected_scope_ids: [33333333-3333-4333-8333-333333333333]
+        execution_set_ids: [44444444-4444-4444-8444-444444444444]
+        entry_kind_ids: [EXTERNAL_RUNTIME_UNKNOWN]
+        role_ids: [runtime-external]
+        required_process_state_ids: [base]
+        forbidden_process_state_ids: []
+      effect_families: [FILE]
+      operation_ids: [MMAP_READ, OPEN_READ, READ]
+      object:
+        kind: OBJECT_CLASSES
+        object_class_ids: [MANUAL_BENIGN]
+      binding_lifecycle_states: [ACTIVE]
+      required_proof:
+        source_authority: [KERNEL_DECISION]
+        local_subject_binding: [EXACT_TASK]
+        remote_subject_binding: []
+        operation_result_authority: [PRE_EFFECT_DECISION]
+        temporal_coverage: [COMPLETE]
+        integrity: [LOCAL_ATTESTED]
+    requested_disposition: ALLOW
+    errno: null
+    finding: null
+    response_binding_ids: []
+    fallback_by_condition: []
+    budgets:
+      rate_limits: []
+      concurrency_limits: []
+      maximum_lifetime: null
+      automatic_response_limit: null
+    overrides_rule_ids: []
+    exception_ids: []
+    valid_from_utc_ns: null
+    valid_until_utc_ns: null
+  - schema_version: 1
+    rule_id: allow-manual-exec-read
+    enabled: true
+    priority: 0
+    evaluation_stage: LOCAL_PRE_EFFECT
+    match:
+      kind: LOCAL_PRE_EFFECT
+      subject:
+        workload_selector_ids: [worker]
+        protected_scope_ids: [33333333-3333-4333-8333-333333333333]
+        execution_set_ids: [44444444-4444-4444-8444-444444444444]
+        entry_kind_ids: [EXTERNAL_RUNTIME_UNKNOWN]
+        role_ids: [runtime-external]
+        required_process_state_ids: [base]
+        forbidden_process_state_ids: []
+      effect_families: [FILE]
+      operation_ids: [OPEN_READ, READ]
+      object:
+        kind: OBJECT_CLASSES
+        object_class_ids: [MANUAL_EXEC]
+      binding_lifecycle_states: [ACTIVE]
+      required_proof:
+        source_authority: [KERNEL_DECISION]
+        local_subject_binding: [EXACT_TASK]
+        remote_subject_binding: []
+        operation_result_authority: [PRE_EFFECT_DECISION]
+        temporal_coverage: [COMPLETE]
+        integrity: [LOCAL_ATTESTED]
+    requested_disposition: ALLOW
+    errno: null
+    finding: null
+    response_binding_ids: []
+    fallback_by_condition: []
+    budgets:
+      rate_limits: []
+      concurrency_limits: []
+      maximum_lifetime: null
+      automatic_response_limit: null
+    overrides_rule_ids: []
+    exception_ids: []
+    valid_from_utc_ns: null
+    valid_until_utc_ns: null
+  - schema_version: 1
+    rule_id: deny-manual-exec
+    enabled: true
+    priority: 0
+    evaluation_stage: LOCAL_PRE_EFFECT
+    match:
+      kind: LOCAL_PRE_EFFECT
+      subject:
+        workload_selector_ids: [worker]
+        protected_scope_ids: [33333333-3333-4333-8333-333333333333]
+        execution_set_ids: [44444444-4444-4444-8444-444444444444]
+        entry_kind_ids: [EXTERNAL_RUNTIME_UNKNOWN]
+        role_ids: [runtime-external]
+        required_process_state_ids: [base]
+        forbidden_process_state_ids: []
+      effect_families: [EXEC]
+      operation_ids: [EXECUTE]
+      object:
+        kind: OBJECT_CLASSES
+        object_class_ids: [MANUAL_EXEC]
+      binding_lifecycle_states: [ACTIVE]
+      required_proof:
+        source_authority: [KERNEL_DECISION]
+        local_subject_binding: [EXACT_TASK]
+        remote_subject_binding: []
+        operation_result_authority: [PRE_EFFECT_DECISION]
+        temporal_coverage: [COMPLETE]
+        integrity: [LOCAL_ATTESTED]
+    requested_disposition: DENY
+    errno: EACCES
+    finding:
+      reason_code: MANUAL_EXEC_DENY
+      severity: CRITICAL
+      route_ids: []
+      evidence_level: STANDARD
+      title_template_id: null
+    response_binding_ids: []
+    fallback_by_condition: []
+    budgets:
+      rate_limits: []
+      concurrency_limits: []
+      maximum_lifetime: null
+      automatic_response_limit: null
+    overrides_rule_ids: []
+    exception_ids: []
+    valid_from_utc_ns: null
+    valid_until_utc_ns: null
+  - schema_version: 1
+    rule_id: deny-manual-secret-open
+    enabled: true
+    priority: 0
+    evaluation_stage: LOCAL_PRE_EFFECT
+    match:
+      kind: LOCAL_PRE_EFFECT
+      subject:
+        workload_selector_ids: [worker]
+        protected_scope_ids: [33333333-3333-4333-8333-333333333333]
+        execution_set_ids: [44444444-4444-4444-8444-444444444444]
+        entry_kind_ids: [EXTERNAL_RUNTIME_UNKNOWN]
+        role_ids: [runtime-external]
+        required_process_state_ids: [base]
+        forbidden_process_state_ids: []
+      effect_families: [FILE]
+      operation_ids: [MMAP_READ, OPEN_READ, READ]
+      object:
+        kind: OBJECT_CLASSES
+        object_class_ids: [MANUAL_SECRET]
+      binding_lifecycle_states: [ACTIVE]
+      required_proof:
+        source_authority: [KERNEL_DECISION]
+        local_subject_binding: [EXACT_TASK]
+        remote_subject_binding: []
+        operation_result_authority: [PRE_EFFECT_DECISION]
+        temporal_coverage: [COMPLETE]
+        integrity: [LOCAL_ATTESTED]
+    requested_disposition: DENY
+    errno: EACCES
+    finding:
+      reason_code: MANUAL_SECRET_READ
+      severity: CRITICAL
+      route_ids: []
+      evidence_level: STANDARD
+      title_template_id: null
+    response_binding_ids: []
+    fallback_by_condition: []
+    budgets:
+      rate_limits: []
+      concurrency_limits: []
+      maximum_lifetime: null
+      automatic_response_limit: null
+    overrides_rule_ids: []
+    exception_ids: []
+    valid_from_utc_ns: null
+    valid_until_utc_ns: null
+source_coverage_health_rules: []
+rollout:
+  rollout_generation: 1
+  desired_profile_mode: OBSERVE
+  cohort_selection: ALL_BOUND_EXECUTION_SETS
+  explicit_execution_set_ids: []
+  selector_hash_modulus: 1
+  selected_bucket_ids: [0]
