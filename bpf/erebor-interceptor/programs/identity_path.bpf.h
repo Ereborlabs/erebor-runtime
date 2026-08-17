@@ -289,13 +289,13 @@ static __always_inline int mount_scan_push(
 
     if (!node)
         return 0;
-    if (build->stack_depth >= MAX_CANONICAL_MOUNTS_V1)
+    if (build->stack_depth >= MAX_CANONICAL_PATH_COMPONENTS_V1)
         return -EACCES;
     asm volatile("%[bounded] = %[raw] ;\n"
                  "%[bounded] &= %2 ;\n"
                  : [bounded] "=&r"(index)
                  : [raw] "r"((__u64)build->stack_depth),
-                   "i"(MAX_CANONICAL_MOUNTS_V1 - 1));
+                   "i"(MAX_CANONICAL_PATH_COMPONENTS_V1));
     scratch->mount_scan_stack[index] = (__u64)node;
     build->stack_depth++;
     return 0;
@@ -325,7 +325,7 @@ static long canonical_mount_cache_build_step(__u32 offset, void *data)
                  "%[bounded] &= %2 ;\n"
                  : [bounded] "=&r"(index)
                  : [raw] "r"((__u64)build->stack_depth),
-                   "i"(MAX_CANONICAL_MOUNTS_V1 - 1));
+                   "i"(MAX_CANONICAL_PATH_COMPONENTS_V1));
     node = (struct rb_node *)scratch->mount_scan_stack[index];
     build->left_node_address = 0;
     build->right_node_address = 0;

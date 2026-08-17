@@ -1219,7 +1219,11 @@ mod tests {
 
         const PATH_COMPONENT_BUDGET: i32 = 255;
         const PATH_WALK_BUDGET: i32 = 4_096 + PATH_COMPONENT_BUDGET;
+        let maps = include_str!("../../../bpf/erebor-interceptor/programs/identity_maps.h");
+        let path = include_str!("../../../bpf/erebor-interceptor/programs/identity_path.bpf.h");
         let instructions = BUNDLED_BPF_OBJECT.chunks_exact(8).collect::<Vec<_>>();
+        assert!(maps.contains("mount_scan_stack[MAX_CANONICAL_PATH_COMPONENTS_V1 + 1]"));
+        assert!(path.contains("build->stack_depth >= MAX_CANONICAL_PATH_COMPONENTS_V1"));
         for budget in [PATH_COMPONENT_BUDGET, PATH_WALK_BUDGET] {
             assert!(instructions.iter().enumerate().any(|(index, instruction)| {
                 instruction[0] == 0x85
