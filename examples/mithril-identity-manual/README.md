@@ -31,6 +31,19 @@ threads wait at one barrier, then both call `exec`. Linux leaves one `sleep`
 process. The command checks that its Mithril process state and restricted role
 remain correct. It removes its Pod and fixture directory at exit.
 
+Run this subreaper reparenting case from the same root shell:
+
+```sh
+examples/mithril-identity-manual/native-child.sh --subreaper
+```
+
+The command creates one Python Pod and live CRI binding. A restricted external
+Python root sets itself as a Linux child subreaper. Its native middle child
+exits after it creates one stopped grandchild. The grandchild becomes a child
+of the subreaper, then executes `sleep`. The command checks immutable creator
+identity, changed real parent, and the inherited restricted role. It removes
+its Pod and fixture directory at exit.
+
 Run this self-contained namespace-entry case from the same root shell:
 
 ```sh
@@ -77,6 +90,7 @@ Then run only the case being checked:
 | Pre-PONR failed native exec | `sudo examples/mithril-identity-manual/native-child.sh NODE_CONFIG CONTAINER_OR_FULL_CRI_ID --failed-exec` |
 | Non-leader Python thread exec | `sudo examples/mithril-identity-manual/native-child.sh --thread-exec` in the manual VM; otherwise `sudo examples/mithril-identity-manual/native-child.sh NODE_CONFIG CONTAINER_OR_FULL_CRI_ID --thread-exec` |
 | Concurrent Python thread exec | `sudo examples/mithril-identity-manual/native-child.sh --concurrent-thread-exec` in the manual VM |
+| Subreaper native reparenting | `sudo examples/mithril-identity-manual/native-child.sh --subreaper` in the manual VM |
 | `nsenter` and cgroup movement | `sudo examples/mithril-identity-manual/nsenter-move.sh` in the manual VM |
 | Labeled native-child mount entry | `sudo examples/mithril-identity-manual/nsenter-move.sh --labeled-task` in the manual VM |
 | Node restart | `sudo examples/mithril-identity-manual/restart.sh NODE_CONFIG CONTAINER_OR_FULL_CRI_ID` |

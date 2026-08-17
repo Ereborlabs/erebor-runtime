@@ -4,14 +4,14 @@ source "$(dirname "$0")/identity-runtime.sh"
 
 identity_case_mode=
 identity_case_k3s=false
-if [[ $# -eq 1 && ($1 == --thread-exec || $1 == --concurrent-thread-exec) ]]; then
+if [[ $# -eq 1 && ($1 == --thread-exec || $1 == --concurrent-thread-exec || $1 == --subreaper) ]]; then
   identity_case_mode=$1
   identity_case_k3s=true
 elif [[ $# -eq 2 || ($# -eq 3 && (${3:-} == --orphan || ${3:-} == --double-fork || ${3:-} == --moved-exec || ${3:-} == --failed-exec || ${3:-} == --thread-exec)) ]]; then
   identity_case_mode=${3:-}
 else
   echo "usage: sudo $0 NODE_CONFIG DOCKER_CONTAINER_OR_FULL_CRI_ID [--orphan|--double-fork|--moved-exec|--failed-exec|--thread-exec]" >&2
-  echo "   or: sudo $0 --thread-exec|--concurrent-thread-exec" >&2
+  echo "   or: sudo $0 --thread-exec|--concurrent-thread-exec|--subreaper" >&2
   exit 2
 fi
 
@@ -328,6 +328,156 @@ EOF
     exit 1
   }
   identity_pass "PASS: a pre-PONR ELF loader failure kept the source identity and a later exec committed."
+  exit 0
+fi
+
+if [[ $identity_case_mode == --subreaper ]]; then
+  ready_name=.mithril-subreaper-${identity_work##*.}.ready
+  ready_host=$identity_k3s_shared_directory/$ready_name
+  ready_container=$identity_k3s_container_shared_directory/$ready_name
+  release_host=$ready_host.release
+  crictl --runtime-endpoint "$identity_runtime_endpoint" exec "$identity_container_id" \
+    python3 -c '
+import ctypes
+import os
+import signal
+import sys
+import time
+
+ready = sys.argv[1]
+release = f"{ready}.release"
+libc = ctypes.CDLL(None, use_errno=True)
+if libc.prctl(36, 1, 0, 0, 0) != 0:
+    raise OSError(ctypes.get_errno(), "PR_SET_CHILD_SUBREAPER")
+middle = os.fork()
+if middle == 0:
+    child = os.fork()
+    if child == 0:
+        os.kill(os.getpid(), signal.SIGSTOP)
+        os.execv("/bin/sleep", ["/bin/sleep", "300"])
+    with open(ready, "w", encoding="ascii") as output:
+        output.write(f"{os.getppid()} {os.getpid()} {child}\n")
+    while not os.path.exists(release):
+        time.sleep(0.1)
+    os._exit(0)
+while not os.path.exists(ready):
+    time.sleep(0.1)
+os.waitpid(middle, 0)
+with open(ready, encoding="ascii") as input_file:
+    _root, _middle, child = input_file.read().split()
+os.waitpid(int(child), 0)
+' "$ready_container" >"$identity_work/subreaper-client.log" 2>&1 &
+  for ((attempt = 0; attempt < 100; attempt++)); do
+    [[ -s $ready_host ]] && break
+    sleep 0.1
+  done
+  [[ -s $ready_host ]] || {
+    echo "the K3s subreaper fixture did not become ready" >&2
+    exit 1
+  }
+  read -r namespace_root namespace_middle namespace_child <"$ready_host"
+  [[ $namespace_root =~ ^[1-9][0-9]*$ && $namespace_middle =~ ^[1-9][0-9]*$ \
+    && $namespace_child =~ ^[1-9][0-9]*$ ]] || {
+    echo "the K3s subreaper fixture wrote invalid namespace PIDs" >&2
+    exit 1
+  }
+  subreaper_root_pid=
+  subreaper_middle_pid=
+  subreaper_child_pid=
+  for candidate in $(<"$identity_cgroup_path/cgroup.procs"); do
+    [[ -r /proc/$candidate/status ]] || continue
+    mapped_pid=$(awk '/^NSpid:/ {print $NF}' "/proc/$candidate/status")
+    case $mapped_pid in
+      "$namespace_root") subreaper_root_pid=$candidate ;;
+      "$namespace_middle") subreaper_middle_pid=$candidate ;;
+      "$namespace_child") subreaper_child_pid=$candidate ;;
+    esac
+  done
+  [[ $subreaper_root_pid =~ ^[1-9][0-9]*$ \
+    && $subreaper_middle_pid =~ ^[1-9][0-9]*$ \
+    && $subreaper_child_pid =~ ^[1-9][0-9]*$ ]] || {
+    echo "cannot map the K3s subreaper processes to host PIDs" >&2
+    exit 1
+  }
+  identity_task_pids+=("$subreaper_root_pid" "$subreaper_child_pid")
+  grep -q $'^State:\tT' "/proc/$subreaper_child_pid/status" || {
+    echo "subreaper native child is not stopped before parent exit" >&2
+    exit 1
+  }
+  identity_inspect_task subreaper-root "$subreaper_root_pid" >/dev/null
+  identity_inspect_task subreaper-middle "$subreaper_middle_pid" >/dev/null
+  identity_inspect_task subreaper-child-before "$subreaper_child_pid" >/dev/null
+  subreaper_root_cookie=$(jq -er '.task_cookie' "$identity_work/subreaper-root.json")
+  subreaper_middle_cookie=$(jq -er '.task_cookie' "$identity_work/subreaper-middle.json")
+  subreaper_child_cookie=$(jq -er '.task_cookie' "$identity_work/subreaper-child-before.json")
+  subreaper_child_interval=$(jq -er '.real_parent_interval_sequence' "$identity_work/subreaper-child-before.json")
+  subreaper_child_process=$(jq -er '.process_state_id' "$identity_work/subreaper-child-before.json")
+  subreaper_child_execution=$(jq -er '.active_execution_id' "$identity_work/subreaper-child-before.json")
+  subreaper_child_image=$(jq -er '.image_provenance_id' "$identity_work/subreaper-child-before.json")
+  subreaper_root_role=$(jq -er '.active_role_id' "$identity_work/subreaper-root.json")
+  identity_assert_external "$identity_work/subreaper-root.json"
+  jq -e --argjson root_cookie "$subreaper_root_cookie" \
+    --argjson middle_cookie "$subreaper_middle_cookie" \
+    --argjson root_role "$subreaper_root_role" \
+    '.creator_task_cookie == $root_cookie
+     and .real_parent_task_cookie == $root_cookie
+     and .root_class == null
+     and .installed_role_class == null
+     and .active_role_id == $root_role' \
+    "$identity_work/subreaper-middle.json" >/dev/null
+  jq -e --argjson middle_cookie "$subreaper_middle_cookie" \
+    --argjson root_role "$subreaper_root_role" \
+    '.creator_task_cookie == $middle_cookie
+     and .real_parent_task_cookie == $middle_cookie
+     and .root_class == null
+     and .installed_role_class == null
+     and .active_role_id == $root_role
+     and .coordinate_state == 3' \
+    "$identity_work/subreaper-child-before.json" >/dev/null
+
+  : >"$release_host"
+  for ((attempt = 0; attempt < 100; attempt++)); do
+    [[ ! -d /proc/$subreaper_middle_pid ]] && break
+    sleep 0.1
+  done
+  [[ ! -d /proc/$subreaper_middle_pid ]] || {
+    echo "subreaper middle process did not exit" >&2
+    exit 1
+  }
+  kill -CONT "$subreaper_child_pid"
+  for ((attempt = 0; attempt < 100; attempt++)); do
+    [[ $(tr -d '\n' <"/proc/$subreaper_child_pid/comm" 2>/dev/null || true) == sleep ]] && break
+    sleep 0.1
+  done
+  [[ $(tr -d '\n' <"/proc/$subreaper_child_pid/comm" 2>/dev/null || true) == sleep ]] || {
+    echo "subreaper native child did not exec sleep" >&2
+    exit 1
+  }
+  identity_inspect_task subreaper-child-after "$subreaper_child_pid" >/dev/null
+  jq -e --argjson child_cookie "$subreaper_child_cookie" \
+    --argjson middle_cookie "$subreaper_middle_cookie" \
+    --argjson root_cookie "$subreaper_root_cookie" \
+    --argjson child_interval "$subreaper_child_interval" \
+    --arg child_process "$subreaper_child_process" \
+    --arg child_execution "$subreaper_child_execution" \
+    --arg child_image "$subreaper_child_image" \
+    --argjson root_role "$subreaper_root_role" \
+    '.task_cookie == $child_cookie
+     and .creator_task_cookie == $middle_cookie
+     and .real_parent_task_cookie == $root_cookie
+     and .real_parent_interval_sequence > $child_interval
+     and .process_state_id == $child_process
+     and .active_execution_id != $child_execution
+     and .image_provenance_id != $child_image
+     and .active_role_id == $root_role
+     and .root_class == null
+     and .installed_role_class == null
+     and .coordinate_state == 3
+     and .process_execution_state == 2
+     and .process_state_vector_state == 2
+     and .exec_guard_state == 0' \
+    "$identity_work/subreaper-child-after.json" >/dev/null
+  identity_pass "PASS: subreaper reparenting kept native creator identity and restriction."
   exit 0
 fi
 
