@@ -10,6 +10,16 @@ In the guest, run `sudo -i`, source `/var/tmp/mithril-manual.env`, and change
 to `$MITHRIL_MANUAL_SOURCE`. The manual VM supports CRI, Kubernetes, and
 raw-namespace cases. Docker cases require Docker.
 
+Run this self-contained K3s case from that root shell:
+
+```sh
+examples/mithril-identity-manual/native-child.sh --thread-exec
+```
+
+The command creates one Python Pod and live CRI binding. It starts a Python
+root with one non-leader thread. That thread executes `sleep`. The command
+removes its Pod and fixture directory at exit.
+
 ## Operator Cases
 
 Outside the manual VM, build the real node and inspector once:
@@ -30,6 +40,7 @@ Then run only the case being checked:
 | Double-fork native child | `sudo examples/mithril-identity-manual/native-child.sh NODE_CONFIG CONTAINER_OR_FULL_CRI_ID --double-fork` |
 | Moved native-child exec | `sudo examples/mithril-identity-manual/native-child.sh NODE_CONFIG CONTAINER_OR_FULL_CRI_ID --moved-exec` |
 | Pre-PONR failed native exec | `sudo examples/mithril-identity-manual/native-child.sh NODE_CONFIG CONTAINER_OR_FULL_CRI_ID --failed-exec` |
+| Non-leader Python thread exec | `sudo examples/mithril-identity-manual/native-child.sh --thread-exec` in the manual VM; otherwise `sudo examples/mithril-identity-manual/native-child.sh NODE_CONFIG CONTAINER_OR_FULL_CRI_ID --thread-exec` |
 | `nsenter` and cgroup movement | `sudo examples/mithril-identity-manual/nsenter-move.sh NODE_CONFIG CONTAINER_OR_FULL_CRI_ID` |
 | Node restart | `sudo examples/mithril-identity-manual/restart.sh NODE_CONFIG CONTAINER_OR_FULL_CRI_ID` |
 
@@ -199,6 +210,27 @@ child when the script asks. The remote Bash session removes its exact temporary
 This procedure covers one pre-PONR failure followed by one normal exec commit
 for `EXEC-COMMIT-STATE-001`. It does not cover post-PONR fatal handling,
 concurrent exec, map saturation, or a qualified VM result.
+
+## Non-Leader Python Thread Exec Check
+
+Run this check only when the selected workload has `python3` and `/bin/sleep`:
+
+```bash
+sudo examples/mithril-identity-manual/native-child.sh \
+  NODE_CONFIG CONTAINER_OR_FULL_CRI_ID --thread-exec
+```
+
+The script prints a command for a second root terminal and a short Python
+block. The block creates one non-leader thread and waits for `SIGUSR1`.
+When it prints `MITHRIL_NONLEADER_READY`, find the Python host PID in the
+configured cgroup and enter it. The script requires exactly one non-leader
+thread, then sends `SIGUSR1`.
+
+The non-leader thread must become `sleep`. Its final task must name the
+Python root as creator, keep the same process state and role, change execution
+and image IDs, have no external-root class, and report the original PID as
+both host TID and TGID. This is one non-leader de-threading subcase. It does
+not race execs or cover concurrent fork, vfork, or thread creation.
 
 Every executable starts the real `mithril-node`, performs one operator-driven
 case, and removes its test tasks, BPF pins, lease, temporary config, state, and

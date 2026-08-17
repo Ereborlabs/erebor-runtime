@@ -129,6 +129,17 @@ Phase 3 remains **Blocked**.
 
 ## Implemented Manual Cases
 
+### Self-contained K3s cases — 2026-08-17
+
+In the manual VM, run `cri-file-observe.sh` or
+`nsenter-file-observe.sh` with no arguments. Each script creates and removes
+its own Pod, live CRI binding, shared directory, and Mithril state. Both
+commands printed `PASS` on the retained VM. The direct CRI case proves one
+exact observe event. The `nsenter` case also proves the external restricted
+root. Both cases use key `7`, `OPEN_READ`, `WOULD_DENY`, and
+`UNKNOWN_AFTER_PRE_EFFECT`. They do not assert `kernel_result`. The phase
+remains **Blocked**.
+
 Build once, then run only the cases relevant to the available runtime. Every
 script installs an EXIT trap that stops the node and probe, removes its BPF
 pins, lease, socket, temporary files, and any mount it created. It leaves the

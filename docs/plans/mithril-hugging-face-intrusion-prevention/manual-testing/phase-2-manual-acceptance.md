@@ -282,13 +282,23 @@ This is one pre-PONR recovery subcase of `EXEC-COMMIT-STATE-001`. It does not
 test post-PONR fatal or unknown handling, concurrent or non-leader exec, or the
 complete fixture. The phase remains **Blocked**.
 
+## Manual VM update — 2026-08-17
+
+The retained manual VM ran
+[`native-child.sh --thread-exec`](../../../../examples/mithril-identity-manual/native-child.sh).
+The script created and removed its own Python Pod, live CRI binding, and
+fixture. It printed `PASS`. The non-leader thread exec kept its process and
+role identity. It changed execution and image identity. This is one serial
+non-leader de-threading case. It does not prove concurrent exec races. The
+phase remains **Blocked**.
+
 ## Native Identity Fixture Matrix
 
 | Fixture | Operator action | Required oracle and legitimate control |
 | --- | --- | --- |
 | `AUTHORIZATION-REPLAY-004` | replay, retarget, expire, reboot, and mismatch signed authorization | every invalid envelope rejects; fresh exact envelope consumes according to contract |
 | `EXEC-COMMIT-STATE-001` | run success, pre-PONR failure, and post-PONR fatal/unknown exec | success commits once; early failure keeps exact prior state; later failure never restores broad authority |
-| `EXEC-CONCURRENT-002` | race execs across threads/non-leader de-threading | one serialized valid transition; no mixed image/role state |
+| `EXEC-CONCURRENT-002` | race execs across threads/non-leader de-threading | one serial non-leader de-threading case passed. Concurrent races remain required. |
 | `ID-CGROUP-ESCAPE-001` | move a labeled task to host/unprotected placement | task storage still resolves and denies mismatch; unmoved allowed control works |
 | `ID-CLONE-CGROUP-002` | clone into expected and changed placement | child state exists before effect and placement is verified |
 | `ID-CLONE-CGROUP-FAIL-003` | force child allocation/finalization/placement failure | no unlabeled runnable child gains authority; normal clone succeeds |

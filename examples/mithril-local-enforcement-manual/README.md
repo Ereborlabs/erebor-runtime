@@ -7,6 +7,16 @@ In the guest, run `sudo -i`, source `/var/tmp/mithril-manual.env`, and change
 to `$MITHRIL_MANUAL_SOURCE`. The manual VM supports CRI and raw-namespace
 cases. Docker cases require Docker.
 
+Run either self-contained K3s case from that root shell:
+
+```sh
+examples/mithril-local-enforcement-manual/nsenter-bind-alias-deny.sh
+examples/mithril-local-enforcement-manual/mount-attack-deny.sh
+```
+
+Each command creates one Python Pod and live CRI binding. It removes its Pod
+and fixture directory at exit.
+
 ## Operator Cases
 
 These are real `mithril-node` cases, not wrappers around Rust tests. Each script
@@ -68,6 +78,37 @@ and cgroup intact. Do not remove BPF pins that the script does not own.
 Limit: this case proves one exact, non-rotating benign file in one CRI task. It
 does not prove secret denial, projected-token semantics, token rotation, or
 multi-node behavior.
+
+## CRI Bind Alias And Mount Attack
+
+Run either command without arguments in the manual VM. For an existing target,
+use the five-argument form:
+
+```sh
+examples/mithril-local-enforcement-manual/nsenter-bind-alias-deny.sh \
+  "$case_root/node.json" "$container_id" /var/lib/mithril/secret \
+  "$shared_directory" /var/lib/mithril/manual-shared
+
+examples/mithril-local-enforcement-manual/mount-attack-deny.sh \
+  "$case_root/node.json" "$container_id" /var/lib/mithril/secret \
+  "$shared_directory" /var/lib/mithril/manual-shared
+```
+
+The bind-alias case creates two file bind aliases before policy activation. It
+requires two `EXACT_POLICY_DENY` observations for key `7`. The mount case
+starts eight Python `mount(2)` attempts after activation. It requires each
+attempt to return `EACCES` or `EPERM`, then requires protected file reads to
+fail.
+
+Expected output is one of these lines followed by the Mithril cleanup line:
+
+```text
+PASS: two pre-existing bind aliases canonicalized to the same exact denial.
+PASS: every protected mount attempt was denied and no file retry widened authority.
+```
+
+These cases prove one bound CRI container on one node. They do not prove mount
+propagation, idmapped mounts, token rotation, or the administrative exec path.
 
 Run the automated privileged host oracle first:
 
@@ -139,8 +180,11 @@ Manual Docker, CRI, and raw-namespace cases:
   parent directory must permit creation of the temporary hard link.
 - `nsenter-bind-alias-deny.sh <node.json> <container> <secret>` creates two
   bind aliases before activation and proves each canonicalizes to the same deny.
+  It also accepts the CRI five-argument form shown above. That form requires
+  Python 3.12 in the container and a writable shared hostPath directory.
 - `mount-attack-deny.sh <node.json> <container> <secret>` races eight
-  protected bind mounts and proves no mutation or protected read succeeds.
+  protected bind mounts and proves no mutation or protected read succeeds. It
+  also accepts the same Python CRI five-argument form.
 - `external-mount-replacement-deny.sh <node.json> <container> <secret>
   <benign>` performs two hostile bind changes from outside the protected
   cgroup and proves the namespace-wide DIRTY view returns no fd or bytes. The

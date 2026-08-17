@@ -2190,9 +2190,10 @@ headers. A cross-architecture compile is not a non-x86 physical result.
 
 ### Retained-VM manual review route
 
-This route reviews the current manual-test source. The operator procedure is
-in the [harness README](../../../crates/mithril-e2e/harness/vm/README.md#manual-testing-in-a-retained-vm).
-Do not duplicate that procedure in this guide.
+This route reviews the current manual-test source. The
+[harness README](../../../crates/mithril-e2e/harness/vm/README.md#manual-testing-in-a-vm)
+owns VM start, SSH, and destruction. The example README owns each manual
+command.
 
 1. Read [`manual.sh`](../../../crates/mithril-e2e/harness/vm/manual.sh). It
    owns the local record and accepts `start`, `ssh`, and `destroy`.
@@ -2202,19 +2203,29 @@ Do not duplicate that procedure in this guide.
 3. Read [`providers/libvirt.sh`](../../../crates/mithril-e2e/harness/vm/providers/libvirt.sh).
    It attaches the optional source directory as a read-only 9p device, mounts
    it at `/mnt/mithril-source` during `wait`, and owns `ssh NAME`.
-4. Read [`identity-runtime.sh`](../../../examples/mithril-identity-manual/identity-runtime.sh#L40).
-   It owns the manual node, pin root, lease, task processes, and local cleanup.
-5. Read [`nsenter-move.sh`](../../../examples/mithril-identity-manual/nsenter-move.sh#L10).
+4. Read [`identity-runtime.sh`](../../../examples/mithril-identity-manual/identity-runtime.sh#L201).
+   It creates the run-scoped K3s Pod, resolves its live CRI binding, and
+   removes the Pod and fixture. It also owns the node, pin root, lease, task
+   processes, and local cleanup.
+5. Read [`native-child.sh`](../../../examples/mithril-identity-manual/native-child.sh).
+   Its `--thread-exec` case uses that owner without input arguments.
+6. Read [`nsenter-move.sh`](../../../examples/mithril-identity-manual/nsenter-move.sh#L10).
    It verifies the selected helper and direct `sleep 300` child before it moves
    that child into the configured cgroup.
-6. Read [`observation-runtime.sh`](../../../examples/mithril-effect-observation-manual/observation-runtime.sh#L32).
-   It validates a CRI shared directory, starts the identity-only node, moves
-   the preloaded `nsenter` task, and then starts the signed observation node.
-7. Read [`nsenter-file-observe.sh`](../../../examples/mithril-effect-observation-manual/nsenter-file-observe.sh#L6).
-   It accepts the Docker three-argument form or the CRI five-argument form.
-8. Read [`harness/vm/test.sh`](../../../crates/mithril-e2e/harness/vm/test.sh#L41).
-   It checks the manual command contract, source mount, and CRI `nsenter`
-   source contract.
+7. Read [`observation-runtime.sh`](../../../examples/mithril-effect-observation-manual/observation-runtime.sh#L44).
+   It adds the signed observe policy and the shared release directory to the
+   existing identity owner.
+8. Read [`cri-file-observe.sh`](../../../examples/mithril-effect-observation-manual/cri-file-observe.sh)
+   and [`nsenter-file-observe.sh`](../../../examples/mithril-effect-observation-manual/nsenter-file-observe.sh).
+   Their no-argument form creates the target and runs one CRI case.
+9. Read [`enforcement-runtime.sh`](../../../examples/mithril-local-enforcement-manual/enforcement-runtime.sh#L86).
+   It adds signed protect policy to the existing identity owner.
+10. Read [`nsenter-bind-alias-deny.sh`](../../../examples/mithril-local-enforcement-manual/nsenter-bind-alias-deny.sh)
+    and [`mount-attack-deny.sh`](../../../examples/mithril-local-enforcement-manual/mount-attack-deny.sh).
+    Their no-argument form creates the target and runs one protect case.
+11. Read [`harness/vm/test.sh`](../../../crates/mithril-e2e/harness/vm/test.sh).
+    It checks only harness scripts and harness configuration. It does not read
+    example scripts.
 
 ```mermaid
 sequenceDiagram
@@ -2222,27 +2233,29 @@ sequenceDiagram
     participant H as Manual VM controller
     participant V as Retained VM
     participant S as Manual script
+    participant K as K3s
 
     O->>H: start one K3s guest
     H->>V: mount source, install K3s and tools
     H-->>O: local controller record
     O->>H: ssh
-    O->>S: run one case with a fresh binding
-    S->>V: start node, run probe, remove local state
+    O->>S: run one case
+    S->>K: create Pod and live CRI binding
+    S->>V: start node and run probe
+    S->>K: remove Pod and fixture
     O->>H: destroy the guest
 ```
 
-The harness owns the retained guest and its metadata. The operator owns the
-fresh Pod or container binding and the fixture. The manual script owns only
-its node, pin root, lease, probe, state, and logs. Do not reuse a container ID,
-Pod UID, or binding from an earlier run. Do not run two Mithril owners in one
-guest.
+The harness owns the retained guest and its metadata. The manual script owns
+its fresh Pod, live binding, fixture, node, pin root, lease, probe, state, and
+logs. Do not reuse a container ID, Pod UID, or binding. Do not run two Mithril
+owners in one guest.
 
 The libvirt provider owns the source mount. It exports one host directory as
-read-only 9p. The guest mounts it at `/mnt/mithril-source`. The manual shells
-and binaries run from this mount. The mount cannot own a fixture, binding, pin
-root, lease, or output. The controller opens SSH without a VM name. This test
-does not run the K3s qualification lane.
+read-only 9p at `/mnt/mithril-source`. The manual shells and binaries run from
+this mount. The mount does not own a fixture, binding, pin root, lease, or
+output. The controller opens SSH without a VM name. This flow does not run the
+K3s qualification lane.
 
 `nsenter-move.sh` requires the helper PID and its only direct child PID. It
 requires `sleep 300`, matching mount, UTS, IPC, network, and PID namespaces,
@@ -2257,6 +2270,59 @@ positive task cookie. After release, it requires `OPEN_READ`, `WOULD_DENY`,
 script opens the secret and completes a one-byte read attempt. It does not
 assert `kernel_result`. This source path is implemented. It has no separate
 physical manual `nsenter` record.
+
+### CRI alias and mount manual path — 2026-08-16
+
+The source state for this record is the working tree based at
+`78f12f568b2e8fb8de89d2fbc667aef3824eddfb`. It changes no BPF program, map,
+or policy data type.
+
+[`enforcement_prepare_cri_shared`](../../../examples/mithril-local-enforcement-manual/enforcement-runtime.sh)
+uses the existing CRI binding owner. It configures the signed exact-file
+candidate and verifies the writable shared hostPath before the probe starts.
+[`observation_preload_nsenter_probe`](../../../examples/mithril-effect-observation-manual/observation-runtime.sh)
+starts the Python probe before the signed restart. It moves that host task into
+the bound cgroup, then releases its FIFO after policy activation.
+
+```mermaid
+sequenceDiagram
+    participant O as Operator
+    participant S as Manual script
+    participant K as K3s
+    participant N as mithril-node
+    participant P as Python probe
+    participant B as BPF LSM
+
+    O->>S: run self-contained CRI case
+    S->>K: create Pod and live CRI binding
+    S->>N: start identity-only node
+    S->>P: start and hold probe
+    S->>N: restart with signed policy
+    S->>P: release shared FIFO
+    P->>B: open alias or call mount(2)
+    B-->>P: deny before effect
+    S->>N: remove node-owned state
+    S->>K: remove Pod and fixture
+```
+
+The bind case creates two file bind aliases before activation. The Python
+probe opens each alias. It accepts only `EACCES` or `EPERM` and requires two
+key-7 `EXACT_POLICY_DENY` events. The mount case starts eight Python
+`mount(2)` calls after activation. It requires every call to deny, at least
+eight `UNSUPPORTED_OBJECT` events, and a later exact protected-file denial.
+The scripts use stable mount and root file descriptors for their cleanup.
+
+The physical CRI runs exited 0. Their output SHA-256 values are
+`09e3b76ee1a37afd563eb0c4b6171dbcfa86a25510f4c14b1d9854665eae35e7` and
+`3f2e2a62c5281b2a1750f4c6d12f19649e8a8f1e9a3a0797886e2c3c9655c73c`.
+Each case removed its Mithril state. The outer runner removed its Pod,
+namespace, and fixture. Final inspection found no Mithril pin or process.
+Only unrelated BPF link 1 remained.
+
+The no-argument manual VM form creates the Python container and writable
+shared directory. The five-argument form uses an existing CRI target. These
+cases do not qualify propagation, idmapped mounts, token rotation, or
+administrative exec. The phase remains **Not done**.
 
 The Phase 2 and Phase 3 acceptance records define the remaining manual scope:
 [Phase 2](manual-testing/phase-2-manual-acceptance.md#procedure) and

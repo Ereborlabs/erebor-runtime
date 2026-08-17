@@ -152,70 +152,11 @@ netstat -lnt
 k9s version
 ```
 
-### Direct CRI Observe Case
+The harness does not run manual cases. Run the command in the required example
+README from this root guest shell. Each self-contained case creates and removes
+its own Pod, live CRI binding, and fixture directory.
 
-Run these commands in the root guest shell. They create one Pod, make its
-exact live binding, and run one manual script.
-
-```bash
-case_id=$(date -u +%Y%m%dT%H%M%SZ)-$$
-case_root=/var/tmp/mithril-manual-$case_id
-namespace=mithril-manual-$case_id
-fixture_root=/var/lib/mithril-manual-$case_id
-shared_directory=$fixture_root/shared
-install -d -m 0700 -- "$fixture_root" "$shared_directory" "$case_root"
-printf 'mithril manual secret\n' >"$fixture_root/secret"
-chmod 0400 -- "$fixture_root/secret"
-lsattr -v "$fixture_root/secret"
-
-sed \
-  -e "s|MITHRIL_MANUAL_NAMESPACE|$namespace|g" \
-  -e "s|MITHRIL_MANUAL_SECRET_HOST_PATH|$fixture_root/secret|g" \
-  -e "s|MITHRIL_MANUAL_SHARED_HOST_DIRECTORY|$shared_directory|g" \
-  examples/mithril-effect-observation-manual/k3s-cri-manual-workload-v1.yaml \
-  >"$case_root/workload.yaml"
-k3s kubectl create namespace "$namespace"
-k3s kubectl apply -f "$case_root/workload.yaml"
-k3s kubectl -n "$namespace" wait \
-  --for=condition=Ready pod/mithril-runtime --timeout=300s
-
-container_ref=$(k3s kubectl -n "$namespace" get pod mithril-runtime \
-  -o jsonpath='{.status.containerStatuses[0].containerID}')
-container_id=${container_ref#containerd://}
-pod_uid=$(k3s kubectl -n "$namespace" get pod mithril-runtime \
-  -o jsonpath='{.metadata.uid}')
-container_json=$(k3s crictl inspect "$container_id")
-generation=$(date --utc --date "$(jq -er '.status.createdAt' <<<"$container_json")" +%s%N)
-image_digest=$(jq -er '.status.imageRef' <<<"$container_json")
-sandbox_id=$(k3s crictl ps --id "$container_id" -o json \
-  | jq -er '.containers[0].podSandboxId')
-
-sed \
-  -e "s|/var/tmp/mithril-runtime-qualification-0|$case_root|g" \
-  -e "s|mithril-vm-qualification|$namespace|g" \
-  -e "s|MITHRIL_CONTAINER_ID|$container_id|g" \
-  -e "s|MITHRIL_POD_UID|$pod_uid|g" \
-  -e "s|MITHRIL_SANDBOX_ID|$sandbox_id|g" \
-  -e "s|MITHRIL_IMAGE_DIGEST|$image_digest|g" \
-  -e "s|\"container_generation\": 1|\"container_generation\": $generation|" \
-  crates/mithril-e2e/harness/vm/k3s-cri-effect-node-v1.json \
-  >"$case_root/node.json"
-
-examples/mithril-effect-observation-manual/cri-file-observe.sh \
-  "$case_root/node.json" "$container_id" /var/lib/mithril/secret \
-  "$shared_directory" /var/lib/mithril/manual-shared
-```
-
-The case must print `PASS:` and the Mithril cleanup line. Use this binding for
-one compatible CRI, Kubernetes, or `nsenter` example. Docker examples require
-a Docker guest.
-
-Remove the case, then remove the VM on the host:
-
-```bash
-k3s kubectl delete namespace "$namespace" --wait=true --timeout=120s
-rm -rf -- "$fixture_root" "$case_root"
-```
+On the host, remove the VM after the manual checks:
 
 ```bash
 crates/mithril-e2e/harness/vm/manual.sh destroy

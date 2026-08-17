@@ -8,7 +8,7 @@ until their exact qualification environment is run.
 | --- | --- | --- |
 | `AUTHORIZATION-REPLAY-004` | Replay, retarget, expire, reboot, and mismatch a signed authorization. | Every invalid envelope rejects; a fresh exact envelope consumes according to contract. |
 | `EXEC-COMMIT-STATE-001` | Run successful exec, pre-PONR failure, and post-PONR fatal/unknown exec. Run the pre-PONR branch with [`native-child.sh --failed-exec`](./native-child.sh). | Success commits once; early failure keeps exact prior state; later failure never restores broader authority. The procedure does not cover the post-PONR branch. |
-| `EXEC-CONCURRENT-002` | Race execs across threads and non-leader de-threading. | One serialized valid transition occurs; image and role state never mix. |
+| `EXEC-CONCURRENT-002` | Run one non-leader de-threading branch with [`native-child.sh --thread-exec`](./native-child.sh), then race execs across threads. | The non-leader branch keeps one process state and role while it commits one new execution. The procedure does not cover races. |
 | `ID-CGROUP-ESCAPE-001` | Move a labeled task to host/unprotected placement. | Task storage still resolves and constrains the mismatch; an unmoved control works. |
 | `ID-CLONE-CGROUP-002` | Clone into expected and changed placement. | Child state exists before its first effect and placement is verified. |
 | `ID-CLONE-CGROUP-FAIL-003` | Force child allocation, finalization, or placement failure. | No unlabeled runnable child gains authority; a normal clone succeeds. |

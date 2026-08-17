@@ -3,8 +3,10 @@
 # Shared policy setup for the effect-observation cases. Source this file.
 
 observation_directory=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+observation_repository=$(cd -- "$observation_directory/../.." && pwd)
+observation_policy_fixture_directory=${MITHRIL_POLICY_FIXTURE_DIRECTORY:-$observation_repository/crates/mithril-e2e/fixtures/mithril-policy}
 observation_policy_mode=${observation_policy_mode:-OBSERVE}
-observation_policy_source=${observation_policy_source:-$observation_directory/observe-policy-v1.yaml}
+observation_policy_source=${observation_policy_source:-$observation_policy_fixture_directory/observe-policy-v1.yaml}
 # Reuse the established real-node lifecycle and complete cleanup owner.
 source "$observation_directory/../mithril-identity-manual/identity-runtime.sh"
 
@@ -35,8 +37,24 @@ observation_prepare_cri() {
     return 2
   }
   identity_prepare_cri "$1" "$2"
-  local host_shared_directory=$4
-  local container_shared_directory=$5
+  observation_configure_secret "$3"
+  observation_configure_cri_shared_directory "$4" "$5"
+}
+
+observation_prepare_k3s() {
+  identity_prepare_k3s_case "$1"
+  observation_configure_secret "$identity_k3s_secret_path"
+  observation_configure_cri_shared_directory \
+    "$identity_k3s_shared_directory" "$identity_k3s_container_shared_directory"
+}
+
+observation_configure_cri_shared_directory() {
+  [[ $# -eq 2 ]] || {
+    echo "CRI observation needs a host and container shared directory" >&2
+    return 2
+  }
+  local host_shared_directory=$1
+  local container_shared_directory=$2
   [[ -d $host_shared_directory && -w $host_shared_directory ]] || {
     echo "the CRI host shared directory must exist and be writable" >&2
     return 2
@@ -50,7 +68,6 @@ observation_prepare_cri() {
   probe_name=.mithril-effect-observation-${identity_work##*.}-$$
   marker=$probe_name.marker
   container_marker=$container_shared_directory/$marker
-  observation_configure_secret "$3"
   observation_probe_ready=$container_shared_directory/$probe_name.ready
   observation_probe_release=$container_shared_directory/$probe_name.release
   observation_probe_ready_host=$host_shared_directory/$probe_name.ready
@@ -96,20 +113,20 @@ observation_configure_secret() {
   local artifact=$identity_work/profile.json
   local policy_source=$observation_policy_source
   if [[ $observation_policy_mode == PROTECT \
-    && $policy_source == "$observation_directory/observe-policy-v1.yaml" ]]; then
+    && $policy_source == "$observation_policy_fixture_directory/observe-policy-v1.yaml" ]]; then
     policy_source=$identity_work/protect-observe-policy-v1.yaml
     sed -e 's/desired_profile_mode: OBSERVE/desired_profile_mode: PROTECT/' \
       -e 's/operation_ids: \[OPEN_READ\]/operation_ids: [OPEN_READ, READ, MMAP_READ]/' \
-      "$observation_directory/observe-policy-v1.yaml" >"$policy_source"
+      "$observation_policy_fixture_directory/observe-policy-v1.yaml" >"$policy_source"
   fi
   "$observation_policy" compile \
     --source "$policy_source" \
-    --seal-request "$observation_directory/observe-profile-seal-request.json" \
-    --signing-key "$observation_directory/test-signing-key.hex" \
-    --output "$artifact"
+    --seal-request "$observation_policy_fixture_directory/observe-profile-seal-request.json" \
+    --signing-key "$observation_policy_fixture_directory/test-signing-key.hex" \
+    --output "$artifact" >/dev/null
   "$observation_policy" verify \
     --artifact "$artifact" \
-    --public-key "$observation_directory/test-public-key.hex"
+    --public-key "$observation_policy_fixture_directory/test-public-key.hex" >/dev/null
 
   local inode_generation object
   inode_generation=$(lsattr -v "/proc/$identity_init_pid/root$secret_path" | awk 'NR == 1 {print $1}')
@@ -127,7 +144,7 @@ observation_configure_secret() {
     --inode-generation "$inode_generation" >"$object"
 
   jq --arg artifact "$artifact" \
-    --arg public_key "$observation_directory/test-public-key.hex" \
+    --arg public_key "$observation_policy_fixture_directory/test-public-key.hex" \
     --arg socket "$observation_socket" \
     --arg scope "$observation_scope" \
     --slurpfile object "$object" \
@@ -272,13 +289,15 @@ observation_wait_for_runtime_socket() {
 
 observation_open_probe_gate() {
   local host_release=${observation_probe_release_host:-/proc/$identity_init_pid/root$observation_probe_release}
-  timeout 5s sh -c 'printf 1 >"$1"' sh \
-    "$host_release"
+  timeout 5s sh -c 'printf 1 >"$1"' sh "$host_release"
 }
 
 observation_release_probe() {
   observation_open_probe_gate
-  wait "$observation_probe_pid"
+  if ! wait "$observation_probe_pid"; then
+    observation_probe_pid=
+    return 1
+  fi
   observation_probe_pid=
   observation_probe_host_pid=
 }

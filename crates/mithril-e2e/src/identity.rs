@@ -155,6 +155,9 @@ pub struct IdentityPhysicalProbeBundleV1 {
     pub pre_ponr_failed_exec_before: NativeTaskSnapshotV1,
     pub pre_ponr_failed_exec_after_failure: NativeTaskSnapshotV1,
     pub pre_ponr_failed_exec_after_success: NativeTaskSnapshotV1,
+    pub non_leader_thread_exec_committed: bool,
+    pub non_leader_thread_exec_root: NativeTaskSnapshotV1,
+    pub non_leader_thread_exec_after_exec: NativeTaskSnapshotV1,
     pub clone_into_cgroup_external_root: NativeTaskSnapshotV1,
     pub clone_into_cgroup_native_child: NativeTaskSnapshotV1,
     pub external_root: NativeTaskSnapshotV1,
@@ -289,8 +292,11 @@ impl IdentityTestRunner {
         self.materialize_object(output_directory)?;
         let execfail_path = output_directory.join("execfail");
         let execfail_ready_path = output_directory.join("execfail-ready");
+        let non_leader_thread_ready_path = output_directory.join("non-leader-thread-ready");
         ensure!(
-            !execfail_path.exists() && !execfail_ready_path.exists(),
+            !execfail_path.exists()
+                && !execfail_ready_path.exists()
+                && !non_leader_thread_ready_path.exists(),
             InvalidInputSnafu {
                 path: output_directory,
                 reason: "identity exec-failure probe files must not already exist",
@@ -298,6 +304,7 @@ impl IdentityTestRunner {
         );
         let execfail_cleanup = ProbeFile::new(&execfail_path);
         let execfail_ready_cleanup = ProbeFile::new(&execfail_ready_path);
+        let non_leader_thread_ready_cleanup = ProbeFile::new(&non_leader_thread_ready_path);
         self.materialize_execfail(&execfail_path)?;
         let object_sha256 = bundled_bpf_sha256();
         let (boot_id, node_boot_id) = boot_identity()?;
@@ -522,6 +529,87 @@ impl IdentityTestRunner {
             }
         };
         fixture.stop();
+
+        let mut non_leader_thread_fixture =
+            NativeProcessFixture::start_with_non_leader_exec(&non_leader_thread_ready_path)?;
+        let non_leader_thread_root_pid = non_leader_thread_fixture.outer_pid();
+        fs::write(&procs_path, non_leader_thread_root_pid.to_string())
+            .context(IoSnafu { path: &procs_path })?;
+        let non_leader_thread_exec_root =
+            self.wait_for("non-leader thread exec root identity", &procs_path, || {
+                inspector
+                    .snapshot(non_leader_thread_root_pid)
+                    .context(NodeSnafu)
+            })?;
+        ensure!(
+            non_leader_thread_exec_root.creator_task_cookie.is_none()
+                && non_leader_thread_exec_root.root_class == Some("external_runtime_root")
+                && non_leader_thread_exec_root.installed_role_class
+                    == Some("runtime_external_restricted")
+                && non_leader_thread_exec_root.active_role_id == binding.external_role_id
+                && non_leader_thread_exec_root.coordinate_state
+                    == TaskCoordinateStateV1::Runnable as u8,
+            InvalidInputSnafu {
+                path: &procs_path,
+                reason: "non-leader thread exec root has the wrong identity",
+            }
+        );
+        let next_id_before_non_leader_thread = identity_next_id(&host)?;
+        let expected_next_id_after_non_leader_thread = next_id_before_non_leader_thread
+            .checked_add(2)
+            .ok_or_else(|| {
+                invalid_state("identity ID sequence overflowed for non-leader thread")
+            })?;
+        non_leader_thread_fixture.release_root()?;
+        let non_leader_thread_tid = self.wait_for(
+            "non-leader Python thread creation",
+            &non_leader_thread_ready_path,
+            || non_leader_thread_fixture.non_leader_thread_tid(&non_leader_thread_ready_path),
+        )?;
+        let non_leader_thread_path = PathBuf::from(format!(
+            "/proc/{non_leader_thread_root_pid}/task/{non_leader_thread_tid}"
+        ));
+        let next_id_after_non_leader_thread = identity_next_id(&host)?;
+        ensure!(
+            non_leader_thread_tid != non_leader_thread_root_pid
+                && non_leader_thread_path.is_dir()
+                && next_id_after_non_leader_thread == expected_next_id_after_non_leader_thread,
+            InvalidInputSnafu {
+                path: &non_leader_thread_path,
+                reason: format!(
+                    "non-leader Python thread did not receive one exact task identity; expected next ID {expected_next_id_after_non_leader_thread}, got {next_id_after_non_leader_thread}"
+                ),
+            }
+        );
+        non_leader_thread_fixture.release_non_leader_exec()?;
+        let non_leader_thread_exec_after_exec =
+            self.wait_for("non-leader thread exec commit", &procs_path, || {
+                let snapshot = inspector
+                    .snapshot(non_leader_thread_root_pid)
+                    .context(NodeSnafu)?;
+                Ok(snapshot.filter(|snapshot| {
+                    snapshot.task_cookie == next_id_before_non_leader_thread
+                        && snapshot.creator_task_cookie
+                            == Some(non_leader_thread_exec_root.task_cookie)
+                        && snapshot.process_state_id == non_leader_thread_exec_root.process_state_id
+                        && snapshot.active_execution_id
+                            != non_leader_thread_exec_root.active_execution_id
+                        && snapshot.image_provenance_id
+                            != non_leader_thread_exec_root.image_provenance_id
+                        && snapshot.active_role_id == non_leader_thread_exec_root.active_role_id
+                        && snapshot.root_class.is_none()
+                        && snapshot.installed_role_class.is_none()
+                        && snapshot.host_tid == non_leader_thread_root_pid
+                        && snapshot.host_tgid == non_leader_thread_root_pid
+                        && snapshot.coordinate_state == TaskCoordinateStateV1::Runnable as u8
+                        && snapshot.process_execution_state == ProcessExecutionStateV1::Active as u8
+                        && snapshot.process_state_vector_state
+                            == ProcessStateVectorStateV1::Active as u8
+                        && snapshot.exec_guard_state == ExecGuardStateV1::None as u8
+                }))
+            })?;
+        non_leader_thread_fixture.stop();
+        non_leader_thread_ready_cleanup.cleanup()?;
 
         let mut failed_exec_fixture =
             NativeProcessFixture::start_with_failed_exec(&execfail_path, &execfail_ready_path)?;
@@ -995,7 +1083,7 @@ impl IdentityTestRunner {
             }
         );
         Ok(IdentityPhysicalProbeBundleV1 {
-            schema_version: 5,
+            schema_version: 6,
             object_sha256,
             first_start,
             distinct_pin_root_owner_rejected,
@@ -1007,6 +1095,9 @@ impl IdentityTestRunner {
             pre_ponr_failed_exec_before: failed_exec_before,
             pre_ponr_failed_exec_after_failure: failed_exec_after_failure,
             pre_ponr_failed_exec_after_success: failed_exec_after_success,
+            non_leader_thread_exec_committed: true,
+            non_leader_thread_exec_root,
+            non_leader_thread_exec_after_exec,
             clone_into_cgroup_external_root: clone_external_root,
             clone_into_cgroup_native_child: clone_native_child,
             external_root,
@@ -1148,6 +1239,36 @@ impl NativeProcessFixture {
         Self::start_command(&mut command, false, Path::new("/bin/bash"))
     }
 
+    fn start_with_non_leader_exec(ready: &Path) -> Result<Self> {
+        let mut command = Command::new("python3");
+        command
+            .args([
+                "-c",
+                r#"import os
+import sys
+import threading
+
+ready = sys.argv[1]
+release = threading.Event()
+sys.stdin.readline()
+
+def execute():
+    with open(ready, "x", encoding="ascii") as output:
+        output.write(f"{threading.get_native_id()}\n")
+    release.wait()
+    os.execv("/bin/sleep", ["/bin/sleep", "30"])
+
+thread = threading.Thread(target=execute)
+thread.start()
+sys.stdin.readline()
+release.set()
+thread.join()
+"#,
+            ])
+            .arg(ready);
+        Self::start_command(&mut command, false, Path::new("python3"))
+    }
+
     fn start_command(command: &mut Command, parent_exit_mode: bool, path: &Path) -> Result<Self> {
         let mut outer = command
             .stdin(Stdio::piped())
@@ -1189,6 +1310,10 @@ impl NativeProcessFixture {
 
     fn release_root(&mut self) -> Result<()> {
         self.write_stdin(b"root\n")
+    }
+
+    fn release_non_leader_exec(&mut self) -> Result<()> {
+        self.write_stdin(b"exec\n")
     }
 
     fn release_exec(&mut self, native_pid: u32) -> Result<()> {
@@ -1320,6 +1445,38 @@ impl NativeProcessFixture {
             )));
         }
         self.first_child_pid(self.outer.id())
+    }
+
+    fn non_leader_thread_tid(&mut self, ready: &Path) -> Result<Option<u32>> {
+        if let Some(status) = self.outer.try_wait().context(IoSnafu {
+            path: Path::new("non-leader thread fixture"),
+        })? {
+            let mut stderr = String::new();
+            if let Some(mut pipe) = self.stderr.take() {
+                pipe.read_to_string(&mut stderr).context(IoSnafu {
+                    path: Path::new("non-leader thread fixture stderr"),
+                })?;
+            }
+            return Err(invalid_state(format!(
+                "non-leader thread fixture exited before it reported its TID ({status}): {}",
+                stderr.trim()
+            )));
+        }
+        let text = match fs::read_to_string(ready) {
+            Ok(text) => text,
+            Err(source) if source.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(source) => return Err(source).context(IoSnafu { path: ready }),
+        };
+        if text.trim().is_empty() {
+            return Ok(None);
+        }
+        let tid = text.trim().parse::<u32>().map_err(|source| {
+            invalid_state(format!(
+                "non-leader thread fixture wrote an invalid TID `{}`: {source}",
+                text.trim()
+            ))
+        })?;
+        Ok(Some(tid))
     }
 
     fn intermediate_pid(&mut self) -> Result<Option<u32>> {
@@ -1582,6 +1739,41 @@ mod tests {
         fixture.release_exec(native_pid)?;
         let comm_path = PathBuf::from(format!("/proc/{native_pid}/comm"));
         runner.wait_for("native child exec", &comm_path, || {
+            fs::read_to_string(&comm_path)
+                .map(|name| (name.trim() == "sleep").then_some(()))
+                .map_err(|error| {
+                    super::invalid_state(format!("read {}: {error}", comm_path.display()))
+                })
+        })?;
+        Ok(())
+    }
+
+    #[test]
+    fn native_process_fixture_executes_non_leader_thread() -> crate::Result<()> {
+        let runner = IdentityTestRunner::new(".");
+        let temporary = tempfile::tempdir().map_err(|error| {
+            super::invalid_state(format!("create non-leader thread test directory: {error}"))
+        })?;
+        let ready = temporary.path().join("non-leader-thread-ready");
+        let mut fixture = NativeProcessFixture::start_with_non_leader_exec(&ready)?;
+        let outer_pid = fixture.outer_pid();
+        fs::write(&ready, b"")
+            .map_err(|error| super::invalid_state(format!("write {}: {error}", ready.display())))?;
+        assert_eq!(fixture.non_leader_thread_tid(&ready)?, None);
+        fs::remove_file(&ready).map_err(|error| {
+            super::invalid_state(format!("remove {}: {error}", ready.display()))
+        })?;
+
+        fixture.release_root()?;
+        let thread_tid = runner.wait_for("non-leader Python thread creation", &ready, || {
+            fixture.non_leader_thread_tid(&ready)
+        })?;
+        assert_ne!(thread_tid, outer_pid);
+        assert!(PathBuf::from(format!("/proc/{outer_pid}/task/{thread_tid}")).is_dir());
+
+        fixture.release_non_leader_exec()?;
+        let comm_path = PathBuf::from(format!("/proc/{outer_pid}/comm"));
+        runner.wait_for("non-leader Python thread exec", &comm_path, || {
             fs::read_to_string(&comm_path)
                 .map(|name| (name.trim() == "sleep").then_some(()))
                 .map_err(|error| {

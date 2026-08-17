@@ -1,9 +1,9 @@
 # Phase 3: Effect Observation And Profile Simulation
 
 Status: Blocked. The current source passed the disposable privileged VM
-observation probe and direct-CRI exact-file K3s runs in `OBSERVE` and
-`PROTECT` mode. The remaining manual matrix is not recorded. No prevention
-claim is made.
+observation probe, direct-CRI exact-file K3s runs in `OBSERVE` and `PROTECT`
+mode, and two manual VM observation cases. The manual matrix remains
+incomplete. No prevention claim is made.
 
 Master: [Mithril Hugging Face Intrusion Prevention](./README.md)
 Design: [Validated readable architecture](./policy-and-protection-algorithm-architecture-readable.md)
@@ -307,3 +307,18 @@ is copied, its hashes are verified, and scoped deletion is authorized. Then
 remove only this root. Do not change its external symlink targets. This is one
 direct-CRI OBSERVE operator case. The remaining manual matrix is not complete.
 Phase 3 remains **Blocked**.
+
+## Manual VM update — 2026-08-17
+
+On the retained manual VM, the operator ran
+`cri-file-observe.sh` and `nsenter-file-observe.sh` with no arguments. Each
+script created its own K3s Pod, live CRI binding, and writable shared directory.
+Each script printed `PASS` and removed its node, pins, lease, state, Pod, and
+fixture.
+
+The direct CRI case required the exact task cookie, `OPEN_READ`, `WOULD_DENY`,
+`UNKNOWN_AFTER_PRE_EFFECT`, and object key `7`. The `nsenter` case required the
+same event plus the external restricted-root identity. Both scripts opened the
+exact secret and completed the scripted one-byte read attempt. They do not
+assert `kernel_result`. This records two manual observe cases only. The phase
+remains **Blocked**.

@@ -214,8 +214,7 @@ fi
   "$remote_source/bpf/erebor-interceptor/qualification" \
   "$remote_source/crates/mithril-e2e/fixtures/hugging-face/platforms" \
   "$remote_source/crates/mithril-e2e/fixtures/hugging-face/protected" \
-  "$remote_source/examples/mithril-effect-observation-manual" \
-  "$remote_source/examples/mithril-local-enforcement-manual" \
+  "$remote_source/crates/mithril-e2e/fixtures/mithril-policy" \
   "$remote_root/harness" "$remote_bin"
 
 "$provider" put "$vm_name" "$repo_root/target/debug/mithril-identity-test" \
@@ -243,12 +242,12 @@ fi
   "$remote_root/harness/guest.sh"
 for fixture in observe-profile-seal-request.json test-public-key.hex test-signing-key.hex observe-policy-v1.yaml; do
   "$provider" put "$vm_name" \
-    "$repo_root/examples/mithril-effect-observation-manual/$fixture" \
-    "$remote_source/examples/mithril-effect-observation-manual/$fixture"
+    "$repo_root/crates/mithril-e2e/fixtures/mithril-policy/$fixture" \
+    "$remote_source/crates/mithril-e2e/fixtures/mithril-policy/$fixture"
 done
 "$provider" put "$vm_name" \
-  "$repo_root/examples/mithril-local-enforcement-manual/protect-policy-v1.yaml" \
-  "$remote_source/examples/mithril-local-enforcement-manual/protect-policy-v1.yaml"
+  "$repo_root/crates/mithril-e2e/fixtures/mithril-policy/protect-policy-v1.yaml" \
+  "$remote_source/crates/mithril-e2e/fixtures/mithril-policy/protect-policy-v1.yaml"
 for fixture in \
   fixture.json baseline.json replay.jsonl \
   platforms/node-a.json platforms/node-b.json \
@@ -272,10 +271,10 @@ if [[ $with_k3s == true ]]; then
       k3s-cri-effect "$remote_bin/mithril-node" "$remote_bin/mithril-inspect" \
       "$remote_bin/mithril-policy" \
       "$remote_root/harness/k3s-cri-effect-node-v1.json" \
-      "$remote_source/examples/mithril-effect-observation-manual/observe-policy-v1.yaml" \
-      "$remote_source/examples/mithril-effect-observation-manual/observe-profile-seal-request.json" \
-      "$remote_source/examples/mithril-effect-observation-manual/test-signing-key.hex" \
-      "$remote_source/examples/mithril-effect-observation-manual/test-public-key.hex" \
+      "$remote_source/crates/mithril-e2e/fixtures/mithril-policy/observe-policy-v1.yaml" \
+      "$remote_source/crates/mithril-e2e/fixtures/mithril-policy/observe-profile-seal-request.json" \
+      "$remote_source/crates/mithril-e2e/fixtures/mithril-policy/test-signing-key.hex" \
+      "$remote_source/crates/mithril-e2e/fixtures/mithril-policy/test-public-key.hex" \
       "$remote_root/harness/k3s-workload-v1.yaml" "$remote_root"
   }
   "$provider" put "$vm_name" "$directory/k3s-config-v1.yaml" \
@@ -315,9 +314,9 @@ if [[ $with_k3s == true ]]; then
       "$remote_root/harness/oidc-fixture.py" \
       "$remote_root/harness/k3s-administrative-node-v1.json" \
       "$remote_root/harness/k3s-administrative-policy-v1.yaml" \
-      "$remote_source/examples/mithril-effect-observation-manual/observe-profile-seal-request.json" \
-      "$remote_source/examples/mithril-effect-observation-manual/test-signing-key.hex" \
-      "$remote_source/examples/mithril-effect-observation-manual/test-public-key.hex" \
+      "$remote_source/crates/mithril-e2e/fixtures/mithril-policy/observe-profile-seal-request.json" \
+      "$remote_source/crates/mithril-e2e/fixtures/mithril-policy/test-signing-key.hex" \
+      "$remote_source/crates/mithril-e2e/fixtures/mithril-policy/test-public-key.hex" \
       "$remote_root/harness/k3s-workload-v1.yaml" "$remote_root" \
       >"$k3s_administrative_partial"
     mv -- "$k3s_administrative_partial" \

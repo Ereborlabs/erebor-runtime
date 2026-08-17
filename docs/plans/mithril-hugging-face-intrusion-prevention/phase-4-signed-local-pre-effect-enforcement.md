@@ -290,3 +290,28 @@ This retained-VM record qualifies the implemented alias and mount-CAS slice.
 It does not replace a fresh full-harness qualification record. The phase
 remains **Not done**. The administrative runc bootstrap sequence remains
 unsupported. Do not add a broad runc, pipe, or socket exception.
+
+## Qualification update — 2026-08-16 — readable CRI alias and mount cases
+
+A fresh manual K3s VM ran
+[`nsenter-bind-alias-deny.sh`](../../../examples/mithril-local-enforcement-manual/nsenter-bind-alias-deny.sh)
+and
+[`mount-attack-deny.sh`](../../../examples/mithril-local-enforcement-manual/mount-attack-deny.sh)
+against one bound Python 3.12 container. The working tree was based at
+`78f12f568b2e8fb8de89d2fbc667aef3824eddfb`. The script SHA-256 values were
+`8ffca2db77acd95d87b669374a5cf1246829e2e5221f401bac468c891b83b74d` and
+`51a14ad266eb02c3d8c2af22cabab1bc3ffecc7470b50dec0814b665bca336df`.
+
+The alias case created two file bind aliases before activation. Its Python
+probe required two exact key-7 denials. The mount case issued eight Python
+`mount(2)` calls after activation. Each call returned `EACCES` or `EPERM`.
+The protected-file retries also denied. Both scripts exited 0. Their output
+SHA-256 values were
+`09e3b76ee1a37afd563eb0c4b6171dbcfa86a25510f4c14b1d9854665eae35e7` and
+`3f2e2a62c5281b2a1750f4c6d12f19649e8a8f1e9a3a0797886e2c3c9655c73c`.
+
+The scripts removed their Mithril state. The outer runner removed each Pod,
+namespace, and fixture. Final inspection found no Mithril pin or process.
+Only unrelated BPF link 1 remained. This proves two manual CRI slices. It does
+not qualify propagation, idmapped mounts, token rotation, or administrative
+exec. The phase remains **Not done**.

@@ -2,15 +2,28 @@
 set -Eeuo pipefail
 source "$(dirname "$0")/identity-runtime.sh"
 
-[[ $# -eq 2 || ($# -eq 3 && (${3:-} == --orphan || ${3:-} == --double-fork || ${3:-} == --moved-exec || ${3:-} == --failed-exec)) ]] || {
-  echo "usage: sudo $0 NODE_CONFIG DOCKER_CONTAINER_OR_FULL_CRI_ID [--orphan|--double-fork|--moved-exec|--failed-exec]" >&2
+identity_case_mode=
+identity_case_k3s=false
+if [[ $# -eq 1 && $1 == --thread-exec ]]; then
+  identity_case_mode=$1
+  identity_case_k3s=true
+elif [[ $# -eq 2 || ($# -eq 3 && (${3:-} == --orphan || ${3:-} == --double-fork || ${3:-} == --moved-exec || ${3:-} == --failed-exec || ${3:-} == --thread-exec)) ]]; then
+  identity_case_mode=${3:-}
+else
+  echo "usage: sudo $0 NODE_CONFIG DOCKER_CONTAINER_OR_FULL_CRI_ID [--orphan|--double-fork|--moved-exec|--failed-exec|--thread-exec]" >&2
+  echo "   or: sudo $0 --thread-exec" >&2
   exit 2
-}
+fi
 
-identity_prepare_auto "$1" "$2"
+if [[ $identity_case_k3s == true ]]; then
+  identity_prepare_k3s_case \
+    docker.io/library/python@sha256:78098ea6a3a9c6a7727a5d4674e4a44e57e01fac878ee9cb4d24a86bd93916ff
+else
+  identity_prepare_auto "$1" "$2"
+fi
 identity_start_node
 
-if [[ ${3:-} == --double-fork ]]; then
+if [[ $identity_case_mode == --double-fork ]]; then
   echo "Run in another root terminal:"
   identity_print_runtime_exec '( ( read child_pid _ < /proc/self/stat; kill -STOP "$child_pid"; exec sleep 300 ) & wait ) & middle_pid=$!; wait "$middle_pid"; exec sleep 300'
   echo "Enter the outer shell, its intermediate child, then its stopped grandchild host PIDs."
@@ -95,7 +108,7 @@ if [[ ${3:-} == --double-fork ]]; then
   exit 0
 fi
 
-if [[ ${3:-} == --moved-exec ]]; then
+if [[ $identity_case_mode == --moved-exec ]]; then
   echo "Run in another root terminal:"
   identity_print_runtime_exec '(read child_pid _ < /proc/self/stat; kill -STOP "$child_pid"; exec sleep 300) & wait'
   echo "Enter that shell's host PID, then its stopped native child host PID."
@@ -171,7 +184,7 @@ if [[ ${3:-} == --moved-exec ]]; then
   exit 0
 fi
 
-if [[ ${3:-} == --failed-exec ]]; then
+if [[ $identity_case_mode == --failed-exec ]]; then
   echo "This check requires /bin/bash, python3, and a dynamically linked /bin/true in the workload."
   echo "Run this in another root terminal:"
   if [[ $identity_mode == docker ]]; then
@@ -315,6 +328,157 @@ EOF
     exit 1
   }
   identity_pass "PASS: a pre-PONR ELF loader failure kept the source identity and a later exec committed."
+  exit 0
+fi
+
+if [[ $identity_case_mode == --thread-exec ]]; then
+  if [[ $identity_case_k3s == true ]]; then
+    ready_name=.mithril-thread-exec-${identity_work##*.}.ready
+    ready_host=$identity_k3s_shared_directory/$ready_name
+    ready_container=$identity_k3s_container_shared_directory/$ready_name
+    crictl --runtime-endpoint "$identity_runtime_endpoint" exec "$identity_container_id" \
+      python3 -c '
+import os
+import signal
+import sys
+import threading
+
+release = threading.Event()
+signal.signal(signal.SIGUSR1, lambda _signal, _frame: release.set())
+
+def execute():
+    with open(sys.argv[1], "w", encoding="ascii") as output:
+        output.write(str(os.getpid()))
+    release.wait()
+    os.execv("/bin/sleep", ["/bin/sleep", "300"])
+
+thread = threading.Thread(target=execute)
+thread.start()
+signal.pause()
+thread.join()
+' "$ready_container" >"$identity_work/thread-exec-client.log" 2>&1 &
+    for ((attempt = 0; attempt < 100; attempt++)); do
+      [[ -s $ready_host ]] && break
+      sleep 0.1
+    done
+    [[ -s $ready_host ]] || {
+      echo "the K3s Python worker did not become ready" >&2
+      exit 1
+    }
+    namespace_pid=$(<"$ready_host")
+    [[ $namespace_pid =~ ^[1-9][0-9]*$ ]] || {
+      echo "the K3s Python worker wrote an invalid namespace PID" >&2
+      exit 1
+    }
+    root_pid=
+    for candidate in $(<"$identity_cgroup_path/cgroup.procs"); do
+      [[ -r /proc/$candidate/status ]] || continue
+      mapped_pid=$(awk '/^NSpid:/ {print $NF}' "/proc/$candidate/status")
+      if [[ $mapped_pid == "$namespace_pid" ]]; then
+        root_pid=$candidate
+        break
+      fi
+    done
+    [[ $root_pid =~ ^[1-9][0-9]*$ ]] || {
+      echo "cannot map the K3s Python worker to a host PID" >&2
+      exit 1
+    }
+  else
+    echo "This check requires python3 and /bin/sleep in the workload."
+    echo "Run in another root terminal:"
+    if [[ $identity_mode == docker ]]; then
+      printf '  docker exec -it %q sh\n' "$identity_container"
+    else
+      printf '  crictl --runtime-endpoint %q exec -i %q sh\n' \
+        "$identity_runtime_endpoint" "$identity_container_id"
+    fi
+    cat <<'EOF'
+Paste this block into that shell. Do not change the block.
+
+python3 - <<'PY'
+import os
+import signal
+import threading
+
+release = threading.Event()
+signal.signal(signal.SIGUSR1, lambda _signal, _frame: release.set())
+
+def execute():
+    print("MITHRIL_NONLEADER_READY", flush=True)
+    release.wait()
+    os.execv("/bin/sleep", ["/bin/sleep", "300"])
+
+thread = threading.Thread(target=execute)
+thread.start()
+signal.pause()
+thread.join()
+PY
+EOF
+    printf 'When MITHRIL_NONLEADER_READY appears, find the Python host PID in %q/cgroup.procs.\n' \
+      "$identity_cgroup_path"
+    echo "Verify a candidate with: tr '\\0' ' ' </proc/PID/cmdline"
+    identity_read_host_pid "Python root host PID: "
+    root_pid=$identity_read_pid
+  fi
+  root_task_directory=/proc/$root_pid/task
+  thread_paths=("$root_task_directory"/*)
+  [[ ${#thread_paths[@]} -eq 2 ]] || {
+    echo "Python root does not have exactly one non-leader thread" >&2
+    exit 1
+  }
+  thread_pid=
+  for thread_path in "${thread_paths[@]}"; do
+    candidate=${thread_path##*/}
+    if [[ $candidate != "$root_pid" ]]; then
+      thread_pid=$candidate
+      break
+    fi
+  done
+  [[ $thread_pid =~ ^[1-9][0-9]*$ && -d /proc/$root_pid/task/$thread_pid ]] || {
+    echo "cannot identify the non-leader Python thread" >&2
+    exit 1
+  }
+
+  identity_inspect_task thread-exec-root "$root_pid" >/dev/null
+  root_cookie=$(jq -er '.task_cookie' "$identity_work/thread-exec-root.json")
+  root_process=$(jq -er '.process_state_id' "$identity_work/thread-exec-root.json")
+  root_execution=$(jq -er '.active_execution_id' "$identity_work/thread-exec-root.json")
+  root_image=$(jq -er '.image_provenance_id' "$identity_work/thread-exec-root.json")
+  root_role=$(jq -er '.active_role_id' "$identity_work/thread-exec-root.json")
+  identity_assert_external "$identity_work/thread-exec-root.json"
+
+  kill -USR1 "$root_pid"
+  for ((attempt = 0; attempt < 100; attempt++)); do
+    [[ $(tr -d '\n' </proc/$root_pid/comm 2>/dev/null || true) == sleep ]] && break
+    sleep 0.1
+  done
+  [[ $(tr -d '\n' </proc/$root_pid/comm 2>/dev/null || true) == sleep ]] || {
+    echo "the non-leader Python thread did not exec sleep" >&2
+    exit 1
+  }
+  identity_inspect_task thread-exec-after "$root_pid" >/dev/null
+  jq -e --argjson root_cookie "$root_cookie" \
+    --arg root_process "$root_process" \
+    --arg root_execution "$root_execution" \
+    --arg root_image "$root_image" \
+    --argjson root_role "$root_role" \
+    --argjson root_pid "$root_pid" \
+    '.task_cookie != $root_cookie
+     and .creator_task_cookie == $root_cookie
+     and .process_state_id == $root_process
+     and .active_execution_id != $root_execution
+     and .image_provenance_id != $root_image
+     and .active_role_id == $root_role
+     and .root_class == null
+     and .installed_role_class == null
+     and .host_tid == $root_pid
+     and .host_tgid == $root_pid
+     and .coordinate_state == 3
+     and .process_execution_state == 2
+     and .process_state_vector_state == 2
+     and .exec_guard_state == 0' \
+    "$identity_work/thread-exec-after.json" >/dev/null
+  identity_pass "PASS: a non-leader Python thread exec kept the process identity and role."
   exit 0
 fi
 

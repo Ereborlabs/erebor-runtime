@@ -720,25 +720,25 @@ impl EffectTestRunner {
             HuggingFaceFixture::new(repo_root.join("crates/mithril-e2e/fixtures/hugging-face"))
                 .verify()?
                 .protected_deployment_digest;
-        let signing_fixture = repo_root.join("examples/mithril-effect-observation-manual");
-        let policy_source = repo_root.join(if protect {
-            "examples/mithril-local-enforcement-manual/protect-policy-v1.yaml"
+        let policy_fixture = repo_root.join("crates/mithril-e2e/fixtures/mithril-policy");
+        let policy_source = policy_fixture.join(if protect {
+            "protect-policy-v1.yaml"
         } else {
-            "examples/mithril-effect-observation-manual/observe-policy-v1.yaml"
+            "observe-policy-v1.yaml"
         });
         let artifact_path = fixture_root.join("profile.json");
         PolicyArtifactOwner::default()
             .compile_and_sign(
                 &policy_source,
-                &signing_fixture.join("observe-profile-seal-request.json"),
-                &signing_fixture.join("test-signing-key.hex"),
+                &policy_fixture.join("observe-profile-seal-request.json"),
+                &policy_fixture.join("test-signing-key.hex"),
                 &artifact_path,
             )
             .context(PolicySnafu)?;
         let next_artifact_path = build_next_generation_artifact(
             &policy_source,
-            &signing_fixture.join("observe-profile-seal-request.json"),
-            &signing_fixture.join("test-signing-key.hex"),
+            &policy_fixture.join("observe-profile-seal-request.json"),
+            &policy_fixture.join("test-signing-key.hex"),
             &fixture_root,
         )?;
 
@@ -985,7 +985,7 @@ impl EffectTestRunner {
             &fixture_root,
             pin_root,
             lease_path,
-            &signing_fixture,
+            &policy_fixture,
             artifact_path,
             binding_set.to_vec(),
             exact_objects.clone(),
@@ -1002,7 +1002,7 @@ impl EffectTestRunner {
             &fixture_root,
             pin_root,
             lease_path,
-            &signing_fixture,
+            &policy_fixture,
             next_artifact_path,
             next_bindings,
             next_exact_objects,

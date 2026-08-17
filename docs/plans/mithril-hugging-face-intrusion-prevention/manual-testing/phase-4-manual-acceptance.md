@@ -116,6 +116,49 @@ alias and mount-CAS slice. It does not replace the manual matrix in this
 document. The phase remains **Not done**. The administrative runc bootstrap
 sequence remains unsupported.
 
+### CRI Bind Alias And Mount Attack — 2026-08-16
+
+A fresh manual K3s VM ran two readable CRI cases with one bound Python 3.12
+container. The working tree was based at `78f12f568b2e8fb8de89d2fbc667aef3824eddfb`.
+The bind-alias script SHA-256 was
+`8ffca2db77acd95d87b669374a5cf1246829e2e5221f401bac468c891b83b74d`.
+The mount-attack script SHA-256 was
+`51a14ad266eb02c3d8c2af22cabab1bc3ffecc7470b50dec0814b665bca336df`.
+
+`nsenter-bind-alias-deny.sh` created two file bind aliases before activation.
+Its Python probe opened both aliases after release. The script required two
+key-7 `EXACT_POLICY_DENY` events and a `DENIED_BEFORE_EFFECT` result. It exited
+0.
+Its output SHA-256 was
+`09e3b76ee1a37afd563eb0c4b6171dbcfa86a25510f4c14b1d9854665eae35e7`.
+
+`mount-attack-deny.sh` started eight Python `mount(2)` attempts after
+activation. The script required `EACCES` or `EPERM` from every call, at least
+eight `UNSUPPORTED_OBJECT` events, and a later exact protected-file denial.
+It exited 0. Its output SHA-256 was
+`3f2e2a62c5281b2a1750f4c6d12f19649e8a8f1e9a3a0797886e2c3c9655c73c`.
+
+Each case removed its node, pins, lease, state, sockets, and mounts. The
+outer runner removed its Pod, namespace, and fixture. Final inspection found
+no Mithril pin or process. Only unrelated BPF link 1 remained.
+
+This is one CRI bind-alias case and one CRI mount-attack case. It does not
+qualify propagation, idmapped mounts, token rotation, or administrative exec.
+The phase remains **Not done**.
+
+### Self-contained manual VM cases — 2026-08-17
+
+On the retained manual VM, the operator ran `nsenter-bind-alias-deny.sh` and
+`mount-attack-deny.sh` with no arguments. Each script created its own Python
+Pod, live CRI binding, and fixture. Each script printed `PASS` and removed its
+Mithril state, Pod, and fixture.
+
+The bind-alias case denied both pre-existing aliases as exact object key `7`.
+The mount-attack case denied all protected mount attempts and the later
+protected open. These are one-container manual cases. They do not qualify
+propagation, idmapped mounts, token rotation, or administrative exec. The
+phase remains **Not done**.
+
 ## Procedure
 
 1. Install a signed candidate generation only after complete readback and

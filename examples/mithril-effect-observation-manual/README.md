@@ -7,6 +7,17 @@ In the guest, run `sudo -i`, source `/var/tmp/mithril-manual.env`, and change
 to `$MITHRIL_MANUAL_SOURCE`. The manual VM supports CRI and raw-namespace
 cases. Docker cases require Docker.
 
+Run either self-contained K3s case from that root shell:
+
+```sh
+examples/mithril-effect-observation-manual/cri-file-observe.sh
+examples/mithril-effect-observation-manual/nsenter-file-observe.sh
+```
+
+Each command creates one Pod and live CRI binding. It removes its Pod and
+fixture directory at exit. The first case is direct CRI. The second case joins
+the Pod mount namespace and moves the probe to its cgroup.
+
 ## Operator Cases
 
 These scripts run the real `mithril-node`; they are not wrappers around Rust
@@ -65,13 +76,15 @@ Cases:
 - `docker-file-observe.sh <node.json> <container> <absolute-secret-path>`
   recovers Mithril with the candidate, releases an already-attributed process,
   and requires the read to succeed while the kernel reports `WOULD_DENY`.
-- `cri-file-observe.sh <node.json> <container-id> <absolute-secret-path>
+- `cri-file-observe.sh` runs the self-contained K3s CRI case. It also accepts
+  `<node.json> <container-id> <absolute-secret-path>
   <host-shared-directory> <container-shared-directory>` runs the same physical
   oracle through a configured CRI runtime. The host directory must be the
   run-scoped directory mounted at the container directory. It records the
   direct CRI task cookie and requires `WOULD_DENY`,
   `UNKNOWN_AFTER_PRE_EFFECT`, and exact object key `7` for the completed read.
-- `nsenter-file-observe.sh` accepts either `<node.json> <container>
+- `nsenter-file-observe.sh` runs the self-contained K3s `nsenter` case. It also
+  accepts either `<node.json> <container>
   <absolute-secret-path>` for Docker or `<node.json> <full-container-id>
   <absolute-secret-path> <host-shared-directory> <container-shared-directory>`
   for K3s/CRI. It joins the mount view with raw `nsenter`, moves the blocked
@@ -80,8 +93,8 @@ Cases:
   cookie in the `family=2`, `operation=2`, `WOULD_DENY`,
   `UNKNOWN_AFTER_PRE_EFFECT`, and exact object key `7` event.
 
-For K3s/CRI, use the five-argument form with a full container ID and a fresh
-writable shared directory:
+For an existing K3s/CRI target, use the five-argument form with a full
+container ID and a fresh writable shared directory:
 
 ```sh
 sudo examples/mithril-effect-observation-manual/nsenter-file-observe.sh \

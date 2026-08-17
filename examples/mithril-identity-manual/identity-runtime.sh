@@ -12,6 +12,14 @@ identity_cleanup_functions=()
 identity_success_message=
 identity_work=
 identity_pin_root=
+identity_repository=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
+identity_k3s_namespace=
+identity_k3s_namespace_created=false
+identity_k3s_fixture_root=
+identity_k3s_shared_directory=
+identity_k3s_node_config=
+identity_k3s_secret_path=
+identity_k3s_container_shared_directory=
 
 identity_require_command() {
   command -v "$1" >/dev/null || {
@@ -154,6 +162,14 @@ identity_prepare_cri() {
   identity_container=$identity_container_id
   identity_begin
 
+  identity_configure_cri "$1" "$2"
+}
+
+identity_configure_cri() {
+  identity_source_config=$1
+  identity_container_id=$2
+  identity_container=$identity_container_id
+
   local matching_bindings runtime_socket
   matching_bindings=$(jq --arg id "$identity_container_id" \
     '[.workload_bindings[] | select(.container_id == $id)] | length' \
@@ -180,6 +196,96 @@ identity_prepare_cri() {
   identity_init_pid=$(crictl --runtime-endpoint "$identity_runtime_endpoint" \
     inspect "$identity_container_id" | jq -er '.info.pid')
   identity_cgroup_path=$(identity_cgroup_for_pid "$identity_init_pid")
+}
+
+identity_prepare_k3s_case() {
+  local image=$1
+  local source_config=$identity_repository/crates/mithril-e2e/harness/vm/k3s-cri-effect-node-v1.json
+  local workload_template=$identity_repository/examples/mithril-effect-observation-manual/k3s-cri-manual-workload-v1.yaml
+  identity_check_base "$source_config"
+  identity_require_command crictl
+  identity_require_command date
+  identity_require_command kubectl
+  identity_mode=cri
+  identity_begin
+
+  local suffix
+  suffix=$(tr '[:upper:]' '[:lower:]' <<<"${identity_work##*.}")
+  identity_k3s_namespace=mithril-manual-$suffix
+  identity_k3s_fixture_root=/var/lib/mithril-manual-$suffix
+  identity_k3s_shared_directory=$identity_k3s_fixture_root/shared
+  identity_k3s_node_config=$identity_work/k3s-node.json
+  identity_k3s_secret_path=/var/lib/mithril/secret
+  identity_k3s_container_shared_directory=/var/lib/mithril/manual-shared
+  identity_cleanup_functions+=(identity_cleanup_k3s_case)
+
+  install -d -m 700 -- "$identity_k3s_fixture_root" "$identity_k3s_shared_directory"
+  printf 'mithril manual secret\n' >"$identity_k3s_fixture_root/secret"
+  chmod 0400 -- "$identity_k3s_fixture_root/secret"
+
+  local workload=$identity_work/workload.yaml
+  sed \
+    -e "s|MITHRIL_MANUAL_NAMESPACE|$identity_k3s_namespace|g" \
+    -e "s|MITHRIL_MANUAL_SECRET_HOST_PATH|$identity_k3s_fixture_root/secret|g" \
+    -e "s|MITHRIL_MANUAL_SHARED_HOST_DIRECTORY|$identity_k3s_shared_directory|g" \
+    -e "s|MITHRIL_MANUAL_IMAGE|$image|g" \
+    "$workload_template" >"$workload"
+  kubectl create namespace "$identity_k3s_namespace" >/dev/null
+  identity_k3s_namespace_created=true
+  kubectl apply -f "$workload" >/dev/null
+  kubectl -n "$identity_k3s_namespace" wait \
+    --for=condition=Ready pod/mithril-runtime --timeout=300s >/dev/null
+
+  local container_ref container_json created_at generation image_digest pod_uid sandbox_id
+  container_ref=$(kubectl -n "$identity_k3s_namespace" get pod mithril-runtime \
+    -o jsonpath='{.status.containerStatuses[0].containerID}')
+  [[ $container_ref == containerd://* ]] || {
+    echo "K3s did not return a containerd container ID" >&2
+    return 1
+  }
+  identity_container_id=${container_ref#containerd://}
+  identity_container=$identity_container_id
+  pod_uid=$(kubectl -n "$identity_k3s_namespace" get pod mithril-runtime \
+    -o jsonpath='{.metadata.uid}')
+  container_json=$(crictl inspect "$identity_container_id")
+  created_at=$(jq -er '.status.createdAt' <<<"$container_json")
+  generation=$(date --utc --date "$created_at" +%s%N)
+  image_digest=$(jq -er '.status.imageRef' <<<"$container_json")
+  sandbox_id=$(crictl ps --id "$identity_container_id" -o json \
+    | jq -er '.containers[0].podSandboxId')
+  [[ $generation =~ ^[1-9][0-9]*$ && -n $pod_uid && -n $sandbox_id && -n $image_digest ]] || {
+    echo "K3s did not return a complete live workload binding" >&2
+    return 1
+  }
+
+  jq --arg id "$identity_container_id" \
+    --arg namespace "$identity_k3s_namespace" \
+    --arg pod_uid "$pod_uid" \
+    --arg sandbox_id "$sandbox_id" \
+    --arg image_digest "$image_digest" \
+    --argjson generation "$generation" \
+    '.workload_bindings[0].container_id = $id
+     | .workload_bindings[0].namespace = $namespace
+     | .workload_bindings[0].pod_uid = $pod_uid
+     | .workload_bindings[0].sandbox_id = $sandbox_id
+     | .workload_bindings[0].image_digest = $image_digest
+     | .workload_bindings[0].container_generation = $generation' \
+    "$source_config" >"$identity_k3s_node_config"
+  identity_configure_cri "$identity_k3s_node_config" "$identity_container_id"
+}
+
+identity_cleanup_k3s_case() {
+  local status=0
+  if [[ $identity_k3s_namespace_created == true ]]; then
+    kubectl -n "$identity_k3s_namespace" delete pod mithril-runtime \
+      --ignore-not-found --wait=true --timeout=120s >/dev/null || status=1
+    kubectl delete namespace "$identity_k3s_namespace" --wait=true --timeout=120s >/dev/null || status=1
+  fi
+  if [[ -n $identity_k3s_fixture_root ]]; then
+    [[ $identity_k3s_fixture_root == /var/lib/mithril-manual-* ]] || return 1
+    rm -rf -- "$identity_k3s_fixture_root" || status=1
+  fi
+  return "$status"
 }
 
 identity_prepare_auto() {

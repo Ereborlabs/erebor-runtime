@@ -724,20 +724,19 @@ mod tests {
     fn enforcement_fixture_is_a_verified_protect_artifact() -> Result<(), Box<dyn std::error::Error>>
     {
         let repository = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let signing_fixture = repository.join("examples/mithril-effect-observation-manual");
-        let policy_source =
-            repository.join("examples/mithril-local-enforcement-manual/protect-policy-v1.yaml");
+        let policy_fixture = repository.join("crates/mithril-e2e/fixtures/mithril-policy");
+        let policy_source = policy_fixture.join("protect-policy-v1.yaml");
         let directory = tempfile::tempdir()?;
         let artifact_path = directory.path().join("enforcement-profile.json");
         let owner = PolicyArtifactOwner::default();
         owner.compile_and_sign(
             &policy_source,
-            &signing_fixture.join("observe-profile-seal-request.json"),
-            &signing_fixture.join("test-signing-key.hex"),
+            &policy_fixture.join("observe-profile-seal-request.json"),
+            &policy_fixture.join("test-signing-key.hex"),
             &artifact_path,
         )?;
         let artifact =
-            owner.load_verified(&artifact_path, &signing_fixture.join("test-public-key.hex"))?;
+            owner.load_verified(&artifact_path, &policy_fixture.join("test-public-key.hex"))?;
 
         assert_eq!(artifact.compiled_profile.mode, ProfileModeV1::Protect);
         let cells = &artifact.compiled_profile.compiled_cells;
@@ -847,7 +846,7 @@ mod tests {
     fn checked_in_enforcement_manual_policy_matches_the_automated_fixture() -> crate::Result<()> {
         let repository = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
         let path =
-            repository.join("examples/mithril-local-enforcement-manual/protect-policy-v1.yaml");
+            repository.join("crates/mithril-e2e/fixtures/mithril-policy/protect-policy-v1.yaml");
         let source = std::fs::read(&path).map_err(|source| crate::Error::Io {
             path: path.clone(),
             source,

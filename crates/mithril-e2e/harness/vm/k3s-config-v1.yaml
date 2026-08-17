@@ -1,4 +1,5 @@
 write-kubeconfig-mode: "0600"
+disable-cloud-controller: true
 disable:
   - servicelb
   - traefik

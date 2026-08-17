@@ -3,13 +3,11 @@
 set -euo pipefail
 
 directory=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
-nsenter_observation_script=$directory/../../../../examples/mithril-effect-observation-manual/nsenter-file-observe.sh
 test_root=$(mktemp -d /tmp/mithril-vm-harness-test.XXXXXX)
 trap 'rm -rf -- "$test_root"' EXIT
 
 for script in "$directory/run.sh" "$directory/manual.sh" "$directory/guest.sh" \
-  "$directory/providers/libvirt.sh" "$directory/test.sh" \
-  "$nsenter_observation_script"; do
+  "$directory/providers/libvirt.sh" "$directory/test.sh"; do
   bash -n "$script"
 done
 
@@ -59,23 +57,6 @@ skip_without_k3s=$($directory/run.sh --skip-administrative-exec 2>&1)
 status=$?
 set -e
 [[ $status -eq 2 && $skip_without_k3s == "--skip-administrative-exec requires --with-k3s" ]]
-
-grep -Fq 'case $# in' "$nsenter_observation_script"
-grep -Fq 'observation_prepare_docker "$1" "$2" "$3"' "$nsenter_observation_script"
-grep -Fq 'observation_prepare_cri "$1" "$2" "$3" "$4" "$5"' "$nsenter_observation_script"
-grep -Fq 'observation_preload_nsenter_probe sh -ec' "$nsenter_observation_script"
-! grep -Fq 'python3 -c' "$nsenter_observation_script"
-grep -Fq 'exec 4<"$2"' "$nsenter_observation_script"
-grep -Fq 'IFS= read -r -n 1 _ <&4 || :' "$nsenter_observation_script"
-grep -Fq 'identity_inspect_task cri-nsenter-effect-probe "$observation_probe_host_pid"' \
-  "$nsenter_observation_script"
-grep -Fq 'identity_assert_external "$identity_work/cri-nsenter-effect-probe.json"' \
-  "$nsenter_observation_script"
-grep -Fq '.active_role_id == $external_role_id and .coordinate_state == 3' \
-  "$nsenter_observation_script"
-grep -Fq 'task_cookie=$task_cookie family=2 operation=2 reason=WOULD_DENY result=UNKNOWN_AFTER_PRE_EFFECT' \
-  "$nsenter_observation_script"
-grep -Fq 'exact_object_key_id=7' "$nsenter_observation_script"
 
 grep -q '^write-kubeconfig-mode: "0600"$' "$directory/k3s-config-v1.yaml"
 grep -q '^#cloud-config$' "$directory/cloud-init-v1.yaml"

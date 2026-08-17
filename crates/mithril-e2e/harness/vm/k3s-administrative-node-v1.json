@@ -54,7 +54,7 @@
     "trust_domain_id": "22222222-2222-4222-8222-222222222222",
     "issuer_id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
     "key_id": "mithril-vm-administrative-key-v1",
-    "public_key_path": "/var/tmp/mithril-runtime-qualification-0/source/examples/mithril-effect-observation-manual/test-public-key.hex",
+    "public_key_path": "/var/tmp/mithril-runtime-qualification-0/source/crates/mithril-e2e/fixtures/mithril-policy/test-public-key.hex",
     "sequence_epoch": 1,
     "valid_from_utc_ns": 1767225600000000000,
     "valid_until_utc_ns": 1893456000000000000,
