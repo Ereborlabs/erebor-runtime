@@ -894,9 +894,15 @@ mod tests {
                 b"new-child".to_vec(),
             ],
         ] {
-            let state = graph
-                .state_after(&components)
-                .expect("protected path state");
+            let state =
+                graph
+                    .state_after(&components)
+                    .ok_or_else(|| crate::Error::PolicyValidation {
+                        policy_id: "test".to_owned(),
+                        code: "PATH_TEST",
+                        reason: "recursive denial graph did not match".to_owned(),
+                        location: snafu::Location::default(),
+                    })?;
             assert_eq!(
                 graph
                     .path_tree_deny_floors
