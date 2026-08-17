@@ -12,7 +12,7 @@ Completed-row evidence remains in the phase result and acceptance record:
 
 | Fixture ID | Current proof | Missing closure proof |
 | --- | --- | --- |
-| `ENTRY-BINDING-GAP-001` | No fixture. | Binding-gap source fixture and VM result. |
+| `ENTRY-BINDING-GAP-001` | Blocked. A stopped `NativeProcessFixture` moved into the target cgroup before binding remained unlabelled. On the physical VM, `NativeSecurityStateOwner` reconciliation reported 22 allocation failures, 22 missing-identity denials, and one reconciliation requirement. | Fix live-task reconciliation before adding the source fixture, VM result, and manual shell. |
 | `ENTRY-CONTAINERS-001` | No fixture. | Init, sidecar, and shared-resource cases. |
 | `ENTRY-EPHEMERAL-001` | No fixture. | Ephemeral-container case. |
 | `ENTRY-EXEC-001` | One non-TTY `kubectl exec` subcase. | Runner fixture, TTY, copy-shaped, and identical native-child controls. |
