@@ -589,6 +589,32 @@ This is physical evidence for host-task cgroup-entry identity only. It does
 not run `nsenter`, restore, or a protected effect. It does not complete
 `ENTRY-MIGRATE-001`. Phase 2 remains **Blocked**.
 
+### Entry-migration manual VM qualification
+
+At source commit `e6352f8`, the retained x86_64 Ubuntu 24.04 VM ran
+[`nsenter-move.sh`](../../../examples/mithril-identity-manual/nsenter-move.sh).
+The shell SHA-256 was
+`871f3dc975a31cf423a97296462581a16a224d16650270ca59f962ffdbb5adec`.
+
+The shell calls `identity_prepare_k3s_case`. That shared owner creates the
+Pod, exact CRI binding, node configuration, pin root, lease, and cleanup list.
+The shell starts the real node. It starts one namespace-only `sleep 300` child,
+proves that the child has no task identity, and moves only that child into the
+configured cgroup. The final inspector record had no creator cookie,
+`external_runtime_root`, `runtime_external_restricted`, active role `2`, and
+`Runnable` coordinate state `3`.
+
+The same VM ran `IdentityTestRunner::physical_probe` with unique paths. Its
+JSON SHA-256 was
+`91990138176e69b729f043b3f9e349fffa259f6bf36e9edbfdfd53405722ac2b`. The
+runner records the host-entry control and `CloneIntoCgroupFixture` external
+root. It records removal of its pin root, lease, and cgroup.
+
+Postflight found no case namespace, fixture directory, Mithril pin, node
+process, lease, or cgroup. The result adds the namespace-entry and cgroup-move
+subcase. It does not prove a protected effect, labeled-task namespace movement,
+restore, or complete `ENTRY-MIGRATE-001`. Phase 2 remains **Blocked**.
+
 ### Pre-PONR failed-exec physical qualification
 
 At source commit `af685cd6a8dd73f22bd44234b3346298dd04dcd1`, the isolated

@@ -2,7 +2,7 @@
 
 Status: Blocked.
 
-This matrix records the checked source and evidence state at commit `4875862`.
+This matrix records the checked source and evidence state at commit `e6352f8`.
 It does not convert a registry allocation, a unit test, or a partial VM probe
 into fixture qualification.
 
@@ -23,7 +23,7 @@ operator can run the case in an existing VM without a second runner.
 | `ENTRY-EXEC-002` | None. | `cri-exec.sh` and `docker-exec.sh`. | One direct CRI exec subcase. | Blocked: the runner does not own a source fixture or JSON row. |
 | `ENTRY-EXTERNAL-AMBIGUITY-001` | None. | None. | None. | Blocked: no concurrent indistinguishable-root fixture. |
 | `ENTRY-LOSS-001` | None. | None. | None. | Blocked: independent runtime, audit, and entry loss cases are absent. |
-| `ENTRY-MIGRATE-001` | `IdentityTestRunner::physical_probe` with `CloneIntoCgroupFixture`. | `nsenter-move.sh`, not self-contained at this source state. | Host-task cgroup-entry subcase only; no namespace entry. | Blocked: the required namespace-entry and cgroup-movement case has no matching VM result. |
+| `ENTRY-MIGRATE-001` | `IdentityTestRunner::physical_probe` with `CloneIntoCgroupFixture`. | Self-contained `nsenter-move.sh` in the retained manual VM. | Runner JSON `91990138176e69b729f043b3f9e349fffa259f6bf36e9edbfdfd53405722ac2b`; manual VM case passed. | Partial: no protected effect, labeled-task namespace move, or restore result exists. |
 | `ENTRY-NETPROBE-001` | None. | None. | None. | Blocked: HTTP, TCP, and gRPC cases are absent. |
 | `ENTRY-POSTSTART-001` | None. | None. | None. | Blocked: both start orders are absent. |
 | `ENTRY-POSTSTART-002` | None. | None. | None. | Blocked: kubelet-restart lifecycle case is absent. |

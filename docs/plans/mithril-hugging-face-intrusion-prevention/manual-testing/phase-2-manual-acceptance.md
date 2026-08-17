@@ -292,6 +292,39 @@ role identity. It changed execution and image identity. This is one serial
 non-leader de-threading case. It does not prove concurrent exec races. The
 phase remains **Blocked**.
 
+## Entry-Migration Manual VM Result — 2026-08-17
+
+At source commit `e6352f8`, the retained x86_64 Ubuntu 24.04 VM ran this exact
+root-shell command:
+
+```sh
+examples/mithril-identity-manual/nsenter-move.sh
+```
+
+The shell SHA-256 was
+`871f3dc975a31cf423a97296462581a16a224d16650270ca59f962ffdbb5adec`.
+The shell used `identity_prepare_k3s_case`. It created its own Pod and exact
+CRI binding. It started a namespace-only `sleep 300` child and confirmed that
+the child had no Mithril task identity before cgroup movement. After movement,
+the child had no creator task cookie, `external_runtime_root`,
+`runtime_external_restricted`, active role `2`, and coordinate state `3`
+(`Runnable`). The shell printed `PASS`.
+
+The same VM ran `mithril-identity-test physical-probe` with unique paths. Its
+JSON file was
+`/tmp/mithril-phase2-entry-auto.KoZvGP/identity-physical-probe.json`, SHA-256
+`91990138176e69b729f043b3f9e349fffa259f6bf36e9edbfdfd53405722ac2b`.
+The runner used `CloneIntoCgroupFixture`. It recorded restricted external
+roots for its host-entry control and its direct `CLONE_INTO_CGROUP` root. It
+recorded `pin_root_removed=true`, `lease_removed=true`,
+`cgroup_removed=true`, and `profile_task_refs_after_exit=0`.
+
+Postflight found no case namespace, fixture directory, Mithril pin, node
+process, lease, or cgroup. This result qualifies the namespace-entry and
+cgroup-move subcase only. It does not prove a protected effect, an already
+labeled task that crosses a namespace boundary, restore, or complete
+`ENTRY-MIGRATE-001`. The phase remains **Blocked**.
+
 ## Native Identity Fixture Matrix
 
 | Fixture | Operator action | Required oracle and legitimate control |

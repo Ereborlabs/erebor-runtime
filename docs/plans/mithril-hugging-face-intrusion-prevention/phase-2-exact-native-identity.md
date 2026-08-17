@@ -7,6 +7,7 @@ recorded.
 Master: [Mithril Hugging Face Intrusion Prevention](./README.md)
 Design: [Validated readable architecture](./policy-and-protection-algorithm-architecture-readable.md)
 Manual acceptance: [Phase 2 runbook](./manual-testing/phase-2-manual-acceptance.md)  
+Closure matrix: [checked fixture evidence](./phase-2-closure-matrix.md)
 Environment setup: [shared setup guide](./manual-testing/environment-setup.md)
 
 ## Purpose
@@ -401,3 +402,38 @@ This is physical evidence for the pre-PONR recovery subcase of
 `EXEC-COMMIT-STATE-001` only. It does not qualify post-PONR fatal or unknown
 handling, concurrent or non-leader exec, or the full fixture. The phase remains
 **Blocked**.
+
+## Entry-Migration Manual VM Qualification — 2026-08-17
+
+At source commit `e6352f8`, the retained x86_64 Ubuntu 24.04 VM ran the exact
+root-shell command:
+
+```sh
+examples/mithril-identity-manual/nsenter-move.sh
+```
+
+The shell SHA-256 was
+`871f3dc975a31cf423a97296462581a16a224d16650270ca59f962ffdbb5adec`.
+The shell used `identity_prepare_k3s_case` to create and remove its Pod, CRI
+binding, fixture directory, node process, pins, lease, state, and cgroup. It
+started a namespace-only `sleep 300` child, confirmed no Mithril task identity
+before movement, and moved that child into the configured cgroup. The final
+task had no creator task cookie, `external_runtime_root`,
+`runtime_external_restricted`, active role `2`, and `Runnable` coordinate
+state `3`. The shell printed `PASS`.
+
+The same VM ran `mithril-identity-test physical-probe` with unique paths. The
+result JSON was
+`/tmp/mithril-phase2-entry-auto.KoZvGP/identity-physical-probe.json`. Its
+SHA-256 was
+`91990138176e69b729f043b3f9e349fffa259f6bf36e9edbfdfd53405722ac2b`.
+The JSON records restricted external roots for both the host-entry control and
+the `CloneIntoCgroupFixture` root. It records
+`pin_root_removed=true`, `lease_removed=true`,
+`cgroup_removed=true`, and `profile_task_refs_after_exit=0`.
+
+Postflight found no case namespace, fixture directory, Mithril pin, node
+process, lease, or cgroup. This is a qualified namespace-entry and cgroup-move
+subcase of `ENTRY-MIGRATE-001`. It does not test a protected effect, movement
+of an already labeled task through a namespace boundary, restore, or the full
+fixture. The phase remains **Blocked**.
