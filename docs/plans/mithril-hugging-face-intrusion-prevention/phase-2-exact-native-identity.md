@@ -775,3 +775,54 @@ process, lease work directory, or manual work directory.
 
 This qualifies `ENTRY-EXTERNAL-AMBIGUITY-001` only. The remaining required
 fixtures are open. The phase remains **Blocked**.
+
+## Cgroup-Escape Qualification — 2026-08-17
+
+Source commit `c5b2147b537fa411978f7a9c9533de5eab1f7a4f` extends the existing
+`CloneIntoCgroupFixture` and physical bundle. The fixture stops a root before
+its direct `open(2)` of a sentinel. It first requires an unmoved restricted
+external root to open the sentinel. It then moves a second root to the
+unprotected cgroup, requires its fail-closed coordinate, and requires the
+same direct open to exit with `EACCES`. It adds no map, role, runner, or
+durable type.
+
+The retained x86_64 Ubuntu 24.04 VM ran Linux `6.8.0-137-generic` with these
+unique paths:
+
+```sh
+"$MITHRIL_BIN_DIRECTORY/mithril-identity-test" \
+  --repo-root "$MITHRIL_MANUAL_SOURCE" \
+  --output-directory /var/tmp/mithril-phase2-cgroup-escape-20260817-1450 \
+  physical-probe \
+  --pin-root /sys/fs/bpf/mithril-phase2-cgroup-escape-20260817-1450 \
+  --lease-path /run/mithril-phase2-cgroup-escape-20260817-1450.lock \
+  --cgroup-path /sys/fs/cgroup/mithril-phase2-cgroup-escape-20260817-1450
+```
+
+The schema-12 JSON SHA-256 is
+`c0605bf353ec6c67c906ae3f34fc872254c509e08ab16daebe6cfeceac50c460`.
+The test binary SHA-256 is
+`6d2fb16531e072255d720339ca650f0f3bb3847aac6edeaadc60a18b59c4a0be`.
+The BPF object SHA-256 is
+`3269516fcd2714ab7fbe29df26386c40f0c912b6284007b641d8bbf68842b876`.
+The unmoved control had task cookie `214`, process state
+`000000000000000100000000000000d4`, role `11`, and coordinate state `3`.
+The moved root had task cookie `221`, process state
+`000000000000000100000000000000db`, role `11`, and coordinate state `6`.
+Both had no creator, `external_runtime_root`, and
+`runtime_external_restricted`. The JSON records an allowed unmoved first
+effect, a placement mismatch, a denied moved first effect, removed pin, lease,
+and cgroup paths, and `profile_task_refs_after_exit=0`.
+
+The same retained VM ran
+[`cgroup-escape.sh`](../../../../examples/mithril-identity-manual/cgroup-escape.sh)
+as root. The shell used `identity_prepare_k3s_case`, checked the configured
+external role and runnable coordinate before the move, then checked the same
+task cookie, process state, role, and fail-closed coordinate after the move.
+It printed `PASS` only when the unmoved open succeeded and the moved open
+returned `EACCES`. Postflight found no case namespace, fixture directory,
+Mithril pin, node process, lease work directory, manual work directory, or
+case cgroup.
+
+This qualifies `ID-CGROUP-ESCAPE-001` only. The remaining required fixtures
+are open. The phase remains **Blocked**.

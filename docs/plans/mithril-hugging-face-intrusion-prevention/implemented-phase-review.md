@@ -2868,3 +2868,40 @@ pin, node process, lease work, Pod cgroup, or manual work.
 
 This qualifies `ENTRY-EXTERNAL-AMBIGUITY-001` only. The remaining required
 rows are open. Phase 2 remains **Blocked**.
+
+## Cgroup-Escape Fixture Review — 2026-08-17
+
+Source commit `c5b2147b537fa411978f7a9c9533de5eab1f7a4f` uses the existing
+fixture owner and physical bundle. It adds no map, role, generic runner, or
+durable type.
+
+1. [`CloneIntoCgroupFixture`](../../../crates/mithril-e2e/src/identity/clone3.rs)
+   can stop a root before one direct sentinel `open(2)`. It reports success
+   only for the unmoved control and `EACCES` only for the moved root.
+2. [`IdentityTestRunner::physical_probe`](../../../crates/mithril-e2e/src/identity.rs)
+   requires the configured external role, restricted root class, and runnable
+   coordinate for the control. It moves the second root, requires the same
+   role and fail-closed coordinate, then requires a placement-mismatch increase
+   and the denied direct open.
+3. [`cgroup-escape.sh`](../../../examples/mithril-identity-manual/cgroup-escape.sh)
+   prepares the K3s case, waits until the Python signal handler is ready, and
+   runs the unmoved control before the moved-root case. Its second process
+   keeps its task and process identities while it moves to the root cgroup.
+4. [`resolved_identity_effect_gate`](../../../bpf/erebor-interceptor/programs/identity_effects.bpf.h)
+   checks the current cgroup binding against the existing task label before it
+   checks the later effect-policy switch. A moved label therefore denies the
+   sentinel open even when this row does not install another effect policy.
+
+The privileged VM passed on Linux `6.8.0-137-generic`. Its schema-12 JSON
+SHA-256 is `c0605bf353ec6c67c906ae3f34fc872254c509e08ab16daebe6cfeceac50c460`.
+The unmoved control had task cookie `214`, process state
+`000000000000000100000000000000d4`, role `11`, and coordinate `3`. The moved
+root had task cookie `221`, process state
+`000000000000000100000000000000db`, role `11`, and coordinate `6`. The JSON
+records the allowed control, placement mismatch, denied moved effect, removed
+pin, lease, and cgroup, and zero profile task references after exit. The root
+manual shell printed `PASS`, and postflight found no namespace, fixture, pin,
+node process, lease work, manual work, or case cgroup.
+
+This qualifies `ID-CGROUP-ESCAPE-001` only. The remaining required rows are
+open. Phase 2 remains **Blocked**.

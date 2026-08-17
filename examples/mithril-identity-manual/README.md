@@ -84,6 +84,20 @@ identities, no creator, and the same configured restricted external role. The
 command removes both processes, the Pod, node process, pin root, lease, state,
 and fixture directory at exit.
 
+Run this cgroup-escape case from the same root shell:
+
+```sh
+examples/mithril-identity-manual/cgroup-escape.sh
+```
+
+The command starts a live Python root that waits for `SIGUSR1` before its first
+direct file open. An unmoved root opens the sentinel. A second root keeps its
+task, process, and configured external-role identities while it moves to the
+VM root cgroup. Its coordinate becomes fail closed. A queued `SIGUSR1` then
+causes its sentinel open to fail with `EACCES`. The command removes the Pod,
+node process, pin root, lease, state, fixture directory, and its host tasks at
+exit.
+
 Run this self-contained namespace-entry case from the same root shell:
 
 ```sh
@@ -134,6 +148,7 @@ Then run only the case being checked:
 | PID-namespace-init reparenting | `sudo examples/mithril-identity-manual/native-child.sh --namespace-init` in the manual VM |
 | Live binding gap | `sudo examples/mithril-identity-manual/binding-gap.sh` in the manual VM |
 | Concurrent external roots | `sudo examples/mithril-identity-manual/external-ambiguity.sh` in the manual VM |
+| Cgroup escape | `sudo examples/mithril-identity-manual/cgroup-escape.sh` in the manual VM |
 | `nsenter` and cgroup movement | `sudo examples/mithril-identity-manual/nsenter-move.sh` in the manual VM |
 | Labeled native-child mount entry | `sudo examples/mithril-identity-manual/nsenter-move.sh --labeled-task` in the manual VM |
 | Node restart | `sudo examples/mithril-identity-manual/restart.sh NODE_CONFIG CONTAINER_OR_FULL_CRI_ID` |

@@ -203,6 +203,40 @@ pin, node process, lease work directory, or manual work directory. This
 qualifies `ENTRY-EXTERNAL-AMBIGUITY-001` only. It does not qualify the
 remaining entry fixtures. The phase remains **Blocked**.
 
+## Recorded Cgroup-Escape Qualification — 2026-08-17
+
+The retained Ubuntu 24.04 VM ran this root-shell command after `manual.sh
+start` and `manual.sh ssh`:
+
+```sh
+examples/mithril-identity-manual/cgroup-escape.sh
+```
+
+The shell used `identity_prepare_k3s_case` and a live Python process that had
+already installed its `SIGUSR1` open handler. It moved the process into the
+live Pod cgroup and required no creator, `external_runtime_root`,
+`runtime_external_restricted`, the configured external role, and coordinate
+state `3`. The control received `SIGUSR1` and opened the sentinel.
+
+The shell started a second prepared root, saved its task cookie and process
+state, stopped it, and moved it to `/sys/fs/cgroup/cgroup.procs`. It required
+the same task cookie, process state, configured external role, root class,
+restricted role class, and coordinate state `6`. It queued `SIGUSR1`, resumed
+the root, and required exit status `13` (`EACCES`). The shell printed `PASS`.
+
+The matching schema-12 physical JSON has SHA-256
+`c0605bf353ec6c67c906ae3f34fc872254c509e08ab16daebe6cfeceac50c460`.
+It records task cookie `214`, role `11`, and runnable coordinate `3` for the
+unmoved control. It records task cookie `221`, role `11`, and fail-closed
+coordinate `6` for the moved root. It records an allowed unmoved first effect,
+a placement mismatch, and a denied moved first effect. The runner removed its
+pin, lease, and cgroup. The shell cleanup and postflight found no case
+namespace, fixture directory, Mithril pin, node process, lease work directory,
+manual work directory, or case cgroup.
+
+This qualifies `ID-CGROUP-ESCAPE-001` only. The remaining required rows are
+open. The phase remains **Blocked**.
+
 ## Procedure
 
 1. Start the unchanged worker, legitimate controller, and all configured
