@@ -149,6 +149,9 @@ pub struct IdentityPhysicalProbeBundleV1 {
     pub distinct_pin_root_owner_rejected: bool,
     pub binding_gap_reconciled_root: NativeTaskSnapshotV1,
     pub binding_gap_reconciliation_closed: bool,
+    pub external_ambiguity_first_root: NativeTaskSnapshotV1,
+    pub external_ambiguity_second_root: NativeTaskSnapshotV1,
+    pub external_ambiguity_same_restricted_role: bool,
     pub cgroup_escape_root: NativeTaskSnapshotV1,
     pub cgroup_escape_placement_mismatch_detected: bool,
     pub moved_parent_fork_denied: bool,
@@ -398,6 +401,65 @@ impl IdentityTestRunner {
             }
         );
         binding_gap_fixture.stop();
+
+        let mut external_ambiguity_first = NativeProcessFixture::start()?;
+        let mut external_ambiguity_second = NativeProcessFixture::start()?;
+        fs::write(
+            &procs_path,
+            external_ambiguity_first.outer_pid().to_string(),
+        )
+        .context(IoSnafu { path: &procs_path })?;
+        fs::write(
+            &procs_path,
+            external_ambiguity_second.outer_pid().to_string(),
+        )
+        .context(IoSnafu { path: &procs_path })?;
+        let external_ambiguity_first_root = self.wait_for(
+            "first concurrent external-root identity",
+            &procs_path,
+            || {
+                inspector
+                    .snapshot(external_ambiguity_first.outer_pid())
+                    .context(NodeSnafu)
+            },
+        )?;
+        let external_ambiguity_second_root = self.wait_for(
+            "second concurrent external-root identity",
+            &procs_path,
+            || {
+                inspector
+                    .snapshot(external_ambiguity_second.outer_pid())
+                    .context(NodeSnafu)
+            },
+        )?;
+        let external_ambiguity_same_restricted_role = external_ambiguity_first_root.active_role_id
+            == external_ambiguity_second_root.active_role_id;
+        ensure!(
+            external_ambiguity_first_root.creator_task_cookie.is_none()
+                && external_ambiguity_second_root.creator_task_cookie.is_none()
+                && external_ambiguity_first_root.task_cookie
+                    != external_ambiguity_second_root.task_cookie
+                && external_ambiguity_first_root.process_state_id
+                    != external_ambiguity_second_root.process_state_id
+                && external_ambiguity_first_root.root_class == Some("external_runtime_root")
+                && external_ambiguity_second_root.root_class == Some("external_runtime_root")
+                && external_ambiguity_first_root.installed_role_class
+                    == Some("runtime_external_restricted")
+                && external_ambiguity_second_root.installed_role_class
+                    == Some("runtime_external_restricted")
+                && external_ambiguity_same_restricted_role
+                && external_ambiguity_first_root.active_role_id == binding.external_role_id
+                && external_ambiguity_first_root.coordinate_state
+                    == TaskCoordinateStateV1::Runnable as u8
+                && external_ambiguity_second_root.coordinate_state
+                    == TaskCoordinateStateV1::Runnable as u8,
+            InvalidInputSnafu {
+                path: &procs_path,
+                reason: "concurrent indistinguishable external roots did not remain separate restricted roots",
+            }
+        );
+        external_ambiguity_first.stop();
+        external_ambiguity_second.stop();
 
         let mut escape_fixture = CloneIntoCgroupFixture::start(&cgroup_path)?;
         let escape_root_before_move = self.wait_for(
@@ -1563,12 +1625,15 @@ impl IdentityTestRunner {
             }
         );
         Ok(IdentityPhysicalProbeBundleV1 {
-            schema_version: 10,
+            schema_version: 11,
             object_sha256,
             first_start,
             distinct_pin_root_owner_rejected,
             binding_gap_reconciled_root,
             binding_gap_reconciliation_closed: true,
+            external_ambiguity_first_root,
+            external_ambiguity_second_root,
+            external_ambiguity_same_restricted_role,
             cgroup_escape_root,
             cgroup_escape_placement_mismatch_detected: true,
             moved_parent_fork_denied: true,
