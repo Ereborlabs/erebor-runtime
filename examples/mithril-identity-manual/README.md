@@ -44,6 +44,20 @@ of the subreaper, then executes `sleep`. The command checks immutable creator
 identity, changed real parent, and the inherited restricted role. It removes
 its Pod and fixture directory at exit.
 
+Run this PID-namespace-init reparenting case from the same root shell:
+
+```sh
+examples/mithril-identity-manual/native-child.sh --namespace-init
+```
+
+The command creates one Python Pod and live CRI binding. It starts and stops a
+user and PID namespace outside the Pod cgroup. It moves the namespace init,
+which has PID `1`, into the Pod cgroup. The init creates a middle child and one
+stopped grandchild. The middle child exits. The namespace init adopts the
+grandchild, which then executes `sleep`. The command checks the immutable
+creator, the adopted real-parent coordinates, and the inherited restricted
+role. It removes the host processes, Pod, and fixture directory at exit.
+
 Run this self-contained namespace-entry case from the same root shell:
 
 ```sh
@@ -91,6 +105,7 @@ Then run only the case being checked:
 | Non-leader Python thread exec | `sudo examples/mithril-identity-manual/native-child.sh --thread-exec` in the manual VM; otherwise `sudo examples/mithril-identity-manual/native-child.sh NODE_CONFIG CONTAINER_OR_FULL_CRI_ID --thread-exec` |
 | Concurrent Python thread exec | `sudo examples/mithril-identity-manual/native-child.sh --concurrent-thread-exec` in the manual VM |
 | Subreaper native reparenting | `sudo examples/mithril-identity-manual/native-child.sh --subreaper` in the manual VM |
+| PID-namespace-init reparenting | `sudo examples/mithril-identity-manual/native-child.sh --namespace-init` in the manual VM |
 | `nsenter` and cgroup movement | `sudo examples/mithril-identity-manual/nsenter-move.sh` in the manual VM |
 | Labeled native-child mount entry | `sudo examples/mithril-identity-manual/nsenter-move.sh --labeled-task` in the manual VM |
 | Node restart | `sudo examples/mithril-identity-manual/restart.sh NODE_CONFIG CONTAINER_OR_FULL_CRI_ID` |

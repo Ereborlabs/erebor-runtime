@@ -4,14 +4,14 @@ source "$(dirname "$0")/identity-runtime.sh"
 
 identity_case_mode=
 identity_case_k3s=false
-if [[ $# -eq 1 && ($1 == --thread-exec || $1 == --concurrent-thread-exec || $1 == --subreaper) ]]; then
+if [[ $# -eq 1 && ($1 == --thread-exec || $1 == --concurrent-thread-exec || $1 == --subreaper || $1 == --namespace-init) ]]; then
   identity_case_mode=$1
   identity_case_k3s=true
-elif [[ $# -eq 2 || ($# -eq 3 && (${3:-} == --orphan || ${3:-} == --double-fork || ${3:-} == --moved-exec || ${3:-} == --failed-exec || ${3:-} == --thread-exec)) ]]; then
+elif [[ $# -eq 2 || ($# -eq 3 && (${3:-} == --orphan || ${3:-} == --double-fork || ${3:-} == --moved-exec || ${3:-} == --failed-exec || ${3:-} == --thread-exec || ${3:-} == --namespace-init)) ]]; then
   identity_case_mode=${3:-}
 else
-  echo "usage: sudo $0 NODE_CONFIG DOCKER_CONTAINER_OR_FULL_CRI_ID [--orphan|--double-fork|--moved-exec|--failed-exec|--thread-exec]" >&2
-  echo "   or: sudo $0 --thread-exec|--concurrent-thread-exec|--subreaper" >&2
+  echo "usage: sudo $0 NODE_CONFIG DOCKER_CONTAINER_OR_FULL_CRI_ID [--orphan|--double-fork|--moved-exec|--failed-exec|--thread-exec|--namespace-init]" >&2
+  echo "   or: sudo $0 --thread-exec|--concurrent-thread-exec|--subreaper|--namespace-init" >&2
   exit 2
 fi
 
@@ -328,6 +328,193 @@ EOF
     exit 1
   }
   identity_pass "PASS: a pre-PONR ELF loader failure kept the source identity and a later exec committed."
+  exit 0
+fi
+
+if [[ $identity_case_mode == --namespace-init ]]; then
+  identity_require_command unshare
+  ready_name=.mithril-namespace-init-${identity_work##*.}.ready
+  ready_host=$identity_k3s_shared_directory/$ready_name
+  namespace_init_pids=()
+  namespace_init_cleanup() {
+    local pid
+    for pid in "${namespace_init_pids[@]}"; do
+      kill -KILL "$pid" 2>/dev/null || true
+    done
+  }
+  identity_cleanup_functions+=(namespace_init_cleanup)
+  /usr/bin/unshare --user --map-root-user --pid --fork python3 -c '
+import os
+import signal
+import sys
+
+ready = sys.argv[1]
+os.kill(os.getpid(), signal.SIGSTOP)
+middle = os.fork()
+if middle == 0:
+    child = os.fork()
+    if child == 0:
+        os.kill(os.getpid(), signal.SIGSTOP)
+        os.execv("/bin/sleep", ["/bin/sleep", "300"])
+    with open(ready, "w", encoding="ascii") as output:
+        output.write(f"{os.getpid()} {child}\n")
+os.waitpid(middle, 0)
+with open(ready, encoding="ascii") as input_file:
+    _middle, child = input_file.read().split()
+os.waitpid(int(child), 0)
+' "$ready_host" >"$identity_work/namespace-init-client.log" 2>&1 &
+  namespace_init_outer_pid=$!
+  namespace_init_pids+=("$namespace_init_outer_pid")
+  for ((attempt = 0; attempt < 100; attempt++)); do
+    namespace_init_pid=$(awk '{print $1}' "/proc/$namespace_init_outer_pid/task/$namespace_init_outer_pid/children" 2>/dev/null || true)
+    [[ $namespace_init_pid =~ ^[1-9][0-9]*$ ]] && break
+    sleep 0.1
+  done
+  [[ $namespace_init_pid =~ ^[1-9][0-9]*$ ]] || {
+    echo "cannot find the stopped PID-namespace init" >&2
+    exit 1
+  }
+  namespace_init_pids+=("$namespace_init_pid")
+  [[ $(awk '/^NSpid:/ {print $NF}' "/proc/$namespace_init_pid/status") == 1 ]] || {
+    echo "the stopped namespace init does not have PID 1" >&2
+    exit 1
+  }
+  printf '%s\n' "$namespace_init_pid" >"$identity_cgroup_path/cgroup.procs"
+  for ((attempt = 0; attempt < 100; attempt++)); do
+    identity_inspect_task namespace-init-parent "$namespace_init_pid" >/dev/null 2>&1 && break
+    sleep 0.1
+  done
+  identity_assert_external "$identity_work/namespace-init-parent.json"
+  namespace_init_parent_cookie=$(jq -er '.task_cookie' "$identity_work/namespace-init-parent.json")
+  namespace_init_role=$(jq -er '.active_role_id' "$identity_work/namespace-init-parent.json")
+  namespace_init_host_tid=$(jq -er '.host_tid' "$identity_work/namespace-init-parent.json")
+  namespace_init_host_tgid=$(jq -er '.host_tgid' "$identity_work/namespace-init-parent.json")
+  kill -CONT "$namespace_init_pid"
+  for ((attempt = 0; attempt < 100; attempt++)); do
+    [[ -s $ready_host ]] && break
+    sleep 0.1
+  done
+  [[ -s $ready_host ]] || {
+    echo "the PID-namespace fixture did not become ready" >&2
+    exit 1
+  }
+  read -r namespace_middle_pid namespace_child_pid <"$ready_host"
+  [[ $namespace_middle_pid =~ ^[1-9][0-9]*$ \
+    && $namespace_child_pid =~ ^[1-9][0-9]*$ ]] || {
+    echo "the PID-namespace fixture did not report middle and child PIDs" >&2
+    exit 1
+  }
+  namespace_middle_host_pid=
+  namespace_child_host_pid=
+  for candidate in $(<"$identity_cgroup_path/cgroup.procs"); do
+    [[ -r /proc/$candidate/status ]] || continue
+    mapped_pid=$(awk '/^NSpid:/ {print $NF}' "/proc/$candidate/status")
+    case $mapped_pid in
+      "$namespace_middle_pid") namespace_middle_host_pid=$candidate ;;
+      "$namespace_child_pid") namespace_child_host_pid=$candidate ;;
+    esac
+  done
+  [[ $namespace_middle_host_pid =~ ^[1-9][0-9]*$ \
+    && $namespace_child_host_pid =~ ^[1-9][0-9]*$ ]] || {
+    echo "cannot map the PID-namespace middle and child to host PIDs" >&2
+    exit 1
+  }
+  namespace_init_pids+=("$namespace_middle_host_pid" "$namespace_child_host_pid")
+  identity_task_pids+=("$namespace_init_pid" "$namespace_child_host_pid")
+  grep -q $'^State:\tT' "/proc/$namespace_child_host_pid/status" || {
+    echo "PID-namespace native child is not stopped before parent exit" >&2
+    exit 1
+  }
+  identity_inspect_task namespace-init-parent "$namespace_init_pid" >/dev/null
+  identity_inspect_task namespace-init-middle "$namespace_middle_host_pid" >/dev/null
+  identity_inspect_task namespace-init-child-before "$namespace_child_host_pid" >/dev/null
+  namespace_init_parent_cookie=$(jq -er '.task_cookie' "$identity_work/namespace-init-parent.json")
+  namespace_middle_cookie=$(jq -er '.task_cookie' "$identity_work/namespace-init-middle.json")
+  namespace_child_cookie=$(jq -er '.task_cookie' "$identity_work/namespace-init-child-before.json")
+  namespace_child_interval=$(jq -er '.real_parent_interval_sequence' "$identity_work/namespace-init-child-before.json")
+  namespace_child_process=$(jq -er '.process_state_id' "$identity_work/namespace-init-child-before.json")
+  namespace_child_execution=$(jq -er '.active_execution_id' "$identity_work/namespace-init-child-before.json")
+  namespace_child_image=$(jq -er '.image_provenance_id' "$identity_work/namespace-init-child-before.json")
+  jq -e --argjson init_cookie "$namespace_init_parent_cookie" \
+    --argjson init_tid "$namespace_init_host_tid" \
+    --argjson init_tgid "$namespace_init_host_tgid" \
+    --argjson init_role "$namespace_init_role" \
+    '.creator_task_cookie == $init_cookie
+     and .real_parent_task_cookie == $init_cookie
+     and .real_parent_host_tid == $init_tid
+     and .real_parent_host_tgid == $init_tgid
+     and .root_class == null
+     and .installed_role_class == null
+     and .active_role_id == $init_role' \
+    "$identity_work/namespace-init-middle.json" >/dev/null
+  jq -e --argjson middle_cookie "$namespace_middle_cookie" \
+    --argjson middle_tid "$(jq -er '.host_tid' "$identity_work/namespace-init-middle.json")" \
+    --argjson middle_tgid "$(jq -er '.host_tgid' "$identity_work/namespace-init-middle.json")" \
+    --argjson init_role "$namespace_init_role" \
+    '.creator_task_cookie == $middle_cookie
+     and .real_parent_task_cookie == $middle_cookie
+     and .real_parent_host_tid == $middle_tid
+     and .real_parent_host_tgid == $middle_tgid
+     and .root_class == null
+     and .installed_role_class == null
+     and .active_role_id == $init_role
+     and .coordinate_state == 3' \
+    "$identity_work/namespace-init-child-before.json" >/dev/null
+
+  kill -TERM "$namespace_middle_host_pid"
+  for ((attempt = 0; attempt < 100; attempt++)); do
+    [[ ! -d /proc/$namespace_middle_host_pid ]] && break
+    sleep 0.1
+  done
+  [[ ! -d /proc/$namespace_middle_host_pid ]] || {
+    echo "PID-namespace middle process did not exit" >&2
+    exit 1
+  }
+  [[ $(awk '/^PPid:/ {print $2}' "/proc/$namespace_child_host_pid/status") == "$namespace_init_pid" ]] || {
+    echo "PID-namespace init did not adopt the native child" >&2
+    exit 1
+  }
+  kill -CONT "$namespace_child_host_pid"
+  for ((attempt = 0; attempt < 100; attempt++)); do
+    [[ $(tr -d '\n' <"/proc/$namespace_child_host_pid/comm" 2>/dev/null || true) == sleep ]] && break
+    sleep 0.1
+  done
+  [[ $(tr -d '\n' <"/proc/$namespace_child_host_pid/comm" 2>/dev/null || true) == sleep ]] || {
+    echo "PID-namespace native child did not exec sleep" >&2
+    exit 1
+  }
+  identity_inspect_task namespace-init-child-after "$namespace_child_host_pid" >/dev/null
+  if ! jq -e --argjson child_cookie "$namespace_child_cookie" \
+    --argjson middle_cookie "$namespace_middle_cookie" \
+    --argjson init_tid "$namespace_init_host_tid" \
+    --argjson init_tgid "$namespace_init_host_tgid" \
+    --argjson child_interval "$namespace_child_interval" \
+    --arg child_process "$namespace_child_process" \
+    --arg child_execution "$namespace_child_execution" \
+    --arg child_image "$namespace_child_image" \
+    --argjson init_role "$namespace_init_role" \
+    '.task_cookie == $child_cookie
+     and .creator_task_cookie == $middle_cookie
+     and .real_parent_task_cookie == 0
+     and .real_parent_host_tid == $init_tid
+     and .real_parent_host_tgid == $init_tgid
+     and .real_parent_interval_sequence > $child_interval
+     and .process_state_id == $child_process
+     and .active_execution_id != $child_execution
+     and .image_provenance_id != $child_image
+     and .active_role_id == $init_role
+     and .root_class == null
+     and .installed_role_class == null
+     and .coordinate_state == 3
+     and .process_execution_state == 2
+     and .process_state_vector_state == 2
+     and .exec_guard_state == 0' \
+    "$identity_work/namespace-init-child-after.json" >/dev/null; then
+    echo "PID-namespace child identity did not meet the required limit:" >&2
+    cat "$identity_work/namespace-init-child-after.json" >&2
+    exit 1
+  fi
+  identity_pass "PASS: PID-namespace init adoption kept native creator identity and restriction."
   exit 0
 fi
 

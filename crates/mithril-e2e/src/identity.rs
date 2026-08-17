@@ -174,7 +174,6 @@ pub struct IdentityPhysicalProbeBundleV1 {
     pub subreaper_intermediate_before_exit: NativeTaskSnapshotV1,
     pub subreaper_native_child_before_parent_exit: NativeTaskSnapshotV1,
     pub subreaper_native_child_after_parent_exit: NativeTaskSnapshotV1,
-    pub namespace_init_outer_parent: NativeTaskSnapshotV1,
     pub namespace_init_parent: NativeTaskSnapshotV1,
     pub namespace_init_pid_in_own_namespace: u32,
     pub namespace_init_intermediate_before_exit: NativeTaskSnapshotV1,
@@ -1210,20 +1209,13 @@ impl IdentityTestRunner {
         subreaper_fixture.stop();
 
         let mut namespace_init_fixture = NativeProcessFixture::start_namespace_init_reparenting()?;
-        fs::write(&procs_path, namespace_init_fixture.outer_pid().to_string())
-            .context(IoSnafu { path: &procs_path })?;
-        let namespace_init_outer_parent =
-            self.wait_for("PID-namespace outer parent identity", &procs_path, || {
-                inspector
-                    .snapshot(namespace_init_fixture.outer_pid())
-                    .context(NodeSnafu)
-            })?;
-        namespace_init_fixture.release_root()?;
         let namespace_init_parent_pid =
             self.wait_for("PID-namespace init creation", &procs_path, || {
                 namespace_init_fixture.namespace_init_pid()
             })?;
         namespace_init_fixture.open_namespace_init_pidfd(namespace_init_parent_pid)?;
+        fs::write(&procs_path, namespace_init_parent_pid.to_string())
+            .context(IoSnafu { path: &procs_path })?;
         let namespace_init_pid_in_own_namespace = pid_in_own_namespace(namespace_init_parent_pid)?;
         ensure!(
             namespace_init_pid_in_own_namespace == 1,
@@ -1232,6 +1224,13 @@ impl IdentityTestRunner {
                 reason: "PID-namespace init did not have namespace PID 1",
             }
         );
+        let namespace_init_parent =
+            self.wait_for("PID-namespace init identity", &procs_path, || {
+                inspector
+                    .snapshot(namespace_init_parent_pid)
+                    .context(NodeSnafu)
+            })?;
+        namespace_init_fixture.release_namespace_init()?;
         let namespace_init_intermediate_pid =
             self.wait_for("PID-namespace intermediate creation", &procs_path, || {
                 namespace_init_fixture.namespace_init_intermediate_pid(namespace_init_parent_pid)
@@ -1243,12 +1242,6 @@ impl IdentityTestRunner {
                     .intermediate_native_child_pid(namespace_init_intermediate_pid)
             })?;
         namespace_init_fixture.open_native_pidfd(namespace_init_native_child_pid)?;
-        let namespace_init_parent =
-            self.wait_for("PID-namespace init identity", &procs_path, || {
-                inspector
-                    .snapshot(namespace_init_parent_pid)
-                    .context(NodeSnafu)
-            })?;
         let namespace_init_intermediate_before_exit =
             self.wait_for("PID-namespace intermediate identity", &procs_path, || {
                 inspector
@@ -1262,19 +1255,9 @@ impl IdentityTestRunner {
                     .context(NodeSnafu)
             })?;
         ensure!(
-            namespace_init_outer_parent.root_class == Some("external_runtime_root")
-                && namespace_init_outer_parent.installed_role_class
+            namespace_init_parent.root_class == Some("external_runtime_root")
+                && namespace_init_parent.installed_role_class
                     == Some("runtime_external_restricted")
-                && namespace_init_parent.creator_task_cookie
-                    == Some(namespace_init_outer_parent.task_cookie)
-                && namespace_init_parent.real_parent_task_cookie
-                    == namespace_init_outer_parent.task_cookie
-                && namespace_init_parent.real_parent_host_tid
-                    == namespace_init_outer_parent.host_tid
-                && namespace_init_parent.real_parent_host_tgid
-                    == namespace_init_outer_parent.host_tgid
-                && namespace_init_parent.root_class.is_none()
-                && namespace_init_parent.installed_role_class.is_none()
                 && namespace_init_intermediate_before_exit.creator_task_cookie
                     == Some(namespace_init_parent.task_cookie)
                 && namespace_init_intermediate_before_exit.real_parent_task_cookie
@@ -1351,7 +1334,7 @@ impl IdentityTestRunner {
                     .installed_role_class
                     .is_none()
                 && namespace_init_native_child_after_parent_exit.active_role_id
-                    == namespace_init_outer_parent.active_role_id,
+                    == namespace_init_parent.active_role_id,
             InvalidInputSnafu {
                 path: &procs_path,
                 reason: "PID-namespace native child lost its inherited restriction",
@@ -1585,7 +1568,6 @@ impl IdentityTestRunner {
             subreaper_intermediate_before_exit,
             subreaper_native_child_before_parent_exit,
             subreaper_native_child_after_parent_exit,
-            namespace_init_outer_parent,
             namespace_init_parent,
             namespace_init_pid_in_own_namespace,
             namespace_init_intermediate_before_exit,
@@ -1717,13 +1699,18 @@ os.waitpid(-1, 0)
     }
 
     fn start_namespace_init_reparenting() -> Result<Self> {
-        let mut command = Command::new("/bin/sh");
+        let mut command = Command::new("/usr/bin/unshare");
         command.args([
+            "--user",
+            "--map-root-user",
+            "--pid",
+            "--fork",
+            "python3",
             "-c",
-            "read _; exec /usr/bin/unshare --user --map-root-user --pid --fork --mount-proc python3 -c \"$0\"",
             r#"import os
 import signal
 
+os.kill(os.getpid(), signal.SIGSTOP)
 middle = os.fork()
 if middle == 0:
     child = os.fork()
@@ -1900,6 +1887,15 @@ second.join()
 
     fn release_root(&mut self) -> Result<()> {
         self.write_stdin(b"root\n")
+    }
+
+    fn release_namespace_init(&self) -> Result<()> {
+        let pidfd = self
+            .namespace_init_pidfd
+            .as_ref()
+            .ok_or_else(|| invalid_state("PID-namespace init has no pidfd"))?;
+        pidfd_send_signal(pidfd, Signal::CONT)
+            .map_err(|error| invalid_state(format!("release PID-namespace init: {error}")))
     }
 
     fn release_non_leader_exec(&mut self) -> Result<()> {
@@ -2519,7 +2515,6 @@ mod tests {
     fn native_process_fixture_executes_after_namespace_init_reparenting() -> crate::Result<()> {
         let runner = IdentityTestRunner::new(".");
         let mut fixture = NativeProcessFixture::start_namespace_init_reparenting()?;
-        fixture.release_root()?;
         let outer_pid = fixture.outer_pid();
         let outer_children = PathBuf::from(format!("/proc/{outer_pid}/task/{outer_pid}/children"));
         let namespace_init_pid =
@@ -2528,6 +2523,7 @@ mod tests {
             })?;
         fixture.open_namespace_init_pidfd(namespace_init_pid)?;
         assert_eq!(super::pid_in_own_namespace(namespace_init_pid)?, 1);
+        fixture.release_namespace_init()?;
         let namespace_init_children = PathBuf::from(format!(
             "/proc/{namespace_init_pid}/task/{namespace_init_pid}/children"
         ));
