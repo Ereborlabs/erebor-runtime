@@ -16,20 +16,28 @@ identity_prepare_k3s_case \
 identity_start_node
 
 if [[ $identity_labeled_task == true ]]; then
+  identity_root_exec_release=$identity_work/labeled-root-exec-release
   identity_namespace_release=$identity_work/labeled-namespace-release
-  mkfifo "$identity_namespace_release"
   bash -c '
-    read -r _ < "$1"
+    while [[ ! -e $1 ]]; do
+      sleep 0.1
+    done
+    exec bash -c "$2" bash "$3" "$4"
+  ' bash "$identity_root_exec_release" '
+    while [[ ! -e $1 ]]; do
+      sleep 0.1
+    done
     (
       read -r child_pid _ < /proc/self/stat
       kill -STOP "$child_pid"
       exec nsenter -t "$2" -m -- sleep 300
     ) &
     wait "$!"
-  ' bash "$identity_namespace_release" "$identity_init_pid" &
+  ' "$identity_namespace_release" "$identity_init_pid" &
   labeled_root_pid=$!
   identity_task_pids+=("$labeled_root_pid")
   printf '%s\n' "$labeled_root_pid" >"$identity_cgroup_path/cgroup.procs"
+  : >"$identity_root_exec_release"
 
   for ((attempt = 0; attempt < 100; attempt++)); do
     identity_inspect_task labeled-namespace-root "$labeled_root_pid" >/dev/null 2>&1 || true
@@ -44,26 +52,23 @@ if [[ $identity_labeled_task == true ]]; then
   labeled_root_cookie=$(jq -er '.task_cookie' "$identity_work/labeled-namespace-root.json")
   labeled_root_role=$(jq -er '.active_role_id' "$identity_work/labeled-namespace-root.json")
 
-  printf 'release\n' >"$identity_namespace_release"
+  : >"$identity_namespace_release"
   for ((attempt = 0; attempt < 100; attempt++)); do
+    labeled_children=()
     read -r -a labeled_children \
       <"/proc/$labeled_root_pid/task/$labeled_root_pid/children" || true
-    [[ ${#labeled_children[@]} -eq 1 ]] && break
+    if [[ ${#labeled_children[@]} -eq 1 ]] \
+      && grep -q $'^State:\tT' "/proc/${labeled_children[0]}/status"; then
+      labeled_child_pid=${labeled_children[0]}
+      break
+    fi
     sleep 0.1
   done
-  labeled_children=()
-  read -r -a labeled_children \
-    <"/proc/$labeled_root_pid/task/$labeled_root_pid/children" || true
-  [[ ${#labeled_children[@]} -eq 1 ]] || {
-    echo "labeled namespace child is not the root's only direct child" >&2
+  [[ -n ${labeled_child_pid:-} ]] || {
+    echo "labeled namespace child did not become the root's stopped direct child" >&2
     exit 1
   }
-  labeled_child_pid=${labeled_children[0]}
   identity_task_pids+=("$labeled_child_pid")
-  grep -q $'^State:\tT' "/proc/$labeled_child_pid/status" || {
-    echo "labeled namespace child is not stopped before namespace entry" >&2
-    exit 1
-  }
   identity_inspect_task labeled-namespace-before "$labeled_child_pid"
   labeled_child_cookie=$(jq -er '.task_cookie' "$identity_work/labeled-namespace-before.json")
   labeled_child_process=$(jq -er '.process_state_id' "$identity_work/labeled-namespace-before.json")
@@ -101,9 +106,9 @@ if [[ $identity_labeled_task == true ]]; then
   identity_inspect_task labeled-namespace-after "$labeled_child_pid"
   jq -e --argjson child_cookie "$labeled_child_cookie" \
     --argjson root_cookie "$labeled_root_cookie" \
-    --argjson child_process "$labeled_child_process" \
-    --argjson child_execution "$labeled_child_execution" \
-    --argjson child_image "$labeled_child_image" \
+    --arg child_process "$labeled_child_process" \
+    --arg child_execution "$labeled_child_execution" \
+    --arg child_image "$labeled_child_image" \
     --argjson root_role "$labeled_root_role" \
     '.task_cookie == $child_cookie
      and .creator_task_cookie == $root_cookie
