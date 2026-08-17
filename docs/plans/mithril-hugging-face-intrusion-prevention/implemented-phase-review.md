@@ -4,6 +4,9 @@ This guide explains the current implementation. It uses source links so that a
 reviewer can follow each owner, state transition, and BPF decision. It does not
 replace an acceptance record.
 
+The dedicated [signed path-tree denial review](./path-tree-denial-implementation-review.md)
+explains the recursive path enforcement and its exact-commit VM evidence.
+
 Source reviewed: code commit `434060190384f426b1c7da6d498adca76aae5b8a`
 plus the current documentation changes on `mithril-phase-2-4`. The production
 identity object loaded by the 2026-08-18 VM has SHA-256
