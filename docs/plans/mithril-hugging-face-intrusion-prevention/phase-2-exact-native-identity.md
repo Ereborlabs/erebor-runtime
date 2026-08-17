@@ -536,6 +536,49 @@ This qualifies the labeled native mount-namespace subcase of
 `ENTRY-MIGRATE-001`. It does not test a protected effect or restore. The phase
 remains **Blocked**.
 
+## Current Entry-Migration VM Recheck — 2026-08-17
+
+At source commit `ff129206ca610689c68b1de475b982f6e86ea97e`, a retained
+x86_64 Ubuntu 24.04 VM, kernel `6.8.0-137-generic`, ran these root-shell
+commands:
+
+```sh
+examples/mithril-identity-manual/nsenter-move.sh
+examples/mithril-identity-manual/nsenter-move.sh --labeled-task
+```
+
+The current shell SHA-256 was
+`6cda64a4e3c62e61ee24f05f301e6ff627e722d9f4525d601434ea4c0f12cbcd`.
+The first command printed `PASS` after it proved that namespace entry gave the
+`sleep 300` child no task identity and cgroup movement gave it the restricted
+external-root identity. The final record had task cookie `12`, no creator,
+active role `2`, and coordinate state `3` (`Runnable`).
+
+The labeled command printed `PASS`. Its child kept task cookie `18`, creator
+and real-parent task cookie `12`, process state
+`00000000000000010000000000000016`, and active role `2`. Its execution ID
+changed from `00000000000000010000000000000013` to
+`0000000000000001000000000000001c`. Its image ID changed from
+`00000000000000010000000000000011` to
+`0000000000000001000000000000001d`. The final child was runnable, both
+process records were active, and its exec guard was none.
+
+The disposable automated VM probe used the same source state before this
+commit. Its schema-13 JSON was
+`/tmp/mithril-phase2-registry-refresh-20260817-2130/identity-physical-probe.json`,
+SHA-256 `54f7a3a61d3831fabefbf1ccce14f4f72704684b454f9e90423a5a77f95a0911`.
+`CloneIntoCgroupFixture` recorded restricted external root task cookie `33` and
+native-child task cookie `36`. The child kept its task, creator, parent, and
+process IDs across mount-namespace entry. It changed execution and image IDs.
+The JSON records `pin_root_removed=true`, `lease_removed=true`,
+`cgroup_removed=true`, and `profile_task_refs_after_exit=0`.
+
+Manual postflight found no case namespace, fixture directory, Mithril pin,
+node process, lease or work directory, or identifiable manual cgroup. The
+harness then removed the retained VM and `virsh list --all` was empty. These
+results recheck the namespace-entry and labeled-child subcases. They do not
+prove a protected effect or restore. `ENTRY-MIGRATE-001` remains **Blocked**.
+
 ## Current Moved-Native Rows — 2026-08-17
 
 At source commit `c1b15be02553ae6cd18210d23f9e2bb2447a9511`, the retained

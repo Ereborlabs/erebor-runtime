@@ -707,6 +707,36 @@ process, lease, or cgroup. The result adds the namespace-entry and cgroup-move
 subcase. It does not prove a protected effect, labeled-task namespace movement,
 restore, or complete `ENTRY-MIGRATE-001`. Phase 2 remains **Blocked**.
 
+### Current entry-migration recheck
+
+At source commit `ff129206ca610689c68b1de475b982f6e86ea97e`, the retained
+x86_64 Ubuntu 24.04 VM ran the two current operator commands as root:
+
+```sh
+examples/mithril-identity-manual/nsenter-move.sh
+examples/mithril-identity-manual/nsenter-move.sh --labeled-task
+```
+
+The first command proved no task identity before cgroup movement, then the
+restricted external-root identity after movement. The labeled command proved
+that child task cookie `18`, creator and real-parent cookie `12`, process state
+`00000000000000010000000000000016`, and active role `2` survived mount
+namespace entry. Its execution and image IDs changed. Both commands printed
+`PASS` and removed their owned resources.
+
+The existing physical runner also exercised
+[`CloneIntoCgroupFixture`](../../../crates/mithril-e2e/src/identity/clone3.rs#L18)
+in the source state committed as `ff12920`. Its schema-13 JSON SHA-256 was
+`54f7a3a61d3831fabefbf1ccce14f4f72704684b454f9e90423a5a77f95a0911`.
+The JSON records preserved child task, creator, parent, and process identity,
+changed execution and image identity, and complete pin, lease, cgroup, and task
+reference cleanup. The retained VM was destroyed after postflight; its provider
+listed no remaining guest.
+
+This rechecks only the existing identity path. It adds no BPF map, program,
+role, runner, or durable type. It does not prove a protected effect or restore,
+so `ENTRY-MIGRATE-001` remains **Blocked**.
+
 ### Pre-PONR failed-exec physical qualification
 
 At source commit `af685cd6a8dd73f22bd44234b3346298dd04dcd1`, the isolated

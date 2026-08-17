@@ -23,7 +23,7 @@ Completed-row evidence remains in the phase result and acceptance record:
 | `ENTRY-EXEC-001` | Blocked: one operator subcase has no automated fixture contract. | Runner fixture, TTY, copy-shaped, and identical native-child controls. |
 | `ENTRY-EXEC-002` | Blocked: one operator subcase has no automated fixture contract. | Runner fixture and row JSON. |
 | `ENTRY-LOSS-001` | Blocked: no current fixture contract. | Independent runtime, audit, and entry-loss cases. |
-| `ENTRY-MIGRATE-001` | Blocked. Namespace-only entry, cgroup movement, and labeled native mount-namespace entry passed. The Phase 2 identity owner has no effect permission table, so an unlabeled moved root is restricted but has no first-effect denial oracle. No owned restore operation exists. | Add a Phase-2-compatible first-effect and restore mechanism before adding the remaining fixture, VM result, and manual shell. |
+| `ENTRY-MIGRATE-001` | Blocked. `CloneIntoCgroupFixture`, the automated VM probe, and both `nsenter-move.sh` cases passed. They prove namespace entry, cgroup movement, and labeled native mount-namespace entry. Phase 2 has no effect-permission or restore owner. | Exact protected-effect and restore cases. |
 | `ENTRY-NETPROBE-001` | Blocked: no current fixture contract. | HTTP, TCP, and gRPC cases. |
 | `ENTRY-POSTSTART-001` | Blocked: no current fixture contract. | Both start orders. |
 | `ENTRY-POSTSTART-002` | Blocked: no current fixture contract. | Kubelet-restart lifecycle case. |

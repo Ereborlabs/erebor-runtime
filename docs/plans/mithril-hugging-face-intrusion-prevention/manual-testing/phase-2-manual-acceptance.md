@@ -500,6 +500,38 @@ This qualifies the labeled native mount-namespace subcase of
 `ENTRY-MIGRATE-001`. Protected-effect and restore cases remain required. The
 phase remains **Blocked**.
 
+## Current Entry-Migration Manual Recheck — 2026-08-17
+
+At source commit `ff129206ca610689c68b1de475b982f6e86ea97e`, a retained
+x86_64 Ubuntu 24.04 VM, kernel `6.8.0-137-generic`, ran as root:
+
+```sh
+examples/mithril-identity-manual/nsenter-move.sh
+examples/mithril-identity-manual/nsenter-move.sh --labeled-task
+```
+
+The shell SHA-256 was
+`6cda64a4e3c62e61ee24f05f301e6ff627e722d9f4525d601434ea4c0f12cbcd`.
+The first command printed `PASS`. The namespace-only child had no task identity
+before movement. After movement, it had task cookie `12`, no creator,
+`external_runtime_root`, `runtime_external_restricted`, active role `2`, and
+coordinate state `3` (`Runnable`).
+
+The labeled command printed `PASS`. The child kept task cookie `18`, creator
+and real-parent task cookie `12`, process state
+`00000000000000010000000000000016`, and active role `2`. Its execution ID
+changed from `00000000000000010000000000000013` to
+`0000000000000001000000000000001c`; its image ID changed from
+`00000000000000010000000000000011` to
+`0000000000000001000000000000001d`. It stayed runnable with active process
+records and no exec guard.
+
+Postflight found no case namespace, fixture directory, Mithril pin, node
+process, lease or work directory, or identifiable manual cgroup. The harness
+then removed the VM and `virsh list --all` was empty. This reruns the manual
+namespace-entry and labeled-child cases. It does not prove a protected effect
+or restore, so `ENTRY-MIGRATE-001` remains **Blocked**.
+
 ## Current Moved-Native VM Result — 2026-08-17
 
 The retained x86_64 Ubuntu 24.04 VM ran the current
