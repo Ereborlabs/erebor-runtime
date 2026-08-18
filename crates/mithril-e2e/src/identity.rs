@@ -3,7 +3,7 @@ mod clone3;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::{Read as _, Write as _};
-use std::mem::size_of;
+use std::mem::{offset_of, size_of};
 use std::os::fd::OwnedFd;
 use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _};
 use std::path::{Path, PathBuf};
@@ -16,8 +16,11 @@ use erebor_interceptor::{
     KernelObjectLayoutV1, KernelObjectManifestV1, BUNDLED_BPF_OBJECT, REQUIRED_IDENTITY_PROGRAMS,
 };
 use erebor_interceptor_abi::{
-    ExecGuardStateV1, IdentityRuntimeConfigV1, ProcessExecutionStateV1, ProcessStateVectorStateV1,
-    TaskCoordinateStateV1,
+    CreatedByEdgeV1, EntryLifetimeStateV1, EntrySecurityStateV1, ExecGuardStateV1, Id128V1,
+    IdentityRuntimeConfigV1, PendingExecStateV1, PendingExecV1, ProcessExecutionInstanceV1,
+    ProcessExecutionStateV1, ProcessSecurityStateKindV1, ProcessSecurityStateV1,
+    ProcessStateVectorStateV1, ProcessStateVectorV1, ReferenceTombstoneStateV1,
+    TaskCoordinateStateV1, TaskCoordinateV1, TaskReferenceTombstoneV1, TASK_REFERENCE_ALL_V1,
 };
 use libbpf_rs::{MapHandle, MapType};
 use mithril_node::{
@@ -27,7 +30,7 @@ use mithril_node::{
 use rustix::process::{pidfd_open, pidfd_send_signal, Pid, PidfdFlags, Signal};
 use serde::{Deserialize, Serialize};
 use snafu::{ensure, ResultExt as _};
-use zerocopy::FromBytes as _;
+use zerocopy::{FromBytes as _, KnownLayout, TryFromBytes};
 
 use crate::closure::ArchitectureClosure;
 use crate::error::{InterceptorSnafu, InvalidInputSnafu, IoSnafu, JsonSnafu, NodeSnafu};
@@ -160,6 +163,10 @@ pub struct IdentityPhysicalProbeBundleV1 {
     pub pre_ponr_failed_exec_before: NativeTaskSnapshotV1,
     pub pre_ponr_failed_exec_after_failure: NativeTaskSnapshotV1,
     pub pre_ponr_failed_exec_after_success: NativeTaskSnapshotV1,
+    pub post_ponr_exec_fatal: bool,
+    pub post_ponr_pending_state: u8,
+    pub post_ponr_exec_guard_state: u8,
+    pub post_ponr_task_coordinate_state: u8,
     pub non_leader_thread_exec_committed: bool,
     pub non_leader_thread_exec_root: NativeTaskSnapshotV1,
     pub non_leader_thread_exec_after_exec: NativeTaskSnapshotV1,
@@ -188,6 +195,29 @@ pub struct IdentityPhysicalProbeBundleV1 {
     pub double_fork_intermediate_before_exit: NativeTaskSnapshotV1,
     pub double_fork_native_child_before_intermediate_exit: NativeTaskSnapshotV1,
     pub double_fork_native_child_after_intermediate_exit: NativeTaskSnapshotV1,
+    pub no_pidfd_thread_observed: bool,
+    pub leader_first_worker_task_cookie: u64,
+    pub leader_first_process_refs_after_leader_exit: u64,
+    pub leader_first_entry_refs_after_leader_exit: u64,
+    pub leader_first_profile_refs_after_leader_exit: u64,
+    pub leader_first_root_tombstone_released: bool,
+    pub leader_first_worker_tombstone_owned: bool,
+    pub leader_first_process_refs_after_worker_exit: u64,
+    pub leader_first_entry_refs_after_worker_exit: u64,
+    pub leader_first_profile_refs_after_worker_exit: u64,
+    pub leader_first_process_reclaimable: bool,
+    pub leader_first_entry_draining: bool,
+    pub leader_first_worker_tombstone_released: bool,
+    pub reused_namespace_pid: u32,
+    pub pid_reuse_first: NativeTaskSnapshotV1,
+    pub pid_reuse_second: NativeTaskSnapshotV1,
+    pub pid_reuse_fresh_identity: bool,
+    pub reused_namespace_tid: u32,
+    pub tid_reuse_first_task_cookie: u64,
+    pub tid_reuse_second_task_cookie: u64,
+    pub tid_reuse_first_host_tid: u32,
+    pub tid_reuse_second_host_tid: u32,
+    pub tid_reuse_fresh_identity: bool,
     pub profile_task_refs_after_exit: u64,
     pub recovered_start: KernelObjectManifestV1,
     pub map_ids_stable_across_restart: bool,
@@ -353,12 +383,18 @@ impl IdentityTestRunner {
         self.materialize_object(output_directory)?;
         let execfail_path = output_directory.join("execfail");
         let execfail_ready_path = output_directory.join("execfail-ready");
+        let post_ponr_execfail_path = output_directory.join("post-ponr-execfail");
         let non_leader_thread_ready_path = output_directory.join("non-leader-thread-ready");
+        let leader_first_ready_path = output_directory.join("leader-first-ready");
+        let leader_first_release_path = output_directory.join("leader-first-release");
         let cgroup_escape_sentinel_path = output_directory.join("cgroup-escape-sentinel");
         ensure!(
             !execfail_path.exists()
                 && !execfail_ready_path.exists()
+                && !post_ponr_execfail_path.exists()
                 && !non_leader_thread_ready_path.exists()
+                && !leader_first_ready_path.exists()
+                && !leader_first_release_path.exists()
                 && !cgroup_escape_sentinel_path.exists(),
             InvalidInputSnafu {
                 path: output_directory,
@@ -367,9 +403,13 @@ impl IdentityTestRunner {
         );
         let execfail_cleanup = ProbeFile::new(&execfail_path);
         let execfail_ready_cleanup = ProbeFile::new(&execfail_ready_path);
+        let post_ponr_execfail_cleanup = ProbeFile::new(&post_ponr_execfail_path);
         let non_leader_thread_ready_cleanup = ProbeFile::new(&non_leader_thread_ready_path);
+        let leader_first_ready_cleanup = ProbeFile::new(&leader_first_ready_path);
+        let leader_first_release_cleanup = ProbeFile::new(&leader_first_release_path);
         let cgroup_escape_sentinel_cleanup = ProbeFile::new(&cgroup_escape_sentinel_path);
         self.materialize_execfail(&execfail_path)?;
+        self.materialize_post_ponr_execfail(&post_ponr_execfail_path)?;
         fs::write(
             &cgroup_escape_sentinel_path,
             b"identity cgroup escape sentinel\n",
@@ -942,6 +982,121 @@ impl IdentityTestRunner {
         execfail_ready_cleanup.cleanup()?;
         execfail_cleanup.cleanup()?;
 
+        let mut post_ponr_fixture =
+            NativeProcessFixture::start_with_post_ponr_exec(&post_ponr_execfail_path)?;
+        fs::write(&procs_path, post_ponr_fixture.outer_pid().to_string())
+            .context(IoSnafu { path: &procs_path })?;
+        let post_ponr_parent = self.wait_for("post-PONR parent identity", &procs_path, || {
+            inspector
+                .snapshot(post_ponr_fixture.outer_pid())
+                .context(NodeSnafu)
+        })?;
+        post_ponr_fixture.release_root()?;
+        let post_ponr_pid = self.wait_for("post-PONR native child", &procs_path, || {
+            post_ponr_fixture.native_child_pid()
+        })?;
+        post_ponr_fixture.open_native_pidfd(post_ponr_pid)?;
+        post_ponr_fixture.wait_for_stopped_native_child(post_ponr_pid)?;
+        let post_ponr_before = self.wait_for("post-PONR child identity", &procs_path, || {
+            inspector.snapshot(post_ponr_pid).context(NodeSnafu)
+        })?;
+        ensure!(
+            post_ponr_parent.root_class.as_deref() == Some("external_runtime_root")
+                && post_ponr_before.creator_task_cookie == Some(post_ponr_parent.task_cookie)
+                && post_ponr_before.active_role_id == post_ponr_parent.active_role_id
+                && post_ponr_before.exec_guard_state == ExecGuardStateV1::None as u8,
+            InvalidInputSnafu {
+                path: &procs_path,
+                reason: "the post-PONR child did not start with the inherited restricted identity",
+            }
+        );
+        let post_ponr_process_key = id_key(&post_ponr_before.process_state_id)?;
+        post_ponr_fixture.release_exec(post_ponr_pid)?;
+        post_ponr_fixture.wait_for_post_ponr_fatal(post_ponr_pid)?;
+        let (
+            post_ponr_pending,
+            post_ponr_process,
+            post_ponr_coordinate,
+            post_ponr_tombstone,
+            post_ponr_source_execution,
+            post_ponr_target_execution,
+        ) = self.wait_for("post-PONR fatal identity", &procs_path, || {
+            let Some(pending) = optional_abi_map::<PendingExecV1>(
+                &host,
+                "pending_execs",
+                &post_ponr_before.task_cookie.to_ne_bytes(),
+                "post-PONR pending exec",
+            )?
+            else {
+                return Ok(None);
+            };
+            let process = required_abi_map::<ProcessSecurityStateV1>(
+                &host,
+                "process_states",
+                &post_ponr_process_key,
+                "post-PONR process state",
+            )?;
+            let coordinate = required_abi_map::<TaskCoordinateV1>(
+                &host,
+                "task_coordinates",
+                &post_ponr_before.task_cookie.to_ne_bytes(),
+                "post-PONR task coordinate",
+            )?;
+            let tombstone = required_abi_map::<TaskReferenceTombstoneV1>(
+                &host,
+                "task_reference_tombstones",
+                &post_ponr_before.task_cookie.to_ne_bytes(),
+                "post-PONR task tombstone",
+            )?;
+            let source_execution = required_abi_map::<ProcessExecutionInstanceV1>(
+                &host,
+                "process_execution_instances",
+                &id_bytes(pending.source_execution_id),
+                "post-PONR source execution",
+            )?;
+            let target_execution = required_abi_map::<ProcessExecutionInstanceV1>(
+                &host,
+                "process_execution_instances",
+                &id_bytes(pending.target_execution_id),
+                "post-PONR target execution",
+            )?;
+            Ok((pending.state == PendingExecStateV1::PostPonrFatal
+                && process.exec_guard_state == ExecGuardStateV1::OutcomeUnknown
+                && process.state == ProcessSecurityStateKindV1::Reclaimable
+                && process.live_thread_refs == 0
+                && coordinate.state == TaskCoordinateStateV1::Exited
+                && tombstone.task_free_observed == 1
+                && tombstone.released_bits == TASK_REFERENCE_ALL_V1
+                && tombstone.state == ReferenceTombstoneStateV1::Released
+                && source_execution.state == ProcessExecutionStateV1::Complete
+                && target_execution.state == ProcessExecutionStateV1::OutcomeUnknown)
+                .then_some((
+                    pending,
+                    process,
+                    coordinate,
+                    tombstone,
+                    source_execution,
+                    target_execution,
+                )))
+        })?;
+        ensure!(
+            post_ponr_process.active_role_id == post_ponr_before.active_role_id
+                && post_ponr_process.active_execution_id == post_ponr_pending.source_execution_id
+                && post_ponr_pending.source_role_id == post_ponr_before.active_role_id
+                && post_ponr_coordinate.task_cookie == post_ponr_before.task_cookie
+                && post_ponr_tombstone.task_cookie == post_ponr_before.task_cookie
+                && post_ponr_source_execution.process_execution_instance_id
+                    == post_ponr_pending.source_execution_id
+                && post_ponr_target_execution.process_execution_instance_id
+                    == post_ponr_pending.target_execution_id,
+            InvalidInputSnafu {
+                path: &post_ponr_execfail_path,
+                reason: "post-PONR failure restored or replaced the source restriction",
+            }
+        );
+        post_ponr_fixture.stop();
+        post_ponr_execfail_cleanup.cleanup()?;
+
         let mut moved_task_fixture = NativeProcessFixture::start()?;
         fs::write(&procs_path, moved_task_fixture.outer_pid().to_string())
             .context(IoSnafu { path: &procs_path })?;
@@ -1466,6 +1621,450 @@ impl IdentityTestRunner {
         );
         double_fork_fixture.stop();
 
+        self.wait_for("native reference baseline", &procs_path, || {
+            Ok((profile_task_refs(&host)? == 0).then_some(()))
+        })?;
+        let mut leader_first_fixture = NativeProcessFixture::start_with_leader_first_exit(
+            &leader_first_ready_path,
+            &leader_first_release_path,
+        )?;
+        fs::write(&procs_path, leader_first_fixture.outer_pid().to_string())
+            .context(IoSnafu { path: &procs_path })?;
+        let leader_first_root = self.wait_for("leader-first root identity", &procs_path, || {
+            inspector
+                .snapshot(leader_first_fixture.outer_pid())
+                .context(NodeSnafu)
+        })?;
+        let leader_first_process_key = id_key(&leader_first_root.process_state_id)?;
+        let leader_first_process_before = required_abi_map::<ProcessSecurityStateV1>(
+            &host,
+            "process_states",
+            &leader_first_process_key,
+            "leader-first process state",
+        )?;
+        let leader_first_entry_key = id_bytes(leader_first_process_before.entry_instance_id);
+        let next_id_before_worker = identity_next_id(&host)?;
+        leader_first_fixture.release_root()?;
+        let leader_first_worker_tid = self.wait_for(
+            "leader-first worker thread",
+            &leader_first_ready_path,
+            || leader_first_fixture.reported_tid(&leader_first_ready_path),
+        )?;
+        let leader_first_worker_task_cookie = next_id_before_worker;
+        let no_pidfd_thread_observed = {
+            let raw = i32::try_from(leader_first_worker_tid).map_err(|error| {
+                invalid_state(format!(
+                    "worker TID {leader_first_worker_tid} is invalid: {error}"
+                ))
+            })?;
+            let tid = Pid::from_raw(raw)
+                .ok_or_else(|| invalid_state("worker TID zero cannot have a pidfd"))?;
+            pidfd_open(tid, PidfdFlags::empty()).is_err()
+        };
+        let leader_first_worker_coordinate = required_abi_map::<TaskCoordinateV1>(
+            &host,
+            "task_coordinates",
+            &leader_first_worker_task_cookie.to_ne_bytes(),
+            "leader-first worker coordinate",
+        )?;
+        let leader_first_created_by = required_abi_map::<CreatedByEdgeV1>(
+            &host,
+            "created_by_edges",
+            &leader_first_worker_task_cookie.to_ne_bytes(),
+            "leader-first worker creator edge",
+        )?;
+        ensure!(
+            no_pidfd_thread_observed
+                && identity_next_id(&host)? == next_id_before_worker + 2
+                && leader_first_worker_coordinate.task_cookie == leader_first_worker_task_cookie
+                && leader_first_worker_coordinate.host_tid == leader_first_worker_tid
+                && leader_first_worker_coordinate.host_tgid == leader_first_root.host_tgid
+                && leader_first_worker_coordinate.process_state_id
+                    == leader_first_process_before.process_state_id
+                && leader_first_worker_coordinate.state == TaskCoordinateStateV1::Runnable
+                && leader_first_created_by.child_task_cookie == leader_first_worker_task_cookie
+                && leader_first_created_by.creator_task_cookie == leader_first_root.task_cookie,
+            InvalidInputSnafu {
+                path: &leader_first_ready_path,
+                reason: "the non-leader thread did not receive one exact native identity",
+            }
+        );
+        let (
+            leader_first_process_refs_after_leader_exit,
+            leader_first_entry_refs_after_leader_exit,
+            leader_first_profile_refs_after_leader_exit,
+            leader_first_root_tombstone_released,
+            leader_first_worker_tombstone_owned,
+        ) = self.wait_for("leader-first reference transition", &procs_path, || {
+            let root_coordinate = required_abi_map::<TaskCoordinateV1>(
+                &host,
+                "task_coordinates",
+                &leader_first_root.task_cookie.to_ne_bytes(),
+                "leader-first root coordinate",
+            )?;
+            let process = required_abi_map::<ProcessSecurityStateV1>(
+                &host,
+                "process_states",
+                &leader_first_process_key,
+                "leader-first live process",
+            )?;
+            let entry = required_map_bytes(
+                &host,
+                "entry_states",
+                &leader_first_entry_key,
+                "leader-first live entry",
+            )?;
+            let entry_refs = read_u64(
+                &entry,
+                offset_of!(EntrySecurityStateV1, live_task_refs),
+                "leader-first live entry references",
+            )?;
+            let root_tombstone = required_abi_map::<TaskReferenceTombstoneV1>(
+                &host,
+                "task_reference_tombstones",
+                &leader_first_root.task_cookie.to_ne_bytes(),
+                "leader-first root tombstone",
+            )?;
+            let worker_tombstone = required_abi_map::<TaskReferenceTombstoneV1>(
+                &host,
+                "task_reference_tombstones",
+                &leader_first_worker_task_cookie.to_ne_bytes(),
+                "leader-first worker tombstone",
+            )?;
+            let profile_refs = profile_task_refs(&host)?;
+            let root_released = root_tombstone.task_free_observed == 1
+                && root_tombstone.released_bits == TASK_REFERENCE_ALL_V1
+                && root_tombstone.state == ReferenceTombstoneStateV1::Released;
+            let worker_owned = worker_tombstone.task_free_observed == 0
+                && worker_tombstone.released_bits == 0
+                && worker_tombstone.state == ReferenceTombstoneStateV1::Owned;
+            Ok((root_coordinate.state == TaskCoordinateStateV1::Exited
+                && process.state == ProcessSecurityStateKindV1::Active
+                && process.live_thread_refs == 1
+                && process.active_role_id == leader_first_root.active_role_id
+                && entry_refs == 1
+                && profile_refs == 1
+                && root_released
+                && worker_owned)
+                .then_some((
+                    process.live_thread_refs,
+                    entry_refs,
+                    profile_refs,
+                    root_released,
+                    worker_owned,
+                )))
+        })?;
+        fs::write(&leader_first_release_path, b"release\n").context(IoSnafu {
+            path: &leader_first_release_path,
+        })?;
+        leader_first_fixture.wait_for_successful_exit()?;
+        let (
+            leader_first_process_refs_after_worker_exit,
+            leader_first_entry_refs_after_worker_exit,
+            leader_first_profile_refs_after_worker_exit,
+            leader_first_process_reclaimable,
+            leader_first_entry_draining,
+            leader_first_worker_tombstone_released,
+        ) = self.wait_for("leader-first final reference release", &procs_path, || {
+            let worker_coordinate = required_abi_map::<TaskCoordinateV1>(
+                &host,
+                "task_coordinates",
+                &leader_first_worker_task_cookie.to_ne_bytes(),
+                "leader-first exited worker coordinate",
+            )?;
+            let process = required_abi_map::<ProcessSecurityStateV1>(
+                &host,
+                "process_states",
+                &leader_first_process_key,
+                "leader-first retired process",
+            )?;
+            let vector = required_abi_map::<ProcessStateVectorV1>(
+                &host,
+                "process_state_vectors",
+                &leader_first_process_key,
+                "leader-first retired process vector",
+            )?;
+            let execution = required_abi_map::<ProcessExecutionInstanceV1>(
+                &host,
+                "process_execution_instances",
+                &id_bytes(process.active_execution_id),
+                "leader-first completed execution",
+            )?;
+            let entry = required_map_bytes(
+                &host,
+                "entry_states",
+                &leader_first_entry_key,
+                "leader-first draining entry",
+            )?;
+            let entry_refs = read_u64(
+                &entry,
+                offset_of!(EntrySecurityStateV1, live_task_refs),
+                "leader-first final entry references",
+            )?;
+            let entry_lifetime = read_u8(
+                &entry,
+                offset_of!(EntrySecurityStateV1, lifetime_state),
+                "leader-first entry lifetime",
+            )?;
+            let worker_tombstone = required_abi_map::<TaskReferenceTombstoneV1>(
+                &host,
+                "task_reference_tombstones",
+                &leader_first_worker_task_cookie.to_ne_bytes(),
+                "leader-first released worker tombstone",
+            )?;
+            let profile_refs = profile_task_refs(&host)?;
+            let process_reclaimable = process.state == ProcessSecurityStateKindV1::Reclaimable
+                && process.live_thread_refs == 0
+                && vector.state == ProcessStateVectorStateV1::Retiring
+                && execution.state == ProcessExecutionStateV1::Complete;
+            let entry_draining =
+                entry_refs == 0 && entry_lifetime == EntryLifetimeStateV1::Draining as u8;
+            let worker_released = worker_tombstone.task_free_observed == 1
+                && worker_tombstone.released_bits == TASK_REFERENCE_ALL_V1
+                && worker_tombstone.state == ReferenceTombstoneStateV1::Released;
+            Ok((worker_coordinate.state == TaskCoordinateStateV1::Exited
+                && process_reclaimable
+                && entry_draining
+                && profile_refs == 0
+                && worker_released)
+                .then_some((
+                    process.live_thread_refs,
+                    entry_refs,
+                    profile_refs,
+                    process_reclaimable,
+                    entry_draining,
+                    worker_released,
+                )))
+        })?;
+        leader_first_fixture.stop();
+        leader_first_ready_cleanup.cleanup()?;
+        leader_first_release_cleanup.cleanup()?;
+
+        let reuse_work = output_directory.join("pid-tid-reuse");
+        ensure!(
+            !reuse_work.exists(),
+            InvalidInputSnafu {
+                path: &reuse_work,
+                reason: "the PID/TID reuse fixture directory must not already exist",
+            }
+        );
+        fs::create_dir(&reuse_work).context(IoSnafu { path: &reuse_work })?;
+        let reuse_cleanup = ProbeDirectory::new(&reuse_work);
+        let mut reuse_fixture = NativeProcessFixture::start_pid_tid_reuse(&reuse_work)?;
+        let reuse_namespace_init_pid =
+            self.wait_for("PID/TID reuse namespace init", &reuse_work, || {
+                reuse_fixture.namespace_init_pid()
+            })?;
+        reuse_fixture.open_namespace_init_pidfd(reuse_namespace_init_pid)?;
+        fs::write(&procs_path, reuse_namespace_init_pid.to_string())
+            .context(IoSnafu { path: &procs_path })?;
+        let reuse_namespace_init = self.wait_for(
+            "PID/TID reuse namespace-init external identity",
+            &procs_path,
+            || {
+                inspector
+                    .snapshot(reuse_namespace_init_pid)
+                    .context(NodeSnafu)
+            },
+        )?;
+        reuse_fixture.release_root()?;
+        let reused_namespace_pid = self.wait_for(
+            "first reusable namespace PID",
+            &reuse_work.join("process-first"),
+            || read_marker_pid(&reuse_work.join("process-first")),
+        )?;
+        let first_reused_host_pid =
+            self.wait_for("first reusable host PID", &reuse_work, || {
+                reuse_fixture.first_child_pid(reuse_namespace_init_pid)
+            })?;
+        let first_live_namespace_pid = pid_in_own_namespace(first_reused_host_pid)?;
+        let pid_reuse_first = self.wait_for("first reused-PID identity", &procs_path, || {
+            inspector.snapshot(first_reused_host_pid).context(NodeSnafu)
+        })?;
+        let pid_reuse_first_coordinate = required_abi_map::<TaskCoordinateV1>(
+            &host,
+            "task_coordinates",
+            &pid_reuse_first.task_cookie.to_ne_bytes(),
+            "first reused-PID coordinate",
+        )?;
+        fs::write(reuse_work.join("release-process-first"), b"release\n").context(IoSnafu {
+            path: reuse_work.join("release-process-first"),
+        })?;
+        let second_namespace_pid = self.wait_for(
+            "second reusable namespace PID",
+            &reuse_work.join("process-second"),
+            || read_marker_pid(&reuse_work.join("process-second")),
+        )?;
+        let second_reused_host_pid =
+            self.wait_for("second reusable host PID", &reuse_work, || {
+                reuse_fixture.first_child_pid(reuse_namespace_init_pid)
+            })?;
+        let second_live_namespace_pid = pid_in_own_namespace(second_reused_host_pid)?;
+        let pid_reuse_second = self.wait_for("second reused-PID identity", &procs_path, || {
+            inspector
+                .snapshot(second_reused_host_pid)
+                .context(NodeSnafu)
+        })?;
+        let pid_reuse_second_coordinate = required_abi_map::<TaskCoordinateV1>(
+            &host,
+            "task_coordinates",
+            &pid_reuse_second.task_cookie.to_ne_bytes(),
+            "second reused-PID coordinate",
+        )?;
+        let pid_reuse_fresh_identity = reused_namespace_pid == second_namespace_pid
+            && first_reused_host_pid != second_reused_host_pid
+            && pid_reuse_first.task_cookie != pid_reuse_second.task_cookie
+            && pid_reuse_first.process_state_id != pid_reuse_second.process_state_id
+            && pid_reuse_first.active_execution_id != pid_reuse_second.active_execution_id
+            && pid_reuse_first.creator_task_cookie == Some(reuse_namespace_init.task_cookie)
+            && pid_reuse_second.creator_task_cookie == Some(reuse_namespace_init.task_cookie)
+            && pid_reuse_first_coordinate.pid_namespace_inode
+                == pid_reuse_second_coordinate.pid_namespace_inode
+            && pid_reuse_first_coordinate.task_start_boottime_ns
+                != pid_reuse_second_coordinate.task_start_boottime_ns;
+        ensure!(
+            reuse_namespace_init.root_class.as_deref() == Some("external_runtime_root")
+                && reuse_namespace_init.creator_task_cookie.is_none()
+                && reused_namespace_pid > 1
+                && first_live_namespace_pid == reused_namespace_pid
+                && second_live_namespace_pid == reused_namespace_pid
+                && pid_reuse_fresh_identity,
+            InvalidInputSnafu {
+                path: &reuse_work,
+                reason: "reusing a namespace PID attached stale native identity",
+            }
+        );
+        fs::write(reuse_work.join("release-process-second"), b"release\n").context(IoSnafu {
+            path: reuse_work.join("release-process-second"),
+        })?;
+        self.wait_for(
+            "process-reuse completion gate",
+            &reuse_work.join("processes-done"),
+            || Ok(reuse_work.join("processes-done").exists().then_some(())),
+        )?;
+
+        let next_id_before_first_reused_tid = identity_next_id(&host)?;
+        fs::write(reuse_work.join("start-thread-first"), b"start\n").context(IoSnafu {
+            path: reuse_work.join("start-thread-first"),
+        })?;
+        let reused_namespace_tid = self.wait_for(
+            "first reusable namespace TID",
+            &reuse_work.join("thread-first"),
+            || read_marker_pid(&reuse_work.join("thread-first")),
+        )?;
+        let tid_reuse_first_host_tid = self.wait_for(
+            "first reusable host TID",
+            &reuse_work.join("thread-first"),
+            || host_thread_for_namespace_tid(reuse_namespace_init_pid, reused_namespace_tid),
+        )?;
+        let tid_reuse_first_task_cookie = next_id_before_first_reused_tid;
+        let tid_reuse_first_coordinate = required_abi_map::<TaskCoordinateV1>(
+            &host,
+            "task_coordinates",
+            &tid_reuse_first_task_cookie.to_ne_bytes(),
+            "first reused-TID coordinate",
+        )?;
+        let tid_reuse_first_edge = required_abi_map::<CreatedByEdgeV1>(
+            &host,
+            "created_by_edges",
+            &tid_reuse_first_task_cookie.to_ne_bytes(),
+            "first reused-TID creator edge",
+        )?;
+        ensure!(
+            identity_next_id(&host)? == next_id_before_first_reused_tid + 2
+                && tid_reuse_first_coordinate.host_tid == tid_reuse_first_host_tid
+                && tid_reuse_first_coordinate.host_tgid == reuse_namespace_init.host_tgid
+                && tid_reuse_first_coordinate.process_state_id
+                    == id_value(&reuse_namespace_init.process_state_id)?
+                && tid_reuse_first_edge.creator_task_cookie == reuse_namespace_init.task_cookie,
+            InvalidInputSnafu {
+                path: &reuse_work,
+                reason: "the first reusable TID did not receive an exact thread identity",
+            }
+        );
+        fs::write(reuse_work.join("release-thread-first"), b"release\n").context(IoSnafu {
+            path: reuse_work.join("release-thread-first"),
+        })?;
+        self.wait_for(
+            "first reusable TID exit",
+            &reuse_work.join("thread-first-done"),
+            || {
+                if !reuse_work.join("thread-first-done").exists() {
+                    return Ok(None);
+                }
+                let coordinate = required_abi_map::<TaskCoordinateV1>(
+                    &host,
+                    "task_coordinates",
+                    &tid_reuse_first_task_cookie.to_ne_bytes(),
+                    "exited first reused-TID coordinate",
+                )?;
+                Ok((coordinate.state == TaskCoordinateStateV1::Exited).then_some(()))
+            },
+        )?;
+        let next_id_before_second_reused_tid = identity_next_id(&host)?;
+        fs::write(reuse_work.join("start-thread-second"), b"start\n").context(IoSnafu {
+            path: reuse_work.join("start-thread-second"),
+        })?;
+        let second_namespace_tid = self.wait_for(
+            "second reusable namespace TID",
+            &reuse_work.join("thread-second"),
+            || read_marker_pid(&reuse_work.join("thread-second")),
+        )?;
+        let tid_reuse_second_host_tid = self.wait_for(
+            "second reusable host TID",
+            &reuse_work.join("thread-second"),
+            || host_thread_for_namespace_tid(reuse_namespace_init_pid, second_namespace_tid),
+        )?;
+        let tid_reuse_second_task_cookie = next_id_before_second_reused_tid;
+        let tid_reuse_second_coordinate = required_abi_map::<TaskCoordinateV1>(
+            &host,
+            "task_coordinates",
+            &tid_reuse_second_task_cookie.to_ne_bytes(),
+            "second reused-TID coordinate",
+        )?;
+        let tid_reuse_second_edge = required_abi_map::<CreatedByEdgeV1>(
+            &host,
+            "created_by_edges",
+            &tid_reuse_second_task_cookie.to_ne_bytes(),
+            "second reused-TID creator edge",
+        )?;
+        let tid_reuse_fresh_identity = reused_namespace_tid == second_namespace_tid
+            && tid_reuse_first_host_tid != tid_reuse_second_host_tid
+            && tid_reuse_first_task_cookie != tid_reuse_second_task_cookie
+            && tid_reuse_first_coordinate.task_start_boottime_ns
+                != tid_reuse_second_coordinate.task_start_boottime_ns
+            && tid_reuse_first_coordinate.pid_namespace_inode
+                == tid_reuse_second_coordinate.pid_namespace_inode
+            && tid_reuse_second_edge.creator_task_cookie == reuse_namespace_init.task_cookie;
+        ensure!(
+            identity_next_id(&host)? == next_id_before_second_reused_tid + 2
+                && tid_reuse_second_coordinate.host_tid == tid_reuse_second_host_tid
+                && tid_reuse_second_coordinate.host_tgid == reuse_namespace_init.host_tgid
+                && tid_reuse_fresh_identity,
+            InvalidInputSnafu {
+                path: &reuse_work,
+                reason: "reusing a namespace TID attached stale native identity",
+            }
+        );
+        fs::write(reuse_work.join("release-thread-second"), b"release\n").context(IoSnafu {
+            path: reuse_work.join("release-thread-second"),
+        })?;
+        reuse_fixture.wait_for_successful_exit()?;
+        self.wait_for("reused TID final release", &reuse_work, || {
+            let tombstone = required_abi_map::<TaskReferenceTombstoneV1>(
+                &host,
+                "task_reference_tombstones",
+                &tid_reuse_second_task_cookie.to_ne_bytes(),
+                "second reused-TID tombstone",
+            )?;
+            Ok((tombstone.task_free_observed == 1
+                && tombstone.released_bits == TASK_REFERENCE_ALL_V1
+                && tombstone.state == ReferenceTombstoneStateV1::Released)
+                .then_some(()))
+        })?;
+        reuse_fixture.stop();
+        reuse_cleanup.cleanup()?;
+
         let mut cgroup_escape_control = CloneIntoCgroupFixture::start_with_root_first_effect(
             &cgroup_path,
             &cgroup_escape_sentinel_path,
@@ -1726,7 +2325,7 @@ impl IdentityTestRunner {
             }
         );
         Ok(IdentityPhysicalProbeBundleV1 {
-            schema_version: 20,
+            schema_version: 23,
             object_sha256,
             first_start,
             distinct_pin_root_owner_rejected,
@@ -1746,6 +2345,10 @@ impl IdentityTestRunner {
             pre_ponr_failed_exec_before: failed_exec_before,
             pre_ponr_failed_exec_after_failure: failed_exec_after_failure,
             pre_ponr_failed_exec_after_success: failed_exec_after_success,
+            post_ponr_exec_fatal: true,
+            post_ponr_pending_state: post_ponr_pending.state as u8,
+            post_ponr_exec_guard_state: post_ponr_process.exec_guard_state as u8,
+            post_ponr_task_coordinate_state: post_ponr_coordinate.state as u8,
             non_leader_thread_exec_committed: true,
             non_leader_thread_exec_root,
             non_leader_thread_exec_after_exec,
@@ -1775,6 +2378,29 @@ impl IdentityTestRunner {
             double_fork_intermediate_before_exit,
             double_fork_native_child_before_intermediate_exit,
             double_fork_native_child_after_intermediate_exit,
+            no_pidfd_thread_observed,
+            leader_first_worker_task_cookie,
+            leader_first_process_refs_after_leader_exit,
+            leader_first_entry_refs_after_leader_exit,
+            leader_first_profile_refs_after_leader_exit,
+            leader_first_root_tombstone_released,
+            leader_first_worker_tombstone_owned,
+            leader_first_process_refs_after_worker_exit,
+            leader_first_entry_refs_after_worker_exit,
+            leader_first_profile_refs_after_worker_exit,
+            leader_first_process_reclaimable,
+            leader_first_entry_draining,
+            leader_first_worker_tombstone_released,
+            reused_namespace_pid,
+            pid_reuse_first,
+            pid_reuse_second,
+            pid_reuse_fresh_identity,
+            reused_namespace_tid,
+            tid_reuse_first_task_cookie,
+            tid_reuse_second_task_cookie,
+            tid_reuse_first_host_tid,
+            tid_reuse_second_host_tid,
+            tid_reuse_fresh_identity,
             profile_task_refs_after_exit,
             recovered_start,
             map_ids_stable_across_restart,
@@ -1943,7 +2569,7 @@ impl IdentityTestRunner {
             && bundle.kubernetes_poststart_repeated_hook.is_some()
             && bundle.kubernetes_poststart_repeat_fresh_identity == Some(true);
         ensure!(
-            matches!(bundle.schema_version, 15..=22)
+            matches!(bundle.schema_version, 15..=23)
                 && (entry_results_missing || entry_results_present)
                 && matches!(bundle.kubernetes_lifecycle_sleep_no_task, None | Some(true))
                 && (network_results_missing || network_results_present)
@@ -1957,7 +2583,7 @@ impl IdentityTestRunner {
                 reason: "the prior identity bundle cannot accept the next Kubernetes result",
             }
         );
-        bundle.schema_version = 22;
+        bundle.schema_version = 23;
         if entry_results_missing {
             self.physical_kubernetes_exec_probe(
                 output_directory,
@@ -2057,6 +2683,85 @@ impl IdentityTestRunner {
         let mut missing_linker = linker.to_vec();
         missing_linker[1] = b'z';
         bytes[linker_offset..linker_offset + linker.len()].copy_from_slice(&missing_linker);
+        fs::write(path, bytes).context(IoSnafu { path })?;
+        let mut permissions = fs::metadata(path).context(IoSnafu { path })?.permissions();
+        permissions.set_mode(0o700);
+        fs::set_permissions(path, permissions).context(IoSnafu { path })
+    }
+
+    fn materialize_post_ponr_execfail(&self, path: &Path) -> Result<()> {
+        const PT_LOAD: u32 = 1;
+
+        let source = Path::new("/bin/true");
+        let mut bytes = fs::read(source).context(IoSnafu { path: source })?;
+        ensure!(
+            bytes.get(0..4) == Some(b"\x7fELF") && bytes.get(5) == Some(&1),
+            InvalidInputSnafu {
+                path: source,
+                reason: "the post-PONR fixture requires a little-endian ELF",
+            }
+        );
+        let (program_offset, entry_size, entry_count, filesz_offset, memsz_offset) =
+            match bytes.get(4).copied() {
+                Some(2) => (
+                    read_u64_le(&bytes, 32, "ELF64 program-header offset")? as usize,
+                    read_u16(&bytes, 54, "ELF64 program-header size")? as usize,
+                    read_u16(&bytes, 56, "ELF64 program-header count")? as usize,
+                    32,
+                    40,
+                ),
+                Some(1) => (
+                    read_u32(&bytes, 28, "ELF32 program-header offset")? as usize,
+                    read_u16(&bytes, 42, "ELF32 program-header size")? as usize,
+                    read_u16(&bytes, 44, "ELF32 program-header count")? as usize,
+                    16,
+                    20,
+                ),
+                class => {
+                    return Err(invalid_state(format!(
+                        "unsupported ELF class {class:?} for the post-PONR fixture"
+                    )))
+                }
+            };
+        let field_size = if bytes[4] == 2 { 8 } else { 4 };
+        let mut patched = false;
+        for index in 0..entry_count {
+            let offset = program_offset
+                .checked_add(index.saturating_mul(entry_size))
+                .ok_or_else(|| invalid_state("ELF program-header offset overflowed"))?;
+            if read_u32(&bytes, offset, "ELF program-header type")? != PT_LOAD {
+                continue;
+            }
+            let filesz = read_uint(
+                &bytes,
+                offset + filesz_offset,
+                field_size,
+                "ELF PT_LOAD file size",
+            )?;
+            ensure!(
+                filesz > 0,
+                InvalidInputSnafu {
+                    path: source,
+                    reason: "the first ELF PT_LOAD segment has no file bytes",
+                }
+            );
+            write_uint(
+                &mut bytes,
+                offset + memsz_offset,
+                field_size,
+                filesz - 1,
+                "ELF PT_LOAD memory size",
+            )?;
+            patched = true;
+            break;
+        }
+        ensure!(
+            patched,
+            InvalidInputSnafu {
+                path: source,
+                reason: "the source ELF has no PT_LOAD segment",
+            }
+        );
         fs::write(path, bytes).context(IoSnafu { path })?;
         let mut permissions = fs::metadata(path).context(IoSnafu { path })?.permissions();
         permissions.set_mode(0o700);
@@ -6001,6 +6706,79 @@ os.waitpid(-1, 0)
         Self::start_command(&mut command, false, Path::new("/usr/bin/unshare"))
     }
 
+    fn start_pid_tid_reuse(work: &Path) -> Result<Self> {
+        let mut command = Command::new("/usr/bin/unshare");
+        command
+            .args([
+                "--pid",
+                "--fork",
+                "--mount-proc",
+                "python3",
+                "-c",
+                r#"import os
+import sys
+import threading
+import time
+
+work = sys.argv[1]
+sys.stdin.readline()
+
+def path(name):
+    return os.path.join(work, name)
+
+def mark(name, value="ready"):
+    temporary = f"{path(name)}.tmp"
+    with open(temporary, "x", encoding="ascii") as output:
+        output.write(f"{value}\n")
+    os.replace(temporary, path(name))
+
+def wait_for(name):
+    while not os.path.exists(path(name)):
+        time.sleep(0.01)
+
+def process(name, release):
+    mark(name, os.getpid())
+    wait_for(release)
+    os._exit(0)
+
+first = os.fork()
+if first == 0:
+    process("process-first", "release-process-first")
+os.waitpid(first, 0)
+with open("/proc/sys/kernel/ns_last_pid", "w", encoding="ascii") as output:
+    output.write(str(first - 1))
+second = os.fork()
+if second == 0:
+    process("process-second", "release-process-second")
+os.waitpid(second, 0)
+mark("processes-done")
+
+thread_ids = []
+def worker(name, release):
+    thread_ids.append(threading.get_native_id())
+    mark(name, thread_ids[-1])
+    wait_for(release)
+
+wait_for("start-thread-first")
+first_thread = threading.Thread(
+    target=worker, args=("thread-first", "release-thread-first"))
+first_thread.start()
+first_thread.join()
+mark("thread-first-done")
+wait_for("start-thread-second")
+with open("/proc/sys/kernel/ns_last_pid", "w", encoding="ascii") as output:
+    output.write(str(thread_ids[0] - 1))
+second_thread = threading.Thread(
+    target=worker, args=("thread-second", "release-thread-second"))
+second_thread.start()
+second_thread.join()
+mark("complete")
+"#,
+            ])
+            .arg(work);
+        Self::start_command(&mut command, false, Path::new("/usr/bin/unshare"))
+    }
+
     fn start_double_forking() -> Result<Self> {
         Self::start_with_script(
             "read _; ( ( read child_pid _ < /proc/self/stat; kill -STOP \"$child_pid\"; exec /bin/sleep 30 ) & wait ) & middle_pid=$!; wait \"$middle_pid\"; exec /bin/sleep 30",
@@ -6036,6 +6814,56 @@ os.waitpid(-1, 0)
             .arg(execfail)
             .arg(ready);
         Self::start_command(&mut command, false, Path::new("/bin/bash"))
+    }
+
+    fn start_with_post_ponr_exec(execfail: &Path) -> Result<Self> {
+        let mut command = Command::new("/bin/sh");
+        command
+            .args([
+                "-c",
+                "read _; (read child_pid _ < /proc/self/stat; kill -STOP \"$child_pid\"; exec \"$0\") & wait \"$!\"",
+            ])
+            .arg(execfail);
+        Self::start_command(&mut command, false, Path::new("/bin/sh"))
+    }
+
+    fn start_with_leader_first_exit(ready: &Path, release: &Path) -> Result<Self> {
+        let mut command = Command::new("python3");
+        command
+            .args([
+                "-c",
+                r#"import ctypes
+import os
+import sys
+import threading
+import time
+
+ready = sys.argv[1]
+release = sys.argv[2]
+sys.stdin.readline()
+
+def worker():
+    temporary = f"{ready}.tmp"
+    with open(temporary, "x", encoding="ascii") as output:
+        output.write(f"{threading.get_native_id()}\n")
+    os.replace(temporary, ready)
+    while not os.path.exists(release):
+        time.sleep(0.01)
+
+thread = threading.Thread(target=worker)
+thread.start()
+while not os.path.exists(ready):
+    time.sleep(0.01)
+libc = ctypes.CDLL(None, use_errno=True)
+libc.pthread_exit.argtypes = [ctypes.c_void_p]
+libc.pthread_exit.restype = None
+libc.pthread_exit(None)
+raise RuntimeError("pthread_exit returned")
+"#,
+            ])
+            .arg(ready)
+            .arg(release);
+        Self::start_command(&mut command, false, Path::new("python3"))
     }
 
     fn start_with_non_leader_exec(ready: &Path) -> Result<Self> {
@@ -6265,6 +7093,63 @@ second.join()
         }
     }
 
+    fn wait_for_post_ponr_fatal(&mut self, native_pid: u32) -> Result<()> {
+        let path = PathBuf::from(format!("/proc/{native_pid}"));
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            if let Some(status) = self.outer.try_wait().context(IoSnafu {
+                path: Path::new("post-PONR identity fixture"),
+            })? {
+                self.stdin.take();
+                ensure!(
+                    !status.success() && !path.exists(),
+                    InvalidInputSnafu {
+                        path: &path,
+                        reason: format!(
+                            "post-PONR exec did not terminate its task; outer status {status}"
+                        ),
+                    }
+                );
+                return Ok(());
+            }
+            ensure!(
+                Instant::now() < deadline,
+                InvalidInputSnafu {
+                    path: &path,
+                    reason: "post-PONR exec failure did not terminate before the short deadline",
+                }
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    fn wait_for_successful_exit(&mut self) -> Result<()> {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            if let Some(status) = self.outer.try_wait().context(IoSnafu {
+                path: Path::new("leader-first identity fixture"),
+            })? {
+                self.stdin.take();
+                ensure!(
+                    status.success(),
+                    InvalidInputSnafu {
+                        path: Path::new("leader-first identity fixture"),
+                        reason: format!("leader-first fixture exited with {status}"),
+                    }
+                );
+                return Ok(());
+            }
+            ensure!(
+                Instant::now() < deadline,
+                InvalidInputSnafu {
+                    path: Path::new("leader-first identity fixture"),
+                    reason: "leader-first worker did not exit before the short deadline",
+                }
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
+
     fn release_parent_exit(&mut self) -> Result<()> {
         ensure!(
             self.parent_exit_mode,
@@ -6376,6 +7261,10 @@ second.join()
             ))
         })?;
         Ok(Some(tid))
+    }
+
+    fn reported_tid(&mut self, ready: &Path) -> Result<Option<u32>> {
+        self.non_leader_thread_tid(ready)
     }
 
     #[cfg(test)]
@@ -6669,6 +7558,159 @@ fn read_u64(bytes: &[u8], offset: usize, name: &str) -> Result<u64> {
     Ok(u64::from_ne_bytes(value))
 }
 
+fn read_u8(bytes: &[u8], offset: usize, name: &str) -> Result<u8> {
+    bytes
+        .get(offset)
+        .copied()
+        .ok_or_else(|| invalid_state(format!("{name} is truncated")))
+}
+
+fn read_u16(bytes: &[u8], offset: usize, name: &str) -> Result<u16> {
+    let value = bytes
+        .get(offset..offset + size_of::<u16>())
+        .and_then(|value| value.try_into().ok())
+        .ok_or_else(|| invalid_state(format!("{name} is truncated")))?;
+    Ok(u16::from_le_bytes(value))
+}
+
+fn read_u32(bytes: &[u8], offset: usize, name: &str) -> Result<u32> {
+    let value = bytes
+        .get(offset..offset + size_of::<u32>())
+        .and_then(|value| value.try_into().ok())
+        .ok_or_else(|| invalid_state(format!("{name} is truncated")))?;
+    Ok(u32::from_le_bytes(value))
+}
+
+fn read_u64_le(bytes: &[u8], offset: usize, name: &str) -> Result<u64> {
+    let value = bytes
+        .get(offset..offset + size_of::<u64>())
+        .and_then(|value| value.try_into().ok())
+        .ok_or_else(|| invalid_state(format!("{name} is truncated")))?;
+    Ok(u64::from_le_bytes(value))
+}
+
+fn read_uint(bytes: &[u8], offset: usize, size: usize, name: &str) -> Result<u64> {
+    match size {
+        4 => read_u32(bytes, offset, name).map(u64::from),
+        8 => read_u64_le(bytes, offset, name),
+        _ => Err(invalid_state(format!("{name} has unsupported size {size}"))),
+    }
+}
+
+fn write_uint(bytes: &mut [u8], offset: usize, size: usize, value: u64, name: &str) -> Result<()> {
+    let encoded = match size {
+        4 => u32::try_from(value)
+            .map_err(|error| invalid_state(format!("{name} does not fit ELF32: {error}")))?
+            .to_le_bytes()
+            .to_vec(),
+        8 => value.to_le_bytes().to_vec(),
+        _ => return Err(invalid_state(format!("{name} has unsupported size {size}"))),
+    };
+    let target = bytes
+        .get_mut(offset..offset + size)
+        .ok_or_else(|| invalid_state(format!("{name} is truncated")))?;
+    target.copy_from_slice(&encoded);
+    Ok(())
+}
+
+fn id_key(value: &str) -> Result<[u8; 16]> {
+    id_value(value).map(id_bytes)
+}
+
+fn id_value(value: &str) -> Result<Id128V1> {
+    ensure!(
+        value.len() == 32 && value.bytes().all(|byte| byte.is_ascii_hexdigit()),
+        InvalidInputSnafu {
+            path: Path::new("native identity ID"),
+            reason: format!("`{value}` is not a 128-bit identity"),
+        }
+    );
+    let high = u64::from_str_radix(&value[..16], 16)
+        .map_err(|error| invalid_state(format!("parse identity high word: {error}")))?;
+    let low = u64::from_str_radix(&value[16..], 16)
+        .map_err(|error| invalid_state(format!("parse identity low word: {error}")))?;
+    Ok(Id128V1::new(high, low))
+}
+
+fn id_bytes(value: Id128V1) -> [u8; 16] {
+    let mut bytes = [0_u8; 16];
+    bytes[..8].copy_from_slice(&value.high.to_ne_bytes());
+    bytes[8..].copy_from_slice(&value.low.to_ne_bytes());
+    bytes
+}
+
+fn required_map_bytes(host: &KernelHost, map: &str, key: &[u8], name: &str) -> Result<Vec<u8>> {
+    host.lookup_map(map, key)
+        .context(InterceptorSnafu)?
+        .ok_or_else(|| invalid_state(format!("{name} is missing")))
+}
+
+fn optional_abi_map<T>(host: &KernelHost, map: &str, key: &[u8], name: &str) -> Result<Option<T>>
+where
+    T: KnownLayout + TryFromBytes,
+{
+    host.lookup_map(map, key)
+        .context(InterceptorSnafu)?
+        .map(|bytes| {
+            T::try_read_from_bytes(&bytes)
+                .map_err(|error| invalid_state(format!("{name} has an invalid value: {error}")))
+        })
+        .transpose()
+}
+
+fn required_abi_map<T>(host: &KernelHost, map: &str, key: &[u8], name: &str) -> Result<T>
+where
+    T: KnownLayout + TryFromBytes,
+{
+    optional_abi_map(host, map, key, name)?
+        .ok_or_else(|| invalid_state(format!("{name} is missing")))
+}
+
+fn read_marker_pid(path: &Path) -> Result<Option<u32>> {
+    let text = match fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(source) if source.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(source) => return Err(source).context(IoSnafu { path }),
+    };
+    let pid = text.trim().parse::<u32>().map_err(|error| {
+        invalid_state(format!(
+            "PID marker `{}` has an invalid value: {error}",
+            path.display()
+        ))
+    })?;
+    ensure!(
+        pid > 0,
+        InvalidInputSnafu {
+            path,
+            reason: "PID marker contains PID zero",
+        }
+    );
+    Ok(Some(pid))
+}
+
+fn host_thread_for_namespace_tid(host_tgid: u32, namespace_tid: u32) -> Result<Option<u32>> {
+    let task_path = PathBuf::from(format!("/proc/{host_tgid}/task"));
+    let entries = match fs::read_dir(&task_path) {
+        Ok(entries) => entries,
+        Err(source) if source.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(source) => return Err(source).context(IoSnafu { path: &task_path }),
+    };
+    for entry in entries {
+        let entry = entry.context(IoSnafu { path: &task_path })?;
+        let Some(host_tid) = entry
+            .file_name()
+            .to_str()
+            .and_then(|value| value.parse::<u32>().ok())
+        else {
+            continue;
+        };
+        if host_tid != host_tgid && pid_in_own_namespace(host_tid)? == namespace_tid {
+            return Ok(Some(host_tid));
+        }
+    }
+    Ok(None)
+}
+
 fn invalid_state(reason: impl Into<String>) -> crate::Error {
     InvalidInputSnafu {
         path: Path::new("live identity state"),
@@ -6680,7 +7722,9 @@ fn invalid_state(reason: impl Into<String>) -> crate::Error {
 #[cfg(test)]
 mod tests {
     use std::fs;
+    use std::os::unix::process::ExitStatusExt as _;
     use std::path::PathBuf;
+    use std::process::Command;
 
     use super::{
         IdentityTestRunner, NativeProcessFixture, IDENTITY_FIXTURES, REQUIRED_IDENTITY_MAPS,
@@ -6719,6 +7763,43 @@ mod tests {
                     super::invalid_state(format!("read {}: {error}", comm_path.display()))
                 })
         })?;
+        Ok(())
+    }
+
+    #[test]
+    fn post_ponr_fixture_terminates_the_exec_process() -> crate::Result<()> {
+        let runner = IdentityTestRunner::new(".");
+        let temporary = tempfile::tempdir().map_err(|error| {
+            super::invalid_state(format!("create post-PONR test directory: {error}"))
+        })?;
+        let executable = temporary.path().join("post-ponr-execfail");
+        runner.materialize_post_ponr_execfail(&executable)?;
+        let status = Command::new(&executable)
+            .status()
+            .map_err(|error| super::invalid_state(format!("execute post-PONR fixture: {error}")))?;
+        assert!(!status.success());
+        assert!(status.signal().is_some());
+        Ok(())
+    }
+
+    #[test]
+    fn leader_first_fixture_keeps_the_worker_until_release() -> crate::Result<()> {
+        let temporary = tempfile::tempdir().map_err(|error| {
+            super::invalid_state(format!("create leader-first test directory: {error}"))
+        })?;
+        let ready = temporary.path().join("ready");
+        let release = temporary.path().join("release");
+        let mut fixture = NativeProcessFixture::start_with_leader_first_exit(&ready, &release)?;
+        fixture.release_root()?;
+        let runner = IdentityTestRunner::new(".");
+        let tid = runner.wait_for("leader-first unit worker", &ready, || {
+            fixture.reported_tid(&ready)
+        })?;
+        assert_ne!(tid, fixture.outer_pid());
+        fs::write(&release, b"release\n").map_err(|error| {
+            super::invalid_state(format!("release leader-first unit worker: {error}"))
+        })?;
+        fixture.wait_for_successful_exit()?;
         Ok(())
     }
 

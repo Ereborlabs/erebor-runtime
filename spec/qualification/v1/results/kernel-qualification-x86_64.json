@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "architecture_revision_sha256": "31e2ab2590a6781db6e1bf61c0147090d790f201756d08c87753981b79ebfe37",
+  "architecture_revision_sha256": "22678b9c0379ff915fe595059f3da2789c3e32cdf54d61656c7257175263d14a",
   "platform_architecture": "x86_64",
   "kernel_release": "6.8.0-137-generic",
   "active_lsm_order": "lockdown,capability,landlock,yama,apparmor,bpf",
@@ -8,8 +8,8 @@
   "abi_header_sha256": "6311588645a81b338c45cea0482f6054c24a21c457aa4c7a545687b15c47181d",
   "bpf_source_sha256": "6447fb9501f1f7b05f634b549b9c89a6483b50d8055548fafa1df59664677586",
   "bpf_object_sha256": "4d56e05b36bb310af66c7ec553aa13fa4b29d4839096a7dd0e5708edddaa1eac",
-  "physical_probe_artifact_sha256": "55de1265c848914613efb6abcccacf34ad509a43cdcb8383ba03a7e672d6e58e",
-  "physical_evidence_sha256": "e8e0e3d41bcb62926987f399bfbd985d932c093cb60484f3dd61eb68967e68ac",
+  "physical_probe_artifact_sha256": "05ae39fb79fa005e6709defdb61b110cd9262da7de26e29f9d7db6fcd80e49d3",
+  "physical_evidence_sha256": "c4d9bf8bce22604aec949e67fec80299538969894c8e9ed48869230bbc5fdb76",
   "lsm_program_count": 41,
   "map_count": 3,
   "file_open_allow_deny_allow": true,

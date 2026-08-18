@@ -59,6 +59,20 @@ grandchild, which then executes `sleep`. The command checks the immutable
 creator, the adopted real-parent coordinates, and the inherited restricted
 role. It removes the host processes, Pod, and fixture directory at exit.
 
+Run this namespace PID-reuse case from the same root shell:
+
+```sh
+examples/mithril-identity-manual/native-pid-reuse.sh
+```
+
+The command creates one Pod binding and one held PID namespace. It moves the
+namespace init into the Pod cgroup before it creates either test process. It
+then creates two processes in sequence with namespace PID `2`. Mithril must
+give them different task, process, and execution identities. Both processes
+must keep the exact configured creator and restricted role. The command
+removes the processes, Pod, node process, pin root, lease, state, and fixture
+directory at exit.
+
 Run this live-binding-gap case from the same root shell:
 
 ```sh
@@ -157,6 +171,7 @@ Then run only the case being checked:
 | Concurrent Python thread exec | `sudo examples/mithril-identity-manual/native-child.sh --concurrent-thread-exec` in the manual VM |
 | Subreaper native reparenting | `sudo examples/mithril-identity-manual/native-child.sh --subreaper` in the manual VM |
 | PID-namespace-init reparenting | `sudo examples/mithril-identity-manual/native-child.sh --namespace-init` in the manual VM |
+| Namespace PID reuse | `sudo examples/mithril-identity-manual/native-pid-reuse.sh` in the manual VM |
 | Live binding gap | `sudo examples/mithril-identity-manual/binding-gap.sh` in the manual VM |
 | Concurrent external roots | `sudo examples/mithril-identity-manual/external-ambiguity.sh` in the manual VM |
 | Cgroup escape | `sudo examples/mithril-identity-manual/cgroup-escape.sh` in the manual VM |
