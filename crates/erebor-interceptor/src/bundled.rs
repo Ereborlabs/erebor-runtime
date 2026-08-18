@@ -684,11 +684,11 @@ mod tests {
                 })
                 .count();
 
-            // The hook reads the trusted current creator, can install that creator
-            // as an external root, and installs the trusted task_alloc child. It
-            // also preallocates the child's fail-closed io_uring execution state.
+            // The hook reads the trusted current creator, claims and installs that
+            // creator as an external root, and installs the trusted task_alloc
+            // child. It also preallocates the child's fail-closed io_uring state.
             // It never derives a task pointer from a scalar identifier.
-            assert_eq!(calls, 6);
+            assert_eq!(calls, 7);
         }
         assert!(found);
         Ok(())
