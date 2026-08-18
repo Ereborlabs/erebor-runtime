@@ -59,6 +59,7 @@ pub(super) const DEVICE_PTMX_OBJECT_KEY_ID: u64 = 13;
 pub(super) const DEVICE_ZERO_OBJECT_KEY_ID: u64 = 14;
 pub(super) const PROPAGATION_BENIGN_OBJECT_KEY_ID: u64 = 15;
 const QUALIFIED_TIOCGPTN_IOCTL: u32 = 2_147_767_344;
+const QUALIFIED_TIOCGPTPEER_IOCTL: u32 = 0x5441;
 const BOUNDED_EXCEPTION_INSTANCE_ID: Id128V1 =
     Id128V1::new(0x8888_8888_8888_4888, 0x8888_8888_8888_8889);
 const EXPIRED_EXCEPTION_INSTANCE_ID: Id128V1 =
@@ -192,6 +193,8 @@ pub struct EffectPhysicalProbeBundleV1 {
     pub process_signal_unmatched_denied: bool,
     pub namespace_privilege_hard_closed: bool,
     pub ptmx_ioctl_exact_allowed: bool,
+    pub ptmx_derived_peer_hard_closed: bool,
+    pub ptmx_derived_peer_installed_nothing: bool,
     pub zero_device_ioctl_exact_denied: bool,
     pub bpf_hard_closed: bool,
     pub managed_link_pin_unlink_denied: bool,
@@ -2590,6 +2593,33 @@ impl EffectTestRunner {
                 DEVICE_PTMX_OBJECT_KEY_ID,
                 Some(QUALIFIED_TIOCGPTN_IOCTL),
             )?;
+            let descriptors_before = process_descriptor_set(fixture.pid())?;
+            let derived_peer_marker = require_hard_close(
+                &mut fixture,
+                &reader,
+                &observations,
+                HardClosedOperation::IoctlDerivedPeer,
+                "UNSUPPORTED_OBJECT",
+                (KernelEffectFamilyV1::Device, KernelEffectOperationV1::Ioctl),
+                "PTMX derived-peer acquisition",
+            )?;
+            let descriptors_after = process_descriptor_set(fixture.pid())?;
+            ensure!(
+                descriptors_after == descriptors_before,
+                InvalidInputSnafu {
+                    path: Path::new("/dev/pts/ptmx"),
+                    reason: "denied PTMX derived-peer acquisition installed a descriptor",
+                }
+            );
+            wait_for_exact_effect(
+                &reader,
+                &observations,
+                derived_peer_marker,
+                "UNSUPPORTED_OBJECT",
+                (KernelEffectFamilyV1::Device, KernelEffectOperationV1::Ioctl),
+                DEVICE_PTMX_OBJECT_KEY_ID,
+                Some(QUALIFIED_TIOCGPTPEER_IOCTL),
+            )?;
             let device_deny_marker = require_hard_close(
                 &mut fixture,
                 &reader,
@@ -3547,6 +3577,8 @@ impl EffectTestRunner {
             process_signal_unmatched_denied: protect,
             namespace_privilege_hard_closed: true,
             ptmx_ioctl_exact_allowed: protect,
+            ptmx_derived_peer_hard_closed: protect,
+            ptmx_derived_peer_installed_nothing: protect,
             zero_device_ioctl_exact_denied: protect,
             bpf_hard_closed: true,
             managed_link_pin_unlink_denied: true,
