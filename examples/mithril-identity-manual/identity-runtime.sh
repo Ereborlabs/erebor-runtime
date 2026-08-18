@@ -182,6 +182,7 @@ identity_prepare_docker() {
          workload_selector_id: "worker",
          profile_id: "33333333-3333-4333-8333-333333333333",
          container_id: $id,
+         namespace: "docker-manual",
          pod_uid: "docker-manual",
          sandbox_id: $id,
          container_name: $name,

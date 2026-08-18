@@ -149,6 +149,10 @@ supplied container and cgroup intact.
 cargo build -p mithril-node --bins -p mithril-control --bin mithril-policy
 examples/mithril-effect-observation-manual/compile-observe-policy.sh
 
+# Required for each Docker case. Bind these two paths before the case.
+export MITHRIL_MANUAL_DOCKER_HOST_SHARED_DIRECTORY=/var/tmp/mithril-effect-run
+export MITHRIL_MANUAL_DOCKER_CONTAINER_SHARED_DIRECTORY=/var/lib/mithril-effect-run
+
 sudo examples/mithril-effect-observation-manual/docker-file-observe.sh \
   <identity-node.json> <container> <secret-path>
 sudo examples/mithril-effect-observation-manual/cri-file-observe.sh \
