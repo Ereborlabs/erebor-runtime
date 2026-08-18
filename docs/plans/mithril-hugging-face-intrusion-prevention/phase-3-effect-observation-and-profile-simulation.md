@@ -9,6 +9,7 @@ Master: [Mithril Hugging Face Intrusion Prevention](./README.md)
 Design: [Validated readable architecture](./policy-and-protection-algorithm-architecture-readable.md)
 Manual acceptance: [Phase 3 runbook](./manual-testing/phase-3-manual-acceptance.md)  
 Closure matrix: [Phase 3 closure matrix](./phase-3-closure-matrix.md)
+Implementation review: [Phase 3 implementation review guide](./phase-3-implementation-review.md)
 Environment setup: [shared setup guide](./manual-testing/environment-setup.md)
 
 ## Purpose

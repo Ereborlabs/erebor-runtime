@@ -3,6 +3,7 @@
 Phase: [Effect Observation And Profile Simulation](./phase-3-effect-observation-and-profile-simulation.md)  
 Architecture: [validated readable architecture](./policy-and-protection-algorithm-architecture-readable.md)  
 Manual acceptance: [Phase 3 runbook](./manual-testing/phase-3-manual-acceptance.md)
+Implementation review: [Phase 3 implementation review guide](./phase-3-implementation-review.md)
 
 ## Closure Decision
 
