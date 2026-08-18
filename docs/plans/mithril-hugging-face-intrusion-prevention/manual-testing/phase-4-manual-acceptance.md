@@ -233,7 +233,7 @@ file mappings, exact mount views, restricted io_uring, inherited and exact
 Unix-stream relationships, process-control relationships, event saturation,
 mount CAS, and mount
 snapshots. The [closure matrix](../phase-4-closure-matrix.md) names the exact
-12 Appendix C rows and their limits. The record also has:
+13 Appendix C rows and their limits. The record also has:
 
 - `new_roots_generation_published_atomically=true`,
   `existing_tasks_retained_old_generation=true`, and
@@ -254,10 +254,17 @@ identity probe with `profile_task_refs_after_exit=0`. The identity JSON
 SHA-256 is
 `fff4e3f494751c01b8e75c83e1515bbb16ce143ea4c93ac7e2e79c7c4dc66c99`.
 
-This result does not qualify the 16 implementation-open rows in the closure
+The retained guest ran the derived-device slice at implementation commit
+`e6da7a2`. The result is `/tmp/mithril-phase4-device-derived.json`, with
+SHA-256
+`1d10974f2bc42c62e645b6d3fa07605912f5f72165b448dff955edffb053a7a3`.
+It records the exact allowed PTMX control, the hard-closed descriptor-producing
+operation, no installed descriptor, and complete cleanup. This tier does not
+advertise granular authority after a derived object is minted.
+
+This result does not qualify the 15 implementation-open rows in the closure
 matrix. It does not qualify projected-token rotation, immutable content and
-VMA provenance, complete derived authority, complete self-protection, or
-administrative exec.
+VMA provenance, complete self-protection, or administrative exec.
 
 ## Procedure
 

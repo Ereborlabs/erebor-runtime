@@ -7,7 +7,7 @@ Manual acceptance: [Phase 4 runbook](./manual-testing/phase-4-manual-acceptance.
 ## Closure Decision
 
 Phase 4 is `Not done` at implementation commit
-`5dd695e89868bdc8461c9db383b61b90029e07a3`. The reviewed architecture
+`e6da7a203a8b27b70ef09ad74c25f2cb792eafbc`. The reviewed architecture
 SHA-256 is
 `22678b9c0379ff915fe595059f3da2789c3e32cdf54d61656c7257175263d14a`.
 
@@ -26,7 +26,7 @@ The status terms in this matrix have these meanings:
 - `Implementation open`: one or more required authority, lifecycle, race, or
   control paths do not exist.
 
-Current count: 12 `Done`, zero `Proof open`, and 16 `Implementation open`
+Current count: 13 `Done`, zero `Proof open`, and 15 `Implementation open`
 for the 28 Appendix C fixtures. The additional plan-owned path-tree test is
 `Done`.
 
@@ -38,7 +38,7 @@ for the 28 Appendix C fixtures. The additional plan-owned path-tree test is
 | `D4.2` | The BPF exec and memory hooks enforce exact file-backed exec variants and represented executable mappings. Unsupported anonymous, memfd, and pkey paths fail closed. | Partial | Add complete immutable image, content-race, script, interpreter, `binfmt_misc`, loader, pkey, and VMA provenance. Run the protected concurrent-exec race. |
 | `D4.3` | Exact file rows, represented aliases, passed-descriptor acquisition and use, recursive path-tree denial, global mount invalidation, propagation-peer invalidation, and exact reconciliation exist. | Partial | Add projected-token rotation, overlay copy-up, persistent file and VMA state, positive create parent-and-name authority, and the remaining local acquisition provenance. Qualify the complete mount race matrix. |
 | `D4.4` | Exact Unix-stream relationships and exact process-control target rows exist. The runner has positive, inherited-endpoint, stale-peer, unmatched-peer, and denial controls. | Partial | Add listener transfer, socket activation, datagram, pipe, shared-memory, zero-copy, and remaining asynchronous lifetime models. |
-| `D4.5` | Exact device ioctl and process-control rows exist. Represented namespace, BPF, and managed-pin operations fail closed. | Partial | Add derived-device, capability, credential, namespace, process-vm, pidfd, perf, module, keyring, and complete local self-protection authority. |
+| `D4.5` | Exact device ioctl and process-control rows exist. A descriptor-producing PTMX operation fails closed before it installs the derived descriptor. Represented namespace, BPF, and managed-pin operations also fail closed. | Partial | Add capability, credential, namespace, process-vm, pidfd, perf, module, keyring, and complete local self-protection authority. Do not advertise granular post-mint derived-object authority without a qualified label hook. |
 | `D4.6` | Signed bounded exceptions use exact matching entries, atomic consumption, receipts, and a restart-safe WAL. The administrative path reaches Control, admission, and slot arm. | Partial | Model stock-runc bootstrap without a broad exception. Then prove one exact winner plus replay, expiry, mismatch, disconnect, and contention denials. |
 | `D4.7` | The node reports `LANDLOCK_TARGET_CONTEXT_FLOOR=ABSENT` with reason `NO_QUALIFIED_TARGET_CONTEXT_INSTALL`. | Done as `ABSENT` | No Landlock work is a release gate for this platform result. |
 | `D4.8` | [`EffectTestRunner`](../../../crates/mithril-e2e/src/effect.rs) records a static branch classification and represented local denials. | Partial | Add one physical first-effect negative oracle and one legitimate control for every branch that claims local prevention. Do not convert in-memory, remote, or unsupported branches into prevention claims. |
@@ -48,7 +48,7 @@ for the 28 Appendix C fixtures. The additional plan-owned path-tree test is
 | Fixture | Current source and proof | Exact remaining work | Status |
 | --- | --- | --- | --- |
 | `ADMIN-EXEC-APPROVAL-001` | The Control, admission, signed node authorization, and exact one-use slot owners exist. The current VM lane reaches slot arm. | Stock runc fails closed in its unmodeled sealed self-clone and bootstrap channels before the target exec. Add a narrow typed bootstrap protocol and run the winner, non-winner, replay, expiry, mismatch, disconnect, and contention matrix. | Implementation open |
-| `DEVICE-DERIVED-001` | The runner allows one exact `ptmx` ioctl and denies one exact `/dev/zero` ioctl. | Track the acquired device instance and derived descriptors or authority objects across use, pass, close, and reuse. Add a positive derived-object control. | Implementation open |
+| `DEVICE-DERIVED-001` | The runner allows exact PTMX `TIOCGPTN`, denies exact `/dev/zero` use, and hard-closes PTMX `TIOCGPTPEER` before the descriptor-producing ioctl installs a slave descriptor. The observation retains the exact PTMX object and command. | The qualified tier denies derived-object minting as a whole. It does not advertise granular post-mint derived-object authority. The current physical record has both derived-peer fields true and retains the harmless PTMX control. | Done |
 | `EXEC-CONCURRENT-002` | The identity runner proves normal Linux two-thread exec behavior only. | Race real source-role and target-role transitions against a protected exec. Prove one complete state and no forbidden effect from a loser or child. | Implementation open |
 | `FILE-CONTENT-RACE-002` | Exact inode, inode-generation, mount-view, and path restrictions exist. | Add immutable approved-content provenance. Race mutation or replacement between classification and use, reject stale authority, and retain one immutable positive control. | Implementation open |
 | `FILE-FD-PASS-001` | The effect runner checks protected and benign descriptor receipt, acquisition, and later read. | The current-source physical record has `passed_fd_read_denied=true`, `passed_fd_acquisition_denied=true`, `passed_fd_acquisition_installed_nothing=true`, and all three benign acquisition and read controls true. | Done |
@@ -107,6 +107,14 @@ cleanup records before it returned success. The record has 10,000 measured
 opens and 50,000 saturation opens. It also has `pin_root_removed=true`,
 `lease_removed=true`, `cgroup_removed=true`, and
 `fixture_root_removed=true`.
+
+The derived-device slice passed in the retained guest at implementation
+commit `e6da7a2`. Its JSON is `/tmp/mithril-phase4-device-derived.json`, and its
+SHA-256 is
+`1d10974f2bc42c62e645b6d3fa07605912f5f72165b448dff955edffb053a7a3`.
+It has `ptmx_ioctl_exact_allowed=true`,
+`ptmx_derived_peer_hard_closed=true`,
+`ptmx_derived_peer_installed_nothing=true`, and all four cleanup fields true.
 
 The identity source now serializes external-root label publication against a
 concurrent exit. The physical fixture also uses explicit process barriers for
