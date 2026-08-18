@@ -38,29 +38,30 @@ observation_prepare_cri() {
   }
   identity_prepare_cri "$1" "$2"
   observation_configure_secret "$3"
-  observation_configure_cri_shared_directory "$4" "$5"
+  observation_configure_shared_directory cri "$4" "$5"
 }
 
 observation_prepare_k3s() {
   identity_prepare_k3s_case "$1"
   observation_configure_secret "$identity_k3s_secret_path"
-  observation_configure_cri_shared_directory \
+  observation_configure_shared_directory cri \
     "$identity_k3s_shared_directory" "$identity_k3s_container_shared_directory"
 }
 
-observation_configure_cri_shared_directory() {
-  [[ $# -eq 2 ]] || {
-    echo "CRI observation needs a host and container shared directory" >&2
+observation_configure_shared_directory() {
+  [[ $# -eq 3 ]] || {
+    echo "observation needs a runtime and host/container shared directories" >&2
     return 2
   }
-  local host_shared_directory=$1
-  local container_shared_directory=$2
+  local runtime=$1
+  local host_shared_directory=$2
+  local container_shared_directory=$3
   [[ -d $host_shared_directory && -w $host_shared_directory ]] || {
-    echo "the CRI host shared directory must exist and be writable" >&2
+    echo "the host shared directory must exist and be writable" >&2
     return 2
   }
   [[ $container_shared_directory == /* ]] || {
-    echo "the CRI container shared directory must be absolute" >&2
+    echo "the container shared directory must be absolute" >&2
     return 2
   }
 
@@ -76,12 +77,25 @@ observation_configure_cri_shared_directory() {
 
   umask 077
   printf '%s\n' "$marker" >"$observation_probe_marker_host"
-  if ! crictl --runtime-endpoint "$identity_runtime_endpoint" \
-    exec "$identity_container_id" sh -ec '
+  if [[ $runtime == docker ]]; then
+    docker exec "$identity_container" sh -ec '
       IFS= read -r observed < "$1"
       [ "$observed" = "$2" ]
-    ' sh "$container_marker" "$marker"; then
-    echo "the CRI shared directory is not mounted at the requested container path" >&2
+    ' sh "$container_marker" "$marker" || {
+      echo "the Docker shared directory is not mounted at the requested container path" >&2
+      return 1
+    }
+  elif [[ $runtime == cri ]]; then
+    crictl --runtime-endpoint "$identity_runtime_endpoint" \
+      exec "$identity_container_id" sh -ec '
+        IFS= read -r observed < "$1"
+        [ "$observed" = "$2" ]
+      ' sh "$container_marker" "$marker" || {
+      echo "the CRI shared directory is not mounted at the requested container path" >&2
+      return 1
+    }
+  else
+    echo "unsupported shared-directory runtime: $runtime" >&2
     return 1
   fi
   rm -f -- "$observation_probe_marker_host"
@@ -190,6 +204,16 @@ observation_configure_secret() {
     "$observation_final_config" >"$observation_identity_config"
   cp -- "$observation_final_config" "$identity_config"
   identity_cleanup_functions+=(observation_cleanup_probe_files)
+  if [[ $identity_mode == docker ]]; then
+    local docker_host_shared=${MITHRIL_MANUAL_DOCKER_HOST_SHARED_DIRECTORY:-}
+    local docker_container_shared=${MITHRIL_MANUAL_DOCKER_CONTAINER_SHARED_DIRECTORY:-}
+    [[ -n $docker_host_shared && -n $docker_container_shared ]] || {
+      echo "Docker observation needs MITHRIL_MANUAL_DOCKER_HOST_SHARED_DIRECTORY and MITHRIL_MANUAL_DOCKER_CONTAINER_SHARED_DIRECTORY" >&2
+      exit 2
+    }
+    observation_configure_shared_directory docker \
+      "$docker_host_shared" "$docker_container_shared"
+  fi
 }
 
 # Start the probe while effect observation is disabled, then recover the same

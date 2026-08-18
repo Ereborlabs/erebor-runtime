@@ -9,16 +9,22 @@ source "$directory/observation-runtime.sh"
 }
 
 identity_prepare_docker "$1" "$2"
-observation_hardlink_directory=/tmp/mithril-effect-observation-hardlink-$$
+observation_hardlink_shared=${MITHRIL_MANUAL_DOCKER_CONTAINER_SHARED_DIRECTORY:-}
+[[ $observation_hardlink_shared == /* ]] || {
+  echo "MITHRIL_MANUAL_DOCKER_CONTAINER_SHARED_DIRECTORY must be absolute" >&2
+  exit 2
+}
+observation_hardlink_directory=$observation_hardlink_shared/mithril-effect-observation-hardlink-$$
+observation_hardlink_host_directory=${MITHRIL_MANUAL_DOCKER_HOST_SHARED_DIRECTORY:?}/mithril-effect-observation-hardlink-$$
 observation_hardlink_original=$observation_hardlink_directory/original
 observation_hardlink_alias=$observation_hardlink_directory/alias
 docker exec "$2" sh -c 'mkdir -p "$1"; printf "secret\n" >"$2"; ln "$2" "$3"' \
   sh "$observation_hardlink_directory" "$observation_hardlink_original" "$observation_hardlink_alias"
 
 observation_cleanup_hardlink() {
-  rm -f -- "/proc/$identity_init_pid/root$observation_hardlink_alias" \
-    "/proc/$identity_init_pid/root$observation_hardlink_original"
-  rmdir -- "/proc/$identity_init_pid/root$observation_hardlink_directory" 2>/dev/null || true
+  rm -f -- "$observation_hardlink_host_directory/alias" \
+    "$observation_hardlink_host_directory/original"
+  rmdir -- "$observation_hardlink_host_directory"
 }
 identity_cleanup_functions+=(observation_cleanup_hardlink)
 observation_configure_secret "$observation_hardlink_original"

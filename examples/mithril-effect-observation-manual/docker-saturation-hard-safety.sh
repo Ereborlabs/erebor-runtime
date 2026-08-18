@@ -39,20 +39,29 @@ finally:
     probe.close()
 ' "$observation_probe_ready" "$3" "$observation_opens"
 
-# The kernel must decide independently of userspace ring consumption.
 kill -STOP "$identity_node_pid"
 observation_release_probe
 kill -CONT "$identity_node_pid"
 
 for ((attempt = 0; attempt < 100; attempt++)); do
-  "$identity_inspect" effects --socket-path "$observation_socket" \
-    --cgroup-scope "$observation_scope" >"$identity_work/effects.txt"
+  if ! "$identity_inspect" effects --socket-path "$observation_socket" \
+    --cgroup-scope "$observation_scope" >"$identity_work/effects.txt" \
+    2>"$identity_work/effects-error.txt"; then
+    kill -0 "$identity_node_pid" 2>/dev/null || {
+      cat "$identity_work/effects-error.txt" >&2
+      echo "mithril-node exited after the observation reader resumed" >&2
+      exit 1
+    }
+    sleep 0.1
+    continue
+  fi
   observation_lost=$(observation_health_field lost "$identity_work/effects.txt")
   [[ -n $observation_lost && $observation_lost -gt 0 ]] && break
   sleep 0.1
 done
 [[ -n ${observation_lost:-} && $observation_lost -gt 0 ]] || {
   cat "$identity_work/effects.txt" >&2
+  cat "$identity_work/effects-error.txt" >&2
   echo "the observation ring did not report saturation loss" >&2
   exit 1
 }

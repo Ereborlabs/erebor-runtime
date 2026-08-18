@@ -9,12 +9,14 @@ source "$directory/observation-runtime.sh"
 }
 
 observation_prepare_docker "$1" "$2" "$3"
-observation_mount_target=/tmp/mithril-effect-observation-mount-target-$$
-mkdir -- "/proc/$identity_init_pid/root$observation_mount_target"
+observation_mount_target_name=mithril-effect-observation-mount-target-$$
+observation_mount_target=${MITHRIL_MANUAL_DOCKER_CONTAINER_SHARED_DIRECTORY:?}/$observation_mount_target_name
+observation_mount_target_host=${MITHRIL_MANUAL_DOCKER_HOST_SHARED_DIRECTORY:?}/$observation_mount_target_name
+mkdir -- "$observation_mount_target_host"
 observation_cleanup_mount_target() {
   nsenter -t "$identity_init_pid" -m -r -- \
     umount -- "$observation_mount_target" 2>/dev/null || true
-  rmdir -- "/proc/$identity_init_pid/root$observation_mount_target"
+  rmdir -- "$observation_mount_target_host"
 }
 identity_cleanup_functions+=(observation_cleanup_mount_target)
 

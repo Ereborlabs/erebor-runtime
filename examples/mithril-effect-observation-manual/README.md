@@ -39,6 +39,21 @@ Outside the manual VM, build once:
 cargo build -p mithril-node --bins -p mithril-control --bin mithril-policy
 ```
 
+Before a Docker case, bind one run-scoped writable host directory into the
+target container. Set both paths for the case:
+
+```sh
+export MITHRIL_MANUAL_DOCKER_HOST_SHARED_DIRECTORY=/var/tmp/mithril-effect-run
+export MITHRIL_MANUAL_DOCKER_CONTAINER_SHARED_DIRECTORY=/var/lib/mithril-effect-run
+```
+
+The helper verifies the exact mapping before it starts Mithril. It uses the
+directory for the ready and release files. The hard-link case also creates its
+exact-generation fixture there because a container overlay can omit
+`FS_IOC_GETVERSION`. The mount-attack case creates and removes its mount target
+there through the host-side path. Other protected files can be at another
+path. Remove the empty run-scoped directory after the case.
+
 For the automated privileged host oracle, build and run the self-cleaning Rust
 probe instead:
 
