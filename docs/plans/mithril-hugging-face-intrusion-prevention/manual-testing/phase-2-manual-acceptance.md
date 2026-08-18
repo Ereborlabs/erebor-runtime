@@ -1519,8 +1519,55 @@ second run found that a retryable CRI outage terminated active bindings. Both
 runs removed their Namespace, fixture, pin, lease, cgroup, node process, and
 work directory.
 
-This closes `ENTRY-RESTART-001`. `ENTRY-REUSE-001` and
-`ENTRY-STOCK-HOOK-FAILURE-002` remain open. Phase 2 remains **Blocked**.
+This closes `ENTRY-RESTART-001`. At this result point, `ENTRY-REUSE-001` and
+`ENTRY-STOCK-HOOK-FAILURE-002` remained open. The next record closes the reuse
+row.
+
+## Recorded Identity Lifetime Reuse VM Results — 2026-08-18
+
+The retained VM ran these operator cases as root from the same source that
+produced the automated artifacts:
+
+```sh
+examples/mithril-identity-manual/native-pid-reuse.sh
+examples/mithril-identity-manual/native-cgroup-reuse.sh
+examples/mithril-identity-manual/kubernetes-reuse.sh
+```
+
+Each shell printed `PASS`. The native schema-27 JSON is
+`/tmp/mithril-phase2-entry-reuse-native-20260818-28.json`; its SHA-256 is
+`a456f1f1640ea4c64d9ad09d48c8fcceec539060dfd5b3d72ef2d86778377a`.
+The Kubernetes schema-27 JSON is
+`/tmp/mithril-phase2-entry-reuse-kubernetes-20260818-29.json`; its SHA-256 is
+`ec2e87cede2e019132abe34c412015a251c6d72b85e2af51885c471936e6209c`.
+
+The native result reused namespace PID `2` and namespace TID `3` with fresh
+task, process, and execution identities. It removed and recreated
+`/sys/fs/cgroup/mithril-phase2-entry-reuse-native-20260818-28`. The kernel
+cgroup ID changed from `46662` to `46741`. The binding nonce changed from
+`605d522715b446c2b1154468e0241847` to
+`1cd70d410d72469090b72294c3fe3f37`. The live interval changed from
+`09239bc1faf650aea03023057c19119e` to
+`07288220adcd94dae6dfc11af410968a`.
+
+The Kubernetes result reused the same Namespace, Pod, and container names.
+The Pod UID changed from `30b8929e-c2c1-411a-a126-f501cbd9f768` to
+`86d7f7a6-3047-4655-8e22-df8b5a28ca7f`. The full container ID changed from
+`d2edd389154edc35b636b0728e7cd88021bc79c0bfe118289f484d0095094fbc` to
+`8a7aba93c7f58c39f7d45c760130d8ea8df3209cc92151d42716acc1ac303fca`.
+The kernel cgroup ID changed from `50040` to `50277`. The binding nonce, live
+interval, sandbox ID, cgroup path, task identity, process identity, and
+execution identity also changed.
+
+The exact limit is that the cgroup allocator returned a new kernel ID. The
+production recovery check rejects a repeated kernel cgroup ID with a changed
+live interval, but an operator cannot safely force Linux to make that
+collision. This record does not claim a policy-effect or response result.
+
+Automated and manual cleanup removed every case Namespace, fixture, Mithril
+pin, node process, lease, cgroup, and work directory. The Kubernetes service
+was active after cleanup. This closes `ENTRY-REUSE-001`.
+`ENTRY-STOCK-HOOK-FAILURE-002` remains open, so Phase 2 remains **Blocked**.
 
 ## Native Identity Fixture Matrix
 

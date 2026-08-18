@@ -4,14 +4,14 @@ This guide explains the current implementation. It uses source links so that a
 reviewer can follow each owner, state transition, and BPF decision. It does not
 replace an acceptance record.
 
-Source reviewed: code commit `838fc8f800902c0d6bfcc77a025fbc66c5261b44`
+Source reviewed: code commit `adafcddb9e50aca6637cd92b276e7742246b1693`
 plus the current documentation changes on `mithril-phase-2-4`. The production
 identity object loaded by the 2026-08-18 VM has SHA-256
 `02408c371aafaeeb044cbf11195a25dca35013bcdea44e37aa0756ebd2f2f3e6`.
 The checked kernel-qualification object has SHA-256
 `4d56e05b36bb310af66c7ec553aa13fa4b29d4839096a7dd0e5708edddaa1eac`.
 The current architecture digest is
-`22678b9c0379ff915fe595059f3da2789c3e32cdf54d61656c7257175263d14a`.
+`a0f2e81b4e4d30ddc8e7986df84376a2aed57ce329f662de5af5ab0ccbac2965`.
 
 The source contains one production BPF object, native task identity, signed
 local policy rows, exact file decisions, typed device and process decisions,
@@ -33,8 +33,7 @@ The latest phase results remain:
   Kubernetes exec, copy, identical native-child, lifecycle-sleep, network-
   probe, container-identity, authorization-replay, entry-loss, and restart rows
   have current source and privileged VM evidence. Operator-runnable rows also
-  have manual evidence. `ENTRY-REUSE-001` and
-  `ENTRY-STOCK-HOOK-FAILURE-002` remain open.
+  have manual evidence. `ENTRY-STOCK-HOOK-FAILURE-002` remains open.
   Phase 4 owns saturation, raced-policy, IPC-policy, and protected-effect
   results.
 - Phase 3: **Blocked**. Exact observation has current privileged VM and K3s
@@ -1367,8 +1366,8 @@ kernel. The existing task-coordinate map supplies its exact identity.
 
 This result closes `EXEC-COMMIT-STATE-001`, `ID-CREATOR-PARENT-007`,
 `ID-TASK-COORD-FINALIZE-006`, and `NATIVE-STATE-REF-LIFETIME-001`. It adds no
-map, role, runner, or durable type. Full cgroup, namespace, Pod, and container
-lifetime reuse remains in `ENTRY-REUSE-001`.
+map, role, runner, or durable type. The later identity-lifetime review extends
+this control to cgroup, Pod, and container reuse.
 
 This guide is explanatory only. The authoritative scope and acceptance records
 remain the phase documents and the readable architecture:
@@ -3723,5 +3722,75 @@ directory. K3s was active. The full Rust CI script passed.
 
 This closes only `ENTRY-RESTART-001`. The K3s service owns its embedded
 kubelet and container runtime. The result does not qualify other service
-layouts, CRD delivery, or a protected effect decision. `ENTRY-REUSE-001` and
-`ENTRY-STOCK-HOOK-FAILURE-002` remain open.
+layouts, CRD delivery, or a protected effect decision. The following review
+closes `ENTRY-REUSE-001`; `ENTRY-STOCK-HOOK-FAILURE-002` remains open.
+
+## Identity Lifetime Reuse Fixture Review — 2026-08-18
+
+Source commit `adafcdd` extends existing owners only. It adds no map, role,
+generic runner, or durable type.
+
+Review this path in order:
+
+1. [`NativeProcessFixture::start_pid_tid_reuse`](../../../crates/mithril-e2e/src/identity.rs)
+   makes the existing PID-namespace fixture reuse namespace PID `2` and TID
+   `3` while `IdentityTestRunner` records fresh task, process, and execution
+   identities.
+2. [`IdentityTestRunner::physical_probe`](../../../crates/mithril-e2e/src/identity.rs)
+   records the first configured cgroup binding, removes the cgroup, recreates
+   the exact path, and publishes a second binding through the existing host.
+3. [`same_runtime_binding`](../../../crates/mithril-node/src/identity/inspection.rs)
+   accepts only equal root cgroup ID, binding nonce, and live interval. Its
+   source test rejects a repeated cgroup ID with a changed live interval.
+4. [`IdentityTestRunner::physical_kubernetes_resilience_probe`](../../../crates/mithril-e2e/src/identity.rs)
+   deletes one Pod, waits for its old cgroup to disappear, creates the same
+   names again, resolves the new full CRI identity, and binds the existing
+   predeclared assignment to that new runtime lifetime.
+5. [`native-cgroup-reuse.sh`](../../../examples/mithril-identity-manual/native-cgroup-reuse.sh)
+   and [`kubernetes-reuse.sh`](../../../examples/mithril-identity-manual/kubernetes-reuse.sh)
+   run the operator cases in an existing VM. `identity-runtime.sh` owns the
+   Kubernetes target, runtime binding, node, pin, lease, and cleanup.
+
+```mermaid
+sequenceDiagram
+    participant R as IdentityTestRunner
+    participant O as predeclared assignment
+    participant C1 as first runtime lifetime
+    participant C2 as recreated runtime lifetime
+    participant B as execution_set_bindings
+
+    R->>C1: resolve full live identity
+    O->>B: bind first actual lifetime
+    R->>C1: delete and wait for cgroup removal
+    R->>C2: create the same workload names
+    R->>C2: resolve new full live identity
+    O->>B: bind second actual lifetime
+    B-->>R: new cgroup ID, nonce, and live interval
+```
+
+The native schema-27 JSON SHA-256 is
+`a456f1f1640ea4c64d9ad09d48c8fcceec539060dfd5b3d72ef2d86778377a`.
+The exact cgroup path stayed equal. Its kernel cgroup ID changed from `46662`
+to `46741`; its binding nonce and live interval also changed. Namespace PID
+`2` and namespace TID `3` each received fresh identities.
+
+The Kubernetes schema-27 JSON SHA-256 is
+`ec2e87cede2e019132abe34c412015a251c6d72b85e2af51885c471936e6209c`.
+The Namespace, Pod, and container names stayed equal. The Pod UID, sandbox
+ID, full container ID, cgroup path, cgroup ID, binding nonce, live interval,
+task identity, process identity, and execution identity all changed.
+
+The retained VM ran `native-pid-reuse.sh`, `native-cgroup-reuse.sh`, and
+`kubernetes-reuse.sh` as root. Each case printed `PASS`. Automated and manual
+cleanup removed each Namespace, fixture, pin, node process, lease, cgroup, and
+work directory. The Kubernetes service was active. Focused Rust tests and the
+full Rust CI script passed.
+
+The physical cgroup case does not force a kernel cgroup-ID collision. Linux
+allocated a fresh ID when the exact path was recreated. The strict recovery
+oracle covers the collision shape in source because the allocator does not
+provide a safe deterministic collision control. This is identity evidence,
+not CRD delivery or a policy-effect decision.
+
+This closes only `ENTRY-REUSE-001`.
+`ENTRY-STOCK-HOOK-FAILURE-002` remains open.

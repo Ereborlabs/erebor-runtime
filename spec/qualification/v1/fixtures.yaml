@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "architecture_revision_sha256": "22678b9c0379ff915fe595059f3da2789c3e32cdf54d61656c7257175263d14a",
+  "architecture_revision_sha256": "a0f2e81b4e4d30ddc8e7986df84376a2aed57ce329f662de5af5ab0ccbac2965",
   "fixture_ids": [
     "ADMIN-EXEC-APPROVAL-001",
     "AUTHORIZATION-REPLAY-004",
