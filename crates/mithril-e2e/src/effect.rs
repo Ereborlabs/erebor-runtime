@@ -183,6 +183,7 @@ pub struct EffectPhysicalProbeBundleV1 {
     pub file_rename_hard_closed: bool,
     pub sysv_ipc_access_hard_closed: bool,
     pub unix_stream_relationship_allowed: bool,
+    pub inherited_unix_stream_send_denied: bool,
     pub unix_stream_stale_peer_denied: bool,
     pub unix_stream_unmatched_denied: bool,
     pub ptrace_hard_closed: bool,
@@ -2388,6 +2389,27 @@ impl EffectTestRunner {
                 }
             );
 
+            let inherited_stream_marker = observations.cursor();
+            ensure!(
+                fixture
+                    .run_prepared(HardClosedOperation::InheritedUnixStreamSend)?
+                    .denied(),
+                InvalidInputSnafu {
+                    path: Path::new("inherited Unix-stream endpoint"),
+                    reason: "a fork child borrowed its parent's exact Unix-stream endpoint",
+                }
+            );
+            wait_for_effect(
+                &reader,
+                &observations,
+                inherited_stream_marker,
+                "CORRUPT_IDENTITY_OR_GENERATION",
+                (
+                    KernelEffectFamilyV1::Ipc,
+                    KernelEffectOperationV1::IpcAccess,
+                ),
+            )?;
+
             let passed_secret_descriptors = process_descriptor_set(fixture.pid())?;
             let passed_secret_acquisition_marker = observations.cursor();
             let passed_secret_acquisition = fixture.receive_passed_secret()?;
@@ -3516,6 +3538,7 @@ impl EffectTestRunner {
             file_rename_hard_closed: true,
             sysv_ipc_access_hard_closed: true,
             unix_stream_relationship_allowed: protect,
+            inherited_unix_stream_send_denied: protect,
             unix_stream_stale_peer_denied: protect,
             unix_stream_unmatched_denied: protect,
             ptrace_hard_closed: true,

@@ -57,6 +57,18 @@ pub(super) fn wait_process(process: libc::pid_t) -> io::Result<()> {
     wait_child(process)
 }
 
+pub(super) fn forked_write_one(fd: RawFd, byte: u8) -> io::Result<()> {
+    fork_and_wait(|| {
+        // SAFETY: fd is live in the fork child and byte is retained for this call.
+        let written = unsafe { libc::write(fd, std::ptr::from_ref(&byte).cast(), 1) };
+        match written {
+            1 => 0,
+            value if value < 0 => last_errno(),
+            _ => libc::EIO,
+        }
+    })
+}
+
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
 struct IoSqringOffsets {

@@ -142,6 +142,7 @@ pub(super) enum PreparedOperation {
     IoctlUnsupported,
     Ipc,
     UnixStream,
+    InheritedUnixStreamSend,
     UnixStreamStalePeer,
     UnixStreamUnmatched,
     Ptrace,
@@ -1895,6 +1896,10 @@ impl PreparedOperations {
                 .unix_stream_target
                 .as_mut()
                 .map_or_else(missing_process_target, UnixStreamTarget::roundtrip),
+            PreparedOperation::InheritedUnixStreamSend => self
+                .unix_stream_target
+                .as_ref()
+                .map_or_else(missing_process_target, UnixStreamTarget::forked_send),
             PreparedOperation::UnixStreamStalePeer => self
                 .unix_stream_target
                 .as_mut()
@@ -2200,6 +2205,14 @@ impl UnixStreamTarget {
                 stream
                     .write_all(&[3])
                     .map_or_else(error_outcome, |()| allowed_outcome())
+            })
+    }
+
+    fn forked_send(&self) -> IoOutcome {
+        self.connected_stream
+            .as_ref()
+            .map_or_else(missing_process_target, |stream| {
+                io_outcome(fixture_syscalls::forked_write_one(stream.as_raw_fd(), 4))
             })
     }
 
