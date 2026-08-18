@@ -221,6 +221,11 @@ pub struct IdentityPhysicalProbeBundleV1 {
     pub kubernetes_probe_kubectl_exec_root: Option<NativeTaskSnapshotV1>,
     pub kubernetes_probe_direct_cri_exec_root: Option<NativeTaskSnapshotV1>,
     pub kubernetes_probe_identities_distinct: Option<bool>,
+    pub kubernetes_prestop_application_before: Option<NativeTaskSnapshotV1>,
+    pub kubernetes_prestop_application_during: Option<NativeTaskSnapshotV1>,
+    pub kubernetes_prestop_exec_root: Option<NativeTaskSnapshotV1>,
+    pub kubernetes_prestop_profile_refs_during: Option<u64>,
+    pub kubernetes_prestop_profile_refs_after: Option<u64>,
     pub kubernetes_fixture_removed: bool,
 }
 
@@ -1793,6 +1798,11 @@ impl IdentityTestRunner {
             kubernetes_probe_kubectl_exec_root: None,
             kubernetes_probe_direct_cri_exec_root: None,
             kubernetes_probe_identities_distinct: None,
+            kubernetes_prestop_application_before: None,
+            kubernetes_prestop_application_during: None,
+            kubernetes_prestop_exec_root: None,
+            kubernetes_prestop_profile_refs_during: None,
+            kubernetes_prestop_profile_refs_after: None,
             kubernetes_fixture_removed: false,
         })
     }
@@ -1869,20 +1879,31 @@ impl IdentityTestRunner {
             && bundle.kubernetes_probe_kubectl_exec_root.is_some()
             && bundle.kubernetes_probe_direct_cri_exec_root.is_some()
             && bundle.kubernetes_probe_identities_distinct == Some(true);
+        let prestop_results_missing = bundle.kubernetes_prestop_application_before.is_none()
+            && bundle.kubernetes_prestop_application_during.is_none()
+            && bundle.kubernetes_prestop_exec_root.is_none()
+            && bundle.kubernetes_prestop_profile_refs_during.is_none()
+            && bundle.kubernetes_prestop_profile_refs_after.is_none();
+        let prestop_results_present = bundle.kubernetes_prestop_application_before.is_some()
+            && bundle.kubernetes_prestop_application_during.is_some()
+            && bundle.kubernetes_prestop_exec_root.is_some()
+            && bundle.kubernetes_prestop_profile_refs_during == Some(2)
+            && bundle.kubernetes_prestop_profile_refs_after == Some(0);
         ensure!(
-            matches!(bundle.schema_version, 15..=20)
+            matches!(bundle.schema_version, 15..=21)
                 && (entry_results_missing || entry_results_present)
                 && matches!(bundle.kubernetes_lifecycle_sleep_no_task, None | Some(true))
                 && (network_results_missing || network_results_present)
                 && (container_results_missing || container_results_present)
                 && (ephemeral_results_missing || ephemeral_results_present)
-                && (probe_results_missing || probe_results_present),
+                && (probe_results_missing || probe_results_present)
+                && (prestop_results_missing || prestop_results_present),
             InvalidInputSnafu {
                 path: previous_bundle_path,
                 reason: "the prior identity bundle cannot accept the next Kubernetes result",
             }
         );
-        bundle.schema_version = 20;
+        bundle.schema_version = 21;
         if entry_results_missing {
             self.physical_kubernetes_exec_probe(
                 output_directory,
@@ -1919,6 +1940,14 @@ impl IdentityTestRunner {
         }
         if probe_results_missing {
             self.physical_kubernetes_probe_impersonation(
+                output_directory,
+                pin_root,
+                lease_path,
+                &mut bundle,
+            )?;
+        }
+        if prestop_results_missing {
+            self.physical_kubernetes_prestop_probe(
                 output_directory,
                 pin_root,
                 lease_path,
@@ -4052,6 +4081,302 @@ impl IdentityTestRunner {
         bundle.kubernetes_probe_kubectl_exec_root = Some(kubectl_root);
         bundle.kubernetes_probe_direct_cri_exec_root = Some(direct_cri_root);
         bundle.kubernetes_probe_identities_distinct = Some(distinct_identities);
+        Ok(())
+    }
+
+    fn physical_kubernetes_prestop_probe(
+        &self,
+        output_directory: &Path,
+        pin_root: &Path,
+        lease_path: &Path,
+        bundle: &mut IdentityPhysicalProbeBundleV1,
+    ) -> Result<()> {
+        fs::create_dir_all(output_directory).context(IoSnafu {
+            path: output_directory,
+        })?;
+        let work_directory = output_directory.join("kubernetes-prestop");
+        ensure!(
+            !work_directory.exists(),
+            InvalidInputSnafu {
+                path: &work_directory,
+                reason: "the Kubernetes PreStop fixture directory already exists",
+            }
+        );
+        fs::create_dir(&work_directory).context(IoSnafu {
+            path: &work_directory,
+        })?;
+        let work_cleanup = ProbeDirectory::new(&work_directory);
+        let namespace = format!("mithril-identity-prestop-{}", std::process::id());
+        let fixture_root = work_directory.join("fixture");
+        let manifest_path = work_directory.join("workload.yaml");
+        fs::create_dir(&fixture_root).context(IoSnafu {
+            path: &fixture_root,
+        })?;
+        let template_path = self
+            .repo_root
+            .join("crates/mithril-e2e/fixtures/identity/kubernetes-prestop-workload-v1.yaml");
+        let manifest = fs::read_to_string(&template_path).context(IoSnafu {
+            path: &template_path,
+        })?;
+        fs::write(
+            &manifest_path,
+            manifest
+                .replace("MITHRIL_IDENTITY_PRESTOP_NAMESPACE", &namespace)
+                .replace(
+                    "MITHRIL_IDENTITY_PRESTOP_FIXTURE_ROOT",
+                    fixture_root.to_string_lossy().as_ref(),
+                ),
+        )
+        .context(IoSnafu {
+            path: &manifest_path,
+        })?;
+        ensure!(
+            !pin_root.exists() && !lease_path.exists(),
+            InvalidInputSnafu {
+                path: pin_root,
+                reason: "the Kubernetes PreStop pin root and lease must not already exist",
+            }
+        );
+        let pin_cleanup = ProbeDirectory::new(pin_root);
+        let lease_cleanup = ProbeFile::new(lease_path);
+        let mut namespace_created = false;
+        let mut host = None;
+        let mut pod_delete = None;
+        let mut prestop_namespace_pid = None;
+
+        let probe = (|| -> Result<_> {
+            namespace_created = true;
+            self.kubernetes_output(
+                &[
+                    "kubectl",
+                    "apply",
+                    "-f",
+                    manifest_path.to_string_lossy().as_ref(),
+                ],
+                "create the Kubernetes PreStop fixture",
+            )?;
+            let (binding, application_pid, _) = self.kubernetes_container_binding(
+                &namespace,
+                "mithril-prestop",
+                "application",
+                (
+                    mithril_node::ContainerKindV1::Application,
+                    "11111111-1111-4111-8111-111111111401",
+                    "22222222-2222-4222-8222-222222222501",
+                    "33333333-3333-4333-8333-333333333333",
+                    PROFILE_GENERATION_REF_ID,
+                ),
+                &manifest_path,
+            )?;
+            let application_cgroup = binding
+                .root_cgroup_path
+                .as_deref()
+                .ok_or_else(|| invalid_state("the PreStop application binding has no cgroup"))?;
+
+            let (boot_id, node_boot_id) = boot_identity()?;
+            let mut identity_host = KernelHostOwner::new(KernelHostConfig::identity(
+                "/sys/kernel/btf/vmlinux",
+                lease_path,
+                Some(pin_root.to_path_buf()),
+                boot_id,
+                1,
+            ))
+            .start()
+            .context(InterceptorSnafu)?;
+            let mut bindings = WorkloadBindingOwner::system(node_boot_id, 1).context(NodeSnafu)?;
+            bindings
+                .publish_all(&identity_host, std::slice::from_ref(&binding))
+                .context(NodeSnafu)?;
+            NativeSecurityStateOwner::new(node_boot_id, 1)
+                .activate(&mut identity_host)
+                .context(NodeSnafu)?;
+            host = Some(identity_host);
+            let inspector = NativeIdentityInspector::new(pin_root);
+            let application_before =
+                self.wait_for("PreStop application identity", pin_root, || {
+                    inspector.snapshot(application_pid).context(NodeSnafu)
+                })?;
+            ensure!(
+                application_before.creator_task_cookie.is_none()
+                    && application_before.root_class.as_deref() == Some("restored_or_unknown_root")
+                    && application_before.installed_role_class.as_deref()
+                        == Some("fail_closed_unknown")
+                    && application_before.active_role_id == binding.external_role_id
+                    && profile_task_refs(
+                        host.as_ref()
+                            .ok_or_else(|| invalid_state("the PreStop identity host is missing"))?,
+                    )? == 1,
+                InvalidInputSnafu {
+                    path: pin_root,
+                    reason:
+                        "the PreStop application did not retain one conservative root reference",
+                }
+            );
+
+            pod_delete = Some(
+                Command::new("/usr/local/bin/k3s")
+                    .args([
+                        "kubectl",
+                        "-n",
+                        namespace.as_str(),
+                        "delete",
+                        "pod",
+                        "mithril-prestop",
+                        "--wait=true",
+                        "--timeout=90s",
+                    ])
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .spawn()
+                    .context(IoSnafu {
+                        path: Path::new("/usr/local/bin/k3s"),
+                    })?,
+            );
+            let namespace_pid = self.wait_for("Kubernetes PreStop exec", &fixture_root, || {
+                Ok(self
+                    .kubernetes_fixture_slot_pids(&fixture_root, "prestop")?
+                    .into_iter()
+                    .next())
+            })?;
+            prestop_namespace_pid = Some(namespace_pid);
+            let prestop_host_pid = self.wait_for(
+                "Kubernetes PreStop exec host PID",
+                application_cgroup,
+                || self.kubernetes_host_pid(application_cgroup, namespace_pid),
+            )?;
+            ensure!(
+                prestop_host_pid != application_pid,
+                InvalidInputSnafu {
+                    path: application_cgroup,
+                    reason: "the Kubernetes PreStop hook did not create a separate task",
+                }
+            );
+            let application_during =
+                self.wait_for("application identity during PreStop", pin_root, || {
+                    inspector.snapshot(application_pid).context(NodeSnafu)
+                })?;
+            let prestop_root = self.wait_for("PreStop exec identity", pin_root, || {
+                inspector.snapshot(prestop_host_pid).context(NodeSnafu)
+            })?;
+            let refs_during = profile_task_refs(
+                host.as_ref()
+                    .ok_or_else(|| invalid_state("the PreStop identity host is missing"))?,
+            )?;
+            ensure!(
+                application_during == application_before,
+                InvalidInputSnafu {
+                    path: pin_root,
+                    reason:
+                        "Pod termination changed the application identity before PreStop completed",
+                }
+            );
+            ensure!(
+                prestop_root.creator_task_cookie.is_none()
+                    && prestop_root.root_class.as_deref() == Some("external_runtime_root")
+                    && prestop_root.installed_role_class.as_deref()
+                        == Some("runtime_external_restricted")
+                    && prestop_root.active_role_id == binding.external_role_id
+                    && prestop_root.task_cookie != application_before.task_cookie
+                    && prestop_root.process_state_id != application_before.process_state_id
+                    && refs_during == 2,
+                InvalidInputSnafu {
+                    path: pin_root,
+                    reason: "PreStop did not retain the application reference and add one restricted external root",
+                }
+            );
+
+            self.kubernetes_release_fifo(
+                &fixture_root.join(format!("prestop-release-{namespace_pid}")),
+            )?;
+            let delete_status = pod_delete
+                .as_mut()
+                .ok_or_else(|| invalid_state("the Kubernetes Pod delete process is missing"))?
+                .wait()
+                .context(IoSnafu {
+                    path: Path::new("Kubernetes Pod delete"),
+                })?;
+            ensure!(
+                delete_status.success(),
+                InvalidInputSnafu {
+                    path: &manifest_path,
+                    reason: format!("Kubernetes Pod delete exited with {delete_status}"),
+                }
+            );
+            pod_delete = None;
+            let refs_after =
+                self.wait_for("PreStop profile reference release", pin_root, || {
+                    let refs =
+                        profile_task_refs(host.as_ref().ok_or_else(|| {
+                            invalid_state("the PreStop identity host is missing")
+                        })?)?;
+                    Ok((refs == 0).then_some(refs))
+                })?;
+            Ok((
+                application_before,
+                application_during,
+                prestop_root,
+                refs_during,
+                refs_after,
+            ))
+        })();
+
+        if let Some(namespace_pid) = prestop_namespace_pid {
+            let release_path = fixture_root.join(format!("prestop-release-{namespace_pid}"));
+            if release_path.exists() {
+                let _ = self.kubernetes_release_fifo(&release_path);
+            }
+        }
+        Self::stop_fixture_process(&mut pod_delete);
+        let namespace_cleanup = if namespace_created {
+            self.kubernetes_output(
+                &[
+                    "kubectl",
+                    "delete",
+                    "namespace",
+                    namespace.as_str(),
+                    "--ignore-not-found",
+                    "--wait=true",
+                    "--timeout=120s",
+                ],
+                "remove the Kubernetes PreStop fixture namespace",
+            )
+            .map(|_| ())
+        } else {
+            Ok(())
+        };
+        let host_cleanup = if let Some(host) = host.take() {
+            host.shutdown().context(InterceptorSnafu)
+        } else {
+            Ok(())
+        };
+        let cleanup = namespace_cleanup
+            .and(host_cleanup)
+            .and(pin_cleanup.cleanup())
+            .and(lease_cleanup.cleanup())
+            .and(work_cleanup.cleanup());
+        if let Err(source) = probe {
+            cleanup?;
+            return Err(source);
+        }
+        cleanup?;
+        ensure!(
+            self.kubernetes_namespace_absent(&namespace)?
+                && !pin_root.exists()
+                && !lease_path.exists()
+                && !work_directory.exists(),
+            InvalidInputSnafu {
+                path: &work_directory,
+                reason: "the Kubernetes PreStop fixture was not removed",
+            }
+        );
+        let (application_before, application_during, prestop_root, refs_during, refs_after) =
+            probe?;
+        bundle.kubernetes_prestop_application_before = Some(application_before);
+        bundle.kubernetes_prestop_application_during = Some(application_during);
+        bundle.kubernetes_prestop_exec_root = Some(prestop_root);
+        bundle.kubernetes_prestop_profile_refs_during = Some(refs_during);
+        bundle.kubernetes_prestop_profile_refs_after = Some(refs_after);
         Ok(())
     }
 

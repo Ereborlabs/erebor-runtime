@@ -35,6 +35,7 @@ identity_k3s_startup_pid=
 identity_k3s_readiness_pid=
 identity_k3s_liveness_pid=
 identity_probe_command=
+identity_prestop_release_fifo=
 
 identity_require_command() {
   command -v "$1" >/dev/null || {
@@ -683,6 +684,70 @@ identity_prepare_k3s_probe_impersonation_case() {
     "$source_config" >"$identity_config"
   identity_init_pid=$identity_k3s_application_pid
   identity_cgroup_path=$(identity_cgroup_for_pid "$identity_init_pid")
+}
+
+identity_prepare_k3s_prestop_case() {
+  local source_config=$identity_repository/crates/mithril-e2e/harness/vm/k3s-cri-effect-node-v1.json
+  local workload_template=$identity_repository/crates/mithril-e2e/fixtures/identity/kubernetes-prestop-workload-v1.yaml
+  identity_check_base "$source_config"
+  identity_require_command crictl
+  identity_require_command date
+  identity_require_command dd
+  identity_require_command kubectl
+  identity_require_command timeout
+  identity_mode=cri
+  identity_begin
+
+  local suffix workload runtime_socket application
+  suffix=$(tr '[:upper:]' '[:lower:]' <<<"${identity_work##*.}")
+  identity_k3s_namespace=mithril-manual-$suffix
+  identity_k3s_fixture_root=/var/lib/mithril-manual-$suffix
+  identity_k3s_shared_directory=$identity_k3s_fixture_root/shared
+  identity_k3s_node_config=$identity_work/k3s-node.json
+  identity_cleanup_functions+=(identity_cleanup_prestop_case identity_cleanup_k3s_case)
+  install -d -m 700 -- "$identity_k3s_fixture_root" "$identity_k3s_shared_directory"
+
+  runtime_socket=$(jq -er '.container_runtime.socket_path' "$source_config")
+  identity_runtime_endpoint=unix://$runtime_socket
+  workload=$identity_work/workload.yaml
+  sed \
+    -e "s|MITHRIL_IDENTITY_PRESTOP_NAMESPACE|$identity_k3s_namespace|g" \
+    -e "s|MITHRIL_IDENTITY_PRESTOP_FIXTURE_ROOT|$identity_k3s_shared_directory|g" \
+    "$workload_template" >"$workload"
+  identity_k3s_namespace_created=true
+  kubectl apply -f "$workload" >/dev/null
+
+  application=$(identity_k3s_container_binding_json application application \
+    11111111-1111-4111-8111-111111111401 \
+    22222222-2222-4222-8222-222222222501 mithril-prestop \
+    33333333-3333-4333-8333-333333333333 7)
+  identity_k3s_application_container_id=$(jq -er '.container_id' <<<"$application")
+  identity_k3s_application_pid=$(crictl --runtime-endpoint "$identity_runtime_endpoint" \
+    inspect "$identity_k3s_application_container_id" | jq -er '.info.pid')
+  [[ $identity_k3s_application_pid =~ ^[1-9][0-9]*$ ]] || {
+    echo "Kubernetes returned an invalid PreStop application PID" >&2
+    return 1
+  }
+
+  jq \
+    --arg state "$identity_state" \
+    --arg pin_root "$identity_pin_root" \
+    --arg lease "$identity_lease" \
+    --argjson application "$application" \
+    '.state_directory = $state
+     | .interceptor.pin_root = $pin_root
+     | .interceptor.lease_path = $lease
+     | .runtime_observation = null
+     | .workload_bindings = [$application]' \
+    "$source_config" >"$identity_config"
+  identity_init_pid=$identity_k3s_application_pid
+  identity_cgroup_path=$(identity_cgroup_for_pid "$identity_init_pid")
+}
+
+identity_cleanup_prestop_case() {
+  if [[ -n $identity_prestop_release_fifo && -p $identity_prestop_release_fifo ]]; then
+    timeout 2s dd if=/dev/null of="$identity_prestop_release_fifo" status=none || true
+  fi
 }
 
 identity_cleanup_k3s_case() {
