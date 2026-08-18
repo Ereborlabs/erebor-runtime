@@ -34,6 +34,12 @@ wait_for_stock_hook_result() {
       printf '%s\n' "$result"
       return 0
     fi
+    result=$(journalctl -u k3s --since '2 minutes ago' --no-pager -o cat \
+      | awk -v expected="$expected" 'index($0, expected) { print "K3S_JOURNAL: " $0; exit }')
+    if [[ -n $result ]]; then
+      printf '%s\n' "$result"
+      return 0
+    fi
     sleep 0.1
   done
   echo "the stock hook did not return: $expected" >&2

@@ -856,6 +856,7 @@ identity_prepare_k3s_stock_hook_failure_case() {
   identity_stock_hook_manifest_template=$identity_repository/crates/mithril-e2e/fixtures/identity/kubernetes-stock-hook-failure-workload-v1.yaml
   identity_check_base "$source_config"
   identity_require_command crictl
+  identity_require_command journalctl
   identity_require_command kubectl
   identity_mode=cri
   identity_begin

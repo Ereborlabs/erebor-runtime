@@ -7912,6 +7912,39 @@ impl IdentityTestRunner {
                 return Ok(result);
             }
 
+            let journal_program = Path::new("/usr/bin/journalctl");
+            let journal = Command::new(journal_program)
+                .args([
+                    "-u",
+                    "k3s",
+                    "--since",
+                    "2 minutes ago",
+                    "--no-pager",
+                    "-o",
+                    "cat",
+                ])
+                .output()
+                .context(IoSnafu {
+                    path: journal_program,
+                })?;
+            ensure!(
+                journal.status.success(),
+                InvalidInputSnafu {
+                    path: journal_program,
+                    reason: format!(
+                        "read the Kubernetes stock-hook journal failed with {}: {}",
+                        journal.status,
+                        String::from_utf8_lossy(&journal.stderr).trim()
+                    ),
+                }
+            );
+            if let Some(line) = String::from_utf8_lossy(&journal.stdout)
+                .lines()
+                .find(|line| line.contains(expected_hook_message))
+            {
+                return Ok(format!("K3S_JOURNAL: {line}"));
+            }
+
             ensure!(
                 Instant::now() < deadline,
                 InvalidInputSnafu {
