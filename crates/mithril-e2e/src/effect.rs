@@ -159,6 +159,9 @@ pub struct EffectPhysicalProbeBundleV1 {
     pub inherited_fd_read_denied: bool,
     pub file_mmap_denied: bool,
     pub writable_shared_mmap_denied: bool,
+    pub independent_root_shared_mmap_denied: bool,
+    pub independent_root_benign_mmap_allowed: bool,
+    pub independent_root_shared_mmap_distinct_identity: bool,
     pub executable_mmap_denied: bool,
     pub file_mprotect_exec_denied: bool,
     pub benign_mmap_allowed: bool,
@@ -909,6 +912,7 @@ impl EffectTestRunner {
         };
         fixture.prepare_mount_race(&paths.source, mount_race_target, 8)?;
         fixture.prepare_operations(&paths, &truncate_target)?;
+        let shared_mmap_target_pid = fixture.shared_mmap_target_pid()?;
         let unix_stream_peer_pid = fixture.prepare_unix_stream_target()?;
         if protect {
             fs::remove_file(&paths.deleted_exec_target).context(IoSnafu {
@@ -931,6 +935,13 @@ impl EffectTestRunner {
                 path: cgroup_path.join("cgroup.procs"),
             },
         )?;
+        fs::write(
+            cgroup_path.join("cgroup.procs"),
+            shared_mmap_target_pid.to_string(),
+        )
+        .context(IoSnafu {
+            path: cgroup_path.join("cgroup.procs"),
+        })?;
         fs::write(
             peer_cgroup_path.join("cgroup.procs"),
             unix_stream_peer_pid.to_string(),
@@ -1632,6 +1643,106 @@ impl EffectTestRunner {
                     KernelEffectOperationV1::MmapRead,
                 ),
                 EXACT_OBJECT_KEY_ID,
+                None,
+            )?;
+            let main_mapping_identity = observations
+                .recent_since(mmap_marker)
+                .iter()
+                .find(|event| {
+                    event.reason == "EXACT_POLICY_DENY"
+                        && event.effect_family == u32::from(KernelEffectFamilyV1::File as u16)
+                        && event.operation == u32::from(KernelEffectOperationV1::MmapRead as u16)
+                        && event.exact_object_key_id == EXACT_OBJECT_KEY_ID
+                })
+                .map(|event| {
+                    (
+                        event.task_cookie,
+                        event.process_lineage_id.clone(),
+                        event.process_instance_id.clone(),
+                    )
+                })
+                .ok_or_else(|| {
+                    InvalidInputSnafu {
+                        path: Path::new("effect_observations"),
+                        reason: "the primary-root mapping decision has no identity",
+                    }
+                    .build()
+                })?;
+            let independent_deny_marker = observations.cursor();
+            ensure!(
+                fixture
+                    .run_prepared(HardClosedOperation::IndependentSecretMmapWrite)?
+                    .denied(),
+                InvalidInputSnafu {
+                    path: &paths.secret,
+                    reason: "an independent root acquired the protected shared mapping",
+                }
+            );
+            wait_for_exact_effect(
+                &reader,
+                &observations,
+                independent_deny_marker,
+                "EXACT_POLICY_DENY",
+                (
+                    KernelEffectFamilyV1::File,
+                    KernelEffectOperationV1::MmapWrite,
+                ),
+                EXACT_OBJECT_KEY_ID,
+                None,
+            )?;
+            let independent_mapping_identity = observations
+                .recent_since(independent_deny_marker)
+                .iter()
+                .find(|event| {
+                    event.reason == "EXACT_POLICY_DENY"
+                        && event.effect_family == u32::from(KernelEffectFamilyV1::File as u16)
+                        && event.operation == u32::from(KernelEffectOperationV1::MmapWrite as u16)
+                        && event.exact_object_key_id == EXACT_OBJECT_KEY_ID
+                })
+                .map(|event| {
+                    (
+                        event.task_cookie,
+                        event.process_lineage_id.clone(),
+                        event.process_instance_id.clone(),
+                    )
+                })
+                .ok_or_else(|| {
+                    InvalidInputSnafu {
+                        path: Path::new("effect_observations"),
+                        reason: "the independent-root mapping decision has no identity",
+                    }
+                    .build()
+                })?;
+            ensure!(
+                independent_mapping_identity.0 > 0
+                    && independent_mapping_identity.0 != main_mapping_identity.0
+                    && independent_mapping_identity.1 != main_mapping_identity.1
+                    && independent_mapping_identity.2 != main_mapping_identity.2,
+                InvalidInputSnafu {
+                    path: Path::new("effect_observations"),
+                    reason: "the shared-mapping target did not have an independent process root",
+                }
+            );
+            let independent_allow_marker = observations.cursor();
+            ensure!(
+                fixture
+                    .run_prepared(HardClosedOperation::IndependentBenignMmapRead)?
+                    .allowed,
+                InvalidInputSnafu {
+                    path: &paths.benign,
+                    reason: "the independent-root benign mapping control was denied",
+                }
+            );
+            wait_for_exact_effect(
+                &reader,
+                &observations,
+                independent_allow_marker,
+                "EXACT_POLICY_ALLOW",
+                (
+                    KernelEffectFamilyV1::File,
+                    KernelEffectOperationV1::MmapRead,
+                ),
+                BENIGN_OBJECT_KEY_ID,
                 None,
             )?;
         }
@@ -3543,6 +3654,9 @@ impl EffectTestRunner {
             inherited_fd_read_denied: protect,
             file_mmap_denied: protect,
             writable_shared_mmap_denied: protect,
+            independent_root_shared_mmap_denied: protect,
+            independent_root_benign_mmap_allowed: protect,
+            independent_root_shared_mmap_distinct_identity: protect,
             executable_mmap_denied: protect,
             file_mprotect_exec_denied: protect,
             benign_mmap_allowed: protect,
