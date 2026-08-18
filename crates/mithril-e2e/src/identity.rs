@@ -634,7 +634,9 @@ impl IdentityTestRunner {
                     == TaskCoordinateStateV1::Runnable as u8,
             InvalidInputSnafu {
                 path: &procs_path,
-                reason: "concurrent indistinguishable external roots did not remain separate restricted roots",
+                reason: format!(
+                    "concurrent indistinguishable external roots did not remain separate restricted roots: first {external_ambiguity_first_root:?}; second {external_ambiguity_second_root:?}"
+                ),
             }
         );
         external_ambiguity_first.stop();
@@ -1496,7 +1498,7 @@ impl IdentityTestRunner {
                     .snapshot(namespace_init_intermediate_pid)
                     .context(NodeSnafu)
             })?;
-        namespace_init_fixture.release_intermediate_start()?;
+        namespace_init_fixture.release_intermediate_start(namespace_init_intermediate_pid)?;
         let namespace_init_native_child_pid =
             self.wait_for("PID-namespace native child creation", &procs_path, || {
                 namespace_init_fixture
@@ -8648,8 +8650,9 @@ os.waitpid(-1, 0)
             "-c",
             r#"import os
 import signal
+import sys
 
-os.kill(os.getpid(), signal.SIGSTOP)
+sys.stdin.readline()
 middle = os.fork()
 if middle == 0:
     os.kill(os.getpid(), signal.SIGSTOP)
@@ -8953,13 +8956,8 @@ second.join()
         self.write_stdin(b"root\n")
     }
 
-    fn release_namespace_init(&self) -> Result<()> {
-        let pidfd = self
-            .namespace_init_pidfd
-            .as_ref()
-            .ok_or_else(|| invalid_state("PID-namespace init has no pidfd"))?;
-        pidfd_send_signal(pidfd, Signal::CONT)
-            .map_err(|error| invalid_state(format!("release PID-namespace init: {error}")))
+    fn release_namespace_init(&mut self) -> Result<()> {
+        self.write_stdin(b"namespace-init\n")
     }
 
     fn release_non_leader_exec(&mut self) -> Result<()> {
@@ -9130,7 +9128,8 @@ second.join()
             .map_err(|error| invalid_state(format!("release intermediate exit: {error}")))
     }
 
-    fn release_intermediate_start(&self) -> Result<()> {
+    fn release_intermediate_start(&mut self, intermediate_pid: u32) -> Result<()> {
+        self.wait_for_stopped_native_child(intermediate_pid)?;
         let pidfd = self
             .intermediate_pidfd
             .as_ref()
@@ -10145,7 +10144,7 @@ mod tests {
             || fixture.namespace_init_intermediate_pid(namespace_init_pid),
         )?;
         fixture.open_intermediate_pidfd(intermediate_pid)?;
-        fixture.release_intermediate_start()?;
+        fixture.release_intermediate_start(intermediate_pid)?;
         let native_pid = runner.wait_for(
             "PID-namespace native child creation",
             &namespace_init_children,
