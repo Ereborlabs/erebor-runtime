@@ -366,7 +366,8 @@ mod tests {
     use crate::{EffectObservationStore, NodeReadinessV1};
 
     #[test]
-    fn observation_response_retains_the_newest_events_within_the_frame_bound() {
+    fn observation_response_retains_the_newest_events_within_the_frame_bound(
+    ) -> erebor_runtime_ipc::Result<()> {
         let string_field = "f".repeat(64);
         let template = MithrilEffectObservation {
             process_lineage_id: string_field.clone(),
@@ -398,17 +399,20 @@ mod tests {
             }),
         };
 
-        let envelope = bounded_observation_response(7, response).expect("response fits");
-        envelope.into_frame().expect("bounded response frame");
-        let response: MithrilObservationSnapshotResponse = envelope
-            .decode_typed_payload(KIND_MITHRIL_OBSERVATION_SNAPSHOT_RESPONSE)
-            .expect("decode bounded response");
-        let retained = &response.snapshot.expect("accepted snapshot").recent_effects;
+        let envelope = bounded_observation_response(7, response)?;
+        envelope.into_frame()?;
+        let response: MithrilObservationSnapshotResponse =
+            envelope.decode_typed_payload(KIND_MITHRIL_OBSERVATION_SNAPSHOT_RESPONSE)?;
+        let retained = response
+            .snapshot
+            .map(|snapshot| snapshot.recent_effects)
+            .unwrap_or_default();
 
         assert!(!retained.is_empty());
         assert!(retained.len() < 1_024);
-        assert_eq!(retained.last().expect("latest event").task_cookie, 1_023);
-        assert!(retained.first().expect("oldest retained event").task_cookie > 0);
+        assert_eq!(retained.last().map(|event| event.task_cookie), Some(1_023));
+        assert!(retained.first().is_some_and(|event| event.task_cookie > 0));
+        Ok(())
     }
 
     #[test]
