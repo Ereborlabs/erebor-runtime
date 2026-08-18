@@ -1341,6 +1341,11 @@ Read these owners in this order:
 | 3 | [`IdentityTestRunner` PID/TID-reuse case](../../../crates/mithril-e2e/src/identity.rs#L1853) | One held PID namespace reuses namespace PID `2` and TID `3`. The runner requires fresh task, process, execution, and coordinate identity. |
 | 4 | [`native-pid-reuse.sh`](../../../examples/mithril-identity-manual/native-pid-reuse.sh#L1) | The operator case uses `identity_prepare_k3s_case`, moves the held namespace init into the protected cgroup, and checks two real processes with the same namespace PID. |
 
+Cleanup correction commit `6b9537e` keeps cleanup in that shell. It validates
+the exact fixture command before it signals a PID. It terminates a surviving
+PID-namespace init before Kubernetes cleanup. A successful rerun left no
+fixture process, Namespace, cgroup, pin, lease, node, or work path.
+
 The post-PONR case records pending state `PostPonrFatal`, exec guard
 `OutcomeUnknown`, and coordinate `Exited`. It retains the source role and
 source execution state. It does not activate the target execution. Linux has

@@ -1348,11 +1348,14 @@ namespace PID `2`, and required fresh task, process, and execution identities
 with the same exact creator. Automated cleanup removed the dedicated pin,
 lease, cgroup, and fixture. Manual cleanup removed its Namespace, Pod, node
 process, pin, lease, state, cgroup, fixture, and manual work directory.
+Cleanup correction commit `6b9537e` adds exact fixture-command validation and
+terminates the PID-namespace init on an error path. The retained VM reran the
+shell after that correction. Postflight found no fixture process or owned
+path.
 
 This result closes only the four native rows named above. It does not qualify
-runtime-binding loss, node or runtime restart, cgroup/namespace/Pod/container
-lifetime reuse, stock OCI hook rejection, or authorization replay. The phase
-remains **Blocked**.
+node or runtime restart, cgroup/namespace/Pod/container lifetime reuse, or
+stock OCI hook rejection. The phase remains **Blocked**.
 
 ## Authorization-Replay Qualification — 2026-08-18
 
