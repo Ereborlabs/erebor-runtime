@@ -247,6 +247,9 @@ fi
 "$provider" put "$vm_name" \
   "$repo_root/crates/mithril-e2e/fixtures/identity/kubernetes-lifecycle-sleep-workload-v1.yaml" \
   "$remote_source/crates/mithril-e2e/fixtures/identity/kubernetes-lifecycle-sleep-workload-v1.yaml"
+"$provider" put "$vm_name" \
+  "$repo_root/crates/mithril-e2e/fixtures/identity/kubernetes-network-probes-workload-v1.yaml" \
+  "$remote_source/crates/mithril-e2e/fixtures/identity/kubernetes-network-probes-workload-v1.yaml"
 for fixture in observe-profile-seal-request.json test-public-key.hex test-signing-key.hex observe-policy-v1.yaml; do
   "$provider" put "$vm_name" \
     "$repo_root/crates/mithril-e2e/fixtures/mithril-policy/$fixture" \

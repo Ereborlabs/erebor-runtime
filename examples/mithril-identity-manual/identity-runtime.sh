@@ -314,6 +314,29 @@ identity_prepare_k3s_lifecycle_sleep_case() {
   kubectl apply -f "$workload" >/dev/null
 }
 
+identity_prepare_k3s_network_probe_case() {
+  local source_config=$identity_repository/crates/mithril-e2e/harness/vm/k3s-cri-effect-node-v1.json
+  local workload_template=$identity_repository/crates/mithril-e2e/fixtures/identity/kubernetes-network-probes-workload-v1.yaml
+  identity_check_base "$source_config"
+  identity_require_command crictl
+  identity_require_command kubectl
+  identity_begin
+
+  local suffix workload
+  suffix=$(tr '[:upper:]' '[:lower:]' <<<"${identity_work##*.}")
+  identity_k3s_namespace=mithril-manual-$suffix
+  identity_k3s_fixture_root=/var/lib/mithril-manual-$suffix
+  identity_k3s_shared_directory=$identity_k3s_fixture_root/shared
+  identity_cleanup_functions+=(identity_cleanup_k3s_case)
+  install -d -m 700 -- "$identity_k3s_fixture_root" "$identity_k3s_shared_directory"
+
+  workload=$identity_work/workload.yaml
+  sed -e "s|MITHRIL_IDENTITY_NETWORK_PROBE_NAMESPACE|$identity_k3s_namespace|g" \
+    "$workload_template" >"$workload"
+  identity_k3s_namespace_created=true
+  kubectl apply -f "$workload" >/dev/null
+}
+
 identity_cleanup_k3s_case() {
   local status=0
   if [[ $identity_k3s_namespace_created == true ]]; then

@@ -202,6 +202,9 @@ pub struct IdentityPhysicalProbeBundleV1 {
     pub kubernetes_native_child_parent: Option<NativeTaskSnapshotV1>,
     pub kubernetes_native_child_control: Option<NativeTaskSnapshotV1>,
     pub kubernetes_lifecycle_sleep_no_task: Option<bool>,
+    pub kubernetes_http_probe_no_task: Option<bool>,
+    pub kubernetes_tcp_probe_no_task: Option<bool>,
+    pub kubernetes_grpc_probe_no_task: Option<bool>,
     pub kubernetes_fixture_removed: bool,
 }
 
@@ -1691,7 +1694,7 @@ impl IdentityTestRunner {
             }
         );
         Ok(IdentityPhysicalProbeBundleV1 {
-            schema_version: 16,
+            schema_version: 17,
             object_sha256,
             first_start,
             distinct_pin_root_owner_rejected,
@@ -1755,6 +1758,9 @@ impl IdentityTestRunner {
             kubernetes_native_child_parent: None,
             kubernetes_native_child_control: None,
             kubernetes_lifecycle_sleep_no_task: None,
+            kubernetes_http_probe_no_task: None,
+            kubernetes_tcp_probe_no_task: None,
+            kubernetes_grpc_probe_no_task: None,
             kubernetes_fixture_removed: false,
         })
     }
@@ -1789,16 +1795,20 @@ impl IdentityTestRunner {
             && bundle.kubernetes_native_child_parent.is_some()
             && bundle.kubernetes_native_child_control.is_some()
             && bundle.kubernetes_fixture_removed;
+        let network_results_missing = bundle.kubernetes_http_probe_no_task.is_none()
+            && bundle.kubernetes_tcp_probe_no_task.is_none()
+            && bundle.kubernetes_grpc_probe_no_task.is_none();
         ensure!(
             matches!(bundle.schema_version, 15 | 16)
                 && (entry_results_missing || entry_results_present)
-                && bundle.kubernetes_lifecycle_sleep_no_task.is_none(),
+                && matches!(bundle.kubernetes_lifecycle_sleep_no_task, None | Some(true))
+                && network_results_missing,
             InvalidInputSnafu {
                 path: previous_bundle_path,
-                reason: "the prior identity bundle cannot accept one Kubernetes result",
+                reason: "the prior identity bundle cannot accept the next Kubernetes result",
             }
         );
-        bundle.schema_version = 16;
+        bundle.schema_version = 17;
         if entry_results_missing {
             self.physical_kubernetes_exec_probe(
                 output_directory,
@@ -1807,8 +1817,14 @@ impl IdentityTestRunner {
                 &mut bundle,
             )?;
         }
-        bundle.kubernetes_lifecycle_sleep_no_task =
-            Some(self.physical_kubernetes_lifecycle_sleep_probe(output_directory)?);
+        if bundle.kubernetes_lifecycle_sleep_no_task.is_none() {
+            bundle.kubernetes_lifecycle_sleep_no_task =
+                Some(self.physical_kubernetes_lifecycle_sleep_probe(output_directory)?);
+        }
+        let (http, tcp, grpc) = self.physical_kubernetes_network_probe(output_directory)?;
+        bundle.kubernetes_http_probe_no_task = Some(http);
+        bundle.kubernetes_tcp_probe_no_task = Some(tcp);
+        bundle.kubernetes_grpc_probe_no_task = Some(grpc);
         bundle.kubernetes_fixture_removed = true;
         Ok(bundle)
     }
@@ -2780,6 +2796,251 @@ impl IdentityTestRunner {
             }
         );
         probe
+    }
+
+    fn physical_kubernetes_network_probe(
+        &self,
+        output_directory: &Path,
+    ) -> Result<(bool, bool, bool)> {
+        fs::create_dir_all(output_directory).context(IoSnafu {
+            path: output_directory,
+        })?;
+        let work_directory = output_directory.join("kubernetes-network-probes");
+        ensure!(
+            !work_directory.exists(),
+            InvalidInputSnafu {
+                path: &work_directory,
+                reason: "the Kubernetes network-probe fixture directory already exists",
+            }
+        );
+        fs::create_dir(&work_directory).context(IoSnafu {
+            path: &work_directory,
+        })?;
+        let work_cleanup = ProbeDirectory::new(&work_directory);
+        let namespace = format!("mithril-identity-network-{}", std::process::id());
+        let manifest_path = work_directory.join("workload.yaml");
+        let template_path = self.repo_root.join(
+            "crates/mithril-e2e/fixtures/identity/kubernetes-network-probes-workload-v1.yaml",
+        );
+        let manifest = fs::read_to_string(&template_path).context(IoSnafu {
+            path: &template_path,
+        })?;
+        fs::write(
+            &manifest_path,
+            manifest.replace("MITHRIL_IDENTITY_NETWORK_PROBE_NAMESPACE", &namespace),
+        )
+        .context(IoSnafu {
+            path: &manifest_path,
+        })?;
+        let mut namespace_created = false;
+
+        let probe = (|| -> Result<(bool, bool, bool)> {
+            namespace_created = true;
+            self.kubernetes_output(
+                &[
+                    "kubectl",
+                    "apply",
+                    "-f",
+                    manifest_path.to_string_lossy().as_ref(),
+                ],
+                "create the Kubernetes network-probe fixture",
+            )?;
+            self.kubernetes_output(
+                &[
+                    "kubectl",
+                    "-n",
+                    namespace.as_str(),
+                    "wait",
+                    "--for=condition=Ready",
+                    "pod/mithril-network-probes",
+                    "--timeout=180s",
+                ],
+                "wait for the Kubernetes network probes",
+            )?;
+
+            let pod = self.kubernetes_output(
+                &[
+                    "kubectl",
+                    "-n",
+                    namespace.as_str(),
+                    "get",
+                    "pod",
+                    "mithril-network-probes",
+                    "-o",
+                    "json",
+                ],
+                "read the Kubernetes network-probe Pod",
+            )?;
+            let pod: serde_json::Value = serde_json::from_str(&pod).context(JsonSnafu {
+                path: &manifest_path,
+            })?;
+            let statuses = pod
+                .pointer("/status/containerStatuses")
+                .and_then(serde_json::Value::as_array)
+                .ok_or_else(|| invalid_state("network-probe Pod has no container statuses"))?;
+            for name in ["http", "tcp", "grpc"] {
+                let status = statuses
+                    .iter()
+                    .find(|status| {
+                        status.get("name").and_then(serde_json::Value::as_str) == Some(name)
+                    })
+                    .ok_or_else(|| {
+                        invalid_state(format!(
+                            "network-probe Pod has no `{name}` container status"
+                        ))
+                    })?;
+                ensure!(
+                    status.get("ready").and_then(serde_json::Value::as_bool) == Some(true)
+                        && status
+                            .get("restartCount")
+                            .and_then(serde_json::Value::as_u64)
+                            == Some(0),
+                    InvalidInputSnafu {
+                        path: &manifest_path,
+                        reason: format!(
+                            "the `{name}` network probe did not pass without a restart"
+                        ),
+                    }
+                );
+            }
+
+            let http = self.kubernetes_network_probe_container_no_task(
+                &namespace,
+                "http",
+                &manifest_path,
+            )?;
+            let tcp =
+                self.kubernetes_network_probe_container_no_task(&namespace, "tcp", &manifest_path)?;
+            let grpc = self.kubernetes_network_probe_container_no_task(
+                &namespace,
+                "grpc",
+                &manifest_path,
+            )?;
+            Ok((http, tcp, grpc))
+        })();
+
+        let namespace_cleanup = if namespace_created {
+            self.kubernetes_output(
+                &[
+                    "kubectl",
+                    "delete",
+                    "namespace",
+                    namespace.as_str(),
+                    "--ignore-not-found",
+                    "--wait=true",
+                    "--timeout=120s",
+                ],
+                "remove the Kubernetes network-probe fixture namespace",
+            )
+            .map(|_| ())
+        } else {
+            Ok(())
+        };
+        let cleanup = namespace_cleanup.and(work_cleanup.cleanup());
+        if let Err(source) = probe {
+            cleanup?;
+            return Err(source);
+        }
+        cleanup?;
+        ensure!(
+            self.kubernetes_namespace_absent(&namespace)? && !work_directory.exists(),
+            InvalidInputSnafu {
+                path: &work_directory,
+                reason: "the Kubernetes network-probe fixture was not removed",
+            }
+        );
+        probe
+    }
+
+    fn kubernetes_network_probe_container_no_task(
+        &self,
+        namespace: &str,
+        container_name: &str,
+        manifest_path: &Path,
+    ) -> Result<bool> {
+        let container_id = self.wait_for(
+            "Kubernetes network-probe container start",
+            manifest_path,
+            || {
+                let inventory = self.kubernetes_output(
+                    &["crictl", "ps", "-o", "json"],
+                    "read the network-probe CRI inventory",
+                )?;
+                let inventory: serde_json::Value =
+                    serde_json::from_str(&inventory).context(JsonSnafu {
+                        path: manifest_path,
+                    })?;
+                Ok(inventory
+                    .get("containers")
+                    .and_then(serde_json::Value::as_array)
+                    .and_then(|containers| {
+                        containers.iter().find_map(|container| {
+                            let matching_namespace = container
+                                .pointer("/labels/io.kubernetes.pod.namespace")
+                                .and_then(serde_json::Value::as_str)
+                                == Some(namespace);
+                            let matching_name = container
+                                .pointer("/metadata/name")
+                                .and_then(serde_json::Value::as_str)
+                                == Some(container_name);
+                            (matching_namespace && matching_name)
+                                .then(|| {
+                                    container
+                                        .get("id")
+                                        .and_then(serde_json::Value::as_str)
+                                        .map(str::to_owned)
+                                })
+                                .flatten()
+                        })
+                    }))
+            },
+        )?;
+        let container = self.kubernetes_output(
+            &["crictl", "inspect", container_id.as_str()],
+            "inspect the network-probe container",
+        )?;
+        let container: serde_json::Value = serde_json::from_str(&container).context(JsonSnafu {
+            path: manifest_path,
+        })?;
+        let init_pid = container
+            .pointer("/info/pid")
+            .and_then(serde_json::Value::as_u64)
+            .and_then(|pid| u32::try_from(pid).ok())
+            .filter(|pid| *pid > 0)
+            .ok_or_else(|| {
+                invalid_state(format!(
+                    "the `{container_name}` network-probe CRI PID is invalid"
+                ))
+            })?;
+        let cgroup = self.kubernetes_cgroup_for_pid(init_pid)?;
+        let procs_path = cgroup.join("cgroup.procs");
+        let deadline = Instant::now() + Duration::from_secs(4);
+        loop {
+            let tasks = fs::read_to_string(&procs_path)
+                .context(IoSnafu { path: &procs_path })?
+                .split_ascii_whitespace()
+                .map(|pid| {
+                    pid.parse::<u32>().map_err(|source| {
+                        invalid_state(format!(
+                            "the `{container_name}` network-probe cgroup has invalid PID `{pid}`: {source}"
+                        ))
+                    })
+                })
+                .collect::<Result<BTreeSet<_>>>()?;
+            ensure!(
+                tasks.len() == 1 && tasks.contains(&init_pid),
+                InvalidInputSnafu {
+                    path: &procs_path,
+                    reason: format!(
+                        "the `{container_name}` network probe created an in-container task: {tasks:?}"
+                    ),
+                }
+            );
+            if Instant::now() >= deadline {
+                return Ok(true);
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
     }
 
     fn kubernetes_output(&self, arguments: &[&str], description: &str) -> Result<String> {

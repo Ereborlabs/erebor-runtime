@@ -1,0 +1,46 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: MITHRIL_IDENTITY_NETWORK_PROBE_NAMESPACE
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: mithril-network-probes
+  namespace: MITHRIL_IDENTITY_NETWORK_PROBE_NAMESPACE
+spec:
+  automountServiceAccountToken: false
+  restartPolicy: Never
+  terminationGracePeriodSeconds: 5
+  containers:
+    - name: http
+      image: registry.k8s.io/e2e-test-images/agnhost:2.59@sha256:17bbb702a0754dcdb5bf4ac6f62d9eafc2dd7ec10b3fed28a330100516de1dce
+      imagePullPolicy: IfNotPresent
+      command: ["/agnhost", "netexec", "--http-port=8080", "--udp-port=-1"]
+      readinessProbe:
+        httpGet:
+          path: /
+          port: 8080
+        periodSeconds: 1
+        timeoutSeconds: 1
+        failureThreshold: 30
+    - name: tcp
+      image: registry.k8s.io/e2e-test-images/agnhost:2.59@sha256:17bbb702a0754dcdb5bf4ac6f62d9eafc2dd7ec10b3fed28a330100516de1dce
+      imagePullPolicy: IfNotPresent
+      command: ["/agnhost", "netexec", "--http-port=8081", "--udp-port=-1"]
+      readinessProbe:
+        tcpSocket:
+          port: 8081
+        periodSeconds: 1
+        timeoutSeconds: 1
+        failureThreshold: 30
+    - name: grpc
+      image: registry.k8s.io/e2e-test-images/agnhost:2.59@sha256:17bbb702a0754dcdb5bf4ac6f62d9eafc2dd7ec10b3fed28a330100516de1dce
+      imagePullPolicy: IfNotPresent
+      command: ["/agnhost", "grpc-health-checking", "--port=5000", "--http-port=8082"]
+      readinessProbe:
+        grpc:
+          port: 5000
+        periodSeconds: 1
+        timeoutSeconds: 1
+        failureThreshold: 30
