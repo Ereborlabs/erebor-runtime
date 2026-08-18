@@ -1,4 +1,3 @@
-use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -850,16 +849,4 @@ pub enum CohortSelectionV1 {
 
 pub(crate) fn ordered_unique<T: Ord>(values: &[T]) -> bool {
     values.windows(2).all(|pair| pair[0] < pair[1])
-}
-
-pub(crate) fn duplicate_ids<'a>(ids: impl Iterator<Item = &'a str>) -> Vec<String> {
-    let mut counts = BTreeMap::new();
-    for id in ids {
-        *counts.entry(id).or_insert(0_u8) = counts.get(id).copied().unwrap_or(0).saturating_add(1);
-    }
-    counts
-        .into_iter()
-        .filter(|(_, count)| *count > 1)
-        .map(|(id, _)| id.to_owned())
-        .collect()
 }

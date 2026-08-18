@@ -30,6 +30,17 @@ fn checked_policy_is_closed_and_compiles_deterministically() -> mithril_control:
 }
 
 #[test]
+fn child_owned_policy_values_validate_before_document_relationships() -> mithril_control::Result<()>
+{
+    let mut document = parse(VALID_POLICY)?;
+    document.roles[0].role_id = "INVALID_ROLE".to_owned();
+    assert!(PolicyCompiler
+        .compile(&document)
+        .is_err_and(|error| error.to_string().contains("CFG_LOCAL_ID")));
+    Ok(())
+}
+
+#[test]
 fn administrative_entry_requires_the_exact_approval_contract() -> mithril_control::Result<()> {
     let mut document = parse(VALID_POLICY)?;
     document

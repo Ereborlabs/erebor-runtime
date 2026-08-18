@@ -8,6 +8,8 @@ mod simulation;
 mod source;
 mod source_proof;
 mod source_response;
+#[rustfmt::skip]
+mod validation;
 
 pub use artifact::PolicyArtifactOwner;
 pub use compiler::{
