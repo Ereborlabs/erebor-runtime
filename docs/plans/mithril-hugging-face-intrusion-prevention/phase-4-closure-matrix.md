@@ -6,8 +6,8 @@ Manual acceptance: [Phase 4 runbook](./manual-testing/phase-4-manual-acceptance.
 
 ## Closure Decision
 
-Phase 4 is `Not done` at source commit
-`13849d53d7b5f68d77350437ef7769f1cdb9d215`. The reviewed architecture
+Phase 4 is `Not done` at implementation commit
+`5dd695e89868bdc8461c9db383b61b90029e07a3`. The reviewed architecture
 SHA-256 is
 `22678b9c0379ff915fe595059f3da2789c3e32cdf54d61656c7257175263d14a`.
 
@@ -26,7 +26,7 @@ The status terms in this matrix have these meanings:
 - `Implementation open`: one or more required authority, lifecycle, race, or
   control paths do not exist.
 
-Current count: 11 `Done`, zero `Proof open`, and 17 `Implementation open`
+Current count: 12 `Done`, zero `Proof open`, and 16 `Implementation open`
 for the 28 Appendix C fixtures. The additional plan-owned path-tree test is
 `Done`.
 
@@ -37,7 +37,7 @@ for the 28 Appendix C fixtures. The additional plan-owned path-tree test is
 | `D4.1` | [`NodePolicyGenerationOwner`](../../../crates/mithril-node/src/policy.rs) verifies signed artifacts and rollback state, preflights capacity, stages and reads back rows, probes staged decisions, publishes one profile-generation pointer, recovers ambiguous commits, retains old holders, and deletes retired rows after represented references clear. | Partial | Prove crash and concurrent-holder retirement, pending exec and administrative state, and the required post-reference grace boundary in one current physical lifecycle matrix. |
 | `D4.2` | The BPF exec and memory hooks enforce exact file-backed exec variants and represented executable mappings. Unsupported anonymous, memfd, and pkey paths fail closed. | Partial | Add complete immutable image, content-race, script, interpreter, `binfmt_misc`, loader, pkey, and VMA provenance. Run the protected concurrent-exec race. |
 | `D4.3` | Exact file rows, represented aliases, passed-descriptor acquisition and use, recursive path-tree denial, global mount invalidation, propagation-peer invalidation, and exact reconciliation exist. | Partial | Add projected-token rotation, overlay copy-up, persistent file and VMA state, positive create parent-and-name authority, and the remaining local acquisition provenance. Qualify the complete mount race matrix. |
-| `D4.4` | Exact Unix-stream relationships and exact process-control target rows exist. The runner has positive, stale-peer, unmatched-peer, and denial controls. | Partial | Add the required inherited channel, listener transfer, socket activation, datagram, pipe, shared-memory, zero-copy, and remaining asynchronous lifetime models. |
+| `D4.4` | Exact Unix-stream relationships and exact process-control target rows exist. The runner has positive, inherited-endpoint, stale-peer, unmatched-peer, and denial controls. | Partial | Add listener transfer, socket activation, datagram, pipe, shared-memory, zero-copy, and remaining asynchronous lifetime models. |
 | `D4.5` | Exact device ioctl and process-control rows exist. Represented namespace, BPF, and managed-pin operations fail closed. | Partial | Add derived-device, capability, credential, namespace, process-vm, pidfd, perf, module, keyring, and complete local self-protection authority. |
 | `D4.6` | Signed bounded exceptions use exact matching entries, atomic consumption, receipts, and a restart-safe WAL. The administrative path reaches Control, admission, and slot arm. | Partial | Model stock-runc bootstrap without a broad exception. Then prove one exact winner plus replay, expiry, mismatch, disconnect, and contention denials. |
 | `D4.7` | The node reports `LANDLOCK_TARGET_CONTEXT_FLOOR=ABSENT` with reason `NO_QUALIFIED_TARGET_CONTEXT_INSTALL`. | Done as `ABSENT` | No Landlock work is a release gate for this platform result. |
@@ -72,7 +72,7 @@ for the 28 Appendix C fixtures. The additional plan-owned path-tree test is
 | `MOUNT-PROPAGATION-003` | One propagation peer enters fail closure and later reconciles. | Add the complete affected-view and overflow model, then run the full propagation race matrix. | Implementation open |
 | `MOUNT-SNAPSHOT-004` | Complete represented snapshots restore exact authority; partial or replaced views remain dirty and denied. | The current-source physical record has global invalidation, propagation-view fail closure, reconciliation, external replacement fail closure, and exact restoration true. | Done |
 | `SELF-PROTECT-001` | The runner denies one managed link-pin unlink and detects some pin identity changes. | Protect or explicitly close capability for program, link, map, pin-root, configuration, binary, process, and update-path replacement. Add a physical postcondition for each claimed operation. | Implementation open |
-| `STATE-FORK-IPC-002` | Phase 3 has an inherited-channel simulation case. Production exact relationship state exists. | Fork while a real pipe or socket state is inherited. Prove that the inherited restriction remains active and that the declared positive channel still works. | Implementation open |
+| `STATE-FORK-IPC-002` | The protected effect runner forks after it creates an exact Unix-stream relationship. The child inherits the connected endpoint but has a distinct task and process identity. | The current-source physical record has `inherited_unix_stream_send_denied=true` and `unix_stream_relationship_allowed=true`. The inherited child receives no relationship authority from the parent. | Done |
 | `STATE-PERSISTENT-FILE-LIFETIME-007` | Exact live file identity prevents a different inode from inheriting an old row by name. | Add persistent object state across close, node restart, storage remount or reuse, and exact retirement. Prove a new object cannot inherit clean authority. | Implementation open |
 | `STATE-THREAD-RACE-001` | Generation publication is atomic for new roots, and existing tasks retain their pinned generation. | Race a real task role or generation transition with a protected local effect. Prove every effect sees one complete state and no stale authority completes. | Implementation open |
 
@@ -92,29 +92,29 @@ the exact lookup order and limits.
 
 ## Current-Source Physical Record
 
-The repository VM harness passed at worktree commit `e9efc7d`. The Rust and
-BPF source state is commit `13849d5`; `e9efc7d` adds only this closure
-matrix and its phase-plan link. The guest ran x86-64 Ubuntu Linux
+The repository VM harness passed at implementation commit `5dd695e`. The guest
+ran x86-64 Ubuntu Linux
 `6.8.0-137-generic` with BPF LSM, cgroup v2, runtime BTF, and unique mount
 IDs. The production BPF object SHA-256 is
-`e44e761a8bfa2c33f02475beb4162d41efdbe704ee10960bd03fafb31b4d13d8`.
+`ca4dace998d14c6755d759bc7c20d0c21a34c40c18c75c317f4ea2a84b95cd64`.
 
 The local-enforcement JSON is
-`/tmp/mithril-phase4-diagnostic-13849d5/local-enforcement-physical-probe.json`.
+`/tmp/mithril-phase4-full-after-fixes/local-enforcement-physical-probe.json`.
 Its SHA-256 is
-`d91ce0bbc952090de0ccebdab1dc4c834749116c052897472f96028195e9a976`.
+`04b1fdb9f5b86c884612a880d79fe272d45e79eaade69a1fc238808376eab465`.
 The harness validated the kernel, identity, observation, protection, and
 cleanup records before it returned success. The record has 10,000 measured
 opens and 50,000 saturation opens. It also has `pin_root_removed=true`,
 `lease_removed=true`, `cgroup_removed=true`, and
 `fixture_root_removed=true`.
 
-Two earlier fresh guests stopped in the native-identity prerequisite before
-they ran the effect probe. One timed out while it waited for a PID-namespace
-intermediate identity. One timed out while it waited for a profile reference
-to release. Each failed run retained only its platform record and destroyed
-its guest. The successful current-source record is valid for the 11 rows above,
-but the prerequisite timing failures remain a harness reliability concern.
+The identity source now serializes external-root label publication against a
+concurrent exit. The physical fixture also uses explicit process barriers for
+PID-namespace and `CLONE_INTO_CGROUP` transitions. Six consecutive identity
+probes passed in one retained guest. The fresh full harness then passed the
+identity probe and reported `profile_task_refs_after_exit=0`. Its identity JSON
+SHA-256 is
+`fff4e3f494751c01b8e75c83e1515bbb16ce143ea4c93ac7e2e79c7c4dc66c99`.
 
 ## Work Assigned To Later Phases
 

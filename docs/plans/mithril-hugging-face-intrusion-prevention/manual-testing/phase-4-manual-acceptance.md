@@ -214,26 +214,26 @@ token rotation, or administrative exec.
 
 ### Current-source local enforcement record — 2026-08-18
 
-The repository VM harness passed at worktree commit `e9efc7d`. The Rust and
-BPF source state is commit `13849d5`; `e9efc7d` adds only the Phase 4
-closure matrix and its phase-plan link. The guest ran x86-64 Ubuntu Linux
+The repository VM harness passed at implementation commit `5dd695e`. The guest
+ran x86-64 Ubuntu Linux
 `6.8.0-137-generic` with BPF LSM, cgroup v2, runtime BTF, and unique mount
 IDs.
 
 The local-enforcement record is
-`/tmp/mithril-phase4-diagnostic-13849d5/local-enforcement-physical-probe.json`.
+`/tmp/mithril-phase4-full-after-fixes/local-enforcement-physical-probe.json`.
 Its SHA-256 is
-`d91ce0bbc952090de0ccebdab1dc4c834749116c052897472f96028195e9a976`.
+`04b1fdb9f5b86c884612a880d79fe272d45e79eaade69a1fc238808376eab465`.
 The production BPF object SHA-256 is
-`e44e761a8bfa2c33f02475beb4162d41efdbe704ee10960bd03fafb31b4d13d8`.
+`ca4dace998d14c6755d759bc7c20d0c21a34c40c18c75c317f4ea2a84b95cd64`.
 The protected deployment digest is
 `741a9fd0857e360a8b3096924f52dd59695d9f6440aa6610370e4e092b23b1dc`.
 
 The record closes the represented physical rows for passed file descriptors,
-file mappings, exact mount views, restricted io_uring, exact Unix-stream and
-process-control relationships, event saturation, mount CAS, and mount
+file mappings, exact mount views, restricted io_uring, inherited and exact
+Unix-stream relationships, process-control relationships, event saturation,
+mount CAS, and mount
 snapshots. The [closure matrix](../phase-4-closure-matrix.md) names the exact
-11 Appendix C rows and their limits. The record also has:
+12 Appendix C rows and their limits. The record also has:
 
 - `new_roots_generation_published_atomically=true`,
   `existing_tasks_retained_old_generation=true`, and
@@ -241,17 +241,20 @@ snapshots. The [closure matrix](../phase-4-closure-matrix.md) names the exact
 - 10,000 measured opens and 50,000 saturation opens;
 - 39,081 lost observation records during saturation while the policy denial
   and benign allow remained true; and
+- `inherited_unix_stream_send_denied=true` with
+  `unix_stream_relationship_allowed=true`; and
 - `pin_root_removed=true`, `lease_removed=true`,
   `cgroup_removed=true`, and `fixture_root_removed=true`.
 
-Two earlier fresh guests stopped in the native-identity prerequisite before
-they ran the effect probe. One timed out while it waited for a PID-namespace
-intermediate identity. One timed out while it waited for a profile reference
-to release. Each failed run retained only its platform record and destroyed
-its guest. The successful current-source effect record remains valid. The
-prerequisite timing failures remain a harness reliability concern.
+The identity source serializes external-root label publication against a
+concurrent exit. The physical fixture uses explicit process barriers for
+PID-namespace and `CLONE_INTO_CGROUP` transitions. Six consecutive identity
+probes passed in one retained guest. The fresh full harness then passed the
+identity probe with `profile_task_refs_after_exit=0`. The identity JSON
+SHA-256 is
+`fff4e3f494751c01b8e75c83e1515bbb16ce143ea4c93ac7e2e79c7c4dc66c99`.
 
-This result does not qualify the 17 implementation-open rows in the closure
+This result does not qualify the 16 implementation-open rows in the closure
 matrix. It does not qualify projected-token rotation, immutable content and
 VMA provenance, complete derived authority, complete self-protection, or
 administrative exec.
