@@ -147,6 +147,7 @@ Then run only the case being checked:
 | Kubernetes ephemeral identity | `sudo examples/mithril-identity-manual/kubernetes-ephemeral.sh` in the manual VM |
 | Kubernetes exec-probe identity | `sudo examples/mithril-identity-manual/kubernetes-probe-impersonation.sh` in the manual VM |
 | Kubernetes PreStop identity | `sudo examples/mithril-identity-manual/kubernetes-prestop.sh` in the manual VM |
+| Kubernetes prestart and PostStart identity | `sudo examples/mithril-identity-manual/kubernetes-poststart.sh` in the manual VM |
 | Native child | `sudo examples/mithril-identity-manual/native-child.sh NODE_CONFIG CONTAINER_OR_FULL_CRI_ID` |
 | Orphaned native child | `sudo examples/mithril-identity-manual/native-child.sh NODE_CONFIG CONTAINER_OR_FULL_CRI_ID --orphan` |
 | Double-fork native child | `sudo examples/mithril-identity-manual/native-child.sh NODE_CONFIG CONTAINER_OR_FULL_CRI_ID --double-fork` |
@@ -364,6 +365,39 @@ identity. The script releases the hook and requires Pod deletion to complete.
 This check proves termination-time identity retention. Phase 4 owns
 containment and effect policy. The script removes its Namespace, node, pins,
 lease, temporary paths, and fixture at exit.
+
+## Kubernetes Prestart And PostStart Identity Check
+
+Use the retained manual Kubernetes VM and run:
+
+```sh
+sudo examples/mithril-identity-manual/kubernetes-poststart.sh
+```
+
+The VM harness installs the checked OCI prestart hook and the `mithril`
+containerd runtime handler. The script creates three Pods with that
+`RuntimeClass`. For each application container, the prestart hook reports the
+exact held init PID, cgroup, full container ID, and Kubernetes annotations.
+The script verifies the live CRI record and sole cgroup PID, starts the real
+Mithril node with those static bindings, and then releases container start.
+
+Two Pods run a real exec `PostStart` hook on opposite sides of the application
+entrypoint. The application tasks must be initial roots. The hooks must be
+distinct restricted external roots. The third Pod keeps its first hook in
+flight while the script restarts K3s. The script then reads the exact exec-hook
+command from the live Pod and sends the same command through CRI `ExecSync`.
+The application identity must stay unchanged. Both hook deliveries must have
+fresh task and process identities under the same restricted external role.
+
+K3s `v1.35.5+k3s1` did not automatically resend the in-flight hook during the
+qualified restart. This check does not claim that behavior. Kubernetes permits
+duplicate hook delivery but does not guarantee deterministic resend after a
+restart. The script supplies the second exact delivery so an operator can
+verify Mithril's duplicate-entry identity behavior.
+
+The script removes its Namespace, RuntimeClass, fixture, prestart request,
+node, pin, lease, state, and temporary files. The retained VM remains under
+`manual.sh` ownership.
 
 ## Namespace Entry And Cgroup Movement Check
 

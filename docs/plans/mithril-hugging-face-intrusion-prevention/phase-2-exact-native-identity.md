@@ -9,7 +9,9 @@ used Kubernetes through the K3s distribution. A targeted ephemeral container
 also kept a separate identity tree while it shared the application PID
 namespace. Concurrent exec probes and probe-identical native, `kubectl exec`,
 and direct CRI entries also kept their required identity classes. The complete
-failure-injection and entry-case matrix is not recorded.
+failure-injection and entry-case matrix is not recorded. A qualified OCI
+prestart path now binds the held container init task before its first exec and
+keeps real PostStart hooks distinct in both application-start orders.
 
 Master: [Mithril Hugging Face Intrusion Prevention](./README.md)
 Design: [Validated readable architecture](./policy-and-protection-algorithm-architecture-readable.md)
@@ -129,7 +131,7 @@ Policy matching, effect allow/deny tables, graph conclusions, and response.
 
 ```text
 State: Blocked.
-Validated architecture revision/digest: policy-and-protection-algorithm-architecture-readable.md at SHA-256 31e2ab2590a6781db6e1bf61c0147090d790f201756d08c87753981b79ebfe37.
+Validated architecture revision/digest: policy-and-protection-algorithm-architecture-readable.md at SHA-256 22678b9c0379ff915fe595059f3da2789c3e32cdf54d61656c7257175263d14a.
 Completed deliverable IDs: D2.1-D2.6 are implemented and code-backed. The current source passed the disposable privileged VM identity probe. The phase cannot be marked Done until the remaining failure-injection and entry-case matrix passes.
 Files and durable owners changed: erebor-interceptor-abi owns the generated snake_case Rust/C task, process, entry, authority, fork-edge, exec, binding, reference, and health layouts; bpf/erebor-interceptor/programs owns the production CO-RE identity object through one translation-unit front, one map owner, shared task/root helpers, and lifecycle/exec/effect/exit hook families; erebor-interceptor owns the fully vendored libbpf-rs load/attach/pin/reuse/readback lifecycle and its narrow read-only pinned-map reader, and embeds the single libbpf-cargo-built production object; mithril-node owns binding publication, exact CRI inventory reconciliation, boot/label epochs, task reconciliation, signed-intent verification, trust/time/replay state, one-use authorization identity, and the read-only live-task inspector used by operators and e2e; mithril-e2e owns the bounded acceptance runners and disposable VM harness; examples/mithril-identity-manual owns the operator-driven cases.
 Build and simplicity result: libbpf-cargo 0.27.0 is the only production C-to-BPF build path, and the production C is compiled with -Wall -Werror. The resulting object is embedded in the node binary and opened from memory through fully vendored libbpf-rs 0.27.0; the former second configured object path/checksum and Docker build-directory copy were removed. The BPF source follows the checked-source hook-family shape without adding another object, loader, map owner, or link step: the small `identity.bpf.c` front includes the map/task/root owners and cohesive lifecycle, exec-transaction, effect-gate, and exit families into the same object. cbindgen remains only the Rust-to-C ABI renderer and drift check. Standard Linux names CLONE_PARENT, CLONE_THREAD, AT_EXECVE_CHECK, and EACCES are used through the minimal syscall-note UAPI header because those macros are absent from vmlinux BTF and full host UAPI headers would make the CO-RE translation unit host-architecture-dependent. Product-owned state constants are generated once from the shared ABI.
@@ -137,9 +139,11 @@ Correctness-preserving simplifications: execution_set_bindings is the single cgr
 Upstream-adoption dossier IDs used: BJ-TASK-STORAGE-001 and BJ-REJECTED-ENROLLMENT-002 for task-first allocation and rejection of delayed PID enrollment; KA-LSM-DECISION-001 and KA-PATH-MOUNT-003 for prior-result/fail-closed LSM behavior and live mount identity; TG-FORK-EXEC-001, TG-RUNTIME-CGROUP-JOIN-002, TG-FRESH-MAPS-004, TG-VMLINUX-HEADER-006, and TG-VMLINUX-ARM64-007 for fork/exec, cgroup binding, recoverable publication, and CO-RE headers; AS-VMLINUX-ARM-001 and AS-VMLINUX-RISCV-002 for checked compile headers. No upstream daemon, policy engine, loader, or delayed-enrollment model was copied.
 Fixture cases and exact physical results: the source allocates exactly 29 Phase 2 fixture IDs. Unit tests cover authorization-envelope identity, ABI layout, binding identity, runtime reconciliation, reference parsing, object embedding, required program/map sets, packaging, and fixture allocation. The native physical probe covers initial and external roots, direct `clone3(CLONE_INTO_CGROUP)`, native inheritance, exec continuity, reparenting, movement, restart, and cleanup. The Kubernetes extension covers the pre-existing conservative root, direct CRI exec, non-TTY and TTY `kubectl exec`, `kubectl cp`, an identical native child, the native lifecycle `sleep` action, HTTP, TCP, and gRPC readiness probes, distinct regular-init, native-sidecar, and application roots, a targeted ephemeral root in a shared PID namespace, concurrent exec-probe impersonation controls, and termination-time PreStop identity. The schema-15 entry JSON SHA-256 is ef749b5a6d2521c6bd865317ce3843bf685610d009500f6d37569c9bd26a57cc. The schema-16 lifecycle-sleep JSON SHA-256 is a62e82352a3153c65895d69265e4e0265d78ec6a76679e50a7d1f0bbcc2804fb. The schema-17 network-probe JSON SHA-256 is cbc024f56ce366a84aa2b0ffdbb7efaab58599b282d1f24295f30c08702fac07. The schema-18 container-identity JSON SHA-256 is dfb7b407b8a945c474a210fb769abbc09b03599ecb271f4c27cb9d195da92ada. The schema-19 ephemeral-identity JSON SHA-256 is ee12bc57c8431ac801ae6e06e2e55dbf75ec50692b3a594785fc0d27fabf0efc. The schema-20 probe-identity JSON SHA-256 is abead9ce84882d9ecc69853a417ef39ccd629f0df7de97e4ac0e5eebfd9190a6. The schema-21 PreStop JSON SHA-256 is 4d14142beb3671342c7c6d2c8ed8e5c9d85da730f60ef556f7783f7cd231fcee. The independent runtime entries are restricted external roots with no fabricated purpose. The identical children have native parent lineage and the parent's restricted role. Each lifecycle-sleep and network-probe cgroup contained only its container init PID. The regular init, native sidecar, application, and ephemeral container have separate conservative roots and execution sets as applicable. Fixture allocation and unit coverage are not physical execution of every fixture. The closure matrix states each remaining exact limit.
 Commands and exact source state covered: source commit 098f167c88755f88acabf7f387da5095d568869d freezes the accepted PreStop runner, manifest, runtime helper, and manual shell. The accepted schema-21 JSON is /tmp/mithril-phase2-kubernetes-prestop-20260818-044/identity-physical-probe.json. The retained VM ran examples/mithril-identity-manual/kubernetes-prestop.sh as root; it passed from the same source bytes. Source commit 4ca2d26bd90ad6a9cd85b7fe5e9e615a6ea4fa14 and schema-20 JSON cover probe identity. Source commit 76d0145c2ecd7991ab7160773faf452c383df6a9 and schema-19 JSON cover ephemeral identity. Source commit 6e23a23e327f70b3462faf932b0845f7e52ec67f and schema-18 JSON cover container identity. Source commit f9b7c8bc2be84f2a39f3db7b43dae3ab1914c0d0 and schema-17 JSON cover network probes. Source commit 828fdec76c5753790c526d87e6757fde6134002e and schema-16 JSON cover lifecycle sleep. Source commit 53fbd287aad8b6012eb4f80dcd4fe83e34ed5470 and schema-15 JSON cover the Kubernetes entry forms. The manual and automated owners removed their Namespace, fixture, pin, lease, cgroup, node process, and loaded Erebor Interceptor programs. The manual harness destroyed each retained VM.
-Platform/kernel/runtime manifests: the current physical result ran on x86_64 Ubuntu 24.04, kernel 6.8.0-137-generic, with cgroup v2 and the required BPF/LSM support. Kubernetes v1.35.5 ran through the K3s v1.35.5+k3s1 distribution and the live containerd CRI endpoint. The runner created an exact Pod/CRI binding before it tested later runtime roots. The BPF object SHA-256 is 3269516fcd2714ab7fbe29df26386c40f0c912b6284007b641d8bbf68842b876. The production program compiles through the checked x86, arm64, arm, and riscv vmlinux dispatch. Compilation is not a non-x86 physical result.
+PostStart qualification update: source commit a056f00fd7d110cc0582b6e8a476de1d1e233a59 and schema-22 JSON cover prestart-bound initial roots, both real PostStart orders, and one repeated exact hook delivery after K3s restart. The accepted JSON is /tmp/mithril-phase2-kubernetes-poststart-20260818-049/identity-physical-probe.json. Its SHA-256 is f7b1c44d26ad5c3b36b401d5f80e87156594dd790daf965fc65c58760e4e0dcb. The retained VM ran examples/mithril-identity-manual/kubernetes-poststart.sh as root from the same source bytes. Automated and manual cleanup removed the case Namespace, RuntimeClass, fixture, prestart request, pin, lease, cgroup, node process, and loaded programs. The VM remains retained for the next operator case.
+Platform/kernel/runtime manifests: the current physical result ran on x86_64 Ubuntu 24.04, kernel 6.8.0-137-generic, with cgroup v2 and the required BPF/LSM support. Kubernetes v1.35.5 ran through the K3s v1.35.5+k3s1 distribution, containerd v2.2.3-k3s1, the live CRI endpoint, and the configured io.containerd.runc.v2 handler. The OCI prestart hook held each init task until Mithril verified its Created container and sole cgroup PID, published its static binding, and activated identity. The BPF object SHA-256 is 02408c371aafaeeb044cbf11195a25dca35013bcdea44e37aa0756ebd2f2f3e6. The production program compiles through the checked x86, arm64, arm, and riscv vmlinux dispatch. Compilation is not a non-x86 physical result.
 Performance/capacity results: all authoritative maps are bounded and fail closed on missing or full state. No identity-specific production latency or saturation result is recorded. The feasibility benchmark is historical platform evidence, not an identity result.
 Unsupported/degraded paths: approved administrative roles, permission tables, raced policy transitions, protected effects, IPC policy, shared-resource policy, and response remain outside this identity result. A configured static Docker binding validates live cgroup identity but does not continuously validate Docker-daemon metadata. CRI-backed bindings validate exact runtime metadata and local cgroup placement, but snapshot discovery alone cannot prove that a binding preceded the first user instruction. Only a qualified Created/empty-cgroup observation or supported start interface can make that claim. The closure matrix lists the remaining Phase 2 identity, entry, coordinate, native-reference, and failure-injection results. A cleanup loss retains restriction and raises reconciliation instead of recovering authority.
+PostStart limit: K3s did not automatically resend the in-flight hook. The fixture supplied the second exact CRI delivery after restart and does not claim automatic kubelet replay. Hook timeout, mismatch, and missing-field rejection remain open.
 Remaining work in this phase: run and record the remaining Phase 2 operator rows and failure-injection matrix. Do not change the implementation result to Done without those physical artifacts.
 Next phase not authorized: yes.
 ```
@@ -391,6 +395,46 @@ passed.
 This completes `ENTRY-PRESTOP-001`. The exact limit is task identity and
 profile-reference retention during a real PreStop exec. Phase 4 owns
 containment and effect policy. Other open rows keep Phase 2 **Blocked**.
+
+## Kubernetes Prestart And PostStart Result — 2026-08-18
+
+Source commit `a056f00fd7d110cc0582b6e8a476de1d1e233a59` uses the
+existing runtime-binding and identity owners. A synchronous OCI prestart hook
+holds each real init task. Mithril verifies the full container ID, Created
+state, cgroup, sole PID, Pod UID, sandbox, container name, image digest, and
+container generation before it publishes and activates the initial root.
+
+The retained VM ran a fresh native base and the full Kubernetes extension with
+object SHA-256
+`02408c371aafaeeb044cbf11195a25dca35013bcdea44e37aa0756ebd2f2f3e6`.
+The schema-22 physical JSON is
+`/tmp/mithril-phase2-kubernetes-poststart-20260818-049/identity-physical-probe.json`.
+Its SHA-256 is
+`f7b1c44d26ad5c3b36b401d5f80e87156594dd790daf965fc65c58760e4e0dcb`.
+
+Real Kubernetes PostStart hooks ran before and after the application
+entrypoint. The two applications had task cookies `5` and `59`, initial-root
+class, and initial role `10`. Their hooks had task cookies `150` and `218`,
+restricted-external class, and role `11`. Every task and process identity was
+distinct.
+
+The restart application kept task cookie `108` and an identical snapshot.
+The first real hook had task cookie `269`. The repeated exact CRI delivery had
+task cookie `381`. Their process identities differed, and both used the same
+restricted external role.
+
+The retained VM ran
+`examples/mithril-identity-manual/kubernetes-poststart.sh` as root. It printed
+both observed orders, the two repeated-hook cookies, and `PASS`. Postflight
+found no case Namespace, RuntimeClass, fixture, prestart request, pin, lease,
+cgroup, node process, or loaded program. Full Rust CI passed.
+
+This completes `ENTRY-POSTSTART-001` and the Mithril identity oracle in
+`ENTRY-POSTSTART-002`. K3s did not automatically resend the in-flight hook.
+Kubernetes permits duplicate delivery but does not guarantee deterministic
+resend after this restart. The fixture repeats the live Pod's exact hook
+command through CRI and makes no automatic kubelet replay claim. Hook failure
+injection remains open. Other open rows keep Phase 2 **Blocked**.
 
 ## Maintenance update — 2026-08-09
 

@@ -1151,9 +1151,9 @@ The implementation performs these steps:
 
 The cgroup binding and restrictive defaults must exist before Mithril claims
 prevention for a container. If a process runs before the binding exists, the
-honest result is either a denied protected effect or a recorded start gap. It
-is never “exactly admitted before first user instruction” unless a particular
-supported integration really proves that ordering.
+honest result is either a denied protected effect or a recorded start gap. A
+qualified synchronous OCI prestart hook can prove the ordering for its exact
+runtime configuration. Snapshot CRI discovery cannot make that claim.
 
 #### What a supported hook may add
 
@@ -4241,19 +4241,29 @@ Pod UID, cgroup live interval, binding nonce, image digest, profile generation,
 and exact entry identity. Conflicts are compiler errors or explicit closed
 intersections, never logged ambiguity.
 
-#### 29.4 Use a stock runtime creation hook for what it really proves
+#### 29.4 Use each stock runtime hook for what it really proves
 
-One checked OCI `createRuntime` path can fail before user code. Another create
-path is a no-op, and policy-map failures can log and continue (`TG-CODE-004`
-and `TG-CODE-021`). The hook can report metadata or reject that create request.
-It does not hold a task, explain a later exec, or prove control before the
-first user instruction.
+Runtime hook stages have different contracts. A checked `createRuntime` path
+can report metadata or reject a request, but it does not expose a held target
+task. The qualified OCI `prestart` path runs after runc creates the container
+init task and before runc starts the application. The synchronous hook reports
+the exact PID, full container ID, cgroup, and Kubernetes annotations. It waits
+until Mithril verifies the live CRI record, verifies that the cgroup contains
+only that PID, publishes the static binding, and activates identity state.
+Only then does the hook return and let runc continue.
 
-**Example.** The OCI hook reports Pod metadata, but kernel/runtime readback
-finds a different full container ID or cgroup lifetime. Mithril rejects the
-metadata and leaves the placement under its unresolved BPF floor. Whether the
-container start itself fails depends only on the stock hook's documented
-failure semantics; Mithril does not claim it held a task.
+The held task is still in runtime mount setup before its first successful
+exec. Mithril permits mount mutations only while this exact committed initial
+container root still has its process-birth execution. The first successful
+application exec replaces that execution and closes the setup allowance. All
+other effect families continue through their normal identity gate.
+
+**Example.** The prestart hook reports PID A and cgroup C. CRI readback must
+show the same full container ID in `Created` state, and C must contain only A.
+If any fact differs, Mithril does not publish the initial role. The passing
+Phase 2 result qualifies the accepted path on the configured K3s, containerd,
+and runc versions. Hook timeout, mismatch, and rejection remain separate
+failure fixtures.
 
 #### 29.5 Keep stable process coordinates separate from authority identity
 
@@ -4423,7 +4433,7 @@ relationship or effect result does not block Phase 2.
 | --- | --- | --- |
 | `ENTRY-START-001` | Delay or drop runtime discovery/hook metadata for an initial root | The root receives conservative identity and the exact start gap is recorded. No first-instruction claim. Phase 4 owns effect denial. |
 | `ENTRY-POSTSTART-001` | Race `PostStart` and entrypoint in both orders | Initial root and external root remain distinct; neither is fabricated as the other's child. |
-| `ENTRY-POSTSTART-002` | Kubelet restart repeats `PostStart` | Each observed external task gets a fresh task/lifetime identity and the same restricted budget; no stale identity is reused. |
+| `ENTRY-POSTSTART-002` | Keep one real `PostStart` in flight across kubelet restart, then repeat the live Pod's exact hook command through CRI | Each observed external task gets a fresh task/lifetime identity and the same restricted budget; no stale identity is reused. Automatic kubelet resend is not required or claimed. |
 | `ENTRY-PRESTOP-001` | Delete Pod while a restricted root is active | Termination does not change task identity or release required native references. Phase 4 owns containment-versus-cleanup policy. |
 | `ENTRY-PROBE-001` | Concurrent startup/readiness/liveness exec probes | Stock path gives one restricted external class. Exact different purpose is claimed only for a qualified existing interface that actually carries it. |
 | `ENTRY-PROBE-002` | Application child runs identical probe binary/argv/cadence | Native lineage remains; no probe role. |

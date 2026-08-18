@@ -872,6 +872,76 @@ This completes `ENTRY-PRESTOP-001`. The exact limit is identity and profile-
 reference retention during PreStop. Phase 4 owns containment and effect
 policy. Other open rows keep Phase 2 **Blocked**.
 
+### Kubernetes prestart and PostStart identity — 2026-08-18
+
+Review this path in order:
+
+1. [`oci-prestart-admission-v1.sh`](../../../crates/mithril-e2e/fixtures/identity/oci-prestart-admission-v1.sh)
+   reports the exact runc init PID, cgroup, full container ID, and Kubernetes
+   annotations. It waits for one PID-bound acceptance response.
+2. [`WorkloadBindingOwner::publish_held_initial_roots`](../../../crates/mithril-node/src/identity/binding.rs)
+   requires one held PID in each armed static binding cgroup. The existing
+   binding map remains the placement authority.
+3. [`NativeSecurityStateOwner::activate_held_initial_admission`](../../../crates/mithril-node/src/identity/native.rs)
+   activates identity without reconciling the held init task as a late root.
+   The first kernel identity event classifies it as the initial root.
+4. [`initial_root_is_before_first_exec`](../../../bpf/erebor-interceptor/programs/identity_effects.bpf.h)
+   permits only runtime mount setup while the exact committed initial root
+   still uses its process-birth execution. The first successful exec closes
+   this allowance.
+5. [`IdentityTestRunner::physical_kubernetes_poststart_probe`](../../../crates/mithril-e2e/src/identity.rs)
+   owns the automated ordering, restart, repeat, evidence, and cleanup
+   sequence. It reuses the existing physical bundle.
+6. [`identity-runtime.sh`](../../../examples/mithril-identity-manual/identity-runtime.sh)
+   owns manual Kubernetes setup, CRI verification, bindings, pins, lease,
+   node, and cleanup. [`kubernetes-poststart.sh`](../../../examples/mithril-identity-manual/kubernetes-poststart.sh)
+   owns the operator scenario. The VM harness only installs the checked hook
+   and owns the VM lifecycle.
+
+```mermaid
+sequenceDiagram
+    participant K as Kubernetes, containerd, and runc
+    participant H as OCI prestart hook
+    participant M as Mithril identity owners
+    participant A as application and PostStart tasks
+
+    K->>H: call prestart with held init PID
+    H->>M: report PID, cgroup, container, and Pod facts
+    M->>M: verify CRI and publish the initial binding
+    M-->>H: accept the exact held PID
+    H-->>K: return and permit container start
+    K->>A: start application and real PostStart hook
+    A->>M: first kernel identity events
+    M-->>A: initial role for app; restricted role for hook
+    K->>K: restart while first repeat hook stays live
+    K->>A: repeat the live Pod hook command through CRI
+    M-->>A: fresh restricted external identity
+```
+
+Schema 22 adds the ordered application and hook snapshots, the restart
+application snapshots, the two hook snapshots, and two Boolean oracles. It
+adds no production map, role, durable type, or second runner.
+
+Source commit `a056f00fd7d110cc0582b6e8a476de1d1e233a59` produced the
+accepted JSON at
+`/tmp/mithril-phase2-kubernetes-poststart-20260818-049/identity-physical-probe.json`.
+Its SHA-256 is
+`f7b1c44d26ad5c3b36b401d5f80e87156594dd790daf965fc65c58760e4e0dcb`.
+The BPF object SHA-256 is
+`02408c371aafaeeb044cbf11195a25dca35013bcdea44e37aa0756ebd2f2f3e6`.
+
+Both real PostStart orders passed. Each application was an initial root. Each
+hook was a distinct restricted external root. The restart application stayed
+unchanged, and the repeated exact hook delivery received a fresh task and
+process identity. The manual shell passed in the retained VM. Automated and
+manual cleanup removed every case-owned object. Full Rust CI passed.
+
+K3s did not automatically resend the in-flight PostStart hook. The repeated
+delivery used the exact command from the live Pod through CRI `ExecSync` after
+restart. This qualifies Mithril's duplicate-entry behavior, not automatic
+kubelet replay. Hook timeout, mismatch, and missing-field rejection remain
+separate fixtures.
+
 ### Retained alias and mount evidence — 2026-08-15
 
 At source `5b1abfa984d0`, a retained x86_64 VM ran the existing

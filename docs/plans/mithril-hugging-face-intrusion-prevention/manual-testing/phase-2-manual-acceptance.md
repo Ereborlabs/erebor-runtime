@@ -302,7 +302,7 @@ start hook.
 | `ENTRY-LOSS-001` | drop runtime, audit, and entry evidence independently | protected unknown remains restricted and coverage reflects each loss; later phases own effect results |
 | `ENTRY-NETPROBE-001` | run HTTP/TCP/gRPC probes | no fake in-container process root; later network fixtures own flow policy |
 | `ENTRY-POSTSTART-001` | race `PostStart` and entrypoint in both orders | initial and external roots remain distinct |
-| `ENTRY-POSTSTART-002` | restart kubelet and repeat `PostStart` | fresh task/lifetime identity with same restricted budget; no stale reuse |
+| `ENTRY-POSTSTART-002` | keep one real hook in flight across kubelet restart, then repeat the live Pod's exact hook command through CRI | fresh task/lifetime identity with the same restricted budget; no stale reuse; do not require or claim automatic kubelet resend |
 | `ENTRY-PRESTOP-001` | terminate while a restricted root is active | termination does not change identity or release required native references; Phase 4 owns containment policy |
 | `ENTRY-PROBE-001` | run concurrent startup/readiness/liveness exec probes | stock purpose remains unknown/restricted; qualified evidence only if interface supplies it |
 | `ENTRY-PROBE-002` | app child runs identical probe bytes/cadence | native child keeps application lineage and cannot impersonate external root |
@@ -913,6 +913,88 @@ retention during a real exec PreStop hook: termination did not alter the live
 application identity or release its profile reference, and the hook received
 a fresh restricted external identity. Phase 4 owns containment and effect
 policy. Other open matrix rows keep Phase 2 **Blocked**.
+
+## Recorded Kubernetes Prestart And PostStart Result — 2026-08-18
+
+Source commit `a056f00fd7d110cc0582b6e8a476de1d1e233a59` freezes the
+runner, OCI prestart hook, workload manifest, node admission path, runtime
+helper, and operator shell used for this result. The implementation reuses
+`IdentityTestRunner`, `WorkloadBindingOwner`, `NativeSecurityStateOwner`, and
+the existing physical bundle. It adds no map, role, generic runner, or durable
+type.
+
+The retained x86_64 Ubuntu 24.04 VM ran kernel `6.8.0-137-generic`.
+Kubernetes `v1.35.5` ran through K3s `v1.35.5+k3s1`, containerd
+`v2.2.3-k3s1`, and the configured `io.containerd.runc.v2` handler. The root
+shell first ran a fresh native base and then ran the Kubernetes extension with
+unique paths:
+
+```sh
+target/debug/mithril-identity-test \
+  --repo-root /mnt/mithril-source \
+  --output-directory /var/tmp/mithril-poststart-native-base-20260818-5 \
+  physical-probe \
+  --pin-root /sys/fs/bpf/mithril-poststart-native-base-20260818-5 \
+  --lease-path /var/tmp/mithril-poststart-native-base-20260818-5/owner.lock \
+  --cgroup-path /sys/fs/cgroup/mithril-poststart-native-base-20260818-5
+
+target/debug/mithril-identity-test \
+  --repo-root /mnt/mithril-source \
+  --output-directory /var/tmp/mithril-poststart-auto-20260818-5 \
+  physical-probe \
+  --pin-root /sys/fs/bpf/mithril-poststart-auto-20260818-5 \
+  --lease-path /var/tmp/mithril-poststart-auto-20260818-5/owner.lock \
+  --cgroup-path /sys/fs/cgroup/mithril-poststart-auto-20260818-5 \
+  --with-kubernetes \
+  --previous-bundle \
+    /var/tmp/mithril-poststart-native-base-20260818-5/identity-physical-probe.json
+```
+
+The schema-22 JSON is
+`/tmp/mithril-phase2-kubernetes-poststart-20260818-049/identity-physical-probe.json`.
+Its SHA-256 is
+`f7b1c44d26ad5c3b36b401d5f80e87156594dd790daf965fc65c58760e4e0dcb`.
+The BPF object SHA-256 is
+`02408c371aafaeeb044cbf11195a25dca35013bcdea44e37aa0756ebd2f2f3e6`.
+The test binary SHA-256 is
+`adcb264ac75ca077c06ea6fd7bfc6d5f0624e2f3d8f0e6042c600de12101fe74`.
+
+The entrypoint-first application and hook had task cookies `5` and `150`.
+The hook-first application and hook had task cookies `59` and `218`. The
+applications had `initial_container_root`, `initial_role`, and role `10`.
+The hooks had `external_runtime_root`, `runtime_external_restricted`, and role
+`11`. All four task cookies and process-state IDs differed.
+
+The restart application kept task cookie `108` and an identical snapshot
+before and after K3s restart. The first real PostStart hook had task cookie
+`269`. The repeated CRI delivery had task cookie `381`. Their process-state
+IDs differed, and both kept the restricted external role.
+
+The retained VM also ran this command from the same source bytes:
+
+```sh
+sudo examples/mithril-identity-manual/kubernetes-poststart.sh
+```
+
+It printed both observed orders, different repeated-hook task cookies, and
+`PASS`. Automated and manual postflight found no case Namespace, RuntimeClass,
+fixture, prestart request, pin, lease, cgroup, Mithril process, or loaded
+Erebor Interceptor program. The retained VM remains available for the next
+operator case.
+
+The focused held-prestart unit test, shell syntax, formatting, diff check, and
+final `bash .github/scripts/verify-rust-ci.sh` passed. The first CI invocation
+was sandbox-blocked from local socket creation. One host-permitted retry hit an
+unrelated transient CDP `WouldBlock`. The final host-permitted full run passed.
+
+This completes `ENTRY-POSTSTART-001`. It also completes the Mithril identity
+oracle in `ENTRY-POSTSTART-002`. The exact repeat limit is important: K3s did
+not automatically resend the in-flight PostStart hook. Kubernetes permits
+duplicate hook delivery but does not guarantee deterministic resend after this
+restart. The fixture reads the live Pod's exact hook command and supplies the
+second CRI `ExecSync` delivery. It does not claim automatic kubelet replay.
+Hook timeout, mismatch, and missing-field rejection remain in
+`ENTRY-STOCK-HOOK-FAILURE-002`.
 
 ## Recorded Pre-PONR Failed Native-Exec VM Subcase — 2026-08-15
 
