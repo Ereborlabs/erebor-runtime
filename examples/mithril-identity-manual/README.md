@@ -162,6 +162,7 @@ Then run only the case being checked:
 | Kubernetes exec-probe identity | `sudo examples/mithril-identity-manual/kubernetes-probe-impersonation.sh` in the manual VM |
 | Kubernetes PreStop identity | `sudo examples/mithril-identity-manual/kubernetes-prestop.sh` in the manual VM |
 | Kubernetes prestart and PostStart identity | `sudo examples/mithril-identity-manual/kubernetes-poststart.sh` in the manual VM |
+| Kubernetes entry-source loss | `sudo examples/mithril-identity-manual/kubernetes-entry-loss.sh` in the manual VM |
 | Native child | `sudo examples/mithril-identity-manual/native-child.sh NODE_CONFIG CONTAINER_OR_FULL_CRI_ID` |
 | Orphaned native child | `sudo examples/mithril-identity-manual/native-child.sh NODE_CONFIG CONTAINER_OR_FULL_CRI_ID --orphan` |
 | Double-fork native child | `sudo examples/mithril-identity-manual/native-child.sh NODE_CONFIG CONTAINER_OR_FULL_CRI_ID --double-fork` |
@@ -413,6 +414,32 @@ verify Mithril's duplicate-entry identity behavior.
 The script removes its Namespace, RuntimeClass, fixture, prestart request,
 node, pin, lease, state, and temporary files. The retained VM remains under
 `manual.sh` ownership.
+
+## Kubernetes Entry-Source Loss Check
+
+Use the retained manual Kubernetes VM and run:
+
+```sh
+sudo examples/mithril-identity-manual/kubernetes-entry-loss.sh
+```
+
+The script creates one Pod and resolves its exact CRI identity. The node config
+is the predeclared identity assignment. The node binds that assignment to the
+live container ID, Pod UID, sandbox ID, creation generation, and cgroup.
+
+The script starts one direct CRI exec without Kubernetes audit metadata. The
+task must be a restricted external root. It then removes only that task's BPF
+label while the task is stopped. The script resumes the task for one file
+open. Mithril must give it a fresh `external_runtime_root` identity with
+`runtime_external_restricted` restriction and the configured external role.
+
+The script then stops K3s. Mithril must report
+`LIVE_IDENTITY_RECONCILIATION_FAILED`. The live task identity must not change.
+The script restarts K3s before it removes the task, Namespace, Pod, node, pin,
+lease, state, cgroup, fixture, and temporary files.
+
+This check proves independent audit-metadata absence, BPF task-label loss, and
+runtime-inventory loss. It does not test effect policy or CRD delivery.
 
 ## Namespace Entry And Cgroup Movement Check
 

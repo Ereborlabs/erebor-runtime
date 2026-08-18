@@ -271,6 +271,9 @@ fi
   "$repo_root/crates/mithril-e2e/fixtures/identity/kubernetes-poststart-workload-v1.yaml" \
   "$remote_source/crates/mithril-e2e/fixtures/identity/kubernetes-poststart-workload-v1.yaml"
 "$provider" put "$vm_name" \
+  "$repo_root/crates/mithril-e2e/fixtures/identity/kubernetes-resilience-workload-v1.yaml" \
+  "$remote_source/crates/mithril-e2e/fixtures/identity/kubernetes-resilience-workload-v1.yaml"
+"$provider" put "$vm_name" \
   "$repo_root/crates/mithril-e2e/fixtures/identity/oci-prestart-admission-v1.sh" \
   "$remote_source/crates/mithril-e2e/fixtures/identity/oci-prestart-admission-v1.sh"
 for fixture in observe-profile-seal-request.json test-public-key.hex test-signing-key.hex observe-policy-v1.yaml; do

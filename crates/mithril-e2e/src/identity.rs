@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::{Read as _, Write as _};
 use std::mem::{offset_of, size_of};
-use std::os::fd::OwnedFd;
+use std::os::fd::{AsRawFd as _, OwnedFd};
 use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStderr, ChildStdin, Command, Stdio};
@@ -23,7 +23,7 @@ use erebor_interceptor_abi::{
     ProcessStateVectorStateV1, ProcessStateVectorV1, ReferenceTombstoneStateV1,
     TaskCoordinateStateV1, TaskCoordinateV1, TaskReferenceTombstoneV1, TASK_REFERENCE_ALL_V1,
 };
-use libbpf_rs::{MapHandle, MapType};
+use libbpf_rs::{MapCore as _, MapHandle, MapType};
 use mithril_control::{
     encode_administrative_authorization_fixture, AdministrativeExecResolution,
     AdministrativeFileObject, ResolvedAdministrativeExecutable,
@@ -284,6 +284,11 @@ pub struct IdentityPhysicalProbeBundleV1 {
     pub kubernetes_poststart_first_hook: Option<NativeTaskSnapshotV1>,
     pub kubernetes_poststart_repeated_hook: Option<NativeTaskSnapshotV1>,
     pub kubernetes_poststart_repeat_fresh_identity: Option<bool>,
+    pub kubernetes_loss_audit_absent_root: Option<NativeTaskSnapshotV1>,
+    pub kubernetes_loss_bpf_recovered_root: Option<NativeTaskSnapshotV1>,
+    pub kubernetes_loss_bpf_recovered_fresh_restricted: Option<bool>,
+    pub kubernetes_loss_runtime_root: Option<NativeTaskSnapshotV1>,
+    pub kubernetes_loss_runtime_identity_unhealthy: Option<bool>,
     pub kubernetes_fixture_removed: bool,
 }
 
@@ -2355,7 +2360,7 @@ impl IdentityTestRunner {
             }
         );
         Ok(IdentityPhysicalProbeBundleV1 {
-            schema_version: 24,
+            schema_version: 25,
             object_sha256,
             first_start,
             distinct_pin_root_owner_rejected,
@@ -2491,6 +2496,11 @@ impl IdentityTestRunner {
             kubernetes_poststart_first_hook: None,
             kubernetes_poststart_repeated_hook: None,
             kubernetes_poststart_repeat_fresh_identity: None,
+            kubernetes_loss_audit_absent_root: None,
+            kubernetes_loss_bpf_recovered_root: None,
+            kubernetes_loss_bpf_recovered_fresh_restricted: None,
+            kubernetes_loss_runtime_root: None,
+            kubernetes_loss_runtime_identity_unhealthy: None,
             kubernetes_fixture_removed: false,
         })
     }
@@ -2609,8 +2619,22 @@ impl IdentityTestRunner {
             && bundle.kubernetes_poststart_first_hook.is_some()
             && bundle.kubernetes_poststart_repeated_hook.is_some()
             && bundle.kubernetes_poststart_repeat_fresh_identity == Some(true);
+        let loss_results_missing = bundle.kubernetes_loss_audit_absent_root.is_none()
+            && bundle.kubernetes_loss_bpf_recovered_root.is_none()
+            && bundle
+                .kubernetes_loss_bpf_recovered_fresh_restricted
+                .is_none()
+            && bundle.kubernetes_loss_runtime_root.is_none()
+            && bundle.kubernetes_loss_runtime_identity_unhealthy.is_none();
+        let loss_results_present = bundle.kubernetes_loss_audit_absent_root.is_some()
+            && bundle.kubernetes_loss_bpf_recovered_root.is_some()
+            && bundle.kubernetes_loss_bpf_recovered_fresh_restricted == Some(true)
+            && bundle.kubernetes_loss_runtime_root.is_some()
+            && bundle.kubernetes_loss_runtime_identity_unhealthy == Some(true);
+        let schema_compatible =
+            bundle.schema_version == 25 || (bundle.schema_version == 24 && loss_results_missing);
         ensure!(
-            bundle.schema_version == 24
+            schema_compatible
                 && (entry_results_missing || entry_results_present)
                 && matches!(bundle.kubernetes_lifecycle_sleep_no_task, None | Some(true))
                 && (network_results_missing || network_results_present)
@@ -2618,13 +2642,14 @@ impl IdentityTestRunner {
                 && (ephemeral_results_missing || ephemeral_results_present)
                 && (probe_results_missing || probe_results_present)
                 && (prestop_results_missing || prestop_results_present)
-                && (poststart_results_missing || poststart_results_present),
+                && (poststart_results_missing || poststart_results_present)
+                && (loss_results_missing || loss_results_present),
             InvalidInputSnafu {
                 path: previous_bundle_path,
                 reason: "the prior identity bundle cannot accept the next Kubernetes result",
             }
         );
-        bundle.schema_version = 24;
+        bundle.schema_version = 25;
         if entry_results_missing {
             self.physical_kubernetes_exec_probe(
                 output_directory,
@@ -2683,6 +2708,14 @@ impl IdentityTestRunner {
                 &mut bundle,
             )?;
         }
+        if loss_results_missing {
+            self.physical_kubernetes_loss_probe(
+                output_directory,
+                pin_root,
+                lease_path,
+                &mut bundle,
+            )?;
+        }
         bundle.kubernetes_fixture_removed = true;
         Ok(bundle)
     }
@@ -2693,6 +2726,44 @@ impl IdentityTestRunner {
         }
         let bytes = serde_json::to_vec_pretty(value).context(JsonSnafu { path: output })?;
         fs::write(output, bytes).context(IoSnafu { path: output })
+    }
+
+    pub fn remove_task_label_for_fixture(&self, pin_root: &Path, host_pid: u32) -> Result<()> {
+        let raw_pid = i32::try_from(host_pid)
+            .map_err(|error| invalid_state(format!("host PID {host_pid} is invalid: {error}")))?;
+        let pid = Pid::from_raw(raw_pid)
+            .ok_or_else(|| invalid_state("host PID zero cannot identify a task"))?;
+        let pidfd = pidfd_open(pid, PidfdFlags::empty())
+            .map_err(std::io::Error::from)
+            .context(IoSnafu {
+                path: PathBuf::from(format!("/proc/{host_pid}")),
+            })?;
+        let path = pin_root.join("maps/task_labels");
+        let map = MapHandle::from_pinned_path(&path).map_err(|error| {
+            invalid_state(format!("open task-label map for loss injection: {error}"))
+        })?;
+        let key = pidfd.as_raw_fd().to_ne_bytes();
+        ensure!(
+            map.lookup(&key, libbpf_rs::MapFlags::ANY)
+                .map_err(|error| invalid_state(format!("read task label before loss: {error}")))?
+                .is_some(),
+            InvalidInputSnafu {
+                path: &path,
+                reason: "the task has no label to remove",
+            }
+        );
+        map.delete(&key)
+            .map_err(|error| invalid_state(format!("remove task label: {error}")))?;
+        ensure!(
+            map.lookup(&key, libbpf_rs::MapFlags::ANY)
+                .map_err(|error| invalid_state(format!("read task label after loss: {error}")))?
+                .is_none(),
+            InvalidInputSnafu {
+                path: &path,
+                reason: "the task label survived loss injection",
+            }
+        );
+        Ok(())
     }
 
     fn materialize_object(&self, output_directory: &Path) -> Result<PathBuf> {
@@ -5837,6 +5908,419 @@ impl IdentityTestRunner {
         Ok(())
     }
 
+    fn physical_kubernetes_loss_probe(
+        &self,
+        output_directory: &Path,
+        pin_root: &Path,
+        lease_path: &Path,
+        bundle: &mut IdentityPhysicalProbeBundleV1,
+    ) -> Result<()> {
+        fs::create_dir_all(output_directory).context(IoSnafu {
+            path: output_directory,
+        })?;
+        let work_directory = output_directory.join("kubernetes-entry-loss");
+        ensure!(
+            !work_directory.exists(),
+            InvalidInputSnafu {
+                path: &work_directory,
+                reason: "the Kubernetes entry-loss fixture directory already exists",
+            }
+        );
+        fs::create_dir(&work_directory).context(IoSnafu {
+            path: &work_directory,
+        })?;
+        let work_cleanup = ProbeDirectory::new(&work_directory);
+        let namespace = format!("mithril-identity-loss-{}", std::process::id());
+        let fixture_root = work_directory.join("fixture");
+        let manifest_path = work_directory.join("workload.yaml");
+        let config_path = work_directory.join("node.json");
+        let state_directory = work_directory.join("state");
+        let observation_socket = work_directory.join("observation.sock");
+        let marker_path = fixture_root.join("loss.pid");
+        let node_log_path = work_directory.join("mithril-node.log");
+        fs::create_dir(&fixture_root).context(IoSnafu {
+            path: &fixture_root,
+        })?;
+        let template_path = self
+            .repo_root
+            .join("crates/mithril-e2e/fixtures/identity/kubernetes-resilience-workload-v1.yaml");
+        let manifest = fs::read_to_string(&template_path).context(IoSnafu {
+            path: &template_path,
+        })?;
+        fs::write(
+            &manifest_path,
+            manifest
+                .replace("MITHRIL_IDENTITY_RESILIENCE_NAMESPACE", &namespace)
+                .replace(
+                    "MITHRIL_IDENTITY_RESILIENCE_FIXTURE_ROOT",
+                    fixture_root.to_string_lossy().as_ref(),
+                ),
+        )
+        .context(IoSnafu {
+            path: &manifest_path,
+        })?;
+        ensure!(
+            !pin_root.exists() && !lease_path.exists(),
+            InvalidInputSnafu {
+                path: pin_root,
+                reason: "the Kubernetes entry-loss pin root and lease must not already exist",
+            }
+        );
+        let pin_cleanup = ProbeDirectory::new(pin_root);
+        let lease_cleanup = ProbeFile::new(lease_path);
+        let mut namespace_created = false;
+        let mut k3s_stopped = false;
+        let mut node = None;
+        let mut external = None;
+
+        let probe = (|| -> Result<_> {
+            namespace_created = true;
+            self.kubernetes_output(
+                &[
+                    "kubectl",
+                    "apply",
+                    "-f",
+                    manifest_path.to_string_lossy().as_ref(),
+                ],
+                "create the Kubernetes entry-loss fixture",
+            )?;
+            self.kubernetes_output(
+                &[
+                    "kubectl",
+                    "-n",
+                    namespace.as_str(),
+                    "wait",
+                    "--for=condition=Ready",
+                    "pod/mithril-resilience",
+                    "--timeout=180s",
+                ],
+                "wait for the Kubernetes entry-loss Pod",
+            )?;
+            let (mut binding, init_pid, _sandbox) = self.kubernetes_container_binding(
+                &namespace,
+                "mithril-resilience",
+                "application",
+                (
+                    mithril_node::ContainerKindV1::Application,
+                    "11111111-1111-4111-8111-111111111701",
+                    "22222222-2222-4222-8222-222222222701",
+                    "33333333-3333-4333-8333-333333333701",
+                    7,
+                ),
+                &manifest_path,
+            )?;
+            let container_id = binding.container_id.clone();
+            let cgroup = self.kubernetes_cgroup_for_pid(init_pid)?;
+            binding.root_cgroup_path = None;
+            binding.arm_initial_root = false;
+
+            let source_config_path = self
+                .repo_root
+                .join("crates/mithril-e2e/harness/vm/k3s-cri-effect-node-v1.json");
+            let mut config: serde_json::Value =
+                serde_json::from_slice(&fs::read(&source_config_path).context(IoSnafu {
+                    path: &source_config_path,
+                })?)
+                .context(JsonSnafu {
+                    path: &source_config_path,
+                })?;
+            config["state_directory"] =
+                serde_json::Value::String(state_directory.to_string_lossy().into_owned());
+            config["interceptor"]["pin_root"] =
+                serde_json::Value::String(pin_root.to_string_lossy().into_owned());
+            config["interceptor"]["lease_path"] =
+                serde_json::Value::String(lease_path.to_string_lossy().into_owned());
+            config["runtime_observation"] = serde_json::json!({
+                "socket_path": observation_socket.to_string_lossy(),
+                "allowed_uid": 0,
+                "cgroup_scope": "/"
+            });
+            let binding_config = config
+                .pointer_mut("/workload_bindings/0")
+                .ok_or_else(|| invalid_state("the node template has no workload binding"))?;
+            binding_config["binding_id"] = binding.binding_id.clone().into();
+            binding_config["execution_set_id"] = binding.execution_set_id.clone().into();
+            binding_config["protected_scope_id"] = binding.protected_scope_id.clone().into();
+            binding_config["workload_selector_id"] = binding.workload_selector_id.clone().into();
+            binding_config["profile_id"] = binding.profile_id.clone().into();
+            binding_config["container_id"] = binding.container_id.clone().into();
+            binding_config["namespace"] = binding.namespace.clone().into();
+            binding_config["pod_uid"] = binding.pod_uid.clone().into();
+            binding_config["sandbox_id"] = binding.sandbox_id.clone().into();
+            binding_config["container_name"] = binding.container_name.clone().into();
+            binding_config["image_digest"] = binding.image_digest.clone().into();
+            binding_config["container_generation"] = binding.container_generation.into();
+            binding_config["lifecycle_generation"] = binding.lifecycle_generation.into();
+            binding_config["active_profile_generation_ref_id"] =
+                binding.active_profile_generation_ref_id.into();
+            binding_config["initial_role_id"] = binding.initial_role_id.into();
+            binding_config["external_role_id"] = binding.external_role_id.into();
+            fs::write(
+                &config_path,
+                serde_json::to_vec_pretty(&config).context(JsonSnafu { path: &config_path })?,
+            )
+            .context(IoSnafu { path: &config_path })?;
+
+            let current_executable = std::env::current_exe().context(IoSnafu {
+                path: Path::new("current Mithril identity-test executable"),
+            })?;
+            let binary_directory = current_executable
+                .parent()
+                .ok_or_else(|| invalid_state("the identity-test executable has no parent"))?;
+            let node_binary = binary_directory.join("mithril-node");
+            let inspect_binary = binary_directory.join("mithril-inspect");
+            ensure!(
+                node_binary.is_file() && inspect_binary.is_file(),
+                InvalidInputSnafu {
+                    path: binary_directory,
+                    reason: "the entry-loss fixture requires sibling node and inspector binaries",
+                }
+            );
+            let node_log = fs::OpenOptions::new()
+                .create_new(true)
+                .write(true)
+                .mode(0o600)
+                .open(&node_log_path)
+                .context(IoSnafu {
+                    path: &node_log_path,
+                })?;
+            node = Some(
+                Command::new(&node_binary)
+                    .args(["--config", config_path.to_string_lossy().as_ref()])
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::from(node_log))
+                    .spawn()
+                    .context(IoSnafu { path: &node_binary })?,
+            );
+            self.wait_for("Kubernetes entry-loss node", pin_root, || {
+                if node
+                    .as_mut()
+                    .is_some_and(|child| child.try_wait().ok().flatten().is_some())
+                {
+                    return Err(invalid_state(format!(
+                        "the entry-loss node exited: {}",
+                        fs::read_to_string(&node_log_path).unwrap_or_default()
+                    )));
+                }
+                Ok((pin_root.join("links/erebor_sched_process_exit").exists()
+                    && observation_socket.exists())
+                .then_some(()))
+            })?;
+            let initial_capability = self.wait_for(
+                "healthy entry-loss identity capability",
+                &observation_socket,
+                || {
+                    let output = Command::new(&inspect_binary)
+                        .args([
+                            "effects",
+                            "--socket-path",
+                            observation_socket.to_string_lossy().as_ref(),
+                            "--cgroup-scope",
+                            "/",
+                        ])
+                        .output()
+                        .context(IoSnafu {
+                            path: &inspect_binary,
+                        })?;
+                    let stdout = String::from_utf8_lossy(&output.stdout);
+                    Ok((output.status.success()
+                        && stdout.contains("capability=EXACT_NATIVE_IDENTITY state=SUPPORTED"))
+                    .then_some(true))
+                },
+            )?;
+            ensure!(
+                initial_capability,
+                InvalidInputSnafu {
+                    path: &observation_socket,
+                    reason: "the entry-loss node did not start with healthy identity coverage",
+                }
+            );
+
+            external = Some(
+                Command::new("/usr/local/bin/k3s")
+                    .args([
+                        "crictl",
+                        "exec",
+                        container_id.as_str(),
+                        "/bin/sh",
+                        "-c",
+                        "read identity_pid _ < /proc/self/stat; printf '%s\n' \"$identity_pid\" > /var/lib/mithril/resilience/loss.pid; kill -STOP \"$identity_pid\"; read identity_hostname < /etc/hostname; kill -STOP \"$identity_pid\"",
+                    ])
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .spawn()
+                    .context(IoSnafu {
+                        path: Path::new("/usr/local/bin/k3s"),
+                    })?,
+            );
+            let namespace_pid = self.wait_for("entry-loss CRI task", &marker_path, || {
+                self.kubernetes_fixture_pid(&marker_path)
+            })?;
+            let host_pid = self.wait_for("entry-loss CRI host PID", &cgroup, || {
+                self.kubernetes_host_pid(&cgroup, namespace_pid)
+            })?;
+            self.wait_for_stopped_host_pid(host_pid, "entry-loss CRI task")?;
+            let inspector = NativeIdentityInspector::new(pin_root);
+            let audit_absent = self.wait_for("entry-loss direct CRI identity", pin_root, || {
+                inspector.snapshot(host_pid).context(NodeSnafu)
+            })?;
+            ensure!(
+                audit_absent.creator_task_cookie.is_none()
+                    && audit_absent.root_class.as_deref() == Some("external_runtime_root")
+                    && audit_absent.installed_role_class.as_deref()
+                        == Some("runtime_external_restricted")
+                    && audit_absent.active_role_id == binding.external_role_id,
+                InvalidInputSnafu {
+                    path: pin_root,
+                    reason: "direct CRI entry without Kubernetes audit metadata was not restricted",
+                }
+            );
+
+            self.remove_task_label_for_fixture(pin_root, host_pid)?;
+            ensure!(
+                inspector.snapshot(host_pid).context(NodeSnafu)?.is_none(),
+                InvalidInputSnafu {
+                    path: pin_root,
+                    reason: "the BPF entry label survived the independent loss injection",
+                }
+            );
+            self.continue_host_pid(host_pid)?;
+            let bpf_recovered = self.wait_for("entry-loss BPF recovery", pin_root, || {
+                let snapshot = inspector.snapshot(host_pid).context(NodeSnafu)?;
+                let stopped = fs::read_to_string(format!("/proc/{host_pid}/status"))
+                    .is_ok_and(|status| status.lines().any(|line| line.starts_with("State:\tT")));
+                Ok(stopped.then_some(snapshot).flatten())
+            })?;
+            let bpf_recovered_fresh_restricted = bpf_recovered.task_cookie
+                != audit_absent.task_cookie
+                && bpf_recovered.process_state_id != audit_absent.process_state_id
+                && bpf_recovered.creator_task_cookie.is_none()
+                && bpf_recovered.root_class.as_deref() == Some("external_runtime_root")
+                && bpf_recovered.installed_role_class.as_deref()
+                    == Some("runtime_external_restricted")
+                && bpf_recovered.active_role_id == binding.external_role_id;
+            ensure!(
+                bpf_recovered_fresh_restricted,
+                InvalidInputSnafu {
+                    path: pin_root,
+                    reason: format!(
+                        "the first effect after BPF entry loss did not install a fresh restricted root: before={audit_absent:?}; after={bpf_recovered:?}",
+                    ),
+                }
+            );
+
+            self.set_k3s_service("stop")?;
+            k3s_stopped = true;
+            let runtime_identity_unhealthy = self.wait_for(
+                "entry-loss runtime coverage transition",
+                &observation_socket,
+                || {
+                    let output = Command::new(&inspect_binary)
+                        .args([
+                            "effects",
+                            "--socket-path",
+                            observation_socket.to_string_lossy().as_ref(),
+                            "--cgroup-scope",
+                            "/",
+                        ])
+                        .output()
+                        .context(IoSnafu {
+                            path: &inspect_binary,
+                        })?;
+                    let stdout = String::from_utf8_lossy(&output.stdout);
+                    Ok((output.status.success()
+                        && stdout.contains(
+                            "capability=EXACT_NATIVE_IDENTITY state=UNHEALTHY reason=LIVE_IDENTITY_RECONCILIATION_FAILED",
+                        ))
+                    .then_some(true))
+                },
+            )?;
+            let runtime_root = self.wait_for(
+                "entry-loss task after runtime loss",
+                Path::new("/proc"),
+                || inspector.snapshot(host_pid).context(NodeSnafu),
+            )?;
+            ensure!(
+                runtime_identity_unhealthy && runtime_root == bpf_recovered,
+                InvalidInputSnafu {
+                    path: pin_root,
+                    reason: "runtime loss changed task identity or did not close identity coverage",
+                }
+            );
+
+            self.set_k3s_service("start")?;
+            k3s_stopped = false;
+            self.wait_for_k3s_ready()?;
+            self.continue_host_pid(host_pid)?;
+            Ok((
+                audit_absent,
+                bpf_recovered,
+                bpf_recovered_fresh_restricted,
+                runtime_root,
+                runtime_identity_unhealthy,
+            ))
+        })();
+
+        if k3s_stopped {
+            let _result = self.set_k3s_service("start");
+            let _result = self.wait_for_k3s_ready();
+        }
+        Self::stop_fixture_process(&mut external);
+        Self::stop_fixture_process(&mut node);
+        let namespace_cleanup = if namespace_created {
+            self.kubernetes_output(
+                &[
+                    "kubectl",
+                    "delete",
+                    "namespace",
+                    namespace.as_str(),
+                    "--ignore-not-found",
+                    "--wait=true",
+                    "--timeout=120s",
+                ],
+                "remove the Kubernetes entry-loss fixture namespace",
+            )
+            .map(|_| ())
+        } else {
+            Ok(())
+        };
+        let cleanup = namespace_cleanup
+            .and(pin_cleanup.cleanup())
+            .and(lease_cleanup.cleanup())
+            .and(work_cleanup.cleanup());
+        if let Err(source) = probe {
+            cleanup?;
+            return Err(source);
+        }
+        cleanup?;
+        ensure!(
+            self.kubernetes_namespace_absent(&namespace)?
+                && !pin_root.exists()
+                && !lease_path.exists()
+                && !work_directory.exists(),
+            InvalidInputSnafu {
+                path: &work_directory,
+                reason: "the Kubernetes entry-loss fixture was not removed",
+            }
+        );
+        let (
+            audit_absent,
+            bpf_recovered,
+            bpf_recovered_fresh_restricted,
+            runtime_root,
+            runtime_identity_unhealthy,
+        ) = probe?;
+        bundle.kubernetes_loss_audit_absent_root = Some(audit_absent);
+        bundle.kubernetes_loss_bpf_recovered_root = Some(bpf_recovered);
+        bundle.kubernetes_loss_bpf_recovered_fresh_restricted =
+            Some(bpf_recovered_fresh_restricted);
+        bundle.kubernetes_loss_runtime_root = Some(runtime_root);
+        bundle.kubernetes_loss_runtime_identity_unhealthy = Some(runtime_identity_unhealthy);
+        Ok(())
+    }
+
     fn kubernetes_container_binding(
         &self,
         namespace: &str,
@@ -6448,6 +6932,82 @@ impl IdentityTestRunner {
             }
         );
         Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+    }
+
+    fn set_k3s_service(&self, action: &str) -> Result<()> {
+        ensure!(
+            matches!(action, "start" | "stop"),
+            InvalidInputSnafu {
+                path: Path::new("/usr/bin/systemctl"),
+                reason: format!("unsupported K3s service action `{action}`"),
+            }
+        );
+        let program = Path::new("/usr/bin/systemctl");
+        let output = Command::new(program)
+            .args([action, "k3s"])
+            .output()
+            .context(IoSnafu { path: program })?;
+        ensure!(
+            output.status.success(),
+            InvalidInputSnafu {
+                path: program,
+                reason: format!(
+                    "K3s service {action} failed with {}: {}",
+                    output.status,
+                    String::from_utf8_lossy(&output.stderr).trim(),
+                ),
+            }
+        );
+        Ok(())
+    }
+
+    fn continue_host_pid(&self, host_pid: u32) -> Result<()> {
+        let raw_pid = i32::try_from(host_pid)
+            .map_err(|error| invalid_state(format!("host PID {host_pid} is invalid: {error}")))?;
+        let pid = Pid::from_raw(raw_pid)
+            .ok_or_else(|| invalid_state("host PID zero cannot identify a task"))?;
+        let pidfd = pidfd_open(pid, PidfdFlags::empty())
+            .map_err(std::io::Error::from)
+            .context(IoSnafu {
+                path: PathBuf::from(format!("/proc/{host_pid}")),
+            })?;
+        pidfd_send_signal(&pidfd, Signal::CONT)
+            .map_err(|error| invalid_state(format!("continue host PID {host_pid}: {error}")))
+    }
+
+    fn wait_for_stopped_host_pid(&self, host_pid: u32, name: &str) -> Result<()> {
+        let status_path = PathBuf::from(format!("/proc/{host_pid}/status"));
+        self.wait_for(name, &status_path, || {
+            let status =
+                fs::read_to_string(&status_path).context(IoSnafu { path: &status_path })?;
+            Ok(status
+                .lines()
+                .any(|line| line.starts_with("State:\tT"))
+                .then_some(()))
+        })
+    }
+
+    fn wait_for_k3s_ready(&self) -> Result<()> {
+        self.wait_for(
+            "Kubernetes node readiness",
+            Path::new("/usr/local/bin/k3s"),
+            || {
+                let output = Command::new("/usr/local/bin/k3s")
+                    .args([
+                        "kubectl",
+                        "wait",
+                        "--for=condition=Ready",
+                        "node",
+                        "--all",
+                        "--timeout=5s",
+                    ])
+                    .output()
+                    .context(IoSnafu {
+                        path: Path::new("/usr/local/bin/k3s"),
+                    })?;
+                Ok(output.status.success().then_some(()))
+            },
+        )
     }
 
     fn kubernetes_namespace_absent(&self, namespace: &str) -> Result<bool> {

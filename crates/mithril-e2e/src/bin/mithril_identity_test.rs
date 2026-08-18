@@ -17,6 +17,12 @@ struct Cli {
 #[derive(Subcommand)]
 enum Command {
     Verify,
+    InjectTaskLabelLoss {
+        #[arg(long)]
+        pin_root: PathBuf,
+        #[arg(long)]
+        host_pid: u32,
+    },
     PhysicalProbe {
         #[arg(long)]
         pin_root: PathBuf,
@@ -49,6 +55,10 @@ fn run() -> Result<()> {
                 &bundle,
             )?;
             println!("Mithril native-identity object verification passed");
+        }
+        Command::InjectTaskLabelLoss { pin_root, host_pid } => {
+            runner.remove_task_label_for_fixture(&pin_root, host_pid)?;
+            println!("Mithril task-label loss injection passed");
         }
         Command::PhysicalProbe {
             pin_root,
