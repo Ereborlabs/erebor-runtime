@@ -99,6 +99,8 @@ grep -q 'k3s-administrative-exec.txt' "$directory/run.sh"
 grep -q 'run_k3s_cri_effect OBSERVE' "$directory/run.sh"
 grep -q 'run_k3s_cri_effect PROTECT' "$directory/run.sh"
 grep -Fq 'kubernetes-stock-hook-failure-workload-v1.yaml' "$directory/run.sh"
+grep -Fq '$remote_source/crates/mithril-e2e/harness/vm/k3s-cri-effect-node-v1.json' \
+  "$directory/run.sh"
 grep -Fq 'if [[ $skip_administrative_exec == false ]]; then' "$directory/run.sh"
 grep -q 'retained-vm.txt' "$directory/run.sh"
 grep -Fq 'manual_vm=false' "$directory/run.sh"

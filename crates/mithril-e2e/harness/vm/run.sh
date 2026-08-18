@@ -221,6 +221,7 @@ fi
   "$remote_source/crates/mithril-e2e/fixtures/hugging-face/protected" \
   "$remote_source/crates/mithril-e2e/fixtures/identity" \
   "$remote_source/crates/mithril-e2e/fixtures/mithril-policy" \
+  "$remote_source/crates/mithril-e2e/harness/vm" \
   "$remote_root/harness" "$remote_bin"
 
 "$provider" put "$vm_name" "$repo_root/target/debug/mithril-identity-test" \
@@ -303,7 +304,7 @@ if [[ $with_k3s == true ]]; then
       bash "$remote_root/harness/guest.sh" \
       k3s-cri-effect "$remote_bin/mithril-node" "$remote_bin/mithril-inspect" \
       "$remote_bin/mithril-policy" \
-      "$remote_root/harness/k3s-cri-effect-node-v1.json" \
+      "$remote_source/crates/mithril-e2e/harness/vm/k3s-cri-effect-node-v1.json" \
       "$remote_source/crates/mithril-e2e/fixtures/mithril-policy/observe-policy-v1.yaml" \
       "$remote_source/crates/mithril-e2e/fixtures/mithril-policy/observe-profile-seal-request.json" \
       "$remote_source/crates/mithril-e2e/fixtures/mithril-policy/test-signing-key.hex" \
@@ -315,7 +316,7 @@ if [[ $with_k3s == true ]]; then
   "$provider" put "$vm_name" "$directory/k3s-workload-v1.yaml" \
     "$remote_root/harness/k3s-workload-v1.yaml"
   "$provider" put "$vm_name" "$directory/k3s-cri-effect-node-v1.json" \
-    "$remote_root/harness/k3s-cri-effect-node-v1.json"
+    "$remote_source/crates/mithril-e2e/harness/vm/k3s-cri-effect-node-v1.json"
   "$provider" put "$vm_name" "$directory/k3s-administrative-node-v1.json" \
     "$remote_root/harness/k3s-administrative-node-v1.json"
   "$provider" put "$vm_name" "$directory/k3s-administrative-policy-v1.yaml" \
