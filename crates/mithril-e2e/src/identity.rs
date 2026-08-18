@@ -289,6 +289,13 @@ pub struct IdentityPhysicalProbeBundleV1 {
     pub kubernetes_loss_bpf_recovered_fresh_restricted: Option<bool>,
     pub kubernetes_loss_runtime_root: Option<NativeTaskSnapshotV1>,
     pub kubernetes_loss_runtime_identity_unhealthy: Option<bool>,
+    pub kubernetes_restart_discovered_root: Option<NativeTaskSnapshotV1>,
+    pub kubernetes_restart_bound_root: Option<NativeTaskSnapshotV1>,
+    pub kubernetes_restart_runtime_recovered_root: Option<NativeTaskSnapshotV1>,
+    pub kubernetes_restart_node_gap_root: Option<NativeTaskSnapshotV1>,
+    pub kubernetes_restart_node_recovered_root: Option<NativeTaskSnapshotV1>,
+    pub kubernetes_restart_node_observation_unavailable: Option<bool>,
+    pub kubernetes_restart_identity_stable: Option<bool>,
     pub kubernetes_fixture_removed: bool,
 }
 
@@ -2360,7 +2367,7 @@ impl IdentityTestRunner {
             }
         );
         Ok(IdentityPhysicalProbeBundleV1 {
-            schema_version: 25,
+            schema_version: 26,
             object_sha256,
             first_start,
             distinct_pin_root_owner_rejected,
@@ -2501,6 +2508,13 @@ impl IdentityTestRunner {
             kubernetes_loss_bpf_recovered_fresh_restricted: None,
             kubernetes_loss_runtime_root: None,
             kubernetes_loss_runtime_identity_unhealthy: None,
+            kubernetes_restart_discovered_root: None,
+            kubernetes_restart_bound_root: None,
+            kubernetes_restart_runtime_recovered_root: None,
+            kubernetes_restart_node_gap_root: None,
+            kubernetes_restart_node_recovered_root: None,
+            kubernetes_restart_node_observation_unavailable: None,
+            kubernetes_restart_identity_stable: None,
             kubernetes_fixture_removed: false,
         })
     }
@@ -2631,8 +2645,25 @@ impl IdentityTestRunner {
             && bundle.kubernetes_loss_bpf_recovered_fresh_restricted == Some(true)
             && bundle.kubernetes_loss_runtime_root.is_some()
             && bundle.kubernetes_loss_runtime_identity_unhealthy == Some(true);
-        let schema_compatible =
-            bundle.schema_version == 25 || (bundle.schema_version == 24 && loss_results_missing);
+        let restart_results_missing = bundle.kubernetes_restart_discovered_root.is_none()
+            && bundle.kubernetes_restart_bound_root.is_none()
+            && bundle.kubernetes_restart_runtime_recovered_root.is_none()
+            && bundle.kubernetes_restart_node_gap_root.is_none()
+            && bundle.kubernetes_restart_node_recovered_root.is_none()
+            && bundle
+                .kubernetes_restart_node_observation_unavailable
+                .is_none()
+            && bundle.kubernetes_restart_identity_stable.is_none();
+        let restart_results_present = bundle.kubernetes_restart_discovered_root.is_some()
+            && bundle.kubernetes_restart_bound_root.is_some()
+            && bundle.kubernetes_restart_runtime_recovered_root.is_some()
+            && bundle.kubernetes_restart_node_gap_root.is_some()
+            && bundle.kubernetes_restart_node_recovered_root.is_some()
+            && bundle.kubernetes_restart_node_observation_unavailable == Some(true)
+            && bundle.kubernetes_restart_identity_stable == Some(true);
+        let schema_compatible = bundle.schema_version == 26
+            || (bundle.schema_version == 25 && restart_results_missing)
+            || (bundle.schema_version == 24 && loss_results_missing && restart_results_missing);
         ensure!(
             schema_compatible
                 && (entry_results_missing || entry_results_present)
@@ -2643,13 +2674,14 @@ impl IdentityTestRunner {
                 && (probe_results_missing || probe_results_present)
                 && (prestop_results_missing || prestop_results_present)
                 && (poststart_results_missing || poststart_results_present)
-                && (loss_results_missing || loss_results_present),
+                && (loss_results_missing || loss_results_present)
+                && (restart_results_missing || restart_results_present),
             InvalidInputSnafu {
                 path: previous_bundle_path,
                 reason: "the prior identity bundle cannot accept the next Kubernetes result",
             }
         );
-        bundle.schema_version = 25;
+        bundle.schema_version = 26;
         if entry_results_missing {
             self.physical_kubernetes_exec_probe(
                 output_directory,
@@ -2708,8 +2740,8 @@ impl IdentityTestRunner {
                 &mut bundle,
             )?;
         }
-        if loss_results_missing {
-            self.physical_kubernetes_loss_probe(
+        if loss_results_missing || restart_results_missing {
+            self.physical_kubernetes_resilience_probe(
                 output_directory,
                 pin_root,
                 lease_path,
@@ -5908,7 +5940,7 @@ impl IdentityTestRunner {
         Ok(())
     }
 
-    fn physical_kubernetes_loss_probe(
+    fn physical_kubernetes_resilience_probe(
         &self,
         output_directory: &Path,
         pin_root: &Path,
@@ -6136,6 +6168,21 @@ impl IdentityTestRunner {
                     reason: "the entry-loss node did not start with healthy identity coverage",
                 }
             );
+            let inspector = NativeIdentityInspector::new(pin_root);
+            let discovered_root =
+                self.wait_for("Kubernetes resilience discovery identity", pin_root, || {
+                    inspector.snapshot(init_pid).context(NodeSnafu)
+                })?;
+            ensure!(
+                discovered_root.creator_task_cookie.is_none()
+                    && discovered_root.root_class.as_deref() == Some("restored_or_unknown_root")
+                    && discovered_root.installed_role_class.as_deref()
+                        == Some("fail_closed_unknown"),
+                InvalidInputSnafu {
+                    path: pin_root,
+                    reason: "the node did not conservatively discover the pre-existing Pod root",
+                }
+            );
 
             external = Some(
                 Command::new("/usr/local/bin/k3s")
@@ -6162,7 +6209,6 @@ impl IdentityTestRunner {
                 self.kubernetes_host_pid(&cgroup, namespace_pid)
             })?;
             self.wait_for_stopped_host_pid(host_pid, "entry-loss CRI task")?;
-            let inspector = NativeIdentityInspector::new(pin_root);
             let audit_absent = self.wait_for("entry-loss direct CRI identity", pin_root, || {
                 inspector.snapshot(host_pid).context(NodeSnafu)
             })?;
@@ -6253,6 +6299,127 @@ impl IdentityTestRunner {
             self.set_k3s_service("start")?;
             k3s_stopped = false;
             self.wait_for_k3s_ready()?;
+            let runtime_recovered = self.wait_for(
+                "healthy identity capability after Kubernetes service restart",
+                &observation_socket,
+                || {
+                    let output = Command::new(&inspect_binary)
+                        .args([
+                            "effects",
+                            "--socket-path",
+                            observation_socket.to_string_lossy().as_ref(),
+                            "--cgroup-scope",
+                            "/",
+                        ])
+                        .output()
+                        .context(IoSnafu {
+                            path: &inspect_binary,
+                        })?;
+                    let stdout = String::from_utf8_lossy(&output.stdout);
+                    Ok((output.status.success()
+                        && stdout.contains("capability=EXACT_NATIVE_IDENTITY state=SUPPORTED"))
+                    .then(|| inspector.snapshot(host_pid).context(NodeSnafu))
+                    .transpose()?
+                    .flatten())
+                },
+            )?;
+            ensure!(
+                runtime_recovered == bpf_recovered,
+                InvalidInputSnafu {
+                    path: pin_root,
+                    reason: "the Kubernetes service restart changed the live task identity",
+                }
+            );
+
+            Self::stop_node_process(&mut node)?;
+            let observation = Command::new(&inspect_binary)
+                .args([
+                    "effects",
+                    "--socket-path",
+                    observation_socket.to_string_lossy().as_ref(),
+                    "--cgroup-scope",
+                    "/",
+                ])
+                .output()
+                .context(IoSnafu {
+                    path: &inspect_binary,
+                })?;
+            let node_observation_unavailable = !observation.status.success();
+            let node_gap_root = inspector
+                .snapshot(host_pid)
+                .context(NodeSnafu)?
+                .ok_or_else(|| {
+                    invalid_state(
+                        "the live task lost its pinned identity during the node restart gap",
+                    )
+                })?;
+            ensure!(
+                node_observation_unavailable && node_gap_root == bpf_recovered,
+                InvalidInputSnafu {
+                    path: pin_root,
+                    reason:
+                        "the node restart gap was not explicit or changed the live task identity",
+                }
+            );
+
+            let node_log = fs::OpenOptions::new()
+                .append(true)
+                .open(&node_log_path)
+                .context(IoSnafu {
+                    path: &node_log_path,
+                })?;
+            node = Some(
+                Command::new(&node_binary)
+                    .args(["--config", config_path.to_string_lossy().as_ref()])
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::from(node_log))
+                    .spawn()
+                    .context(IoSnafu { path: &node_binary })?,
+            );
+            let node_recovered = self.wait_for(
+                "healthy identity capability after node restart",
+                &observation_socket,
+                || {
+                    if node
+                        .as_mut()
+                        .is_some_and(|child| child.try_wait().ok().flatten().is_some())
+                    {
+                        return Err(invalid_state(format!(
+                            "the recovered resilience node exited: {}",
+                            fs::read_to_string(&node_log_path).unwrap_or_default()
+                        )));
+                    }
+                    let output = Command::new(&inspect_binary)
+                        .args([
+                            "effects",
+                            "--socket-path",
+                            observation_socket.to_string_lossy().as_ref(),
+                            "--cgroup-scope",
+                            "/",
+                        ])
+                        .output()
+                        .context(IoSnafu {
+                            path: &inspect_binary,
+                        })?;
+                    let stdout = String::from_utf8_lossy(&output.stdout);
+                    Ok((output.status.success()
+                        && stdout.contains("capability=EXACT_NATIVE_IDENTITY state=SUPPORTED"))
+                    .then(|| inspector.snapshot(host_pid).context(NodeSnafu))
+                    .transpose()?
+                    .flatten())
+                },
+            )?;
+            let restart_identity_stable = runtime_recovered == bpf_recovered
+                && node_gap_root == bpf_recovered
+                && node_recovered == bpf_recovered;
+            ensure!(
+                restart_identity_stable,
+                InvalidInputSnafu {
+                    path: pin_root,
+                    reason: "the recovered node reused a different task, process, or role identity",
+                }
+            );
             self.continue_host_pid(host_pid)?;
             Ok((
                 audit_absent,
@@ -6260,6 +6427,12 @@ impl IdentityTestRunner {
                 bpf_recovered_fresh_restricted,
                 runtime_root,
                 runtime_identity_unhealthy,
+                discovered_root,
+                runtime_recovered,
+                node_gap_root,
+                node_recovered,
+                node_observation_unavailable,
+                restart_identity_stable,
             ))
         })();
 
@@ -6311,13 +6484,26 @@ impl IdentityTestRunner {
             bpf_recovered_fresh_restricted,
             runtime_root,
             runtime_identity_unhealthy,
+            discovered_root,
+            runtime_recovered,
+            node_gap_root,
+            node_recovered,
+            node_observation_unavailable,
+            restart_identity_stable,
         ) = probe?;
         bundle.kubernetes_loss_audit_absent_root = Some(audit_absent);
-        bundle.kubernetes_loss_bpf_recovered_root = Some(bpf_recovered);
+        bundle.kubernetes_loss_bpf_recovered_root = Some(bpf_recovered.clone());
         bundle.kubernetes_loss_bpf_recovered_fresh_restricted =
             Some(bpf_recovered_fresh_restricted);
         bundle.kubernetes_loss_runtime_root = Some(runtime_root);
         bundle.kubernetes_loss_runtime_identity_unhealthy = Some(runtime_identity_unhealthy);
+        bundle.kubernetes_restart_discovered_root = Some(discovered_root);
+        bundle.kubernetes_restart_bound_root = Some(bpf_recovered);
+        bundle.kubernetes_restart_runtime_recovered_root = Some(runtime_recovered);
+        bundle.kubernetes_restart_node_gap_root = Some(node_gap_root);
+        bundle.kubernetes_restart_node_recovered_root = Some(node_recovered);
+        bundle.kubernetes_restart_node_observation_unavailable = Some(node_observation_unavailable);
+        bundle.kubernetes_restart_identity_stable = Some(restart_identity_stable);
         Ok(())
     }
 
@@ -6973,6 +7159,57 @@ impl IdentityTestRunner {
             })?;
         pidfd_send_signal(&pidfd, Signal::CONT)
             .map_err(|error| invalid_state(format!("continue host PID {host_pid}: {error}")))
+    }
+
+    fn stop_node_process(child: &mut Option<Child>) -> Result<()> {
+        let Some(mut child) = child.take() else {
+            return Ok(());
+        };
+        if child
+            .try_wait()
+            .context(IoSnafu {
+                path: Path::new("mithril-node child"),
+            })?
+            .is_some()
+        {
+            return Err(invalid_state(
+                "mithril-node exited before the restart boundary",
+            ));
+        }
+        let raw_pid = i32::try_from(child.id()).map_err(|error| {
+            invalid_state(format!(
+                "mithril-node PID {} is invalid: {error}",
+                child.id()
+            ))
+        })?;
+        let pid = Pid::from_raw(raw_pid)
+            .ok_or_else(|| invalid_state("mithril-node PID zero cannot identify a process"))?;
+        let pidfd = pidfd_open(pid, PidfdFlags::empty())
+            .map_err(std::io::Error::from)
+            .context(IoSnafu {
+                path: Path::new("mithril-node child"),
+            })?;
+        pidfd_send_signal(&pidfd, Signal::INT)
+            .map_err(|error| invalid_state(format!("stop mithril-node for restart: {error}")))?;
+        for _attempt in 0..50 {
+            if child
+                .try_wait()
+                .context(IoSnafu {
+                    path: Path::new("mithril-node child"),
+                })?
+                .is_some()
+            {
+                return Ok(());
+            }
+            thread::sleep(Duration::from_millis(100));
+        }
+        child.kill().context(IoSnafu {
+            path: Path::new("mithril-node child"),
+        })?;
+        child.wait().context(IoSnafu {
+            path: Path::new("mithril-node child"),
+        })?;
+        Ok(())
     }
 
     fn wait_for_stopped_host_pid(&self, host_pid: u32, name: &str) -> Result<()> {

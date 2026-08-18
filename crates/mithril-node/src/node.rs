@@ -336,6 +336,8 @@ impl NodeChassis {
         let mut kernel_healthy = true;
         let mut identity_healthy = true;
         let mut run_error = None;
+        let healthy_identity_capabilities = self.registration.capabilities.clone();
+        let healthy_effect_prevention_claims = self.registration.effect_prevention_claims_enabled;
         let mut reconciliation = tokio::time::interval(self.config.reconciliation_interval());
         reconciliation.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         'running: loop {
@@ -406,7 +408,24 @@ impl NodeChassis {
                             }
                             _instant = reconciliation.tick() => {
                                 match self.reconcile_bindings().await {
-                                    ReconciliationOutcome::Healthy => {}
+                                    ReconciliationOutcome::Healthy => {
+                                        if !identity_healthy && kernel_healthy {
+                                            identity_healthy = true;
+                                            restore_identity_claims(
+                                                &mut self.registration,
+                                                &healthy_identity_capabilities,
+                                                healthy_effect_prevention_claims,
+                                            );
+                                            self.readiness.send_replace(NodeReadinessV1 {
+                                                kernel_ready: true,
+                                                identity_ready: true,
+                                                control_ready: true,
+                                                admission_ready: true,
+                                                effect_prevention_claims_enabled:
+                                                    healthy_effect_prevention_claims,
+                                            });
+                                        }
+                                    }
                                     ReconciliationOutcome::IdentityUnhealthy => {
                                         identity_healthy = false;
                                         close_identity_claims(&mut self.registration);
@@ -467,7 +486,23 @@ impl NodeChassis {
                     }
                     _instant = reconciliation.tick() => {
                         match self.reconcile_bindings().await {
-                            ReconciliationOutcome::Healthy => {}
+                            ReconciliationOutcome::Healthy => {
+                                if !identity_healthy && kernel_healthy {
+                                    identity_healthy = true;
+                                    restore_identity_claims(
+                                        &mut self.registration,
+                                        &healthy_identity_capabilities,
+                                        healthy_effect_prevention_claims,
+                                    );
+                                    self.readiness.send_replace(NodeReadinessV1 {
+                                        kernel_ready: true,
+                                        identity_ready: true,
+                                        control_ready: false,
+                                        admission_ready: false,
+                                        effect_prevention_claims_enabled: false,
+                                    });
+                                }
+                            }
                             ReconciliationOutcome::IdentityUnhealthy => {
                                 identity_healthy = false;
                                 close_identity_claims(&mut self.registration);
@@ -653,6 +688,28 @@ fn close_identity_claims(registration: &mut NodeRegistration) {
     }
 }
 
+fn restore_identity_claims(
+    registration: &mut NodeRegistration,
+    healthy_capabilities: &[CapabilityRecord],
+    effect_prevention_claims_enabled: bool,
+) {
+    registration.effect_prevention_claims_enabled = effect_prevention_claims_enabled;
+    for capability in &mut registration.capabilities {
+        if !matches!(
+            capability.capability_id.as_str(),
+            "EXACT_NATIVE_IDENTITY" | "LOCAL_EFFECT_OBSERVATION"
+        ) {
+            continue;
+        }
+        if let Some(healthy) = healthy_capabilities
+            .iter()
+            .find(|healthy| healthy.capability_id == capability.capability_id)
+        {
+            capability.clone_from(healthy);
+        }
+    }
+}
+
 async fn effect_reader_finished(
     task: &mut Option<tokio::task::JoinHandle<std::result::Result<(), erebor_interceptor::Error>>>,
 ) -> Result<()> {
@@ -776,7 +833,8 @@ fn registration(
 #[cfg(test)]
 mod tests {
     use super::{
-        close_identity_claims, close_kernel_claims, effect_reader_finished, NodeReadinessV1,
+        close_identity_claims, close_kernel_claims, effect_reader_finished,
+        restore_identity_claims, NodeReadinessV1,
     };
     use mithril_control::{CapabilityRecord, NodeRegistration};
     use tokio::sync::watch;
@@ -851,6 +909,41 @@ mod tests {
                 && capability.reason_code == "LIVE_IDENTITY_RECONCILIATION_FAILED"
         }));
         assert_eq!(registration.capabilities[2].state, "SUPPORTED");
+    }
+
+    #[test]
+    fn healthy_reconciliation_restores_identity_claims_from_the_startup_record() {
+        let healthy_capabilities = vec![
+            CapabilityRecord {
+                capability_id: "EXACT_NATIVE_IDENTITY".to_owned(),
+                state: "SUPPORTED".to_owned(),
+                reason_code: "EXACT_ATTACH_AND_RECONCILIATION".to_owned(),
+            },
+            CapabilityRecord {
+                capability_id: "LOCAL_EFFECT_OBSERVATION".to_owned(),
+                state: "DEGRADED".to_owned(),
+                reason_code: "SIGNED_ACTIVE_EXACT_FILE_SLICE_ONLY".to_owned(),
+            },
+            CapabilityRecord {
+                capability_id: "RUNTIME_READ_ONLY_OBSERVATION".to_owned(),
+                state: "SUPPORTED".to_owned(),
+                reason_code: "PEER_CREDENTIAL_AND_CGROUP_SCOPED".to_owned(),
+            },
+        ];
+        let mut registration = NodeRegistration {
+            platform_digest: "a".repeat(64),
+            program_digest: "b".repeat(64),
+            label_epoch: 1,
+            kernel_ready: true,
+            effect_prevention_claims_enabled: true,
+            capabilities: healthy_capabilities.clone(),
+        };
+
+        close_identity_claims(&mut registration);
+        restore_identity_claims(&mut registration, &healthy_capabilities, true);
+
+        assert!(registration.effect_prevention_claims_enabled);
+        assert_eq!(registration.capabilities, healthy_capabilities);
     }
 
     #[test]

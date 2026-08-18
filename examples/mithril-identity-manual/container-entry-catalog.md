@@ -21,7 +21,7 @@ entry surfaces too.
 | `ENTRY-PROBE-001` | Run concurrent startup, readiness, and liveness exec probes. | Stock purpose remains unknown/restricted unless a qualified interface proves it. |
 | `ENTRY-PROBE-002` | Have an app child run identical probe bytes and cadence. [`native-child.sh`](./native-child.sh) supplies the native-child control. | The native child keeps application lineage and cannot impersonate an external root. |
 | `ENTRY-PROBE-IMPERSONATION-003` | Race a native child, stock probe, ordinary `kubectl exec`, and direct-runtime root with identical argv/TTY. | The child stays native and the independent runtime roots stay restricted. Phase 4 owns approved-role transition. |
-| `ENTRY-RESTART-001` | Restart the runtime, kubelet when present, and node during binding. [`restart.sh`](./restart.sh) covers the node-only branch. | Live reconciliation opens exact gaps and does not reuse a stale role. |
+| `ENTRY-RESTART-001` | Restart the Kubernetes service and node during discovery and binding. [`restart.sh`](./restart.sh) creates the case in an existing VM. | Live reconciliation opens exact gaps and retains the exact live task identity. In the qualified K3s distribution, one service restart covers its embedded kubelet and container runtime. |
 | `ENTRY-REUSE-001` | Reuse PID, namespace, cgroup path/ID, Pod/container name. | New cookies, nonces, and live intervals prevent old authority or response attachment. |
 | `ENTRY-SLEEP-001` | Execute a lifecycle sleep action. | It is only a lifecycle fact; no process entry is invented when no task exists. |
 | `ENTRY-START-001` | Delay or drop configured start metadata. | The root stays conservative and the start gap remains explicit. Phase 4 owns effect denial. |

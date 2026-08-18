@@ -10,6 +10,7 @@ use erebor_interceptor_abi::{
     BindingActivationTargetKeyV1, BindingLifecycleStateV1, ExecutionSetBindingStateV1, Id128V1,
     InitialRootStateV1, PolicyGenerationStateV1, ProfileGenerationDescriptorV1, TaskLabelV1,
 };
+use erebor_runtime_error::{ErrorExt as _, RetryHint};
 use rustix::process::{pidfd_open, Pid, PidfdFlags};
 use sha2::{Digest as _, Sha256};
 use snafu::{ensure, OptionExt as _, ResultExt as _};
@@ -557,11 +558,14 @@ impl WorkloadBindingOwner {
         host: &KernelHost,
         configured: &[WorkloadBindingConfig],
     ) -> Result<()> {
-        let result = self.reconcile_runtime_inner(host, configured).await;
-        if result.is_err() {
-            self.terminate_all(host)?;
+        match self.reconcile_runtime_inner(host, configured).await {
+            Ok(()) => Ok(()),
+            Err(source) if source.retry_hint() == RetryHint::Retryable => Err(source),
+            Err(source) => {
+                self.terminate_all(host)?;
+                Err(source)
+            }
         }
-        result
     }
 
     async fn reconcile_runtime_inner(

@@ -178,7 +178,7 @@ Then run only the case being checked:
 | Cgroup escape | `sudo examples/mithril-identity-manual/cgroup-escape.sh` in the manual VM |
 | `nsenter` and cgroup movement | `sudo examples/mithril-identity-manual/nsenter-move.sh` in the manual VM |
 | Labeled native-child mount entry | `sudo examples/mithril-identity-manual/nsenter-move.sh --labeled-task` in the manual VM |
-| Node restart | `sudo examples/mithril-identity-manual/restart.sh NODE_CONFIG CONTAINER_OR_FULL_CRI_ID` |
+| Kubernetes service and node restart | `sudo examples/mithril-identity-manual/restart.sh` |
 
 The no-argument CRI and Kubernetes cases run only inside the retained manual
 Kubernetes VM. Each case creates and removes its Namespace, Pod, and fixture.
