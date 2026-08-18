@@ -161,8 +161,8 @@ five-record replay WAL SHA-256 is
 The runner removed its replay state. It changed the production owner's boot
 identity but did not reboot the VM. The complete approved-exec transaction and
 protected effect remain Phase 4 work.
-Remaining work in this phase: `ENTRY-LOSS-001`, `ENTRY-RESTART-001`,
-`ENTRY-REUSE-001`, and `ENTRY-STOCK-HOOK-FAILURE-002`. Do not change the
+Remaining work in this phase: `ENTRY-RESTART-001`, `ENTRY-REUSE-001`, and
+`ENTRY-STOCK-HOOK-FAILURE-002`. Do not change the
 implementation result to Done without their physical artifacts.
 Next phase not authorized: yes.
 ```
@@ -490,8 +490,49 @@ pin root, lease, cgroup, and fixture directory. The VM itself did not reboot;
 the fixture loaded the production owner with a distinct boot identity.
 
 This closes `AUTHORIZATION-REPLAY-004`. It does not qualify the Phase 4
-approved-exec transaction or a protected effect. Four entry rows remain, so
-Phase 2 remains **Blocked**.
+approved-exec transaction or a protected effect. Phase 2 remains **Blocked**.
+
+## Entry-Source Loss Result — 2026-08-18
+
+Source commit `dd236af` extends `IdentityTestRunner` and its existing physical
+bundle. It adds no map, role, runner, or durable type.
+
+The retained x86_64 Ubuntu 24.04 VM ran Linux `6.8.0-137-generic`, Kubernetes
+`v1.35.5`, K3s `v1.35.5+k3s1`, and containerd `v2.2.3-k3s1`. The runner used
+the accepted schema-24 bundle with SHA-256
+`9a0aca62b808421552029518dc4212ed5f1317d483afcc4d6a32b78554228951` as
+its prior input. It wrote schema-25 evidence to
+`/tmp/mithril-phase2-entry-loss-20260818-14/identity-physical-probe.json`.
+The new SHA-256 is
+`d3817779c7835ef7b766d6bcbc84dc67007b8e1192665e39b8d3f00173b689fd`.
+
+The direct CRI exec supplied no Kubernetes API audit metadata. It was a
+restricted external root with task cookie `19` and role `11`. The runner
+stopped that task, removed only its BPF task label, and verified the label was
+absent. The task then made one file open. The existing BPF effect-entry helper
+created fresh task cookie `64` and a fresh process state. It kept
+`external_runtime_root`, `runtime_external_restricted`, and role `11`.
+
+The runner stopped K3s while task `64` remained stopped. The observation
+socket reported `EXACT_NATIVE_IDENTITY` as `UNHEALTHY` with reason
+`LIVE_IDENTITY_RECONCILIATION_FAILED`. The full task snapshot stayed
+unchanged. The runner restarted K3s before cleanup.
+
+The same VM ran this command as root:
+
+```sh
+examples/mithril-identity-manual/kubernetes-entry-loss.sh
+```
+
+The shell printed `PASS`. Independent postflight checks found no case
+Namespace, fixture directory, pin root, node process, lease, cgroup, or manual
+work directory. K3s was active. Full Rust CI passed.
+
+This closes `ENTRY-LOSS-001`. The node config is the manually compiled
+predeclared assignment. The live CRI record binds it to the actual container.
+This result does not qualify CRD delivery or any Phase 4 effect decision.
+`ENTRY-RESTART-001`, `ENTRY-REUSE-001`, and
+`ENTRY-STOCK-HOOK-FAILURE-002` remain open. Phase 2 remains **Blocked**.
 
 ## Maintenance update — 2026-08-09
 

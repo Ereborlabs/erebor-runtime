@@ -3604,4 +3604,56 @@ directory, pin, lease, cgroup, and fixture. The VM did not reboot.
 No manual shell is valid because the scenario requires one owner for signed
 bytes, trusted time, replay identity, boot identity, and WAL state. This closes
 only `AUTHORIZATION-REPLAY-004`. Phase 4 still owns approved exec and physical
-effects. Four Phase 2 entry rows remain open.
+effects. Three Phase 2 entry rows remain open.
+
+## Entry-Source Loss Fixture Review — 2026-08-18
+
+Source commit `dd236af` extends existing owners only. It adds no map, role,
+runner, or durable type.
+
+Review this path in order:
+
+1. [`physical_kubernetes_loss_probe`](../../../crates/mithril-e2e/src/identity.rs)
+   creates one Pod, resolves its exact live CRI identity, and starts the real
+   node with that predeclared binding.
+2. The direct CRI exec supplies no Kubernetes API audit metadata. It stops
+   itself before the runner removes its task-storage label.
+3. [`prepare_effect_identity`](../../../bpf/erebor-interceptor/programs/identity_effects.bpf.h)
+   uses the existing external-root constructor before the resumed task's file
+   open. The runner requires a fresh restricted identity.
+4. [`WorkloadBindingOwner`](../../../crates/mithril-node/src/identity/binding.rs)
+   loses live CRI inventory when K3s stops. The node reports exact identity
+   coverage unhealthy and does not change the task identity.
+5. [`kubernetes-entry-loss.sh`](../../../examples/mithril-identity-manual/kubernetes-entry-loss.sh)
+   runs the same stop, delete, continue, inspect, runtime-stop, and cleanup
+   sequence in an existing VM.
+
+```mermaid
+sequenceDiagram
+    participant R as IdentityTestRunner
+    participant T as stopped CRI task
+    participant B as BPF identity hooks
+    participant N as mithril-node
+    participant K as K3s runtime
+
+    R->>T: remove task label while stopped
+    R->>T: continue for one file open
+    T->>B: file open without a label
+    B-->>R: fresh restricted external identity
+    R->>K: stop runtime inventory
+    N-->>R: exact identity coverage unhealthy
+    R->>K: restart before cleanup
+```
+
+The retained VM accepted schema-25 JSON with SHA-256
+`d3817779c7835ef7b766d6bcbc84dc67007b8e1192665e39b8d3f00173b689fd`.
+Task cookie `19` became fresh cookie `64`; both used restricted external role
+`11`. Runtime loss reported `LIVE_IDENTITY_RECONCILIATION_FAILED` and kept the
+cookie `64` snapshot unchanged. The automated and manual cases removed their
+Namespace, fixture, pin, node process, lease, cgroup, and work paths. K3s was
+active after each case.
+
+This closes only `ENTRY-LOSS-001`. The result uses a checked node config as
+the predeclared assignment and live CRI as the actual container binding. It
+does not qualify CRD delivery or a Phase 4 effect decision. Three Phase 2 rows
+remain open.

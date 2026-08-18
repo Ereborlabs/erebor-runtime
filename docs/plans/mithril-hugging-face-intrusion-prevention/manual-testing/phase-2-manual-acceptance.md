@@ -1394,9 +1394,63 @@ identity, and WAL lifecycle. The exact reboot limit is that the fixture loads
 the production owner with a distinct boot identity. It does not reboot the
 VM. Phase 4 owns the complete approved-exec transaction and physical effect.
 
-This closes `AUTHORIZATION-REPLAY-004`. Runtime-binding loss, restart
-reconciliation, full Kubernetes lifetime reuse, and stock-hook failures remain
-open. Phase 2 remains **Blocked**.
+This closes `AUTHORIZATION-REPLAY-004`. Restart reconciliation, full
+Kubernetes lifetime reuse, and stock-hook failures remain open. Phase 2
+remains **Blocked**.
+
+## Entry-Source Loss Qualification — 2026-08-18
+
+Source commit `dd236af` ran in the retained x86_64 Ubuntu 24.04 VM on Linux
+`6.8.0-137-generic`. The VM used Kubernetes `v1.35.5`, K3s
+`v1.35.5+k3s1`, and containerd `v2.2.3-k3s1`.
+
+The automated command used these unique paths:
+
+```sh
+"$MITHRIL_BIN_DIRECTORY/mithril-identity-test" \
+  --repo-root "$MITHRIL_MANUAL_SOURCE" \
+  --output-directory /tmp/mithril-phase2-entry-loss-20260818-14/result \
+  physical-probe \
+  --pin-root /sys/fs/bpf/mithril-phase2-entry-loss-20260818-14 \
+  --lease-path /tmp/mithril-phase2-entry-loss-20260818-14/result/owner.lock \
+  --cgroup-path /sys/fs/cgroup/mithril-phase2-entry-loss-20260818-14 \
+  --with-kubernetes \
+  --previous-bundle \
+    /tmp/mithril-phase2-entry-loss-20260818-14/input/identity-physical-probe.json
+```
+
+The prior schema-24 input SHA-256 was
+`9a0aca62b808421552029518dc4212ed5f1317d483afcc4d6a32b78554228951`.
+The accepted schema-25 JSON is
+`/tmp/mithril-phase2-entry-loss-20260818-14/identity-physical-probe.json`.
+Its SHA-256 is
+`d3817779c7835ef7b766d6bcbc84dc67007b8e1192665e39b8d3f00173b689fd`.
+
+The direct CRI control had no Kubernetes API audit metadata. Its restricted
+external task cookie was `19`. The stopped task had no label after independent
+BPF task-storage deletion. Its next file open created fresh restricted
+external task cookie `64` and a fresh process state. Both identities used the
+configured external role `11`.
+
+Stopping K3s changed exact-native-identity capability state to `UNHEALTHY`
+with reason `LIVE_IDENTITY_RECONCILIATION_FAILED`. It did not change the full
+task `64` snapshot. The runner restarted K3s and removed its Namespace,
+fixture, pin, lease, node process, and work directory.
+
+The same VM then ran:
+
+```sh
+examples/mithril-identity-manual/kubernetes-entry-loss.sh
+```
+
+The shell printed `PASS`. Postflight found no case Namespace, fixture, pin,
+node process, lease, cgroup, or manual work directory. K3s was active.
+
+The exact limit is identity only. The checked node config supplies a
+predeclared assignment, and live CRI discovery binds it to the actual
+container. This does not prove CRD delivery or a protected effect result. This
+closes `ENTRY-LOSS-001`. Three rows remain open, so Phase 2 remains
+**Blocked**.
 
 ## Native Identity Fixture Matrix
 
