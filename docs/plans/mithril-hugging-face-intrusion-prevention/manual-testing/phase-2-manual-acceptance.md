@@ -5,8 +5,9 @@ and its Kubernetes entry extension. Direct CRI exec, non-TTY and TTY
 `kubectl exec`, `kubectl cp`, the identical native-child control, lifecycle
 sleep, and HTTP, TCP, and gRPC readiness probes passed as self-contained
 operator cases. Init, native-sidecar, and application container identity also
-passed. The VM used the K3s distribution. The full fixture matrix is not
-recorded.
+passed. A targeted ephemeral container kept a separate identity tree while it
+shared the application PID namespace. The VM used the K3s distribution. The
+full fixture matrix is not recorded.
 
 Phase: [Exact Native Identity](../phase-2-exact-native-identity.md)  
 Setup: [`SINGLE-NODE`](./environment-setup.md)
@@ -671,6 +672,83 @@ the regular init, native sidecar, and application kept separate roots and
 execution sets while sharing the Pod sandbox and volume. This result does not
 qualify shared-network or shared-volume relationships or policy. Other open
 matrix rows keep Phase 2 **Blocked**.
+
+## Recorded Kubernetes Ephemeral-Identity Result — 2026-08-18
+
+Source commit `76d0145c2ecd7991ab7160773faf452c383df6a9` freezes the
+exact runner, manifest, runtime helper, and manual shell bytes used for this
+result. It extends the existing `IdentityTestRunner` and physical JSON bundle.
+It adds no BPF map, role, runner, or durable type. The retained x86_64 Ubuntu
+24.04 VM ran kernel `6.8.0-137-generic`. Kubernetes `v1.35.5` ran through the
+K3s `v1.35.5+k3s1` distribution and the live containerd CRI endpoint.
+
+The root shell ran the automated Kubernetes extension with unique paths:
+
+```sh
+target/debug/mithril-identity-test \
+  --repo-root "$MITHRIL_MANUAL_SOURCE" \
+  --output-directory /var/tmp/mithril-kubernetes-ephemeral-20260818-035 \
+  physical-probe \
+  --pin-root /sys/fs/bpf/mithril-kubernetes-ephemeral-035 \
+  --lease-path /var/tmp/mithril-kubernetes-ephemeral-20260818-035/owner.lock \
+  --cgroup-path /sys/fs/cgroup/mithril-kubernetes-ephemeral-035 \
+  --with-kubernetes \
+  --previous-bundle /var/tmp/identity-kubernetes-schema18-034.json
+```
+
+The schema-19 JSON is
+`/tmp/mithril-phase2-kubernetes-ephemeral-20260818-035/identity-physical-probe.json`.
+Its SHA-256 is
+`ee12bc57c8431ac801ae6e06e2e55dbf75ec50692b3a594785fc0d27fabf0efc`.
+It records `kubernetes_ephemeral_shared_pid_namespace=true`,
+`kubernetes_ephemeral_distinct_execution_set_and_profile=true`, and
+`kubernetes_fixture_removed=true`. The application task has cookie `5`, an
+execution-set ID ending in `01`, and profile generation reference `7`. The
+ephemeral task has cookie `12`, an execution-set ID ending in `02`, and profile
+generation reference `8`. Each task has a separate process state. Both tasks
+have `restored_or_unknown_root` and `fail_closed_unknown` because Mithril
+discovered the live containers after start.
+
+The unchanged BPF object SHA-256 is
+`3269516fcd2714ab7fbe29df26386c40f0c912b6284007b641d8bbf68842b876`.
+The workload manifest SHA-256 is
+`44f419ca73b06353c372930000ab7a0acac7fec7dc83bba60ab2747e4e493141`.
+The fixture created one Pod with `shareProcessNamespace: true`. It patched the
+real `ephemeralcontainers` subresource with
+`targetContainerName: application`, then verified that Kubernetes retained
+that exact target. The application and debugger used the same Pod sandbox and
+PID namespace but separate container cgroups.
+
+The retained VM then ran this command as root from the same source bytes:
+
+```sh
+examples/mithril-identity-manual/kubernetes-ephemeral.sh
+```
+
+The shell SHA-256 is
+`a692a39929d13654f5ea54c0ff353c01eac3ce6eadae9f138a3ed63366f3c896`.
+The shared runtime helper SHA-256 is
+`ef098b3a367c672a6677997155263cfda43bee293301dc6d8d9b99513abb72ce`.
+It printed application task cookie `5`, ephemeral task cookie `12`, both
+execution-set and profile identities, shared PID-namespace inode `4026532733`,
+and `PASS`.
+
+Postflight found only the four baseline Kubernetes Namespaces. It found no
+case fixture, manual work directory, pin, lease, cgroup, node process, or
+loaded Erebor Interceptor program. `manual.sh destroy` removed the VM, and
+`virsh list --all` was empty. There was no rejected physical run for this
+fixture.
+
+The focused fixture-allocation test passed. `cargo clippy -p mithril-e2e
+-p mithril-node --all-targets -- -D warnings` passed. The VM shell checks
+passed. The final `bash .github/scripts/verify-rust-ci.sh` passed with exit
+status `0` when the local socket tests ran with host permission.
+
+This completes `ENTRY-EPHEMERAL-001`. The exact limit is identity separation:
+the targeted ephemeral container kept a separate task root, process state,
+execution set, and profile while it shared the application PID namespace and
+Pod sandbox. This result does not qualify shared-namespace relationships or
+policy. Other open matrix rows keep Phase 2 **Blocked**.
 
 ## Recorded Pre-PONR Failed Native-Exec VM Subcase — 2026-08-15
 

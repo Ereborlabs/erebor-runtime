@@ -144,6 +144,7 @@ Then run only the case being checked:
 | Kubernetes lifecycle sleep | `sudo examples/mithril-identity-manual/kubernetes-lifecycle-sleep.sh` in the manual VM |
 | Kubernetes network probes | `sudo examples/mithril-identity-manual/kubernetes-network-probes.sh` in the manual VM |
 | Kubernetes container identities | `sudo examples/mithril-identity-manual/kubernetes-containers.sh` in the manual VM |
+| Kubernetes ephemeral identity | `sudo examples/mithril-identity-manual/kubernetes-ephemeral.sh` in the manual VM |
 | Native child | `sudo examples/mithril-identity-manual/native-child.sh NODE_CONFIG CONTAINER_OR_FULL_CRI_ID` |
 | Orphaned native child | `sudo examples/mithril-identity-manual/native-child.sh NODE_CONFIG CONTAINER_OR_FULL_CRI_ID --orphan` |
 | Double-fork native child | `sudo examples/mithril-identity-manual/native-child.sh NODE_CONFIG CONTAINER_OR_FULL_CRI_ID --double-fork` |
@@ -305,6 +306,25 @@ Because the node discovers each live root after start, each root must be
 qualify shared-network or shared-volume relationships or policy. The script
 removes its Namespace, Pod, node, pins, lease, temporary paths, and fixture at
 exit.
+
+## Kubernetes Ephemeral-Identity Check
+
+Use the retained manual Kubernetes VM and run:
+
+```sh
+sudo examples/mithril-identity-manual/kubernetes-ephemeral.sh
+```
+
+The script creates one Pod that shares its process namespace. It then adds a
+real ephemeral container that targets the application container. The script
+requires the application and ephemeral container to share one Pod sandbox and
+PID namespace. It also requires separate container cgroups, task/process
+roots, execution-set IDs, and profiles.
+
+Because the node discovers both live roots after start, both roots must be
+`restored_or_unknown_root` with `fail_closed_unknown`. This check does not
+qualify shared-namespace relationships or policy. The script removes its
+Namespace, Pod, node, pins, lease, temporary paths, and fixture at exit.
 
 ## Namespace Entry And Cgroup Movement Check
 

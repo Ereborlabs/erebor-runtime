@@ -685,6 +685,66 @@ set separation for a regular init, native sidecar, and application in one Pod.
 The result does not qualify shared-network or shared-volume relationships or
 policy. Other open rows keep Phase 2 **Blocked**.
 
+### Kubernetes ephemeral identity — 2026-08-18
+
+Review this path in order:
+
+1. [`kubernetes-ephemeral-workload-v1.yaml`](../../../crates/mithril-e2e/fixtures/identity/kubernetes-ephemeral-workload-v1.yaml)
+   defines one application Pod with a shared process namespace.
+2. [`IdentityTestRunner::physical_kubernetes_ephemeral_probe`](../../../crates/mithril-e2e/src/identity.rs)
+   patches the real ephemeral-container subresource, resolves both live CRI
+   containers, publishes their separate bindings, and records both roots.
+3. [`WorkloadBindingOwner`](../../../crates/mithril-node/src/identity/binding.rs)
+   publishes the existing per-cgroup execution-set and profile bindings. The
+   shared PID namespace does not change this owner.
+4. [`identity-runtime.sh`](../../../examples/mithril-identity-manual/identity-runtime.sh)
+   owns the manual Pod, CRI bindings, node, pins, lease, and cleanup.
+   [`kubernetes-ephemeral.sh`](../../../examples/mithril-identity-manual/kubernetes-ephemeral.sh)
+   owns the operator sequence. `manual.sh` owns only the VM lifecycle.
+
+```mermaid
+sequenceDiagram
+    participant O as operator or VM harness
+    participant R as IdentityTestRunner or manual shell
+    participant K as Kubernetes and CRI
+    participant M as Mithril identity owner
+
+    O->>R: start ephemeral-identity case
+    R->>K: create application with shared PID namespace
+    R->>K: add debugger targeted at application
+    K-->>R: return two CRI containers in one Pod sandbox
+    R->>M: bind separate cgroups, execution sets, and profiles
+    M-->>R: return two separate conservative roots
+    R->>K: delete Namespace
+    R-->>O: record shared PID namespace and separate identities
+```
+
+The implementation reuses the existing physical bundle. Schema 19 adds two
+optional task snapshots and two result booleans. It adds no map, role, generic
+runner, durable owner, or kernel state.
+
+Source commit `76d0145c2ecd7991ab7160773faf452c383df6a9` freezes the
+source bytes that produced the accepted schema-19 JSON at
+`/tmp/mithril-phase2-kubernetes-ephemeral-20260818-035/identity-physical-probe.json`.
+Its SHA-256 is
+`ee12bc57c8431ac801ae6e06e2e55dbf75ec50692b3a594785fc0d27fabf0efc`.
+The application and ephemeral task cookies are `5` and `12`. Their execution-
+set IDs end in `01` and `02`, and their profile generation references are `7`
+and `8`. Both roots are `restored_or_unknown_root` with
+`fail_closed_unknown`; the fixture makes no false first-instruction claim.
+
+The retained physical VM also ran `kubernetes-ephemeral.sh` as root from the
+same source bytes. It printed the two distinct identities, their shared PID-
+namespace inode, and `PASS`. Automated and manual cleanup removed the
+Namespace, fixture, pin, lease, cgroup, node process, and loaded Erebor
+Interceptor programs. The VM was destroyed, and `virsh list --all` was empty.
+
+This completes `ENTRY-EPHEMERAL-001`. The exact limit is separate root,
+process, execution-set, and profile identity for one targeted ephemeral
+container in the application's PID namespace. The result does not qualify
+shared-namespace relationships or policy. Other open rows keep Phase 2
+**Blocked**.
+
 ### Retained alias and mount evidence — 2026-08-15
 
 At source `5b1abfa984d0`, a retained x86_64 VM ran the existing

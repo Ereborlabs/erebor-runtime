@@ -49,6 +49,8 @@ action creates no extra task in the container cgroup. The network-probe
 extension records the same task-absence result for HTTP, TCP, and gRPC
 readiness probes. The container-identity extension records separate roots and
 execution sets for a regular init, native sidecar, and application in one Pod.
+The ephemeral extension records a separate root, process, execution set, and
+profile for a targeted ephemeral container in the application's PID namespace.
 It does not prove approved administrative exec, shared-resource or network-flow
 policy, multi-node propagation, or complete Kubernetes protection.
 
