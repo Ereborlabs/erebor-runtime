@@ -1283,6 +1283,77 @@ This is physical and manual evidence for the PID-namespace-init subcase of
 `ID-CREATOR-PARENT-007`. Ptrace reparenting and PID reuse remain unqualified.
 The phase remains **Blocked**.
 
+## Native Terminal-State Qualification — 2026-08-18
+
+Source commit `e63488e` extends the existing `IdentityTestRunner` and
+`NativeProcessFixture`. It adds no runner, map, role, or durable type. The
+retained x86_64 Ubuntu 24.04 VM ran Linux `6.8.0-137-generic` and this command
+with unique paths:
+
+```sh
+"$MITHRIL_BIN_DIRECTORY/mithril-identity-test" \
+  --repo-root "$MITHRIL_MANUAL_SOURCE" \
+  --output-directory /var/tmp/mithril-native-final-20260818-8 \
+  physical-probe \
+  --pin-root /sys/fs/bpf/mithril-native-final-20260818-8 \
+  --lease-path /run/mithril-native-final-20260818-8.lock \
+  --cgroup-path /sys/fs/cgroup/mithril-native-final-20260818-8
+```
+
+The accepted schema-23 JSON is
+`/tmp/mithril-phase2-native-terminal-20260818-8/identity-physical-probe.json`.
+Its SHA-256 is
+`f659a8983f7002f8558d88862b2f3500b2e138563c083f308f56ac309f1be8cb`.
+The BPF object SHA-256 is
+`02408c371aafaeeb044cbf11195a25dca35013bcdea44e37aa0756ebd2f2f3e6`.
+
+For `EXEC-COMMIT-STATE-001`, the runner copied `/bin/true` and changed one
+ELF load segment so `p_memsz` was smaller than `p_filesz`. Linux crossed the
+exec point of no return and then terminated the task. Mithril recorded pending
+state `4` (`PostPonrFatal`), exec guard `3` (`OutcomeUnknown`), and coordinate
+state `4` (`Exited`). The source execution completed. The target execution
+remained outcome-unknown and did not become active. The source role remained
+restricted. The process cannot be held for an operator inspection after this
+failure, so the existing runner owns this exact map oracle. The readable
+[`native-child.sh --failed-exec`](../../../../examples/mithril-identity-manual/native-child.sh)
+case remains the manual pre-PONR control.
+
+For `ID-CREATOR-PARENT-007`, the runner reused namespace PID `2`. The first
+task had host PID `96008`, task cookie `228`, and process state
+`000000000000000100000000000000e8`. The second task had host PID `96009`, task
+cookie `234`, and process state `000000000000000100000000000000ee`.
+Their execution IDs were also different. Both creator edges remained task
+cookie `225`.
+
+For `ID-TASK-COORD-FINALIZE-006`, ordinary `pidfd_open` could not open the
+non-leader worker. The existing task-coordinate map still identified the
+worker before leader exit. The runner then reused namespace TID `3`. Host TIDs
+`96010` and `96011` received task cookies `240` and `242`. No old coordinate
+or task identity was reused.
+
+For `NATIVE-STATE-REF-LIFETIME-001`, process, entry, and profile task
+references were each `1` after the leader exited and the worker remained live.
+They were each `0` after the worker exited. The root tombstone released after
+leader exit. The worker tombstone stayed owned until final exit and then
+released. The process became reclaimable and the entry became draining.
+
+The same VM ran this readable root-shell command:
+
+```sh
+examples/mithril-identity-manual/native-pid-reuse.sh
+```
+
+The shell printed `PASS`. It used `identity_prepare_k3s_case`, reused
+namespace PID `2`, and required fresh task, process, and execution identities
+with the same exact creator. Automated cleanup removed the dedicated pin,
+lease, cgroup, and fixture. Manual cleanup removed its Namespace, Pod, node
+process, pin, lease, state, cgroup, fixture, and manual work directory.
+
+This result closes only the four native rows named above. It does not qualify
+runtime-binding loss, node or runtime restart, cgroup/namespace/Pod/container
+lifetime reuse, stock OCI hook rejection, or authorization replay. The phase
+remains **Blocked**.
+
 ## Native Identity Fixture Matrix
 
 | Fixture | Operator action | Required oracle and legitimate control |
@@ -1291,7 +1362,7 @@ The phase remains **Blocked**.
 | `EXEC-COMMIT-STATE-001` | run success, pre-PONR failure, and post-PONR fatal/unknown exec | success commits once; early failure keeps exact prior state; later failure never restores broad authority |
 | `ID-CGROUP-ESCAPE-001` | move a labeled task to host/unprotected placement | task storage still resolves and denies mismatch; unmoved allowed control works |
 | `ID-CLONE-CGROUP-002` | fixture-owned physical probe; no manual shell is valid | stopped clone child has exact inherited identity before one direct first effect |
-| `ID-CREATOR-PARENT-007` | reparent or orphan a child after native creation. Use [`native-child.sh --orphan`](../../../../examples/mithril-identity-manual/native-child.sh) for creator exit, [`native-child.sh --double-fork`](../../../../examples/mithril-identity-manual/native-child.sh) for double fork, [`native-child.sh --subreaper`](../../../../examples/mithril-identity-manual/native-child.sh) for subreaper reparenting, and [`native-child.sh --namespace-init`](../../../../examples/mithril-identity-manual/native-child.sh) for PID-namespace-init reparenting. | The immutable creator edge stays exact while the real-parent interval changes. PID reuse remains unqualified. A permitted ptrace topology belongs to Phase 4. |
+| `ID-CREATOR-PARENT-007` | reparent or orphan a child after native creation. Use [`native-child.sh --orphan`](../../../../examples/mithril-identity-manual/native-child.sh) for creator exit, [`native-child.sh --double-fork`](../../../../examples/mithril-identity-manual/native-child.sh) for double fork, [`native-child.sh --subreaper`](../../../../examples/mithril-identity-manual/native-child.sh) for subreaper reparenting, [`native-child.sh --namespace-init`](../../../../examples/mithril-identity-manual/native-child.sh) for PID-namespace-init reparenting, and [`native-pid-reuse.sh`](../../../../examples/mithril-identity-manual/native-pid-reuse.sh) for namespace PID reuse. | The immutable creator edge stays exact while the real-parent interval changes. Reused namespace PID gets fresh task, process, and execution identity. A permitted ptrace topology belongs to Phase 4. |
 | `ID-MOVED-PARENT-FORK-004` | move parent, then fork | child inherits actual task authority and placement floor, not cgroup-derived role |
 | `ID-MOVED-TASK-EXEC-005` | move labeled task, then exec | task-first old identity and placement mismatch constrain transition |
 | `ID-TASK-COORD-FINALIZE-006` | inspect task at allocation, pre-wake finalization, visibility, and exit | opaque state precedes effect; PID/TGID/start coordinates finalize later without granting permission |

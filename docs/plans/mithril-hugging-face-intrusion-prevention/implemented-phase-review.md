@@ -1322,6 +1322,49 @@ The fixture uses a stopped child to remove the setup-exec race. The failed exec
 must leave no pending entry. The later successful exec must change only the
 execution and image identities that the runner checks.
 
+### Native terminal-state physical qualification
+
+Source commit `e63488e` closes the four native rows that the earlier
+pre-PONR result left open. The accepted schema-23 JSON is
+`/tmp/mithril-phase2-native-terminal-20260818-8/identity-physical-probe.json`.
+Its SHA-256 is
+`f659a8983f7002f8558d88862b2f3500b2e138563c083f308f56ac309f1be8cb`.
+The BPF object SHA-256 is
+`02408c371aafaeeb044cbf11195a25dca35013bcdea44e37aa0756ebd2f2f3e6`.
+
+Read these owners in this order:
+
+| Order | Source | Review point |
+| --- | --- | --- |
+| 1 | [`IdentityTestRunner` post-PONR case](../../../crates/mithril-e2e/src/identity.rs#L985) | The existing runner releases one stopped child into a deliberately invalid ELF load and reads terminal state from the existing maps. |
+| 2 | [`IdentityTestRunner` leader-first case](../../../crates/mithril-e2e/src/identity.rs#L1627) | The leader exits while one real sibling thread stays live. The runner reads exact process, entry, profile-reference, coordinate, creator-edge, and tombstone state. |
+| 3 | [`IdentityTestRunner` PID/TID-reuse case](../../../crates/mithril-e2e/src/identity.rs#L1853) | One held PID namespace reuses namespace PID `2` and TID `3`. The runner requires fresh task, process, execution, and coordinate identity. |
+| 4 | [`native-pid-reuse.sh`](../../../examples/mithril-identity-manual/native-pid-reuse.sh#L1) | The operator case uses `identity_prepare_k3s_case`, moves the held namespace init into the protected cgroup, and checks two real processes with the same namespace PID. |
+
+The post-PONR case records pending state `PostPonrFatal`, exec guard
+`OutcomeUnknown`, and coordinate `Exited`. It retains the source role and
+source execution state. It does not activate the target execution. Linux has
+already terminated the task, so a manual shell cannot keep that task live for
+inspection. The runner therefore owns this map-only oracle.
+
+The leader-first case records process, entry, and profile references at
+`1/1/1` while the worker remains live and at `0/0/0` after it exits. The root
+tombstone releases after leader exit. The worker tombstone remains owned until
+the worker exits. Final exit makes the process reclaimable and the entry
+draining.
+
+The reuse case records namespace PID `2` for host PIDs `96008` and `96009`.
+Their task cookies are `228` and `234`; their process and execution identities
+are also different. Both creator edges remain task cookie `225`. Namespace
+TID `3` is then reused by host TIDs `96010` and `96011` with task cookies `240`
+and `242`. Ordinary `pidfd_open` cannot open the non-leader task on this
+kernel. The existing task-coordinate map supplies its exact identity.
+
+This result closes `EXEC-COMMIT-STATE-001`, `ID-CREATOR-PARENT-007`,
+`ID-TASK-COORD-FINALIZE-006`, and `NATIVE-STATE-REF-LIFETIME-001`. It adds no
+map, role, runner, or durable type. Full cgroup, namespace, Pod, and container
+lifetime reuse remains in `ENTRY-REUSE-001`.
+
 This guide is explanatory only. The authoritative scope and acceptance records
 remain the phase documents and the readable architecture:
 
