@@ -233,7 +233,7 @@ file mappings, exact mount views, restricted io_uring, inherited and exact
 Unix-stream relationships, process-control relationships, event saturation,
 mount CAS, and mount
 snapshots. The [closure matrix](../phase-4-closure-matrix.md) names the exact
-13 Appendix C rows and their limits. The record also has:
+14 Appendix C rows and their limits. The record also has:
 
 - `new_roots_generation_published_atomically=true`,
   `existing_tasks_retained_old_generation=true`, and
@@ -262,7 +262,16 @@ It records the exact allowed PTMX control, the hard-closed descriptor-producing
 operation, no installed descriptor, and complete cleanup. This tier does not
 advertise granular authority after a derived object is minted.
 
-This result does not qualify the 15 implementation-open rows in the closure
+The retained guest ran the independent-root shared-mapping slice at
+implementation commit `b6e5dea`. The result is
+`/tmp/mithril-phase4-independent-mmap.json`, with SHA-256
+`d41f0f133ffeb38b37431d5a77bf8515bfc5485f711120f94788ae375bf75b8f`.
+The protected mapping denies, the benign mapping succeeds, and the decision
+records prove distinct task, process-lineage, and process-instance identities.
+This tier makes no per-load, per-store, or byte-taint claim after an admitted
+mapping.
+
+This result does not qualify the 14 implementation-open rows in the closure
 matrix. It does not qualify projected-token rotation, immutable content and
 VMA provenance, complete self-protection, or administrative exec.
 

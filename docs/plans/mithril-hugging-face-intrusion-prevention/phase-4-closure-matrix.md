@@ -7,7 +7,7 @@ Manual acceptance: [Phase 4 runbook](./manual-testing/phase-4-manual-acceptance.
 ## Closure Decision
 
 Phase 4 is `Not done` at implementation commit
-`e6da7a203a8b27b70ef09ad74c25f2cb792eafbc`. The reviewed architecture
+`b6e5dea27aba3c7d430610bdae4c326297838e18`. The reviewed architecture
 SHA-256 is
 `22678b9c0379ff915fe595059f3da2789c3e32cdf54d61656c7257175263d14a`.
 
@@ -26,7 +26,7 @@ The status terms in this matrix have these meanings:
 - `Implementation open`: one or more required authority, lifecycle, race, or
   control paths do not exist.
 
-Current count: 13 `Done`, zero `Proof open`, and 15 `Implementation open`
+Current count: 14 `Done`, zero `Proof open`, and 14 `Implementation open`
 for the 28 Appendix C fixtures. The additional plan-owned path-tree test is
 `Done`.
 
@@ -36,7 +36,7 @@ for the 28 Appendix C fixtures. The additional plan-owned path-tree test is
 | --- | --- | --- | --- |
 | `D4.1` | [`NodePolicyGenerationOwner`](../../../crates/mithril-node/src/policy.rs) verifies signed artifacts and rollback state, preflights capacity, stages and reads back rows, probes staged decisions, publishes one profile-generation pointer, recovers ambiguous commits, retains old holders, and deletes retired rows after represented references clear. | Partial | Prove crash and concurrent-holder retirement, pending exec and administrative state, and the required post-reference grace boundary in one current physical lifecycle matrix. |
 | `D4.2` | The BPF exec and memory hooks enforce exact file-backed exec variants and represented executable mappings. Unsupported anonymous, memfd, and pkey paths fail closed. | Partial | Add complete immutable image, content-race, script, interpreter, `binfmt_misc`, loader, pkey, and VMA provenance. Run the protected concurrent-exec race. |
-| `D4.3` | Exact file rows, represented aliases, passed-descriptor acquisition and use, recursive path-tree denial, global mount invalidation, propagation-peer invalidation, and exact reconciliation exist. | Partial | Add projected-token rotation, overlay copy-up, persistent file and VMA state, positive create parent-and-name authority, and the remaining local acquisition provenance. Qualify the complete mount race matrix. |
+| `D4.3` | Exact file rows, represented aliases, passed-descriptor acquisition and use, independent-root shared-mapping denial, recursive path-tree denial, global mount invalidation, propagation-peer invalidation, and exact reconciliation exist. | Partial | Add projected-token rotation, overlay copy-up, persistent file and VMA state, positive create parent-and-name authority, and the remaining local acquisition provenance. Qualify the complete mount race matrix. |
 | `D4.4` | Exact Unix-stream relationships and exact process-control target rows exist. The runner has positive, inherited-endpoint, stale-peer, unmatched-peer, and denial controls. | Partial | Add listener transfer, socket activation, datagram, pipe, shared-memory, zero-copy, and remaining asynchronous lifetime models. |
 | `D4.5` | Exact device ioctl and process-control rows exist. A descriptor-producing PTMX operation fails closed before it installs the derived descriptor. Represented namespace, BPF, and managed-pin operations also fail closed. | Partial | Add capability, credential, namespace, process-vm, pidfd, perf, module, keyring, and complete local self-protection authority. Do not advertise granular post-mint derived-object authority without a qualified label hook. |
 | `D4.6` | Signed bounded exceptions use exact matching entries, atomic consumption, receipts, and a restart-safe WAL. The administrative path reaches Control, admission, and slot arm. | Partial | Model stock-runc bootstrap without a broad exception. Then prove one exact winner plus replay, expiry, mismatch, disconnect, and contention denials. |
@@ -54,7 +54,7 @@ for the 28 Appendix C fixtures. The additional plan-owned path-tree test is
 | `FILE-FD-PASS-001` | The effect runner checks protected and benign descriptor receipt, acquisition, and later read. | The current-source physical record has `passed_fd_read_denied=true`, `passed_fd_acquisition_denied=true`, `passed_fd_acquisition_installed_nothing=true`, and all three benign acquisition and read controls true. | Done |
 | `FILE-IDENTITY-001` | Exact object decisions and hard-link, symbolic-link, bind, proc-fd, and recursive path-tree cases exist. | Add the required overlay copy-up identity case, then run the final alias matrix. | Implementation open |
 | `FILE-MMAP-001` | The effect runner checks forbidden read, writable shared, and executable file mappings plus benign mapping controls. | The current-source physical record has all four represented file and executable mapping denials true and both benign mapping controls true. | Done |
-| `FILE-MMAP-SHARED-011` | One forbidden writable shared mapping and benign mapping control exist. | Track attachment and lifetime across independent roots. Prove that an unapproved root cannot acquire or attach the represented shared VMA. | Implementation open |
+| `FILE-MMAP-SHARED-011` | A target created before protected-cgroup attachment receives a distinct root task, process lineage, and process instance. Its inherited protected fd cannot create a writable shared mapping. The same root can create the exact benign mapping. | The current physical record has the denial, benign control, and distinct-identity fields true. The strict tier denies mapping acquisition and makes no per-load, per-store, or byte-taint claim after an admitted mapping. | Done |
 | `FILE-NAMESPACE-001` | Live mount-view lookup, bind-alias selection, dirty closure, and exact reconciliation exist. | The current-source physical record has bind canonicalization, protected and external mount-race fail closure, exact restoration, and the outside-tree control true. | Done |
 | `FILE-SA-TOKEN-OPEN-001` | The K3s lane discovers a projected token, but the effect bundle marks the branch `Unsupported`. | Bind worker and controller to distinct signed profiles. Deny the worker before fd or bytes, allow the controller, rotate the token, and prove no visibility gap. | Implementation open |
 | `FILE-VMA-SNAPSHOT-001` | Missing or unsupported VMA state fails closed. | Add a complete typed VMA snapshot and its mutation generation. Race map, unmap, share, and policy or response changes. Prove an incomplete snapshot never allows and a complete snapshot has a positive control. | Implementation open |
@@ -115,6 +115,15 @@ SHA-256 is
 It has `ptmx_ioctl_exact_allowed=true`,
 `ptmx_derived_peer_hard_closed=true`,
 `ptmx_derived_peer_installed_nothing=true`, and all four cleanup fields true.
+
+The independent-root shared-mapping slice passed at implementation commit
+`b6e5dea`. Its JSON is `/tmp/mithril-phase4-independent-mmap.json`, and its
+SHA-256 is
+`d41f0f133ffeb38b37431d5a77bf8515bfc5485f711120f94788ae375bf75b8f`.
+It has `independent_root_shared_mmap_denied=true`,
+`independent_root_benign_mmap_allowed=true`,
+`independent_root_shared_mmap_distinct_identity=true`, and all four cleanup
+fields true.
 
 The identity source now serializes external-root label publication against a
 concurrent exit. The physical fixture also uses explicit process barriers for
