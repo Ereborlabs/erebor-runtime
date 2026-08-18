@@ -26,6 +26,7 @@ const UNIX_STREAM_FAILURE_BASE: u32 = 1 << 16;
 const BPF_MAP_CREATE: libc::c_uint = 0;
 const BPF_MAP_TYPE_ARRAY: u32 = 2;
 const QUALIFIED_TIOCGPTN_IOCTL: libc::c_ulong = 2_147_767_344;
+const QUALIFIED_TIOCGPTPEER_IOCTL: libc::c_ulong = 0x5441;
 static UNIX_STREAM_FIXTURE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 #[repr(C)]
@@ -139,6 +140,7 @@ pub(super) enum PreparedOperation {
     MountSetattr,
     MountPropagation,
     Ioctl,
+    IoctlDerivedPeer,
     IoctlUnsupported,
     Ipc,
     UnixStream,
@@ -1530,6 +1532,9 @@ impl PreparedOperations {
             .context(IoSnafu {
                 path: Path::new("/dev/pts/ptmx"),
             })?;
+        unlock_ptmx(&ioctl_file).context(IoSnafu {
+            path: Path::new("/dev/pts/ptmx"),
+        })?;
         let unsupported_ioctl_file = fs::File::open("/dev/zero").context(IoSnafu {
             path: Path::new("/dev/zero"),
         })?;
@@ -1872,6 +1877,7 @@ impl PreparedOperations {
                 io_outcome(fixture_syscalls::make_mount_shared(&self.mount_source))
             }
             PreparedOperation::Ioctl => ptmx_number_outcome(&self.ioctl_file),
+            PreparedOperation::IoctlDerivedPeer => ptmx_peer_outcome(&self.ioctl_file),
             PreparedOperation::IoctlUnsupported => {
                 let mut pty_number = u32::MAX;
                 // SAFETY: TIOCGPTN writes one u32 to the valid stack address.
@@ -2467,6 +2473,37 @@ fn ptmx_number_outcome(file: &fs::File) -> IoOutcome {
 }
 
 #[allow(unsafe_code)]
+fn unlock_ptmx(file: &fs::File) -> io::Result<()> {
+    let mut locked: libc::c_int = 0;
+    // SAFETY: TIOCSPTLCK reads one int from the valid stack address.
+    let result = unsafe { libc::ioctl(file.as_raw_fd(), libc::TIOCSPTLCK, &mut locked) };
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(io::Error::last_os_error())
+    }
+}
+
+#[allow(unsafe_code)]
+fn ptmx_peer_outcome(file: &fs::File) -> IoOutcome {
+    // SAFETY: TIOCGPTPEER returns a new descriptor or a negative errno result.
+    let result = unsafe {
+        libc::ioctl(
+            file.as_raw_fd(),
+            QUALIFIED_TIOCGPTPEER_IOCTL,
+            libc::O_RDWR | libc::O_NOCTTY,
+        )
+    };
+    if result >= 0 {
+        // SAFETY: a successful TIOCGPTPEER result is a new owned descriptor.
+        let _peer = unsafe { OwnedFd::from_raw_fd(result) };
+        allowed_outcome()
+    } else {
+        error_outcome(io::Error::last_os_error())
+    }
+}
+
+#[allow(unsafe_code)]
 fn mmap_protection_outcome(
     file: &fs::File,
     initial_protection: libc::c_int,
@@ -2537,9 +2574,9 @@ mod tests {
     use std::os::unix::fs::OpenOptionsExt as _;
 
     use super::{
-        invalid_state, mmap_outcome, ptmx_number_outcome, read_outcome, BatchOutcome,
-        BpfMapCreateAttr, IoOutcome, PreparedWriteRace, ProcessControlTarget, UnixStreamTarget,
-        BPF_MAP_TYPE_ARRAY,
+        invalid_state, mmap_outcome, ptmx_number_outcome, ptmx_peer_outcome, read_outcome,
+        unlock_ptmx, BatchOutcome, BpfMapCreateAttr, IoOutcome, PreparedWriteRace,
+        ProcessControlTarget, UnixStreamTarget, BPF_MAP_TYPE_ARRAY,
     };
     use crate::effect::fixture_syscalls;
     use crate::effect::mailbox::SharedMailbox;
@@ -2572,6 +2609,12 @@ mod tests {
                 location: snafu::location!(),
             })?;
         assert!(ptmx_number_outcome(&ptmx).allowed);
+        unlock_ptmx(&ptmx).map_err(|source| crate::Error::Io {
+            path: ptmx_path.to_path_buf(),
+            source,
+            location: snafu::location!(),
+        })?;
+        assert!(ptmx_peer_outcome(&ptmx).allowed);
 
         let null_path = std::path::Path::new("/dev/null");
         let null = fs::File::open(null_path).map_err(|source| crate::Error::Io {
