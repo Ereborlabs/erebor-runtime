@@ -201,6 +201,7 @@ pub struct IdentityPhysicalProbeBundleV1 {
     pub kubernetes_kubectl_copy_root: Option<NativeTaskSnapshotV1>,
     pub kubernetes_native_child_parent: Option<NativeTaskSnapshotV1>,
     pub kubernetes_native_child_control: Option<NativeTaskSnapshotV1>,
+    pub kubernetes_lifecycle_sleep_no_task: Option<bool>,
     pub kubernetes_fixture_removed: bool,
 }
 
@@ -1690,7 +1691,7 @@ impl IdentityTestRunner {
             }
         );
         Ok(IdentityPhysicalProbeBundleV1 {
-            schema_version: 15,
+            schema_version: 16,
             object_sha256,
             first_start,
             distinct_pin_root_owner_rejected,
@@ -1753,6 +1754,7 @@ impl IdentityTestRunner {
             kubernetes_kubectl_copy_root: None,
             kubernetes_native_child_parent: None,
             kubernetes_native_child_control: None,
+            kubernetes_lifecycle_sleep_no_task: None,
             kubernetes_fixture_removed: false,
         })
     }
@@ -1771,22 +1773,42 @@ impl IdentityTestRunner {
             serde_json::from_slice(&bytes).context(JsonSnafu {
                 path: previous_bundle_path,
             })?;
+        let entry_results_missing = bundle.kubernetes_initial_root.is_none()
+            && bundle.kubernetes_direct_cri_exec_root.is_none()
+            && bundle.kubernetes_kubectl_exec_root.is_none()
+            && bundle.kubernetes_kubectl_tty_exec_root.is_none()
+            && bundle.kubernetes_kubectl_copy_root.is_none()
+            && bundle.kubernetes_native_child_parent.is_none()
+            && bundle.kubernetes_native_child_control.is_none()
+            && !bundle.kubernetes_fixture_removed;
+        let entry_results_present = bundle.kubernetes_initial_root.is_some()
+            && bundle.kubernetes_direct_cri_exec_root.is_some()
+            && bundle.kubernetes_kubectl_exec_root.is_some()
+            && bundle.kubernetes_kubectl_tty_exec_root.is_some()
+            && bundle.kubernetes_kubectl_copy_root.is_some()
+            && bundle.kubernetes_native_child_parent.is_some()
+            && bundle.kubernetes_native_child_control.is_some()
+            && bundle.kubernetes_fixture_removed;
         ensure!(
-            bundle.schema_version == 15
-                && bundle.kubernetes_initial_root.is_none()
-                && bundle.kubernetes_direct_cri_exec_root.is_none()
-                && bundle.kubernetes_kubectl_exec_root.is_none()
-                && bundle.kubernetes_kubectl_tty_exec_root.is_none()
-                && bundle.kubernetes_kubectl_copy_root.is_none()
-                && bundle.kubernetes_native_child_parent.is_none()
-                && bundle.kubernetes_native_child_control.is_none()
-                && !bundle.kubernetes_fixture_removed,
+            matches!(bundle.schema_version, 15 | 16)
+                && (entry_results_missing || entry_results_present)
+                && bundle.kubernetes_lifecycle_sleep_no_task.is_none(),
             InvalidInputSnafu {
                 path: previous_bundle_path,
                 reason: "the prior identity bundle cannot accept one Kubernetes result",
             }
         );
-        self.physical_kubernetes_exec_probe(output_directory, pin_root, lease_path, &mut bundle)?;
+        bundle.schema_version = 16;
+        if entry_results_missing {
+            self.physical_kubernetes_exec_probe(
+                output_directory,
+                pin_root,
+                lease_path,
+                &mut bundle,
+            )?;
+        }
+        bundle.kubernetes_lifecycle_sleep_no_task =
+            Some(self.physical_kubernetes_lifecycle_sleep_probe(output_directory)?);
         bundle.kubernetes_fixture_removed = true;
         Ok(bundle)
     }
@@ -2558,6 +2580,206 @@ impl IdentityTestRunner {
         bundle.kubernetes_native_child_parent = Some(native_child_parent);
         bundle.kubernetes_native_child_control = Some(native_child_control);
         Ok(())
+    }
+
+    fn physical_kubernetes_lifecycle_sleep_probe(&self, output_directory: &Path) -> Result<bool> {
+        fs::create_dir_all(output_directory).context(IoSnafu {
+            path: output_directory,
+        })?;
+        let work_directory = output_directory.join("kubernetes-lifecycle-sleep");
+        ensure!(
+            !work_directory.exists(),
+            InvalidInputSnafu {
+                path: &work_directory,
+                reason: "the Kubernetes lifecycle-sleep fixture directory already exists",
+            }
+        );
+        fs::create_dir(&work_directory).context(IoSnafu {
+            path: &work_directory,
+        })?;
+        let work_cleanup = ProbeDirectory::new(&work_directory);
+        let namespace = format!("mithril-identity-sleep-{}", std::process::id());
+        let manifest_path = work_directory.join("workload.yaml");
+        let template_path = self.repo_root.join(
+            "crates/mithril-e2e/fixtures/identity/kubernetes-lifecycle-sleep-workload-v1.yaml",
+        );
+        let manifest = fs::read_to_string(&template_path).context(IoSnafu {
+            path: &template_path,
+        })?;
+        fs::write(
+            &manifest_path,
+            manifest.replace("MITHRIL_IDENTITY_SLEEP_NAMESPACE", &namespace),
+        )
+        .context(IoSnafu {
+            path: &manifest_path,
+        })?;
+        let mut namespace_created = false;
+
+        let probe = (|| -> Result<bool> {
+            namespace_created = true;
+            self.kubernetes_output(
+                &[
+                    "kubectl",
+                    "apply",
+                    "-f",
+                    manifest_path.to_string_lossy().as_ref(),
+                ],
+                "create the Kubernetes lifecycle-sleep fixture",
+            )?;
+
+            let container_id = self.wait_for(
+                "Kubernetes lifecycle-sleep container start",
+                &manifest_path,
+                || {
+                    let inventory = self.kubernetes_output(
+                        &["crictl", "ps", "-o", "json"],
+                        "read the lifecycle-sleep CRI inventory",
+                    )?;
+                    let inventory: serde_json::Value =
+                        serde_json::from_str(&inventory).context(JsonSnafu {
+                            path: &manifest_path,
+                        })?;
+                    Ok(inventory
+                        .get("containers")
+                        .and_then(serde_json::Value::as_array)
+                        .and_then(|containers| {
+                            containers.iter().find_map(|container| {
+                                let matching_namespace = container
+                                    .pointer("/labels/io.kubernetes.pod.namespace")
+                                    .and_then(serde_json::Value::as_str)
+                                    == Some(namespace.as_str());
+                                let matching_name = container
+                                    .pointer("/metadata/name")
+                                    .and_then(serde_json::Value::as_str)
+                                    == Some("runtime");
+                                (matching_namespace && matching_name)
+                                    .then(|| {
+                                        container
+                                            .get("id")
+                                            .and_then(serde_json::Value::as_str)
+                                            .map(str::to_owned)
+                                    })
+                                    .flatten()
+                            })
+                        }))
+                },
+            )?;
+            let container = self.kubernetes_output(
+                &["crictl", "inspect", container_id.as_str()],
+                "inspect the lifecycle-sleep container",
+            )?;
+            let container: serde_json::Value =
+                serde_json::from_str(&container).context(JsonSnafu {
+                    path: &manifest_path,
+                })?;
+            let init_pid = container
+                .pointer("/info/pid")
+                .and_then(serde_json::Value::as_u64)
+                .and_then(|pid| u32::try_from(pid).ok())
+                .filter(|pid| *pid > 0)
+                .ok_or_else(|| invalid_state("lifecycle-sleep CRI PID is invalid"))?;
+            let cgroup = self.kubernetes_cgroup_for_pid(init_pid)?;
+            let procs_path = cgroup.join("cgroup.procs");
+            let tasks = fs::read_to_string(&procs_path)
+                .context(IoSnafu { path: &procs_path })?
+                .split_ascii_whitespace()
+                .map(|pid| {
+                    pid.parse::<u32>().map_err(|source| {
+                        invalid_state(format!(
+                            "lifecycle-sleep cgroup has invalid PID `{pid}`: {source}"
+                        ))
+                    })
+                })
+                .collect::<Result<BTreeSet<_>>>()?;
+            ensure!(
+                tasks.len() == 1 && tasks.contains(&init_pid),
+                InvalidInputSnafu {
+                    path: &procs_path,
+                    reason: format!(
+                        "Kubernetes lifecycle sleep created an in-container task: {tasks:?}"
+                    ),
+                }
+            );
+
+            let pod = self.kubernetes_output(
+                &[
+                    "kubectl",
+                    "-n",
+                    namespace.as_str(),
+                    "get",
+                    "pod",
+                    "mithril-sleep",
+                    "-o",
+                    "json",
+                ],
+                "read the lifecycle-sleep Pod",
+            )?;
+            let pod: serde_json::Value = serde_json::from_str(&pod).context(JsonSnafu {
+                path: &manifest_path,
+            })?;
+            let ready = pod
+                .pointer("/status/conditions")
+                .and_then(serde_json::Value::as_array)
+                .is_some_and(|conditions| {
+                    conditions.iter().any(|condition| {
+                        condition.get("type").and_then(serde_json::Value::as_str) == Some("Ready")
+                            && condition.get("status").and_then(serde_json::Value::as_str)
+                                == Some("True")
+                    })
+                });
+            ensure!(
+                !ready,
+                InvalidInputSnafu {
+                    path: &manifest_path,
+                    reason: "the lifecycle sleep completed before the no-task observation",
+                }
+            );
+            self.kubernetes_output(
+                &[
+                    "kubectl",
+                    "-n",
+                    namespace.as_str(),
+                    "wait",
+                    "--for=condition=Ready",
+                    "pod/mithril-sleep",
+                    "--timeout=120s",
+                ],
+                "wait for the Kubernetes lifecycle sleep to complete",
+            )?;
+            Ok(true)
+        })();
+
+        let namespace_cleanup = if namespace_created {
+            self.kubernetes_output(
+                &[
+                    "kubectl",
+                    "delete",
+                    "namespace",
+                    namespace.as_str(),
+                    "--ignore-not-found",
+                    "--wait=true",
+                    "--timeout=120s",
+                ],
+                "remove the Kubernetes lifecycle-sleep fixture namespace",
+            )
+            .map(|_| ())
+        } else {
+            Ok(())
+        };
+        let cleanup = namespace_cleanup.and(work_cleanup.cleanup());
+        if let Err(source) = probe {
+            cleanup?;
+            return Err(source);
+        }
+        cleanup?;
+        ensure!(
+            self.kubernetes_namespace_absent(&namespace)? && !work_directory.exists(),
+            InvalidInputSnafu {
+                path: &work_directory,
+                reason: "the Kubernetes lifecycle-sleep fixture was not removed",
+            }
+        );
+        probe
     }
 
     fn kubernetes_output(&self, arguments: &[&str], description: &str) -> Result<String> {
