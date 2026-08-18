@@ -3,14 +3,13 @@ use std::path::Path;
 use ed25519_dalek::SigningKey;
 use erebor_interceptor_abi::KernelEffectOperationV1;
 use mithril_control::{
-    compiled_key_digest, kernel_operation_id, process_control_operation, AntiRollbackStore,
-    BlastRadiusLimitV1, CompiledPhysicalResultV1, EffectFamilyDefaultV1, EffectFamilyV1,
-    EntryKindV1, ErrnoV1, ExactExceptionSubjectSelectorV1, ExceptionConsumptionScopeV1,
-    ExceptionV1, HardSafetyConditionV1, IpcRelationshipRuleV1, PathTreeDenyFloorV1,
-    PermittedAuthorityDeltaV1, PolicyCompiler, PolicyDispositionV1, PolicyDocumentV1,
-    PolicySimulator, ProfileActivationMetadataV1, ProfileCandidateArtifactV1, ProfileSealRequestV1,
-    RegistryDigestsV1, RollbackAuthorizationArtifactV1, RollbackAuthorizationPayloadV1,
-    RootClassificationV1, SimulatedDispositionV1,
+    AntiRollbackStore, BlastRadiusLimitV1, CompiledOperationV1, CompiledPhysicalResultV1,
+    EffectFamilyDefaultV1, EffectFamilyV1, EntryKindV1, ErrnoV1, ExactExceptionSubjectSelectorV1,
+    ExceptionConsumptionScopeV1, ExceptionV1, HardSafetyConditionV1, IpcRelationshipRuleV1,
+    PathTreeDenyFloorV1, PermittedAuthorityDeltaV1, PolicyCompiler, PolicyDispositionV1,
+    PolicyDocumentV1, PolicySimulator, ProfileActivationMetadataV1, ProfileCandidateArtifactV1,
+    ProfileSealRequestV1, RegistryDigestsV1, RollbackAuthorizationArtifactV1,
+    RollbackAuthorizationPayloadV1, RootClassificationV1, SimulatedDispositionV1,
 };
 
 const VALID_POLICY: &str = include_str!("fixtures/policy-v1.yaml");
@@ -240,7 +239,7 @@ fn unix_stream_relationships_reject_one_conflicting_role_pair() -> mithril_contr
 
 #[test]
 fn process_control_requires_exact_positive_arguments_and_target_roles(
-) -> mithril_control::Result<()> {
+) -> Result<(), Box<dyn std::error::Error>> {
     for (operation, expected_family, expected_argument) in [
         ("SIGNAL_15", KernelEffectOperationV1::Signal, 15),
         ("PTRACE_ACCESS_18", KernelEffectOperationV1::Ptrace, 18),
@@ -249,10 +248,12 @@ fn process_control_requires_exact_positive_arguments_and_target_roles(
         let compiled = PolicyCompiler.compile(&document)?;
         assert_eq!(compiled.compiled_cells.len(), 1);
         assert_eq!(compiled.compiled_cells[0].key.operation_id, operation);
-        assert_eq!(
-            process_control_operation(operation),
-            Some((expected_family, expected_argument, false))
-        );
+        let compiled_operation = CompiledOperationV1::try_from(operation)?
+            .process_control()
+            .ok_or("fixture operation must be process control")?;
+        assert_eq!(compiled_operation.kernel_id, expected_family);
+        assert_eq!(compiled_operation.argument, expected_argument);
+        assert!(!compiled_operation.argument_wildcard);
 
         document.rules[0].requested_disposition = PolicyDispositionV1::Deny;
         document.rules[0].errno = Some(ErrnoV1::Eacces);
@@ -326,7 +327,10 @@ fn io_uring_operations_have_closed_authority_rules() -> mithril_control::Result<
         ),
         ("IO_URING_COMMAND", KernelEffectOperationV1::IoUringCommand),
     ] {
-        assert_eq!(kernel_operation_id(operation), Some(expected));
+        assert_eq!(
+            CompiledOperationV1::try_from(operation).map(|operation| operation.kernel_id),
+            Ok(expected)
+        );
 
         let mut deny = parse(VALID_POLICY)?;
         let mithril_control::RuleMatchV1::LocalPreEffect(effect) = &mut deny.rules[0].rule_match
@@ -407,7 +411,11 @@ fn file_namespace_operations_compile_to_closed_kernel_ids() -> mithril_control::
         compiled
             .compiled_cells
             .iter()
-            .map(|cell| kernel_operation_id(&cell.key.operation_id))
+            .map(|cell| {
+                CompiledOperationV1::try_from(cell.key.operation_id.as_str())
+                    .map(|operation| operation.kernel_id)
+                    .ok()
+            })
             .collect::<Vec<_>>(),
         [
             KernelEffectOperationV1::Create,
@@ -443,7 +451,9 @@ fn bounded_exception_binds_one_exact_allow_cell() -> mithril_control::Result<()>
     effect.operation_ids = vec!["OPEN_WRITE".to_owned()];
     let write_cell = PolicyCompiler.compile(&write_document)?;
     assert_eq!(
-        compiled_key_digest(document.profile_id(), &write_cell.compiled_cells[0].key)?,
+        write_cell.compiled_cells[0]
+            .key
+            .digest(document.profile_id())?,
         "5c0e91f06548ddcf908971608bf5e656c55c2be27c18249678b82a9811a5a72d"
     );
     document.exceptions.push(ExceptionV1 {
@@ -482,7 +492,7 @@ fn bounded_exception_binds_one_exact_allow_cell() -> mithril_control::Result<()>
     });
     document.exceptions[0]
         .exact_subject
-        .exact_compiled_key_digests = vec![compiled_key_digest(document.profile_id(), &cell.key)?];
+        .exact_compiled_key_digests = vec![cell.key.digest(document.profile_id())?];
     document.exceptions[0]
         .authority_delta
         .added_or_removed_operation_cells = document.exceptions[0]
@@ -521,7 +531,7 @@ fn bounded_exception_binds_one_exact_allow_cell() -> mithril_control::Result<()>
         .exact_compiled_key_digests = preliminary
         .compiled_cells
         .iter()
-        .map(|cell| compiled_key_digest(multiple_cells.profile_id(), &cell.key))
+        .map(|cell| cell.key.digest(multiple_cells.profile_id()))
         .collect::<mithril_control::Result<Vec<_>>>()?;
     multiple_cells.exceptions[0]
         .authority_delta

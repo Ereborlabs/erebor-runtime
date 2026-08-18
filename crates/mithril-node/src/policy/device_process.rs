@@ -4,7 +4,7 @@ use erebor_interceptor_abi::{
     BindingLifecycleStateV1, DeviceEffectKeyV1, ExactDeviceTypeV1, KernelEffectFamilyV1,
     KernelEffectOperationV1, PhysicalDecisionKindV1, PhysicalDecisionV1, ProcessControlRuleKeyV1,
 };
-use mithril_control::{kernel_operation_id, process_control_operation, CompiledDecisionCellV1};
+use mithril_control::{CompiledDecisionCellV1, CompiledOperationV1};
 use snafu::ensure;
 use zerocopy::IntoBytes as _;
 
@@ -49,8 +49,9 @@ fn lower_device(
     rows: &mut BTreeMap<Vec<u8>, Vec<u8>>,
 ) -> Result<()> {
     ensure!(
-        cell.key.effect_family.kernel_id() == KernelEffectFamilyV1::Device
-            && kernel_operation_id(&cell.key.operation_id) == Some(KernelEffectOperationV1::Ioctl),
+        KernelEffectFamilyV1::from(cell.key.effect_family) == KernelEffectFamilyV1::Device
+            && CompiledOperationV1::try_from(cell.key.operation_id.as_str())
+                .is_ok_and(|operation| operation.kernel_id == KernelEffectOperationV1::Ioctl),
         IdentityStateSnafu {
             reason: "a DEVICE selector is valid only for the DEVICE/IOCTL effect",
         }
@@ -133,8 +134,10 @@ fn lower_process(
     decision: PhysicalDecisionV1,
     rows: &mut BTreeMap<Vec<u8>, Vec<u8>>,
 ) -> Result<()> {
-    let (operation, operation_argument, argument_wildcard) =
-        process_control_operation(&cell.key.operation_id).ok_or_else(|| {
+    let operation = CompiledOperationV1::try_from(cell.key.operation_id.as_str())
+        .ok()
+        .and_then(CompiledOperationV1::process_control)
+        .ok_or_else(|| {
             IdentityStateSnafu {
                 reason: format!(
                     "process-control selector has unknown operation `{}`",
@@ -144,9 +147,9 @@ fn lower_process(
             .build()
         })?;
     ensure!(
-        cell.key.effect_family.kernel_id() == KernelEffectFamilyV1::Privilege
+        KernelEffectFamilyV1::from(cell.key.effect_family) == KernelEffectFamilyV1::Privilege
             && matches!(
-                operation,
+                operation.kernel_id,
                 KernelEffectOperationV1::Ptrace | KernelEffectOperationV1::Signal
             ),
         IdentityStateSnafu {
@@ -154,7 +157,7 @@ fn lower_process(
         }
     );
     ensure!(
-        !argument_wildcard || decision.decision == PhysicalDecisionKindV1::Deny,
+        !operation.argument_wildcard || decision.decision == PhysicalDecisionKindV1::Deny,
         IdentityStateSnafu {
             reason: "a process-control argument wildcard is denial-only",
         }
@@ -178,11 +181,11 @@ fn lower_process(
         controller_process_state_vector_id: context.actor_process_state_vector_id,
         target_role_id,
         target_process_state_vector_id,
-        operation_argument,
+        operation_argument: operation.argument,
         entry_kind: context.entry_kind,
-        operation: operation as u16,
+        operation: operation.kernel_id as u16,
         binding_lifecycle_state: context.binding_lifecycle_state,
-        argument_wildcard: u8::from(argument_wildcard),
+        argument_wildcard: u8::from(operation.argument_wildcard),
         reserved: [0; 6],
     };
     insert_exact(rows, key.as_bytes(), decision.as_bytes())

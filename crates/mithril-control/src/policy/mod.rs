@@ -8,13 +8,12 @@ mod simulation;
 mod source;
 mod source_proof;
 mod source_response;
-#[rustfmt::skip]
 mod validation;
 
 pub use artifact::PolicyArtifactOwner;
 pub use compiler::{
-    compiled_key_digest, kernel_operation_id, process_control_operation, CompiledDecisionCellV1,
-    CompiledPhysicalResultV1, PolicyCompiler, StaticDecisionKeyV1, StaticExpandedProfileV1,
+    CompiledDecisionCellV1, CompiledOperationV1, CompiledPhysicalResultV1, PolicyCompiler,
+    StaticDecisionKeyV1, StaticExpandedProfileV1,
 };
 pub use path::*;
 pub use rollback::{
