@@ -853,6 +853,7 @@ identity_prepare_k3s_poststart_case() {
 
 identity_prepare_k3s_stock_hook_failure_case() {
   local source_config=$identity_repository/crates/mithril-e2e/harness/vm/k3s-cri-effect-node-v1.json
+  local runtime_socket
   identity_stock_hook_manifest_template=$identity_repository/crates/mithril-e2e/fixtures/identity/kubernetes-stock-hook-failure-workload-v1.yaml
   identity_check_base "$source_config"
   identity_require_command crictl
@@ -877,6 +878,8 @@ identity_prepare_k3s_stock_hook_failure_case() {
     return 1
   }
   install -d -o root -g root -m 700 -- "$identity_prestart_request_directory"
+  runtime_socket=$(jq -er '.container_runtime.socket_path' "$source_config")
+  identity_runtime_endpoint=unix://$runtime_socket
 }
 
 identity_create_stock_hook_failure_pod() {
