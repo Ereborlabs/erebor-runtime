@@ -3,6 +3,11 @@
 #ifndef EREBOR_IDENTITY_TASK_HELPERS_H
 #define EREBOR_IDENTITY_TASK_HELPERS_H
 
+#define TASK_LABEL_CLAIM_COOKIE_V1 (~0ULL)
+#define TASK_LABEL_EXIT_COOKIE_V1 (~0ULL - 1)
+/* Linux sets PF_EXITING before the sched_process_exit tracepoint. */
+#define TASK_FLAG_EXITING_V1 0x00000004
+
 struct mount___unique {
     __u64 mnt_id_unique;
 } __attribute__((preserve_access_index));
@@ -337,6 +342,8 @@ static __always_inline int publish_task(struct task_struct *task,
         .interval_sequence = 1,
     };
     task_label_v1 *installed;
+    __u64 installed_cookie;
+    __u64 task_cookie = scratch->label.task_cookie;
 
     if (bpf_map_update_elem(&kernel_real_parent_intervals, &parent_key,
                             &scratch->real_parent, BPF_NOEXIST))
@@ -362,9 +369,25 @@ static __always_inline int publish_task(struct task_struct *task,
         bpf_map_delete_elem(&kernel_real_parent_intervals, &parent_key);
         return -EACCES;
     }
+    installed_cookie = __sync_val_compare_and_swap(
+        &installed->task_cookie, 0, TASK_LABEL_CLAIM_COOKIE_V1);
+    if (installed_cookie != 0 &&
+        installed_cookie != TASK_LABEL_CLAIM_COOKIE_V1) {
+        bpf_task_storage_delete(&task_labels, task);
+        bpf_map_delete_elem(&task_reference_tombstones,
+                            &scratch->label.task_cookie);
+        bpf_map_delete_elem(&task_coordinates, &scratch->label.task_cookie);
+        bpf_map_delete_elem(&kernel_real_parent_intervals, &parent_key);
+        return -EACCES;
+    }
+    scratch->label.task_cookie = TASK_LABEL_CLAIM_COOKIE_V1;
     *installed = scratch->label;
+    scratch->label.task_cookie = task_cookie;
     __asm__ volatile("" ::: "memory");
-    if (installed->task_cookie != scratch->label.task_cookie ||
+    installed_cookie = __sync_val_compare_and_swap(
+        &installed->task_cookie, TASK_LABEL_CLAIM_COOKIE_V1, task_cookie);
+    if (installed_cookie != TASK_LABEL_CLAIM_COOKIE_V1 ||
+        installed->task_cookie != scratch->label.task_cookie ||
         !id128_equal(&installed->process_state_id,
                      &scratch->label.process_state_id) ||
         !id128_equal(&installed->entry_instance_id,
@@ -379,6 +402,30 @@ static __always_inline int publish_task(struct task_struct *task,
         return -EACCES;
     }
     return 0;
+}
+
+/* Return zero when this call owns the task-label transaction. */
+static __always_inline int claim_task_label(struct task_struct *task)
+{
+    task_label_v1 *label;
+    __u64 cookie;
+    unsigned int flags = 0;
+
+    if (BPF_CORE_READ_INTO(&flags, task, flags) ||
+        (flags & TASK_FLAG_EXITING_V1))
+        return -EACCES;
+    label = bpf_task_storage_get(&task_labels, task, 0,
+                                 BPF_LOCAL_STORAGE_GET_F_CREATE);
+    if (!label)
+        return -EACCES;
+    cookie = __sync_val_compare_and_swap(&label->task_cookie, 0,
+                                         TASK_LABEL_CLAIM_COOKIE_V1);
+    if (!cookie)
+        return 0;
+    if (cookie == TASK_LABEL_CLAIM_COOKIE_V1 ||
+        cookie == TASK_LABEL_EXIT_COOKIE_V1)
+        return -EACCES;
+    return 1;
 }
 
 static __always_inline void prepare_child_process(
