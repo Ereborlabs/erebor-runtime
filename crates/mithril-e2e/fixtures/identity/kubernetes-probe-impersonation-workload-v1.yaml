@@ -1,0 +1,92 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: MITHRIL_IDENTITY_PROBE_NAMESPACE
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: mithril-probe-impersonation
+  namespace: MITHRIL_IDENTITY_PROBE_NAMESPACE
+spec:
+  automountServiceAccountToken: false
+  restartPolicy: Never
+  terminationGracePeriodSeconds: 5
+  containers:
+    - name: startup
+      image: docker.io/library/busybox:1.36.1@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662
+      imagePullPolicy: IfNotPresent
+      command: ["/bin/sh", "-c", "exec sleep 3600"]
+      env:
+        - name: MITHRIL_PROBE_SLOT
+          value: startup
+      startupProbe:
+        exec:
+          command:
+            - /bin/sh
+            - -c
+            - 'read identity_pid _ < /proc/self/stat; directory=/var/lib/mithril/probe; marker="$directory/$MITHRIL_PROBE_SLOT-$identity_pid.pid"; fifo="$directory/$MITHRIL_PROBE_SLOT-release-$identity_pid"; printf "%s\n" "$identity_pid" > "$marker"; mkfifo "$fifo"; read -r identity_release < "$fifo"; rm -f "$fifo"'
+        initialDelaySeconds: 20
+        periodSeconds: 30
+        timeoutSeconds: 45
+      volumeMounts:
+        - name: probe
+          mountPath: /var/lib/mithril/probe
+    - name: readiness
+      image: docker.io/library/busybox:1.36.1@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662
+      imagePullPolicy: IfNotPresent
+      command: ["/bin/sh", "-c", "exec sleep 3600"]
+      env:
+        - name: MITHRIL_PROBE_SLOT
+          value: readiness
+      readinessProbe:
+        exec:
+          command:
+            - /bin/sh
+            - -c
+            - 'read identity_pid _ < /proc/self/stat; directory=/var/lib/mithril/probe; marker="$directory/$MITHRIL_PROBE_SLOT-$identity_pid.pid"; fifo="$directory/$MITHRIL_PROBE_SLOT-release-$identity_pid"; printf "%s\n" "$identity_pid" > "$marker"; mkfifo "$fifo"; read -r identity_release < "$fifo"; rm -f "$fifo"'
+        initialDelaySeconds: 20
+        periodSeconds: 30
+        timeoutSeconds: 45
+      volumeMounts:
+        - name: probe
+          mountPath: /var/lib/mithril/probe
+    - name: liveness
+      image: docker.io/library/busybox:1.36.1@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662
+      imagePullPolicy: IfNotPresent
+      command: ["/bin/sh", "-c", "exec sleep 3600"]
+      env:
+        - name: MITHRIL_PROBE_SLOT
+          value: liveness
+      livenessProbe:
+        exec:
+          command:
+            - /bin/sh
+            - -c
+            - 'read identity_pid _ < /proc/self/stat; directory=/var/lib/mithril/probe; marker="$directory/$MITHRIL_PROBE_SLOT-$identity_pid.pid"; fifo="$directory/$MITHRIL_PROBE_SLOT-release-$identity_pid"; printf "%s\n" "$identity_pid" > "$marker"; mkfifo "$fifo"; read -r identity_release < "$fifo"; rm -f "$fifo"'
+        initialDelaySeconds: 20
+        periodSeconds: 30
+        timeoutSeconds: 45
+      volumeMounts:
+        - name: probe
+          mountPath: /var/lib/mithril/probe
+    - name: application
+      image: docker.io/library/busybox:1.36.1@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662
+      imagePullPolicy: IfNotPresent
+      command:
+        - /bin/sh
+        - -c
+        - 'read -r identity_start < /var/lib/mithril/probe/native-start; /bin/sh -c "$MITHRIL_PROBE_COMMAND" & wait "$!"; exec sleep 3600'
+      env:
+        - name: MITHRIL_PROBE_SLOT
+          value: application
+        - name: MITHRIL_PROBE_COMMAND
+          value: 'read identity_pid _ < /proc/self/stat; directory=/var/lib/mithril/probe; marker="$directory/$MITHRIL_PROBE_SLOT-$identity_pid.pid"; fifo="$directory/$MITHRIL_PROBE_SLOT-release-$identity_pid"; printf "%s\n" "$identity_pid" > "$marker"; mkfifo "$fifo"; read -r identity_release < "$fifo"; rm -f "$fifo"'
+      volumeMounts:
+        - name: probe
+          mountPath: /var/lib/mithril/probe
+  volumes:
+    - name: probe
+      hostPath:
+        path: MITHRIL_IDENTITY_PROBE_FIXTURE_ROOT
+        type: Directory

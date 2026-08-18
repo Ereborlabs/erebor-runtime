@@ -24,10 +24,17 @@ identity_k3s_init_container_id=
 identity_k3s_sidecar_container_id=
 identity_k3s_application_container_id=
 identity_k3s_ephemeral_container_id=
+identity_k3s_startup_container_id=
+identity_k3s_readiness_container_id=
+identity_k3s_liveness_container_id=
 identity_k3s_init_pid=
 identity_k3s_sidecar_pid=
 identity_k3s_application_pid=
 identity_k3s_ephemeral_pid=
+identity_k3s_startup_pid=
+identity_k3s_readiness_pid=
+identity_k3s_liveness_pid=
+identity_probe_command=
 
 identity_require_command() {
   command -v "$1" >/dev/null || {
@@ -581,6 +588,98 @@ identity_prepare_k3s_ephemeral_case() {
      | .interceptor.lease_path = $lease
      | .runtime_observation = null
      | .workload_bindings = [$target, $ephemeral]' \
+    "$source_config" >"$identity_config"
+  identity_init_pid=$identity_k3s_application_pid
+  identity_cgroup_path=$(identity_cgroup_for_pid "$identity_init_pid")
+}
+
+identity_prepare_k3s_probe_impersonation_case() {
+  local source_config=$identity_repository/crates/mithril-e2e/harness/vm/k3s-cri-effect-node-v1.json
+  local workload_template=$identity_repository/crates/mithril-e2e/fixtures/identity/kubernetes-probe-impersonation-workload-v1.yaml
+  identity_check_base "$source_config"
+  identity_require_command crictl
+  identity_require_command date
+  identity_require_command kubectl
+  identity_require_command mkfifo
+  identity_mode=cri
+  identity_begin
+
+  local suffix workload runtime_socket startup readiness liveness application command_count
+  suffix=$(tr '[:upper:]' '[:lower:]' <<<"${identity_work##*.}")
+  identity_k3s_namespace=mithril-manual-$suffix
+  identity_k3s_fixture_root=/var/lib/mithril-manual-$suffix
+  identity_k3s_shared_directory=$identity_k3s_fixture_root/shared
+  identity_k3s_node_config=$identity_work/k3s-node.json
+  identity_cleanup_functions+=(identity_cleanup_k3s_case)
+  install -d -m 700 -- "$identity_k3s_fixture_root" "$identity_k3s_shared_directory"
+  mkfifo -- "$identity_k3s_shared_directory/native-start"
+
+  identity_probe_command='read identity_pid _ < /proc/self/stat; directory=/var/lib/mithril/probe; marker="$directory/$MITHRIL_PROBE_SLOT-$identity_pid.pid"; fifo="$directory/$MITHRIL_PROBE_SLOT-release-$identity_pid"; printf "%s\n" "$identity_pid" > "$marker"; mkfifo "$fifo"; read -r identity_release < "$fifo"; rm -f "$fifo"'
+  runtime_socket=$(jq -er '.container_runtime.socket_path' "$source_config")
+  identity_runtime_endpoint=unix://$runtime_socket
+  workload=$identity_work/workload.yaml
+  sed \
+    -e "s|MITHRIL_IDENTITY_PROBE_NAMESPACE|$identity_k3s_namespace|g" \
+    -e "s|MITHRIL_IDENTITY_PROBE_FIXTURE_ROOT|$identity_k3s_shared_directory|g" \
+    "$workload_template" >"$workload"
+  command_count=$(grep -Fo -- "$identity_probe_command" "$workload" | wc -l)
+  [[ $command_count -eq 4 ]] || {
+    echo "the stock probes and independent entries do not use identical command bytes" >&2
+    return 1
+  }
+  identity_k3s_namespace_created=true
+  kubectl apply -f "$workload" >/dev/null
+
+  startup=$(identity_k3s_container_binding_json startup application \
+    11111111-1111-4111-8111-111111111301 \
+    22222222-2222-4222-8222-222222222401 mithril-probe-impersonation \
+    33333333-3333-4333-8333-333333333333 7)
+  readiness=$(identity_k3s_container_binding_json readiness application \
+    11111111-1111-4111-8111-111111111302 \
+    22222222-2222-4222-8222-222222222402 mithril-probe-impersonation \
+    33333333-3333-4333-8333-333333333333 7)
+  liveness=$(identity_k3s_container_binding_json liveness application \
+    11111111-1111-4111-8111-111111111303 \
+    22222222-2222-4222-8222-222222222403 mithril-probe-impersonation \
+    33333333-3333-4333-8333-333333333333 7)
+  application=$(identity_k3s_container_binding_json application application \
+    11111111-1111-4111-8111-111111111304 \
+    22222222-2222-4222-8222-222222222404 mithril-probe-impersonation \
+    33333333-3333-4333-8333-333333333333 7)
+
+  identity_k3s_startup_container_id=$(jq -er '.container_id' <<<"$startup")
+  identity_k3s_readiness_container_id=$(jq -er '.container_id' <<<"$readiness")
+  identity_k3s_liveness_container_id=$(jq -er '.container_id' <<<"$liveness")
+  identity_k3s_application_container_id=$(jq -er '.container_id' <<<"$application")
+  identity_k3s_startup_pid=$(crictl --runtime-endpoint "$identity_runtime_endpoint" \
+    inspect "$identity_k3s_startup_container_id" | jq -er '.info.pid')
+  identity_k3s_readiness_pid=$(crictl --runtime-endpoint "$identity_runtime_endpoint" \
+    inspect "$identity_k3s_readiness_container_id" | jq -er '.info.pid')
+  identity_k3s_liveness_pid=$(crictl --runtime-endpoint "$identity_runtime_endpoint" \
+    inspect "$identity_k3s_liveness_container_id" | jq -er '.info.pid')
+  identity_k3s_application_pid=$(crictl --runtime-endpoint "$identity_runtime_endpoint" \
+    inspect "$identity_k3s_application_container_id" | jq -er '.info.pid')
+  [[ $identity_k3s_startup_pid =~ ^[1-9][0-9]*$ \
+    && $identity_k3s_readiness_pid =~ ^[1-9][0-9]*$ \
+    && $identity_k3s_liveness_pid =~ ^[1-9][0-9]*$ \
+    && $identity_k3s_application_pid =~ ^[1-9][0-9]*$ ]] || {
+    echo "Kubernetes returned an invalid probe fixture PID" >&2
+    return 1
+  }
+
+  jq \
+    --arg state "$identity_state" \
+    --arg pin_root "$identity_pin_root" \
+    --arg lease "$identity_lease" \
+    --argjson startup "$startup" \
+    --argjson readiness "$readiness" \
+    --argjson liveness "$liveness" \
+    --argjson application "$application" \
+    '.state_directory = $state
+     | .interceptor.pin_root = $pin_root
+     | .interceptor.lease_path = $lease
+     | .runtime_observation = null
+     | .workload_bindings = [$startup, $readiness, $liveness, $application]' \
     "$source_config" >"$identity_config"
   identity_init_pid=$identity_k3s_application_pid
   identity_cgroup_path=$(identity_cgroup_for_pid "$identity_init_pid")

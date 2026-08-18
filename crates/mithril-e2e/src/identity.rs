@@ -5,7 +5,7 @@ use std::fs;
 use std::io::{Read as _, Write as _};
 use std::mem::size_of;
 use std::os::fd::OwnedFd;
-use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
+use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStderr, ChildStdin, Command, Stdio};
 use std::thread;
@@ -213,6 +213,14 @@ pub struct IdentityPhysicalProbeBundleV1 {
     pub kubernetes_ephemeral_container_root: Option<NativeTaskSnapshotV1>,
     pub kubernetes_ephemeral_shared_pid_namespace: Option<bool>,
     pub kubernetes_ephemeral_distinct_execution_set_and_profile: Option<bool>,
+    pub kubernetes_startup_exec_probe_root: Option<NativeTaskSnapshotV1>,
+    pub kubernetes_readiness_exec_probe_root: Option<NativeTaskSnapshotV1>,
+    pub kubernetes_liveness_exec_probe_root: Option<NativeTaskSnapshotV1>,
+    pub kubernetes_probe_native_parent: Option<NativeTaskSnapshotV1>,
+    pub kubernetes_probe_native_child: Option<NativeTaskSnapshotV1>,
+    pub kubernetes_probe_kubectl_exec_root: Option<NativeTaskSnapshotV1>,
+    pub kubernetes_probe_direct_cri_exec_root: Option<NativeTaskSnapshotV1>,
+    pub kubernetes_probe_identities_distinct: Option<bool>,
     pub kubernetes_fixture_removed: bool,
 }
 
@@ -1702,7 +1710,7 @@ impl IdentityTestRunner {
             }
         );
         Ok(IdentityPhysicalProbeBundleV1 {
-            schema_version: 19,
+            schema_version: 20,
             object_sha256,
             first_start,
             distinct_pin_root_owner_rejected,
@@ -1777,6 +1785,14 @@ impl IdentityTestRunner {
             kubernetes_ephemeral_container_root: None,
             kubernetes_ephemeral_shared_pid_namespace: None,
             kubernetes_ephemeral_distinct_execution_set_and_profile: None,
+            kubernetes_startup_exec_probe_root: None,
+            kubernetes_readiness_exec_probe_root: None,
+            kubernetes_liveness_exec_probe_root: None,
+            kubernetes_probe_native_parent: None,
+            kubernetes_probe_native_child: None,
+            kubernetes_probe_kubectl_exec_root: None,
+            kubernetes_probe_direct_cri_exec_root: None,
+            kubernetes_probe_identities_distinct: None,
             kubernetes_fixture_removed: false,
         })
     }
@@ -1837,19 +1853,36 @@ impl IdentityTestRunner {
             && bundle.kubernetes_ephemeral_container_root.is_some()
             && bundle.kubernetes_ephemeral_shared_pid_namespace == Some(true)
             && bundle.kubernetes_ephemeral_distinct_execution_set_and_profile == Some(true);
+        let probe_results_missing = bundle.kubernetes_startup_exec_probe_root.is_none()
+            && bundle.kubernetes_readiness_exec_probe_root.is_none()
+            && bundle.kubernetes_liveness_exec_probe_root.is_none()
+            && bundle.kubernetes_probe_native_parent.is_none()
+            && bundle.kubernetes_probe_native_child.is_none()
+            && bundle.kubernetes_probe_kubectl_exec_root.is_none()
+            && bundle.kubernetes_probe_direct_cri_exec_root.is_none()
+            && bundle.kubernetes_probe_identities_distinct.is_none();
+        let probe_results_present = bundle.kubernetes_startup_exec_probe_root.is_some()
+            && bundle.kubernetes_readiness_exec_probe_root.is_some()
+            && bundle.kubernetes_liveness_exec_probe_root.is_some()
+            && bundle.kubernetes_probe_native_parent.is_some()
+            && bundle.kubernetes_probe_native_child.is_some()
+            && bundle.kubernetes_probe_kubectl_exec_root.is_some()
+            && bundle.kubernetes_probe_direct_cri_exec_root.is_some()
+            && bundle.kubernetes_probe_identities_distinct == Some(true);
         ensure!(
-            matches!(bundle.schema_version, 15..=19)
+            matches!(bundle.schema_version, 15..=20)
                 && (entry_results_missing || entry_results_present)
                 && matches!(bundle.kubernetes_lifecycle_sleep_no_task, None | Some(true))
                 && (network_results_missing || network_results_present)
                 && (container_results_missing || container_results_present)
-                && (ephemeral_results_missing || ephemeral_results_present),
+                && (ephemeral_results_missing || ephemeral_results_present)
+                && (probe_results_missing || probe_results_present),
             InvalidInputSnafu {
                 path: previous_bundle_path,
                 reason: "the prior identity bundle cannot accept the next Kubernetes result",
             }
         );
-        bundle.schema_version = 19;
+        bundle.schema_version = 20;
         if entry_results_missing {
             self.physical_kubernetes_exec_probe(
                 output_directory,
@@ -1878,6 +1911,14 @@ impl IdentityTestRunner {
         }
         if ephemeral_results_missing {
             self.physical_kubernetes_ephemeral_probe(
+                output_directory,
+                pin_root,
+                lease_path,
+                &mut bundle,
+            )?;
+        }
+        if probe_results_missing {
+            self.physical_kubernetes_probe_impersonation(
                 output_directory,
                 pin_root,
                 lease_path,
@@ -3433,6 +3474,587 @@ impl IdentityTestRunner {
         Ok(())
     }
 
+    fn physical_kubernetes_probe_impersonation(
+        &self,
+        output_directory: &Path,
+        pin_root: &Path,
+        lease_path: &Path,
+        bundle: &mut IdentityPhysicalProbeBundleV1,
+    ) -> Result<()> {
+        const PROBE_COMMAND: &str = "read identity_pid _ < /proc/self/stat; directory=/var/lib/mithril/probe; marker=\"$directory/$MITHRIL_PROBE_SLOT-$identity_pid.pid\"; fifo=\"$directory/$MITHRIL_PROBE_SLOT-release-$identity_pid\"; printf \"%s\\n\" \"$identity_pid\" > \"$marker\"; mkfifo \"$fifo\"; read -r identity_release < \"$fifo\"; rm -f \"$fifo\"";
+
+        fs::create_dir_all(output_directory).context(IoSnafu {
+            path: output_directory,
+        })?;
+        let work_directory = output_directory.join("kubernetes-probe-impersonation");
+        ensure!(
+            !work_directory.exists(),
+            InvalidInputSnafu {
+                path: &work_directory,
+                reason: "the Kubernetes probe-impersonation fixture directory already exists",
+            }
+        );
+        fs::create_dir(&work_directory).context(IoSnafu {
+            path: &work_directory,
+        })?;
+        let work_cleanup = ProbeDirectory::new(&work_directory);
+        let namespace = format!("mithril-identity-probes-{}", std::process::id());
+        let fixture_root = work_directory.join("fixture");
+        let native_start_path = fixture_root.join("native-start");
+        let manifest_path = work_directory.join("workload.yaml");
+        fs::create_dir(&fixture_root).context(IoSnafu {
+            path: &fixture_root,
+        })?;
+        let mkfifo = Command::new("/usr/bin/mkfifo")
+            .arg(&native_start_path)
+            .output()
+            .context(IoSnafu {
+                path: Path::new("/usr/bin/mkfifo"),
+            })?;
+        ensure!(
+            mkfifo.status.success(),
+            InvalidInputSnafu {
+                path: &native_start_path,
+                reason: format!(
+                    "cannot create the native-start FIFO: {}",
+                    String::from_utf8_lossy(&mkfifo.stderr).trim()
+                ),
+            }
+        );
+        let template_path = self.repo_root.join(
+            "crates/mithril-e2e/fixtures/identity/kubernetes-probe-impersonation-workload-v1.yaml",
+        );
+        let manifest = fs::read_to_string(&template_path).context(IoSnafu {
+            path: &template_path,
+        })?;
+        ensure!(
+            manifest.matches(PROBE_COMMAND).count() == 4,
+            InvalidInputSnafu {
+                path: &template_path,
+                reason:
+                    "the stock probes and independent entries do not use identical command bytes",
+            }
+        );
+        fs::write(
+            &manifest_path,
+            manifest
+                .replace("MITHRIL_IDENTITY_PROBE_NAMESPACE", &namespace)
+                .replace(
+                    "MITHRIL_IDENTITY_PROBE_FIXTURE_ROOT",
+                    fixture_root.to_string_lossy().as_ref(),
+                ),
+        )
+        .context(IoSnafu {
+            path: &manifest_path,
+        })?;
+        ensure!(
+            !pin_root.exists() && !lease_path.exists(),
+            InvalidInputSnafu {
+                path: pin_root,
+                reason: "the Kubernetes probe pin root and lease must not already exist",
+            }
+        );
+        let pin_cleanup = ProbeDirectory::new(pin_root);
+        let lease_cleanup = ProbeFile::new(lease_path);
+        let mut namespace_created = false;
+        let mut host = None;
+        let mut kubectl_exec = None;
+        let mut direct_cri_exec = None;
+
+        let probe = (|| -> Result<_> {
+            namespace_created = true;
+            self.kubernetes_output(
+                &[
+                    "kubectl",
+                    "apply",
+                    "-f",
+                    manifest_path.to_string_lossy().as_ref(),
+                ],
+                "create the Kubernetes probe-impersonation fixture",
+            )?;
+
+            let (startup_binding, _startup_pid, startup_sandbox) = self
+                .kubernetes_container_binding(
+                    &namespace,
+                    "mithril-probe-impersonation",
+                    "startup",
+                    (
+                        mithril_node::ContainerKindV1::Application,
+                        "11111111-1111-4111-8111-111111111301",
+                        "22222222-2222-4222-8222-222222222401",
+                        "33333333-3333-4333-8333-333333333333",
+                        PROFILE_GENERATION_REF_ID,
+                    ),
+                    &manifest_path,
+                )?;
+            let (readiness_binding, _readiness_pid, readiness_sandbox) = self
+                .kubernetes_container_binding(
+                    &namespace,
+                    "mithril-probe-impersonation",
+                    "readiness",
+                    (
+                        mithril_node::ContainerKindV1::Application,
+                        "11111111-1111-4111-8111-111111111302",
+                        "22222222-2222-4222-8222-222222222402",
+                        "33333333-3333-4333-8333-333333333333",
+                        PROFILE_GENERATION_REF_ID,
+                    ),
+                    &manifest_path,
+                )?;
+            let (liveness_binding, _liveness_pid, liveness_sandbox) = self
+                .kubernetes_container_binding(
+                    &namespace,
+                    "mithril-probe-impersonation",
+                    "liveness",
+                    (
+                        mithril_node::ContainerKindV1::Application,
+                        "11111111-1111-4111-8111-111111111303",
+                        "22222222-2222-4222-8222-222222222403",
+                        "33333333-3333-4333-8333-333333333333",
+                        PROFILE_GENERATION_REF_ID,
+                    ),
+                    &manifest_path,
+                )?;
+            let (application_binding, application_pid, application_sandbox) = self
+                .kubernetes_container_binding(
+                    &namespace,
+                    "mithril-probe-impersonation",
+                    "application",
+                    (
+                        mithril_node::ContainerKindV1::Application,
+                        "11111111-1111-4111-8111-111111111304",
+                        "22222222-2222-4222-8222-222222222404",
+                        "33333333-3333-4333-8333-333333333333",
+                        PROFILE_GENERATION_REF_ID,
+                    ),
+                    &manifest_path,
+                )?;
+            ensure!(
+                startup_sandbox == readiness_sandbox
+                    && startup_sandbox == liveness_sandbox
+                    && startup_sandbox == application_sandbox,
+                InvalidInputSnafu {
+                    path: &manifest_path,
+                    reason: "the probe containers do not share one Pod sandbox",
+                }
+            );
+            let startup_cgroup = startup_binding
+                .root_cgroup_path
+                .as_deref()
+                .ok_or_else(|| invalid_state("the startup probe binding has no cgroup"))?;
+            let readiness_cgroup = readiness_binding
+                .root_cgroup_path
+                .as_deref()
+                .ok_or_else(|| invalid_state("the readiness probe binding has no cgroup"))?;
+            let liveness_cgroup = liveness_binding
+                .root_cgroup_path
+                .as_deref()
+                .ok_or_else(|| invalid_state("the liveness probe binding has no cgroup"))?;
+            let application_cgroup = application_binding
+                .root_cgroup_path
+                .as_deref()
+                .ok_or_else(|| invalid_state("the probe application binding has no cgroup"))?;
+
+            let (boot_id, node_boot_id) = boot_identity()?;
+            let mut identity_host = KernelHostOwner::new(KernelHostConfig::identity(
+                "/sys/kernel/btf/vmlinux",
+                lease_path,
+                Some(pin_root.to_path_buf()),
+                boot_id,
+                1,
+            ))
+            .start()
+            .context(InterceptorSnafu)?;
+            let mut bindings = WorkloadBindingOwner::system(node_boot_id, 1).context(NodeSnafu)?;
+            bindings
+                .publish_all(
+                    &identity_host,
+                    &[
+                        startup_binding.clone(),
+                        readiness_binding.clone(),
+                        liveness_binding.clone(),
+                        application_binding.clone(),
+                    ],
+                )
+                .context(NodeSnafu)?;
+            NativeSecurityStateOwner::new(node_boot_id, 1)
+                .activate(&mut identity_host)
+                .context(NodeSnafu)?;
+            host = Some(identity_host);
+            let inspector = NativeIdentityInspector::new(pin_root);
+            let application_parent =
+                self.wait_for("Kubernetes probe application root", pin_root, || {
+                    inspector.snapshot(application_pid).context(NodeSnafu)
+                })?;
+            ensure!(
+                application_parent.creator_task_cookie.is_none()
+                    && application_parent.root_class.as_deref() == Some("restored_or_unknown_root")
+                    && application_parent.installed_role_class.as_deref()
+                        == Some("fail_closed_unknown"),
+                InvalidInputSnafu {
+                    path: pin_root,
+                    reason: "the probe application root was not reconciled conservatively",
+                }
+            );
+
+            self.kubernetes_release_fifo(&native_start_path)?;
+            let native_namespace_pid =
+                self.wait_for("probe-identical native child", &fixture_root, || {
+                    Ok(self
+                        .kubernetes_fixture_slot_pids(&fixture_root, "application")?
+                        .into_iter()
+                        .next())
+                })?;
+            let native_host_pid = self.wait_for(
+                "probe-identical native child host PID",
+                application_cgroup,
+                || self.kubernetes_host_pid(application_cgroup, native_namespace_pid),
+            )?;
+
+            kubectl_exec = Some(
+                Command::new("/usr/local/bin/k3s")
+                    .args([
+                        "kubectl",
+                        "-n",
+                        namespace.as_str(),
+                        "exec",
+                        "mithril-probe-impersonation",
+                        "-c",
+                        "application",
+                        "--",
+                        "/bin/sh",
+                        "-c",
+                        PROBE_COMMAND,
+                    ])
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .spawn()
+                    .context(IoSnafu {
+                        path: Path::new("/usr/local/bin/k3s"),
+                    })?,
+            );
+            let kubectl_namespace_pid =
+                self.wait_for("probe-identical kubectl exec", &fixture_root, || {
+                    Ok(self
+                        .kubernetes_fixture_slot_pids(&fixture_root, "application")?
+                        .into_iter()
+                        .find(|pid| *pid != native_namespace_pid))
+                })?;
+            let kubectl_host_pid = self.wait_for(
+                "probe-identical kubectl exec host PID",
+                application_cgroup,
+                || self.kubernetes_host_pid(application_cgroup, kubectl_namespace_pid),
+            )?;
+
+            direct_cri_exec = Some(
+                Command::new("/usr/local/bin/k3s")
+                    .args([
+                        "crictl",
+                        "exec",
+                        application_binding.container_id.as_str(),
+                        "/bin/sh",
+                        "-c",
+                        PROBE_COMMAND,
+                    ])
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .spawn()
+                    .context(IoSnafu {
+                        path: Path::new("/usr/local/bin/k3s"),
+                    })?,
+            );
+            let direct_cri_namespace_pid =
+                self.wait_for("probe-identical direct CRI exec", &fixture_root, || {
+                    Ok(self
+                        .kubernetes_fixture_slot_pids(&fixture_root, "application")?
+                        .into_iter()
+                        .find(|pid| *pid != native_namespace_pid && *pid != kubectl_namespace_pid))
+                })?;
+            let direct_cri_host_pid = self.wait_for(
+                "probe-identical direct CRI exec host PID",
+                application_cgroup,
+                || self.kubernetes_host_pid(application_cgroup, direct_cri_namespace_pid),
+            )?;
+
+            let startup_namespace_pid =
+                self.wait_for("stock startup exec probe", &fixture_root, || {
+                    Ok(self
+                        .kubernetes_fixture_slot_pids(&fixture_root, "startup")?
+                        .into_iter()
+                        .next())
+                })?;
+            let readiness_namespace_pid =
+                self.wait_for("stock readiness exec probe", &fixture_root, || {
+                    Ok(self
+                        .kubernetes_fixture_slot_pids(&fixture_root, "readiness")?
+                        .into_iter()
+                        .next())
+                })?;
+            let liveness_namespace_pid =
+                self.wait_for("stock liveness exec probe", &fixture_root, || {
+                    Ok(self
+                        .kubernetes_fixture_slot_pids(&fixture_root, "liveness")?
+                        .into_iter()
+                        .next())
+                })?;
+            let startup_host_pid =
+                self.wait_for("stock startup exec probe host PID", startup_cgroup, || {
+                    self.kubernetes_host_pid(startup_cgroup, startup_namespace_pid)
+                })?;
+            let readiness_host_pid = self.wait_for(
+                "stock readiness exec probe host PID",
+                readiness_cgroup,
+                || self.kubernetes_host_pid(readiness_cgroup, readiness_namespace_pid),
+            )?;
+            let liveness_host_pid = self.wait_for(
+                "stock liveness exec probe host PID",
+                liveness_cgroup,
+                || self.kubernetes_host_pid(liveness_cgroup, liveness_namespace_pid),
+            )?;
+
+            ensure!(
+                kubectl_exec
+                    .as_mut()
+                    .ok_or_else(|| invalid_state("kubectl exec process is missing"))?
+                    .try_wait()
+                    .context(IoSnafu {
+                        path: Path::new("probe-identical kubectl exec"),
+                    })?
+                    .is_none()
+                    && direct_cri_exec
+                        .as_mut()
+                        .ok_or_else(|| invalid_state("direct CRI exec process is missing"))?
+                        .try_wait()
+                        .context(IoSnafu {
+                            path: Path::new("probe-identical direct CRI exec"),
+                        })?
+                        .is_none(),
+                InvalidInputSnafu {
+                    path: &fixture_root,
+                    reason: "the independent entries did not overlap the stock exec probes",
+                }
+            );
+
+            let startup_root = self.wait_for("stock startup probe identity", pin_root, || {
+                inspector.snapshot(startup_host_pid).context(NodeSnafu)
+            })?;
+            let readiness_root =
+                self.wait_for("stock readiness probe identity", pin_root, || {
+                    inspector.snapshot(readiness_host_pid).context(NodeSnafu)
+                })?;
+            let liveness_root = self.wait_for("stock liveness probe identity", pin_root, || {
+                inspector.snapshot(liveness_host_pid).context(NodeSnafu)
+            })?;
+            let native_child =
+                self.wait_for("probe-identical native identity", pin_root, || {
+                    inspector.snapshot(native_host_pid).context(NodeSnafu)
+                })?;
+            let kubectl_root =
+                self.wait_for("probe-identical kubectl identity", pin_root, || {
+                    inspector.snapshot(kubectl_host_pid).context(NodeSnafu)
+                })?;
+            let direct_cri_root =
+                self.wait_for("probe-identical direct CRI identity", pin_root, || {
+                    inspector.snapshot(direct_cri_host_pid).context(NodeSnafu)
+                })?;
+            let external_roots = [
+                &startup_root,
+                &readiness_root,
+                &liveness_root,
+                &kubectl_root,
+                &direct_cri_root,
+            ];
+            ensure!(
+                external_roots.iter().all(|root| {
+                    root.creator_task_cookie.is_none()
+                        && root.root_class.as_deref() == Some("external_runtime_root")
+                        && root.installed_role_class.as_deref()
+                            == Some("runtime_external_restricted")
+                        && root.active_role_id == application_binding.external_role_id
+                }),
+                InvalidInputSnafu {
+                    path: pin_root,
+                    reason: format!(
+                        "an independent identical-byte entry was not restricted: startup={:?}/{:?}/{}, readiness={:?}/{:?}/{}, liveness={:?}/{:?}/{}, kubectl={:?}/{:?}/{}, cri={:?}/{:?}/{}",
+                        startup_root.root_class,
+                        startup_root.installed_role_class,
+                        startup_root.active_role_id,
+                        readiness_root.root_class,
+                        readiness_root.installed_role_class,
+                        readiness_root.active_role_id,
+                        liveness_root.root_class,
+                        liveness_root.installed_role_class,
+                        liveness_root.active_role_id,
+                        kubectl_root.root_class,
+                        kubectl_root.installed_role_class,
+                        kubectl_root.active_role_id,
+                        direct_cri_root.root_class,
+                        direct_cri_root.installed_role_class,
+                        direct_cri_root.active_role_id,
+                    ),
+                }
+            );
+            ensure!(
+                native_child.creator_task_cookie == Some(application_parent.task_cookie)
+                    && native_child.real_parent_task_cookie == application_parent.task_cookie
+                    && native_child.root_class.is_none()
+                    && native_child.installed_role_class.is_none()
+                    && native_child.active_role_id == application_parent.active_role_id,
+                InvalidInputSnafu {
+                    path: pin_root,
+                    reason: format!(
+                        "the identical native child lost application lineage: parent={}, creator={:?}, real_parent={}, root={:?}, role_class={:?}, role={}",
+                        application_parent.task_cookie,
+                        native_child.creator_task_cookie,
+                        native_child.real_parent_task_cookie,
+                        native_child.root_class,
+                        native_child.installed_role_class,
+                        native_child.active_role_id,
+                    ),
+                }
+            );
+            let snapshots = [
+                &application_parent,
+                &startup_root,
+                &readiness_root,
+                &liveness_root,
+                &native_child,
+                &kubectl_root,
+                &direct_cri_root,
+            ];
+            let distinct_identities = snapshots
+                .iter()
+                .map(|snapshot| snapshot.task_cookie)
+                .collect::<BTreeSet<_>>()
+                .len()
+                == snapshots.len()
+                && snapshots
+                    .iter()
+                    .map(|snapshot| snapshot.process_state_id.as_str())
+                    .collect::<BTreeSet<_>>()
+                    .len()
+                    == snapshots.len();
+            ensure!(
+                distinct_identities,
+                InvalidInputSnafu {
+                    path: pin_root,
+                    reason:
+                        "concurrent probe and runtime entries reused a task or process identity",
+                }
+            );
+
+            for (slot, namespace_pid) in [
+                ("startup", startup_namespace_pid),
+                ("readiness", readiness_namespace_pid),
+                ("liveness", liveness_namespace_pid),
+                ("application", native_namespace_pid),
+                ("application", kubectl_namespace_pid),
+                ("application", direct_cri_namespace_pid),
+            ] {
+                self.kubernetes_release_fifo(
+                    &fixture_root.join(format!("{slot}-release-{namespace_pid}")),
+                )?;
+            }
+            for (process, description) in [
+                (&mut kubectl_exec, "probe-identical kubectl exec"),
+                (&mut direct_cri_exec, "probe-identical direct CRI exec"),
+            ] {
+                let status = process
+                    .as_mut()
+                    .ok_or_else(|| invalid_state(format!("{description} process is missing")))?
+                    .wait()
+                    .context(IoSnafu {
+                        path: Path::new(description),
+                    })?;
+                ensure!(
+                    status.success(),
+                    InvalidInputSnafu {
+                        path: Path::new(description),
+                        reason: format!("{description} exited with {status}"),
+                    }
+                );
+                *process = None;
+            }
+
+            Ok((
+                startup_root,
+                readiness_root,
+                liveness_root,
+                application_parent,
+                native_child,
+                kubectl_root,
+                direct_cri_root,
+                distinct_identities,
+            ))
+        })();
+
+        let host_cleanup = if let Some(host) = host.take() {
+            host.shutdown().context(InterceptorSnafu)
+        } else {
+            Ok(())
+        };
+        let namespace_cleanup = if namespace_created {
+            self.kubernetes_output(
+                &[
+                    "kubectl",
+                    "delete",
+                    "namespace",
+                    namespace.as_str(),
+                    "--ignore-not-found",
+                    "--wait=true",
+                    "--timeout=120s",
+                ],
+                "remove the Kubernetes probe-impersonation fixture namespace",
+            )
+            .map(|_| ())
+        } else {
+            Ok(())
+        };
+        Self::stop_fixture_process(&mut kubectl_exec);
+        Self::stop_fixture_process(&mut direct_cri_exec);
+        let cleanup = host_cleanup
+            .and(namespace_cleanup)
+            .and(pin_cleanup.cleanup())
+            .and(lease_cleanup.cleanup())
+            .and(work_cleanup.cleanup());
+        if let Err(source) = probe {
+            cleanup?;
+            return Err(source);
+        }
+        cleanup?;
+        ensure!(
+            self.kubernetes_namespace_absent(&namespace)?
+                && !pin_root.exists()
+                && !lease_path.exists()
+                && !work_directory.exists(),
+            InvalidInputSnafu {
+                path: &work_directory,
+                reason: "the Kubernetes probe-impersonation fixture was not removed",
+            }
+        );
+        let (
+            startup_root,
+            readiness_root,
+            liveness_root,
+            application_parent,
+            native_child,
+            kubectl_root,
+            direct_cri_root,
+            distinct_identities,
+        ) = probe?;
+        bundle.kubernetes_startup_exec_probe_root = Some(startup_root);
+        bundle.kubernetes_readiness_exec_probe_root = Some(readiness_root);
+        bundle.kubernetes_liveness_exec_probe_root = Some(liveness_root);
+        bundle.kubernetes_probe_native_parent = Some(application_parent);
+        bundle.kubernetes_probe_native_child = Some(native_child);
+        bundle.kubernetes_probe_kubectl_exec_root = Some(kubectl_root);
+        bundle.kubernetes_probe_direct_cri_exec_root = Some(direct_cri_root);
+        bundle.kubernetes_probe_identities_distinct = Some(distinct_identities);
+        Ok(())
+    }
+
     fn kubernetes_container_binding(
         &self,
         namespace: &str,
@@ -3864,6 +4486,61 @@ impl IdentityTestRunner {
             ))
         })?;
         Ok((pid > 0).then_some(pid))
+    }
+
+    fn kubernetes_fixture_slot_pids(&self, directory: &Path, slot: &str) -> Result<Vec<u32>> {
+        let mut pids = BTreeSet::new();
+        for entry in fs::read_dir(directory).context(IoSnafu { path: directory })? {
+            let entry = entry.context(IoSnafu { path: directory })?;
+            let file_name = entry.file_name();
+            let Some(file_name) = file_name.to_str() else {
+                continue;
+            };
+            let Some(name_pid) = file_name
+                .strip_prefix(&format!("{slot}-"))
+                .and_then(|name| name.strip_suffix(".pid"))
+            else {
+                continue;
+            };
+            let path = entry.path();
+            let text = fs::read_to_string(&path).context(IoSnafu { path: &path })?;
+            let pid = text.trim().parse::<u32>().map_err(|source| {
+                invalid_state(format!(
+                    "Kubernetes fixture wrote an invalid `{slot}` namespace PID `{}`: {source}",
+                    text.trim()
+                ))
+            })?;
+            ensure!(
+                pid > 0 && name_pid == pid.to_string(),
+                InvalidInputSnafu {
+                    path: &path,
+                    reason: "the Kubernetes fixture PID marker name and value differ",
+                }
+            );
+            pids.insert(pid);
+        }
+        Ok(pids.into_iter().collect())
+    }
+
+    fn kubernetes_release_fifo(&self, path: &Path) -> Result<()> {
+        self.wait_for("Kubernetes fixture FIFO reader", path, || {
+            let mut release = match fs::OpenOptions::new()
+                .write(true)
+                .custom_flags(libc::O_NONBLOCK)
+                .open(path)
+            {
+                Ok(release) => release,
+                Err(source)
+                    if source.kind() == std::io::ErrorKind::NotFound
+                        || source.raw_os_error() == Some(libc::ENXIO) =>
+                {
+                    return Ok(None)
+                }
+                Err(source) => return Err(source).context(IoSnafu { path }),
+            };
+            release.write_all(b"release\n").context(IoSnafu { path })?;
+            Ok(Some(()))
+        })
     }
 
     fn kubernetes_container_generation(&self, created_at: &serde_json::Value) -> Result<u64> {
