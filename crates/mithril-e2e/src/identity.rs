@@ -46,6 +46,7 @@ use crate::physical::{boot_identity, ProbeCgroup, ProbeDirectory, ProbeFile};
 use crate::Result;
 
 const WAIT_LIMIT: Duration = Duration::from_secs(30);
+const KUBERNETES_CLEANUP_WAIT_LIMIT: Duration = Duration::from_secs(120);
 const PROFILE_GENERATION_REF_ID: u64 = 7;
 const PRESTART_REQUEST_DIRECTORY: &str = "/run/mithril-identity-prestart";
 
@@ -3200,11 +3201,24 @@ impl IdentityTestRunner {
         fs::set_permissions(path, permissions).context(IoSnafu { path })
     }
 
-    fn wait_for<T, F>(&self, description: &str, path: &Path, mut inspect: F) -> Result<T>
+    fn wait_for<T, F>(&self, description: &str, path: &Path, inspect: F) -> Result<T>
     where
         F: FnMut() -> Result<Option<T>>,
     {
-        let deadline = Instant::now() + WAIT_LIMIT;
+        self.wait_for_with_limit(description, path, WAIT_LIMIT, inspect)
+    }
+
+    fn wait_for_with_limit<T, F>(
+        &self,
+        description: &str,
+        path: &Path,
+        limit: Duration,
+        mut inspect: F,
+    ) -> Result<T>
+    where
+        F: FnMut() -> Result<Option<T>>,
+    {
+        let deadline = Instant::now() + limit;
         loop {
             if let Some(value) = inspect()? {
                 return Ok(value);
@@ -6506,9 +6520,10 @@ impl IdentityTestRunner {
                     ],
                     &format!("finish removal of the stock-hook {case} Pod"),
                 )?;
-                self.wait_for(
+                self.wait_for_with_limit(
                     &format!("stock-hook {case} CRI container removal"),
                     &manifest_path,
+                    KUBERNETES_CLEANUP_WAIT_LIMIT,
                     || {
                         let listed = self.kubernetes_output(
                             &[
