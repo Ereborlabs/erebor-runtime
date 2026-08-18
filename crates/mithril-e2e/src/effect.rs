@@ -380,7 +380,7 @@ pub struct EffectPhysicalProbeBundleV1 {
     pub script_exec_denied: bool,
     pub deleted_exec_denied: bool,
     pub non_leader_exec_denied: bool,
-    pub approved_exec_allowed: bool,
+    pub exact_file_exec_control_allowed: bool,
     pub memfd_exec_failed_closed: bool,
     pub anonymous_exec_hard_closed: bool,
     pub anonymous_executable_mmap_hard_closed: bool,
@@ -611,7 +611,7 @@ fn hf_static_effect_classification() -> Vec<HfStaticEffectClassificationCaseV1> 
             declared_denial_before_effect: true,
             declared_no_file_descriptor_or_bytes: false,
             declared_legitimate_control_succeeded: true,
-            classification_basis: "the unapproved helper returned EACCES; the exact approved BusyBox image completed",
+            classification_basis: "the unapproved helper returned EACCES; the exact file-backed BusyBox control completed without proving immutable executable authority",
         },
         HfStaticEffectClassificationCaseV1 {
             incident_event_id: "HF-002",
@@ -638,7 +638,7 @@ fn hf_static_effect_classification() -> Vec<HfStaticEffectClassificationCaseV1> 
             declared_denial_before_effect: true,
             declared_no_file_descriptor_or_bytes: false,
             declared_legitimate_control_succeeded: true,
-            classification_basis: "the copied executable returned EACCES; the exact approved BusyBox image completed",
+            classification_basis: "the copied executable returned EACCES; the exact file-backed BusyBox control completed without proving immutable executable authority",
         },
         HfStaticEffectClassificationCaseV1 {
             incident_event_id: "HF-004",
@@ -773,7 +773,7 @@ fn hf_static_effect_classification() -> Vec<HfStaticEffectClassificationCaseV1> 
             declared_denial_before_effect: true,
             declared_no_file_descriptor_or_bytes: false,
             declared_legitimate_control_succeeded: true,
-            classification_basis: "the later unapproved executable returned EACCES; the exact approved image completed",
+            classification_basis: "the later unapproved executable returned EACCES; the exact file-backed executable control completed without proving immutable executable authority",
         },
         HfStaticEffectClassificationCaseV1 {
             incident_event_id: "HF-011",
@@ -2266,7 +2266,7 @@ impl EffectTestRunner {
                 InvalidInputSnafu {
                     path: &paths.allowed_exec_target,
                     reason: format!(
-                        "the signed exact executable allow control did not execute: {approved_exec:?}; observed {:?}",
+                        "the signed exact file-backed executable control did not execute: {approved_exec:?}; observed {:?}",
                         observations
                             .recent_since(approved_exec_marker)
                             .iter()
@@ -3876,7 +3876,7 @@ impl EffectTestRunner {
             script_exec_denied: protect,
             deleted_exec_denied: protect,
             non_leader_exec_denied: protect,
-            approved_exec_allowed: protect,
+            exact_file_exec_control_allowed: protect,
             memfd_exec_failed_closed: protect,
             anonymous_exec_hard_closed: true,
             anonymous_executable_mmap_hard_closed: true,
