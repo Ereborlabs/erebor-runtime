@@ -148,7 +148,22 @@ Platform/kernel/runtime manifests: the current physical result ran on x86_64 Ubu
 Performance/capacity results: all authoritative maps are bounded and fail closed on missing or full state. No identity-specific production latency or saturation result is recorded. The feasibility benchmark is historical platform evidence, not an identity result.
 Unsupported/degraded paths: approved administrative roles, permission tables, raced policy transitions, protected effects, IPC policy, shared-resource policy, and response remain outside this identity result. A configured static Docker binding validates live cgroup identity but does not continuously validate Docker-daemon metadata. CRI-backed bindings validate exact runtime metadata and local cgroup placement, but snapshot discovery alone cannot prove that a binding preceded the first user instruction. Only a qualified Created/empty-cgroup observation or supported start interface can make that claim. The closure matrix lists the remaining Phase 2 identity, entry, coordinate, native-reference, and failure-injection results. A cleanup loss retains restriction and raises reconciliation instead of recovering authority.
 PostStart limit: K3s did not automatically resend the in-flight hook. The fixture supplied the second exact CRI delivery after restart and does not claim automatic kubelet replay. Hook timeout, mismatch, and missing-field rejection remain open.
-Remaining work in this phase: `AUTHORIZATION-REPLAY-004`, `ENTRY-LOSS-001`, `ENTRY-RESTART-001`, `ENTRY-REUSE-001`, and `ENTRY-STOCK-HOOK-FAILURE-002`. Do not change the implementation result to Done without their physical artifacts.
+Authorization-replay qualification update: source commit `8c4adcb` and the
+schema-24 VM JSON close `AUTHORIZATION-REPLAY-004`. The JSON is
+`/tmp/mithril-phase2-authorization-replay-20260818-11/identity-physical-probe.json`.
+Its SHA-256 is
+`9a0aca62b808421552029518dc4212ed5f1317d483afcc4d6a32b78554228951`.
+The fixture rejected a retargeted body, expiry, signature mismatch, same-owner
+replay, owner-restart replay, and replay after a changed boot identity. Fresh
+exact envelopes passed before and after the boot-identity change. The
+five-record replay WAL SHA-256 is
+`2ca8c993cab4371f8d76c35fecc9eedc8044fc3502aa8144c62be6b1b39c399a`.
+The runner removed its replay state. It changed the production owner's boot
+identity but did not reboot the VM. The complete approved-exec transaction and
+protected effect remain Phase 4 work.
+Remaining work in this phase: `ENTRY-LOSS-001`, `ENTRY-RESTART-001`,
+`ENTRY-REUSE-001`, and `ENTRY-STOCK-HOOK-FAILURE-002`. Do not change the
+implementation result to Done without their physical artifacts.
 Next phase not authorized: yes.
 ```
 
@@ -439,6 +454,44 @@ Kubernetes permits duplicate delivery but does not guarantee deterministic
 resend after this restart. The fixture repeats the live Pod's exact hook
 command through CRI and makes no automatic kubelet replay claim. Hook failure
 injection remains open. Other open rows keep Phase 2 **Blocked**.
+
+## Authorization-Replay Identity Result — 2026-08-18
+
+Source commit `8c4adcb` extends the existing `IdentityTestRunner`. The fixture
+uses the production administrative-envelope encoder and the production
+`AuthorizationProofOwner`. It adds no map, role, runner, or durable type.
+
+The retained x86_64 Ubuntu 24.04 VM ran Linux `6.8.0-137-generic` with unique
+paths under `/var/tmp/mithril-auth-replay-20260818-11`,
+`/sys/fs/bpf/mithril-auth-replay-20260818-11`,
+`/run/mithril-auth-replay-20260818-11.lock`, and
+`/sys/fs/cgroup/mithril-auth-replay-20260818-11`. The accepted schema-24 JSON
+is
+`/tmp/mithril-phase2-authorization-replay-20260818-11/identity-physical-probe.json`.
+Its SHA-256 is
+`9a0aca62b808421552029518dc4212ed5f1317d483afcc4d6a32b78554228951`.
+The BPF object SHA-256 is
+`02408c371aafaeeb044cbf11195a25dca35013bcdea44e37aa0756ebd2f2f3e6`.
+
+The fixture rejected a retargeted body before replay-state mutation. It also
+rejected an expired envelope, a changed signature, a repeated proof and slot
+in one owner, a fresh proof and slot with the repeated sequence after owner
+restart, and the original proof after loading the owner with a distinct boot
+identity. The original exact envelope passed once. A fresh exact envelope
+with the next sequence passed after the boot-identity change. The replay WAL
+had exactly five newline-terminated records. Its SHA-256 is
+`2ca8c993cab4371f8d76c35fecc9eedc8044fc3502aa8144c62be6b1b39c399a`.
+
+No separate manual shell is valid. An operator shell would have to duplicate
+the runner-owned signing key, exact signed body, trusted clock, proof and slot
+identities, boot identity, and private WAL lifecycle. The physical runner is
+the readable and controlled owner of this case. It removed the replay state,
+pin root, lease, cgroup, and fixture directory. The VM itself did not reboot;
+the fixture loaded the production owner with a distinct boot identity.
+
+This closes `AUTHORIZATION-REPLAY-004`. It does not qualify the Phase 4
+approved-exec transaction or a protected effect. Four entry rows remain, so
+Phase 2 remains **Blocked**.
 
 ## Maintenance update — 2026-08-09
 

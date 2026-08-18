@@ -1354,6 +1354,50 @@ runtime-binding loss, node or runtime restart, cgroup/namespace/Pod/container
 lifetime reuse, stock OCI hook rejection, or authorization replay. The phase
 remains **Blocked**.
 
+## Authorization-Replay Qualification — 2026-08-18
+
+Source commit `8c4adcb` ran in the retained x86_64 Ubuntu 24.04 VM on Linux
+`6.8.0-137-generic`. The automated identity runner used unique paths under
+`/var/tmp/mithril-auth-replay-20260818-11`,
+`/sys/fs/bpf/mithril-auth-replay-20260818-11`,
+`/run/mithril-auth-replay-20260818-11.lock`, and
+`/sys/fs/cgroup/mithril-auth-replay-20260818-11`.
+
+The accepted schema-24 JSON is
+`/tmp/mithril-phase2-authorization-replay-20260818-11/identity-physical-probe.json`.
+Its SHA-256 is
+`9a0aca62b808421552029518dc4212ed5f1317d483afcc4d6a32b78554228951`.
+The BPF object SHA-256 is
+`02408c371aafaeeb044cbf11195a25dca35013bcdea44e37aa0756ebd2f2f3e6`.
+
+The runner used the production administrative-envelope encoder and the
+production `AuthorizationProofOwner`. It required these results:
+
+- A changed exact target rejected before replay-state mutation.
+- An expired envelope rejected.
+- A changed signature rejected.
+- A repeated proof and slot rejected in the same owner.
+- A fresh proof and slot with the repeated sequence rejected after owner
+  restart.
+- The original proof rejected after the owner loaded a distinct boot identity.
+- One fresh exact envelope passed before the boot-identity change.
+- One fresh exact envelope with the next sequence passed after the change.
+
+The replay WAL had exactly five newline-terminated records. Its SHA-256 is
+`2ca8c993cab4371f8d76c35fecc9eedc8044fc3502aa8144c62be6b1b39c399a`.
+The runner removed the WAL directory, pin root, lease, cgroup, and fixture
+directory.
+
+No separate manual shell is valid for this case. A shell would duplicate the
+runner-owned signing key, signed body, trusted clock, proof and slot IDs, boot
+identity, and WAL lifecycle. The exact reboot limit is that the fixture loads
+the production owner with a distinct boot identity. It does not reboot the
+VM. Phase 4 owns the complete approved-exec transaction and physical effect.
+
+This closes `AUTHORIZATION-REPLAY-004`. Runtime-binding loss, restart
+reconciliation, full Kubernetes lifetime reuse, and stock-hook failures remain
+open. Phase 2 remains **Blocked**.
+
 ## Native Identity Fixture Matrix
 
 | Fixture | Operator action | Required oracle and legitimate control |

@@ -3568,3 +3568,40 @@ found no case namespace, fixture, pin, node process, lease, or cgroup.
 No manual shell is valid for this fixture-owned synchronization. This
 qualifies `ID-CLONE-CGROUP-002` only. The remaining required rows are open.
 Phase 2 remains **Blocked**.
+
+## Authorization-Replay Fixture Review — 2026-08-18
+
+Source commit `8c4adcb` extends the existing `IdentityTestRunner` and physical
+bundle. It adds no map, role, runner, or durable type.
+
+Review this path in order:
+
+1. [`encode_administrative_authorization_fixture`](../../../crates/mithril-control/src/administrative_exec.rs)
+   calls the existing production administrative-body and signed-intent
+   encoders. The feature-gated function exposes those exact bytes only to the
+   e2e crate.
+2. [`run_authorization_replay_fixture`](../../../crates/mithril-e2e/src/identity.rs)
+   owns the signing key, signed target, trusted clock values, proof IDs, slot
+   IDs, owner restarts, changed boot identity, and WAL checks.
+3. [`AuthorizationProofOwner::verify_and_accept`](../../../crates/mithril-node/src/identity/authorization/mod.rs)
+   verifies signature, time, exact target, proof and slot identity, and
+   sequence state through the production owner.
+4. [`AuthorizationReplayState`](../../../crates/mithril-node/src/identity/authorization/replay.rs)
+   owns the durable append-only replay WAL and recovery checks.
+5. [`IdentityPhysicalProbeBundleV1`](../../../crates/mithril-e2e/src/identity.rs)
+   records each rejection, both fresh controls, the WAL hash and record count,
+   and replay-state cleanup in the existing JSON bundle.
+
+The retained VM accepted schema-24 JSON with SHA-256
+`9a0aca62b808421552029518dc4212ed5f1317d483afcc4d6a32b78554228951`.
+The five-record WAL SHA-256 is
+`2ca8c993cab4371f8d76c35fecc9eedc8044fc3502aa8144c62be6b1b39c399a`.
+Retarget, expiry, signature mismatch, same-owner replay, owner-restart replay,
+and replay after a changed boot identity rejected. Fresh exact envelopes
+passed before and after the boot-identity change. The runner removed the WAL
+directory, pin, lease, cgroup, and fixture. The VM did not reboot.
+
+No manual shell is valid because the scenario requires one owner for signed
+bytes, trusted time, replay identity, boot identity, and WAL state. This closes
+only `AUTHORIZATION-REPLAY-004`. Phase 4 still owns approved exec and physical
+effects. Four Phase 2 entry rows remain open.
