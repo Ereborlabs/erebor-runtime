@@ -1,7 +1,7 @@
 # Signed Path-Tree Denial Implementation Review
 
 This guide covers implementation commit
-`567cbb4243f750b2afc323ccf202e8494b7a2373`. The commit is based on the
+`b20ede0ced8ca45143acb31303e8b1a8f7818769`. The commit is based on the
 policy definition in `4875862804b64c003927b60e634b7989dd3897f7`.
 
 The design source is the
@@ -20,48 +20,54 @@ Read the implementation in this order:
 
 1. Read [`PathTreeDenyFloorV1`](../../../crates/mithril-control/src/policy/source.rs#L435)
    and its
-   [`Validate` implementation](../../../crates/mithril-control/src/policy/validation.rs#L242).
+   [`Validate` implementation](../../../crates/mithril-control/src/policy/validation/records.rs#L180).
    These sources define and validate the signed restriction.
 2. Read
-   [`PolicyDocumentV1::validate`](../../../crates/mithril-control/src/policy/validation.rs#L701)
+   [`PolicyDocumentV1::validate`](../../../crates/mithril-control/src/policy/validation/document.rs#L13)
    and
-   [`PolicyCompiler::compile`](../../../crates/mithril-control/src/policy/compiler.rs#L69).
+   [`PolicyCompiler::compile`](../../../crates/mithril-control/src/policy/compiler.rs#L82).
    The document owns recursive and cross-record checks. The compiler starts
    only after validation succeeds.
 3. Read
+   [`CompiledOperationV1`](../../../crates/mithril-control/src/policy/compiler/conversion.rs#L10)
+   and
+   [`RuleDimensions`](../../../crates/mithril-control/src/policy/compiler/expansion.rs#L121).
+   Conversion implementations own signed-to-kernel value mapping. Expansion
+   owns policy-dimension products and exact-cell resolution.
+4. Read
    [`CanonicalPathGraphV1::compile_with_path_tree_denies`](../../../crates/mithril-control/src/policy/path.rs#L312)
    and
    [`insert_path_tree_deny`](../../../crates/mithril-control/src/policy/path.rs#L552).
    These functions create the recursive graph terminal and operation mask.
-4. Read [`lower_path_tables`](../../../crates/mithril-node/src/policy.rs#L3329).
+5. Read [`lower_path_tables`](../../../crates/mithril-node/src/policy.rs#L3331).
    This function compiles static policy components to generation-scoped map
    rows. It does not inspect a filesystem or mount namespace for a path-tree
    floor.
-5. Read [`LoweredGeneration::install`](../../../crates/mithril-node/src/policy.rs#L1641).
+6. Read [`LoweredGeneration::install`](../../../crates/mithril-node/src/policy.rs#L1643).
    This function installs and reads back the graph before generation
    activation.
-6. Read
+7. Read
    [`canonical_mount_cache_build_step`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L304),
    [`canonical_mount_path_walk_step`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L522),
    and
    [`collect_mount_components`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L608).
    These functions inspect the task's live mount namespace, select the oldest
    mount, and walk from the leaf to the namespace root.
-7. Read
+8. Read
    [`canonical_path_match_step`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L741)
    and
    [`canonical_path_candidate`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L810).
    These functions reverse the collected components and traverse only the
    task's active profile generation.
-8. Read
+9. Read
    [`resolved_identity_effect_gate`](../../../bpf/erebor-interceptor/programs/identity_effects.bpf.h#L292).
    The path-tree decision occurs before exact-object lookup.
-9. Read
+10. Read
    [`path_tree_deny_uses_the_live_bpf_mount_path_before_object_lookup`](../../../crates/erebor-interceptor/src/bundled.rs#L500)
    and
    [`bpf_path_walks_use_meta_component_and_namespace_budgets`](../../../crates/erebor-interceptor/src/bundled.rs#L1217).
    These tests check decision order and the compiled BPF loop limits.
-10. Read [`EffectTestRunner::physical_probe`](../../../crates/mithril-e2e/src/effect.rs#L705).
+11. Read [`EffectTestRunner::physical_probe`](../../../crates/mithril-e2e/src/effect.rs#L705).
    This test checks the physical result at the 255-component limit.
 
 ## Implemented result
@@ -104,20 +110,20 @@ installation.
 
 ### Validation ownership
 
-[`PolicyCompiler::compile`](../../../crates/mithril-control/src/policy/compiler.rs#L69)
+[`PolicyCompiler::compile`](../../../crates/mithril-control/src/policy/compiler.rs#L82)
 calls the document's `Validate` implementation before it lowers any rule.
 The compiler does not contain policy validation functions.
 
-[`PolicyValue`](../../../crates/mithril-control/src/policy/validation.rs#L80)
+[`PolicyValue`](../../../crates/mithril-control/src/policy/validation/value.rs#L8)
 owns the shared lexical checks for local IDs, registry symbols, UUIDs,
 digests, and durations. Each policy record that owns intrinsic checks implements
-[`Validate`](../../../crates/mithril-control/src/policy/validation.rs#L12)
+[`Validate`](../../../crates/mithril-control/src/policy/validation.rs#L5)
 for its intrinsic fields. For example,
-[`PathTreeDenyFloorV1::validate`](../../../crates/mithril-control/src/policy/validation.rs#L242)
+[`PathTreeDenyFloorV1::validate`](../../../crates/mithril-control/src/policy/validation/records.rs#L180)
 owns the path-tree schema, disposition, recursion, operation, and canonical
 path syntax checks.
 
-[`PolicyDocumentV1::validate`](../../../crates/mithril-control/src/policy/validation.rs#L701)
+[`PolicyDocumentV1::validate`](../../../crates/mithril-control/src/policy/validation/document.rs#L13)
 validates its children and then checks relationships that require the full
 document. These checks include unique IDs, references, graph-wide conflicts,
 and role reachability. There is no validation context object. A child receives
@@ -131,12 +137,26 @@ shape and bounds. It does not call `open`, `stat`, `readlink`, `setns`, or any
 mount API. Rust therefore does not inspect a current container path and does
 not require a Pod or container to exist.
 
+The module split follows ownership. The
+[`validation` module root](../../../crates/mithril-control/src/policy/validation.rs#L1)
+defines only the trait, error, and repeated-check macros. Child files own
+scalar values, records, effect rules, authority rules, and document-wide
+relationships. The
+[`compiler` module root](../../../crates/mithril-control/src/policy/compiler.rs#L1)
+owns artifact models and orchestration. Standard conversion implementations
+in
+[`conversion.rs`](../../../crates/mithril-control/src/policy/compiler/conversion.rs#L1)
+replace the old operation, effect-family, object-cell, and physical-result
+free functions. Rule expansion and conflict resolution are in
+[`expansion.rs`](../../../crates/mithril-control/src/policy/compiler/expansion.rs#L1).
+The compiler module has one loose helper: a stateless SHA-256 formatter.
+
 ### 1. Compile the signed path-tree floor
 
-[`PathTreeDenyFloorV1::validate`](../../../crates/mithril-control/src/policy/validation.rs#L242)
+[`PathTreeDenyFloorV1::validate`](../../../crates/mithril-control/src/policy/validation/records.rs#L180)
 accepts only a recursive `FILE` denial. The rule cannot have an exception.
 The validator also rejects an empty or unsupported operation set.
-[`PolicyDocumentV1::validate`](../../../crates/mithril-control/src/policy/validation.rs#L701)
+[`PolicyDocumentV1::validate`](../../../crates/mithril-control/src/policy/validation/document.rs#L13)
 requires `PROTECT` mode when the document contains a path-tree denial.
 
 [`canonical_path_components`](../../../crates/mithril-control/src/policy/path.rs#L279)
@@ -157,13 +177,13 @@ deterministic state contains the union of its active denial operation IDs.
 This conversion preserves the recursive wildcard when another exact edge also
 starts at the same state.
 
-[`lower_path_tables`](../../../crates/mithril-node/src/policy.rs#L3329)
+[`lower_path_tables`](../../../crates/mithril-node/src/policy.rs#L3331)
 adds `profile_generation_ref_id` to every exact-transition, wildcard-transition,
 and terminal key. The terminal value contains a 64-bit denied-operation mask.
 The function does not require a Pod, target file, target directory, or mount
 namespace.
 
-[`LoweredGeneration::install`](../../../crates/mithril-node/src/policy.rs#L1641)
+[`LoweredGeneration::install`](../../../crates/mithril-node/src/policy.rs#L1643)
 writes the three graph tables, verifies the immutable rows, and then changes
 the generation descriptor to active. The graph is complete before a task can
 use the generation.
@@ -366,7 +386,7 @@ sequenceDiagram
 Different cgroups can select different profile generations. BPF places the
 active generation in every graph key. It cannot traverse another profile's
 rows by state ID alone. The
-[`path_graph_rows_are_scoped_to_the_bound_generation`](../../../crates/mithril-node/src/policy.rs#L4163)
+[`path_graph_rows_are_scoped_to_the_bound_generation`](../../../crates/mithril-node/src/policy.rs#L4168)
 test checks that equal policy paths in two generations produce disjoint keys.
 
 The repository has signed artifact, CRI inventory, cgroup binding, and policy
@@ -380,7 +400,7 @@ binding boundary.
 | Owner | Input and state | Output and authority |
 | --- | --- | --- |
 | `PolicyDocumentV1` and child `Validate` implementations | Signed policy records. | Check intrinsic child fields, then document-wide IDs, references, conflicts, and reachability. They inspect no filesystem or mount namespace. |
-| `PolicyCompiler` | One signed `PolicyDocumentV1`. | Calls document validation, then produces a verified artifact. It creates no kernel state. |
+| `PolicyCompiler` | One signed `PolicyDocumentV1`. | Calls document validation, then produces a verified artifact. Its root orchestrates compilation, conversion implementations map signed values, and expansion owns exact cells. It creates no kernel state. |
 | `CanonicalPathGraphV1` | Canonical policy components and operation IDs. | Produces deterministic static transitions and terminal masks. It does not inspect live mounts. |
 | `NodePolicyGenerationOwner` | Verified artifact and profile generation. | Installs, reads back, activates, and retires generation-scoped policy rows. It does not enter a workload mount namespace for path-tree lowering. |
 | Workload binding owner | Exact cgroup and selected profile generation. | Installs the generation that new tasks inherit through the existing identity path. |
@@ -506,7 +526,7 @@ engine, or userspace namespace helper.
 
 One per-CPU `identity_scratch_v1` value owns cache-build, path-walk, component,
 and graph-match state. `bpf_loop` callbacks receive only a pointer to this
-state. The checked object at commit `567cbb4` has these maximum stack offsets:
+state. The checked object at commit `b20ede0` has these maximum stack offsets:
 
 | Function | Stack bytes |
 | --- | ---: |
@@ -549,7 +569,7 @@ The graph maps and BPF caches are declared in
 [`identity_maps.h`](../../../bpf/erebor-interceptor/programs/identity_maps.h#L564).
 Generation retirement deletes exact transitions, wildcard transitions, and
 terminals for the retired generation. The
-[`generation_retirement_waits_for_async_io_authority`](../../../crates/mithril-node/src/policy.rs#L4071)
+[`generation_retirement_waits_for_async_io_authority`](../../../crates/mithril-node/src/policy.rs#L4073)
 test checks these three cleanup targets. The node does not delete policy rows
 while a task or asynchronous request retains the generation.
 
@@ -577,7 +597,7 @@ Mount caches can survive loader recovery because they are keyed by live
 namespace identity and event. A failed cache validation causes a new build or
 an unresolved decision. It does not authorize from a stale address alone.
 
-[`retire_generation_rows`](../../../crates/mithril-node/src/policy.rs#L2656)
+[`retire_generation_rows`](../../../crates/mithril-node/src/policy.rs#L2658)
 removes the retired generation's exact transitions, wildcard transitions, and
 terminals after the generation has no retained authority. Cache rows are not
 generation rows. They remain policy-neutral and bounded by map capacity.
@@ -607,6 +627,8 @@ typed identity or policy error before activation.
 | --- | --- |
 | `path_tree_rules_are_signed_denial_floors_only` | Checks the signed restriction boundary and rejects positive or ambiguous forms. |
 | `child_owned_policy_values_validate_before_document_relationships` | Checks that a child-owned local-ID error is returned before document relationship checks. |
+| [`process_control_requires_exact_positive_arguments_and_target_roles`](../../../crates/mithril-control/tests/policy_compilation.rs#L241) | Checks the `TryFrom` operation conversion, exact numeric arguments, wildcard limits, and target-role requirement. |
+| [`file_namespace_operations_compile_to_closed_kernel_ids`](../../../crates/mithril-control/tests/policy_compilation.rs#L398) | Checks that each signed file-namespace operation converts to its closed kernel operation ID. |
 | `recursive_path_tree_deny_covers_the_root_and_descendants` | Checks the root, descendants, and outside path in the deterministic graph. |
 | `canonical_path_accepts_meta_depth_and_rejects_one_more` | Accepts 255 canonical components and rejects 256 components. |
 | `path_tree_floor_lowers_without_a_live_mount_view` | Checks that Rust lowers the floor with no exact object, mount namespace, or mount root row. |
@@ -616,25 +638,25 @@ typed identity or policy error before activation.
 | `bpf_path_walks_use_meta_component_and_namespace_budgets` | Inspects the compiled object for the 255-component and 4,351-callback `bpf_loop` limits. It also checks the 255-entry scan-stack source bound. |
 | `generation_retirement_waits_for_async_io_authority` | Checks retained asynchronous authority and removal of all three generation-scoped path maps. |
 | Cross-architecture compile | The production object compiles with `-Wall -Werror` against checked x86, arm64, arm, and RISC-V kernel headers. This is not non-x86 physical proof. |
-| Repository Rust CI | `bash .github/scripts/verify-rust-ci.sh` passed at exact code commit `567cbb4`. It ran formatting, workspace check, warnings-as-errors clippy, and the full workspace tests. The focused policy compilation suite passed all 30 tests. |
-| Disposable VM | The kernel, identity, observation, local-enforcement, K3s observe, and K3s protect lanes passed at exact commit `567cbb4`. The documented administrative-exec lane was skipped. |
+| Repository Rust CI | `bash .github/scripts/verify-rust-ci.sh` passed at exact code commit `b20ede0`. It ran formatting, workspace check, warnings-as-errors clippy, and the full workspace tests. The focused policy compilation suite passed all 30 tests. |
+| Disposable VM | The kernel, identity, observation, local-enforcement, K3s observe, and K3s protect lanes passed at exact commit `b20ede0`. The documented administrative-exec lane was skipped. |
 
 The exact-commit VM command was:
 
 ```sh
 rtk proxy bash crates/mithril-e2e/harness/vm/run.sh --with-k3s \
   --skip-administrative-exec \
-  --output-directory /tmp/mithril-path-tree-567cbb4
+  --output-directory /tmp/mithril-path-tree-b20ede0
 ```
 
 The exact-commit VM evidence directory is
-`/tmp/mithril-path-tree-567cbb4`. The production BPF object SHA-256 is
+`/tmp/mithril-path-tree-b20ede0`. The production BPF object SHA-256 is
 `e44e761a8bfa2c33f02475beb4162d41efdbe704ee10960bd03fafb31b4d13d8`.
 The platform was x86_64 Ubuntu with Linux `6.8.0-137-generic` and BPF in the
 active LSM order.
 
 The local-enforcement artifact SHA-256 is
-`a855d07b630a269725bdd400b504610b5d4ba83f9afd48352bb73d61117f26a5`.
+`a168972e1ed8c3f63524f56eb00e759bcdfb0b4db3fd0a1b2f93ade60a686b07`.
 It records these true results:
 
 - `path_tree_meta_depth_denied`
