@@ -18,7 +18,7 @@ libbpf-rs.workspace = true
 libc = "0.2.186"
 linux-raw-sys = { version = "0.12.1", features = ["general"] }
 memmap2 = "0.9.11"
-mithril-control = { path = "../mithril-control" }
+mithril-control = { path = "../mithril-control", features = ["test-fixtures"] }
 mithril-node = { path = "../mithril-node" }
 rustix = { version = "1.1.4", features = ["mount", "process", "thread"] }
 serde.workspace = true

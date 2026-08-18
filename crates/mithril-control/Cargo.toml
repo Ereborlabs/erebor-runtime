@@ -6,6 +6,9 @@ license.workspace = true
 repository.workspace = true
 build = "build.rs"
 
+[features]
+test-fixtures = []
+
 [dependencies]
 axum.workspace = true
 axum-server.workspace = true

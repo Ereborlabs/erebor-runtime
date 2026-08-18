@@ -11,6 +11,7 @@ use std::process::{Child, ChildStderr, ChildStdin, Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use ed25519_dalek::SigningKey;
 use erebor_interceptor::{
     bundled_bpf_sha256, Error as InterceptorError, KernelHost, KernelHostConfig, KernelHostOwner,
     KernelObjectLayoutV1, KernelObjectManifestV1, BUNDLED_BPF_OBJECT, REQUIRED_IDENTITY_PROGRAMS,
@@ -23,8 +24,13 @@ use erebor_interceptor_abi::{
     TaskCoordinateStateV1, TaskCoordinateV1, TaskReferenceTombstoneV1, TASK_REFERENCE_ALL_V1,
 };
 use libbpf_rs::{MapHandle, MapType};
+use mithril_control::{
+    encode_administrative_authorization_fixture, AdministrativeExecResolution,
+    AdministrativeFileObject, ResolvedAdministrativeExecutable,
+};
 use mithril_node::{
-    NativeIdentityInspector, NativeSecurityStateOwner, NativeTaskSnapshotV1, WorkloadBindingConfig,
+    AuthorizationProofOwner, AuthorizationTargetV1, IssuerTrustV1, NativeIdentityInspector,
+    NativeSecurityStateOwner, NativeTaskSnapshotV1, TrustBundleV1, WorkloadBindingConfig,
     WorkloadBindingOwner,
 };
 use rustix::process::{pidfd_open, pidfd_send_signal, Pid, PidfdFlags, Signal};
@@ -167,6 +173,17 @@ pub struct IdentityPhysicalProbeBundleV1 {
     pub post_ponr_pending_state: u8,
     pub post_ponr_exec_guard_state: u8,
     pub post_ponr_task_coordinate_state: u8,
+    pub authorization_retarget_rejected: bool,
+    pub authorization_expired_rejected: bool,
+    pub authorization_signature_mismatch_rejected: bool,
+    pub authorization_same_owner_replay_rejected: bool,
+    pub authorization_restart_replay_rejected: bool,
+    pub authorization_reboot_replay_rejected: bool,
+    pub authorization_fresh_exact_accepted: bool,
+    pub authorization_fresh_after_reboot_accepted: bool,
+    pub authorization_replay_wal_sha256: String,
+    pub authorization_replay_wal_records: u64,
+    pub authorization_replay_state_removed: bool,
     pub non_leader_thread_exec_committed: bool,
     pub non_leader_thread_exec_root: NativeTaskSnapshotV1,
     pub non_leader_thread_exec_after_exec: NativeTaskSnapshotV1,
@@ -388,6 +405,7 @@ impl IdentityTestRunner {
         let leader_first_ready_path = output_directory.join("leader-first-ready");
         let leader_first_release_path = output_directory.join("leader-first-release");
         let cgroup_escape_sentinel_path = output_directory.join("cgroup-escape-sentinel");
+        let authorization_state_directory = output_directory.join("authorization-replay");
         ensure!(
             !execfail_path.exists()
                 && !execfail_ready_path.exists()
@@ -395,7 +413,8 @@ impl IdentityTestRunner {
                 && !non_leader_thread_ready_path.exists()
                 && !leader_first_ready_path.exists()
                 && !leader_first_release_path.exists()
-                && !cgroup_escape_sentinel_path.exists(),
+                && !cgroup_escape_sentinel_path.exists()
+                && !authorization_state_directory.exists(),
             InvalidInputSnafu {
                 path: output_directory,
                 reason: "identity exec probe files must not already exist",
@@ -408,6 +427,7 @@ impl IdentityTestRunner {
         let leader_first_ready_cleanup = ProbeFile::new(&leader_first_ready_path);
         let leader_first_release_cleanup = ProbeFile::new(&leader_first_release_path);
         let cgroup_escape_sentinel_cleanup = ProbeFile::new(&cgroup_escape_sentinel_path);
+        let authorization_state_cleanup = ProbeDirectory::new(&authorization_state_directory);
         self.materialize_execfail(&execfail_path)?;
         self.materialize_post_ponr_execfail(&post_ponr_execfail_path)?;
         fs::write(
@@ -419,6 +439,16 @@ impl IdentityTestRunner {
         })?;
         let object_sha256 = bundled_bpf_sha256();
         let (boot_id, node_boot_id) = boot_identity()?;
+        let (authorization_replay_wal_sha256, authorization_replay_wal_records) =
+            run_authorization_replay_fixture(&authorization_state_directory, node_boot_id)?;
+        authorization_state_cleanup.cleanup()?;
+        ensure!(
+            !authorization_state_directory.exists(),
+            InvalidInputSnafu {
+                path: &authorization_state_directory,
+                reason: "authorization replay fixture survived cleanup",
+            }
+        );
         let config = KernelHostConfig::identity(
             "/sys/kernel/btf/vmlinux",
             lease_path,
@@ -2325,7 +2355,7 @@ impl IdentityTestRunner {
             }
         );
         Ok(IdentityPhysicalProbeBundleV1 {
-            schema_version: 23,
+            schema_version: 24,
             object_sha256,
             first_start,
             distinct_pin_root_owner_rejected,
@@ -2349,6 +2379,17 @@ impl IdentityTestRunner {
             post_ponr_pending_state: post_ponr_pending.state as u8,
             post_ponr_exec_guard_state: post_ponr_process.exec_guard_state as u8,
             post_ponr_task_coordinate_state: post_ponr_coordinate.state as u8,
+            authorization_retarget_rejected: true,
+            authorization_expired_rejected: true,
+            authorization_signature_mismatch_rejected: true,
+            authorization_same_owner_replay_rejected: true,
+            authorization_restart_replay_rejected: true,
+            authorization_reboot_replay_rejected: true,
+            authorization_fresh_exact_accepted: true,
+            authorization_fresh_after_reboot_accepted: true,
+            authorization_replay_wal_sha256,
+            authorization_replay_wal_records,
+            authorization_replay_state_removed: true,
             non_leader_thread_exec_committed: true,
             non_leader_thread_exec_root,
             non_leader_thread_exec_after_exec,
@@ -2569,7 +2610,7 @@ impl IdentityTestRunner {
             && bundle.kubernetes_poststart_repeated_hook.is_some()
             && bundle.kubernetes_poststart_repeat_fresh_identity == Some(true);
         ensure!(
-            matches!(bundle.schema_version, 15..=23)
+            bundle.schema_version == 24
                 && (entry_results_missing || entry_results_present)
                 && matches!(bundle.kubernetes_lifecycle_sleep_no_task, None | Some(true))
                 && (network_results_missing || network_results_present)
@@ -2583,7 +2624,7 @@ impl IdentityTestRunner {
                 reason: "the prior identity bundle cannot accept the next Kubernetes result",
             }
         );
-        bundle.schema_version = 23;
+        bundle.schema_version = 24;
         if entry_results_missing {
             self.physical_kubernetes_exec_probe(
                 output_directory,
@@ -7613,6 +7654,307 @@ fn write_uint(bytes: &mut [u8], offset: usize, size: usize, value: u64, name: &s
     Ok(())
 }
 
+fn run_authorization_replay_fixture(
+    state_directory: &Path,
+    node_boot_id: Id128V1,
+) -> Result<(String, u64)> {
+    let now_utc_ns = 1_000_000_000_000_i64;
+    let expires_at_utc_ns = now_utc_ns + 60_000_000_000;
+    let signing_key = SigningKey::from_bytes(&[7; 32]);
+    let (envelope, body_sha256) = encode_fixture_signed_authorization(
+        &signing_key,
+        6,
+        fixture_authorization_id(1),
+        fixture_authorization_id(7),
+        now_utc_ns,
+        expires_at_utc_ns,
+    )?;
+    let trust = TrustBundleV1 {
+        trust_domain_id: fixture_authorization_id(3),
+        bundle_generation: 1,
+        maximum_clock_skew_ns: 0,
+        replay_window_size: 4096,
+        issuers: vec![IssuerTrustV1 {
+            issuer_id: fixture_authorization_id(4),
+            key_id: b"operator-key".to_vec(),
+            public_key: signing_key.verifying_key().to_bytes(),
+            sequence_epoch: 5,
+            valid_from_utc_ns: now_utc_ns - 1,
+            valid_until_utc_ns: now_utc_ns + 120_000_000_000,
+            revoked_at_utc_ns: None,
+            allowed_intent_kinds: vec![8],
+            allowed_tenant_ids: vec![fixture_authorization_id(2)],
+        }],
+    };
+    let target = AuthorizationTargetV1 {
+        tenant_id: fixture_authorization_id(2),
+        trust_domain_id: fixture_authorization_id(3),
+        issuer_id: fixture_authorization_id(4),
+        intent_kind: 8,
+        body_sha256,
+    };
+    let mut owner = AuthorizationProofOwner::load(
+        state_directory,
+        fixture_authorization_id(32),
+        node_boot_id,
+        trust.clone(),
+    )
+    .context(NodeSnafu)?;
+
+    let retargeted = AuthorizationTargetV1 {
+        body_sha256: [0x55; 32],
+        ..target
+    };
+    ensure!(
+        owner
+            .verify_and_accept(&envelope, retargeted, now_utc_ns, 100)
+            .is_err_and(|error| error.to_string().contains("exact target does not match")),
+        InvalidInputSnafu {
+            path: state_directory,
+            reason: "authorization retarget did not reject before replay-state mutation",
+        }
+    );
+    ensure!(
+        owner
+            .verify_and_accept(&envelope, target, expires_at_utc_ns + 1, 100)
+            .is_err_and(|error| error
+                .to_string()
+                .contains("outside its trusted time interval")),
+        InvalidInputSnafu {
+            path: state_directory,
+            reason: "expired authorization did not reject before replay-state mutation",
+        }
+    );
+    let mut signature_mismatch = envelope.clone();
+    let last = signature_mismatch
+        .last_mut()
+        .ok_or_else(|| invalid_state("signed authorization fixture is empty"))?;
+    *last ^= 1;
+    ensure!(
+        owner
+            .verify_and_accept(&signature_mismatch, target, now_utc_ns, 100)
+            .is_err_and(|error| error.to_string().contains("Ed25519 verification failed")),
+        InvalidInputSnafu {
+            path: state_directory,
+            reason: "authorization signature mismatch did not reject",
+        }
+    );
+
+    let fresh = owner
+        .verify_and_accept(&envelope, target, now_utc_ns, 100)
+        .context(NodeSnafu)?;
+    ensure!(
+        fresh.proof_id == fixture_authorization_id(1)
+            && fresh.claim_slot_id == fixture_authorization_id(7)
+            && fresh.sequence_epoch == 5
+            && fresh.sequence == 6
+            && fresh.body_sha256 == body_sha256,
+        InvalidInputSnafu {
+            path: state_directory,
+            reason: "fresh authorization did not retain its exact signed identity",
+        }
+    );
+    ensure!(
+        owner
+            .verify_and_accept(&envelope, target, now_utc_ns, 100)
+            .is_err_and(|error| error.to_string().contains("replay WAL repeats identity")),
+        InvalidInputSnafu {
+            path: state_directory,
+            reason: "same-owner authorization replay did not reject",
+        }
+    );
+    let (sequence_replay_envelope, sequence_replay_body_sha256) =
+        encode_fixture_signed_authorization(
+            &signing_key,
+            6,
+            fixture_authorization_id(10),
+            fixture_authorization_id(11),
+            now_utc_ns,
+            expires_at_utc_ns,
+        )?;
+    ensure!(
+        sequence_replay_body_sha256 == body_sha256,
+        InvalidInputSnafu {
+            path: state_directory,
+            reason: "authorization sequence-replay control changed its exact target",
+        }
+    );
+    drop(owner);
+
+    let mut restarted = AuthorizationProofOwner::load(
+        state_directory,
+        fixture_authorization_id(32),
+        node_boot_id,
+        trust.clone(),
+    )
+    .context(NodeSnafu)?;
+    ensure!(
+        restarted
+            .verify_and_accept(&sequence_replay_envelope, target, now_utc_ns, 100)
+            .is_err_and(|error| error.to_string().contains("replay window")),
+        InvalidInputSnafu {
+            path: state_directory,
+            reason: "authorization replay succeeded after owner restart",
+        }
+    );
+    drop(restarted);
+
+    let reboot_low = node_boot_id
+        .low
+        .checked_add(1)
+        .unwrap_or_else(|| node_boot_id.low.saturating_sub(1));
+    let reboot_boot_id = Id128V1::new(node_boot_id.high, reboot_low);
+    ensure!(
+        !reboot_boot_id.is_zero() && reboot_boot_id != node_boot_id,
+        InvalidInputSnafu {
+            path: state_directory,
+            reason: "authorization reboot fixture did not create a distinct boot identity",
+        }
+    );
+    let mut rebooted = AuthorizationProofOwner::load(
+        state_directory,
+        fixture_authorization_id(32),
+        reboot_boot_id,
+        trust,
+    )
+    .context(NodeSnafu)?;
+    ensure!(
+        rebooted
+            .verify_and_accept(&envelope, target, now_utc_ns, 100)
+            .is_err_and(|error| error.to_string().contains("replay WAL repeats identity")),
+        InvalidInputSnafu {
+            path: state_directory,
+            reason: "authorization replay succeeded after boot identity changed",
+        }
+    );
+
+    let (fresh_after_reboot_envelope, fresh_after_reboot_body_sha256) =
+        encode_fixture_signed_authorization(
+            &signing_key,
+            7,
+            fixture_authorization_id(8),
+            fixture_authorization_id(9),
+            now_utc_ns,
+            expires_at_utc_ns,
+        )?;
+    ensure!(
+        fresh_after_reboot_body_sha256 == body_sha256,
+        InvalidInputSnafu {
+            path: state_directory,
+            reason: "fresh reboot authorization changed its exact target",
+        }
+    );
+    let fresh_after_reboot = rebooted
+        .verify_and_accept(&fresh_after_reboot_envelope, target, now_utc_ns, 100)
+        .context(NodeSnafu)?;
+    ensure!(
+        fresh_after_reboot.proof_id == fixture_authorization_id(8)
+            && fresh_after_reboot.claim_slot_id == fixture_authorization_id(9)
+            && fresh_after_reboot.sequence == 7,
+        InvalidInputSnafu {
+            path: state_directory,
+            reason: "fresh exact authorization failed after boot identity changed",
+        }
+    );
+    drop(rebooted);
+
+    let wal_path = state_directory.join("authorization-replay-v1.jsonl");
+    let wal = fs::read(&wal_path).context(IoSnafu { path: &wal_path })?;
+    let wal_records = u64::try_from(
+        wal.split(|byte| *byte == b'\n')
+            .filter(|record| !record.is_empty())
+            .count(),
+    )
+    .map_err(|error| invalid_state(format!("authorization WAL record count overflow: {error}")))?;
+    ensure!(
+        wal.ends_with(b"\n") && wal_records == 5,
+        InvalidInputSnafu {
+            path: &wal_path,
+            reason: format!("authorization replay WAL has {wal_records} records instead of 5"),
+        }
+    );
+    Ok((crate::digest::DigestV1::of(wal).to_hex(), wal_records))
+}
+
+fn fixture_authorization_id(value: u64) -> Id128V1 {
+    Id128V1::new(1, value)
+}
+
+fn fixture_portable_id(value: Id128V1) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(16);
+    bytes.extend_from_slice(&value.high.to_be_bytes());
+    bytes.extend_from_slice(&value.low.to_be_bytes());
+    bytes
+}
+
+fn fixture_administrative_resolution() -> AdministrativeExecResolution {
+    AdministrativeExecResolution {
+        request_id: fixture_portable_id(fixture_authorization_id(19)),
+        resolved: true,
+        reason_code: "resolved".to_owned(),
+        target_node_id: fixture_portable_id(fixture_authorization_id(32)),
+        namespace: b"default".to_vec(),
+        pod_uid: b"pod-uid".to_vec(),
+        container_name: b"worker".to_vec(),
+        full_container_id: vec![b'c'; 32],
+        container_generation: 1,
+        argv: vec![b"bash".to_vec()],
+        stream_flags: 2,
+        approved_role_id: "admin.exec".to_owned(),
+        profile_id: fixture_portable_id(fixture_authorization_id(31)),
+        profile_owner_generation: 1,
+        profile_artifact_sha256: vec![9; 32],
+        resolved_executable: Some(ResolvedAdministrativeExecutable {
+            requested_name: b"bash".to_vec(),
+            resolution_mode: 3,
+            resolved_display_path: b"/usr/bin/bash".to_vec(),
+            container_working_directory: b"/workspace".to_vec(),
+            effective_path_entries: vec![b"/usr/local/bin".to_vec(), b"/usr/bin".to_vec()],
+            target_mount_namespace_id: fixture_portable_id(fixture_authorization_id(30)),
+            target_mount_topology_generation: 1,
+            executable_object: Some(AdministrativeFileObject {
+                mount_namespace_id: fixture_portable_id(fixture_authorization_id(30)),
+                mount_topology_generation: 1,
+                mount_id: 42,
+                filesystem_instance_id: fixture_portable_id(fixture_authorization_id(33)),
+                inode: 100,
+                inode_generation: 2,
+                exact_live_object_id: fixture_portable_id(fixture_authorization_id(34)),
+                object_kind: 1,
+                backing_identity: fixture_portable_id(fixture_authorization_id(35)),
+                live_interval_id: fixture_portable_id(fixture_authorization_id(36)),
+            }),
+        }),
+    }
+}
+
+fn encode_fixture_signed_authorization(
+    signing_key: &SigningKey,
+    sequence: u64,
+    proof_id: Id128V1,
+    claim_slot_id: Id128V1,
+    issued_at_utc_ns: i64,
+    expires_at_utc_ns: i64,
+) -> Result<(Vec<u8>, [u8; 32])> {
+    encode_administrative_authorization_fixture(
+        signing_key,
+        b"operator-key",
+        fixture_authorization_id(2),
+        fixture_authorization_id(22),
+        fixture_authorization_id(3),
+        fixture_authorization_id(4),
+        5,
+        sequence,
+        proof_id,
+        claim_slot_id,
+        issued_at_utc_ns,
+        expires_at_utc_ns,
+        fixture_authorization_id(20),
+        fixture_authorization_id(21),
+        &fixture_administrative_resolution(),
+    )
+    .map_err(|error| invalid_state(format!("encode authorization fixture: {error}")))
+}
 fn id_key(value: &str) -> Result<[u8; 16]> {
     id_value(value).map(id_bytes)
 }
@@ -7740,6 +8082,20 @@ mod tests {
         assert_eq!(bundle.schema_version, 1);
         assert_eq!(bundle.layout.maps.len(), REQUIRED_IDENTITY_MAPS.len());
         assert_eq!(bundle.identity_fixture_ids.len(), IDENTITY_FIXTURES.len());
+        Ok(())
+    }
+
+    #[test]
+    fn authorization_replay_fixture_persists_exact_rejections_and_fresh_control(
+    ) -> crate::Result<()> {
+        let temporary = tempfile::tempdir().map_err(|error| {
+            super::invalid_state(format!("create authorization fixture directory: {error}"))
+        })?;
+        let state = temporary.path().join("authorization-replay");
+        let (wal_sha256, wal_records) =
+            super::run_authorization_replay_fixture(&state, super::fixture_authorization_id(90))?;
+        assert_eq!(wal_sha256.len(), 64);
+        assert_eq!(wal_records, 5);
         Ok(())
     }
 

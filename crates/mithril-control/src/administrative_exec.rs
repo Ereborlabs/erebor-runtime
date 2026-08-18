@@ -940,6 +940,50 @@ fn encode_file_object(
     )
 }
 
+#[cfg(feature = "test-fixtures")]
+#[doc(hidden)]
+#[allow(clippy::too_many_arguments)]
+pub fn encode_administrative_authorization_fixture(
+    signing_key: &SigningKey,
+    key_id: &[u8],
+    tenant_id: Id128V1,
+    cluster_uid: Id128V1,
+    trust_domain_id: Id128V1,
+    issuer_id: Id128V1,
+    sequence_epoch: u64,
+    sequence: u64,
+    proof_id: Id128V1,
+    claim_slot_id: Id128V1,
+    issued_at_utc_ns: i64,
+    expires_at_utc_ns: i64,
+    requester: Id128V1,
+    approver: Id128V1,
+    resolution: &AdministrativeExecResolution,
+) -> Result<(Vec<u8>, [u8; 32])> {
+    let body = encode_administrative_body(requester, approver, cluster_uid, resolution)?;
+    let body_sha256 = Sha256::digest(&body).into();
+    let config = PreparedApprovalConfig {
+        tenant_id,
+        cluster_uid,
+        trust_domain_id,
+        issuer_id,
+        key_id: key_id.to_vec(),
+        sequence_epoch,
+        authorization_lifetime_ns: expires_at_utc_ns.saturating_sub(issued_at_utc_ns),
+    };
+    let envelope = encode_signed_intent(
+        signing_key,
+        &config,
+        sequence,
+        proof_id,
+        claim_slot_id,
+        issued_at_utc_ns,
+        expires_at_utc_ns,
+        &body,
+    )?;
+    Ok((envelope, body_sha256))
+}
+
 #[allow(clippy::too_many_arguments)]
 fn encode_signed_intent(
     signing_key: &SigningKey,
