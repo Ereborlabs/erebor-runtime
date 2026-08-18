@@ -145,6 +145,7 @@ Then run only the case being checked:
 | Kubernetes network probes | `sudo examples/mithril-identity-manual/kubernetes-network-probes.sh` in the manual VM |
 | Kubernetes container identities | `sudo examples/mithril-identity-manual/kubernetes-containers.sh` in the manual VM |
 | Kubernetes ephemeral identity | `sudo examples/mithril-identity-manual/kubernetes-ephemeral.sh` in the manual VM |
+| Kubernetes exec-probe identity | `sudo examples/mithril-identity-manual/kubernetes-probe-impersonation.sh` in the manual VM |
 | Native child | `sudo examples/mithril-identity-manual/native-child.sh NODE_CONFIG CONTAINER_OR_FULL_CRI_ID` |
 | Orphaned native child | `sudo examples/mithril-identity-manual/native-child.sh NODE_CONFIG CONTAINER_OR_FULL_CRI_ID --orphan` |
 | Double-fork native child | `sudo examples/mithril-identity-manual/native-child.sh NODE_CONFIG CONTAINER_OR_FULL_CRI_ID --double-fork` |
@@ -325,6 +326,25 @@ Because the node discovers both live roots after start, both roots must be
 `restored_or_unknown_root` with `fail_closed_unknown`. This check does not
 qualify shared-namespace relationships or policy. The script removes its
 Namespace, Pod, node, pins, lease, temporary paths, and fixture at exit.
+
+## Kubernetes Exec-Probe Identity Check
+
+Use the retained manual Kubernetes VM and run:
+
+```sh
+sudo examples/mithril-identity-manual/kubernetes-probe-impersonation.sh
+```
+
+The script creates one Pod with separate startup, readiness, and liveness
+exec-probe containers and one application container. It starts Mithril after
+it publishes the four live CRI bindings. A native application child, the three
+stock probes, ordinary `kubectl exec`, and direct CRI exec then run identical
+shell-command bytes and remain live for inspection.
+
+The native child must keep application lineage. Each stock probe and runtime
+exec must be a distinct restricted external root. Command bytes and timing do
+not create a probe purpose or approved role. The script removes its Namespace,
+Pod, node, pins, lease, temporary paths, and fixture at exit.
 
 ## Namespace Entry And Cgroup Movement Check
 

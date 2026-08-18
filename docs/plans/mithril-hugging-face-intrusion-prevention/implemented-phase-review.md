@@ -745,6 +745,73 @@ container in the application's PID namespace. The result does not qualify
 shared-namespace relationships or policy. Other open rows keep Phase 2
 **Blocked**.
 
+### Kubernetes exec-probe identity — 2026-08-18
+
+Review this path in order:
+
+1. [`kubernetes-probe-impersonation-workload-v1.yaml`](../../../crates/mithril-e2e/fixtures/identity/kubernetes-probe-impersonation-workload-v1.yaml)
+   defines three stock exec-probe containers and one application container.
+   All entry sources use the same shell-command bytes.
+2. [`IdentityTestRunner::physical_kubernetes_probe_impersonation`](../../../crates/mithril-e2e/src/identity.rs)
+   resolves the four live CRI containers, publishes their bindings, releases
+   the native child, starts `kubectl exec` and direct CRI exec, and records all
+   identities while the six entry tasks remain live.
+3. [`WorkloadBindingOwner`](../../../crates/mithril-node/src/identity/binding.rs)
+   publishes the existing per-cgroup execution sets and one shared profile.
+   The BPF entry owner classifies each task from creator and runtime-root
+   evidence, not from its command bytes.
+4. [`identity-runtime.sh`](../../../examples/mithril-identity-manual/identity-runtime.sh)
+   owns manual Kubernetes setup, CRI binding, Mithril, pins, lease, and cleanup.
+   [`kubernetes-probe-impersonation.sh`](../../../examples/mithril-identity-manual/kubernetes-probe-impersonation.sh)
+   owns the operator sequence. `manual.sh` owns only the VM lifecycle.
+
+```mermaid
+sequenceDiagram
+    participant O as operator or VM harness
+    participant R as IdentityTestRunner or manual shell
+    participant K as Kubernetes and CRI
+    participant M as Mithril identity owner
+
+    O->>R: start combined probe case
+    R->>K: create one Pod with four containers
+    R->>M: publish four live cgroup bindings
+    R->>K: release native child; start kubectl and CRI exec
+    K->>K: start three stock exec probes
+    M-->>R: native lineage plus five restricted external roots
+    R->>K: release held tasks and delete Namespace
+    R-->>O: record seven distinct identities and cleanup
+```
+
+Kubernetes does not run readiness or liveness probes in one container before
+its startup probe succeeds. The fixture therefore uses three probe containers
+in one Pod to make the three stock probe types concurrent. The application
+container supplies the native-child, `kubectl exec`, and direct CRI controls.
+The implementation reuses the existing physical bundle. Schema 20 adds seven
+optional snapshots and one distinctness result. It adds no map, role, generic
+runner, durable owner, or kernel state.
+
+Source commit `4ca2d26bd90ad6a9cd85b7fe5e9e615a6ea4fa14` produced the
+accepted schema-20 JSON at
+`/tmp/mithril-phase2-kubernetes-probes-20260818-042/identity-physical-probe.json`.
+Its SHA-256 is
+`abead9ce84882d9ecc69853a417ef39ccd629f0df7de97e4ac0e5eebfd9190a6`.
+The three stock probes, `kubectl exec`, and direct CRI exec are distinct
+restricted external roots with role `11`. The native child keeps creator and
+real-parent cookie `26`, the application execution set, role `11`, and no root
+or installed-role class. All seven task cookies and process-state IDs differ.
+
+The retained VM ran `kubernetes-probe-impersonation.sh` as root from the same
+source bytes. It printed `PASS`. Automated and manual cleanup removed the
+Namespace, fixture, pin, lease, cgroup, node process, and loaded Erebor
+Interceptor programs. The VM was destroyed, and `virsh list --all --name` was
+empty. Full Rust CI passed.
+
+This completes `ENTRY-PROBE-001`, `ENTRY-PROBE-002`, and
+`ENTRY-PROBE-IMPERSONATION-003`. The exact limit is one held invocation from
+each source in one concurrent interval. Stock Kubernetes supplied no purpose,
+so Mithril assigns no probe role. Phase 4 owns approved-role transition. Other
+open rows keep Phase 2 **Blocked**.
+
 ### Retained alias and mount evidence — 2026-08-15
 
 At source `5b1abfa984d0`, a retained x86_64 VM ran the existing

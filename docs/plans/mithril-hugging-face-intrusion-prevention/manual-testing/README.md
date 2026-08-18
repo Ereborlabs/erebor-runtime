@@ -51,6 +51,9 @@ readiness probes. The container-identity extension records separate roots and
 execution sets for a regular init, native sidecar, and application in one Pod.
 The ephemeral extension records a separate root, process, execution set, and
 profile for a targeted ephemeral container in the application's PID namespace.
+The exec-probe extension records concurrent startup, readiness, and liveness
+exec probes together with probe-identical native, `kubectl exec`, and direct
+CRI entries. It keeps native lineage separate from restricted external roots.
 It does not prove approved administrative exec, shared-resource or network-flow
 policy, multi-node propagation, or complete Kubernetes protection.
 

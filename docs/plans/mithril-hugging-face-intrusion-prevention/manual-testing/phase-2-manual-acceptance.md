@@ -750,6 +750,96 @@ execution set, and profile while it shared the application PID namespace and
 Pod sandbox. This result does not qualify shared-namespace relationships or
 policy. Other open matrix rows keep Phase 2 **Blocked**.
 
+## Recorded Kubernetes Exec-Probe Identity Result — 2026-08-18
+
+Source commit `4ca2d26bd90ad6a9cd85b7fe5e9e615a6ea4fa14` freezes the
+runner, workload manifest, shared runtime helper, and operator shell used for
+this result. It extends the existing `IdentityTestRunner` and physical bundle.
+It adds no BPF map, role, runner, or durable type. The retained x86_64 Ubuntu
+24.04 VM ran kernel `6.8.0-137-generic`. Kubernetes `v1.35.5` ran through the
+K3s `v1.35.5+k3s1` distribution and the live containerd CRI endpoint.
+
+The root shell ran the automated extension with unique paths:
+
+```sh
+target/debug/mithril-identity-test \
+  --repo-root "$MITHRIL_MANUAL_SOURCE" \
+  --output-directory /var/tmp/mithril-kubernetes-probes-20260818-042 \
+  physical-probe \
+  --pin-root /sys/fs/bpf/mithril-kubernetes-probes-042 \
+  --lease-path /var/tmp/mithril-kubernetes-probes-20260818-042/owner.lock \
+  --cgroup-path /sys/fs/cgroup/mithril-kubernetes-probes-042 \
+  --with-kubernetes \
+  --previous-bundle /var/tmp/identity-kubernetes-schema19-035.json
+```
+
+The schema-20 JSON is
+`/tmp/mithril-phase2-kubernetes-probes-20260818-042/identity-physical-probe.json`.
+Its SHA-256 is
+`abead9ce84882d9ecc69853a417ef39ccd629f0df7de97e4ac0e5eebfd9190a6`.
+It records `kubernetes_probe_identities_distinct=true` and
+`kubernetes_fixture_removed=true`. Startup, readiness, and liveness probe task
+cookies were `293`, `245`, and `187`. Their execution-set IDs end in `01`,
+`02`, and `03`. The application parent and native child task cookies were `26`
+and `29`; both used the application execution set ending in `04`. The
+`kubectl exec` and direct CRI exec task cookies were `58` and `119`; both used
+that application execution set. All seven process-state IDs were distinct.
+
+Each stock probe, `kubectl exec`, and direct CRI exec had no creator,
+`external_runtime_root`, `runtime_external_restricted`, and active role `11`.
+The native child had creator and real-parent task cookie `26`, no root class,
+no installed-role class, and inherited role `11`. The fixture required the
+same `/bin/sh -c` command bytes for the native child, all three stock probes,
+`kubectl exec`, and direct CRI exec. The six tasks remained live together
+until every identity snapshot passed. Separate probe containers were required
+because Kubernetes does not start readiness or liveness probes in a container
+until its startup probe succeeds.
+
+The unchanged BPF object SHA-256 is
+`3269516fcd2714ab7fbe29df26386c40f0c912b6284007b641d8bbf68842b876`.
+The test binary SHA-256 is
+`d8bb13e2b567eb1850cbcce5826bdafa5af04c734ea2b6cb7553adbcd62bc496`.
+The workload manifest SHA-256 is
+`7105b89a7023c2a73cd2b6863dfa9640bbc5f5db64dce926d41999f7730a25db`.
+The operator shell SHA-256 is
+`5f3dd3de608422cb857f5685bc03ccc4f3903f5a8be7d46577942be03584c958`.
+The shared runtime helper SHA-256 is
+`7ac409f970194a939b35585bb1f1240c3fe63bd51c3d1e8d3dca16e399cf9fa4`.
+
+The retained VM then ran this command as root from the same source bytes:
+
+```sh
+examples/mithril-identity-manual/kubernetes-probe-impersonation.sh
+```
+
+It printed `PASS: identical bytes kept native lineage and every independent
+entry restricted.` The shell removed its Mithril process, tasks, pins, state,
+lease, configuration, logs, Namespace, and fixture. Independent postflight
+found only the four baseline Kubernetes Namespaces and no case cgroup or
+loaded Erebor Interceptor program. `manual.sh destroy` removed the VM, and
+`virsh list --all --name` was empty.
+
+Runs `036` through `041` were rejected. They exposed, in order, a profile and
+generation mismatch in the fixture, shell PID escaping errors, a probe wait
+that was shorter than the configured period, and stock probes that executed
+before binding. The last case correctly produced conservative unknown roots,
+not a false restricted-external pass. Run `042` delayed the probe attempts
+until after binding and is the only accepted result.
+
+The focused fixture-allocation and VM-harness tests passed. `cargo clippy -p
+mithril-e2e -p mithril-node --all-targets -- -D warnings`, shell syntax checks,
+and `cargo fmt --all -- --check` passed. The final
+`bash .github/scripts/verify-rust-ci.sh` passed with exit status `0` when its
+local socket tests ran with host permission.
+
+This completes `ENTRY-PROBE-001`, `ENTRY-PROBE-002`, and
+`ENTRY-PROBE-IMPERSONATION-003`. The exact limit is one held native invocation,
+one held invocation of each stock probe type, one ordinary `kubectl exec`, and
+one direct CRI exec in one concurrent interval. Stock Kubernetes supplied no
+purpose, so every independent entry used the restricted external class. The
+native child kept application lineage. Phase 4 owns approved-role transition.
+Other open matrix rows keep Phase 2 **Blocked**.
+
 ## Recorded Pre-PONR Failed Native-Exec VM Subcase — 2026-08-15
 
 The isolated identity probe passed at source commit
