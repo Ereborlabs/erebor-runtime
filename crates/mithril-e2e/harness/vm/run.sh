@@ -246,33 +246,21 @@ fi
   "$remote_source/bpf/erebor-interceptor/qualification/feasibility.bpf.c"
 "$provider" put "$vm_name" "$directory/guest.sh" \
   "$remote_root/harness/guest.sh"
-"$provider" put "$vm_name" \
-  "$repo_root/crates/mithril-e2e/fixtures/identity/kubernetes-entry-workload-v1.yaml" \
-  "$remote_source/crates/mithril-e2e/fixtures/identity/kubernetes-entry-workload-v1.yaml"
-"$provider" put "$vm_name" \
-  "$repo_root/crates/mithril-e2e/fixtures/identity/kubernetes-lifecycle-sleep-workload-v1.yaml" \
-  "$remote_source/crates/mithril-e2e/fixtures/identity/kubernetes-lifecycle-sleep-workload-v1.yaml"
-"$provider" put "$vm_name" \
-  "$repo_root/crates/mithril-e2e/fixtures/identity/kubernetes-network-probes-workload-v1.yaml" \
-  "$remote_source/crates/mithril-e2e/fixtures/identity/kubernetes-network-probes-workload-v1.yaml"
-"$provider" put "$vm_name" \
-  "$repo_root/crates/mithril-e2e/fixtures/identity/kubernetes-containers-workload-v1.yaml" \
-  "$remote_source/crates/mithril-e2e/fixtures/identity/kubernetes-containers-workload-v1.yaml"
-"$provider" put "$vm_name" \
-  "$repo_root/crates/mithril-e2e/fixtures/identity/kubernetes-ephemeral-workload-v1.yaml" \
-  "$remote_source/crates/mithril-e2e/fixtures/identity/kubernetes-ephemeral-workload-v1.yaml"
-"$provider" put "$vm_name" \
-  "$repo_root/crates/mithril-e2e/fixtures/identity/kubernetes-probe-impersonation-workload-v1.yaml" \
-  "$remote_source/crates/mithril-e2e/fixtures/identity/kubernetes-probe-impersonation-workload-v1.yaml"
-"$provider" put "$vm_name" \
-  "$repo_root/crates/mithril-e2e/fixtures/identity/kubernetes-prestop-workload-v1.yaml" \
-  "$remote_source/crates/mithril-e2e/fixtures/identity/kubernetes-prestop-workload-v1.yaml"
-"$provider" put "$vm_name" \
-  "$repo_root/crates/mithril-e2e/fixtures/identity/kubernetes-poststart-workload-v1.yaml" \
-  "$remote_source/crates/mithril-e2e/fixtures/identity/kubernetes-poststart-workload-v1.yaml"
-"$provider" put "$vm_name" \
-  "$repo_root/crates/mithril-e2e/fixtures/identity/kubernetes-resilience-workload-v1.yaml" \
-  "$remote_source/crates/mithril-e2e/fixtures/identity/kubernetes-resilience-workload-v1.yaml"
+for fixture in \
+  kubernetes-entry-workload-v1.yaml \
+  kubernetes-lifecycle-sleep-workload-v1.yaml \
+  kubernetes-network-probes-workload-v1.yaml \
+  kubernetes-containers-workload-v1.yaml \
+  kubernetes-ephemeral-workload-v1.yaml \
+  kubernetes-probe-impersonation-workload-v1.yaml \
+  kubernetes-prestop-workload-v1.yaml \
+  kubernetes-poststart-workload-v1.yaml \
+  kubernetes-resilience-workload-v1.yaml \
+  kubernetes-stock-hook-failure-workload-v1.yaml; do
+  "$provider" put "$vm_name" \
+    "$repo_root/crates/mithril-e2e/fixtures/identity/$fixture" \
+    "$remote_source/crates/mithril-e2e/fixtures/identity/$fixture"
+done
 "$provider" put "$vm_name" \
   "$repo_root/crates/mithril-e2e/fixtures/identity/oci-prestart-admission-v1.sh" \
   "$remote_source/crates/mithril-e2e/fixtures/identity/oci-prestart-admission-v1.sh"
