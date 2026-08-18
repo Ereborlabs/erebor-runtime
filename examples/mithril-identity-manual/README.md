@@ -10,7 +10,8 @@ In the guest, run `sudo -i`, source `/var/tmp/mithril-manual.env`, and change
 to `$MITHRIL_MANUAL_SOURCE`. The manual VM supports CRI, Kubernetes, and
 raw-namespace cases. Docker cases require Docker.
 
-Run this self-contained K3s case from that root shell:
+Run this self-contained Kubernetes-backed Phase 4 control from that root
+shell. The VM uses the K3s distribution:
 
 ```sh
 examples/mithril-identity-manual/native-child.sh --thread-exec
@@ -20,7 +21,7 @@ The command creates one Python Pod and live CRI binding. It starts a Python
 root with one non-leader thread. That thread executes `sleep`. The command
 removes its Pod and fixture directory at exit.
 
-Run this concurrent-exec case from the same root shell:
+Run this Phase 4 concurrent-exec control from the same root shell:
 
 ```sh
 examples/mithril-identity-manual/native-child.sh --concurrent-thread-exec
@@ -135,8 +136,8 @@ Then run only the case being checked:
 | Case | Command |
 | --- | --- |
 | Raw Docker exec | `sudo examples/mithril-identity-manual/docker-exec.sh NODE_CONFIG CONTAINER` |
-| Direct CRI exec | `sudo examples/mithril-identity-manual/cri-exec.sh NODE_CONFIG FULL_CONTAINER_ID` |
-| Kubernetes exec | `sudo examples/mithril-identity-manual/kubernetes-exec.sh NODE_CONFIG FULL_CONTAINER_ID NAMESPACE POD CONTAINER` |
+| Direct CRI exec | `sudo examples/mithril-identity-manual/cri-exec.sh` in the manual VM |
+| Non-TTY Kubernetes exec | `sudo examples/mithril-identity-manual/kubernetes-exec.sh` in the manual VM |
 | Native child | `sudo examples/mithril-identity-manual/native-child.sh NODE_CONFIG CONTAINER_OR_FULL_CRI_ID` |
 | Orphaned native child | `sudo examples/mithril-identity-manual/native-child.sh NODE_CONFIG CONTAINER_OR_FULL_CRI_ID --orphan` |
 | Double-fork native child | `sudo examples/mithril-identity-manual/native-child.sh NODE_CONFIG CONTAINER_OR_FULL_CRI_ID --double-fork` |
@@ -153,33 +154,27 @@ Then run only the case being checked:
 | Labeled native-child mount entry | `sudo examples/mithril-identity-manual/nsenter-move.sh --labeled-task` in the manual VM |
 | Node restart | `sudo examples/mithril-identity-manual/restart.sh NODE_CONFIG CONTAINER_OR_FULL_CRI_ID` |
 
-Kubernetes is optional, not excluded: only `kubernetes-exec.sh` requires it.
-The Docker case derives a trusted test-only configured cgroup binding from
-`docker inspect`. CRI and Kubernetes cases require the full live container ID
-and its exact test profile assignment in `workload_bindings`; the temporary
-config deliberately removes `root_cgroup_path` so `mithril-node` must resolve,
-validate, and reconcile the live cgroup through CRI.
+The no-argument CRI and Kubernetes exec cases run only inside the retained
+manual Kubernetes VM. Each case creates its Namespace, Pod, live CRI binding,
+node, pins, lease, and fixture. Each case removes those resources before it
+returns. The VM uses K3s as its Kubernetes distribution. The Docker case runs
+outside that VM and derives a trusted test-only configured cgroup binding from
+`docker inspect`.
 
 ## Direct CRI Exec Check
 
-Use this check only when all of these prerequisites are true:
+Use this check only in the retained manual Kubernetes VM. The VM must provide
+`kubectl`, `crictl`, `jq`, `bpftool`, the built Mithril binaries, and the
+manual environment file. Run:
 
-- Run it as root on the node that owns the live CRI container.
-- Build `mithril-node` and `mithril-inspect` with `cargo build -p mithril-node --bins`.
-- Install `crictl` and `jq`.
-- Put exactly one binding for the full live container ID in `NODE_CONFIG`.
-  The binding must specify the CRI socket and the exact test profile.
-
-Start the check:
-
-```bash
-sudo examples/mithril-identity-manual/cri-exec.sh \
-  NODE_CONFIG FULL_CRI_CONTAINER_ID
+```sh
+sudo examples/mithril-identity-manual/cri-exec.sh
 ```
 
-The script prints a `crictl --runtime-endpoint ... exec` command. Run that
-command in another root terminal. It starts a sleeping process and asks for its
-host PID from the container cgroup.
+The script creates one Namespace and Pod, reads the exact live CRI and cgroup
+identity, writes one temporary binding, and starts the real `mithril-node`.
+It then runs direct `crictl exec` and holds that process until inspection is
+complete.
 
 The oracle is the printed task record. The process must have no creator task
 cookie, `external_runtime_root` as its root class, and
@@ -187,8 +182,23 @@ cookie, `external_runtime_root` as its root class, and
 and cgroup placement do not create a probe or application role.
 
 This check proves one direct CRI exec root after the node starts. It does not
-prove a kubelet probe join, first-instruction binding, or the complete entry
-and failure-injection matrix.
+prove a kubelet probe, first-instruction binding, or the complete entry and
+failure-injection matrix. Cleanup removes the Namespace, Pod, binding, node,
+pins, lease, cgroup, and fixture.
+
+## Non-TTY Kubernetes Exec Check
+
+Use the same retained manual Kubernetes VM and run:
+
+```sh
+sudo examples/mithril-identity-manual/kubernetes-exec.sh
+```
+
+The script owns the same setup and cleanup as the direct CRI case. It runs
+ordinary non-TTY `kubectl exec`, holds the task for inspection, and requires a
+restricted external root with no creator. It does not qualify TTY exec,
+`kubectl cp`, an identical native-child control, or approved administrative
+exec.
 
 ## Namespace Entry And Cgroup Movement Check
 
@@ -365,13 +375,15 @@ Run this case in the manual VM as root:
 sudo examples/mithril-identity-manual/native-child.sh --concurrent-thread-exec
 ```
 
-The script creates its own K3s Pod and live CRI binding. It starts two sibling
+The script creates its own Kubernetes Pod and live CRI binding. The VM uses
+the K3s distribution. It starts two sibling
 Python workers and releases both through one barrier. Linux leaves one `sleep`
 process. The survivor must keep the root creator, process state, and restricted
 role. Its execution and image IDs must change. The script removes its Pod,
 fixture, node, pin, lease, state, config, and logs. This is the normal
-two-worker subcase. It does not test exec versus fork, vfork, or thread
-creation.
+two-worker Linux control for Phase 4. It does not qualify
+`EXEC-CONCURRENT-002` without real source-role and target-role transitions and
+a raced protected-effect oracle.
 
 Every executable starts the real `mithril-node`, performs one operator-driven
 case, and removes its test tasks, BPF pins, lease, temporary config, state, and

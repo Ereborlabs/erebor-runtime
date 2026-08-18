@@ -1007,7 +1007,6 @@ child ran is observation only.
 | Protected parent lacks identity | Deny creation if returning hook supports it; otherwise install fail-closed child and deny first protected effect |
 | Role/ancestor bound overflows | Deny creation, or install overflow restriction and deny every protected effect while reporting availability failure |
 | Task storage is full | Return configured creation errno when possible; never create an unlabeled child and call it protected |
-| Later clone setup fails | Roll back every preallocated identity/reference exactly once; never report a runnable child |
 
 `task_alloc` occurs before PID/TGID/start-time/pidfd coordinates exist. It
 allocates opaque IDs and preallocated state only. A tested pre-wake point fills
@@ -1017,9 +1016,11 @@ grants no permission. After visibility, Rust may append pidfd revalidation.
 If coordinate finalization fails, the label points to
 `FAIL_CLOSED_UNKNOWN`. The child cannot perform a protected effect.
 
-`ID-TASK-COORD-FINALIZE-006` pauses before and after PID assignment, forces
-map failure, covers leader-first exit, TID reuse, missing `PIDFD_THREAD`, and
-non-leader exec, and proves no incomplete child reads or sends one marker byte.
+`ID-TASK-COORD-FINALIZE-006` pauses before and after PID assignment and covers
+leader-first exit, TID reuse, missing `PIDFD_THREAD`, and non-leader exec. It
+proves that no PID-derived field exists before finalization and that no
+incomplete record is reported as runnable. Phase 4
+`LSM-DENY-SATURATION-001` owns physical map-saturation failure.
 
 #### Exec transition
 
@@ -2067,6 +2068,12 @@ fault injection after every state/reference write.
 T continues through 42; S follows its declared 42 lifetime; a new root N gets
 43. Only after T exits, S closes, all typed references reconcile to zero, and
 the grace period completes may 42 be removed.
+
+`NATIVE-STATE-REF-LIFETIME-001` owns the Phase 2 task, process, entry, native
+state, tombstone, and task-generation reference result. Socket, file, VMA,
+device, IPC, and policy-effect lifetimes use their allocated Phase 3 and Phase
+4 fixtures. Those later holders do not block the Phase 2 native-identity
+result.
 
 ### 13. The One Local Pre-Effect Decision
 
@@ -4406,24 +4413,30 @@ object, or verified response result, not an alert string.
 
 #### 31.1 Kubernetes and runtime entry matrix
 
+Phase 2 owns the identity part of this matrix: root creation, native lineage,
+execution sets, binding lifetimes, coordinates, and conservative missing-state
+classification. Phase 3 owns observed relationship evidence. Phase 4 owns
+permission, approved-role transitions, and physical effect results. A later
+relationship or effect result does not block Phase 2.
+
 | Fixture | Real setup | Required result |
 | --- | --- | --- |
-| `ENTRY-START-001` | Delay or drop runtime discovery/hook metadata for an initial root | Protected-but-unresolved effects deny; if the task ran before BPF/binding coverage, the exact start gap is recorded. No first-instruction claim. |
+| `ENTRY-START-001` | Delay or drop runtime discovery/hook metadata for an initial root | The root receives conservative identity and the exact start gap is recorded. No first-instruction claim. Phase 4 owns effect denial. |
 | `ENTRY-POSTSTART-001` | Race `PostStart` and entrypoint in both orders | Initial root and external root remain distinct; neither is fabricated as the other's child. |
 | `ENTRY-POSTSTART-002` | Kubelet restart repeats `PostStart` | Each observed external task gets a fresh task/lifetime identity and the same restricted budget; no stale identity is reused. |
-| `ENTRY-PRESTOP-001` | Delete Pod during an active response | Containment versus cleanup policy wins explicitly; termination grants no bypass. |
+| `ENTRY-PRESTOP-001` | Delete Pod while a restricted root is active | Termination does not change task identity or release required native references. Phase 4 owns containment-versus-cleanup policy. |
 | `ENTRY-PROBE-001` | Concurrent startup/readiness/liveness exec probes | Stock path gives one restricted external class. Exact different purpose is claimed only for a qualified existing interface that actually carries it. |
 | `ENTRY-PROBE-002` | Application child runs identical probe binary/argv/cadence | Native lineage remains; no probe role. |
-| `ENTRY-NETPROBE-001` | HTTP, TCP, and gRPC probes | No fake in-container process root; host flow and application receive are scoped separately. |
+| `ENTRY-NETPROBE-001` | HTTP, TCP, and gRPC probes | No fake in-container process root. Later network fixtures own host-flow and application-receive policy. |
 | `ENTRY-SLEEP-001` | Lifecycle `sleep` action | Kubelet lifecycle evidence only; no invented task. |
 | `ENTRY-EXEC-001` | `kubectl exec`, TTY/non-TTY, and `kubectl cp` | Restricted external roots plus separate Kubernetes audit facts. The configured approved path must also pass `ADMIN-EXEC-APPROVAL-001` before assigning a stronger task role. |
 | `ENTRY-EXEC-002` | `crictl exec` runs same command as probe | Restricted external root, never a kubelet-probe role. |
 | `ENTRY-EPHEMERAL-001` | Add ephemeral container sharing target PID namespace | Independent container execution set and profile; shared PID namespace does not merge trees. |
-| `ENTRY-CONTAINERS-001` | Init, native sidecar, and app containers share Pod network/volume | Independent roots plus exact shared-resource edges. |
-| `ENTRY-MIGRATE-001` | Move unlabeled task into protected cgroup or use `nsenter` | First protected effect denies because no application authority is inherited. |
+| `ENTRY-CONTAINERS-001` | Init, native sidecar, and app containers share Pod network/volume | Independent roots and execution sets. Later relationship fixtures own shared-resource edges. |
+| `ENTRY-MIGRATE-001` | Move unlabeled task into protected cgroup or use `nsenter` | Namespace entry grants no identity. Cgroup entry creates a restricted external root. Phase 4 owns the protected-effect result. |
 | `ENTRY-REUSE-001` | Reuse PID, namespace number, cgroup path/ID, Pod/container name | Full IDs and live intervals prevent old policy/response attachment. |
 | `ENTRY-RESTART-001` | Restart kubelet, runtime, and node agent during discovery and binding | Live tasks are re-enumerated; no stale role is reused; incomplete history and coverage transition are explicit. |
-| `ENTRY-LOSS-001` | Drop runtime/audit metadata and BPF entry evidence independently | Protected unknown/external task stays restricted; loss cannot relax enforcement. |
+| `ENTRY-LOSS-001` | Drop runtime/audit metadata and BPF entry evidence independently | The task stays a restricted unknown/external root and each coverage loss is explicit. Phase 4 owns the effect result. |
 
 Every case records the exact runtime/CRI version; kernel/BTF/LSM order and
 capabilities; Pod UID and resource version; full container/image/cgroup live
@@ -6519,11 +6532,14 @@ above; Appendix B.2 keeps the rejection and its reason.
 
 Mandatory tests include leader-exits-first threads, failed fork rollback,
 double cleanup, PID/TID reuse, moved labeled parent, moved exec task,
-`CLONE_INTO_CGROUP` with allocation failure, concurrent exec, non-leader exec,
+`CLONE_INTO_CGROUP`, concurrent exec, non-leader exec,
 shebang, `binfmt_misc`, approved and substituted ELF loaders, pre/post-point-of-
 no-return failure, direct `crictl` exec, identical probe/hook/admin commands,
 runtime restart, discovery delay, missing hook fields, forged hook metadata,
 and every supported stock hook failure/timeout result.
+
+Physical map-saturation behavior is allocated to Phase 4
+`LSM-DENY-SATURATION-001`; it is not a Phase 2 identity-closure gate.
 
 #### A.9.9 Checkpoint, attach, port-forward, and node-floor limits
 

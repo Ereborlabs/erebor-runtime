@@ -40,10 +40,11 @@ crates/mithril-e2e/harness/vm/run.sh --with-k3s \
 
 The harness creates one disposable Ubuntu 24.04 libvirt guest, verifies the
 qualified kernel features, runs the current binaries, copies the evidence, and
-destroys the guest. The optional k3s lane proves Pod, `kubectl exec`, CRI,
-overlay-root, and projected-token runtime facts while the local probes run. It
-does not prove a Mithril CRI policy binding, admission approval, multi-node
-propagation, or complete Kubernetes protection.
+destroys the guest. The optional Kubernetes lane uses the K3s distribution.
+It proves Pod and CRI facts, creates an exact Mithril CRI binding, and records
+restricted direct CRI exec and non-TTY `kubectl exec` roots. It does not prove
+TTY exec, `kubectl cp`, approved administrative exec, multi-node propagation,
+or complete Kubernetes protection.
 
 For a retained guest that runs manual shells, use the [manual retained-VM
 procedure](../../../../crates/mithril-e2e/harness/vm/README.md#manual-testing-in-a-retained-vm).

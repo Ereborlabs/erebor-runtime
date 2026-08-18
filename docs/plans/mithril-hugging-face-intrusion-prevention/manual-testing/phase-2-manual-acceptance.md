@@ -1,8 +1,9 @@
 # How To Manually Accept Phase 2
 
-Status: The current source passed the automated privileged VM identity probe.
-The optional k3s lane passed its substrate checks. It did not configure a
-Mithril CRI binding. The full operator matrix is not recorded.
+Status: The current source passed the automated privileged VM identity probe
+and its Kubernetes entry extension on the K3s distribution. Direct CRI exec
+and non-TTY `kubectl exec` also passed as self-contained operator cases. The
+full fixture matrix is not recorded.
 
 Phase: [Exact Native Identity](../phase-2-exact-native-identity.md)  
 Setup: [`SINGLE-NODE`](./environment-setup.md)
@@ -288,62 +289,70 @@ start hook.
 
 | Fixture | Operator action | Required oracle and legitimate control |
 | --- | --- | --- |
-| `ENTRY-BINDING-GAP-001` | delay/drop binding before first protected effect | unresolved effect denies and gap is recorded; qualified initial binding succeeds |
-| `ENTRY-CONTAINERS-001` | run init, native sidecar, app, and shared-volume/network cases | independent execution sets remain distinct; declared sharing works through explicit relationships |
+| `ENTRY-BINDING-GAP-001` | delay/drop binding before root reconciliation | unresolved root stays fail closed; later qualified binding creates a restricted external root |
+| `ENTRY-CONTAINERS-001` | run init, native sidecar, and app containers | independent roots and execution sets remain distinct; later phases own shared-resource relationships |
 | `ENTRY-EPHEMERAL-001` | add an ephemeral container sharing PID namespace | new independent root/profile; shared namespace does not merge lineage |
-| `ENTRY-EXEC-001` | run TTY/non-TTY `kubectl exec` and copy shape | restricted external root unless approved path completes; normal app child remains native |
+| `ENTRY-EXEC-001` | run TTY/non-TTY `kubectl exec`, `kubectl cp`, and an identical native child | ordinary exec/copy roots stay restricted external; the app child stays native; Phase 4 owns approved administrative exec |
 | `ENTRY-EXEC-002` | run direct `docker exec` or `crictl exec` with probe-identical argv | restricted external root, never fabricated probe purpose |
 | `ENTRY-EXTERNAL-AMBIGUITY-001` | create indistinguishable external purposes concurrently | same permission intersection/restricted class; no timing/argv split |
-| `ENTRY-LOSS-001` | drop runtime, audit, and entry evidence independently | protected unknown remains restricted and coverage reflects each loss |
-| `ENTRY-NETPROBE-001` | run HTTP/TCP/gRPC probes | no fake in-container process root; application receive and host flow remain distinct |
+| `ENTRY-LOSS-001` | drop runtime, audit, and entry evidence independently | protected unknown remains restricted and coverage reflects each loss; later phases own effect results |
+| `ENTRY-NETPROBE-001` | run HTTP/TCP/gRPC probes | no fake in-container process root; later network fixtures own flow policy |
 | `ENTRY-POSTSTART-001` | race `PostStart` and entrypoint in both orders | initial and external roots remain distinct |
 | `ENTRY-POSTSTART-002` | restart kubelet and repeat `PostStart` | fresh task/lifetime identity with same restricted budget; no stale reuse |
-| `ENTRY-PRESTOP-001` | terminate during active restriction | cleanup cannot regain authority; approved safe cleanup control follows policy |
+| `ENTRY-PRESTOP-001` | terminate while a restricted root is active | termination does not change identity or release required native references; Phase 4 owns containment policy |
 | `ENTRY-PROBE-001` | run concurrent startup/readiness/liveness exec probes | stock purpose remains unknown/restricted; qualified evidence only if interface supplies it |
 | `ENTRY-PROBE-002` | app child runs identical probe bytes/cadence | native child keeps application lineage and cannot impersonate external root |
-| `ENTRY-PROBE-IMPERSONATION-003` | race native child, probe, admin, and direct runtime roots with identical argv/TTY | only native creation or complete approval changes authority; ordinary identical roots stay restricted |
+| `ENTRY-PROBE-IMPERSONATION-003` | race native child, stock probe, ordinary `kubectl exec`, and direct CRI exec with identical argv/TTY | the child stays native and every independent stock/runtime root stays restricted; Phase 4 owns approved-role transition |
 | `ENTRY-RESTART-001` | restart runtime, kubelet, and node during binding | live reconciliation opens exact gaps and reuses no stale role |
 | `ENTRY-REUSE-001` | reuse PID, namespace, cgroup path/ID, Pod/container name | new cookies/nonces/live intervals prevent old authority/response attachment |
 | `ENTRY-SLEEP-001` | execute lifecycle sleep action | lifecycle fact only; no invented process entry when no task exists |
-| `ENTRY-START-001` | delay/drop configured start-hook metadata | first unresolved protected effect denies; measured start gap remains explicit |
+| `ENTRY-START-001` | delay/drop configured start metadata | root identity stays conservative and the measured start gap remains explicit; Phase 4 owns effect denial |
 | `ENTRY-STOCK-HOOK-FAILURE-002` | fail/timeout/mismatch the configured stock hook | exact documented failure result; no held-task or purpose claim |
 
-## Recorded Direct CRI Result — 2026-08-15
+## Recorded Kubernetes Entry Results — 2026-08-17
 
-The K3s VM lane ran a direct `crictl exec` in the exact configured container.
-The task record had no creator task cookie, `external_runtime_root` as its root
-class, and `runtime_external_restricted` as its installed role. The lane also
-completed its OBSERVE and PROTECT checks and removed its owned namespace,
-fixture, pin root, and lane state.
+Source commit `da01f77d2deb83482788f16081307b01a6dc6556` ran in one
+disposable x86_64 Ubuntu 24.04 VM on kernel `6.8.0-137-generic`. Kubernetes
+`v1.35.5` ran through the K3s `v1.35.5+k3s1` distribution. The automated
+runner used
+[`kubernetes-entry-workload-v1.yaml`](../../../../crates/mithril-e2e/fixtures/identity/kubernetes-entry-workload-v1.yaml),
+whose SHA-256 is
+`3a8d0108982c07a5a3ecd7bd6a66e187d0539fa80a63399c53a4f6c606747d54`.
+It created the Namespace and Pod, read exact live CRI and cgroup identity,
+published the binding, and used the existing `IdentityTestRunner` owner.
 
-Use [`examples/mithril-identity-manual/cri-exec.sh`](../../../../examples/mithril-identity-manual/cri-exec.sh)
-for the readable operator procedure. This result covers one direct CRI exec.
-It does not complete the full entry or failure-injection matrix.
+The schema-14 JSON is
+`/tmp/mithril-kubernetes-entry-20260817-021/identity-physical-probe.json`.
+Its SHA-256 is
+`aa70c2c398c6d07d138b81293103f3cbfc4be91d2c8999387b893ff7cac92910`.
+The BPF object SHA-256 is
+`3269516fcd2714ab7fbe29df26386c40f0c912b6284007b641d8bbf68842b876`.
+The pre-existing Pod root had no creator, `restored_or_unknown_root`, and
+`fail_closed_unknown`. Direct CRI exec and non-TTY `kubectl exec` each had no
+creator, `external_runtime_root`, `runtime_external_restricted`, and active
+role `11`. Their task cookies were distinct.
 
-## Recorded Non-TTY Kubernetes Exec Identity Subcase — 2026-08-15
+The retained manual VM then ran these root-shell commands consecutively:
 
-The same retained K3s CRI lane ran at source
-`e38a117b1d2a3bb2f3e1947483c1f4f61f7fd43e`. Its staged guest script SHA-256
-was `380fd7c73d33aefc320ff7919160db38c29be7d06b59f6dc51dd5b715fcf4018`.
-It ran `kubectl exec ... -- sh -c ...` without `-i`, `-t`, or `--tty`. The
-staged script required `creator_task_cookie=null`, `external_runtime_root`,
-and `runtime_external_restricted` before it accepted the task.
+```sh
+examples/mithril-identity-manual/cri-exec.sh
+examples/mithril-identity-manual/kubernetes-exec.sh
+```
 
-The `OBSERVE` artifact
-`/tmp/mithril-phase3-direct-cri-evidence.eWjKKw/observe-clean.txt` has SHA-256
-`c6cdd686dde59b84fa362b1c3e4e3d8e839bac44339081b8611cfc985057b994` and
-records task cookie `80`. The `PROTECT` artifact
-`/tmp/mithril-phase3-direct-cri-evidence.eWjKKw/protect-clean.txt` has SHA-256
-`a3a5a16e8abc67e0d919b4650c62e0a1ce75c0df206c96028d93c8790351f8ab` and
-also records task cookie `80`. Phase 3 recorded clean lane postflight. This
-record reuses that evidence; it does not run another VM case.
+The direct CRI shell SHA-256 is
+`b5ed7eaa6f6512b2e6e20df34bc0e2a50d3a654b57c9a8c4c5098a8de9c866d7`.
+The non-TTY Kubernetes exec shell SHA-256 is
+`f03e4bd2d79751193fb024c599084d405f5c10e79b63f362cc23809bd3641faa`.
+Each shell created its own Namespace, Pod, CRI binding, node, pin, lease, and
+fixture, then printed `PASS`. After both cases, no case Namespace, fixture,
+Mithril process, pin, lease, cgroup, or loaded Erebor Interceptor program
+remained. `manual.sh destroy` removed the VM, and `virsh list --all --name`
+was empty.
 
-Use [`kubernetes-exec.sh`](../../../../examples/mithril-identity-manual/kubernetes-exec.sh)
-for the readable non-TTY operator procedure. It was not run in this retained
-lane. This result covers one non-TTY `kubectl exec` identity subcase of
-`ENTRY-EXEC-001`. It excludes TTY execution, copy-shaped execution, and a
-native application child with the identical command. The phase remains
-**Blocked**.
+This completes `ENTRY-EXEC-002`. It completes only the non-TTY subcase of
+`ENTRY-EXEC-001`. TTY exec, `kubectl cp`, and an application-native child with
+the same command remain open. Phase 4 owns the stronger approved
+administrative role. Phase 2 remains **Blocked**.
 
 ## Recorded Pre-PONR Failed Native-Exec VM Subcase — 2026-08-15
 
@@ -394,31 +403,6 @@ fixture. It printed `PASS`. The non-leader thread exec kept its process and
 role identity. It changed execution and image identity. This is one serial
 non-leader de-threading case. It does not prove concurrent exec races. The
 phase remains **Blocked**.
-
-## Concurrent Exec Manual VM Result — 2026-08-17
-
-The retained x86_64 Ubuntu 24.04 VM, kernel `6.8.0-137-generic`, ran
-[`native-child.sh --concurrent-thread-exec`](../../../../examples/mithril-identity-manual/native-child.sh)
-as root. The shell source SHA-256 was
-`adc11a45efb571fe4e73e4d8aaa27a4de3d9ede69a6244117b53ee446ac9644d`.
-It created one K3s Pod with a live CRI binding, then created two sibling Python
-workers. One `SIGUSR1` released both workers through their barrier. Linux left
-one `sleep` process. The shell required the surviving task to keep the root
-creator, process state, and restricted role, with changed execution and image
-IDs and no exec guard. It printed `PASS`.
-
-The paired automated VM result used source SHA-256
-`a168927ad6a9f37da535f7c05be1cb9eeab8a72303555025946c410e3c85c3f9`.
-It required exactly four identity-ID allocations for the two worker threads,
-two distinct live task coordinates, and a committed winner. Its JSON SHA-256
-was `6438be6817109b6592fb60bd39fd50e061528fcc8615f5403037c4bcc5a0ee08`.
-The BPF object SHA-256 was
-`69ee79417f875f7c7a7065d18e08918e9d9bc32359711b57013eba77879fbcbe`.
-
-Postflight found no case namespace, fixture directory, Mithril pin, node
-process, lease, or cgroup. This qualifies only the normal two-worker exec
-subcase of `EXEC-CONCURRENT-002`. Exec versus fork, vfork, and thread creation
-remain required. The phase remains **Blocked**.
 
 ## Entry-Migration Manual VM Result — 2026-08-17
 
@@ -495,9 +479,10 @@ printed `PASS`. The shared runtime owner removed its Pod, CRI binding, fixture
 directory, node, pin, lease, state, and cgroup. Postflight found no case
 namespace, fixture directory, Mithril pin, node process, lease, or cgroup.
 
-This qualifies the labeled native mount-namespace subcase of
-`ENTRY-MIGRATE-001`. Protected-effect and restore cases remain required. The
-phase remains **Blocked**.
+This historical result qualified the labeled native mount-namespace subcase of
+`ENTRY-MIGRATE-001`. The current recheck below completes the Phase 2 identity
+scope. Phase 4 owns protected effects. Phase 12 owns checkpoint restore through
+`ENTRY-RESTORE-001`.
 
 ## Current Entry-Migration Manual Recheck — 2026-08-17
 
@@ -528,8 +513,9 @@ records and no exec guard.
 Postflight found no case namespace, fixture directory, Mithril pin, node
 process, lease or work directory, or identifiable manual cgroup. The harness
 then removed the VM and `virsh list --all` was empty. This completes the Phase
-2 identity scope of `ENTRY-MIGRATE-001`. Protected effect and restore cases
-begin in Phase 4 and are not a Phase 2 closure gate.
+2 identity scope of `ENTRY-MIGRATE-001`. Phase 4 owns protected effects. Phase
+12 owns checkpoint restore through `ENTRY-RESTORE-001`. Neither later result
+is a Phase 2 closure gate.
 
 ## Current Moved-Native VM Result — 2026-08-17
 
@@ -667,7 +653,7 @@ The phase remains **Blocked**.
 | `ID-MOVED-PARENT-FORK-004` | move parent, then fork | child inherits actual task authority and placement floor, not cgroup-derived role |
 | `ID-MOVED-TASK-EXEC-005` | move labeled task, then exec | task-first old identity and placement mismatch constrain transition |
 | `ID-TASK-COORD-FINALIZE-006` | inspect task at allocation, pre-wake finalization, visibility, and exit | opaque state precedes effect; PID/TGID/start coordinates finalize later without granting permission |
-| `NATIVE-STATE-REF-LIFETIME-001` | exit tasks/processes while sockets/objects/generations remain referenced | exact references/tombstones retain restrictions until final qualified release |
+| `NATIVE-STATE-REF-LIFETIME-001` | exit tasks/processes while task generations, entry state, or native tombstones remain referenced | exact native references and tombstones retain restrictions until final qualified release; socket and protected-object lifetimes belong to later phases |
 
 ## Administrative Identity Partial Gate
 

@@ -205,6 +205,23 @@ phase remains **Not done**.
 | `SELF-PROTECT-001` | mutate/detach/replace Mithril links/maps/pins/config/binary | intact floor denies where qualified; successful tamper closes capability/coverage and never claims self-containment |
 | `STATE-PERSISTENT-FILE-LIFETIME-007` | reuse persistent volume/file identity after close/restart | old restriction follows exact live object only; new object cannot inherit clean authority by name |
 
+## Concurrent Exec Control Result — 2026-08-17
+
+The x86_64 Ubuntu 24.04 VM, kernel `6.8.0-137-generic`, ran
+[`native-child.sh --concurrent-thread-exec`](../../../../examples/mithril-identity-manual/native-child.sh)
+as root. Two sibling Python threads waited on one barrier and both called
+`exec`. Linux retained one `sleep` process. The survivor kept the root creator,
+process state, and restricted role, changed execution and image IDs, and had
+no exec guard. The shell printed `PASS` and removed its Kubernetes Namespace,
+Pod fixture, node, pin, lease, and cgroup.
+
+The paired source control required four identity-ID allocations and two
+distinct live task coordinates. Its JSON SHA-256 is
+`6438be6817109b6592fb60bd39fd50e061528fcc8615f5403037c4bcc5a0ee08`.
+This proves normal Linux two-thread exec behavior only. It does not qualify
+`EXEC-CONCURRENT-002`, which still needs real source-role and target-role
+transitions plus a raced protected-effect oracle.
+
 ## Mandatory Incident And Exception Checks
 
 - `HF-008`: the hostile HDF5 reference receives no forbidden fd or bytes;

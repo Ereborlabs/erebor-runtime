@@ -1,8 +1,8 @@
 # Phase 2: Exact Native Identity
 
-Status: Blocked. The current source passed the disposable privileged VM
-identity probe. The complete failure-injection and entry-case matrix is not
-recorded.
+Status: Blocked. The current source passed the disposable privileged VM native
+identity probe and its Kubernetes entry extension on the K3s distribution.
+The complete failure-injection and entry-case matrix is not recorded.
 
 Master: [Mithril Hugging Face Intrusion Prevention](./README.md)
 Design: [Validated readable architecture](./policy-and-protection-algorithm-architecture-readable.md)
@@ -122,53 +122,50 @@ Policy matching, effect allow/deny tables, graph conclusions, and response.
 
 ```text
 State: Blocked.
-Validated architecture revision/digest: policy-and-protection-algorithm-architecture-readable.md at SHA-256 4a445b4015c4868a87af4893398068c5f362452c316d0cb8d06c038d41ffc0d8.
+Validated architecture revision/digest: policy-and-protection-algorithm-architecture-readable.md at SHA-256 31e2ab2590a6781db6e1bf61c0147090d790f201756d08c87753981b79ebfe37.
 Completed deliverable IDs: D2.1-D2.6 are implemented and code-backed. The current source passed the disposable privileged VM identity probe. The phase cannot be marked Done until the remaining failure-injection and entry-case matrix passes.
 Files and durable owners changed: erebor-interceptor-abi owns the generated snake_case Rust/C task, process, entry, authority, fork-edge, exec, binding, reference, and health layouts; bpf/erebor-interceptor/programs owns the production CO-RE identity object through one translation-unit front, one map owner, shared task/root helpers, and lifecycle/exec/effect/exit hook families; erebor-interceptor owns the fully vendored libbpf-rs load/attach/pin/reuse/readback lifecycle and its narrow read-only pinned-map reader, and embeds the single libbpf-cargo-built production object; mithril-node owns binding publication, exact CRI inventory reconciliation, boot/label epochs, task reconciliation, signed-intent verification, trust/time/replay state, one-use authorization identity, and the read-only live-task inspector used by operators and e2e; mithril-e2e owns the bounded acceptance runners and disposable VM harness; examples/mithril-identity-manual owns the operator-driven cases.
 Build and simplicity result: libbpf-cargo 0.27.0 is the only production C-to-BPF build path, and the production C is compiled with -Wall -Werror. The resulting object is embedded in the node binary and opened from memory through fully vendored libbpf-rs 0.27.0; the former second configured object path/checksum and Docker build-directory copy were removed. The BPF source follows the checked-source hook-family shape without adding another object, loader, map owner, or link step: the small `identity.bpf.c` front includes the map/task/root owners and cohesive lifecycle, exec-transaction, effect-gate, and exit families into the same object. cbindgen remains only the Rust-to-C ABI renderer and drift check. Standard Linux names CLONE_PARENT, CLONE_THREAD, AT_EXECVE_CHECK, and EACCES are used through the minimal syscall-note UAPI header because those macros are absent from vmlinux BTF and full host UAPI headers would make the CO-RE translation unit host-architecture-dependent. Product-owned state constants are generated once from the shared ABI.
 Correctness-preserving simplifications: execution_set_bindings is the single cgroup-placement authority. Configured non-CRI bindings still use one exact cgroup path and periodically revalidate its live handle, device, and inode. The 2026-08-09 pass rejects the cgroup root as a workload, opens the cgroup handle before publication, compares the handle and live path identity before each publish, and rejects root/traversal CRI paths. When CRI is configured, `WorkloadBindingOwner` takes one standard full `ListContainers` snapshot per interval, ignores unconfigured containers, validates the configured full container ID, Pod UID, sandbox, container name, image reference, creation generation, and live Created/Running state, and resolves `runtimeSpec.linux.cgroupsPath` locally before publishing. A newly observed Created container may retain configured initial-root arming only while its cgroup is empty; a container first observed Running is conservatively external and is never retroactively promoted. A missing/stopped exact lifetime is transitioned to Terminating, and a changed/reused identity fails closed. The periodic inventory is recovery truth after event loss or restart; adding a separate CRI-event state machine would not prove pre-start ordering. Raw Docker exec, direct CRI exec, and a host task moved after `nsenter` use the same BPF classification path rather than separate runtime-specific identity engines. The BPF program performs a bounded 64-level walk of the live kernel cgroup ancestry, using the upstream-compatible cgroup ancestors layout with the self.parent fallback; an unreadable or over-depth chain denies and increments health rather than treating the task as unprotected. Missing exit tombstones now also increment reconciliation health while retaining restrictions. This replaces both the userspace descendant scan and the capacity-sensitive descendant map. AT_EXECVE_CHECK ownership is an atomic task-cookie marker in ProcessSecurityStateV1, so a check-only exec cannot stage an exec, consume an administrative slot, or depend on insertion into another bounded map. Binding nonces are random UUID-v4 values on first publication and are recovered byte-exactly from pinned state on restart. Nested configured protected roots are rejected instead of introducing precedence rules. Exact desired assignments remain bootstrap inputs in Phase 2; policy compilation/effect permission is Phase 3-4 and authenticated fleet distribution remains Phase 7-8.
 Upstream-adoption dossier IDs used: BJ-TASK-STORAGE-001 and BJ-REJECTED-ENROLLMENT-002 for task-first allocation and rejection of delayed PID enrollment; KA-LSM-DECISION-001 and KA-PATH-MOUNT-003 for prior-result/fail-closed LSM behavior and live mount identity; TG-FORK-EXEC-001, TG-RUNTIME-CGROUP-JOIN-002, TG-FRESH-MAPS-004, TG-VMLINUX-HEADER-006, and TG-VMLINUX-ARM64-007 for fork/exec, cgroup binding, recoverable publication, and CO-RE headers; AS-VMLINUX-ARM-001 and AS-VMLINUX-RISCV-002 for checked compile headers. No upstream daemon, policy engine, loader, or delayed-enrollment model was copied.
-Fixture cases and exact physical results: AUTHORIZATION-REPLAY-004 has code-backed signature, exact-target, bounded deterministic-CBOR, trust/key/epoch, 4,096-bit replay, durable proof/slot, restart, idempotent close recovery, and one-use consumption tests. Unit tests cover exact ABI layout, closed enum/state values, binding identity and initial-root admission, configured static/CRI binding validation, Created-versus-Running initial-root treatment, exact runtime-lifetime reconciliation, cgroup path-reuse and cgroup-root rejection, distinct/recovered nonce behavior, epoch recovery, CRI cgroup parsing, reference parsing, object embedding, exact required program/map sets, packaging, and exact allocation of all 29 identity fixture IDs. The complete operator case catalog lives under examples/mithril-identity-manual. Separate small shells run the real mithril-node for raw Docker exec, direct CRI exec, Kubernetes exec, native-child provenance, namespace-only and cgroup-moved `nsenter`, and exact restart recovery; each owns and removes its tasks, pins, lease, state, config, and logs. An earlier VM record has object_sha256=c9a73d3f640443c0968ee86f76d5a456b369e75564bdae925aecb06cda2dbbf1. First start and recovered start each report ready=true, 45 maps, and 48 links. map_ids_stable_across_restart=true and profile_task_refs_after_exit=0. The external root and the direct `clone3(CLONE_INTO_CGROUP)` root have root_class=external_runtime_root and installed_role_class=runtime_external_restricted. The direct native child has creator_task_cookie=5 and real_parent_task_cookie=5. The later native child keeps task_cookie=21 and creator_task_cookie=18 across exec, while active_execution_id changes from 00000000000000010000000000000016 to 0000000000000001000000000000001c. pin_root_removed=true, lease_removed=true, and cgroup_removed=true. The identity evidence SHA-256 is f392274c5643120b035cf84937529a39d805931ddeba37bbbaf148c66c58bc0e. On 2026-08-15, the K3s lane added by `d806aa3` also ran a direct `crictl exec` in the exact bound container. The direct CRI task had no creator task cookie, `external_runtime_root` as its root class, and `runtime_external_restricted` as its installed role. The same lane passed its OBSERVE and PROTECT file-effect checks and removed its namespace, fixture, pin root, and lane state. This is one physical `ENTRY-EXEC-002` result. Fixture allocation is not physical execution of every fixture.
-Commands and exact source state covered: the disposable VM record under /tmp/mithril-vm-source18-final covers the current object digest above. The optional k3s record under /tmp/mithril-k3s-source20-final uses the same object digest. Repository CI results are recorded separately after the final repository edit.
-Platform/kernel/runtime manifests: the physical identity probe ran on x86_64 Ubuntu kernel 6.8.0-136-generic with LSM order lockdown,capability,landlock,yama,apparmor,bpf, runtime BTF SHA-256 9aa9eb9e8108bff44e685830315fb7a442bafd99778314cdd6de0fb72868829f, cgroup v2, and unique mount IDs. The optional k3s lane recorded k3s v1.35.5+k3s1, node ubuntu, CRI endpoint unix:///run/k3s/containerd/containerd.sock, overlay storage, and a projected token available through exec and the workload root. Its k3s record SHA-256 is 905a3ad84106e975cc1cde8b68cb24c861079f8baf3b616c597ec14e234f2503. This is runtime-substrate evidence only. It does not configure or prove a Mithril CRI binding. The production program compiles through the checked x86, arm64, arm, and riscv vmlinux dispatch. Compilation is not a non-x86 physical result.
+Fixture cases and exact physical results: the source allocates exactly 29 Phase 2 fixture IDs. Unit tests cover authorization-envelope identity, ABI layout, binding identity, runtime reconciliation, reference parsing, object embedding, required program/map sets, packaging, and fixture allocation. The native physical probe covers initial and external roots, direct `clone3(CLONE_INTO_CGROUP)`, native inheritance, exec continuity, reparenting, movement, restart, and cleanup. The Kubernetes extension covers the pre-existing conservative root, direct CRI exec, and non-TTY `kubectl exec`. Its schema-14 JSON SHA-256 is aa70c2c398c6d07d138b81293103f3cbfc4be91d2c8999387b893ff7cac92910. Direct CRI exec and non-TTY `kubectl exec` are restricted external roots with no fabricated purpose. Fixture allocation and unit coverage are not physical execution of every fixture. The closure matrix states each remaining exact limit.
+Commands and exact source state covered: source commit da01f77d2deb83482788f16081307b01a6dc6556 ran the complete disposable VM harness. The Kubernetes identity JSON is /tmp/mithril-kubernetes-entry-20260817-021/identity-physical-probe.json. The retained manual VM ran examples/mithril-identity-manual/cri-exec.sh and examples/mithril-identity-manual/kubernetes-exec.sh consecutively as root. Both passed. The manual and automated owners removed their Namespace, fixture, pin, lease, cgroup, node process, and loaded Erebor Interceptor programs. The VM harness destroyed both VMs.
+Platform/kernel/runtime manifests: the current physical result ran on x86_64 Ubuntu 24.04, kernel 6.8.0-137-generic, with cgroup v2 and the required BPF/LSM support. Kubernetes v1.35.5 ran through the K3s v1.35.5+k3s1 distribution and the live containerd CRI endpoint. The runner created an exact Pod/CRI binding before it tested later runtime roots. The BPF object SHA-256 is 3269516fcd2714ab7fbe29df26386c40f0c912b6284007b641d8bbf68842b876. The production program compiles through the checked x86, arm64, arm, and riscv vmlinux dispatch. Compilation is not a non-x86 physical result.
 Performance/capacity results: all authoritative maps are bounded and fail closed on missing or full state. No identity-specific production latency or saturation result is recorded. The feasibility benchmark is historical platform evidence, not an identity result.
-Unsupported/degraded paths: complete administrative-exec approval, permission, and physical denial remain outside this identity result. Policy and effect tables now exist in the current source, but they do not expand this result. The administrative identity foundation uses the trusted node lowering boundary to install an exact live executable tuple; the approval ingress and complete portable transaction remain required. A configured static Docker binding validates live cgroup identity but does not continuously validate Docker-daemon metadata; a replacement container therefore requires a new configured generation and otherwise loses authority. CRI-backed bindings continuously validate exact runtime metadata and local cgroup placement, but snapshot discovery alone cannot prove that a binding preceded the first user instruction; only a qualified Created/empty-cgroup observation or later supported start hook can make that claim. Serial and two-worker normal concurrent exec passed in the manual VM. Exec versus fork, vfork, and thread creation, complete ephemeral-container, map saturation, identifier reuse, and non-x86 cases remain physically unqualified. A cleanup loss deliberately leaks restriction and raises reconciliation rather than recovering authority.
+Unsupported/degraded paths: approved administrative roles, permission tables, raced policy transitions, protected effects, IPC policy, shared-resource policy, and response remain outside this identity result. A configured static Docker binding validates live cgroup identity but does not continuously validate Docker-daemon metadata. CRI-backed bindings validate exact runtime metadata and local cgroup placement, but snapshot discovery alone cannot prove that a binding preceded the first user instruction. Only a qualified Created/empty-cgroup observation or supported start interface can make that claim. The closure matrix lists the remaining Phase 2 identity, entry, coordinate, native-reference, and failure-injection results. A cleanup loss retains restriction and raises reconciliation instead of recovering authority.
 Remaining work in this phase: run and record the remaining Phase 2 operator rows and failure-injection matrix. Do not change the implementation result to Done without those physical artifacts.
 Next phase not authorized: yes.
 ```
 
-## Concurrent Exec Result — 2026-08-17
+## Kubernetes Entry Result — 2026-08-17
 
-The retained x86_64 Ubuntu 24.04 VM, kernel `6.8.0-137-generic`, ran the
-production `mithril-identity-test physical-probe` with unique paths. The JSON
-record was `/tmp/mithril-phase2-concurrent-final.9XkJqd/identity-physical-probe.json`.
-Its SHA-256 was
-`6438be6817109b6592fb60bd39fd50e061528fcc8615f5403037c4bcc5a0ee08`.
-The BPF object SHA-256 was
-`69ee79417f875f7c7a7065d18e08918e9d9bc32359711b57013eba77879fbcbe`.
+Source commit `da01f77d2deb83482788f16081307b01a6dc6556` passed the full
+disposable VM harness on x86_64 Ubuntu 24.04, kernel
+`6.8.0-137-generic`. Kubernetes `v1.35.5` ran through the K3s
+`v1.35.5+k3s1` distribution. The schema-14 identity JSON is
+`/tmp/mithril-kubernetes-entry-20260817-021/identity-physical-probe.json`.
+Its SHA-256 is
+`aa70c2c398c6d07d138b81293103f3cbfc4be91d2c8999387b893ff7cac92910`.
+The BPF object SHA-256 is
+`3269516fcd2714ab7fbe29df26386c40f0c912b6284007b641d8bbf68842b876`.
 
-The source fixture SHA-256 was
-`a168927ad6a9f37da535f7c05be1cb9eeab8a72303555025946c410e3c85c3f9`.
-It created two sibling Python threads, held both before `exec`, and released
-both through one barrier. The fixture required exactly four identity-ID
-allocations: two task identities and two clone-attempt identities. It required
-two distinct live `task_coordinates` records with the root process state. The
-surviving Linux exec had one worker task cookie, the root creator cookie, the
-same restricted role, changed execution and image IDs, and no exec guard.
-The JSON recorded `concurrent_thread_exec_committed=true` and removal of the
-pin root, lease, and cgroup.
+The pre-existing Pod root had no creator, `restored_or_unknown_root`, and
+`fail_closed_unknown`. Direct CRI exec and non-TTY `kubectl exec` each had no
+creator, `external_runtime_root`, `runtime_external_restricted`, and active
+role `11`. Their task cookies differed. The runner removed its Kubernetes
+Namespace, fixture directory, pin, lease, and cgroup. The outer harness removed
+Kubernetes and destroyed the VM.
 
-The same retained VM ran
-[`native-child.sh --concurrent-thread-exec`](../../../examples/mithril-identity-manual/native-child.sh)
-as root. Its source SHA-256 was
-`adc11a45efb571fe4e73e4d8aaa27a4de3d9ede69a6244117b53ee446ac9644d`.
-It created and removed its K3s Pod, CRI binding, fixture directory, node,
-pin, lease, and cgroup. No case namespace, fixture, pin, node process, lease,
-or cgroup remained.
+The retained manual VM ran `cri-exec.sh` and `kubernetes-exec.sh`
+consecutively as root. Both printed `PASS`. Postflight found no case Namespace,
+fixture, Mithril process, pin, lease, cgroup, or loaded Erebor Interceptor
+program. The manual harness destroyed the VM, and `virsh list --all --name`
+was empty.
 
-This result qualifies the normal two-worker exec subcase of
-`EXEC-CONCURRENT-002`. It does not qualify exec versus fork, vfork, or thread
-creation. The phase remains **Blocked**.
+This completes `ENTRY-EXEC-002`. It completes only the non-TTY subcase of
+`ENTRY-EXEC-001`; TTY exec, `kubectl cp`, and the identical native-child
+control remain open. Phase 4 owns the approved administrative role. Phase 2
+remains **Blocked**.
 
 ## Maintenance update — 2026-08-09
 
@@ -203,11 +200,12 @@ The probe recorded these results:
 - `pin_root_removed=true`, `lease_removed=true`, and
   `cgroup_removed=true`.
 
-The optional k3s lane also passed. It recorded Pod readiness, CRI discovery,
+The historical optional Kubernetes lane through the K3s distribution passed.
+It recorded Pod readiness, CRI discovery,
 the workload root, overlay storage, and a projected token. Its record SHA-256
 is `905a3ad84106e975cc1cde8b68cb24c861079f8baf3b616c597ec14e234f2503`.
-This lane proves the k3s substrate only. It does not configure or prove a
-Mithril CRI binding.
+This historical lane proves the Kubernetes substrate only. It does not
+configure or prove a Mithril CRI binding.
 
 The phase stays **Blocked** because the complete entry-case and
 failure-injection matrix is not recorded. The full ephemeral-container,
@@ -375,32 +373,6 @@ This is physical identity evidence for host-task cgroup entry only. It does
 not run `nsenter`, restore, or a protected effect. It does not qualify the
 complete `ENTRY-MIGRATE-001` row. The phase remains **Blocked**.
 
-## Non-TTY Kubernetes Exec Identity Subcase — 2026-08-15
-
-The retained K3s CRI lane ran at source commit
-`e38a117b1d2a3bb2f3e1947483c1f4f61f7fd43e`. Its staged guest script SHA-256
-was `380fd7c73d33aefc320ff7919160db38c29be7d06b59f6dc51dd5b715fcf4018`.
-The lane invoked `kubectl exec ... -- sh -c ...` without `-i`, `-t`, or
-`--tty`. Before it accepted the task, the staged script required
-`creator_task_cookie=null`, `external_runtime_root`, and
-`runtime_external_restricted` for that `kubectl exec` root.
-
-The `OBSERVE` record is
-`/tmp/mithril-phase3-direct-cri-evidence.eWjKKw/observe-clean.txt`, SHA-256
-`c6cdd686dde59b84fa362b1c3e4e3d8e839bac44339081b8611cfc985057b994`. It
-records task cookie `80` for the `kubectl exec` exact read. The `PROTECT`
-record is
-`/tmp/mithril-phase3-direct-cri-evidence.eWjKKw/protect-clean.txt`, SHA-256
-`a3a5a16e8abc67e0d919b4650c62e0a1ce75c0df206c96028d93c8790351f8ab`. It
-also records task cookie `80` for the exact read. The Phase 3 record reports
-clean lane postflight. This reuses that physical evidence; it is not a new VM
-run.
-
-This is one non-TTY `kubectl exec` identity subcase of `ENTRY-EXEC-001`.
-It does not test TTY execution, copy-shaped execution, or a native application
-child with the identical command. It does not complete `ENTRY-EXEC-001`. The
-phase remains **Blocked**.
-
 ## Pre-PONR Failed-Exec Physical Qualification — 2026-08-15
 
 The isolated identity probe passed at source commit
@@ -472,10 +444,10 @@ the `CloneIntoCgroupFixture` root. It records
 `cgroup_removed=true`, and `profile_task_refs_after_exit=0`.
 
 Postflight found no case namespace, fixture directory, Mithril pin, node
-process, lease, or cgroup. This is a qualified namespace-entry and cgroup-move
-subcase of `ENTRY-MIGRATE-001`. It does not test a protected effect, movement
-of an already labeled task through a namespace boundary, restore, or the full
-fixture. The phase remains **Blocked**.
+process, lease, or cgroup. This historical result qualified the namespace-entry
+and cgroup-move subcase of `ENTRY-MIGRATE-001`. It did not cover movement of an
+already labeled task. The current recheck below completes the Phase 2 identity
+scope.
 
 ## Labeled Native Mount-Namespace Entry — 2026-08-17
 
@@ -539,8 +511,8 @@ and no exec guard. The shell printed `PASS`. Postflight found no case namespace,
 fixture directory, Mithril pin, node process, lease, or cgroup.
 
 This qualifies the labeled native mount-namespace subcase of
-`ENTRY-MIGRATE-001`. It does not test a protected effect or restore. The phase
-remains **Blocked**.
+`ENTRY-MIGRATE-001`. The current recheck below combines this result with the
+namespace-only and cgroup-move result.
 
 ## Current Entry-Migration VM Recheck — 2026-08-17
 
@@ -582,8 +554,9 @@ The JSON records `pin_root_removed=true`, `lease_removed=true`,
 Manual postflight found no case namespace, fixture directory, Mithril pin,
 node process, lease or work directory, or identifiable manual cgroup. The
 harness then removed the retained VM and `virsh list --all` was empty. These
-results complete the Phase 2 identity scope of `ENTRY-MIGRATE-001`. Protected
-effect and restore cases begin in Phase 4 and are not a Phase 2 closure gate.
+results complete the Phase 2 identity scope of `ENTRY-MIGRATE-001`. Phase 4
+owns protected effects. Phase 12 owns checkpoint restore through
+`ENTRY-RESTORE-001`. Neither later result is a Phase 2 closure gate.
 
 ## Current Moved-Native Rows — 2026-08-17
 
@@ -651,8 +624,9 @@ The same VM ran this root-shell command:
 examples/mithril-identity-manual/native-child.sh --subreaper
 ```
 
-The shell created its K3s Pod and live CRI binding through
-`identity_prepare_k3s_case`. It printed `PASS`. It checked the same immutable
+The shell created its Kubernetes Pod and live CRI binding through
+`identity_prepare_k3s_case`. The VM used the K3s distribution. The shell
+printed `PASS`. It checked the same immutable
 creator, real-parent coordinate, execution, image, role, and active-state
 limits. Postflight found no case namespace, fixture directory, Mithril pin,
 node process, lease, or cgroup. The JSON records

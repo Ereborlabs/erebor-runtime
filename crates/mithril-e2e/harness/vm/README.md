@@ -20,7 +20,8 @@ crates/mithril-e2e/harness/vm/run.sh \
   --output-directory /tmp/mithril-vm-test-evidence
 ```
 
-Add the optional single-node k3s lane:
+Add the optional single-node Kubernetes lane. The harness uses the K3s
+distribution:
 
 ```bash
 crates/mithril-e2e/harness/vm/run.sh --with-k3s \
@@ -28,9 +29,10 @@ crates/mithril-e2e/harness/vm/run.sh --with-k3s \
   --output-directory /tmp/mithril-k3s-vm-test-evidence
 ```
 
-This option installs k3s only after the provider creates the disposable guest.
-It uses the checked `k3s-config-v1.yaml`, k3s `v1.35.5+k3s1`, and an immutable
-BusyBox image reference. It waits for the node and CRI, then proves Pod
+This option installs the K3s distribution only after the provider creates the
+disposable guest. It uses the checked `k3s-config-v1.yaml`, K3s
+`v1.35.5+k3s1`, Kubernetes `v1.35.5`, and an immutable BusyBox image
+reference. It waits for the node and CRI, then proves Pod
 readiness, direct CRI exec, `kubectl exec`, the CRI container ID and workload
 root, an overlay root, and a projected service-account token. It then starts
 the real `mithril-node` against the k3s containerd socket. The node binds the
@@ -77,10 +79,12 @@ only `get` and `create` on `pods/exec`; current Kubernetes also checks `create`
 for the CONNECT upgrade. The validating webhook stays fail-closed for both
 permissions.
 
-The lanes remove their namespaces, files, node and Control state, sockets,
-leases, temporary trust, webhooks, RBAC, and BPF pins. The runtime probes then
-run while k3s is active. Finally, the official k3s uninstall owner runs before
-the provider destroys the guest.
+The lanes remove their Namespaces, files, node and Control state, sockets,
+leases, temporary trust, webhooks, RBAC, and BPF pins. The native identity
+probe runs before Kubernetes starts. The Kubernetes identity extension runs
+after the effect probes and records the pre-existing Pod root, direct CRI
+exec, and non-TTY `kubectl exec`. Finally, the official K3s uninstall owner
+runs before the provider destroys the guest.
 
 The libvirt provider uses these optional variables:
 
@@ -125,9 +129,10 @@ crates/mithril-e2e/harness/vm/manual.sh start
 crates/mithril-e2e/harness/vm/manual.sh ssh
 ```
 
-`start` creates one K3s VM, mounts the current repository read-only at
-`/mnt/mithril-source`, and builds `mithril-node`, `mithril-inspect`, and
-`mithril-policy`. Do not start a second Mithril owner in this VM.
+`start` creates one Kubernetes VM through the K3s distribution, mounts the
+current repository read-only at `/mnt/mithril-source`, and builds
+`mithril-node`, `mithril-inspect`, and `mithril-policy`. Do not start a second
+Mithril owner in this VM.
 
 In the guest:
 

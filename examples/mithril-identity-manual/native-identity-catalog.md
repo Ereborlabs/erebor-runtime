@@ -14,7 +14,7 @@ their exact qualification environment is run.
 | `ID-MOVED-PARENT-FORK-004` | Move a parent, then fork. | The child inherits actual task authority and the placement floor, not a cgroup-derived role. |
 | `ID-MOVED-TASK-EXEC-005` | Move a stopped labeled child, then exec. Run [`native-child.sh --moved-exec`](./native-child.sh). | The task and creator cookies stay exact. The moved child becomes fail closed and cannot exec `sleep` through host policy. |
 | `ID-TASK-COORD-FINALIZE-006` | Inspect allocation, pre-wake finalization, visibility, and exit. | Opaque state precedes effects; coordinates finalize later without granting permission. |
-| `NATIVE-STATE-REF-LIFETIME-001` | Exit tasks/processes while sockets, objects, or generations remain referenced. | Exact references and tombstones retain restrictions until final qualified release. |
+| `NATIVE-STATE-REF-LIFETIME-001` | Exit tasks/processes while task generations, entry state, or native tombstones remain referenced. | Exact native references and tombstones retain restrictions until final qualified release. Socket and protected-object lifetimes belong to later phases. |
 
 The identity half of `ADMIN-EXEC-APPROVAL-001` must bind target node/container,
 entry class, optional slot identity, expiry, and replay state. Local enforcement must

@@ -1936,7 +1936,7 @@ result an implementation must prove.
 
 | Invariant | Practical example | Required result and why |
 | --- | --- | --- |
-| `INV-ENTRY-001` | The labeled conversion worker forks a child, while `kubectl exec` separately creates a root in the same container. | The forked child has a kernel-proven parent label before it runs. The administrative root has a one-use, audited external-entry admission. Neither is accepted merely because both are in the container cgroup. |
+| `INV-ENTRY-001` | The labeled conversion worker forks a child, while ordinary `kubectl exec` separately creates a root in the same container. | The forked child has a kernel-proven parent label before it runs. The ordinary exec task is a restricted external root. A stronger administrative role requires the separate one-use approved path. Neither is accepted merely because both are in the container cgroup. |
 | `INV-ENTRY-002` | A host process uses `nsenter`, or a runtime task is moved directly into the protected cgroup, with no pending runtime intent. Its first action is to read the service-account token. | The file hook denies the read and records `unknown-external-entry`. Cgroup membership proves where the task is now, not why it was created or what authority it has. |
 | `INV-ENTRY-003` | Container A exits; container B later receives the same PID, namespace number, or numeric cgroup ID. | Container B cannot resolve A's label, policy generation, or containment state because every lookup also verifies the live interval, full container identity, boot/label epoch, and non-reused task identity. |
 | `INV-ROLE-001` | An approved update root and a compromised conversion worker both execute `/usr/bin/curl`. | The updater receives only the role admitted for its signed entry and transition. The worker remains a worker or receives a denied exec transition. Identical executable paths do not create identical authority. |
@@ -1945,7 +1945,7 @@ result an implementation must prove.
 | `INV-EFFECT-002` | The attacker floods exec and file attempts until the ring buffer is full while the central service and local WAL are under pressure. | Every already-computed denial remains a denial. Mithril exposes loss and pressure counters, but telemetry backpressure never opens the protected effect. |
 | `INV-POLICY-001` | Learning mode observes a compromised worker successfully calling the Kubernetes API with its mounted token. | The observation becomes a review candidate and evidence; it never writes an allow entry. Only a signed policy, validated and compiled by the Rust owner, can authorize that role/effect tuple. |
 | `INV-POLICY-002` | Generation 42 allows an established approved socket while generation 43 denies new sockets to that destination. The update occurs while tasks and the old socket are live. | One atomic pointer activates generation 43 for new decisions. References that require generation 42 keep it resident until their explicit lifetime policy completes; no decision reads a half-loaded mixture or a freed map. |
-| `INV-K8S-001` | The declared readiness probe, an application child, and `kubectl exec` each run the identical `/app/healthcheck` bytes. | They receive `kubelet-exec-probe`, application-descendant, and `administrative-exec` entry/role identities respectively. The executable object is evidence for command matching, not proof of Kubernetes intent. |
+| `INV-K8S-001` | A stock readiness probe, an application child, ordinary `kubectl exec`, and direct CRI exec each run the identical `/app/healthcheck` bytes. | The application child keeps native lineage. The three independent runtime roots keep the same restricted external class because stock CRI does not carry exact purpose. A stronger administrative role requires the separate Phase 4 approved path. The executable object is not proof of Kubernetes intent. |
 | `INV-K8S-002` | During termination, a malicious or compromised `PreStop` command tries to read a Secret and send it externally. | The policy remains installed and the narrow `kubelet-prestop` budget still applies until all tasks and relevant sockets are gone. “Terminating” never means unrestricted. |
 | `INV-GRAPH-001` | A process on node A uses the Kubernetes API to create a Pod whose root later starts on node B. | Node A's task is not recorded as the Linux parent of node B's root. The graph adds a typed causal chain—API request, audit object, controller/scheduler decision, Pod UID, runtime admission—with the strength and gaps of each proof. |
 | `INV-RESPONSE-001` | The graph says PID 7312 was malicious, but it exited and the kernel reused 7312 before containment arrives. | The actuator rejects the stale target after pidfd/start-time/cgroup/task-cookie re-resolution. It acts only on the current verified process, cgroup, credential, or provider object and then verifies the requested postcondition. |
@@ -2095,17 +2095,18 @@ hooks are required.
 
 If an attacker has Kubernetes `pods/exec` authority, a normal `kubectl exec`
 path goes through the API/streaming control path to kubelet, which asks the
-container runtime to create an exec process. Mithril classifies that process as
-`AdministrativeExecEntry`, correlates the Kubernetes audit principal and
-request when available, and applies default-deny or an explicitly approved
-break-glass role.
+container runtime to create an exec process. Phase 2 classifies that process as
+a restricted external root. Kubernetes audit records the API actor separately.
+Only the Phase 4 approved path may correlate an exact request, consume one
+slot, and install a stronger administrative role.
 
 For example, an attacker cannot obtain probe authority by running the probe's
 exact command:
 
 ```text
-declared readiness probe -> /app/healthcheck -> kubelet-exec-probe role
-kubectl exec by attacker  -> /app/healthcheck -> administrative-exec role
+stock readiness probe    -> /app/healthcheck -> restricted external root
+ordinary kubectl exec    -> /app/healthcheck -> restricted external root
+approved Mithril exec    -> /app/healthcheck -> one-use administrative role
 ```
 
 The binary, argv, cgroup, and namespaces can all match. The request transport,
@@ -3012,11 +3013,11 @@ Because the pre-wake point cannot return an error, failure there is
 first-protected-effect prevention, not child-creation denial. A platform may
 advertise creation denial only for failures already decidable at the returning
 `task_alloc` hook. `ID-TASK-COORD-FINALIZE-006` pauses before/after PID
-assignment, forces finalization-state/map failure, and proves: no PID-derived
-field exists early; no child is reported `RUNNABLE` from an incomplete
-record; and an incomplete child cannot read one sentinel byte or send one
-packet. It also covers leader-exits-first, thread/TID reuse, unavailable
-`PIDFD_THREAD`, and non-leader exec/de-threading coordinate changes.
+assignment and proves that no PID-derived field exists early and no child is
+reported `RUNNABLE` from an incomplete record. It also covers
+leader-exits-first, thread/TID reuse, unavailable `PIDFD_THREAD`, and
+non-leader exec/de-threading coordinate changes. Phase 4
+`LSM-DENY-SATURATION-001` owns physical map-saturation failure.
 
 The `task_free` rollback program is deliberately tiny because the kernel may
 invoke the LSM task-free path in non-sleepable/interrupt context. It performs
@@ -3362,17 +3363,17 @@ and the [CRI runtime API](https://github.com/kubernetes/cri-api/blob/master/pkg/
 
 | Kubernetes/runtime situation | Native shape | Required entry treatment | Default role and decision |
 | --- | --- | --- | --- |
-| Initial application entrypoint | Runtime-created root in new container cgroup | Pre-start `ContainerStartEntry` bound to full container/image/Pod/profile generation | Exact `application-root`; deny start if strict admission cannot complete |
+| Initial application entrypoint | Runtime-created root in new container cgroup | Initial root only when a qualified Created/empty-cgroup or configured start interface proves pre-start order; otherwise conservative restored/unknown root | Exact initial role only with qualified evidence; otherwise fail closed |
 | Regular fork/thread from labeled workload | Native descendant | Kernel inheritance; no runtime admission | Profile transition or restrictive inherited role |
-| Exec `PostStart` | Possible secondary root, concurrent with entrypoint | One-use `KubeletPostStartEntry`, matched against exact PodSpec generation | Narrow `kubelet-poststart`; no inheritance of all application authority |
-| Exec `PreStop` | Possible secondary root during termination | One-use `KubeletPreStopEntry`; policy stays installed through exit | Narrow `kubelet-prestop`; no universal containment bypass |
-| Exec startup/liveness/readiness probe | Repeated secondary roots | Bounded, repeatable `KubeletExecProbeEntry` matched to effective PodSpec command | `kubelet-exec-probe`; strict file/socket/exec budget |
+| Exec `PostStart` | Possible secondary root, concurrent with entrypoint | Restricted external root unless a qualified existing interface carries exact purpose | No application inheritance; later policy owns its budget |
+| Exec `PreStop` | Possible secondary root during termination | Restricted external root unless a qualified existing interface carries exact purpose | Termination does not broaden identity or authority |
+| Exec startup/liveness/readiness probe | Repeated secondary roots | Stock CRI path creates restricted external roots; command and timing do not prove probe purpose | Same conservative external class unless a qualified interface carries purpose |
 | HTTP lifecycle handler | Kubelet-originated connection to Pod endpoint | No workload entry; retain node-flow and declared-hook context | Do not invent a workload process or parent edge |
 | HTTP/TCP/gRPC probe | Kubelet-originated connection | No workload entry; optional inbound-probe observation | Do not treat application receiver thread as a probe-created root |
 | Sleep lifecycle handler | Sleep in kubelet | No workload task or entry | No workload decision |
-| `kubectl exec` / streaming exec | Runtime-created secondary root plus Kubernetes `pods/exec` audit | `AdministrativeExecEntry`, correlated to audit principal when possible | Default deny or explicit approval; limited break-glass role |
-| `kubectl cp` | Usually a streaming exec that runs archive tooling | Same as administrative exec; never infer benignity from `tar` | Default deny or explicit scoped file-transfer role |
-| Direct `crictl exec` or runtime API exec | Runtime-created secondary root without Kubernetes user audit | `HostAdministrativeExecEntry` with runtime peer evidence | Deny on protected workloads unless host break-glass policy allows |
+| `kubectl exec` / streaming exec | Runtime-created secondary root plus separate Kubernetes `pods/exec` audit | Restricted external root. Phase 4 may consume an exact approved slot before assigning a stronger role. | Conservative external role by default; one-use break-glass role only after complete approval |
+| `kubectl cp` | Usually a streaming exec that runs archive tooling | Restricted external root plus separate audit fact; never infer benignity from `tar` | Conservative external role; Phase 4 owns any approved file-transfer role |
+| Direct `crictl exec` or runtime API exec | Runtime-created secondary root without Kubernetes user audit | Restricted external root with no fabricated Kubernetes purpose | Conservative external role; later policy decides effects |
 | Checkpoint/restore or migration | Restores one or many tasks, mappings, fds, sockets, namespaces, and device state, possibly without user `bprm` | `CheckpointRestoreEntry`; default reject, or hold the entire restored set and reconcile every object before atomic resume | Restore-specific role/current policy; never inherit old-node labels or skip entry because no exec occurred |
 | `kubectl attach` / CRI `Attach` | Authenticated streams attach to an existing process; normally no new workload task | Stream-authority object correlated to `pods/attach`/runtime evidence; retain existing task role | No invented entry/root; allow/reject/record the stream according to actor and target policy |
 | `kubectl port-forward` / CRI `PortForward` | Kubelet/API streaming path forwards traffic to Pod network; normally no new workload process | Typed port-forward stream/flow authority and audit edge | No invented process lineage; restrict actor, Pod UID, ports, direction, bytes/time, and destination flow |
@@ -3380,7 +3381,7 @@ and the [CRI runtime API](https://github.com/kubernetes/cri-api/blob/master/pkg/
 | Init container | Separate ordered container root | Its own execution set and image/profile | Init-specific role; never app-role inheritance |
 | Native sidecar | Separate independently restarted container root | Its own execution set and image/profile | Sidecar-specific role; shared Pod network does not merge lineage |
 | OCI runtime hook process | Infrastructure process, often outside workload cgroup | Infrastructure observation only | Never assign workload authority from shared namespaces alone |
-| `nsenter` or task moved into protected cgroup | Unlabeled external task | No pending authenticated entry means deny first protected effect | `unknown-external-entry` finding; fail closed |
+| `nsenter` or task moved into protected cgroup | Unlabeled external task | Namespace entry alone grants no identity; protected cgroup entry creates a restricted external root | Conservative external identity; Phase 4 owns the first-effect result |
 | Container restart in same Pod | New full container ID, cgroup live interval, root and lifecycle generation | New execution set and root admission | Never reuse the prior root label or response target implicitly |
 
 #### Checkpoint creation, restore, attach, and port-forward
@@ -15757,24 +15758,29 @@ the effect had already happened.
 The following tests are mandatory before a runtime/kernel combination can
 claim full protected-entry support.
 
+Phase 2 owns root identity, lineage, execution sets, binding lifetimes,
+coordinates, and conservative missing-state classification. Relationship
+evidence begins in Phase 3. Permission, approved-role transitions, and
+physical effect results begin in Phase 4 and do not block Phase 2.
+
 | Test | Setup and adversarial variation | Expected proof |
 | --- | --- | --- |
-| `ENTRY-START-001` | Hold a new container in runtime-created state; delay/wrong-profile/drop admission ack | Configured executable never begins without exact ack in strict mode; observe mode records the gap and continues |
+| `ENTRY-START-001` | Hold a new container in runtime-created state; delay, mismatch, or drop start metadata | Root identity stays conservative and the exact start gap is recorded. Phase 4 owns start denial. |
 | `ENTRY-POSTSTART-001` | PostStart races entrypoint in both observed orders | Two independent admitted roots, no fabricated parent, correct roles regardless of ordering |
 | `ENTRY-POSTSTART-002` | Kubelet restart causes duplicate PostStart delivery | Separate idempotent/repeated entry instances within policy budget; no stale nonce reuse |
-| `ENTRY-PRESTOP-001` | Trigger deletion while policy and an active response root exist | Enforcement remains installed; configured containment-vs-cleanup rule wins; termination alone grants nothing |
+| `ENTRY-PRESTOP-001` | Trigger deletion while a restricted root exists | Termination does not change identity or release required native references. Phase 4 owns containment policy. |
 | `ENTRY-PROBE-001` | Run startup, readiness, and liveness exec probes concurrently with identical and different commands | Exact reason when extension exists; otherwise only same-budget conservative classification; unequal ambiguity denies |
 | `ENTRY-PROBE-002` | Application child executes the exact probe binary/argv at the expected cadence | It retains native child lineage/role and cannot claim external probe intent |
-| `ENTRY-NETPROBE-001` | HTTP, TCP, and gRPC probes hit the Pod | No synthetic in-container probe task; host flow and application receive remain correctly scoped |
+| `ENTRY-NETPROBE-001` | HTTP, TCP, and gRPC probes hit the Pod | No synthetic in-container probe task. Later network fixtures own flow policy. |
 | `ENTRY-SLEEP-001` | PostStart/PreStop sleep action | No in-container task appears; kubelet lifecycle evidence only |
-| `ENTRY-EXEC-001` | `kubectl exec`, TTY/non-TTY, and `kubectl cp` | Administrative entry role and `pods/exec` audit correlation; default deny/approval honored |
-| `ENTRY-EXEC-002` | Direct `crictl exec` with the same command as a probe | Host-admin/unknown runtime entry, never exact kubelet-probe role |
+| `ENTRY-EXEC-001` | `kubectl exec`, TTY/non-TTY, and `kubectl cp` | Restricted external roots plus separate Kubernetes audit facts. Phase 4 owns the approved administrative role. |
+| `ENTRY-EXEC-002` | Direct `crictl exec` with the same command as a probe | Restricted external root, never a kubelet-probe role |
 | `ENTRY-EPHEMERAL-001` | Add ephemeral container targeting app PID namespace | New container execution set, API actor evidence, separate profile; shared PID namespace does not merge native trees |
-| `ENTRY-CONTAINERS-001` | Init, native sidecar, and app containers share Pod network and volume | Independent roots/profiles and correct shared-resource evidence |
-| `ENTRY-MIGRATE-001` | Move an unlabeled task into protected cgroup or use `nsenter` | First protected effect denied without valid pending intent |
+| `ENTRY-CONTAINERS-001` | Init, native sidecar, and app containers share Pod network and volume | Independent roots and execution sets. Later relationship fixtures own shared-resource edges. |
+| `ENTRY-MIGRATE-001` | Move an unlabeled task into protected cgroup or use `nsenter` | Namespace entry grants no identity; cgroup entry creates a restricted external root. Phase 4 owns the effect result. |
 | `ENTRY-REUSE-001` | Reuse PID, namespace number, cgroup ID/path, container name, and Pod name over time | Live interval/full IDs prevent the old profile/response from attaching to the new subject |
 | `ENTRY-RESTART-001` | Restart kubelet, runtime, and `mithril-node` at every admission state | Pending intents reconcile or expire; no task executes with a stale/duplicate role; exact coverage transition recorded |
-| `ENTRY-LOSS-001` | Drop runtime-intent message or BPF entry event independently | Strict task denied or container held; event loss cannot relax enforcement; loss counter closes coverage |
+| `ENTRY-LOSS-001` | Drop runtime, audit, or BPF entry evidence independently | Task identity stays conservative and each coverage loss is explicit. Phase 4 owns the effect result. |
 
 For every case the test captures:
 
