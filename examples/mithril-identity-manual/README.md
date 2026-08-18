@@ -138,6 +138,9 @@ Then run only the case being checked:
 | Raw Docker exec | `sudo examples/mithril-identity-manual/docker-exec.sh NODE_CONFIG CONTAINER` |
 | Direct CRI exec | `sudo examples/mithril-identity-manual/cri-exec.sh` in the manual VM |
 | Non-TTY Kubernetes exec | `sudo examples/mithril-identity-manual/kubernetes-exec.sh` in the manual VM |
+| TTY Kubernetes exec | `sudo examples/mithril-identity-manual/kubernetes-exec-tty.sh` in the manual VM |
+| Kubernetes copy | `sudo examples/mithril-identity-manual/kubernetes-copy.sh` in the manual VM |
+| Kubernetes native child | `sudo examples/mithril-identity-manual/kubernetes-native-child.sh` in the manual VM |
 | Native child | `sudo examples/mithril-identity-manual/native-child.sh NODE_CONFIG CONTAINER_OR_FULL_CRI_ID` |
 | Orphaned native child | `sudo examples/mithril-identity-manual/native-child.sh NODE_CONFIG CONTAINER_OR_FULL_CRI_ID --orphan` |
 | Double-fork native child | `sudo examples/mithril-identity-manual/native-child.sh NODE_CONFIG CONTAINER_OR_FULL_CRI_ID --double-fork` |
@@ -154,11 +157,11 @@ Then run only the case being checked:
 | Labeled native-child mount entry | `sudo examples/mithril-identity-manual/nsenter-move.sh --labeled-task` in the manual VM |
 | Node restart | `sudo examples/mithril-identity-manual/restart.sh NODE_CONFIG CONTAINER_OR_FULL_CRI_ID` |
 
-The no-argument CRI and Kubernetes exec cases run only inside the retained
-manual Kubernetes VM. Each case creates its Namespace, Pod, live CRI binding,
-node, pins, lease, and fixture. Each case removes those resources before it
-returns. The VM uses K3s as its Kubernetes distribution. The Docker case runs
-outside that VM and derives a trusted test-only configured cgroup binding from
+The no-argument CRI and Kubernetes cases run only inside the retained manual
+Kubernetes VM. Each case creates its Namespace, Pod, live CRI binding, node,
+pins, lease, and fixture. Each case removes those resources before it returns.
+The VM uses K3s as its Kubernetes distribution. The Docker case runs outside
+that VM and derives a trusted test-only configured cgroup binding from
 `docker inspect`.
 
 ## Direct CRI Exec Check
@@ -196,9 +199,49 @@ sudo examples/mithril-identity-manual/kubernetes-exec.sh
 
 The script owns the same setup and cleanup as the direct CRI case. It runs
 ordinary non-TTY `kubectl exec`, holds the task for inspection, and requires a
-restricted external root with no creator. It does not qualify TTY exec,
-`kubectl cp`, an identical native-child control, or approved administrative
+restricted external root with no creator. Separate shells own the TTY, copy,
+and identical native-child controls. Phase 4 owns approved administrative
 exec.
+
+## TTY Kubernetes Exec Check
+
+Use the retained manual Kubernetes VM and run:
+
+```sh
+sudo examples/mithril-identity-manual/kubernetes-exec-tty.sh
+```
+
+The script allocates a real pseudo-terminal and runs `kubectl exec -i -t`. It
+holds the container shell until inspection. The shell must be a restricted
+external root with no creator. The script does not treat TTY allocation as a
+role signal.
+
+## Kubernetes Copy Check
+
+Use the retained manual Kubernetes VM and run:
+
+```sh
+sudo examples/mithril-identity-manual/kubernetes-copy.sh
+```
+
+The script runs real `kubectl cp`. A bounded `tar` wrapper records and holds
+the container task before it executes `/bin/tar`. The task must be a
+restricted external root with no creator. The copied file must match the
+source bytes.
+
+## Kubernetes Native-Child Control
+
+Use the retained manual Kubernetes VM and run:
+
+```sh
+sudo examples/mithril-identity-manual/kubernetes-native-child.sh
+```
+
+The script starts one restricted external shell through CRI. That shell forks
+an identical child command. The parent must remain a restricted external root.
+The child must have the parent's task cookie as its creator and real parent,
+no root or installed-role class, and the parent's active role. Command bytes
+do not convert a native child into an external root.
 
 ## Namespace Entry And Cgroup Movement Check
 

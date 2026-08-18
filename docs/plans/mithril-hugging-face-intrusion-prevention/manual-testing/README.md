@@ -42,8 +42,9 @@ The harness creates one disposable Ubuntu 24.04 libvirt guest, verifies the
 qualified kernel features, runs the current binaries, copies the evidence, and
 destroys the guest. The optional Kubernetes lane uses the K3s distribution.
 It proves Pod and CRI facts, creates an exact Mithril CRI binding, and records
-restricted direct CRI exec and non-TTY `kubectl exec` roots. It does not prove
-TTY exec, `kubectl cp`, approved administrative exec, multi-node propagation,
+restricted direct CRI exec, non-TTY and TTY `kubectl exec`, and `kubectl cp`
+roots. It also records an identical native child with its parent lineage and
+role. It does not prove approved administrative exec, multi-node propagation,
 or complete Kubernetes protection.
 
 For a retained guest that runs manual shells, use the [manual retained-VM

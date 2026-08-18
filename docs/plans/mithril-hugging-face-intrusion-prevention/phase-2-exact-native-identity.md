@@ -1,8 +1,10 @@
 # Phase 2: Exact Native Identity
 
-Status: Blocked. The current source passed the disposable privileged VM native
-identity probe and its Kubernetes entry extension on the K3s distribution.
-The complete failure-injection and entry-case matrix is not recorded.
+Status: Blocked. The current source passed the privileged VM native identity
+probe and its Kubernetes entry extension. The extension includes direct CRI
+exec, non-TTY and TTY `kubectl exec`, `kubectl cp`, and an identical native
+child. The VM used the K3s distribution. The complete failure-injection and
+entry-case matrix is not recorded.
 
 Master: [Mithril Hugging Face Intrusion Prevention](./README.md)
 Design: [Validated readable architecture](./policy-and-protection-algorithm-architecture-readable.md)
@@ -128,8 +130,8 @@ Files and durable owners changed: erebor-interceptor-abi owns the generated snak
 Build and simplicity result: libbpf-cargo 0.27.0 is the only production C-to-BPF build path, and the production C is compiled with -Wall -Werror. The resulting object is embedded in the node binary and opened from memory through fully vendored libbpf-rs 0.27.0; the former second configured object path/checksum and Docker build-directory copy were removed. The BPF source follows the checked-source hook-family shape without adding another object, loader, map owner, or link step: the small `identity.bpf.c` front includes the map/task/root owners and cohesive lifecycle, exec-transaction, effect-gate, and exit families into the same object. cbindgen remains only the Rust-to-C ABI renderer and drift check. Standard Linux names CLONE_PARENT, CLONE_THREAD, AT_EXECVE_CHECK, and EACCES are used through the minimal syscall-note UAPI header because those macros are absent from vmlinux BTF and full host UAPI headers would make the CO-RE translation unit host-architecture-dependent. Product-owned state constants are generated once from the shared ABI.
 Correctness-preserving simplifications: execution_set_bindings is the single cgroup-placement authority. Configured non-CRI bindings still use one exact cgroup path and periodically revalidate its live handle, device, and inode. The 2026-08-09 pass rejects the cgroup root as a workload, opens the cgroup handle before publication, compares the handle and live path identity before each publish, and rejects root/traversal CRI paths. When CRI is configured, `WorkloadBindingOwner` takes one standard full `ListContainers` snapshot per interval, ignores unconfigured containers, validates the configured full container ID, Pod UID, sandbox, container name, image reference, creation generation, and live Created/Running state, and resolves `runtimeSpec.linux.cgroupsPath` locally before publishing. A newly observed Created container may retain configured initial-root arming only while its cgroup is empty; a container first observed Running is conservatively external and is never retroactively promoted. A missing/stopped exact lifetime is transitioned to Terminating, and a changed/reused identity fails closed. The periodic inventory is recovery truth after event loss or restart; adding a separate CRI-event state machine would not prove pre-start ordering. Raw Docker exec, direct CRI exec, and a host task moved after `nsenter` use the same BPF classification path rather than separate runtime-specific identity engines. The BPF program performs a bounded 64-level walk of the live kernel cgroup ancestry, using the upstream-compatible cgroup ancestors layout with the self.parent fallback; an unreadable or over-depth chain denies and increments health rather than treating the task as unprotected. Missing exit tombstones now also increment reconciliation health while retaining restrictions. This replaces both the userspace descendant scan and the capacity-sensitive descendant map. AT_EXECVE_CHECK ownership is an atomic task-cookie marker in ProcessSecurityStateV1, so a check-only exec cannot stage an exec, consume an administrative slot, or depend on insertion into another bounded map. Binding nonces are random UUID-v4 values on first publication and are recovered byte-exactly from pinned state on restart. Nested configured protected roots are rejected instead of introducing precedence rules. Exact desired assignments remain bootstrap inputs in Phase 2; policy compilation/effect permission is Phase 3-4 and authenticated fleet distribution remains Phase 7-8.
 Upstream-adoption dossier IDs used: BJ-TASK-STORAGE-001 and BJ-REJECTED-ENROLLMENT-002 for task-first allocation and rejection of delayed PID enrollment; KA-LSM-DECISION-001 and KA-PATH-MOUNT-003 for prior-result/fail-closed LSM behavior and live mount identity; TG-FORK-EXEC-001, TG-RUNTIME-CGROUP-JOIN-002, TG-FRESH-MAPS-004, TG-VMLINUX-HEADER-006, and TG-VMLINUX-ARM64-007 for fork/exec, cgroup binding, recoverable publication, and CO-RE headers; AS-VMLINUX-ARM-001 and AS-VMLINUX-RISCV-002 for checked compile headers. No upstream daemon, policy engine, loader, or delayed-enrollment model was copied.
-Fixture cases and exact physical results: the source allocates exactly 29 Phase 2 fixture IDs. Unit tests cover authorization-envelope identity, ABI layout, binding identity, runtime reconciliation, reference parsing, object embedding, required program/map sets, packaging, and fixture allocation. The native physical probe covers initial and external roots, direct `clone3(CLONE_INTO_CGROUP)`, native inheritance, exec continuity, reparenting, movement, restart, and cleanup. The Kubernetes extension covers the pre-existing conservative root, direct CRI exec, and non-TTY `kubectl exec`. Its schema-14 JSON SHA-256 is aa70c2c398c6d07d138b81293103f3cbfc4be91d2c8999387b893ff7cac92910. Direct CRI exec and non-TTY `kubectl exec` are restricted external roots with no fabricated purpose. Fixture allocation and unit coverage are not physical execution of every fixture. The closure matrix states each remaining exact limit.
-Commands and exact source state covered: source commit da01f77d2deb83482788f16081307b01a6dc6556 ran the complete disposable VM harness. The Kubernetes identity JSON is /tmp/mithril-kubernetes-entry-20260817-021/identity-physical-probe.json. The retained manual VM ran examples/mithril-identity-manual/cri-exec.sh and examples/mithril-identity-manual/kubernetes-exec.sh consecutively as root. Both passed. The manual and automated owners removed their Namespace, fixture, pin, lease, cgroup, node process, and loaded Erebor Interceptor programs. The VM harness destroyed both VMs.
+Fixture cases and exact physical results: the source allocates exactly 29 Phase 2 fixture IDs. Unit tests cover authorization-envelope identity, ABI layout, binding identity, runtime reconciliation, reference parsing, object embedding, required program/map sets, packaging, and fixture allocation. The native physical probe covers initial and external roots, direct `clone3(CLONE_INTO_CGROUP)`, native inheritance, exec continuity, reparenting, movement, restart, and cleanup. The Kubernetes extension covers the pre-existing conservative root, direct CRI exec, non-TTY and TTY `kubectl exec`, `kubectl cp`, and an identical native child. Its schema-15 JSON SHA-256 is ef749b5a6d2521c6bd865317ce3843bf685610d009500f6d37569c9bd26a57cc. The independent runtime entries are restricted external roots with no fabricated purpose. The identical child has native parent lineage and the parent's restricted role. Fixture allocation and unit coverage are not physical execution of every fixture. The closure matrix states each remaining exact limit.
+Commands and exact source state covered: source commit 53fbd287aad8b6012eb4f80dcd4fe83e34ed5470 ran the Kubernetes identity extension in the retained physical VM with a passing schema-15 native bundle. The Kubernetes identity JSON is /tmp/mithril-phase2-kubernetes-entry-exec-20260818-025/identity-physical-probe.json. The retained VM ran examples/mithril-identity-manual/kubernetes-exec-tty.sh, examples/mithril-identity-manual/kubernetes-copy.sh, and examples/mithril-identity-manual/kubernetes-native-child.sh consecutively as root. All three passed. The prior current-source record covers direct CRI exec and non-TTY `kubectl exec`. The manual and automated owners removed their Namespace, fixture, pin, lease, cgroup, node process, and loaded Erebor Interceptor programs. The manual harness destroyed the VM.
 Platform/kernel/runtime manifests: the current physical result ran on x86_64 Ubuntu 24.04, kernel 6.8.0-137-generic, with cgroup v2 and the required BPF/LSM support. Kubernetes v1.35.5 ran through the K3s v1.35.5+k3s1 distribution and the live containerd CRI endpoint. The runner created an exact Pod/CRI binding before it tested later runtime roots. The BPF object SHA-256 is 3269516fcd2714ab7fbe29df26386c40f0c912b6284007b641d8bbf68842b876. The production program compiles through the checked x86, arm64, arm, and riscv vmlinux dispatch. Compilation is not a non-x86 physical result.
 Performance/capacity results: all authoritative maps are bounded and fail closed on missing or full state. No identity-specific production latency or saturation result is recorded. The feasibility benchmark is historical platform evidence, not an identity result.
 Unsupported/degraded paths: approved administrative roles, permission tables, raced policy transitions, protected effects, IPC policy, shared-resource policy, and response remain outside this identity result. A configured static Docker binding validates live cgroup identity but does not continuously validate Docker-daemon metadata. CRI-backed bindings validate exact runtime metadata and local cgroup placement, but snapshot discovery alone cannot prove that a binding preceded the first user instruction. Only a qualified Created/empty-cgroup observation or supported start interface can make that claim. The closure matrix lists the remaining Phase 2 identity, entry, coordinate, native-reference, and failure-injection results. A cleanup loss retains restriction and raises reconciliation instead of recovering authority.
@@ -166,6 +168,33 @@ This completes `ENTRY-EXEC-002`. It completes only the non-TTY subcase of
 `ENTRY-EXEC-001`; TTY exec, `kubectl cp`, and the identical native-child
 control remain open. Phase 4 owns the approved administrative role. Phase 2
 remains **Blocked**.
+
+## Kubernetes Exec Closure Result — 2026-08-18
+
+Source commit `53fbd287aad8b6012eb4f80dcd4fe83e34ed5470` uses the
+existing `IdentityTestRunner` and bundle. The automated physical extension
+passed in the retained x86_64 Ubuntu 24.04 VM on kernel
+`6.8.0-137-generic`. Kubernetes `v1.35.5` used the K3s
+`v1.35.5+k3s1` distribution.
+
+The schema-15 JSON is
+`/tmp/mithril-phase2-kubernetes-entry-exec-20260818-025/identity-physical-probe.json`.
+Its SHA-256 is
+`ef749b5a6d2521c6bd865317ce3843bf685610d009500f6d37569c9bd26a57cc`.
+It records distinct restricted external roots for non-TTY and TTY
+`kubectl exec` and `kubectl cp`. It records an external parent and its native
+child with exact creator, real-parent, and inherited-role identity. The copy
+fixture also required exact destination bytes.
+
+The same retained VM ran `kubernetes-exec-tty.sh`, `kubernetes-copy.sh`, and
+`kubernetes-native-child.sh` consecutively as root. All three printed `PASS`.
+Postflight found no case Namespace, fixture, Mithril process, pin, lease,
+cgroup, or loaded Erebor Interceptor program. The manual harness destroyed the
+VM, and `virsh list --all --name` was empty. The final full Rust CI script
+passed with exit status `0`.
+
+This completes `ENTRY-EXEC-001`. It does not prove approved administrative
+exec; Phase 4 owns that result. Other open rows keep Phase 2 **Blocked**.
 
 ## Maintenance update — 2026-08-09
 

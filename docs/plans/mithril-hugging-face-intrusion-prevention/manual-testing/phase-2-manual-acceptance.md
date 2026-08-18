@@ -1,9 +1,10 @@
 # How To Manually Accept Phase 2
 
 Status: The current source passed the automated privileged VM identity probe
-and its Kubernetes entry extension on the K3s distribution. Direct CRI exec
-and non-TTY `kubectl exec` also passed as self-contained operator cases. The
-full fixture matrix is not recorded.
+and its Kubernetes entry extension. Direct CRI exec, non-TTY and TTY
+`kubectl exec`, `kubectl cp`, and the identical native-child control passed as
+self-contained operator cases. The VM used the K3s distribution. The full
+fixture matrix is not recorded.
 
 Phase: [Exact Native Identity](../phase-2-exact-native-identity.md)  
 Setup: [`SINGLE-NODE`](./environment-setup.md)
@@ -353,6 +354,82 @@ This completes `ENTRY-EXEC-002`. It completes only the non-TTY subcase of
 `ENTRY-EXEC-001`. TTY exec, `kubectl cp`, and an application-native child with
 the same command remain open. Phase 4 owns the stronger approved
 administrative role. Phase 2 remains **Blocked**.
+
+## Recorded Kubernetes Exec Closure — 2026-08-18
+
+Source commit `53fbd287aad8b6012eb4f80dcd4fe83e34ed5470` extends the
+existing `IdentityTestRunner` and physical JSON bundle. It adds no BPF map,
+role, runner, or durable type. The retained x86_64 Ubuntu 24.04 VM ran kernel
+`6.8.0-137-generic`. Kubernetes `v1.35.5` ran through the K3s
+`v1.35.5+k3s1` distribution and the live containerd CRI endpoint.
+
+The root shell ran the automated Kubernetes extension with unique paths:
+
+```sh
+target/debug/mithril-identity-test \
+  --repo-root "$MITHRIL_MANUAL_SOURCE" \
+  --output-directory /var/tmp/mithril-kubernetes-entry-exec-20260818-025 \
+  physical-probe \
+  --pin-root /sys/fs/bpf/mithril-kubernetes-entry-exec-025 \
+  --lease-path /var/tmp/mithril-kubernetes-entry-exec-20260818-025/owner.lock \
+  --cgroup-path /sys/fs/cgroup/mithril-kubernetes-entry-exec-025 \
+  --with-kubernetes \
+  --previous-bundle /var/tmp/identity-native-schema15-023.json
+```
+
+The schema-15 JSON is
+`/tmp/mithril-phase2-kubernetes-entry-exec-20260818-025/identity-physical-probe.json`.
+Its SHA-256 is
+`ef749b5a6d2521c6bd865317ce3843bf685610d009500f6d37569c9bd26a57cc`.
+The input native bundle SHA-256 is
+`8ac4bf32a0851360223b8c038bf86a7fdaca13e2314908eaa956927715af0688`.
+The BPF object SHA-256 is
+`3269516fcd2714ab7fbe29df26386c40f0c912b6284007b641d8bbf68842b876`.
+The automated workload manifest SHA-256 is
+`6acba20b7b171c35a7140491aa87cf9e36530fc85c3a6abaee3aff4eda73cc95`.
+
+The non-TTY, TTY, and copy tasks had task cookies `71`, `123`, and `175`.
+Each had no creator, `external_runtime_root`,
+`runtime_external_restricted`, and active role `11`. The copy fixture also
+required the exact source bytes at the destination. The native parent had
+task cookie `230`, no creator, the same external classes, and role `11`. Its
+child had task cookie `271`, creator and real-parent cookie `230`, no root or
+installed-role class, and role `11`. The JSON records
+`kubernetes_fixture_removed=true`.
+
+The retained VM then ran these commands consecutively as root:
+
+```sh
+examples/mithril-identity-manual/kubernetes-exec-tty.sh
+examples/mithril-identity-manual/kubernetes-copy.sh
+examples/mithril-identity-manual/kubernetes-native-child.sh
+```
+
+The shell SHA-256 values, in command order, are
+`d5e97f6f0335bfe3e8515045ed9ae1d4e9c2125642080d390f983ab3a4c64415`,
+`d4eecdaacdf918d5637632c7b6e2330109653668a90b4caed5080a8c713473ad`,
+and
+`89d10a01b104c4f5d2bffaee572ccf30d4469ea05ba13af04c7460d4fe469a14`.
+All three shells printed `PASS`. Postflight found no case Namespace, fixture,
+Mithril pin, node process, lease, cgroup, or loaded Erebor Interceptor program.
+`manual.sh destroy` removed the VM. `virsh list --all --name` was empty.
+
+Three rejected disposable runs are not acceptance evidence. Run `022` timed
+out at the unchanged native reference-release check. Run `023` passed the
+native probe, then exposed a stale marker between non-TTY and TTY exec. The
+runner now deletes that marker and its release file before it starts TTY exec.
+Run `024` timed out at the unchanged PID-namespace intermediate identity
+check before it started Kubernetes. The passing Kubernetes-only run used the
+schema-15 native bundle from run `023`; no failed Kubernetes output was used.
+
+`cargo test -p mithril-e2e
+production_object_and_identity_fixture_allocation_are_exact` passed.
+`cargo clippy -p mithril-e2e --all-targets -- -D warnings` passed.
+The final `bash .github/scripts/verify-rust-ci.sh` passed with exit status `0`.
+
+This completes `ENTRY-EXEC-001`. The exact limit is ordinary runtime entry
+identity only. Phase 4 owns approved administrative exec and its permission
+transition. Other open matrix rows keep Phase 2 **Blocked**.
 
 ## Recorded Pre-PONR Failed Native-Exec VM Subcase — 2026-08-15
 

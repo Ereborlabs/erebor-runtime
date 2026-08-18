@@ -4,7 +4,7 @@ This guide explains the current implementation. It uses source links so that a
 reviewer can follow each owner, state transition, and BPF decision. It does not
 replace an acceptance record.
 
-Source reviewed: code commit `da01f77d2deb83482788f16081307b01a6dc6556`
+Source reviewed: code commit `53fbd287aad8b6012eb4f80dcd4fe83e34ed5470`
 plus the current documentation changes on `mithril-phase-2-4`. The production
 identity object loaded by the 2026-08-17 VM has SHA-256
 `3269516fcd2714ab7fbe29df26386c40f0c912b6284007b641d8bbf68842b876`.
@@ -29,10 +29,11 @@ The latest phase results remain:
 - Phase 0: **Done** for its narrow x86-64 BPF Linux Security Module (LSM)
   capability and performance claim.
 - Phase 1: **Done**.
-- Phase 2: **Blocked**. Native identity and the direct CRI and non-TTY
-  Kubernetes exec rows have current source, manual, and privileged VM
-  evidence. The exact closure matrix lists the remaining entry, reuse,
-  coordinate, native-reference, authorization-identity, and failure cases.
+- Phase 2: **Blocked**. Native identity and the direct CRI, non-TTY and TTY
+  Kubernetes exec, copy, and identical native-child rows have current source,
+  manual, and privileged VM evidence. The exact closure matrix lists the
+  remaining entry, reuse, coordinate, native-reference,
+  authorization-identity, and failure cases.
   Phase 4 owns saturation, raced-policy, IPC-policy, and protected-effect
   results.
 - Phase 3: **Blocked**. Exact observation has current privileged VM and K3s
@@ -404,80 +405,101 @@ this root. Do not change its external symlink targets. This is one Phase 3
 direct-CRI OBSERVE operator case. It does not complete the manual matrix. Phase
 3 remains **Blocked**.
 
-### Kubernetes entry identity — 2026-08-17
+### Kubernetes entry identity — 2026-08-18
 
 Review this path in order:
 
 1. [`kubernetes-entry-workload-v1.yaml`](../../../crates/mithril-e2e/fixtures/identity/kubernetes-entry-workload-v1.yaml)
-   defines one real Pod, startup probe barrier, and shared host directory.
+   defines one real Pod, one startup barrier, and one shared host directory.
+   Its `PATH` lets the copy fixture place a bounded `tar` wrapper in that
+   shared directory.
 2. [`IdentityTestRunner::physical_kubernetes_probe`](../../../crates/mithril-e2e/src/identity.rs)
-   accepts the prior schema-14 native bundle. It rejects a bundle that already
-   contains a Kubernetes result.
+   accepts one prior schema-15 native bundle. It rejects a bundle that already
+   contains any Kubernetes result.
 3. The same runner creates the Namespace and Pod. It reads the full container
    ID, Pod UID, sandbox ID, image digest, creation generation, and live cgroup.
 4. `WorkloadBindingOwner` publishes that exact CRI binding. The existing
    `KernelHostOwner` loads and owns the production object. The existing
-   `NativeIdentityInspector` reads the three task snapshots.
-5. [`mithril-identity-test`](../../../crates/mithril-e2e/src/bin/mithril_identity_test.rs)
+   `NativeIdentityInspector` reads every task snapshot.
+5. The runner holds direct CRI exec, non-TTY and TTY `kubectl exec`, and
+   `kubectl cp` at file barriers. Each operation must have a distinct
+   restricted external-root identity. The copy operation must also copy the
+   exact source bytes.
+6. The runner starts one CRI external shell that forks an identical command.
+   The parent must be a restricted external root. The child must have the
+   parent's task cookie as both its creator and real parent, no root or
+   installed-role class, and the parent's active role.
+7. [`mithril-identity-test`](../../../crates/mithril-e2e/src/bin/mithril_identity_test.rs)
    writes the combined JSON only after the runner returns.
-6. [`run.sh`](../../../crates/mithril-e2e/harness/vm/run.sh) runs native
-   identity first. It starts Kubernetes through the K3s distribution, runs the
-   other physical owners, and runs the Kubernetes identity extension last.
-   The VM harness does not run example shells.
+8. [`identity-runtime.sh`](../../../examples/mithril-identity-manual/identity-runtime.sh)
+   owns the manual node, Kubernetes target, CRI binding, pins, lease, and
+   cleanup. The three new example shells each own only one operator scenario.
+9. [`run.sh`](../../../crates/mithril-e2e/harness/vm/run.sh) and
+   [`manual.sh`](../../../crates/mithril-e2e/harness/vm/manual.sh) own VM
+   creation, SSH access, and destruction. They do not run example shells.
 
 ```mermaid
 sequenceDiagram
-    participant H as VM harness
+    participant O as operator or VM harness
     participant R as IdentityTestRunner
     participant K as Kubernetes and CRI
     participant N as node owners
     participant B as BPF identity hooks
     participant I as inspector
 
-    H->>R: run native identity and save schema-14 bundle
-    H->>K: start Kubernetes through K3s
-    H->>R: run Kubernetes extension with prior bundle
+    O->>R: provide passing schema-15 native bundle
     R->>K: create Namespace, Pod, and startup barrier
     R->>N: publish exact CRI binding and start identity owner
     N->>B: load object and pin maps and links
     R->>I: inspect pre-existing Pod root
-    R->>K: run direct CRI exec and non-TTY kubectl exec
-    R->>I: inspect both independent runtime roots
+    R->>K: start CRI exec, kubectl exec, TTY exec, and copy
+    R->>I: require distinct restricted external roots
+    R->>K: start external parent and identical native child
+    R->>I: require parent lineage and inherited role
     R->>N: stop owner and remove pins and lease
     R->>K: delete Namespace and fixture
-    R-->>H: write the combined JSON
+    R-->>O: write the combined schema-15 JSON
 ```
 
 The pre-existing Pod root has no creator. It is
-`restored_or_unknown_root` with `fail_closed_unknown`. The direct CRI exec and
-non-TTY `kubectl exec` tasks each have no creator. Each task is an
-`external_runtime_root` with `runtime_external_restricted`. Their task cookies
-are different. The runner does not infer purpose from command bytes, timing,
-TTY shape, cgroup, or namespaces.
+`restored_or_unknown_root` with `fail_closed_unknown`. Direct CRI exec,
+non-TTY and TTY `kubectl exec`, `kubectl cp`, and the native child's parent
+each have no creator. Each is an `external_runtime_root` with
+`runtime_external_restricted` and role `11`. Their task cookies are `19`,
+`71`, `123`, `175`, and `230`. The native child has task cookie `271`, creator
+and real-parent cookie `230`, no root or installed-role class, and role `11`.
+The runner does not infer purpose from command bytes, timing, TTY shape,
+cgroup, or namespaces.
 
-The physical JSON path is
-`/tmp/mithril-kubernetes-entry-20260817-021/identity-physical-probe.json`.
+Source commit `53fbd287aad8b6012eb4f80dcd4fe83e34ed5470` ran the
+Kubernetes-only extension in the retained x86_64 Ubuntu 24.04 VM on kernel
+`6.8.0-137-generic`. Kubernetes `v1.35.5` used the K3s
+`v1.35.5+k3s1` distribution. The physical JSON path is
+`/tmp/mithril-phase2-kubernetes-entry-exec-20260818-025/identity-physical-probe.json`.
 Its SHA-256 is
-`aa70c2c398c6d07d138b81293103f3cbfc4be91d2c8999387b893ff7cac92910`.
+`ef749b5a6d2521c6bd865317ce3843bf685610d009500f6d37569c9bd26a57cc`.
 The workload manifest SHA-256 is
-`3a8d0108982c07a5a3ecd7bd6a66e187d0539fa80a63399c53a4f6c606747d54`.
-The runner records `kubernetes_fixture_removed=true`. Harness postflight also
-found no owned Namespace, fixture, pin, lease, cgroup, node process, or VM.
+`6acba20b7b171c35a7140491aa87cf9e36530fc85c3a6abaee3aff4eda73cc95`.
+The BPF object SHA-256 is
+`3269516fcd2714ab7fbe29df26386c40f0c912b6284007b641d8bbf68842b876`.
 
-The manual owner is
-[`identity_prepare_k3s_case`](../../../examples/mithril-identity-manual/identity-runtime.sh).
-It creates one Kubernetes target through the K3s distribution and writes the
-exact CRI binding. [`cri-exec.sh`](../../../examples/mithril-identity-manual/cri-exec.sh)
-and [`kubernetes-exec.sh`](../../../examples/mithril-identity-manual/kubernetes-exec.sh)
-each run one root-only operator case in the retained VM. Each script owns its
-node, pins, lease, Namespace, Pod, binding, cgroup, and fixture. Both scripts
-passed consecutively. Final `bpftool` output contained no Erebor Interceptor
-program. The manual VM was destroyed.
+The retained VM ran
+[`kubernetes-exec-tty.sh`](../../../examples/mithril-identity-manual/kubernetes-exec-tty.sh),
+[`kubernetes-copy.sh`](../../../examples/mithril-identity-manual/kubernetes-copy.sh),
+and
+[`kubernetes-native-child.sh`](../../../examples/mithril-identity-manual/kubernetes-native-child.sh)
+consecutively as root. Their SHA-256 values are
+`d5e97f6f0335bfe3e8515045ed9ae1d4e9c2125642080d390f983ab3a4c64415`,
+`d4eecdaacdf918d5637632c7b6e2330109653668a90b4caed5080a8c713473ad`,
+and
+`89d10a01b104c4f5d2bffaee572ccf30d4469ea05ba13af04c7460d4fe469a14`.
+Each script printed `PASS`. Postflight found no case Namespace, fixture, pin,
+lease, cgroup, node process, or loaded Erebor Interceptor program. The manual
+harness destroyed the VM, and `virsh list --all --name` was empty.
 
-This result completes `ENTRY-EXEC-002`. It completes the non-TTY part of
-`ENTRY-EXEC-001`. TTY exec, `kubectl cp`, and the identical native-child
-control remain open. Phase 4 owns approved administrative exec. Phase 2
-remains **Blocked**.
+This result completes `ENTRY-EXEC-001`. The earlier result completes
+`ENTRY-EXEC-002`. Phase 4 owns approved administrative exec. Other open rows
+keep Phase 2 **Blocked**.
 
 ### Retained alias and mount evidence — 2026-08-15
 
@@ -921,7 +943,7 @@ NodeChassis::start
 | Other attached hooks | Explicit typed BPF wrappers | An attached hook can still be partial or unsupported. A protected request reaches an explicit hard-safe result when the code cannot prove the required object or state. |
 | Observation | one `EffectObservationReader` plus `EffectObservationStore` | One `libbpf-rs` ring reader copies best-effort records into a bounded in-process history. It does not authorize and is not durable evidence. |
 | Landlock target-context floor | Capability registration | The optional floor is complete as `ABSENT`, with reason `NO_QUALIFIED_TARGET_CONTEXT_INSTALL`. No BPF decision depends on this floor. |
-| Physical qualification | `mithril-e2e` VM harness | The current object requires 68 production programs and 55 maps. It has 66 persistent links, one temporary task iterator, and one on-demand policy probe. Current native-identity, direct CRI exec identity, OBSERVE, and PROTECT records passed. The administrative lane is blocked by the unsupported stock-runc bootstrap path. The latest source still needs the complete qualification matrix. |
+| Physical qualification | `mithril-e2e` VM harness | The current object requires 68 production programs and 55 maps. It has 66 persistent links, one temporary task iterator, and one on-demand policy probe. Current native identity; direct CRI exec; non-TTY and TTY `kubectl exec`; `kubectl cp`; the identical native child; OBSERVE; and PROTECT records passed. The administrative lane is blocked by the unsupported stock-runc bootstrap path. The latest source still needs the complete qualification matrix. |
 
 ## One object, one loader, one node
 
@@ -2388,9 +2410,10 @@ baseline read and then a protected read. The protected read must return
 `EACCES` and emit the matching exact-file decision for the same task.
 
 The same Kubernetes lane runs the identity extension after the local effect
-probes. The extension appends three snapshots to the prior native identity
-bundle. It records the conservative pre-existing root, direct CRI exec, and
-non-TTY `kubectl exec`. The extension uses its own Namespace and cleanup path.
+probes. The extension appends seven snapshots to the prior native identity
+bundle. It records the conservative pre-existing root; direct CRI exec;
+non-TTY and TTY `kubectl exec`; `kubectl cp`; and one external parent with its
+native child. The extension uses its own Namespace and cleanup path.
 
 The current CRI effect lane proves one local Kubernetes binding and exact
 pre-effect denial. It does not prove distributed policy or multi-node
