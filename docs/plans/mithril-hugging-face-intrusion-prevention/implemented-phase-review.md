@@ -11,7 +11,7 @@ identity object loaded by the 2026-08-18 VM has SHA-256
 The checked kernel-qualification object has SHA-256
 `4d56e05b36bb310af66c7ec553aa13fa4b29d4839096a7dd0e5708edddaa1eac`.
 The current architecture digest is
-`a0f2e81b4e4d30ddc8e7986df84376a2aed57ce329f662de5af5ab0ccbac2965`.
+`22678b9c0379ff915fe595059f3da2789c3e32cdf54d61656c7257175263d14a`.
 
 The source contains one production BPF object, native task identity, signed
 local policy rows, exact file decisions, typed device and process decisions,

@@ -295,6 +295,16 @@ pub struct IdentityPhysicalProbeBundleV1 {
     pub kubernetes_poststart_first_hook: Option<NativeTaskSnapshotV1>,
     pub kubernetes_poststart_repeated_hook: Option<NativeTaskSnapshotV1>,
     pub kubernetes_poststart_repeat_fresh_identity: Option<bool>,
+    pub kubernetes_stock_hook_timeout_seconds: Option<u64>,
+    pub kubernetes_stock_hook_timeout_result: Option<String>,
+    pub kubernetes_stock_hook_timeout_no_payload: Option<bool>,
+    pub kubernetes_stock_hook_mismatch_result: Option<String>,
+    pub kubernetes_stock_hook_mismatch_rejected: Option<bool>,
+    pub kubernetes_stock_hook_mismatch_no_payload: Option<bool>,
+    pub kubernetes_stock_hook_missing_field_result: Option<String>,
+    pub kubernetes_stock_hook_missing_field_rejected: Option<bool>,
+    pub kubernetes_stock_hook_missing_field_no_payload: Option<bool>,
+    pub kubernetes_stock_hook_failure_fixture_removed: Option<bool>,
     pub kubernetes_loss_audit_absent_root: Option<NativeTaskSnapshotV1>,
     pub kubernetes_loss_bpf_recovered_root: Option<NativeTaskSnapshotV1>,
     pub kubernetes_loss_bpf_recovered_fresh_restricted: Option<bool>,
@@ -2481,7 +2491,7 @@ impl IdentityTestRunner {
             }
         );
         Ok(IdentityPhysicalProbeBundleV1 {
-            schema_version: 27,
+            schema_version: 28,
             object_sha256,
             first_start,
             distinct_pin_root_owner_rejected,
@@ -2631,6 +2641,16 @@ impl IdentityTestRunner {
             kubernetes_poststart_first_hook: None,
             kubernetes_poststart_repeated_hook: None,
             kubernetes_poststart_repeat_fresh_identity: None,
+            kubernetes_stock_hook_timeout_seconds: None,
+            kubernetes_stock_hook_timeout_result: None,
+            kubernetes_stock_hook_timeout_no_payload: None,
+            kubernetes_stock_hook_mismatch_result: None,
+            kubernetes_stock_hook_mismatch_rejected: None,
+            kubernetes_stock_hook_mismatch_no_payload: None,
+            kubernetes_stock_hook_missing_field_result: None,
+            kubernetes_stock_hook_missing_field_rejected: None,
+            kubernetes_stock_hook_missing_field_no_payload: None,
+            kubernetes_stock_hook_failure_fixture_removed: None,
             kubernetes_loss_audit_absent_root: None,
             kubernetes_loss_bpf_recovered_root: None,
             kubernetes_loss_bpf_recovered_fresh_restricted: None,
@@ -2780,6 +2800,44 @@ impl IdentityTestRunner {
             && bundle.kubernetes_poststart_first_hook.is_some()
             && bundle.kubernetes_poststart_repeated_hook.is_some()
             && bundle.kubernetes_poststart_repeat_fresh_identity == Some(true);
+        let stock_hook_failure_results_missing =
+            bundle.kubernetes_stock_hook_timeout_seconds.is_none()
+                && bundle.kubernetes_stock_hook_timeout_result.is_none()
+                && bundle.kubernetes_stock_hook_timeout_no_payload.is_none()
+                && bundle.kubernetes_stock_hook_mismatch_result.is_none()
+                && bundle.kubernetes_stock_hook_mismatch_rejected.is_none()
+                && bundle.kubernetes_stock_hook_mismatch_no_payload.is_none()
+                && bundle.kubernetes_stock_hook_missing_field_result.is_none()
+                && bundle
+                    .kubernetes_stock_hook_missing_field_rejected
+                    .is_none()
+                && bundle
+                    .kubernetes_stock_hook_missing_field_no_payload
+                    .is_none()
+                && bundle
+                    .kubernetes_stock_hook_failure_fixture_removed
+                    .is_none();
+        let stock_hook_failure_results_present = bundle
+            .kubernetes_stock_hook_timeout_seconds
+            .is_some_and(|seconds| seconds == 30)
+            && bundle
+                .kubernetes_stock_hook_timeout_result
+                .as_deref()
+                .is_some_and(|result| !result.is_empty())
+            && bundle.kubernetes_stock_hook_timeout_no_payload == Some(true)
+            && bundle
+                .kubernetes_stock_hook_mismatch_result
+                .as_deref()
+                .is_some_and(|result| !result.is_empty())
+            && bundle.kubernetes_stock_hook_mismatch_rejected == Some(true)
+            && bundle.kubernetes_stock_hook_mismatch_no_payload == Some(true)
+            && bundle
+                .kubernetes_stock_hook_missing_field_result
+                .as_deref()
+                .is_some_and(|result| !result.is_empty())
+            && bundle.kubernetes_stock_hook_missing_field_rejected == Some(true)
+            && bundle.kubernetes_stock_hook_missing_field_no_payload == Some(true)
+            && bundle.kubernetes_stock_hook_failure_fixture_removed == Some(true);
         let loss_results_missing = bundle.kubernetes_loss_audit_absent_root.is_none()
             && bundle.kubernetes_loss_bpf_recovered_root.is_none()
             && bundle
@@ -2846,13 +2904,20 @@ impl IdentityTestRunner {
             && bundle.kubernetes_reuse_same_names == Some(true)
             && bundle.kubernetes_reuse_fresh_full_identity == Some(true)
             && bundle.kubernetes_reuse_fresh_binding_identity == Some(true);
-        let schema_compatible = bundle.schema_version == 27
-            || (bundle.schema_version == 26 && reuse_results_missing)
-            || (bundle.schema_version == 25 && restart_results_missing && reuse_results_missing)
+        let schema_compatible = bundle.schema_version == 28
+            || (bundle.schema_version == 27 && stock_hook_failure_results_missing)
+            || (bundle.schema_version == 26
+                && reuse_results_missing
+                && stock_hook_failure_results_missing)
+            || (bundle.schema_version == 25
+                && restart_results_missing
+                && reuse_results_missing
+                && stock_hook_failure_results_missing)
             || (bundle.schema_version == 24
                 && loss_results_missing
                 && restart_results_missing
-                && reuse_results_missing);
+                && reuse_results_missing
+                && stock_hook_failure_results_missing);
         ensure!(
             schema_compatible
                 && (entry_results_missing || entry_results_present)
@@ -2863,6 +2928,7 @@ impl IdentityTestRunner {
                 && (probe_results_missing || probe_results_present)
                 && (prestop_results_missing || prestop_results_present)
                 && (poststart_results_missing || poststart_results_present)
+                && (stock_hook_failure_results_missing || stock_hook_failure_results_present)
                 && (loss_results_missing || loss_results_present)
                 && (restart_results_missing || restart_results_present)
                 && (reuse_results_missing || reuse_results_present),
@@ -2871,7 +2937,7 @@ impl IdentityTestRunner {
                 reason: "the prior identity bundle cannot accept the next Kubernetes result",
             }
         );
-        bundle.schema_version = 27;
+        bundle.schema_version = 28;
         if entry_results_missing {
             self.physical_kubernetes_exec_probe(
                 output_directory,
@@ -2929,6 +2995,9 @@ impl IdentityTestRunner {
                 lease_path,
                 &mut bundle,
             )?;
+        }
+        if stock_hook_failure_results_missing {
+            self.physical_kubernetes_stock_hook_failure_probe(output_directory, &mut bundle)?;
         }
         if loss_results_missing || restart_results_missing || reuse_results_missing {
             self.physical_kubernetes_resilience_probe(
@@ -6155,6 +6224,420 @@ impl IdentityTestRunner {
         Ok(())
     }
 
+    fn physical_kubernetes_stock_hook_failure_probe(
+        &self,
+        output_directory: &Path,
+        bundle: &mut IdentityPhysicalProbeBundleV1,
+    ) -> Result<()> {
+        const HOOK_TIMEOUT_SECONDS: u64 = 30;
+
+        fs::create_dir_all(output_directory).context(IoSnafu {
+            path: output_directory,
+        })?;
+        let work_directory = output_directory.join("kubernetes-stock-hook-failure");
+        ensure!(
+            !work_directory.exists(),
+            InvalidInputSnafu {
+                path: &work_directory,
+                reason: "the Kubernetes stock-hook failure fixture directory already exists",
+            }
+        );
+        fs::create_dir(&work_directory).context(IoSnafu {
+            path: &work_directory,
+        })?;
+        let work_cleanup = ProbeDirectory::new(&work_directory);
+        let fixture_root = work_directory.join("fixture");
+        fs::create_dir(&fixture_root).context(IoSnafu {
+            path: &fixture_root,
+        })?;
+        let request_directory = Path::new(PRESTART_REQUEST_DIRECTORY);
+        ensure!(
+            !request_directory.exists(),
+            InvalidInputSnafu {
+                path: request_directory,
+                reason: "the stock-hook failure request directory must not already exist",
+            }
+        );
+        fs::create_dir(request_directory).context(IoSnafu {
+            path: request_directory,
+        })?;
+        fs::set_permissions(request_directory, fs::Permissions::from_mode(0o700)).context(
+            IoSnafu {
+                path: request_directory,
+            },
+        )?;
+        let request_cleanup = ProbeDirectory::new(request_directory);
+        let namespace = format!("mithril-identity-stock-hook-{}", std::process::id());
+        let template_path = self.repo_root.join(
+            "crates/mithril-e2e/fixtures/identity/kubernetes-stock-hook-failure-workload-v1.yaml",
+        );
+        let template = fs::read_to_string(&template_path).context(IoSnafu {
+            path: &template_path,
+        })?;
+        let mut namespace_created = false;
+        let mut runtime_class_created = false;
+
+        let probe = (|| -> Result<_> {
+            let mut timeout_result = None;
+            let mut timeout_no_payload = false;
+            let mut mismatch_result = None;
+            let mut mismatch_rejected = false;
+            let mut mismatch_no_payload = false;
+            let mut missing_field_result = None;
+            let mut missing_field_rejected = false;
+            let mut missing_field_no_payload = false;
+
+            for (index, case) in ["timeout", "mismatch", "missing-field"]
+                .into_iter()
+                .enumerate()
+            {
+                let pod_name = format!("mithril-stock-hook-{case}");
+                let manifest_path = work_directory.join(format!("{case}.yaml"));
+                fs::write(
+                    &manifest_path,
+                    template
+                        .replace("MITHRIL_IDENTITY_STOCK_HOOK_NAMESPACE", &namespace)
+                        .replace("MITHRIL_IDENTITY_STOCK_HOOK_CASE", case)
+                        .replace(
+                            "MITHRIL_IDENTITY_STOCK_HOOK_FIXTURE_ROOT",
+                            fixture_root.to_string_lossy().as_ref(),
+                        ),
+                )
+                .context(IoSnafu {
+                    path: &manifest_path,
+                })?;
+                namespace_created = true;
+                runtime_class_created = true;
+                self.kubernetes_output(
+                    &[
+                        "kubectl",
+                        "apply",
+                        "-f",
+                        manifest_path.to_string_lossy().as_ref(),
+                    ],
+                    &format!("create the Kubernetes stock-hook {case} fixture"),
+                )?;
+                let request_path = self.kubernetes_prestart_request_path(
+                    request_directory,
+                    &namespace,
+                    &pod_name,
+                    "application",
+                )?;
+                let container_id = request_path
+                    .file_stem()
+                    .and_then(|value| value.to_str())
+                    .filter(|value| {
+                        value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+                    })
+                    .ok_or_else(|| invalid_state("stock-hook request has no full container ID"))?
+                    .to_owned();
+                let binding_id = format!("11111111-1111-4111-8111-11111111170{index}");
+                let execution_set_id = format!("22222222-2222-4222-8222-22222222280{index}");
+                let identity = (
+                    mithril_node::ContainerKindV1::Application,
+                    binding_id.as_str(),
+                    execution_set_id.as_str(),
+                    "33333333-3333-4333-8333-333333333333",
+                    PROFILE_GENERATION_REF_ID,
+                );
+
+                let expected_hook_message = match case {
+                    "timeout" => {
+                        let (_, _, validated_request) = self.kubernetes_prestart_binding(
+                            request_directory,
+                            &namespace,
+                            &pod_name,
+                            "application",
+                            identity,
+                            &manifest_path,
+                        )?;
+                        ensure!(
+                            validated_request == request_path,
+                            InvalidInputSnafu {
+                                path: &request_path,
+                                reason: "timeout validation selected another prestart request",
+                            }
+                        );
+                        format!("Mithril prestart admission timed out for {container_id}")
+                    }
+                    "mismatch" => {
+                        let mut request: serde_json::Value =
+                            serde_json::from_slice(&fs::read(&request_path).context(IoSnafu {
+                                path: &request_path,
+                            })?)
+                            .context(JsonSnafu {
+                                path: &request_path,
+                            })?;
+                        let state_id = request
+                            .pointer_mut("/state/id")
+                            .ok_or_else(|| invalid_state("prestart request has no state ID"))?;
+                        *state_id = serde_json::Value::String("0".repeat(64));
+                        fs::write(
+                            &request_path,
+                            serde_json::to_vec(&request).context(JsonSnafu {
+                                path: &request_path,
+                            })?,
+                        )
+                        .context(IoSnafu {
+                            path: &request_path,
+                        })?;
+                        mismatch_rejected = self
+                            .kubernetes_prestart_binding(
+                                request_directory,
+                                &namespace,
+                                &pod_name,
+                                "application",
+                                identity,
+                                &manifest_path,
+                            )
+                            .is_err_and(|error| {
+                                error.to_string().contains(
+                                    "prestart OCI state does not match the sole live cgroup PID",
+                                )
+                            });
+                        ensure!(
+                            mismatch_rejected,
+                            InvalidInputSnafu {
+                                path: &request_path,
+                                reason: "mismatched prestart identity did not reject",
+                            }
+                        );
+                        self.reject_prestart(&request_path)?;
+                        format!("Mithril rejected prestart admission for {container_id}")
+                    }
+                    "missing-field" => {
+                        let mut request: serde_json::Value =
+                            serde_json::from_slice(&fs::read(&request_path).context(IoSnafu {
+                                path: &request_path,
+                            })?)
+                            .context(JsonSnafu {
+                                path: &request_path,
+                            })?;
+                        let removed = request
+                            .pointer_mut("/annotations")
+                            .and_then(serde_json::Value::as_object_mut)
+                            .and_then(|annotations| {
+                                annotations.remove("io.kubernetes.cri.sandbox-uid")
+                            });
+                        ensure!(
+                            removed.is_some(),
+                            InvalidInputSnafu {
+                                path: &request_path,
+                                reason: "prestart request has no Pod UID to remove",
+                            }
+                        );
+                        fs::write(
+                            &request_path,
+                            serde_json::to_vec(&request).context(JsonSnafu {
+                                path: &request_path,
+                            })?,
+                        )
+                        .context(IoSnafu {
+                            path: &request_path,
+                        })?;
+                        missing_field_rejected = self
+                            .kubernetes_prestart_binding(
+                                request_directory,
+                                &namespace,
+                                &pod_name,
+                                "application",
+                                identity,
+                                &manifest_path,
+                            )
+                            .is_err_and(|error| {
+                                error
+                                    .to_string()
+                                    .contains("prestart request has no Pod UID")
+                            });
+                        ensure!(
+                            missing_field_rejected,
+                            InvalidInputSnafu {
+                                path: &request_path,
+                                reason: "missing prestart Pod UID did not reject",
+                            }
+                        );
+                        self.reject_prestart(&request_path)?;
+                        format!("Mithril rejected prestart admission for {container_id}")
+                    }
+                    _ => unreachable!(),
+                };
+
+                let runtime_result = self.kubernetes_stock_hook_failure_result(
+                    &namespace,
+                    &pod_name,
+                    &expected_hook_message,
+                    &manifest_path,
+                )?;
+                let marker_path = fixture_root.join(format!("{case}.started"));
+                let no_payload = !marker_path.exists();
+                ensure!(
+                    no_payload,
+                    InvalidInputSnafu {
+                        path: &marker_path,
+                        reason: format!("the stock-hook {case} payload started"),
+                    }
+                );
+                self.kubernetes_output(
+                    &[
+                        "kubectl",
+                        "-n",
+                        namespace.as_str(),
+                        "delete",
+                        "pod",
+                        pod_name.as_str(),
+                        "--wait=false",
+                    ],
+                    &format!("begin removal of the stock-hook {case} Pod"),
+                )?;
+                self.settle_prestart_requests(request_directory)?;
+                self.kubernetes_output(
+                    &[
+                        "kubectl",
+                        "-n",
+                        namespace.as_str(),
+                        "wait",
+                        "--for=delete",
+                        &format!("pod/{pod_name}"),
+                        "--timeout=120s",
+                    ],
+                    &format!("finish removal of the stock-hook {case} Pod"),
+                )?;
+                self.wait_for(
+                    &format!("stock-hook {case} CRI container removal"),
+                    &manifest_path,
+                    || {
+                        let listed = self.kubernetes_output(
+                            &[
+                                "crictl",
+                                "ps",
+                                "-a",
+                                "--id",
+                                container_id.as_str(),
+                                "-o",
+                                "json",
+                            ],
+                            "read the failed stock-hook container record",
+                        )?;
+                        let listed: serde_json::Value =
+                            serde_json::from_str(&listed).context(JsonSnafu {
+                                path: &manifest_path,
+                            })?;
+                        Ok(listed
+                            .get("containers")
+                            .and_then(serde_json::Value::as_array)
+                            .is_some_and(Vec::is_empty)
+                            .then_some(()))
+                    },
+                )?;
+
+                match case {
+                    "timeout" => {
+                        timeout_result = Some(runtime_result);
+                        timeout_no_payload = no_payload;
+                    }
+                    "mismatch" => {
+                        mismatch_result = Some(runtime_result);
+                        mismatch_no_payload = no_payload;
+                    }
+                    "missing-field" => {
+                        missing_field_result = Some(runtime_result);
+                        missing_field_no_payload = no_payload;
+                    }
+                    _ => unreachable!(),
+                }
+            }
+
+            Ok((
+                timeout_result
+                    .ok_or_else(|| invalid_state("stock-hook timeout result is missing"))?,
+                timeout_no_payload,
+                mismatch_result
+                    .ok_or_else(|| invalid_state("stock-hook mismatch result is missing"))?,
+                mismatch_rejected,
+                mismatch_no_payload,
+                missing_field_result
+                    .ok_or_else(|| invalid_state("stock-hook missing-field result is missing"))?,
+                missing_field_rejected,
+                missing_field_no_payload,
+            ))
+        })();
+
+        let _ = self.settle_prestart_requests(request_directory);
+        let namespace_cleanup = if namespace_created {
+            self.kubernetes_output(
+                &[
+                    "kubectl",
+                    "delete",
+                    "namespace",
+                    namespace.as_str(),
+                    "--ignore-not-found",
+                    "--wait=true",
+                    "--timeout=120s",
+                ],
+                "remove the Kubernetes stock-hook failure fixture namespace",
+            )
+            .map(|_| ())
+        } else {
+            Ok(())
+        };
+        let runtime_class_cleanup = if runtime_class_created {
+            self.kubernetes_output(
+                &[
+                    "kubectl",
+                    "delete",
+                    "runtimeclass",
+                    "mithril",
+                    "--ignore-not-found",
+                    "--wait=true",
+                    "--timeout=60s",
+                ],
+                "remove the Kubernetes stock-hook failure RuntimeClass",
+            )
+            .map(|_| ())
+        } else {
+            Ok(())
+        };
+        let cleanup = namespace_cleanup
+            .and(runtime_class_cleanup)
+            .and(request_cleanup.cleanup())
+            .and(work_cleanup.cleanup());
+        if let Err(source) = probe {
+            cleanup?;
+            return Err(source);
+        }
+        cleanup?;
+        ensure!(
+            self.kubernetes_namespace_absent(&namespace)?
+                && !request_directory.exists()
+                && !work_directory.exists(),
+            InvalidInputSnafu {
+                path: &work_directory,
+                reason: "the Kubernetes stock-hook failure fixture was not removed",
+            }
+        );
+        let (
+            timeout_result,
+            timeout_no_payload,
+            mismatch_result,
+            mismatch_rejected,
+            mismatch_no_payload,
+            missing_field_result,
+            missing_field_rejected,
+            missing_field_no_payload,
+        ) = probe?;
+        bundle.kubernetes_stock_hook_timeout_seconds = Some(HOOK_TIMEOUT_SECONDS);
+        bundle.kubernetes_stock_hook_timeout_result = Some(timeout_result);
+        bundle.kubernetes_stock_hook_timeout_no_payload = Some(timeout_no_payload);
+        bundle.kubernetes_stock_hook_mismatch_result = Some(mismatch_result);
+        bundle.kubernetes_stock_hook_mismatch_rejected = Some(mismatch_rejected);
+        bundle.kubernetes_stock_hook_mismatch_no_payload = Some(mismatch_no_payload);
+        bundle.kubernetes_stock_hook_missing_field_result = Some(missing_field_result);
+        bundle.kubernetes_stock_hook_missing_field_rejected = Some(missing_field_rejected);
+        bundle.kubernetes_stock_hook_missing_field_no_payload = Some(missing_field_no_payload);
+        bundle.kubernetes_stock_hook_failure_fixture_removed = Some(true);
+        Ok(())
+    }
+
     fn physical_kubernetes_resilience_probe(
         &self,
         output_directory: &Path,
@@ -7085,52 +7568,11 @@ impl IdentityTestRunner {
         identity: (mithril_node::ContainerKindV1, &str, &str, &str, u64),
         manifest_path: &Path,
     ) -> Result<(WorkloadBindingConfig, u32, PathBuf)> {
-        let request_path = self.wait_for(
-            &format!("Kubernetes `{pod_name}` prestart request"),
+        let request_path = self.kubernetes_prestart_request_path(
             request_directory,
-            || {
-                let mut matching = Vec::new();
-                for entry in fs::read_dir(request_directory).context(IoSnafu {
-                    path: request_directory,
-                })? {
-                    let path = entry
-                        .context(IoSnafu {
-                            path: request_directory,
-                        })?
-                        .path();
-                    if path.extension().and_then(|value| value.to_str()) != Some("json") {
-                        continue;
-                    }
-                    let request: serde_json::Value =
-                        serde_json::from_slice(&fs::read(&path).context(IoSnafu { path: &path })?)
-                            .context(JsonSnafu { path: &path })?;
-                    if request
-                        .pointer("/annotations/io.kubernetes.cri.sandbox-namespace")
-                        .and_then(serde_json::Value::as_str)
-                        == Some(namespace)
-                        && request
-                            .pointer("/annotations/io.kubernetes.cri.sandbox-name")
-                            .and_then(serde_json::Value::as_str)
-                            == Some(pod_name)
-                        && request
-                            .pointer("/annotations/io.kubernetes.cri.container-name")
-                            .and_then(serde_json::Value::as_str)
-                            == Some(container_name)
-                    {
-                        matching.push(path);
-                    }
-                }
-                ensure!(
-                    matching.len() <= 1,
-                    InvalidInputSnafu {
-                        path: request_directory,
-                        reason: format!(
-                            "more than one prestart request matched `{pod_name}/{container_name}`"
-                        ),
-                    }
-                );
-                Ok(matching.pop())
-            },
+            namespace,
+            pod_name,
+            container_name,
         )?;
         let request: serde_json::Value =
             serde_json::from_slice(&fs::read(&request_path).context(IoSnafu {
@@ -7278,6 +7720,62 @@ impl IdentityTestRunner {
         Ok((binding, pid, request_path))
     }
 
+    fn kubernetes_prestart_request_path(
+        &self,
+        request_directory: &Path,
+        namespace: &str,
+        pod_name: &str,
+        container_name: &str,
+    ) -> Result<PathBuf> {
+        self.wait_for(
+            &format!("Kubernetes `{pod_name}` prestart request"),
+            request_directory,
+            || {
+                let mut matching = Vec::new();
+                for entry in fs::read_dir(request_directory).context(IoSnafu {
+                    path: request_directory,
+                })? {
+                    let path = entry
+                        .context(IoSnafu {
+                            path: request_directory,
+                        })?
+                        .path();
+                    if path.extension().and_then(|value| value.to_str()) != Some("json") {
+                        continue;
+                    }
+                    let request: serde_json::Value =
+                        serde_json::from_slice(&fs::read(&path).context(IoSnafu { path: &path })?)
+                            .context(JsonSnafu { path: &path })?;
+                    if request
+                        .pointer("/annotations/io.kubernetes.cri.sandbox-namespace")
+                        .and_then(serde_json::Value::as_str)
+                        == Some(namespace)
+                        && request
+                            .pointer("/annotations/io.kubernetes.cri.sandbox-name")
+                            .and_then(serde_json::Value::as_str)
+                            == Some(pod_name)
+                        && request
+                            .pointer("/annotations/io.kubernetes.cri.container-name")
+                            .and_then(serde_json::Value::as_str)
+                            == Some(container_name)
+                    {
+                        matching.push(path);
+                    }
+                }
+                ensure!(
+                    matching.len() <= 1,
+                    InvalidInputSnafu {
+                        path: request_directory,
+                        reason: format!(
+                            "more than one prestart request matched `{pod_name}/{container_name}`"
+                        ),
+                    }
+                );
+                Ok(matching.pop())
+            },
+        )
+    }
+
     fn release_prestart(&self, request_path: &Path) -> Result<()> {
         let request: serde_json::Value = serde_json::from_slice(
             &fs::read(request_path).context(IoSnafu { path: request_path })?,
@@ -7296,6 +7794,135 @@ impl IdentityTestRunner {
         self.wait_for("prestart request release", request_path, || {
             Ok((!request_path.exists() && !release_path.exists()).then_some(()))
         })
+    }
+
+    fn reject_prestart(&self, request_path: &Path) -> Result<()> {
+        let release_path = request_path.with_extension("release");
+        fs::write(&release_path, b"rejected\n").context(IoSnafu {
+            path: &release_path,
+        })?;
+        self.wait_for("prestart request rejection", request_path, || {
+            Ok((!request_path.exists() && !release_path.exists()).then_some(()))
+        })
+    }
+
+    fn settle_prestart_requests(&self, request_directory: &Path) -> Result<()> {
+        if !request_directory.exists() {
+            return Ok(());
+        }
+        let mut requests = Vec::new();
+        for entry in fs::read_dir(request_directory).context(IoSnafu {
+            path: request_directory,
+        })? {
+            let path = entry
+                .context(IoSnafu {
+                    path: request_directory,
+                })?
+                .path();
+            if path.extension().and_then(|value| value.to_str()) == Some("json") {
+                let release_path = path.with_extension("release");
+                fs::write(&release_path, b"rejected\n").context(IoSnafu {
+                    path: &release_path,
+                })?;
+                requests.push((path, release_path));
+            }
+        }
+        thread::sleep(Duration::from_millis(500));
+        for (request_path, release_path) in requests {
+            for path in [&request_path, &release_path] {
+                match fs::remove_file(path) {
+                    Ok(()) => {}
+                    Err(source) if source.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(source) => return Err(source).context(IoSnafu { path }),
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn kubernetes_stock_hook_failure_result(
+        &self,
+        namespace: &str,
+        pod_name: &str,
+        expected_hook_message: &str,
+        manifest_path: &Path,
+    ) -> Result<String> {
+        let deadline = Instant::now() + Duration::from_secs(45);
+        loop {
+            let pod = self.kubernetes_output(
+                &[
+                    "kubectl", "-n", namespace, "get", "pod", pod_name, "-o", "json",
+                ],
+                "read the Kubernetes stock-hook failure Pod",
+            )?;
+            let pod: serde_json::Value = serde_json::from_str(&pod).context(JsonSnafu {
+                path: manifest_path,
+            })?;
+            if let Some(waiting) = pod
+                .pointer("/status/containerStatuses/0/state/waiting")
+                .and_then(serde_json::Value::as_object)
+            {
+                let reason = waiting
+                    .get("reason")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("UNKNOWN");
+                let message = waiting
+                    .get("message")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or_default();
+                if message.contains(expected_hook_message) {
+                    return Ok(format!("{reason}: {message}"));
+                }
+            }
+
+            let events = self.kubernetes_output(
+                &[
+                    "kubectl",
+                    "-n",
+                    namespace,
+                    "get",
+                    "events",
+                    "--field-selector",
+                    &format!("involvedObject.name={pod_name}"),
+                    "-o",
+                    "json",
+                ],
+                "read the Kubernetes stock-hook failure events",
+            )?;
+            let events: serde_json::Value = serde_json::from_str(&events).context(JsonSnafu {
+                path: manifest_path,
+            })?;
+            if let Some(result) = events
+                .get("items")
+                .and_then(serde_json::Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(|event| {
+                    let message = event.get("message")?.as_str()?;
+                    message.contains(expected_hook_message).then(|| {
+                        let reason = event
+                            .get("reason")
+                            .and_then(serde_json::Value::as_str)
+                            .unwrap_or("UNKNOWN");
+                        format!("{reason}: {message}")
+                    })
+                })
+                .next()
+            {
+                return Ok(result);
+            }
+
+            ensure!(
+                Instant::now() < deadline,
+                InvalidInputSnafu {
+                    path: manifest_path,
+                    reason: format!(
+                        "timed out waiting for stock-hook result `{expected_hook_message}`"
+                    ),
+                }
+            );
+            thread::sleep(Duration::from_millis(100));
+        }
     }
 
     fn physical_kubernetes_network_probe(

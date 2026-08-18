@@ -162,6 +162,7 @@ Then run only the case being checked:
 | Kubernetes exec-probe identity | `sudo examples/mithril-identity-manual/kubernetes-probe-impersonation.sh` in the manual VM |
 | Kubernetes PreStop identity | `sudo examples/mithril-identity-manual/kubernetes-prestop.sh` in the manual VM |
 | Kubernetes prestart and PostStart identity | `sudo examples/mithril-identity-manual/kubernetes-poststart.sh` in the manual VM |
+| Kubernetes stock-hook timeout and invalid identity | `sudo examples/mithril-identity-manual/kubernetes-stock-hook-failure.sh` in the manual VM |
 | Kubernetes entry-source loss | `sudo examples/mithril-identity-manual/kubernetes-entry-loss.sh` in the manual VM |
 | Native child | `sudo examples/mithril-identity-manual/native-child.sh NODE_CONFIG CONTAINER_OR_FULL_CRI_ID` |
 | Orphaned native child | `sudo examples/mithril-identity-manual/native-child.sh NODE_CONFIG CONTAINER_OR_FULL_CRI_ID --orphan` |
@@ -415,6 +416,30 @@ verify Mithril's duplicate-entry identity behavior.
 
 The script removes its Namespace, RuntimeClass, fixture, prestart request,
 node, pin, lease, state, and temporary files. The retained VM remains under
+`manual.sh` ownership.
+
+## Kubernetes Stock-Hook Failure Check
+
+Use the retained manual Kubernetes VM and run:
+
+```sh
+sudo examples/mithril-identity-manual/kubernetes-stock-hook-failure.sh
+```
+
+The script uses the configured `mithril` RuntimeClass and its OCI prestart
+hook. It first supplies a valid request but no release and requires the
+30-second hook timeout to stop container creation. It then changes the OCI
+state container ID and requires live-CRI validation to reject the mismatch.
+Finally, it removes the required Pod UID and requires validation to reject the
+missing field. The last two cases return a rejection to the waiting hook.
+
+Every Pod command would write a host marker before it sleeps. No marker may
+exist after a failure. Kubernetes must report the hook error, and the failed
+CRI container record must disappear after Pod deletion. The script makes no
+held-task, purpose, policy-effect, or CRD-delivery claim.
+
+The script removes its Namespace, RuntimeClass, fixture, prestart requests,
+pin, lease, state, and temporary files. The retained VM remains under
 `manual.sh` ownership.
 
 ## Kubernetes Entry-Source Loss Check

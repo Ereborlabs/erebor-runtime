@@ -45,6 +45,7 @@ identity_k3s_runtime_class_created=false
 identity_probe_command=
 identity_prestop_release_fifo=
 identity_poststart_release_fifos=()
+identity_stock_hook_manifest_template=
 
 identity_require_command() {
   command -v "$1" >/dev/null || {
@@ -850,6 +851,50 @@ identity_prepare_k3s_poststart_case() {
   identity_release_prestarts
 }
 
+identity_prepare_k3s_stock_hook_failure_case() {
+  local source_config=$identity_repository/crates/mithril-e2e/harness/vm/k3s-cri-effect-node-v1.json
+  identity_stock_hook_manifest_template=$identity_repository/crates/mithril-e2e/fixtures/identity/kubernetes-stock-hook-failure-workload-v1.yaml
+  identity_check_base "$source_config"
+  identity_require_command crictl
+  identity_require_command kubectl
+  identity_mode=cri
+  identity_begin
+
+  local suffix
+  suffix=$(tr '[:upper:]' '[:lower:]' <<<"${identity_work##*.}")
+  identity_k3s_namespace=mithril-manual-$suffix
+  identity_k3s_fixture_root=/var/lib/mithril-manual-$suffix
+  identity_k3s_shared_directory=$identity_k3s_fixture_root/shared
+  identity_cleanup_functions+=(
+    identity_cleanup_stock_hook_failure_case
+    identity_cleanup_k3s_case
+    identity_cleanup_prestart_case
+  )
+  install -d -m 700 -- "$identity_k3s_fixture_root" "$identity_k3s_shared_directory"
+  [[ ! -e $identity_prestart_request_directory ]] || {
+    echo "the prestart request directory already exists" >&2
+    return 1
+  }
+  install -d -o root -g root -m 700 -- "$identity_prestart_request_directory"
+}
+
+identity_create_stock_hook_failure_pod() {
+  local case_name=$1
+  local workload=$identity_work/stock-hook-$case_name.yaml
+  [[ $case_name == timeout || $case_name == mismatch || $case_name == missing-field ]] || {
+    echo "invalid stock-hook failure case: $case_name" >&2
+    return 1
+  }
+  sed \
+    -e "s|MITHRIL_IDENTITY_STOCK_HOOK_NAMESPACE|$identity_k3s_namespace|g" \
+    -e "s|MITHRIL_IDENTITY_STOCK_HOOK_CASE|$case_name|g" \
+    -e "s|MITHRIL_IDENTITY_STOCK_HOOK_FIXTURE_ROOT|$identity_k3s_shared_directory|g" \
+    "$identity_stock_hook_manifest_template" >"$workload"
+  identity_k3s_namespace_created=true
+  identity_k3s_runtime_class_created=true
+  kubectl apply -f "$workload" >/dev/null
+}
+
 identity_wait_prestart_request() {
   local pod_name=$1
   local container_name=$2
@@ -921,7 +966,10 @@ identity_prestart_binding_json() {
   jq -e --arg id "$container_id" --argjson pid "$pid" \
     '.stage == "prestart" and .state.id == $id and .state.pid == $pid
      and .annotations["io.kubernetes.cri.container-type"] == "container"' \
-    "$request" >/dev/null
+    "$request" >/dev/null || {
+    echo "prestart OCI state does not match the live container identity" >&2
+    return 1
+  }
 
   container_json=$(crictl --runtime-endpoint "$identity_runtime_endpoint" \
     inspect "$container_id")
@@ -935,7 +983,10 @@ identity_prestart_binding_json() {
   fi
   image_digest=$(jq -er '.status.imageRef | select(contains("sha256:"))' \
     <<<"$container_json")
-  pod_uid=$(jq -er '.annotations["io.kubernetes.cri.sandbox-uid"]' "$request")
+  pod_uid=$(jq -er '.annotations["io.kubernetes.cri.sandbox-uid"]' "$request") || {
+    echo "prestart request has no Pod UID" >&2
+    return 1
+  }
   sandbox_id=$(jq -er '.annotations["io.kubernetes.cri.sandbox-id"]' "$request")
   jq -e \
     --arg id "$container_id" \
@@ -1031,6 +1082,30 @@ identity_cleanup_poststart_case() {
       printf 'rejected\n' >"${request%.json}.release"
     fi
   done
+}
+
+identity_settle_stock_hook_requests() {
+  local request release
+  [[ -d $identity_prestart_request_directory ]] || return 0
+  for request in "$identity_prestart_request_directory"/*.json; do
+    [[ -f $request ]] || continue
+    release=${request%.json}.release
+    printf 'rejected\n' >"$release"
+  done
+  sleep 0.5
+  for request in "$identity_prestart_request_directory"/*.json; do
+    [[ -f $request ]] || continue
+    release=${request%.json}.release
+    rm -f -- "$request" "$release"
+  done
+  for release in "$identity_prestart_request_directory"/*.release; do
+    [[ -f $release ]] || continue
+    rm -f -- "$release"
+  done
+}
+
+identity_cleanup_stock_hook_failure_case() {
+  identity_settle_stock_hook_requests
 }
 
 identity_cleanup_prestart_case() {

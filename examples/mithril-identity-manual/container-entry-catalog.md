@@ -25,7 +25,7 @@ entry surfaces too.
 | `ENTRY-REUSE-001` | Reuse PID and namespace number with [`native-pid-reuse.sh`](./native-pid-reuse.sh), recreate one cgroup path with [`native-cgroup-reuse.sh`](./native-cgroup-reuse.sh), and recreate one Kubernetes Pod and container name with [`kubernetes-reuse.sh`](./kubernetes-reuse.sh). | New full runtime IDs, cgroup IDs, cookies, nonces, and live intervals prevent old authority or response attachment. Source recovery rejects a reused cgroup ID when its live interval differs. |
 | `ENTRY-SLEEP-001` | Execute a lifecycle sleep action. | It is only a lifecycle fact; no process entry is invented when no task exists. |
 | `ENTRY-START-001` | Delay or drop configured start metadata. | The root stays conservative and the start gap remains explicit. Phase 4 owns effect denial. |
-| `ENTRY-STOCK-HOOK-FAILURE-002` | Fail, time out, or mismatch the configured stock hook. | The documented failure result occurs; there is no held-task or purpose claim. |
+| `ENTRY-STOCK-HOOK-FAILURE-002` | Use [`kubernetes-stock-hook-failure.sh`](./kubernetes-stock-hook-failure.sh) to time out a valid prestart request, mismatch its container ID, and remove its Pod UID. | Each configured OCI hook failure stops container creation before the payload marker. There is no held-task, purpose, policy-effect, or CRD-delivery claim. |
 
 This work establishes identity. Local enforcement owns permission tables and
 physical file, network, and exec denial, so these cases do not claim a policy

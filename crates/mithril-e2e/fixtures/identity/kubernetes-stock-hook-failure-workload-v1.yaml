@@ -1,0 +1,37 @@
+apiVersion: node.k8s.io/v1
+kind: RuntimeClass
+metadata:
+  name: mithril
+handler: mithril
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: MITHRIL_IDENTITY_STOCK_HOOK_NAMESPACE
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: mithril-stock-hook-MITHRIL_IDENTITY_STOCK_HOOK_CASE
+  namespace: MITHRIL_IDENTITY_STOCK_HOOK_NAMESPACE
+spec:
+  automountServiceAccountToken: false
+  runtimeClassName: mithril
+  restartPolicy: Never
+  terminationGracePeriodSeconds: 1
+  containers:
+    - name: application
+      image: docker.io/library/busybox:1.36.1@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662
+      imagePullPolicy: IfNotPresent
+      command:
+        - /bin/sh
+        - -c
+        - 'touch /var/lib/mithril-stock-hook/MITHRIL_IDENTITY_STOCK_HOOK_CASE.started; exec sleep 3600'
+      volumeMounts:
+        - name: fixture
+          mountPath: /var/lib/mithril-stock-hook
+  volumes:
+    - name: fixture
+      hostPath:
+        path: MITHRIL_IDENTITY_STOCK_HOOK_FIXTURE_ROOT
+        type: Directory

@@ -4444,7 +4444,7 @@ relationship or effect result does not block Phase 2.
 | `ENTRY-EPHEMERAL-001` | Add ephemeral container sharing target PID namespace | Independent container execution set and profile; shared PID namespace does not merge trees. |
 | `ENTRY-CONTAINERS-001` | Init, native sidecar, and app containers share Pod network/volume | Independent roots and execution sets. Later relationship fixtures own shared-resource edges. |
 | `ENTRY-MIGRATE-001` | Move unlabeled task into protected cgroup or use `nsenter` | Namespace entry grants no identity. Cgroup entry creates a restricted external root. Phase 4 owns the protected-effect result. |
-| `ENTRY-REUSE-001` | Reuse PID, namespace number, exact cgroup path, or Pod/container name. Treat an observed kernel cgroup-ID collision as the same case. | Full IDs and live intervals prevent old policy or response attachment. Physical qualification recreates the exact cgroup path and requires a new kernel cgroup ID. A source oracle must also reject a repeated kernel cgroup ID with a changed live interval because Linux does not provide a safe way to force that collision. |
+| `ENTRY-REUSE-001` | Reuse PID, namespace number, cgroup path/ID, Pod/container name | Full IDs and live intervals prevent old policy/response attachment. |
 | `ENTRY-RESTART-001` | Restart kubelet, runtime, and node agent during discovery and binding | Live tasks are re-enumerated; no stale role is reused; incomplete history and coverage transition are explicit. |
 | `ENTRY-LOSS-001` | Drop runtime/audit metadata and BPF entry evidence independently | The task stays a restricted unknown/external root and each coverage loss is explicit. Phase 4 owns the effect result. |
 
