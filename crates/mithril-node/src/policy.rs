@@ -14,17 +14,17 @@ use erebor_interceptor_abi::{
     ExactObjectBindingV1, ExceptionBindingStateV1, ExceptionHandleBindingKeyV1,
     ExceptionHandleBindingV1, ExceptionRuntimeStateKeyV1, ExceptionRuntimeStateKindV1,
     ExceptionRuntimeStateV1, ExecutionSetBindingStateV1, Id128V1, IoUringRequestStateV1,
-    IoUringRingStateV1, MountReconciliationProposalV1, MountSecurityViewStateV1,
-    MountTopologyStateV1, PathGraphStateKeyV1, PathGraphTerminalV1, PathGraphTransitionKeyV1,
-    PathGraphTransitionV1, PendingAdministrativeMatchV1, PendingExecV1, PhysicalDecisionKindV1,
-    PhysicalDecisionV1, PolicyActivationProbeMapKindV1, PolicyActivationProbeV1,
-    PolicyGenerationModeV1, PolicyGenerationStateV1, ProcessSecurityStateKindV1,
-    ProcessSecurityStateV1, ProfileGenerationDescriptorV1, ReferenceTombstoneStateV1,
-    TaskReferenceTombstoneV1, MAX_CANONICAL_COMPONENT_BYTES_V1,
+    IoUringRingStateV1, KernelEffectFamilyV1, MountReconciliationProposalV1,
+    MountSecurityViewStateV1, MountTopologyStateV1, PathGraphStateKeyV1, PathGraphTerminalV1,
+    PathGraphTransitionKeyV1, PathGraphTransitionV1, PendingAdministrativeMatchV1, PendingExecV1,
+    PhysicalDecisionKindV1, PhysicalDecisionV1, PolicyActivationProbeMapKindV1,
+    PolicyActivationProbeV1, PolicyGenerationModeV1, PolicyGenerationStateV1,
+    ProcessSecurityStateKindV1, ProcessSecurityStateV1, ProfileGenerationDescriptorV1,
+    ReferenceTombstoneStateV1, TaskReferenceTombstoneV1, MAX_CANONICAL_COMPONENT_BYTES_V1,
     MAX_POLICY_ACTIVATION_PROBE_KEY_BYTES_V1,
 };
 use mithril_control::{
-    canonical_path_components, kernel_operation_id, AntiRollbackStore, CanonicalPathGraphV1,
+    canonical_path_components, AntiRollbackStore, CanonicalPathGraphV1, CompiledOperationV1,
     CompiledPhysicalResultV1, ContainerKindV1 as PolicyContainerKindV1, EntryKindV1,
     ObjectClassifierSelectorV1, PathPatternComponentV1, PathPatternV1, PathTreeDenyPatternV1,
     PendingProfileActivationV1, PolicyArtifactOwner, ProfileActivationMetadataV1,
@@ -1157,13 +1157,15 @@ impl LoweredGeneration {
                     }
                     .build()
                 })?;
-            let family = cell.key.effect_family.kernel_id() as u16;
-            let operation = kernel_operation_id(&cell.key.operation_id).ok_or_else(|| {
-                IdentityStateSnafu {
-                    reason: format!("unsupported kernel operation `{}`", cell.key.operation_id),
-                }
-                .build()
-            })? as u16;
+            let family = KernelEffectFamilyV1::from(cell.key.effect_family) as u16;
+            let operation = CompiledOperationV1::try_from(cell.key.operation_id.as_str())
+                .map_err(|_| {
+                    IdentityStateSnafu {
+                        reason: format!("unsupported kernel operation `{}`", cell.key.operation_id),
+                    }
+                    .build()
+                })?
+                .kernel_id as u16;
             let exception_numeric_handle = cell
                 .consuming_exception_id
                 .as_ref()
@@ -3369,9 +3371,9 @@ fn lower_path_tables(
                 .operation_ids
                 .iter()
                 .map(|operation| {
-                    kernel_operation_id(operation)
-                        .map(|operation| operation as u16)
-                        .ok_or_else(|| {
+                    CompiledOperationV1::try_from(operation.as_str())
+                        .map(|operation| operation.kernel_id as u16)
+                        .map_err(|_| {
                             IdentityStateSnafu {
                                 reason: format!(
                                     "path-tree rule has unknown operation `{operation}`"

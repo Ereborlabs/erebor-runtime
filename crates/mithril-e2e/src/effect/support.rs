@@ -596,8 +596,8 @@ mod tests {
     use std::path::PathBuf;
 
     use mithril_control::{
-        compiled_key_digest, CompiledPhysicalResultV1, EffectFamilyV1, PolicyArtifactOwner,
-        PolicyCompiler, PolicyDocumentV1, ProfileModeV1,
+        CompiledPhysicalResultV1, EffectFamilyV1, PolicyArtifactOwner, PolicyCompiler,
+        PolicyDocumentV1, ProfileModeV1,
     };
     use mithril_node::EffectObservationHealth;
 
@@ -835,7 +835,7 @@ mod tests {
                 .find(|cell| cell.consuming_exception_id.as_deref() == Some(exception_id))
                 .ok_or("protect fixture has no expected exception cell")?;
             assert_eq!(
-                compiled_key_digest(&artifact.compiled_profile.profile_id, &cell.key)?,
+                cell.key.digest(&artifact.compiled_profile.profile_id)?,
                 expected_digest
             );
         }

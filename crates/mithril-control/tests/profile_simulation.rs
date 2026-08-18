@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 use std::path::Path;
 
 use mithril_control::{
-    kernel_operation_id, BindingLifecycleV1, CompiledDecisionCellV1, CompiledPhysicalResultV1,
+    BindingLifecycleV1, CompiledDecisionCellV1, CompiledOperationV1, CompiledPhysicalResultV1,
     EffectFamilyV1, EntryKindV1, HardSafetyConditionV1, NonPreventionReasonV1, PolicyCompiler,
     PolicyDocumentV1, PolicySimulator, SimulatedDispositionV1, SimulatedPhysicalResultV1,
     StaticDecisionKeyV1,
@@ -150,7 +150,7 @@ fn observation_simulates_every_required_future_fixture_and_incident_branch(
             Expected::UnresolvedNoCoveredEffect | Expected::UnresolvedOutsideAuthority
         ) {
             assert!(
-                kernel_operation_id(&case.operation_id).is_some(),
+                CompiledOperationV1::try_from(case.operation_id.as_str()).is_ok(),
                 "{} has no closed kernel operation",
                 case.case_id
             );
