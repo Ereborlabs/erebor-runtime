@@ -1,0 +1,109 @@
+apiVersion: node.k8s.io/v1
+kind: RuntimeClass
+metadata:
+  name: mithril
+handler: mithril
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: MITHRIL_IDENTITY_POSTSTART_NAMESPACE
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: mithril-poststart-entrypoint-first
+  namespace: MITHRIL_IDENTITY_POSTSTART_NAMESPACE
+spec:
+  automountServiceAccountToken: false
+  runtimeClassName: mithril
+  restartPolicy: Never
+  terminationGracePeriodSeconds: 5
+  containers:
+    - name: application
+      image: docker.io/library/busybox:1.36.1@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662
+      imagePullPolicy: IfNotPresent
+      command:
+        - /bin/sh
+        - -c
+        - 'read identity_pid _ < /proc/self/stat; read identity_uptime _ < /proc/uptime; directory=/var/lib/mithril/poststart; printf "%s\n" "$identity_pid" > "$directory/entrypoint-first-$identity_pid.pid"; printf "%s\n" "$identity_uptime" > "$directory/entrypoint-first.order"; fifo="$directory/entrypoint-first-release-$identity_pid"; mkfifo "$fifo"; read -r identity_release < "$fifo"; rm -f "$fifo"; exec sleep 3600'
+      lifecycle:
+        postStart:
+          exec:
+            command:
+              - /bin/sh
+              - -c
+              - 'sleep 2; read identity_pid _ < /proc/self/stat; read identity_uptime _ < /proc/uptime; directory=/var/lib/mithril/poststart; printf "%s\n" "$identity_pid" > "$directory/poststart-entrypoint-first-$identity_pid.pid"; printf "%s\n" "$identity_uptime" > "$directory/poststart-entrypoint-first.order"; fifo="$directory/poststart-entrypoint-first-release-$identity_pid"; mkfifo "$fifo"; read -r identity_release < "$fifo"; rm -f "$fifo"'
+      volumeMounts:
+        - name: poststart
+          mountPath: /var/lib/mithril/poststart
+  volumes:
+    - name: poststart
+      hostPath:
+        path: MITHRIL_IDENTITY_POSTSTART_FIXTURE_ROOT
+        type: Directory
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: mithril-poststart-hook-first
+  namespace: MITHRIL_IDENTITY_POSTSTART_NAMESPACE
+spec:
+  automountServiceAccountToken: false
+  runtimeClassName: mithril
+  restartPolicy: Never
+  terminationGracePeriodSeconds: 5
+  containers:
+    - name: application
+      image: docker.io/library/busybox:1.36.1@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662
+      imagePullPolicy: IfNotPresent
+      command:
+        - /bin/sh
+        - -c
+        - 'sleep 2; read identity_pid _ < /proc/self/stat; read identity_uptime _ < /proc/uptime; directory=/var/lib/mithril/poststart; printf "%s\n" "$identity_pid" > "$directory/entrypoint-hook-first-$identity_pid.pid"; printf "%s\n" "$identity_uptime" > "$directory/entrypoint-hook-first.order"; fifo="$directory/entrypoint-hook-first-release-$identity_pid"; mkfifo "$fifo"; read -r identity_release < "$fifo"; rm -f "$fifo"; exec sleep 3600'
+      lifecycle:
+        postStart:
+          exec:
+            command:
+              - /bin/sh
+              - -c
+              - 'read identity_pid _ < /proc/self/stat; read identity_uptime _ < /proc/uptime; directory=/var/lib/mithril/poststart; printf "%s\n" "$identity_pid" > "$directory/poststart-hook-first-$identity_pid.pid"; printf "%s\n" "$identity_uptime" > "$directory/poststart-hook-first.order"; fifo="$directory/poststart-hook-first-release-$identity_pid"; mkfifo "$fifo"; read -r identity_release < "$fifo"; rm -f "$fifo"'
+      volumeMounts:
+        - name: poststart
+          mountPath: /var/lib/mithril/poststart
+  volumes:
+    - name: poststart
+      hostPath:
+        path: MITHRIL_IDENTITY_POSTSTART_FIXTURE_ROOT
+        type: Directory
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: mithril-poststart-repeat
+  namespace: MITHRIL_IDENTITY_POSTSTART_NAMESPACE
+spec:
+  automountServiceAccountToken: false
+  runtimeClassName: mithril
+  restartPolicy: Never
+  terminationGracePeriodSeconds: 5
+  containers:
+    - name: application
+      image: docker.io/library/busybox:1.36.1@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662
+      imagePullPolicy: IfNotPresent
+      command: ["/bin/sh", "-c", "exec sleep 3600"]
+      lifecycle:
+        postStart:
+          exec:
+            command:
+              - /bin/sh
+              - -c
+              - 'read identity_pid _ < /proc/self/stat; directory=/var/lib/mithril/poststart; printf "%s\n" "$identity_pid" > "$directory/poststart-repeat-$identity_pid.pid"; fifo="$directory/poststart-repeat-release-$identity_pid"; mkfifo "$fifo"; read -r identity_release < "$fifo"; rm -f "$fifo"'
+      volumeMounts:
+        - name: poststart
+          mountPath: /var/lib/mithril/poststart
+  volumes:
+    - name: poststart
+      hostPath:
+        path: MITHRIL_IDENTITY_POSTSTART_FIXTURE_ROOT
+        type: Directory

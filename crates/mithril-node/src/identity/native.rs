@@ -34,13 +34,30 @@ impl NativeSecurityStateOwner {
     }
 
     pub fn activate(&self, host: &mut KernelHost) -> Result<ReconciliationReportV1> {
-        self.activate_with_effect_policy(host, false)
+        self.activate_state(host, false, true)
+    }
+
+    pub fn activate_held_initial_admission(
+        &self,
+        host: &mut KernelHost,
+        effect_policy_enabled: bool,
+    ) -> Result<ReconciliationReportV1> {
+        self.activate_state(host, effect_policy_enabled, false)
     }
 
     pub fn activate_with_effect_policy(
         &self,
         host: &mut KernelHost,
         effect_policy_enabled: bool,
+    ) -> Result<ReconciliationReportV1> {
+        self.activate_state(host, effect_policy_enabled, true)
+    }
+
+    fn activate_state(
+        &self,
+        host: &mut KernelHost,
+        effect_policy_enabled: bool,
+        reconcile_tasks: bool,
     ) -> Result<ReconciliationReportV1> {
         let mut config = IdentityRuntimeConfigV1 {
             node_boot_id: self.node_boot_id,
@@ -78,7 +95,9 @@ impl NativeSecurityStateOwner {
             host.update_map("identity_config", &key, config.as_bytes())
                 .context(InterceptorSnafu)?;
         }
-        host.reconcile_tasks().context(InterceptorSnafu)?;
+        if reconcile_tasks {
+            host.reconcile_tasks().context(InterceptorSnafu)?;
+        }
         let report = self.health(host)?;
         ensure!(
             report.allocation_failures == 0

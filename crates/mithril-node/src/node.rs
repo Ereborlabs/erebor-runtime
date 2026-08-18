@@ -76,7 +76,29 @@ pub struct NodeChassis {
 
 impl NodeChassis {
     pub async fn start(config: NodeConfig) -> Result<Self> {
+        Self::start_with_held_initial_pids(config, &[]).await
+    }
+
+    pub async fn start_with_held_initial_pids(
+        config: NodeConfig,
+        held_initial_pids: &[u32],
+    ) -> Result<Self> {
         config.validate()?;
+        if !held_initial_pids.is_empty() {
+            snafu::ensure!(
+                config.container_runtime.is_none()
+                    && held_initial_pids.len() == config.workload_bindings.len()
+                    && config
+                        .workload_bindings
+                        .iter()
+                        .all(|binding| binding.arm_initial_root)
+                    && held_initial_pids.iter().all(|pid| *pid > 0),
+                IdentityStateSnafu {
+                    reason:
+                        "prestart admission requires one held PID for each armed static binding",
+                }
+            );
+        }
         let boot_id = NodeEpochs::boot_id()?;
         let node_boot_id = id_from_uuid_bytes(boot_id);
         let recover_identity = config
@@ -84,6 +106,12 @@ impl NodeChassis {
             .pin_root
             .join("maps/identity_config")
             .exists();
+        snafu::ensure!(
+            held_initial_pids.is_empty() || !recover_identity,
+            IdentityStateSnafu {
+                reason: "prestart admission requires a fresh identity pin root",
+            }
+        );
         let label_epoch = NodeEpochs::label_epoch(&config.state_directory, recover_identity)?;
         let owner = KernelHostOwner::new(KernelHostConfig::identity(
             &config.interceptor.runtime_btf_path,
@@ -98,9 +126,19 @@ impl NodeChassis {
         } else {
             WorkloadBindingOwner::system(node_boot_id, label_epoch)?
         };
-        bindings
-            .publish_configured(&host, &config.workload_bindings)
-            .await?;
+        if held_initial_pids.is_empty() {
+            bindings
+                .publish_configured(&host, &config.workload_bindings)
+                .await?;
+        } else {
+            let created = config
+                .workload_bindings
+                .iter()
+                .cloned()
+                .zip(held_initial_pids.iter().copied())
+                .collect::<Vec<_>>();
+            bindings.publish_held_initial_roots(&host, &created)?;
+        }
         let policy = if config.policy_candidates.is_empty() {
             None
         } else {
@@ -151,7 +189,11 @@ impl NodeChassis {
             .as_ref()
             .is_some_and(crate::NodePolicyGenerationOwner::prevention_enabled);
         let identity = NativeSecurityStateOwner::new(node_boot_id, label_epoch);
-        let reconciliation = identity.activate_with_effect_policy(&mut host, policy_loaded)?;
+        let reconciliation = if held_initial_pids.is_empty() {
+            identity.activate_with_effect_policy(&mut host, policy_loaded)?
+        } else {
+            identity.activate_held_initial_admission(&mut host, policy_loaded)?
+        };
         let observations = crate::EffectObservationStore::default();
         let effect_reader = policy_loaded
             .then(|| {

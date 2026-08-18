@@ -29,6 +29,7 @@ struct PublishedBinding {
     root_handle: File,
     spec: WorkloadBindingConfig,
     runtime_identity: Option<RuntimeContainerIdentity>,
+    held_initial_pid: Option<u32>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -57,12 +58,29 @@ impl PublishedBinding {
         }
         let procs_path = self.root_cgroup_path.join("cgroup.procs");
         let procs = fs::read_to_string(&procs_path).context(IoSnafu { path: &procs_path })?;
+        let live_pids = procs
+            .split_whitespace()
+            .map(|pid| {
+                pid.parse::<u32>().map_err(|error| {
+                    IdentityStateSnafu {
+                        reason: format!(
+                            "initial-root admission for `{}` found invalid PID `{pid}`: {error}",
+                            self.root_cgroup_path.display()
+                        ),
+                    }
+                    .build()
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let admitted = self
+            .held_initial_pid
+            .map_or_else(|| live_pids.is_empty(), |pid| live_pids.as_slice() == [pid]);
         ensure!(
-            procs.trim().is_empty(),
+            admitted,
             IdentityStateSnafu {
                 reason: format!(
-                    "initial-root admission for `{}` requires an empty cgroup",
-                    self.root_cgroup_path.display()
+                    "initial-root admission for `{}` requires an empty cgroup or its one held prestart PID",
+                    self.root_cgroup_path.display(),
                 ),
             }
         );
@@ -239,8 +257,34 @@ impl WorkloadBindingOwner {
         host: &KernelHost,
         configured: &[WorkloadBindingConfig],
     ) -> Result<()> {
-        for spec in configured {
+        self.publish(host, configured.iter().map(|spec| (spec, None)))
+    }
+
+    pub fn publish_held_initial_roots(
+        &mut self,
+        host: &KernelHost,
+        configured: &[(WorkloadBindingConfig, u32)],
+    ) -> Result<()> {
+        self.publish(
+            host,
+            configured.iter().map(|(spec, pid)| (spec, Some(*pid))),
+        )
+    }
+
+    fn publish<'a>(
+        &mut self,
+        host: &KernelHost,
+        configured: impl IntoIterator<Item = (&'a WorkloadBindingConfig, Option<u32>)>,
+    ) -> Result<()> {
+        for (spec, held_initial_pid) in configured {
             let mut binding = self.prepare(spec)?;
+            ensure!(
+                held_initial_pid.is_none() || spec.arm_initial_root,
+                IdentityStateSnafu {
+                    reason: "prestart admission requires an armed initial root",
+                }
+            );
+            binding.held_initial_pid = held_initial_pid;
             ensure!(
                 !self.bindings.contains_key(&binding.root_cgroup_id)
                     && !self.bindings.values().any(|installed| {
@@ -360,7 +404,11 @@ impl WorkloadBindingOwner {
                         reason: format!("binding `{}` failed preparing readback", spec.binding_id),
                     }
                 );
-                reserve_live_root_task_labels(host, &binding)?;
+                if binding.held_initial_pid.is_none() {
+                    reserve_live_root_task_labels(host, &binding)?;
+                } else {
+                    binding.require_initial_root_admission()?;
+                }
                 binding.state.lifecycle_state = BindingLifecycleStateV1::Active;
                 binding.state.transition_version += 1;
                 host.update_map("execution_set_bindings", &key, binding.state.as_bytes())
@@ -374,6 +422,7 @@ impl WorkloadBindingOwner {
                         reason: format!("binding `{}` failed active readback", spec.binding_id),
                     }
                 );
+                binding.require_initial_root_admission()?;
             }
             self.profile_handles.insert(
                 binding.state.active_profile_generation_ref_id,
@@ -668,6 +717,7 @@ impl WorkloadBindingOwner {
             root_handle,
             spec: spec.clone(),
             runtime_identity: None,
+            held_initial_pid: None,
             state: ExecutionSetBindingStateV1 {
                 binding_id,
                 binding_nonce,
@@ -987,6 +1037,27 @@ mod tests {
             .prepare(&spec(&root))?
             .require_initial_root_admission()
             .is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn held_prestart_pid_can_claim_initial_root() -> crate::Result<()> {
+        let temporary = tempfile::tempdir().context(IoSnafu {
+            path: "temporary cgroup root",
+        })?;
+        let root = temporary.path().join("workload");
+        fs::create_dir(&root).context(IoSnafu { path: &root })?;
+        fs::write(root.join("cgroup.procs"), "42\n").context(IoSnafu { path: &root })?;
+        let owner = WorkloadBindingOwner::at(temporary.path(), Id128V1::new(1, 2), 3)?;
+        let mut binding = owner.prepare(&spec(&root))?;
+        binding.held_initial_pid = Some(42);
+        binding.require_initial_root_admission()?;
+
+        binding.held_initial_pid = Some(43);
+        assert!(binding.require_initial_root_admission().is_err());
+        fs::write(root.join("cgroup.procs"), "42\n43\n").context(IoSnafu { path: &root })?;
+        binding.held_initial_pid = Some(42);
+        assert!(binding.require_initial_root_admission().is_err());
         Ok(())
     }
 

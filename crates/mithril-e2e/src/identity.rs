@@ -37,6 +37,7 @@ use crate::Result;
 
 const WAIT_LIMIT: Duration = Duration::from_secs(30);
 const PROFILE_GENERATION_REF_ID: u64 = 7;
+const PRESTART_REQUEST_DIRECTORY: &str = "/run/mithril-identity-prestart";
 
 const REQUIRED_IDENTITY_MAPS: [&str; 55] = [
     "active_profile_generations",
@@ -226,6 +227,16 @@ pub struct IdentityPhysicalProbeBundleV1 {
     pub kubernetes_prestop_exec_root: Option<NativeTaskSnapshotV1>,
     pub kubernetes_prestop_profile_refs_during: Option<u64>,
     pub kubernetes_prestop_profile_refs_after: Option<u64>,
+    pub kubernetes_poststart_entrypoint_first_application: Option<NativeTaskSnapshotV1>,
+    pub kubernetes_poststart_entrypoint_first_hook: Option<NativeTaskSnapshotV1>,
+    pub kubernetes_poststart_hook_first_application: Option<NativeTaskSnapshotV1>,
+    pub kubernetes_poststart_hook_first_hook: Option<NativeTaskSnapshotV1>,
+    pub kubernetes_poststart_both_orders_observed: Option<bool>,
+    pub kubernetes_poststart_repeat_application_before: Option<NativeTaskSnapshotV1>,
+    pub kubernetes_poststart_repeat_application_after: Option<NativeTaskSnapshotV1>,
+    pub kubernetes_poststart_first_hook: Option<NativeTaskSnapshotV1>,
+    pub kubernetes_poststart_repeated_hook: Option<NativeTaskSnapshotV1>,
+    pub kubernetes_poststart_repeat_fresh_identity: Option<bool>,
     pub kubernetes_fixture_removed: bool,
 }
 
@@ -1803,6 +1814,16 @@ impl IdentityTestRunner {
             kubernetes_prestop_exec_root: None,
             kubernetes_prestop_profile_refs_during: None,
             kubernetes_prestop_profile_refs_after: None,
+            kubernetes_poststart_entrypoint_first_application: None,
+            kubernetes_poststart_entrypoint_first_hook: None,
+            kubernetes_poststart_hook_first_application: None,
+            kubernetes_poststart_hook_first_hook: None,
+            kubernetes_poststart_both_orders_observed: None,
+            kubernetes_poststart_repeat_application_before: None,
+            kubernetes_poststart_repeat_application_after: None,
+            kubernetes_poststart_first_hook: None,
+            kubernetes_poststart_repeated_hook: None,
+            kubernetes_poststart_repeat_fresh_identity: None,
             kubernetes_fixture_removed: false,
         })
     }
@@ -1889,21 +1910,54 @@ impl IdentityTestRunner {
             && bundle.kubernetes_prestop_exec_root.is_some()
             && bundle.kubernetes_prestop_profile_refs_during == Some(2)
             && bundle.kubernetes_prestop_profile_refs_after == Some(0);
+        let poststart_results_missing = bundle
+            .kubernetes_poststart_entrypoint_first_application
+            .is_none()
+            && bundle.kubernetes_poststart_entrypoint_first_hook.is_none()
+            && bundle.kubernetes_poststart_hook_first_application.is_none()
+            && bundle.kubernetes_poststart_hook_first_hook.is_none()
+            && bundle.kubernetes_poststart_both_orders_observed.is_none()
+            && bundle
+                .kubernetes_poststart_repeat_application_before
+                .is_none()
+            && bundle
+                .kubernetes_poststart_repeat_application_after
+                .is_none()
+            && bundle.kubernetes_poststart_first_hook.is_none()
+            && bundle.kubernetes_poststart_repeated_hook.is_none()
+            && bundle.kubernetes_poststart_repeat_fresh_identity.is_none();
+        let poststart_results_present = bundle
+            .kubernetes_poststart_entrypoint_first_application
+            .is_some()
+            && bundle.kubernetes_poststart_entrypoint_first_hook.is_some()
+            && bundle.kubernetes_poststart_hook_first_application.is_some()
+            && bundle.kubernetes_poststart_hook_first_hook.is_some()
+            && bundle.kubernetes_poststart_both_orders_observed == Some(true)
+            && bundle
+                .kubernetes_poststart_repeat_application_before
+                .is_some()
+            && bundle
+                .kubernetes_poststart_repeat_application_after
+                .is_some()
+            && bundle.kubernetes_poststart_first_hook.is_some()
+            && bundle.kubernetes_poststart_repeated_hook.is_some()
+            && bundle.kubernetes_poststart_repeat_fresh_identity == Some(true);
         ensure!(
-            matches!(bundle.schema_version, 15..=21)
+            matches!(bundle.schema_version, 15..=22)
                 && (entry_results_missing || entry_results_present)
                 && matches!(bundle.kubernetes_lifecycle_sleep_no_task, None | Some(true))
                 && (network_results_missing || network_results_present)
                 && (container_results_missing || container_results_present)
                 && (ephemeral_results_missing || ephemeral_results_present)
                 && (probe_results_missing || probe_results_present)
-                && (prestop_results_missing || prestop_results_present),
+                && (prestop_results_missing || prestop_results_present)
+                && (poststart_results_missing || poststart_results_present),
             InvalidInputSnafu {
                 path: previous_bundle_path,
                 reason: "the prior identity bundle cannot accept the next Kubernetes result",
             }
         );
-        bundle.schema_version = 21;
+        bundle.schema_version = 22;
         if entry_results_missing {
             self.physical_kubernetes_exec_probe(
                 output_directory,
@@ -1948,6 +2002,14 @@ impl IdentityTestRunner {
         }
         if prestop_results_missing {
             self.physical_kubernetes_prestop_probe(
+                output_directory,
+                pin_root,
+                lease_path,
+                &mut bundle,
+            )?;
+        }
+        if poststart_results_missing {
+            self.physical_kubernetes_poststart_probe(
                 output_directory,
                 pin_root,
                 lease_path,
@@ -4380,6 +4442,655 @@ impl IdentityTestRunner {
         Ok(())
     }
 
+    fn physical_kubernetes_poststart_probe(
+        &self,
+        output_directory: &Path,
+        pin_root: &Path,
+        lease_path: &Path,
+        bundle: &mut IdentityPhysicalProbeBundleV1,
+    ) -> Result<()> {
+        fs::create_dir_all(output_directory).context(IoSnafu {
+            path: output_directory,
+        })?;
+        let work_directory = output_directory.join("kubernetes-poststart");
+        ensure!(
+            !work_directory.exists(),
+            InvalidInputSnafu {
+                path: &work_directory,
+                reason: "the Kubernetes PostStart fixture directory already exists",
+            }
+        );
+        fs::create_dir(&work_directory).context(IoSnafu {
+            path: &work_directory,
+        })?;
+        let work_cleanup = ProbeDirectory::new(&work_directory);
+        let namespace = format!("mithril-identity-poststart-{}", std::process::id());
+        let fixture_root = work_directory.join("fixture");
+        let manifest_path = work_directory.join("workload.yaml");
+        fs::create_dir(&fixture_root).context(IoSnafu {
+            path: &fixture_root,
+        })?;
+        let template_path = self
+            .repo_root
+            .join("crates/mithril-e2e/fixtures/identity/kubernetes-poststart-workload-v1.yaml");
+        let manifest = fs::read_to_string(&template_path).context(IoSnafu {
+            path: &template_path,
+        })?;
+        fs::write(
+            &manifest_path,
+            manifest
+                .replace("MITHRIL_IDENTITY_POSTSTART_NAMESPACE", &namespace)
+                .replace(
+                    "MITHRIL_IDENTITY_POSTSTART_FIXTURE_ROOT",
+                    fixture_root.to_string_lossy().as_ref(),
+                ),
+        )
+        .context(IoSnafu {
+            path: &manifest_path,
+        })?;
+        ensure!(
+            !pin_root.exists() && !lease_path.exists(),
+            InvalidInputSnafu {
+                path: pin_root,
+                reason: "the Kubernetes PostStart pin root and lease must not already exist",
+            }
+        );
+        let pin_cleanup = ProbeDirectory::new(pin_root);
+        let lease_cleanup = ProbeFile::new(lease_path);
+        let request_directory = Path::new(PRESTART_REQUEST_DIRECTORY);
+        ensure!(
+            !request_directory.exists(),
+            InvalidInputSnafu {
+                path: request_directory,
+                reason: "the PostStart prestart request directory must not already exist",
+            }
+        );
+        fs::create_dir(request_directory).context(IoSnafu {
+            path: request_directory,
+        })?;
+        fs::set_permissions(request_directory, fs::Permissions::from_mode(0o700)).context(
+            IoSnafu {
+                path: request_directory,
+            },
+        )?;
+        let request_cleanup = ProbeDirectory::new(request_directory);
+        let mut namespace_created = false;
+        let mut host = None;
+        let mut repeated_poststart = None;
+
+        let probe = (|| -> Result<_> {
+            let (boot_id, node_boot_id) = boot_identity()?;
+            host = Some(
+                KernelHostOwner::new(KernelHostConfig::identity(
+                    "/sys/kernel/btf/vmlinux",
+                    lease_path,
+                    Some(pin_root.to_path_buf()),
+                    boot_id,
+                    1,
+                ))
+                .start()
+                .context(InterceptorSnafu)?,
+            );
+            let mut bindings = WorkloadBindingOwner::system(node_boot_id, 1).context(NodeSnafu)?;
+            namespace_created = true;
+            self.kubernetes_output(
+                &[
+                    "kubectl",
+                    "apply",
+                    "-f",
+                    manifest_path.to_string_lossy().as_ref(),
+                ],
+                "create the Kubernetes PostStart fixture",
+            )?;
+            let (entrypoint_first_binding, entrypoint_first_init_pid, entrypoint_first_request) =
+                self.kubernetes_prestart_binding(
+                    request_directory,
+                    &namespace,
+                    "mithril-poststart-entrypoint-first",
+                    "application",
+                    (
+                        mithril_node::ContainerKindV1::Application,
+                        "11111111-1111-4111-8111-111111111501",
+                        "22222222-2222-4222-8222-222222222601",
+                        "33333333-3333-4333-8333-333333333333",
+                        PROFILE_GENERATION_REF_ID,
+                    ),
+                    &manifest_path,
+                )?;
+            let (hook_first_binding, hook_first_init_pid, hook_first_request) = self
+                .kubernetes_prestart_binding(
+                    request_directory,
+                    &namespace,
+                    "mithril-poststart-hook-first",
+                    "application",
+                    (
+                        mithril_node::ContainerKindV1::Application,
+                        "11111111-1111-4111-8111-111111111502",
+                        "22222222-2222-4222-8222-222222222602",
+                        "33333333-3333-4333-8333-333333333333",
+                        PROFILE_GENERATION_REF_ID,
+                    ),
+                    &manifest_path,
+                )?;
+            let (repeat_binding, repeat_init_pid, repeat_request) = self
+                .kubernetes_prestart_binding(
+                    request_directory,
+                    &namespace,
+                    "mithril-poststart-repeat",
+                    "application",
+                    (
+                        mithril_node::ContainerKindV1::Application,
+                        "11111111-1111-4111-8111-111111111503",
+                        "22222222-2222-4222-8222-222222222603",
+                        "33333333-3333-4333-8333-333333333333",
+                        PROFILE_GENERATION_REF_ID,
+                    ),
+                    &manifest_path,
+                )?;
+            bindings
+                .publish_held_initial_roots(
+                    host.as_ref()
+                        .ok_or_else(|| invalid_state("the PostStart identity host is missing"))?,
+                    &[
+                        (entrypoint_first_binding.clone(), entrypoint_first_init_pid),
+                        (hook_first_binding.clone(), hook_first_init_pid),
+                        (repeat_binding.clone(), repeat_init_pid),
+                    ],
+                )
+                .context(NodeSnafu)?;
+            NativeSecurityStateOwner::new(node_boot_id, 1)
+                .activate_held_initial_admission(
+                    host.as_mut()
+                        .ok_or_else(|| invalid_state("the PostStart identity host is missing"))?,
+                    false,
+                )
+                .context(NodeSnafu)?;
+            for request in [
+                &entrypoint_first_request,
+                &hook_first_request,
+                &repeat_request,
+            ] {
+                self.release_prestart(request)?;
+            }
+            let entrypoint_first_pid =
+                self.wait_for("entrypoint-first application", &fixture_root, || {
+                    Ok(self
+                        .kubernetes_fixture_slot_pids(&fixture_root, "entrypoint-first")?
+                        .into_iter()
+                        .next())
+                })?;
+            let entrypoint_first_hook_pid =
+                self.wait_for("entrypoint-first PostStart hook", &fixture_root, || {
+                    Ok(self
+                        .kubernetes_fixture_slot_pids(&fixture_root, "poststart-entrypoint-first")?
+                        .into_iter()
+                        .next())
+                })?;
+            let hook_first_pid = self.wait_for("hook-first application", &fixture_root, || {
+                Ok(self
+                    .kubernetes_fixture_slot_pids(&fixture_root, "entrypoint-hook-first")?
+                    .into_iter()
+                    .next())
+            })?;
+            let hook_first_hook_pid =
+                self.wait_for("hook-first PostStart hook", &fixture_root, || {
+                    Ok(self
+                        .kubernetes_fixture_slot_pids(&fixture_root, "poststart-hook-first")?
+                        .into_iter()
+                        .next())
+                })?;
+            let repeat_first_hook_pid =
+                self.wait_for("restart PostStart hook", &fixture_root, || {
+                    Ok(self
+                        .kubernetes_fixture_slot_pids(&fixture_root, "poststart-repeat")?
+                        .into_iter()
+                        .next())
+                })?;
+            let entrypoint_first_order =
+                self.wait_for("entrypoint-first order record", &fixture_root, || {
+                    self.kubernetes_fixture_order(&fixture_root, "entrypoint-first")
+                })?;
+            let entrypoint_first_hook_order =
+                self.wait_for("entrypoint-first hook order record", &fixture_root, || {
+                    self.kubernetes_fixture_order(&fixture_root, "poststart-entrypoint-first")
+                })?;
+            let hook_first_order =
+                self.wait_for("hook-first order record", &fixture_root, || {
+                    self.kubernetes_fixture_order(&fixture_root, "entrypoint-hook-first")
+                })?;
+            let hook_first_hook_order =
+                self.wait_for("hook-first hook order record", &fixture_root, || {
+                    self.kubernetes_fixture_order(&fixture_root, "poststart-hook-first")
+                })?;
+            let both_orders_observed = entrypoint_first_order < entrypoint_first_hook_order
+                && hook_first_hook_order < hook_first_order;
+            ensure!(
+                both_orders_observed,
+                InvalidInputSnafu {
+                    path: &fixture_root,
+                    reason: format!(
+                        "Kubernetes PostStart orders are wrong: entrypoint-first={entrypoint_first_order}/{entrypoint_first_hook_order}, hook-first={hook_first_hook_order}/{hook_first_order}"
+                    ),
+                }
+            );
+
+            let entrypoint_first_cgroup = entrypoint_first_binding
+                .root_cgroup_path
+                .as_deref()
+                .ok_or_else(|| invalid_state("the entrypoint-first binding has no cgroup"))?;
+            let hook_first_cgroup = hook_first_binding
+                .root_cgroup_path
+                .as_deref()
+                .ok_or_else(|| invalid_state("the hook-first binding has no cgroup"))?;
+            let repeat_cgroup = repeat_binding
+                .root_cgroup_path
+                .as_deref()
+                .ok_or_else(|| invalid_state("the restart PostStart binding has no cgroup"))?;
+            let entrypoint_first_host_pid =
+                self.wait_for("entrypoint-first host PID", entrypoint_first_cgroup, || {
+                    self.kubernetes_host_pid(entrypoint_first_cgroup, entrypoint_first_pid)
+                })?;
+            let entrypoint_first_hook_host_pid = self.wait_for(
+                "entrypoint-first PostStart host PID",
+                entrypoint_first_cgroup,
+                || self.kubernetes_host_pid(entrypoint_first_cgroup, entrypoint_first_hook_pid),
+            )?;
+            let hook_first_host_pid =
+                self.wait_for("hook-first host PID", hook_first_cgroup, || {
+                    self.kubernetes_host_pid(hook_first_cgroup, hook_first_pid)
+                })?;
+            let hook_first_hook_host_pid =
+                self.wait_for("hook-first PostStart host PID", hook_first_cgroup, || {
+                    self.kubernetes_host_pid(hook_first_cgroup, hook_first_hook_pid)
+                })?;
+            let repeat_first_hook_host_pid =
+                self.wait_for("restart PostStart first host PID", repeat_cgroup, || {
+                    self.kubernetes_host_pid(repeat_cgroup, repeat_first_hook_pid)
+                })?;
+
+            let inspector = NativeIdentityInspector::new(pin_root);
+            let entrypoint_first_application =
+                self.wait_for("entrypoint-first application identity", pin_root, || {
+                    inspector
+                        .snapshot(entrypoint_first_host_pid)
+                        .context(NodeSnafu)
+                })?;
+            let entrypoint_first_hook =
+                self.wait_for("entrypoint-first PostStart identity", pin_root, || {
+                    inspector
+                        .snapshot(entrypoint_first_hook_host_pid)
+                        .context(NodeSnafu)
+                })?;
+            let hook_first_application =
+                self.wait_for("hook-first application identity", pin_root, || {
+                    inspector.snapshot(hook_first_host_pid).context(NodeSnafu)
+                })?;
+            let hook_first_hook =
+                self.wait_for("hook-first PostStart identity", pin_root, || {
+                    inspector
+                        .snapshot(hook_first_hook_host_pid)
+                        .context(NodeSnafu)
+                })?;
+            let repeat_application_before =
+                self.wait_for("restart application identity", pin_root, || {
+                    inspector.snapshot(repeat_init_pid).context(NodeSnafu)
+                })?;
+            let first_hook = self.wait_for("restart first PostStart identity", pin_root, || {
+                inspector
+                    .snapshot(repeat_first_hook_host_pid)
+                    .context(NodeSnafu)
+            })?;
+            let roots = [
+                &entrypoint_first_application,
+                &entrypoint_first_hook,
+                &hook_first_application,
+                &hook_first_hook,
+                &repeat_application_before,
+                &first_hook,
+            ];
+            ensure!(
+                [
+                    (&entrypoint_first_application, &entrypoint_first_binding),
+                    (&hook_first_application, &hook_first_binding),
+                    (&repeat_application_before, &repeat_binding),
+                ]
+                .into_iter()
+                .all(|(root, binding)| {
+                    root.creator_task_cookie.is_none()
+                        && root.root_class.as_deref() == Some("initial_container_root")
+                        && root.installed_role_class.as_deref() == Some("initial_role")
+                        && root.active_role_id == binding.initial_role_id
+                })
+                    && [
+                        (&entrypoint_first_hook, &entrypoint_first_binding),
+                        (&hook_first_hook, &hook_first_binding),
+                        (&first_hook, &repeat_binding),
+                    ]
+                    .into_iter()
+                    .all(|(root, binding)| {
+                        root.creator_task_cookie.is_none()
+                            && root.root_class.as_deref() == Some("external_runtime_root")
+                            && root.installed_role_class.as_deref()
+                                == Some("runtime_external_restricted")
+                            && root.active_role_id == binding.external_role_id
+                    })
+                    && roots
+                        .iter()
+                        .map(|root| root.task_cookie)
+                        .collect::<BTreeSet<_>>()
+                        .len()
+                        == roots.len()
+                    && roots
+                        .iter()
+                        .map(|root| root.process_state_id.as_str())
+                        .collect::<BTreeSet<_>>()
+                        .len()
+                        == roots.len(),
+                InvalidInputSnafu {
+                    path: pin_root,
+                    reason: "prestart admission did not keep application and PostStart roots distinct with exact roles",
+                }
+            );
+
+            for (slot, namespace_pid) in [
+                ("entrypoint-first", entrypoint_first_pid),
+                ("poststart-entrypoint-first", entrypoint_first_hook_pid),
+                ("entrypoint-hook-first", hook_first_pid),
+                ("poststart-hook-first", hook_first_hook_pid),
+            ] {
+                self.kubernetes_release_fifo(
+                    &fixture_root.join(format!("{slot}-release-{namespace_pid}")),
+                )?;
+            }
+            for pod in [
+                "mithril-poststart-entrypoint-first",
+                "mithril-poststart-hook-first",
+            ] {
+                self.kubernetes_output(
+                    &[
+                        "kubectl",
+                        "-n",
+                        namespace.as_str(),
+                        "wait",
+                        "--for=condition=Ready",
+                        &format!("pod/{pod}"),
+                        "--timeout=60s",
+                    ],
+                    "wait for the ordered PostStart fixture Pod",
+                )?;
+            }
+
+            let kill = Command::new("/usr/bin/systemctl")
+                .args(["kill", "--kill-who=main", "--signal=SIGKILL", "k3s"])
+                .output()
+                .context(IoSnafu {
+                    path: Path::new("/usr/bin/systemctl"),
+                })?;
+            ensure!(
+                kill.status.success(),
+                InvalidInputSnafu {
+                    path: Path::new("/usr/bin/systemctl"),
+                    reason: format!(
+                        "Kubernetes node service kill failed: {}",
+                        String::from_utf8_lossy(&kill.stderr).trim()
+                    ),
+                }
+            );
+            let start = Command::new("/usr/bin/systemctl")
+                .args(["start", "k3s"])
+                .output()
+                .context(IoSnafu {
+                    path: Path::new("/usr/bin/systemctl"),
+                })?;
+            ensure!(
+                start.status.success(),
+                InvalidInputSnafu {
+                    path: Path::new("/usr/bin/systemctl"),
+                    reason: format!(
+                        "Kubernetes node service start failed: {}",
+                        String::from_utf8_lossy(&start.stderr).trim()
+                    ),
+                }
+            );
+            let repeat_command =
+                self.wait_for("Kubernetes API after restart", &manifest_path, || {
+                    let program = Path::new("/usr/local/bin/k3s");
+                    let output = Command::new(program)
+                        .args([
+                            "kubectl",
+                            "-n",
+                            namespace.as_str(),
+                            "get",
+                            "pod",
+                            "mithril-poststart-repeat",
+                            "-o",
+                            "json",
+                        ])
+                        .output()
+                        .context(IoSnafu { path: program })?;
+                    if !output.status.success() {
+                        return Ok(None);
+                    }
+                    let pod: serde_json::Value =
+                        serde_json::from_slice(&output.stdout).context(JsonSnafu {
+                            path: &manifest_path,
+                        })?;
+                    let command = pod
+                        .pointer("/spec/containers/0/lifecycle/postStart/exec/command")
+                        .and_then(serde_json::Value::as_array)
+                        .filter(|command| !command.is_empty())
+                        .ok_or_else(|| {
+                            invalid_state("the live PostStart fixture Pod has no exec-hook command")
+                        })?
+                        .iter()
+                        .map(|argument| {
+                            argument.as_str().map(str::to_owned).ok_or_else(|| {
+                                invalid_state(
+                                    "the live PostStart fixture command has a non-string argument",
+                                )
+                            })
+                        })
+                        .collect::<Result<Vec<_>>>()?;
+                    Ok(Some(command))
+                })?;
+            repeated_poststart = Some(
+                Command::new("/usr/local/bin/k3s")
+                    .args([
+                        "crictl",
+                        "exec",
+                        "--sync",
+                        repeat_binding.container_id.as_str(),
+                    ])
+                    .args(&repeat_command)
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .spawn()
+                    .context(IoSnafu {
+                        path: Path::new("/usr/local/bin/k3s"),
+                    })?,
+            );
+            let repeat_second_hook_pid =
+                self.wait_for("repeated PostStart hook", &fixture_root, || {
+                    Ok(self
+                        .kubernetes_fixture_slot_pids(&fixture_root, "poststart-repeat")?
+                        .into_iter()
+                        .find(|pid| *pid != repeat_first_hook_pid))
+                })?;
+            let repeat_second_hook_host_pid =
+                self.wait_for("repeated PostStart host PID", repeat_cgroup, || {
+                    self.kubernetes_host_pid(repeat_cgroup, repeat_second_hook_pid)
+                })?;
+            ensure!(
+                self.kubernetes_host_pid(repeat_cgroup, repeat_first_hook_pid)?
+                    == Some(repeat_first_hook_host_pid),
+                InvalidInputSnafu {
+                    path: repeat_cgroup,
+                    reason: "the first in-flight PostStart task did not survive kubelet restart",
+                }
+            );
+            let repeated_hook = self.wait_for("repeated PostStart identity", pin_root, || {
+                inspector
+                    .snapshot(repeat_second_hook_host_pid)
+                    .context(NodeSnafu)
+            })?;
+            let repeat_application_after = self.wait_for(
+                "application identity after kubelet restart",
+                pin_root,
+                || inspector.snapshot(repeat_init_pid).context(NodeSnafu),
+            )?;
+            let repeat_fresh_identity = repeated_hook.task_cookie != first_hook.task_cookie
+                && repeated_hook.process_state_id != first_hook.process_state_id;
+            ensure!(
+                repeat_application_after == repeat_application_before
+                    && repeat_fresh_identity
+                    && repeated_hook.creator_task_cookie.is_none()
+                    && repeated_hook.root_class.as_deref() == Some("external_runtime_root")
+                    && repeated_hook.installed_role_class.as_deref()
+                        == Some("runtime_external_restricted")
+                    && repeated_hook.active_role_id == repeat_binding.external_role_id,
+                InvalidInputSnafu {
+                    path: pin_root,
+                    reason: "the repeated PostStart task reused identity or lost its restricted external class",
+                }
+            );
+            for namespace_pid in [repeat_first_hook_pid, repeat_second_hook_pid] {
+                self.kubernetes_release_fifo(
+                    &fixture_root.join(format!("poststart-repeat-release-{namespace_pid}")),
+                )?;
+            }
+            let repeat_status = repeated_poststart
+                .take()
+                .ok_or_else(|| invalid_state("the repeated PostStart delivery is missing"))?
+                .wait()
+                .context(IoSnafu {
+                    path: Path::new("/usr/local/bin/k3s"),
+                })?;
+            ensure!(
+                repeat_status.success(),
+                InvalidInputSnafu {
+                    path: Path::new("/usr/local/bin/k3s"),
+                    reason: format!(
+                        "the repeated PostStart CRI delivery failed with {repeat_status}"
+                    ),
+                }
+            );
+            self.kubernetes_output(
+                &[
+                    "kubectl",
+                    "-n",
+                    namespace.as_str(),
+                    "wait",
+                    "--for=condition=Ready",
+                    "pod/mithril-poststart-repeat",
+                    "--timeout=60s",
+                ],
+                "wait for the repeated PostStart fixture Pod",
+            )?;
+
+            Ok((
+                entrypoint_first_application,
+                entrypoint_first_hook,
+                hook_first_application,
+                hook_first_hook,
+                both_orders_observed,
+                repeat_application_before,
+                repeat_application_after,
+                first_hook,
+                repeated_hook,
+                repeat_fresh_identity,
+            ))
+        })();
+
+        Self::stop_fixture_process(&mut repeated_poststart);
+        let namespace_cleanup = if namespace_created {
+            self.kubernetes_output(
+                &[
+                    "kubectl",
+                    "delete",
+                    "namespace",
+                    namespace.as_str(),
+                    "--ignore-not-found",
+                    "--wait=true",
+                    "--timeout=120s",
+                ],
+                "remove the Kubernetes PostStart fixture namespace",
+            )
+            .map(|_| ())
+        } else {
+            Ok(())
+        };
+        let runtime_class_cleanup = if namespace_created {
+            self.kubernetes_output(
+                &[
+                    "kubectl",
+                    "delete",
+                    "runtimeclass",
+                    "mithril",
+                    "--ignore-not-found",
+                    "--wait=true",
+                    "--timeout=60s",
+                ],
+                "remove the Mithril prestart RuntimeClass",
+            )
+            .map(|_| ())
+        } else {
+            Ok(())
+        };
+        let host_cleanup = if let Some(host) = host.take() {
+            host.shutdown().context(InterceptorSnafu)
+        } else {
+            Ok(())
+        };
+        let cleanup = namespace_cleanup
+            .and(runtime_class_cleanup)
+            .and(host_cleanup)
+            .and(pin_cleanup.cleanup())
+            .and(lease_cleanup.cleanup())
+            .and(request_cleanup.cleanup())
+            .and(work_cleanup.cleanup());
+        if let Err(source) = probe {
+            cleanup?;
+            return Err(source);
+        }
+        cleanup?;
+        ensure!(
+            self.kubernetes_namespace_absent(&namespace)?
+                && !pin_root.exists()
+                && !lease_path.exists()
+                && !request_directory.exists()
+                && !work_directory.exists(),
+            InvalidInputSnafu {
+                path: &work_directory,
+                reason: "the Kubernetes PostStart fixture was not removed",
+            }
+        );
+        let (
+            entrypoint_first_application,
+            entrypoint_first_hook,
+            hook_first_application,
+            hook_first_hook,
+            both_orders_observed,
+            repeat_application_before,
+            repeat_application_after,
+            first_hook,
+            repeated_hook,
+            repeat_fresh_identity,
+        ) = probe?;
+        bundle.kubernetes_poststart_entrypoint_first_application =
+            Some(entrypoint_first_application);
+        bundle.kubernetes_poststart_entrypoint_first_hook = Some(entrypoint_first_hook);
+        bundle.kubernetes_poststart_hook_first_application = Some(hook_first_application);
+        bundle.kubernetes_poststart_hook_first_hook = Some(hook_first_hook);
+        bundle.kubernetes_poststart_both_orders_observed = Some(both_orders_observed);
+        bundle.kubernetes_poststart_repeat_application_before = Some(repeat_application_before);
+        bundle.kubernetes_poststart_repeat_application_after = Some(repeat_application_after);
+        bundle.kubernetes_poststart_first_hook = Some(first_hook);
+        bundle.kubernetes_poststart_repeated_hook = Some(repeated_hook);
+        bundle.kubernetes_poststart_repeat_fresh_identity = Some(repeat_fresh_identity);
+        Ok(())
+    }
+
     fn kubernetes_container_binding(
         &self,
         namespace: &str,
@@ -4504,6 +5215,228 @@ impl IdentityTestRunner {
         binding.container_kind = container_kind;
         binding.container_generation = container_generation;
         Ok((binding, init_pid, sandbox_id))
+    }
+
+    fn kubernetes_prestart_binding(
+        &self,
+        request_directory: &Path,
+        namespace: &str,
+        pod_name: &str,
+        container_name: &str,
+        identity: (mithril_node::ContainerKindV1, &str, &str, &str, u64),
+        manifest_path: &Path,
+    ) -> Result<(WorkloadBindingConfig, u32, PathBuf)> {
+        let request_path = self.wait_for(
+            &format!("Kubernetes `{pod_name}` prestart request"),
+            request_directory,
+            || {
+                let mut matching = Vec::new();
+                for entry in fs::read_dir(request_directory).context(IoSnafu {
+                    path: request_directory,
+                })? {
+                    let path = entry
+                        .context(IoSnafu {
+                            path: request_directory,
+                        })?
+                        .path();
+                    if path.extension().and_then(|value| value.to_str()) != Some("json") {
+                        continue;
+                    }
+                    let request: serde_json::Value =
+                        serde_json::from_slice(&fs::read(&path).context(IoSnafu { path: &path })?)
+                            .context(JsonSnafu { path: &path })?;
+                    if request
+                        .pointer("/annotations/io.kubernetes.cri.sandbox-namespace")
+                        .and_then(serde_json::Value::as_str)
+                        == Some(namespace)
+                        && request
+                            .pointer("/annotations/io.kubernetes.cri.sandbox-name")
+                            .and_then(serde_json::Value::as_str)
+                            == Some(pod_name)
+                        && request
+                            .pointer("/annotations/io.kubernetes.cri.container-name")
+                            .and_then(serde_json::Value::as_str)
+                            == Some(container_name)
+                    {
+                        matching.push(path);
+                    }
+                }
+                ensure!(
+                    matching.len() <= 1,
+                    InvalidInputSnafu {
+                        path: request_directory,
+                        reason: format!(
+                            "more than one prestart request matched `{pod_name}/{container_name}`"
+                        ),
+                    }
+                );
+                Ok(matching.pop())
+            },
+        )?;
+        let request: serde_json::Value =
+            serde_json::from_slice(&fs::read(&request_path).context(IoSnafu {
+                path: &request_path,
+            })?)
+            .context(JsonSnafu {
+                path: &request_path,
+            })?;
+        let pid = request
+            .get("pid")
+            .and_then(serde_json::Value::as_u64)
+            .and_then(|pid| u32::try_from(pid).ok())
+            .filter(|pid| *pid > 0)
+            .ok_or_else(|| invalid_state("prestart request has no valid OCI state PID"))?;
+        let container_id = request_path
+            .file_stem()
+            .and_then(|value| value.to_str())
+            .filter(|value| value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit()))
+            .ok_or_else(|| invalid_state("prestart request has no full container ID"))?;
+        let state_id = request
+            .pointer("/state/id")
+            .and_then(serde_json::Value::as_str);
+        let state_pid = request
+            .pointer("/state/pid")
+            .and_then(serde_json::Value::as_u64)
+            .and_then(|pid| u32::try_from(pid).ok());
+        let cgroup = request
+            .get("cgroup")
+            .and_then(serde_json::Value::as_str)
+            .filter(|path| {
+                path.starts_with('/')
+                    && path != &"/"
+                    && !path.split('/').any(|part| matches!(part, "." | ".."))
+            })
+            .ok_or_else(|| invalid_state("prestart request has no clean cgroup path"))?;
+        let root_cgroup_path = Path::new("/sys/fs/cgroup").join(cgroup.trim_start_matches('/'));
+        let live_cgroup = self.kubernetes_cgroup_for_pid(pid)?;
+        let procs_path = root_cgroup_path.join("cgroup.procs");
+        let live_pids = fs::read_to_string(&procs_path)
+            .context(IoSnafu { path: &procs_path })?
+            .split_ascii_whitespace()
+            .map(|value| value.parse::<u32>())
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(|error| {
+                invalid_state(format!("prestart cgroup has an invalid PID: {error}"))
+            })?;
+        ensure!(
+            request.get("stage").and_then(serde_json::Value::as_str) == Some("prestart")
+                && state_id == Some(container_id)
+                && state_pid == Some(pid)
+                && live_pids.as_slice() == [pid]
+                && fs::canonicalize(&root_cgroup_path).context(IoSnafu {
+                    path: &root_cgroup_path,
+                })? == fs::canonicalize(&live_cgroup).context(IoSnafu { path: &live_cgroup })?,
+            InvalidInputSnafu {
+                path: &request_path,
+                reason: "prestart OCI state does not match the sole live cgroup PID",
+            }
+        );
+
+        let container = self.kubernetes_output(
+            &["crictl", "inspect", container_id],
+            "inspect the held prestart container",
+        )?;
+        let container: serde_json::Value = serde_json::from_str(&container).context(JsonSnafu {
+            path: manifest_path,
+        })?;
+        let runtime_cgroups_path = container
+            .pointer("/info/runtimeSpec/linux/cgroupsPath")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| invalid_state("held prestart container has no cgroup path"))?;
+        let image_digest = container
+            .pointer("/status/imageRef")
+            .and_then(serde_json::Value::as_str)
+            .filter(|digest| digest.contains("sha256:"))
+            .ok_or_else(|| invalid_state("held prestart container has no image digest"))?
+            .to_owned();
+        let container_generation = container
+            .pointer("/status/createdAt")
+            .ok_or_else(|| invalid_state("held prestart container has no generation"))
+            .and_then(|created_at| self.kubernetes_container_generation(created_at))?;
+        let annotation = |name: &str| {
+            request
+                .pointer(&format!("/annotations/{name}"))
+                .and_then(serde_json::Value::as_str)
+        };
+        let pod_uid = annotation("io.kubernetes.cri.sandbox-uid")
+            .ok_or_else(|| invalid_state("prestart request has no Pod UID"))?;
+        let sandbox_id = annotation("io.kubernetes.cri.sandbox-id")
+            .ok_or_else(|| invalid_state("prestart request has no sandbox ID"))?;
+        let listed = self.kubernetes_output(
+            &["crictl", "ps", "-a", "--id", container_id, "-o", "json"],
+            "read the held prestart container record",
+        )?;
+        let listed: serde_json::Value = serde_json::from_str(&listed).context(JsonSnafu {
+            path: manifest_path,
+        })?;
+        ensure!(
+            container
+                .pointer("/status/id")
+                .and_then(serde_json::Value::as_str)
+                == Some(container_id)
+                && container
+                    .pointer("/status/state")
+                    .and_then(serde_json::Value::as_str)
+                    == Some("CONTAINER_CREATED")
+                && container
+                    .pointer("/info/pid")
+                    .and_then(serde_json::Value::as_u64)
+                    == Some(0)
+                && runtime_cgroups_path.contains(container_id)
+                && annotation("io.kubernetes.cri.container-type") == Some("container")
+                && annotation("io.kubernetes.cri.sandbox-namespace") == Some(namespace)
+                && annotation("io.kubernetes.cri.sandbox-name") == Some(pod_name)
+                && annotation("io.kubernetes.cri.container-name") == Some(container_name)
+                && listed
+                    .pointer("/containers/0/podSandboxId")
+                    .and_then(serde_json::Value::as_str)
+                    == Some(sandbox_id)
+                && listed
+                    .pointer("/containers/0/labels/io.kubernetes.pod.uid")
+                    .and_then(serde_json::Value::as_str)
+                    == Some(pod_uid),
+            InvalidInputSnafu {
+                path: &request_path,
+                reason: "prestart fields do not match the Created CRI container",
+            }
+        );
+
+        let (container_kind, binding_id, execution_set_id, profile_id, profile_ref_id) = identity;
+        let mut binding = test_binding(&root_cgroup_path);
+        binding.binding_id = binding_id.to_owned();
+        binding.execution_set_id = execution_set_id.to_owned();
+        binding.profile_id = profile_id.to_owned();
+        binding.active_profile_generation_ref_id = profile_ref_id;
+        binding.container_id = container_id.to_owned();
+        binding.namespace = namespace.to_owned();
+        binding.pod_uid = pod_uid.to_owned();
+        binding.sandbox_id = sandbox_id.to_owned();
+        binding.container_name = container_name.to_owned();
+        binding.image_digest = image_digest;
+        binding.container_kind = container_kind;
+        binding.container_generation = container_generation;
+        binding.arm_initial_root = true;
+        Ok((binding, pid, request_path))
+    }
+
+    fn release_prestart(&self, request_path: &Path) -> Result<()> {
+        let request: serde_json::Value = serde_json::from_slice(
+            &fs::read(request_path).context(IoSnafu { path: request_path })?,
+        )
+        .context(JsonSnafu { path: request_path })?;
+        let pid = request
+            .get("pid")
+            .and_then(serde_json::Value::as_u64)
+            .and_then(|pid| u32::try_from(pid).ok())
+            .filter(|pid| *pid > 0)
+            .ok_or_else(|| invalid_state("prestart request has no valid release PID"))?;
+        let release_path = request_path.with_extension("release");
+        fs::write(&release_path, format!("accepted:{pid}\n")).context(IoSnafu {
+            path: &release_path,
+        })?;
+        self.wait_for("prestart request release", request_path, || {
+            Ok((!request_path.exists() && !release_path.exists()).then_some(()))
+        })
     }
 
     fn physical_kubernetes_network_probe(
@@ -4845,6 +5778,32 @@ impl IdentityTestRunner {
             pids.insert(pid);
         }
         Ok(pids.into_iter().collect())
+    }
+
+    fn kubernetes_fixture_order(&self, directory: &Path, slot: &str) -> Result<Option<f64>> {
+        let path = directory.join(format!("{slot}.order"));
+        let text = match fs::read_to_string(&path) {
+            Ok(text) => text,
+            Err(source) if source.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(source) => return Err(source).context(IoSnafu { path: &path }),
+        };
+        let text = text.trim();
+        if text.is_empty() {
+            return Ok(None);
+        }
+        let order = text.parse::<f64>().map_err(|source| {
+            invalid_state(format!(
+                "Kubernetes fixture wrote an invalid `{slot}` order `{text}`: {source}"
+            ))
+        })?;
+        ensure!(
+            order.is_finite() && order > 0.0,
+            InvalidInputSnafu {
+                path: &path,
+                reason: "the Kubernetes fixture order must be a positive finite value",
+            }
+        );
+        Ok(Some(order))
     }
 
     fn kubernetes_release_fifo(&self, path: &Path) -> Result<()> {

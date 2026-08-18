@@ -182,6 +182,11 @@ if [[ $manual_vm == true ]]; then
     k3s-install "$k3s_version" \
     /mnt/mithril-source/crates/mithril-e2e/harness/vm/k3s-config-v1.yaml \
     "$remote_root"
+  "$provider" run "$vm_name" sudo bash \
+    /mnt/mithril-source/crates/mithril-e2e/harness/vm/guest.sh \
+    k3s-runtime-hook \
+    /mnt/mithril-source/crates/mithril-e2e/fixtures/identity/oci-prestart-admission-v1.sh \
+    "$remote_root"
   "$provider" run "$vm_name" \
     'sudo apt-get update && sudo apt-get install -y --no-install-recommends net-tools'
   "$provider" run "$vm_name" "set -e; cd '$remote_root'; \
@@ -262,6 +267,12 @@ fi
 "$provider" put "$vm_name" \
   "$repo_root/crates/mithril-e2e/fixtures/identity/kubernetes-prestop-workload-v1.yaml" \
   "$remote_source/crates/mithril-e2e/fixtures/identity/kubernetes-prestop-workload-v1.yaml"
+"$provider" put "$vm_name" \
+  "$repo_root/crates/mithril-e2e/fixtures/identity/kubernetes-poststart-workload-v1.yaml" \
+  "$remote_source/crates/mithril-e2e/fixtures/identity/kubernetes-poststart-workload-v1.yaml"
+"$provider" put "$vm_name" \
+  "$repo_root/crates/mithril-e2e/fixtures/identity/oci-prestart-admission-v1.sh" \
+  "$remote_source/crates/mithril-e2e/fixtures/identity/oci-prestart-admission-v1.sh"
 for fixture in observe-profile-seal-request.json test-public-key.hex test-signing-key.hex observe-policy-v1.yaml; do
   "$provider" put "$vm_name" \
     "$repo_root/crates/mithril-e2e/fixtures/mithril-policy/$fixture" \
@@ -322,6 +333,10 @@ if [[ $with_k3s == true ]]; then
     "$remote_root/harness/oidc-fixture.py"
   "$provider" run "$vm_name" sudo bash "$remote_root/harness/guest.sh" \
     k3s-install "$k3s_version" "$remote_root/harness/k3s-config-v1.yaml" \
+    "$remote_root"
+  "$provider" run "$vm_name" sudo bash "$remote_root/harness/guest.sh" \
+    k3s-runtime-hook \
+    "$remote_source/crates/mithril-e2e/fixtures/identity/oci-prestart-admission-v1.sh" \
     "$remote_root"
   "$provider" run "$vm_name" sudo bash "$remote_root/harness/guest.sh" \
     k3s-qualify "$remote_root/harness/k3s-workload-v1.yaml" "$remote_root" \

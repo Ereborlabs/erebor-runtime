@@ -34,8 +34,17 @@ identity_k3s_ephemeral_pid=
 identity_k3s_startup_pid=
 identity_k3s_readiness_pid=
 identity_k3s_liveness_pid=
+identity_poststart_entrypoint_first_pid=
+identity_poststart_hook_first_pid=
+identity_poststart_repeat_pid=
+identity_poststart_repeat_container_id=
+identity_held_initial_pids=()
+identity_prestart_requests=()
+identity_prestart_request_directory=/run/mithril-identity-prestart
+identity_k3s_runtime_class_created=false
 identity_probe_command=
 identity_prestop_release_fifo=
+identity_poststart_release_fifos=()
 
 identity_require_command() {
   command -v "$1" >/dev/null || {
@@ -744,10 +753,294 @@ identity_prepare_k3s_prestop_case() {
   identity_cgroup_path=$(identity_cgroup_for_pid "$identity_init_pid")
 }
 
+identity_prepare_k3s_poststart_case() {
+  local source_config=$identity_repository/crates/mithril-e2e/harness/vm/k3s-cri-effect-node-v1.json
+  local workload_template=$identity_repository/crates/mithril-e2e/fixtures/identity/kubernetes-poststart-workload-v1.yaml
+  identity_check_base "$source_config"
+  identity_require_command crictl
+  identity_require_command date
+  identity_require_command dd
+  identity_require_command kubectl
+  identity_require_command systemctl
+  identity_require_command timeout
+  identity_mode=cri
+  identity_begin
+
+  local suffix workload runtime_socket entrypoint_first hook_first repeat
+  suffix=$(tr '[:upper:]' '[:lower:]' <<<"${identity_work##*.}")
+  identity_k3s_namespace=mithril-manual-$suffix
+  identity_k3s_fixture_root=/var/lib/mithril-manual-$suffix
+  identity_k3s_shared_directory=$identity_k3s_fixture_root/shared
+  identity_k3s_node_config=$identity_work/k3s-node.json
+  identity_cleanup_functions+=(
+    identity_cleanup_poststart_case
+    identity_cleanup_k3s_case
+    identity_cleanup_prestart_case
+  )
+  install -d -m 700 -- "$identity_k3s_fixture_root" "$identity_k3s_shared_directory"
+  [[ ! -e $identity_prestart_request_directory ]] || {
+    echo "the prestart request directory already exists" >&2
+    return 1
+  }
+  install -d -o root -g root -m 700 -- "$identity_prestart_request_directory"
+
+  runtime_socket=$(jq -er '.container_runtime.socket_path' "$source_config")
+  identity_runtime_endpoint=unix://$runtime_socket
+  workload=$identity_work/workload.yaml
+  sed \
+    -e "s|MITHRIL_IDENTITY_POSTSTART_NAMESPACE|$identity_k3s_namespace|g" \
+    -e "s|MITHRIL_IDENTITY_POSTSTART_FIXTURE_ROOT|$identity_k3s_shared_directory|g" \
+    "$workload_template" >"$workload"
+  identity_k3s_namespace_created=true
+  identity_k3s_runtime_class_created=true
+  kubectl apply -f "$workload" >/dev/null
+
+  entrypoint_first=$(identity_prestart_binding_json application application \
+    11111111-1111-4111-8111-111111111501 \
+    22222222-2222-4222-8222-222222222601 mithril-poststart-entrypoint-first \
+    33333333-3333-4333-8333-333333333333 7)
+  hook_first=$(identity_prestart_binding_json application application \
+    11111111-1111-4111-8111-111111111502 \
+    22222222-2222-4222-8222-222222222602 mithril-poststart-hook-first \
+    33333333-3333-4333-8333-333333333333 7)
+  repeat=$(identity_prestart_binding_json application application \
+    11111111-1111-4111-8111-111111111503 \
+    22222222-2222-4222-8222-222222222603 mithril-poststart-repeat \
+    33333333-3333-4333-8333-333333333333 7)
+
+  identity_poststart_entrypoint_first_pid=$(jq -er '.pid' <<<"$entrypoint_first")
+  identity_poststart_hook_first_pid=$(jq -er '.pid' <<<"$hook_first")
+  identity_poststart_repeat_pid=$(jq -er '.pid' <<<"$repeat")
+  identity_poststart_repeat_container_id=$(jq -er '.binding.container_id' <<<"$repeat")
+  [[ $identity_poststart_entrypoint_first_pid =~ ^[1-9][0-9]*$ \
+    && $identity_poststart_hook_first_pid =~ ^[1-9][0-9]*$ \
+    && $identity_poststart_repeat_pid =~ ^[1-9][0-9]*$ \
+    && $identity_poststart_repeat_container_id =~ ^[0-9a-f]{64}$ ]] || {
+    echo "Kubernetes returned an invalid PostStart application PID" >&2
+    return 1
+  }
+
+  jq \
+    --arg state "$identity_state" \
+    --arg pin_root "$identity_pin_root" \
+    --arg lease "$identity_lease" \
+    --argjson entrypoint_first "$(jq -c '.binding' <<<"$entrypoint_first")" \
+    --argjson hook_first "$(jq -c '.binding' <<<"$hook_first")" \
+    --argjson repeat "$(jq -c '.binding' <<<"$repeat")" \
+    '.state_directory = $state
+     | .interceptor.pin_root = $pin_root
+     | .interceptor.lease_path = $lease
+     | .runtime_observation = null
+     | .container_runtime = null
+     | .workload_bindings = [$entrypoint_first, $hook_first, $repeat]' \
+    "$source_config" >"$identity_config"
+  identity_held_initial_pids=(
+    "$identity_poststart_entrypoint_first_pid"
+    "$identity_poststart_hook_first_pid"
+    "$identity_poststart_repeat_pid"
+  )
+  identity_prestart_requests=(
+    "$(jq -er '.request' <<<"$entrypoint_first")"
+    "$(jq -er '.request' <<<"$hook_first")"
+    "$(jq -er '.request' <<<"$repeat")"
+  )
+  identity_init_pid=$identity_poststart_entrypoint_first_pid
+  identity_cgroup_path=$(identity_cgroup_for_pid "$identity_init_pid")
+  identity_start_node
+  identity_release_prestarts
+}
+
+identity_wait_prestart_request() {
+  local pod_name=$1
+  local container_name=$2
+  local attempt request count match
+  for ((attempt = 0; attempt < 300; attempt++)); do
+    match=
+    count=0
+    for request in "$identity_prestart_request_directory"/*.json; do
+      [[ -f $request ]] || continue
+      if jq -e \
+        --arg namespace "$identity_k3s_namespace" \
+        --arg pod "$pod_name" \
+        --arg container "$container_name" \
+        '.annotations["io.kubernetes.cri.sandbox-namespace"] == $namespace
+         and .annotations["io.kubernetes.cri.sandbox-name"] == $pod
+         and .annotations["io.kubernetes.cri.container-name"] == $container' \
+        "$request" >/dev/null; then
+        match=$request
+        ((count += 1))
+      fi
+    done
+    [[ $count -le 1 ]] || {
+      echo "more than one prestart request matched $pod_name/$container_name" >&2
+      return 1
+    }
+    if [[ $count -eq 1 ]]; then
+      printf '%s\n' "$match"
+      return 0
+    fi
+    sleep 0.1
+  done
+  echo "the $pod_name/$container_name prestart request did not arrive" >&2
+  return 1
+}
+
+identity_prestart_binding_json() {
+  local container_name=$1
+  local container_kind=$2
+  local binding_id=$3
+  local execution_set_id=$4
+  local pod_name=$5
+  local profile_id=$6
+  local profile_ref_id=$7
+  local request container_id pid cgroup live_cgroup root_cgroup
+  local container_json listed created_at generation image_digest pod_uid sandbox_id
+  local -a live_pids
+
+  request=$(identity_wait_prestart_request "$pod_name" "$container_name") || return
+  container_id=${request##*/}
+  container_id=${container_id%.json}
+  pid=$(jq -er '.pid' "$request")
+  cgroup=$(jq -er '.cgroup' "$request")
+  [[ $container_id =~ ^[0-9a-f]{64}$ && $pid =~ ^[1-9][0-9]*$ \
+    && $cgroup == /* && $cgroup != / ]] || {
+    echo "the prestart request has an invalid identity" >&2
+    return 1
+  }
+  root_cgroup=/sys/fs/cgroup${cgroup}
+  live_cgroup=$(identity_cgroup_for_pid "$pid")
+  [[ $root_cgroup == "$live_cgroup" ]] || {
+    echo "the prestart request cgroup does not match PID $pid" >&2
+    return 1
+  }
+  mapfile -t live_pids <"$root_cgroup/cgroup.procs"
+  [[ ${#live_pids[@]} -eq 1 && ${live_pids[0]} == "$pid" ]] || {
+    echo "the prestart cgroup does not contain only PID $pid" >&2
+    return 1
+  }
+  jq -e --arg id "$container_id" --argjson pid "$pid" \
+    '.stage == "prestart" and .state.id == $id and .state.pid == $pid
+     and .annotations["io.kubernetes.cri.container-type"] == "container"' \
+    "$request" >/dev/null
+
+  container_json=$(crictl --runtime-endpoint "$identity_runtime_endpoint" \
+    inspect "$container_id")
+  listed=$(crictl --runtime-endpoint "$identity_runtime_endpoint" \
+    ps -a --id "$container_id" -o json)
+  created_at=$(jq -er '.status.createdAt' <<<"$container_json")
+  if [[ $created_at =~ ^[1-9][0-9]*$ ]]; then
+    generation=$created_at
+  else
+    generation=$(date --utc --date "$created_at" +%s%N)
+  fi
+  image_digest=$(jq -er '.status.imageRef | select(contains("sha256:"))' \
+    <<<"$container_json")
+  pod_uid=$(jq -er '.annotations["io.kubernetes.cri.sandbox-uid"]' "$request")
+  sandbox_id=$(jq -er '.annotations["io.kubernetes.cri.sandbox-id"]' "$request")
+  jq -e \
+    --arg id "$container_id" \
+    '.status.id == $id and .status.state == "CONTAINER_CREATED"
+     and .info.pid == 0
+     and (.info.runtimeSpec.linux.cgroupsPath | contains($id))' \
+    <<<"$container_json" >/dev/null
+  jq -e --arg sandbox "$sandbox_id" --arg pod_uid "$pod_uid" \
+    '.containers | length == 1
+     and .[0].podSandboxId == $sandbox
+     and .[0].labels["io.kubernetes.pod.uid"] == $pod_uid' \
+    <<<"$listed" >/dev/null
+
+  jq -n \
+    --arg binding_id "$binding_id" \
+    --arg execution_set_id "$execution_set_id" \
+    --arg container_id "$container_id" \
+    --arg namespace "$identity_k3s_namespace" \
+    --arg pod_uid "$pod_uid" \
+    --arg sandbox_id "$sandbox_id" \
+    --arg container_name "$container_name" \
+    --arg image_digest "$image_digest" \
+    --arg container_kind "$container_kind" \
+    --arg profile_id "$profile_id" \
+    --arg root_cgroup "$root_cgroup" \
+    --arg request "$request" \
+    --argjson generation "$generation" \
+    --argjson profile_ref_id "$profile_ref_id" \
+    --argjson pid "$pid" \
+    '{
+      pid: $pid,
+      request: $request,
+      binding: {
+        binding_id: $binding_id,
+        execution_set_id: $execution_set_id,
+        protected_scope_id: "44444444-4444-4444-8444-444444444444",
+        workload_selector_id: $container_name,
+        profile_id: $profile_id,
+        container_id: $container_id,
+        namespace: $namespace,
+        pod_uid: $pod_uid,
+        sandbox_id: $sandbox_id,
+        container_name: $container_name,
+        image_digest: $image_digest,
+        container_kind: $container_kind,
+        container_generation: $generation,
+        root_cgroup_path: $root_cgroup,
+        lifecycle_generation: 1,
+        active_profile_generation_ref_id: $profile_ref_id,
+        initial_role_id: 1,
+        external_role_id: 2,
+        arm_initial_root: true
+      }
+    }'
+}
+
+identity_release_prestarts() {
+  local index request release pid attempt
+  for index in "${!identity_prestart_requests[@]}"; do
+    request=${identity_prestart_requests[$index]}
+    pid=$(jq -er '.pid' "$request")
+    release=${request%.json}.release
+    printf 'accepted:%s\n' "$pid" >"$release"
+  done
+  for request in "${identity_prestart_requests[@]}"; do
+    release=${request%.json}.release
+    for ((attempt = 0; attempt < 300; attempt++)); do
+      [[ ! -e $request && ! -e $release ]] && break
+      sleep 0.1
+    done
+    [[ ! -e $request && ! -e $release ]] || {
+      echo "the prestart hook did not consume $release" >&2
+      return 1
+    }
+  done
+}
+
 identity_cleanup_prestop_case() {
   if [[ -n $identity_prestop_release_fifo && -p $identity_prestop_release_fifo ]]; then
     timeout 2s dd if=/dev/null of="$identity_prestop_release_fifo" status=none || true
   fi
+}
+
+identity_cleanup_poststart_case() {
+  local fifo request
+  for fifo in "${identity_poststart_release_fifos[@]}"; do
+    if [[ -p $fifo ]]; then
+      timeout 2s dd if=/dev/null of="$fifo" status=none || true
+    fi
+  done
+  for request in "${identity_prestart_requests[@]}"; do
+    if [[ -f $request ]]; then
+      printf 'rejected\n' >"${request%.json}.release"
+    fi
+  done
+}
+
+identity_cleanup_prestart_case() {
+  local status=0
+  if [[ -n $identity_prestart_request_directory ]]; then
+    [[ $identity_prestart_request_directory == /run/mithril-identity-prestart ]] \
+      || return 1
+    rm -rf -- "$identity_prestart_request_directory" || status=1
+  fi
+  return "$status"
 }
 
 identity_cleanup_k3s_case() {
@@ -756,6 +1049,10 @@ identity_cleanup_k3s_case() {
     kubectl -n "$identity_k3s_namespace" delete pod mithril-runtime \
       --ignore-not-found --wait=true --timeout=120s >/dev/null || status=1
     kubectl delete namespace "$identity_k3s_namespace" --wait=true --timeout=120s >/dev/null || status=1
+  fi
+  if [[ $identity_k3s_runtime_class_created == true ]]; then
+    kubectl delete runtimeclass mithril --ignore-not-found \
+      --wait=true --timeout=60s >/dev/null || status=1
   fi
   if [[ -n $identity_k3s_fixture_root ]]; then
     [[ $identity_k3s_fixture_root == /var/lib/mithril-manual-* ]] || return 1
@@ -773,11 +1070,17 @@ identity_prepare_auto() {
 }
 
 identity_start_node() {
+  local pid
+  local -a command
   [[ -d $identity_cgroup_path ]] || {
     echo "configured container cgroup does not exist: $identity_cgroup_path" >&2
     return 1
   }
-  "$identity_node" --config "$identity_config" >>"$identity_work/mithril-node.log" 2>&1 &
+  command=("$identity_node" --config "$identity_config")
+  for pid in "${identity_held_initial_pids[@]}"; do
+    command+=(--held-initial-pid "$pid")
+  done
+  "${command[@]}" >>"$identity_work/mithril-node.log" 2>&1 &
   identity_node_pid=$!
 
   for ((attempt = 0; attempt < 600; attempt++)); do
@@ -898,6 +1201,13 @@ identity_assert_external() {
   jq -e '.creator_task_cookie == null
          and .root_class == "external_runtime_root"
          and .installed_role_class == "runtime_external_restricted"' \
+    "$1" >/dev/null
+}
+
+identity_assert_initial() {
+  jq -e '.creator_task_cookie == null
+         and .root_class == "initial_container_root"
+         and .installed_role_class == "initial_role"' \
     "$1" >/dev/null
 }
 

@@ -992,8 +992,61 @@ int BPF_PROG(erebor_identity_path_rename, const struct path *old_dir,
         new_dir, new_dentry, kernel_effect_operation_v1_rename, 0);
 }
 
+static __always_inline bool initial_root_is_before_first_exec(void)
+{
+    identity_runtime_config_v1 *config = identity_runtime_config();
+    struct task_struct *task;
+    task_label_v1 *label;
+    process_security_state_v1 *root_process;
+    process_execution_instance_v1 *root_execution;
+    entry_security_state_v1 *entry;
+    execution_set_binding_state_v1 *binding;
+    struct cgroup *cgroup = NULL;
+    int binding_lookup;
+
+    if (!config || !config->enabled)
+        return false;
+    task = bpf_get_current_task_btf();
+    if (!task || task_cgroup(task, &cgroup))
+        return false;
+    binding = binding_for_cgroup(cgroup, &binding_lookup);
+    if (binding_lookup || !binding ||
+        binding->lifecycle_state != binding_lifecycle_state_v1_active)
+        return false;
+    label = bpf_task_storage_get(&task_labels, task, 0, 0);
+    if (!label)
+        return binding->initial_root_state == initial_root_state_v1_available;
+    if (!label_matches_runtime(label, config) ||
+        !binding_matches_label(binding, label))
+        return false;
+    entry = bpf_map_lookup_elem(&entry_states, &label->entry_instance_id);
+    root_process = entry ? bpf_map_lookup_elem(
+                               &process_states,
+                               &entry->root_process_state_id)
+                         : NULL;
+    root_execution = root_process
+                         ? bpf_map_lookup_elem(
+                               &process_execution_instances,
+                               &root_process->active_execution_id)
+                         : NULL;
+    return entry && root_process && root_execution &&
+           entry->entry_kind == entry_kind_v1_container_start &&
+           entry->admission_state == entry_admission_state_v1_committed &&
+           entry->lifetime_state == entry_lifetime_state_v1_active &&
+           root_process->state == process_security_state_kind_v1_active &&
+           root_process->exec_guard_state == exec_guard_state_v1_none &&
+           id128_equal(&entry->committed_execution_id,
+                       &root_process->active_execution_id) &&
+           root_execution->state == process_execution_state_v1_active &&
+           root_execution->started_by ==
+               process_execution_started_by_v1_process_birth;
+}
+
 static __always_inline int mount_mutation_effect(__u16 operation, int ret)
 {
+    /* The runtime completes this task's mount setup before its first exec. */
+    if (ret || initial_root_is_before_first_exec())
+        return ret;
     ret = identity_effect_gate(NULL, kernel_effect_family_v1_mount, operation,
                                ret);
     if (ret)
@@ -1005,7 +1058,7 @@ SEC("lsm/sb_kern_mount")
 int BPF_PROG(erebor_identity_sb_kern_mount, const struct super_block *superblock,
              int ret)
 {
-    if (ret)
+    if (ret || initial_root_is_before_first_exec())
         return ret;
     return begin_mount_mutation();
 }

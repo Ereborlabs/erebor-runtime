@@ -9,6 +9,8 @@ use tokio::sync::watch;
 struct Cli {
     #[arg(long)]
     config: PathBuf,
+    #[arg(long)]
+    held_initial_pid: Vec<u32>,
 }
 
 #[tokio::main]
@@ -20,8 +22,9 @@ async fn main() {
 }
 
 async fn run() -> mithril_node::Result<()> {
-    let config = NodeConfig::load(&Cli::parse().config)?;
-    let node = NodeChassis::start(config).await?;
+    let cli = Cli::parse();
+    let config = NodeConfig::load(&cli.config)?;
+    let node = NodeChassis::start_with_held_initial_pids(config, &cli.held_initial_pid).await?;
     let (shutdown, receiver) = watch::channel(false);
     tokio::spawn(async move {
         let _result = tokio::signal::ctrl_c().await;

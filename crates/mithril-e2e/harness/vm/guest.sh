@@ -3,7 +3,7 @@
 set -euo pipefail
 
 usage() {
-  echo "usage: MITHRIL_VM_CRI_EFFECT_MODE=OBSERVE|PROTECT $0 {platform INSPECT WORK_DIRECTORY|k3s-install VERSION CONFIG WORK_DIRECTORY|k3s-qualify MANIFEST WORK_DIRECTORY|k3s-cri-effect NODE INSPECT POLICY TEMPLATE POLICY_SOURCE SEAL_REQUEST SIGNING_KEY PUBLIC_KEY MANIFEST WORK_DIRECTORY|k3s-administrative-exec CONTROL NODE INSPECT POLICY KUBECTL_MITHRIL OIDC TEMPLATE POLICY_SOURCE SEAL_REQUEST SIGNING_KEY PUBLIC_KEY MANIFEST WORK_DIRECTORY|k3s-remove WORK_DIRECTORY}" >&2
+  echo "usage: MITHRIL_VM_CRI_EFFECT_MODE=OBSERVE|PROTECT $0 {platform INSPECT WORK_DIRECTORY|k3s-install VERSION CONFIG WORK_DIRECTORY|k3s-runtime-hook HOOK WORK_DIRECTORY|k3s-qualify MANIFEST WORK_DIRECTORY|k3s-cri-effect NODE INSPECT POLICY TEMPLATE POLICY_SOURCE SEAL_REQUEST SIGNING_KEY PUBLIC_KEY MANIFEST WORK_DIRECTORY|k3s-administrative-exec CONTROL NODE INSPECT POLICY KUBECTL_MITHRIL OIDC TEMPLATE POLICY_SOURCE SEAL_REQUEST SIGNING_KEY PUBLIC_KEY MANIFEST WORK_DIRECTORY|k3s-remove WORK_DIRECTORY}" >&2
 }
 
 require_root() {
@@ -125,6 +125,45 @@ case ${1:-} in
     /usr/local/bin/k3s kubectl wait --for=condition=Ready node --all --timeout=300s
     /usr/local/bin/k3s crictl info >/dev/null
     : >"$work_directory/k3s-installed-by-harness"
+    ;;
+  k3s-runtime-hook)
+    (($# == 3)) || { usage; exit 2; }
+    hook_source=$2
+    work_directory=$3
+    require_root
+    require_command jq
+    require_command systemctl
+    require_harness_guest "$work_directory"
+    [[ -r $hook_source && -f $work_directory/k3s-installed-by-harness ]] || {
+      echo "K3s runtime setup needs the checked hook and installed K3s" >&2
+      exit 2
+    }
+
+    hook=/usr/local/libexec/mithril-oci-prestart-admission
+    base_spec=/etc/containerd/mithril-base-spec.json
+    template=/var/lib/rancher/k3s/agent/etc/containerd/config-v3.toml.tmpl
+    temporary_spec=$work_directory/mithril-base-spec.json
+    install -d -m 755 /usr/local/libexec /etc/containerd "$(dirname "$template")"
+    rm -f -- /usr/local/libexec/mithril-oci-create-runtime-stage
+    rm -f -- /usr/local/libexec/mithril-oci-create-container-stage
+    install -m 700 "$hook_source" "$hook"
+    /usr/local/bin/k3s ctr oci spec | jq \
+      --arg hook "$hook" \
+      '.hooks.prestart = [{path: $hook, args: [$hook, "prestart", "/run/mithril-identity-prestart"]}]' \
+      >"$temporary_spec"
+    install -m 600 "$temporary_spec" "$base_spec"
+    rm -f -- "$temporary_spec"
+    printf '%s\n' \
+      '{{ template "base" . }}' \
+      '[plugins.'\''io.containerd.cri.v1.runtime'\''.containerd.runtimes.mithril]' \
+      'runtime_type = "io.containerd.runc.v2"' \
+      'base_runtime_spec = "/etc/containerd/mithril-base-spec.json"' \
+      '[plugins.'\''io.containerd.cri.v1.runtime'\''.containerd.runtimes.mithril.options]' \
+      'SystemdCgroup = true' >"$template"
+    chmod 600 "$template"
+    systemctl restart k3s
+    /usr/local/bin/k3s kubectl wait --for=condition=Ready node --all --timeout=300s
+    : >"$work_directory/k3s-runtime-hook-installed-by-harness"
     ;;
   k3s-qualify)
     (($# == 3)) || { usage; exit 2; }
@@ -1433,6 +1472,14 @@ EOF
     }
     /usr/local/bin/k3s-uninstall.sh
     rm -f -- /etc/rancher/k3s/config.yaml
+    if [[ -f $work_directory/k3s-runtime-hook-installed-by-harness ]]; then
+      rm -f -- /usr/local/libexec/mithril-oci-prestart-admission \
+        /usr/local/libexec/mithril-oci-create-container-stage \
+        /usr/local/libexec/mithril-oci-create-runtime-stage \
+        /etc/containerd/mithril-base-spec.json \
+        /var/lib/rancher/k3s/agent/etc/containerd/config-v3.toml.tmpl
+      rm -f -- "$work_directory/k3s-runtime-hook-installed-by-harness"
+    fi
     ! systemctl is-active --quiet k3s
     [[ ! -S /run/k3s/containerd/containerd.sock ]]
     rm -f -- "$work_directory/k3s-installed-by-harness"
