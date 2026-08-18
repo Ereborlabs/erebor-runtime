@@ -26,8 +26,8 @@ The status terms in this matrix have these meanings:
 - `Implementation open`: one or more required authority, lifecycle, race, or
   control paths do not exist.
 
-Current count: zero `Done`, 11 `Proof open`, and 17 `Implementation open` for
-the 28 Appendix C fixtures. The additional plan-owned path-tree test is
+Current count: 11 `Done`, zero `Proof open`, and 17 `Implementation open`
+for the 28 Appendix C fixtures. The additional plan-owned path-tree test is
 `Done`.
 
 ## Deliverable Closure
@@ -51,26 +51,26 @@ the 28 Appendix C fixtures. The additional plan-owned path-tree test is
 | `DEVICE-DERIVED-001` | The runner allows one exact `ptmx` ioctl and denies one exact `/dev/zero` ioctl. | Track the acquired device instance and derived descriptors or authority objects across use, pass, close, and reuse. Add a positive derived-object control. | Implementation open |
 | `EXEC-CONCURRENT-002` | The identity runner proves normal Linux two-thread exec behavior only. | Race real source-role and target-role transitions against a protected exec. Prove one complete state and no forbidden effect from a loser or child. | Implementation open |
 | `FILE-CONTENT-RACE-002` | Exact inode, inode-generation, mount-view, and path restrictions exist. | Add immutable approved-content provenance. Race mutation or replacement between classification and use, reject stale authority, and retain one immutable positive control. | Implementation open |
-| `FILE-FD-PASS-001` | The effect runner checks protected and benign descriptor receipt, acquisition, and later read. | Run the complete fixture on the final source and retain the negative effect oracle and benign control. | Proof open |
+| `FILE-FD-PASS-001` | The effect runner checks protected and benign descriptor receipt, acquisition, and later read. | The current-source physical record has `passed_fd_read_denied=true`, `passed_fd_acquisition_denied=true`, `passed_fd_acquisition_installed_nothing=true`, and all three benign acquisition and read controls true. | Done |
 | `FILE-IDENTITY-001` | Exact object decisions and hard-link, symbolic-link, bind, proc-fd, and recursive path-tree cases exist. | Add the required overlay copy-up identity case, then run the final alias matrix. | Implementation open |
-| `FILE-MMAP-001` | The effect runner checks forbidden read, writable shared, and executable file mappings plus benign mapping controls. | Run the complete fixture on the final source and retain the absent-mapping oracle. | Proof open |
+| `FILE-MMAP-001` | The effect runner checks forbidden read, writable shared, and executable file mappings plus benign mapping controls. | The current-source physical record has all four represented file and executable mapping denials true and both benign mapping controls true. | Done |
 | `FILE-MMAP-SHARED-011` | One forbidden writable shared mapping and benign mapping control exist. | Track attachment and lifetime across independent roots. Prove that an unapproved root cannot acquire or attach the represented shared VMA. | Implementation open |
-| `FILE-NAMESPACE-001` | Live mount-view lookup, bind-alias selection, dirty closure, and exact reconciliation exist. | Run the actor-specific allow and deny case across distinct live mount views on the final source. | Proof open |
+| `FILE-NAMESPACE-001` | Live mount-view lookup, bind-alias selection, dirty closure, and exact reconciliation exist. | The current-source physical record has bind canonicalization, protected and external mount-race fail closure, exact restoration, and the outside-tree control true. | Done |
 | `FILE-SA-TOKEN-OPEN-001` | The K3s lane discovers a projected token, but the effect bundle marks the branch `Unsupported`. | Bind worker and controller to distinct signed profiles. Deny the worker before fd or bytes, allow the controller, rotate the token, and prove no visibility gap. | Implementation open |
 | `FILE-VMA-SNAPSHOT-001` | Missing or unsupported VMA state fails closed. | Add a complete typed VMA snapshot and its mutation generation. Race map, unmap, share, and policy or response changes. Prove an incomplete snapshot never allows and a complete snapshot has a positive control. | Implementation open |
 | `HF-LOCAL-001` | Static classifications and represented exact file and exec denials exist. | Add branch-specific physical fixtures for each local prevention claim, including the complete hostile HDF5 no-fd/no-bytes oracle and its legitimate conversion control. | Implementation open |
-| `IPC-ASYNC-UNSUPPORTED-010` | Restricted io_uring read and write ownership, executor attribution, completion, reference release, and SQPOLL fail closure exist. | Run the final exact negative and synchronous positive controls. Keep unsupported opcodes and unowned SQPOLL explicit. | Proof open |
-| `IPC-PEER-RACE-004` | Exact Unix-stream peer generations, a stale-peer denial, and an exact allowed peer exist. | Run peer exit, restart, reuse, and rebind races on the final source with the live positive control. | Proof open |
-| `IPC-PROCESS-CHANNEL-009` | Exact directional Unix-stream and process-control rows exist with represented positive and negative controls. | Run the complete direction and operation matrix on the final source. Record the process and channel postconditions. | Proof open |
-| `IPC-RELATIONSHIP-ALLOW-003` | A declared exact Unix-stream peer can communicate without merging task identity. | Run the final physical positive relationship case and retain distinct identities. | Proof open |
-| `IPC-RELATIONSHIP-UNMATCHED-005` | Stale and unmatched Unix-stream peers deny, and the declared peer control succeeds. | Run the final physical stale, wildcard, reuse, and positive cases. | Proof open |
-| `LSM-DENY-SATURATION-001` | The runner performs 50,000 opens while it checks a policy denial and benign allow independently from event delivery. | Run the final source under event saturation and retain the syscall and object postconditions plus loss counts. | Proof open |
+| `IPC-ASYNC-UNSUPPORTED-010` | Restricted io_uring read and write ownership, executor attribution, completion, reference release, and SQPOLL fail closure exist. | The current-source physical record has denied exact read, allowed benign read, worker attribution, denied SQPOLL before ring creation, and released lifecycle state. Unsupported opcodes and unowned SQPOLL remain explicit. | Done |
+| `IPC-PEER-RACE-004` | Exact Unix-stream peer generations, a stale-peer denial, and an exact allowed peer exist. | The current-source physical record has exact relationship allow plus stale and unmatched peer denials. The stale case uses a changed peer generation. | Done |
+| `IPC-PROCESS-CHANNEL-009` | Exact directional Unix-stream and process-control rows exist with represented positive and negative controls. | The current-source physical record has an allowed exact Unix-stream relationship, exact ptrace denial, unmatched signal denial, and allowed signal-zero permission control. | Done |
+| `IPC-RELATIONSHIP-ALLOW-003` | A declared exact Unix-stream peer can communicate without merging task identity. | The current-source physical record has `unix_stream_relationship_allowed=true`; the fixture keeps distinct actor and peer identities. | Done |
+| `IPC-RELATIONSHIP-UNMATCHED-005` | Stale and unmatched Unix-stream peers deny, and the declared peer control succeeds. | The current-source physical record has stale and unmatched denials plus the declared-peer positive control. | Done |
+| `LSM-DENY-SATURATION-001` | The runner performs 50,000 opens while it checks a policy denial and benign allow independently from event delivery. | The current-source physical record lost 39,081 observation records under saturation while the policy denial and benign allow remained true. | Done |
 | `MEM-EXEC-001` | Exact executable file and represented mapping transitions have deny and allow controls. Anonymous, memfd, pkey, and incomplete paths fail closed. | Complete immutable image and VMA provenance for the advertised script, interpreter, loader, `binfmt_misc`, memfd, deleted-file, anonymous, mprotect, and pkey paths. | Implementation open |
 | `MEM-KERNEL-MAP-002` | Missing represented state fails closed. | Add complete mm and VMA state, bounded capacity, mutation generations, cleanup, and a positive valid-state control. Prove races, overflow, and corruption cannot relax authority. | Implementation open |
 | `MOUNT-ATTR-001` | A global dirty epoch covers represented mount operations, one propagation peer, and `mount_setattr` reconciliation. | Add and qualify old and new mount APIs, recursive attributes, idmapped mounts, automount, referral, overlay copy-up, and overflow behavior. | Implementation open |
-| `MOUNT-CAS-002` | The runner rejects a stale proposal, blocks protected opens while dirty, and restores only an exact reconciled object. | Run the concurrent proposal and protected-effect matrix on the final source. | Proof open |
+| `MOUNT-CAS-002` | The runner rejects a stale proposal, blocks protected opens while dirty, and restores only an exact reconciled object. | The current-source physical record has the stale-proposal denial, protected mount-race denial, external replacement fail closure, and exact restoration true. | Done |
 | `MOUNT-PROPAGATION-003` | One propagation peer enters fail closure and later reconciles. | Add the complete affected-view and overflow model, then run the full propagation race matrix. | Implementation open |
-| `MOUNT-SNAPSHOT-004` | Complete represented snapshots restore exact authority; partial or replaced views remain dirty and denied. | Run complete and incomplete snapshot variants on the final source and retain the protected-effect controls. | Proof open |
+| `MOUNT-SNAPSHOT-004` | Complete represented snapshots restore exact authority; partial or replaced views remain dirty and denied. | The current-source physical record has global invalidation, propagation-view fail closure, reconciliation, external replacement fail closure, and exact restoration true. | Done |
 | `SELF-PROTECT-001` | The runner denies one managed link-pin unlink and detects some pin identity changes. | Protect or explicitly close capability for program, link, map, pin-root, configuration, binary, process, and update-path replacement. Add a physical postcondition for each claimed operation. | Implementation open |
 | `STATE-FORK-IPC-002` | Phase 3 has an inherited-channel simulation case. Production exact relationship state exists. | Fork while a real pipe or socket state is inherited. Prove that the inherited restriction remains active and that the declared positive channel still works. | Implementation open |
 | `STATE-PERSISTENT-FILE-LIFETIME-007` | Exact live file identity prevents a different inode from inheriting an old row by name. | Add persistent object state across close, node restart, storage remount or reuse, and exact retirement. Prove a new object cannot inherit clean authority. | Implementation open |
@@ -89,6 +89,32 @@ children, an outside-tree positive control, mount-attack fail closure, and
 cleanup. The
 [path-tree review guide](./path-tree-denial-implementation-review.md) records
 the exact lookup order and limits.
+
+## Current-Source Physical Record
+
+The repository VM harness passed at worktree commit `e9efc7d`. The Rust and
+BPF source state is commit `13849d5`; `e9efc7d` adds only this closure
+matrix and its phase-plan link. The guest ran x86-64 Ubuntu Linux
+`6.8.0-137-generic` with BPF LSM, cgroup v2, runtime BTF, and unique mount
+IDs. The production BPF object SHA-256 is
+`e44e761a8bfa2c33f02475beb4162d41efdbe704ee10960bd03fafb31b4d13d8`.
+
+The local-enforcement JSON is
+`/tmp/mithril-phase4-diagnostic-13849d5/local-enforcement-physical-probe.json`.
+Its SHA-256 is
+`d91ce0bbc952090de0ccebdab1dc4c834749116c052897472f96028195e9a976`.
+The harness validated the kernel, identity, observation, protection, and
+cleanup records before it returned success. The record has 10,000 measured
+opens and 50,000 saturation opens. It also has `pin_root_removed=true`,
+`lease_removed=true`, `cgroup_removed=true`, and
+`fixture_root_removed=true`.
+
+Two earlier fresh guests stopped in the native-identity prerequisite before
+they ran the effect probe. One timed out while it waited for a PID-namespace
+intermediate identity. One timed out while it waited for a profile reference
+to release. Each failed run retained only its platform record and destroyed
+its guest. The successful current-source record is valid for the 11 rows above,
+but the prerequisite timing failures remain a harness reliability concern.
 
 ## Work Assigned To Later Phases
 
