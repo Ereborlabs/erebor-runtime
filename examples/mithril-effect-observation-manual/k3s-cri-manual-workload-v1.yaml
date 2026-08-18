@@ -12,6 +12,9 @@ spec:
       image: MITHRIL_MANUAL_IMAGE
       imagePullPolicy: IfNotPresent
       command: ["/bin/sh", "-c", "test -r /var/lib/mithril/secret && exec sleep 3600"]
+      env:
+        - name: PATH
+          value: /var/lib/mithril/manual-shared:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
       volumeMounts:
         - name: secret
           mountPath: /var/lib/mithril/secret
