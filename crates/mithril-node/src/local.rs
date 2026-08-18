@@ -8,7 +8,7 @@ use erebor_runtime_ipc::v1::{
     MithrilObservationSnapshotRequest, MithrilObservationSnapshotResponse,
     KIND_MITHRIL_OBSERVATION_SNAPSHOT_REQUEST, KIND_MITHRIL_OBSERVATION_SNAPSHOT_RESPONSE,
 };
-use erebor_runtime_ipc::AsyncFrameCodec;
+use erebor_runtime_ipc::{AsyncFrameCodec, IpcProtocolError};
 use mithril_control::CapabilityRecord;
 use rustix::{fs::chown, process::Uid};
 use snafu::ResultExt as _;
@@ -216,21 +216,48 @@ async fn handle(
             })
         });
     }
-    send(
-        &mut stream,
-        Envelope::wrap_message(
-            2,
-            envelope.message_id,
-            KIND_MITHRIL_OBSERVATION_SNAPSHOT_RESPONSE,
-            &MithrilObservationSnapshotResponse {
-                accepted,
-                reason: reason.to_owned(),
-                snapshot: accepted.then_some(snapshot),
-            },
-        )
-        .context(LocalIpcSnafu)?,
+    let response = bounded_observation_response(
+        envelope.message_id,
+        MithrilObservationSnapshotResponse {
+            accepted,
+            reason: reason.to_owned(),
+            snapshot: accepted.then_some(snapshot),
+        },
     )
-    .await
+    .context(LocalIpcSnafu)?;
+    send(&mut stream, response).await
+}
+
+fn bounded_observation_response(
+    correlation_id: u64,
+    mut response: MithrilObservationSnapshotResponse,
+) -> erebor_runtime_ipc::Result<Envelope> {
+    loop {
+        let envelope = Envelope::wrap_message(
+            2,
+            correlation_id,
+            KIND_MITHRIL_OBSERVATION_SNAPSHOT_RESPONSE,
+            &response,
+        )?;
+        match envelope.into_frame() {
+            Ok(_frame) => return Ok(envelope),
+            Err(IpcProtocolError::PayloadTooLarge { .. }) => {
+                let Some(recent) = response
+                    .snapshot
+                    .as_mut()
+                    .map(|snapshot| &mut snapshot.recent_effects)
+                else {
+                    return envelope.into_frame().map(|_frame| envelope);
+                };
+                if recent.is_empty() {
+                    return envelope.into_frame().map(|_frame| envelope);
+                }
+                let remove = recent.len().div_ceil(2);
+                recent.drain(..remove);
+            }
+            Err(error) => return Err(error),
+        }
+    }
 }
 
 fn apply_readiness(snapshot: &mut MithrilObservationSnapshot, readiness: NodeReadinessV1) {
@@ -330,10 +357,59 @@ async fn send(stream: &mut UnixStream, envelope: Envelope) -> Result<()> {
 mod tests {
     use std::cell::Cell;
 
-    use erebor_runtime_ipc::v1::{MithrilCapabilityRecord, MithrilObservationSnapshot};
+    use erebor_runtime_ipc::v1::{
+        MithrilCapabilityRecord, MithrilEffectObservation, MithrilObservationSnapshot,
+        MithrilObservationSnapshotResponse, KIND_MITHRIL_OBSERVATION_SNAPSHOT_RESPONSE,
+    };
 
-    use super::{apply_readiness, update_effect_health};
+    use super::{apply_readiness, bounded_observation_response, update_effect_health};
     use crate::{EffectObservationStore, NodeReadinessV1};
+
+    #[test]
+    fn observation_response_retains_the_newest_events_within_the_frame_bound() {
+        let string_field = "f".repeat(64);
+        let template = MithrilEffectObservation {
+            process_lineage_id: string_field.clone(),
+            process_instance_id: string_field.clone(),
+            entry_instance_id: string_field.clone(),
+            authority_domain_id: string_field.clone(),
+            binding_id: string_field.clone(),
+            execution_set_id: string_field.clone(),
+            reason: string_field.clone(),
+            physical_result: string_field.clone(),
+            stage: string_field.clone(),
+            controller_process_state_id: string_field.clone(),
+            target_process_state_id: string_field.clone(),
+            io_uring_ring_id: string_field,
+            ..MithrilEffectObservation::default()
+        };
+        let recent_effects = (0..1_024)
+            .map(|task_cookie| MithrilEffectObservation {
+                task_cookie,
+                ..template.clone()
+            })
+            .collect::<Vec<_>>();
+        let response = MithrilObservationSnapshotResponse {
+            accepted: true,
+            reason: "accepted".to_owned(),
+            snapshot: Some(MithrilObservationSnapshot {
+                recent_effects,
+                ..MithrilObservationSnapshot::default()
+            }),
+        };
+
+        let envelope = bounded_observation_response(7, response).expect("response fits");
+        envelope.into_frame().expect("bounded response frame");
+        let response: MithrilObservationSnapshotResponse = envelope
+            .decode_typed_payload(KIND_MITHRIL_OBSERVATION_SNAPSHOT_RESPONSE)
+            .expect("decode bounded response");
+        let retained = &response.snapshot.expect("accepted snapshot").recent_effects;
+
+        assert!(!retained.is_empty());
+        assert!(retained.len() < 1_024);
+        assert_eq!(retained.last().expect("latest event").task_cookie, 1_023);
+        assert!(retained.first().expect("oldest retained event").task_cookie > 0);
+    }
 
     #[test]
     fn identity_failure_closes_only_identity_dependent_local_claims() {
