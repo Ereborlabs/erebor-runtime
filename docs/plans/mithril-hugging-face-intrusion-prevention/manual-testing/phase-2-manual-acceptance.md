@@ -2,9 +2,10 @@
 
 Status: The current source passed the automated privileged VM identity probe
 and its Kubernetes entry extension. Direct CRI exec, non-TTY and TTY
-`kubectl exec`, `kubectl cp`, and the identical native-child control passed as
-self-contained operator cases. The VM used the K3s distribution. The full
-fixture matrix is not recorded.
+`kubectl exec`, `kubectl cp`, the identical native-child control, lifecycle
+sleep, and HTTP, TCP, and gRPC readiness probes passed as self-contained
+operator cases. The VM used the K3s distribution. The full fixture matrix is
+not recorded.
 
 Phase: [Exact Native Identity](../phase-2-exact-native-identity.md)  
 Setup: [`SINGLE-NODE`](./environment-setup.md)
@@ -511,6 +512,83 @@ This completes `ENTRY-SLEEP-001`. The exact limit is the native Kubernetes
 lifecycle `sleep` action: it created no extra in-container task. This result
 does not qualify exec probes, network probes, purpose, role, or policy. Other
 open matrix rows keep Phase 2 **Blocked**.
+
+## Recorded Kubernetes Network-Probe Result — 2026-08-18
+
+Source commit `f9b7c8bc2be84f2a39f3db7b43dae3ab1914c0d0` contains the
+exact runner, manifest, runtime helper, and manual shell used for this result.
+It extends the existing `IdentityTestRunner` and physical JSON bundle. It adds
+no BPF map, role, runner, or durable type. The retained x86_64 Ubuntu 24.04 VM
+ran kernel `6.8.0-137-generic`. Kubernetes `v1.35.5` ran through the K3s
+`v1.35.5+k3s1` distribution and the live containerd CRI endpoint.
+
+The root shell ran the automated Kubernetes extension with unique paths:
+
+```sh
+target/debug/mithril-identity-test \
+  --repo-root "$MITHRIL_MANUAL_SOURCE" \
+  --output-directory /var/tmp/mithril-kubernetes-network-20260818-033 \
+  physical-probe \
+  --pin-root /sys/fs/bpf/mithril-kubernetes-network-033 \
+  --lease-path /var/tmp/mithril-kubernetes-network-20260818-033/owner.lock \
+  --cgroup-path /sys/fs/cgroup/mithril-kubernetes-network-033 \
+  --with-kubernetes \
+  --previous-bundle /var/tmp/identity-kubernetes-schema16-029.json
+```
+
+The schema-17 JSON is
+`/tmp/mithril-phase2-kubernetes-network-20260818-033/identity-physical-probe.json`.
+Its SHA-256 is
+`cbc024f56ce366a84aa2b0ffdbb7efaab58599b282d1f24295f30c08702fac07`.
+It records `kubernetes_http_probe_no_task=true`,
+`kubernetes_tcp_probe_no_task=true`,
+`kubernetes_grpc_probe_no_task=true`, and
+`kubernetes_fixture_removed=true`. The test binary SHA-256 is
+`2268462584fb2f4b844c236aa7d46edce0019beb75e6960d56934af7b1df9132`.
+The unchanged BPF object SHA-256 is
+`3269516fcd2714ab7fbe29df26386c40f0c912b6284007b641d8bbf68842b876`.
+The network-probe workload manifest SHA-256 is
+`1c3ed281dad293132deaf38e63a1a1304281d79d6b11252816c3c0a78bcd159f`.
+
+The fixture created one real Pod with HTTP, TCP, and gRPC readiness probes.
+All three containers became Ready without a restart. The runner then resolved
+each exact live container through CRI and sampled its cgroup every 10 ms for
+four seconds. Each sample contained only the CRI-reported container init PID.
+The runner removed its Namespace and fixture directory.
+
+The retained VM then ran this command as root from the committed source:
+
+```sh
+examples/mithril-identity-manual/kubernetes-network-probes.sh
+```
+
+The shell SHA-256 is
+`51276805c3de845ab794a2616d6b539bc092c077a4592d1841b7b2d15ca6f7ec`.
+The shared runtime helper SHA-256 is
+`590fb65f4eca9b6576216334b1aec1179f5a0a10de7a3da63a828dc33cd2772b`.
+The shell sampled each cgroup 400 times. It printed init PID and only task
+`5490` for HTTP, `5523` for TCP, and `5553` for gRPC, then printed `PASS`.
+Postflight found no case Namespace, fixture, pin, lease, cgroup, node process,
+or loaded Erebor Interceptor program. `manual.sh destroy` removed the VM, and
+`virsh list --all` was empty.
+
+Run `030` is rejected because it used a stale test binary and stopped before
+the Kubernetes case. Run `031` is rejected because the HTTP probe used
+`/healthz`, which returns HTTP 412 when the fixture disables UDP. Debug case
+`032` identified that manifest error and was removed. Run `033`, with HTTP
+path `/`, is the accepted automated result.
+
+`cargo test -p mithril-e2e
+production_object_and_identity_fixture_allocation_are_exact` passed.
+`cargo clippy -p mithril-e2e --all-targets -- -D warnings` passed.
+`bash crates/mithril-e2e/harness/vm/test.sh` passed. The final
+`bash .github/scripts/verify-rust-ci.sh` passed with exit status `0` when the
+local socket tests ran with host permission.
+
+This completes `ENTRY-NETPROBE-001`. The exact limit is HTTP, TCP, and gRPC
+readiness probing: these probes created no extra in-container task. This
+result does not qualify network flow, application receipt, purpose, role, or
+policy. Other open matrix rows keep Phase 2 **Blocked**.
 
 ## Recorded Pre-PONR Failed Native-Exec VM Subcase — 2026-08-15
 

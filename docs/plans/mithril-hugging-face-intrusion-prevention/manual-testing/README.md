@@ -45,9 +45,10 @@ It proves Pod and CRI facts, creates an exact Mithril CRI binding, and records
 restricted direct CRI exec, non-TTY and TTY `kubectl exec`, and `kubectl cp`
 roots. It also records an identical native child with its parent lineage and
 role. The lifecycle-sleep extension records that the native Kubernetes sleep
-action creates no extra task in the container cgroup. It does not prove
-approved administrative exec, multi-node propagation, or complete Kubernetes
-protection.
+action creates no extra task in the container cgroup. The network-probe
+extension records the same task-absence result for HTTP, TCP, and gRPC
+readiness probes. It does not prove approved administrative exec, network-flow
+policy, multi-node propagation, or complete Kubernetes protection.
 
 For a retained guest that runs manual shells, use the [manual retained-VM
 procedure](../../../../crates/mithril-e2e/harness/vm/README.md#manual-testing-in-a-retained-vm).

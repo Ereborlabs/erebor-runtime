@@ -142,6 +142,7 @@ Then run only the case being checked:
 | Kubernetes copy | `sudo examples/mithril-identity-manual/kubernetes-copy.sh` in the manual VM |
 | Kubernetes native child | `sudo examples/mithril-identity-manual/kubernetes-native-child.sh` in the manual VM |
 | Kubernetes lifecycle sleep | `sudo examples/mithril-identity-manual/kubernetes-lifecycle-sleep.sh` in the manual VM |
+| Kubernetes network probes | `sudo examples/mithril-identity-manual/kubernetes-network-probes.sh` in the manual VM |
 | Native child | `sudo examples/mithril-identity-manual/native-child.sh NODE_CONFIG CONTAINER_OR_FULL_CRI_ID` |
 | Orphaned native child | `sudo examples/mithril-identity-manual/native-child.sh NODE_CONFIG CONTAINER_OR_FULL_CRI_ID --orphan` |
 | Double-fork native child | `sudo examples/mithril-identity-manual/native-child.sh NODE_CONFIG CONTAINER_OR_FULL_CRI_ID --double-fork` |
@@ -161,10 +162,11 @@ Then run only the case being checked:
 The no-argument CRI and Kubernetes cases run only inside the retained manual
 Kubernetes VM. Each case creates and removes its Namespace, Pod, and fixture.
 The identity-inspection cases also own their live CRI binding, node, pins, and
-lease. The lifecycle-sleep case does not start Mithril because its oracle is
-the absence of an extra task in the live container cgroup. The VM uses K3s as
-its Kubernetes distribution. The Docker case runs outside that VM and derives
-a trusted test-only configured cgroup binding from `docker inspect`.
+lease. The lifecycle-sleep and network-probe cases do not start Mithril because
+their oracle is the absence of an extra task in the live container cgroup. The
+VM uses K3s as its Kubernetes distribution. The Docker case runs outside that
+VM and derives a trusted test-only configured cgroup binding from
+`docker inspect`.
 
 ## Direct CRI Exec Check
 
@@ -262,6 +264,25 @@ This check proves that the lifecycle `sleep` action creates no in-container
 task. It does not qualify an exec probe, a network probe, or an identity role.
 The script removes its Namespace, Pod, temporary pin directory, and fixture at
 exit.
+
+## Kubernetes Network-Probe Check
+
+Use the retained manual Kubernetes VM and run:
+
+```sh
+sudo examples/mithril-identity-manual/kubernetes-network-probes.sh
+```
+
+The script creates one Pod with separate HTTP, TCP, and gRPC readiness-probe
+containers. It requires all three containers to become Ready without a
+restart. It then resolves each exact container ID, init PID, and cgroup through
+CRI. Each cgroup must contain only its init PID in 400 samples at 10 ms
+intervals.
+
+This check proves that these native Kubernetes network probes create no extra
+in-container task. It does not qualify network flow, application receipt,
+purpose, role, or policy. The script removes its Namespace, Pod, temporary pin
+directory, and fixture at exit.
 
 ## Namespace Entry And Cgroup Movement Check
 

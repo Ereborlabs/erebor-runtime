@@ -30,10 +30,10 @@ The latest phase results remain:
   capability and performance claim.
 - Phase 1: **Done**.
 - Phase 2: **Blocked**. Native identity and the direct CRI, non-TTY and TTY
-  Kubernetes exec, copy, and identical native-child rows have current source,
-  manual, and privileged VM evidence. The exact closure matrix lists the
-  remaining entry, reuse, coordinate, native-reference,
-  authorization-identity, and failure cases.
+  Kubernetes exec, copy, identical native-child, lifecycle-sleep, and network-
+  probe rows have current source, manual, and privileged VM evidence. The exact
+  closure matrix lists the remaining entry, reuse, coordinate,
+  native-reference, authorization-identity, and failure cases.
   Phase 4 owns saturation, raced-policy, IPC-policy, and protected-effect
   results.
 - Phase 3: **Blocked**. Exact observation has current privileged VM and K3s
@@ -559,6 +559,67 @@ This completes `ENTRY-SLEEP-001`. The exact limit is one native Kubernetes
 lifecycle `sleep` action. The result does not qualify exec probes, network
 probes, identity purpose, role, or policy. Other open rows keep Phase 2
 **Blocked**.
+
+### Kubernetes network probes — 2026-08-18
+
+Review this path in order:
+
+1. [`kubernetes-network-probes-workload-v1.yaml`](../../../crates/mithril-e2e/fixtures/identity/kubernetes-network-probes-workload-v1.yaml)
+   defines real HTTP, TCP, and gRPC readiness probes in one Pod. It pins the
+   test image by digest.
+2. [`IdentityTestRunner::physical_kubernetes_network_probe`](../../../crates/mithril-e2e/src/identity.rs)
+   waits for all three containers to become Ready without restart. It resolves
+   each exact live container and init PID through CRI.
+3. [`IdentityTestRunner::kubernetes_network_probe_container_no_task`](../../../crates/mithril-e2e/src/identity.rs)
+   samples each live cgroup every 10 ms for four seconds. Every sample must
+   contain only the CRI-reported init PID.
+4. [`identity-runtime.sh`](../../../examples/mithril-identity-manual/identity-runtime.sh)
+   owns the manual Namespace, Pod, temporary paths, and cleanup.
+   [`kubernetes-network-probes.sh`](../../../examples/mithril-identity-manual/kubernetes-network-probes.sh)
+   owns the readable operator scenario. `manual.sh` owns VM creation, SSH, and
+   destruction and does not run the example.
+
+```mermaid
+sequenceDiagram
+    participant O as operator or VM harness
+    participant R as IdentityTestRunner or manual shell
+    participant K as Kubernetes and CRI
+    participant C as live container cgroups
+
+    O->>R: start network-probe case
+    R->>K: create Namespace and three-container Pod
+    K->>K: run HTTP, TCP, and gRPC readiness probes
+    R->>K: require Ready and zero restarts
+    R->>K: resolve exact container IDs and init PIDs
+    loop repeated samples for each container
+        R->>C: read cgroup.procs
+        C-->>R: return only that container init PID
+    end
+    R->>K: delete Namespace
+    R-->>O: record three no-extra-task results
+```
+
+The implementation uses the existing physical bundle. Schema 17 adds three
+optional booleans. It adds no map, role, generic runner, or durable owner. The
+oracle is kernel-visible task membership. It does not infer purpose from a
+network probe or claim that the application received the probe.
+
+Source commit `f9b7c8bc2be84f2a39f3db7b43dae3ab1914c0d0` produced the
+accepted schema-17 JSON at
+`/tmp/mithril-phase2-kubernetes-network-20260818-033/identity-physical-probe.json`.
+Its SHA-256 is
+`cbc024f56ce366a84aa2b0ffdbb7efaab58599b282d1f24295f30c08702fac07`.
+The retained physical VM also ran `kubernetes-network-probes.sh` as root from
+that commit. The shell printed one init PID and the same single cgroup task for
+each probe container, then printed `PASS`. Automated and manual cleanup removed
+the Namespace and fixture. Postflight also found no Mithril pin, lease, cgroup,
+node process, or loaded Erebor Interceptor program. The VM was destroyed, and
+`virsh list --all` was empty.
+
+This completes `ENTRY-NETPROBE-001`. The exact limit is native HTTP, TCP, and
+gRPC readiness probes that created no extra in-container task. The result does
+not qualify network flow, application receipt, purpose, role, or policy. Other
+open rows keep Phase 2 **Blocked**.
 
 ### Retained alias and mount evidence — 2026-08-15
 
