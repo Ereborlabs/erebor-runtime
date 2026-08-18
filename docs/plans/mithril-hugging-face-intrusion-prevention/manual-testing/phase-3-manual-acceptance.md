@@ -1,12 +1,12 @@
 # How To Manually Accept Phase 3
 
-Status: The compiler, canonical path and mount handling, exact-file
-observation, hard-safety, typed effect, and simulation cases have
-implementations. The current source passed the privileged VM observation
-probe and direct-CRI exact-file K3s runs in `OBSERVE` and `PROTECT` mode. The
-remaining operator cases are not recorded.
+Status: Done. The compiler, canonical path and mount handling, exact-file
+observation, hard-safety, typed effect, simulation, privileged Rust probe, and
+runtime-specific operator cases pass for the qualified Phase 3 slice. No
+prevention claim is made.
 
 Phase: [Effect Observation And Profile Simulation](../phase-3-effect-observation-and-profile-simulation.md)  
+Closure matrix: [Phase 3 closure matrix](../phase-3-closure-matrix.md)
 Setup: [`SINGLE-NODE`](./environment-setup.md)
 
 ## Outcome
@@ -26,7 +26,7 @@ cargo test -p mithril-e2e --all-targets --all-features
 bash .github/scripts/verify-rust-ci.sh
 ```
 
-The `mithril-control` suite includes the machine-readable 50-case simulation
+The `mithril-control` suite includes the machine-readable 51-case simulation
 matrix: every Phase 4/5 fixture listed by the Phase 3 plan plus the managed,
 pure-memory, and outside-authority `HF-002` through `HF-012` branches. A case
 that lacks a qualified object model has an explicit hard-safety or
@@ -52,8 +52,28 @@ path. The namespace must become DIRTY before the mutation, protected opens must
 fail closed, and userspace must refuse to clean the view while the exact
 mount/device/inode/generation differs. The same probe checks the configured
 AF_UNIX `SOCK_STREAM` unmatched-policy result. Docker direct-cgroup and CRI
-discovery logic remain ordinary Rust fixtures. The manual cases below validate their
-real-daemon transport integrations.
+discovery logic remain ordinary Rust fixtures. The manual cases below validate
+their real-daemon transport integrations.
+
+## Final Closure Record — 2026-08-18
+
+At source `30f3b2ee9a8870d01d8b14f32eb817fcf2a38a71`, the disposable x86_64
+Linux `6.8.0-137-generic` VM passed the privileged Rust probe and the Docker
+direct-file, bind-alias, hard-link, mount-attack, unsupported-network,
+50,000-open saturation, and 10,000-open latency cases. The Rust result SHA-256
+is `71c09e60a614ed96ae9b4050804c2607996cda2e3785152372642ea6bc06215a`.
+
+The operator output hashes, exact expected results, physical limits, and
+later-phase allocations are in the
+[closure matrix](../phase-3-closure-matrix.md). Each case removed its own
+Mithril tasks, process, pins, state, lease, socket, and run-scoped files. Final
+inspection found no Mithril BPF program. The exact disposable container,
+fixture, VM domain, and VM work directories were removed after the nonsecret
+records were copied and hashed.
+
+The dated records below preserve earlier partial qualification history. Their
+`Blocked` statements describe those earlier source states and do not override
+the final closure record.
 
 ## Current K3s CRI Record
 
