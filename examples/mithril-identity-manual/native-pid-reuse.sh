@@ -13,6 +13,35 @@ identity_prepare_k3s_case \
 identity_start_node
 
 reuse_directory=$identity_work/native-pid-reuse
+reuse_outer_pid=
+reuse_init_pid=
+reuse_fixture_pid_matches() {
+  local pid=$1
+  local command
+  [[ $pid =~ ^[1-9][0-9]*$ && -r /proc/$pid/cmdline ]] || return 1
+  command=$(tr '\0' ' ' <"/proc/$pid/cmdline")
+  [[ $command == *" $reuse_directory/fixture.py $reuse_directory "* ]]
+}
+reuse_cleanup_processes() {
+  local pid attempt
+  for pid in "$reuse_init_pid" "$reuse_outer_pid"; do
+    reuse_fixture_pid_matches "$pid" && kill -TERM "$pid"
+  done
+  for ((attempt = 0; attempt < 20; attempt++)); do
+    if ! reuse_fixture_pid_matches "$reuse_init_pid" \
+      && ! reuse_fixture_pid_matches "$reuse_outer_pid"; then
+      break
+    fi
+    sleep 0.1
+  done
+  for pid in "$reuse_init_pid" "$reuse_outer_pid"; do
+    reuse_fixture_pid_matches "$pid" && kill -KILL "$pid"
+  done
+  [[ -z $reuse_outer_pid ]] || wait "$reuse_outer_pid" 2>/dev/null || true
+  ! reuse_fixture_pid_matches "$reuse_init_pid" \
+    && ! reuse_fixture_pid_matches "$reuse_outer_pid"
+}
+identity_cleanup_functions=(reuse_cleanup_processes "${identity_cleanup_functions[@]}")
 mkdir -m 700 -- "$reuse_directory"
 cat >"$reuse_directory/fixture.py" <<'PY'
 import os
@@ -63,7 +92,6 @@ PY
 reuse_outer_pid=$!
 identity_task_pids+=("$reuse_outer_pid")
 
-reuse_init_pid=
 for ((attempt = 0; attempt < 100; attempt++)); do
   read -r reuse_init_pid _ \
     <"/proc/$reuse_outer_pid/task/$reuse_outer_pid/children" || true
@@ -154,6 +182,9 @@ done
   exit 1
 }
 wait "$reuse_outer_pid"
+reuse_outer_pid=
+reuse_init_pid=
+identity_task_pids=()
 
 identity_pass \
   "PASS: namespace PID $reuse_first_namespace_pid was reused by fresh tasks; both creator edges stayed exact."
