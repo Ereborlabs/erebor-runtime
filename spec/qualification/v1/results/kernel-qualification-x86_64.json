@@ -5,11 +5,11 @@
   "kernel_release": "6.8.0-137-generic",
   "active_lsm_order": "lockdown,capability,landlock,yama,apparmor,bpf",
   "runtime_btf_sha256": "6da9f6b4ebcae9b07e6a717b517884abf7f6b524e46340e40fb164eed4a49a7c",
-  "abi_header_sha256": "6311588645a81b338c45cea0482f6054c24a21c457aa4c7a545687b15c47181d",
+  "abi_header_sha256": "c37219728bd11661afd36447acf02765a0f4b2590bacf91d27989c5780fa0bff",
   "bpf_source_sha256": "6447fb9501f1f7b05f634b549b9c89a6483b50d8055548fafa1df59664677586",
-  "bpf_object_sha256": "4d56e05b36bb310af66c7ec553aa13fa4b29d4839096a7dd0e5708edddaa1eac",
-  "physical_probe_artifact_sha256": "05ae39fb79fa005e6709defdb61b110cd9262da7de26e29f9d7db6fcd80e49d3",
-  "physical_evidence_sha256": "c4d9bf8bce22604aec949e67fec80299538969894c8e9ed48869230bbc5fdb76",
+  "bpf_object_sha256": "e44e761a8bfa2c33f02475beb4162d41efdbe704ee10960bd03fafb31b4d13d8",
+  "physical_probe_artifact_sha256": "688812391d74069eb04772ddcb67a790f8c493b5c89fb3b4c6e84d96a163c0dc",
+  "physical_evidence_sha256": "6dc5863855070e86490c2c1efc8900f96f6fa36acba4fea4127ed5395182f7dd",
   "lsm_program_count": 41,
   "map_count": 3,
   "file_open_allow_deny_allow": true,
@@ -20,8 +20,8 @@
   ],
   "unsupported_capability_count": 16,
   "benchmark_artifacts": {
-    "baseline_sha256": "11fef6a17b107803af7499d5f788cb4585abd722042a078bbe4c127488391afe",
-    "protected_sha256": "f315ab7856c6f415cb3094193f749ee9dbc36bd1e8e2fce2bf2d3d0e50126937"
+    "baseline_sha256": "bfc45630f3c1eea874803bc49167d215585b139f07c789002a24966daa0015bc",
+    "protected_sha256": "36377299a087917b6e83b97f44e5bdab467d2a266135b42468e164b717003441"
   },
   "benchmarks": [
     {
@@ -29,52 +29,52 @@
       "concurrency": 1,
       "warmup_iterations": 100000,
       "measured_iterations": 1000000,
-      "elapsed_ns": 5098905282,
-      "operations_per_second": 196120.52875941223,
-      "p50_ns": 4374,
-      "p95_ns": 4483,
-      "p99_ns": 16900,
-      "maximum_ns": 1116703,
-      "raw_samples_sha256": "46d1ede69f1b5bc4655c3258bdf4650d5ec5c7f8f7283b1d5ef26aef64a54ec8"
+      "elapsed_ns": 5037503711,
+      "operations_per_second": 198511.02001500837,
+      "p50_ns": 4325,
+      "p95_ns": 4444,
+      "p99_ns": 17112,
+      "maximum_ns": 831813,
+      "raw_samples_sha256": "52cf77d7a718dbe175fce47ba0f7055746a7bcbd6e1f33998d70130d2f4464c2"
     },
     {
       "mode": "BASELINE",
       "concurrency": 32,
       "warmup_iterations": 100000,
       "measured_iterations": 1000000,
-      "elapsed_ns": 2623005877,
-      "operations_per_second": 381241.9974993445,
-      "p50_ns": 4443,
-      "p95_ns": 4961,
-      "p99_ns": 13730,
-      "maximum_ns": 72023645,
-      "raw_samples_sha256": "319b8eb435bda88edab36a08964812b36311dad22819a254918f9bb8ac21d1f5"
+      "elapsed_ns": 2625153221,
+      "operations_per_second": 380930.1460960324,
+      "p50_ns": 4385,
+      "p95_ns": 4972,
+      "p99_ns": 14637,
+      "maximum_ns": 54233407,
+      "raw_samples_sha256": "02125f2cc9ee41721b44e1fb2662be44c235080fe3194366a0db9014515c6315"
     },
     {
       "mode": "PROTECTED",
       "concurrency": 1,
       "warmup_iterations": 100000,
       "measured_iterations": 1000000,
-      "elapsed_ns": 5388877422,
-      "operations_per_second": 185567.40517375976,
-      "p50_ns": 4632,
-      "p95_ns": 4702,
-      "p99_ns": 17627,
-      "maximum_ns": 2696796,
-      "raw_samples_sha256": "9eb14cab0b9e33baafb22e4eba76278dd70eabb5f056e948dd798d56494941bf"
+      "elapsed_ns": 5331774855,
+      "operations_per_second": 187554.80626910305,
+      "p50_ns": 4574,
+      "p95_ns": 4653,
+      "p99_ns": 17799,
+      "maximum_ns": 1342167,
+      "raw_samples_sha256": "f14d0aef5bf288cdbb02ce3889d023aa0f87a8dd1055c056bc09e2ca59055567"
     },
     {
       "mode": "PROTECTED",
       "concurrency": 32,
       "warmup_iterations": 100000,
       "measured_iterations": 1000000,
-      "elapsed_ns": 2807735905,
-      "operations_per_second": 356158.8531952759,
-      "p50_ns": 4712,
-      "p95_ns": 5329,
-      "p99_ns": 15768,
-      "maximum_ns": 49277949,
-      "raw_samples_sha256": "407bcc5cac01a8f722378496588a7dab2c256c38a616fdd680ca2352a9b682cc"
+      "elapsed_ns": 2781327404,
+      "operations_per_second": 359540.5555497845,
+      "p50_ns": 4655,
+      "p95_ns": 5230,
+      "p99_ns": 15254,
+      "maximum_ns": 60034627,
+      "raw_samples_sha256": "dede75ddf9a45f4760b4e0bd6a67f1c2f2ad3b295f3a551cca59ab0caa4feb89"
     }
   ]
 }
