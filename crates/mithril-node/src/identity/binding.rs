@@ -1115,6 +1115,9 @@ mod tests {
         recovered.transition_version = 12;
 
         assert!(same_runtime_binding(&desired, &recovered));
+        recovered.root_cgroup_live_interval_id = Id128V1::new(11, 12);
+        assert!(!same_runtime_binding(&desired, &recovered));
+        recovered.root_cgroup_live_interval_id = desired.root_cgroup_live_interval_id;
         recovered.execution_set_id = Id128V1::new(11, 12);
         assert!(!same_runtime_binding(&desired, &recovered));
         Ok(())

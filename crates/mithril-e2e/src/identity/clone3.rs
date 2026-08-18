@@ -456,7 +456,7 @@ fn start_mount_namespace_target() -> Result<Child> {
         path: Path::new("/proc/self/ns/mnt"),
     })?;
     let mut target = Command::new("/usr/bin/unshare")
-        .args(["--mount", "--propagation", "private", "/bin/sleep", "30"])
+        .args(["--mount", "--propagation", "private", "/bin/sleep", "300"])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -540,7 +540,7 @@ fn run_child(
                 c"-m".as_ptr(),
                 c"--".as_ptr(),
                 c"/bin/sleep".as_ptr(),
-                c"30".as_ptr(),
+                c"300".as_ptr(),
                 std::ptr::null::<libc::c_char>(),
             );
             libc::_exit(127);

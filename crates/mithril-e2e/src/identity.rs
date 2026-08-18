@@ -17,11 +17,12 @@ use erebor_interceptor::{
     KernelObjectLayoutV1, KernelObjectManifestV1, BUNDLED_BPF_OBJECT, REQUIRED_IDENTITY_PROGRAMS,
 };
 use erebor_interceptor_abi::{
-    CreatedByEdgeV1, EntryLifetimeStateV1, EntrySecurityStateV1, ExecGuardStateV1, Id128V1,
-    IdentityRuntimeConfigV1, PendingExecStateV1, PendingExecV1, ProcessExecutionInstanceV1,
-    ProcessExecutionStateV1, ProcessSecurityStateKindV1, ProcessSecurityStateV1,
-    ProcessStateVectorStateV1, ProcessStateVectorV1, ReferenceTombstoneStateV1,
-    TaskCoordinateStateV1, TaskCoordinateV1, TaskReferenceTombstoneV1, TASK_REFERENCE_ALL_V1,
+    CreatedByEdgeV1, EntryLifetimeStateV1, EntrySecurityStateV1, ExecGuardStateV1,
+    ExecutionSetBindingStateV1, Id128V1, IdentityRuntimeConfigV1, PendingExecStateV1,
+    PendingExecV1, ProcessExecutionInstanceV1, ProcessExecutionStateV1, ProcessSecurityStateKindV1,
+    ProcessSecurityStateV1, ProcessStateVectorStateV1, ProcessStateVectorV1,
+    ReferenceTombstoneStateV1, TaskCoordinateStateV1, TaskCoordinateV1, TaskReferenceTombstoneV1,
+    TASK_REFERENCE_ALL_V1,
 };
 use libbpf_rs::{MapCore as _, MapHandle, MapType};
 use mithril_control::{
@@ -235,6 +236,16 @@ pub struct IdentityPhysicalProbeBundleV1 {
     pub tid_reuse_first_host_tid: u32,
     pub tid_reuse_second_host_tid: u32,
     pub tid_reuse_fresh_identity: bool,
+    pub cgroup_reuse_path: PathBuf,
+    pub cgroup_reuse_first_root: NativeTaskSnapshotV1,
+    pub cgroup_reuse_second_root: NativeTaskSnapshotV1,
+    pub cgroup_reuse_first_root_id: u64,
+    pub cgroup_reuse_second_root_id: u64,
+    pub cgroup_reuse_first_binding_nonce: String,
+    pub cgroup_reuse_second_binding_nonce: String,
+    pub cgroup_reuse_first_live_interval_id: String,
+    pub cgroup_reuse_second_live_interval_id: String,
+    pub cgroup_reuse_fresh_identity: bool,
     pub profile_task_refs_after_exit: u64,
     pub recovered_start: KernelObjectManifestV1,
     pub map_ids_stable_across_restart: bool,
@@ -296,6 +307,25 @@ pub struct IdentityPhysicalProbeBundleV1 {
     pub kubernetes_restart_node_recovered_root: Option<NativeTaskSnapshotV1>,
     pub kubernetes_restart_node_observation_unavailable: Option<bool>,
     pub kubernetes_restart_identity_stable: Option<bool>,
+    pub kubernetes_reuse_first_root: Option<NativeTaskSnapshotV1>,
+    pub kubernetes_reuse_second_root: Option<NativeTaskSnapshotV1>,
+    pub kubernetes_reuse_first_pod_uid: Option<String>,
+    pub kubernetes_reuse_second_pod_uid: Option<String>,
+    pub kubernetes_reuse_first_sandbox_id: Option<String>,
+    pub kubernetes_reuse_second_sandbox_id: Option<String>,
+    pub kubernetes_reuse_first_container_id: Option<String>,
+    pub kubernetes_reuse_second_container_id: Option<String>,
+    pub kubernetes_reuse_first_cgroup_path: Option<PathBuf>,
+    pub kubernetes_reuse_second_cgroup_path: Option<PathBuf>,
+    pub kubernetes_reuse_first_root_cgroup_id: Option<u64>,
+    pub kubernetes_reuse_second_root_cgroup_id: Option<u64>,
+    pub kubernetes_reuse_first_binding_nonce: Option<String>,
+    pub kubernetes_reuse_second_binding_nonce: Option<String>,
+    pub kubernetes_reuse_first_live_interval_id: Option<String>,
+    pub kubernetes_reuse_second_live_interval_id: Option<String>,
+    pub kubernetes_reuse_same_names: Option<bool>,
+    pub kubernetes_reuse_fresh_full_identity: Option<bool>,
+    pub kubernetes_reuse_fresh_binding_identity: Option<bool>,
     pub kubernetes_fixture_removed: bool,
 }
 
@@ -1665,6 +1695,13 @@ impl IdentityTestRunner {
 
         self.wait_for("native reference baseline", &procs_path, || {
             Ok((profile_task_refs(&host)? == 0).then_some(()))
+        })
+        .map_err(|source| {
+            invalid_state(format!(
+                "{source}; live cgroup tasks `{}`; profile refs {}",
+                fs::read_to_string(&procs_path).unwrap_or_default().trim(),
+                profile_task_refs(&host).unwrap_or(u64::MAX)
+            ))
         })?;
         let mut leader_first_fixture = NativeProcessFixture::start_with_leader_first_exit(
             &leader_first_ready_path,
@@ -2288,6 +2325,15 @@ impl IdentityTestRunner {
                 let refs = profile_task_refs(&host)?;
                 Ok((refs == 0).then_some(refs))
             })?;
+        let cgroup_reuse_first_root_id = fs::metadata(&cgroup_path)
+            .context(IoSnafu { path: &cgroup_path })?
+            .ino();
+        let cgroup_reuse_first_binding = required_abi_map::<ExecutionSetBindingStateV1>(
+            &host,
+            "execution_set_bindings",
+            &cgroup_reuse_first_root_id.to_ne_bytes(),
+            "first cgroup lifetime binding",
+        )?;
 
         let first_map_ids = map_ids(&first_start);
         host.shutdown().context(InterceptorSnafu)?;
@@ -2334,7 +2380,7 @@ impl IdentityTestRunner {
         let mut recovered_bindings =
             WorkloadBindingOwner::system(node_boot_id, 1).context(NodeSnafu)?;
         recovered_bindings
-            .publish_all(&recovered, &[binding])
+            .publish_all(&recovered, std::slice::from_ref(&binding))
             .context(NodeSnafu)?;
         NativeSecurityStateOwner::new(node_boot_id, 1)
             .activate(&mut recovered)
@@ -2348,10 +2394,78 @@ impl IdentityTestRunner {
                 reason: "recovery did not reuse the complete pinned map generation",
             }
         );
+        cgroup_cleanup.cleanup()?;
+        ensure!(
+            !cgroup_path.exists(),
+            InvalidInputSnafu {
+                path: &cgroup_path,
+                reason: "the first cgroup lifetime survived removal",
+            }
+        );
+        let reused_cgroup_cleanup = ProbeCgroup::create(&cgroup_path)?;
+        let reused_procs_path = reused_cgroup_cleanup.path().join("cgroup.procs");
+        let mut reused_fixture = NativeProcessFixture::start()?;
+        fs::write(&reused_procs_path, reused_fixture.outer_pid().to_string()).context(IoSnafu {
+            path: &reused_procs_path,
+        })?;
+        let mut reused_binding = test_binding(reused_cgroup_cleanup.path());
+        reused_binding.container_id = "c".repeat(64);
+        reused_binding.pod_uid = "identity-pod-uid-reused".to_owned();
+        reused_binding.sandbox_id = "identity-sandbox-reused".to_owned();
+        reused_binding.container_generation = 2;
+
+        let mut reused_bindings =
+            WorkloadBindingOwner::system(node_boot_id, 1).context(NodeSnafu)?;
+        reused_bindings
+            .publish_all(&recovered, std::slice::from_ref(&reused_binding))
+            .context(NodeSnafu)?;
+        NativeSecurityStateOwner::new(node_boot_id, 1)
+            .activate(&mut recovered)
+            .context(NodeSnafu)?;
+        let cgroup_reuse_second_root =
+            self.wait_for("recreated cgroup root identity", &reused_procs_path, || {
+                inspector
+                    .snapshot(reused_fixture.outer_pid())
+                    .context(NodeSnafu)
+            })?;
+        let cgroup_reuse_second_root_id = fs::metadata(reused_cgroup_cleanup.path())
+            .context(IoSnafu {
+                path: reused_cgroup_cleanup.path(),
+            })?
+            .ino();
+        let cgroup_reuse_second_binding = required_abi_map::<ExecutionSetBindingStateV1>(
+            &recovered,
+            "execution_set_bindings",
+            &cgroup_reuse_second_root_id.to_ne_bytes(),
+            "second cgroup lifetime binding",
+        )?;
+        let cgroup_reuse_fresh_identity = cgroup_reuse_first_root_id != cgroup_reuse_second_root_id
+            && cgroup_reuse_first_binding.binding_nonce
+                != cgroup_reuse_second_binding.binding_nonce
+            && cgroup_reuse_first_binding.root_cgroup_live_interval_id
+                != cgroup_reuse_second_binding.root_cgroup_live_interval_id
+            && binding_gap_reconciled_root.task_cookie != cgroup_reuse_second_root.task_cookie
+            && binding_gap_reconciled_root.process_state_id
+                != cgroup_reuse_second_root.process_state_id
+            && binding_gap_reconciled_root.active_execution_id
+                != cgroup_reuse_second_root.active_execution_id
+            && cgroup_reuse_second_root.creator_task_cookie.is_none()
+            && cgroup_reuse_second_root.root_class.as_deref() == Some("restored_or_unknown_root")
+            && cgroup_reuse_second_root.installed_role_class.as_deref()
+                == Some("fail_closed_unknown")
+            && cgroup_reuse_second_root.active_role_id == reused_binding.external_role_id;
+        ensure!(
+            cgroup_reuse_fresh_identity,
+            InvalidInputSnafu {
+                path: &cgroup_path,
+                reason: "the recreated cgroup path reused an old lifetime identity",
+            }
+        );
+        reused_fixture.stop();
         recovered.shutdown().context(InterceptorSnafu)?;
         pin_cleanup.cleanup()?;
         lease_cleanup.cleanup()?;
-        cgroup_cleanup.cleanup()?;
+        reused_cgroup_cleanup.cleanup()?;
         ensure!(
             !pin_root.exists() && !lease_path.exists(),
             InvalidInputSnafu {
@@ -2367,11 +2481,11 @@ impl IdentityTestRunner {
             }
         );
         Ok(IdentityPhysicalProbeBundleV1 {
-            schema_version: 26,
+            schema_version: 27,
             object_sha256,
             first_start,
             distinct_pin_root_owner_rejected,
-            binding_gap_reconciled_root,
+            binding_gap_reconciled_root: binding_gap_reconciled_root.clone(),
             binding_gap_reconciliation_closed: true,
             external_ambiguity_first_root,
             external_ambiguity_second_root,
@@ -2454,6 +2568,20 @@ impl IdentityTestRunner {
             tid_reuse_first_host_tid,
             tid_reuse_second_host_tid,
             tid_reuse_fresh_identity,
+            cgroup_reuse_path: cgroup_path.clone(),
+            cgroup_reuse_first_root: binding_gap_reconciled_root.clone(),
+            cgroup_reuse_second_root,
+            cgroup_reuse_first_root_id,
+            cgroup_reuse_second_root_id,
+            cgroup_reuse_first_binding_nonce: id128_hex(cgroup_reuse_first_binding.binding_nonce),
+            cgroup_reuse_second_binding_nonce: id128_hex(cgroup_reuse_second_binding.binding_nonce),
+            cgroup_reuse_first_live_interval_id: id128_hex(
+                cgroup_reuse_first_binding.root_cgroup_live_interval_id,
+            ),
+            cgroup_reuse_second_live_interval_id: id128_hex(
+                cgroup_reuse_second_binding.root_cgroup_live_interval_id,
+            ),
+            cgroup_reuse_fresh_identity,
             profile_task_refs_after_exit,
             recovered_start,
             map_ids_stable_across_restart,
@@ -2515,6 +2643,25 @@ impl IdentityTestRunner {
             kubernetes_restart_node_recovered_root: None,
             kubernetes_restart_node_observation_unavailable: None,
             kubernetes_restart_identity_stable: None,
+            kubernetes_reuse_first_root: None,
+            kubernetes_reuse_second_root: None,
+            kubernetes_reuse_first_pod_uid: None,
+            kubernetes_reuse_second_pod_uid: None,
+            kubernetes_reuse_first_sandbox_id: None,
+            kubernetes_reuse_second_sandbox_id: None,
+            kubernetes_reuse_first_container_id: None,
+            kubernetes_reuse_second_container_id: None,
+            kubernetes_reuse_first_cgroup_path: None,
+            kubernetes_reuse_second_cgroup_path: None,
+            kubernetes_reuse_first_root_cgroup_id: None,
+            kubernetes_reuse_second_root_cgroup_id: None,
+            kubernetes_reuse_first_binding_nonce: None,
+            kubernetes_reuse_second_binding_nonce: None,
+            kubernetes_reuse_first_live_interval_id: None,
+            kubernetes_reuse_second_live_interval_id: None,
+            kubernetes_reuse_same_names: None,
+            kubernetes_reuse_fresh_full_identity: None,
+            kubernetes_reuse_fresh_binding_identity: None,
             kubernetes_fixture_removed: false,
         })
     }
@@ -2661,9 +2808,51 @@ impl IdentityTestRunner {
             && bundle.kubernetes_restart_node_recovered_root.is_some()
             && bundle.kubernetes_restart_node_observation_unavailable == Some(true)
             && bundle.kubernetes_restart_identity_stable == Some(true);
-        let schema_compatible = bundle.schema_version == 26
-            || (bundle.schema_version == 25 && restart_results_missing)
-            || (bundle.schema_version == 24 && loss_results_missing && restart_results_missing);
+        let reuse_results_missing = bundle.kubernetes_reuse_first_root.is_none()
+            && bundle.kubernetes_reuse_second_root.is_none()
+            && bundle.kubernetes_reuse_first_pod_uid.is_none()
+            && bundle.kubernetes_reuse_second_pod_uid.is_none()
+            && bundle.kubernetes_reuse_first_sandbox_id.is_none()
+            && bundle.kubernetes_reuse_second_sandbox_id.is_none()
+            && bundle.kubernetes_reuse_first_container_id.is_none()
+            && bundle.kubernetes_reuse_second_container_id.is_none()
+            && bundle.kubernetes_reuse_first_cgroup_path.is_none()
+            && bundle.kubernetes_reuse_second_cgroup_path.is_none()
+            && bundle.kubernetes_reuse_first_root_cgroup_id.is_none()
+            && bundle.kubernetes_reuse_second_root_cgroup_id.is_none()
+            && bundle.kubernetes_reuse_first_binding_nonce.is_none()
+            && bundle.kubernetes_reuse_second_binding_nonce.is_none()
+            && bundle.kubernetes_reuse_first_live_interval_id.is_none()
+            && bundle.kubernetes_reuse_second_live_interval_id.is_none()
+            && bundle.kubernetes_reuse_same_names.is_none()
+            && bundle.kubernetes_reuse_fresh_full_identity.is_none()
+            && bundle.kubernetes_reuse_fresh_binding_identity.is_none();
+        let reuse_results_present = bundle.kubernetes_reuse_first_root.is_some()
+            && bundle.kubernetes_reuse_second_root.is_some()
+            && bundle.kubernetes_reuse_first_pod_uid.is_some()
+            && bundle.kubernetes_reuse_second_pod_uid.is_some()
+            && bundle.kubernetes_reuse_first_sandbox_id.is_some()
+            && bundle.kubernetes_reuse_second_sandbox_id.is_some()
+            && bundle.kubernetes_reuse_first_container_id.is_some()
+            && bundle.kubernetes_reuse_second_container_id.is_some()
+            && bundle.kubernetes_reuse_first_cgroup_path.is_some()
+            && bundle.kubernetes_reuse_second_cgroup_path.is_some()
+            && bundle.kubernetes_reuse_first_root_cgroup_id.is_some()
+            && bundle.kubernetes_reuse_second_root_cgroup_id.is_some()
+            && bundle.kubernetes_reuse_first_binding_nonce.is_some()
+            && bundle.kubernetes_reuse_second_binding_nonce.is_some()
+            && bundle.kubernetes_reuse_first_live_interval_id.is_some()
+            && bundle.kubernetes_reuse_second_live_interval_id.is_some()
+            && bundle.kubernetes_reuse_same_names == Some(true)
+            && bundle.kubernetes_reuse_fresh_full_identity == Some(true)
+            && bundle.kubernetes_reuse_fresh_binding_identity == Some(true);
+        let schema_compatible = bundle.schema_version == 27
+            || (bundle.schema_version == 26 && reuse_results_missing)
+            || (bundle.schema_version == 25 && restart_results_missing && reuse_results_missing)
+            || (bundle.schema_version == 24
+                && loss_results_missing
+                && restart_results_missing
+                && reuse_results_missing);
         ensure!(
             schema_compatible
                 && (entry_results_missing || entry_results_present)
@@ -2675,13 +2864,14 @@ impl IdentityTestRunner {
                 && (prestop_results_missing || prestop_results_present)
                 && (poststart_results_missing || poststart_results_present)
                 && (loss_results_missing || loss_results_present)
-                && (restart_results_missing || restart_results_present),
+                && (restart_results_missing || restart_results_present)
+                && (reuse_results_missing || reuse_results_present),
             InvalidInputSnafu {
                 path: previous_bundle_path,
                 reason: "the prior identity bundle cannot accept the next Kubernetes result",
             }
         );
-        bundle.schema_version = 26;
+        bundle.schema_version = 27;
         if entry_results_missing {
             self.physical_kubernetes_exec_probe(
                 output_directory,
@@ -2740,7 +2930,7 @@ impl IdentityTestRunner {
                 &mut bundle,
             )?;
         }
-        if loss_results_missing || restart_results_missing {
+        if loss_results_missing || restart_results_missing || reuse_results_missing {
             self.physical_kubernetes_resilience_probe(
                 output_directory,
                 pin_root,
@@ -2796,6 +2986,31 @@ impl IdentityTestRunner {
             }
         );
         Ok(())
+    }
+
+    fn pinned_execution_set_binding(
+        &self,
+        pin_root: &Path,
+        cgroup_path: &Path,
+    ) -> Result<ExecutionSetBindingStateV1> {
+        let root_cgroup_id = fs::metadata(cgroup_path)
+            .context(IoSnafu { path: cgroup_path })?
+            .ino();
+        let map_path = pin_root.join("maps/execution_set_bindings");
+        let map = MapHandle::from_pinned_path(&map_path).map_err(|error| {
+            invalid_state(format!(
+                "open execution-set binding map for reuse inspection: {error}"
+            ))
+        })?;
+        let bytes = map
+            .lookup(&root_cgroup_id.to_ne_bytes(), libbpf_rs::MapFlags::ANY)
+            .map_err(|error| invalid_state(format!("read reused cgroup binding: {error}")))?
+            .ok_or_else(|| invalid_state("the reused cgroup has no execution-set binding"))?;
+        ExecutionSetBindingStateV1::try_read_from_bytes(&bytes).map_err(|error| {
+            invalid_state(format!(
+                "the reused cgroup binding has an invalid ABI value: {error}"
+            ))
+        })
     }
 
     fn materialize_object(&self, output_directory: &Path) -> Result<PathBuf> {
@@ -6420,19 +6635,209 @@ impl IdentityTestRunner {
                     reason: "the recovered node reused a different task, process, or role identity",
                 }
             );
+            let first_reuse_binding = self.pinned_execution_set_binding(pin_root, &cgroup)?;
             self.continue_host_pid(host_pid)?;
+            let external_status = external
+                .as_mut()
+                .ok_or_else(|| invalid_state("the resilience CRI task disappeared"))?
+                .wait()
+                .context(IoSnafu {
+                    path: Path::new("Kubernetes resilience CRI task"),
+                })?;
+            external = None;
+            ensure!(
+                external_status.success(),
+                InvalidInputSnafu {
+                    path: &marker_path,
+                    reason: "the resilience CRI task failed after its final release",
+                }
+            );
+
+            Self::stop_node_process(&mut node)?;
+            self.kubernetes_output(
+                &[
+                    "kubectl",
+                    "-n",
+                    namespace.as_str(),
+                    "delete",
+                    "pod",
+                    "mithril-resilience",
+                    "--wait=true",
+                    "--timeout=120s",
+                ],
+                "remove the first Kubernetes reuse Pod lifetime",
+            )?;
+            self.wait_for("first Kubernetes reuse cgroup removal", &cgroup, || {
+                Ok((!cgroup.exists()).then_some(()))
+            })?;
+            self.kubernetes_output(
+                &[
+                    "kubectl",
+                    "apply",
+                    "-f",
+                    manifest_path.to_string_lossy().as_ref(),
+                ],
+                "recreate the Kubernetes reuse Pod with the same names",
+            )?;
+            self.kubernetes_output(
+                &[
+                    "kubectl",
+                    "-n",
+                    namespace.as_str(),
+                    "wait",
+                    "--for=condition=Ready",
+                    "pod/mithril-resilience",
+                    "--timeout=180s",
+                ],
+                "wait for the recreated Kubernetes reuse Pod",
+            )?;
+            let (mut second_binding, second_init_pid, _second_sandbox) = self
+                .kubernetes_container_binding(
+                    &namespace,
+                    "mithril-resilience",
+                    "application",
+                    (
+                        mithril_node::ContainerKindV1::Application,
+                        "11111111-1111-4111-8111-111111111701",
+                        "22222222-2222-4222-8222-222222222701",
+                        "33333333-3333-4333-8333-333333333701",
+                        7,
+                    ),
+                    &manifest_path,
+                )?;
+            let second_cgroup = self.kubernetes_cgroup_for_pid(second_init_pid)?;
+            second_binding.root_cgroup_path = None;
+            second_binding.arm_initial_root = false;
+            let binding_config = config
+                .pointer_mut("/workload_bindings/0")
+                .ok_or_else(|| invalid_state("the node template has no workload binding"))?;
+            binding_config["binding_id"] = second_binding.binding_id.clone().into();
+            binding_config["execution_set_id"] = second_binding.execution_set_id.clone().into();
+            binding_config["protected_scope_id"] = second_binding.protected_scope_id.clone().into();
+            binding_config["workload_selector_id"] =
+                second_binding.workload_selector_id.clone().into();
+            binding_config["profile_id"] = second_binding.profile_id.clone().into();
+            binding_config["container_id"] = second_binding.container_id.clone().into();
+            binding_config["namespace"] = second_binding.namespace.clone().into();
+            binding_config["pod_uid"] = second_binding.pod_uid.clone().into();
+            binding_config["sandbox_id"] = second_binding.sandbox_id.clone().into();
+            binding_config["container_name"] = second_binding.container_name.clone().into();
+            binding_config["image_digest"] = second_binding.image_digest.clone().into();
+            binding_config["container_generation"] = second_binding.container_generation.into();
+            binding_config["lifecycle_generation"] = second_binding.lifecycle_generation.into();
+            binding_config["active_profile_generation_ref_id"] =
+                second_binding.active_profile_generation_ref_id.into();
+            binding_config["initial_role_id"] = second_binding.initial_role_id.into();
+            binding_config["external_role_id"] = second_binding.external_role_id.into();
+            fs::write(
+                &config_path,
+                serde_json::to_vec_pretty(&config).context(JsonSnafu { path: &config_path })?,
+            )
+            .context(IoSnafu { path: &config_path })?;
+
+            let node_log = fs::OpenOptions::new()
+                .append(true)
+                .open(&node_log_path)
+                .context(IoSnafu {
+                    path: &node_log_path,
+                })?;
+            node = Some(
+                Command::new(&node_binary)
+                    .args(["--config", config_path.to_string_lossy().as_ref()])
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::from(node_log))
+                    .spawn()
+                    .context(IoSnafu { path: &node_binary })?,
+            );
+            let second_root = self.wait_for(
+                "recreated Kubernetes Pod root identity",
+                &observation_socket,
+                || {
+                    if node
+                        .as_mut()
+                        .is_some_and(|child| child.try_wait().ok().flatten().is_some())
+                    {
+                        return Err(invalid_state(format!(
+                            "the Kubernetes reuse node exited: {}",
+                            fs::read_to_string(&node_log_path).unwrap_or_default()
+                        )));
+                    }
+                    let output = Command::new(&inspect_binary)
+                        .args([
+                            "effects",
+                            "--socket-path",
+                            observation_socket.to_string_lossy().as_ref(),
+                            "--cgroup-scope",
+                            "/",
+                        ])
+                        .output()
+                        .context(IoSnafu {
+                            path: &inspect_binary,
+                        })?;
+                    let healthy = output.status.success()
+                        && String::from_utf8_lossy(&output.stdout)
+                            .contains("capability=EXACT_NATIVE_IDENTITY state=SUPPORTED");
+                    Ok(healthy
+                        .then(|| inspector.snapshot(second_init_pid).context(NodeSnafu))
+                        .transpose()?
+                        .flatten())
+                },
+            )?;
+            let second_reuse_binding =
+                self.pinned_execution_set_binding(pin_root, &second_cgroup)?;
+            let same_names = binding.namespace == second_binding.namespace
+                && binding.container_name == second_binding.container_name;
+            let fresh_full_identity = binding.pod_uid != second_binding.pod_uid
+                && binding.sandbox_id != second_binding.sandbox_id
+                && binding.container_id != second_binding.container_id
+                && binding.container_generation != second_binding.container_generation;
+            let fresh_binding_identity = first_reuse_binding.root_cgroup_id
+                != second_reuse_binding.root_cgroup_id
+                && first_reuse_binding.binding_nonce != second_reuse_binding.binding_nonce
+                && first_reuse_binding.root_cgroup_live_interval_id
+                    != second_reuse_binding.root_cgroup_live_interval_id
+                && discovered_root.task_cookie != second_root.task_cookie
+                && discovered_root.process_state_id != second_root.process_state_id
+                && discovered_root.active_execution_id != second_root.active_execution_id
+                && second_root.creator_task_cookie.is_none()
+                && second_root.root_class.as_deref() == Some("restored_or_unknown_root")
+                && second_root.installed_role_class.as_deref() == Some("fail_closed_unknown")
+                && second_root.active_role_id == second_binding.external_role_id;
+            ensure!(
+                same_names && fresh_full_identity && fresh_binding_identity,
+                InvalidInputSnafu {
+                    path: &manifest_path,
+                    reason: "the recreated Pod or container reused an old full or binding identity",
+                }
+            );
             Ok((
                 audit_absent,
                 bpf_recovered,
                 bpf_recovered_fresh_restricted,
                 runtime_root,
                 runtime_identity_unhealthy,
-                discovered_root,
+                discovered_root.clone(),
                 runtime_recovered,
                 node_gap_root,
                 node_recovered,
                 node_observation_unavailable,
                 restart_identity_stable,
+                discovered_root,
+                second_root,
+                binding.pod_uid.clone(),
+                second_binding.pod_uid.clone(),
+                binding.sandbox_id.clone(),
+                second_binding.sandbox_id.clone(),
+                binding.container_id.clone(),
+                second_binding.container_id.clone(),
+                cgroup.clone(),
+                second_cgroup,
+                first_reuse_binding,
+                second_reuse_binding,
+                same_names,
+                fresh_full_identity,
+                fresh_binding_identity,
             ))
         })();
 
@@ -6490,6 +6895,21 @@ impl IdentityTestRunner {
             node_recovered,
             node_observation_unavailable,
             restart_identity_stable,
+            reuse_first_root,
+            reuse_second_root,
+            reuse_first_pod_uid,
+            reuse_second_pod_uid,
+            reuse_first_sandbox_id,
+            reuse_second_sandbox_id,
+            reuse_first_container_id,
+            reuse_second_container_id,
+            reuse_first_cgroup_path,
+            reuse_second_cgroup_path,
+            reuse_first_binding,
+            reuse_second_binding,
+            reuse_same_names,
+            reuse_fresh_full_identity,
+            reuse_fresh_binding_identity,
         ) = probe?;
         bundle.kubernetes_loss_audit_absent_root = Some(audit_absent);
         bundle.kubernetes_loss_bpf_recovered_root = Some(bpf_recovered.clone());
@@ -6504,6 +6924,29 @@ impl IdentityTestRunner {
         bundle.kubernetes_restart_node_recovered_root = Some(node_recovered);
         bundle.kubernetes_restart_node_observation_unavailable = Some(node_observation_unavailable);
         bundle.kubernetes_restart_identity_stable = Some(restart_identity_stable);
+        bundle.kubernetes_reuse_first_root = Some(reuse_first_root);
+        bundle.kubernetes_reuse_second_root = Some(reuse_second_root);
+        bundle.kubernetes_reuse_first_pod_uid = Some(reuse_first_pod_uid);
+        bundle.kubernetes_reuse_second_pod_uid = Some(reuse_second_pod_uid);
+        bundle.kubernetes_reuse_first_sandbox_id = Some(reuse_first_sandbox_id);
+        bundle.kubernetes_reuse_second_sandbox_id = Some(reuse_second_sandbox_id);
+        bundle.kubernetes_reuse_first_container_id = Some(reuse_first_container_id);
+        bundle.kubernetes_reuse_second_container_id = Some(reuse_second_container_id);
+        bundle.kubernetes_reuse_first_cgroup_path = Some(reuse_first_cgroup_path);
+        bundle.kubernetes_reuse_second_cgroup_path = Some(reuse_second_cgroup_path);
+        bundle.kubernetes_reuse_first_root_cgroup_id = Some(reuse_first_binding.root_cgroup_id);
+        bundle.kubernetes_reuse_second_root_cgroup_id = Some(reuse_second_binding.root_cgroup_id);
+        bundle.kubernetes_reuse_first_binding_nonce =
+            Some(id128_hex(reuse_first_binding.binding_nonce));
+        bundle.kubernetes_reuse_second_binding_nonce =
+            Some(id128_hex(reuse_second_binding.binding_nonce));
+        bundle.kubernetes_reuse_first_live_interval_id =
+            Some(id128_hex(reuse_first_binding.root_cgroup_live_interval_id));
+        bundle.kubernetes_reuse_second_live_interval_id =
+            Some(id128_hex(reuse_second_binding.root_cgroup_live_interval_id));
+        bundle.kubernetes_reuse_same_names = Some(reuse_same_names);
+        bundle.kubernetes_reuse_fresh_full_identity = Some(reuse_fresh_full_identity);
+        bundle.kubernetes_reuse_fresh_binding_identity = Some(reuse_fresh_binding_identity);
         Ok(())
     }
 
@@ -7505,7 +7948,7 @@ if middle == 0:
     child = os.fork()
     if child == 0:
         os.kill(os.getpid(), signal.SIGSTOP)
-        os.execv("/bin/sleep", ["/bin/sleep", "30"])
+        os.execv("/bin/sleep", ["/bin/sleep", "300"])
     os.waitpid(child, 0)
     os._exit(0)
 os.waitpid(middle, 0)
@@ -7534,7 +7977,7 @@ if middle == 0:
     child = os.fork()
     if child == 0:
         os.kill(os.getpid(), signal.SIGSTOP)
-        os.execv("/bin/sleep", ["/bin/sleep", "30"])
+        os.execv("/bin/sleep", ["/bin/sleep", "300"])
     os.waitpid(child, 0)
     os._exit(0)
 os.waitpid(middle, 0)
@@ -7619,7 +8062,7 @@ mark("complete")
 
     fn start_double_forking() -> Result<Self> {
         Self::start_with_script(
-            "read _; ( ( read child_pid _ < /proc/self/stat; kill -STOP \"$child_pid\"; exec /bin/sleep 30 ) & wait ) & middle_pid=$!; wait \"$middle_pid\"; exec /bin/sleep 30",
+            "read _; ( ( read child_pid _ < /proc/self/stat; kill -STOP \"$child_pid\"; exec /bin/sleep 300 ) & wait ) & middle_pid=$!; wait \"$middle_pid\"; exec /bin/sleep 300",
             false,
         )
     }
@@ -7631,7 +8074,7 @@ mark("complete")
             "wait \"$!\""
         };
         let script = format!(
-            "read _; (read child_pid _ < /proc/self/stat; kill -STOP \"$child_pid\"; exec /bin/sleep 30) & {parent_wait}"
+            "read _; (read child_pid _ < /proc/self/stat; kill -STOP \"$child_pid\"; exec /bin/sleep 300) & {parent_wait}"
         );
         Self::start_with_script(&script, parent_exit_mode)
     }
@@ -7647,7 +8090,7 @@ mark("complete")
         command
             .args([
                 "-c",
-                "read _; /bin/bash -c 'read child_pid _ < /proc/self/stat; kill -STOP \"$child_pid\"; shopt -s execfail; exec \"$0\"; : > \"$1\"; kill -STOP \"$child_pid\"; exec /bin/sleep 30' \"$0\" \"$1\" & wait \"$!\"",
+                "read _; /bin/bash -c 'read child_pid _ < /proc/self/stat; kill -STOP \"$child_pid\"; shopt -s execfail; exec \"$0\"; : > \"$1\"; kill -STOP \"$child_pid\"; exec /bin/sleep 300' \"$0\" \"$1\" & wait \"$!\"",
             ])
             .arg(execfail)
             .arg(ready);
@@ -7721,7 +8164,7 @@ def execute():
     with open(ready, "x", encoding="ascii") as output:
         output.write(f"{threading.get_native_id()}\n")
     release.wait()
-    os.execv("/bin/sleep", ["/bin/sleep", "30"])
+    os.execv("/bin/sleep", ["/bin/sleep", "300"])
 
 thread = threading.Thread(target=execute)
 thread.start()
@@ -7758,7 +8201,7 @@ def execute():
     started.wait()
     release.wait()
     racing.wait()
-    os.execv("/bin/sleep", ["/bin/sleep", "30"])
+    os.execv("/bin/sleep", ["/bin/sleep", "300"])
 
 first = threading.Thread(target=execute)
 second = threading.Thread(target=execute)
@@ -8825,6 +9268,10 @@ fn read_marker_pid(path: &Path) -> Result<Option<u32>> {
         }
     );
     Ok(Some(pid))
+}
+
+fn id128_hex(value: Id128V1) -> String {
+    format!("{:016x}{:016x}", value.high, value.low)
 }
 
 fn host_thread_for_namespace_tid(host_tgid: u32, namespace_tid: u32) -> Result<Option<u32>> {

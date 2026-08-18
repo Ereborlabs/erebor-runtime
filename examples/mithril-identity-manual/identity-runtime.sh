@@ -1159,6 +1159,37 @@ identity_wait_for_task_snapshot() {
   return 1
 }
 
+identity_read_binding_state() {
+  local cgroup_path=$1
+  local output=$2
+  local root_cgroup_id value_hex key_hex byte
+  local -a key_bytes=()
+
+  root_cgroup_id=$(stat -c %i -- "$cgroup_path")
+  for ((shift = 0; shift < 64; shift += 8)); do
+    printf -v byte '%02x' "$(((root_cgroup_id >> shift) & 255))"
+    key_bytes+=("$byte")
+  done
+  printf -v key_hex '%s' "${key_bytes[@]}"
+  value_hex=$(bpftool -j map lookup pinned \
+    "$identity_pin_root/maps/execution_set_bindings" \
+    key hex "${key_bytes[@]}" \
+    | jq -er '.value | map(sub("^0x"; "")) | join("")')
+  [[ ${#value_hex} -ge 272 && ${value_hex:224:16} == "$key_hex" ]] || {
+    echo "execution-set binding has an invalid cgroup identity" >&2
+    return 1
+  }
+  jq -n \
+    --argjson root_cgroup_id "$root_cgroup_id" \
+    --arg binding_nonce "${value_hex:32:32}" \
+    --arg root_cgroup_live_interval_id "${value_hex:240:32}" \
+    '{
+      root_cgroup_id: $root_cgroup_id,
+      binding_nonce: $binding_nonce,
+      root_cgroup_live_interval_id: $root_cgroup_live_interval_id
+    }' >"$output"
+}
+
 identity_read_host_pid() {
   local prompt=$1
   read -r -p "$prompt" identity_read_pid

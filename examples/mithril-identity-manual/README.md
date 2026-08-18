@@ -173,6 +173,8 @@ Then run only the case being checked:
 | Subreaper native reparenting | `sudo examples/mithril-identity-manual/native-child.sh --subreaper` in the manual VM |
 | PID-namespace-init reparenting | `sudo examples/mithril-identity-manual/native-child.sh --namespace-init` in the manual VM |
 | Namespace PID reuse | `sudo examples/mithril-identity-manual/native-pid-reuse.sh` in the manual VM |
+| Native cgroup-path reuse | `sudo examples/mithril-identity-manual/native-cgroup-reuse.sh` in the manual VM |
+| Kubernetes Pod and container name reuse | `sudo examples/mithril-identity-manual/kubernetes-reuse.sh` in the manual VM |
 | Live binding gap | `sudo examples/mithril-identity-manual/binding-gap.sh` in the manual VM |
 | Concurrent external roots | `sudo examples/mithril-identity-manual/external-ambiguity.sh` in the manual VM |
 | Cgroup escape | `sudo examples/mithril-identity-manual/cgroup-escape.sh` in the manual VM |
@@ -626,6 +628,28 @@ two-worker Linux control for Phase 4. It does not qualify
 `EXEC-CONCURRENT-002` without real source-role and target-role transitions and
 a raced protected-effect oracle.
 
+## Identity Reuse Checks
+
+Run these checks in the retained manual Kubernetes VM as root:
+
+```bash
+sudo examples/mithril-identity-manual/native-pid-reuse.sh
+sudo examples/mithril-identity-manual/native-cgroup-reuse.sh
+sudo examples/mithril-identity-manual/kubernetes-reuse.sh
+```
+
+The first script reuses one PID-namespace number. The second script removes
+and recreates one exact cgroup path. The third script removes and recreates one
+Pod with the same Namespace, Pod name, and container name. Each script requires
+fresh task and process identity. The cgroup and Kubernetes scripts also require
+fresh cgroup IDs, binding nonces, and cgroup live-interval IDs. The Kubernetes
+script requires new Pod UID, sandbox ID, full container ID, container
+generation, and cgroup path.
+
+These checks do not force the kernel to reuse one cgroup ID. Source recovery
+tests reject one cgroup ID with a different live-interval identity. The physical
+cgroup check qualifies exact path reuse with a newly allocated cgroup ID.
+
 Every executable starts the real `mithril-node`, performs one operator-driven
 case, and removes its test tasks, BPF pins, lease, temporary config, state, and
 logs on success or failure. `identity-runtime.sh` contains only that shared
@@ -641,5 +665,5 @@ The complete identity catalog is split only to keep the tables readable:
 - [native identity and authorization cases](./native-identity-catalog.md)
 
 These scripts do not pretend to cover every catalog row. Race injection,
-saturation, reuse, lifecycle hooks, and the remaining Kubernetes behavior still
-require their applicable qualification setup.
+saturation, unsupported stock-hook failure injection, and the remaining
+Kubernetes behavior require their applicable qualification setup.
