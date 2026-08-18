@@ -17,6 +17,7 @@
     {"case_id":"IPC-PROCESS-CHANNEL-009","fixture_id":"IPC-PROCESS-CHANNEL-009","actor":"managed-converter","object":"PROCESS_CHANNEL","effect_family":"IPC","operation_id":"IPC_ACCESS","expected":"HARD_DENY_UNSUPPORTED"},
     {"case_id":"IPC-RELATIONSHIP-ALLOW-003","fixture_id":"IPC-RELATIONSHIP-ALLOW-003","actor":"managed-controller","object":"DECLARED_PEER","effect_family":"IPC","operation_id":"IPC_ACCESS","expected":"ALLOW"},
     {"case_id":"IPC-RELATIONSHIP-UNMATCHED-005","fixture_id":"IPC-RELATIONSHIP-UNMATCHED-005","actor":"managed-converter","object":"UNMATCHED_PEER","effect_family":"IPC","operation_id":"IPC_ACCESS","expected":"HARD_DENY_UNSUPPORTED"},
+    {"case_id":"STATE-FORK-IPC-002","fixture_id":"STATE-FORK-IPC-002","actor":"managed-converter","object":"INHERITED_IPC_CHANNEL","effect_family":"IPC","operation_id":"IPC_ACCESS","expected":"WOULD_DENY"},
     {"case_id":"LSM-DENY-SATURATION-001","fixture_id":"LSM-DENY-SATURATION-001","actor":"managed-converter","object":"EXACT_FILE_OBJECT","effect_family":"FILE","operation_id":"OPEN_READ","expected":"HARD_DENY_PRIOR_LSM"},
     {"case_id":"MEM-EXEC-001","fixture_id":"MEM-EXEC-001","actor":"managed-converter","object":"EXECUTABLE_MEMORY","effect_family":"FILE","operation_id":"MMAP_EXEC","expected":"HARD_DENY_UNSUPPORTED"},
     {"case_id":"MEM-KERNEL-MAP-002","fixture_id":"MEM-KERNEL-MAP-002","actor":"managed-converter","object":"UNKNOWN_VMA","effect_family":"FILE","operation_id":"MPROTECT","expected":"HARD_DENY_UNSUPPORTED"},
