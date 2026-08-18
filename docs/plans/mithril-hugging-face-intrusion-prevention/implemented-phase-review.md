@@ -503,6 +503,63 @@ gap with conservative identity, not first-instruction observation. Phase 4
 owns approved administrative exec and the start-gap effect result. Other open
 rows keep Phase 2 **Blocked**.
 
+### Kubernetes lifecycle sleep — 2026-08-18
+
+Review this path in order:
+
+1. [`kubernetes-lifecycle-sleep-workload-v1.yaml`](../../../crates/mithril-e2e/fixtures/identity/kubernetes-lifecycle-sleep-workload-v1.yaml)
+   defines one real Pod and a 30-second native Kubernetes lifecycle `sleep`
+   action.
+2. [`IdentityTestRunner::physical_kubernetes_lifecycle_sleep_probe`](../../../crates/mithril-e2e/src/identity.rs)
+   finds the exact live container through CRI, resolves its cgroup, and reads
+   `cgroup.procs` while the Pod is not Ready.
+3. [`identity-runtime.sh`](../../../examples/mithril-identity-manual/identity-runtime.sh)
+   owns the manual Namespace, Pod, temporary paths, and cleanup.
+   [`kubernetes-lifecycle-sleep.sh`](../../../examples/mithril-identity-manual/kubernetes-lifecycle-sleep.sh)
+   owns the readable operator scenario.
+4. [`run.sh`](../../../crates/mithril-e2e/harness/vm/run.sh) copies the fixture
+   for automated VM runs. `manual.sh` owns VM creation, SSH access, and
+   destruction. Neither harness reads or runs the example shell.
+
+```mermaid
+sequenceDiagram
+    participant O as operator or VM harness
+    participant R as IdentityTestRunner or manual shell
+    participant K as Kubernetes and CRI
+    participant C as live container cgroup
+
+    O->>R: start lifecycle-sleep case
+    R->>K: create Namespace and Pod
+    K->>K: hold Pod readiness during native sleep
+    R->>K: resolve exact live container and init PID
+    R->>C: read cgroup.procs
+    C-->>R: return only the init PID
+    R->>K: require Pod readiness and delete Namespace
+    R-->>O: record no extra in-container task
+```
+
+The implementation uses the existing physical bundle. Schema 16 adds only
+`kubernetes_lifecycle_sleep_no_task`; it adds no map, role, generic runner, or
+durable owner. The oracle is kernel-visible task membership, not an inferred
+Kubernetes purpose. A pass requires exactly one cgroup task, and that task must
+be the CRI-reported container init PID while the Pod is not Ready.
+
+Source commit `828fdec76c5753790c526d87e6757fde6134002e` produced the
+accepted schema-16 JSON at
+`/tmp/mithril-phase2-kubernetes-sleep-20260818-029/identity-physical-probe.json`.
+Its SHA-256 is
+`a62e82352a3153c65895d69265e4e0265d78ec6a76679e50a7d1f0bbcc2804fb`.
+The retained physical VM also ran `kubernetes-lifecycle-sleep.sh` as root from
+that commit. The shell printed one init PID, the same single cgroup task, and
+`PASS`. Automated and manual cleanup removed the Namespace, fixture, pin,
+lease, cgroup, node process, and loaded Erebor Interceptor programs. The VM was
+destroyed, and `virsh list --all` was empty.
+
+This completes `ENTRY-SLEEP-001`. The exact limit is one native Kubernetes
+lifecycle `sleep` action. The result does not qualify exec probes, network
+probes, identity purpose, role, or policy. Other open rows keep Phase 2
+**Blocked**.
+
 ### Retained alias and mount evidence — 2026-08-15
 
 At source `5b1abfa984d0`, a retained x86_64 VM ran the existing

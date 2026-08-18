@@ -440,6 +440,78 @@ it started a later entry. The exact limit is a measured late-discovery gap and
 conservative identity. This result does not claim that Mithril observed the
 first user instruction. Phase 4 owns the effect result during that gap.
 
+## Recorded Kubernetes Lifecycle Sleep Result — 2026-08-18
+
+Source commit `828fdec76c5753790c526d87e6757fde6134002e` contains the
+exact runner, manifest, runtime helper, and manual shell used for this result.
+It extends the existing `IdentityTestRunner` and physical JSON bundle. It adds
+no BPF map, role, runner, or durable type. The retained x86_64 Ubuntu 24.04 VM
+ran kernel `6.8.0-137-generic`. Kubernetes `v1.35.5` ran through the K3s
+`v1.35.5+k3s1` distribution and the live containerd CRI endpoint.
+
+The root shell ran the automated Kubernetes extension with unique paths:
+
+```sh
+target/debug/mithril-identity-test \
+  --repo-root "$MITHRIL_MANUAL_SOURCE" \
+  --output-directory /var/tmp/mithril-kubernetes-sleep-20260818-029 \
+  physical-probe \
+  --pin-root /sys/fs/bpf/mithril-kubernetes-sleep-029 \
+  --lease-path /var/tmp/mithril-kubernetes-sleep-20260818-029/owner.lock \
+  --cgroup-path /sys/fs/cgroup/mithril-kubernetes-sleep-029 \
+  --with-kubernetes \
+  --previous-bundle /var/tmp/identity-kubernetes-schema15-025.json
+```
+
+The schema-16 JSON is
+`/tmp/mithril-phase2-kubernetes-sleep-20260818-029/identity-physical-probe.json`.
+Its SHA-256 is
+`a62e82352a3153c65895d69265e4e0265d78ec6a76679e50a7d1f0bbcc2804fb`.
+It records `kubernetes_lifecycle_sleep_no_task=true` and
+`kubernetes_fixture_removed=true`. The BPF object SHA-256 is
+`3269516fcd2714ab7fbe29df26386c40f0c912b6284007b641d8bbf68842b876`.
+The lifecycle workload manifest SHA-256 is
+`16e149155ff79321724087d5fd73bce8e7cca60934218f49370745118631d18b`.
+
+The fixture created a real Pod with a 30-second native Kubernetes lifecycle
+`sleep` action. While the Pod was not Ready, the runner resolved the exact
+live container through CRI. The container cgroup contained only its init PID.
+The runner then required the Pod to become Ready and removed its Namespace and
+fixture directory.
+
+The retained VM then ran this command as root from the committed source:
+
+```sh
+examples/mithril-identity-manual/kubernetes-lifecycle-sleep.sh
+```
+
+The shell SHA-256 is
+`f07fb345559b7af8177e16d14acf455dd11796c8232f3953f7ca3fa5edc01afc`.
+The shared runtime helper SHA-256 is
+`f60b907f5bd31ef54a884e909e3c1087b72afa352f6e0751ab3274d41d9b584e`.
+The shell printed container init PID `3410` and only task `3410` in the live
+container cgroup. It then printed `PASS`. Postflight found no case Namespace,
+fixture, pin, lease, cgroup, node process, or loaded Erebor Interceptor
+program. `manual.sh destroy` removed the VM, and `virsh list --all` was empty.
+
+Runs `026` and `027` are rejected results. Run `026` exposed an invalid
+termination-grace setting. Run `027` exposed an incorrect CRI name filter.
+The leaked run-`026` Namespace was removed before the accepted run. Run `028`
+passed before the final cleanup-ownership change and is not the acceptance
+artifact. Run `029` is the accepted automated result.
+
+`cargo test -p mithril-e2e
+production_object_and_identity_fixture_allocation_are_exact` passed.
+`cargo clippy -p mithril-e2e --all-targets -- -D warnings` passed.
+`bash crates/mithril-e2e/harness/vm/test.sh` passed. The final
+`bash .github/scripts/verify-rust-ci.sh` passed with exit status `0` when the
+local socket tests ran with host permission.
+
+This completes `ENTRY-SLEEP-001`. The exact limit is the native Kubernetes
+lifecycle `sleep` action: it created no extra in-container task. This result
+does not qualify exec probes, network probes, purpose, role, or policy. Other
+open matrix rows keep Phase 2 **Blocked**.
+
 ## Recorded Pre-PONR Failed Native-Exec VM Subcase — 2026-08-15
 
 The isolated identity probe passed at source commit

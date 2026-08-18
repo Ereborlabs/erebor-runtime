@@ -141,6 +141,7 @@ Then run only the case being checked:
 | TTY Kubernetes exec | `sudo examples/mithril-identity-manual/kubernetes-exec-tty.sh` in the manual VM |
 | Kubernetes copy | `sudo examples/mithril-identity-manual/kubernetes-copy.sh` in the manual VM |
 | Kubernetes native child | `sudo examples/mithril-identity-manual/kubernetes-native-child.sh` in the manual VM |
+| Kubernetes lifecycle sleep | `sudo examples/mithril-identity-manual/kubernetes-lifecycle-sleep.sh` in the manual VM |
 | Native child | `sudo examples/mithril-identity-manual/native-child.sh NODE_CONFIG CONTAINER_OR_FULL_CRI_ID` |
 | Orphaned native child | `sudo examples/mithril-identity-manual/native-child.sh NODE_CONFIG CONTAINER_OR_FULL_CRI_ID --orphan` |
 | Double-fork native child | `sudo examples/mithril-identity-manual/native-child.sh NODE_CONFIG CONTAINER_OR_FULL_CRI_ID --double-fork` |
@@ -158,11 +159,12 @@ Then run only the case being checked:
 | Node restart | `sudo examples/mithril-identity-manual/restart.sh NODE_CONFIG CONTAINER_OR_FULL_CRI_ID` |
 
 The no-argument CRI and Kubernetes cases run only inside the retained manual
-Kubernetes VM. Each case creates its Namespace, Pod, live CRI binding, node,
-pins, lease, and fixture. Each case removes those resources before it returns.
-The VM uses K3s as its Kubernetes distribution. The Docker case runs outside
-that VM and derives a trusted test-only configured cgroup binding from
-`docker inspect`.
+Kubernetes VM. Each case creates and removes its Namespace, Pod, and fixture.
+The identity-inspection cases also own their live CRI binding, node, pins, and
+lease. The lifecycle-sleep case does not start Mithril because its oracle is
+the absence of an extra task in the live container cgroup. The VM uses K3s as
+its Kubernetes distribution. The Docker case runs outside that VM and derives
+a trusted test-only configured cgroup binding from `docker inspect`.
 
 ## Direct CRI Exec Check
 
@@ -242,6 +244,24 @@ an identical child command. The parent must remain a restricted external root.
 The child must have the parent's task cookie as its creator and real parent,
 no root or installed-role class, and the parent's active role. Command bytes
 do not convert a native child into an external root.
+
+## Kubernetes Lifecycle Sleep Check
+
+Use the retained manual Kubernetes VM and run:
+
+```sh
+sudo examples/mithril-identity-manual/kubernetes-lifecycle-sleep.sh
+```
+
+The script creates one Pod with a 30-second native Kubernetes lifecycle
+`sleep` action. While the Pod is not Ready, it reads the exact container ID,
+init PID, and cgroup through CRI. The cgroup must contain only the init PID.
+The script then waits for the Pod to become Ready.
+
+This check proves that the lifecycle `sleep` action creates no in-container
+task. It does not qualify an exec probe, a network probe, or an identity role.
+The script removes its Namespace, Pod, temporary pin directory, and fixture at
+exit.
 
 ## Namespace Entry And Cgroup Movement Check
 
