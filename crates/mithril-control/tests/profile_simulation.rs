@@ -13,7 +13,7 @@ const POLICY: &str = include_str!("fixtures/policy-v1.yaml");
 const MATRIX: &str = include_str!("fixtures/profile-simulation.json");
 const FIXTURE_REGISTRY: &str = include_str!("../../../spec/qualification/v1/fixtures.yaml");
 
-const REQUIRED_ENFORCEMENT_FIXTURES: [&str; 38] = [
+const REQUIRED_ENFORCEMENT_FIXTURES: [&str; 39] = [
     "ADMIN-EXEC-APPROVAL-001",
     "DEVICE-DERIVED-001",
     "FILE-CONTENT-RACE-002",
@@ -30,6 +30,7 @@ const REQUIRED_ENFORCEMENT_FIXTURES: [&str; 38] = [
     "IPC-PROCESS-CHANNEL-009",
     "IPC-RELATIONSHIP-ALLOW-003",
     "IPC-RELATIONSHIP-UNMATCHED-005",
+    "STATE-FORK-IPC-002",
     "LSM-DENY-SATURATION-001",
     "MEM-EXEC-001",
     "MEM-KERNEL-MAP-002",
