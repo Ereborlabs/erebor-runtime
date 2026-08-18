@@ -23,9 +23,11 @@ identity_k3s_container_shared_directory=
 identity_k3s_init_container_id=
 identity_k3s_sidecar_container_id=
 identity_k3s_application_container_id=
+identity_k3s_ephemeral_container_id=
 identity_k3s_init_pid=
 identity_k3s_sidecar_pid=
 identity_k3s_application_pid=
+identity_k3s_ephemeral_pid=
 
 identity_require_command() {
   command -v "$1" >/dev/null || {
@@ -398,6 +400,9 @@ identity_k3s_container_binding_json() {
   local container_kind=$2
   local binding_id=$3
   local execution_set_id=$4
+  local pod_name=$5
+  local profile_id=${6:-33333333-3333-4333-8333-333333333333}
+  local profile_ref_id=${7:-1}
   local container_id container_json created_at generation image_digest pod_uid sandbox_id
 
   container_id=$(identity_k3s_wait_container_id "$container_name")
@@ -406,7 +411,7 @@ identity_k3s_container_binding_json() {
   created_at=$(jq -er '.status.createdAt' <<<"$container_json")
   generation=$(date --utc --date "$created_at" +%s%N)
   image_digest=$(jq -er '.status.imageRef' <<<"$container_json")
-  pod_uid=$(kubectl -n "$identity_k3s_namespace" get pod mithril-containers \
+  pod_uid=$(kubectl -n "$identity_k3s_namespace" get pod "$pod_name" \
     -o jsonpath='{.metadata.uid}')
   sandbox_id=$(crictl --runtime-endpoint "$identity_runtime_endpoint" \
     ps --id "$container_id" -o json | jq -er '.containers[0].podSandboxId')
@@ -425,13 +430,15 @@ identity_k3s_container_binding_json() {
     --arg container_name "$container_name" \
     --arg image_digest "$image_digest" \
     --arg container_kind "$container_kind" \
+    --arg profile_id "$profile_id" \
     --argjson generation "$generation" \
+    --argjson profile_ref_id "$profile_ref_id" \
     '{
       binding_id: $binding_id,
       execution_set_id: $execution_set_id,
       protected_scope_id: "44444444-4444-4444-8444-444444444444",
       workload_selector_id: $container_name,
-      profile_id: "33333333-3333-4333-8333-333333333333",
+      profile_id: $profile_id,
       container_id: $container_id,
       namespace: $namespace,
       pod_uid: $pod_uid,
@@ -441,7 +448,7 @@ identity_k3s_container_binding_json() {
       container_kind: $container_kind,
       container_generation: $generation,
       lifecycle_generation: 1,
-      active_profile_generation_ref_id: 1,
+      active_profile_generation_ref_id: $profile_ref_id,
       initial_role_id: 1,
       external_role_id: 2,
       arm_initial_root: false
@@ -456,10 +463,10 @@ identity_configure_k3s_containers_stage() {
     init)
       first=$(identity_k3s_container_binding_json init init \
         11111111-1111-4111-8111-111111111101 \
-        22222222-2222-4222-8222-222222222201)
+        22222222-2222-4222-8222-222222222201 mithril-containers)
       second=$(identity_k3s_container_binding_json sidecar sidecar \
         11111111-1111-4111-8111-111111111102 \
-        22222222-2222-4222-8222-222222222202)
+        22222222-2222-4222-8222-222222222202 mithril-containers)
       identity_k3s_init_container_id=$(jq -er '.container_id' <<<"$first")
       identity_k3s_sidecar_container_id=$(jq -er '.container_id' <<<"$second")
       identity_k3s_init_pid=$(crictl --runtime-endpoint "$identity_runtime_endpoint" \
@@ -472,10 +479,10 @@ identity_configure_k3s_containers_stage() {
     application)
       first=$(identity_k3s_container_binding_json sidecar sidecar \
         11111111-1111-4111-8111-111111111102 \
-        22222222-2222-4222-8222-222222222202)
+        22222222-2222-4222-8222-222222222202 mithril-containers)
       second=$(identity_k3s_container_binding_json application application \
         11111111-1111-4111-8111-111111111103 \
-        22222222-2222-4222-8222-222222222203)
+        22222222-2222-4222-8222-222222222203 mithril-containers)
       identity_k3s_sidecar_container_id=$(jq -er '.container_id' <<<"$first")
       identity_k3s_application_container_id=$(jq -er '.container_id' <<<"$second")
       identity_k3s_sidecar_pid=$(crictl --runtime-endpoint "$identity_runtime_endpoint" \
@@ -508,6 +515,74 @@ identity_configure_k3s_containers_stage() {
     return 1
   }
   identity_init_pid=$second_pid
+  identity_cgroup_path=$(identity_cgroup_for_pid "$identity_init_pid")
+}
+
+identity_prepare_k3s_ephemeral_case() {
+  local source_config=$identity_repository/crates/mithril-e2e/harness/vm/k3s-cri-effect-node-v1.json
+  local workload_template=$identity_repository/crates/mithril-e2e/fixtures/identity/kubernetes-ephemeral-workload-v1.yaml
+  local ephemeral_patch='{"spec":{"ephemeralContainers":[{"name":"debugger","image":"docker.io/library/busybox:1.36.1@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662","imagePullPolicy":"IfNotPresent","targetContainerName":"application","command":["/bin/sh","-c","exec sleep 3600"],"stdin":false,"tty":false}]}}'
+  identity_check_base "$source_config"
+  identity_require_command crictl
+  identity_require_command date
+  identity_require_command kubectl
+  identity_mode=cri
+  identity_begin
+
+  local suffix workload runtime_socket target ephemeral
+  suffix=$(tr '[:upper:]' '[:lower:]' <<<"${identity_work##*.}")
+  identity_k3s_namespace=mithril-manual-$suffix
+  identity_k3s_fixture_root=/var/lib/mithril-manual-$suffix
+  identity_k3s_shared_directory=$identity_k3s_fixture_root/shared
+  identity_k3s_node_config=$identity_work/k3s-node.json
+  identity_cleanup_functions+=(identity_cleanup_k3s_case)
+  install -d -m 700 -- "$identity_k3s_fixture_root" "$identity_k3s_shared_directory"
+
+  runtime_socket=$(jq -er '.container_runtime.socket_path' "$source_config")
+  identity_runtime_endpoint=unix://$runtime_socket
+  workload=$identity_work/workload.yaml
+  sed -e "s|MITHRIL_IDENTITY_EPHEMERAL_NAMESPACE|$identity_k3s_namespace|g" \
+    "$workload_template" >"$workload"
+  identity_k3s_namespace_created=true
+  kubectl apply -f "$workload" >/dev/null
+  kubectl -n "$identity_k3s_namespace" wait --for=condition=Ready \
+    pod/mithril-ephemeral --timeout=180s >/dev/null
+  kubectl -n "$identity_k3s_namespace" patch pod mithril-ephemeral \
+    --subresource=ephemeralcontainers --type=merge -p "$ephemeral_patch" >/dev/null
+
+  target=$(identity_k3s_container_binding_json application application \
+    11111111-1111-4111-8111-111111111201 \
+    22222222-2222-4222-8222-222222222301 mithril-ephemeral \
+    33333333-3333-4333-8333-333333333301 7)
+  ephemeral=$(identity_k3s_container_binding_json debugger ephemeral \
+    11111111-1111-4111-8111-111111111202 \
+    22222222-2222-4222-8222-222222222302 mithril-ephemeral \
+    33333333-3333-4333-8333-333333333302 8)
+  identity_k3s_application_container_id=$(jq -er '.container_id' <<<"$target")
+  identity_k3s_ephemeral_container_id=$(jq -er '.container_id' <<<"$ephemeral")
+  identity_k3s_application_pid=$(crictl --runtime-endpoint "$identity_runtime_endpoint" \
+    inspect "$identity_k3s_application_container_id" | jq -er '.info.pid')
+  identity_k3s_ephemeral_pid=$(crictl --runtime-endpoint "$identity_runtime_endpoint" \
+    inspect "$identity_k3s_ephemeral_container_id" | jq -er '.info.pid')
+  [[ $identity_k3s_application_pid =~ ^[1-9][0-9]*$ \
+    && $identity_k3s_ephemeral_pid =~ ^[1-9][0-9]*$ ]] || {
+    echo "Kubernetes returned an invalid application or ephemeral PID" >&2
+    return 1
+  }
+
+  jq \
+    --arg state "$identity_state" \
+    --arg pin_root "$identity_pin_root" \
+    --arg lease "$identity_lease" \
+    --argjson target "$target" \
+    --argjson ephemeral "$ephemeral" \
+    '.state_directory = $state
+     | .interceptor.pin_root = $pin_root
+     | .interceptor.lease_path = $lease
+     | .runtime_observation = null
+     | .workload_bindings = [$target, $ephemeral]' \
+    "$source_config" >"$identity_config"
+  identity_init_pid=$identity_k3s_application_pid
   identity_cgroup_path=$(identity_cgroup_for_pid "$identity_init_pid")
 }
 
@@ -600,6 +675,21 @@ identity_inspect_task() {
   local pid=$2
   "$identity_inspect" --pin-root "$identity_pin_root" task --host-pid "$pid" \
     | tee "$identity_work/$name.json"
+}
+
+identity_wait_for_task_snapshot() {
+  local name=$1
+  local pid=$2
+  local attempt
+  for ((attempt = 0; attempt < 300; attempt++)); do
+    if "$identity_inspect" --pin-root "$identity_pin_root" task --host-pid "$pid" \
+      >"$identity_work/$name.json" 2>/dev/null; then
+      return 0
+    fi
+    sleep 0.1
+  done
+  echo "Mithril did not publish the $name identity" >&2
+  return 1
 }
 
 identity_read_host_pid() {

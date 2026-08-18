@@ -7,27 +7,12 @@ source "$(dirname "$0")/identity-runtime.sh"
   exit 2
 }
 
-wait_for_task_snapshot() {
-  local name=$1
-  local pid=$2
-  local attempt
-  for ((attempt = 0; attempt < 300; attempt++)); do
-    if "$identity_inspect" --pin-root "$identity_pin_root" task --host-pid "$pid" \
-      >"$identity_work/$name.json" 2>/dev/null; then
-      return 0
-    fi
-    sleep 0.1
-  done
-  echo "Mithril did not publish the $name identity" >&2
-  return 1
-}
-
 identity_prepare_k3s_containers_case
 identity_configure_k3s_containers_stage init
 identity_start_node
 
-wait_for_task_snapshot init-root "$identity_k3s_init_pid"
-wait_for_task_snapshot sidecar-before "$identity_k3s_sidecar_pid"
+identity_wait_for_task_snapshot init-root "$identity_k3s_init_pid"
+identity_wait_for_task_snapshot sidecar-before "$identity_k3s_sidecar_pid"
 identity_assert_recovered "$identity_work/init-root.json"
 identity_assert_recovered "$identity_work/sidecar-before.json"
 jq -e --slurpfile sidecar "$identity_work/sidecar-before.json" '
@@ -50,8 +35,8 @@ kubectl -n "$identity_k3s_namespace" wait --for=condition=Ready \
 
 identity_configure_k3s_containers_stage application
 identity_start_node
-wait_for_task_snapshot sidecar-root "$identity_k3s_sidecar_pid"
-wait_for_task_snapshot application-root "$identity_k3s_application_pid"
+identity_wait_for_task_snapshot sidecar-root "$identity_k3s_sidecar_pid"
+identity_wait_for_task_snapshot application-root "$identity_k3s_application_pid"
 identity_assert_recovered "$identity_work/sidecar-root.json"
 identity_assert_recovered "$identity_work/application-root.json"
 jq -e --slurpfile application "$identity_work/application-root.json" \

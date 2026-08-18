@@ -5,7 +5,7 @@ use std::fs;
 use std::io::{Read as _, Write as _};
 use std::mem::size_of;
 use std::os::fd::OwnedFd;
-use std::os::unix::fs::PermissionsExt as _;
+use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStderr, ChildStdin, Command, Stdio};
 use std::thread;
@@ -209,6 +209,10 @@ pub struct IdentityPhysicalProbeBundleV1 {
     pub kubernetes_sidecar_container_root: Option<NativeTaskSnapshotV1>,
     pub kubernetes_application_container_root: Option<NativeTaskSnapshotV1>,
     pub kubernetes_containers_distinct_execution_sets: Option<bool>,
+    pub kubernetes_ephemeral_target_root: Option<NativeTaskSnapshotV1>,
+    pub kubernetes_ephemeral_container_root: Option<NativeTaskSnapshotV1>,
+    pub kubernetes_ephemeral_shared_pid_namespace: Option<bool>,
+    pub kubernetes_ephemeral_distinct_execution_set_and_profile: Option<bool>,
     pub kubernetes_fixture_removed: bool,
 }
 
@@ -1698,7 +1702,7 @@ impl IdentityTestRunner {
             }
         );
         Ok(IdentityPhysicalProbeBundleV1 {
-            schema_version: 18,
+            schema_version: 19,
             object_sha256,
             first_start,
             distinct_pin_root_owner_rejected,
@@ -1769,6 +1773,10 @@ impl IdentityTestRunner {
             kubernetes_sidecar_container_root: None,
             kubernetes_application_container_root: None,
             kubernetes_containers_distinct_execution_sets: None,
+            kubernetes_ephemeral_target_root: None,
+            kubernetes_ephemeral_container_root: None,
+            kubernetes_ephemeral_shared_pid_namespace: None,
+            kubernetes_ephemeral_distinct_execution_set_and_profile: None,
             kubernetes_fixture_removed: false,
         })
     }
@@ -1819,18 +1827,29 @@ impl IdentityTestRunner {
             && bundle.kubernetes_sidecar_container_root.is_some()
             && bundle.kubernetes_application_container_root.is_some()
             && bundle.kubernetes_containers_distinct_execution_sets == Some(true);
+        let ephemeral_results_missing = bundle.kubernetes_ephemeral_target_root.is_none()
+            && bundle.kubernetes_ephemeral_container_root.is_none()
+            && bundle.kubernetes_ephemeral_shared_pid_namespace.is_none()
+            && bundle
+                .kubernetes_ephemeral_distinct_execution_set_and_profile
+                .is_none();
+        let ephemeral_results_present = bundle.kubernetes_ephemeral_target_root.is_some()
+            && bundle.kubernetes_ephemeral_container_root.is_some()
+            && bundle.kubernetes_ephemeral_shared_pid_namespace == Some(true)
+            && bundle.kubernetes_ephemeral_distinct_execution_set_and_profile == Some(true);
         ensure!(
-            matches!(bundle.schema_version, 15..=18)
+            matches!(bundle.schema_version, 15..=19)
                 && (entry_results_missing || entry_results_present)
                 && matches!(bundle.kubernetes_lifecycle_sleep_no_task, None | Some(true))
                 && (network_results_missing || network_results_present)
-                && (container_results_missing || container_results_present),
+                && (container_results_missing || container_results_present)
+                && (ephemeral_results_missing || ephemeral_results_present),
             InvalidInputSnafu {
                 path: previous_bundle_path,
                 reason: "the prior identity bundle cannot accept the next Kubernetes result",
             }
         );
-        bundle.schema_version = 18;
+        bundle.schema_version = 19;
         if entry_results_missing {
             self.physical_kubernetes_exec_probe(
                 output_directory,
@@ -1851,6 +1870,14 @@ impl IdentityTestRunner {
         }
         if container_results_missing {
             self.physical_kubernetes_containers_probe(
+                output_directory,
+                pin_root,
+                lease_path,
+                &mut bundle,
+            )?;
+        }
+        if ephemeral_results_missing {
+            self.physical_kubernetes_ephemeral_probe(
                 output_directory,
                 pin_root,
                 lease_path,
@@ -2897,10 +2924,33 @@ impl IdentityTestRunner {
                 "create the Kubernetes containers fixture",
             )?;
 
-            let (init_binding, init_pid, init_sandbox) =
-                self.kubernetes_container_binding(&namespace, "init", &manifest_path)?;
-            let (sidecar_binding, sidecar_pid, sidecar_sandbox) =
-                self.kubernetes_container_binding(&namespace, "sidecar", &manifest_path)?;
+            let (init_binding, init_pid, init_sandbox) = self.kubernetes_container_binding(
+                &namespace,
+                "mithril-containers",
+                "init",
+                (
+                    mithril_node::ContainerKindV1::Init,
+                    "11111111-1111-4111-8111-111111111101",
+                    "22222222-2222-4222-8222-222222222201",
+                    "4cd90188-e814-45ec-899f-4e3c9bca3803",
+                    PROFILE_GENERATION_REF_ID,
+                ),
+                &manifest_path,
+            )?;
+            let (sidecar_binding, sidecar_pid, sidecar_sandbox) = self
+                .kubernetes_container_binding(
+                    &namespace,
+                    "mithril-containers",
+                    "sidecar",
+                    (
+                        mithril_node::ContainerKindV1::Sidecar,
+                        "11111111-1111-4111-8111-111111111102",
+                        "22222222-2222-4222-8222-222222222202",
+                        "4cd90188-e814-45ec-899f-4e3c9bca3803",
+                        PROFILE_GENERATION_REF_ID,
+                    ),
+                    &manifest_path,
+                )?;
             ensure!(
                 init_sandbox == sidecar_sandbox
                     && init_binding.root_cgroup_path != sidecar_binding.root_cgroup_path,
@@ -2975,8 +3025,20 @@ impl IdentityTestRunner {
                 "wait for the Kubernetes application container",
             )?;
 
-            let (application_binding, application_pid, application_sandbox) =
-                self.kubernetes_container_binding(&namespace, "application", &manifest_path)?;
+            let (application_binding, application_pid, application_sandbox) = self
+                .kubernetes_container_binding(
+                    &namespace,
+                    "mithril-containers",
+                    "application",
+                    (
+                        mithril_node::ContainerKindV1::Application,
+                        "11111111-1111-4111-8111-111111111103",
+                        "22222222-2222-4222-8222-222222222203",
+                        "4cd90188-e814-45ec-899f-4e3c9bca3803",
+                        PROFILE_GENERATION_REF_ID,
+                    ),
+                    &manifest_path,
+                )?;
             ensure!(
                 application_sandbox == init_sandbox
                     && application_binding.root_cgroup_path != sidecar_binding.root_cgroup_path
@@ -3084,66 +3146,330 @@ impl IdentityTestRunner {
         Ok(())
     }
 
+    fn physical_kubernetes_ephemeral_probe(
+        &self,
+        output_directory: &Path,
+        pin_root: &Path,
+        lease_path: &Path,
+        bundle: &mut IdentityPhysicalProbeBundleV1,
+    ) -> Result<()> {
+        const EPHEMERAL_PATCH: &str = r#"{"spec":{"ephemeralContainers":[{"name":"debugger","image":"docker.io/library/busybox:1.36.1@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662","imagePullPolicy":"IfNotPresent","targetContainerName":"application","command":["/bin/sh","-c","exec sleep 3600"],"stdin":false,"tty":false}]}}"#;
+
+        fs::create_dir_all(output_directory).context(IoSnafu {
+            path: output_directory,
+        })?;
+        let work_directory = output_directory.join("kubernetes-ephemeral");
+        ensure!(
+            !work_directory.exists(),
+            InvalidInputSnafu {
+                path: &work_directory,
+                reason: "the Kubernetes ephemeral fixture directory already exists",
+            }
+        );
+        fs::create_dir(&work_directory).context(IoSnafu {
+            path: &work_directory,
+        })?;
+        let work_cleanup = ProbeDirectory::new(&work_directory);
+        let namespace = format!("mithril-identity-ephemeral-{}", std::process::id());
+        let manifest_path = work_directory.join("workload.yaml");
+        let template_path = self
+            .repo_root
+            .join("crates/mithril-e2e/fixtures/identity/kubernetes-ephemeral-workload-v1.yaml");
+        let manifest = fs::read_to_string(&template_path).context(IoSnafu {
+            path: &template_path,
+        })?;
+        fs::write(
+            &manifest_path,
+            manifest.replace("MITHRIL_IDENTITY_EPHEMERAL_NAMESPACE", &namespace),
+        )
+        .context(IoSnafu {
+            path: &manifest_path,
+        })?;
+        ensure!(
+            !pin_root.exists() && !lease_path.exists(),
+            InvalidInputSnafu {
+                path: pin_root,
+                reason: "the Kubernetes ephemeral pin root and lease must not already exist",
+            }
+        );
+        let pin_cleanup = ProbeDirectory::new(pin_root);
+        let lease_cleanup = ProbeFile::new(lease_path);
+        let mut namespace_created = false;
+        let mut host = None;
+
+        let probe = (|| -> Result<_> {
+            namespace_created = true;
+            self.kubernetes_output(
+                &[
+                    "kubectl",
+                    "apply",
+                    "-f",
+                    manifest_path.to_string_lossy().as_ref(),
+                ],
+                "create the Kubernetes ephemeral fixture",
+            )?;
+            self.kubernetes_output(
+                &[
+                    "kubectl",
+                    "-n",
+                    namespace.as_str(),
+                    "wait",
+                    "--for=condition=Ready",
+                    "pod/mithril-ephemeral",
+                    "--timeout=180s",
+                ],
+                "wait for the Kubernetes ephemeral target",
+            )?;
+            self.kubernetes_output(
+                &[
+                    "kubectl",
+                    "-n",
+                    namespace.as_str(),
+                    "patch",
+                    "pod",
+                    "mithril-ephemeral",
+                    "--subresource=ephemeralcontainers",
+                    "--type=merge",
+                    "-p",
+                    EPHEMERAL_PATCH,
+                ],
+                "add the Kubernetes ephemeral container",
+            )?;
+
+            let (target_binding, target_pid, target_sandbox) = self.kubernetes_container_binding(
+                &namespace,
+                "mithril-ephemeral",
+                "application",
+                (
+                    mithril_node::ContainerKindV1::Application,
+                    "11111111-1111-4111-8111-111111111201",
+                    "22222222-2222-4222-8222-222222222301",
+                    "33333333-3333-4333-8333-333333333301",
+                    PROFILE_GENERATION_REF_ID,
+                ),
+                &manifest_path,
+            )?;
+            let (ephemeral_binding, ephemeral_pid, ephemeral_sandbox) = self
+                .kubernetes_container_binding(
+                    &namespace,
+                    "mithril-ephemeral",
+                    "debugger",
+                    (
+                        mithril_node::ContainerKindV1::Ephemeral,
+                        "11111111-1111-4111-8111-111111111202",
+                        "22222222-2222-4222-8222-222222222302",
+                        "33333333-3333-4333-8333-333333333302",
+                        PROFILE_GENERATION_REF_ID + 1,
+                    ),
+                    &manifest_path,
+                )?;
+            let target_pid_namespace = fs::metadata(format!("/proc/{target_pid}/ns/pid"))
+                .context(IoSnafu {
+                    path: PathBuf::from(format!("/proc/{target_pid}/ns/pid")),
+                })?
+                .ino();
+            let ephemeral_pid_namespace = fs::metadata(format!("/proc/{ephemeral_pid}/ns/pid"))
+                .context(IoSnafu {
+                    path: PathBuf::from(format!("/proc/{ephemeral_pid}/ns/pid")),
+                })?
+                .ino();
+            let shared_pid_namespace =
+                target_pid_namespace != 0 && target_pid_namespace == ephemeral_pid_namespace;
+            ensure!(
+                target_sandbox == ephemeral_sandbox
+                    && target_binding.root_cgroup_path != ephemeral_binding.root_cgroup_path
+                    && shared_pid_namespace,
+                InvalidInputSnafu {
+                    path: &manifest_path,
+                    reason: "the ephemeral container did not target the application PID namespace from a separate container cgroup",
+                }
+            );
+
+            let pod = self.kubernetes_output(
+                &[
+                    "kubectl",
+                    "-n",
+                    namespace.as_str(),
+                    "get",
+                    "pod",
+                    "mithril-ephemeral",
+                    "-o",
+                    "json",
+                ],
+                "read the Kubernetes ephemeral fixture Pod",
+            )?;
+            let pod: serde_json::Value = serde_json::from_str(&pod).context(JsonSnafu {
+                path: &manifest_path,
+            })?;
+            let target_recorded = pod
+                .pointer("/spec/ephemeralContainers")
+                .and_then(serde_json::Value::as_array)
+                .is_some_and(|containers| {
+                    containers.iter().any(|container| {
+                        container.get("name").and_then(serde_json::Value::as_str)
+                            == Some("debugger")
+                            && container
+                                .get("targetContainerName")
+                                .and_then(serde_json::Value::as_str)
+                                == Some("application")
+                    })
+                });
+            ensure!(
+                target_recorded,
+                InvalidInputSnafu {
+                    path: &manifest_path,
+                    reason: "Kubernetes did not retain the exact ephemeral target",
+                }
+            );
+
+            let (boot_id, node_boot_id) = boot_identity()?;
+            let mut identity_host = KernelHostOwner::new(KernelHostConfig::identity(
+                "/sys/kernel/btf/vmlinux",
+                lease_path,
+                Some(pin_root.to_path_buf()),
+                boot_id,
+                1,
+            ))
+            .start()
+            .context(InterceptorSnafu)?;
+            let mut bindings = WorkloadBindingOwner::system(node_boot_id, 1).context(NodeSnafu)?;
+            bindings
+                .publish_all(
+                    &identity_host,
+                    &[target_binding.clone(), ephemeral_binding.clone()],
+                )
+                .context(NodeSnafu)?;
+            NativeSecurityStateOwner::new(node_boot_id, 1)
+                .activate(&mut identity_host)
+                .context(NodeSnafu)?;
+            host = Some(identity_host);
+            let inspector = NativeIdentityInspector::new(pin_root);
+            let target_root =
+                self.wait_for("Kubernetes ephemeral target identity", pin_root, || {
+                    inspector.snapshot(target_pid).context(NodeSnafu)
+                })?;
+            let ephemeral_root =
+                self.wait_for("Kubernetes ephemeral-container identity", pin_root, || {
+                    inspector.snapshot(ephemeral_pid).context(NodeSnafu)
+                })?;
+            let distinct_execution_set_and_profile = target_root.execution_set_id.is_some()
+                && ephemeral_root.execution_set_id.is_some()
+                && target_root.execution_set_id != ephemeral_root.execution_set_id
+                && target_root.profile_generation_ref_id
+                    != ephemeral_root.profile_generation_ref_id;
+            ensure!(
+                target_root.creator_task_cookie.is_none()
+                    && target_root.root_class.as_deref() == Some("restored_or_unknown_root")
+                    && target_root.installed_role_class.as_deref() == Some("fail_closed_unknown")
+                    && ephemeral_root.creator_task_cookie.is_none()
+                    && ephemeral_root.root_class.as_deref() == Some("restored_or_unknown_root")
+                    && ephemeral_root.installed_role_class.as_deref()
+                        == Some("fail_closed_unknown")
+                    && target_root.task_cookie != ephemeral_root.task_cookie
+                    && target_root.process_state_id != ephemeral_root.process_state_id
+                    && distinct_execution_set_and_profile,
+                InvalidInputSnafu {
+                    path: pin_root,
+                    reason: "the ephemeral container merged with the application identity tree",
+                }
+            );
+            Ok((
+                target_root,
+                ephemeral_root,
+                shared_pid_namespace,
+                distinct_execution_set_and_profile,
+            ))
+        })();
+
+        let host_cleanup = if let Some(host) = host.take() {
+            host.shutdown().context(InterceptorSnafu)
+        } else {
+            Ok(())
+        };
+        let namespace_cleanup = if namespace_created {
+            self.kubernetes_output(
+                &[
+                    "kubectl",
+                    "delete",
+                    "namespace",
+                    namespace.as_str(),
+                    "--ignore-not-found",
+                    "--wait=true",
+                    "--timeout=120s",
+                ],
+                "remove the Kubernetes ephemeral fixture namespace",
+            )
+            .map(|_| ())
+        } else {
+            Ok(())
+        };
+        let cleanup = host_cleanup
+            .and(namespace_cleanup)
+            .and(pin_cleanup.cleanup())
+            .and(lease_cleanup.cleanup())
+            .and(work_cleanup.cleanup());
+        if let Err(source) = probe {
+            cleanup?;
+            return Err(source);
+        }
+        cleanup?;
+        ensure!(
+            self.kubernetes_namespace_absent(&namespace)?
+                && !pin_root.exists()
+                && !lease_path.exists()
+                && !work_directory.exists(),
+            InvalidInputSnafu {
+                path: &work_directory,
+                reason: "the Kubernetes ephemeral fixture was not removed",
+            }
+        );
+        let (target_root, ephemeral_root, shared_pid_namespace, distinct_execution_set_and_profile) =
+            probe?;
+        bundle.kubernetes_ephemeral_target_root = Some(target_root);
+        bundle.kubernetes_ephemeral_container_root = Some(ephemeral_root);
+        bundle.kubernetes_ephemeral_shared_pid_namespace = Some(shared_pid_namespace);
+        bundle.kubernetes_ephemeral_distinct_execution_set_and_profile =
+            Some(distinct_execution_set_and_profile);
+        Ok(())
+    }
+
     fn kubernetes_container_binding(
         &self,
         namespace: &str,
+        pod_name: &str,
         container_name: &str,
+        identity: (mithril_node::ContainerKindV1, &str, &str, &str, u64),
         manifest_path: &Path,
     ) -> Result<(WorkloadBindingConfig, u32, String)> {
-        let (container_kind, binding_id, execution_set_id) = match container_name {
-            "init" => (
-                mithril_node::ContainerKindV1::Init,
-                "11111111-1111-4111-8111-111111111101",
-                "22222222-2222-4222-8222-222222222201",
-            ),
-            "sidecar" => (
-                mithril_node::ContainerKindV1::Sidecar,
-                "11111111-1111-4111-8111-111111111102",
-                "22222222-2222-4222-8222-222222222202",
-            ),
-            "application" => (
-                mithril_node::ContainerKindV1::Application,
-                "11111111-1111-4111-8111-111111111103",
-                "22222222-2222-4222-8222-222222222203",
-            ),
-            _ => {
-                return Err(invalid_state(format!(
-                    "`{container_name}` is not a Kubernetes containers fixture owner"
-                )))
-            }
-        };
+        let (container_kind, binding_id, execution_set_id, profile_id, profile_ref_id) = identity;
         let container_id = self.wait_for(
             &format!("Kubernetes `{container_name}` container start"),
             manifest_path,
             || {
                 let pod = self.kubernetes_output(
                     &[
-                        "kubectl",
-                        "-n",
-                        namespace,
-                        "get",
-                        "pod",
-                        "mithril-containers",
-                        "-o",
-                        "json",
+                        "kubectl", "-n", namespace, "get", "pod", pod_name, "-o", "json",
                     ],
                     "read the Kubernetes containers fixture Pod",
                 )?;
                 let pod: serde_json::Value = serde_json::from_str(&pod).context(JsonSnafu {
                     path: manifest_path,
                 })?;
-                let status = ["initContainerStatuses", "containerStatuses"]
-                    .into_iter()
-                    .filter_map(|field| {
-                        pod.pointer(&format!("/status/{field}"))
-                            .and_then(serde_json::Value::as_array)
-                    })
-                    .flatten()
-                    .find(|status| {
-                        status.get("name").and_then(serde_json::Value::as_str)
-                            == Some(container_name)
-                            && status.pointer("/state/running").is_some()
-                    });
+                let status = [
+                    "initContainerStatuses",
+                    "containerStatuses",
+                    "ephemeralContainerStatuses",
+                ]
+                .into_iter()
+                .filter_map(|field| {
+                    pod.pointer(&format!("/status/{field}"))
+                        .and_then(serde_json::Value::as_array)
+                })
+                .flatten()
+                .find(|status| {
+                    status.get("name").and_then(serde_json::Value::as_str) == Some(container_name)
+                        && status.pointer("/state/running").is_some()
+                });
                 Ok(status
                     .and_then(|status| status.get("containerID"))
                     .and_then(serde_json::Value::as_str)
@@ -3193,7 +3519,7 @@ impl IdentityTestRunner {
                 namespace,
                 "get",
                 "pod",
-                "mithril-containers",
+                pod_name,
                 "-o",
                 "jsonpath={.metadata.uid}",
             ],
@@ -3220,6 +3546,8 @@ impl IdentityTestRunner {
         let mut binding = test_binding(&root_cgroup_path);
         binding.binding_id = binding_id.to_owned();
         binding.execution_set_id = execution_set_id.to_owned();
+        binding.profile_id = profile_id.to_owned();
+        binding.active_profile_generation_ref_id = profile_ref_id;
         binding.container_id = container_id;
         binding.namespace = namespace.to_owned();
         binding.pod_uid = pod_uid.trim().to_owned();
