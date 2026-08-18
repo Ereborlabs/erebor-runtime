@@ -1,8 +1,10 @@
 # Signed Path-Tree Denial Implementation Review
 
-This guide covers implementation commit
-`b20ede0ced8ca45143acb31303e8b1a8f7818769`. The commit is based on the
-policy definition in `4875862804b64c003927b60e634b7989dd3897f7`.
+This guide covers physical source commit
+`c04d6a1e44b019649b23111365b17467c2faf751`. The commit contains the path-tree
+implementation rebased onto Phase 2 source commit
+`9b2f8d5845557294b8aab772bf58fb56c9746d8f`. The policy definition starts at
+commit `4875862804b64c003927b60e634b7989dd3897f7`.
 
 The design source is the
 [validated architecture](./policy-and-protection-algorithm-architecture-readable.md#path-selector-resolution-path-tree-floors-and-exact-object-authority).
@@ -356,7 +358,7 @@ source.
 
 The old split did not meet this table. Rust previously resolved the namespace
 mount chain and installed a graph prefix. BPF walked only from the leaf to the
-current mount root. Commit `6a0f389` removes that path-tree dependency. The
+current mount root. Commit `03775b7` removes that path-tree dependency. The
 path-tree branch does not read `canonical_mount_roots` or require a clean Rust
 mount snapshot.
 
@@ -526,7 +528,7 @@ engine, or userspace namespace helper.
 
 One per-CPU `identity_scratch_v1` value owns cache-build, path-walk, component,
 and graph-match state. `bpf_loop` callbacks receive only a pointer to this
-state. The checked object at commit `b20ede0` has these maximum stack offsets:
+state. The checked object at commit `c04d6a1` has these maximum stack offsets:
 
 | Function | Stack bytes |
 | --- | ---: |
@@ -638,25 +640,32 @@ typed identity or policy error before activation.
 | `bpf_path_walks_use_meta_component_and_namespace_budgets` | Inspects the compiled object for the 255-component and 4,351-callback `bpf_loop` limits. It also checks the 255-entry scan-stack source bound. |
 | `generation_retirement_waits_for_async_io_authority` | Checks retained asynchronous authority and removal of all three generation-scoped path maps. |
 | Cross-architecture compile | The production object compiles with `-Wall -Werror` against checked x86, arm64, arm, and RISC-V kernel headers. This is not non-x86 physical proof. |
-| Repository Rust CI | `bash .github/scripts/verify-rust-ci.sh` passed at exact code commit `b20ede0`. It ran formatting, workspace check, warnings-as-errors clippy, and the full workspace tests. The focused policy compilation suite passed all 30 tests. |
-| Disposable VM | The kernel, identity, observation, local-enforcement, K3s observe, and K3s protect lanes passed at exact commit `b20ede0`. The documented administrative-exec lane was skipped. |
+| Repository Rust CI | `bash .github/scripts/verify-rust-ci.sh` passed for code commit `c04d6a1` and the regenerated checked qualification record. It ran formatting, workspace check, warnings-as-errors clippy, and the full workspace tests. The focused policy compilation suite passed all 30 tests. |
+| Phase 2 companion | The exact four-crate, all-targets, all-features suite passed 224 tests. Identity source verification and the identity probe build also passed. |
+| Disposable VM | The kernel, identity, observation, local-enforcement, K3s observe, K3s protect, and Kubernetes identity lanes passed at exact physical source commit `c04d6a1`. The documented administrative-exec lane was skipped. |
 
 The exact-commit VM command was:
 
 ```sh
-rtk proxy bash crates/mithril-e2e/harness/vm/run.sh --with-k3s \
+rtk proxy crates/mithril-e2e/harness/vm/run.sh --with-k3s \
   --skip-administrative-exec \
-  --output-directory /tmp/mithril-path-tree-b20ede0
+  --output-directory /tmp/mithril-phase2-rebase-c04d6a1-r3
 ```
 
 The exact-commit VM evidence directory is
-`/tmp/mithril-path-tree-b20ede0`. The production BPF object SHA-256 is
+`/tmp/mithril-phase2-rebase-c04d6a1-r3`. The production Interceptor BPF object
+SHA-256 is
+`eae3b62827883a049c4f7eceaa1857fef52108adfdeab0f70573c23b312d52bb`.
+The separate kernel-qualification object SHA-256 is
 `e44e761a8bfa2c33f02475beb4162d41efdbe704ee10960bd03fafb31b4d13d8`.
+The identity artifact SHA-256 is
+`a29d9a483711a336a76f1916a2cfeef5297db04aa463647bc626fe2fd5d52802`.
 The platform was x86_64 Ubuntu with Linux `6.8.0-137-generic` and BPF in the
-active LSM order.
+active LSM order. The harness removed the VM. An independent libvirt query
+found no remaining domain.
 
 The local-enforcement artifact SHA-256 is
-`a168972e1ed8c3f63524f56eb00e759bcdfb0b4db3fd0a1b2f93ade60a686b07`.
+`d5742664acc7ea95f81bd0772dee179207b53b4ad4810d3e350a20d2eadff8f9`.
 It records these true results:
 
 - `path_tree_meta_depth_denied`
@@ -686,6 +695,14 @@ case proves that a mount namespace created after policy activation uses the
 installed graph. These records prove the existing generation and cgroup
 binding boundary. They do not add or prove a Kubernetes custom resource
 definition or admission controller.
+
+Seven earlier directories are rejected results. Four runs failed known native
+identity fixture liveness checks. Two runs exposed missing files in the guest
+source manifest. One run exposed the short Container Runtime Interface (CRI)
+cleanup deadline. The fixes keep all identity and hook-decision waits at 30
+seconds. Only asynchronous CRI record removal uses the 120-second Kubernetes
+cleanup limit. Every rejected harness run removed its disposable VM. No
+rejected artifact contributes to the checked qualification record.
 
 ## Limits and nonclaims
 
