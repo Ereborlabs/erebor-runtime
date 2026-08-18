@@ -395,3 +395,32 @@ namespace, and fixture. Final inspection found no Mithril pin or process.
 Only unrelated BPF link 1 remained. This proves two manual CRI slices. It does
 not qualify propagation, idmapped mounts, token rotation, or administrative
 exec. The phase remains **Not done**.
+
+## Qualification update — 2026-08-18 — inherited IPC and identity lifecycle
+
+Implementation commit `5dd695e` adds a physical inherited Unix-stream case.
+A fork child inherits its parent's connected endpoint but does not inherit the
+parent's exact relationship authority. The protected operation denies. The
+declared parent-to-peer control still succeeds.
+
+The same source serializes external-root label publication against task exit.
+It rejects a label claim after `PF_EXITING`, publishes the task cookie last,
+and lets the exit hook cancel an incomplete claim. The identity fixtures use
+explicit barriers for PID-namespace and `CLONE_INTO_CGROUP` transitions. Six
+consecutive identity probes passed in one retained guest.
+
+A fresh disposable VM then passed the kernel, identity, observation, and
+protected-effect lanes. The local-enforcement JSON is
+`/tmp/mithril-phase4-full-after-fixes/local-enforcement-physical-probe.json`.
+Its SHA-256 is
+`04b1fdb9f5b86c884612a880d79fe272d45e79eaade69a1fc238808376eab465`.
+It records `inherited_unix_stream_send_denied=true`,
+`unix_stream_relationship_allowed=true`, 10,000 measured opens, 50,000
+saturation opens, preserved policy decisions under loss, and complete cleanup.
+The identity JSON SHA-256 is
+`fff4e3f494751c01b8e75c83e1515bbb16ce143ea4c93ac7e2e79c7c4dc66c99`.
+
+`STATE-FORK-IPC-002` is **Done**. The phase remains **Not done** with 16
+implementation-open Appendix C rows. The
+[closure matrix](./phase-4-closure-matrix.md) states each remaining owner and
+separates later-phase work.
