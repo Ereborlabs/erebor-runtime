@@ -307,7 +307,7 @@ start hook.
 | `ENTRY-PROBE-001` | run concurrent startup/readiness/liveness exec probes | stock purpose remains unknown/restricted; qualified evidence only if interface supplies it |
 | `ENTRY-PROBE-002` | app child runs identical probe bytes/cadence | native child keeps application lineage and cannot impersonate external root |
 | `ENTRY-PROBE-IMPERSONATION-003` | race native child, stock probe, ordinary `kubectl exec`, and direct CRI exec with identical argv/TTY | the child stays native and every independent stock/runtime root stays restricted; Phase 4 owns approved-role transition |
-| `ENTRY-RESTART-001` | restart runtime, kubelet, and node during binding | live reconciliation opens exact gaps and reuses no stale role |
+| `ENTRY-RESTART-001` | restart the Kubernetes service and node during discovery and binding | the runtime gap is unhealthy, node observation is unavailable while the node is down, and the live task keeps its exact identity after both recoveries |
 | `ENTRY-REUSE-001` | reuse PID, namespace, cgroup path/ID, Pod/container name | new cookies/nonces/live intervals prevent old authority/response attachment |
 | `ENTRY-SLEEP-001` | execute lifecycle sleep action | lifecycle fact only; no invented process entry when no task exists |
 | `ENTRY-START-001` | delay/drop configured start metadata | root identity stays conservative and the measured start gap remains explicit; Phase 4 owns effect denial |
@@ -1452,8 +1452,75 @@ node process, lease, cgroup, or manual work directory. K3s was active.
 The exact limit is identity only. The checked node config supplies a
 predeclared assignment, and live CRI discovery binds it to the actual
 container. This does not prove CRD delivery or a protected effect result. This
-closes `ENTRY-LOSS-001`. Three rows remain open, so Phase 2 remains
-**Blocked**.
+closes `ENTRY-LOSS-001`. The later restart qualification below reduces the
+open set to two rows. Phase 2 remains **Blocked**.
+
+## Kubernetes Service And Node Restart Qualification — 2026-08-18
+
+Source commit `838fc8f` ran in the retained x86_64 Ubuntu 24.04 VM on Linux
+`6.8.0-137-generic`. The VM used Kubernetes `v1.35.5`, K3s
+`v1.35.5+k3s1`, and containerd `v2.2.3-k3s1`.
+
+The automated command used these unique paths:
+
+```sh
+"$MITHRIL_BIN_DIRECTORY/mithril-identity-test" \
+  --repo-root "$MITHRIL_MANUAL_SOURCE" \
+  --output-directory /tmp/mithril-phase2-entry-restart-20260818-18/result \
+  physical-probe \
+  --pin-root /sys/fs/bpf/mithril-phase2-entry-restart-20260818-18 \
+  --lease-path /tmp/mithril-phase2-entry-restart-20260818-18/result/owner.lock \
+  --cgroup-path /sys/fs/cgroup/mithril-phase2-entry-restart-20260818-18 \
+  --with-kubernetes \
+  --previous-bundle \
+    /tmp/mithril-phase2-entry-restart-20260818-18/input/identity-physical-probe.json
+```
+
+The prior schema-25 input SHA-256 was
+`d3817779c7835ef7b766d6bcbc84dc67007b8e1192665e39b8d3f00173b689fd`.
+The accepted schema-26 JSON is
+`/tmp/mithril-phase2-entry-restart-20260818-18/identity-physical-probe.json`.
+Its SHA-256 is
+`d9be44d4315cd6097f9cb9eddc3514f6b1ef84aa5ddd326ad1709bc10f85eb02`.
+
+The Pod existed before the node started. The discovered application root had
+task cookie `5`, no creator, `restored_or_unknown_root`, and
+`fail_closed_unknown`. A stopped direct CRI task then had task cookie `64`,
+process state `0000000000000001000000000000003e`,
+`external_runtime_root`, `runtime_external_restricted`, and role `11`.
+
+Stopping K3s changed exact-native-identity capability state to `UNHEALTHY`
+with reason `LIVE_IDENTITY_RECONCILIATION_FAILED`. The runner restarted K3s
+and required `SUPPORTED` state. It then stopped the node. Node observation was
+unavailable during that gap. Direct pinned-map inspection remained available.
+The full task `64` snapshot was equal before the Kubernetes service restart,
+after that restart, during the node gap, and after node recovery.
+
+The same VM then ran:
+
+```sh
+examples/mithril-identity-manual/restart.sh
+```
+
+The shell printed `PASS`. Independent postflight checks found no case
+Namespace, fixture, pin, node process, lease, cgroup, or manual work directory.
+K3s was active. The full Rust CI script passed.
+
+The exact service limit is specific to the qualified K3s distribution. Its one
+service owns the kubelet and containerd. The result does not qualify separate
+service units on another Kubernetes distribution. The node config is the
+predeclared assignment. Live CRI discovery binds that assignment to the actual
+container. This result does not qualify Custom Resource Definition delivery or
+a protected effect decision.
+
+Two earlier physical runs are not acceptance evidence. The first run found
+that healthy reconciliation did not restore closed capability claims. The
+second run found that a retryable CRI outage terminated active bindings. Both
+runs removed their Namespace, fixture, pin, lease, cgroup, node process, and
+work directory.
+
+This closes `ENTRY-RESTART-001`. `ENTRY-REUSE-001` and
+`ENTRY-STOCK-HOOK-FAILURE-002` remain open. Phase 2 remains **Blocked**.
 
 ## Native Identity Fixture Matrix
 

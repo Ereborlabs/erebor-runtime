@@ -4,14 +4,14 @@ This guide explains the current implementation. It uses source links so that a
 reviewer can follow each owner, state transition, and BPF decision. It does not
 replace an acceptance record.
 
-Source reviewed: code commit `53fbd287aad8b6012eb4f80dcd4fe83e34ed5470`
+Source reviewed: code commit `838fc8f800902c0d6bfcc77a025fbc66c5261b44`
 plus the current documentation changes on `mithril-phase-2-4`. The production
-identity object loaded by the 2026-08-17 VM has SHA-256
-`3269516fcd2714ab7fbe29df26386c40f0c912b6284007b641d8bbf68842b876`.
+identity object loaded by the 2026-08-18 VM has SHA-256
+`02408c371aafaeeb044cbf11195a25dca35013bcdea44e37aa0756ebd2f2f3e6`.
 The checked kernel-qualification object has SHA-256
 `4d56e05b36bb310af66c7ec553aa13fa4b29d4839096a7dd0e5708edddaa1eac`.
 The current architecture digest is
-`31e2ab2590a6781db6e1bf61c0147090d790f201756d08c87753981b79ebfe37`.
+`22678b9c0379ff915fe595059f3da2789c3e32cdf54d61656c7257175263d14a`.
 
 The source contains one production BPF object, native task identity, signed
 local policy rows, exact file decisions, typed device and process decisions,
@@ -31,10 +31,10 @@ The latest phase results remain:
 - Phase 1: **Done**.
 - Phase 2: **Blocked**. Native identity and the direct CRI, non-TTY and TTY
   Kubernetes exec, copy, identical native-child, lifecycle-sleep, network-
-  probe, and container-identity rows have current source, manual, and
-  privileged VM evidence. The exact closure matrix lists the remaining entry,
-  reuse, coordinate, native-reference, authorization-identity, and failure
-  cases.
+  probe, container-identity, authorization-replay, entry-loss, and restart rows
+  have current source and privileged VM evidence. Operator-runnable rows also
+  have manual evidence. `ENTRY-REUSE-001` and
+  `ENTRY-STOCK-HOOK-FAILURE-002` remain open.
   Phase 4 owns saturation, raced-policy, IPC-policy, and protected-effect
   results.
 - Phase 3: **Blocked**. Exact observation has current privileged VM and K3s
@@ -3609,7 +3609,8 @@ directory, pin, lease, cgroup, and fixture. The VM did not reboot.
 No manual shell is valid because the scenario requires one owner for signed
 bytes, trusted time, replay identity, boot identity, and WAL state. This closes
 only `AUTHORIZATION-REPLAY-004`. Phase 4 still owns approved exec and physical
-effects. Three Phase 2 entry rows remain open.
+effects. The later loss and restart reviews below reduce the open set to two
+rows.
 
 ## Entry-Source Loss Fixture Review — 2026-08-18
 
@@ -3618,7 +3619,7 @@ runner, or durable type.
 
 Review this path in order:
 
-1. [`physical_kubernetes_loss_probe`](../../../crates/mithril-e2e/src/identity.rs)
+1. [`physical_kubernetes_resilience_probe`](../../../crates/mithril-e2e/src/identity.rs)
    creates one Pod, resolves its exact live CRI identity, and starts the real
    node with that predeclared binding.
 2. The direct CRI exec supplies no Kubernetes API audit metadata. It stops
@@ -3660,5 +3661,67 @@ active after each case.
 
 This closes only `ENTRY-LOSS-001`. The result uses a checked node config as
 the predeclared assignment and live CRI as the actual container binding. It
-does not qualify CRD delivery or a Phase 4 effect decision. Three Phase 2 rows
-remain open.
+does not qualify CRD delivery or a Phase 4 effect decision. The later restart
+review below reduces the open set to two rows.
+
+## Kubernetes Service And Node Restart Fixture Review — 2026-08-18
+
+Source commit `838fc8f` changes existing owners only. It adds no map, role,
+generic runner, or durable type.
+
+Review this path in order:
+
+1. [`WorkloadBindingOwner::reconcile_runtime`](../../../crates/mithril-node/src/identity/binding.rs)
+   keeps an active binding when CRI observation fails with a retryable error.
+   A non-retryable identity error still terminates the binding.
+2. [`NodeChassis::run`](../../../crates/mithril-node/src/node.rs) closes
+   identity-dependent capability claims after a failed reconciliation. A later
+   healthy reconciliation restores the exact startup capability records.
+3. [`physical_kubernetes_resilience_probe`](../../../crates/mithril-e2e/src/identity.rs)
+   starts the Pod before the node. It records conservative discovery, holds one
+   direct CRI task, restarts the Kubernetes service, and restarts the node from
+   pinned state.
+4. [`IdentityPhysicalProbeBundleV1`](../../../crates/mithril-e2e/src/identity.rs)
+   records the discovery root, the bound root, both recovered roots, the node-
+   gap root, the unavailable node observation, and exact identity stability.
+5. [`restart.sh`](../../../examples/mithril-identity-manual/restart.sh) runs the
+   operator case in an existing VM. `identity-runtime.sh` owns the Pod, runtime
+   binding, node, pin, lease, and cleanup.
+
+```mermaid
+sequenceDiagram
+    participant R as IdentityTestRunner
+    participant T as stopped CRI task
+    participant K as K3s service
+    participant N as mithril-node
+    participant B as pinned BPF state
+
+    R->>K: stop kubelet and container runtime service
+    N-->>R: identity capability unhealthy
+    B-->>R: live task identity unchanged
+    R->>K: start service
+    N-->>R: identity capability supported
+    R->>N: stop node
+    N-->>R: observation unavailable
+    B-->>R: live task identity unchanged
+    R->>N: start with retained pins
+    N-->>R: identity capability supported
+```
+
+The retained Ubuntu 24.04 VM passed on Linux `6.8.0-137-generic`. It used
+Kubernetes `v1.35.5`, K3s `v1.35.5+k3s1`, and containerd
+`v2.2.3-k3s1`. The schema-26 JSON SHA-256 is
+`d9be44d4315cd6097f9cb9eddc3514f6b1ef84aa5ddd326ad1709bc10f85eb02`.
+The discovered Pod root was fail-closed unknown. The bound task kept cookie
+`64`, process state `0000000000000001000000000000003e`, restricted external
+role `11`, and its complete snapshot across both recovery paths. Node
+observation was unavailable only while the node was down.
+
+The manual shell printed `PASS`. Automated and manual postflight checks found
+no case Namespace, fixture, pin, node process, lease, cgroup, or work
+directory. K3s was active. The full Rust CI script passed.
+
+This closes only `ENTRY-RESTART-001`. The K3s service owns its embedded
+kubelet and container runtime. The result does not qualify other service
+layouts, CRD delivery, or a protected effect decision. `ENTRY-REUSE-001` and
+`ENTRY-STOCK-HOOK-FAILURE-002` remain open.
