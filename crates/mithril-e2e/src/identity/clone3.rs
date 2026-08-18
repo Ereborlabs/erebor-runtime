@@ -145,6 +145,23 @@ impl CloneIntoCgroupFixture {
     }
 
     pub(super) fn release_root(&self) -> Result<()> {
+        let path = PathBuf::from(format!("/proc/{}/status", self.root_pid));
+        let mut stopped = false;
+        for _attempt in 0..500 {
+            let status = std::fs::read_to_string(&path).context(IoSnafu { path: &path })?;
+            if status.lines().any(|line| line.starts_with("State:\tT")) {
+                stopped = true;
+                break;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        ensure!(
+            stopped,
+            InvalidInputSnafu {
+                path: &path,
+                reason: "CLONE_INTO_CGROUP root did not reach its stop barrier",
+            }
+        );
         pidfd_send_signal(&self.root_pidfd, Signal::CONT)
             .map_err(|error| invalid_state(format!("release CLONE_INTO_CGROUP root: {error}")))
     }
