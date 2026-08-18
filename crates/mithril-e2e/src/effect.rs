@@ -16,7 +16,7 @@ use erebor_interceptor_abi::{
     ExceptionRuntimeStateKindV1, ExceptionRuntimeStateV1, ExceptionUseReceiptV1, Id128V1,
     IpcOperationV1, KernelEffectFamilyV1, KernelEffectOperationV1, MountReconciliationProposalV1,
     MountSecurityViewStateV1, MountTopologyStateV1, PolicyGenerationStateV1,
-    ProfileGenerationDescriptorV1, MAX_CANONICAL_PATH_COMPONENTS_V1,
+    ProfileGenerationDescriptorV1, QualificationResultV1, MAX_CANONICAL_PATH_COMPONENTS_V1,
 };
 use mithril_control::{
     EffectFamilyV1, PathTreeDenyFloorV1, PolicyArtifactOwner, PolicyDispositionV1,
@@ -148,10 +148,218 @@ pub struct HfStaticEffectClassificationCaseV1 {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct LocalEnforcementFixtureResultV1 {
+    pub fixture_id: String,
+    pub result: QualificationResultV1,
+    pub reason_code: String,
+}
+
+#[derive(Clone, Copy)]
+enum LocalFixtureDisposition {
+    Physical(&'static str),
+    Unsupported(&'static str),
+}
+
+#[derive(Clone, Copy)]
+struct LocalFixtureSpec {
+    fixture_id: &'static str,
+    disposition: LocalFixtureDisposition,
+}
+
+const LOCAL_ENFORCEMENT_FIXTURES: [LocalFixtureSpec; 29] = [
+    LocalFixtureSpec {
+        fixture_id: "ADMIN-EXEC-APPROVAL-001",
+        disposition: LocalFixtureDisposition::Unsupported("ADMIN_EXEC_CLAIM_NOT_ADVERTISED"),
+    },
+    LocalFixtureSpec {
+        fixture_id: "DEVICE-DERIVED-001",
+        disposition: LocalFixtureDisposition::Physical(
+            "DERIVED_DEVICE_MINT_DENIED_BEFORE_DESCRIPTOR_INSTALL",
+        ),
+    },
+    LocalFixtureSpec {
+        fixture_id: "EXEC-CONCURRENT-002",
+        disposition: LocalFixtureDisposition::Unsupported(
+            "PROTECTED_CONCURRENT_EXEC_NOT_PHYSICALLY_QUALIFIED",
+        ),
+    },
+    LocalFixtureSpec {
+        fixture_id: "FILE-CONTENT-RACE-002",
+        disposition: LocalFixtureDisposition::Unsupported(
+            "IMMUTABLE_SOURCE_MUTABILITY_PROOF_NOT_QUALIFIED",
+        ),
+    },
+    LocalFixtureSpec {
+        fixture_id: "FILE-FD-PASS-001",
+        disposition: LocalFixtureDisposition::Physical(
+            "PASSED_DESCRIPTOR_ACQUISITION_AND_USE_QUALIFIED",
+        ),
+    },
+    LocalFixtureSpec {
+        fixture_id: "FILE-IDENTITY-001",
+        disposition: LocalFixtureDisposition::Unsupported(
+            "OVERLAY_COPY_UP_PROVENANCE_NOT_QUALIFIED",
+        ),
+    },
+    LocalFixtureSpec {
+        fixture_id: "FILE-MMAP-001",
+        disposition: LocalFixtureDisposition::Physical(
+            "FILE_MAPPING_DENY_AND_BENIGN_CONTROL_QUALIFIED",
+        ),
+    },
+    LocalFixtureSpec {
+        fixture_id: "FILE-MMAP-SHARED-011",
+        disposition: LocalFixtureDisposition::Physical(
+            "INDEPENDENT_ROOT_MAPPING_ACQUISITION_QUALIFIED",
+        ),
+    },
+    LocalFixtureSpec {
+        fixture_id: "FILE-NAMESPACE-001",
+        disposition: LocalFixtureDisposition::Physical(
+            "EXACT_MOUNT_VIEW_INVALIDATION_AND_RECONCILIATION_QUALIFIED",
+        ),
+    },
+    LocalFixtureSpec {
+        fixture_id: "FILE-PATH-TREE-DENY-001",
+        disposition: LocalFixtureDisposition::Physical("RECURSIVE_PATH_TREE_DENY_QUALIFIED"),
+    },
+    LocalFixtureSpec {
+        fixture_id: "FILE-SA-TOKEN-OPEN-001",
+        disposition: LocalFixtureDisposition::Unsupported(
+            "PROJECTED_TOKEN_ROTATION_BINDING_NOT_QUALIFIED",
+        ),
+    },
+    LocalFixtureSpec {
+        fixture_id: "FILE-VMA-SNAPSHOT-001",
+        disposition: LocalFixtureDisposition::Unsupported("COMPLETE_VMA_SNAPSHOT_NOT_QUALIFIED"),
+    },
+    LocalFixtureSpec {
+        fixture_id: "HF-LOCAL-001",
+        disposition: LocalFixtureDisposition::Unsupported(
+            "PROJECTED_TOKEN_AND_CONTROLLER_CONTROL_NOT_QUALIFIED",
+        ),
+    },
+    LocalFixtureSpec {
+        fixture_id: "IPC-ASYNC-UNSUPPORTED-010",
+        disposition: LocalFixtureDisposition::Physical(
+            "RESTRICTED_IO_URING_AND_SQPOLL_HARD_CLOSE_QUALIFIED",
+        ),
+    },
+    LocalFixtureSpec {
+        fixture_id: "IPC-PEER-RACE-004",
+        disposition: LocalFixtureDisposition::Physical("UNIX_PEER_GENERATION_RACE_QUALIFIED"),
+    },
+    LocalFixtureSpec {
+        fixture_id: "IPC-PROCESS-CHANNEL-009",
+        disposition: LocalFixtureDisposition::Physical(
+            "PROCESS_CHANNEL_AND_CONTROL_DIRECTION_QUALIFIED",
+        ),
+    },
+    LocalFixtureSpec {
+        fixture_id: "IPC-RELATIONSHIP-ALLOW-003",
+        disposition: LocalFixtureDisposition::Physical("EXACT_UNIX_STREAM_RELATIONSHIP_QUALIFIED"),
+    },
+    LocalFixtureSpec {
+        fixture_id: "IPC-RELATIONSHIP-UNMATCHED-005",
+        disposition: LocalFixtureDisposition::Physical("UNMATCHED_AND_STALE_UNIX_PEERS_QUALIFIED"),
+    },
+    LocalFixtureSpec {
+        fixture_id: "LSM-DENY-SATURATION-001",
+        disposition: LocalFixtureDisposition::Physical(
+            "DENIAL_INDEPENDENT_FROM_OBSERVATION_DELIVERY_QUALIFIED",
+        ),
+    },
+    LocalFixtureSpec {
+        fixture_id: "MEM-EXEC-001",
+        disposition: LocalFixtureDisposition::Unsupported(
+            "IMMUTABLE_EXECUTABLE_SOURCE_PROOF_NOT_QUALIFIED",
+        ),
+    },
+    LocalFixtureSpec {
+        fixture_id: "MEM-KERNEL-MAP-002",
+        disposition: LocalFixtureDisposition::Unsupported("MM_AND_VMA_STATE_NOT_QUALIFIED"),
+    },
+    LocalFixtureSpec {
+        fixture_id: "MOUNT-ATTR-001",
+        disposition: LocalFixtureDisposition::Unsupported(
+            "COMPLETE_MOUNT_ATTRIBUTE_VARIANTS_NOT_QUALIFIED",
+        ),
+    },
+    LocalFixtureSpec {
+        fixture_id: "MOUNT-CAS-002",
+        disposition: LocalFixtureDisposition::Physical(
+            "MOUNT_PROPOSAL_CAS_AND_EXACT_RECONCILIATION_QUALIFIED",
+        ),
+    },
+    LocalFixtureSpec {
+        fixture_id: "MOUNT-PROPAGATION-003",
+        disposition: LocalFixtureDisposition::Unsupported(
+            "COMPLETE_PROPAGATION_FANOUT_AND_OVERFLOW_NOT_QUALIFIED",
+        ),
+    },
+    LocalFixtureSpec {
+        fixture_id: "MOUNT-SNAPSHOT-004",
+        disposition: LocalFixtureDisposition::Physical(
+            "INCOMPLETE_SNAPSHOT_HARD_CLOSE_AND_RECOVERY_QUALIFIED",
+        ),
+    },
+    LocalFixtureSpec {
+        fixture_id: "SELF-PROTECT-001",
+        disposition: LocalFixtureDisposition::Unsupported(
+            "COMPLETE_LOCAL_SELF_PROTECTION_NOT_QUALIFIED",
+        ),
+    },
+    LocalFixtureSpec {
+        fixture_id: "STATE-FORK-IPC-002",
+        disposition: LocalFixtureDisposition::Physical(
+            "INHERITED_CHANNEL_AUTHORITY_DENIAL_QUALIFIED",
+        ),
+    },
+    LocalFixtureSpec {
+        fixture_id: "STATE-PERSISTENT-FILE-LIFETIME-007",
+        disposition: LocalFixtureDisposition::Unsupported(
+            "PERSISTENT_FILE_INSTANCE_LIFETIME_NOT_QUALIFIED",
+        ),
+    },
+    LocalFixtureSpec {
+        fixture_id: "STATE-THREAD-RACE-001",
+        disposition: LocalFixtureDisposition::Unsupported(
+            "PROTECTED_EFFECT_ROLE_TRANSITION_RACE_NOT_QUALIFIED",
+        ),
+    },
+];
+
+fn local_enforcement_fixture_results(protect: bool) -> Vec<LocalEnforcementFixtureResultV1> {
+    LOCAL_ENFORCEMENT_FIXTURES
+        .into_iter()
+        .map(|spec| {
+            let (result, reason_code) = match spec.disposition {
+                LocalFixtureDisposition::Physical(reason_code) if protect => {
+                    (QualificationResultV1::Pass, reason_code)
+                }
+                LocalFixtureDisposition::Physical(_) => (
+                    QualificationResultV1::Degraded,
+                    "OBSERVE_MODE_HAS_NO_PREVENTION_RESULT",
+                ),
+                LocalFixtureDisposition::Unsupported(reason_code) => {
+                    (QualificationResultV1::Unsupported, reason_code)
+                }
+            };
+            LocalEnforcementFixtureResultV1 {
+                fixture_id: spec.fixture_id.to_owned(),
+                result,
+                reason_code: reason_code.to_owned(),
+            }
+        })
+        .collect()
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct EffectPhysicalProbeBundleV1 {
     pub schema_version: u32,
     pub protect_mode: bool,
     pub protected_deployment_digest: String,
+    pub local_enforcement_fixture_results: Vec<LocalEnforcementFixtureResultV1>,
     pub hf_static_effect_classification: Vec<HfStaticEffectClassificationCaseV1>,
     pub managed_proc_read_hard_closed: bool,
     pub exact_open_observed: bool,
@@ -3647,6 +3855,7 @@ impl EffectTestRunner {
             schema_version: 1,
             protect_mode: protect,
             protected_deployment_digest,
+            local_enforcement_fixture_results: local_enforcement_fixture_results(protect),
             hf_static_effect_classification: hf_static_effect_classification(),
             managed_proc_read_hard_closed: protect,
             exact_open_observed: true,
@@ -3767,7 +3976,12 @@ impl EffectTestRunner {
 mod tests {
     use std::collections::BTreeSet;
 
-    use super::{hf_static_effect_classification, HfStaticEffectClassificationV1};
+    use erebor_interceptor_abi::QualificationResultV1;
+
+    use super::{
+        hf_static_effect_classification, local_enforcement_fixture_results,
+        HfStaticEffectClassificationV1,
+    };
 
     #[test]
     fn static_effect_classification_covers_every_branch_without_physical_claims() {
@@ -3822,5 +4036,54 @@ mod tests {
                 && case.branch_id == "projected-token-open-and-read"
                 && case.classification == HfStaticEffectClassificationV1::Unsupported
         }));
+    }
+
+    #[test]
+    fn local_enforcement_results_close_every_owned_fixture_exactly_once() {
+        let protected = local_enforcement_fixture_results(true);
+        let fixture_ids = protected
+            .iter()
+            .map(|record| record.fixture_id.as_str())
+            .collect::<BTreeSet<_>>();
+        assert_eq!(protected.len(), 29);
+        assert_eq!(fixture_ids.len(), protected.len());
+        assert_eq!(
+            protected
+                .iter()
+                .filter(|record| record.result == QualificationResultV1::Pass)
+                .count(),
+            15
+        );
+        assert_eq!(
+            protected
+                .iter()
+                .filter(|record| record.result == QualificationResultV1::Unsupported)
+                .count(),
+            14
+        );
+        assert!(protected.iter().all(|record| {
+            matches!(
+                record.result,
+                QualificationResultV1::Pass | QualificationResultV1::Unsupported
+            ) && !record.reason_code.is_empty()
+        }));
+        assert!(fixture_ids.contains("FILE-PATH-TREE-DENY-001"));
+
+        let observed = local_enforcement_fixture_results(false);
+        assert_eq!(observed.len(), protected.len());
+        assert_eq!(
+            observed
+                .iter()
+                .filter(|record| record.result == QualificationResultV1::Degraded)
+                .count(),
+            15
+        );
+        assert_eq!(
+            observed
+                .iter()
+                .filter(|record| record.result == QualificationResultV1::Unsupported)
+                .count(),
+            14
+        );
     }
 }
