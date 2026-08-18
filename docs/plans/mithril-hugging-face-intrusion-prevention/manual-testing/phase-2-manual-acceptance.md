@@ -4,8 +4,9 @@ Status: The current source passed the automated privileged VM identity probe
 and its Kubernetes entry extension. Direct CRI exec, non-TTY and TTY
 `kubectl exec`, `kubectl cp`, the identical native-child control, lifecycle
 sleep, and HTTP, TCP, and gRPC readiness probes passed as self-contained
-operator cases. The VM used the K3s distribution. The full fixture matrix is
-not recorded.
+operator cases. Init, native-sidecar, and application container identity also
+passed. The VM used the K3s distribution. The full fixture matrix is not
+recorded.
 
 Phase: [Exact Native Identity](../phase-2-exact-native-identity.md)  
 Setup: [`SINGLE-NODE`](./environment-setup.md)
@@ -589,6 +590,87 @@ This completes `ENTRY-NETPROBE-001`. The exact limit is HTTP, TCP, and gRPC
 readiness probing: these probes created no extra in-container task. This
 result does not qualify network flow, application receipt, purpose, role, or
 policy. Other open matrix rows keep Phase 2 **Blocked**.
+
+## Recorded Kubernetes Container-Identity Result — 2026-08-18
+
+Source commit `6e23a23e327f70b3462faf932b0845f7e52ec67f` contains the
+exact runner, manifest, inspector field, runtime helper, and manual shell used
+for this result. It extends the existing `IdentityTestRunner` and physical JSON
+bundle. It adds no BPF map, role, runner, or durable type. The retained x86_64
+Ubuntu 24.04 VM ran kernel `6.8.0-137-generic`. Kubernetes `v1.35.5` ran
+through the K3s `v1.35.5+k3s1` distribution and the live containerd CRI
+endpoint.
+
+The root shell ran the automated Kubernetes extension with unique paths:
+
+```sh
+target/debug/mithril-identity-test \
+  --repo-root "$MITHRIL_MANUAL_SOURCE" \
+  --output-directory /var/tmp/mithril-kubernetes-containers-20260818-034 \
+  physical-probe \
+  --pin-root /sys/fs/bpf/mithril-kubernetes-containers-034 \
+  --lease-path /var/tmp/mithril-kubernetes-containers-20260818-034/owner.lock \
+  --cgroup-path /sys/fs/cgroup/mithril-kubernetes-containers-034 \
+  --with-kubernetes \
+  --previous-bundle /var/tmp/identity-kubernetes-schema17-033.json
+```
+
+The schema-18 JSON is
+`/tmp/mithril-phase2-kubernetes-containers-20260818-034/identity-physical-probe.json`.
+Its SHA-256 is
+`dfb7b407b8a945c474a210fb769abbc09b03599ecb271f4c27cb9d195da92ada`.
+It records `kubernetes_containers_distinct_execution_sets=true` and
+`kubernetes_fixture_removed=true`. The init, native-sidecar, and application
+task cookies are `12`, `5`, and `19`. Their execution-set IDs end in `01`,
+`02`, and `03`. Each root has `restored_or_unknown_root` and
+`fail_closed_unknown`, because Mithril discovered the live container after it
+started. The test binary SHA-256 is
+`5deff30a4e3ae111bf8fda4c82c7264d77ffad6991106b9a4609723668723a76`.
+The unchanged BPF object SHA-256 is
+`3269516fcd2714ab7fbe29df26386c40f0c912b6284007b641d8bbf68842b876`.
+The workload manifest SHA-256 is
+`ad54f35479d911221ae01653c0409d60e1f37c544381223efb859de52d04bf03`.
+
+The fixture created one Pod. A restartable init container supplied the native
+sidecar. A regular init container wrote the shared-volume marker and waited.
+The runner bound and inspected both live roots, released the regular init, and
+then bound and inspected the live application. All three containers used the
+same Pod sandbox and mounted the same host-backed volume. Each used a separate
+container cgroup, task root, process state, and configured execution set.
+
+The retained VM then ran this command as root from the committed source:
+
+```sh
+examples/mithril-identity-manual/kubernetes-containers.sh
+```
+
+The shell SHA-256 is
+`a3ae981f06fd2cb9b65f5265fbef21c3820f4dee4520526a4bc73ca7f7fd131c`.
+The shared runtime helper SHA-256 is
+`0c15474f35e053136ef0fb3df5e7bf0bdb5d24127d34b68e503bd46bc819c474`.
+It printed task cookies `12`, `5`, and `19`, the three distinct execution-set
+IDs, and `PASS`. The first manual attempt is rejected because its shell read
+the init PID before runtime reconciliation completed. The accepted shell uses
+a bounded identity wait and keeps the same oracle.
+
+Postflight found only the four baseline Kubernetes Namespaces. It found no case
+fixture, manual work directory, pin, lease, cgroup, node process, or loaded
+Erebor Interceptor program. `manual.sh destroy` removed the VM, and
+`virsh list --all` was empty.
+
+`cargo test -p mithril-e2e
+production_object_and_identity_fixture_allocation_are_exact` passed.
+The focused namespace-init test passed after one unrelated timing timeout in
+the first full-CI attempt. `cargo clippy -p mithril-e2e -p mithril-node
+--all-targets -- -D warnings` passed. The VM shell checks passed. The final
+`bash .github/scripts/verify-rust-ci.sh` passed with exit status `0` when the
+local socket tests ran with host permission.
+
+This completes `ENTRY-CONTAINERS-001`. The exact limit is identity separation:
+the regular init, native sidecar, and application kept separate roots and
+execution sets while sharing the Pod sandbox and volume. This result does not
+qualify shared-network or shared-volume relationships or policy. Other open
+matrix rows keep Phase 2 **Blocked**.
 
 ## Recorded Pre-PONR Failed Native-Exec VM Subcase — 2026-08-15
 

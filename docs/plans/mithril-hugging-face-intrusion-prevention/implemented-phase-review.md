@@ -30,10 +30,11 @@ The latest phase results remain:
   capability and performance claim.
 - Phase 1: **Done**.
 - Phase 2: **Blocked**. Native identity and the direct CRI, non-TTY and TTY
-  Kubernetes exec, copy, identical native-child, lifecycle-sleep, and network-
-  probe rows have current source, manual, and privileged VM evidence. The exact
-  closure matrix lists the remaining entry, reuse, coordinate,
-  native-reference, authorization-identity, and failure cases.
+  Kubernetes exec, copy, identical native-child, lifecycle-sleep, network-
+  probe, and container-identity rows have current source, manual, and
+  privileged VM evidence. The exact closure matrix lists the remaining entry,
+  reuse, coordinate, native-reference, authorization-identity, and failure
+  cases.
   Phase 4 owns saturation, raced-policy, IPC-policy, and protected-effect
   results.
 - Phase 3: **Blocked**. Exact observation has current privileged VM and K3s
@@ -620,6 +621,69 @@ This completes `ENTRY-NETPROBE-001`. The exact limit is native HTTP, TCP, and
 gRPC readiness probes that created no extra in-container task. The result does
 not qualify network flow, application receipt, purpose, role, or policy. Other
 open rows keep Phase 2 **Blocked**.
+
+### Kubernetes container identities — 2026-08-18
+
+Review this path in order:
+
+1. [`kubernetes-containers-workload-v1.yaml`](../../../crates/mithril-e2e/fixtures/identity/kubernetes-containers-workload-v1.yaml)
+   defines one regular init, one restartable init used as a native sidecar, and
+   one application in a shared Pod sandbox and host-backed volume.
+2. [`IdentityTestRunner::physical_kubernetes_containers_probe`](../../../crates/mithril-e2e/src/identity.rs)
+   binds the live init and sidecar, records both roots, releases the init gate,
+   and then binds and records the application root.
+3. [`NativeIdentityInspector`](../../../crates/mithril-node/src/identity/inspection.rs)
+   exposes the existing task-label execution-set ID in the existing physical
+   snapshot. No kernel state changes for this evidence field.
+4. [`identity-runtime.sh`](../../../examples/mithril-identity-manual/identity-runtime.sh)
+   owns the manual Pod, CRI bindings, two node lifetimes, pins, lease, and
+   cleanup. [`kubernetes-containers.sh`](../../../examples/mithril-identity-manual/kubernetes-containers.sh)
+   owns the operator sequence. `manual.sh` owns only the VM lifecycle.
+
+```mermaid
+sequenceDiagram
+    participant O as operator or VM harness
+    participant R as IdentityTestRunner or manual shell
+    participant K as Kubernetes and CRI
+    participant M as Mithril identity owner
+
+    O->>R: start container-identity case
+    R->>K: create Pod with sidecar and blocked regular init
+    R->>K: resolve init and sidecar roots
+    R->>M: bind separate cgroups and execution sets
+    M-->>R: return separate conservative roots
+    R->>K: release regular init and wait for application
+    R->>K: resolve application root
+    R->>M: bind its separate cgroup and execution set
+    M-->>R: return third conservative root
+    R->>K: delete Namespace
+    R-->>O: record root and execution-set separation
+```
+
+The implementation uses the existing physical bundle. Schema 18 adds three
+optional task snapshots and one distinctness boolean. The snapshot exposes the
+execution-set ID already present in `TaskLabelV1`. The change adds no map, role,
+generic runner, durable owner, or kernel state.
+
+Source commit `6e23a23e327f70b3462faf932b0845f7e52ec67f` produced the
+accepted schema-18 JSON at
+`/tmp/mithril-phase2-kubernetes-containers-20260818-034/identity-physical-probe.json`.
+Its SHA-256 is
+`dfb7b407b8a945c474a210fb769abbc09b03599ecb271f4c27cb9d195da92ada`.
+The root task cookies are `12`, `5`, and `19`. Their execution-set IDs end in
+`01`, `02`, and `03`. Each root is `restored_or_unknown_root` with
+`fail_closed_unknown`; the fixture makes no false first-instruction claim.
+
+The retained physical VM also ran `kubernetes-containers.sh` as root from that
+commit. The shell printed the three distinct task and execution-set identities
+and `PASS`. Automated and manual cleanup removed the Namespace, fixture, pin,
+lease, cgroup, node process, and loaded Erebor Interceptor programs. The VM was
+destroyed, and `virsh list --all` was empty.
+
+This completes `ENTRY-CONTAINERS-001`. The exact limit is root and execution-
+set separation for a regular init, native sidecar, and application in one Pod.
+The result does not qualify shared-network or shared-volume relationships or
+policy. Other open rows keep Phase 2 **Blocked**.
 
 ### Retained alias and mount evidence — 2026-08-15
 

@@ -143,6 +143,7 @@ Then run only the case being checked:
 | Kubernetes native child | `sudo examples/mithril-identity-manual/kubernetes-native-child.sh` in the manual VM |
 | Kubernetes lifecycle sleep | `sudo examples/mithril-identity-manual/kubernetes-lifecycle-sleep.sh` in the manual VM |
 | Kubernetes network probes | `sudo examples/mithril-identity-manual/kubernetes-network-probes.sh` in the manual VM |
+| Kubernetes container identities | `sudo examples/mithril-identity-manual/kubernetes-containers.sh` in the manual VM |
 | Native child | `sudo examples/mithril-identity-manual/native-child.sh NODE_CONFIG CONTAINER_OR_FULL_CRI_ID` |
 | Orphaned native child | `sudo examples/mithril-identity-manual/native-child.sh NODE_CONFIG CONTAINER_OR_FULL_CRI_ID --orphan` |
 | Double-fork native child | `sudo examples/mithril-identity-manual/native-child.sh NODE_CONFIG CONTAINER_OR_FULL_CRI_ID --double-fork` |
@@ -283,6 +284,27 @@ This check proves that these native Kubernetes network probes create no extra
 in-container task. It does not qualify network flow, application receipt,
 purpose, role, or policy. The script removes its Namespace, Pod, temporary pin
 directory, and fixture at exit.
+
+## Kubernetes Container-Identity Check
+
+Use the retained manual Kubernetes VM and run:
+
+```sh
+sudo examples/mithril-identity-manual/kubernetes-containers.sh
+```
+
+The script creates one Pod with a regular init container, a restartable init
+container used as a native sidecar, and an application container. The three
+containers share the Pod sandbox and one host-backed volume. The script first
+inspects the regular init and sidecar. It then releases the regular init and
+inspects the sidecar and application.
+
+Every root must have a distinct task/process identity and execution-set ID.
+Because the node discovers each live root after start, each root must be
+`restored_or_unknown_root` with `fail_closed_unknown`. This check does not
+qualify shared-network or shared-volume relationships or policy. The script
+removes its Namespace, Pod, node, pins, lease, temporary paths, and fixture at
+exit.
 
 ## Namespace Entry And Cgroup Movement Check
 

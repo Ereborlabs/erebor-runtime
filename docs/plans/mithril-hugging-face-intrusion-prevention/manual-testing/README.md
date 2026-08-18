@@ -47,7 +47,9 @@ roots. It also records an identical native child with its parent lineage and
 role. The lifecycle-sleep extension records that the native Kubernetes sleep
 action creates no extra task in the container cgroup. The network-probe
 extension records the same task-absence result for HTTP, TCP, and gRPC
-readiness probes. It does not prove approved administrative exec, network-flow
+readiness probes. The container-identity extension records separate roots and
+execution sets for a regular init, native sidecar, and application in one Pod.
+It does not prove approved administrative exec, shared-resource or network-flow
 policy, multi-node propagation, or complete Kubernetes protection.
 
 For a retained guest that runs manual shells, use the [manual retained-VM
