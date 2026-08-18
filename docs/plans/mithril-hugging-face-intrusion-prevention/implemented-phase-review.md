@@ -812,6 +812,66 @@ each source in one concurrent interval. Stock Kubernetes supplied no purpose,
 so Mithril assigns no probe role. Phase 4 owns approved-role transition. Other
 open rows keep Phase 2 **Blocked**.
 
+### Kubernetes PreStop identity — 2026-08-18
+
+Review this path in order:
+
+1. [`kubernetes-prestop-workload-v1.yaml`](../../../crates/mithril-e2e/fixtures/identity/kubernetes-prestop-workload-v1.yaml)
+   defines one application and one real exec PreStop hook. The hook reports its
+   namespace PID and waits on a fixture-owned FIFO.
+2. [`IdentityTestRunner::physical_kubernetes_prestop_probe`](../../../crates/mithril-e2e/src/identity.rs)
+   publishes the live application binding, records its identity, deletes the
+   Pod, records both live tasks and the task-reference count, releases the
+   hook, and requires all references to reach zero.
+3. [`profile_task_refs`](../../../crates/mithril-e2e/src/identity.rs)
+   reads the existing `profile_generation_task_refs` map. It does not create a
+   second reference owner or result type.
+4. [`identity-runtime.sh`](../../../examples/mithril-identity-manual/identity-runtime.sh)
+   owns manual Kubernetes setup, CRI binding, Mithril, pins, lease, and cleanup.
+   [`kubernetes-prestop.sh`](../../../examples/mithril-identity-manual/kubernetes-prestop.sh)
+   owns the operator sequence. `manual.sh` owns only the VM lifecycle.
+
+```mermaid
+sequenceDiagram
+    participant O as operator or VM harness
+    participant R as IdentityTestRunner or manual shell
+    participant K as Kubernetes and CRI
+    participant M as Mithril identity owner
+
+    O->>R: start PreStop case
+    R->>K: create application Pod
+    R->>M: publish live cgroup binding
+    M-->>R: return conservative application root
+    R->>K: delete Pod
+    K->>M: start exec PreStop task
+    M-->>R: keep application root and add restricted external root
+    R->>K: release hook and finish deletion
+    M-->>R: profile task references reach zero
+```
+
+The implementation reuses the existing physical bundle. Schema 21 adds three
+optional snapshots and two reference counts. It adds no map, role, generic
+runner, durable owner, or kernel state.
+
+Source commit `098f167c88755f88acabf7f387da5095d568869d` produced the
+accepted schema-21 JSON at
+`/tmp/mithril-phase2-kubernetes-prestop-20260818-044/identity-physical-probe.json`.
+Its SHA-256 is
+`4d14142beb3671342c7c6d2c8ed8e5c9d85da730f60ef556f7783f7cd231fcee`.
+The application task stayed byte-for-byte unchanged during termination. The
+PreStop task was a fresh restricted external root. Profile task references
+were `2` while both tasks were live and `0` after deletion.
+
+The retained VM ran `kubernetes-prestop.sh` as root from the same source bytes.
+It printed both task identities and `PASS`. Automated and manual cleanup
+removed the Namespace, fixture, pin, lease, cgroup, node process, and loaded
+Erebor Interceptor programs. The VM was destroyed, and
+`virsh list --all --name` was empty. Full Rust CI passed.
+
+This completes `ENTRY-PRESTOP-001`. The exact limit is identity and profile-
+reference retention during PreStop. Phase 4 owns containment and effect
+policy. Other open rows keep Phase 2 **Blocked**.
+
 ### Retained alias and mount evidence — 2026-08-15
 
 At source `5b1abfa984d0`, a retained x86_64 VM ran the existing

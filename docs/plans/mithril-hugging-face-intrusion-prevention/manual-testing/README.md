@@ -54,6 +54,9 @@ profile for a targeted ephemeral container in the application's PID namespace.
 The exec-probe extension records concurrent startup, readiness, and liveness
 exec probes together with probe-identical native, `kubectl exec`, and direct
 CRI entries. It keeps native lineage separate from restricted external roots.
+The PreStop extension holds a real exec hook during Pod deletion and records
+unchanged application identity, a fresh restricted hook root, and exact task-
+reference release.
 It does not prove approved administrative exec, shared-resource or network-flow
 policy, multi-node propagation, or complete Kubernetes protection.
 

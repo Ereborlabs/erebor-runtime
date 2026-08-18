@@ -146,6 +146,7 @@ Then run only the case being checked:
 | Kubernetes container identities | `sudo examples/mithril-identity-manual/kubernetes-containers.sh` in the manual VM |
 | Kubernetes ephemeral identity | `sudo examples/mithril-identity-manual/kubernetes-ephemeral.sh` in the manual VM |
 | Kubernetes exec-probe identity | `sudo examples/mithril-identity-manual/kubernetes-probe-impersonation.sh` in the manual VM |
+| Kubernetes PreStop identity | `sudo examples/mithril-identity-manual/kubernetes-prestop.sh` in the manual VM |
 | Native child | `sudo examples/mithril-identity-manual/native-child.sh NODE_CONFIG CONTAINER_OR_FULL_CRI_ID` |
 | Orphaned native child | `sudo examples/mithril-identity-manual/native-child.sh NODE_CONFIG CONTAINER_OR_FULL_CRI_ID --orphan` |
 | Double-fork native child | `sudo examples/mithril-identity-manual/native-child.sh NODE_CONFIG CONTAINER_OR_FULL_CRI_ID --double-fork` |
@@ -345,6 +346,24 @@ The native child must keep application lineage. Each stock probe and runtime
 exec must be a distinct restricted external root. Command bytes and timing do
 not create a probe purpose or approved role. The script removes its Namespace,
 Pod, node, pins, lease, temporary paths, and fixture at exit.
+
+## Kubernetes PreStop Identity Check
+
+Use the retained manual Kubernetes VM and run:
+
+```sh
+sudo examples/mithril-identity-manual/kubernetes-prestop.sh
+```
+
+The script creates one application Pod, publishes its live CRI binding, and
+starts Mithril. It then deletes the Pod while the real exec PreStop hook waits
+on a FIFO. The application identity must stay unchanged during the hook. The
+hook must be a fresh restricted external root with a distinct task and process
+identity. The script releases the hook and requires Pod deletion to complete.
+
+This check proves termination-time identity retention. Phase 4 owns
+containment and effect policy. The script removes its Namespace, node, pins,
+lease, temporary paths, and fixture at exit.
 
 ## Namespace Entry And Cgroup Movement Check
 

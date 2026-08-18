@@ -840,6 +840,80 @@ purpose, so every independent entry used the restricted external class. The
 native child kept application lineage. Phase 4 owns approved-role transition.
 Other open matrix rows keep Phase 2 **Blocked**.
 
+## Recorded Kubernetes PreStop Identity Result — 2026-08-18
+
+Source commit `098f167c88755f88acabf7f387da5095d568869d` freezes the
+runner, workload manifest, shared runtime helper, and operator shell used for
+this result. It extends the existing `IdentityTestRunner` and physical bundle.
+It adds no BPF map, role, runner, or durable type. The retained x86_64 Ubuntu
+24.04 VM ran kernel `6.8.0-137-generic`. Kubernetes `v1.35.5` ran through the
+K3s `v1.35.5+k3s1` distribution and the live containerd CRI endpoint.
+
+The root shell ran the automated extension with unique paths:
+
+```sh
+target/debug/mithril-identity-test \
+  --repo-root "$MITHRIL_MANUAL_SOURCE" \
+  --output-directory /var/tmp/mithril-kubernetes-prestop-20260818-044 \
+  physical-probe \
+  --pin-root /sys/fs/bpf/mithril-kubernetes-prestop-044 \
+  --lease-path /var/tmp/mithril-kubernetes-prestop-20260818-044/owner.lock \
+  --cgroup-path /sys/fs/cgroup/mithril-kubernetes-prestop-044 \
+  --with-kubernetes \
+  --previous-bundle /var/tmp/identity-kubernetes-schema20-042.json
+```
+
+The schema-21 JSON is
+`/tmp/mithril-phase2-kubernetes-prestop-20260818-044/identity-physical-probe.json`.
+Its SHA-256 is
+`4d14142beb3671342c7c6d2c8ed8e5c9d85da730f60ef556f7783f7cd231fcee`.
+The application snapshot was identical before and during termination. It had
+task cookie `5`, process-state ID ending in `03`, execution-set ID ending in
+`01`, `restored_or_unknown_root`, `fail_closed_unknown`, and role `11`. The
+PreStop exec had task cookie `19`, a distinct process-state ID,
+`external_runtime_root`, `runtime_external_restricted`, and role `11`. The
+profile-generation task-reference count was exactly `2` while both tasks were
+live and `0` after Pod deletion.
+
+The unchanged BPF object SHA-256 is
+`3269516fcd2714ab7fbe29df26386c40f0c912b6284007b641d8bbf68842b876`.
+The test binary SHA-256 is
+`7eaef40ea57c00366fffa24c0002ece3c3eca31989943a26b77b2628cde18236`.
+The workload manifest SHA-256 is
+`fff9364ac752dd26f08aa89afa62f90c4adec52ca488b5cc9ff9e59926c8f457`.
+The operator shell SHA-256 is
+`a3edd992ddfbca62f135cc2b0e0ec63052191a7bf1bc87344d88977d3f3d1917`.
+The shared runtime helper SHA-256 is
+`3bf7d3e51950c3143bde728aea200033c9f51588d3aaa699f3fc6cc038d4efca`.
+
+The retained VM then ran this command as root from the same source bytes:
+
+```sh
+examples/mithril-identity-manual/kubernetes-prestop.sh
+```
+
+It printed application task `5`, PreStop task `19`, and `PASS`. The shell
+removed its Mithril process, tasks, pins, state, lease, configuration, logs,
+Namespace, and fixture. Independent postflight found only the four baseline
+Kubernetes Namespaces and no case cgroup or loaded Erebor Interceptor program.
+`manual.sh destroy` removed the VM, and `virsh list --all --name` was empty.
+
+Run `043` is rejected because the VM command used a stale schema-20 binary and
+returned its input unchanged. The executable was rebuilt and checked for the
+PreStop fixture path before accepted run `044`.
+
+The focused fixture-allocation and VM-harness tests passed. `cargo clippy -p
+mithril-e2e -p mithril-node --all-targets -- -D warnings`, shell syntax checks,
+and `cargo fmt --all -- --check` passed. The final
+`bash .github/scripts/verify-rust-ci.sh` passed with exit status `0` when its
+local socket tests ran with host permission.
+
+This completes `ENTRY-PRESTOP-001`. The exact limit is identity and reference
+retention during a real exec PreStop hook: termination did not alter the live
+application identity or release its profile reference, and the hook received
+a fresh restricted external identity. Phase 4 owns containment and effect
+policy. Other open matrix rows keep Phase 2 **Blocked**.
+
 ## Recorded Pre-PONR Failed Native-Exec VM Subcase — 2026-08-15
 
 The isolated identity probe passed at source commit
