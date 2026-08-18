@@ -1,0 +1,46 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: MITHRIL_IDENTITY_CONTAINERS_NAMESPACE
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: mithril-containers
+  namespace: MITHRIL_IDENTITY_CONTAINERS_NAMESPACE
+spec:
+  automountServiceAccountToken: false
+  restartPolicy: Never
+  terminationGracePeriodSeconds: 5
+  initContainers:
+    - name: sidecar
+      image: docker.io/library/busybox:1.36.1@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662
+      imagePullPolicy: IfNotPresent
+      restartPolicy: Always
+      command: ["/bin/sh", "-c", "exec sleep 3600"]
+      volumeMounts:
+        - name: shared
+          mountPath: /var/lib/mithril/shared
+    - name: init
+      image: docker.io/library/busybox:1.36.1@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662
+      imagePullPolicy: IfNotPresent
+      command:
+        - /bin/sh
+        - -c
+        - 'printf "init\n" > /var/lib/mithril/shared/init; while [ ! -f /var/lib/mithril/shared/release-init ]; do sleep 0.1; done'
+      volumeMounts:
+        - name: shared
+          mountPath: /var/lib/mithril/shared
+  containers:
+    - name: application
+      image: docker.io/library/busybox:1.36.1@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662
+      imagePullPolicy: IfNotPresent
+      command: ["/bin/sh", "-c", "test -f /var/lib/mithril/shared/init; exec sleep 3600"]
+      volumeMounts:
+        - name: shared
+          mountPath: /var/lib/mithril/shared
+  volumes:
+    - name: shared
+      hostPath:
+        path: MITHRIL_IDENTITY_CONTAINERS_FIXTURE_ROOT
+        type: Directory

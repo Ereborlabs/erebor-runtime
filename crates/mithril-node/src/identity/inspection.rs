@@ -19,6 +19,8 @@ use crate::Result;
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct NativeTaskSnapshotV1 {
     pub task_cookie: u64,
+    #[serde(default)]
+    pub execution_set_id: Option<String>,
     pub creator_task_cookie: Option<u64>,
     pub root_class: Option<String>,
     pub installed_role_class: Option<String>,
@@ -157,6 +159,7 @@ impl NativeIdentityInspector {
         });
         Ok(Some(NativeTaskSnapshotV1 {
             task_cookie,
+            execution_set_id: Some(id_string(label.execution_set_id)),
             creator_task_cookie,
             root_class,
             installed_role_class,

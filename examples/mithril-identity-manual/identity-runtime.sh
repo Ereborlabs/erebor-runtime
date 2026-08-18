@@ -20,6 +20,12 @@ identity_k3s_shared_directory=
 identity_k3s_node_config=
 identity_k3s_secret_path=
 identity_k3s_container_shared_directory=
+identity_k3s_init_container_id=
+identity_k3s_sidecar_container_id=
+identity_k3s_application_container_id=
+identity_k3s_init_pid=
+identity_k3s_sidecar_pid=
+identity_k3s_application_pid=
 
 identity_require_command() {
   command -v "$1" >/dev/null || {
@@ -335,6 +341,174 @@ identity_prepare_k3s_network_probe_case() {
     "$workload_template" >"$workload"
   identity_k3s_namespace_created=true
   kubectl apply -f "$workload" >/dev/null
+}
+
+identity_prepare_k3s_containers_case() {
+  local source_config=$identity_repository/crates/mithril-e2e/harness/vm/k3s-cri-effect-node-v1.json
+  local workload_template=$identity_repository/crates/mithril-e2e/fixtures/identity/kubernetes-containers-workload-v1.yaml
+  identity_check_base "$source_config"
+  identity_require_command crictl
+  identity_require_command date
+  identity_require_command kubectl
+  identity_mode=cri
+  identity_begin
+
+  local suffix workload runtime_socket
+  suffix=$(tr '[:upper:]' '[:lower:]' <<<"${identity_work##*.}")
+  identity_k3s_namespace=mithril-manual-$suffix
+  identity_k3s_fixture_root=/var/lib/mithril-manual-$suffix
+  identity_k3s_shared_directory=$identity_k3s_fixture_root/shared
+  identity_k3s_node_config=$identity_work/k3s-node.json
+  identity_cleanup_functions+=(identity_cleanup_k3s_case)
+  install -d -m 700 -- "$identity_k3s_fixture_root" "$identity_k3s_shared_directory"
+
+  runtime_socket=$(jq -er '.container_runtime.socket_path' "$source_config")
+  identity_runtime_endpoint=unix://$runtime_socket
+  workload=$identity_work/workload.yaml
+  sed \
+    -e "s|MITHRIL_IDENTITY_CONTAINERS_NAMESPACE|$identity_k3s_namespace|g" \
+    -e "s|MITHRIL_IDENTITY_CONTAINERS_FIXTURE_ROOT|$identity_k3s_shared_directory|g" \
+    "$workload_template" >"$workload"
+  identity_k3s_namespace_created=true
+  kubectl apply -f "$workload" >/dev/null
+}
+
+identity_k3s_wait_container_id() {
+  local container_name=$1
+  local attempt container_id
+  for ((attempt = 0; attempt < 600; attempt++)); do
+    container_id=$(crictl --runtime-endpoint "$identity_runtime_endpoint" ps -o json \
+      | jq -r --arg namespace "$identity_k3s_namespace" --arg name "$container_name" \
+        '.containers[]?
+         | select(.metadata.name == $name)
+         | select(.labels["io.kubernetes.pod.namespace"] == $namespace)
+         | .id' | head -n 1)
+    if [[ -n $container_id ]]; then
+      printf '%s\n' "$container_id"
+      return 0
+    fi
+    sleep 0.1
+  done
+  echo "the $container_name container did not start" >&2
+  return 1
+}
+
+identity_k3s_container_binding_json() {
+  local container_name=$1
+  local container_kind=$2
+  local binding_id=$3
+  local execution_set_id=$4
+  local container_id container_json created_at generation image_digest pod_uid sandbox_id
+
+  container_id=$(identity_k3s_wait_container_id "$container_name")
+  container_json=$(crictl --runtime-endpoint "$identity_runtime_endpoint" \
+    inspect "$container_id")
+  created_at=$(jq -er '.status.createdAt' <<<"$container_json")
+  generation=$(date --utc --date "$created_at" +%s%N)
+  image_digest=$(jq -er '.status.imageRef' <<<"$container_json")
+  pod_uid=$(kubectl -n "$identity_k3s_namespace" get pod mithril-containers \
+    -o jsonpath='{.metadata.uid}')
+  sandbox_id=$(crictl --runtime-endpoint "$identity_runtime_endpoint" \
+    ps --id "$container_id" -o json | jq -er '.containers[0].podSandboxId')
+  [[ $generation =~ ^[1-9][0-9]*$ && -n $pod_uid && -n $sandbox_id && -n $image_digest ]] || {
+    echo "Kubernetes did not return a complete $container_name binding" >&2
+    return 1
+  }
+
+  jq -n \
+    --arg binding_id "$binding_id" \
+    --arg execution_set_id "$execution_set_id" \
+    --arg container_id "$container_id" \
+    --arg namespace "$identity_k3s_namespace" \
+    --arg pod_uid "$pod_uid" \
+    --arg sandbox_id "$sandbox_id" \
+    --arg container_name "$container_name" \
+    --arg image_digest "$image_digest" \
+    --arg container_kind "$container_kind" \
+    --argjson generation "$generation" \
+    '{
+      binding_id: $binding_id,
+      execution_set_id: $execution_set_id,
+      protected_scope_id: "44444444-4444-4444-8444-444444444444",
+      workload_selector_id: $container_name,
+      profile_id: "33333333-3333-4333-8333-333333333333",
+      container_id: $container_id,
+      namespace: $namespace,
+      pod_uid: $pod_uid,
+      sandbox_id: $sandbox_id,
+      container_name: $container_name,
+      image_digest: $image_digest,
+      container_kind: $container_kind,
+      container_generation: $generation,
+      lifecycle_generation: 1,
+      active_profile_generation_ref_id: 1,
+      initial_role_id: 1,
+      external_role_id: 2,
+      arm_initial_root: false
+    }'
+}
+
+identity_configure_k3s_containers_stage() {
+  local stage=$1
+  local source_config=$identity_repository/crates/mithril-e2e/harness/vm/k3s-cri-effect-node-v1.json
+  local first second first_pid second_pid
+  case "$stage" in
+    init)
+      first=$(identity_k3s_container_binding_json init init \
+        11111111-1111-4111-8111-111111111101 \
+        22222222-2222-4222-8222-222222222201)
+      second=$(identity_k3s_container_binding_json sidecar sidecar \
+        11111111-1111-4111-8111-111111111102 \
+        22222222-2222-4222-8222-222222222202)
+      identity_k3s_init_container_id=$(jq -er '.container_id' <<<"$first")
+      identity_k3s_sidecar_container_id=$(jq -er '.container_id' <<<"$second")
+      identity_k3s_init_pid=$(crictl --runtime-endpoint "$identity_runtime_endpoint" \
+        inspect "$identity_k3s_init_container_id" | jq -er '.info.pid')
+      identity_k3s_sidecar_pid=$(crictl --runtime-endpoint "$identity_runtime_endpoint" \
+        inspect "$identity_k3s_sidecar_container_id" | jq -er '.info.pid')
+      first_pid=$identity_k3s_init_pid
+      second_pid=$identity_k3s_sidecar_pid
+      ;;
+    application)
+      first=$(identity_k3s_container_binding_json sidecar sidecar \
+        11111111-1111-4111-8111-111111111102 \
+        22222222-2222-4222-8222-222222222202)
+      second=$(identity_k3s_container_binding_json application application \
+        11111111-1111-4111-8111-111111111103 \
+        22222222-2222-4222-8222-222222222203)
+      identity_k3s_sidecar_container_id=$(jq -er '.container_id' <<<"$first")
+      identity_k3s_application_container_id=$(jq -er '.container_id' <<<"$second")
+      identity_k3s_sidecar_pid=$(crictl --runtime-endpoint "$identity_runtime_endpoint" \
+        inspect "$identity_k3s_sidecar_container_id" | jq -er '.info.pid')
+      identity_k3s_application_pid=$(crictl --runtime-endpoint "$identity_runtime_endpoint" \
+        inspect "$identity_k3s_application_container_id" | jq -er '.info.pid')
+      first_pid=$identity_k3s_sidecar_pid
+      second_pid=$identity_k3s_application_pid
+      ;;
+    *)
+      echo "unknown Kubernetes containers stage: $stage" >&2
+      return 2
+      ;;
+  esac
+
+  jq \
+    --arg state "$identity_state" \
+    --arg pin_root "$identity_pin_root" \
+    --arg lease "$identity_lease" \
+    --argjson first "$first" \
+    --argjson second "$second" \
+    '.state_directory = $state
+     | .interceptor.pin_root = $pin_root
+     | .interceptor.lease_path = $lease
+     | .runtime_observation = null
+     | .workload_bindings = [$first, $second]' \
+    "$source_config" >"$identity_config"
+  [[ $first_pid =~ ^[1-9][0-9]*$ && $second_pid =~ ^[1-9][0-9]*$ ]] || {
+    echo "Kubernetes returned an invalid container PID for stage $stage" >&2
+    return 1
+  }
+  identity_init_pid=$second_pid
+  identity_cgroup_path=$(identity_cgroup_for_pid "$identity_init_pid")
 }
 
 identity_cleanup_k3s_case() {
