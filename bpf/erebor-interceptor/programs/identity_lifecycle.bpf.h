@@ -9,13 +9,29 @@ static __always_inline int label_external_root(
 {
     identity_health_v1 *health = identity_health_record();
     struct identity_scratch_v1 *scratch;
+    int claim;
 
     scratch = identity_scratch_record();
-    if (!scratch || create_external_root(task, config, binding, scratch)) {
+    if (!scratch) {
         if (health)
             health->allocation_failures++;
         return -EACCES;
-    } else if (finalize_task_coordinate(task, &scratch->label)) {
+    }
+    claim = claim_task_label(task);
+    if (claim > 0)
+        return 0;
+    if (claim < 0) {
+        if (health)
+            health->allocation_failures++;
+        return -EACCES;
+    }
+    if (create_external_root(task, config, binding, scratch)) {
+        bpf_task_storage_delete(&task_labels, task);
+        if (health)
+            health->allocation_failures++;
+        return -EACCES;
+    }
+    if (finalize_task_coordinate(task, &scratch->label)) {
         task_coordinate_v1 *coordinate =
             bpf_map_lookup_elem(&task_coordinates,
                                 &scratch->label.task_cookie);
@@ -228,6 +244,7 @@ int erebor_reconcile_tasks(struct bpf_iter__task *context)
     authority_domain_state_v1 *domain;
     execution_set_binding_state_v1 *binding;
     __u64 *profile_task_refs;
+    int claim;
     kernel_real_parent_interval_key_v1 parent_key;
     kernel_real_parent_interval_v1 *parent_interval;
     struct task_struct *task = context->task;
@@ -308,15 +325,23 @@ int erebor_reconcile_tasks(struct bpf_iter__task *context)
     }
     if (!binding)
         return 0;
-    consume_initial_root(binding);
     scratch = identity_scratch_record();
     health = identity_health_record();
-    if (!scratch || create_root(
-                        task, config, binding, scratch,
-                        external_root_class_v1_restored_or_unknown_root,
-                        installed_role_class_v1_fail_closed_unknown,
-                        binding->external_role_id) ||
+    claim = scratch ? claim_task_label(task) : -EACCES;
+    if (claim > 0)
+        return 0;
+    if (claim < 0) {
+        if (health)
+            health->reconciliation_required++;
+        return 0;
+    }
+    consume_initial_root(binding);
+    if (create_root(task, config, binding, scratch,
+                    external_root_class_v1_restored_or_unknown_root,
+                    installed_role_class_v1_fail_closed_unknown,
+                    binding->external_role_id) ||
         finalize_task_coordinate(task, &scratch->label)) {
+        bpf_task_storage_delete(&task_labels, task);
         if (health)
             health->reconciliation_required++;
     }

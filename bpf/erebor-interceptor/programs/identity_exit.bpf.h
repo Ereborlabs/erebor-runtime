@@ -27,6 +27,7 @@ int erebor_sched_process_exit(struct trace_event_raw_sched_process_template *con
     __u64 *profile_task_refs;
     identity_health_v1 *health;
     __u64 previous;
+    __u64 task_cookie;
     bool released = true;
 
     finish_mount_mutation();
@@ -34,6 +35,22 @@ int erebor_sched_process_exit(struct trace_event_raw_sched_process_template *con
     exit_task_effect_attempts(task);
     label = bpf_task_storage_get(&task_labels, task, 0, 0);
     if (!label)
+        return 0;
+    task_cookie = __sync_fetch_and_add(&label->task_cookie, 0);
+    if (!task_cookie) {
+        task_cookie = __sync_val_compare_and_swap(
+            &label->task_cookie, 0, TASK_LABEL_EXIT_COOKIE_V1);
+        if (!task_cookie)
+            return 0;
+    }
+    if (task_cookie == TASK_LABEL_CLAIM_COOKIE_V1) {
+        task_cookie = __sync_val_compare_and_swap(
+            &label->task_cookie, TASK_LABEL_CLAIM_COOKIE_V1,
+            TASK_LABEL_EXIT_COOKIE_V1);
+        if (task_cookie == TASK_LABEL_CLAIM_COOKIE_V1)
+            return 0;
+    }
+    if (task_cookie == TASK_LABEL_EXIT_COOKIE_V1)
         return 0;
     bpf_map_delete_elem(&pending_administrative_matches,
                         &label->task_cookie);
