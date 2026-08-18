@@ -497,9 +497,11 @@ Each script printed `PASS`. Postflight found no case Namespace, fixture, pin,
 lease, cgroup, node process, or loaded Erebor Interceptor program. The manual
 harness destroyed the VM, and `virsh list --all --name` was empty.
 
-This result completes `ENTRY-EXEC-001`. The earlier result completes
-`ENTRY-EXEC-002`. Phase 4 owns approved administrative exec. Other open rows
-keep Phase 2 **Blocked**.
+This result completes `ENTRY-EXEC-001` and `ENTRY-START-001`. The earlier
+result completes `ENTRY-EXEC-002`. The initial root proves a late-discovery
+gap with conservative identity, not first-instruction observation. Phase 4
+owns approved administrative exec and the start-gap effect result. Other open
+rows keep Phase 2 **Blocked**.
 
 ### Retained alias and mount evidence — 2026-08-15
 

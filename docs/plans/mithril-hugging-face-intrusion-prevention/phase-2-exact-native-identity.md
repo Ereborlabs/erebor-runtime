@@ -193,8 +193,11 @@ cgroup, or loaded Erebor Interceptor program. The manual harness destroyed the
 VM, and `virsh list --all --name` was empty. The final full Rust CI script
 passed with exit status `0`.
 
-This completes `ENTRY-EXEC-001`. It does not prove approved administrative
-exec; Phase 4 owns that result. Other open rows keep Phase 2 **Blocked**.
+This completes `ENTRY-EXEC-001` and `ENTRY-START-001`. The pre-existing Pod
+root records the exact late-discovery gap and conservative identity. It does
+not prove first-instruction observation. It also does not prove approved
+administrative exec; Phase 4 owns that result. Other open rows keep Phase 2
+**Blocked**.
 
 ## Maintenance update — 2026-08-09
 

@@ -33,7 +33,7 @@ results.
 | `ENTRY-RESTART-001` | Missing. | `restart.sh` is readable but not self-contained in the manual VM. | Missing runtime, kubelet, and node restart reconciliation with exact coverage gaps. | Open |
 | `ENTRY-REUSE-001` | Missing. | Missing. | Missing PID/TID, namespace, cgroup, Pod, and container lifetime reuse without stale identity. | Open |
 | `ENTRY-SLEEP-001` | Missing. | Missing. | Missing real Kubernetes lifecycle `sleep` proof that no workload task is created. | Open |
-| `ENTRY-START-001` | Missing. | Missing. | Missing the measured initial-root discovery/start gap and conservative classification. Effect denial belongs to Phase 4. | Open |
+| `ENTRY-START-001` | `physical_kubernetes_probe` starts the Pod before Mithril and records its initial root after live CRI discovery. | Every self-contained Kubernetes shell calls `identity_wait_for_initial_binding`; `kubernetes-exec-tty.sh` is the current recorded run. | Pass: the pre-existing PID 1 has no creator, `restored_or_unknown_root`, and `fail_closed_unknown`. Schema-15 VM JSON SHA-256 `ef749b5a6d2521c6bd865317ce3843bf685610d009500f6d37569c9bd26a57cc`. Exact limit: no first-instruction claim; Phase 4 owns effect denial. | Done |
 | `ENTRY-STOCK-HOOK-FAILURE-002` | Missing. | Missing. | Missing stock hook timeout, mismatch, and missing-field identity results. | Open |
 | `EXEC-COMMIT-STATE-001` | `NativeProcessFixture` covers success and pre-PONR failure. | `native-child.sh --failed-exec` | Pass for success and pre-PONR restore. Missing post-PONR fatal and unknown-state identity oracles. | Partial |
 | `ID-CGROUP-ESCAPE-001` | `CloneIntoCgroupFixture` in `physical_probe`. | `cgroup-escape.sh` | Pass: moved root keeps identity, becomes fail closed, and cannot use host fallback. | Done |

@@ -431,6 +431,15 @@ This completes `ENTRY-EXEC-001`. The exact limit is ordinary runtime entry
 identity only. Phase 4 owns approved administrative exec and its permission
 transition. Other open matrix rows keep Phase 2 **Blocked**.
 
+The same automated and manual runs also complete `ENTRY-START-001`. The Pod
+and its startup barrier existed before Mithril started. After live CRI
+discovery and binding, PID 1 had task cookie `5`, no creator,
+`restored_or_unknown_root`, `fail_closed_unknown`, and active role `11`.
+Each recorded manual shell called `identity_wait_for_initial_binding` before
+it started a later entry. The exact limit is a measured late-discovery gap and
+conservative identity. This result does not claim that Mithril observed the
+first user instruction. Phase 4 owns the effect result during that gap.
+
 ## Recorded Pre-PONR Failed Native-Exec VM Subcase — 2026-08-15
 
 The isolated identity probe passed at source commit
