@@ -33,9 +33,11 @@ else:
         json.dump(result, target)'
 
 observation_baseline=$(docker exec "$2" python3 -c "$observation_measure" "$3" "$observation_opens" -)
-observation_latency_result=/tmp/mithril-effect-observation-latency-$$.json
+observation_latency_name=mithril-effect-observation-latency-$$.json
+observation_latency_result=${MITHRIL_MANUAL_DOCKER_CONTAINER_SHARED_DIRECTORY:?}/$observation_latency_name
+observation_latency_result_host=${MITHRIL_MANUAL_DOCKER_HOST_SHARED_DIRECTORY:?}/$observation_latency_name
 observation_cleanup_latency() {
-  rm -f -- "/proc/$identity_init_pid/root$observation_latency_result"
+  rm -f -- "$observation_latency_result_host"
 }
 identity_cleanup_functions+=(observation_cleanup_latency)
 
@@ -63,7 +65,7 @@ observation_emitted=$(observation_health_field emitted "$identity_work/effects.t
   echo "latency run has incomplete observations; its timing is not valid evidence" >&2
   exit 1
 }
-observation_observe=$(<"/proc/$identity_init_pid/root$observation_latency_result")
+observation_observe=$(<"$observation_latency_result_host")
 jq -n --argjson baseline "$observation_baseline" --argjson observe "$observation_observe" \
   '{schema_version: 1, baseline: $baseline, observe: $observe,
     added_ns_per_open: ($observe.ns_per_open - $baseline.ns_per_open),

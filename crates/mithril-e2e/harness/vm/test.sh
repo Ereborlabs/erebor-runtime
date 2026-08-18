@@ -124,6 +124,8 @@ grep -Fq 'namespace: "docker-manual"' \
   "$directory/../../../../examples/mithril-identity-manual/identity-runtime.sh"
 grep -Fq 'MITHRIL_MANUAL_DOCKER_HOST_SHARED_DIRECTORY' \
   "$directory/../../../../examples/mithril-effect-observation-manual/observation-runtime.sh"
+grep -Fq 'observation_latency_result_host' \
+  "$directory/../../../../examples/mithril-effect-observation-manual/docker-open-latency.sh"
 grep -Fq 'exec "$provider" ssh "$vm_name"' "$directory/manual.sh"
 grep -Fq '"$provider" destroy "$vm_name" "$work_directory"' \
   "$directory/manual.sh"
