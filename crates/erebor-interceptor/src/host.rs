@@ -1494,7 +1494,7 @@ mod tests {
     #[test]
     fn effect_reader_retries_an_interrupted_poll() {
         let mut attempts = 0;
-        poll_until_complete(|| {
+        let result = poll_until_complete(|| {
             attempts += 1;
             if attempts == 1 {
                 Err(libbpf_rs::Error::from(io::Error::from(
@@ -1503,9 +1503,9 @@ mod tests {
             } else {
                 Ok(())
             }
-        })
-        .expect("the second poll completes");
+        });
 
+        assert!(result.is_ok(), "the second poll must complete");
         assert_eq!(attempts, 2);
     }
 
