@@ -4,7 +4,7 @@ This guide explains the current implementation. It uses source links so that a
 reviewer can follow each owner, state transition, and BPF decision. It does not
 replace an acceptance record.
 
-Source reviewed: code commit `adafcddb9e50aca6637cd92b276e7742246b1693`
+Source reviewed: code commit `434060190384f426b1c7da6d498adca76aae5b8a`
 plus the current documentation changes on `mithril-phase-2-4`. The production
 identity object loaded by the 2026-08-18 VM has SHA-256
 `02408c371aafaeeb044cbf11195a25dca35013bcdea44e37aa0756ebd2f2f3e6`.
@@ -29,13 +29,10 @@ The latest phase results remain:
 - Phase 0: **Done** for its narrow x86-64 BPF Linux Security Module (LSM)
   capability and performance claim.
 - Phase 1: **Done**.
-- Phase 2: **Blocked**. Native identity and the direct CRI, non-TTY and TTY
-  Kubernetes exec, copy, identical native-child, lifecycle-sleep, network-
-  probe, container-identity, authorization-replay, entry-loss, and restart rows
-  have current source and privileged VM evidence. Operator-runnable rows also
-  have manual evidence. `ENTRY-STOCK-HOOK-FAILURE-002` remains open.
-  Phase 4 owns saturation, raced-policy, IPC-policy, and protected-effect
-  results.
+- Phase 2: **Done**. All 29 required rows have source and privileged VM
+  evidence. Operator-runnable rows also have manual evidence. Each row records
+  its exact limit. Phase 4 owns saturation, raced-policy, IPC-policy, and
+  protected-effect results.
 - Phase 3: **Blocked**. Exact observation has current privileged VM and K3s
   direct-CRI exact-file `OBSERVE` and `PROTECT` evidence. The full manual
   matrix is not complete.
@@ -3792,5 +3789,75 @@ oracle covers the collision shape in source because the allocator does not
 provide a safe deterministic collision control. This is identity evidence,
 not CRD delivery or a policy-effect decision.
 
-This closes only `ENTRY-REUSE-001`.
-`ENTRY-STOCK-HOOK-FAILURE-002` remains open.
+This closes only `ENTRY-REUSE-001`. The following review closes the final
+required row.
+
+## Stock OCI Prestart Failure Fixture Review — 2026-08-18
+
+Source commits `9820ca7`, `5534d1b`, and `4340601` extend existing owners. No
+new map, role, generic runner, or durable type was added.
+
+Review this path in order:
+
+1. [`kubernetes-stock-hook-failure-workload-v1.yaml`](../../../crates/mithril-e2e/fixtures/identity/kubernetes-stock-hook-failure-workload-v1.yaml)
+   defines a payload that writes a host marker before it sleeps.
+2. [`mithril-identity-prestart-hook`](../../../crates/mithril-e2e/src/bin/mithril-identity-prestart-hook.rs)
+   sends the OCI state and returns nonzero after timeout or rejection.
+3. [`kubernetes_prestart_binding`](../../../crates/mithril-e2e/src/identity.rs)
+   verifies the exact live CRI container, Pod UID, sandbox, container name,
+   cgroup, state, and sole init PID before it accepts a request.
+4. [`IdentityTestRunner::physical_kubernetes_stock_hook_failure_probe`](../../../crates/mithril-e2e/src/identity.rs)
+   drives timeout, changed-container-ID, and missing-Pod-UID cases through the
+   configured runtime. It records the results in the existing physical bundle.
+5. [`kubernetes-stock-hook-failure.sh`](../../../examples/mithril-identity-manual/kubernetes-stock-hook-failure.sh)
+   runs the operator case in an existing VM. `identity-runtime.sh` owns the
+   Kubernetes target, RuntimeClass, endpoint, pin, lease, node, and cleanup.
+
+```mermaid
+sequenceDiagram
+    participant K as kubelet and containerd
+    participant R as runc
+    participant H as Mithril prestart hook
+    participant V as live CRI validator
+    participant P as container payload
+
+    K->>R: create container
+    R->>H: run prestart with OCI state
+    H->>V: submit exact identity request
+    alt no release
+        H-->>R: fail after 30-second timeout
+    else changed or missing identity
+        V-->>H: reject request
+        H-->>R: fail
+    end
+    R-->>K: StartContainer failure
+    Note over P: payload never executes
+```
+
+The schema-28 JSON SHA-256 is
+`daa232982846a3dd0981b7771d16368497a4cebdec6f4a09bd13765c89937551`.
+The exact container IDs are:
+
+- timeout:
+  `c69d894cf9c27f49d5882c74a1059ab44a4220fb9f0517a5d147aaff5e97833e`;
+- changed OCI state ID:
+  `544d5f45afef218c851279daeb005c0e1bfa022eb052312f017df6a1ab598021`;
+- missing Pod UID:
+  `220dfabb9d5028dce492c04652d6fe56252fbef5659271fa95254937cbfd645d`.
+
+The configured runtime reported a prestart-hook failure for each container.
+All three payload markers were absent. The retained VM ran
+`kubernetes-stock-hook-failure.sh` as root and printed `PASS`. Automated and
+manual cleanup removed the Namespace, fixture, prestart request, Mithril pin,
+node process, lease, cgroup, and work directory. The Kubernetes service was
+active. Focused Rust tests and the full Rust CI script passed.
+
+The exact limit is the qualified Kubernetes `v1.35.5` environment through the
+K3s `v1.35.5+k3s1` distribution, containerd `v2.2.3-k3s1`, and the configured
+`io.containerd.runc.v2` handler. The full hook error came from the local K3s
+journal, joined to the exact full container ID, because Pod status and Events
+did not retain it during the fixture window. This does not prove CRD delivery,
+held-task inspection, purpose, a protected effect, or response behavior.
+
+This closes `ENTRY-STOCK-HOOK-FAILURE-002`. All 29 Phase 2 rows are `Done`.
+Phase 2 is **Done**.

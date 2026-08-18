@@ -690,5 +690,5 @@ The complete identity catalog is split only to keep the tables readable:
 - [native identity and authorization cases](./native-identity-catalog.md)
 
 These scripts do not pretend to cover every catalog row. Race injection,
-saturation, unsupported stock-hook failure injection, and the remaining
-Kubernetes behavior require their applicable qualification setup.
+saturation, later policy effects, and later Kubernetes behavior require their
+applicable qualification setup.

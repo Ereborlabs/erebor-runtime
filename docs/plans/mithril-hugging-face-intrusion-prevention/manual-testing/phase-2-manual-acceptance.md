@@ -1567,7 +1567,52 @@ collision. This record does not claim a policy-effect or response result.
 Automated and manual cleanup removed every case Namespace, fixture, Mithril
 pin, node process, lease, cgroup, and work directory. The Kubernetes service
 was active after cleanup. This closes `ENTRY-REUSE-001`.
-`ENTRY-STOCK-HOOK-FAILURE-002` remains open, so Phase 2 remains **Blocked**.
+The next record closes `ENTRY-STOCK-HOOK-FAILURE-002`.
+
+## Recorded OCI Prestart Failure VM Result — 2026-08-18
+
+The automated runner used the configured Kubernetes RuntimeClass and OCI
+prestart hook. The accepted schema-28 JSON is
+`/tmp/mithril-phase2-stock-hook-failure-20260818-32/result/identity-physical-probe.json`.
+Its SHA-256 is
+`daa232982846a3dd0981b7771d16368497a4cebdec6f4a09bd13765c89937551`.
+
+The runner recorded these exact container lifetimes:
+
+- Container
+  `c69d894cf9c27f49d5882c74a1059ab44a4220fb9f0517a5d147aaff5e97833e`
+  had valid identity. Mithril did not release it. The hook timed out after
+  exactly 30 seconds, and the runtime reported a prestart-hook failure.
+- Container
+  `544d5f45afef218c851279daeb005c0e1bfa022eb052312f017df6a1ab598021`
+  had a changed OCI state container ID. The live-CRI binding validator
+  rejected it, and the runtime reported a prestart-hook failure.
+- Container
+  `220dfabb9d5028dce492c04652d6fe56252fbef5659271fa95254937cbfd645d`
+  had no Pod UID in its request. The validator rejected it, and the runtime
+  reported a prestart-hook failure.
+
+Each Pod payload would create a distinct host marker before it slept. None of
+the three markers existed. The retained VM also ran:
+
+```sh
+sudo examples/mithril-identity-manual/kubernetes-stock-hook-failure.sh
+```
+
+The shell printed the three exact runtime failures and `PASS`. Automated and
+manual postflight checks found no case Namespace, fixture, prestart request,
+Mithril pin, node process, lease, cgroup, or work directory. The Kubernetes
+service was active.
+
+The exact limit is the qualified Kubernetes `v1.35.5` environment through the
+K3s `v1.35.5+k3s1` distribution, containerd `v2.2.3-k3s1`, and the configured
+`io.containerd.runc.v2` handler. Pod status and Events did not retain the full
+hook error during the fixture window. The runner therefore joined the exact
+full container ID to the local K3s journal. This result does not qualify CRD
+delivery, a held-task inspection, purpose, a policy effect, or response.
+
+This closes `ENTRY-STOCK-HOOK-FAILURE-002`. All 29 Phase 2 rows are `Done`.
+Phase 2 is **Done**.
 
 ## Native Identity Fixture Matrix
 

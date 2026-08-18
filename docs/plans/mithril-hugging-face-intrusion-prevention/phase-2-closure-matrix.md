@@ -1,13 +1,13 @@
 # Phase 2 Closure Matrix
 
-Status: Blocked.
+Status: Done.
 
 This table is the exact 29-fixture Phase 2 allocation in
 `IdentityTestRunner`. A row is complete only when it has a source-backed Rust
 fixture, a physical VM result, a readable shell when an operator can run the
 case, and an acceptance record that states the exact limit.
 
-Current count: 28 `Done`; one `Open`.
+Current count: 29 `Done`; zero `Open`.
 
 Phase 3 and Phase 4 relationship, permission, raced-policy, and physical-effect
 results are not Phase 2 gates. This table records only task, process, execution,
@@ -36,7 +36,7 @@ results.
 | `ENTRY-REUSE-001` | `physical_probe` uses `NativeProcessFixture::start_pid_tid_reuse` and recreates one configured cgroup path. `physical_kubernetes_resilience_probe` recreates one Pod and container under the same names. Both run through `IdentityTestRunner`. | `native-pid-reuse.sh`, `native-cgroup-reuse.sh`, and `kubernetes-reuse.sh` | Pass: namespace PID/TID reuse, exact cgroup-path reuse, and same-name Pod/container reuse all receive fresh full and binding identities. Native schema-27 VM JSON SHA-256 `a456f1f1640ea4c64d9ad09d48c8fcceec539060dfd5b3d72ef2d86778377a`; Kubernetes schema-27 VM JSON SHA-256 `ec2e87cede2e019132abe34c412015a251c6d72b85e2af51885c471936e6209c`. Exact limit: the physical cgroup received a new kernel cgroup ID. The recovery oracle separately rejects the same cgroup ID with a changed live interval; the fixture does not force an allocator collision. This is identity proof, not a policy-effect decision. | Done |
 | `ENTRY-SLEEP-001` | `physical_kubernetes_lifecycle_sleep_probe` in `IdentityTestRunner` reads the live CRI cgroup while the real lifecycle `sleep` action is pending. | `kubernetes-lifecycle-sleep.sh` | Pass: `cgroup.procs` contained only the container init PID while the Pod was not Ready. The lifecycle action created no in-container task. Schema-16 VM JSON SHA-256 `a62e82352a3153c65895d69265e4e0265d78ec6a76679e50a7d1f0bbcc2804fb`. Exact limit: this proves only the native Kubernetes lifecycle `sleep` action; it does not qualify exec probes or network probes. | Done |
 | `ENTRY-START-001` | `physical_kubernetes_probe` starts the Pod before Mithril and records its initial root after live CRI discovery. | Every self-contained Kubernetes shell calls `identity_wait_for_initial_binding`; `kubernetes-exec-tty.sh` is the current recorded run. | Pass: the pre-existing PID 1 has no creator, `restored_or_unknown_root`, and `fail_closed_unknown`. Schema-15 VM JSON SHA-256 `ef749b5a6d2521c6bd865317ce3843bf685610d009500f6d37569c9bd26a57cc`. Exact limit: no first-instruction claim; Phase 4 owns effect denial. | Done |
-| `ENTRY-STOCK-HOOK-FAILURE-002` | Missing. | Missing. | Missing stock hook timeout, mismatch, and missing-field identity results. | Open |
+| `ENTRY-STOCK-HOOK-FAILURE-002` | `physical_kubernetes_stock_hook_failure_probe` in `IdentityTestRunner` uses the configured OCI prestart handler and the existing live-CRI binding validator. | `kubernetes-stock-hook-failure.sh` | Pass: a valid identity without release timed out after exactly 30 seconds; a changed OCI container ID and a request without Pod UID were rejected. In all three cases, the runtime failed container creation before the payload marker existed. Schema-28 VM JSON SHA-256 `daa232982846a3dd0981b7771d16368497a4cebdec6f4a09bd13765c89937551`. Exact limit: this qualifies the configured K3s/containerd/runc path only. The fixture joined each full container ID to the local K3s journal because Pod status and Events did not retain the complete hook error during the fixture window. It does not qualify CRD delivery, a held-task inspection, purpose, or a protected effect. | Done |
 | `EXEC-COMMIT-STATE-001` | `NativeProcessFixture` in `physical_probe` covers success, pre-PONR recovery, and a deterministic post-PONR fatal ELF load. | `native-child.sh --failed-exec` covers the runnable pre-PONR case. The fatal post-PONR map state is not operator-runnable because Linux terminates the process. | Pass: post-PONR pending state is `PostPonrFatal`, exec outcome is `OutcomeUnknown`, the coordinate is `Exited`, source restriction remains installed, and target execution never becomes active. Schema-23 VM JSON SHA-256 `f659a8983f7002f8558d88862b2f3500b2e138563c083f308f56ac309f1be8cb`. Exact limit: the manual shell proves only pre-PONR recovery; the runner owns the terminal map oracle. | Done |
 | `ID-CGROUP-ESCAPE-001` | `CloneIntoCgroupFixture` in `physical_probe`. | `cgroup-escape.sh` | Pass: moved root keeps identity, becomes fail closed, and cannot use host fallback. | Done |
 | `ID-CLONE-CGROUP-002` | `CloneIntoCgroupFixture` in `physical_probe`. | Not operator-runnable; the runner owns the stopped clone and pidfd synchronization. | Pass: child identity exists before its first direct effect. | Done |
@@ -46,5 +46,6 @@ results.
 | `ID-TASK-COORD-FINALIZE-006` | `NativeProcessFixture` in `physical_probe` covers allocation, runnable state, non-leader exec, missing `PIDFD_THREAD`, leader-first exit, and deterministic namespace-TID reuse. | `native-pid-reuse.sh` covers the runnable PID-reuse control. The task-storage coordinate and leader-first map states are not operator-runnable. | Pass: ordinary `pidfd_open` rejects the non-leader TID, the existing task coordinate identifies it, and namespace TID `3` is reused by fresh host TIDs `96010` and `96011` with task cookies `240` and `242`. Schema-23 VM JSON SHA-256 `f659a8983f7002f8558d88862b2f3500b2e138563c083f308f56ac309f1be8cb`. Exact limit: map saturation belongs to Phase 4 `LSM-DENY-SATURATION-001`. | Done |
 | `NATIVE-STATE-REF-LIFETIME-001` | `physical_probe` reads the existing process, entry, profile-reference, and tombstone maps across leader-first and final-thread exit. | Not operator-runnable; the exact retained-state oracle is available only through the existing pinned maps. | Pass: process, entry, and profile references are each `1` after leader exit and `0` after worker exit; the root tombstone releases first, the worker tombstone stays owned until final exit, the process becomes reclaimable, and the entry becomes draining. Schema-23 VM JSON SHA-256 `f659a8983f7002f8558d88862b2f3500b2e138563c083f308f56ac309f1be8cb`. Exact limit: socket and protected-object effect lifetimes belong to later phases. | Done |
 
-Phase 2 closes only when every row is `Done`. The Phase 4 administrative-exec
-and raced-policy fixtures do not block this result.
+All 29 required rows are `Done`. Phase 3 and Phase 4 observation, permission,
+raced-policy, IPC-policy, and protected-effect fixtures do not block this
+identity result.
