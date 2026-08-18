@@ -39,10 +39,19 @@ pub struct EffectObservationReader {
 
 impl EffectObservationReader {
     pub fn poll(&self, timeout: Duration) -> Result<()> {
-        self.ring.poll(timeout).context(LibbpfSnafu {
+        poll_until_complete(|| self.ring.poll(timeout)).context(LibbpfSnafu {
             action: "poll effect observation ring",
             path: Path::new("effect_observations"),
         })
+    }
+}
+
+fn poll_until_complete(mut poll: impl FnMut() -> libbpf_rs::Result<()>) -> libbpf_rs::Result<()> {
+    loop {
+        match poll() {
+            Err(error) if error.kind() == libbpf_rs::ErrorKind::Interrupted => continue,
+            result => return result,
+        }
     }
 }
 
@@ -1470,17 +1479,35 @@ impl Drop for PinRollback {
 #[cfg(test)]
 mod tests {
     use snafu::{OptionExt as _, ResultExt as _};
-    use std::fs;
+    use std::{fs, io};
 
     use super::{
-        kernel_program_name, KernelHost, KernelHostConfig, KernelHostOwner, KernelObjectKind,
-        KernelProgramLayoutV1, PinRollback, REQUIRED_QUALIFICATION_LSM_PROGRAMS,
+        kernel_program_name, poll_until_complete, KernelHost, KernelHostConfig, KernelHostOwner,
+        KernelObjectKind, KernelProgramLayoutV1, PinRollback, REQUIRED_QUALIFICATION_LSM_PROGRAMS,
     };
     use crate::error::{InvalidConfigurationSnafu, IoSnafu};
     use crate::{
         KernelLinkManifestV1, KernelMapManifestV1, KernelObjectManifestV1, KernelPreflightV1,
         BUNDLED_BPF_OBJECT,
     };
+
+    #[test]
+    fn effect_reader_retries_an_interrupted_poll() {
+        let mut attempts = 0;
+        poll_until_complete(|| {
+            attempts += 1;
+            if attempts == 1 {
+                Err(libbpf_rs::Error::from(io::Error::from(
+                    io::ErrorKind::Interrupted,
+                )))
+            } else {
+                Ok(())
+            }
+        })
+        .expect("the second poll completes");
+
+        assert_eq!(attempts, 2);
+    }
 
     #[test]
     fn missing_required_hook_cannot_validate() {
