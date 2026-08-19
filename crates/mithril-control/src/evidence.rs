@@ -26,7 +26,7 @@ pub struct EvidenceIntakeOwner {
     nodes: Arc<Mutex<BTreeMap<String, IntakeStateV1>>>,
 }
 
-#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 struct IntakeStateV1 {
     contiguous_cursor: u64,
@@ -95,26 +95,32 @@ impl EvidenceIntakeOwner {
             Some(state) => state,
             None => read_state(&node_root).map_err(internal_status)?,
         };
-        if batch.first_cursor == state.last_first_cursor
+        let duplicate = batch.first_cursor == state.last_first_cursor
             && batch.last_cursor == state.contiguous_cursor
-            && batch_digest == state.last_batch_sha256
-        {
-            return Ok(EvidenceAck {
-                first_cursor: batch.first_cursor,
-                last_cursor: batch.last_cursor,
-                batch_sha256: batch.batch_sha256.clone(),
-            });
-        }
-        if batch.first_cursor != state.contiguous_cursor.saturating_add(1)
-            || batch.last_cursor < batch.first_cursor
-            || batch.last_cursor - batch.first_cursor + 1 != batch.records.len() as u64
+            && batch_digest == state.last_batch_sha256;
+        if !duplicate
+            && (batch.first_cursor != state.contiguous_cursor.saturating_add(1)
+                || batch.last_cursor < batch.first_cursor
+                || batch.last_cursor - batch.first_cursor + 1 != batch.records.len() as u64)
         {
             return Err(Status::aborted(
                 "evidence batch is not the next contiguous cursor range",
             ));
         }
 
-        let mut previous = state.last_record_sha256;
+        let mut previous = if duplicate {
+            batch
+                .records
+                .first()
+                .and_then(|record| record.previous_record_sha256.as_slice().try_into().ok())
+                .ok_or_else(|| {
+                    Status::invalid_argument(
+                        "duplicate evidence batch has no valid previous record digest",
+                    )
+                })?
+        } else {
+            state.last_record_sha256
+        };
         for (index, record) in batch.records.iter().enumerate() {
             let cursor = batch.first_cursor + index as u64;
             validate_record(record, cursor, previous)?;
@@ -132,6 +138,13 @@ impl EvidenceIntakeOwner {
         }
         for record in &batch.records {
             persist_record(&node_root, record).map_err(internal_status)?;
+        }
+        if duplicate {
+            return Ok(EvidenceAck {
+                first_cursor: batch.first_cursor,
+                last_cursor: batch.last_cursor,
+                batch_sha256: batch.batch_sha256.clone(),
+            });
         }
         let next_state = IntakeStateV1 {
             contiguous_cursor: batch.last_cursor,
@@ -184,6 +197,7 @@ impl EvidenceIntakeOwner {
             && state.revision == report.revision
             && state.report_sha256 == report_digest
         {
+            persist_coverage_report(&node_root, report).map_err(internal_status)?;
             return Ok(coverage_ack(report));
         }
         if report.source_epoch < state.source_epoch
@@ -193,14 +207,7 @@ impl EvidenceIntakeOwner {
                 "coverage report epoch or revision is stale",
             ));
         }
-        let coverage_root = node_root.join("coverage");
-        fs::create_dir_all(&coverage_root)
-            .map_err(|error| Status::internal(format!("coverage directory failed: {error}")))?;
-        let path = coverage_root.join(format!(
-            "{:020}-{:020}.pb",
-            report.source_epoch, report.revision
-        ));
-        atomic_write(&path, &report.encode_to_vec()).map_err(internal_status)?;
+        persist_coverage_report(&node_root, report).map_err(internal_status)?;
         persist_coverage_state(
             &node_root,
             CoverageIntakeStateV1 {
@@ -464,6 +471,30 @@ fn persist_record(root: &Path, record: &EvidenceRecord) -> Result<()> {
     atomic_write(&path, &bytes)
 }
 
+fn persist_coverage_report(root: &Path, report: &CoverageReport) -> Result<()> {
+    let coverage_root = root.join("coverage");
+    fs::create_dir_all(&coverage_root).context(IoSnafu {
+        path: &coverage_root,
+    })?;
+    let path = coverage_root.join(format!(
+        "{:020}-{:020}.pb",
+        report.source_epoch, report.revision
+    ));
+    let bytes = report.encode_to_vec();
+    if path.exists() {
+        let existing = fs::read(&path).context(IoSnafu { path: &path })?;
+        if existing == bytes {
+            return Ok(());
+        }
+        return EvidenceStateSnafu {
+            path,
+            reason: "coverage revision already contains different evidence".to_owned(),
+        }
+        .fail();
+    }
+    atomic_write(&path, &bytes)
+}
+
 fn persist_state(root: &Path, state: IntakeStateV1) -> Result<()> {
     let path = root.join("cursor.json");
     let bytes = serde_json::to_vec(&state).map_err(|error| {
@@ -482,13 +513,27 @@ fn read_state(root: &Path) -> Result<IntakeStateV1> {
         return Ok(IntakeStateV1::default());
     }
     let bytes = fs::read(&path).context(IoSnafu { path: &path })?;
-    serde_json::from_slice(&bytes).map_err(|error| {
+    let state: IntakeStateV1 = serde_json::from_slice(&bytes).map_err(|error| {
         EvidenceStateSnafu {
-            path,
+            path: path.clone(),
             reason: format!("cursor decoding failed: {error}"),
         }
         .build()
-    })
+    })?;
+    let empty = state == IntakeStateV1::default();
+    let populated = state.contiguous_cursor > 0
+        && state.last_first_cursor > 0
+        && state.last_first_cursor <= state.contiguous_cursor
+        && state.last_batch_sha256 != [0; 32]
+        && state.last_record_sha256 != [0; 32];
+    if !empty && !populated {
+        return EvidenceStateSnafu {
+            path,
+            reason: "cursor has inconsistent ranges or digests".to_owned(),
+        }
+        .fail();
+    }
+    Ok(state)
 }
 
 fn persist_coverage_state(root: &Path, state: CoverageIntakeStateV1) -> Result<()> {
@@ -509,17 +554,31 @@ fn read_coverage_state(root: &Path) -> Result<CoverageIntakeStateV1> {
         return Ok(CoverageIntakeStateV1::default());
     }
     let bytes = fs::read(&path).context(IoSnafu { path: &path })?;
-    serde_json::from_slice(&bytes).map_err(|error| {
+    let state: CoverageIntakeStateV1 = serde_json::from_slice(&bytes).map_err(|error| {
         EvidenceStateSnafu {
-            path,
+            path: path.clone(),
             reason: format!("coverage cursor decoding failed: {error}"),
         }
         .build()
-    })
+    })?;
+    let empty = state == CoverageIntakeStateV1::default();
+    let populated = state.source_epoch > 0 && state.revision > 0 && state.report_sha256 != [0; 32];
+    if !empty && !populated {
+        return EvidenceStateSnafu {
+            path,
+            reason: "coverage cursor has inconsistent identity or digest".to_owned(),
+        }
+        .fail();
+    }
+    Ok(state)
 }
 
 fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
     let temporary = path.with_extension("tmp");
+    if temporary.exists() {
+        fs::remove_file(&temporary).context(IoSnafu { path: &temporary })?;
+        sync_directory(&temporary)?;
+    }
     let mut file = OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -721,6 +780,39 @@ mod tests {
         *last ^= 1;
         std::fs::write(path, bytes)?;
         assert!(intake.latest_coverage_report("node-a").is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn duplicate_delivery_rechecks_the_durable_record() -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let intake = EvidenceIntakeOwner::open(directory.path())?;
+        let first = batch(1, 1, [0; 32]);
+        intake.receive("node-a", &first)?;
+        let path = directory.path().join("node-a/00000000000000000001.json");
+        std::fs::write(&path, b"corrupt durable record")?;
+        assert!(intake.receive("node-a", &first).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn intake_retries_owned_torn_record_and_coverage_writes(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let node_root = directory.path().join("node-a");
+        let coverage_root = node_root.join("coverage");
+        std::fs::create_dir_all(&coverage_root)?;
+        let record_temporary = node_root.join("00000000000000000001.tmp");
+        let coverage_temporary =
+            coverage_root.join("00000000000000000007-00000000000000000001.tmp");
+        std::fs::write(&record_temporary, b"torn record")?;
+        std::fs::write(&coverage_temporary, b"torn coverage")?;
+
+        let intake = EvidenceIntakeOwner::open(directory.path())?;
+        intake.receive("node-a", &batch(1, 1, [0; 32]))?;
+        intake.receive_coverage("node-a", &coverage_report(7, 1, "HEALTHY"))?;
+        assert!(!record_temporary.exists());
+        assert!(!coverage_temporary.exists());
         Ok(())
     }
 }
