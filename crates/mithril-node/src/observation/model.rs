@@ -293,13 +293,47 @@ pub struct ObservationEnvelopeV1 {
 }
 
 impl ObservationEnvelopeV1 {
-    pub fn canonical_bytes(&self) -> Result<Vec<u8>> {
+    pub fn validate(&self) -> Result<()> {
         self.payload.validate()?;
+        let identity_valid = self.schema_version == 1
+            && !self.tenant_id.is_zero()
+            && self.observation_id != [0; 32]
+            && !self.source_id.is_zero()
+            && self.source_epoch > 0
+            && self.source_sequence > 0
+            && !self.coverage_interval_id.is_zero()
+            && self.transport_integrity_digest != [0; 32]
+            && self
+                .stable_provider_event_id
+                .as_ref()
+                .is_none_or(|id| !id.is_empty() && id.len() <= 4_096)
+            && self
+                .signature_or_batch_digest
+                .is_none_or(|digest| digest != [0; 32]);
+        let expected = observation_id(
+            self.tenant_id,
+            self.source_id,
+            self.source_epoch,
+            self.source_sequence,
+            self.payload_schema_id,
+            &self.payload,
+        )?;
+        if !identity_valid || self.observation_id != expected {
+            return EvidenceStateSnafu {
+                reason: "observation identity, version, or bound is invalid".to_owned(),
+            }
+            .fail();
+        }
+        Ok(())
+    }
+
+    pub fn canonical_bytes(&self) -> Result<Vec<u8>> {
+        self.validate()?;
         canonical_cbor(self)
     }
 
     pub fn wire_bytes(&self) -> Result<Vec<u8>> {
-        self.payload.validate()?;
+        self.validate()?;
         serde_json::to_vec(self).map_err(|error| {
             EvidenceStateSnafu {
                 reason: format!("observation wire encoding failed: {error}"),
@@ -315,21 +349,7 @@ impl ObservationEnvelopeV1 {
             }
             .build()
         })?;
-        envelope.payload.validate()?;
-        if envelope.schema_version != 1
-            || envelope.tenant_id.is_zero()
-            || envelope.observation_id == [0; 32]
-            || envelope.source_id.is_zero()
-            || envelope.source_epoch == 0
-            || envelope.source_sequence == 0
-            || envelope.coverage_interval_id.is_zero()
-            || envelope.transport_integrity_digest == [0; 32]
-        {
-            return EvidenceStateSnafu {
-                reason: "observation wire identity or version is invalid".to_owned(),
-            }
-            .fail();
-        }
+        envelope.validate()?;
         Ok(envelope)
     }
 

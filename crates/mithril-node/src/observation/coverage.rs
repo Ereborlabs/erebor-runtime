@@ -70,7 +70,10 @@ pub struct CoverageIntervalV1 {
 impl CoverageIntervalV1 {
     #[must_use]
     pub fn supports_negative_claim(&self) -> bool {
-        self.state == CoverageStateV1::Healthy && self.gap_reasons.is_empty()
+        matches!(
+            self.state,
+            CoverageStateV1::Healthy | CoverageStateV1::Closed
+        ) && self.gap_reasons.is_empty()
     }
 }
 
@@ -265,7 +268,7 @@ impl CoverageHealthOwner {
                     gap = Some(CoverageGapReasonV1::CounterRegression);
                 }
                 source.last_health = Some(counters);
-                if let Some(reason) = gap {
+                let completed = if let Some(reason) = gap {
                     mark_source_gap(source, reason, counters)
                 } else if first_health_sample
                     && source.last_observed_sequence.unwrap_or(0) == counters.next_sequence
@@ -284,7 +287,9 @@ impl CoverageHealthOwner {
                     mark_source_gap(source, CoverageGapReasonV1::ReaderDelay, counters)
                 } else {
                     None
-                }
+                };
+                source.current.closing_counters = Some(counters);
+                completed
             };
             append_history(&mut inner, completed)?;
         }
