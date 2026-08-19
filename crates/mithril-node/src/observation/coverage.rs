@@ -354,6 +354,89 @@ impl CoverageHealthOwner {
         bump_and_persist(&mut inner)
     }
 
+    pub fn recover_after_probe(&self, samples: &[EffectObservationCpuHealth]) -> Result<()> {
+        let mut inner = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
+        if inner.snapshot.sources.is_empty() {
+            return EvidenceStateSnafu {
+                reason: "coverage recovery requires an existing source".to_owned(),
+            }
+            .fail();
+        }
+        let sample_count = samples.len();
+        let samples = samples
+            .iter()
+            .map(|sample| (sample.cpu_id, sample.counters))
+            .collect::<BTreeMap<_, _>>();
+        if samples.len() != sample_count || samples.len() != inner.snapshot.sources.len() {
+            return EvidenceStateSnafu {
+                reason: "coverage recovery requires one probe for every source".to_owned(),
+            }
+            .fail();
+        }
+        for (cpu_id, source) in &inner.snapshot.sources {
+            let counters = samples.get(cpu_id).ok_or_else(|| {
+                EvidenceStateSnafu {
+                    reason: "coverage recovery is missing a source probe".to_owned(),
+                }
+                .build()
+            })?;
+            if !counters_are_valid(*counters)
+                || source.last_health != Some(*counters)
+                || source.last_observed_sequence.unwrap_or(0) != counters.next_sequence
+                || (source.current.state == CoverageStateV1::Gapped
+                    && source
+                        .current
+                        .gap_reasons
+                        .contains(&CoverageGapReasonV1::CounterRegression))
+            {
+                return EvidenceStateSnafu {
+                    reason: "coverage recovery probe is incomplete or inconsistent".to_owned(),
+                }
+                .fail();
+            }
+        }
+        let recovering = inner
+            .snapshot
+            .sources
+            .values()
+            .filter(|source| source.current.state == CoverageStateV1::Gapped)
+            .count();
+        if inner.snapshot.history.len().saturating_add(recovering) > MAX_COVERAGE_HISTORY {
+            return EvidenceStateSnafu {
+                reason: "coverage history capacity is exhausted".to_owned(),
+            }
+            .fail();
+        }
+
+        let original = inner.snapshot.clone();
+        let mut completed = Vec::with_capacity(recovering);
+        for source in inner.snapshot.sources.values_mut() {
+            if source.current.state != CoverageStateV1::Gapped {
+                continue;
+            }
+            let counters = samples[&source.cpu_id];
+            let first_sequence = counters.next_sequence.checked_add(1).ok_or_else(|| {
+                EvidenceStateSnafu {
+                    reason: "coverage recovery sequence is exhausted".to_owned(),
+                }
+                .build()
+            })?;
+            completed.push(rotate_interval(
+                source,
+                CoverageStateV1::Healthy,
+                first_sequence,
+                counters,
+                Vec::new(),
+            ));
+        }
+        inner.snapshot.history.extend(completed);
+        if let Err(error) = bump_and_persist(&mut inner) {
+            inner.snapshot = original;
+            return Err(error);
+        }
+        Ok(())
+    }
+
     pub fn snapshot(&self) -> CoverageSnapshotV1 {
         self.inner
             .lock()
@@ -408,6 +491,11 @@ fn ensure_source(
             }
             .build()
         })
+}
+
+fn counters_are_valid(counters: CoverageCountersV1) -> bool {
+    counters.attempted == counters.suppressed.saturating_add(counters.requested)
+        && counters.requested == counters.emitted.saturating_add(counters.lost)
 }
 
 fn mark_source_gap(
@@ -652,12 +740,56 @@ mod tests {
         owner.sample_health(&[health(0, 0)])?;
         owner.observe(2, 1)?;
         drop(owner);
-        assert_eq!(open_owner(&path, 1)?.snapshot().source_epoch, 1);
+        let same_epoch = open_owner(&path, 1)?;
+        assert_eq!(same_epoch.snapshot().source_epoch, 1);
+        same_epoch.sample_health(&[health(1, 0)])?;
+        same_epoch.recover_after_probe(&[health(1, 0)])?;
+        let recovered = same_epoch.snapshot();
+        assert!(recovered.supports_negative_claim());
+        assert!(recovered.history.iter().any(|interval| interval
+            .gap_reasons
+            .contains(&CoverageGapReasonV1::UncleanRestart)));
+        drop(same_epoch);
         let restarted = open_owner(&path, 2)?;
         assert_eq!(restarted.snapshot().source_epoch, 2);
         assert!(restarted.snapshot().history.iter().any(|interval| interval
             .gap_reasons
             .contains(&CoverageGapReasonV1::UncleanRestart)));
+        Ok(())
+    }
+
+    #[test]
+    fn exact_probe_opens_a_new_healthy_interval_without_rewriting_a_gap() -> crate::Result<()> {
+        let directory = tempfile::tempdir().map_err(|source| crate::Error::Io {
+            path: "temporary coverage directory".into(),
+            source,
+            location: snafu::Location::new(file!(), line!(), column!()),
+        })?;
+        let owner = open_owner(&directory.path().join("coverage.json"), 1)?;
+        owner.sample_health(&[health(0, 0)])?;
+        owner.observe(2, 1)?;
+        owner.sample_health(&[health(2, 1)])?;
+        assert!(owner.recover_after_probe(&[health(2, 1)]).is_err());
+
+        owner.observe(2, 3)?;
+        owner.sample_health(&[health(3, 1)])?;
+        owner.recover_after_probe(&[health(3, 1)])?;
+
+        let snapshot = owner.snapshot();
+        assert!(snapshot.supports_negative_claim());
+        assert!(snapshot.history.iter().any(|interval| {
+            interval.state == crate::CoverageStateV1::Gapped
+                && interval
+                    .gap_reasons
+                    .contains(&CoverageGapReasonV1::RingLoss)
+                && interval
+                    .gap_reasons
+                    .contains(&CoverageGapReasonV1::SourceSequenceGap)
+        }));
+        let current = &snapshot.current_intervals()[0];
+        assert_eq!(current.state, crate::CoverageStateV1::Healthy);
+        assert_eq!(current.first_sequence, 4);
+        assert!(current.gap_reasons.is_empty());
         Ok(())
     }
 }
