@@ -413,6 +413,7 @@ impl ControlPlane {
         ),
         Status,
     > {
+        self.require_ready_session_owner(identity)?;
         let evidence = self.evidence.as_ref().ok_or_else(|| {
             Status::failed_precondition("Control has no durable evidence intake owner")
         })?;
@@ -454,6 +455,7 @@ impl ControlPlane {
         ),
         Status,
     > {
+        self.require_ready_session_owner(identity)?;
         let evidence = self.evidence.as_ref().ok_or_else(|| {
             Status::failed_precondition("Control has no durable evidence intake owner")
         })?;
@@ -481,6 +483,24 @@ impl ControlPlane {
                 .identity
                 .envelope(sequence, ControlPayload::CoverageAck(ack)),
         ))
+    }
+
+    #[allow(clippy::result_large_err)]
+    fn require_ready_session_owner(&self, identity: &StreamIdentity) -> Result<(), Status> {
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| Status::internal("control session state is poisoned"))?;
+        let session = state
+            .sessions
+            .get(&identity.node_id)
+            .ok_or_else(|| Status::failed_precondition("evidence arrived before node readiness"))?;
+        if session.identity.connection_nonce != identity.connection_nonce {
+            return Err(Status::unauthenticated(
+                "evidence stream does not own the ready node session",
+            ));
+        }
+        Ok(())
     }
 
     fn unregister(&self, identity: &StreamIdentity) {
@@ -857,6 +877,48 @@ mod tests {
         assert!(!valid_registration(&invalid));
         invalid.capabilities[0].state = "ABSENT".to_owned();
         assert!(!valid_registration(&invalid));
+    }
+
+    #[test]
+    fn evidence_rejects_a_nonowning_stream_before_intake_validation(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let control = ControlPlane::with_evidence_directory(
+            vec![AllowedNodeIdentity {
+                node_id: "node-a".to_owned(),
+                certificate_sha256: "a".repeat(64),
+            }],
+            TrustGenerationV1 {
+                generation: 7,
+                bundle_digest: "b".repeat(64),
+            },
+            directory.path(),
+        )?;
+        let identity = StreamIdentity {
+            node_id: "node-a".to_owned(),
+            node_boot_id: vec![1; 16],
+            connection_nonce: vec![2; 16],
+        };
+        let (output, _input) = tokio::sync::mpsc::channel(1);
+        assert!(control
+            .register_ready_session(&identity, &output, true)
+            .is_ok());
+        let nonowner = StreamIdentity {
+            connection_nonce: vec![3; 16],
+            ..identity
+        };
+        assert!(matches!(
+            control.accept_evidence(&nonowner, &crate::EvidenceBatch::default()),
+            Err(error) if error.code() == tonic::Code::Unauthenticated
+        ));
+        assert_eq!(
+            control
+                .evidence
+                .as_ref()
+                .and_then(|owner| owner.contiguous_cursor("node-a").ok()),
+            Some(0)
+        );
+        Ok(())
     }
 
     #[tokio::test]
