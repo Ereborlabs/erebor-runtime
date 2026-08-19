@@ -92,6 +92,11 @@ For an operator-driven benign-only CRI case, use
 It does not prove the secret-deny half, projected-token rotation, or the
 administrative-exec path.
 
+## Dated Qualification Records
+
+Each record below applies only to its named source state and date. Its old
+status sentence does not override the final closure record.
+
 ### Retained VM alias and mount evidence — 2026-08-15
 
 At source `5b1abfa984d0`, a retained x86_64 VM ran the existing
