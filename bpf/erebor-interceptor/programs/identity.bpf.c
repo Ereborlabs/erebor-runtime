@@ -4,6 +4,7 @@
 #include "erebor_interceptor_abi.h"
 #include "linux_uapi.h"
 #include <bpf/bpf_core_read.h>
+#include <bpf/bpf_endian.h>
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_tracing.h>
 
@@ -23,6 +24,18 @@ _Static_assert(sizeof(ipc_relationship_decision_key_v1) == 24,
                "IPC relationship key ABI size");
 _Static_assert(sizeof(ipc_socket_state_v1) == 216,
                "IPC socket state ABI size");
+_Static_assert(sizeof(network_ipv4_lpm_key_v1) == 32,
+               "network IPv4 LPM key ABI size");
+_Static_assert(sizeof(network_ipv6_lpm_key_v1) == 40,
+               "network IPv6 LPM key ABI size");
+_Static_assert(sizeof(network_destination_class_v1) == 48,
+               "network destination class ABI size");
+_Static_assert(sizeof(network_destination_decision_key_v1) == 32,
+               "network destination decision key ABI size");
+_Static_assert(sizeof(network_socket_state_v1) == 240,
+               "network socket state ABI size");
+_Static_assert(sizeof(network_response_floor_key_v1) == 24,
+               "network response key ABI size");
 _Static_assert(sizeof(device_effect_key_v1) == 72,
                "device effect key ABI size");
 _Static_assert(sizeof(process_control_rule_key_v1) == 40,
@@ -81,7 +94,7 @@ _Static_assert(sizeof(exact_file_object_key_v1) == 40,
                "exact file object ABI size");
 _Static_assert(sizeof(exact_object_binding_v1) == 32,
                "exact object binding ABI size");
-_Static_assert(sizeof(effect_observation_v1) == 376,
+_Static_assert(sizeof(effect_observation_v1) == 504,
                "effect observation ABI size");
 _Static_assert(sizeof(effect_observation_health_v1) == 32,
                "effect observation health ABI size");
@@ -157,6 +170,14 @@ int erebor_policy_activation_probe(struct __sk_buff *context)
                          sizeof(scratch->process_control_rule_key));
         decision = bpf_map_lookup_elem(&process_control_rules,
                                        &scratch->process_control_rule_key);
+        break;
+    case policy_activation_probe_map_kind_v1_network_destination:
+        if (request->key_size != sizeof(scratch->network_destination_key))
+            return 4;
+        __builtin_memcpy(&scratch->network_destination_key, request->key,
+                         sizeof(scratch->network_destination_key));
+        decision = bpf_map_lookup_elem(&network_destination_decisions,
+                                       &scratch->network_destination_key);
         break;
     case policy_activation_probe_map_kind_v1_administrative_slot_cancel:
         if (request->key_size != sizeof(scratch->administrative_slot_key) +

@@ -159,7 +159,7 @@ fn to_ipc(event: EffectObservationV1) -> MithrilEffectObservation {
         reason: reason_name(event.reason).to_owned(),
         physical_result_code: u32::from(event.physical_result),
         physical_result: physical_result_name(event.physical_result).to_owned(),
-        stage: "LOCAL_PRE_EFFECT_V1".to_owned(),
+        stage: observation_stage(event.physical_result).to_owned(),
         controller_process_state_id: id_hex(event.controller_process_state_id),
         controller_transition_version: event.controller_transition_version,
         target_task_cookie: event.target_task_cookie,
@@ -169,6 +169,25 @@ fn to_ipc(event: EffectObservationV1) -> MithrilEffectObservation {
         target_role_id: event.target_role_id,
         target_process_state_vector_id: event.target_process_state_vector_id,
         operation_argument: event.operation_argument,
+        network_socket_key_id: event.network_socket_key_id,
+        network_socket_generation: event.network_socket_generation,
+        network_flow_generation: event.network_flow_generation,
+        network_destination_policy_handle: event.network_destination_policy_handle,
+        network_namespace_address: event.network_namespace.network_namespace_address,
+        network_namespace_inode: event.network_namespace.network_namespace_inode,
+        network_creator_profile_generation_ref_id: event.network_creator_profile_generation_ref_id,
+        network_peer_address: event.network_peer_address.to_vec(),
+        network_peer_port: u32::from(event.network_peer_port),
+        network_address_family: u32::from(event.network_address_family),
+        network_protocol: u32::from(event.network_protocol),
+        network_socket_state: u32::from(event.network_socket_state),
+        network_response_scope: u32::from(event.network_response_scope),
+        network_flow_authorization_id: id_hex(event.network_flow_authorization_id),
+        network_creator_destination_policy_handle: event.network_creator_destination_policy_handle,
+        network_flow_authorizer_profile_generation_ref_id: event
+            .network_flow_authorizer_profile_generation_ref_id,
+        network_parent_socket_key_id: event.network_parent_socket_key_id,
+        network_parent_socket_generation: event.network_parent_socket_generation,
         io_uring_ring_id: id_hex(event.io_uring_ring_id),
         io_uring_ring_generation: event.io_uring_ring_generation,
         io_uring_submission_sequence: event.io_uring_submission_sequence,
@@ -212,6 +231,9 @@ const fn reason_name(reason: u8) -> &'static str {
         value if value == EffectObservationReasonV1::PathTreePolicyDeny as u8 => {
             "PATH_TREE_POLICY_DENY"
         }
+        value if value == EffectObservationReasonV1::NetworkResponseFence as u8 => {
+            "NETWORK_RESPONSE_FENCE"
+        }
         _ => "UNKNOWN",
     }
 }
@@ -224,7 +246,18 @@ const fn physical_result_name(result: u8) -> &'static str {
         value if value == EffectPhysicalResultV1::DeniedBeforeEffect as u8 => {
             "DENIED_BEFORE_EFFECT"
         }
+        value if value == EffectPhysicalResultV1::PacketDroppedAfterRewrite as u8 => {
+            "PACKET_DROPPED_AFTER_REWRITE"
+        }
         _ => "UNKNOWN",
+    }
+}
+
+const fn observation_stage(result: u8) -> &'static str {
+    if result == EffectPhysicalResultV1::PacketDroppedAfterRewrite as u8 {
+        "FINAL_PACKET_V1"
+    } else {
+        "LOCAL_PRE_EFFECT_V1"
     }
 }
 

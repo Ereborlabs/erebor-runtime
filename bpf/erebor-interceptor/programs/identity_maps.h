@@ -163,6 +163,11 @@ struct identity_scratch_v1 {
     effect_default_key_v1 effect_default;
     ipc_relationship_decision_key_v1 ipc_relationship_key;
     ipc_socket_state_v1 ipc_socket_state;
+    network_ipv4_lpm_key_v1 network_ipv4_key;
+    network_ipv6_lpm_key_v1 network_ipv6_key;
+    network_destination_decision_key_v1 network_destination_key;
+    network_response_floor_key_v1 network_response_key;
+    network_socket_state_v1 network_socket_state;
     device_effect_key_v1 device_effect_key;
     process_control_rule_key_v1 process_control_rule_key;
     exception_use_receipt_key_v1 exception_receipt_key;
@@ -408,6 +413,43 @@ struct {
 } ipc_socket_states SEC(".maps");
 
 struct {
+    __uint(type, BPF_MAP_TYPE_LPM_TRIE);
+    __uint(max_entries, 4096);
+    __uint(map_flags, BPF_F_NO_PREALLOC);
+    __type(key, network_ipv4_lpm_key_v1);
+    __type(value, network_destination_class_v1);
+} network_ipv4_destination_classes SEC(".maps");
+
+struct {
+    __uint(type, BPF_MAP_TYPE_LPM_TRIE);
+    __uint(max_entries, 4096);
+    __uint(map_flags, BPF_F_NO_PREALLOC);
+    __type(key, network_ipv6_lpm_key_v1);
+    __type(value, network_destination_class_v1);
+} network_ipv6_destination_classes SEC(".maps");
+
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, 65536);
+    __type(key, network_destination_decision_key_v1);
+    __type(value, physical_decision_v1);
+} network_destination_decisions SEC(".maps");
+
+struct {
+    __uint(type, BPF_MAP_TYPE_SK_STORAGE);
+    __type(key, int);
+    __type(value, network_socket_state_v1);
+    __uint(map_flags, BPF_F_NO_PREALLOC | BPF_F_CLONE);
+} network_socket_states SEC(".maps");
+
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, 65536);
+    __type(key, network_response_floor_key_v1);
+    __type(value, network_response_floor_v1);
+} network_response_floors SEC(".maps");
+
+struct {
     __uint(type, BPF_MAP_TYPE_HASH);
     __uint(max_entries, 65536);
     __type(key, device_effect_key_v1);
@@ -485,6 +527,13 @@ struct {
     __type(key, __u64);
     __type(value, __u64);
 } profile_generation_async_refs SEC(".maps");
+
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, 4096);
+    __type(key, __u64);
+    __type(value, __u64);
+} profile_generation_socket_refs SEC(".maps");
 
 struct {
     __uint(type, BPF_MAP_TYPE_HASH);

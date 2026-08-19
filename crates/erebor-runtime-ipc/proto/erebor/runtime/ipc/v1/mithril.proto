@@ -85,4 +85,22 @@ message MithrilEffectObservation {
   uint32 io_uring_request_flags = 48;
   uint32 io_uring_rw_flags = 49;
   uint32 io_uring_opcode = 50;
+  uint64 network_socket_key_id = 51;
+  uint64 network_socket_generation = 52;
+  uint64 network_flow_generation = 53;
+  uint64 network_destination_policy_handle = 54;
+  uint64 network_namespace_address = 55;
+  uint32 network_namespace_inode = 56;
+  uint64 network_creator_profile_generation_ref_id = 57;
+  bytes network_peer_address = 58;
+  uint32 network_peer_port = 59;
+  uint32 network_address_family = 60;
+  uint32 network_protocol = 61;
+  uint32 network_socket_state = 62;
+  uint32 network_response_scope = 63;
+  string network_flow_authorization_id = 64;
+  uint64 network_creator_destination_policy_handle = 65;
+  uint64 network_flow_authorizer_profile_generation_ref_id = 66;
+  uint64 network_parent_socket_key_id = 67;
+  uint64 network_parent_socket_generation = 68;
 }

@@ -102,6 +102,19 @@ include = [
   "KernelRealParentIntervalV1",
   "KernelEffectFamilyV1",
   "KernelEffectOperationV1",
+  "NetworkAddressFamilyV1",
+  "NetworkDestinationClassV1",
+  "NetworkDestinationDecisionKeyV1",
+  "NetworkIpv4LpmKeyV1",
+  "NetworkIpv6LpmKeyV1",
+  "NetworkNamespaceGenerationV1",
+  "NetworkPortRangeV1",
+  "NetworkProtocolV1",
+  "NetworkResponseFloorKeyV1",
+  "NetworkResponseFloorV1",
+  "NetworkResponseScopeV1",
+  "NetworkSocketStateKindV1",
+  "NetworkSocketStateV1",
   "MountMutationAttemptV1",
   "MountReconciliationProposalV1",
   "MountSecurityViewStateV1",
@@ -218,6 +231,19 @@ include = [
 "KernelRealParentIntervalV1" = "kernel_real_parent_interval_v1"
 "KernelEffectFamilyV1" = "kernel_effect_family_v1"
 "KernelEffectOperationV1" = "kernel_effect_operation_v1"
+"NetworkAddressFamilyV1" = "network_address_family_v1"
+"NetworkDestinationClassV1" = "network_destination_class_v1"
+"NetworkDestinationDecisionKeyV1" = "network_destination_decision_key_v1"
+"NetworkIpv4LpmKeyV1" = "network_ipv4_lpm_key_v1"
+"NetworkIpv6LpmKeyV1" = "network_ipv6_lpm_key_v1"
+"NetworkNamespaceGenerationV1" = "network_namespace_generation_v1"
+"NetworkPortRangeV1" = "network_port_range_v1"
+"NetworkProtocolV1" = "network_protocol_v1"
+"NetworkResponseFloorKeyV1" = "network_response_floor_key_v1"
+"NetworkResponseFloorV1" = "network_response_floor_v1"
+"NetworkResponseScopeV1" = "network_response_scope_v1"
+"NetworkSocketStateKindV1" = "network_socket_state_kind_v1"
+"NetworkSocketStateV1" = "network_socket_state_v1"
 "MountMutationAttemptV1" = "mount_mutation_attempt_v1"
 "MountReconciliationProposalV1" = "mount_reconciliation_proposal_v1"
 "MountSecurityViewStateV1" = "mount_security_view_state_v1"

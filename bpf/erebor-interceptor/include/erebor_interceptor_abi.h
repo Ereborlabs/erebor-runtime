@@ -41,6 +41,8 @@ typedef __s32 int32_t;
 
 #define CONSERVATIVE_PROCESS_STATE_VECTOR_V1 1
 
+#define MAX_NETWORK_PORT_RANGES_V1 8
+
 #define MAX_CANONICAL_PATH_COMPONENTS_V1 255
 
 #define MAX_CANONICAL_COMPONENT_BYTES_V1 255
@@ -286,6 +288,7 @@ enum effect_observation_reason_v1
   effect_observation_reason_v1_exact_policy_deny = 9,
   effect_observation_reason_v1_exception_unavailable = 10,
   effect_observation_reason_v1_path_tree_policy_deny = 11,
+  effect_observation_reason_v1_network_response_fence = 12,
 };
 #if __STDC_VERSION__ >= 202311L
 typedef enum effect_observation_reason_v1 effect_observation_reason_v1;
@@ -300,6 +303,7 @@ enum effect_physical_result_v1
  {
   effect_physical_result_v1_unknown_after_pre_effect = 0,
   effect_physical_result_v1_denied_before_effect = 1,
+  effect_physical_result_v1_packet_dropped_after_rewrite = 2,
 };
 #if __STDC_VERSION__ >= 202311L
 typedef enum effect_physical_result_v1 effect_physical_result_v1;
@@ -601,11 +605,79 @@ enum kernel_effect_operation_v1
   kernel_effect_operation_v1_io_uring_sqpoll = 29,
   kernel_effect_operation_v1_io_uring_override_creds = 30,
   kernel_effect_operation_v1_io_uring_command = 31,
+  kernel_effect_operation_v1_socket_create = 32,
+  kernel_effect_operation_v1_bind = 33,
+  kernel_effect_operation_v1_listen = 34,
+  kernel_effect_operation_v1_accept = 35,
+  kernel_effect_operation_v1_receive = 36,
+  kernel_effect_operation_v1_shutdown = 37,
+  kernel_effect_operation_v1_setsockopt = 38,
 };
 #if __STDC_VERSION__ >= 202311L
 typedef enum kernel_effect_operation_v1 kernel_effect_operation_v1;
 #else
 typedef uint16_t kernel_effect_operation_v1;
+#endif // __STDC_VERSION__ >= 202311L
+
+enum network_address_family_v1
+#if __STDC_VERSION__ >= 202311L
+  : uint8_t
+#endif // __STDC_VERSION__ >= 202311L
+ {
+  network_address_family_v1_unknown = 0,
+  network_address_family_v1_ipv4 = 1,
+  network_address_family_v1_ipv6 = 2,
+};
+#if __STDC_VERSION__ >= 202311L
+typedef enum network_address_family_v1 network_address_family_v1;
+#else
+typedef uint8_t network_address_family_v1;
+#endif // __STDC_VERSION__ >= 202311L
+
+enum network_protocol_v1
+#if __STDC_VERSION__ >= 202311L
+  : uint8_t
+#endif // __STDC_VERSION__ >= 202311L
+ {
+  network_protocol_v1_unknown = 0,
+  network_protocol_v1_tcp = 6,
+  network_protocol_v1_udp = 17,
+};
+#if __STDC_VERSION__ >= 202311L
+typedef enum network_protocol_v1 network_protocol_v1;
+#else
+typedef uint8_t network_protocol_v1;
+#endif // __STDC_VERSION__ >= 202311L
+
+enum network_response_scope_v1
+#if __STDC_VERSION__ >= 202311L
+  : uint8_t
+#endif // __STDC_VERSION__ >= 202311L
+ {
+  network_response_scope_v1_unknown = 0,
+  network_response_scope_v1_whole_socket = 1,
+};
+#if __STDC_VERSION__ >= 202311L
+typedef enum network_response_scope_v1 network_response_scope_v1;
+#else
+typedef uint8_t network_response_scope_v1;
+#endif // __STDC_VERSION__ >= 202311L
+
+enum network_socket_state_kind_v1
+#if __STDC_VERSION__ >= 202311L
+  : uint8_t
+#endif // __STDC_VERSION__ >= 202311L
+ {
+  network_socket_state_kind_v1_unknown = 0,
+  network_socket_state_kind_v1_active = 1,
+  network_socket_state_kind_v1_fenced = 2,
+  network_socket_state_kind_v1_tombstoned = 3,
+  network_socket_state_kind_v1_reconciliation_required = 4,
+};
+#if __STDC_VERSION__ >= 202311L
+typedef enum network_socket_state_kind_v1 network_socket_state_kind_v1;
+#else
+typedef uint8_t network_socket_state_kind_v1;
 #endif // __STDC_VERSION__ >= 202311L
 
 enum mount_topology_state_v1
@@ -685,6 +757,7 @@ enum policy_activation_probe_map_kind_v1
   policy_activation_probe_map_kind_v1_process_control = 5,
   policy_activation_probe_map_kind_v1_administrative_slot_cancel = 6,
   policy_activation_probe_map_kind_v1_mount_reconciliation = 7,
+  policy_activation_probe_map_kind_v1_network_destination = 8,
 };
 #if __STDC_VERSION__ >= 202311L
 typedef enum policy_activation_probe_map_kind_v1 policy_activation_probe_map_kind_v1;
@@ -1110,6 +1183,12 @@ typedef struct exact_file_object_key_v1 {
   uint32_t reserved;
 } exact_file_object_key_v1;
 
+typedef struct network_namespace_generation_v1 {
+  uint64_t network_namespace_address;
+  uint32_t network_namespace_inode;
+  uint32_t reserved;
+} network_namespace_generation_v1;
+
 typedef struct effect_observation_v1 {
   uint64_t observed_boottime_ns;
   uint64_t task_cookie;
@@ -1143,6 +1222,24 @@ typedef struct effect_observation_v1 {
   uint32_t target_process_state_vector_id;
   uint32_t operation_argument;
   uint8_t reserved_process_control[4];
+  uint64_t network_socket_key_id;
+  uint64_t network_socket_generation;
+  uint64_t network_flow_generation;
+  struct id128_v1 network_flow_authorization_id;
+  uint64_t network_destination_policy_handle;
+  uint64_t network_creator_destination_policy_handle;
+  uint64_t network_flow_authorizer_profile_generation_ref_id;
+  uint64_t network_parent_socket_key_id;
+  uint64_t network_parent_socket_generation;
+  struct network_namespace_generation_v1 network_namespace;
+  uint64_t network_creator_profile_generation_ref_id;
+  uint8_t network_peer_address[16];
+  uint16_t network_peer_port;
+  uint8_t network_address_family;
+  uint8_t network_protocol;
+  uint8_t network_socket_state;
+  uint8_t network_response_scope;
+  uint8_t reserved_network[2];
   struct id128_v1 io_uring_ring_id;
   uint64_t io_uring_ring_generation;
   uint64_t io_uring_submission_sequence;
@@ -1387,6 +1484,96 @@ typedef struct kernel_real_parent_interval_v1 {
   uint64_t interval_end_boottime_ns;
   uint64_t transition_version;
 } kernel_real_parent_interval_v1;
+
+typedef struct network_port_range_v1 {
+  uint16_t first;
+  uint16_t last;
+} network_port_range_v1;
+
+typedef struct network_destination_class_v1 {
+  uint64_t destination_policy_handle;
+  struct network_port_range_v1 port_ranges[MAX_NETWORK_PORT_RANGES_V1];
+  uint8_t port_range_count;
+  uint8_t final_address_required;
+  uint8_t reserved[6];
+} network_destination_class_v1;
+
+typedef struct network_destination_decision_key_v1 {
+  uint64_t profile_generation_ref_id;
+  uint64_t destination_policy_handle;
+  uint32_t active_role_id;
+  uint32_t process_state_vector_id;
+  uint16_t entry_kind;
+  uint16_t operation;
+  network_protocol_v1 protocol;
+  binding_lifecycle_state_v1 binding_lifecycle_state;
+  uint8_t reserved[2];
+} network_destination_decision_key_v1;
+
+typedef struct network_ipv4_lpm_key_v1 {
+  uint32_t prefix_length;
+  uint32_t reserved_alignment;
+  uint64_t profile_generation_ref_id;
+  network_protocol_v1 protocol;
+  uint8_t reserved[7];
+  uint8_t address[4];
+  uint8_t reserved_tail[4];
+} network_ipv4_lpm_key_v1;
+
+typedef struct network_ipv6_lpm_key_v1 {
+  uint32_t prefix_length;
+  uint32_t reserved_alignment;
+  uint64_t profile_generation_ref_id;
+  network_protocol_v1 protocol;
+  uint8_t reserved[7];
+  uint8_t address[16];
+} network_ipv6_lpm_key_v1;
+
+typedef struct network_response_floor_key_v1 {
+  uint64_t profile_generation_ref_id;
+  uint64_t socket_key_id;
+  uint64_t socket_generation;
+} network_response_floor_key_v1;
+
+typedef struct network_response_floor_v1 {
+  uint64_t transition_version;
+  uint64_t response_reason_id;
+  network_response_scope_v1 scope;
+  uint8_t fenced;
+  uint8_t reserved[6];
+} network_response_floor_v1;
+
+typedef struct network_socket_state_v1 {
+  struct id128_v1 creator_process_state_id;
+  struct id128_v1 creator_authority_domain_id;
+  struct id128_v1 creator_binding_id;
+  struct id128_v1 creator_binding_nonce;
+  struct id128_v1 creator_execution_set_id;
+  struct network_namespace_generation_v1 socket_network_namespace;
+  uint64_t creator_profile_generation_ref_id;
+  uint64_t creator_process_transition_version;
+  uint64_t creator_root_cgroup_id;
+  uint64_t socket_key_id;
+  uint64_t socket_generation;
+  uint64_t flow_generation;
+  struct id128_v1 flow_authorization_id;
+  uint64_t destination_policy_handle;
+  uint64_t creator_destination_policy_handle;
+  uint64_t flow_authorizer_profile_generation_ref_id;
+  uint64_t parent_socket_key_id;
+  uint64_t parent_socket_generation;
+  uint32_t creator_role_id;
+  uint32_t creator_process_state_vector_id;
+  uint16_t creator_entry_kind;
+  network_address_family_v1 address_family;
+  network_protocol_v1 protocol;
+  uint16_t socket_type;
+  uint16_t peer_port;
+  uint8_t peer_address[16];
+  binding_lifecycle_state_v1 creator_binding_lifecycle_state;
+  network_socket_state_kind_v1 state;
+  uint8_t reserved[6];
+} network_socket_state_v1;
 
 typedef struct mount_mutation_attempt_v1 {
   uint32_t mount_namespace_inode;

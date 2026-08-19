@@ -52,6 +52,9 @@ impl Validate for PolicyDocumentV1 {
             notification_routes, response_bindings, exceptions, rules,
             authority_behavior_rules, source_coverage_health_rules
         );
+        if let Some(network_policy) = &self.network_policy {
+            network_policy.validate()?;
+        }
         for posture in [
             &self.default_postures.missing_task_identity,
             &self.default_postures.required_classifier_unknown,
@@ -110,6 +113,12 @@ impl PolicyDocumentV1 {
                 | AuthorityBehaviorRuleV1::PostEffectResult { rule_id, .. } => rule_id.as_str(),
             })
             .collect::<BTreeSet<_>>();
+        let destination_ids = self
+            .network_policy
+            .iter()
+            .flat_map(|policy| &policy.destination_policies)
+            .map(|policy| policy.destination_policy_id.as_str())
+            .collect::<BTreeSet<_>>();
         let coverage_ids = self
             .source_coverage_health_rules
             .iter()
@@ -143,6 +152,11 @@ impl PolicyDocumentV1 {
             && responses.len() == self.response_bindings.len()
             && exceptions.len() == self.exceptions.len()
             && ipc_ids.len() == self.ipc_relationship_rules.len()
+            && destination_ids.len()
+                == self
+                    .network_policy
+                    .as_ref()
+                    .map_or(0, |policy| policy.destination_policies.len())
             && authority_ids.len() == self.authority_behavior_rules.len()
             && coverage_ids.len() == self.source_coverage_health_rules.len()
             && rule_ids.len() == self.rules.len() + self.path_tree_deny_floors.len();
@@ -343,6 +357,19 @@ impl PolicyDocumentV1 {
                 );
             }
             if let RuleMatchV1::LocalPreEffect(effect) = &rule.rule_match {
+                if let LocalObjectSelectorV1::Destinations {
+                    destination_policy_ids,
+                } = &effect.object
+                {
+                    require!(
+                        ordered_unique(destination_policy_ids)
+                            && destination_policy_ids
+                                .iter()
+                                .all(|id| destination_ids.contains(id.as_str())),
+                        "CFG_NETWORK_DESTINATION_REFERENCE",
+                        format!("rule `{}` has unknown network destinations", rule.rule_id)
+                    );
+                }
                 if let LocalObjectSelectorV1::ObjectClasses { object_class_ids } = &effect.object {
                     require!(
                         ordered_unique(object_class_ids)

@@ -4,12 +4,14 @@ use ed25519_dalek::SigningKey;
 use erebor_interceptor_abi::KernelEffectOperationV1;
 use mithril_control::{
     AntiRollbackStore, BlastRadiusLimitV1, CompiledOperationV1, CompiledPhysicalResultV1,
-    EffectFamilyDefaultV1, EffectFamilyV1, EntryKindV1, ErrnoV1, ExactExceptionSubjectSelectorV1,
-    ExceptionConsumptionScopeV1, ExceptionV1, HardSafetyConditionV1, IpcRelationshipRuleV1,
-    PathTreeDenyFloorV1, PermittedAuthorityDeltaV1, PolicyCompiler, PolicyDispositionV1,
-    PolicyDocumentV1, PolicySimulator, ProfileActivationMetadataV1, ProfileCandidateArtifactV1,
-    ProfileSealRequestV1, RegistryDigestsV1, RollbackAuthorizationArtifactV1,
-    RollbackAuthorizationPayloadV1, RootClassificationV1, SimulatedDispositionV1,
+    DestinationPolicyRecordV1, DnsPolicyModeV1, EffectFamilyDefaultV1, EffectFamilyV1, EntryKindV1,
+    ErrnoV1, ExactExceptionSubjectSelectorV1, ExceptionConsumptionScopeV1, ExceptionV1,
+    HardSafetyConditionV1, IpcRelationshipRuleV1, NetworkPolicyV1, NetworkPortRangeV1,
+    NetworkProtocolV1, PathTreeDenyFloorV1, PermittedAuthorityDeltaV1, PolicyCompiler,
+    PolicyDispositionV1, PolicyDocumentV1, PolicySimulator, ProfileActivationMetadataV1,
+    ProfileCandidateArtifactV1, ProfileSealRequestV1, RegistryDigestsV1,
+    RollbackAuthorizationArtifactV1, RollbackAuthorizationPayloadV1, RootClassificationV1,
+    SimulatedDispositionV1,
 };
 
 const VALID_POLICY: &str = include_str!("fixtures/policy-v1.yaml");
@@ -745,6 +747,92 @@ fn network_effect_defaults_are_denial_only() -> mithril_control::Result<()> {
                 .is_err_and(|error| error.to_string().contains("CFG_NETWORK_DEFAULT_AUTHORITY")));
         }
     }
+    Ok(())
+}
+
+#[test]
+fn safe_network_controls_may_use_a_positive_role_default() -> mithril_control::Result<()> {
+    for operation in [
+        "SOCKET_CREATE",
+        "LISTEN",
+        "ACCEPT",
+        "SHUTDOWN",
+        "SETSOCKOPT",
+    ] {
+        let mut document = parse(VALID_POLICY)?;
+        document.rules[0].enabled = false;
+        document.effect_family_defaults = vec![EffectFamilyDefaultV1 {
+            role_ids: vec!["converter".to_owned()],
+            effect_family: EffectFamilyV1::Network,
+            operations: vec![operation.to_owned()],
+            requested_disposition: PolicyDispositionV1::Allow,
+            errno: None,
+            finding: None,
+        }];
+        assert!(PolicyCompiler.compile(&document).is_ok());
+    }
+    Ok(())
+}
+
+#[test]
+fn destination_policy_compiles_only_canonical_bounded_network_rules() -> mithril_control::Result<()>
+{
+    let mut document = parse(VALID_POLICY)?;
+    document.network_policy = Some(NetworkPolicyV1 {
+        dns_mode: DnsPolicyModeV1::DenyDnsAndUsePolicyResolvedAddresses,
+        destination_policies: vec![DestinationPolicyRecordV1 {
+            destination_policy_id: "result-service".to_owned(),
+            protocols: vec![NetworkProtocolV1::Tcp, NetworkProtocolV1::Udp],
+            ipv4_prefixes: vec!["127.0.0.0/8".to_owned()],
+            ipv6_prefixes: vec!["::1/128".to_owned()],
+            port_ranges: vec![NetworkPortRangeV1 {
+                first: 8_443,
+                last: 8_443,
+            }],
+            required_network_namespace_ids: Vec::new(),
+            service_identities: Vec::new(),
+            final_address_required: false,
+        }],
+    });
+    let mithril_control::RuleMatchV1::LocalPreEffect(effect) = &mut document.rules[0].rule_match
+    else {
+        unreachable!("fixture has a local effect rule")
+    };
+    effect.effect_families = vec![EffectFamilyV1::Network];
+    effect.operation_ids = vec!["CONNECT".to_owned()];
+    effect.object = mithril_control::LocalObjectSelectorV1::Destinations {
+        destination_policy_ids: vec!["result-service".to_owned()],
+    };
+    document.rules[0].requested_disposition = PolicyDispositionV1::Allow;
+    document.rules[0].errno = None;
+
+    let compiled = PolicyCompiler.compile(&document)?;
+    assert_eq!(compiled.compiled_cells.len(), 1);
+    assert_eq!(
+        compiled.compiled_cells[0].key.object_selector,
+        "DESTINATION:result-service"
+    );
+
+    let mut invalid = document.clone();
+    let Some(network) = invalid.network_policy.as_mut() else {
+        unreachable!("fixture has a network policy")
+    };
+    network.destination_policies[0].ipv4_prefixes = vec!["127.0.0.1/8".to_owned()];
+    assert!(PolicyCompiler
+        .compile(&invalid)
+        .is_err_and(|error| error.to_string().contains("CFG_NETWORK_PREFIX")));
+
+    let mut dns = document;
+    let Some(network) = dns.network_policy.as_mut() else {
+        unreachable!("fixture has a network policy")
+    };
+    network.destination_policies[0].port_ranges = vec![NetworkPortRangeV1 {
+        first: 53,
+        last: 53,
+    }];
+    assert!(PolicyCompiler
+        .compile(&dns)
+        .is_err_and(|error| error.to_string().contains("CFG_NETWORK_DNS_MODE")));
     Ok(())
 }
 

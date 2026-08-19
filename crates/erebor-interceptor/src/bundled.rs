@@ -1259,6 +1259,64 @@ mod tests {
     }
 
     #[test]
+    fn network_socket_authority_is_retained_until_kernel_release() {
+        let maps = include_str!("../../../bpf/erebor-interceptor/programs/identity_maps.h");
+        let source =
+            include_str!("../../../bpf/erebor-interceptor/programs/identity_network.bpf.h");
+        let release = source
+            .split("int BPF_PROG(erebor_network_socket_release")
+            .nth(1)
+            .unwrap_or_default();
+
+        assert!(maps.contains("BPF_F_NO_PREALLOC | BPF_F_CLONE"));
+        assert!(source.contains("SEC(\"fexit/inet_csk_accept\")"));
+        assert!(source.contains("state->parent_socket_generation"));
+        assert!(release.contains("profile_generation_socket_refs"));
+        assert!(release.contains("network_response_floors"));
+        assert!(release.contains("network_socket_state_kind_v1_tombstoned"));
+    }
+
+    #[test]
+    fn network_use_intersects_current_and_creator_decisions() {
+        let source =
+            include_str!("../../../bpf/erebor-interceptor/programs/identity_network.bpf.h");
+        let destination = source
+            .split("static __always_inline int network_apply_destination")
+            .nth(1)
+            .and_then(|source| {
+                source
+                    .split("static __always_inline int network_socket_create_result")
+                    .next()
+            })
+            .unwrap_or_default();
+
+        assert!(destination.contains("current_class = network_classify_destination"));
+        assert!(destination.contains("creator_class = network_classify_destination"));
+        assert!(destination.contains("network_decision_allows(creator, creator_generation)"));
+        assert!(destination.contains("network_apply_decision(config, scratch, current_generation"));
+        assert!(destination.contains("network_replace_flow_authorizer"));
+    }
+
+    #[test]
+    fn final_packet_floor_uses_retained_flow_state_without_a_current_actor() {
+        let source =
+            include_str!("../../../bpf/erebor-interceptor/programs/identity_network.bpf.h");
+        let packet = source
+            .split("int erebor_network_final_flow")
+            .nth(1)
+            .and_then(|source| source.split("SEC(\"lsm/socket_create\")").next())
+            .unwrap_or_default();
+
+        assert!(packet.contains("bpf_sk_storage_get(&network_socket_states"));
+        assert!(packet.contains("state->flow_authorizer_profile_generation_ref_id"));
+        assert!(packet.contains("state->creator_profile_generation_ref_id"));
+        assert!(packet.contains("network_response_floors"));
+        assert!(packet.contains("effect_observation_reason_v1_network_response_fence"));
+        assert!(!packet.contains("network_current_actor"));
+        assert!(!packet.contains("bpf_get_current_task"));
+    }
+
+    #[test]
     fn mount_reconciliation_commits_in_bpf_before_global_clean_publication() {
         let source = include_str!("../../../bpf/erebor-interceptor/programs/identity.bpf.c");
         let command = source
