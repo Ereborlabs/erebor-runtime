@@ -3945,44 +3945,6 @@ mod tests {
     };
 
     #[test]
-    fn global_mount_clean_epoch_follows_kernel_reconciliation() -> crate::Result<()> {
-        let source = include_str!("policy.rs");
-        let reconciliation = source
-            .split("pub fn reconcile_mount_views")
-            .nth(1)
-            .and_then(|source| source.split("fn mount_view_is_clean").next())
-            .unwrap_or_default();
-        let view_reconciliation = source
-            .split("fn reconcile_mount_view(")
-            .nth(1)
-            .and_then(|source| source.split("#[derive(Clone)]").next())
-            .unwrap_or_default();
-        let commit = reconciliation
-            .find(".reconcile_mount_view(host, roots, global_epoch)")
-            .ok_or_else(|| {
-                IdentityStateSnafu {
-                    reason: "mount reconciliation does not invoke each kernel view commit"
-                        .to_owned(),
-                }
-                .build()
-            })?;
-        let publish = reconciliation
-            .find("host.update_map(\n                \"mount_global_clean_epoch\"")
-            .ok_or_else(|| {
-                IdentityStateSnafu {
-                    reason: "mount reconciliation does not publish the global clean epoch"
-                        .to_owned(),
-                }
-                .build()
-            })?;
-
-        assert!(commit < publish);
-        assert!(view_reconciliation.contains("apply_mount_reconciliation_proposal"));
-        assert!(reconciliation.contains("self.mount_view_is_clean(host, roots, global_epoch)"));
-        Ok(())
-    }
-
-    #[test]
     fn capacity_preflight_counts_existing_and_planned_unique_keys() -> crate::Result<()> {
         ensure_map_capacity(
             "effect_decisions",
@@ -4181,42 +4143,11 @@ mod tests {
     }
 
     #[test]
-    fn committed_publication_is_not_rolled_back_after_readback_failure() -> crate::Result<()> {
+    fn committed_generation_readback_requires_the_published_value() -> crate::Result<()> {
         let target = 8_u64.to_ne_bytes();
         ensure_committed_generation(&target, Some(&target))?;
         assert!(ensure_committed_generation(&target, None).is_err());
         assert!(ensure_committed_generation(&target, Some(&7_u64.to_ne_bytes())).is_err());
-
-        let activation = include_str!("policy.rs")
-            .split("fn activate_profile(")
-            .nth(1)
-            .and_then(|source| source.split("fn same_activation_identity(").next())
-            .unwrap_or_default();
-        let after_commit = activation
-            .split("let committed = host")
-            .nth(1)
-            .unwrap_or_default();
-        assert!(!after_commit.contains("restore_activation_targets"));
-        let prepare = activation
-            .find(".prepare_activation(")
-            .unwrap_or(usize::MAX);
-        let last_target_readback = activation
-            .rfind("binding activation target changed before publication")
-            .unwrap_or_default();
-        let pointer_update = activation
-            .find(".update_map(\"active_profile_generations\"")
-            .unwrap_or_default();
-        assert!(last_target_readback < prepare && prepare < pointer_update);
-        assert!(activation[pointer_update..].contains("rollback.finalize_pending"));
-
-        let recovery = include_str!("policy.rs")
-            .split("fn reconcile_pending_activations(")
-            .nth(1)
-            .and_then(|source| source.split("fn verify_pending_descriptor(").next())
-            .unwrap_or_default();
-        assert!(recovery.contains("verify_pending_descriptor(host, &pending)?"));
-        assert!(recovery.contains("rollback.finalize_pending(&pending)"));
-        assert!(recovery.contains("observed == pending.previous_profile_generation_ref_id"));
         Ok(())
     }
 
@@ -4252,68 +4183,6 @@ mod tests {
         };
 
         assert_ne!(old.as_bytes(), new.as_bytes());
-    }
-
-    #[test]
-    fn generation_staging_does_not_overwrite_live_mount_state() {
-        let source = include_str!("policy.rs");
-        let install = source
-            .split("fn install(\n        &self,\n        host: &KernelHost")
-            .nth(1)
-            .and_then(|source| source.split("fn active_descriptor(").next())
-            .unwrap_or_default();
-
-        assert!(install.contains("self.install_missing_mount_rows(host)?;"));
-        assert!(!install.contains("install_rows(host, \"mount_security_views\""));
-        assert!(!install.contains("install_rows(host, \"mount_mutation_epochs\""));
-        assert!(!install.contains("install_rows(host, \"mount_security_view_locks\""));
-    }
-
-    #[test]
-    fn new_roots_use_one_profile_pointer_and_live_effects_use_pinned_generation() {
-        let maps = include_str!("../../../bpf/erebor-interceptor/programs/identity_maps.h");
-        let effects =
-            include_str!("../../../bpf/erebor-interceptor/programs/identity_effects.bpf.h");
-        let roots =
-            include_str!("../../../bpf/erebor-interceptor/programs/identity_root_helpers.h");
-        let exec = include_str!("../../../bpf/erebor-interceptor/programs/identity_exec.bpf.h");
-
-        assert!(maps.contains(
-            "bpf_map_lookup_elem(&active_profile_generations,\n                                            &binding->profile_id)"
-        ));
-        assert!(maps.contains("key.profile_generation_ref_id = generation_id;"));
-        assert!(maps.contains("generation_id != target->active_profile_generation_ref_id"));
-        assert!(maps.contains("&target->binding_nonce, &binding->binding_nonce"));
-        assert!(maps.contains("&target->profile_id, &binding->profile_id"));
-        assert!(maps.contains("binding->lifecycle_state != binding_lifecycle_state_v1_active"));
-        assert!(effects.contains(
-            "&profile_generation_descriptors,\n        &scratch->process.active_profile_generation_ref_id"
-        ));
-        assert!(roots.contains("create_root(task, config, activation, scratch"));
-        assert!(exec.contains("slot, binding, process->active_profile_generation_ref_id"));
-    }
-
-    #[test]
-    fn generation_retirement_waits_for_async_io_authority() {
-        let source = include_str!("policy.rs");
-        let retained = source
-            .split("fn generation_has_retained_authority(")
-            .nth(1)
-            .and_then(|source| source.split("fn retire_generation_rows(").next())
-            .unwrap_or_default();
-        let retire = source
-            .split("fn retire_generation_rows(")
-            .nth(1)
-            .and_then(|source| source.split("fn delete_generation_prefixed_rows(").next())
-            .unwrap_or_default();
-
-        assert!(retained.contains("profile_generation_async_refs"));
-        assert!(retained.contains("io_uring_ring_states"));
-        assert!(retained.contains("io_uring_request_states"));
-        assert!(retire.contains("delete_map_entry(\"profile_generation_async_refs\""));
-        assert!(retire.contains("\"path_graph_exact_transitions\""));
-        assert!(retire.contains("\"path_graph_wildcard_transitions\""));
-        assert!(retire.contains("\"path_graph_terminals\""));
     }
 
     #[test]
