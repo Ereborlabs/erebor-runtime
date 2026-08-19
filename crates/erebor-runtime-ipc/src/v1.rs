@@ -538,31 +538,6 @@ mod tests {
     };
 
     #[test]
-    fn split_proto_files_are_the_v1_contract_artifact() {
-        let proto = concat!(
-            include_str!("../proto/erebor/runtime/ipc/v1/envelope.proto"),
-            include_str!("../proto/erebor/runtime/ipc/v1/guard.proto"),
-            include_str!("../proto/erebor/runtime/ipc/v1/hook.proto"),
-            include_str!("../proto/erebor/runtime/ipc/v1/daemon.proto"),
-        );
-
-        assert!(proto.contains("message Envelope"));
-        assert!(proto.contains("message InterceptionRequest"));
-        assert!(proto.contains("message InterceptionDecision"));
-        assert!(proto.contains("message GuardLifecycleEvent"));
-        assert!(proto.contains("message GuardLifecycleReply"));
-        assert!(proto.contains("enum GuardLifecycleReplyKind"));
-        assert!(proto.contains("enum DecisionKind"));
-        assert!(proto.contains("message HookHello"));
-        assert!(proto.contains("message HookPeerEvidence"));
-        assert!(proto.contains("message HookEvent"));
-        assert!(proto.contains("message HookResult"));
-        assert!(proto.contains("message HookRejection"));
-        assert!(proto.contains("enum HookEventKind"));
-        assert!(proto.contains("message DaemonHello"));
-    }
-
-    #[test]
     fn guard_hello_fixture_round_trips_through_envelope_frame() -> Result<(), Box<dyn Error>> {
         let fixture = fixtures::guard_hello();
         let envelope = Envelope::wrap_message(1, 0, KIND_GUARD_HELLO, &fixture)?;

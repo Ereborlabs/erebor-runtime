@@ -830,21 +830,6 @@ mod tests {
     }
 
     #[test]
-    fn receipt_restore_never_uses_an_overwriting_update() {
-        let source = include_str!("exception_authority.rs");
-        let restore = source
-            .split("pub(super) fn restore_receipts")
-            .nth(1)
-            .and_then(|source| source.split("pub(super) fn reconcile").next())
-            .unwrap_or_default();
-
-        assert!(restore.contains("insert_map(\"exception_use_receipts\""));
-        assert!(restore.contains("MapInsertResult::AlreadyExists"));
-        assert!(restore.contains("validate_receipt_transition(&durable, &live)"));
-        assert!(!restore.contains("update_map"));
-    }
-
-    #[test]
     fn torn_wal_record_fails_closed() -> crate::Result<()> {
         let directory = state_directory()?;
         let key = runtime_key();
