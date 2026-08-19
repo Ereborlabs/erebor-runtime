@@ -41,6 +41,7 @@ struct NodeSession {
     identity: StreamIdentity,
     output: mpsc::Sender<Result<ControlEnvelope, Status>>,
     next_sequence: u64,
+    admission_ready: bool,
 }
 
 enum PendingAdministrativeResponse {
@@ -135,6 +136,11 @@ impl ControlPlane {
                 .sessions
                 .get_mut(node_id)
                 .ok_or_else(|| Status::unavailable("target node has no ready control stream"))?;
+            if !session.admission_ready {
+                return Err(Status::failed_precondition(
+                    "target node admission is not ready",
+                ));
+            }
             let sequence = session.next_sequence;
             session.next_sequence = sequence
                 .checked_add(1)
@@ -189,6 +195,11 @@ impl ControlPlane {
                 .sessions
                 .get_mut(node_id)
                 .ok_or_else(|| Status::unavailable("target node has no ready control stream"))?;
+            if !session.admission_ready {
+                return Err(Status::failed_precondition(
+                    "target node admission is not ready",
+                ));
+            }
             let sequence = session.next_sequence;
             session.next_sequence = sequence
                 .checked_add(1)
@@ -298,9 +309,9 @@ impl ControlPlane {
 
     #[allow(clippy::result_large_err)]
     fn validate_readiness(&self, report: &crate::NodeReadinessReport) -> Result<(), Status> {
-        if !report.kernel_ready || !report.control_ready || !report.admission_ready {
+        if !report.kernel_ready || !report.control_ready {
             return Err(Status::failed_precondition(
-                "node readiness requires kernel, control, and admission readiness",
+                "node readiness requires kernel and control readiness",
             ));
         }
         Ok(())
@@ -311,6 +322,7 @@ impl ControlPlane {
         &self,
         identity: &StreamIdentity,
         output: &mpsc::Sender<Result<ControlEnvelope, Status>>,
+        admission_ready: bool,
     ) -> Result<(), Status> {
         let mut state = self
             .state
@@ -331,6 +343,7 @@ impl ControlPlane {
                 identity: identity.clone(),
                 output: output.clone(),
                 next_sequence: 3,
+                admission_ready,
             },
         );
         Ok(())
@@ -426,6 +439,47 @@ impl ControlPlane {
             session
                 .identity
                 .envelope(sequence, ControlPayload::EvidenceAck(ack)),
+        ))
+    }
+
+    #[allow(clippy::result_large_err)]
+    fn accept_coverage(
+        &self,
+        identity: &StreamIdentity,
+        report: &crate::CoverageReport,
+    ) -> Result<
+        (
+            mpsc::Sender<Result<ControlEnvelope, Status>>,
+            ControlEnvelope,
+        ),
+        Status,
+    > {
+        let evidence = self.evidence.as_ref().ok_or_else(|| {
+            Status::failed_precondition("Control has no durable evidence intake owner")
+        })?;
+        let ack = evidence.receive_coverage(&identity.node_id, report)?;
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| Status::internal("control session state is poisoned"))?;
+        let session = state
+            .sessions
+            .get_mut(&identity.node_id)
+            .ok_or_else(|| Status::failed_precondition("coverage arrived before node readiness"))?;
+        if session.identity.connection_nonce != identity.connection_nonce {
+            return Err(Status::unauthenticated(
+                "coverage stream does not own the ready node session",
+            ));
+        }
+        let sequence = session.next_sequence;
+        session.next_sequence = sequence
+            .checked_add(1)
+            .ok_or_else(|| Status::out_of_range("control stream sequence exhausted"))?;
+        Ok((
+            session.output.clone(),
+            session
+                .identity
+                .envelope(sequence, ControlPayload::CoverageAck(ack)),
         ))
     }
 
@@ -530,7 +584,11 @@ impl NodeControl for ControlPlane {
                         ),
                         Some(NodePayload::ReadinessReport(report)) => {
                             control.validate_readiness(&report)?;
-                            control.register_ready_session(&identity, &session_output)
+                            control.register_ready_session(
+                                &identity,
+                                &session_output,
+                                report.admission_ready,
+                            )
                         }
                         Some(NodePayload::Resolution(response)) => {
                             control.deliver_resolution(&identity.node_id, *response)
@@ -543,6 +601,14 @@ impl NodeControl for ControlPlane {
                             ack_output.try_send(Ok(ack)).map_err(|_| {
                                 Status::unavailable(
                                     "evidence acknowledgement output is full or closed",
+                                )
+                            })
+                        }
+                        Some(NodePayload::CoverageReport(report)) => {
+                            let (ack_output, ack) = control.accept_coverage(&identity, &report)?;
+                            ack_output.try_send(Ok(ack)).map_err(|_| {
+                                Status::unavailable(
+                                    "coverage acknowledgement output is full or closed",
                                 )
                             })
                         }
@@ -803,7 +869,7 @@ mod tests {
             connection_nonce: vec![2; 16],
         };
         let (output, mut input) = tokio::sync::mpsc::channel(1);
-        control.register_ready_session(&identity, &output)?;
+        control.register_ready_session(&identity, &output, true)?;
         let request_id = vec![3; 16];
         let request = ResolveAdministrativeExec {
             request_id: request_id.clone(),

@@ -4,9 +4,10 @@ use std::path::{Path, PathBuf};
 
 use erebor_interceptor::{KernelObjectManifestV1, KernelStateReader};
 use erebor_runtime_ipc::v1::{
-    Envelope, EnvelopeServiceFamily, MithrilCapabilityRecord, MithrilObservationSnapshot,
-    MithrilObservationSnapshotRequest, MithrilObservationSnapshotResponse,
-    KIND_MITHRIL_OBSERVATION_SNAPSHOT_REQUEST, KIND_MITHRIL_OBSERVATION_SNAPSHOT_RESPONSE,
+    Envelope, EnvelopeServiceFamily, MithrilCapabilityRecord, MithrilCoverageInterval,
+    MithrilObservationSnapshot, MithrilObservationSnapshotRequest,
+    MithrilObservationSnapshotResponse, KIND_MITHRIL_OBSERVATION_SNAPSHOT_REQUEST,
+    KIND_MITHRIL_OBSERVATION_SNAPSHOT_RESPONSE,
 };
 use erebor_runtime_ipc::{AsyncFrameCodec, IpcProtocolError};
 use mithril_control::CapabilityRecord;
@@ -126,6 +127,9 @@ impl RuntimeObservationServer {
             unresolved_effects: 0,
             decoder_errors: 0,
             effect_health_available: false,
+            coverage_intervals: Vec::new(),
+            negative_claim_eligible: false,
+            evidence_errors: 0,
         };
         Ok(Self {
             config,
@@ -215,6 +219,7 @@ async fn handle(
                     .flatten()
             })
         });
+        update_coverage(&mut snapshot, &observations);
     }
     let response = bounded_observation_response(
         envelope.message_id,
@@ -308,7 +313,68 @@ fn update_effect_health(
     snapshot.lost_effects = health.lost;
     snapshot.unresolved_effects = health.unresolved;
     snapshot.decoder_errors = health.decoder_errors;
+    snapshot.evidence_errors = health.evidence_errors;
     snapshot.effect_health_available = health_bytes.is_some();
+}
+
+fn update_coverage(
+    snapshot: &mut MithrilObservationSnapshot,
+    observations: &EffectObservationStore,
+) {
+    let Some(coverage) = observations.coverage_snapshot() else {
+        snapshot.coverage_intervals.clear();
+        snapshot.negative_claim_eligible = false;
+        return;
+    };
+    snapshot.negative_claim_eligible = coverage.supports_negative_claim();
+    if !snapshot.negative_claim_eligible {
+        if let Some(capability) = snapshot
+            .capabilities
+            .iter_mut()
+            .find(|capability| capability.capability_id == "LOCAL_EFFECT_OBSERVATION")
+        {
+            capability.state = "UNHEALTHY".to_owned();
+            capability.reason_code = "DURABLE_EVIDENCE_COVERAGE_GAPPED".to_owned();
+        }
+    }
+    snapshot.coverage_intervals = coverage
+        .all_intervals()
+        .into_iter()
+        .map(|interval| {
+            let negative_claim_eligible = interval.supports_negative_claim();
+            let counters = interval
+                .closing_counters
+                .unwrap_or(interval.opening_counters);
+            MithrilCoverageInterval {
+                interval_id: evidence_id_hex(interval.interval_id),
+                source_id: evidence_id_hex(interval.source_id),
+                source_epoch: interval.source_epoch,
+                cpu_id: interval.cpu_id,
+                revision: interval.revision,
+                state: interval.state.as_str().to_owned(),
+                first_sequence: interval.first_sequence,
+                last_sequence: interval.last_sequence,
+                gap_reasons: interval
+                    .gap_reasons
+                    .into_iter()
+                    .map(|reason| reason.as_str().to_owned())
+                    .collect(),
+                attempted: counters.attempted,
+                suppressed: counters.suppressed,
+                requested: counters.requested,
+                emitted: counters.emitted,
+                lost: counters.lost,
+                classifier_miss_count: counters.classifier_miss_count,
+                unresolved: counters.unresolved,
+                next_sequence: counters.next_sequence,
+                negative_claim_eligible,
+            }
+        })
+        .collect();
+}
+
+fn evidence_id_hex(id: crate::EvidenceIdV1) -> String {
+    format!("{:016x}{:016x}", id.high, id.low)
 }
 
 fn peer_in_cgroup_scope(pid: i32, allowed_scope: &str) -> bool {

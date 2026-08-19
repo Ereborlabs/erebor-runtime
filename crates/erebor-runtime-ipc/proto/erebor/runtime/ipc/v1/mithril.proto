@@ -26,6 +26,30 @@ message MithrilObservationSnapshot {
   uint64 unresolved_effects = 11;
   uint64 decoder_errors = 12;
   bool effect_health_available = 13;
+  repeated MithrilCoverageInterval coverage_intervals = 14;
+  bool negative_claim_eligible = 15;
+  uint64 evidence_errors = 16;
+}
+
+message MithrilCoverageInterval {
+  string interval_id = 1;
+  string source_id = 2;
+  uint64 source_epoch = 3;
+  uint32 cpu_id = 4;
+  uint64 revision = 5;
+  string state = 6;
+  uint64 first_sequence = 7;
+  optional uint64 last_sequence = 8;
+  repeated string gap_reasons = 9;
+  uint64 attempted = 10;
+  uint64 suppressed = 11;
+  uint64 requested = 12;
+  uint64 emitted = 13;
+  uint64 lost = 14;
+  uint64 classifier_miss_count = 15;
+  uint64 unresolved = 16;
+  uint64 next_sequence = 17;
+  bool negative_claim_eligible = 18;
 }
 
 message MithrilCapabilityRecord {
