@@ -10,6 +10,7 @@
 #define SOCK_TYPE_MASK 0xf
 #define AF_INET 2
 #define AF_INET6 10
+#define AF_UNIX 1
 #define IPPROTO_TCP 6
 #define IPPROTO_UDP 17
 #define SOL_SOCKET 1
@@ -912,8 +913,12 @@ SEC("lsm/socket_create")
 int BPF_PROG(erebor_identity_socket_create, int family, int type, int protocol,
              int kern, int ret)
 {
-    if (family != AF_INET && family != AF_INET6)
+    if (family == AF_UNIX)
         return ret;
+    if (family != AF_INET && family != AF_INET6)
+        return network_unsupported(
+            ret, network_current_actor(
+                     kernel_effect_operation_v1_socket_create, ret));
     return network_socket_create_result(family, type, protocol, ret);
 }
 
