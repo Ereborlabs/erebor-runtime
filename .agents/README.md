@@ -13,6 +13,8 @@ the detailed rules. Read the guide that matches the work before editing.
   protocol handling, and browser-client acceptance.
 - [verification.md](verification.md): required quality gates, e2e evidence, and
   final reporting.
+- [worktrees.md](worktrees.md): required repository-local worktree location,
+  creation, relocation, and verification.
 
 ## Discover Documentation And Plans
 

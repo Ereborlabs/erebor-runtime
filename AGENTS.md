@@ -11,7 +11,10 @@ Do not edit external source trees such as `openclaw/`, `playwright/`, or
 2. Read the guide that matches the work before editing: `engineering.md` for
    code, `planning.md` for plans, `browser-cdp.md` for browser/CDP work, and
    `verification.md` before claiming a result.
-3. Read the relevant current plan and its supporting documents. Use
+3. Read [worktrees.md](.agents/worktrees.md) before you create, move, or use a
+   linked worktree. Every linked worktree except the primary checkout must be
+   under this repository's `worktrees/` directory.
+4. Read the relevant current plan and its supporting documents. Use
    [docs/README.md](docs/README.md) and
    [docs/plans/README.md](docs/plans/README.md) as the document and plan
    indexes; do not rely on a remembered or stale path.
