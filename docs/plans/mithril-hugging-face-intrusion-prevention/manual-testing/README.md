@@ -1,12 +1,16 @@
 # Mithril Manual Acceptance Index
 
-Status: Proposed operator runbooks. No procedure in this directory has been
-executed by this documentation change.
+Status: Operator runbooks. The Phase 6 guide contains an executed acceptance
+record. Other guides retain their own stated status.
 
 These documents turn each phase's automated fixtures into a human-reviewable
 live acceptance procedure. They supplement, but never replace, the committed
 Rust tests, deterministic fixtures, and qualification artifacts required by
 the phase plan.
+
+The Phase 6 record refers to evidence in `/tmp`. It records SHA-256 values so
+an operator can identify the exact files. The evidence files are not
+repository or release artifacts.
 
 Start with [environment setup](./environment-setup.md). Then use the guide for
 the approved phase:
