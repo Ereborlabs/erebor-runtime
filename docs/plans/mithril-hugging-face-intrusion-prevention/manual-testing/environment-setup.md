@@ -37,7 +37,7 @@ by later rows in this guide.
 Phase 5 also has a network-only two-node companion:
 
 ```sh
-examples/mithril-network-manual/run-two-node-network-probe.sh \
+crates/mithril-e2e/harness/vm/two-node-network.sh \
   --output-directory /tmp/mithril-network-two-node-review
 ```
 

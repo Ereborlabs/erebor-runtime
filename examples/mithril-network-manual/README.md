@@ -1,9 +1,8 @@
 # Mithril Network Enforcement Manual Probe
 
-This example runs the single-host and two-node physical network probes. The
-single-host probe loads the real Mithril BPF programs, creates dedicated
-cgroups, installs a signed policy, and runs managed children through the
-production enforcement path.
+This example runs the single-host physical network probe. It loads the real
+Mithril BPF programs, creates dedicated cgroups, installs a signed policy, and
+runs managed children through the production enforcement path.
 
 The probe proves these results:
 
@@ -27,7 +26,7 @@ The result contains one `PASS` row for each of the 13 allocated fixtures. It
 does not claim DNS payload parsing, TLS operation semantics, every network
 topology, or every network protocol.
 
-## Run The Single-Host Probe
+## Run
 
 Use a kernel-qualified Linux host with cgroup v2, runtime BPF Type Format, a
 mounted BPF filesystem, and BPF LSM enabled. Install `iproute2`, `nftables`,
@@ -65,38 +64,9 @@ The script exits with an error unless every Boolean physical oracle is `true`
 and the exact 13-row fixture list contains only `PASS` results. The result does
 not turn an untested product capability into a support claim.
 
-## Run The Two-Node CNI Probe
+## Two-Node Automation Boundary
 
-Use an x86_64 Linux host with system libvirt access and the VM harness
-dependencies. Run this command as the workspace user so the harness can build
-the Rust binaries and use that user's SSH key:
-
-```sh
-examples/mithril-network-manual/run-two-node-network-probe.sh
-```
-
-The script creates two disposable VMs, installs the pinned K3s version, and
-waits for two Ready Kubernetes nodes with different boot identities. It pins
-one peer Pod to each node. The peer server runs in the Pod network namespace.
-The source probe uses the remote Pod IP, so allowed and denied traffic crosses
-the K3s Flannel CNI path.
-
-The probe runs in both directions. Each direction must deliver allowed TCP and
-UDP payloads, deny the unapproved port without peer receipt, and pass all 13
-network fixtures. The harness removes the namespace, K3s installation, and
-both VMs after a successful run.
-
-The default evidence directory is:
-
-```text
-/tmp/mithril-network-two-node-manual
-```
-
-Set a different empty directory with `--output-directory` or
-`MITHRIL_NETWORK_TWO_NODE_OUTPUT`. Use `--keep-vms` only for a controlled
-debugging run. The retained-VM file contains the exact cleanup commands and
-ownership paths.
-
-This result qualifies the implemented cross-node Flannel CNI route. It does
-not qualify an arbitrary service mesh, a different CNI, distributed response
-authorization, or Layer 7 semantics.
+The two-node K3s Flannel proof owns VM and cluster lifecycle. It is an
+automated harness case, not a manual example. Use the
+[VM harness instructions](../../crates/mithril-e2e/harness/vm/README.md) for
+that proof. This example does not create, select, retain, or destroy a VM.

@@ -114,9 +114,13 @@ Fixture cases and exact physical results: all 13 allocated fixtures are PASS
   in the single-host probe and in both two-node directions; allowed peer TCP
   and UDP payloads arrive, and the denied peer receives no connection.
 Commands and exact source state covered: current checked worktree source;
-  formatting, focused clippy, Mithril e2e library tests, complete repository
-  Rust CI, the standalone network manual probe, the complete single-node VM
-  harness, and the bidirectional two-node K3s Flannel harness.
+  formatting, workspace check, workspace clippy, focused network tests, the
+  standalone network manual probe, the complete single-node VM harness, and
+  the bidirectional two-node K3s Flannel harness. The final workspace test
+  reaches the digest-bound kernel qualification bundle check and rejects the
+  unchanged generated qualification record as stale. The user directed this
+  source-only change not to commit that generated record. A separate full
+  workspace run passed every other test with that exact bundle test excluded.
 Platform/kernel/runtime manifests: x86_64 Linux 6.8.0-137-generic on both
   independently booted nodes, cgroup v2, BPF filesystem, runtime BTF, active
   BPF LSM, K3s v1.35.5+k3s1, and two Ready Kubernetes nodes.
@@ -127,7 +131,9 @@ Unsupported/degraded allocated paths: none. DNS payload and TLS semantics,
   service meshes, SNAT and dynamic route mutation, transfer mechanisms beyond
   the qualified descriptor and pidfd paths, and broader protocols are not
   advertised. No fixture is DEGRADED.
-Remaining work in this phase: none. Claim expansion requires a new
+Remaining implementation work in this phase: none. The source-only branch is
+  not a green release branch until its separate generated kernel qualification
+  record is refreshed by the release owner. Claim expansion requires a new
   qualification outcome.
 Next phase not authorized: yes.
 ```
