@@ -28,6 +28,12 @@ pub use identity::{
 };
 pub use local::RuntimeObservationServer;
 pub use node::{NodeChassis, NodeReadinessV1};
-pub use observation::{EffectObservationHealth, EffectObservationStore};
+pub use observation::{
+    CoverageStateV1, EffectObservationHealth, EffectObservationStore, EvidenceFieldKeyV1,
+    EvidenceFieldV1, EvidenceIdV1, EvidencePayloadV1, EvidenceValueV1, IntegrityV1,
+    LocalSubjectBindingV1, ObservationCanonicalizer, ObservationEnvelopeV1,
+    OperationResultAuthorityV1, ProofQualityV1, RemoteSubjectBindingV1, SensitivityV1,
+    SourceAuthorityV1, TemporalCoverageV1, MAX_EVIDENCE_FIELDS_V1, MAX_PROVENANCE_OBSERVATIONS_V1,
+};
 pub use policy::NodePolicyGenerationOwner;
 pub use trust::{InstalledTrustGenerationV1, TrustCache};
