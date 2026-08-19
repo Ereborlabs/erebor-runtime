@@ -38,6 +38,8 @@ use crate::Result;
 const PAYLOAD: &[u8] = b"allowed";
 const DUP_PAYLOAD: &[u8] = b"dup";
 const FORK_PAYLOAD: &[u8] = b"fork";
+const SENDMSG_PAYLOAD: &[u8] = b"sendmsg";
+const TOKEN_PAYLOAD: &[u8] = b"token";
 const TOKEN_OBJECT_KEY_ID: u64 = 9_001;
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -53,18 +55,25 @@ pub struct NetworkPhysicalProbeBundleV1 {
     pub denied_unclassified_connect: bool,
     pub allowed_connect: bool,
     pub allowed_send_received: bool,
+    pub sendmsg_allowed: bool,
+    pub sendfile_allowed: bool,
+    pub splice_allowed: bool,
     pub allowed_receive: bool,
     pub allowed_socket_control: bool,
     pub whole_socket_fence_installed: bool,
     pub post_fence_send_denied: bool,
     pub post_fence_shutdown_denied: bool,
     pub post_fence_bytes_absent: bool,
+    pub post_fence_bypass_packets_absent: bool,
     pub socket_reference_released: bool,
     pub tcp_ipv6_allowed: bool,
     pub udp_connected_allowed: bool,
     pub udp_unconnected_allowed: bool,
     pub dns_and_alternate_resolver_denied: bool,
     pub unsupported_network_families_denied: bool,
+    pub io_uring_sqpoll_denied: bool,
+    pub tun_tap_setup_denied: bool,
+    pub bpf_setup_denied: bool,
     pub unsafe_socket_control_denied: bool,
     pub accepted_socket_narrow_actor_denied: bool,
     pub accepted_socket_approved_actor_allowed: bool,
@@ -262,7 +271,7 @@ impl NetworkTestRunner {
 
         let main_root = actor_root(&fixture_root, actor_names[0])?;
         let token_path = main_root.join("token");
-        fs::write(&token_path, b"token").context(IoSnafu { path: &token_path })?;
+        fs::write(&token_path, TOKEN_PAYLOAD).context(IoSnafu { path: &token_path })?;
         let mut fixture = EffectProcessFixture::start(&main_root)?;
         move_actor(&fixture, &actor_cgroups[0])?;
         let mut server_fixture =
@@ -378,7 +387,18 @@ impl NetworkTestRunner {
         );
 
         let server = thread::spawn(move || {
-            server_exchange(listener, &[PAYLOAD, DUP_PAYLOAD, FORK_PAYLOAD].concat())
+            server_exchange(
+                listener,
+                &[
+                    PAYLOAD,
+                    DUP_PAYLOAD,
+                    FORK_PAYLOAD,
+                    SENDMSG_PAYLOAD,
+                    TOKEN_PAYLOAD,
+                    TOKEN_PAYLOAD,
+                ]
+                .concat(),
+            )
         });
         let lifecycle_server = thread::spawn(move || server_receive(lifecycle_listener, b"new"));
         let ipv6_server = thread::spawn(move || server_receive(ipv6_listener, b"ipv6"));
@@ -464,12 +484,20 @@ impl NetworkTestRunner {
         fixture.network_clone()?;
         let cloned_socket_allowed = fixture.network_clone_send(DUP_PAYLOAD)?.allowed;
         let inherited_socket_allowed = fixture.network_fork_send(FORK_PAYLOAD)?.allowed;
+        let sendmsg_allowed = fixture.network_sendmsg(SENDMSG_PAYLOAD)?.allowed;
+        let sendfile_allowed = fixture.network_sendfile(&token_path)?.allowed;
+        let splice_allowed = fixture.network_splice(&token_path)?.allowed;
         let unsafe_socket_control_denied = fixture.network_set_mark(7)?.denied();
         ensure!(
-            cloned_socket_allowed && inherited_socket_allowed && unsafe_socket_control_denied,
+            cloned_socket_allowed
+                && inherited_socket_allowed
+                && sendmsg_allowed
+                && sendfile_allowed
+                && splice_allowed
+                && unsafe_socket_control_denied,
             InvalidInputSnafu {
                 path: Path::new("network socket variants"),
-                reason: "clone, inherited use, or unsafe socket-control closure failed",
+                reason: "a socket transfer path, inherited path, or unsafe control failed",
             }
         );
 
@@ -505,12 +533,19 @@ impl NetworkTestRunner {
             (KernelEffectFamilyV1::Network, KernelEffectOperationV1::Send),
         )?;
         let post_fence_shutdown_denied = fixture.network_shutdown()?.denied();
+        let post_fence_sendmsg = fixture.network_sendmsg(b"sendmsg-blocked")?;
+        let post_fence_sendfile = fixture.network_sendfile(&token_path)?;
+        let post_fence_splice = fixture.network_splice(&token_path)?;
         let shared_clone_denied = fixture.network_clone_send(b"clone-blocked")?.denied();
         ensure!(
-            post_fence_shutdown_denied && shared_clone_denied,
+            post_fence_shutdown_denied
+                && shared_clone_denied
+                && (post_fence_sendmsg.allowed || post_fence_sendmsg.denied())
+                && (post_fence_sendfile.allowed || post_fence_sendfile.denied())
+                && (post_fence_splice.allowed || post_fence_splice.denied()),
             InvalidInputSnafu {
                 path: Path::new("fenced network socket"),
-                reason: "the whole-socket response fence allowed shutdown",
+                reason: "a fenced bypass path returned an unqualified result",
             }
         );
         fixture.network_close()?;
@@ -542,6 +577,7 @@ impl NetworkTestRunner {
                 reason: "the server received bytes after the whole-socket fence",
             }
         );
+        let post_fence_bypass_packets_absent = post_fence_bytes_absent;
 
         let reuse_marker = observations.cursor();
         let lifecycle_connect = fixture.network_connect(lifecycle_address)?.allowed;
@@ -635,6 +671,7 @@ impl NetworkTestRunner {
             (libc::AF_PACKET, libc::SOCK_RAW, 0),
             (libc::AF_NETLINK, libc::SOCK_RAW, 0),
             (libc::AF_VSOCK, libc::SOCK_STREAM, 0),
+            (27, libc::SOCK_RAW, 0),
             (44, libc::SOCK_RAW, 0),
             (libc::AF_INET, libc::SOCK_STREAM, 132),
             (libc::AF_INET6, libc::SOCK_STREAM, 262),
@@ -646,11 +683,40 @@ impl NetworkTestRunner {
         .collect::<Result<Vec<_>>>()?
         .into_iter()
         .all(super::child::IoOutcome::denied);
+        let io_uring_marker = observations.cursor();
+        let io_uring_sqpoll_denied = fixture.network_io_uring_sqpoll()?.denied();
+        wait_for_effect(
+            &reader,
+            &observations,
+            io_uring_marker,
+            "UNSUPPORTED_OBJECT",
+            (
+                KernelEffectFamilyV1::Privilege,
+                KernelEffectOperationV1::IoUringSqpoll,
+            ),
+        )?;
+        let tun_tap_setup_denied = fixture.network_tun_tap()?.denied();
+        let bpf_marker = observations.cursor();
+        let bpf_setup_denied = fixture.network_bpf_setup()?.denied();
+        wait_for_effect(
+            &reader,
+            &observations,
+            bpf_marker,
+            "UNSUPPORTED_OBJECT",
+            (
+                KernelEffectFamilyV1::Privilege,
+                KernelEffectOperationV1::Bpf,
+            ),
+        )?;
         ensure!(
-            dns_and_alternate_resolver_denied && unsupported_network_families_denied,
+            dns_and_alternate_resolver_denied
+                && unsupported_network_families_denied
+                && io_uring_sqpoll_denied
+                && tun_tap_setup_denied
+                && bpf_setup_denied,
             InvalidInputSnafu {
                 path: Path::new("closed network paths"),
-                reason: "a DNS, resolver, tunnel, or unsupported protocol path remained open",
+                reason: "a DNS, tunnel, delegated setup, or protocol path remained open",
             }
         );
 
@@ -972,6 +1038,13 @@ impl NetworkTestRunner {
             hf_network: denied_unclassified_connect
                 && dns_and_alternate_resolver_denied
                 && unsupported_network_families_denied
+                && io_uring_sqpoll_denied
+                && tun_tap_setup_denied
+                && bpf_setup_denied
+                && sendmsg_allowed
+                && sendfile_allowed
+                && splice_allowed
+                && post_fence_bypass_packets_absent
                 && allowed_send_received,
             local_inet: allowed_connect
                 && tcp_ipv6_allowed
@@ -1032,18 +1105,25 @@ impl NetworkTestRunner {
             denied_unclassified_connect,
             allowed_connect,
             allowed_send_received,
+            sendmsg_allowed,
+            sendfile_allowed,
+            splice_allowed,
             allowed_receive,
             allowed_socket_control,
             whole_socket_fence_installed,
             post_fence_send_denied,
             post_fence_shutdown_denied,
             post_fence_bytes_absent,
+            post_fence_bypass_packets_absent,
             socket_reference_released,
             tcp_ipv6_allowed,
             udp_connected_allowed,
             udp_unconnected_allowed,
             dns_and_alternate_resolver_denied,
             unsupported_network_families_denied,
+            io_uring_sqpoll_denied,
+            tun_tap_setup_denied,
+            bpf_setup_denied,
             unsafe_socket_control_denied,
             accepted_socket_narrow_actor_denied,
             accepted_socket_approved_actor_allowed,
