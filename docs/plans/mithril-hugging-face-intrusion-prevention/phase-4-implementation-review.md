@@ -3,10 +3,10 @@
 Status: Source-grounded review guide for implementation commit
 `e0438d920d5071295ab733db0d7df0eb03a95b8c`.
 
-Phase: [Signed Local Pre-Effect Enforcement](./phase-4-signed-local-pre-effect-enforcement.md)  
-Architecture: [validated readable architecture](./policy-and-protection-algorithm-architecture-readable.md)  
-Closure: [local fixture matrix](./phase-4-closure-matrix.md)  
-Manual proof: [acceptance runbook](./manual-testing/phase-4-manual-acceptance.md)
+- Phase: [Signed Local Pre-Effect Enforcement](./phase-4-signed-local-pre-effect-enforcement.md)
+- Architecture: [validated readable architecture](./policy-and-protection-algorithm-architecture-readable.md)
+- Closure: [local fixture matrix](./phase-4-closure-matrix.md)
+- Manual proof: [acceptance runbook](./manual-testing/phase-4-manual-acceptance.md)
 
 ## Review Claim
 

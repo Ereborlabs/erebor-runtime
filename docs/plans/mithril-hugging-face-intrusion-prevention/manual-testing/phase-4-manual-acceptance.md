@@ -5,10 +5,10 @@ protected result has 15 `PASS` and 14 exact `UNSUPPORTED` fixture results.
 The catalog below remains the qualification target for a later, broader
 claim.
 
-Phase: [Signed Local Pre-Effect Enforcement](../phase-4-signed-local-pre-effect-enforcement.md)  
-Setup: [`SINGLE-NODE`](./environment-setup.md)  
-Closure: [local fixture matrix](../phase-4-closure-matrix.md)  
-Review: [implementation review guide](../phase-4-implementation-review.md)
+- Phase: [Signed Local Pre-Effect Enforcement](../phase-4-signed-local-pre-effect-enforcement.md)
+- Setup: [`SINGLE-NODE`](./environment-setup.md)
+- Closure: [local fixture matrix](../phase-4-closure-matrix.md)
+- Review: [implementation review guide](../phase-4-implementation-review.md)
 
 ## Outcome
 
