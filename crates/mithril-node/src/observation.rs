@@ -175,6 +175,10 @@ fn to_ipc(event: EffectObservationV1) -> MithrilEffectObservation {
         network_destination_policy_handle: event.network_destination_policy_handle,
         network_namespace_address: event.network_namespace.network_namespace_address,
         network_namespace_inode: event.network_namespace.network_namespace_inode,
+        network_current_namespace_address: event
+            .network_current_namespace
+            .network_namespace_address,
+        network_current_namespace_inode: event.network_current_namespace.network_namespace_inode,
         network_creator_profile_generation_ref_id: event.network_creator_profile_generation_ref_id,
         network_peer_address: event.network_peer_address.to_vec(),
         network_peer_port: u32::from(event.network_peer_port),
@@ -265,7 +269,7 @@ const fn observation_stage(result: u8) -> &'static str {
 mod tests {
     use erebor_interceptor_abi::{
         EffectObservationHealthV1, EffectObservationReasonV1, EffectObservationV1,
-        EffectPhysicalResultV1, Id128V1,
+        EffectPhysicalResultV1, Id128V1, NetworkNamespaceGenerationV1,
     };
     use zerocopy::IntoBytes as _;
 
@@ -299,6 +303,16 @@ mod tests {
                 target_role_id: 11,
                 target_process_state_vector_id: 12,
                 operation_argument: 13,
+                network_namespace: NetworkNamespaceGenerationV1 {
+                    network_namespace_address: 28,
+                    network_namespace_inode: 29,
+                    reserved: 0,
+                },
+                network_current_namespace: NetworkNamespaceGenerationV1 {
+                    network_namespace_address: 30,
+                    network_namespace_inode: 31,
+                    reserved: 0,
+                },
                 io_uring_ring_id: Id128V1::new(14, 15),
                 io_uring_ring_generation: 16,
                 io_uring_submission_sequence: 17,
@@ -341,6 +355,10 @@ mod tests {
         assert_eq!(recent[0].target_role_id, 11);
         assert_eq!(recent[0].target_process_state_vector_id, 12);
         assert_eq!(recent[0].operation_argument, 13);
+        assert_eq!(recent[0].network_namespace_address, 28);
+        assert_eq!(recent[0].network_namespace_inode, 29);
+        assert_eq!(recent[0].network_current_namespace_address, 30);
+        assert_eq!(recent[0].network_current_namespace_inode, 31);
         assert_eq!(
             recent[0].io_uring_ring_id,
             "000000000000000e000000000000000f"

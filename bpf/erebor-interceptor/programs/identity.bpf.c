@@ -94,7 +94,7 @@ _Static_assert(sizeof(exact_file_object_key_v1) == 40,
                "exact file object ABI size");
 _Static_assert(sizeof(exact_object_binding_v1) == 32,
                "exact object binding ABI size");
-_Static_assert(sizeof(effect_observation_v1) == 504,
+_Static_assert(sizeof(effect_observation_v1) == 520,
                "effect observation ABI size");
 _Static_assert(sizeof(effect_observation_health_v1) == 32,
                "effect observation health ABI size");

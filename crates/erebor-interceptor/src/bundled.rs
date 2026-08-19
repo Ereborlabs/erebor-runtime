@@ -1298,6 +1298,27 @@ mod tests {
     }
 
     #[test]
+    fn network_namespace_transfer_keeps_both_namespaces_without_transferring_authority() {
+        let source =
+            include_str!("../../../bpf/erebor-interceptor/programs/identity_network.bpf.h");
+        let validation = source
+            .split("static __always_inline int network_validate_socket")
+            .nth(1)
+            .and_then(|source| {
+                source
+                    .split("static __always_inline int network_replace_flow_authorizer")
+                    .next()
+            })
+            .unwrap_or_default();
+
+        assert!(validation.contains("scratch->observation.network_current_namespace"));
+        assert!(source.contains(
+            "scratch->observation.network_namespace =\n        state->socket_network_namespace"
+        ));
+        assert!(!validation.contains("network_namespace_equal"));
+    }
+
+    #[test]
     fn network_control_hooks_leave_unix_sockets_to_the_ipc_owner() {
         let source =
             include_str!("../../../bpf/erebor-interceptor/programs/identity_network.bpf.h");
