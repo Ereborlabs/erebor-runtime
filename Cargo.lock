@@ -3219,6 +3219,7 @@ dependencies = [
  "minicbor",
  "mithril-control",
  "procfs",
+ "prost",
  "rcgen",
  "rustix",
  "serde",

@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::fs;
 use std::time::Duration;
 
@@ -6,9 +7,12 @@ use mithril_control::node_control_client::NodeControlClient as GrpcNodeControlCl
 use mithril_control::node_envelope::Payload as NodePayload;
 use mithril_control::{
     AdministrativeExecArmResult, AdministrativeExecResolution, ArmAdministrativeExec,
-    ControlEnvelope, EvidenceAck, EvidenceBatch, EvidenceRecord, NodeEnvelope, NodeReadinessReport,
-    NodeRegistration, ResolveAdministrativeExec, TrustGenerationAck, CONTROL_PROTOCOL_VERSION,
+    ControlEnvelope, CoverageAck, CoverageCounters, CoverageInterval, CoverageReport, EvidenceAck,
+    EvidenceBatch, EvidenceRecord, NodeEnvelope, NodeReadinessReport, NodeRegistration,
+    ResolveAdministrativeExec, TrustGenerationAck, CONTROL_PROTOCOL_VERSION,
 };
+use prost::Message as _;
+use sha2::{Digest as _, Sha256};
 use snafu::ResultExt as _;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
@@ -43,6 +47,7 @@ pub enum AdministrativeControlRequest {
 pub enum NodeControlMessage {
     Administrative(AdministrativeControlRequest),
     EvidenceAck(EvidenceAck),
+    CoverageAck(CoverageAck),
 }
 
 struct ConnectionIdentity {
@@ -195,6 +200,7 @@ impl ControlConnection {
                 NodeControlMessage::Administrative(AdministrativeControlRequest::Arm(request)),
             ),
             Some(ControlPayload::EvidenceAck(ack)) => Ok(NodeControlMessage::EvidenceAck(ack)),
+            Some(ControlPayload::CoverageAck(ack)) => Ok(NodeControlMessage::CoverageAck(ack)),
             _ => ControlProtocolSnafu {
                 reason: "Control sent an unexpected post-registration message".to_owned(),
             }
@@ -207,6 +213,11 @@ impl ControlConnection {
             NodeControlMessage::Administrative(request) => Ok(request),
             NodeControlMessage::EvidenceAck(_) => ControlProtocolSnafu {
                 reason: "Control sent evidence acknowledgement to an administrative-only owner"
+                    .to_owned(),
+            }
+            .fail(),
+            NodeControlMessage::CoverageAck(_) => ControlProtocolSnafu {
+                reason: "Control sent coverage acknowledgement to an administrative-only owner"
                     .to_owned(),
             }
             .fail(),
@@ -233,6 +244,57 @@ impl ControlConnection {
             batch_sha256: batch.batch_sha256.to_vec(),
         }))
         .await
+    }
+
+    pub async fn send_coverage_report(
+        &mut self,
+        snapshot: crate::CoverageSnapshotV1,
+    ) -> Result<CoverageAck> {
+        let current: BTreeSet<_> = snapshot
+            .current_intervals()
+            .into_iter()
+            .map(|interval| interval.interval_id)
+            .collect();
+        let intervals = snapshot
+            .all_intervals()
+            .into_iter()
+            .map(|interval| {
+                let current_interval = current.contains(&interval.interval_id);
+                CoverageInterval {
+                    interval_id: evidence_id_bytes(interval.interval_id),
+                    source_id: evidence_id_bytes(interval.source_id),
+                    source_epoch: interval.source_epoch,
+                    cpu_id: interval.cpu_id,
+                    revision: interval.revision,
+                    state: interval.state.as_str().to_owned(),
+                    first_sequence: interval.first_sequence,
+                    last_sequence: interval.last_sequence,
+                    opening_counters: Some(coverage_counters(interval.opening_counters)),
+                    closing_counters: interval.closing_counters.map(coverage_counters),
+                    gap_reasons: interval
+                        .gap_reasons
+                        .into_iter()
+                        .map(|reason| reason.as_str().to_owned())
+                        .collect(),
+                    current: current_interval,
+                }
+            })
+            .collect();
+        let mut report = CoverageReport {
+            source_epoch: snapshot.source_epoch,
+            revision: snapshot.revision,
+            intervals,
+            negative_claim_eligible: snapshot.supports_negative_claim(),
+            report_sha256: Vec::new(),
+        };
+        report.report_sha256 = Sha256::digest(report.encode_to_vec()).to_vec();
+        let expected = CoverageAck {
+            source_epoch: report.source_epoch,
+            revision: report.revision,
+            report_sha256: report.report_sha256.clone(),
+        };
+        self.send(NodePayload::CoverageReport(report)).await?;
+        Ok(expected)
     }
 
     pub async fn send_resolution(&mut self, response: AdministrativeExecResolution) -> Result<()> {
@@ -274,6 +336,23 @@ impl ControlConnection {
                 .fail()
             })
     }
+}
+
+fn coverage_counters(counters: crate::CoverageCountersV1) -> CoverageCounters {
+    CoverageCounters {
+        attempted: counters.attempted,
+        suppressed: counters.suppressed,
+        requested: counters.requested,
+        emitted: counters.emitted,
+        lost: counters.lost,
+        classifier_miss_count: counters.classifier_miss_count,
+        unresolved: counters.unresolved,
+        next_sequence: counters.next_sequence,
+    }
+}
+
+fn evidence_id_bytes(id: crate::EvidenceIdV1) -> Vec<u8> {
+    [id.high.to_be_bytes(), id.low.to_be_bytes()].concat()
 }
 
 impl AdministrativeControlRequest {

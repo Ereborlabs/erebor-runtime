@@ -253,6 +253,18 @@ pub enum CoverageStateV1 {
     Closed,
 }
 
+impl CoverageStateV1 {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Healthy => "HEALTHY",
+            Self::Gapped => "GAPPED",
+            Self::Unknown => "UNKNOWN",
+            Self::Closed => "CLOSED",
+        }
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ObservationEnvelopeV1 {
@@ -417,7 +429,7 @@ impl ObservationCanonicalizer {
         })
     }
 
-    fn cpu_source_id(self, cpu_id: u32) -> EvidenceIdV1 {
+    pub(crate) fn cpu_source_id(self, cpu_id: u32) -> EvidenceIdV1 {
         let mut digest = Sha256::new();
         digest.update(b"MITHRIL-KERNEL-SOURCE-V1\0");
         self.source_id.update_digest(&mut digest);
