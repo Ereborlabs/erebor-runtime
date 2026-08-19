@@ -81,18 +81,30 @@ The following checks passed after the last implementation edit:
 
 ```sh
 cargo fmt --all -- --check
-cargo clippy -p erebor-interceptor -p mithril-e2e --all-targets -- -D warnings
-cargo test -p mithril-e2e --lib
-bash .github/scripts/verify-rust-ci.sh
+cargo check --workspace
+cargo clippy --workspace --all-targets --all-features -- -D warnings
+cargo test --workspace --all-targets --all-features -- \
+  --skip runner::tests::verification_bundle_is_frozen_only_for_recorded_physical_surfaces
 ```
 
-The complete repository CI script passed outside the restricted sandbox so
-its localhost integration tests could bind sockets. The network runner also
-passed in the disposable VM through the manual script and the full VM harness.
-The two-node companion passed with:
+The required repository CI script does not pass the exact source-only branch.
+It completes formatting, workspace check, clippy, and all earlier tests. The
+digest-bound `verification_bundle_is_frozen_only_for_recorded_physical_surfaces`
+test then rejects the unchanged generated kernel qualification record as
+stale. The user directed this change not to commit a regenerated SHA-256 or
+CI/CD qualification artifact. The implementation does not weaken or skip that
+release test.
+
+The source-only workspace command passed 972 tests. It ignored 15 tests and
+filtered five tests. The only deliberate exclusion was the exact
+qualification-bundle test named in the command.
+
+The network runner passed in the disposable VM through the manual script and
+the full VM harness. The two-node companion passed with the automated harness
+owner:
 
 ```sh
-examples/mithril-network-manual/run-two-node-network-probe.sh \
+crates/mithril-e2e/harness/vm/two-node-network.sh \
   --output-directory /tmp/mithril-network-two-node-review
 ```
 

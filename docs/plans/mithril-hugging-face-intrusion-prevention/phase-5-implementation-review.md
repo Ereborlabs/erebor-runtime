@@ -476,7 +476,7 @@ accepts either direction.
 | Node lifecycle tests | Tests beside [`NodePolicyGenerationOwner`](../../../crates/mithril-node/src/policy.rs) | Capacity, staging, readback, publication, response-floor validation, socket-reference-aware retirement, and row deletion. |
 | ABI and Interceptor tests | [`abi/network.rs`](../../../crates/erebor-interceptor-abi/src/abi/network.rs) and [`bundled.rs`](../../../crates/erebor-interceptor/src/bundled.rs) | Closed enums and layout, required maps and hooks, creator/current intersection, socket lifetime, Unix owner separation, and packet use of retained state. |
 | Rust physical fixture tests | [`effect/network.rs`](../../../crates/mithril-e2e/src/effect/network.rs) | Signed fixture compilation, closed unique result matrix, managed-child protocol, and assertion-bearing physical sequence. |
-| Manual example | [`mithril-network-manual`](../../../examples/mithril-network-manual/README.md) | Readable single-host and two-node commands that use the production runner and VM harness. |
+| Manual example | [`mithril-network-manual`](../../../examples/mithril-network-manual/README.md) | A readable single-host command that uses the production runner and does not own VM lifecycle. |
 | Disposable VM harness | [`run.sh`](../../../crates/mithril-e2e/harness/vm/run.sh) and [`two-node-network.sh`](../../../crates/mithril-e2e/harness/vm/two-node-network.sh) | Explicit build, isolated kernel execution, exact two-node and peer-Pod placement, evidence collection, cross-probe compatibility, and cleanup. |
 
 ## Verification Route
@@ -509,7 +509,7 @@ Run the two-node CNI proof when the network route, peer fixture, or K3s harness
 changes:
 
 ```sh
-examples/mithril-network-manual/run-two-node-network-probe.sh \
+crates/mithril-e2e/harness/vm/two-node-network.sh \
   --output-directory /tmp/mithril-network-two-node-review
 ```
 
@@ -568,8 +568,12 @@ widen the qualified network claim without its own physical proof.
 This guide was checked against the current isolated worktree on 2026-08-19.
 The documentation change does not modify Rust, BPF, ABI, build, or test source.
 
-The full Rust CI gate, single-node disposable-VM physical suite, and
-bidirectional two-node K3s Flannel suite passed after the last implementation
-edit. The documentation diff check and local link-target check passed after
-this guide was updated. The guide records no broader result than the closure
-matrix.
+The single-node disposable-VM physical suite and bidirectional two-node K3s
+Flannel suite passed after the last implementation edit. The Rust CI procedure
+passed formatting, workspace check, and workspace clippy. Its workspace tests
+then rejected the unchanged generated kernel qualification record as stale.
+The user directed this source-only change not to commit the regenerated
+SHA-256 or CI/CD qualification artifact. A separate workspace run passed every
+other test with that exact bundle test excluded. The documentation diff check
+and local link-target check passed after this guide was updated. The guide
+records no broader result than the closure matrix.
