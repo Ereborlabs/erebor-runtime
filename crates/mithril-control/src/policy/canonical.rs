@@ -1,5 +1,3 @@
-use std::convert::Infallible;
-
 use minicbor::Encoder;
 use serde::Serialize;
 
@@ -16,7 +14,7 @@ pub(crate) fn canonical_cbor<T: Serialize>(policy_id: &str, value: &T) -> Result
         .build()
     })?;
     let mut bytes = Vec::new();
-    encode_value(&mut Encoder::new(&mut bytes), &value).map_err(|error| {
+    crate::canonical::encode_value(&mut Encoder::new(&mut bytes), &value).map_err(|error| {
         PolicyValidationSnafu {
             policy_id,
             code: "CFG_CANONICAL_CBOR",
@@ -25,50 +23,6 @@ pub(crate) fn canonical_cbor<T: Serialize>(policy_id: &str, value: &T) -> Result
         .build()
     })?;
     Ok(bytes)
-}
-
-fn encode_value(
-    encoder: &mut Encoder<&mut Vec<u8>>,
-    value: &serde_json::Value,
-) -> std::result::Result<(), minicbor::encode::Error<Infallible>> {
-    match value {
-        serde_json::Value::Null => {
-            encoder.null()?;
-        }
-        serde_json::Value::Bool(value) => {
-            encoder.bool(*value)?;
-        }
-        serde_json::Value::Number(value) => {
-            if let Some(value) = value.as_u64() {
-                encoder.u64(value)?;
-            } else if let Some(value) = value.as_i64() {
-                encoder.i64(value)?;
-            } else {
-                return Err(minicbor::encode::Error::message(
-                    "floating-point policy values are forbidden",
-                ));
-            }
-        }
-        serde_json::Value::String(value) => {
-            encoder.str(value)?;
-        }
-        serde_json::Value::Array(values) => {
-            encoder.array(values.len() as u64)?;
-            for value in values {
-                encode_value(encoder, value)?;
-            }
-        }
-        serde_json::Value::Object(values) => {
-            let mut fields = values.iter().collect::<Vec<_>>();
-            fields.sort_unstable_by_key(|(key, _)| *key);
-            encoder.map(fields.len() as u64)?;
-            for (key, value) in fields {
-                encoder.str(key)?;
-                encode_value(encoder, value)?;
-            }
-        }
-    }
-    Ok(())
 }
 
 #[cfg(test)]
@@ -83,10 +37,23 @@ mod tests {
         a: u8,
     }
 
+    #[derive(Serialize)]
+    struct DifferentLengths {
+        aa: u8,
+        b: u8,
+    }
+
     #[test]
     fn map_keys_are_canonical_not_struct_ordered() -> crate::Result<()> {
         let bytes = canonical_cbor("test", &OrderedDifferently { z: 1, a: 2 })?;
         assert_eq!(bytes, [0xa2, 0x61, b'a', 2, 0x61, b'z', 1]);
+        Ok(())
+    }
+
+    #[test]
+    fn map_keys_use_rfc_8949_length_then_byte_order() -> crate::Result<()> {
+        let bytes = canonical_cbor("test", &DifferentLengths { aa: 1, b: 2 })?;
+        assert_eq!(bytes, [0xa2, 0x61, b'b', 2, 0x62, b'a', b'a', 1]);
         Ok(())
     }
 }

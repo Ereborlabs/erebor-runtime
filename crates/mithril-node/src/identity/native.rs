@@ -53,7 +53,11 @@ impl NativeSecurityStateOwner {
         self.activate_state(host, effect_policy_enabled, true)
     }
 
-    pub fn reconcile(&self, host: &mut KernelHost) -> Result<ReconciliationReportV1> {
+    pub fn reconcile(
+        &self,
+        host: &mut KernelHost,
+        effect_policy_enabled: bool,
+    ) -> Result<ReconciliationReportV1> {
         let key = 0_u32.to_ne_bytes();
         let bytes = host
             .lookup_map("identity_config", &key)
@@ -75,7 +79,7 @@ impl NativeSecurityStateOwner {
                 && config.label_epoch == self.label_epoch
                 && config.next_id > 0
                 && config.enabled == 1
-                && config.effect_policy_enabled <= 1
+                && config.effect_policy_enabled == u8::from(effect_policy_enabled)
                 && config.first_effect_errno == -rustix::io::Errno::ACCESS.raw_os_error(),
             IdentityStateSnafu {
                 reason: "live identity configuration differs from its node owner",

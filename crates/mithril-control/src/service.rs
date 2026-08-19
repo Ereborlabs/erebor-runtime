@@ -56,6 +56,10 @@ enum PendingAdministrativeResponse {
 }
 
 const ADMINISTRATIVE_NODE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+type SessionResponse = (
+    mpsc::Sender<Result<ControlEnvelope, Status>>,
+    ControlEnvelope,
+);
 
 #[derive(Clone)]
 pub struct ControlPlane {
@@ -86,17 +90,9 @@ impl ControlPlane {
         trust: TrustGenerationV1,
         directory: impl Into<std::path::PathBuf>,
     ) -> crate::Result<Self> {
-        Ok(Self {
-            allowed_nodes: Arc::new(
-                allowed
-                    .into_iter()
-                    .map(|identity| (identity.node_id, identity.certificate_sha256))
-                    .collect(),
-            ),
-            trust,
-            state: Arc::new(Mutex::new(ControlState::default())),
-            evidence: Some(crate::EvidenceIntakeOwner::open(directory)?),
-        })
+        let mut control = Self::new(allowed, trust);
+        control.evidence = Some(crate::EvidenceIntakeOwner::open(directory)?);
+        Ok(control)
     }
 
     #[must_use]
@@ -406,18 +402,35 @@ impl ControlPlane {
         &self,
         identity: &StreamIdentity,
         batch: &crate::EvidenceBatch,
-    ) -> Result<
-        (
-            mpsc::Sender<Result<ControlEnvelope, Status>>,
-            ControlEnvelope,
-        ),
-        Status,
-    > {
+    ) -> Result<SessionResponse, Status> {
         self.require_ready_session_owner(identity)?;
         let evidence = self.evidence.as_ref().ok_or_else(|| {
             Status::failed_precondition("Control has no durable evidence intake owner")
         })?;
         let ack = evidence.receive(&identity.node_id, batch)?;
+        self.session_response(identity, ControlPayload::EvidenceAck(ack))
+    }
+
+    #[allow(clippy::result_large_err)]
+    fn accept_coverage(
+        &self,
+        identity: &StreamIdentity,
+        report: &crate::CoverageReport,
+    ) -> Result<SessionResponse, Status> {
+        self.require_ready_session_owner(identity)?;
+        let evidence = self.evidence.as_ref().ok_or_else(|| {
+            Status::failed_precondition("Control has no durable evidence intake owner")
+        })?;
+        let ack = evidence.receive_coverage(&identity.node_id, report)?;
+        self.session_response(identity, ControlPayload::CoverageAck(ack))
+    }
+
+    #[allow(clippy::result_large_err)]
+    fn session_response(
+        &self,
+        identity: &StreamIdentity,
+        payload: ControlPayload,
+    ) -> Result<SessionResponse, Status> {
         let mut state = self
             .state
             .lock()
@@ -437,51 +450,7 @@ impl ControlPlane {
             .ok_or_else(|| Status::out_of_range("control stream sequence exhausted"))?;
         Ok((
             session.output.clone(),
-            session
-                .identity
-                .envelope(sequence, ControlPayload::EvidenceAck(ack)),
-        ))
-    }
-
-    #[allow(clippy::result_large_err)]
-    fn accept_coverage(
-        &self,
-        identity: &StreamIdentity,
-        report: &crate::CoverageReport,
-    ) -> Result<
-        (
-            mpsc::Sender<Result<ControlEnvelope, Status>>,
-            ControlEnvelope,
-        ),
-        Status,
-    > {
-        self.require_ready_session_owner(identity)?;
-        let evidence = self.evidence.as_ref().ok_or_else(|| {
-            Status::failed_precondition("Control has no durable evidence intake owner")
-        })?;
-        let ack = evidence.receive_coverage(&identity.node_id, report)?;
-        let mut state = self
-            .state
-            .lock()
-            .map_err(|_| Status::internal("control session state is poisoned"))?;
-        let session = state
-            .sessions
-            .get_mut(&identity.node_id)
-            .ok_or_else(|| Status::failed_precondition("coverage arrived before node readiness"))?;
-        if session.identity.connection_nonce != identity.connection_nonce {
-            return Err(Status::unauthenticated(
-                "coverage stream does not own the ready node session",
-            ));
-        }
-        let sequence = session.next_sequence;
-        session.next_sequence = sequence
-            .checked_add(1)
-            .ok_or_else(|| Status::out_of_range("control stream sequence exhausted"))?;
-        Ok((
-            session.output.clone(),
-            session
-                .identity
-                .envelope(sequence, ControlPayload::CoverageAck(ack)),
+            session.identity.envelope(sequence, payload),
         ))
     }
 

@@ -8,8 +8,8 @@ use mithril_control::node_envelope::Payload as NodePayload;
 use mithril_control::{
     AdministrativeExecArmResult, AdministrativeExecResolution, ArmAdministrativeExec,
     ControlEnvelope, CoverageAck, CoverageCounters, CoverageInterval, CoverageReport, EvidenceAck,
-    EvidenceBatch, EvidenceRecord, NodeEnvelope, NodeReadinessReport, NodeRegistration,
-    ResolveAdministrativeExec, TrustGenerationAck, CONTROL_PROTOCOL_VERSION,
+    NodeEnvelope, NodeReadinessReport, NodeRegistration, ResolveAdministrativeExec,
+    TrustGenerationAck, CONTROL_PROTOCOL_VERSION,
 };
 use prost::Message as _;
 use sha2::{Digest as _, Sha256};
@@ -225,25 +225,7 @@ impl ControlConnection {
     }
 
     pub async fn send_evidence_batch(&mut self, batch: crate::EvidenceBatchV1) -> Result<()> {
-        let records = batch
-            .records
-            .into_iter()
-            .map(|record| EvidenceRecord {
-                cursor: record.cursor,
-                observation_id: record.observation_id.to_vec(),
-                payload: record.payload,
-                payload_sha256: record.payload_sha256.to_vec(),
-                previous_record_sha256: record.previous_record_sha256.to_vec(),
-                record_sha256: record.record_sha256.to_vec(),
-            })
-            .collect();
-        self.send(NodePayload::EvidenceBatch(EvidenceBatch {
-            first_cursor: batch.first_cursor,
-            last_cursor: batch.last_cursor,
-            records,
-            batch_sha256: batch.batch_sha256.to_vec(),
-        }))
-        .await
+        self.send(NodePayload::EvidenceBatch(batch.into())).await
     }
 
     pub async fn send_coverage_report(
@@ -261,8 +243,8 @@ impl ControlConnection {
             .map(|interval| {
                 let current_interval = current.contains(&interval.interval_id);
                 CoverageInterval {
-                    interval_id: evidence_id_bytes(interval.interval_id),
-                    source_id: evidence_id_bytes(interval.source_id),
+                    interval_id: interval.interval_id.to_be_bytes().to_vec(),
+                    source_id: interval.source_id.to_be_bytes().to_vec(),
                     source_epoch: interval.source_epoch,
                     cpu_id: interval.cpu_id,
                     revision: interval.revision,
@@ -349,10 +331,6 @@ fn coverage_counters(counters: crate::CoverageCountersV1) -> CoverageCounters {
         unresolved: counters.unresolved,
         next_sequence: counters.next_sequence,
     }
-}
-
-fn evidence_id_bytes(id: crate::EvidenceIdV1) -> Vec<u8> {
-    [id.high.to_be_bytes(), id.low.to_be_bytes()].concat()
 }
 
 impl AdministrativeControlRequest {

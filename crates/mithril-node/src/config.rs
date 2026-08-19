@@ -57,6 +57,38 @@ pub struct EvidenceConfig {
     pub maximum_control_delay_ms: u64,
 }
 
+impl From<&EvidenceConfig> for crate::EvidenceWalLimits {
+    fn from(config: &EvidenceConfig) -> Self {
+        Self {
+            maximum_record_bytes: config.maximum_record_bytes,
+            maximum_retained_bytes: config.maximum_retained_bytes,
+            maximum_retained_records: config.maximum_retained_records,
+            maximum_batch_records: config.maximum_batch_records,
+        }
+    }
+}
+
+impl EvidenceConfig {
+    pub(crate) fn identities(
+        &self,
+    ) -> crate::Result<(
+        erebor_interceptor_abi::Id128V1,
+        erebor_interceptor_abi::Id128V1,
+    )> {
+        let parse = |value: &str| {
+            uuid::Uuid::parse_str(value)
+                .map(|uuid| (*uuid.as_bytes()).into())
+                .map_err(|error| {
+                    InvalidConfigurationSnafu {
+                        reason: format!("evidence identity is invalid: {error}"),
+                    }
+                    .build()
+                })
+        };
+        Ok((parse(&self.tenant_id)?, parse(&self.source_id)?))
+    }
+}
+
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ContainerRuntimeConfig {
@@ -201,20 +233,17 @@ impl NodeConfig {
 
     pub fn validate(&self) -> Result<()> {
         ensure!(
-            !self.node_id.is_empty() && !self.node_id.chars().any(char::is_whitespace),
+            mithril_control::node_id_is_valid(&self.node_id),
             InvalidConfigurationSnafu {
-                reason: "node_id must be nonempty and contain no whitespace",
+                reason: "node_id must be a bounded path-safe identity",
             }
         );
         if let Some(evidence) = &self.evidence {
+            let limits = crate::EvidenceWalLimits::from(evidence);
             ensure!(
                 canonical_uuid(&evidence.tenant_id)
                     && canonical_uuid(&evidence.source_id)
-                    && evidence.maximum_record_bytes > 0
-                    && evidence.maximum_retained_bytes >= evidence.maximum_record_bytes
-                    && evidence.maximum_retained_records > 0
-                    && evidence.maximum_batch_records > 0
-                    && evidence.maximum_batch_records <= evidence.maximum_retained_records
+                    && limits.validate().is_ok()
                     && evidence.maximum_control_delay_ms > 0,
                 InvalidConfigurationSnafu {
                     reason:
@@ -433,7 +462,7 @@ const fn default_authorization_clock_skew_ns() -> i64 {
 }
 
 const fn default_evidence_record_bytes() -> u64 {
-    128 * 1_024
+    mithril_control::MAX_EVIDENCE_RECORD_BYTES as u64
 }
 
 const fn default_evidence_retained_bytes() -> u64 {
@@ -445,7 +474,7 @@ const fn default_evidence_retained_records() -> usize {
 }
 
 const fn default_evidence_batch_records() -> usize {
-    256
+    mithril_control::MAX_EVIDENCE_BATCH_RECORDS
 }
 
 const fn default_evidence_control_delay_ms() -> u64 {
@@ -567,6 +596,27 @@ mod tests {
         let mut config = config();
         config.workload_bindings[0].root_cgroup_path = None;
         assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn node_identity_and_evidence_bounds_match_control() {
+        for node_id in [".", "..", "node/a", "node\\a"] {
+            let mut config = config();
+            config.node_id = node_id.to_owned();
+            assert!(config.validate().is_err());
+        }
+
+        let mut record_config = config();
+        if let Some(evidence) = &mut record_config.evidence {
+            evidence.maximum_record_bytes = mithril_control::MAX_EVIDENCE_RECORD_BYTES as u64 + 1;
+        }
+        assert!(record_config.validate().is_err());
+
+        let mut batch_config = config();
+        if let Some(evidence) = &mut batch_config.evidence {
+            evidence.maximum_batch_records = mithril_control::MAX_EVIDENCE_BATCH_RECORDS + 1;
+        }
+        assert!(batch_config.validate().is_err());
     }
 
     #[test]

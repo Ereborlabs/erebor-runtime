@@ -857,11 +857,11 @@ mod tests {
         for (exception_id, expected_digest) in [
             (
                 "bounded-secret-write-open",
-                "eb7614f22732c8edcac2e55060444472180eb11ab3e34a9ea10c3514d8d16fb3",
+                "5bb883e3b91342e70e970fff1794e8cb3299c88fc1b32585de6204dc0a514734",
             ),
             (
                 "expired-benign-write-open",
-                "d30e1be8582242608dda1b298fdf0a1e593bf54750f7e6497b3a6009d6965c9d",
+                "204bf0cbc52163f870bdf789ac161adfc15c44fd8aa8d9695f9d884791363309",
             ),
         ] {
             let cell = cells

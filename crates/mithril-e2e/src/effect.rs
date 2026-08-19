@@ -114,8 +114,11 @@ fn process_descriptor_set(pid: u32) -> Result<BTreeSet<u32>> {
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize)]
 pub struct EffectHealthV1 {
     pub attempted: u64,
+    pub suppressed: u64,
+    pub requested: u64,
     pub emitted: u64,
     pub lost: u64,
+    pub classifier_miss_count: u64,
     pub unresolved: u64,
     pub decoder_errors: u64,
     pub evidence_errors: u64,
@@ -125,8 +128,11 @@ impl From<EffectObservationHealth> for EffectHealthV1 {
     fn from(value: EffectObservationHealth) -> Self {
         Self {
             attempted: value.attempted,
+            suppressed: value.suppressed,
+            requested: value.requested,
             emitted: value.emitted,
             lost: value.lost,
+            classifier_miss_count: value.classifier_miss_count,
             unresolved: value.unresolved,
             decoder_errors: value.decoder_errors,
             evidence_errors: value.evidence_errors,
@@ -1396,16 +1402,14 @@ impl EffectTestRunner {
             1_024,
             output_directory.join("evidence-wal-v1"),
             EvidenceWalLimits {
-                maximum_record_bytes: 128 * 1_024,
-                maximum_retained_bytes: 32 * 1_024 * 1_024,
                 maximum_retained_records: 1_024,
-                maximum_batch_records: 256,
+                ..EvidenceWalLimits::default()
             },
             ObservationCanonicalizer::new(
                 EvidenceIdV1::new(0x6000_0000_0000_4000, 0x8000_0000_0000_0001),
                 EvidenceIdV1::new(0x6000_0000_0000_4000, 0x8000_0000_0000_0002),
                 1,
-                node_boot_id.into(),
+                node_boot_id,
             )
             .context(NodeSnafu)?,
         )
@@ -3788,10 +3792,11 @@ impl EffectTestRunner {
             .poll(Duration::from_millis(100))
             .context(InterceptorSnafu)?;
         let pre_saturation = sample_observation_health(&host, &observations)?;
+        let latency_delta = health_delta(pre_saturation, before_latency);
         ensure!(
-            health_delta(pre_saturation, before_latency).lost == 0
-                && health_delta(pre_saturation, before_latency).attempted
-                    == health_delta(pre_saturation, before_latency).emitted,
+            latency_delta.lost == 0
+                && latency_delta.attempted == latency_delta.suppressed + latency_delta.requested
+                && latency_delta.requested == latency_delta.emitted,
             InvalidInputSnafu {
                 path: Path::new("effect_observation_health"),
                 reason: "bounded latency measurement lost effect observations",
@@ -3840,12 +3845,12 @@ impl EffectTestRunner {
         ensure!(
             saturation_delta.lost > 0
                 && saturation_delta.attempted
-                    == saturation_delta
-                        .emitted
-                        .saturating_add(saturation_delta.lost),
+                    == saturation_delta.suppressed + saturation_delta.requested
+                && saturation_delta.requested
+                    == saturation_delta.emitted + saturation_delta.lost,
             InvalidInputSnafu {
                 path: Path::new("effect_observation_health"),
-                reason: "ring saturation did not preserve exact attempted=emitted+lost accounting",
+                reason: "ring saturation did not preserve exact attempted, requested, emitted, and lost accounting",
             }
         );
         let coverage = observations.coverage_snapshot().ok_or_else(|| {

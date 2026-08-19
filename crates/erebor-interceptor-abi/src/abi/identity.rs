@@ -1,3 +1,4 @@
+use serde::{Deserialize, Serialize};
 use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout, TryFromBytes};
 
 pub const MAX_ANCESTOR_PROCESS_LINEAGES_V1: usize = 8;
@@ -18,6 +19,7 @@ pub const CONSERVATIVE_PROCESS_STATE_VECTOR_V1: u32 = 1;
     Copy,
     Debug,
     Default,
+    Deserialize,
     Eq,
     FromBytes,
     Hash,
@@ -27,7 +29,9 @@ pub const CONSERVATIVE_PROCESS_STATE_VECTOR_V1: u32 = 1;
     Ord,
     PartialEq,
     PartialOrd,
+    Serialize,
 )]
+#[serde(deny_unknown_fields)]
 pub struct Id128V1 {
     pub high: u64,
     pub low: u64,
@@ -44,6 +48,31 @@ impl Id128V1 {
     #[must_use]
     pub const fn is_zero(self) -> bool {
         self.high == 0 && self.low == 0
+    }
+
+    #[must_use]
+    pub const fn to_be_bytes(self) -> [u8; 16] {
+        (((self.high as u128) << 64) | self.low as u128).to_be_bytes()
+    }
+}
+
+impl From<u128> for Id128V1 {
+    fn from(value: u128) -> Self {
+        Self::new((value >> 64) as u64, value as u64)
+    }
+}
+
+impl From<[u8; 16]> for Id128V1 {
+    fn from(value: [u8; 16]) -> Self {
+        u128::from_be_bytes(value).into()
+    }
+}
+
+impl From<[u8; 32]> for Id128V1 {
+    fn from(digest: [u8; 32]) -> Self {
+        let mut bytes = [0; 16];
+        bytes.copy_from_slice(&digest[..16]);
+        bytes.into()
     }
 }
 

@@ -114,7 +114,7 @@ fn manifest() -> KernelObjectManifestV1 {
             program: "qualification_file_open".to_owned(),
             link_id: 1,
             program_id: 2,
-            program_tag: vec![0; 8],
+            program_tag: [0; 8],
             pin_path: None,
         }],
         ready: true,

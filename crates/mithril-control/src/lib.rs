@@ -1,5 +1,6 @@
 mod administrative_exec;
 mod administrative_http;
+mod canonical;
 mod config;
 mod error;
 mod evidence;
@@ -12,7 +13,7 @@ pub use administrative_exec::*;
 pub use administrative_http::*;
 pub use config::ControlConfig;
 pub use error::{Error, Result};
-pub use evidence::EvidenceIntakeOwner;
+pub use evidence::*;
 pub use policy::*;
 pub use protocol::*;
 pub use server::{serve, ControlServerTls};

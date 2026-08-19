@@ -29,7 +29,7 @@ impl LocalFindingWindowSpecV1 {
                 .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
             || self.package_version == 0
             || self.sequence_width == 0
-            || self.sequence_width > 1_000_000
+            || self.sequence_width > MAX_WINDOW_OBSERVATIONS as u64
         {
             return EvidenceStateSnafu {
                 reason: "local window package identity or sequence bound is invalid".to_owned(),
@@ -41,12 +41,13 @@ impl LocalFindingWindowSpecV1 {
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[repr(u8)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum LocalFindingWindowStateV1 {
-    Open,
-    Ready,
-    CoverageInsufficient,
-    Contradicted,
+    Open = 0,
+    Ready = 1,
+    CoverageInsufficient = 2,
+    Contradicted = 3,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -60,7 +61,6 @@ pub struct LocalFindingWindowV1 {
     pub source_epoch: u64,
     pub first_sequence: u64,
     pub last_sequence: u64,
-    pub revision: u64,
     pub revision_digest: EvidenceDigestV1,
     pub state: LocalFindingWindowStateV1,
     pub observation_ids: Vec<EvidenceDigestV1>,
@@ -246,14 +246,6 @@ impl DeterministicLocalWindowOwner {
         let window_id = window_id(&self.spec, key, last_sequence);
         let revision_digest =
             revision_digest(window_id, state, &observation_ids, &coverage_interval_ids);
-        let mut revision = u64::from_be_bytes(
-            revision_digest[..8]
-                .try_into()
-                .unwrap_or([0; std::mem::size_of::<u64>()]),
-        );
-        if revision == 0 {
-            revision = 1;
-        }
         Ok(LocalFindingWindowV1 {
             schema_version: LOCAL_WINDOW_SCHEMA_VERSION,
             window_id,
@@ -263,7 +255,6 @@ impl DeterministicLocalWindowOwner {
             source_epoch: key.source_epoch,
             first_sequence: key.first_sequence,
             last_sequence,
-            revision,
             revision_digest,
             state,
             observation_ids,
@@ -317,8 +308,7 @@ fn window_id(
     digest.update((spec.package_id.len() as u64).to_be_bytes());
     digest.update(spec.package_id.as_bytes());
     digest.update(spec.package_version.to_be_bytes());
-    digest.update(key.source_id.high.to_be_bytes());
-    digest.update(key.source_id.low.to_be_bytes());
+    digest.update(key.source_id.to_be_bytes());
     digest.update(key.source_epoch.to_be_bytes());
     digest.update(key.first_sequence.to_be_bytes());
     digest.update(last_sequence.to_be_bytes());
@@ -335,12 +325,13 @@ fn revision_digest(
     digest.update(b"MITHRIL-LOCAL-WINDOW-REVISION-V1\0");
     digest.update(window_id);
     digest.update([state as u8]);
+    digest.update((observation_ids.len() as u64).to_be_bytes());
     for observation_id in observation_ids {
         digest.update(observation_id);
     }
+    digest.update((coverage_interval_ids.len() as u64).to_be_bytes());
     for coverage_id in coverage_interval_ids {
-        digest.update(coverage_id.high.to_be_bytes());
-        digest.update(coverage_id.low.to_be_bytes());
+        digest.update(coverage_id.to_be_bytes());
     }
     digest.finalize().into()
 }
@@ -388,12 +379,21 @@ mod tests {
     }
 
     #[test]
-    fn delivery_order_and_duplicates_produce_identical_terminal_windows() -> crate::Result<()> {
-        let directory = tempfile::tempdir().map_err(|source| crate::Error::Io {
-            path: "temporary local window directory".into(),
-            source,
-            location: snafu::Location::default(),
-        })?;
+    fn window_width_cannot_exceed_owner_capacity() {
+        assert!(
+            DeterministicLocalWindowOwner::new(LocalFindingWindowSpecV1 {
+                package_id: "HF-PROC-001".to_owned(),
+                package_version: 1,
+                sequence_width: 4_097,
+            })
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn delivery_order_and_duplicates_produce_identical_terminal_windows(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
         let canonicalizer = canonicalizer()?;
         let coverage =
             CoverageHealthOwner::open(directory.path().join("coverage.json"), canonicalizer)?;
@@ -406,7 +406,7 @@ mod tests {
                     source_sequence: sequence,
                     source_cpu_id: 0,
                     task_cookie: 7,
-                    reason: u8::try_from(sequence).unwrap_or_default(),
+                    reason: u8::try_from(sequence)?,
                     physical_result: 1,
                     ..EffectObservationV1::default()
                 },
@@ -431,6 +431,7 @@ mod tests {
 
         let mut wrong_interval = observations.clone();
         wrong_interval[0].coverage_interval_id = EvidenceIdV1::new(99, 100);
+        wrong_interval[0] = wrong_interval[0].clone().finalize()?;
         let inconsistent = owner()?.build(&wrong_interval, &coverage.snapshot())?;
         assert_eq!(
             inconsistent[0].state,
@@ -441,12 +442,8 @@ mod tests {
     }
 
     #[test]
-    fn gaps_and_contradictions_have_stable_nonnegative_revisions() -> crate::Result<()> {
-        let directory = tempfile::tempdir().map_err(|source| crate::Error::Io {
-            path: "temporary local window directory".into(),
-            source,
-            location: snafu::Location::default(),
-        })?;
+    fn gaps_and_contradictions_have_stable_revisions() -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
         let canonicalizer = canonicalizer()?;
         let coverage =
             CoverageHealthOwner::open(directory.path().join("coverage.json"), canonicalizer)?;

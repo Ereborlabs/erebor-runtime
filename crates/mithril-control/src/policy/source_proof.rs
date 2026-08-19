@@ -95,6 +95,20 @@ pub struct ProofQualityV1 {
     pub integrity: ProofIntegrityV1,
 }
 
+impl ProofQualityV1 {
+    #[must_use]
+    pub const fn kernel_decision(temporal_coverage: TemporalCoverageV1) -> Self {
+        Self {
+            source_authority: SourceAuthorityV1::KernelDecision,
+            local_subject_binding: LocalSubjectBindingV1::ExactTask,
+            remote_subject_binding: RemoteSubjectBindingV1::None,
+            operation_result_authority: OperationResultAuthorityV1::PreEffectDecision,
+            temporal_coverage,
+            integrity: ProofIntegrityV1::LocalAttested,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ResourceSelectorV1 {

@@ -26,6 +26,13 @@ pub enum Error {
         #[snafu(implicit)]
         location: Location,
     },
+    #[snafu(display("Mithril evidence model is invalid: {source}"))]
+    EvidenceModel {
+        #[snafu(source(from(mithril_control::EvidenceModelError, Box::new)))]
+        source: Box<mithril_control::EvidenceModelError>,
+        #[snafu(implicit)]
+        location: Location,
+    },
     #[snafu(display("Mithril authorization proof was rejected: {reason}"))]
     Authorization {
         reason: String,
@@ -113,12 +120,22 @@ pub enum Error {
 
 pub type Result<T> = std::result::Result<T, Error>;
 
+impl From<mithril_control::EvidenceModelError> for Error {
+    fn from(source: mithril_control::EvidenceModelError) -> Self {
+        Self::EvidenceModel {
+            source: Box::new(source),
+            location: Location::new(file!(), line!(), column!()),
+        }
+    }
+}
+
 impl ErrorExt for Error {
     fn status_code(&self) -> StatusCode {
         match self {
             Self::InvalidConfiguration { .. }
             | Self::IdentityState { .. }
             | Self::EvidenceState { .. }
+            | Self::EvidenceModel { .. }
             | Self::Json { .. }
             | Self::ControlProtocol { .. } => StatusCode::InvalidArguments,
             Self::Authorization { .. } => StatusCode::PermissionDenied,
@@ -150,6 +167,7 @@ impl ErrorExt for Error {
             Self::InvalidConfiguration { .. }
             | Self::IdentityState { .. }
             | Self::EvidenceState { .. }
+            | Self::EvidenceModel { .. }
             | Self::Authorization { .. }
             | Self::Json { .. }
             | Self::ControlProtocol { .. } => RetryHint::NonRetryable,

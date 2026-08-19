@@ -1,6 +1,5 @@
 use std::collections::BTreeMap;
-use std::fs::{self, File, OpenOptions};
-use std::io::Write as _;
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
 
@@ -8,9 +7,14 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 use snafu::ResultExt as _;
 
-use super::{CoverageStateV1, EvidenceIdV1, ObservationCanonicalizer, TemporalCoverageV1};
+use super::{
+    CoverageGapReasonV1, CoverageStateV1, EvidenceIdV1, ObservationCanonicalizer,
+    TemporalCoverageV1,
+};
 use crate::error::{EvidenceStateSnafu, IoSnafu};
 use crate::Result;
+
+use super::persistence::atomic_write;
 
 const COVERAGE_SCHEMA_VERSION: u32 = 1;
 const MAX_COVERAGE_HISTORY: usize = 4_096;
@@ -32,23 +36,6 @@ pub struct CoverageCountersV1 {
 pub struct EffectObservationCpuHealth {
     pub cpu_id: u32,
     pub counters: CoverageCountersV1,
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-pub enum CoverageGapReasonV1 {
-    SourceSequenceGap,
-    RingLoss,
-    ClassifierMiss,
-    UnresolvedEffect,
-    ReaderDelay,
-    ReaderStopped,
-    WalFailure,
-    WalCapacity,
-    ControlDelay,
-    KernelStateMismatch,
-    UncleanRestart,
-    CounterRegression,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -125,26 +112,6 @@ impl CoverageSnapshotV1 {
     }
 }
 
-impl CoverageGapReasonV1 {
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::SourceSequenceGap => "SOURCE_SEQUENCE_GAP",
-            Self::RingLoss => "RING_LOSS",
-            Self::ClassifierMiss => "CLASSIFIER_MISS",
-            Self::UnresolvedEffect => "UNRESOLVED_EFFECT",
-            Self::ReaderDelay => "READER_DELAY",
-            Self::ReaderStopped => "READER_STOPPED",
-            Self::WalFailure => "WAL_FAILURE",
-            Self::WalCapacity => "WAL_CAPACITY",
-            Self::ControlDelay => "CONTROL_DELAY",
-            Self::KernelStateMismatch => "KERNEL_STATE_MISMATCH",
-            Self::UncleanRestart => "UNCLEAN_RESTART",
-            Self::CounterRegression => "COUNTER_REGRESSION",
-        }
-    }
-}
-
 #[derive(Clone)]
 pub struct CoverageHealthOwner {
     inner: Arc<Mutex<CoverageInner>>,
@@ -154,6 +121,27 @@ struct CoverageInner {
     path: PathBuf,
     canonicalizer: ObservationCanonicalizer,
     snapshot: CoverageSnapshotV1,
+}
+
+impl CoverageInner {
+    fn commit<T>(&mut self, change: impl FnOnce(&mut Self) -> Result<T>) -> Result<T> {
+        let original = self.snapshot.clone();
+        let value = match change(self) {
+            Ok(value) => value,
+            Err(error) => {
+                self.snapshot = original;
+                return Err(error);
+            }
+        };
+        if self.snapshot == original {
+            return Ok(value);
+        }
+        if let Err(error) = bump_and_persist(self) {
+            self.snapshot = original;
+            return Err(error);
+        }
+        Ok(value)
+    }
 }
 
 struct IntervalStart {
@@ -179,15 +167,18 @@ impl CoverageHealthOwner {
             validate_snapshot(&prior)?;
             if prior.source_epoch == source_epoch {
                 for source in prior.sources.values_mut() {
-                    if source.current.state != CoverageStateV1::Gapped {
-                        source.current.state = CoverageStateV1::Gapped;
-                        insert_reason(
-                            &mut source.current.gap_reasons,
-                            CoverageGapReasonV1::UncleanRestart,
-                        );
-                    }
+                    source.current.state = CoverageStateV1::Gapped;
+                    insert_reason(
+                        &mut source.current.gap_reasons,
+                        CoverageGapReasonV1::UncleanRestart,
+                    );
                 }
-                prior.revision = prior.revision.saturating_add(1);
+                prior.revision = prior.revision.checked_add(1).ok_or_else(|| {
+                    EvidenceStateSnafu {
+                        reason: "coverage revision is exhausted".to_owned(),
+                    }
+                    .build()
+                })?;
                 prior
             } else {
                 let sources = std::mem::take(&mut prior.sources);
@@ -209,7 +200,12 @@ impl CoverageHealthOwner {
                 CoverageSnapshotV1 {
                     schema_version: COVERAGE_SCHEMA_VERSION,
                     source_epoch,
-                    revision: prior.revision.saturating_add(1),
+                    revision: prior.revision.checked_add(1).ok_or_else(|| {
+                        EvidenceStateSnafu {
+                            reason: "coverage revision is exhausted".to_owned(),
+                        }
+                        .build()
+                    })?,
                     history: prior.history,
                     sources: BTreeMap::new(),
                 }
@@ -236,64 +232,70 @@ impl CoverageHealthOwner {
 
     pub fn sample_health(&self, samples: &[EffectObservationCpuHealth]) -> Result<()> {
         let mut inner = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
-        for sample in samples {
-            let completed = {
-                let source = ensure_source(&mut inner, *sample)?;
-                let counters = sample.counters;
-                let first_health_sample = source.last_health.is_none();
-                let accounting_valid = counters.attempted
-                    == counters.suppressed.saturating_add(counters.requested)
-                    && counters.requested == counters.emitted.saturating_add(counters.lost);
-                let mut gap = None;
-                if let Some(previous) = source.last_health {
-                    if counters.attempted < previous.attempted
-                        || counters.suppressed < previous.suppressed
-                        || counters.requested < previous.requested
-                        || counters.emitted < previous.emitted
-                        || counters.lost < previous.lost
-                        || counters.classifier_miss_count < previous.classifier_miss_count
-                        || counters.unresolved < previous.unresolved
-                        || counters.next_sequence < previous.next_sequence
-                    {
-                        gap = Some(CoverageGapReasonV1::CounterRegression);
-                    } else if counters.lost > previous.lost {
-                        gap = Some(CoverageGapReasonV1::RingLoss);
-                    } else if counters.classifier_miss_count > previous.classifier_miss_count {
-                        gap = Some(CoverageGapReasonV1::ClassifierMiss);
-                    } else if counters.unresolved > previous.unresolved {
-                        gap = Some(CoverageGapReasonV1::UnresolvedEffect);
+        inner.commit(|inner| {
+            for sample in samples {
+                let completed = {
+                    let source = ensure_source(inner, *sample)?;
+                    let counters = sample.counters;
+                    let first_health_sample = source.last_health.is_none();
+                    let accounting_valid = counters_are_valid(counters);
+                    let mut gaps = Vec::new();
+                    if let Some(previous) = source.last_health {
+                        if counters.attempted < previous.attempted
+                            || counters.suppressed < previous.suppressed
+                            || counters.requested < previous.requested
+                            || counters.emitted < previous.emitted
+                            || counters.lost < previous.lost
+                            || counters.classifier_miss_count < previous.classifier_miss_count
+                            || counters.unresolved < previous.unresolved
+                            || counters.next_sequence < previous.next_sequence
+                            || !accounting_valid
+                        {
+                            gaps.push(CoverageGapReasonV1::CounterRegression);
+                        } else {
+                            if counters.lost > previous.lost {
+                                gaps.push(CoverageGapReasonV1::RingLoss);
+                            }
+                            if counters.classifier_miss_count > previous.classifier_miss_count {
+                                gaps.push(CoverageGapReasonV1::ClassifierMiss);
+                            }
+                            if counters.unresolved > previous.unresolved {
+                                gaps.push(CoverageGapReasonV1::UnresolvedEffect);
+                            }
+                        }
+                    } else if !accounting_valid {
+                        gaps.push(CoverageGapReasonV1::CounterRegression);
                     }
-                }
-                if !accounting_valid {
-                    gap = Some(CoverageGapReasonV1::CounterRegression);
-                }
-                source.last_health = Some(counters);
-                let completed = if let Some(reason) = gap {
-                    mark_source_gap(source, reason, counters)
-                } else if first_health_sample
-                    && source.last_observed_sequence.unwrap_or(0) == counters.next_sequence
-                    && source.current.state == CoverageStateV1::Unknown
-                {
-                    Some(rotate_interval(
-                        source,
-                        CoverageStateV1::Healthy,
-                        counters.next_sequence.saturating_add(1),
-                        counters,
-                        Vec::new(),
-                    ))
-                } else if source.last_observed_sequence.unwrap_or(0) < counters.next_sequence
-                    && (first_health_sample || source.current.state == CoverageStateV1::Healthy)
-                {
-                    mark_source_gap(source, CoverageGapReasonV1::ReaderDelay, counters)
-                } else {
-                    None
+                    source.last_health = Some(counters);
+                    let mut completed = mark_source_gaps(source, gaps, counters);
+                    if completed.is_none()
+                        && source.current.state != CoverageStateV1::Gapped
+                        && first_health_sample
+                        && source.last_observed_sequence.unwrap_or(0) == counters.next_sequence
+                        && source.current.state == CoverageStateV1::Unknown
+                    {
+                        completed = Some(rotate_interval(
+                            source,
+                            CoverageStateV1::Healthy,
+                            counters.next_sequence.saturating_add(1),
+                            counters,
+                            Vec::new(),
+                        ));
+                    } else if completed.is_none()
+                        && source.current.state != CoverageStateV1::Gapped
+                        && source.last_observed_sequence.unwrap_or(0) < counters.next_sequence
+                        && (first_health_sample || source.current.state == CoverageStateV1::Healthy)
+                    {
+                        completed =
+                            mark_source_gap(source, CoverageGapReasonV1::ReaderDelay, counters);
+                    }
+                    source.current.closing_counters = Some(counters);
+                    completed
                 };
-                source.current.closing_counters = Some(counters);
-                completed
-            };
-            append_history(&mut inner, completed)?;
-        }
-        bump_and_persist(&mut inner)
+                append_history(inner, completed)?;
+            }
+            Ok(())
+        })
     }
 
     pub fn observe(
@@ -308,56 +310,60 @@ impl CoverageHealthOwner {
             .fail();
         }
         let mut inner = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
-        let baseline = EffectObservationCpuHealth {
-            cpu_id,
-            counters: CoverageCountersV1 {
-                next_sequence: sequence - 1,
-                ..CoverageCountersV1::default()
-            },
-        };
-        let (completed, interval_id, coverage) = {
-            let source = ensure_source(&mut inner, baseline)?;
-            let expected = source
-                .last_observed_sequence
-                .and_then(|value| value.checked_add(1));
-            let completed = if expected.is_some_and(|expected| expected != sequence) {
-                mark_source_gap(
-                    source,
-                    CoverageGapReasonV1::SourceSequenceGap,
-                    source.last_health.unwrap_or_default(),
-                )
-            } else {
-                None
+        inner.commit(|inner| {
+            let baseline = EffectObservationCpuHealth {
+                cpu_id,
+                counters: CoverageCountersV1 {
+                    next_sequence: sequence - 1,
+                    ..CoverageCountersV1::default()
+                },
             };
-            source.last_observed_sequence = Some(sequence);
-            source.current.last_sequence = Some(sequence);
-            let interval_id = source.current.interval_id;
-            let coverage = if source.current.supports_negative_claim() {
-                TemporalCoverageV1::Complete
-            } else {
-                TemporalCoverageV1::Gapped
+            let (completed, interval_id, coverage) = {
+                let source = ensure_source(inner, baseline)?;
+                let expected = source
+                    .last_observed_sequence
+                    .unwrap_or(source.current.opening_counters.next_sequence)
+                    .checked_add(1);
+                let completed = if expected != Some(sequence) {
+                    mark_source_gap(
+                        source,
+                        CoverageGapReasonV1::SourceSequenceGap,
+                        source.last_health.unwrap_or_default(),
+                    )
+                } else {
+                    None
+                };
+                source.last_observed_sequence = Some(sequence);
+                source.current.last_sequence = Some(sequence);
+                let interval_id = source.current.interval_id;
+                let coverage = if source.current.supports_negative_claim() {
+                    TemporalCoverageV1::Complete
+                } else {
+                    TemporalCoverageV1::Gapped
+                };
+                (completed, interval_id, coverage)
             };
-            (completed, interval_id, coverage)
-        };
-        append_history(&mut inner, completed)?;
-        bump_and_persist(&mut inner)?;
-        Ok((interval_id, coverage))
+            append_history(inner, completed)?;
+            Ok((interval_id, coverage))
+        })
     }
 
     pub fn mark_all_gapped(&self, reason: CoverageGapReasonV1) -> Result<()> {
         let mut inner = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
-        let mut completed = Vec::new();
-        for source in inner.snapshot.sources.values_mut() {
-            if let Some(interval) =
-                mark_source_gap(source, reason, source.last_health.unwrap_or_default())
-            {
-                completed.push(interval);
+        inner.commit(|inner| {
+            let mut completed = Vec::new();
+            for source in inner.snapshot.sources.values_mut() {
+                if let Some(interval) =
+                    mark_source_gap(source, reason, source.last_health.unwrap_or_default())
+                {
+                    completed.push(interval);
+                }
             }
-        }
-        for interval in completed {
-            append_history(&mut inner, Some(interval))?;
-        }
-        bump_and_persist(&mut inner)
+            for interval in completed {
+                append_history(inner, Some(interval))?;
+            }
+            Ok(())
+        })
     }
 
     pub fn recover_after_probe(&self, samples: &[EffectObservationCpuHealth]) -> Result<()> {
@@ -414,33 +420,30 @@ impl CoverageHealthOwner {
             .fail();
         }
 
-        let original = inner.snapshot.clone();
-        let mut completed = Vec::with_capacity(recovering);
-        for source in inner.snapshot.sources.values_mut() {
-            if source.current.state != CoverageStateV1::Gapped {
-                continue;
-            }
-            let counters = samples[&source.cpu_id];
-            let first_sequence = counters.next_sequence.checked_add(1).ok_or_else(|| {
-                EvidenceStateSnafu {
-                    reason: "coverage recovery sequence is exhausted".to_owned(),
+        inner.commit(|inner| {
+            let mut completed = Vec::with_capacity(recovering);
+            for source in inner.snapshot.sources.values_mut() {
+                if source.current.state != CoverageStateV1::Gapped {
+                    continue;
                 }
-                .build()
-            })?;
-            completed.push(rotate_interval(
-                source,
-                CoverageStateV1::Healthy,
-                first_sequence,
-                counters,
-                Vec::new(),
-            ));
-        }
-        inner.snapshot.history.extend(completed);
-        if let Err(error) = bump_and_persist(&mut inner) {
-            inner.snapshot = original;
-            return Err(error);
-        }
-        Ok(())
+                let counters = samples[&source.cpu_id];
+                let first_sequence = counters.next_sequence.checked_add(1).ok_or_else(|| {
+                    EvidenceStateSnafu {
+                        reason: "coverage recovery sequence is exhausted".to_owned(),
+                    }
+                    .build()
+                })?;
+                completed.push(rotate_interval(
+                    source,
+                    CoverageStateV1::Healthy,
+                    first_sequence,
+                    counters,
+                    Vec::new(),
+                ));
+            }
+            inner.snapshot.history.extend(completed);
+            Ok(())
+        })
     }
 
     pub fn snapshot(&self) -> CoverageSnapshotV1 {
@@ -528,6 +531,20 @@ fn mark_source_gap(
     }
 }
 
+fn mark_source_gaps(
+    source: &mut SourceCoverageV1,
+    reasons: impl IntoIterator<Item = CoverageGapReasonV1>,
+    counters: CoverageCountersV1,
+) -> Option<CoverageIntervalV1> {
+    let mut completed = None;
+    for reason in reasons {
+        if let Some(interval) = mark_source_gap(source, reason, counters) {
+            completed = Some(interval);
+        }
+    }
+    completed
+}
+
 fn rotate_interval(
     source: &mut SourceCoverageV1,
     state: CoverageStateV1,
@@ -580,14 +597,13 @@ fn interval(
 ) -> CoverageIntervalV1 {
     let mut digest = Sha256::new();
     digest.update(b"MITHRIL-COVERAGE-INTERVAL-V1\0");
-    digest.update(source_id.high.to_be_bytes());
-    digest.update(source_id.low.to_be_bytes());
+    digest.update(source_id.to_be_bytes());
     digest.update(source_epoch.to_be_bytes());
     digest.update(cpu_id.to_be_bytes());
     digest.update(revision.to_be_bytes());
     digest.update(start.first_sequence.to_be_bytes());
     CoverageIntervalV1 {
-        interval_id: EvidenceIdV1::from_digest(digest.finalize().into()),
+        interval_id: <[u8; 32]>::from(digest.finalize()).into(),
         source_id,
         source_epoch,
         cpu_id,
@@ -629,7 +645,9 @@ fn validate_snapshot(snapshot: &CoverageSnapshotV1) -> Result<()> {
         || snapshot.source_epoch == 0
         || snapshot.history.len() > MAX_COVERAGE_HISTORY
         || snapshot.history.iter().any(|interval| {
-            !interval_ids.insert(interval.interval_id) || !interval_is_valid(interval, false)
+            interval.source_epoch > snapshot.source_epoch
+                || !interval_ids.insert(interval.interval_id)
+                || !interval_is_valid(interval, false)
         })
         || snapshot.sources.iter().any(|(cpu, source)| {
             *cpu != source.cpu_id
@@ -700,23 +718,7 @@ fn persist_snapshot(path: &Path, snapshot: &CoverageSnapshotV1) -> Result<()> {
         }
         .build()
     })?;
-    let temporary = path.with_extension("next");
-    if temporary.exists() {
-        fs::remove_file(&temporary).context(IoSnafu { path: &temporary })?;
-    }
-    let mut file = OpenOptions::new()
-        .create_new(true)
-        .write(true)
-        .open(&temporary)
-        .context(IoSnafu { path: &temporary })?;
-    file.write_all(&bytes)
-        .context(IoSnafu { path: &temporary })?;
-    file.sync_all().context(IoSnafu { path: &temporary })?;
-    fs::rename(&temporary, path).context(IoSnafu { path })?;
-    File::open(parent)
-        .context(IoSnafu { path: parent })?
-        .sync_all()
-        .context(IoSnafu { path: parent })
+    atomic_write(path, &bytes)
 }
 
 #[cfg(test)]
@@ -753,12 +755,14 @@ mod tests {
     }
 
     #[test]
-    fn sequence_and_loss_gaps_cannot_support_negative_claims() -> crate::Result<()> {
-        let directory = tempfile::tempdir().map_err(|source| crate::Error::Io {
-            path: "temporary coverage directory".into(),
-            source,
-            location: snafu::Location::new(file!(), line!(), column!()),
-        })?;
+    fn sequence_and_loss_gaps_cannot_support_negative_claims(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let skipped = open_owner(&directory.path().join("skipped.json"), 1)?;
+        skipped.sample_health(&[health(0, 0)])?;
+        let (_, coverage) = skipped.observe(2, 2)?;
+        assert_eq!(coverage, TemporalCoverageV1::Gapped);
+
         let path = directory.path().join("coverage.json");
         let owner = open_owner(&path, 1)?;
         owner.sample_health(&[health(0, 0)])?;
@@ -779,12 +783,9 @@ mod tests {
     }
 
     #[test]
-    fn restart_preserves_epoch_and_marks_a_new_epoch_unclean() -> crate::Result<()> {
-        let directory = tempfile::tempdir().map_err(|source| crate::Error::Io {
-            path: "temporary coverage directory".into(),
-            source,
-            location: snafu::Location::new(file!(), line!(), column!()),
-        })?;
+    fn restart_preserves_epoch_and_marks_a_new_epoch_unclean(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
         let path = directory.path().join("coverage.json");
         let owner = open_owner(&path, 1)?;
         owner.sample_health(&[health(0, 0)])?;
@@ -809,12 +810,9 @@ mod tests {
     }
 
     #[test]
-    fn exact_probe_opens_a_new_healthy_interval_without_rewriting_a_gap() -> crate::Result<()> {
-        let directory = tempfile::tempdir().map_err(|source| crate::Error::Io {
-            path: "temporary coverage directory".into(),
-            source,
-            location: snafu::Location::new(file!(), line!(), column!()),
-        })?;
+    fn exact_probe_opens_a_new_healthy_interval_without_rewriting_a_gap(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
         let owner = open_owner(&directory.path().join("coverage.json"), 1)?;
         owner.sample_health(&[health(0, 0)])?;
         owner.observe(2, 1)?;
@@ -844,41 +842,67 @@ mod tests {
     }
 
     #[test]
-    fn reopen_rejects_a_healthy_interval_that_retains_a_gap_reason() -> crate::Result<()> {
-        let directory = tempfile::tempdir().map_err(|source| crate::Error::Io {
-            path: "temporary coverage directory".into(),
-            source,
-            location: snafu::Location::new(file!(), line!(), column!()),
-        })?;
+    fn reopen_rejects_a_healthy_interval_that_retains_a_gap_reason(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
         let path = directory.path().join("coverage.json");
         let owner = open_owner(&path, 1)?;
         owner.sample_health(&[health(0, 0)])?;
         drop(owner);
 
-        let mut snapshot: serde_json::Value =
-            serde_json::from_slice(&std::fs::read(&path).map_err(|source| crate::Error::Io {
-                path: path.clone(),
-                source,
-                location: snafu::Location::new(file!(), line!(), column!()),
-            })?)
-            .map_err(|error| crate::Error::EvidenceState {
-                reason: format!("test coverage decode failed: {error}"),
-                location: snafu::Location::new(file!(), line!(), column!()),
-            })?;
+        let mut snapshot: serde_json::Value = serde_json::from_slice(&std::fs::read(&path)?)?;
         snapshot["sources"]["2"]["current"]["gap_reasons"] = serde_json::json!(["RING_LOSS"]);
-        std::fs::write(
-            &path,
-            serde_json::to_vec(&snapshot).map_err(|error| crate::Error::EvidenceState {
-                reason: format!("test coverage encode failed: {error}"),
-                location: snafu::Location::new(file!(), line!(), column!()),
-            })?,
-        )
-        .map_err(|source| crate::Error::Io {
-            path: path.clone(),
-            source,
-            location: snafu::Location::new(file!(), line!(), column!()),
-        })?;
+        std::fs::write(&path, serde_json::to_vec(&snapshot)?)?;
         assert!(open_owner(&path, 1).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn one_health_sample_records_each_increased_gap_counter(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let owner = open_owner(&directory.path().join("coverage.json"), 1)?;
+        owner.sample_health(&[health(0, 0)])?;
+        owner.sample_health(&[EffectObservationCpuHealth {
+            cpu_id: 2,
+            counters: CoverageCountersV1 {
+                attempted: 1,
+                requested: 1,
+                emitted: 1,
+                classifier_miss_count: 1,
+                unresolved: 1,
+                next_sequence: 1,
+                ..CoverageCountersV1::default()
+            },
+        }])?;
+
+        let interval = &owner.snapshot().current_intervals()[0];
+        assert!(interval
+            .gap_reasons
+            .contains(&CoverageGapReasonV1::ClassifierMiss));
+        assert!(interval
+            .gap_reasons
+            .contains(&CoverageGapReasonV1::UnresolvedEffect));
+        Ok(())
+    }
+
+    #[test]
+    fn failed_persistence_does_not_publish_a_coverage_change(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let owner = open_owner(&directory.path().join("coverage.json"), 1)?;
+        owner.sample_health(&[health(0, 0)])?;
+        let before = owner.snapshot();
+        let blocked_path = directory.path().join("blocked");
+        std::fs::create_dir(&blocked_path)?;
+        owner
+            .inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .path = blocked_path;
+
+        assert!(owner.observe(2, 1).is_err());
+        assert_eq!(owner.snapshot(), before);
         Ok(())
     }
 }
