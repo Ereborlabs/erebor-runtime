@@ -1,7 +1,7 @@
 # Phase 5 Implementation Review Guide
 
 Status: Source-grounded review guide for the current isolated worktree on
-2026-08-18.
+2026-08-19.
 
 - Phase: [Process-Aware Network Plane](./phase-5-process-aware-network-plane.md)
 - Architecture: [validated readable architecture](./policy-and-protection-algorithm-architecture-readable.md)
@@ -15,9 +15,9 @@ network path.
 
 ## Review Claim
 
-The implementation closes one limited x86_64 single-host network tier. Eight
-allocated fixtures have physical `PASS` results. Five fixtures have exact
-`UNSUPPORTED` results. An unsupported row is not part of the product claim.
+The implementation closes one qualified x86_64 single-host network tier. All
+13 allocated fixtures have physical `PASS` results. Each row has a negative
+oracle, a legitimate positive control, and the required lifecycle assertion.
 
 The advertised path has these properties:
 
@@ -27,6 +27,10 @@ The advertised path has these properties:
 - connect, send, and receive intersect current-actor and retained creator
   decisions;
 - selected socket controls have a separate exact default;
+- accepted-socket and cross-network-namespace transfers preserve creator,
+  accepter, current-actor, and namespace authority;
+- delegated requests preserve request identity and final destination;
+- a local-output DNAT path enforces the final rewritten destination;
 - a whole-socket response floor denies later use;
 - final socket release removes response state and generation references; and
 - the physical runner proves denial, a legitimate application control, server
@@ -34,10 +38,11 @@ The advertised path has these properties:
 
 Do not infer any of these broader claims:
 
-- a qualified final address after NAT, CNI, mesh, redirect, or route change;
-- cross-actor accepted-socket transfer or cross-network-namespace positive
-  authority;
-- delegated remote file I/O or token-to-egress causality;
+- a qualified final address after CNI, mesh, redirect, SNAT, or arbitrary route
+  changes beyond the tested local-output DNAT path;
+- socket transfer authority for mechanisms beyond the tested Unix descriptor
+  pass and `pidfd_getfd` transfer;
+- delegated remote file systems beyond the tested local proxy request;
 - DNS qname, answer, CNAME, compression, cardinality, or payload policy;
 - TLS verb, bearer purpose, or provider-result semantics;
 - raw, packet, TUN, AF_XDP, RDMA, vsock, netlink, SCTP, MPTCP, or arbitrary
@@ -48,7 +53,7 @@ Do not infer any of these broader claims:
 
 1. Read the [phase result](./phase-5-process-aware-network-plane.md#phase-result)
    and [closure decision](./phase-5-closure-matrix.md#closure-decision). Start
-   with the limited claim and the five unsupported rows.
+   with the 13-row claim and its explicit topology and protocol limits.
 2. Read the architecture chapters for process-aware network enforcement,
    final-destination policy, response floors, and delivery qualification in
    the [validated architecture](./policy-and-protection-algorithm-architecture-readable.md).
@@ -209,10 +214,16 @@ socket. It creates child socket storage from the listener state, assigns a new
 socket identity, records the parent identity, and adds retained generation
 references.
 
-This source path is implemented, but the physical tier does not advertise a
-cross-actor accept/pass result. Reviewers must keep
-`NET-ACCEPT-PASS-001` as `UNSUPPORTED` until a physical negative and positive
-pair passes.
+The physical fixture passes two accepted sockets over governed Unix
+relationships. A narrow receiver cannot send or receive. An approved receiver
+sends bytes that the client receives. The accepter and receiver keep the same
+kernel socket alive, so one close does not release the retained generation
+reference.
+
+The namespace variant duplicates a live accepted socket with `pidfd_getfd`
+into actors in private network namespaces. The narrow actor cannot send. The
+approved actor sends, and its observation records different nonzero creator
+and current network namespace identities.
 
 ## Response Fence Flow
 
@@ -267,9 +278,12 @@ protocols, zero ports, corrupt generations, missing protected socket state,
 and destination-handle changes. It emits the
 `PACKET_DROPPED_AFTER_REWRITE` physical result for a packet-stage drop.
 
-The source mechanism does not prove that the selected cgroup hook runs after
-every rewrite mechanism. The current physical probe installs no rewrite
-chain. Therefore `NET-REWRITE-001` remains unsupported.
+The physical fixture installs probe-owned `nftables` local-output DNAT rules.
+Both documentation-range addresses rewrite to `127.0.0.4`. The policy denies
+the `198.18.0.1` flow after its final destination no longer matches retained
+authority. The `198.18.0.2` control reaches the rewritten server. This result
+does not prove hook placement for CNI, mesh, redirect, SNAT, or arbitrary route
+changes.
 
 ## BPF Program Relationships
 
@@ -281,10 +295,10 @@ chain. Therefore `NET-REWRITE-001` remains unsupported.
 | `lsm/socket_sendmsg` | Uses an explicit datagram address or the retained connected peer. | No address fallback can widen a connected or unconnected path. |
 | `lsm/socket_recvmsg` | Uses the retained connected peer for the qualified receive path. | The physical claim covers only the connected TCP receive control. |
 | `lsm/socket_bind`, `socket_listen`, and `socket_accept` | Apply destination or exact control policy to Internet sockets. | Source support does not create a physical claim for every control variant. Unix sockets stay with IPC. |
-| `fexit/inet_csk_accept` | Labels a returned accepted socket and records its parent socket. | Cross-actor accept/pass remains unsupported until its fixture passes. |
+| `fexit/inet_csk_accept` | Labels a returned accepted socket and records its parent socket. | The accepted-socket and namespace-transfer controls must preserve creator, accepter, current actor, and retained namespace authority. |
 | `lsm/socket_setsockopt` | Allows only represented safe options to reach network control policy. | The qualified fixture proves `TCP_NODELAY`; other options do not inherit it. |
 | `lsm/socket_shutdown` | Applies exact control policy and any response floor. | The probe proves post-fence denial. |
-| `cgroup_skb/egress` | Checks retained flow state, packet destination, creator and flow-authorizer handles, and response floor without current-task context. | Direct packet logic exists, but final rewrite placement is not physically qualified. |
+| `cgroup_skb/egress` | Checks retained flow state, packet destination, creator and flow-authorizer handles, and response floor without current-task context. | The local-output DNAT control proves the tested final-destination placement. Other rewrite topologies need separate qualification. |
 | `fentry/__sock_release` | Deletes the exact response floor, decrements creator and flow-authorizer references, and tombstones socket state. | The release fixture must observe a zero generation reference after close. |
 
 ## BPF Helper Walkthrough
@@ -368,30 +382,46 @@ a current network event.
 
 ## Fixture Result Construction
 
-`NetworkTestRunner::physical_probe` builds a network-only signed policy from
-the checked test key. It removes unrelated file, administrative, IPC,
-exception, and default state before it adds the network rules. This prevents a
-prior fixture family from becoming ambient network authority.
+`NetworkTestRunner::physical_probe` builds a signed network fixture policy from
+the checked test key. It removes unrelated administrative, exception, and
+default state. It adds only the exact network, token-read, process-transfer,
+and Unix relationship rules needed by the fixture. This prevents an earlier
+fixture family from becoming ambient authority.
 
-The runner starts one loopback TCP server and one managed child in a dedicated
-cgroup. It then performs this assertion sequence:
+The runner starts local TCP and UDP controls and eight managed actors in
+dedicated cgroups. It then performs this assertion sequence:
 
-1. An unclassified destination denies before connect and emits the expected
-   network reason.
-2. The signed loopback destination connects and emits an exact allow event
-   with socket identity.
-3. `TCP_NODELAY`, send, server receipt, and receive succeed.
-4. The node installs an exact whole-socket response floor.
-5. A later send denies and emits the response-fence reason.
-6. Shutdown denies.
-7. Close reduces the profile-generation socket reference to zero.
-8. The server receives no post-fence bytes.
-9. The Interceptor, cgroup, lease, pins, and fixture files clean up.
+1. An unclassified destination denies before connect. Signed IPv4 and IPv6
+   TCP paths connect, send, receive, and reach their servers.
+2. Connected and unconnected IPv4 and IPv6 UDP sends reach their servers.
+   Resolver destinations and unrepresented families or protocols deny.
+3. `TCP_NODELAY` succeeds, `SO_MARK` denies, and ordinary shutdown succeeds.
+4. Clone and fork holders send on one socket. Final close releases the retained
+   reference. A later socket has a new generation.
+5. A narrow actor receives a passed accepted socket but cannot send or receive.
+   An approved actor receives another accepted socket and sends bytes.
+6. A whole-socket floor on the passed socket denies the approved receiver and
+   the accepter. The client receives no post-fence bytes.
+7. `pidfd_getfd` duplicates accepted sockets into private network namespaces.
+   The narrow actor cannot send. The approved actor sends, and its event keeps
+   distinct creator and current namespace identities.
+8. A governed local proxy passes a request identity and final destination to a
+   delegate. The forbidden server receives nothing. The approved server
+   receives the delegated bytes.
+9. Zero, end-of-file, I/O error, partial, mapped, inherited-descriptor,
+   governed-read, and governed-map results remain separate from denied network
+   use and provider receipt.
+10. Probe-owned local-output DNAT rewrites two documentation-range addresses.
+    The forbidden final-address mismatch denies. The approved rewritten flow
+    reaches its server.
+11. The original socket receives an exact whole-socket response floor. Later
+    send, clone send, and shutdown deny. The server receives no later bytes.
+12. The Interceptor, actor cgroups, lease, pins, rewrite table, transport
+    endpoints, and fixture files clean up.
 
-Only after these assertions pass does the runner return the JSON bundle. The
-fixture array contains 13 unique terminal rows: eight `PASS` and five
-`UNSUPPORTED`. The array cannot convert a failed physical assertion into a
-pass.
+Only after every assertion passes does the runner return the JSON bundle. The
+fixture array contains 13 unique `PASS` rows. A false physical assertion makes
+the probe fail and prevents a pass result.
 
 ## Test Layers
 
@@ -430,41 +460,44 @@ crates/mithril-e2e/harness/vm/run.sh \
   --output-directory /tmp/mithril-network-vm-review
 ```
 
-The current disposable-VM network result is retained at
-`/tmp/mithril-phase5-vm-codex-013/network-physical-probe.json`. The platform
+The complete disposable-VM result is retained at
+`target/mithril-phase-5-full-harness/network-physical-probe.json`. The platform
 was x86_64 Linux `6.8.0-137-generic`, cgroup v2, BPF filesystem, runtime BPF
-Type Format, and active BPF LSM. All ten network Boolean oracles were true.
-The full repository CI script passed against the same implementation source.
+Type Format, and active BPF LSM. Every network Boolean oracle was true, and all
+13 fixture rows were `PASS`. The full repository CI script passed against the
+same implementation source.
 
 ## Future And Unallocated Work
 
 The [closure matrix](./phase-5-closure-matrix.md) is authoritative. Claim
 expansion needs a new qualification outcome for:
 
-- a real rewrite chain and a proven hook position for its final address;
-- cross-actor accepted-socket transfer;
-- cross-network-namespace positive authority;
-- delegated remote file I/O and token-to-egress causality;
+- rewrite topologies beyond the tested local-output DNAT path;
+- socket transfer mechanisms beyond the tested Unix descriptor pass and
+  `pidfd_getfd` path;
+- delegated remote file systems beyond the tested local proxy protocol;
 - bounded DNS payload policy, if selected; and
 - broader protocol and asynchronous network paths.
 
 A later evidence, detection, response, distributed, or provider phase cannot
-retroactively turn an unsupported network row into a pass.
+widen the qualified network claim without its own physical proof.
 
 ## Review Checklist
 
-- [ ] The reviewed claim is the eight-pass single-host tier, not every network
-      hook present in the object.
+- [ ] The reviewed claim is the 13-pass single-host tier, not every network
+      topology or protocol.
 - [ ] Every advertised operation has a physical negative oracle and a
       legitimate positive control.
-- [ ] Every unqualified fixture has an exact `UNSUPPORTED` result and reason.
+- [ ] Every allocated fixture has an exact `PASS` result and nonempty physical
+      oracle.
 - [ ] Destination rows are canonical, bounded, generation-scoped, and read
       back before publication.
 - [ ] An address and port match still require exact actor-operation decisions.
 - [ ] Connect, send, and receive intersect creator and current authority.
 - [ ] Unix sockets remain with the IPC owner.
 - [ ] Packet decisions use retained flow state and no fictional current task.
-- [ ] The final packet hook is not treated as rewrite qualification.
+- [ ] Rewrite qualification stays limited to the tested local-output DNAT
+      path.
 - [ ] A response floor binds exact socket identity and has whole-socket scope.
 - [ ] Socket release removes the exact floor and retained references.
 - [ ] DNS port denial is not described as DNS payload inspection.
@@ -474,7 +507,7 @@ retroactively turn an unsupported network row into a pass.
 
 ## Source State And Guide Verification
 
-This guide was checked against the current isolated worktree on 2026-08-18.
+This guide was checked against the current isolated worktree on 2026-08-19.
 The documentation change does not modify Rust, BPF, ABI, build, or test source.
 
 The full Rust CI gate and disposable-VM physical suite passed after the last
