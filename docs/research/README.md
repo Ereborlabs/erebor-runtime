@@ -12,6 +12,9 @@
   — a Defender-owned task/process/effect and response architecture built from
   Linux, container-runtime, Kubernetes, and provider decision points; existing
   products are optional implementation studies and evidence adapters.
+- [Cilium and Tetragon network-enforcement lessons](cilium-tetragon-network-enforcement-lessons.md)
+  — source-grounded socket lifetime, actor-stage, final-flow, DNS, response,
+  recovery, and physical-test rules for the Mithril network plane.
 - [Hugging Face Agent Intrusion: Published Live Action Stream](hugging-face-agent-intrusion-live-action-stream.md)
   — a normalized record of the 21 representative actions published in the
   interactive incident replay, explicitly distinct from the recovered raw log.
