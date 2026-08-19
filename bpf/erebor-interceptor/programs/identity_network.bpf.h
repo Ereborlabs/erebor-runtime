@@ -17,6 +17,9 @@
 #define SO_RCVBUF 8
 #define SO_KEEPALIVE 9
 #define TCP_NODELAY 1
+#define NETWORK_REQUEST_OPERATION_MASK 0xffff
+#define NETWORK_REQUEST_CONNECTED_PEER (1U << 16)
+#define NETWORK_REQUEST_RETAIN_FLOW (1U << 17)
 
 static __always_inline int network_current_actor(__u16 operation, int ret)
 {
@@ -42,6 +45,16 @@ static __always_inline network_address_family_v1 network_family(int family)
     if (family == AF_INET6)
         return network_address_family_v1_ipv6;
     return network_address_family_v1_unknown;
+}
+
+static __always_inline bool network_socket_is_inet(struct socket *socket)
+{
+    struct sock *sock = ipc_socket_sock(socket);
+    unsigned short family = 0;
+
+    return sock &&
+           !BPF_CORE_READ_INTO(&family, sock, __sk_common.skc_family) &&
+           (family == AF_INET || family == AF_INET6);
 }
 
 static __always_inline int network_namespace_from_net(
@@ -239,7 +252,6 @@ static __always_inline int network_validate_socket(
     struct sock *sock, network_socket_state_v1 *state)
 {
     profile_generation_descriptor_v1 *generation;
-    network_namespace_generation_v1 current_namespace = {};
     __u64 *socket_refs;
 
     if (!sock || !state || state->state != network_socket_state_kind_v1_active ||
@@ -248,9 +260,11 @@ static __always_inline int network_validate_socket(
         !state->creator_role_id ||
         state->protocol == network_protocol_v1_unknown ||
         state->address_family == network_address_family_v1_unknown ||
-        network_current_namespace(&current_namespace) ||
-        !network_namespace_equal(&current_namespace,
-                                 &state->socket_network_namespace))
+        network_current_namespace(
+            &scratch->network_socket_state.socket_network_namespace) ||
+        !network_namespace_equal(
+            &scratch->network_socket_state.socket_network_namespace,
+            &state->socket_network_namespace))
         return hard_effect_result(
             config, scratch,
             effect_observation_reason_v1_corrupt_identity_or_generation);
@@ -319,7 +333,7 @@ static __always_inline int network_replace_flow_authorizer(
     return 0;
 }
 
-static __always_inline int network_apply_control(
+static __noinline int network_apply_control(
     struct socket *socket, __u16 operation, int ret, int status)
 {
     identity_runtime_config_v1 *config;
@@ -481,10 +495,9 @@ network_classify_destination(struct identity_scratch_v1 *scratch,
     return port_allowed ? destination : NULL;
 }
 
-static __always_inline int network_apply_destination(
+static __noinline int network_apply_destination(
     struct socket *socket, const struct sockaddr *address, int addrlen,
-    __u16 operation, bool connected_peer, bool retain_flow, int ret,
-    int status)
+    __u32 request, int status)
 {
     identity_runtime_config_v1 *config;
     struct identity_scratch_v1 *scratch;
@@ -497,16 +510,19 @@ static __always_inline int network_apply_destination(
     physical_decision_v1 *current;
     physical_decision_v1 *creator;
     struct sock *sock = ipc_socket_sock(socket);
-    __u8 peer_address[16] = {};
-    __u16 peer_port = 0;
-    id128_v1 flow_authorization_id = {};
+    __u8 *peer_address;
+    __u16 *peer_port;
+    id128_v1 *flow_authorization_id;
+    __u16 operation = request & NETWORK_REQUEST_OPERATION_MASK;
+    bool connected_peer = request & NETWORK_REQUEST_CONNECTED_PEER;
+    bool retain_flow = request & NETWORK_REQUEST_RETAIN_FLOW;
     int response;
     int result;
 
     state = sock ? bpf_sk_storage_get(&network_socket_states, sock, 0, 0)
                  : NULL;
     if (status == NETWORK_ACTOR_OUTSIDE_PROTECTED_SCOPE)
-        return state ? -EACCES : ret;
+        return state ? -EACCES : 0;
     if (status)
         return status;
     config = identity_runtime_config();
@@ -514,6 +530,14 @@ static __always_inline int network_apply_destination(
     binding = ipc_current_binding();
     if (!config || !scratch || !binding)
         return -EACCES;
+    peer_address = scratch->network_socket_state.peer_address;
+    peer_port = &scratch->network_socket_state.peer_port;
+    flow_authorization_id =
+        &scratch->network_socket_state.flow_authorization_id;
+    __builtin_memset(peer_address, 0, 16);
+    *peer_port = 0;
+    __builtin_memset(flow_authorization_id, 0,
+                     sizeof(*flow_authorization_id));
     response = network_validate_socket(config, scratch, sock, state);
     if (response)
         return response;
@@ -527,27 +551,27 @@ static __always_inline int network_apply_destination(
                 config, scratch,
                 effect_observation_reason_v1_unsupported_object);
         __builtin_memcpy(peer_address, state->peer_address, 16);
-        peer_port = state->peer_port;
+        *peer_port = state->peer_port;
     } else if (network_read_sockaddr(address, addrlen,
                                      state->address_family, peer_address,
-                                     &peer_port)) {
+                                     peer_port)) {
         return hard_effect_result(
             config, scratch,
             effect_observation_reason_v1_unresolved_object);
     }
     current_class = network_classify_destination(
         scratch, scratch->process.active_profile_generation_ref_id,
-        state->protocol, state->address_family, peer_address, peer_port);
+        state->protocol, state->address_family, peer_address, *peer_port);
     creator_class = network_classify_destination(
         scratch, state->creator_profile_generation_ref_id, state->protocol,
-        state->address_family, peer_address, peer_port);
+        state->address_family, peer_address, *peer_port);
     if (!current_class || !creator_class)
         return hard_effect_result(
             config, scratch,
             effect_observation_reason_v1_unresolved_object);
     scratch->observation.network_destination_policy_handle =
         current_class->destination_policy_handle;
-    scratch->observation.network_peer_port = peer_port;
+    scratch->observation.network_peer_port = *peer_port;
     __builtin_memcpy(scratch->observation.network_peer_address, peer_address,
                      16);
     current_generation = bpf_map_lookup_elem(
@@ -574,7 +598,7 @@ static __always_inline int network_apply_destination(
     result = network_apply_decision(config, scratch, current_generation,
                                     current);
     if (!result && retain_flow) {
-        if (allocate_id(config, &flow_authorization_id))
+        if (allocate_id(config, flow_authorization_id))
             return hard_effect_result(
                 config, scratch,
                 effect_observation_reason_v1_corrupt_identity_or_generation);
@@ -594,8 +618,8 @@ static __always_inline int network_apply_destination(
             current_class->destination_policy_handle;
         state->creator_destination_policy_handle =
             creator_class->destination_policy_handle;
-        state->flow_authorization_id = flow_authorization_id;
-        state->peer_port = peer_port;
+        state->flow_authorization_id = *flow_authorization_id;
+        state->peer_port = *peer_port;
         __builtin_memcpy(state->peer_address, peer_address, 16);
     }
     return result;
@@ -635,12 +659,11 @@ static __always_inline int network_socket_create_result(
         scratch->process.process_state_vector_id,
         scratch->observation.entry_kind, binding->lifecycle_state,
         kernel_effect_operation_v1_socket_create);
-    return apply_effect_decision(config, scratch, generation, decision, false,
-                                 false);
+    return network_apply_decision(config, scratch, generation, decision);
 }
 
-static __always_inline int network_socket_post_create_result(
-    struct socket *socket, int family, int type, int protocol, int ret)
+static __noinline int network_socket_post_create_result(
+    struct socket *socket, int family, int type, int protocol, int status)
 {
     identity_runtime_config_v1 *config;
     struct identity_scratch_v1 *scratch;
@@ -649,11 +672,8 @@ static __always_inline int network_socket_post_create_result(
     struct sock *sock = ipc_socket_sock(socket);
     __u64 *socket_refs;
     id128_v1 socket_generation_id = {};
-    int status = network_current_actor(
-        kernel_effect_operation_v1_socket_create, ret);
-
     if (status == NETWORK_ACTOR_OUTSIDE_PROTECTED_SCOPE)
-        return ret;
+        return 0;
     if (status)
         return status;
     config = identity_runtime_config();
@@ -708,7 +728,7 @@ static __always_inline int network_socket_post_create_result(
     state->socket_type = type & SOCK_TYPE_MASK;
     state->state = network_socket_state_kind_v1_active;
     network_populate_observation(scratch, state);
-    return ret;
+    return 0;
 }
 
 static __always_inline int network_packet_drop(
@@ -815,6 +835,8 @@ int erebor_network_final_flow(struct __sk_buff *skb)
 
     if (!config || !config->enabled || !config->effect_policy_enabled)
         return 1;
+    if (!scratch)
+        return 0;
     full_sock = skb && skb->sk ? bpf_sk_fullsock(skb->sk) : NULL;
     state = full_sock
                 ? bpf_sk_storage_get(&network_socket_states, full_sock, 0, 0)
@@ -902,16 +924,19 @@ SEC("lsm/socket_bind")
 int BPF_PROG(erebor_identity_socket_bind, struct socket *socket,
              struct sockaddr *address, int addrlen, int ret)
 {
+    if (!network_socket_is_inet(socket))
+        return ret;
     return network_apply_destination(
-        socket, address, addrlen, kernel_effect_operation_v1_bind, false,
-        false, ret, network_current_actor(kernel_effect_operation_v1_bind,
-                                          ret));
+        socket, address, addrlen, kernel_effect_operation_v1_bind,
+        network_current_actor(kernel_effect_operation_v1_bind, ret));
 }
 
 SEC("lsm/socket_listen")
 int BPF_PROG(erebor_identity_socket_listen, struct socket *socket, int backlog,
              int ret)
 {
+    if (!network_socket_is_inet(socket))
+        return ret;
     return network_apply_control(
         socket, kernel_effect_operation_v1_listen, ret,
         network_current_actor(kernel_effect_operation_v1_listen, ret));
@@ -921,14 +946,15 @@ SEC("lsm/socket_accept")
 int BPF_PROG(erebor_identity_socket_accept, struct socket *socket,
              struct socket *newsock, int ret)
 {
+    if (!network_socket_is_inet(socket))
+        return ret;
     return network_apply_control(
         socket, kernel_effect_operation_v1_accept, ret,
         network_current_actor(kernel_effect_operation_v1_accept, ret));
 }
 
-SEC("fexit/inet_csk_accept")
-int BPF_PROG(erebor_network_inet_csk_accept, struct sock *listener, int flags,
-             int *error, bool kern, struct sock *accepted)
+static __noinline int network_accept_post_result(struct sock *accepted,
+                                                 int status)
 {
     identity_runtime_config_v1 *config;
     struct identity_scratch_v1 *scratch;
@@ -946,12 +972,6 @@ int BPF_PROG(erebor_network_inet_csk_accept, struct sock *listener, int flags,
     __u16 peer_port = 0;
     id128_v1 socket_generation_id = {};
     id128_v1 flow_authorization_id = {};
-    int status;
-
-    (void)listener;
-    (void)flags;
-    (void)error;
-    (void)kern;
     if (!accepted)
         return 0;
     state = bpf_sk_storage_get(&network_socket_states, accepted, 0, 0);
@@ -962,7 +982,6 @@ int BPF_PROG(erebor_network_inet_csk_accept, struct sock *listener, int flags,
         return 0;
     __builtin_memcpy(&scratch->network_socket_state, state, sizeof(*state));
     state->state = network_socket_state_kind_v1_reconciliation_required;
-    status = network_current_actor(kernel_effect_operation_v1_accept, 0);
     if (status)
         return 0;
     config = identity_runtime_config();
@@ -1067,6 +1086,19 @@ int BPF_PROG(erebor_network_inet_csk_accept, struct sock *listener, int flags,
     return 0;
 }
 
+SEC("fexit/inet_csk_accept")
+int BPF_PROG(erebor_network_inet_csk_accept, struct sock *listener, int flags,
+             int *error, bool kern, struct sock *accepted)
+{
+    (void)listener;
+    (void)flags;
+    (void)error;
+    (void)kern;
+    return network_accept_post_result(
+        accepted,
+        network_current_actor(kernel_effect_operation_v1_accept, 0));
+}
+
 SEC("lsm/socket_setsockopt")
 int BPF_PROG(erebor_identity_socket_setsockopt, struct socket *socket,
              int level, int optname, int ret)
@@ -1074,6 +1106,8 @@ int BPF_PROG(erebor_identity_socket_setsockopt, struct socket *socket,
     int status = network_current_actor(
         kernel_effect_operation_v1_setsockopt, ret);
 
+    if (!network_socket_is_inet(socket))
+        return ret;
     if (!((level == SOL_SOCKET &&
            (optname == SO_SNDBUF || optname == SO_RCVBUF ||
             optname == SO_KEEPALIVE)) ||
@@ -1087,6 +1121,8 @@ SEC("lsm/socket_shutdown")
 int BPF_PROG(erebor_identity_socket_shutdown, struct socket *socket, int how,
              int ret)
 {
+    if (!network_socket_is_inet(socket))
+        return ret;
     return network_apply_control(
         socket, kernel_effect_operation_v1_shutdown, ret,
         network_current_actor(kernel_effect_operation_v1_shutdown, ret));
