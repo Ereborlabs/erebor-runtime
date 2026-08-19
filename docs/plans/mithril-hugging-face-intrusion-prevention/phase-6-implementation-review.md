@@ -1,6 +1,6 @@
 # Phase 6 Implementation Review Guide
 
-Status: Complete source-grounded review guide for source commit `df80630` on
+Status: Complete source-grounded review guide for source commit `6686a23` on
 2026-08-19.
 
 - Phase: [Durable Evidence, Coverage, And Recovery](./phase-6-durable-evidence-coverage-and-recovery.md)
@@ -60,7 +60,9 @@ Do not infer any of these broader claims:
    Verify that the caller supplies the fixed result before
    `emit_effect_observation` allocates a sequence or calls
    `bpf_ringbuf_reserve`.
-5. Review canonical envelope validation and normalization in
+5. Review the shared evidence contract and validation in
+   [`evidence/model.rs`](../../../crates/mithril-control/src/evidence/model.rs).
+   Then review kernel normalization in
    [`observation/model.rs`](../../../crates/mithril-node/src/observation/model.rs).
 6. Review immutable WAL append, batch selection, acknowledgement, and replay
    in
@@ -105,6 +107,7 @@ Do not infer any of these broader claims:
 | `CoverageHealthOwner` | Durable per-source intervals, counter equations, gap reasons, revisions, and negative-claim eligibility. | Repair by inference or distributed coverage. |
 | `NodeEpochs` | Durable label and evidence source epochs and the production evidence WAL directory identity. | Kernel boot identity or Control cursors. |
 | `NodeControlConnector` | Evidence and coverage messages on the authenticated node stream and exact stream identity, nonce, and sequence checks. | Durable Control acceptance. |
+| Shared Control evidence model | Canonical envelope, payload, proof, coverage, sensitivity, identifier, and validation types used by both Control and Node. | Kernel record normalization or durable storage. |
 | `EvidenceIntakeOwner` | Control-side record validation, hash-chain validation, durable storage, contiguous cursors, coverage revisions, and acknowledgements. | Node WAL deletion or physical enforcement. |
 | `DeterministicLocalWindowOwner` | Fixed sequence windows, stable identifiers, deterministic revisions, contradiction state, and coverage qualification. | Detection package evaluation or distributed graph joins. |
 | Physical runners | Production-owner startup, deliberate saturation and restart, syscall or packet oracles, result capture, and owned cleanup. | A second implementation or release-artifact generation. |
@@ -155,11 +158,15 @@ gap.
 
 ## Canonical Observation Contract
 
+The Control evidence model owns the canonical envelope and its validation.
+Node imports that model and adds only kernel normalization.
 `ObservationCanonicalizer` binds the tenant, logical source, evidence source
 epoch, node boot identity, CPU source, sequence, payload schema, payload, and
 proof quality. `ObservationEnvelopeV1::validate` recomputes the observation
 identifier. It rejects a changed payload, zero identity, zero epoch, zero
-sequence, invalid bound, or inconsistent identifier.
+sequence, invalid bound, or inconsistent identifier. `EvidenceIdV1` is a type
+alias for the ABI `Id128V1`; standard `From` conversions replace local
+high-word and low-word converters.
 
 The payload is a bounded typed field set. Validation rejects duplicate keys,
 unknown or invalid shapes, excessive bytes, and values that exceed their
@@ -200,6 +207,11 @@ It reads segments in cursor order and validates every cursor, payload digest,
 previous-record digest, record digest, and canonical envelope. A torn,
 corrupt, missing, reordered, or over-capacity WAL fails closed.
 
+Batch selection uses the encoded protobuf length. It does not estimate frame
+size from payload length. Control rechecks the complete accepted hash chain
+when it opens the evidence directory, and it verifies the complete persisted
+coverage report before it uses the coverage cursor.
+
 Control accepts an identical retry of the last batch. It rejects a different
 record at an existing cursor, a noncontiguous batch, a stale coverage
 revision, a bad digest, or a batch from a stream that does not own the current
@@ -223,10 +235,12 @@ stateDiagram-v2
     Closed --> [*]
 ```
 
-The implemented gap reasons are source sequence gap, ring loss, classifier
-miss, unresolved effect, reader delay, reader stopped, WAL failure, WAL
-capacity, Control delay, kernel state mismatch, unclean restart, and counter
-regression.
+The implemented gap reasons are source sequence gap, decoder error, ring loss,
+classifier miss, unresolved effect, reader delay, reader stopped, WAL failure,
+WAL capacity, Control delay, kernel state mismatch, unclean restart, and
+counter regression. The first record for a CPU is compared with the opening
+health counter. A first sequence greater than the next expected sequence
+creates a gap.
 
 An interval supports a negative claim only when it is complete and healthy.
 A local window is ready only when eligible intervals cover its complete fixed
@@ -257,12 +271,22 @@ Identity reconciliation compares cumulative failure counters before and after
 the reconciliation operation. Historical retained counts remain visible, but
 a new failure in the current pass rejects recovery.
 
+### BPF Evidence Map Lifecycle
+
+| Map | Kernel shape | Writer | Reader | Lifetime and recovery |
+| --- | --- | --- | --- | --- |
+| `effect_observations` | 4 MiB ring buffer; each submitted value is one 536-byte `effect_observation_v1` | Production effect helpers submit a copy after the physical result and source sequence are fixed. | `KernelHostOwner` builds the sole `EffectObservationReader`; Node decodes each record. | The map is pinned with the Interceptor object and must match the startup manifest. Buffered records are evidence, not authority. Restart gaps coverage instead of guessing unread records. |
+| `effect_observation_health` | Per-CPU array with one `u32` key `0` and one 64-byte `effect_observation_health_v1` value per CPU | Production effect helpers update attempted, suppressed, requested, emitted, lost, classifier-miss, unresolved, and next-sequence fields. | Node sums the per-CPU values for local health and reads each CPU value for exact coverage accounting. | The map is pinned and recovered only when its ID, type, key size, value size, capacity, and manifest match. Counter regression, missing state, or a changed map closes coverage and readiness. |
+
 ## Deterministic Local Windows
 
 The local window owner groups observations by source, source epoch, and a
 fixed sequence width. A stable digest identifies the window. A second digest
 binds its state, sorted observation identifiers, and sorted coverage interval
 identifiers into a deterministic revision.
+
+The revision is the digest itself. The owner does not derive a separate
+numeric revision by truncating digest bytes.
 
 Duplicate input has no effect because the owner uses sets. Reordered input
 has no effect because the owner sorts by source sequence and digest. Two
@@ -337,23 +361,23 @@ the closure runs.
 
 ## Verification Record
 
-The final source-only suite passed with 948 tests, 15 ignored tests, and 5
-filtered fixture lanes. The repository CI command passed formatting, checks,
-Clippy, and all tests except the generated qualification-record assertion. The
-checked-in qualification record was intentionally not regenerated.
+The final source-only workspace command passed. The repository CI command
+passed formatting, checks, Clippy, and all ordinary tests. It rejected only
+the generated qualification-record assertion. The checked-in qualification
+record was intentionally not regenerated.
 
-The single-node K3s run at source commit `df80630` passed. Its evidence is in
-`/tmp/mithril-phase6-physical-20260819-r12`. The run covered native and
+The single-node K3s run at source commit `6686a23` passed. Its evidence is in
+`/tmp/mithril-phase6-simplicity-20260819-r2`. The run covered native and
 Kubernetes identity, CRI OBSERVE and PROTECT effects, kernel qualification,
 effect observation, local enforcement, saturation, restart recovery, network
-enforcement, benchmarks, cleanup, and legitimate controls. The network record
-SHA-256 is
-`9e210aeb04394cc82da65f846585b769753002dbc96c782914acbfe67cd609bb`.
+enforcement, benchmarks, cleanup, and legitimate controls. The qualification
+record SHA-256 is
+`1e9039a1469982ef495abf04b53d08fb826f0455faaf9373b5079e13cf3615e7`.
 
 The final two-node K3s run passed in both directions and removed both VMs. Its
-evidence is in `/tmp/mithril-phase6-two-node-20260819-r2`. The summary record
-SHA-256 is
-`cc4e0dc20551caf9cdb04cbf7d9f9d5bd7c3ea93f6a6617d9804068210d6b1b6`.
+evidence is in `/tmp/mithril-phase6-two-node-simplicity-20260819-r1`. The
+summary record SHA-256 is
+`b7df18709c41cecbef72dd49ac2de6ea229f91b81ae19f8a29560ea03727ef6d`.
 The closure commit contains no generated qualification or CI/CD digest
 artifact.
 

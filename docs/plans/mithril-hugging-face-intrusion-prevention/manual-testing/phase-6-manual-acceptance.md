@@ -79,18 +79,23 @@ PID/name/cache guesses.
 
 ## Executed Acceptance Record
 
-The closure run used source commit `df80630` on 2026-08-19. The source-only
-workspace suite passed 948 tests, ignored 15 declared tests, and filtered 5
-fixture lanes. The repository CI command passed formatting, workspace check,
-Clippy, and every ordinary test. It rejected only the unchanged generated
-`kernel-qualification-x86_64.json` record as stale. No generated CI/CD digest
-or qualification artifact was committed.
+The closure run used source commit `6686a23` on 2026-08-19. The source-only
+workspace command passed. The repository CI command passed formatting,
+workspace check, Clippy, and every ordinary test. It rejected only the
+unchanged generated `kernel-qualification-x86_64.json` record as stale. No
+generated CI/CD digest or qualification artifact was committed.
+
+The first physical run exposed a PID-marker publication race in the
+Kubernetes PostStart fixture. The reader saw the file after creation and
+before the writer added the PID. Commit `6686a23` treats an empty marker as
+incomplete and still rejects malformed nonempty data. The complete run below
+started after that commit.
 
 The final single-node evidence is in
-`/tmp/mithril-phase6-physical-20260819-r12`. The disposable Ubuntu 24.04 VM ran
-Linux 6.8.0-137-generic on x86_64 with cgroup v2, BPF filesystem, runtime BTF,
-and the lockdown, capability, Landlock, Yama, AppArmor, and BPF LSMs active.
-The K3s version was v1.35.5+k3s1.
+`/tmp/mithril-phase6-simplicity-20260819-r2`. The disposable Ubuntu 24.04 VM
+ran Linux 6.8.0-137-generic on x86_64 with cgroup v2, BPF filesystem, runtime
+BTF, and the lockdown, capability, Landlock, Yama, AppArmor, and BPF LSMs
+active. The K3s version was v1.35.5+k3s1.
 
 | Fixture | Result and physical oracle |
 | --- | --- |
@@ -109,34 +114,35 @@ ephemeral-container, exec-probe, PostStart, PreStop, reuse, restart, and replay
 checks.
 
 The final two-node evidence is in
-`/tmp/mithril-phase6-two-node-20260819-r2`. K3s reported two Ready nodes with
-different boot identities. The node-A-to-node-B and node-B-to-node-A paths both
-passed. Each node-local network record passed all 13 allocated network fixture
-rows. The harness removed the namespace, K3s installations, and both VMs.
+`/tmp/mithril-phase6-two-node-simplicity-20260819-r1`. K3s reported two Ready
+nodes with different boot identities. The node-A-to-node-B and
+node-B-to-node-A paths both passed. Each node-local network record passed all
+13 allocated network fixture rows. The harness removed the namespace, K3s
+installations, and both VMs.
 
 The OPEN benchmark used 100,000 warmup operations and 1,000,000 measured
 operations per concurrency. The measured rates were:
 
 | Mode | Workers | Operations/s | p50 | p95 | p99 |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| Baseline | 1 | 167,317 | 4,892 ns | 5,588 ns | 21,148 ns |
-| Baseline | 32 | 317,599 | 5,320 ns | 6,205 ns | 15,988 ns |
-| Protected | 1 | 155,272 | 5,310 ns | 6,662 ns | 20,402 ns |
-| Protected | 32 | 297,459 | 5,628 ns | 6,742 ns | 17,798 ns |
+| Baseline | 1 | 199,861 | 4,305 ns | 4,415 ns | 16,147 ns |
+| Baseline | 32 | 382,870 | 4,385 ns | 4,902 ns | 13,980 ns |
+| Protected | 1 | 187,540 | 4,594 ns | 4,673 ns | 17,480 ns |
+| Protected | 32 | 357,666 | 4,684 ns | 5,250 ns | 15,949 ns |
 
 The retained artifact digests are:
 
 | Artifact | SHA-256 |
 | --- | --- |
-| effect observation | `b2fd96f0219cfc7ff949a26ca76db02e9ceefd79b81f5df421a90cd3c07ca74c` |
-| Kubernetes identity | `855f29e53ed408199a4a00a1b3cadfa4da9fad7b38b03cbdddf4e2b11a02f1bb` |
-| local enforcement | `9aab4af62332b7244e3a8246e881c318e54f14b8f76a486301727e65a46f6064` |
+| effect observation | `2894538ad27415062e8ce0721d5ec3575d7d391911e16fa25bf2960a013335e1` |
+| Kubernetes identity | `a22a21b81eca5ad8716d5a5fc5c41c56355cee35fb98cbf3e419882d488dc7e5` |
+| local enforcement | `e017cd30cbfc2554d106caae312525a50e20ec8a26bc5a575a8f516931690fa0` |
 | network recovery | `9e210aeb04394cc82da65f846585b769753002dbc96c782914acbfe67cd609bb` |
-| physical file-open probe | `ae06bf9dc59bb46ffec42bad0881ee7e53082e252cd2649246405530944ecf0e` |
-| baseline benchmark | `5f088a169e3ad5ae33515453e9047a4c7f5be1601bf68c64e2dc548fb2cc7a64` |
-| protected benchmark | `3e199115591eb1e6a723b677d9cc69b1727520b3b1a07ee22de3106269da8e76` |
-| single-node qualification record | `86134f997a97c2bda1cd80eec44f99a6d192526be4db855924c9ed849a0e6c10` |
-| two-node summary | `cc4e0dc20551caf9cdb04cbf7d9f9d5bd7c3ea93f6a6617d9804068210d6b1b6` |
+| physical file-open probe | `5223e81e98b31fb2f507888019513770a0174bebe7ba31d1588a828b55630e50` |
+| baseline benchmark | `fd18e2b9b21e60142c8df98674b48f07fd5b04eef5c298f36c0ca65811728235` |
+| protected benchmark | `429b7108ad05e08da52c42897fbe51943b5bf261bf87cec001f8189ac6a4d8d0` |
+| single-node qualification record | `1e9039a1469982ef495abf04b53d08fb826f0455faaf9373b5079e13cf3615e7` |
+| two-node summary | `b7df18709c41cecbef72dd49ac2de6ea229f91b81ae19f8a29560ea03727ef6d` |
 
 These artifacts remain outside the repository. They qualify only the recorded
 x86_64 tier and the tested K3s Flannel topology.
