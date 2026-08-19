@@ -1330,6 +1330,13 @@ mod tests {
                 .count(),
             5
         );
+        let create = source
+            .split("int BPF_PROG(erebor_identity_socket_create")
+            .nth(1)
+            .and_then(|source| source.split("SEC(\"lsm/socket_bind\")").next())
+            .unwrap_or_default();
+        assert!(create.contains("family == AF_UNIX"));
+        assert!(create.contains("network_unsupported"));
     }
 
     #[test]
