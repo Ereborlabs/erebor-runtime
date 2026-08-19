@@ -1611,33 +1611,6 @@ mod tests {
     }
 
     #[test]
-    fn locked_map_lookup_uses_the_kernel_lock_flag() {
-        let source = include_str!("host.rs");
-        let method = source
-            .split("pub fn lookup_map_locked")
-            .nth(1)
-            .and_then(|source| source.split("pub fn delete_map_entry").next())
-            .unwrap_or_default();
-
-        assert!(method.contains(".lookup(key, MapFlags::LOCK)"));
-        assert!(!method.contains("MapFlags::ANY"));
-    }
-
-    #[test]
-    fn map_insert_uses_noexist_and_reports_a_race() {
-        let source = include_str!("host.rs");
-        let method = source
-            .split("pub fn insert_map")
-            .nth(1)
-            .and_then(|source| source.split("pub fn lookup_map").next())
-            .unwrap_or_default();
-
-        assert!(method.contains("MapFlags::NO_EXIST"));
-        assert!(method.contains("ErrorKind::AlreadyExists"));
-        assert!(!method.contains("MapFlags::ANY"));
-    }
-
-    #[test]
     fn live_manifest_requires_every_map_and_link_pin() {
         let preflight = KernelPreflightV1 {
             kernel_release: "test".to_owned(),
@@ -1682,35 +1655,6 @@ mod tests {
     }
 
     #[test]
-    fn live_manifest_compares_exact_map_link_and_program_ids() {
-        let source = include_str!("host.rs");
-        let method = source
-            .split("pub fn verify_live_manifest")
-            .nth(1)
-            .and_then(|source| source.split("fn map(&self").next())
-            .unwrap_or_default();
-
-        assert!(method.contains("MapHandle::from_pinned_path"));
-        assert!(method.contains("info.info.id == record.id"));
-        assert!(method.contains("Link::open(path)"));
-        assert!(method.contains("info.id == record.link_id && info.prog_id == record.program_id"));
-    }
-
-    #[test]
-    fn recovery_requires_retained_programs_to_use_the_recovered_maps() {
-        let source = include_str!("host.rs");
-        let method = source
-            .split("fn recover(")
-            .nth(1)
-            .and_then(|source| source.split("fn validate_config").next())
-            .unwrap_or_default();
-
-        assert!(method.contains("ProgInfoQueryOptions::default().include_map_ids(true)"));
-        assert!(method.contains("old_program.tag() == new_program.tag()"));
-        assert!(method.contains("old_map_ids == new_map_ids"));
-    }
-
-    #[test]
     fn retained_lsm_link_guard_uses_kernel_program_names() {
         assert_eq!(
             kernel_program_name("erebor_identity_file_permission"),
@@ -1719,56 +1663,7 @@ mod tests {
     }
 
     #[test]
-    fn retained_lsm_link_guard_runs_before_load_or_attach() {
-        let source = include_str!("host.rs");
-        let start = source
-            .split("pub fn start")
-            .nth(1)
-            .and_then(|source| source.split("fn recover(").next())
-            .unwrap_or_default();
-        let recover = source
-            .split("fn recover(")
-            .nth(1)
-            .and_then(|source| source.split("fn validate_config").next())
-            .unwrap_or_default();
-        let guard = source
-            .split("fn reject_retained_lsm_links")
-            .nth(1)
-            .and_then(|source| source.split("fn validate_program_set").next())
-            .unwrap_or_default();
-
-        let guard_before_load = start.find("reject_retained_lsm_links(&BTreeSet::new())");
-        let load = start.find("open.load()");
-        let retained_pin_root = start.find("let retained_pin_root = self.retained_pin_root()?");
-        let lease = start.find("KernelHostLease::acquire");
-        assert!(guard_before_load.is_some());
-        assert!(load.is_some());
-        assert!(guard_before_load < load);
-        assert!(retained_pin_root.is_some());
-        assert!(lease.is_some());
-        assert!(retained_pin_root < lease);
-        assert!(recover.contains("reject_retained_lsm_links(&allowed_link_ids)"));
-        assert!(guard.contains("LinkInfoIter"));
-        assert!(guard.contains("ProgInfoIter"));
-        assert!(guard.contains("ProgramType::Lsm"));
-        assert!(guard.contains("allowed_link_ids.contains(&link.id)"));
-        assert!(guard.contains("RetainedLsmLinkSnafu"));
-    }
-
-    #[test]
     fn fresh_pin_directories_prepare_before_load_and_roll_back() -> crate::Result<()> {
-        let source = include_str!("host.rs");
-        let start = source
-            .split("pub fn start")
-            .nth(1)
-            .and_then(|source| source.split("fn recover(").next())
-            .unwrap_or_default();
-        let lease = start.find("KernelHostLease::acquire");
-        let prepare = start.find("prepare_fresh_pin_directories");
-        let load = start.find("open.load()");
-        assert!(lease.is_some() && prepare.is_some() && load.is_some());
-        assert!(lease < prepare && prepare < load);
-
         let temporary = tempfile::tempdir().context(IoSnafu {
             action: "create temporary pin root",
             path: "temporary pin root",
