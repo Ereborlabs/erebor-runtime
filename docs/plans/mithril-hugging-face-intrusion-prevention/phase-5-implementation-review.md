@@ -15,9 +15,10 @@ network path.
 
 ## Review Claim
 
-The implementation closes one qualified x86_64 single-host network tier. All
-13 allocated fixtures have physical `PASS` results. Each row has a negative
-oracle, a legitimate positive control, and the required lifecycle assertion.
+The implementation closes one qualified x86_64 network tier. All 13 allocated
+fixtures have physical `PASS` results in the single-host probe and in both
+directions of the two-node K3s Flannel probe. Each row has a negative oracle,
+a legitimate positive control, and the required lifecycle assertion.
 
 The advertised path has these properties:
 
@@ -31,6 +32,8 @@ The advertised path has these properties:
   accepter, current-actor, and namespace authority;
 - delegated requests preserve request identity and final destination;
 - a local-output DNAT path enforces the final rewritten destination;
+- a host source reaches a peer in the remote Pod network namespace through the
+  tested K3s Flannel route without widening destination authority;
 - a whole-socket response floor denies later use;
 - final socket release removes response state and generation references; and
 - the physical runner proves denial, a legitimate application control, server
@@ -38,8 +41,8 @@ The advertised path has these properties:
 
 Do not infer any of these broader claims:
 
-- a qualified final address after CNI, mesh, redirect, SNAT, or arbitrary route
-  changes beyond the tested local-output DNAT path;
+- a qualified final address for Pod-origin enforcement, another CNI, an
+  arbitrary service mesh, SNAT, or dynamic route mutation;
 - socket transfer authority for mechanisms beyond the tested Unix descriptor
   pass and `pidfd_getfd` transfer;
 - delegated remote file systems beyond the tested local proxy request;
@@ -88,7 +91,11 @@ Do not infer any of these broader claims:
     [`effect/network.rs`](../../../crates/mithril-e2e/src/effect/network.rs),
     the managed child operations in
     [`effect/child.rs`](../../../crates/mithril-e2e/src/effect/child.rs), and
-    the [manual example](../../../examples/mithril-network-manual/README.md).
+    the peer command in
+    [`mithril_network_test.rs`](../../../crates/mithril-e2e/src/bin/mithril_network_test.rs).
+11. Review two-node orchestration and peer namespace placement in
+    [`two-node-network.sh`](../../../crates/mithril-e2e/harness/vm/two-node-network.sh),
+    then run the [manual example](../../../examples/mithril-network-manual/README.md).
 
 ## Ownership Boundaries
 
@@ -98,8 +105,8 @@ Do not infer any of these broader claims:
 | `mithril-node::NodePolicyGenerationOwner` | Deterministic lowering, capacity and readback through the shared host, generation publication, socket-reference-aware retirement, and exact whole-socket response-floor installation. | BPF loading, current-task identity, or socket lifecycle callbacks. |
 | `erebor-interceptor::KernelHostOwner` | Exclusive object load, required program selection, LSM and cgroup attachment, map access, pins, lease, capability checks, and cleanup. | Mithril policy meaning or a second decision engine. |
 | Production BPF programs | Current actor lookup, socket storage, creator and current intersection, packet parsing, response-floor enforcement, reference accounting, hard closure, and observation requests. | Durable policy authorship, semantic DNS, TLS meaning, or provider results. |
-| `mithril-e2e::NetworkTestRunner` | Signed disposable policy, managed child, local server, exact syscall and server oracles, response-fence request, reference-release assertion, result classification, and cleanup. | A second enforcement implementation or broader support classification. |
-| VM harness | Build, transfer, isolated kernel execution, evidence collection, postflight cleanup, and disposable-VM destruction. | Product policy or fixture result invention. |
+| `mithril-e2e::NetworkTestRunner` | Signed disposable policy, managed child, local and remote-peer controls, exact syscall and server oracles, response-fence request, reference-release assertion, result classification, and cleanup. | A second enforcement implementation or broader support classification. |
+| VM harness | Build, transfer, isolated kernel execution, exact node and Pod placement, evidence collection, postflight cleanup, and owned disposable-VM destruction. | Product policy, fixture result invention, distributed causality, or later-phase Control behavior. |
 
 Mithril Node is the policy and response owner. The Interceptor is the only
 kernel loader. The BPF programs are the physical decision owner. The runner
@@ -282,8 +289,38 @@ The physical fixture installs probe-owned `nftables` local-output DNAT rules.
 Both documentation-range addresses rewrite to `127.0.0.4`. The policy denies
 the `198.18.0.1` flow after its final destination no longer matches retained
 authority. The `198.18.0.2` control reaches the rewritten server. This result
-does not prove hook placement for CNI, mesh, redirect, SNAT, or arbitrary route
-changes.
+proves the local DNAT placement.
+
+The two-node harness adds one peer Pod to each exact K3s node. It resolves the
+container process, enters that Pod network namespace, and runs the Rust peer
+server there. The source host sends to the remote Pod IP, so the packet follows
+the Flannel route. Both directions prove allowed TCP and UDP receipt plus
+denied-port absence. This result does not prove Pod-origin enforcement,
+another CNI, an arbitrary service mesh, SNAT, or dynamic route mutation.
+
+## Two-Node CNI Proof Flow
+
+```mermaid
+sequenceDiagram
+    participant H as Host harness
+    participant A as Node A runner
+    participant PB as Node B peer Pod network namespace
+    participant B as Node B runner
+    participant PA as Node A peer Pod network namespace
+
+    H->>H: Create two owned VMs and install K3s
+    H->>H: Verify different boot identities and two Ready nodes
+    H->>PA: Pin peer Pod and start Rust peer server with nsenter
+    H->>PB: Pin peer Pod and start Rust peer server with nsenter
+    H->>A: Run physical probe for Node B Pod IP
+    A->>PB: Deliver approved TCP and UDP through Flannel
+    A--xPB: Deny the distinct port before peer receipt
+    H->>B: Run physical probe for Node A Pod IP
+    B->>PA: Deliver approved TCP and UDP through Flannel
+    B--xPA: Deny the distinct port before peer receipt
+    H->>H: Validate both peer results and both 13-row matrices
+    H->>H: Remove namespace, K3s installations, and owned VMs
+```
 
 ## BPF Program Relationships
 
@@ -298,7 +335,7 @@ changes.
 | `fexit/inet_csk_accept` | Labels a returned accepted socket and records its parent socket. | The accepted-socket and namespace-transfer controls must preserve creator, accepter, current actor, and retained namespace authority. |
 | `lsm/socket_setsockopt` | Allows only represented safe options to reach network control policy. | The qualified fixture proves `TCP_NODELAY`; other options do not inherit it. |
 | `lsm/socket_shutdown` | Applies exact control policy and any response floor. | The probe proves post-fence denial. |
-| `cgroup_skb/egress` | Checks retained flow state, packet destination, creator and flow-authorizer handles, and response floor without current-task context. | The local-output DNAT control proves the tested final-destination placement. Other rewrite topologies need separate qualification. |
+| `cgroup_skb/egress` | Checks retained flow state, packet destination, creator and flow-authorizer handles, and response floor without current-task context. | The local-output DNAT and host-to-remote-Pod Flannel controls prove the tested placements. Other topology claims need separate qualification. |
 | `fentry/__sock_release` | Deletes the exact response floor, decrements creator and flow-authorizer references, and tombstones socket state. | The release fixture must observe a zero generation reference after close. |
 
 ## BPF Helper Walkthrough
@@ -377,8 +414,9 @@ a current network event.
   held by that socket.
 - The physical runner rejects pre-existing paths and asserts cleanup of its
   pin root, lease, cgroup, and fixture directory.
-- The VM harness destroys only the VM it created. The completed run left an
-  unrelated running VM unchanged.
+- The single-node harness destroys only its owned VM. The two-node harness
+  checks an ownership record for each exact VM before destruction. The
+  completed runs left an unrelated running VM unchanged.
 
 ## Fixture Result Construction
 
@@ -395,33 +433,40 @@ dedicated cgroups. It then performs this assertion sequence:
    TCP paths connect, send, receive, and reach their servers.
 2. Connected and unconnected IPv4 and IPv6 UDP sends reach their servers.
    Resolver destinations and unrepresented families or protocols deny.
-3. `TCP_NODELAY` succeeds, `SO_MARK` denies, and ordinary shutdown succeeds.
-4. Clone and fork holders send on one socket. Final close releases the retained
+3. When a remote peer is present, its approved TCP and UDP destinations
+   succeed. Its distinct denied port rejects the connection.
+4. `TCP_NODELAY` succeeds, `SO_MARK` denies, and ordinary shutdown succeeds.
+5. Clone and fork holders send on one socket. Final close releases the retained
    reference. A later socket has a new generation.
-5. A narrow actor receives a passed accepted socket but cannot send or receive.
+6. A narrow actor receives a passed accepted socket but cannot send or receive.
    An approved actor receives another accepted socket and sends bytes.
-6. A whole-socket floor on the passed socket denies the approved receiver and
+7. A whole-socket floor on the passed socket denies the approved receiver and
    the accepter. The client receives no post-fence bytes.
-7. `pidfd_getfd` duplicates accepted sockets into private network namespaces.
+8. `pidfd_getfd` duplicates accepted sockets into private network namespaces.
    The narrow actor cannot send. The approved actor sends, and its event keeps
    distinct creator and current namespace identities.
-8. A governed local proxy passes a request identity and final destination to a
+9. A governed local proxy passes a request identity and final destination to a
    delegate. The forbidden server receives nothing. The approved server
    receives the delegated bytes.
-9. Zero, end-of-file, I/O error, partial, mapped, inherited-descriptor,
+10. Zero, end-of-file, I/O error, partial, mapped, inherited-descriptor,
    governed-read, and governed-map results remain separate from denied network
    use and provider receipt.
-10. Probe-owned local-output DNAT rewrites two documentation-range addresses.
+11. Probe-owned local-output DNAT rewrites two documentation-range addresses.
     The forbidden final-address mismatch denies. The approved rewritten flow
     reaches its server.
-11. The original socket receives an exact whole-socket response floor. Later
+12. The original socket receives an exact whole-socket response floor. Later
     send, clone send, and shutdown deny. The server receives no later bytes.
-12. The Interceptor, actor cgroups, lease, pins, rewrite table, transport
+13. The Interceptor, actor cgroups, lease, pins, rewrite table, transport
     endpoints, and fixture files clean up.
 
 Only after every assertion passes does the runner return the JSON bundle. The
 fixture array contains 13 unique `PASS` rows. A false physical assertion makes
 the probe fail and prevents a pass result.
+
+The two-node harness starts one peer server inside each peer Pod network
+namespace and invokes the same runner on the opposite host. It requires the
+peer's TCP and UDP receipt and the absence of a denied connection before it
+accepts either direction.
 
 ## Test Layers
 
@@ -431,8 +476,8 @@ the probe fail and prevents a pass result.
 | Node lifecycle tests | Tests beside [`NodePolicyGenerationOwner`](../../../crates/mithril-node/src/policy.rs) | Capacity, staging, readback, publication, response-floor validation, socket-reference-aware retirement, and row deletion. |
 | ABI and Interceptor tests | [`abi/network.rs`](../../../crates/erebor-interceptor-abi/src/abi/network.rs) and [`bundled.rs`](../../../crates/erebor-interceptor/src/bundled.rs) | Closed enums and layout, required maps and hooks, creator/current intersection, socket lifetime, Unix owner separation, and packet use of retained state. |
 | Rust physical fixture tests | [`effect/network.rs`](../../../crates/mithril-e2e/src/effect/network.rs) | Signed fixture compilation, closed unique result matrix, managed-child protocol, and assertion-bearing physical sequence. |
-| Manual example | [`mithril-network-manual`](../../../examples/mithril-network-manual/README.md) | A readable standalone command that uses the production runner. |
-| Disposable VM harness | [`run.sh`](../../../crates/mithril-e2e/harness/vm/run.sh) | Explicit build, isolated kernel execution, evidence collection, cross-probe compatibility, and cleanup. |
+| Manual example | [`mithril-network-manual`](../../../examples/mithril-network-manual/README.md) | Readable single-host and two-node commands that use the production runner and VM harness. |
+| Disposable VM harness | [`run.sh`](../../../crates/mithril-e2e/harness/vm/run.sh) and [`two-node-network.sh`](../../../crates/mithril-e2e/harness/vm/two-node-network.sh) | Explicit build, isolated kernel execution, exact two-node and peer-Pod placement, evidence collection, cross-probe compatibility, and cleanup. |
 
 ## Verification Route
 
@@ -460,19 +505,31 @@ crates/mithril-e2e/harness/vm/run.sh \
   --output-directory /tmp/mithril-network-vm-review
 ```
 
-The complete disposable-VM result is retained at
-`target/mithril-phase-5-full-harness/network-physical-probe.json`. The platform
-was x86_64 Linux `6.8.0-137-generic`, cgroup v2, BPF filesystem, runtime BPF
-Type Format, and active BPF LSM. Every network Boolean oracle was true, and all
-13 fixture rows were `PASS`. The full repository CI script passed against the
-same implementation source.
+Run the two-node CNI proof when the network route, peer fixture, or K3s harness
+changes:
+
+```sh
+examples/mithril-network-manual/run-two-node-network-probe.sh \
+  --output-directory /tmp/mithril-network-two-node-review
+```
+
+The physical results use run-scoped directories under `/tmp`; they are not
+source artifacts. The platform was x86_64 Linux `6.8.0-137-generic`, cgroup
+v2, BPF filesystem, runtime BPF Type Format, and active BPF LSM. Every network
+Boolean oracle was true, and all 13 fixture rows were `PASS`. The two-node run
+used the same kernel and source on two independently booted VMs. It observed
+two Ready K3s nodes, delivered allowed TCP and UDP through Flannel in both
+directions, observed no denied peer connection, and passed all 13 fixture rows
+on each source node. The full repository CI script passed against the same
+implementation source.
 
 ## Future And Unallocated Work
 
 The [closure matrix](./phase-5-closure-matrix.md) is authoritative. Claim
 expansion needs a new qualification outcome for:
 
-- rewrite topologies beyond the tested local-output DNAT path;
+- Pod-origin enforcement, CNIs beyond the tested K3s Flannel route, arbitrary
+  service meshes, SNAT, and dynamic route mutation;
 - socket transfer mechanisms beyond the tested Unix descriptor pass and
   `pidfd_getfd` path;
 - delegated remote file systems beyond the tested local proxy protocol;
@@ -484,8 +541,9 @@ widen the qualified network claim without its own physical proof.
 
 ## Review Checklist
 
-- [ ] The reviewed claim is the 13-pass single-host tier, not every network
-      topology or protocol.
+- [ ] The reviewed claim is the single-host matrix plus the tested
+      host-to-remote-Pod K3s Flannel route, not every network topology or
+      protocol.
 - [ ] Every advertised operation has a physical negative oracle and a
       legitimate positive control.
 - [ ] Every allocated fixture has an exact `PASS` result and nonempty physical
@@ -496,8 +554,8 @@ widen the qualified network claim without its own physical proof.
 - [ ] Connect, send, and receive intersect creator and current authority.
 - [ ] Unix sockets remain with the IPC owner.
 - [ ] Packet decisions use retained flow state and no fictional current task.
-- [ ] Rewrite qualification stays limited to the tested local-output DNAT
-      path.
+- [ ] Rewrite and route qualification stays limited to the tested local-output
+      DNAT and host-to-remote-Pod K3s Flannel paths.
 - [ ] A response floor binds exact socket identity and has whole-socket scope.
 - [ ] Socket release removes the exact floor and retained references.
 - [ ] DNS port denial is not described as DNS payload inspection.
@@ -510,7 +568,8 @@ widen the qualified network claim without its own physical proof.
 This guide was checked against the current isolated worktree on 2026-08-19.
 The documentation change does not modify Rust, BPF, ABI, build, or test source.
 
-The full Rust CI gate and disposable-VM physical suite passed after the last
-implementation edit. The documentation diff check and local link-target check
-passed after this guide was added. The guide records no broader result than
-the closure matrix.
+The full Rust CI gate, single-node disposable-VM physical suite, and
+bidirectional two-node K3s Flannel suite passed after the last implementation
+edit. The documentation diff check and local link-target check passed after
+this guide was updated. The guide records no broader result than the closure
+matrix.
