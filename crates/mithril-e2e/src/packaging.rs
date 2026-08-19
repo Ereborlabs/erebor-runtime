@@ -101,6 +101,8 @@ impl VmTestHarness {
                 && run.matches(" physical-probe").count() == 6
                 && run.contains("--bin mithril-network-test")
                 && run.contains("network-physical-probe.json")
+                && run.matches("iproute2").count() == 2
+                && run.matches("nftables").count() == 2
                 && run.contains("physical-probe --protect")
                 && run.contains("--with-kubernetes")
                 && run.contains("--previous-bundle")

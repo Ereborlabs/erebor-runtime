@@ -189,7 +189,7 @@ if [[ $manual_vm == true ]]; then
     /mnt/mithril-source/crates/mithril-e2e/fixtures/identity/oci-prestart-admission-v1.sh \
     "$remote_root"
   "$provider" run "$vm_name" \
-    'sudo apt-get update && sudo apt-get install -y --no-install-recommends net-tools'
+    'sudo apt-get update && sudo apt-get install -y --no-install-recommends iproute2 net-tools nftables'
   "$provider" run "$vm_name" "set -e; cd '$remote_root'; \
     archive='$remote_root/k9s_Linux_amd64.tar.gz'; \
     checksums='$remote_root/k9s-checksums.sha256'; \
@@ -215,6 +215,9 @@ if [[ $manual_vm == true ]]; then
   echo "Manual VM ready. SSH, then run: sudo -i; . /var/tmp/mithril-manual.env"
   exit 0
 fi
+
+"$provider" run "$vm_name" \
+  'sudo apt-get update && sudo apt-get install -y --no-install-recommends iproute2 nftables'
 
 "$provider" run "$vm_name" mkdir -p \
   "$remote_source/bpf/erebor-interceptor/qualification" \
