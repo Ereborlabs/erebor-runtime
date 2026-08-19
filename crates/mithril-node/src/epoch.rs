@@ -12,6 +12,10 @@ use crate::Result;
 pub(crate) struct NodeEpochs;
 
 impl NodeEpochs {
+    pub(crate) fn evidence_wal_directory(state_directory: &Path) -> PathBuf {
+        state_directory.join("evidence-wal-v1")
+    }
+
     pub(crate) fn boot_id() -> Result<[u8; 16]> {
         let path = PathBuf::from("/proc/sys/kernel/random/boot_id");
         let value = fs::read_to_string(&path).context(IoSnafu { path: &path })?;
@@ -105,7 +109,7 @@ impl NodeEpochs {
                 })
             }
         };
-        let durable_state_exists = state_directory.join("evidence-wal-v1").exists()
+        let durable_state_exists = Self::evidence_wal_directory(state_directory).exists()
             || state_directory.join("evidence-coverage-v1.json").exists();
         if recover && current > 0 {
             return Ok(current);
@@ -148,6 +152,7 @@ mod tests {
 
     use super::NodeEpochs;
     use crate::error::IoSnafu;
+    use crate::{EvidenceWal, EvidenceWalLimits};
 
     #[test]
     fn label_epoch_is_persistent_monotonic_and_nonzero() -> crate::Result<()> {
@@ -178,8 +183,10 @@ mod tests {
         let directory = tempfile::tempdir().context(IoSnafu {
             path: "temporary epoch directory",
         })?;
-        let wal = directory.path().join("evidence-wal-v1");
-        std::fs::create_dir(&wal).context(IoSnafu { path: &wal })?;
+        let _wal = EvidenceWal::open(
+            NodeEpochs::evidence_wal_directory(directory.path()),
+            EvidenceWalLimits::default(),
+        )?;
         assert!(NodeEpochs::source_epoch(directory.path(), true).is_err());
         Ok(())
     }
