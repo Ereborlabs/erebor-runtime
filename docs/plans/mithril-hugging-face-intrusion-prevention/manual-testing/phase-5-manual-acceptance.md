@@ -39,7 +39,7 @@ Run the bidirectional CNI companion when the network route, K3s harness, or
 peer fixture changes:
 
 ```sh
-examples/mithril-network-manual/run-two-node-network-probe.sh \
+crates/mithril-e2e/harness/vm/two-node-network.sh \
   --output-directory /tmp/mithril-network-two-node-review
 ```
 
