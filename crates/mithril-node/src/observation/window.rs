@@ -102,6 +102,20 @@ impl DeterministicLocalWindowOwner {
         observations: &[ObservationEnvelopeV1],
         coverage: &CoverageSnapshotV1,
     ) -> Result<Vec<LocalFindingWindowV1>> {
+        let intervals = coverage.all_intervals();
+        let mut intervals_by_id = BTreeMap::new();
+        for interval in &intervals {
+            if intervals_by_id
+                .insert(interval.interval_id, interval)
+                .is_some()
+            {
+                return EvidenceStateSnafu {
+                    reason: "local window coverage contains a repeated interval identity"
+                        .to_owned(),
+                }
+                .fail();
+            }
+        }
         let mut grouped = BTreeMap::<WindowKey, WindowInputs>::new();
         for observation in observations {
             observation.validate()?;
@@ -133,12 +147,20 @@ impl DeterministicLocalWindowOwner {
                 first_sequence,
             };
             let inputs = grouped.entry(key).or_default();
+            let exact_coverage = intervals_by_id
+                .get(&observation.coverage_interval_id)
+                .is_some_and(|interval| {
+                    interval.source_id == observation.source_id
+                        && interval.source_epoch == observation.source_epoch
+                        && interval.first_sequence <= observation.source_sequence
+                        && interval_upper_sequence(interval) >= observation.source_sequence
+                });
             inputs
                 .observations
                 .entry(observation.source_sequence)
                 .or_default()
                 .insert(observation.observation_id);
-            inputs.coverage_incomplete |= !observation.supports_negative_claim();
+            inputs.coverage_incomplete |= !observation.supports_negative_claim() || !exact_coverage;
         }
         if grouped.len() > MAX_LOCAL_WINDOWS
             || grouped.values().any(|window| {
@@ -190,6 +212,12 @@ impl DeterministicLocalWindowOwner {
             .observations
             .values()
             .any(|observations| observations.len() > 1);
+        let observations_complete = inputs.observations.len() as u64 == self.spec.sequence_width
+            && inputs
+                .observations
+                .keys()
+                .copied()
+                .eq(key.first_sequence..=last_sequence);
         let coverage_incomplete = inputs.coverage_incomplete
             || intervals
                 .iter()
@@ -199,7 +227,7 @@ impl DeterministicLocalWindowOwner {
             LocalFindingWindowStateV1::Contradicted
         } else if coverage_incomplete {
             LocalFindingWindowStateV1::CoverageInsufficient
-        } else if ready {
+        } else if ready && observations_complete {
             LocalFindingWindowStateV1::Ready
         } else {
             LocalFindingWindowStateV1::Open
@@ -396,6 +424,19 @@ mod tests {
         assert_eq!(actual, expected);
         assert_eq!(actual[0].state, LocalFindingWindowStateV1::Ready);
         assert!(actual[0].supports_negative_claim());
+
+        let partial = owner()?.build(&observations[..3], &coverage.snapshot())?;
+        assert_eq!(partial[0].state, LocalFindingWindowStateV1::Open);
+        assert!(!partial[0].supports_negative_claim());
+
+        let mut wrong_interval = observations.clone();
+        wrong_interval[0].coverage_interval_id = EvidenceIdV1::new(99, 100);
+        let inconsistent = owner()?.build(&wrong_interval, &coverage.snapshot())?;
+        assert_eq!(
+            inconsistent[0].state,
+            LocalFindingWindowStateV1::CoverageInsufficient
+        );
+        assert!(!inconsistent[0].supports_negative_claim());
         Ok(())
     }
 
