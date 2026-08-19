@@ -314,19 +314,38 @@ fn validate_coverage_report(report: &CoverageReport) -> std::result::Result<(), 
                         | "COUNTER_REGRESSION"
                 )
         });
+        let state_reasons_valid = match interval.state.as_str() {
+            "HEALTHY" | "CLOSED" => interval.gap_reasons.is_empty(),
+            "GAPPED" => !interval.gap_reasons.is_empty(),
+            "UNKNOWN" => interval.gap_reasons.is_empty(),
+            _ => false,
+        } && (!interval.current || interval.state != "CLOSED");
+        let counter_regression = interval
+            .gap_reasons
+            .iter()
+            .any(|reason| reason == "COUNTER_REGRESSION");
+        let opening = interval.opening_counters.as_ref();
+        let closing = interval.closing_counters.as_ref();
+        let counters_valid = opening.is_some_and(valid_coverage_counters)
+            && closing.is_none_or(valid_coverage_counters)
+            && closing.is_none_or(|closing| {
+                opening.is_some_and(|opening| coverage_counters_do_not_regress(opening, closing))
+            });
+        let exact_regression_record = interval.state == "GAPPED"
+            && counter_regression
+            && opening.is_some()
+            && closing.is_some();
         if !ids_valid
             || !state_valid
             || !reasons_valid
+            || !state_reasons_valid
             || interval.source_epoch != report.source_epoch
             || interval.revision == 0
-            || !interval
-                .opening_counters
-                .as_ref()
-                .is_some_and(valid_coverage_counters)
+            || interval.first_sequence == 0
             || interval
-                .closing_counters
-                .as_ref()
-                .is_some_and(|counters| !valid_coverage_counters(counters))
+                .last_sequence
+                .is_some_and(|last| last < interval.first_sequence)
+            || (!counters_valid && !exact_regression_record)
         {
             return Err(Status::invalid_argument(
                 "coverage interval identity, state, reason, or counters are invalid",
@@ -354,6 +373,20 @@ fn validate_coverage_report(report: &CoverageReport) -> std::result::Result<(), 
 fn valid_coverage_counters(counters: &CoverageCounters) -> bool {
     counters.attempted == counters.suppressed.saturating_add(counters.requested)
         && counters.requested == counters.emitted.saturating_add(counters.lost)
+}
+
+fn coverage_counters_do_not_regress(
+    opening: &CoverageCounters,
+    closing: &CoverageCounters,
+) -> bool {
+    closing.attempted >= opening.attempted
+        && closing.suppressed >= opening.suppressed
+        && closing.requested >= opening.requested
+        && closing.emitted >= opening.emitted
+        && closing.lost >= opening.lost
+        && closing.classifier_miss_count >= opening.classifier_miss_count
+        && closing.unresolved >= opening.unresolved
+        && closing.next_sequence >= opening.next_sequence
 }
 
 fn coverage_ack(report: &CoverageReport) -> CoverageAck {
@@ -813,6 +846,37 @@ mod tests {
         intake.receive_coverage("node-a", &coverage_report(7, 1, "HEALTHY"))?;
         assert!(!record_temporary.exists());
         assert!(!coverage_temporary.exists());
+        Ok(())
+    }
+
+    #[test]
+    fn coverage_intake_rejects_inconsistent_healthy_claims(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let intake = EvidenceIntakeOwner::open(directory.path())?;
+
+        let mut reasoned_healthy = coverage_report(7, 1, "HEALTHY");
+        reasoned_healthy.intervals[0].gap_reasons = vec!["RING_LOSS".to_owned()];
+        reasoned_healthy.report_sha256.clear();
+        reasoned_healthy.report_sha256 = Sha256::digest(reasoned_healthy.encode_to_vec()).to_vec();
+        assert!(intake
+            .receive_coverage("node-a", &reasoned_healthy)
+            .is_err());
+
+        let mut regressed_healthy = coverage_report(7, 1, "HEALTHY");
+        regressed_healthy.intervals[0].opening_counters = Some(CoverageCounters {
+            attempted: 4,
+            requested: 4,
+            emitted: 4,
+            next_sequence: 4,
+            ..CoverageCounters::default()
+        });
+        regressed_healthy.report_sha256.clear();
+        regressed_healthy.report_sha256 =
+            Sha256::digest(regressed_healthy.encode_to_vec()).to_vec();
+        assert!(intake
+            .receive_coverage("node-a", &regressed_healthy)
+            .is_err());
         Ok(())
     }
 }

@@ -618,14 +618,28 @@ fn bump_and_persist(inner: &mut CoverageInner) -> Result<()> {
 }
 
 fn validate_snapshot(snapshot: &CoverageSnapshotV1) -> Result<()> {
+    let mut interval_ids = std::collections::BTreeSet::new();
     if snapshot.schema_version != COVERAGE_SCHEMA_VERSION
         || snapshot.source_epoch == 0
         || snapshot.history.len() > MAX_COVERAGE_HISTORY
+        || snapshot.history.iter().any(|interval| {
+            !interval_ids.insert(interval.interval_id) || !interval_is_valid(interval, false)
+        })
         || snapshot.sources.iter().any(|(cpu, source)| {
             *cpu != source.cpu_id
                 || source.source_id.is_zero()
-                || source.current.interval_id.is_zero()
+                || !interval_ids.insert(source.current.interval_id)
                 || source.current.source_epoch != snapshot.source_epoch
+                || source.current.source_id != source.source_id
+                || !interval_is_valid(&source.current, true)
+                || source.last_observed_sequence == Some(0)
+                || source.last_health.is_some_and(|counters| {
+                    !counters_are_valid(counters)
+                        && !source
+                            .current
+                            .gap_reasons
+                            .contains(&CoverageGapReasonV1::CounterRegression)
+                })
         })
     {
         return EvidenceStateSnafu {
@@ -634,6 +648,35 @@ fn validate_snapshot(snapshot: &CoverageSnapshotV1) -> Result<()> {
         .fail();
     }
     Ok(())
+}
+
+fn interval_is_valid(interval: &CoverageIntervalV1, current: bool) -> bool {
+    let gap_reasons_valid = !interval
+        .gap_reasons
+        .windows(2)
+        .any(|pair| pair[0] >= pair[1]);
+    let state_valid = match interval.state {
+        CoverageStateV1::Healthy | CoverageStateV1::Closed => interval.gap_reasons.is_empty(),
+        CoverageStateV1::Gapped => !interval.gap_reasons.is_empty(),
+        CoverageStateV1::Unknown => interval.gap_reasons.is_empty(),
+    } && (!current || interval.state != CoverageStateV1::Closed);
+    let counter_regression = interval
+        .gap_reasons
+        .contains(&CoverageGapReasonV1::CounterRegression);
+    let counters_valid = (counters_are_valid(interval.opening_counters)
+        && interval.closing_counters.is_none_or(counters_are_valid))
+        || (interval.state == CoverageStateV1::Gapped && counter_regression);
+    !interval.interval_id.is_zero()
+        && !interval.source_id.is_zero()
+        && interval.source_epoch > 0
+        && interval.revision > 0
+        && interval.first_sequence > 0
+        && interval
+            .last_sequence
+            .is_none_or(|last| last >= interval.first_sequence)
+        && gap_reasons_valid
+        && state_valid
+        && counters_valid
 }
 
 fn persist_snapshot(path: &Path, snapshot: &CoverageSnapshotV1) -> Result<()> {
@@ -790,6 +833,45 @@ mod tests {
         assert_eq!(current.state, crate::CoverageStateV1::Healthy);
         assert_eq!(current.first_sequence, 4);
         assert!(current.gap_reasons.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn reopen_rejects_a_healthy_interval_that_retains_a_gap_reason() -> crate::Result<()> {
+        let directory = tempfile::tempdir().map_err(|source| crate::Error::Io {
+            path: "temporary coverage directory".into(),
+            source,
+            location: snafu::Location::new(file!(), line!(), column!()),
+        })?;
+        let path = directory.path().join("coverage.json");
+        let owner = open_owner(&path, 1)?;
+        owner.sample_health(&[health(0, 0)])?;
+        drop(owner);
+
+        let mut snapshot: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).map_err(|source| crate::Error::Io {
+                path: path.clone(),
+                source,
+                location: snafu::Location::new(file!(), line!(), column!()),
+            })?)
+            .map_err(|error| crate::Error::EvidenceState {
+                reason: format!("test coverage decode failed: {error}"),
+                location: snafu::Location::new(file!(), line!(), column!()),
+            })?;
+        snapshot["sources"]["2"]["current"]["gap_reasons"] = serde_json::json!(["RING_LOSS"]);
+        std::fs::write(
+            &path,
+            serde_json::to_vec(&snapshot).map_err(|error| crate::Error::EvidenceState {
+                reason: format!("test coverage encode failed: {error}"),
+                location: snafu::Location::new(file!(), line!(), column!()),
+            })?,
+        )
+        .map_err(|source| crate::Error::Io {
+            path: path.clone(),
+            source,
+            location: snafu::Location::new(file!(), line!(), column!()),
+        })?;
+        assert!(open_owner(&path, 1).is_err());
         Ok(())
     }
 }
