@@ -1,9 +1,11 @@
 mod identity;
 mod ipc;
+mod network;
 mod path;
 
 pub use identity::*;
 pub use ipc::*;
+pub use network::*;
 pub use path::*;
 
 pub const MAX_NESTED_EFFECT_ATTEMPTS_V1: usize = 4;
@@ -122,6 +124,13 @@ pub enum KernelEffectOperationV1 {
     IoUringSqpoll = 29,
     IoUringOverrideCreds = 30,
     IoUringCommand = 31,
+    SocketCreate = 32,
+    Bind = 33,
+    Listen = 34,
+    Accept = 35,
+    Receive = 36,
+    Shutdown = 37,
+    Setsockopt = 38,
 }
 
 #[repr(u8)]
@@ -236,6 +245,7 @@ pub enum PolicyActivationProbeMapKindV1 {
     ProcessControl = 5,
     AdministrativeSlotCancel = 6,
     MountReconciliation = 7,
+    NetworkDestination = 8,
 }
 
 #[repr(C)]
@@ -1102,6 +1112,7 @@ pub enum EffectObservationReasonV1 {
     ExactPolicyDeny = 9,
     ExceptionUnavailable = 10,
     PathTreePolicyDeny = 11,
+    NetworkResponseFence = 12,
 }
 
 #[repr(u8)]
@@ -1120,6 +1131,7 @@ pub enum EffectPhysicalResultV1 {
     #[default]
     UnknownAfterPreEffect = 0,
     DeniedBeforeEffect = 1,
+    PacketDroppedAfterRewrite = 2,
 }
 
 #[repr(C)]
@@ -1168,6 +1180,24 @@ pub struct EffectObservationV1 {
     pub target_process_state_vector_id: u32,
     pub operation_argument: u32,
     pub reserved_process_control: [u8; 4],
+    pub network_socket_key_id: u64,
+    pub network_socket_generation: u64,
+    pub network_flow_generation: u64,
+    pub network_flow_authorization_id: Id128V1,
+    pub network_destination_policy_handle: u64,
+    pub network_creator_destination_policy_handle: u64,
+    pub network_flow_authorizer_profile_generation_ref_id: u64,
+    pub network_parent_socket_key_id: u64,
+    pub network_parent_socket_generation: u64,
+    pub network_namespace: NetworkNamespaceGenerationV1,
+    pub network_creator_profile_generation_ref_id: u64,
+    pub network_peer_address: [u8; 16],
+    pub network_peer_port: u16,
+    pub network_address_family: u8,
+    pub network_protocol: u8,
+    pub network_socket_state: u8,
+    pub network_response_scope: u8,
+    pub reserved_network: [u8; 2],
     pub io_uring_ring_id: Id128V1,
     pub io_uring_ring_generation: u64,
     pub io_uring_submission_sequence: u64,
@@ -1328,7 +1358,7 @@ mod tests {
         assert_eq!(IoUringExecutionStateKindV1::FailClosed as u8, 2);
         assert_eq!(size_of::<ExactFileObjectKeyV1>(), 40);
         assert_eq!(size_of::<ExactObjectBindingV1>(), 32);
-        assert_eq!(size_of::<EffectObservationV1>(), 376);
+        assert_eq!(size_of::<EffectObservationV1>(), 504);
         assert_eq!(size_of::<EffectObservationHealthV1>(), 32);
         assert_eq!(offset_of!(EffectObservationV1, file_object), 120);
         assert_eq!(offset_of!(EffectObservationV1, kernel_result), 192);

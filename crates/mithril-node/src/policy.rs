@@ -15,7 +15,8 @@ use erebor_interceptor_abi::{
     ExceptionHandleBindingV1, ExceptionRuntimeStateKeyV1, ExceptionRuntimeStateKindV1,
     ExceptionRuntimeStateV1, ExecutionSetBindingStateV1, Id128V1, IoUringRequestStateV1,
     IoUringRingStateV1, KernelEffectFamilyV1, MountReconciliationProposalV1,
-    MountSecurityViewStateV1, MountTopologyStateV1, PathGraphStateKeyV1, PathGraphTerminalV1,
+    MountSecurityViewStateV1, MountTopologyStateV1, NetworkResponseFloorKeyV1,
+    NetworkResponseFloorV1, NetworkResponseScopeV1, PathGraphStateKeyV1, PathGraphTerminalV1,
     PathGraphTransitionKeyV1, PathGraphTransitionV1, PendingAdministrativeMatchV1, PendingExecV1,
     PhysicalDecisionKindV1, PhysicalDecisionV1, PolicyActivationProbeMapKindV1,
     PolicyActivationProbeV1, PolicyGenerationModeV1, PolicyGenerationStateV1,
@@ -48,11 +49,13 @@ mod device_process;
 mod exception_authority;
 mod generation_allocator;
 mod ipc;
+mod network;
 
 use self::device_process::{lower_typed_effect, TypedEffectContext};
 use self::exception_authority::ExceptionAuthorityOwner;
 use self::generation_allocator::GenerationHandleAllocator;
 use self::ipc::lower_ipc_relationships;
+use self::network::{destination_handles, lower_destination_classes, lower_destination_decision};
 
 pub struct NodePolicyGenerationOwner {
     node_boot_id: Id128V1,
@@ -62,6 +65,12 @@ pub struct NodePolicyGenerationOwner {
     prevention_enabled: bool,
     administrative_plans: Vec<AdministrativePolicyPlanV1>,
     exception_authority: Mutex<ExceptionAuthorityOwner>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct NetworkSocketFenceResultV1 {
+    pub scope: NetworkResponseScopeV1,
+    pub inserted: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -108,6 +117,90 @@ type PlannedGenerationRow<'a> = (&'static str, &'a GenerationRows);
 type ActivationDecisionRow<'a> = (PolicyActivationProbeMapKindV1, &'a GenerationRows);
 
 impl NodePolicyGenerationOwner {
+    pub fn fence_network_socket(
+        &self,
+        host: &KernelHost,
+        key: NetworkResponseFloorKeyV1,
+        response_reason_id: u64,
+    ) -> Result<NetworkSocketFenceResultV1> {
+        ensure!(
+            key.profile_generation_ref_id > 0
+                && key.socket_key_id > 0
+                && key.socket_generation > 0
+                && response_reason_id > 0,
+            IdentityStateSnafu {
+                reason: "a network response fence needs exact nonzero socket identity",
+            }
+        );
+        let generation_key = key.profile_generation_ref_id.to_ne_bytes();
+        let descriptor = host
+            .lookup_map("profile_generation_descriptors", &generation_key)
+            .context(InterceptorSnafu)?
+            .context(IdentityStateSnafu {
+                reason: "the network response generation does not exist",
+            })?;
+        let descriptor =
+            ProfileGenerationDescriptorV1::try_read_from_bytes(&descriptor).map_err(|error| {
+                IdentityStateSnafu {
+                    reason: format!("the network response generation is invalid: {error}"),
+                }
+                .build()
+            })?;
+        ensure!(
+            descriptor.profile_generation_ref_id == key.profile_generation_ref_id
+                && descriptor.node_boot_id == self.node_boot_id
+                && descriptor.label_epoch == self.label_epoch
+                && matches!(
+                    descriptor.state,
+                    PolicyGenerationStateV1::Active | PolicyGenerationStateV1::Retiring
+                ),
+            IdentityStateSnafu {
+                reason: "the network response generation is not a live local generation",
+            }
+        );
+        let references = host
+            .lookup_map("profile_generation_socket_refs", &generation_key)
+            .context(InterceptorSnafu)?
+            .context(IdentityStateSnafu {
+                reason: "the network response generation has no socket references",
+            })?;
+        ensure!(
+            u64::read_from_bytes(&references).map_err(|error| {
+                IdentityStateSnafu {
+                    reason: format!("the network socket reference count is invalid: {error}"),
+                }
+                .build()
+            })? > 0,
+            IdentityStateSnafu {
+                reason: "the network response generation has no live socket",
+            }
+        );
+        let floor = NetworkResponseFloorV1 {
+            transition_version: 1,
+            response_reason_id,
+            scope: NetworkResponseScopeV1::WholeSocket,
+            fenced: 1,
+            reserved: [0; 6],
+        };
+        let inserted = host
+            .insert_map("network_response_floors", key.as_bytes(), floor.as_bytes())
+            .context(InterceptorSnafu)?
+            == MapInsertResult::Inserted;
+        ensure!(
+            host.lookup_map("network_response_floors", key.as_bytes())
+                .context(InterceptorSnafu)?
+                .as_deref()
+                == Some(floor.as_bytes()),
+            IdentityStateSnafu {
+                reason: "the whole-socket response fence failed exact readback",
+            }
+        );
+        Ok(NetworkSocketFenceResultV1 {
+            scope: NetworkResponseScopeV1::WholeSocket,
+            inserted,
+        })
+    }
+
     pub fn load_and_install(
         config: &NodeConfig,
         host: &mut KernelHost,
@@ -998,6 +1091,9 @@ struct LoweredGeneration {
     device_decisions: BTreeMap<Vec<u8>, Vec<u8>>,
     process_control_rules: BTreeMap<Vec<u8>, Vec<u8>>,
     ipc_relationships: BTreeMap<Vec<u8>, Vec<u8>>,
+    network_ipv4_classes: BTreeMap<Vec<u8>, Vec<u8>>,
+    network_ipv6_classes: BTreeMap<Vec<u8>, Vec<u8>>,
+    network_decisions: BTreeMap<Vec<u8>, Vec<u8>>,
     exceptions: BTreeMap<Vec<u8>, Vec<u8>>,
     exception_deadlines_utc: BTreeMap<Vec<u8>, i64>,
     exception_bindings: BTreeMap<Vec<u8>, Vec<u8>>,
@@ -1071,6 +1167,7 @@ impl LoweredGeneration {
             })
             .collect::<Result<BTreeMap<_, _>>>()?;
         let composite_handles = composite_handles(artifact);
+        let destination_handles = destination_handles(&artifact.policy_document);
         let exception_handles = handles(
             artifact
                 .policy_document
@@ -1136,6 +1233,11 @@ impl LoweredGeneration {
         let mut defaults = BTreeMap::new();
         let mut device_decisions = BTreeMap::new();
         let mut process_control_rules = BTreeMap::new();
+        let mut network = lower_destination_classes(
+            &artifact.policy_document,
+            binding.active_profile_generation_ref_id,
+            &destination_handles,
+        )?;
         for cell in &artifact.compiled_profile.compiled_cells {
             if !cell_matches_binding(&cell.key, binding) {
                 continue;
@@ -1181,6 +1283,38 @@ impl LoweredGeneration {
                 .unwrap_or_default();
             let physical =
                 physical_decision(cell.physical_result, cell.errno, exception_numeric_handle);
+            if let Some(destination_id) = cell.key.object_selector.strip_prefix("DESTINATION:") {
+                let destination = artifact
+                    .policy_document
+                    .network_policy
+                    .iter()
+                    .flat_map(|policy| &policy.destination_policies)
+                    .find(|policy| policy.destination_policy_id == destination_id)
+                    .ok_or_else(|| {
+                        IdentityStateSnafu {
+                            reason: format!(
+                                "compiled cell has unknown destination `{destination_id}`"
+                            ),
+                        }
+                        .build()
+                    })?;
+                if lower_destination_decision(
+                    &mut network,
+                    &cell.key.object_selector,
+                    cell.key.effect_family,
+                    binding.active_profile_generation_ref_id,
+                    role,
+                    process_state,
+                    entry_kind(cell.key.entry_kind),
+                    operation,
+                    lifecycle(cell.key.binding_lifecycle),
+                    &destination_handles,
+                    &destination.protocols,
+                    physical,
+                )? {
+                    continue;
+                }
+            }
             if lower_typed_effect(
                 cell,
                 &TypedEffectContext {
@@ -1264,7 +1398,8 @@ impl LoweredGeneration {
             !decisions.is_empty()
                 || !defaults.is_empty()
                 || !device_decisions.is_empty()
-                || !process_control_rules.is_empty(),
+                || !process_control_rules.is_empty()
+                || !network.decisions.is_empty(),
             IdentityStateSnafu {
                 reason: format!(
                     "binding `{}` selected no exact candidate cells",
@@ -1430,6 +1565,9 @@ impl LoweredGeneration {
             ("device-decision", &device_decisions),
             ("process-control-rule", &process_control_rules),
             ("ipc-relationship", &ipc_relationships),
+            ("network-ipv4-class", &network.ipv4_classes),
+            ("network-ipv6-class", &network.ipv6_classes),
+            ("network-decision", &network.decisions),
             ("object", &file_objects),
             ("path-exact", &path_tables.exact),
             ("path-wildcard", &path_tables.wildcards),
@@ -1447,6 +1585,9 @@ impl LoweredGeneration {
                 .checked_add(device_decisions.len())
                 .and_then(|count| count.checked_add(process_control_rules.len()))
                 .and_then(|count| count.checked_add(ipc_relationships.len()))
+                .and_then(|count| count.checked_add(network.ipv4_classes.len()))
+                .and_then(|count| count.checked_add(network.ipv6_classes.len()))
+                .and_then(|count| count.checked_add(network.decisions.len()))
                 .and_then(|count| count.try_into().ok())
                 .ok_or_else(|| {
                     IdentityStateSnafu {
@@ -1476,6 +1617,9 @@ impl LoweredGeneration {
             device_decisions,
             process_control_rules,
             ipc_relationships,
+            network_ipv4_classes: network.ipv4_classes,
+            network_ipv6_classes: network.ipv6_classes,
+            network_decisions: network.decisions,
             exceptions,
             exception_deadlines_utc,
             exception_bindings,
@@ -1508,6 +1652,9 @@ impl LoweredGeneration {
         merge_rows(&mut self.device_decisions, other.device_decisions)?;
         merge_rows(&mut self.process_control_rules, other.process_control_rules)?;
         merge_rows(&mut self.ipc_relationships, other.ipc_relationships)?;
+        merge_rows(&mut self.network_ipv4_classes, other.network_ipv4_classes)?;
+        merge_rows(&mut self.network_ipv6_classes, other.network_ipv6_classes)?;
+        merge_rows(&mut self.network_decisions, other.network_decisions)?;
         merge_rows(&mut self.exceptions, other.exceptions)?;
         for (key, deadline) in other.exception_deadlines_utc {
             if let Some(existing) = self.exception_deadlines_utc.insert(key, deadline) {
@@ -1536,6 +1683,9 @@ impl LoweredGeneration {
             .checked_add(self.device_decisions.len())
             .and_then(|count| count.checked_add(self.process_control_rules.len()))
             .and_then(|count| count.checked_add(self.ipc_relationships.len()))
+            .and_then(|count| count.checked_add(self.network_ipv4_classes.len()))
+            .and_then(|count| count.checked_add(self.network_ipv6_classes.len()))
+            .and_then(|count| count.checked_add(self.network_decisions.len()))
             .and_then(|count| count.try_into().ok())
             .ok_or_else(|| {
                 IdentityStateSnafu {
@@ -1550,6 +1700,9 @@ impl LoweredGeneration {
             ("device-decision", &self.device_decisions),
             ("process-control-rule", &self.process_control_rules),
             ("ipc-relationship", &self.ipc_relationships),
+            ("network-ipv4-class", &self.network_ipv4_classes),
+            ("network-ipv6-class", &self.network_ipv6_classes),
+            ("network-decision", &self.network_decisions),
             ("object", &self.file_objects),
             ("path-exact", &self.path_exact),
             ("path-wildcard", &self.path_wildcards),
@@ -1565,6 +1718,15 @@ impl LoweredGeneration {
             ("device_effect_decisions", &self.device_decisions),
             ("process_control_rules", &self.process_control_rules),
             ("ipc_relationship_decisions", &self.ipc_relationships),
+            (
+                "network_ipv4_destination_classes",
+                &self.network_ipv4_classes,
+            ),
+            (
+                "network_ipv6_destination_classes",
+                &self.network_ipv6_classes,
+            ),
+            ("network_destination_decisions", &self.network_decisions),
             ("exception_runtime_states", &self.exceptions),
             ("exception_handle_bindings", &self.exception_bindings),
             ("exact_file_objects", &self.file_objects),
@@ -1578,8 +1740,8 @@ impl LoweredGeneration {
         ]
     }
 
-    fn decision_rows(&self) -> [ActivationDecisionRow<'_>; 5] {
-        [
+    fn decision_rows(&self) -> Vec<ActivationDecisionRow<'_>> {
+        vec![
             (
                 PolicyActivationProbeMapKindV1::EffectDecision,
                 &self.decisions,
@@ -1599,6 +1761,10 @@ impl LoweredGeneration {
             (
                 PolicyActivationProbeMapKindV1::ProcessControl,
                 &self.process_control_rules,
+            ),
+            (
+                PolicyActivationProbeMapKindV1::NetworkDestination,
+                &self.network_decisions,
             ),
         ]
     }
@@ -1691,6 +1857,21 @@ impl LoweredGeneration {
         install_rows(host, "device_effect_decisions", &self.device_decisions)?;
         install_rows(host, "process_control_rules", &self.process_control_rules)?;
         install_rows(host, "ipc_relationship_decisions", &self.ipc_relationships)?;
+        install_rows(
+            host,
+            "network_ipv4_destination_classes",
+            &self.network_ipv4_classes,
+        )?;
+        install_rows(
+            host,
+            "network_ipv6_destination_classes",
+            &self.network_ipv6_classes,
+        )?;
+        install_rows(
+            host,
+            "network_destination_decisions",
+            &self.network_decisions,
+        )?;
         install_exception_rows(
             host,
             &self.exceptions,
@@ -1766,6 +1947,15 @@ impl LoweredGeneration {
             ("device_effect_decisions", &self.device_decisions),
             ("process_control_rules", &self.process_control_rules),
             ("ipc_relationship_decisions", &self.ipc_relationships),
+            (
+                "network_ipv4_destination_classes",
+                &self.network_ipv4_classes,
+            ),
+            (
+                "network_ipv6_destination_classes",
+                &self.network_ipv6_classes,
+            ),
+            ("network_destination_decisions", &self.network_decisions),
             ("exact_file_objects", &self.file_objects),
             ("path_graph_exact_transitions", &self.path_exact),
             ("path_graph_wildcard_transitions", &self.path_wildcards),
@@ -1813,6 +2003,10 @@ fn preflight_policy_map_capacity(
             .insert(handle.to_ne_bytes().to_vec());
         planned
             .entry("profile_generation_task_refs")
+            .or_default()
+            .insert(handle.to_ne_bytes().to_vec());
+        planned
+            .entry("profile_generation_socket_refs")
             .or_default()
             .insert(handle.to_ne_bytes().to_vec());
         for (map, rows) in generation.planned_rows() {
@@ -2046,6 +2240,12 @@ fn activate_profile(
         "profile_generation_async_refs",
         activation.generation,
         "async",
+    )?;
+    ensure_generation_reference_row(
+        host,
+        "profile_generation_socket_refs",
+        activation.generation,
+        "socket",
     )?;
 
     let pointer_key = profile_id.as_bytes();
@@ -2514,6 +2714,21 @@ fn generation_has_retained_authority(host: &KernelHost, generation: u64) -> Resu
     {
         return Ok(true);
     }
+    let socket_references = host
+        .lookup_map("profile_generation_socket_refs", &reference_key)
+        .context(InterceptorSnafu)?
+        .context(IdentityStateSnafu {
+            reason: "RETIRING generation lost its socket-reference row",
+        })?;
+    if u64::read_from_bytes(&socket_references).map_err(|error| {
+        IdentityStateSnafu {
+            reason: format!("generation socket references are invalid: {error}"),
+        }
+        .build()
+    })? != 0
+    {
+        return Ok(true);
+    }
 
     for key in host
         .map_keys("io_uring_ring_states")
@@ -2689,6 +2904,7 @@ fn retire_generation_rows(
         "effect_decisions",
         "effect_defaults",
         "ipc_relationship_decisions",
+        "network_destination_decisions",
         "device_effect_decisions",
         "process_control_rules",
         "exception_handle_bindings",
@@ -2700,10 +2916,18 @@ fn retire_generation_rows(
     ] {
         delete_generation_prefixed_rows(host, map, generation, 0)?;
     }
+    for map in [
+        "network_ipv4_destination_classes",
+        "network_ipv6_destination_classes",
+    ] {
+        delete_generation_prefixed_rows(host, map, generation, 8)?;
+    }
     delete_generation_prefixed_rows(host, "binding_activation_targets", generation, 16)?;
     host.delete_map_entry("profile_generation_task_refs", &generation.to_ne_bytes())
         .context(InterceptorSnafu)?;
     host.delete_map_entry("profile_generation_async_refs", &generation.to_ne_bytes())
+        .context(InterceptorSnafu)?;
+    host.delete_map_entry("profile_generation_socket_refs", &generation.to_ne_bytes())
         .context(InterceptorSnafu)?;
     host.delete_map_entry("profile_generation_descriptors", descriptor_key)
         .context(InterceptorSnafu)?;

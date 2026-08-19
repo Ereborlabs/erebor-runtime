@@ -47,7 +47,8 @@ static __always_inline execution_set_binding_state_v1 *ipc_current_binding(void)
  * Return zero for one fully resolved protected actor, one for a proved host
  * actor, or the physical denial from the common task-first gate.
  */
-static __noinline int ipc_current_actor(int ret)
+static __noinline int socket_current_actor(__u16 effect_family,
+                                           __u16 operation, int ret)
 {
     identity_runtime_config_v1 *config;
     struct identity_scratch_v1 *scratch = identity_scratch_record();
@@ -59,8 +60,7 @@ static __noinline int ipc_current_actor(int ret)
     if (!ret)
         prepare_effect_identity();
     ret = dispatch_identity_effect_gate(
-        NULL, NULL, kernel_effect_family_v1_ipc,
-        kernel_effect_operation_v1_ipc_access, ret);
+        NULL, NULL, effect_family, operation, ret);
     if (ret)
         return ret;
     config = identity_runtime_config();
@@ -69,6 +69,12 @@ static __noinline int ipc_current_actor(int ret)
         !scratch || id128_is_zero(&scratch->observation.binding_id))
         return IPC_ACTOR_OUTSIDE_PROTECTED_SCOPE;
     return 0;
+}
+
+static __noinline int ipc_current_actor(int ret)
+{
+    return socket_current_actor(kernel_effect_family_v1_ipc,
+                                kernel_effect_operation_v1_ipc_access, ret);
 }
 
 static __always_inline void ipc_store_endpoint_a(
@@ -439,6 +445,8 @@ static __noinline int ipc_unix_stream_connect_dispatch(struct sock *sock,
     return ipc_unix_stream_connect_effect(sock, other, newsk);
 }
 
+#include "identity_network.bpf.h"
+
 SEC("lsm/socket_post_create")
 int BPF_PROG(erebor_identity_socket_post_create, struct socket *socket,
              int family, int type, int protocol, int kern, int ret)
@@ -446,7 +454,8 @@ int BPF_PROG(erebor_identity_socket_post_create, struct socket *socket,
     int status;
 
     if (family != AF_UNIX)
-        return ret;
+        return network_socket_post_create_result(
+            socket, family, type, protocol, ret);
     status = ipc_current_actor(ret);
     if (type != SOCK_STREAM)
         return ipc_unsupported(ret, status);
@@ -472,8 +481,10 @@ int BPF_PROG(erebor_identity_socket_connect, struct socket *socket,
     if (!sock || BPF_CORE_READ_INTO(&family, sock, __sk_common.skc_family))
         return ipc_unsupported(ret, ipc_current_actor(ret));
     if (family != AF_UNIX)
-        return identity_effect_gate(NULL, kernel_effect_family_v1_network,
-                                    kernel_effect_operation_v1_connect, ret);
+        return network_apply_destination(
+            socket, address, addrlen, kernel_effect_operation_v1_connect,
+            false, true, ret,
+            network_current_actor(kernel_effect_operation_v1_connect, ret));
     if (ipc_is_unix_stream(socket))
         return ret;
     return ipc_unsupported(ret, ipc_current_actor(ret));
@@ -488,9 +499,19 @@ int BPF_PROG(erebor_identity_socket_sendmsg, struct socket *socket,
 
     if (!sock || BPF_CORE_READ_INTO(&family, sock, __sk_common.skc_family))
         return ipc_unsupported(ret, ipc_current_actor(ret));
-    if (family != AF_UNIX)
-        return identity_effect_gate(NULL, kernel_effect_family_v1_network,
-                                    kernel_effect_operation_v1_send, ret);
+    if (family != AF_UNIX) {
+        struct sockaddr *address = NULL;
+        int addrlen = 0;
+
+        if (msg) {
+            BPF_CORE_READ_INTO(&address, msg, msg_name);
+            BPF_CORE_READ_INTO(&addrlen, msg, msg_namelen);
+        }
+        return network_apply_destination(
+            socket, address, addrlen, kernel_effect_operation_v1_send,
+            !address, true, ret,
+            network_current_actor(kernel_effect_operation_v1_send, ret));
+    }
     if (!ipc_is_unix_stream(socket))
         return ipc_unsupported(ret, ipc_current_actor(ret));
     return ipc_connected_effect(socket, ipc_operation_v1_send, ret,
@@ -507,7 +528,10 @@ int BPF_PROG(erebor_identity_socket_recvmsg, struct socket *socket,
     if (!sock || BPF_CORE_READ_INTO(&family, sock, __sk_common.skc_family))
         return ipc_unsupported(ret, ipc_current_actor(ret));
     if (family != AF_UNIX)
-        return ret;
+        return network_apply_destination(
+            socket, NULL, 0, kernel_effect_operation_v1_receive, true, false,
+            ret,
+            network_current_actor(kernel_effect_operation_v1_receive, ret));
     if (!ipc_is_unix_stream(socket))
         return ipc_unsupported(ret, ipc_current_actor(ret));
     return ipc_connected_effect(socket, ipc_operation_v1_receive, ret,

@@ -37,6 +37,7 @@ fn build_bpf() -> Result<(), Box<dyn std::error::Error>> {
         &bpf_root.join("programs/identity_effects.bpf.h"),
         &bpf_root.join("programs/identity_device_process.bpf.h"),
         &bpf_root.join("programs/identity_ipc.bpf.h"),
+        &bpf_root.join("programs/identity_network.bpf.h"),
         &bpf_root.join("programs/identity_io_uring.bpf.h"),
         &bpf_root.join("programs/identity_exit.bpf.h"),
         &bpf_root.join("include/erebor_interceptor_abi.h"),
