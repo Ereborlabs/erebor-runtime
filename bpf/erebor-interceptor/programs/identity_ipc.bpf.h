@@ -453,9 +453,12 @@ int BPF_PROG(erebor_identity_socket_post_create, struct socket *socket,
 {
     int status;
 
-    if (family != AF_UNIX)
+    if (family != AF_UNIX) {
+        status = network_current_actor(
+            kernel_effect_operation_v1_socket_create, ret);
         return network_socket_post_create_result(
-            socket, family, type, protocol, ret);
+            socket, family, type, protocol, status);
+    }
     status = ipc_current_actor(ret);
     if (type != SOCK_STREAM)
         return ipc_unsupported(ret, status);
@@ -482,8 +485,9 @@ int BPF_PROG(erebor_identity_socket_connect, struct socket *socket,
         return ipc_unsupported(ret, ipc_current_actor(ret));
     if (family != AF_UNIX)
         return network_apply_destination(
-            socket, address, addrlen, kernel_effect_operation_v1_connect,
-            false, true, ret,
+            socket, address, addrlen,
+            kernel_effect_operation_v1_connect |
+                NETWORK_REQUEST_RETAIN_FLOW,
             network_current_actor(kernel_effect_operation_v1_connect, ret));
     if (ipc_is_unix_stream(socket))
         return ret;
@@ -508,8 +512,9 @@ int BPF_PROG(erebor_identity_socket_sendmsg, struct socket *socket,
             BPF_CORE_READ_INTO(&addrlen, msg, msg_namelen);
         }
         return network_apply_destination(
-            socket, address, addrlen, kernel_effect_operation_v1_send,
-            !address, true, ret,
+            socket, address, addrlen,
+            kernel_effect_operation_v1_send | NETWORK_REQUEST_RETAIN_FLOW |
+                (!address ? NETWORK_REQUEST_CONNECTED_PEER : 0),
             network_current_actor(kernel_effect_operation_v1_send, ret));
     }
     if (!ipc_is_unix_stream(socket))
@@ -529,8 +534,9 @@ int BPF_PROG(erebor_identity_socket_recvmsg, struct socket *socket,
         return ipc_unsupported(ret, ipc_current_actor(ret));
     if (family != AF_UNIX)
         return network_apply_destination(
-            socket, NULL, 0, kernel_effect_operation_v1_receive, true, false,
-            ret,
+            socket, NULL, 0,
+            kernel_effect_operation_v1_receive |
+                NETWORK_REQUEST_CONNECTED_PEER,
             network_current_actor(kernel_effect_operation_v1_receive, ret));
     if (!ipc_is_unix_stream(socket))
         return ipc_unsupported(ret, ipc_current_actor(ret));

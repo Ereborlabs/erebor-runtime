@@ -11,7 +11,7 @@ use erebor_interceptor_abi::{
     NetworkResponseScopeV1,
 };
 use mithril_control::{
-    DestinationPolicyRecordV1, DnsPolicyModeV1, EffectFamilyDefaultV1, EffectFamilyV1,
+    DestinationPolicyRecordV1, DnsPolicyModeV1, EffectFamilyDefaultV1, EffectFamilyV1, EntryKindV1,
     LocalObjectSelectorV1, NetworkPolicyV1, NetworkPortRangeV1, NetworkProtocolV1,
     PolicyArtifactOwner, PolicyDispositionV1, PolicyDocumentV1, RuleMatchV1,
 };
@@ -360,6 +360,27 @@ fn build_network_artifact(
         })?,
     )
     .context(PolicySnafu)?;
+    let mut network_rule = document.rules[0].clone();
+    document.protected_universe.object_class_ids.clear();
+    document
+        .protected_universe
+        .role_ids
+        .retain(|role| role != "runtime-external-administrative");
+    document
+        .protected_universe
+        .entry_kind_ids
+        .retain(|entry| *entry != EntryKindV1::ApprovedAdministrativeExec);
+    document.classifier_bindings.clear();
+    document
+        .roles
+        .retain(|role| role.role_id != "runtime-external-administrative");
+    document
+        .entry_role_assignments
+        .retain(|assignment| assignment.resulting_role_id != "runtime-external-administrative");
+    document.ipc_relationship_rules.clear();
+    document.effect_family_defaults.clear();
+    document.exceptions.clear();
+    document.rules.clear();
     document.network_policy = Some(NetworkPolicyV1 {
         dns_mode: DnsPolicyModeV1::DenyDnsAndUsePolicyResolvedAddresses,
         destination_policies: vec![DestinationPolicyRecordV1 {
@@ -386,7 +407,6 @@ fn build_network_artifact(
         errno: None,
         finding: None,
     });
-    let mut network_rule = document.rules[0].clone();
     network_rule.rule_id = "allow-network-result-service".to_owned();
     let RuleMatchV1::LocalPreEffect(effect) = &mut network_rule.rule_match else {
         unreachable!("the effect fixture begins with a local rule")
