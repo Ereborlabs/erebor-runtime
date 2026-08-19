@@ -51,11 +51,12 @@ radius; never claim per-lineage attribution for queued bytes or retransmits.
 
 ### D5.5 — DNS policy and encrypted-protocol limits
 
-Implement the selected DNS mode with bounded UDP/TCP parsing, exact/suffix
-qname/type/answer/CNAME/size/rate/cardinality rules, resolver destination floor,
-and malformed/fragmented/encrypted handling. Keep IP/destination enforcement
-independent. Record that direct TLS cannot reveal provider verbs or bearer
-intent.
+Implement the selected DNS mode. The policy-resolved-address mode denies DNS
+instead of parsing it. A plaintext DNS mode requires bounded UDP/TCP parsing,
+exact or suffix qname, type, answer, CNAME, size, rate, cardinality rules, and
+malformed, fragmented, and encrypted handling. Keep IP and destination
+enforcement independent. Record that direct TLS cannot reveal provider verbs
+or bearer intent.
 
 ### D5.6 — HF network prevention increment
 
@@ -107,8 +108,8 @@ Files and durable owners changed: network policy source and validation; portable
   VM harness; qualification record; closure and review documents.
 Upstream-adoption dossier IDs used: none; the checked Cilium and Tetragon
   learning document records the source study and adopted design lessons.
-Fixture cases and exact physical results: 8 PASS and 5 UNSUPPORTED; every
-  network Boolean oracle in the disposable VM result is true.
+Fixture cases and exact physical results: all 13 allocated fixtures are PASS;
+  every network Boolean oracle in the disposable VM result is true.
 Commands and exact source state covered: current checked worktree source;
   formatting, focused clippy, Mithril e2e library tests, complete repository
   Rust CI, the standalone network manual probe, and the complete VM harness.
@@ -116,11 +117,11 @@ Platform/kernel/runtime manifests: x86_64 Linux 6.8.0-137-generic, cgroup v2,
   BPF filesystem, runtime BTF, and active BPF LSM.
 Performance/capacity results: generation-map capacity is bounded and checked;
   no Phase 5 network throughput or latency claim is advertised.
-Unsupported/degraded paths: delegated remote file I/O, token-to-egress chain,
-  cross-actor accepted-socket transfer, cross-network-namespace positive use,
-  and network rewrite qualification are UNSUPPORTED. DNS payload and TLS
-  semantics are not advertised. No fixture is DEGRADED.
-Remaining work in this phase: none inside the limited advertised tier. Claim
-  expansion requires a new qualification outcome.
+Unsupported/degraded allocated paths: none. DNS payload and TLS semantics,
+  rewrite topologies beyond the qualified local-output DNAT path, transfer
+  mechanisms beyond the qualified descriptor and pidfd paths, and broader
+  protocols are not advertised. No fixture is DEGRADED.
+Remaining work in this phase: none. Claim expansion requires a new
+  qualification outcome.
 Next phase not authorized: yes.
 ```
