@@ -83,6 +83,50 @@ impl NodeEpochs {
             })?;
         Ok(next)
     }
+
+    pub(crate) fn source_epoch(state_directory: &Path) -> Result<u64> {
+        fs::create_dir_all(state_directory).context(IoSnafu {
+            path: state_directory,
+        })?;
+        let path = state_directory.join("evidence-source-epoch");
+        let current = match fs::read_to_string(&path) {
+            Ok(value) => value.trim().parse::<u64>().map_err(|error| {
+                InvalidConfigurationSnafu {
+                    reason: format!("stored evidence source epoch is invalid: {error}"),
+                }
+                .build()
+            })?,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => 0,
+            Err(source) => {
+                return Err(crate::Error::Io {
+                    path,
+                    source,
+                    location: snafu::Location::default(),
+                })
+            }
+        };
+        let next = current.checked_add(1).ok_or_else(|| {
+            InvalidConfigurationSnafu {
+                reason: "evidence source epoch exhausted".to_owned(),
+            }
+            .build()
+        })?;
+        let temporary = state_directory.join("evidence-source-epoch.next");
+        let mut file = File::create(&temporary).context(IoSnafu { path: &temporary })?;
+        file.write_all(format!("{next}\n").as_bytes())
+            .context(IoSnafu { path: &temporary })?;
+        file.sync_all().context(IoSnafu { path: &temporary })?;
+        fs::rename(&temporary, &path).context(IoSnafu { path: &path })?;
+        File::open(state_directory)
+            .context(IoSnafu {
+                path: state_directory,
+            })?
+            .sync_all()
+            .context(IoSnafu {
+                path: state_directory,
+            })?;
+        Ok(next)
+    }
 }
 
 #[cfg(test)]
@@ -100,6 +144,8 @@ mod tests {
         assert_eq!(NodeEpochs::label_epoch(directory.path(), false)?, 1);
         assert_eq!(NodeEpochs::label_epoch(directory.path(), true)?, 1);
         assert_eq!(NodeEpochs::label_epoch(directory.path(), false)?, 2);
+        assert_eq!(NodeEpochs::source_epoch(directory.path())?, 1);
+        assert_eq!(NodeEpochs::source_epoch(directory.path())?, 2);
         Ok(())
     }
 }

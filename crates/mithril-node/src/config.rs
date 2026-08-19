@@ -42,6 +42,21 @@ pub struct RuntimeObservationConfig {
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct EvidenceConfig {
+    pub tenant_id: String,
+    pub source_id: String,
+    #[serde(default = "default_evidence_record_bytes")]
+    pub maximum_record_bytes: u64,
+    #[serde(default = "default_evidence_retained_bytes")]
+    pub maximum_retained_bytes: u64,
+    #[serde(default = "default_evidence_retained_records")]
+    pub maximum_retained_records: usize,
+    #[serde(default = "default_evidence_batch_records")]
+    pub maximum_batch_records: usize,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ContainerRuntimeConfig {
     pub socket_path: PathBuf,
     #[serde(default)]
@@ -159,6 +174,8 @@ pub struct NodeConfig {
     pub interceptor: InterceptorConfig,
     pub control: NodeControlConfig,
     #[serde(default)]
+    pub evidence: Option<EvidenceConfig>,
+    #[serde(default)]
     pub runtime_observation: Option<RuntimeObservationConfig>,
     #[serde(default)]
     pub container_runtime: Option<ContainerRuntimeConfig>,
@@ -187,6 +204,21 @@ impl NodeConfig {
                 reason: "node_id must be nonempty and contain no whitespace",
             }
         );
+        if let Some(evidence) = &self.evidence {
+            ensure!(
+                canonical_uuid(&evidence.tenant_id)
+                    && canonical_uuid(&evidence.source_id)
+                    && evidence.maximum_record_bytes > 0
+                    && evidence.maximum_retained_bytes >= evidence.maximum_record_bytes
+                    && evidence.maximum_retained_records > 0
+                    && evidence.maximum_batch_records > 0
+                    && evidence.maximum_batch_records <= evidence.maximum_retained_records,
+                InvalidConfigurationSnafu {
+                    reason:
+                        "evidence requires canonical identities and consistent nonzero WAL bounds",
+                }
+            );
+        }
         ensure!(
             self.control.endpoint.starts_with("https://") && !self.control.server_name.is_empty(),
             InvalidConfigurationSnafu {
@@ -280,6 +312,12 @@ impl NodeConfig {
                 }
             );
         }
+        ensure!(
+            self.policy_candidates.is_empty() || self.evidence.is_some(),
+            InvalidConfigurationSnafu {
+                reason: "effect policy requires a durable evidence owner",
+            }
+        );
         let mut exact_object_ids = BTreeSet::new();
         let mut exact_kernel_objects = BTreeSet::new();
         for object in &self.exact_file_objects {
@@ -391,6 +429,22 @@ const fn default_authorization_clock_skew_ns() -> i64 {
     300_000_000_000
 }
 
+const fn default_evidence_record_bytes() -> u64 {
+    128 * 1_024
+}
+
+const fn default_evidence_retained_bytes() -> u64 {
+    256 * 1_024 * 1_024
+}
+
+const fn default_evidence_retained_records() -> usize {
+    100_000
+}
+
+const fn default_evidence_batch_records() -> usize {
+    256
+}
+
 fn canonical_uuid(value: &str) -> bool {
     uuid::Uuid::parse_str(value).is_ok_and(|uuid| uuid.hyphenated().to_string() == value)
 }
@@ -401,8 +455,8 @@ mod tests {
     use std::time::Duration;
 
     use super::{
-        ContainerKindV1, ExactFileObjectConfig, InterceptorConfig, NodeConfig, NodeControlConfig,
-        PolicyCandidateConfig, WorkloadBindingConfig,
+        ContainerKindV1, EvidenceConfig, ExactFileObjectConfig, InterceptorConfig, NodeConfig,
+        NodeControlConfig, PolicyCandidateConfig, WorkloadBindingConfig,
     };
 
     fn config() -> NodeConfig {
@@ -423,6 +477,14 @@ mod tests {
                 reconnect_minimum_ms: 100,
                 reconnect_maximum_ms: 5_000,
             },
+            evidence: Some(EvidenceConfig {
+                tenant_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa".to_owned(),
+                source_id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb".to_owned(),
+                maximum_record_bytes: 128 * 1_024,
+                maximum_retained_bytes: 16 * 1_024 * 1_024,
+                maximum_retained_records: 10_000,
+                maximum_batch_records: 256,
+            }),
             runtime_observation: None,
             container_runtime: None,
             workload_bindings: vec![WorkloadBindingConfig {

@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 use zerocopy::IntoBytes as _;
 
-use crate::error::IdentityStateSnafu;
+use crate::error::{EvidenceStateSnafu, IdentityStateSnafu};
 use crate::Result;
 
 pub const MAX_EVIDENCE_FIELDS_V1: usize = 64;
@@ -286,6 +286,41 @@ impl ObservationEnvelopeV1 {
         canonical_cbor(self)
     }
 
+    pub fn wire_bytes(&self) -> Result<Vec<u8>> {
+        self.payload.validate()?;
+        serde_json::to_vec(self).map_err(|error| {
+            EvidenceStateSnafu {
+                reason: format!("observation wire encoding failed: {error}"),
+            }
+            .build()
+        })
+    }
+
+    pub fn from_wire_bytes(bytes: &[u8]) -> Result<Self> {
+        let envelope: Self = serde_json::from_slice(bytes).map_err(|error| {
+            EvidenceStateSnafu {
+                reason: format!("observation wire decoding failed: {error}"),
+            }
+            .build()
+        })?;
+        envelope.payload.validate()?;
+        if envelope.schema_version != 1
+            || envelope.tenant_id.is_zero()
+            || envelope.observation_id == [0; 32]
+            || envelope.source_id.is_zero()
+            || envelope.source_epoch == 0
+            || envelope.source_sequence == 0
+            || envelope.coverage_interval_id.is_zero()
+            || envelope.transport_integrity_digest == [0; 32]
+        {
+            return EvidenceStateSnafu {
+                reason: "observation wire identity or version is invalid".to_owned(),
+            }
+            .fail();
+        }
+        Ok(envelope)
+    }
+
     #[must_use]
     pub fn supports_negative_claim(&self) -> bool {
         self.proof_quality.temporal_coverage == TemporalCoverageV1::Complete
@@ -321,6 +356,11 @@ impl ObservationCanonicalizer {
             source_epoch,
             node_boot_id,
         })
+    }
+
+    #[must_use]
+    pub const fn source_epoch(self) -> u64 {
+        self.source_epoch
     }
 
     pub fn normalize_kernel(

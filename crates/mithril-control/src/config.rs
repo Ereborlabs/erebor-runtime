@@ -2,6 +2,7 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::net::SocketAddr;
 use std::path::Path;
+use std::path::PathBuf;
 
 use serde::Deserialize;
 use snafu::{ensure, ResultExt as _};
@@ -20,6 +21,7 @@ pub struct ControlConfig {
     pub allowed_nodes: Vec<AllowedNodeIdentity>,
     pub trust: TrustGenerationV1,
     pub administrative_exec: Option<AdministrativeHttpConfigV1>,
+    pub evidence_directory: PathBuf,
 }
 
 impl ControlConfig {
@@ -32,14 +34,18 @@ impl ControlConfig {
 
     pub fn into_parts(
         self,
-    ) -> (
+    ) -> Result<(
         SocketAddr,
         ControlServerTls,
         ControlPlane,
         Option<AdministrativeHttpConfigV1>,
-    ) {
-        let control = ControlPlane::new(self.allowed_nodes, self.trust);
-        (self.listen, self.tls, control, self.administrative_exec)
+    )> {
+        let control = ControlPlane::with_evidence_directory(
+            self.allowed_nodes,
+            self.trust,
+            self.evidence_directory,
+        )?;
+        Ok((self.listen, self.tls, control, self.administrative_exec))
     }
 
     fn validate(&self) -> Result<()> {
@@ -47,6 +53,12 @@ impl ControlConfig {
             !self.allowed_nodes.is_empty(),
             InvalidConfigurationSnafu {
                 reason: "allowed_nodes must not be empty",
+            }
+        );
+        ensure!(
+            self.evidence_directory.is_absolute(),
+            InvalidConfigurationSnafu {
+                reason: "evidence_directory must be absolute",
             }
         );
         ensure!(

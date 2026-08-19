@@ -20,6 +20,12 @@ pub enum Error {
         #[snafu(implicit)]
         location: Location,
     },
+    #[snafu(display("Mithril local evidence state is invalid: {reason}"))]
+    EvidenceState {
+        reason: String,
+        #[snafu(implicit)]
+        location: Location,
+    },
     #[snafu(display("Mithril authorization proof was rejected: {reason}"))]
     Authorization {
         reason: String,
@@ -112,6 +118,7 @@ impl ErrorExt for Error {
         match self {
             Self::InvalidConfiguration { .. }
             | Self::IdentityState { .. }
+            | Self::EvidenceState { .. }
             | Self::Json { .. }
             | Self::ControlProtocol { .. } => StatusCode::InvalidArguments,
             Self::Authorization { .. } => StatusCode::PermissionDenied,
@@ -142,6 +149,7 @@ impl ErrorExt for Error {
             | Self::LocalTask { .. } => RetryHint::Retryable,
             Self::InvalidConfiguration { .. }
             | Self::IdentityState { .. }
+            | Self::EvidenceState { .. }
             | Self::Authorization { .. }
             | Self::Json { .. }
             | Self::ControlProtocol { .. } => RetryHint::NonRetryable,

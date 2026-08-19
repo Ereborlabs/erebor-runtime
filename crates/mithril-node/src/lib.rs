@@ -12,11 +12,13 @@ mod policy;
 mod trust;
 
 pub use config::{
-    AdministrativeAuthorizationConfig, ContainerKindV1, ContainerRuntimeConfig, ExactDeviceConfig,
-    ExactDeviceType, ExactFileObjectConfig, InterceptorConfig, NodeConfig, NodeControlConfig,
-    PolicyCandidateConfig, RuntimeObservationConfig, WorkloadBindingConfig,
+    AdministrativeAuthorizationConfig, ContainerKindV1, ContainerRuntimeConfig, EvidenceConfig,
+    ExactDeviceConfig, ExactDeviceType, ExactFileObjectConfig, InterceptorConfig, NodeConfig,
+    NodeControlConfig, PolicyCandidateConfig, RuntimeObservationConfig, WorkloadBindingConfig,
 };
-pub use control::{AdministrativeControlRequest, ControlConnection, NodeControlConnector};
+pub use control::{
+    AdministrativeControlRequest, ControlConnection, NodeControlConnector, NodeControlMessage,
+};
 pub use error::{Error, Result};
 pub use exact_object::ExactFileObjectResolver;
 pub use identity::{
@@ -29,9 +31,10 @@ pub use identity::{
 pub use local::RuntimeObservationServer;
 pub use node::{NodeChassis, NodeReadinessV1};
 pub use observation::{
-    CoverageStateV1, EffectObservationHealth, EffectObservationStore, EvidenceFieldKeyV1,
-    EvidenceFieldV1, EvidenceIdV1, EvidencePayloadV1, EvidenceValueV1, IntegrityV1,
-    LocalSubjectBindingV1, ObservationCanonicalizer, ObservationEnvelopeV1,
+    CoverageStateV1, EffectObservationHealth, EffectObservationStore, EvidenceAckV1,
+    EvidenceBatchV1, EvidenceDigestV1, EvidenceFieldKeyV1, EvidenceFieldV1, EvidenceIdV1,
+    EvidencePayloadV1, EvidenceRecordV1, EvidenceValueV1, EvidenceWal, EvidenceWalLimits,
+    IntegrityV1, LocalSubjectBindingV1, ObservationCanonicalizer, ObservationEnvelopeV1,
     OperationResultAuthorityV1, ProofQualityV1, RemoteSubjectBindingV1, SensitivityV1,
     SourceAuthorityV1, TemporalCoverageV1, MAX_EVIDENCE_FIELDS_V1, MAX_PROVENANCE_OBSERVATIONS_V1,
 };

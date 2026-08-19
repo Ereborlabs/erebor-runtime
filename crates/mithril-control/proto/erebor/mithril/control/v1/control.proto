@@ -18,6 +18,7 @@ message NodeEnvelope {
     TrustGenerationAck trust_ack = 12;
     AdministrativeExecResolution resolution = 13;
     AdministrativeExecArmResult arm_result = 14;
+    EvidenceBatch evidence_batch = 15;
   }
 }
 
@@ -58,7 +59,30 @@ message ControlEnvelope {
     TrustGeneration trust_generation = 11;
     ResolveAdministrativeExec resolve_administrative_exec = 12;
     ArmAdministrativeExec arm_administrative_exec = 13;
+    EvidenceAck evidence_ack = 14;
   }
+}
+
+message EvidenceRecord {
+  uint64 cursor = 1;
+  bytes observation_id = 2;
+  bytes payload = 3;
+  bytes payload_sha256 = 4;
+  bytes previous_record_sha256 = 5;
+  bytes record_sha256 = 6;
+}
+
+message EvidenceBatch {
+  uint64 first_cursor = 1;
+  uint64 last_cursor = 2;
+  repeated EvidenceRecord records = 3;
+  bytes batch_sha256 = 4;
+}
+
+message EvidenceAck {
+  uint64 first_cursor = 1;
+  uint64 last_cursor = 2;
+  bytes batch_sha256 = 3;
 }
 
 message ResolveAdministrativeExec {
