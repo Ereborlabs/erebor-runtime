@@ -11,10 +11,13 @@ Runnable example: [Mithril network manual probe](../../../../examples/mithril-ne
 ## Outcome
 
 Prove current-actor and retained creator authority govern the advertised TCP
-socket path. Prove a whole-socket fence denies later use, no later bytes reach
-the server, and final close releases the retained generation reference. Keep
-rewrite, cross-actor, cross-namespace, DNS payload, and TLS semantic results
-outside this claim.
+and UDP paths. Prove accepted-socket and cross-network-namespace transfers do
+not widen authority. Prove the final destination remains authoritative after
+the qualified rewrite. Prove delegated egress and token-read results stay
+separate from provider receipt. Prove a whole-socket fence denies later use,
+no later bytes reach the server, and final close releases the retained
+generation reference. Keep DNS payload and TLS semantic results outside this
+claim.
 
 ## Automated Companion
 
@@ -39,10 +42,10 @@ crates/mithril-e2e/harness/vm/run.sh \
    exist. The runner rejects a pre-existing path.
 3. Build the network binary as the workspace user. Run the example script as
    root so it can load BPF programs and create the probe cgroup.
-4. Check that all ten Boolean fields in `network-physical-probe.json` are
-   `true`.
-5. Check that the fixture array has eight `PASS` rows and five exact
-   `UNSUPPORTED` rows. Compare every row with the
+4. Check that every Boolean physical oracle in
+   `network-physical-probe.json` is `true`.
+5. Check that the fixture array has the exact 13 allocated rows and that each
+   row is `PASS`. Compare every row with the
    [closure matrix](../phase-5-closure-matrix.md).
 6. Confirm that the script removed the pin root, owner lease, cgroup, and
    fixture directory. Only the JSON output directory remains.
@@ -53,24 +56,24 @@ crates/mithril-e2e/harness/vm/run.sh \
 ## Allocated Fixture Matrix
 
 The [closure matrix](../phase-5-closure-matrix.md) is authoritative for the
-current terminal result and claim limit. The stimuli below also describe the
-future positive controls required for rows that are now unsupported.
+current terminal result and claim limit. Each stimulus below has a negative
+oracle and a legitimate positive control in the physical probe.
 
 | Fixture | Operator stimulus | Required physical oracle and control |
 | --- | --- | --- |
-| `FILE-DELEGATED-EGRESS-001` | use remote filesystem/local proxy/delegated I/O | acquisition is governed as egress and forbidden remote request is absent; approved remote object succeeds |
-| `HF-004-RESULT-001` | run connect allowed/denied, send allowed/failed, packet emitted, and provider-write variants | each stage has exact result; payload unobservable unless authorized content oracle exists |
-| `HF-011-READ-RESULT-001` | chain token read variants to failed send, emitted packet, and provider write | read/output/provider results stay separate; no inferred exfiltration |
-| `HF-NET-001` | attempt API/IMDS/C2/alternate-resolver traffic from worker | forbidden connect/send/packet physically absent; approved result/controller traffic works |
-| `IPC-LOCAL-INET-008` | use loopback, Pod IP, Unix, local IPv4/IPv6 channels | exact peer relationship or configured unmatched result; declared peer succeeds |
-| `NET-ACCEPT-PASS-001` | accept then pass/use socket from narrower actor | creator/accepter/current-actor intersection prevents laundering; approved receiver works |
-| `NET-DNS-EXFIL-001` | send bounded/malformed/compressed/multi-question/long/split/TCP/non-53/DoT/DoH/IP variants | forbidden query/destination gets no accepted packet; parser failure still hits IP floor; approved DNS works |
-| `NET-NS-PASS-001` | pass/inherit socket across network namespaces | retained namespace/provenance remains authoritative; current namespace cannot widen egress |
-| `NET-RECV-001` | receive on qualified and unqualified socket paths | advertised receive restriction has syscall/data oracle; unsupported path is explicit |
-| `NET-REWRITE-001` | route through DNAT/SNAT/CNI/mesh/redirect/route-change variants | final post-rewrite forbidden destination receives no packet; allowed rewritten destination works |
-| `NET-SHARED-RESPONSE-002` | share established socket/queued bytes across lineages, then respond | whole socket/flow/cgroup scope is disclosed and fenced; no false per-lineage queued-byte result |
-| `NET-SOCKCTL-001` | bind/listen/accept/shutdown/setsockopt attempts | forbidden control changes no socket state; approved operation reads back |
-| `NET-SOCKET-LIFE-001` | create/accept/inherit/pass/preconnect/reuse/destroy sockets | old state cannot attach to reused fd/cookie/live interval; valid live socket works |
+| `FILE-DELEGATED-EGRESS-001` | send a request identity and final destination through the governed local proxy | the delegate denies the forbidden destination and the forbidden server receives nothing; the approved request reaches its server |
+| `HF-004-RESULT-001` | run denied connect, allowed send, fenced send, and provider-write variants | each stage has a separate syscall or receipt result; no provider result is inferred from a network allow |
+| `HF-011-READ-RESULT-001` | exercise zero, end-of-file, error, partial, mapped, inherited-descriptor, governed-read, and governed-map results | read, denied network, and provider receipt remain separate; no exfiltration result is inferred |
+| `HF-NET-001` | exercise IPv4, IPv6, TCP, UDP, resolver destinations, and unrepresented families or protocols | signed paths succeed; denied destinations and unrepresented paths fail closed |
+| `IPC-LOCAL-INET-008` | use local IPv4, IPv6, and Unix channels | Internet and Unix hooks retain separate policy owners; the declared relationships succeed |
+| `NET-ACCEPT-PASS-001` | pass an accepted socket to a narrower actor and to an approved actor | the narrower actor cannot send or receive; the approved actor sends bytes that the client receives |
+| `NET-DNS-EXFIL-001` | use port 53, an alternate resolver address, port 5353, and encrypted-resolver destination ports | the destination floor denies every tested resolver path; a signed non-DNS destination succeeds |
+| `NET-NS-PASS-001` | duplicate a live accepted socket into actors in private network namespaces | the narrower actor cannot send; the approved actor sends, and evidence keeps distinct creator and current namespace identities |
+| `NET-RECV-001` | receive on a signed connected socket and a passed socket held by a narrower actor | the signed receive succeeds; the narrower actor cannot receive |
+| `NET-REWRITE-001` | install the probe-owned local-output DNAT rules for two documentation-range destinations | the policy mismatch denies the forbidden rewritten flow; the allowed rewritten flow reaches `127.0.0.4` |
+| `NET-SHARED-RESPONSE-002` | retain an accepted socket in the accepter and approved receiver, then install a whole-socket fence | both holders cannot send and the client receives no post-fence bytes |
+| `NET-SOCKCTL-001` | bind, listen, accept, set `TCP_NODELAY`, set `SO_MARK`, and shut down | represented safe controls succeed; `SO_MARK` fails; ordinary shutdown succeeds and fenced shutdown fails |
+| `NET-SOCKET-LIFE-001` | create, clone, fork, inherit, close, reuse a descriptor, and create a new socket generation | live clones and inherited descriptors work; final close releases references; the new socket has a new generation |
 
 ## Encrypted-Channel Claim Limit
 
@@ -88,9 +91,10 @@ result, and cleanup result. The qualified tier passes only when all Boolean
 oracles are true, all 13 fixture rows have their expected terminal status, and
 the probe-owned resources are absent after cleanup.
 
-A rewrite, cross-actor, cross-namespace, delegated-I/O, token-chain, or DNS
-payload experiment needs its own negative oracle and legitimate positive
-control. It cannot widen this runbook's pass rule.
+The pass rule applies only to the exact delegated-I/O, token-read,
+accepted-socket, namespace-transfer, and local-output DNAT variants described
+above. A broader topology or protocol needs its own negative oracle and
+legitimate positive control.
 
 ## Troubleshooting
 
@@ -98,4 +102,5 @@ control. It cannot widen this runbook's pass rule.
   not prove a syscall denial. Record the actual boundary.
 - If the packet hook lacks current-task context, use retained socket/flow state;
   never substitute a fictional task.
-- Unsupported raw/TUN/AF_XDP/RDMA/vsock/SCTP/MPTCP paths narrow the claim.
+- Raw, TUN, AF_XDP, RDMA, vsock, SCTP, MPTCP, and other unadvertised paths
+  fail closed and remain outside the qualified claim.
