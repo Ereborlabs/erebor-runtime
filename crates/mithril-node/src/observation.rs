@@ -15,6 +15,7 @@ use zerocopy::FromBytes as _;
 mod coverage;
 mod model;
 mod wal;
+mod window;
 
 pub use coverage::{
     CoverageCountersV1, CoverageGapReasonV1, CoverageHealthOwner, CoverageIntervalV1,
@@ -28,6 +29,10 @@ pub use model::{
     MAX_EVIDENCE_FIELDS_V1, MAX_PROVENANCE_OBSERVATIONS_V1,
 };
 pub use wal::{EvidenceAckV1, EvidenceBatchV1, EvidenceRecordV1, EvidenceWal, EvidenceWalLimits};
+pub use window::{
+    DeterministicLocalWindowOwner, LocalFindingWindowSpecV1, LocalFindingWindowStateV1,
+    LocalFindingWindowV1,
+};
 
 const DEFAULT_RECENT_EFFECT_CAPACITY: usize = 1_024;
 
