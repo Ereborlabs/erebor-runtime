@@ -6,7 +6,8 @@ directory=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 test_root=$(mktemp -d /tmp/mithril-vm-harness-test.XXXXXX)
 trap 'rm -rf -- "$test_root"' EXIT
 
-for script in "$directory/run.sh" "$directory/manual.sh" "$directory/guest.sh" \
+for script in "$directory/run.sh" "$directory/two-node-network.sh" \
+  "$directory/manual.sh" "$directory/guest.sh" \
   "$directory/providers/libvirt.sh" "$directory/test.sh"; do
   bash -n "$script"
 done
@@ -17,6 +18,8 @@ help=$($directory/run.sh --help 2>&1)
 [[ $help == *--keep-vm* ]]
 [[ $help == *--manual* ]]
 $directory/guest.sh --help >/dev/null 2>&1
+two_node_help=$($directory/two-node-network.sh --help 2>&1)
+[[ $two_node_help == *--keep-vms* ]]
 
 set +e
 manual_without_mount=$($directory/run.sh --manual 2>&1)
@@ -170,6 +173,7 @@ grep -q '^        exact_object_key_ids: \[12\]$' \
   "$directory/k3s-administrative-policy-v1.yaml"
 grep -q '^  k3s-cri-effect)$' "$directory/guest.sh"
 grep -q '^  k3s-administrative-exec)$' "$directory/guest.sh"
+grep -Fq "INSTALL_K3S_EXEC='agent --with-node-id'" "$directory/guest.sh"
 grep -Fq "printf 'mithril-k3s-cri-benign\\n' >\"\$fixture_root/benign\"" \
   "$directory/guest.sh"
 grep -Fq 'chmod 444 "$fixture_root/benign"' "$directory/guest.sh"
@@ -290,6 +294,14 @@ nonempty=$(
 status=$?
 set -e
 [[ $status -eq 2 && $nonempty == *"evidence output directory is not empty"* ]]
+set +e
+two_node_nonempty=$(
+  "$directory/two-node-network.sh" --provider "$fake_provider" \
+    --output-directory "$test_root/evidence" 2>&1
+)
+status=$?
+set -e
+[[ $status -eq 2 && $two_node_nonempty == *"evidence output directory is not empty"* ]]
 
 fake_bin=$test_root/bin
 mkdir "$fake_bin"

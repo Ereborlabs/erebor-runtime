@@ -3,7 +3,7 @@
 set -euo pipefail
 
 usage() {
-  echo "usage: MITHRIL_VM_CRI_EFFECT_MODE=OBSERVE|PROTECT $0 {platform INSPECT WORK_DIRECTORY|k3s-install VERSION CONFIG WORK_DIRECTORY|k3s-runtime-hook HOOK WORK_DIRECTORY|k3s-qualify MANIFEST WORK_DIRECTORY|k3s-cri-effect NODE INSPECT POLICY TEMPLATE POLICY_SOURCE SEAL_REQUEST SIGNING_KEY PUBLIC_KEY MANIFEST WORK_DIRECTORY|k3s-administrative-exec CONTROL NODE INSPECT POLICY KUBECTL_MITHRIL OIDC TEMPLATE POLICY_SOURCE SEAL_REQUEST SIGNING_KEY PUBLIC_KEY MANIFEST WORK_DIRECTORY|k3s-remove WORK_DIRECTORY}" >&2
+  echo "usage: MITHRIL_VM_CRI_EFFECT_MODE=OBSERVE|PROTECT $0 {platform INSPECT WORK_DIRECTORY|k3s-install VERSION CONFIG WORK_DIRECTORY|k3s-agent-install VERSION SERVER TOKEN WORK_DIRECTORY|k3s-runtime-hook HOOK WORK_DIRECTORY|k3s-qualify MANIFEST WORK_DIRECTORY|k3s-cri-effect NODE INSPECT POLICY TEMPLATE POLICY_SOURCE SEAL_REQUEST SIGNING_KEY PUBLIC_KEY MANIFEST WORK_DIRECTORY|k3s-administrative-exec CONTROL NODE INSPECT POLICY KUBECTL_MITHRIL OIDC TEMPLATE POLICY_SOURCE SEAL_REQUEST SIGNING_KEY PUBLIC_KEY MANIFEST WORK_DIRECTORY|k3s-remove WORK_DIRECTORY|k3s-agent-remove WORK_DIRECTORY}" >&2
 }
 
 require_root() {
@@ -125,6 +125,40 @@ case ${1:-} in
     /usr/local/bin/k3s kubectl wait --for=condition=Ready node --all --timeout=300s
     /usr/local/bin/k3s crictl info >/dev/null
     : >"$work_directory/k3s-installed-by-harness"
+    ;;
+  k3s-agent-install)
+    (($# == 5)) || { usage; exit 2; }
+    version=$2
+    server=$3
+    token=$4
+    work_directory=$5
+    [[ $version =~ ^v[0-9]+\.[0-9]+\.[0-9]+\+k3s[0-9]+$ ]] || {
+      echo "invalid k3s version: $version" >&2
+      exit 2
+    }
+    [[ $server =~ ^https://[0-9a-fA-F:.]+:6443$ && -n $token ]] || {
+      echo "invalid k3s agent server or token" >&2
+      exit 2
+    }
+    require_root
+    require_command curl
+    require_command systemctl
+    require_harness_guest "$work_directory"
+    installer=$work_directory/install-k3s-agent.sh
+    curl --fail --location --proto '=https' --tlsv1.2 \
+      --output "$installer" \
+      "https://raw.githubusercontent.com/k3s-io/k3s/$version/install.sh"
+    INSTALL_K3S_VERSION=$version INSTALL_K3S_SYMLINK=skip \
+      INSTALL_K3S_EXEC='agent --with-node-id' \
+      K3S_URL=$server K3S_TOKEN=$token sh "$installer" agent
+    rm -f -- "$installer"
+    systemctl is-active --quiet k3s-agent
+    actual_version=$(/usr/local/bin/k3s --version | awk 'NR == 1 {print $3}')
+    [[ $actual_version == "$version" ]] || {
+      echo "installed k3s version $actual_version, expected $version" >&2
+      exit 1
+    }
+    : >"$work_directory/k3s-agent-installed-by-harness"
     ;;
   k3s-runtime-hook)
     (($# == 3)) || { usage; exit 2; }
@@ -1483,6 +1517,21 @@ EOF
     ! systemctl is-active --quiet k3s
     [[ ! -S /run/k3s/containerd/containerd.sock ]]
     rm -f -- "$work_directory/k3s-installed-by-harness"
+    ;;
+  k3s-agent-remove)
+    (($# == 2)) || { usage; exit 2; }
+    work_directory=$2
+    require_root
+    require_harness_guest "$work_directory"
+    [[ -f $work_directory/k3s-agent-installed-by-harness \
+      && -x /usr/local/bin/k3s-agent-uninstall.sh ]] || {
+      echo "k3s agent uninstall owner is missing" >&2
+      exit 1
+    }
+    /usr/local/bin/k3s-agent-uninstall.sh
+    ! systemctl is-active --quiet k3s-agent
+    [[ ! -S /run/k3s/containerd/containerd.sock ]]
+    rm -f -- "$work_directory/k3s-agent-installed-by-harness"
     ;;
   --help|-h)
     usage

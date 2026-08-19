@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 use std::fs;
 use std::io::{self, Read as _, Write as _};
-use std::net::{SocketAddr, TcpListener, TcpStream, UdpSocket};
+use std::net::{IpAddr, SocketAddr, TcpListener, TcpStream, UdpSocket};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::thread;
@@ -41,6 +41,27 @@ const FORK_PAYLOAD: &[u8] = b"fork";
 const SENDMSG_PAYLOAD: &[u8] = b"sendmsg";
 const TOKEN_PAYLOAD: &[u8] = b"token";
 const TOKEN_OBJECT_KEY_ID: u64 = 9_001;
+pub const NETWORK_PEER_TCP_PORT: u16 = 46_051;
+pub const NETWORK_PEER_UDP_PORT: u16 = 46_052;
+pub const NETWORK_PEER_DENIED_PORT: u16 = 46_053;
+const NETWORK_PEER_TCP_PAYLOAD: &[u8] = b"peer-tcp";
+const NETWORK_PEER_UDP_PAYLOAD: &[u8] = b"peer-udp";
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct NetworkPeerTargetV1 {
+    pub address: IpAddr,
+    pub tcp_port: u16,
+    pub udp_port: u16,
+    pub denied_port: u16,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct NetworkPeerServerResultV1 {
+    pub schema_version: u32,
+    pub tcp_payload_received: bool,
+    pub udp_payload_received: bool,
+    pub denied_connection_absent: bool,
+}
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct NetworkFixtureResultV1 {
@@ -90,6 +111,12 @@ pub struct NetworkPhysicalProbeBundleV1 {
     pub cloned_socket_allowed: bool,
     pub inherited_socket_allowed: bool,
     pub socket_generation_not_reused: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub peer_tcp_allowed: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub peer_udp_allowed: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub peer_denied_connect: Option<bool>,
     pub fixture_results: Vec<NetworkFixtureResultV1>,
 }
 
@@ -128,7 +155,9 @@ impl NetworkTestRunner {
         pin_root: &Path,
         lease_path: &Path,
         cgroup_path: &Path,
+        peer: Option<NetworkPeerTargetV1>,
     ) -> Result<NetworkPhysicalProbeBundleV1> {
+        validate_network_peer(peer)?;
         ensure!(
             !pin_root.exists() && !lease_path.exists() && !cgroup_path.exists(),
             InvalidInputSnafu {
@@ -324,7 +353,7 @@ impl NetworkTestRunner {
         )
         .context(NodeSnafu)?;
         let token_mount_namespaces = BTreeSet::from([token_object.mount_namespace_inode]);
-        let artifact_path = build_network_artifact(&policy_fixture, &fixture_root)?;
+        let artifact_path = build_network_artifact(&policy_fixture, &fixture_root, peer)?;
         let node_config = effect_node_config(
             &fixture_root,
             pin_root,
@@ -667,6 +696,37 @@ impl NetworkTestRunner {
             && fixture
                 .network_udp_send(SocketAddr::from(([127, 0, 0, 53], 5_353)), b"dns", false)?
                 .denied();
+        let (peer_tcp_allowed, peer_udp_allowed, peer_denied_connect) = match peer {
+            Some(peer) => {
+                let denied = fixture
+                    .network_connect(SocketAddr::new(peer.address, peer.denied_port))?
+                    .denied();
+                let tcp = fixture
+                    .network_connect(SocketAddr::new(peer.address, peer.tcp_port))?
+                    .allowed
+                    && fixture.network_send(NETWORK_PEER_TCP_PAYLOAD)?.allowed;
+                fixture.network_close()?;
+                let udp = fixture
+                    .network_udp_send(
+                        SocketAddr::new(peer.address, peer.udp_port),
+                        NETWORK_PEER_UDP_PAYLOAD,
+                        false,
+                    )?
+                    .allowed;
+                ensure!(
+                    denied && tcp && udp,
+                    InvalidInputSnafu {
+                        path: Path::new("two-node network peer"),
+                        reason: "the remote network deny or legitimate control failed",
+                    }
+                );
+                (Some(tcp), Some(udp), Some(denied))
+            }
+            None => (None, None, None),
+        };
+        let peer_network_passed = peer_tcp_allowed.unwrap_or(true)
+            && peer_udp_allowed.unwrap_or(true)
+            && peer_denied_connect.unwrap_or(true);
         let unsupported_network_families_denied = [
             (libc::AF_PACKET, libc::SOCK_RAW, 0),
             (libc::AF_NETLINK, libc::SOCK_RAW, 0),
@@ -1045,6 +1105,7 @@ impl NetworkTestRunner {
                 && sendfile_allowed
                 && splice_allowed
                 && post_fence_bypass_packets_absent
+                && peer_network_passed
                 && allowed_send_received,
             local_inet: allowed_connect
                 && tcp_ipv6_allowed
@@ -1140,6 +1201,9 @@ impl NetworkTestRunner {
             cloned_socket_allowed,
             inherited_socket_allowed,
             socket_generation_not_reused,
+            peer_tcp_allowed,
+            peer_udp_allowed,
+            peer_denied_connect,
             fixture_results,
         })
     }
@@ -1153,7 +1217,151 @@ impl NetworkTestRunner {
     }
 }
 
-fn build_network_artifact(policy_fixture: &Path, fixture_root: &Path) -> Result<PathBuf> {
+pub fn run_network_peer_server(
+    bind_address: IpAddr,
+    tcp_port: u16,
+    udp_port: u16,
+    denied_port: u16,
+    ready_path: &Path,
+) -> Result<NetworkPeerServerResultV1> {
+    validate_peer_ports(tcp_port, udp_port, denied_port)?;
+    let tcp = tcp_listener(SocketAddr::new(bind_address, tcp_port))?;
+    let denied = tcp_listener(SocketAddr::new(bind_address, denied_port))?;
+    let udp = UdpSocket::bind(SocketAddr::new(bind_address, udp_port)).context(IoSnafu {
+        path: Path::new("two-node UDP peer"),
+    })?;
+    tcp.set_nonblocking(true).context(IoSnafu {
+        path: Path::new("two-node TCP peer"),
+    })?;
+    denied.set_nonblocking(true).context(IoSnafu {
+        path: Path::new("two-node denied peer"),
+    })?;
+    udp.set_nonblocking(true).context(IoSnafu {
+        path: Path::new("two-node UDP peer"),
+    })?;
+    fs::write(ready_path, b"ready\n").context(IoSnafu { path: ready_path })?;
+
+    let deadline = Instant::now() + Duration::from_secs(120);
+    let mut tcp_payload_received = false;
+    let mut udp_payload_received = false;
+    let mut denied_connection_absent = true;
+    let mut completed_at = None;
+    while Instant::now() < deadline {
+        match denied.accept() {
+            Ok(_) => {
+                denied_connection_absent = false;
+                break;
+            }
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {}
+            Err(error) => {
+                return Err(crate::Error::Io {
+                    path: PathBuf::from("two-node denied peer"),
+                    source: error,
+                    location: snafu::Location::default(),
+                });
+            }
+        }
+        if !tcp_payload_received {
+            match tcp.accept() {
+                Ok((mut stream, _)) => {
+                    stream
+                        .set_read_timeout(Some(Duration::from_secs(5)))
+                        .context(IoSnafu {
+                            path: Path::new("two-node TCP peer"),
+                        })?;
+                    let mut payload = [0_u8; NETWORK_PEER_TCP_PAYLOAD.len()];
+                    stream.read_exact(&mut payload).context(IoSnafu {
+                        path: Path::new("two-node TCP peer"),
+                    })?;
+                    tcp_payload_received = payload == NETWORK_PEER_TCP_PAYLOAD;
+                }
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {}
+                Err(error) => {
+                    return Err(crate::Error::Io {
+                        path: PathBuf::from("two-node TCP peer"),
+                        source: error,
+                        location: snafu::Location::default(),
+                    });
+                }
+            }
+        }
+        if !udp_payload_received {
+            let mut payload = [0_u8; NETWORK_PEER_UDP_PAYLOAD.len()];
+            match udp.recv_from(&mut payload) {
+                Ok((length, _)) => {
+                    udp_payload_received =
+                        length == payload.len() && payload == NETWORK_PEER_UDP_PAYLOAD;
+                }
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {}
+                Err(error) => {
+                    return Err(crate::Error::Io {
+                        path: PathBuf::from("two-node UDP peer"),
+                        source: error,
+                        location: snafu::Location::default(),
+                    });
+                }
+            }
+        }
+        if tcp_payload_received && udp_payload_received {
+            let completed = completed_at.get_or_insert_with(Instant::now);
+            if completed.elapsed() >= Duration::from_millis(500) {
+                break;
+            }
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+    ensure!(
+        tcp_payload_received && udp_payload_received && denied_connection_absent,
+        InvalidInputSnafu {
+            path: Path::new("two-node network peer"),
+            reason: "the peer did not receive both controls or accepted a denied connection",
+        }
+    );
+    Ok(NetworkPeerServerResultV1 {
+        schema_version: 1,
+        tcp_payload_received,
+        udp_payload_received,
+        denied_connection_absent,
+    })
+}
+
+fn validate_network_peer(peer: Option<NetworkPeerTargetV1>) -> Result<()> {
+    let Some(peer) = peer else {
+        return Ok(());
+    };
+    ensure!(
+        !peer.address.is_unspecified()
+            && !peer.address.is_loopback()
+            && !peer.address.is_multicast(),
+        InvalidInputSnafu {
+            path: Path::new("two-node network peer"),
+            reason: "the peer address must identify a remote unicast interface",
+        }
+    );
+    validate_peer_ports(peer.tcp_port, peer.udp_port, peer.denied_port)
+}
+
+fn validate_peer_ports(tcp_port: u16, udp_port: u16, denied_port: u16) -> Result<()> {
+    ensure!(
+        tcp_port != 0
+            && udp_port != 0
+            && denied_port != 0
+            && tcp_port != udp_port
+            && tcp_port != denied_port
+            && udp_port != denied_port,
+        InvalidInputSnafu {
+            path: Path::new("two-node network peer"),
+            reason: "the peer ports must be nonzero and distinct",
+        }
+    );
+    Ok(())
+}
+
+fn build_network_artifact(
+    policy_fixture: &Path,
+    fixture_root: &Path,
+    peer: Option<NetworkPeerTargetV1>,
+) -> Result<PathBuf> {
     let policy_source = policy_fixture.join("protect-policy-v1.yaml");
     let mut document = PolicyDocumentV1::parse(
         &policy_source,
@@ -1197,49 +1405,84 @@ fn build_network_artifact(policy_fixture: &Path, fixture_root: &Path) -> Result<
     document.effect_family_defaults.clear();
     document.exceptions.clear();
     document.rules.clear();
+    let mut destination_policies = vec![
+        DestinationPolicyRecordV1 {
+            destination_policy_id: "allowed-result-service".to_owned(),
+            protocols: vec![NetworkProtocolV1::Tcp, NetworkProtocolV1::Udp],
+            ipv4_prefixes: vec!["127.0.0.1/32".to_owned(), "127.0.0.2/32".to_owned()],
+            ipv6_prefixes: vec!["::1/128".to_owned()],
+            port_ranges: vec![NetworkPortRangeV1 {
+                first: 1_024,
+                last: u16::MAX,
+            }],
+            required_network_namespace_ids: Vec::new(),
+            service_identities: Vec::new(),
+            final_address_required: true,
+        },
+        DestinationPolicyRecordV1 {
+            destination_policy_id: "allowed-rewrite-service".to_owned(),
+            protocols: vec![NetworkProtocolV1::Tcp],
+            ipv4_prefixes: vec!["127.0.0.4/32".to_owned(), "198.18.0.2/32".to_owned()],
+            ipv6_prefixes: Vec::new(),
+            port_ranges: vec![NetworkPortRangeV1 {
+                first: 1_024,
+                last: u16::MAX,
+            }],
+            required_network_namespace_ids: Vec::new(),
+            service_identities: Vec::new(),
+            final_address_required: true,
+        },
+        DestinationPolicyRecordV1 {
+            destination_policy_id: "requested-rewrite".to_owned(),
+            protocols: vec![NetworkProtocolV1::Tcp],
+            ipv4_prefixes: vec!["198.18.0.1/32".to_owned()],
+            ipv6_prefixes: Vec::new(),
+            port_ranges: vec![NetworkPortRangeV1 {
+                first: 1_024,
+                last: u16::MAX,
+            }],
+            required_network_namespace_ids: Vec::new(),
+            service_identities: Vec::new(),
+            final_address_required: true,
+        },
+    ];
+    let mut destination_policy_ids = [
+        "allowed-result-service",
+        "allowed-rewrite-service",
+        "requested-rewrite",
+    ]
+    .map(str::to_owned)
+    .to_vec();
+    if let Some(peer) = peer {
+        let (ipv4_prefixes, ipv6_prefixes) = match peer.address {
+            IpAddr::V4(address) => (vec![format!("{address}/32")], Vec::new()),
+            IpAddr::V6(address) => (Vec::new(), vec![format!("{address}/128")]),
+        };
+        let mut port_ranges = [peer.tcp_port, peer.udp_port]
+            .map(|port| NetworkPortRangeV1 {
+                first: port,
+                last: port,
+            })
+            .to_vec();
+        port_ranges.sort_by_key(|range| range.first);
+        destination_policies.push(DestinationPolicyRecordV1 {
+            destination_policy_id: "allowed-two-node-peer".to_owned(),
+            protocols: vec![NetworkProtocolV1::Tcp, NetworkProtocolV1::Udp],
+            ipv4_prefixes,
+            ipv6_prefixes,
+            port_ranges,
+            required_network_namespace_ids: Vec::new(),
+            service_identities: Vec::new(),
+            final_address_required: true,
+        });
+        destination_policy_ids.push("allowed-two-node-peer".to_owned());
+    }
+    destination_policies
+        .sort_by(|left, right| left.destination_policy_id.cmp(&right.destination_policy_id));
+    destination_policy_ids.sort();
     document.network_policy = Some(NetworkPolicyV1 {
         dns_mode: DnsPolicyModeV1::DenyDnsAndUsePolicyResolvedAddresses,
-        destination_policies: vec![
-            DestinationPolicyRecordV1 {
-                destination_policy_id: "allowed-result-service".to_owned(),
-                protocols: vec![NetworkProtocolV1::Tcp, NetworkProtocolV1::Udp],
-                ipv4_prefixes: vec!["127.0.0.1/32".to_owned(), "127.0.0.2/32".to_owned()],
-                ipv6_prefixes: vec!["::1/128".to_owned()],
-                port_ranges: vec![NetworkPortRangeV1 {
-                    first: 1_024,
-                    last: u16::MAX,
-                }],
-                required_network_namespace_ids: Vec::new(),
-                service_identities: Vec::new(),
-                final_address_required: true,
-            },
-            DestinationPolicyRecordV1 {
-                destination_policy_id: "allowed-rewrite-service".to_owned(),
-                protocols: vec![NetworkProtocolV1::Tcp],
-                ipv4_prefixes: vec!["127.0.0.4/32".to_owned(), "198.18.0.2/32".to_owned()],
-                ipv6_prefixes: Vec::new(),
-                port_ranges: vec![NetworkPortRangeV1 {
-                    first: 1_024,
-                    last: u16::MAX,
-                }],
-                required_network_namespace_ids: Vec::new(),
-                service_identities: Vec::new(),
-                final_address_required: true,
-            },
-            DestinationPolicyRecordV1 {
-                destination_policy_id: "requested-rewrite".to_owned(),
-                protocols: vec![NetworkProtocolV1::Tcp],
-                ipv4_prefixes: vec!["198.18.0.1/32".to_owned()],
-                ipv6_prefixes: Vec::new(),
-                port_ranges: vec![NetworkPortRangeV1 {
-                    first: 1_024,
-                    last: u16::MAX,
-                }],
-                required_network_namespace_ids: Vec::new(),
-                service_identities: Vec::new(),
-                final_address_required: true,
-            },
-        ],
+        destination_policies,
     });
     document.effect_family_defaults.push(EffectFamilyDefaultV1 {
         role_ids: vec!["converter".to_owned()],
@@ -1268,13 +1511,7 @@ fn build_network_artifact(policy_fixture: &Path, fixture_root: &Path) -> Result<
         .map(str::to_owned)
         .to_vec();
     effect.object = LocalObjectSelectorV1::Destinations {
-        destination_policy_ids: [
-            "allowed-result-service",
-            "allowed-rewrite-service",
-            "requested-rewrite",
-        ]
-        .map(str::to_owned)
-        .to_vec(),
+        destination_policy_ids,
     };
     network_rule.requested_disposition = PolicyDispositionV1::Alert;
     network_rule.errno = None;
@@ -1679,8 +1916,15 @@ fn fixture_results(proof: &NetworkFixtureProof) -> Vec<NetworkFixtureResultV1> {
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
+    use std::io::Write as _;
+    use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener, TcpStream, UdpSocket};
+    use std::thread;
+    use std::time::{Duration, Instant};
 
-    use super::{build_network_artifact, fixture_results, NetworkFixtureProof};
+    use super::{
+        build_network_artifact, fixture_results, run_network_peer_server, NetworkFixtureProof,
+        NETWORK_PEER_TCP_PAYLOAD, NETWORK_PEER_UDP_PAYLOAD,
+    };
 
     #[test]
     fn network_fixture_matrix_requires_physical_proof() {
@@ -1725,8 +1969,116 @@ mod tests {
         })?;
         let policy_fixture =
             std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/mithril-policy");
-        let artifact = build_network_artifact(&policy_fixture, directory.path())?;
+        let artifact = build_network_artifact(&policy_fixture, directory.path(), None)?;
         assert!(artifact.is_file());
+        Ok(())
+    }
+
+    #[test]
+    fn signed_network_fixture_compiles_two_node_peer() -> crate::Result<()> {
+        let directory = tempfile::tempdir().map_err(|source| crate::Error::Io {
+            path: "temporary two-node network fixture".into(),
+            source,
+            location: snafu::Location::default(),
+        })?;
+        let policy_fixture =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/mithril-policy");
+        let artifact = build_network_artifact(
+            &policy_fixture,
+            directory.path(),
+            Some(super::NetworkPeerTargetV1 {
+                address: std::net::IpAddr::V4(std::net::Ipv4Addr::new(192, 0, 2, 10)),
+                tcp_port: super::NETWORK_PEER_TCP_PORT,
+                udp_port: super::NETWORK_PEER_UDP_PORT,
+                denied_port: super::NETWORK_PEER_DENIED_PORT,
+            }),
+        )?;
+        assert!(artifact.is_file());
+        Ok(())
+    }
+
+    #[test]
+    fn network_peer_server_requires_controls_and_denied_absence() -> crate::Result<()> {
+        let directory = tempfile::tempdir().map_err(|source| crate::Error::Io {
+            path: "temporary network peer".into(),
+            source,
+            location: snafu::Location::default(),
+        })?;
+        let reservations = (0..3)
+            .map(|_| TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], 0))))
+            .collect::<std::io::Result<Vec<_>>>()
+            .map_err(|source| crate::Error::Io {
+                path: "temporary network peer ports".into(),
+                source,
+                location: snafu::Location::default(),
+            })?;
+        let ports = reservations
+            .iter()
+            .map(TcpListener::local_addr)
+            .collect::<std::io::Result<Vec<_>>>()
+            .map_err(|source| crate::Error::Io {
+                path: "temporary network peer ports".into(),
+                source,
+                location: snafu::Location::default(),
+            })?;
+        let tcp_port = ports[0].port();
+        let udp_port = ports[1].port();
+        let denied_port = ports[2].port();
+        drop(reservations);
+        let ready = directory.path().join("ready");
+        let ready_for_server = ready.clone();
+        let server = thread::spawn(move || {
+            run_network_peer_server(
+                IpAddr::V4(Ipv4Addr::LOCALHOST),
+                tcp_port,
+                udp_port,
+                denied_port,
+                &ready_for_server,
+            )
+        });
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !ready.is_file() && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert!(ready.is_file());
+        let mut tcp =
+            TcpStream::connect(SocketAddr::from(([127, 0, 0, 1], tcp_port))).map_err(|source| {
+                crate::Error::Io {
+                    path: "temporary TCP peer".into(),
+                    source,
+                    location: snafu::Location::default(),
+                }
+            })?;
+        tcp.write_all(NETWORK_PEER_TCP_PAYLOAD)
+            .map_err(|source| crate::Error::Io {
+                path: "temporary TCP peer".into(),
+                source,
+                location: snafu::Location::default(),
+            })?;
+        let udp = UdpSocket::bind(SocketAddr::from(([127, 0, 0, 1], 0))).map_err(|source| {
+            crate::Error::Io {
+                path: "temporary UDP peer".into(),
+                source,
+                location: snafu::Location::default(),
+            }
+        })?;
+        udp.send_to(
+            NETWORK_PEER_UDP_PAYLOAD,
+            SocketAddr::from(([127, 0, 0, 1], udp_port)),
+        )
+        .map_err(|source| crate::Error::Io {
+            path: "temporary UDP peer".into(),
+            source,
+            location: snafu::Location::default(),
+        })?;
+        let result = server
+            .join()
+            .map_err(|_| super::invalid_probe("the network peer server thread panicked"))??;
+        assert!(
+            result.tcp_payload_received
+                && result.udp_payload_received
+                && result.denied_connection_absent
+        );
         Ok(())
     }
 }
