@@ -8437,10 +8437,14 @@ impl IdentityTestRunner {
             };
             let path = entry.path();
             let text = fs::read_to_string(&path).context(IoSnafu { path: &path })?;
-            let pid = text.trim().parse::<u32>().map_err(|source| {
+            let text = text.trim();
+            if text.is_empty() {
+                continue;
+            }
+            let pid = text.parse::<u32>().map_err(|source| {
                 invalid_state(format!(
                     "Kubernetes fixture wrote an invalid `{slot}` namespace PID `{}`: {source}",
-                    text.trim()
+                    text
                 ))
             })?;
             ensure!(
