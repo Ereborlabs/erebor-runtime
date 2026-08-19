@@ -5503,7 +5503,9 @@ impl IdentityTestRunner {
                     && refs_during == 2,
                 InvalidInputSnafu {
                     path: pin_root,
-                    reason: "PreStop did not retain the application reference and add one restricted external root",
+                    reason: format!(
+                        "PreStop did not retain the application reference and add one restricted external root: application {application_during:?}; PreStop {prestop_root:?}; profile references {refs_during}"
+                    ),
                 }
             );
 
