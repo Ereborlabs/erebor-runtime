@@ -230,7 +230,7 @@ static __always_inline int exact_mount_event_snapshot(
 
     if (!ambiguous || !(ambiguous_epoch = *ambiguous) ||
         !transition_version || !walk->mount_namespace_address ||
-        !walk->namespace_root_mount_id_unique || !walk->namespace_event ||
+        !walk->namespace_root_mount_id_unique ||
         !scratch->file_object.mount_namespace_inode)
         return -EACCES;
     clean = !global_mount_epoch_is_clean(

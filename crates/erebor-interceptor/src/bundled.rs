@@ -497,6 +497,24 @@ mod tests {
     }
 
     #[test]
+    fn exact_mount_snapshot_accepts_the_initial_namespace_event() {
+        let source = include_str!("../../../bpf/erebor-interceptor/programs/identity_path.bpf.h");
+        let snapshot = source
+            .split("static __always_inline int exact_mount_event_snapshot")
+            .nth(1)
+            .and_then(|source| {
+                source
+                    .split("static __always_inline int mount_scan_push")
+                    .next()
+            })
+            .unwrap_or_default();
+
+        assert!(!snapshot.contains("!walk->namespace_event"));
+        assert!(snapshot.contains("initial->namespace_event = walk->namespace_event;"));
+        assert!(snapshot.contains("event->namespace_event == walk->namespace_event"));
+    }
+
+    #[test]
     fn path_tree_deny_uses_the_live_bpf_mount_path_before_object_lookup() {
         let effects =
             include_str!("../../../bpf/erebor-interceptor/programs/identity_effects.bpf.h");
@@ -1356,6 +1374,19 @@ mod tests {
         assert!(packet.contains("effect_observation_reason_v1_network_response_fence"));
         assert!(!packet.contains("network_current_actor"));
         assert!(!packet.contains("bpf_get_current_task"));
+    }
+
+    #[test]
+    fn network_bind_retains_authority_for_listener_packets() {
+        let source =
+            include_str!("../../../bpf/erebor-interceptor/programs/identity_network.bpf.h");
+        let bind = source
+            .split("SEC(\"lsm/socket_bind\")")
+            .nth(1)
+            .and_then(|source| source.split("SEC(\"lsm/socket_listen\")").next())
+            .unwrap_or_default();
+
+        assert!(bind.contains("kernel_effect_operation_v1_bind | NETWORK_REQUEST_RETAIN_FLOW"));
     }
 
     #[test]
