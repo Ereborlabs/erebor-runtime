@@ -84,7 +84,7 @@ impl NodeEpochs {
         Ok(next)
     }
 
-    pub(crate) fn source_epoch(state_directory: &Path) -> Result<u64> {
+    pub(crate) fn source_epoch(state_directory: &Path, recover: bool) -> Result<u64> {
         fs::create_dir_all(state_directory).context(IoSnafu {
             path: state_directory,
         })?;
@@ -105,6 +105,15 @@ impl NodeEpochs {
                 })
             }
         };
+        if recover {
+            ensure!(
+                current > 0,
+                InvalidConfigurationSnafu {
+                    reason: "recovered effect source has no persisted source epoch",
+                }
+            );
+            return Ok(current);
+        }
         let next = current.checked_add(1).ok_or_else(|| {
             InvalidConfigurationSnafu {
                 reason: "evidence source epoch exhausted".to_owned(),
@@ -144,8 +153,9 @@ mod tests {
         assert_eq!(NodeEpochs::label_epoch(directory.path(), false)?, 1);
         assert_eq!(NodeEpochs::label_epoch(directory.path(), true)?, 1);
         assert_eq!(NodeEpochs::label_epoch(directory.path(), false)?, 2);
-        assert_eq!(NodeEpochs::source_epoch(directory.path())?, 1);
-        assert_eq!(NodeEpochs::source_epoch(directory.path())?, 2);
+        assert_eq!(NodeEpochs::source_epoch(directory.path(), false)?, 1);
+        assert_eq!(NodeEpochs::source_epoch(directory.path(), true)?, 1);
+        assert_eq!(NodeEpochs::source_epoch(directory.path(), false)?, 2);
         Ok(())
     }
 }

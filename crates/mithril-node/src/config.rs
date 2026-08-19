@@ -53,6 +53,8 @@ pub struct EvidenceConfig {
     pub maximum_retained_records: usize,
     #[serde(default = "default_evidence_batch_records")]
     pub maximum_batch_records: usize,
+    #[serde(default = "default_evidence_control_delay_ms")]
+    pub maximum_control_delay_ms: u64,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -212,7 +214,8 @@ impl NodeConfig {
                     && evidence.maximum_retained_bytes >= evidence.maximum_record_bytes
                     && evidence.maximum_retained_records > 0
                     && evidence.maximum_batch_records > 0
-                    && evidence.maximum_batch_records <= evidence.maximum_retained_records,
+                    && evidence.maximum_batch_records <= evidence.maximum_retained_records
+                    && evidence.maximum_control_delay_ms > 0,
                 InvalidConfigurationSnafu {
                     reason:
                         "evidence requires canonical identities and consistent nonzero WAL bounds",
@@ -445,6 +448,10 @@ const fn default_evidence_batch_records() -> usize {
     256
 }
 
+const fn default_evidence_control_delay_ms() -> u64 {
+    30_000
+}
+
 fn canonical_uuid(value: &str) -> bool {
     uuid::Uuid::parse_str(value).is_ok_and(|uuid| uuid.hyphenated().to_string() == value)
 }
@@ -484,6 +491,7 @@ mod tests {
                 maximum_retained_bytes: 16 * 1_024 * 1_024,
                 maximum_retained_records: 10_000,
                 maximum_batch_records: 256,
+                maximum_control_delay_ms: 30_000,
             }),
             runtime_observation: None,
             container_runtime: None,

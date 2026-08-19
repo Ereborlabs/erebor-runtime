@@ -12,9 +12,14 @@ use erebor_interceptor_abi::{
 use erebor_runtime_ipc::v1::MithrilEffectObservation;
 use zerocopy::FromBytes as _;
 
+mod coverage;
 mod model;
 mod wal;
 
+pub use coverage::{
+    CoverageCountersV1, CoverageGapReasonV1, CoverageHealthOwner, CoverageIntervalV1,
+    CoverageSnapshotV1, EffectObservationCpuHealth,
+};
 pub use model::{
     CoverageStateV1, EvidenceDigestV1, EvidenceFieldKeyV1, EvidenceFieldV1, EvidenceIdV1,
     EvidencePayloadV1, EvidenceValueV1, IntegrityV1, LocalSubjectBindingV1,
@@ -42,6 +47,7 @@ struct Inner {
 struct DurableEvidence {
     canonicalizer: ObservationCanonicalizer,
     wal: EvidenceWal,
+    coverage: CoverageHealthOwner,
 }
 
 struct RecentEffects {
@@ -59,6 +65,7 @@ pub struct EffectObservationHealth {
     pub classifier_miss_count: u64,
     pub unresolved: u64,
     pub decoder_errors: u64,
+    pub evidence_errors: u64,
 }
 
 impl Default for EffectObservationStore {
@@ -90,6 +97,10 @@ impl EffectObservationStore {
         limits: EvidenceWalLimits,
         canonicalizer: ObservationCanonicalizer,
     ) -> crate::Result<Self> {
+        let coverage_path = wal_root
+            .parent()
+            .unwrap_or(&wal_root)
+            .join("evidence-coverage-v1.json");
         Ok(Self {
             inner: Arc::new(Inner {
                 recent: Mutex::new(RecentEffects {
@@ -101,7 +112,8 @@ impl EffectObservationStore {
                 evidence_errors: AtomicU64::new(0),
                 durable: Some(Mutex::new(DurableEvidence {
                     canonicalizer,
-                    wal: EvidenceWal::open(wal_root, limits)?,
+                    wal: EvidenceWal::open(&wal_root, limits)?,
+                    coverage: CoverageHealthOwner::open(coverage_path, canonicalizer)?,
                 })),
             }),
         })
@@ -125,17 +137,21 @@ impl EffectObservationStore {
         if let Some(durable) = &self.inner.durable {
             let result = (|| {
                 let mut durable = durable.lock().unwrap_or_else(PoisonError::into_inner);
-                let coverage_interval_id = EvidenceIdV1::new(
-                    durable.canonicalizer.source_epoch(),
-                    u64::from(event.source_cpu_id).saturating_add(1),
-                );
+                let (coverage_interval_id, temporal_coverage) = durable
+                    .coverage
+                    .observe(event.source_cpu_id, event.source_sequence)?;
                 let observation = durable.canonicalizer.normalize_kernel(
                     event,
                     coverage_interval_id,
-                    TemporalCoverageV1::Complete,
+                    temporal_coverage,
                     utc_now_ns(),
                 )?;
-                durable.wal.append(&observation)?;
+                if let Err(error) = durable.wal.append(&observation) {
+                    let _result = durable
+                        .coverage
+                        .mark_all_gapped(CoverageGapReasonV1::WalFailure);
+                    return Err(error);
+                }
                 crate::Result::Ok(())
             })();
             if result.is_err() {
@@ -172,6 +188,53 @@ impl EffectObservationStore {
         self.inner.evidence_errors.load(Ordering::Relaxed)
     }
 
+    pub fn sample_coverage_health(&self, per_cpu_bytes: &[u8]) -> crate::Result<()> {
+        let samples =
+            decode_cpu_health(per_cpu_bytes).ok_or_else(|| crate::Error::EvidenceState {
+                reason: "effect observation health bytes are invalid".to_owned(),
+                location: snafu::Location::new(file!(), line!(), column!()),
+            })?;
+        let durable = self
+            .inner
+            .durable
+            .as_ref()
+            .ok_or_else(|| crate::Error::EvidenceState {
+                reason: "node has no durable coverage owner".to_owned(),
+                location: snafu::Location::new(file!(), line!(), column!()),
+            })?;
+        durable
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .coverage
+            .sample_health(&samples)
+    }
+
+    pub fn mark_coverage_gapped(&self, reason: CoverageGapReasonV1) -> crate::Result<()> {
+        let durable = self
+            .inner
+            .durable
+            .as_ref()
+            .ok_or_else(|| crate::Error::EvidenceState {
+                reason: "node has no durable coverage owner".to_owned(),
+                location: snafu::Location::new(file!(), line!(), column!()),
+            })?;
+        durable
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .coverage
+            .mark_all_gapped(reason)
+    }
+
+    #[must_use]
+    pub fn coverage_snapshot(&self) -> Option<CoverageSnapshotV1> {
+        self.inner.durable.as_ref().and_then(|durable| {
+            durable
+                .lock()
+                .ok()
+                .map(|durable| durable.coverage.snapshot())
+        })
+    }
+
     #[must_use]
     pub fn recent(&self) -> Vec<MithrilEffectObservation> {
         self.lock_recent().events.iter().cloned().collect()
@@ -197,30 +260,26 @@ impl EffectObservationStore {
     pub fn health(&self, per_cpu_bytes: Option<&[u8]>) -> EffectObservationHealth {
         let mut health = EffectObservationHealth {
             decoder_errors: self.inner.decoder_errors.load(Ordering::Relaxed),
+            evidence_errors: self.inner.evidence_errors.load(Ordering::Relaxed),
             ..EffectObservationHealth::default()
         };
         let Some(bytes) = per_cpu_bytes else {
             return health;
         };
-        let width = mem::size_of::<EffectObservationHealthV1>();
-        if bytes.is_empty() || !bytes.len().is_multiple_of(width) {
+        let Some(cpus) = decode_cpu_health(bytes) else {
             health.decoder_errors = health.decoder_errors.saturating_add(1);
             return health;
-        }
-        for chunk in bytes.chunks_exact(width) {
-            let Ok(cpu) = EffectObservationHealthV1::read_from_bytes(chunk) else {
-                health.decoder_errors = health.decoder_errors.saturating_add(1);
-                continue;
-            };
-            health.attempted = health.attempted.saturating_add(cpu.attempted);
-            health.suppressed = health.suppressed.saturating_add(cpu.suppressed);
-            health.requested = health.requested.saturating_add(cpu.requested);
-            health.emitted = health.emitted.saturating_add(cpu.emitted);
-            health.lost = health.lost.saturating_add(cpu.lost);
+        };
+        for cpu in cpus {
+            health.attempted = health.attempted.saturating_add(cpu.counters.attempted);
+            health.suppressed = health.suppressed.saturating_add(cpu.counters.suppressed);
+            health.requested = health.requested.saturating_add(cpu.counters.requested);
+            health.emitted = health.emitted.saturating_add(cpu.counters.emitted);
+            health.lost = health.lost.saturating_add(cpu.counters.lost);
             health.classifier_miss_count = health
                 .classifier_miss_count
-                .saturating_add(cpu.classifier_miss_count);
-            health.unresolved = health.unresolved.saturating_add(cpu.unresolved);
+                .saturating_add(cpu.counters.classifier_miss_count);
+            health.unresolved = health.unresolved.saturating_add(cpu.counters.unresolved);
         }
         health
     }
@@ -231,6 +290,33 @@ impl EffectObservationStore {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
     }
+}
+
+fn decode_cpu_health(bytes: &[u8]) -> Option<Vec<EffectObservationCpuHealth>> {
+    let width = mem::size_of::<EffectObservationHealthV1>();
+    if bytes.is_empty() || !bytes.len().is_multiple_of(width) {
+        return None;
+    }
+    bytes
+        .chunks_exact(width)
+        .enumerate()
+        .map(|(cpu_id, chunk)| {
+            let cpu = EffectObservationHealthV1::read_from_bytes(chunk).ok()?;
+            Some(EffectObservationCpuHealth {
+                cpu_id: u32::try_from(cpu_id).ok()?,
+                counters: CoverageCountersV1 {
+                    attempted: cpu.attempted,
+                    suppressed: cpu.suppressed,
+                    requested: cpu.requested,
+                    emitted: cpu.emitted,
+                    lost: cpu.lost,
+                    classifier_miss_count: cpu.classifier_miss_count,
+                    unresolved: cpu.unresolved,
+                    next_sequence: cpu.next_sequence,
+                },
+            })
+        })
+        .collect()
 }
 
 fn utc_now_ns() -> i64 {
@@ -386,7 +472,10 @@ mod tests {
     };
     use zerocopy::IntoBytes as _;
 
-    use super::{reason_name, EffectObservationStore};
+    use super::{
+        reason_name, CoverageGapReasonV1, EffectObservationStore, EvidenceIdV1, EvidenceWalLimits,
+        ObservationCanonicalizer,
+    };
 
     #[test]
     fn enforcement_denial_reasons_are_not_downgraded_to_unknown() {
@@ -565,5 +654,50 @@ mod tests {
         assert_eq!(health.classifier_miss_count, 3);
         assert_eq!(health.unresolved, 6);
         assert_eq!(health.decoder_errors, 1);
+    }
+
+    #[test]
+    fn wal_capacity_closes_negative_coverage_without_changing_effect_events(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let store = EffectObservationStore::durable(
+            4,
+            directory.path().join("wal"),
+            EvidenceWalLimits {
+                maximum_record_bytes: 128 * 1_024,
+                maximum_retained_bytes: 256 * 1_024,
+                maximum_retained_records: 1,
+                maximum_batch_records: 1,
+            },
+            ObservationCanonicalizer::new(
+                EvidenceIdV1::new(1, 2),
+                EvidenceIdV1::new(3, 4),
+                1,
+                EvidenceIdV1::new(5, 6),
+            )?,
+        )?;
+        store.sample_coverage_health(EffectObservationHealthV1::default().as_bytes())?;
+        for source_sequence in [1, 2] {
+            store.record_bytes(
+                EffectObservationV1 {
+                    source_sequence,
+                    reason: EffectObservationReasonV1::ExactPolicyDeny as u8,
+                    physical_result: EffectPhysicalResultV1::DeniedBeforeEffect as u8,
+                    kernel_result: -13,
+                    ..EffectObservationV1::default()
+                }
+                .as_bytes(),
+            );
+        }
+        assert_eq!(store.recent().len(), 2);
+        assert_eq!(store.evidence_errors(), 1);
+        let snapshot = store
+            .coverage_snapshot()
+            .ok_or("coverage snapshot missing")?;
+        assert!(!snapshot.supports_negative_claim());
+        assert!(snapshot.current_intervals()[0]
+            .gap_reasons
+            .contains(&CoverageGapReasonV1::WalFailure));
+        Ok(())
     }
 }

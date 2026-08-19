@@ -4,16 +4,21 @@ use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
+use prost::Message as _;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 use snafu::ResultExt as _;
 use tonic::Status;
 
 use crate::error::{EvidenceStateSnafu, IoSnafu};
-use crate::{EvidenceAck, EvidenceBatch, EvidenceRecord, Result};
+use crate::{
+    CoverageAck, CoverageCounters, CoverageReport, EvidenceAck, EvidenceBatch, EvidenceRecord,
+    Result,
+};
 
 const MAX_BATCH_RECORDS: usize = 256;
 const MAX_RECORD_BYTES: usize = 128 * 1_024;
+const MAX_COVERAGE_INTERVALS: usize = 8_192;
 
 #[derive(Clone)]
 pub struct EvidenceIntakeOwner {
@@ -28,6 +33,14 @@ struct IntakeStateV1 {
     last_first_cursor: u64,
     last_batch_sha256: [u8; 32],
     last_record_sha256: [u8; 32],
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct CoverageIntakeStateV1 {
+    source_epoch: u64,
+    revision: u64,
+    report_sha256: [u8; 32],
 }
 
 #[derive(Serialize)]
@@ -138,6 +151,209 @@ impl EvidenceIntakeOwner {
     pub fn contiguous_cursor(&self, node_id: &str) -> Result<u64> {
         let node_root = self.root.join(node_id);
         Ok(read_state(&node_root)?.contiguous_cursor)
+    }
+
+    #[allow(clippy::result_large_err)]
+    pub fn receive_coverage(
+        &self,
+        node_id: &str,
+        report: &CoverageReport,
+    ) -> std::result::Result<CoverageAck, Status> {
+        validate_node_id(node_id)?;
+        let report_digest: [u8; 32] = report
+            .report_sha256
+            .as_slice()
+            .try_into()
+            .map_err(|_| Status::invalid_argument("coverage report digest must be SHA-256"))?;
+        let mut unsigned = report.clone();
+        unsigned.report_sha256.clear();
+        let actual_digest: [u8; 32] = Sha256::digest(unsigned.encode_to_vec()).into();
+        if actual_digest != report_digest {
+            return Err(Status::data_loss(
+                "coverage report digest does not match its content",
+            ));
+        }
+        validate_coverage_report(report)?;
+
+        let node_root = self.root.join(node_id);
+        fs::create_dir_all(&node_root).map_err(|error| {
+            Status::internal(format!("evidence node directory failed: {error}"))
+        })?;
+        let state = read_coverage_state(&node_root).map_err(internal_status)?;
+        if state.source_epoch == report.source_epoch
+            && state.revision == report.revision
+            && state.report_sha256 == report_digest
+        {
+            return Ok(coverage_ack(report));
+        }
+        if report.source_epoch < state.source_epoch
+            || (report.source_epoch == state.source_epoch && report.revision <= state.revision)
+        {
+            return Err(Status::aborted(
+                "coverage report epoch or revision is stale",
+            ));
+        }
+        let coverage_root = node_root.join("coverage");
+        fs::create_dir_all(&coverage_root)
+            .map_err(|error| Status::internal(format!("coverage directory failed: {error}")))?;
+        let path = coverage_root.join(format!(
+            "{:020}-{:020}.pb",
+            report.source_epoch, report.revision
+        ));
+        atomic_write(&path, &report.encode_to_vec()).map_err(internal_status)?;
+        persist_coverage_state(
+            &node_root,
+            CoverageIntakeStateV1 {
+                source_epoch: report.source_epoch,
+                revision: report.revision,
+                report_sha256: report_digest,
+            },
+        )
+        .map_err(internal_status)?;
+        Ok(coverage_ack(report))
+    }
+
+    pub fn latest_coverage_report(&self, node_id: &str) -> Result<Option<CoverageReport>> {
+        let node_root = self.root.join(node_id);
+        let state = read_coverage_state(&node_root)?;
+        if state.source_epoch == 0 || state.revision == 0 {
+            return Ok(None);
+        }
+        let path = node_root.join("coverage").join(format!(
+            "{:020}-{:020}.pb",
+            state.source_epoch, state.revision
+        ));
+        let bytes = fs::read(&path).context(IoSnafu { path: &path })?;
+        let report = CoverageReport::decode(bytes.as_slice()).map_err(|error| {
+            EvidenceStateSnafu {
+                path: path.clone(),
+                reason: format!("coverage report decoding failed: {error}"),
+            }
+            .build()
+        })?;
+        let supplied_digest: [u8; 32] =
+            report.report_sha256.as_slice().try_into().map_err(|_| {
+                EvidenceStateSnafu {
+                    path: path.clone(),
+                    reason: "coverage report digest is not SHA-256".to_owned(),
+                }
+                .build()
+            })?;
+        let mut unsigned = report.clone();
+        unsigned.report_sha256.clear();
+        let actual_digest: [u8; 32] = Sha256::digest(unsigned.encode_to_vec()).into();
+        if supplied_digest != state.report_sha256 || actual_digest != state.report_sha256 {
+            return EvidenceStateSnafu {
+                path,
+                reason: "coverage report content does not match its durable cursor".to_owned(),
+            }
+            .fail();
+        }
+        Ok(Some(report))
+    }
+}
+
+#[allow(clippy::result_large_err)]
+fn validate_node_id(node_id: &str) -> std::result::Result<(), Status> {
+    if node_id.is_empty() || node_id.chars().any(char::is_whitespace) || node_id.contains('/') {
+        return Err(Status::invalid_argument(
+            "evidence node identity is invalid",
+        ));
+    }
+    Ok(())
+}
+
+#[allow(clippy::result_large_err)]
+fn validate_coverage_report(report: &CoverageReport) -> std::result::Result<(), Status> {
+    if report.source_epoch == 0
+        || report.revision == 0
+        || report.intervals.is_empty()
+        || report.intervals.len() > MAX_COVERAGE_INTERVALS
+    {
+        return Err(Status::invalid_argument(
+            "coverage report epoch, revision, or interval bounds are invalid",
+        ));
+    }
+    let mut interval_ids = std::collections::BTreeSet::new();
+    let mut current_cpus = std::collections::BTreeSet::new();
+    let mut current_healthy = true;
+    let mut current_count = 0_usize;
+    for interval in &report.intervals {
+        let ids_valid = interval.interval_id.len() == 16
+            && interval.interval_id.iter().any(|byte| *byte != 0)
+            && interval.source_id.len() == 16
+            && interval.source_id.iter().any(|byte| *byte != 0)
+            && interval_ids.insert(interval.interval_id.as_slice());
+        let state_valid = matches!(
+            interval.state.as_str(),
+            "HEALTHY" | "GAPPED" | "UNKNOWN" | "CLOSED"
+        );
+        let mut reasons = std::collections::BTreeSet::new();
+        let reasons_valid = interval.gap_reasons.iter().all(|reason| {
+            reasons.insert(reason.as_str())
+                && matches!(
+                    reason.as_str(),
+                    "SOURCE_SEQUENCE_GAP"
+                        | "RING_LOSS"
+                        | "CLASSIFIER_MISS"
+                        | "UNRESOLVED_EFFECT"
+                        | "READER_DELAY"
+                        | "READER_STOPPED"
+                        | "WAL_FAILURE"
+                        | "WAL_CAPACITY"
+                        | "CONTROL_DELAY"
+                        | "KERNEL_STATE_MISMATCH"
+                        | "UNCLEAN_RESTART"
+                        | "COUNTER_REGRESSION"
+                )
+        });
+        if !ids_valid
+            || !state_valid
+            || !reasons_valid
+            || interval.source_epoch != report.source_epoch
+            || interval.revision == 0
+            || !interval
+                .opening_counters
+                .as_ref()
+                .is_some_and(valid_coverage_counters)
+            || interval
+                .closing_counters
+                .as_ref()
+                .is_some_and(|counters| !valid_coverage_counters(counters))
+        {
+            return Err(Status::invalid_argument(
+                "coverage interval identity, state, reason, or counters are invalid",
+            ));
+        }
+        if interval.current {
+            current_count += 1;
+            if !current_cpus.insert(interval.cpu_id) {
+                return Err(Status::invalid_argument(
+                    "coverage report contains duplicate current CPU state",
+                ));
+            }
+            current_healthy &= interval.state == "HEALTHY" && interval.gap_reasons.is_empty();
+        }
+    }
+    let calculated_negative_eligibility = current_count > 0 && current_healthy;
+    if report.negative_claim_eligible != calculated_negative_eligibility {
+        return Err(Status::invalid_argument(
+            "coverage report negative-claim state does not match current intervals",
+        ));
+    }
+    Ok(())
+}
+
+fn valid_coverage_counters(counters: &CoverageCounters) -> bool {
+    counters.attempted == counters.suppressed.saturating_add(counters.requested)
+        && counters.requested == counters.emitted.saturating_add(counters.lost)
+}
+
+fn coverage_ack(report: &CoverageReport) -> CoverageAck {
+    CoverageAck {
+        source_epoch: report.source_epoch,
+        revision: report.revision,
+        report_sha256: report.report_sha256.clone(),
     }
 }
 
@@ -275,6 +491,33 @@ fn read_state(root: &Path) -> Result<IntakeStateV1> {
     })
 }
 
+fn persist_coverage_state(root: &Path, state: CoverageIntakeStateV1) -> Result<()> {
+    let path = root.join("coverage-cursor.json");
+    let bytes = serde_json::to_vec(&state).map_err(|error| {
+        EvidenceStateSnafu {
+            path: path.clone(),
+            reason: format!("coverage cursor encoding failed: {error}"),
+        }
+        .build()
+    })?;
+    atomic_replace(&path, &bytes)
+}
+
+fn read_coverage_state(root: &Path) -> Result<CoverageIntakeStateV1> {
+    let path = root.join("coverage-cursor.json");
+    if !path.exists() {
+        return Ok(CoverageIntakeStateV1::default());
+    }
+    let bytes = fs::read(&path).context(IoSnafu { path: &path })?;
+    serde_json::from_slice(&bytes).map_err(|error| {
+        EvidenceStateSnafu {
+            path,
+            reason: format!("coverage cursor decoding failed: {error}"),
+        }
+        .build()
+    })
+}
+
 fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
     let temporary = path.with_extension("tmp");
     let mut file = OpenOptions::new()
@@ -327,7 +570,10 @@ fn internal_status(error: crate::Error) -> Status {
 #[cfg(test)]
 mod tests {
     use super::EvidenceIntakeOwner;
-    use crate::{EvidenceBatch, EvidenceRecord};
+    use crate::{
+        CoverageCounters, CoverageInterval, CoverageReport, EvidenceBatch, EvidenceRecord,
+    };
+    use prost::Message as _;
     use sha2::{Digest as _, Sha256};
 
     fn record(cursor: u64, previous: [u8; 32]) -> EvidenceRecord {
@@ -365,6 +611,42 @@ mod tests {
         }
     }
 
+    fn coverage_report(epoch: u64, revision: u64, state: &str) -> CoverageReport {
+        let counters = CoverageCounters {
+            attempted: 3,
+            requested: 3,
+            emitted: 3,
+            next_sequence: 3,
+            ..CoverageCounters::default()
+        };
+        let mut report = CoverageReport {
+            source_epoch: epoch,
+            revision,
+            intervals: vec![CoverageInterval {
+                interval_id: vec![1; 16],
+                source_id: vec![2; 16],
+                source_epoch: epoch,
+                cpu_id: 0,
+                revision: 1,
+                state: state.to_owned(),
+                first_sequence: 1,
+                last_sequence: Some(3),
+                opening_counters: Some(CoverageCounters::default()),
+                closing_counters: Some(counters),
+                gap_reasons: if state == "HEALTHY" {
+                    Vec::new()
+                } else {
+                    vec!["RING_LOSS".to_owned()]
+                },
+                current: true,
+            }],
+            negative_claim_eligible: state == "HEALTHY",
+            report_sha256: Vec::new(),
+        };
+        report.report_sha256 = Sha256::digest(report.encode_to_vec()).to_vec();
+        report
+    }
+
     #[test]
     fn intake_is_contiguous_durable_and_idempotent() -> Result<(), Box<dyn std::error::Error>> {
         let directory = tempfile::tempdir()?;
@@ -399,6 +681,46 @@ mod tests {
         corrupted.records[1].payload[0] ^= 1;
         assert!(intake.receive("node-a", &corrupted).is_err());
         assert_eq!(intake.contiguous_cursor("node-a")?, 0);
+        Ok(())
+    }
+
+    #[test]
+    fn coverage_intake_is_durable_monotonic_and_gap_aware() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let directory = tempfile::tempdir()?;
+        let intake = EvidenceIntakeOwner::open(directory.path())?;
+        let healthy = coverage_report(7, 1, "HEALTHY");
+        assert_eq!(
+            intake.receive_coverage("node-a", &healthy)?.revision,
+            healthy.revision
+        );
+        assert_eq!(intake.receive_coverage("node-a", &healthy)?.revision, 1);
+        let gapped = coverage_report(7, 2, "GAPPED");
+        intake.receive_coverage("node-a", &gapped)?;
+        assert!(
+            !intake
+                .latest_coverage_report("node-a")?
+                .ok_or("missing coverage report")?
+                .negative_claim_eligible
+        );
+        assert!(intake.receive_coverage("node-a", &healthy).is_err());
+        drop(intake);
+        let intake = EvidenceIntakeOwner::open(directory.path())?;
+        assert_eq!(
+            intake
+                .latest_coverage_report("node-a")?
+                .ok_or("missing recovered coverage report")?
+                .revision,
+            2
+        );
+        let path = directory
+            .path()
+            .join("node-a/coverage/00000000000000000007-00000000000000000002.pb");
+        let mut bytes = std::fs::read(&path)?;
+        let last = bytes.last_mut().ok_or("empty coverage report")?;
+        *last ^= 1;
+        std::fs::write(path, bytes)?;
+        assert!(intake.latest_coverage_report("node-a").is_err());
         Ok(())
     }
 }

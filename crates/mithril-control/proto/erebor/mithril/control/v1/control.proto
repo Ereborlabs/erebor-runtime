@@ -19,6 +19,7 @@ message NodeEnvelope {
     AdministrativeExecResolution resolution = 13;
     AdministrativeExecArmResult arm_result = 14;
     EvidenceBatch evidence_batch = 15;
+    CoverageReport coverage_report = 16;
   }
 }
 
@@ -60,6 +61,7 @@ message ControlEnvelope {
     ResolveAdministrativeExec resolve_administrative_exec = 12;
     ArmAdministrativeExec arm_administrative_exec = 13;
     EvidenceAck evidence_ack = 14;
+    CoverageAck coverage_ack = 15;
   }
 }
 
@@ -83,6 +85,46 @@ message EvidenceAck {
   uint64 first_cursor = 1;
   uint64 last_cursor = 2;
   bytes batch_sha256 = 3;
+}
+
+message CoverageCounters {
+  uint64 attempted = 1;
+  uint64 suppressed = 2;
+  uint64 requested = 3;
+  uint64 emitted = 4;
+  uint64 lost = 5;
+  uint64 classifier_miss_count = 6;
+  uint64 unresolved = 7;
+  uint64 next_sequence = 8;
+}
+
+message CoverageInterval {
+  bytes interval_id = 1;
+  bytes source_id = 2;
+  uint64 source_epoch = 3;
+  uint32 cpu_id = 4;
+  uint64 revision = 5;
+  string state = 6;
+  uint64 first_sequence = 7;
+  optional uint64 last_sequence = 8;
+  CoverageCounters opening_counters = 9;
+  optional CoverageCounters closing_counters = 10;
+  repeated string gap_reasons = 11;
+  bool current = 12;
+}
+
+message CoverageReport {
+  uint64 source_epoch = 1;
+  uint64 revision = 2;
+  repeated CoverageInterval intervals = 3;
+  bool negative_claim_eligible = 4;
+  bytes report_sha256 = 5;
+}
+
+message CoverageAck {
+  uint64 source_epoch = 1;
+  uint64 revision = 2;
+  bytes report_sha256 = 3;
 }
 
 message ResolveAdministrativeExec {

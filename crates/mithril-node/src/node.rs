@@ -16,11 +16,13 @@ use crate::administrative_exec::{
     AdministrativeExecOwner, AdministrativeResolutionV1, AdministrativeResolveRequestV1,
 };
 use crate::epoch::NodeEpochs;
-use crate::error::{IdentityStateSnafu, InterceptorSnafu, JsonSnafu, LocalTaskSnafu};
+use crate::error::{
+    EvidenceStateSnafu, IdentityStateSnafu, InterceptorSnafu, JsonSnafu, LocalTaskSnafu,
+};
 use crate::{
-    AdministrativeControlRequest, EvidenceAckV1, EvidenceIdV1, EvidenceWalLimits,
-    NativeSecurityStateOwner, NodeConfig, NodeControlConnector, NodeControlMessage,
-    ObservationCanonicalizer, Result, TrustCache, WorkloadBindingOwner,
+    AdministrativeControlRequest, CoverageGapReasonV1, EvidenceAckV1, EvidenceIdV1,
+    EvidenceWalLimits, NativeSecurityStateOwner, NodeConfig, NodeControlConnector,
+    NodeControlMessage, ObservationCanonicalizer, Result, TrustCache, WorkloadBindingOwner,
 };
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize)]
@@ -57,6 +59,7 @@ impl NodeReadinessV1 {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ReconciliationOutcome {
     Healthy,
+    EvidenceUnhealthy,
     IdentityUnhealthy,
     KernelUnhealthy,
 }
@@ -203,7 +206,7 @@ impl NodeChassis {
                 }
                 .build()
             })?;
-            let source_epoch = NodeEpochs::source_epoch(&config.state_directory)?;
+            let source_epoch = NodeEpochs::source_epoch(&config.state_directory, recover_identity)?;
             let canonicalizer = ObservationCanonicalizer::new(
                 evidence_id_from_uuid(&evidence.tenant_id)?,
                 evidence_id_from_uuid(&evidence.source_id)?,
@@ -234,6 +237,7 @@ impl NodeChassis {
             })
             .transpose()
             .context(InterceptorSnafu)?;
+        let evidence_healthy = !policy_loaded || sample_effect_health(&host, &observations).is_ok();
         let manifest = host.manifest();
         let capabilities = vec![
             CapabilityRecord {
@@ -262,13 +266,17 @@ impl NodeChassis {
             },
             CapabilityRecord {
                 capability_id: "LOCAL_EFFECT_OBSERVATION".to_owned(),
-                state: if policy_loaded {
-                    "DEGRADED".to_owned()
+                state: if policy_loaded && evidence_healthy {
+                    "SUPPORTED".to_owned()
+                } else if policy_loaded {
+                    "UNHEALTHY".to_owned()
                 } else {
                     "UNSUPPORTED".to_owned()
                 },
-                reason_code: if policy_loaded {
-                    "SIGNED_ACTIVE_EXACT_FILE_SLICE_ONLY".to_owned()
+                reason_code: if policy_loaded && evidence_healthy {
+                    "DURABLE_LOSS_AWARE_KERNEL_COVERAGE".to_owned()
+                } else if policy_loaded {
+                    "DURABLE_EVIDENCE_COVERAGE_GAPPED".to_owned()
                 } else {
                     "NO_POLICY_CANDIDATE".to_owned()
                 },
@@ -295,7 +303,7 @@ impl NodeChassis {
         let registration = registration(
             manifest,
             label_epoch,
-            prevention_enabled,
+            prevention_enabled && evidence_healthy,
             capabilities.clone(),
         )?;
         let connector =
@@ -306,7 +314,7 @@ impl NodeChassis {
             identity_ready: true,
             control_ready: false,
             admission_ready: false,
-            effect_prevention_claims_enabled: prevention_enabled,
+            effect_prevention_claims_enabled: prevention_enabled && evidence_healthy,
         });
         let local_server = config
             .runtime_observation
@@ -365,6 +373,13 @@ impl NodeChassis {
         let mut backoff = self.config.control.reconnect_minimum();
         let mut kernel_healthy = true;
         let mut identity_healthy = true;
+        let mut evidence_healthy = self
+            .registration
+            .capabilities
+            .iter()
+            .find(|capability| capability.capability_id == "LOCAL_EFFECT_OBSERVATION")
+            .is_none_or(|capability| capability.state != "UNHEALTHY");
+        let mut control_disconnected_since = tokio::time::Instant::now();
         let mut run_error = None;
         let healthy_identity_capabilities = self.registration.capabilities.clone();
         let healthy_effect_prevention_claims = self.registration.effect_prevention_claims_enabled;
@@ -374,17 +389,32 @@ impl NodeChassis {
             if *shutdown.borrow() {
                 break;
             }
+            let evidence_control_deadline =
+                control_disconnected_since + self.evidence_control_delay();
+            let evidence_configured = self.policy.is_some();
             let connection = tokio::select! {
                 result = self.connector.connect(
                     self.registration.clone(),
-                    kernel_healthy && identity_healthy,
+                    kernel_healthy && identity_healthy && evidence_healthy,
                     &mut self.trust,
                 ) => result,
+                _instant = tokio::time::sleep_until(evidence_control_deadline),
+                    if evidence_healthy && evidence_configured => {
+                    let _result = self.observations.mark_coverage_gapped(
+                        CoverageGapReasonV1::ControlDelay,
+                    );
+                    evidence_healthy = false;
+                    close_evidence_claims(&mut self.registration);
+                    continue 'running;
+                }
                 changed = shutdown.changed() => {
                     let _result = changed;
                     break;
                 }
                 result = effect_reader_finished(&mut effect_task) => {
+                    let _result = self.observations.mark_coverage_gapped(
+                        CoverageGapReasonV1::ReaderStopped,
+                    );
                     run_error = result.err();
                     effect_task = None;
                     break;
@@ -396,16 +426,18 @@ impl NodeChassis {
                         kernel_ready: kernel_healthy,
                         identity_ready: identity_healthy,
                         control_ready: true,
-                        admission_ready: kernel_healthy && identity_healthy,
+                        admission_ready: kernel_healthy && identity_healthy && evidence_healthy,
                         effect_prevention_claims_enabled:
                             NodeReadinessV1::prevention_claims_enabled(
                                 kernel_healthy,
-                                identity_healthy,
+                                identity_healthy && evidence_healthy,
                                 prevention_enabled,
                             ),
                     });
                     backoff = self.config.control.reconnect_minimum();
                     let mut evidence_in_flight = false;
+                    let mut coverage_in_flight = None;
+                    let mut acknowledged_coverage = None;
                     let mut evidence_upload = tokio::time::interval(Duration::from_millis(100));
                     evidence_upload
                         .set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -442,14 +474,35 @@ impl NodeChassis {
                                         }
                                         evidence_in_flight = false;
                                     }
+                                    NodeControlMessage::CoverageAck(ack) => {
+                                        if coverage_in_flight.as_ref() != Some(&ack) {
+                                            break;
+                                        }
+                                        acknowledged_coverage =
+                                            Some((ack.source_epoch, ack.revision));
+                                        coverage_in_flight = None;
+                                    }
                                 }
                             }
-                            _instant = evidence_upload.tick(), if !evidence_in_flight => {
-                                if let Some(batch) = self.observations.next_evidence_batch() {
+                            _instant = evidence_upload.tick() => {
+                                if !evidence_in_flight {
+                                    if let Some(batch) = self.observations.next_evidence_batch() {
                                     if connection.send_evidence_batch(batch).await.is_err() {
                                         break;
                                     }
                                     evidence_in_flight = true;
+                                    }
+                                }
+                                if coverage_in_flight.is_none() {
+                                    if let Some(snapshot) = self.observations.coverage_snapshot() {
+                                        let key = (snapshot.source_epoch, snapshot.revision);
+                                        if acknowledged_coverage != Some(key) {
+                                            match connection.send_coverage_report(snapshot).await {
+                                                Ok(expected) => coverage_in_flight = Some(expected),
+                                                Err(_error) => break,
+                                            }
+                                        }
+                                    }
                                 }
                             }
                             changed = shutdown.changed() => {
@@ -457,6 +510,9 @@ impl NodeChassis {
                                 break 'running;
                             }
                             result = effect_reader_finished(&mut effect_task) => {
+                                let _result = self.observations.mark_coverage_gapped(
+                                    CoverageGapReasonV1::ReaderStopped,
+                                );
                                 run_error = result.err();
                                 effect_task = None;
                                 break 'running;
@@ -469,12 +525,31 @@ impl NodeChassis {
                             } => {
                                 match self.reconcile_bindings().await {
                                     ReconciliationOutcome::Healthy => {
+                                        if !evidence_healthy {
+                                            evidence_healthy = true;
+                                            restore_evidence_claims(
+                                                &mut self.registration,
+                                                &healthy_identity_capabilities,
+                                                healthy_effect_prevention_claims,
+                                            );
+                                            self.readiness.send_modify(|readiness| {
+                                                readiness.admission_ready =
+                                                    kernel_healthy && identity_healthy;
+                                                readiness.effect_prevention_claims_enabled =
+                                                    NodeReadinessV1::prevention_claims_enabled(
+                                                        kernel_healthy,
+                                                        identity_healthy,
+                                                        prevention_enabled,
+                                                    );
+                                            });
+                                        }
                                         if !identity_healthy && kernel_healthy {
                                             identity_healthy = true;
                                             restore_identity_claims(
                                                 &mut self.registration,
                                                 &healthy_identity_capabilities,
-                                                healthy_effect_prevention_claims,
+                                                healthy_effect_prevention_claims
+                                                    && evidence_healthy,
                                             );
                                             self.readiness.send_replace(NodeReadinessV1 {
                                                 kernel_ready: true,
@@ -485,6 +560,15 @@ impl NodeChassis {
                                                     healthy_effect_prevention_claims,
                                             });
                                         }
+                                    }
+                                    ReconciliationOutcome::EvidenceUnhealthy => {
+                                        evidence_healthy = false;
+                                        close_evidence_claims(&mut self.registration);
+                                        self.readiness.send_modify(|readiness| {
+                                            readiness.admission_ready = false;
+                                            readiness.effect_prevention_claims_enabled = false;
+                                        });
+                                        break;
                                     }
                                     ReconciliationOutcome::IdentityUnhealthy => {
                                         identity_healthy = false;
@@ -526,10 +610,11 @@ impl NodeChassis {
                 admission_ready: false,
                 effect_prevention_claims_enabled: NodeReadinessV1::prevention_claims_enabled(
                     kernel_healthy,
-                    identity_healthy,
+                    identity_healthy && evidence_healthy,
                     prevention_enabled,
                 ),
             });
+            control_disconnected_since = tokio::time::Instant::now();
             let reconnect = tokio::time::sleep(backoff);
             tokio::pin!(reconnect);
             loop {
@@ -540,6 +625,9 @@ impl NodeChassis {
                         break 'running;
                     }
                     result = effect_reader_finished(&mut effect_task) => {
+                        let _result = self.observations.mark_coverage_gapped(
+                            CoverageGapReasonV1::ReaderStopped,
+                        );
                         run_error = result.err();
                         effect_task = None;
                         break 'running;
@@ -552,12 +640,20 @@ impl NodeChassis {
                     } => {
                         match self.reconcile_bindings().await {
                             ReconciliationOutcome::Healthy => {
+                                if !evidence_healthy {
+                                    evidence_healthy = true;
+                                    restore_evidence_claims(
+                                        &mut self.registration,
+                                        &healthy_identity_capabilities,
+                                        healthy_effect_prevention_claims,
+                                    );
+                                }
                                 if !identity_healthy && kernel_healthy {
                                     identity_healthy = true;
                                     restore_identity_claims(
                                         &mut self.registration,
                                         &healthy_identity_capabilities,
-                                        healthy_effect_prevention_claims,
+                                        healthy_effect_prevention_claims && evidence_healthy,
                                     );
                                     self.readiness.send_replace(NodeReadinessV1 {
                                         kernel_ready: true,
@@ -567,6 +663,10 @@ impl NodeChassis {
                                         effect_prevention_claims_enabled: false,
                                     });
                                 }
+                            }
+                            ReconciliationOutcome::EvidenceUnhealthy => {
+                                evidence_healthy = false;
+                                close_evidence_claims(&mut self.registration);
                             }
                             ReconciliationOutcome::IdentityUnhealthy => {
                                 identity_healthy = false;
@@ -586,6 +686,9 @@ impl NodeChassis {
                 self.config.control.reconnect_maximum(),
             );
         }
+        let _result = self
+            .observations
+            .mark_coverage_gapped(CoverageGapReasonV1::ReaderStopped);
         effect_stop.store(true, Ordering::Release);
         if let Some(task) = effect_task {
             task.await
@@ -614,7 +717,19 @@ impl NodeChassis {
             return ReconciliationOutcome::KernelUnhealthy;
         };
         if host.verify_live_manifest().is_err() {
+            let _result = self
+                .observations
+                .mark_coverage_gapped(CoverageGapReasonV1::KernelStateMismatch);
             return ReconciliationOutcome::KernelUnhealthy;
+        }
+        if self.policy.is_some()
+            && (self.observations.evidence_errors() > 0
+                || sample_effect_health(host, &self.observations).is_err())
+        {
+            let _result = self
+                .observations
+                .mark_coverage_gapped(CoverageGapReasonV1::WalFailure);
+            return ReconciliationOutcome::EvidenceUnhealthy;
         }
         if self
             .bindings
@@ -720,6 +835,41 @@ impl NodeChassis {
     fn close_kernel_claims(&mut self) {
         close_kernel_claims(&mut self.registration, &self.readiness);
     }
+
+    fn evidence_control_delay(&self) -> Duration {
+        Duration::from_millis(
+            self.config
+                .evidence
+                .as_ref()
+                .map_or(30_000, |evidence| evidence.maximum_control_delay_ms),
+        )
+    }
+}
+
+fn sample_effect_health(
+    host: &KernelHost,
+    observations: &crate::EffectObservationStore,
+) -> Result<()> {
+    let bytes = host
+        .lookup_map("effect_observation_health", &0_u32.to_ne_bytes())
+        .context(InterceptorSnafu)?
+        .ok_or_else(|| {
+            IdentityStateSnafu {
+                reason: "effect observation health map has no per-CPU state".to_owned(),
+            }
+            .build()
+        })?;
+    observations.sample_coverage_health(&bytes)?;
+    if !observations
+        .coverage_snapshot()
+        .is_some_and(|snapshot| snapshot.supports_negative_claim())
+    {
+        return EvidenceStateSnafu {
+            reason: "effect observation coverage cannot support a negative claim".to_owned(),
+        }
+        .fail();
+    }
+    Ok(())
 }
 
 fn close_kernel_claims(
@@ -738,6 +888,36 @@ fn close_kernel_claims(
         }
     }
     readiness.send_modify(NodeReadinessV1::close_kernel_claims);
+}
+
+fn close_evidence_claims(registration: &mut NodeRegistration) {
+    registration.effect_prevention_claims_enabled = false;
+    for capability in &mut registration.capabilities {
+        if capability.capability_id == "LOCAL_EFFECT_OBSERVATION" {
+            capability.state = "UNHEALTHY".to_owned();
+            capability.reason_code = "DURABLE_EVIDENCE_COVERAGE_GAPPED".to_owned();
+        }
+    }
+}
+
+fn restore_evidence_claims(
+    registration: &mut NodeRegistration,
+    healthy_capabilities: &[CapabilityRecord],
+    effect_prevention_claims_enabled: bool,
+) {
+    registration.effect_prevention_claims_enabled = effect_prevention_claims_enabled;
+    if let Some(healthy) = healthy_capabilities
+        .iter()
+        .find(|capability| capability.capability_id == "LOCAL_EFFECT_OBSERVATION")
+    {
+        if let Some(capability) = registration
+            .capabilities
+            .iter_mut()
+            .find(|capability| capability.capability_id == "LOCAL_EFFECT_OBSERVATION")
+        {
+            capability.clone_from(healthy);
+        }
+    }
 }
 
 fn close_identity_claims(registration: &mut NodeRegistration) {

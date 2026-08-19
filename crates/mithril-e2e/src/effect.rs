@@ -4,7 +4,7 @@ mod mailbox;
 mod network;
 mod support;
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::mem::{offset_of, size_of};
 use std::os::unix::fs::MetadataExt as _;
@@ -117,6 +117,7 @@ pub struct EffectHealthV1 {
     pub lost: u64,
     pub unresolved: u64,
     pub decoder_errors: u64,
+    pub evidence_errors: u64,
 }
 
 impl From<EffectObservationHealth> for EffectHealthV1 {
@@ -127,6 +128,7 @@ impl From<EffectObservationHealth> for EffectHealthV1 {
             lost: value.lost,
             unresolved: value.unresolved,
             decoder_errors: value.decoder_errors,
+            evidence_errors: value.evidence_errors,
         }
     }
 }
@@ -465,6 +467,7 @@ pub struct EffectPhysicalProbeBundleV1 {
     pub saturated_health: EffectHealthV1,
     pub saturation_preserved_network_denial: bool,
     pub saturation_preserved_benign_allow: bool,
+    pub emitted_source_sequences_monotonic: bool,
     pub pin_root_removed: bool,
     pub lease_removed: bool,
     pub cgroup_removed: bool,
@@ -3769,6 +3772,14 @@ impl EffectTestRunner {
                 reason: "bounded latency measurement lost effect observations",
             }
         );
+        let emitted_source_sequences_monotonic = source_sequences_are_monotonic(&observations);
+        ensure!(
+            emitted_source_sequences_monotonic,
+            InvalidInputSnafu {
+                path: Path::new("effect_observations"),
+                reason: "compiled BPF emitted a zero or non-monotonic per-CPU source sequence",
+            }
+        );
 
         let saturation = fixture.open_many(&paths.secret, saturation_opens)?;
         ensure!(
@@ -3965,6 +3976,7 @@ impl EffectTestRunner {
             saturated_health: saturated.into(),
             saturation_preserved_network_denial: true,
             saturation_preserved_benign_allow: true,
+            emitted_source_sequences_monotonic,
             pin_root_removed: true,
             lease_removed: true,
             cgroup_removed: true,
@@ -3976,6 +3988,19 @@ impl EffectTestRunner {
         let bytes = serde_json::to_vec_pretty(value).context(JsonSnafu { path: output })?;
         fs::write(output, bytes).context(IoSnafu { path: output })
     }
+}
+
+fn source_sequences_are_monotonic(observations: &EffectObservationStore) -> bool {
+    let mut last_by_cpu = BTreeMap::new();
+    let events = observations.recent();
+    !events.is_empty()
+        && events.iter().all(|event| {
+            if event.source_sequence == 0 {
+                return false;
+            }
+            let prior = last_by_cpu.insert(event.source_cpu_id, event.source_sequence);
+            prior.is_none_or(|prior| event.source_sequence > prior)
+        })
 }
 
 #[cfg(test)]

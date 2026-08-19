@@ -55,6 +55,7 @@ pub(super) fn effect_node_config(
             maximum_retained_bytes: 16 * 1_024 * 1_024,
             maximum_retained_records: 10_000,
             maximum_batch_records: 256,
+            maximum_control_delay_ms: 30_000,
         }),
         runtime_observation: None,
         container_runtime: None,
@@ -155,6 +156,9 @@ pub(super) fn health_delta(
             .saturating_sub(earlier.classifier_miss_count),
         unresolved: later.unresolved.saturating_sub(earlier.unresolved),
         decoder_errors: later.decoder_errors.saturating_sub(earlier.decoder_errors),
+        evidence_errors: later
+            .evidence_errors
+            .saturating_sub(earlier.evidence_errors),
     }
 }
 
@@ -723,6 +727,7 @@ mod tests {
             classifier_miss_count: 0,
             unresolved: 1,
             decoder_errors: 0,
+            evidence_errors: 0,
         };
         let after = EffectObservationHealth {
             attempted: 25,
@@ -733,6 +738,7 @@ mod tests {
             classifier_miss_count: 0,
             unresolved: 3,
             decoder_errors: 0,
+            evidence_errors: 0,
         };
         let delta = health_delta(after, before);
         assert_eq!(delta.attempted, delta.suppressed + delta.requested);

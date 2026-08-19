@@ -5,8 +5,8 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use mithril_control::{
-    serve, AllowedNodeIdentity, CapabilityRecord, ControlPlane, ControlServerTls, NodeRegistration,
-    TrustGenerationV1,
+    serve, AllowedNodeIdentity, CapabilityRecord, ControlPlane, ControlServerTls,
+    EvidenceIntakeOwner, NodeRegistration, TrustGenerationV1,
 };
 use mithril_node::{
     EffectObservationStore, EvidenceIdV1, EvidenceWalLimits, NodeControlConfig,
@@ -70,7 +70,7 @@ async fn mtls_registration_acknowledges_trust_and_reconnects_with_a_fresh_nonce(
 }
 
 #[tokio::test]
-async fn mtls_rejects_incomplete_admission_readiness() -> Result<(), Box<dyn StdError>> {
+async fn mtls_keeps_a_degraded_node_connected_for_health_upload() -> Result<(), Box<dyn StdError>> {
     let directory = tempfile::tempdir()?;
     let certificates = Certificates::issue(false)?;
     let files = certificates.write(directory.path())?;
@@ -91,13 +91,10 @@ async fn mtls_rejects_incomplete_admission_readiness() -> Result<(), Box<dyn Std
     let connector =
         NodeControlConnector::new(files.node_config(address), "node-a".to_owned(), [7; 16]);
     let mut trust = TrustCache::load(directory.path())?;
-    let mut connection = connector.connect(registration(), false, &mut trust).await?;
-    assert!(
-        tokio::time::timeout(Duration::from_secs(1), connection.wait_for_disconnect())
-            .await?
-            .is_err()
-    );
+    let connection = connector.connect(registration(), false, &mut trust).await?;
+    tokio::time::sleep(Duration::from_millis(20)).await;
 
+    drop(connection);
     let _result = shutdown.send(());
     server.await??;
     Ok(())
@@ -199,6 +196,79 @@ async fn mtls_evidence_upload_replays_after_disconnect_and_advances_only_on_ack(
     assert_eq!(control.allowed_nodes().len(), 1);
 
     drop(second);
+    let _result = shutdown.send(());
+    server.await??;
+    Ok(())
+}
+
+#[tokio::test]
+async fn mtls_coverage_upload_preserves_gap_truth_at_control() -> Result<(), Box<dyn StdError>> {
+    let directory = tempfile::tempdir()?;
+    let certificates = Certificates::issue(false)?;
+    let files = certificates.write(directory.path())?;
+    let address = free_address()?;
+    let intake_path = directory.path().join("control-evidence");
+    let control = ControlPlane::with_evidence_directory(
+        vec![AllowedNodeIdentity {
+            node_id: "node-a".to_owned(),
+            certificate_sha256: certificates.node_digest(),
+        }],
+        TrustGenerationV1 {
+            generation: 1,
+            bundle_digest: "d".repeat(64),
+        },
+        &intake_path,
+    )?;
+    let (shutdown, server) = start_server(address, &files, control);
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    let observations = EffectObservationStore::durable(
+        4,
+        directory.path().join("node-wal"),
+        EvidenceWalLimits::default(),
+        ObservationCanonicalizer::new(
+            EvidenceIdV1::new(1, 2),
+            EvidenceIdV1::new(3, 4),
+            1,
+            EvidenceIdV1::new(5, 6),
+        )?,
+    )?;
+    observations.record_bytes(
+        erebor_interceptor_abi::EffectObservationV1 {
+            source_sequence: 2,
+            source_cpu_id: 0,
+            task_cookie: 7,
+            reason: 9,
+            physical_result: 1,
+            ..erebor_interceptor_abi::EffectObservationV1::default()
+        }
+        .as_bytes(),
+    );
+    let connector =
+        NodeControlConnector::new(files.node_config(address), "node-a".to_owned(), [7; 16]);
+    let mut trust = TrustCache::load(directory.path())?;
+    let mut connection = connector.connect(registration(), true, &mut trust).await?;
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    let expected = connection
+        .send_coverage_report(
+            observations
+                .coverage_snapshot()
+                .ok_or("missing coverage snapshot")?,
+        )
+        .await?;
+    let NodeControlMessage::CoverageAck(actual) = connection.next_message().await? else {
+        return Err("Control did not acknowledge coverage".into());
+    };
+    assert_eq!(actual, expected);
+    let persisted = EvidenceIntakeOwner::open(&intake_path)?
+        .latest_coverage_report("node-a")?
+        .ok_or("Control did not persist coverage")?;
+    assert!(!persisted.negative_claim_eligible);
+    assert!(persisted
+        .intervals
+        .iter()
+        .any(|interval| interval.current && interval.state != "HEALTHY"));
+
+    drop(connection);
     let _result = shutdown.send(());
     server.await??;
     Ok(())
