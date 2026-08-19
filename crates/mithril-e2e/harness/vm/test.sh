@@ -93,6 +93,8 @@ python3 -c 'import sys; compile(open(sys.argv[1], encoding="utf-8").read(), sys.
   "$directory/k3s-administrative-node-v1.json"
 grep -q 'record-physical-qualification' "$directory/run.sh"
 grep -q 'kernel-qualification-x86_64.json' "$directory/run.sh"
+grep -q 'mithril-network-test' "$directory/run.sh"
+grep -q 'network-physical-probe.json' "$directory/run.sh"
 grep -q 'k3s-cri-observe.txt' "$directory/run.sh"
 grep -q 'k3s-cri-effect.txt' "$directory/run.sh"
 grep -q 'k3s-administrative-exec.txt' "$directory/run.sh"

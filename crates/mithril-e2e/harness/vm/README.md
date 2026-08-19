@@ -105,8 +105,10 @@ disposable work directory until checksum validation succeeds. The harness remove
 cloud-init data, guest, BPF pins, cgroups, lease files, and guest test files.
 The selected output directory keeps the platform manifest, the raw physical
 probe and benchmark evidence, the generated kernel qualification record, and
-the identity and effect results. With `--with-k3s`, it also keeps `k3s.txt` and
-`k3s-cri-observe.txt` and `k3s-cri-effect.txt`. These files record the Pod
+the identity, effect, and network results. The network result records the
+single-host actor, destination, response-fence, and socket-lifetime oracles.
+With `--with-k3s`, the directory also keeps `k3s.txt`, `k3s-cri-observe.txt`,
+and `k3s-cri-effect.txt`. These files record the Pod
 initial-root classification, the direct CRI and `kubectl exec` external-root
 classifications, each matching exact-secret effect, and the observe and protect
 file-open results. Unless
