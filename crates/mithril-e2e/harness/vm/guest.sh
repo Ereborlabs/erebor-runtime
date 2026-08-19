@@ -1169,6 +1169,7 @@ EOF
         tls:{certificate_path:$server_certificate,private_key_path:$server_key,node_ca_path:$ca},
         allowed_nodes:[{node_id:$node_id,certificate_sha256:$node_certificate_sha256}],
         trust:{generation:1,bundle_digest:("d" * 64)},
+        evidence_directory:($state + "/evidence"),
         administrative_exec:{listen:"127.0.0.1:9443",
           public_base_url:"https://localhost:9443",
           tls_certificate_path:$server_certificate,tls_private_key_path:$server_key,

@@ -15,6 +15,14 @@
     "reconnect_minimum_ms": 100,
     "reconnect_maximum_ms": 100
   },
+  "evidence": {
+    "tenant_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    "source_id": "66666666-6666-4666-8666-666666666666",
+    "maximum_record_bytes": 131072,
+    "maximum_retained_bytes": 16777216,
+    "maximum_retained_records": 10000,
+    "maximum_batch_records": 256
+  },
   "runtime_observation": {
     "socket_path": "/var/tmp/mithril-runtime-qualification-0/k3s-cri-effect/observation.sock",
     "allowed_uid": 0,

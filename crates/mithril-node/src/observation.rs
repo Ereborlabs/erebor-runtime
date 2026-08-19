@@ -1,7 +1,9 @@
 use std::collections::VecDeque;
 use std::mem;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use erebor_interceptor_abi::{
     EffectObservationHealthV1, EffectObservationReasonV1, EffectObservationV1,
@@ -11,14 +13,16 @@ use erebor_runtime_ipc::v1::MithrilEffectObservation;
 use zerocopy::FromBytes as _;
 
 mod model;
+mod wal;
 
 pub use model::{
-    CoverageStateV1, EvidenceFieldKeyV1, EvidenceFieldV1, EvidenceIdV1, EvidencePayloadV1,
-    EvidenceValueV1, IntegrityV1, LocalSubjectBindingV1, ObservationCanonicalizer,
-    ObservationEnvelopeV1, OperationResultAuthorityV1, ProofQualityV1, RemoteSubjectBindingV1,
-    SensitivityV1, SourceAuthorityV1, TemporalCoverageV1, MAX_EVIDENCE_FIELDS_V1,
-    MAX_PROVENANCE_OBSERVATIONS_V1,
+    CoverageStateV1, EvidenceDigestV1, EvidenceFieldKeyV1, EvidenceFieldV1, EvidenceIdV1,
+    EvidencePayloadV1, EvidenceValueV1, IntegrityV1, LocalSubjectBindingV1,
+    ObservationCanonicalizer, ObservationEnvelopeV1, OperationResultAuthorityV1, ProofQualityV1,
+    RemoteSubjectBindingV1, SensitivityV1, SourceAuthorityV1, TemporalCoverageV1,
+    MAX_EVIDENCE_FIELDS_V1, MAX_PROVENANCE_OBSERVATIONS_V1,
 };
+pub use wal::{EvidenceAckV1, EvidenceBatchV1, EvidenceRecordV1, EvidenceWal, EvidenceWalLimits};
 
 const DEFAULT_RECENT_EFFECT_CAPACITY: usize = 1_024;
 
@@ -31,6 +35,13 @@ struct Inner {
     recent: Mutex<RecentEffects>,
     capacity: usize,
     decoder_errors: AtomicU64,
+    evidence_errors: AtomicU64,
+    durable: Option<Mutex<DurableEvidence>>,
+}
+
+struct DurableEvidence {
+    canonicalizer: ObservationCanonicalizer,
+    wal: EvidenceWal,
 }
 
 struct RecentEffects {
@@ -67,8 +78,33 @@ impl EffectObservationStore {
                 }),
                 capacity,
                 decoder_errors: AtomicU64::new(0),
+                evidence_errors: AtomicU64::new(0),
+                durable: None,
             }),
         }
+    }
+
+    pub fn durable(
+        capacity: usize,
+        wal_root: PathBuf,
+        limits: EvidenceWalLimits,
+        canonicalizer: ObservationCanonicalizer,
+    ) -> crate::Result<Self> {
+        Ok(Self {
+            inner: Arc::new(Inner {
+                recent: Mutex::new(RecentEffects {
+                    events: VecDeque::with_capacity(capacity),
+                    cursor: 0,
+                }),
+                capacity,
+                decoder_errors: AtomicU64::new(0),
+                evidence_errors: AtomicU64::new(0),
+                durable: Some(Mutex::new(DurableEvidence {
+                    canonicalizer,
+                    wal: EvidenceWal::open(wal_root, limits)?,
+                })),
+            }),
+        })
     }
 
     pub fn record_bytes(&self, bytes: &[u8]) {
@@ -76,15 +112,64 @@ impl EffectObservationStore {
             self.inner.decoder_errors.fetch_add(1, Ordering::Relaxed);
             return;
         };
-        let mut recent = self.lock_recent();
-        recent.cursor = recent.cursor.saturating_add(1);
-        if self.inner.capacity == 0 {
-            return;
+        {
+            let mut recent = self.lock_recent();
+            recent.cursor = recent.cursor.saturating_add(1);
+            if self.inner.capacity > 0 {
+                if recent.events.len() == self.inner.capacity {
+                    recent.events.pop_front();
+                }
+                recent.events.push_back(to_ipc(event));
+            }
         }
-        if recent.events.len() == self.inner.capacity {
-            recent.events.pop_front();
+        if let Some(durable) = &self.inner.durable {
+            let result = (|| {
+                let mut durable = durable.lock().unwrap_or_else(PoisonError::into_inner);
+                let coverage_interval_id = EvidenceIdV1::new(
+                    durable.canonicalizer.source_epoch(),
+                    u64::from(event.source_cpu_id).saturating_add(1),
+                );
+                let observation = durable.canonicalizer.normalize_kernel(
+                    event,
+                    coverage_interval_id,
+                    TemporalCoverageV1::Complete,
+                    utc_now_ns(),
+                )?;
+                durable.wal.append(&observation)?;
+                crate::Result::Ok(())
+            })();
+            if result.is_err() {
+                self.inner.evidence_errors.fetch_add(1, Ordering::Relaxed);
+            }
         }
-        recent.events.push_back(to_ipc(event));
+    }
+
+    pub fn next_evidence_batch(&self) -> Option<EvidenceBatchV1> {
+        self.inner
+            .durable
+            .as_ref()
+            .and_then(|durable| durable.lock().ok()?.wal.next_batch())
+    }
+
+    pub fn acknowledge_evidence(&self, ack: EvidenceAckV1) -> crate::Result<()> {
+        let durable = self
+            .inner
+            .durable
+            .as_ref()
+            .ok_or_else(|| crate::Error::EvidenceState {
+                reason: "node has no durable evidence owner".to_owned(),
+                location: snafu::Location::new(file!(), line!(), column!()),
+            })?;
+        durable
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .wal
+            .acknowledge(ack)
+    }
+
+    #[must_use]
+    pub fn evidence_errors(&self) -> u64 {
+        self.inner.evidence_errors.load(Ordering::Relaxed)
     }
 
     #[must_use]
@@ -146,6 +231,14 @@ impl EffectObservationStore {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
     }
+}
+
+fn utc_now_ns() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .ok()
+        .and_then(|duration| i64::try_from(duration.as_nanos()).ok())
+        .unwrap_or(i64::MAX)
 }
 
 fn to_ipc(event: EffectObservationV1) -> MithrilEffectObservation {
