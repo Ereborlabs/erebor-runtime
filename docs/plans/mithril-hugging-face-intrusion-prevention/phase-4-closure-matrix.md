@@ -1,8 +1,8 @@
 # Phase 4 Closure Matrix
 
-Phase: [Signed Local Pre-Effect Enforcement](./phase-4-signed-local-pre-effect-enforcement.md)  
-Architecture: [validated readable architecture](./policy-and-protection-algorithm-architecture-readable.md)  
-Manual acceptance: [Phase 4 runbook](./manual-testing/phase-4-manual-acceptance.md)
+- Phase: [Signed Local Pre-Effect Enforcement](./phase-4-signed-local-pre-effect-enforcement.md)
+- Architecture: [validated readable architecture](./policy-and-protection-algorithm-architecture-readable.md)
+- Manual acceptance: [Phase 4 runbook](./manual-testing/phase-4-manual-acceptance.md)
 
 ## Closure Decision
 
