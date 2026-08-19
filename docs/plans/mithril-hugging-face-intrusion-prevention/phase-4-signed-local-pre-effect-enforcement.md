@@ -164,6 +164,9 @@ Remaining work in this phase: none inside the limited claim. A missing hook, fie
 Next phase not authorized: yes.
 ```
 
+The dated records below describe earlier source states. Their status sentences
+do not override the current Phase Result.
+
 ## Path-tree protection design update — 2026-08-17
 
 State: Not done. This is a design requirement. It is not implementation or
