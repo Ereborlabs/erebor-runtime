@@ -20,6 +20,10 @@ if [[ ! -x $binary ]]; then
   echo "run: cargo build -p mithril-e2e --bin mithril-network-test" >&2
   exit 2
 fi
+if ! command -v jq >/dev/null 2>&1; then
+  echo "missing executable: jq" >&2
+  exit 2
+fi
 
 output_directory=/tmp/mithril-network-$run_name
 pin_root=/sys/fs/bpf/mithril-network-$run_name
@@ -41,4 +45,31 @@ done
   --lease-path "$lease_path" \
   --cgroup-path "$cgroup_path"
 
-echo "result: $output_directory/network-physical-probe.json"
+result=$output_directory/network-physical-probe.json
+jq -e '
+  .schema_version == 1 and
+  ([.fixture_results[].fixture_id] == [
+    "FILE-DELEGATED-EGRESS-001",
+    "HF-004-RESULT-001",
+    "HF-011-READ-RESULT-001",
+    "HF-NET-001",
+    "IPC-LOCAL-INET-008",
+    "NET-ACCEPT-PASS-001",
+    "NET-DNS-EXFIL-001",
+    "NET-NS-PASS-001",
+    "NET-RECV-001",
+    "NET-REWRITE-001",
+    "NET-SHARED-RESPONSE-002",
+    "NET-SOCKCTL-001",
+    "NET-SOCKET-LIFE-001"
+  ]) and
+  all(.fixture_results[]; .result == "PASS" and (.physical_oracle | length > 0)) and
+  (to_entries | all(
+    .key == "schema_version" or
+    .key == "fixture_results" or
+    .value == true
+  ))
+' "$result" >/dev/null
+
+echo "all 13 network fixtures passed"
+echo "result: $result"
