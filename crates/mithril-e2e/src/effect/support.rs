@@ -92,7 +92,7 @@ pub(super) fn effect_propagation_binding(cgroup_path: &Path) -> WorkloadBindingC
     )
 }
 
-fn effect_binding_with_identity(
+pub(super) fn effect_binding_with_identity(
     cgroup_path: &Path,
     binding_id: &str,
     container_id_byte: char,
