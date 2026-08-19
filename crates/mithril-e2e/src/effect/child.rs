@@ -102,6 +102,15 @@ enum ChildRequest {
     NetworkSend {
         payload: Vec<u8>,
     },
+    NetworkSendMsg {
+        payload: Vec<u8>,
+    },
+    NetworkSendFile {
+        path: PathBuf,
+    },
+    NetworkSplice {
+        path: PathBuf,
+    },
     NetworkReceive,
     NetworkSetNoDelay,
     NetworkShutdown,
@@ -146,6 +155,9 @@ enum ChildRequest {
     NetworkSetMark {
         value: u32,
     },
+    NetworkIoUringSqpoll,
+    NetworkTunTap,
+    NetworkBpfSetup,
     NetworkPrepareProxy {
         path: PathBuf,
     },
@@ -616,6 +628,39 @@ impl EffectProcessFixture {
         }
     }
 
+    pub(super) fn network_sendmsg(&mut self, payload: &[u8]) -> Result<IoOutcome> {
+        match self.request(&ChildRequest::NetworkSendMsg {
+            payload: payload.to_vec(),
+        })? {
+            ChildResponse::Outcome(outcome) => Ok(outcome),
+            _ => Err(invalid_state(
+                "effect child returned the wrong network-sendmsg response",
+            )),
+        }
+    }
+
+    pub(super) fn network_sendfile(&mut self, path: &Path) -> Result<IoOutcome> {
+        match self.request(&ChildRequest::NetworkSendFile {
+            path: path.to_path_buf(),
+        })? {
+            ChildResponse::Outcome(outcome) => Ok(outcome),
+            _ => Err(invalid_state(
+                "effect child returned the wrong network-sendfile response",
+            )),
+        }
+    }
+
+    pub(super) fn network_splice(&mut self, path: &Path) -> Result<IoOutcome> {
+        match self.request(&ChildRequest::NetworkSplice {
+            path: path.to_path_buf(),
+        })? {
+            ChildResponse::Outcome(outcome) => Ok(outcome),
+            _ => Err(invalid_state(
+                "effect child returned the wrong network-splice response",
+            )),
+        }
+    }
+
     pub(super) fn network_receive(&mut self) -> Result<IoOutcome> {
         match self.request(&ChildRequest::NetworkReceive)? {
             ChildResponse::Outcome(outcome) => Ok(outcome),
@@ -816,6 +861,33 @@ impl EffectProcessFixture {
             ChildResponse::Outcome(outcome) => Ok(outcome),
             _ => Err(invalid_state(
                 "effect child returned the wrong socket-mark response",
+            )),
+        }
+    }
+
+    pub(super) fn network_io_uring_sqpoll(&mut self) -> Result<IoOutcome> {
+        match self.request(&ChildRequest::NetworkIoUringSqpoll)? {
+            ChildResponse::Outcome(outcome) => Ok(outcome),
+            _ => Err(invalid_state(
+                "effect child returned the wrong network-io_uring response",
+            )),
+        }
+    }
+
+    pub(super) fn network_tun_tap(&mut self) -> Result<IoOutcome> {
+        match self.request(&ChildRequest::NetworkTunTap)? {
+            ChildResponse::Outcome(outcome) => Ok(outcome),
+            _ => Err(invalid_state(
+                "effect child returned the wrong network-TUN response",
+            )),
+        }
+    }
+
+    pub(super) fn network_bpf_setup(&mut self) -> Result<IoOutcome> {
+        match self.request(&ChildRequest::NetworkBpfSetup)? {
+            ChildResponse::Outcome(outcome) => Ok(outcome),
+            _ => Err(invalid_state(
+                "effect child returned the wrong network-BPF response",
             )),
         }
     }
@@ -1205,6 +1277,36 @@ pub fn run_effect_child(fixture_root: &Path, mailbox_path: &Path) -> Result<()> 
                 )),
                 false,
             ),
+            ChildRequest::NetworkSendMsg { payload } => (
+                Ok(ChildResponse::Outcome(
+                    prepared_network_stream
+                        .as_ref()
+                        .map_or_else(missing_prepared_network, |stream| {
+                            network_sendmsg(stream.as_raw_fd(), &payload)
+                        }),
+                )),
+                false,
+            ),
+            ChildRequest::NetworkSendFile { path } => (
+                Ok(ChildResponse::Outcome(
+                    prepared_network_stream
+                        .as_ref()
+                        .map_or_else(missing_prepared_network, |stream| {
+                            network_sendfile(stream.as_raw_fd(), &path)
+                        }),
+                )),
+                false,
+            ),
+            ChildRequest::NetworkSplice { path } => (
+                Ok(ChildResponse::Outcome(
+                    prepared_network_stream
+                        .as_ref()
+                        .map_or_else(missing_prepared_network, |stream| {
+                            network_splice(stream.as_raw_fd(), &path)
+                        }),
+                )),
+                false,
+            ),
             ChildRequest::NetworkReceive => (
                 Ok(ChildResponse::Outcome(
                     prepared_network_stream.as_mut().map_or_else(
@@ -1446,6 +1548,16 @@ pub fn run_effect_child(fixture_root: &Path, mailbox_path: &Path) -> Result<()> 
                 )),
                 false,
             ),
+            ChildRequest::NetworkIoUringSqpoll => (
+                Ok(ChildResponse::Outcome(io_outcome(
+                    fixture_syscalls::io_uring_sqpoll_setup(),
+                ))),
+                false,
+            ),
+            ChildRequest::NetworkTunTap => (Ok(ChildResponse::Outcome(network_tun_tap())), false),
+            ChildRequest::NetworkBpfSetup => {
+                (Ok(ChildResponse::Outcome(bpf_map_create_outcome())), false)
+            }
             ChildRequest::NetworkPrepareProxy { path } => (
                 Ok(ChildResponse::Outcome(
                     match network_unix_address(&path)
@@ -3430,6 +3542,115 @@ fn forked_network_send(fd: libc::c_int, payload: &[u8]) -> IoOutcome {
 }
 
 #[allow(unsafe_code)]
+fn network_sendmsg(fd: libc::c_int, payload: &[u8]) -> IoOutcome {
+    let mut iovec = libc::iovec {
+        iov_base: payload.as_ptr().cast_mut().cast(),
+        iov_len: payload.len(),
+    };
+    let message = libc::msghdr {
+        msg_name: std::ptr::null_mut(),
+        msg_namelen: 0,
+        msg_iov: &raw mut iovec,
+        msg_iovlen: 1,
+        msg_control: std::ptr::null_mut(),
+        msg_controllen: 0,
+        msg_flags: 0,
+    };
+    // SAFETY: message references one initialized iovec for the call duration.
+    let sent = unsafe { libc::sendmsg(fd, &raw const message, libc::MSG_NOSIGNAL) };
+    if sent == payload.len() as isize {
+        allowed_outcome()
+    } else if sent < 0 {
+        error_outcome(io::Error::last_os_error())
+    } else {
+        IoOutcome {
+            allowed: false,
+            errno: None,
+        }
+    }
+}
+
+#[allow(unsafe_code)]
+fn network_sendfile(fd: libc::c_int, path: &Path) -> IoOutcome {
+    let file = match fs::File::open(path) {
+        Ok(file) => file,
+        Err(error) => return error_outcome(error),
+    };
+    let length = match file.metadata() {
+        Ok(metadata) => usize::try_from(metadata.len()).unwrap_or(usize::MAX),
+        Err(error) => return error_outcome(error),
+    };
+    // SAFETY: both descriptors are live and the kernel owns the implicit input offset.
+    let sent = unsafe { libc::sendfile(fd, file.as_raw_fd(), std::ptr::null_mut(), length) };
+    if sent == length as isize {
+        allowed_outcome()
+    } else if sent < 0 {
+        error_outcome(io::Error::last_os_error())
+    } else {
+        IoOutcome {
+            allowed: false,
+            errno: None,
+        }
+    }
+}
+
+#[allow(unsafe_code)]
+fn network_splice(fd: libc::c_int, path: &Path) -> IoOutcome {
+    let file = match fs::File::open(path) {
+        Ok(file) => file,
+        Err(error) => return error_outcome(error),
+    };
+    let length = match file.metadata() {
+        Ok(metadata) => usize::try_from(metadata.len()).unwrap_or(usize::MAX),
+        Err(error) => return error_outcome(error),
+    };
+    let mut pipe = [-1_i32; 2];
+    // SAFETY: pipe points to storage for two returned descriptors.
+    if unsafe { libc::pipe2(pipe.as_mut_ptr(), libc::O_CLOEXEC) } < 0 {
+        return error_outcome(io::Error::last_os_error());
+    }
+    // SAFETY: pipe2 returned two new owned descriptors.
+    let pipe_read = unsafe { OwnedFd::from_raw_fd(pipe[0]) };
+    // SAFETY: pipe2 returned two new owned descriptors.
+    let pipe_write = unsafe { OwnedFd::from_raw_fd(pipe[1]) };
+    // SAFETY: all descriptors are live and offsets are implicit.
+    let loaded = unsafe {
+        libc::splice(
+            file.as_raw_fd(),
+            std::ptr::null_mut(),
+            pipe_write.as_raw_fd(),
+            std::ptr::null_mut(),
+            length,
+            0,
+        )
+    };
+    if loaded < 0 {
+        return error_outcome(io::Error::last_os_error());
+    }
+    // SAFETY: all descriptors are live and offsets are implicit.
+    let sent = unsafe {
+        libc::splice(
+            pipe_read.as_raw_fd(),
+            std::ptr::null_mut(),
+            fd,
+            std::ptr::null_mut(),
+            usize::try_from(loaded).unwrap_or(usize::MAX),
+            libc::SPLICE_F_MOVE,
+        )
+    };
+    if sent == loaded {
+        allowed_outcome()
+    } else if sent < 0 {
+        error_outcome(io::Error::last_os_error())
+    } else {
+        IoOutcome {
+            allowed: false,
+            errno: None,
+        }
+    }
+}
+
+#[allow(unsafe_code)]
 fn network_udp_send(address: &str, payload: &[u8], connected: bool) -> IoOutcome {
     let address = match address.parse::<InetSocketAddr>() {
         Ok(address) => address,
@@ -3470,6 +3691,31 @@ fn network_udp_send(address: &str, payload: &[u8], connected: bool) -> IoOutcome
             errno: None,
         },
         Err(error) => error_outcome(error),
+    }
+}
+
+#[allow(unsafe_code)]
+fn network_tun_tap() -> IoOutcome {
+    let device = match fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open("/dev/net/tun")
+    {
+        Ok(device) => device,
+        Err(error) => return error_outcome(error),
+    };
+    let mut request = [0_u8; libc::IFNAMSIZ + 24];
+    request[..8].copy_from_slice(b"mithril0");
+    let flags = i16::try_from(libc::IFF_TUN | libc::IFF_NO_PI).unwrap_or_default();
+    request[libc::IFNAMSIZ..libc::IFNAMSIZ + size_of::<i16>()]
+        .copy_from_slice(&flags.to_ne_bytes());
+    const TUNSETIFF: libc::c_ulong = 0x4004_54ca;
+    // SAFETY: request contains the Linux ifreq name and flags fields.
+    let result = unsafe { libc::ioctl(device.as_raw_fd(), TUNSETIFF, request.as_mut_ptr()) };
+    if result == 0 {
+        allowed_outcome()
+    } else {
+        error_outcome(io::Error::last_os_error())
     }
 }
 
