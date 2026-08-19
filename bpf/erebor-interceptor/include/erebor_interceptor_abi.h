@@ -1232,6 +1232,7 @@ typedef struct effect_observation_v1 {
   uint64_t network_parent_socket_key_id;
   uint64_t network_parent_socket_generation;
   struct network_namespace_generation_v1 network_namespace;
+  struct network_namespace_generation_v1 network_current_namespace;
   uint64_t network_creator_profile_generation_ref_id;
   uint8_t network_peer_address[16];
   uint16_t network_peer_port;
