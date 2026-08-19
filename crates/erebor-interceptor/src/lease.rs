@@ -1,4 +1,5 @@
 use std::fs::{self, File};
+use std::os::unix::fs::MetadataExt as _;
 use std::path::{Path, PathBuf};
 
 use rustix::fs::{flock, FlockOperation};
@@ -11,6 +12,7 @@ const HOST_LEASE_PATH: &str = "/run/erebor-interceptor/owner.lock";
 
 pub(crate) struct PinRootLease {
     file: File,
+    path: PathBuf,
 }
 
 impl PinRootLease {
@@ -39,7 +41,26 @@ impl PinRootLease {
                 }
                 .build()
             })?;
-        Ok(Self { file })
+        Ok(Self {
+            file,
+            path: path.to_owned(),
+        })
+    }
+
+    fn verify(&self) -> Result<()> {
+        let held = self.file.metadata().context(IoSnafu {
+            action: "read held lease identity",
+            path: &self.path,
+        })?;
+        let named = fs::metadata(&self.path).context(IoSnafu {
+            action: "read named lease identity",
+            path: &self.path,
+        })?;
+        snafu::ensure!(
+            held.dev() == named.dev() && held.ino() == named.ino(),
+            LeaseOwnedSnafu { path: &self.path }
+        );
+        Ok(())
     }
 }
 
@@ -50,8 +71,8 @@ impl Drop for PinRootLease {
 }
 
 pub(crate) struct KernelHostLease {
-    _host: PinRootLease,
-    _pin_root: PinRootLease,
+    host: PinRootLease,
+    pin_root: PinRootLease,
 }
 
 impl KernelHostLease {
@@ -62,10 +83,12 @@ impl KernelHostLease {
     fn acquire_at(host_path: &Path, instance_lease_path: &Path) -> Result<Self> {
         let host = PinRootLease::acquire(host_path)?;
         let pin_root = PinRootLease::acquire(instance_lease_path)?;
-        Ok(Self {
-            _host: host,
-            _pin_root: pin_root,
-        })
+        Ok(Self { host, pin_root })
+    }
+
+    pub(crate) fn verify(&self) -> Result<()> {
+        self.host.verify()?;
+        self.pin_root.verify()
     }
 }
 
@@ -111,6 +134,27 @@ mod tests {
         assert!(
             KernelHostLease::acquire_at(&host_path, &directory.path().join("two.lock")).is_ok()
         );
+        Ok(())
+    }
+
+    #[test]
+    fn lease_health_rejects_a_replaced_path() -> crate::Result<()> {
+        let directory = tempfile::tempdir().context(IoSnafu {
+            action: "create temporary lease directory",
+            path: "temporary lease directory",
+        })?;
+        let path = directory.path().join("owner.lock");
+        let lease = PinRootLease::acquire(&path)?;
+        let displaced = directory.path().join("displaced.lock");
+        std::fs::rename(&path, &displaced).context(IoSnafu {
+            action: "displace held lease path",
+            path: &path,
+        })?;
+        std::fs::write(&path, b"replacement").context(IoSnafu {
+            action: "replace held lease path",
+            path: &path,
+        })?;
+        assert!(lease.verify().is_err());
         Ok(())
     }
 }

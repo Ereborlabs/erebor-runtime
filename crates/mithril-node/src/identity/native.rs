@@ -53,6 +53,40 @@ impl NativeSecurityStateOwner {
         self.activate_state(host, effect_policy_enabled, true)
     }
 
+    pub fn reconcile(&self, host: &mut KernelHost) -> Result<ReconciliationReportV1> {
+        let key = 0_u32.to_ne_bytes();
+        let bytes = host
+            .lookup_map("identity_config", &key)
+            .context(InterceptorSnafu)?
+            .ok_or_else(|| {
+                IdentityStateSnafu {
+                    reason: "identity config map has no zero-key record".to_owned(),
+                }
+                .build()
+            })?;
+        let config = IdentityRuntimeConfigV1::read_from_bytes(&bytes).map_err(|error| {
+            IdentityStateSnafu {
+                reason: format!("identity config map has an invalid ABI value: {error}"),
+            }
+            .build()
+        })?;
+        ensure!(
+            config.node_boot_id == self.node_boot_id
+                && config.label_epoch == self.label_epoch
+                && config.next_id > 0
+                && config.enabled == 1
+                && config.effect_policy_enabled <= 1
+                && config.first_effect_errno == -rustix::io::Errno::ACCESS.raw_os_error(),
+            IdentityStateSnafu {
+                reason: "live identity configuration differs from its node owner",
+            }
+        );
+        host.reconcile_tasks().context(InterceptorSnafu)?;
+        let report = self.health(host)?;
+        ensure_healthy(report)?;
+        Ok(report)
+    }
+
     fn activate_state(
         &self,
         host: &mut KernelHost,
@@ -99,14 +133,7 @@ impl NativeSecurityStateOwner {
             host.reconcile_tasks().context(InterceptorSnafu)?;
         }
         let report = self.health(host)?;
-        ensure!(
-            report.allocation_failures == 0
-                && report.coordinate_failures == 0
-                && report.reconciliation_required == 0,
-            IdentityStateSnafu {
-                reason: format!("task reconciliation did not close cleanly: {report:?}"),
-            }
-        );
+        ensure_healthy(report)?;
         Ok(report)
     }
 
@@ -122,6 +149,19 @@ impl NativeSecurityStateOwner {
             })?;
         aggregate_health(&bytes)
     }
+}
+
+fn ensure_healthy(report: ReconciliationReportV1) -> Result<()> {
+    ensure!(
+        report.allocation_failures == 0
+            && report.coordinate_failures == 0
+            && report.placement_mismatches == 0
+            && report.reconciliation_required == 0,
+        IdentityStateSnafu {
+            reason: format!("task reconciliation did not close cleanly: {report:?}"),
+        }
+    );
+    Ok(())
 }
 
 fn aggregate_health(bytes: &[u8]) -> Result<ReconciliationReportV1> {
@@ -175,7 +215,7 @@ mod tests {
     use erebor_interceptor_abi::{IdentityHealthV1, IdentityRuntimeConfigV1};
     use zerocopy::IntoBytes as _;
 
-    use super::{aggregate_health, recover_config};
+    use super::{aggregate_health, ensure_healthy, recover_config, ReconciliationReportV1};
 
     #[test]
     fn health_values_use_native_kernel_layout() -> crate::Result<()> {
@@ -188,6 +228,20 @@ mod tests {
         )?;
         assert_eq!(report.reconciliation_required, 9);
         Ok(())
+    }
+
+    #[test]
+    fn live_identity_health_rejects_capacity_and_placement_failures() {
+        assert!(ensure_healthy(ReconciliationReportV1 {
+            allocation_failures: 1,
+            ..ReconciliationReportV1::default()
+        })
+        .is_err());
+        assert!(ensure_healthy(ReconciliationReportV1 {
+            placement_mismatches: 1,
+            ..ReconciliationReportV1::default()
+        })
+        .is_err());
     }
 
     #[test]

@@ -73,6 +73,7 @@ pub struct NodeChassis {
     local_server: Option<crate::RuntimeObservationServer>,
     trust: TrustCache,
     bindings: WorkloadBindingOwner,
+    identity: NativeSecurityStateOwner,
     policy: Option<crate::NodePolicyGenerationOwner>,
     administrative: Option<AdministrativeExecOwner>,
     readiness: watch::Sender<NodeReadinessV1>,
@@ -339,6 +340,7 @@ impl NodeChassis {
             local_server,
             trust,
             bindings,
+            identity,
             policy,
             administrative,
             readiness,
@@ -730,6 +732,9 @@ impl NodeChassis {
                 .observations
                 .mark_coverage_gapped(CoverageGapReasonV1::WalFailure);
             return ReconciliationOutcome::EvidenceUnhealthy;
+        }
+        if self.identity.reconcile(host).is_err() {
+            return ReconciliationOutcome::IdentityUnhealthy;
         }
         if self
             .bindings

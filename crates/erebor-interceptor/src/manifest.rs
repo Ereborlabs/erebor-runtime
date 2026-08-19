@@ -45,6 +45,7 @@ pub struct KernelLinkManifestV1 {
     pub program: String,
     pub link_id: u32,
     pub program_id: u32,
+    pub program_tag: Vec<u8>,
     pub pin_path: Option<PathBuf>,
 }
 
