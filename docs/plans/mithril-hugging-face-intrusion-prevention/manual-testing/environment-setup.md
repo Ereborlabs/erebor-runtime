@@ -12,8 +12,8 @@ accounts, repositories, routes, or provider resources.
 | Profile | Used by | Required shape |
 | --- | --- | --- |
 | `KERNEL-LAB` | Phase 0 | disposable Linux VM or host for verifier, hook, race, and saturation prototypes |
-| `SINGLE-NODE` | Phases 1-7 | one qualified Linux Kubernetes node plus isolated Mithril Control and evidence storage |
-| `TWO-NODE` | Phases 8-11 | two independently booted Linux nodes, Kubernetes control plane, audit/object history, and node-local actuation |
+| `SINGLE-NODE` | Phases 1-7 primary environment | one qualified Linux Kubernetes node plus isolated Mithril Control and evidence storage |
+| `TWO-NODE` | Phase 5 network-route companion and Phases 8-11 | two independently booted Linux nodes; later phases also require audit/object history, Control, and node-local actuation |
 | `PROVIDER-SANDBOX` | Phase 10 | `TWO-NODE` plus dedicated AWS/Google/GitHub/mesh/connector/artifact simulators or sandbox tenants |
 | `OPTIONAL-SURFACE` | Phase 12 | owning prerequisite profile plus the separately approved optional component |
 
@@ -33,6 +33,18 @@ This lane supplies a qualified `KERNEL-LAB` and local one-node evidence. Its
 optional k3s check proves runtime facts only. It does not supply the isolated
 Control service, full policy delivery, admission, or two-node proof required
 by later rows in this guide.
+
+Phase 5 also has a network-only two-node companion:
+
+```sh
+examples/mithril-network-manual/run-two-node-network-probe.sh \
+  --output-directory /tmp/mithril-network-two-node-review
+```
+
+This companion proves different boot identities, two Ready K3s nodes, exact
+peer Pod placement, and bidirectional enforcement through the Flannel CNI
+route. It does not supply Kubernetes audit correlation, distributed lineage,
+Control coordination, or the response proof required by Phases 8-11.
 
 ## 2. Isolate The Lab
 

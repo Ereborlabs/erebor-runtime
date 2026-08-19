@@ -1,10 +1,11 @@
 # How To Manually Accept Phase 5
 
-Status: Verified runbook for the qualified x86_64 single-host network tier.
+Status: Verified runbook for the qualified x86_64 network tier, including the
+tested two-node K3s Flannel route.
 
 Phase: [Process-Aware Network Plane](../phase-5-process-aware-network-plane.md)  
 Setup: [`SINGLE-NODE`](./environment-setup.md), with BPF LSM and a disposable
-cgroup
+cgroup, plus the network-only two-node companion  
 Closure: [Phase 5 closure matrix](../phase-5-closure-matrix.md)  
 Runnable example: [Mithril network manual probe](../../../../examples/mithril-network-manual/README.md)
 
@@ -34,6 +35,14 @@ crates/mithril-e2e/harness/vm/run.sh \
   --output-directory /tmp/mithril-network-vm-review
 ```
 
+Run the bidirectional CNI companion when the network route, K3s harness, or
+peer fixture changes:
+
+```sh
+examples/mithril-network-manual/run-two-node-network-probe.sh \
+  --output-directory /tmp/mithril-network-two-node-review
+```
+
 ## Procedure
 
 1. Use a kernel-qualified x86_64 Linux host with cgroup v2, runtime BPF Type
@@ -52,6 +61,14 @@ crates/mithril-e2e/harness/vm/run.sh \
 7. For release qualification, run the complete VM harness. Confirm that it
    also passes the kernel, identity, effect-observation, and local-enforcement
    probes and destroys only its disposable VM.
+8. Run the two-node companion. Confirm that Kubernetes reports exactly two
+   Ready nodes with different boot identities and one peer Pod on each node.
+9. Confirm that the source probe reaches the remote Pod IP through the Flannel
+   CNI route in both directions. Allowed TCP and UDP must arrive. The denied
+   port must have no peer receipt. All 13 fixture rows must pass in each
+   direction.
+10. Confirm that the harness removes its namespace, K3s installations, and
+    both owned VMs. Do not remove an unrelated VM or ownership record.
 
 ## Allocated Fixture Matrix
 
@@ -87,14 +104,16 @@ kernel Layer 7 prevention result.
 
 Retain the network JSON result, platform record, socket and flow identity,
 syscall results, server receipt, response-fence result, reference-release
-result, and cleanup result. The qualified tier passes only when all Boolean
-oracles are true, all 13 fixture rows have their expected terminal status, and
+result, and cleanup result. For the CNI companion, retain the two-node summary,
+Kubernetes node inventory, both directional probe results, and both peer
+results. The qualified tier passes only when all Boolean oracles are true, all
+13 fixture rows have their expected terminal status in every required run, and
 the probe-owned resources are absent after cleanup.
 
 The pass rule applies only to the exact delegated-I/O, token-read,
-accepted-socket, namespace-transfer, and local-output DNAT variants described
-above. A broader topology or protocol needs its own negative oracle and
-legitimate positive control.
+accepted-socket, namespace-transfer, local-output DNAT, and
+host-to-remote-Pod Flannel variants described above. A broader topology or
+protocol needs its own negative oracle and legitimate positive control.
 
 ## Troubleshooting
 
@@ -104,3 +123,6 @@ legitimate positive control.
   never substitute a fictional task.
 - Raw, TUN, AF_XDP, RDMA, vsock, SCTP, MPTCP, and other unadvertised paths
   fail closed and remain outside the qualified claim.
+- The two-node result covers a host source and a remote peer Pod on K3s
+  Flannel. Do not extend it to Pod-origin enforcement, another CNI, or a
+  service mesh.

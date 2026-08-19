@@ -68,6 +68,26 @@ Use `--skip-administrative-exec` with `--with-k3s` to run the CRI checks
 without the administrative path. The flag does not skip the runtime probes or
 kernel qualification.
 
+Run the network-only two-node K3s companion with:
+
+```bash
+crates/mithril-e2e/harness/vm/two-node-network.sh \
+  --output-directory /tmp/mithril-two-node-network
+```
+
+The companion creates two disposable VMs with different boot identities,
+installs the pinned K3s version, and waits for two Ready nodes. It pins one peer
+Pod to each node and starts the Rust peer server inside each Pod network
+namespace. The opposite host runs the production physical network probe
+against the remote Pod IP. Both directions must deliver allowed TCP and UDP,
+deny the unapproved port without peer receipt, and pass all 13 network fixture
+rows. The companion then removes its namespace, K3s installations, and owned
+VMs.
+
+This lane proves the tested K3s Flannel route. It does not prove Pod-origin
+enforcement, another CNI, a service mesh, distributed causality, or the full
+later-phase two-node lifecycle.
+
 The administrative lane sets the k3s API audience to
 `mithril-administrative-exec`. Control verifies the same audience in each
 TokenReview. Kubernetes can repeat TokenReview while it completes one CONNECT.
@@ -205,11 +225,12 @@ crates/mithril-e2e/harness/vm/test.sh
 
 ## Provider Contract
 
-`run.sh` does not contain libvirt logic. A provider is one executable with six
-commands:
+`run.sh` does not contain libvirt logic. A provider is one executable with
+these commands:
 
 | Command | Required result |
 | --- | --- |
+| `address NAME` | Return the exact provider address for one ready guest. |
 | `create NAME WORK_DIRECTORY PUBLIC_KEY` | Create one new isolated guest. Reject a name collision. |
 | `wait NAME` | Return only after SSH, runtime BTF, cgroup v2, bpffs, and BPF LSM are ready. |
 | `put NAME LOCAL REMOTE` | Copy one file to the guest. |
