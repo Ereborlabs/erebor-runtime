@@ -105,14 +105,18 @@ impl NodeEpochs {
                 })
             }
         };
-        if recover {
+        let durable_state_exists = state_directory.join("evidence-wal-v1").exists()
+            || state_directory.join("evidence-coverage-v1.json").exists();
+        if recover && current > 0 {
+            return Ok(current);
+        }
+        if recover && durable_state_exists {
             ensure!(
                 current > 0,
                 InvalidConfigurationSnafu {
                     reason: "recovered effect source has no persisted source epoch",
                 }
             );
-            return Ok(current);
         }
         let next = current.checked_add(1).ok_or_else(|| {
             InvalidConfigurationSnafu {
@@ -156,6 +160,27 @@ mod tests {
         assert_eq!(NodeEpochs::source_epoch(directory.path(), false)?, 1);
         assert_eq!(NodeEpochs::source_epoch(directory.path(), true)?, 1);
         assert_eq!(NodeEpochs::source_epoch(directory.path(), false)?, 2);
+        Ok(())
+    }
+
+    #[test]
+    fn first_effect_source_can_follow_identity_only_recovery() -> crate::Result<()> {
+        let directory = tempfile::tempdir().context(IoSnafu {
+            path: "temporary epoch directory",
+        })?;
+        assert_eq!(NodeEpochs::label_epoch(directory.path(), false)?, 1);
+        assert_eq!(NodeEpochs::source_epoch(directory.path(), true)?, 1);
+        Ok(())
+    }
+
+    #[test]
+    fn durable_evidence_without_its_source_epoch_is_rejected() -> crate::Result<()> {
+        let directory = tempfile::tempdir().context(IoSnafu {
+            path: "temporary epoch directory",
+        })?;
+        let wal = directory.path().join("evidence-wal-v1");
+        std::fs::create_dir(&wal).context(IoSnafu { path: &wal })?;
+        assert!(NodeEpochs::source_epoch(directory.path(), true).is_err());
         Ok(())
     }
 }
