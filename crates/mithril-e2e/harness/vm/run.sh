@@ -156,6 +156,7 @@ else
   echo "Building the repository-owned physical probes and platform inspector"
   (cd -- "$repo_root" && cargo build --locked -p mithril-e2e \
     --bin mithril-identity-test --bin mithril-effect-test \
+    --bin mithril-network-test \
     --bin mithril-kernel-qualification \
     -p mithril-node --bin mithril-node --bin mithril-inspect \
     -p mithril-control --bin mithril-control --bin mithril-policy \
@@ -228,6 +229,8 @@ fi
   "$remote_bin/mithril-identity-test"
 "$provider" put "$vm_name" "$repo_root/target/debug/mithril-effect-test" \
   "$remote_bin/mithril-effect-test"
+"$provider" put "$vm_name" "$repo_root/target/debug/mithril-network-test" \
+  "$remote_bin/mithril-network-test"
 "$provider" put "$vm_name" "$repo_root/target/debug/mithril-inspect" \
   "$remote_bin/mithril-inspect"
 "$provider" put "$vm_name" "$repo_root/target/debug/mithril-node" \
@@ -413,6 +416,16 @@ enforcement_output=$remote_root/local-enforcement
 "$provider" get "$vm_name" "$enforcement_output/effect-physical-probe.json" \
   "$output_directory/local-enforcement-physical-probe.json"
 
+network_output=$remote_root/network-enforcement
+"$provider" run "$vm_name" sudo "$remote_bin/mithril-network-test" \
+  --repo-root "$remote_source" physical-probe \
+  --output-directory "$network_output" \
+  --pin-root "/sys/fs/bpf/$vm_name-network-enforcement" \
+  --lease-path "$network_output/owner.lock" \
+  --cgroup-path "/sys/fs/cgroup/$vm_name-network-enforcement"
+"$provider" get "$vm_name" "$network_output/network-physical-probe.json" \
+  "$output_directory/network-physical-probe.json"
+
 if [[ $with_k3s == true ]]; then
   kubernetes_identity_output=$remote_root/kubernetes-identity
   "$provider" run "$vm_name" sudo "$remote_bin/mithril-identity-test" \
@@ -438,9 +451,11 @@ verify_absent() {
 verify_absent "/sys/fs/bpf/$vm_name-identity"
 verify_absent "/sys/fs/bpf/$vm_name-effect-observation"
 verify_absent "/sys/fs/bpf/$vm_name-local-enforcement"
+verify_absent "/sys/fs/bpf/$vm_name-network-enforcement"
 verify_absent "/sys/fs/cgroup/$vm_name-identity"
 verify_absent "/sys/fs/cgroup/$vm_name-effect-observation"
 verify_absent "/sys/fs/cgroup/$vm_name-local-enforcement"
+verify_absent "/sys/fs/cgroup/$vm_name-network-enforcement"
 verify_absent "$identity_output/owner.lock"
 if [[ $with_k3s == true ]]; then
   verify_absent "$remote_root/kubernetes-identity/kubernetes-entry"
@@ -450,6 +465,7 @@ if [[ $with_k3s == true ]]; then
 fi
 verify_absent "$observation_output/owner.lock"
 verify_absent "$enforcement_output/owner.lock"
+verify_absent "$network_output/owner.lock"
 verify_absent "$remote_bin/feasibility.bpf.owner.lock"
 
 if [[ $with_k3s == true ]]; then
@@ -457,4 +473,4 @@ if [[ $with_k3s == true ]]; then
     k3s-remove "$remote_root"
 fi
 
-echo "Kernel, identity, effect-observation, and local-enforcement VM probes passed. Evidence: $output_directory"
+echo "Kernel, identity, effect-observation, local-enforcement, and network-enforcement VM probes passed. Evidence: $output_directory"
