@@ -216,7 +216,7 @@ impl NodeChassis {
             )?;
             crate::EffectObservationStore::durable(
                 1_024,
-                config.state_directory.join("evidence-wal"),
+                NodeEpochs::evidence_wal_directory(&config.state_directory),
                 EvidenceWalLimits {
                     maximum_record_bytes: evidence.maximum_record_bytes,
                     maximum_retained_bytes: evidence.maximum_retained_bytes,
