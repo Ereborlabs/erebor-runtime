@@ -5,12 +5,12 @@ result has 14 Appendix C `PASS` results, 14 exact `UNSUPPORTED` results, and
 one additional `PASS` result for the plan-owned path-tree fixture. An
 unsupported surface is not part of the advertised claim.
 
-Master: [Mithril Hugging Face Intrusion Prevention](./README.md)
-Design: [Validated readable architecture](./policy-and-protection-algorithm-architecture-readable.md)
-Manual acceptance: [Phase 4 runbook](./manual-testing/phase-4-manual-acceptance.md)  
-Closure matrix: [Phase 4 closure matrix](./phase-4-closure-matrix.md)  
-Environment setup: [shared setup guide](./manual-testing/environment-setup.md)
-Implementation review: [local pre-effect enforcement](./phase-4-implementation-review.md)
+- Master: [Mithril Hugging Face Intrusion Prevention](./README.md)
+- Design: [Validated readable architecture](./policy-and-protection-algorithm-architecture-readable.md)
+- Manual acceptance: [Phase 4 runbook](./manual-testing/phase-4-manual-acceptance.md)
+- Closure matrix: [Phase 4 closure matrix](./phase-4-closure-matrix.md)
+- Environment setup: [shared setup guide](./manual-testing/environment-setup.md)
+- Implementation review: [local pre-effect enforcement](./phase-4-implementation-review.md)
 
 ## Purpose
 
