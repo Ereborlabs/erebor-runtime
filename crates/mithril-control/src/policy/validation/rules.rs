@@ -54,11 +54,18 @@ impl Validate for EffectFamilyDefaultV1 {
             "CFG_IO_URING_UNQUALIFIED_AUTHORITY",
             "unqualified io_uring defaults are denial-only"
         );
+        let positive_network_control = self.operations.iter().all(|operation| {
+            matches!(
+                operation.as_str(),
+                "SOCKET_CREATE" | "LISTEN" | "ACCEPT" | "SHUTDOWN" | "SETSOCKOPT"
+            )
+        });
         require!(
             self.requested_disposition == PolicyDispositionV1::Deny
-                || self.effect_family != EffectFamilyV1::Network,
+                || self.effect_family != EffectFamilyV1::Network
+                || positive_network_control,
             "CFG_NETWORK_DEFAULT_AUTHORITY",
-            "NETWORK defaults are denial-only"
+            "positive NETWORK defaults are limited to socket controls"
         );
         require!(
             self.requested_disposition == PolicyDispositionV1::Deny
@@ -427,6 +434,18 @@ impl DetectionDispositionRuleV1 {
                     || !ioctl_command_ids.is_empty(),
                 "CFG_DEVICE_IOCTL_WILDCARD",
                 format!("rule `{}` must name ioctl commands", self.rule_id)
+            ),
+            LocalObjectSelectorV1::Destinations { .. } => require!(
+                effect.effect_families.as_slice() == [EffectFamilyV1::Network]
+                    && effect.operation_ids.iter().all(|operation| matches!(
+                        operation.as_str(),
+                        "BIND" | "ACCEPT" | "CONNECT" | "SEND" | "RECEIVE"
+                    )),
+                "CFG_NETWORK_DESTINATION_AUTHORITY",
+                format!(
+                    "rule `{}` must use destination-aware network operations",
+                    self.rule_id
+                )
             ),
             LocalObjectSelectorV1::SecurityObjects {
                 security_object_ids,

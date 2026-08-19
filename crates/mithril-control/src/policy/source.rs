@@ -28,6 +28,8 @@ pub struct PolicyDocumentV1 {
     pub protected_universe: ProtectedUniverseV1,
     pub workload_selectors: Vec<WorkloadSelectorV1>,
     pub classifier_bindings: Vec<ObjectClassifierBindingV1>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub network_policy: Option<NetworkPolicyV1>,
     #[serde(default)]
     pub path_tree_deny_floors: Vec<PathTreeDenyFloorV1>,
     pub roles: Vec<RoleDefinitionV1>,
@@ -282,6 +284,55 @@ pub enum FilesystemObjectTypeV1 {
 pub enum UnknownClassifierResultV1 {
     Deny,
     Alert,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct NetworkPolicyV1 {
+    pub dns_mode: DnsPolicyModeV1,
+    pub destination_policies: Vec<DestinationPolicyRecordV1>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum DnsPolicyModeV1 {
+    DenyDnsAndUsePolicyResolvedAddresses,
+    DestinationOnlyWithPayloadGap,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct DestinationPolicyRecordV1 {
+    pub destination_policy_id: String,
+    pub protocols: Vec<NetworkProtocolV1>,
+    pub ipv4_prefixes: Vec<String>,
+    pub ipv6_prefixes: Vec<String>,
+    pub port_ranges: Vec<NetworkPortRangeV1>,
+    pub required_network_namespace_ids: Vec<String>,
+    pub service_identities: Vec<NetworkServiceIdentityV1>,
+    pub final_address_required: bool,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum NetworkProtocolV1 {
+    Tcp,
+    Udp,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct NetworkPortRangeV1 {
+    pub first: u16,
+    pub last: u16,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct NetworkServiceIdentityV1 {
+    pub provider: String,
+    pub stable_service_id: String,
+    pub endpoint_registry_generation: u64,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

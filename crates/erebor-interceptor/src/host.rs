@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io;
-use std::os::fd::AsFd as _;
+use std::os::fd::{AsFd as _, AsRawFd as _};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -55,7 +55,7 @@ fn poll_until_complete(mut poll: impl FnMut() -> libbpf_rs::Result<()>) -> libbp
     }
 }
 
-pub const REQUIRED_QUALIFICATION_LSM_PROGRAMS: [&str; 41] = [
+pub const REQUIRED_QUALIFICATION_LSM_PROGRAMS: [&str; 47] = [
     "qualification_task_alloc",
     "qualification_file_open",
     "qualification_bprm_check_security",
@@ -65,6 +65,12 @@ pub const REQUIRED_QUALIFICATION_LSM_PROGRAMS: [&str; 41] = [
     "qualification_mmap_file",
     "qualification_file_mprotect",
     "qualification_socket_post_create",
+    "qualification_socket_create",
+    "qualification_socket_bind",
+    "qualification_socket_listen",
+    "qualification_socket_accept",
+    "qualification_socket_setsockopt",
+    "qualification_socket_shutdown",
     "qualification_unix_stream_connect",
     "qualification_ipc_permission",
     "qualification_socket_connect",
@@ -99,7 +105,7 @@ pub const REQUIRED_QUALIFICATION_LSM_PROGRAMS: [&str; 41] = [
     "qualification_uring_cmd",
 ];
 
-pub const REQUIRED_QUALIFICATION_PROGRAMS: [&str; 45] = [
+pub const REQUIRED_QUALIFICATION_PROGRAMS: [&str; 54] = [
     "qualification_task_alloc",
     "qualification_file_open",
     "qualification_bprm_check_security",
@@ -109,6 +115,14 @@ pub const REQUIRED_QUALIFICATION_PROGRAMS: [&str; 45] = [
     "qualification_mmap_file",
     "qualification_file_mprotect",
     "qualification_socket_post_create",
+    "qualification_socket_create",
+    "qualification_socket_bind",
+    "qualification_socket_listen",
+    "qualification_socket_accept",
+    "qualification_socket_setsockopt",
+    "qualification_socket_shutdown",
+    "qualification_socket_release",
+    "qualification_inet_csk_accept",
     "qualification_unix_stream_connect",
     "qualification_ipc_permission",
     "qualification_socket_connect",
@@ -145,9 +159,10 @@ pub const REQUIRED_QUALIFICATION_PROGRAMS: [&str; 45] = [
     "qualification_uring_sqpoll",
     "qualification_uring_override_creds",
     "qualification_uring_cmd",
+    "qualification_final_flow",
 ];
 
-pub const REQUIRED_IDENTITY_PROGRAMS: [&str; 68] = [
+pub const REQUIRED_IDENTITY_PROGRAMS: [&str; 77] = [
     "erebor_task_alloc",
     "erebor_policy_activation_probe",
     "erebor_cgroup_attach_task",
@@ -170,6 +185,15 @@ pub const REQUIRED_IDENTITY_PROGRAMS: [&str; 68] = [
     "erebor_identity_mmap_file",
     "erebor_identity_file_mprotect",
     "erebor_identity_socket_post_create",
+    "erebor_identity_socket_create",
+    "erebor_identity_socket_bind",
+    "erebor_identity_socket_listen",
+    "erebor_identity_socket_accept",
+    "erebor_identity_socket_setsockopt",
+    "erebor_identity_socket_shutdown",
+    "erebor_network_socket_release",
+    "erebor_network_inet_csk_accept",
+    "erebor_network_final_flow",
     "erebor_identity_unix_stream_connect",
     "erebor_identity_ipc_permission",
     "erebor_identity_socket_connect",
@@ -316,6 +340,7 @@ pub struct KernelHostConfig {
     pub pin_root: Option<PathBuf>,
     pub node_boot_id: String,
     pub label_epoch: u64,
+    pub network_cgroup_root: PathBuf,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -349,6 +374,7 @@ impl KernelHostConfig {
             pin_root,
             node_boot_id: node_boot_id.into(),
             label_epoch,
+            network_cgroup_root: PathBuf::from("/sys/fs/cgroup"),
         }
     }
 
@@ -368,7 +394,14 @@ impl KernelHostConfig {
             pin_root,
             node_boot_id: node_boot_id.into(),
             label_epoch,
+            network_cgroup_root: PathBuf::from("/sys/fs/cgroup"),
         }
+    }
+
+    #[must_use]
+    pub fn with_network_cgroup_root(mut self, path: impl Into<PathBuf>) -> Self {
+        self.network_cgroup_root = path.into();
+        self
     }
 
     fn object_path(&self) -> &Path {
@@ -487,7 +520,28 @@ impl KernelHostOwner {
                     }
                 );
             }
-            let link = program.attach().context(LibbpfSnafu {
+            if section.starts_with("cgroup_skb/") {
+                ensure!(
+                    program.prog_type() == ProgramType::CgroupSkb,
+                    ManifestMismatchSnafu {
+                        path: self.config.object_path(),
+                        reason: format!(
+                            "program `{name}` has a cgroup_skb section but type {:?}",
+                            program.prog_type()
+                        ),
+                    }
+                );
+            }
+            let link = if section.starts_with("cgroup_skb/") {
+                let cgroup = fs::File::open(&self.config.network_cgroup_root).context(IoSnafu {
+                    action: "open network cgroup attach root",
+                    path: &self.config.network_cgroup_root,
+                })?;
+                program.attach_cgroup(cgroup.as_raw_fd())
+            } else {
+                program.attach()
+            }
+            .context(LibbpfSnafu {
                 action: "attach BPF program",
                 path: self.config.object_path(),
             })?;

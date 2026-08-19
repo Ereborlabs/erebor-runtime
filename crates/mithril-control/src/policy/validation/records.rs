@@ -121,7 +121,18 @@ impl EffectFamilyV1 {
                     | "LINK"
                     | "RENAME"
             ),
-            Self::Network => matches!(operation, "CONNECT" | "SEND"),
+            Self::Network => matches!(
+                operation,
+                "SOCKET_CREATE"
+                    | "BIND"
+                    | "LISTEN"
+                    | "ACCEPT"
+                    | "CONNECT"
+                    | "SEND"
+                    | "RECEIVE"
+                    | "SHUTDOWN"
+                    | "SETSOCKOPT"
+            ),
             Self::Device => operation == "IOCTL",
             Self::Privilege => {
                 matches!(

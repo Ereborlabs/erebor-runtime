@@ -130,6 +130,62 @@ int BPF_PROG(qualification_socket_post_create, struct socket *socket,
     return ret;
 }
 
+SEC("lsm/socket_create")
+int BPF_PROG(qualification_socket_create, int family, int type, int protocol,
+             int kern, int ret)
+{
+    return ret;
+}
+
+SEC("lsm/socket_bind")
+int BPF_PROG(qualification_socket_bind, struct socket *socket,
+             struct sockaddr *address, int addrlen, int ret)
+{
+    return ret;
+}
+
+SEC("lsm/socket_listen")
+int BPF_PROG(qualification_socket_listen, struct socket *socket, int backlog,
+             int ret)
+{
+    return ret;
+}
+
+SEC("lsm/socket_accept")
+int BPF_PROG(qualification_socket_accept, struct socket *socket,
+             struct socket *newsock, int ret)
+{
+    return ret;
+}
+
+SEC("lsm/socket_setsockopt")
+int BPF_PROG(qualification_socket_setsockopt, struct socket *socket,
+             int level, int optname, int ret)
+{
+    return ret;
+}
+
+SEC("lsm/socket_shutdown")
+int BPF_PROG(qualification_socket_shutdown, struct socket *socket, int how,
+             int ret)
+{
+    return ret;
+}
+
+SEC("fentry/__sock_release")
+int BPF_PROG(qualification_socket_release, struct socket *socket,
+             struct inode *inode)
+{
+    return 0;
+}
+
+SEC("fexit/inet_csk_accept")
+int BPF_PROG(qualification_inet_csk_accept, struct sock *listener, int flags,
+             int *error, bool kern, struct sock *accepted)
+{
+    return 0;
+}
+
 SEC("lsm/unix_stream_connect")
 int BPF_PROG(qualification_unix_stream_connect, struct sock *sock,
              struct sock *other, struct sock *newsk, int ret)

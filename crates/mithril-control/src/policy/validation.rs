@@ -85,6 +85,7 @@ macro_rules! bounded {
 
 mod authority;
 mod document;
+mod network;
 mod records;
 mod rules;
 mod value;
