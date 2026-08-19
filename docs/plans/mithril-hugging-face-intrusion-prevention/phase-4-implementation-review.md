@@ -1,12 +1,18 @@
 # Phase 4 Implementation Review Guide
 
-Status: Source-grounded review guide for implementation commit
+Status: Source-grounded review guide for `main` at commit
+`370bd21f007af44fbe845d4ed54709191fc29bac`. The merged implementation source
+ends at commit `a2c00014c71645cbe99fedb74629e6d89a6c242c`. The physical result used the
+patch-equivalent source commit
 `e0438d920d5071295ab733db0d7df0eb03a95b8c`.
 
 - Phase: [Signed Local Pre-Effect Enforcement](./phase-4-signed-local-pre-effect-enforcement.md)
 - Architecture: [validated readable architecture](./policy-and-protection-algorithm-architecture-readable.md)
 - Closure: [local fixture matrix](./phase-4-closure-matrix.md)
 - Manual proof: [acceptance runbook](./manual-testing/phase-4-manual-acceptance.md)
+
+Berkeley Packet Filter (BPF) programs attach to Linux Security Module (LSM)
+hooks for the qualified pre-effect decisions.
 
 ## Review Claim
 
@@ -23,12 +29,14 @@ the [closure matrix](./phase-4-closure-matrix.md).
 Do not infer any of these broader claims:
 
 - immutable executable or file-content authority;
-- complete mm or VMA provenance;
+- complete Linux memory descriptor (`mm`) or virtual memory area (VMA)
+  provenance;
 - projected-token rotation and controller binding;
 - overlay copy-up or persistent file-instance provenance;
 - complete mount-attribute, propagation, or self-protection coverage;
 - a stock-runc administrative bootstrap authority;
-- arbitrary Unix IPC, shared-memory, pipe, or asynchronous authority;
+- arbitrary Unix interprocess communication (IPC), shared-memory, pipe, or
+  asynchronous authority;
 - per-load, per-store, or byte-taint enforcement after an admitted mapping;
 - network, semantic TLS, distributed, provider, detection, or response
   enforcement; or
@@ -57,10 +65,14 @@ Do not infer any of these broader claims:
    [`KernelHostOwner`](../../../crates/erebor-interceptor/src/host.rs#L391)
    and its narrow map API in
    [`KernelHost`](../../../crates/erebor-interceptor/src/host.rs#L1053).
-6. Read the BPF ABI and map inventory in
+6. Read the BPF application binary interface (ABI) and map inventory in
    [`identity_maps.h`](../../../bpf/erebor-interceptor/programs/identity_maps.h#L206).
    Then follow the decision core in
    [`identity_effects.bpf.h`](../../../bpf/erebor-interceptor/programs/identity_effects.bpf.h#L228).
+   For the live mount-path resolver, use the
+   [detailed BPF Meta walkthrough](./path-tree-denial-implementation-review.md#detailed-bpf-meta-walkthrough).
+   It explains the mount-cache callback, path-walk callback, wrapper,
+   verifier bounds, cache locks, topology checks, and physical failure result.
 7. Review the hook families: exec in
    [`identity_exec.bpf.h`](../../../bpf/erebor-interceptor/programs/identity_exec.bpf.h#L629),
    file, mapping, process-control, path, mount, and privilege hooks in
@@ -90,7 +102,7 @@ Do not infer any of these broader claims:
 | --- | --- | --- |
 | `mithril-control::PolicyArtifactOwner` and `PolicyCompiler` | Closed source validation, deterministic expansion, signing, verification, and simulation. | Kernel lifecycle, task identity, or physical effect results. |
 | `mithril-node::NodePolicyGenerationOwner` | Verified candidate admission, anti-rollback state, map-capacity preflight, generation lowering, staged readback, activation probes, one active generation publication, recovery, and retirement. | BPF loading or a second kernel-policy engine. |
-| `mithril-node::ExceptionAuthorityOwner` | Durable exception-instance state, successful-use receipts, restart reconciliation, and fail closure after a torn or poisoned WAL. | Human approval or kernel-side consumption. |
+| `mithril-node::ExceptionAuthorityOwner` | Durable exception-instance state, successful-use receipts, restart reconciliation, and fail closure after a torn or poisoned write-ahead log (WAL). | Human approval or kernel-side consumption. |
 | `erebor-interceptor::KernelHostOwner` | The exclusive loader lease, object load and attach, links, maps, pins, capability readback, and cleanup. | Mithril policy meaning, identity assignment, or fixture classification. |
 | Production BPF programs | Current-task lookup, exact object/channel lookup, pre-effect decision, atomic exception consumption, hard closure, and observation requests. | Durable WAL, provider semantics, or later response. |
 | `mithril-e2e::EffectTestRunner` | Disposable objects, cgroups, policy fixtures, physical negative oracles, legitimate controls, cleanup assertions, and the result bundle. | A second enforcement path or broader product support. |
@@ -177,7 +189,10 @@ The file path first resolves live task and generation state. A recursive
 path-tree denial can terminate the decision before exact-object lookup. A
 positive file result still needs the exact object, clean mount view, matching
 generation, and exact compiled row. Read the path-tree algorithm in the
-[focused review](./path-tree-denial-implementation-review.md).
+[focused review](./path-tree-denial-implementation-review.md). The
+[step-by-step callback section](./path-tree-denial-implementation-review.md#detailed-bpf-meta-walkthrough)
+shows how the BPF program selects the oldest mount for a repeated root dentry,
+crosses to its parent mountpoint, and rejects a changed or incomplete walk.
 
 ## BPF Program Relationships
 
@@ -186,7 +201,7 @@ generation, and exact compiled row. Read the path-tree algorithm in the
 | `bprm_check_security` and executable file use | Stages the exec transition and checks represented exact file-backed execution. Unsupported anonymous, memfd, deleted, and incomplete paths hard-close. | The exact file-backed control does not prove immutable bytes, full interpreter/loader provenance, or the protected exec race. |
 | `file_open`, `file_receive`, and `file_permission` | Checks acquisition and later use for represented file objects. A received socket uses the IPC path. | Overlay copy-up, rotating projected-token binding, and persistent file-instance lifetime are unsupported. |
 | `mmap_file` and `file_mprotect` | Checks represented read, shared-write, and executable mapping acquisition. | No per-load, per-store, byte-taint, or complete mm/VMA claim exists after admission. |
-| `path_*` and mount hooks | Applies signed recursive deny floors, exact path/object rules, global dirty closure, CAS, and represented reconciliation. | Complete mount variants, fan-out, idmapped mounts, and overflow qualification are unsupported. |
+| `path_*` and mount hooks | Applies signed recursive deny floors, exact path/object rules, global dirty closure, compare-and-swap (CAS), and represented reconciliation. | Complete mount variants, fan-out, idmapped mounts, and overflow qualification are unsupported. |
 | `file_ioctl`, `ptrace_access_check`, and `task_kill` | Applies exact device-ioctl and process-control rows. It keeps a signal-zero control. | Derived-object authority after mint and broad privilege authority are not advertised. |
 | Unix socket hooks | Creates exact Unix-stream endpoint state, checks connect/send/receive relationships, and rejects stale, unmatched, inherited, or unrepresented authority. | Datagrams, socket pairs, arbitrary pipes, shared memory, and other channel families are not advertised. |
 | io_uring tracepoints and file hooks | Binds the restricted request to the submitter and executor, checks the represented file effect, releases lifecycle state, and rejects SQPOLL creation. | Unowned SQPOLL and unrepresented operations remain unsupported. |
@@ -276,7 +291,7 @@ provides the human-readable proof and limit for each row.
 | Node owner tests | Tests beside [`NodePolicyGenerationOwner`](../../../crates/mithril-node/src/policy.rs#L57) and [`ExceptionAuthorityOwner`](../../../crates/mithril-node/src/policy/exception_authority.rs#L86) | Staging, readback, publication, recovery, retirement, WAL transitions, receipts, and reboot separation. |
 | Interceptor and BPF-shape tests | [`bundled.rs`](../../../crates/erebor-interceptor/src/bundled.rs#L1) plus Rust/C layout tests | Required hooks and maps exist, prior LSM results are preserved, bounded exception layout is valid, and generated ABI matches. |
 | Privileged physical runner | [`EffectTestRunner::physical_probe`](../../../crates/mithril-e2e/src/effect.rs#L920) | Production object load, real syscalls, negative postconditions, legitimate controls, loss independence, lifecycle, and cleanup. |
-| Readable operator cases | [`mithril-local-enforcement-manual`](../../../examples/mithril-local-enforcement-manual/README.md) | Selected Docker, raw-namespace, CRI, alias, mount, path-tree, and control flows. These support but do not replace the Rust runner. |
+| Readable operator cases | [`mithril-local-enforcement-manual`](../../../examples/mithril-local-enforcement-manual/README.md) | Selected Docker, raw-namespace, Container Runtime Interface (CRI), alias, mount, path-tree, and control flows. These support but do not replace the Rust runner. |
 
 Review a fixture at its narrowest owner first. Use the physical runner for a
 claim that crosses compilation, node lifecycle, the loader, BPF, a process,
@@ -302,7 +317,11 @@ Do not reuse an artifact from an earlier source commit.
 
 The current evidence is:
 
-- implementation commit:
+- merged implementation source commit:
+  `a2c00014c71645cbe99fedb74629e6d89a6c242c`;
+- reviewed `main` commit:
+  `370bd21f007af44fbe845d4ed54709191fc29bac`;
+- physical source commit:
   `e0438d920d5071295ab733db0d7df0eb03a95b8c`;
 - architecture SHA-256:
   `22678b9c0379ff915fe595059f3da2789c3e32cdf54d61656c7257175263d14a`;
@@ -313,7 +332,7 @@ The current evidence is:
 - result SHA-256:
   `8fc1f4ad4536d00afd29754255410fed4b1290c3a138687f51c70edac079c793`;
 - platform: x86_64 Linux `6.8.0-137-generic`, cgroup v2, and BPF LSM;
-- runtime BTF SHA-256:
+- runtime BPF Type Format (BTF) SHA-256:
   `6da9f6b4ebcae9b07e6a717b517884abf7f6b524e46340e40fb164eed4a49a7c`;
 - protected deployment digest:
   `741a9fd0857e360a8b3096924f52dd59695d9f6440aa6610370e4e092b23b1dc`;
@@ -349,6 +368,11 @@ The closure matrix is authoritative for allocation. In short:
 - [ ] Old task and async holders keep valid rows until their references clear.
 - [ ] Missing identity, exact object, mount state, or generation cannot use a
       host or pathname fallback.
+- [ ] The live mount-cache scan retains the lowest nonzero `mnt_id_unique`
+      for each root dentry under the cache-value spin lock.
+- [ ] The live path walk reaches the task's namespace root and rechecks the
+      namespace event, global epoch, and pending mutation count before it
+      publishes a component vector.
 - [ ] Earlier LSM denial and observation loss cannot become allow.
 - [ ] Bounded exception N/N+1, expiry, receipt, restart, and WAL behavior stay
       atomic and fail closed.
@@ -359,3 +383,17 @@ The closure matrix is authoritative for allocation. In short:
       fixture root.
 - [ ] The evidence binary, source commit, JSON digest, architecture digest,
       kernel, BTF, and protected deployment digest all match.
+
+## Source State And Guide Verification
+
+This guide was checked against `main` source commit
+`370bd21f007af44fbe845d4ed54709191fc29bac` on 2026-08-18. This documentation
+update changes no Rust, BPF, ABI, build, or test source.
+
+The three focused Interceptor tests named in the
+[Meta-algorithm guide](./path-tree-denial-implementation-review.md#source-state-and-guide-verification)
+passed against that source. The local link check, source-line check, and
+`git diff --check` passed for both implementation guides. The full Rust gate
+and physical VM qualification were not rerun for this documentation-only
+update. The evidence section above retains the exact qualified source and
+artifact boundary.
