@@ -426,7 +426,7 @@ pub struct KernelHostOwner {
 }
 
 pub struct KernelHost {
-    _lease: KernelHostLease,
+    lease: KernelHostLease,
     object: Object,
     links: Vec<Link>,
     pinned_paths: Vec<PathBuf>,
@@ -556,10 +556,18 @@ impl KernelHostOwner {
                     reason: format!("program `{name}` attached without readable IDs"),
                 }
             );
+            let program_tag = ProgramHandle::from_prog_id(info.prog_id)
+                .context(LibbpfSnafu {
+                    action: "read attached BPF program",
+                    path: self.config.object_path(),
+                })?
+                .tag()
+                .to_vec();
             link_records.push(KernelLinkManifestV1 {
                 program: name,
                 link_id: info.id,
                 program_id: info.prog_id,
+                program_tag,
                 pin_path: None,
             });
             links.push(link);
@@ -643,7 +651,7 @@ impl KernelHostOwner {
         map_records.sort_by(|left, right| left.name.cmp(&right.name));
         link_records.sort_by(|left, right| left.program.cmp(&right.program));
         Ok(KernelHost {
-            _lease: lease,
+            lease,
             object,
             links,
             pinned_paths,
@@ -794,6 +802,7 @@ impl KernelHostOwner {
                 program: name.to_owned(),
                 link_id: info.id,
                 program_id: info.prog_id,
+                program_tag: old_program.tag().to_vec(),
                 pin_path: Some(path),
             });
             links.push(link);
@@ -822,7 +831,7 @@ impl KernelHostOwner {
         map_records.sort_by(|left, right| left.name.cmp(&right.name));
         link_records.sort_by(|left, right| left.program.cmp(&right.program));
         Ok(KernelHost {
-            _lease: lease,
+            lease,
             object,
             links,
             pinned_paths: Vec::new(),
@@ -1111,6 +1120,7 @@ impl KernelHost {
     }
 
     pub fn verify_live_manifest(&self) -> Result<()> {
+        self.lease.verify()?;
         Self::verify_manifest_pins(&self.manifest)
     }
 
@@ -1129,10 +1139,14 @@ impl KernelHost {
                 path,
             })?;
             ensure!(
-                info.info.id == record.id,
+                info.info.id == record.id
+                    && format!("{:?}", map.map_type()) == record.map_type
+                    && map.key_size() == record.key_size
+                    && map.value_size() == record.value_size
+                    && map.max_entries() == record.max_entries,
                 ManifestMismatchSnafu {
                     path,
-                    reason: format!("live map ID is {}, expected {}", info.info.id, record.id),
+                    reason: "live map ID or layout differs from its manifest".to_owned(),
                 }
             );
         }
@@ -1149,8 +1163,14 @@ impl KernelHost {
                 action: "read live pinned BPF link",
                 path,
             })?;
+            let program = ProgramHandle::from_prog_id(info.prog_id).context(LibbpfSnafu {
+                action: "read live BPF program",
+                path,
+            })?;
             ensure!(
-                info.id == record.link_id && info.prog_id == record.program_id,
+                info.id == record.link_id
+                    && info.prog_id == record.program_id
+                    && program.tag().to_vec() == record.program_tag,
                 ManifestMismatchSnafu {
                     path,
                     reason: format!(
@@ -1645,6 +1665,7 @@ mod tests {
                 program: "program".to_owned(),
                 link_id: 1,
                 program_id: 2,
+                program_tag: vec![0; 8],
                 pin_path: None,
             }],
             preflight,
