@@ -103,4 +103,6 @@ message MithrilEffectObservation {
   uint64 network_flow_authorizer_profile_generation_ref_id = 66;
   uint64 network_parent_socket_key_id = 67;
   uint64 network_parent_socket_generation = 68;
+  uint64 network_current_namespace_address = 69;
+  uint32 network_current_namespace_inode = 70;
 }

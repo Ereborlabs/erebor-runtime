@@ -261,10 +261,7 @@ static __always_inline int network_validate_socket(
         state->protocol == network_protocol_v1_unknown ||
         state->address_family == network_address_family_v1_unknown ||
         network_current_namespace(
-            &scratch->network_socket_state.socket_network_namespace) ||
-        !network_namespace_equal(
-            &scratch->network_socket_state.socket_network_namespace,
-            &state->socket_network_namespace))
+            &scratch->observation.network_current_namespace))
         return hard_effect_result(
             config, scratch,
             effect_observation_reason_v1_corrupt_identity_or_generation);

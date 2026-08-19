@@ -1190,6 +1190,7 @@ pub struct EffectObservationV1 {
     pub network_parent_socket_key_id: u64,
     pub network_parent_socket_generation: u64,
     pub network_namespace: NetworkNamespaceGenerationV1,
+    pub network_current_namespace: NetworkNamespaceGenerationV1,
     pub network_creator_profile_generation_ref_id: u64,
     pub network_peer_address: [u8; 16],
     pub network_peer_port: u16,
@@ -1358,7 +1359,7 @@ mod tests {
         assert_eq!(IoUringExecutionStateKindV1::FailClosed as u8, 2);
         assert_eq!(size_of::<ExactFileObjectKeyV1>(), 40);
         assert_eq!(size_of::<ExactObjectBindingV1>(), 32);
-        assert_eq!(size_of::<EffectObservationV1>(), 504);
+        assert_eq!(size_of::<EffectObservationV1>(), 520);
         assert_eq!(size_of::<EffectObservationHealthV1>(), 32);
         assert_eq!(offset_of!(EffectObservationV1, file_object), 120);
         assert_eq!(offset_of!(EffectObservationV1, kernel_result), 192);
