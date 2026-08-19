@@ -301,11 +301,17 @@ impl CoverageHealthOwner {
         cpu_id: u32,
         sequence: u64,
     ) -> Result<(EvidenceIdV1, TemporalCoverageV1)> {
+        if sequence == 0 {
+            return EvidenceStateSnafu {
+                reason: "coverage observation sequence must be nonzero".to_owned(),
+            }
+            .fail();
+        }
         let mut inner = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
         let baseline = EffectObservationCpuHealth {
             cpu_id,
             counters: CoverageCountersV1 {
-                next_sequence: sequence,
+                next_sequence: sequence - 1,
                 ..CoverageCountersV1::default()
             },
         };
@@ -680,6 +686,7 @@ fn interval_is_valid(interval: &CoverageIntervalV1, current: bool) -> bool {
 }
 
 fn persist_snapshot(path: &Path, snapshot: &CoverageSnapshotV1) -> Result<()> {
+    validate_snapshot(snapshot)?;
     let parent = path.parent().ok_or_else(|| {
         EvidenceStateSnafu {
             reason: "coverage state path has no parent".to_owned(),
