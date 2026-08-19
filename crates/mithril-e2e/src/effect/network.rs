@@ -18,8 +18,8 @@ use mithril_control::{
     PolicyArtifactOwner, PolicyDispositionV1, PolicyDocumentV1, RuleMatchV1,
 };
 use mithril_node::{
-    EffectObservationStore, ExactFileObjectResolver, NativeSecurityStateOwner,
-    NodePolicyGenerationOwner, WorkloadBindingOwner,
+    EffectObservationStore, ExactFileObjectResolver, NativeIdentityInspector,
+    NativeSecurityStateOwner, NodePolicyGenerationOwner, WorkloadBindingOwner,
 };
 use serde::Serialize;
 use snafu::{ensure, ResultExt as _};
@@ -547,8 +547,11 @@ impl NetworkTestRunner {
         let profile_generation_ref_id = allowed_event.network_creator_profile_generation_ref_id;
         let whole_socket_fence_installed =
             fence.scope == NetworkResponseScopeV1::WholeSocket && fence.inserted;
-        let task_state_before = map_snapshot(&host, "task_labels")?;
-        let socket_state_before = map_snapshot(&host, "network_socket_states")?;
+        let identity_inspector = NativeIdentityInspector::new(pin_root);
+        let task_state_before = identity_inspector
+            .snapshot(fixture.pid())
+            .context(NodeSnafu)?
+            .ok_or_else(|| invalid_probe("the live network task has no retained identity"))?;
         let response_floor_before = host
             .lookup_map("network_response_floors", fence_key.as_bytes())
             .context(InterceptorSnafu)?
@@ -556,13 +559,10 @@ impl NetworkTestRunner {
         let mount_state_before = map_snapshot(&host, "mount_security_views")?;
         let active_generation_before = map_snapshot(&host, "active_profile_generations")?;
         ensure!(
-            !task_state_before.is_empty()
-                && !socket_state_before.is_empty()
-                && !mount_state_before.is_empty()
-                && !active_generation_before.is_empty(),
+            !mount_state_before.is_empty() && !active_generation_before.is_empty(),
             InvalidInputSnafu {
                 path: Path::new("retained recovery maps"),
-                reason: "the restart fixture has no live task, socket, mount, or generation state",
+                reason: "the restart fixture has no live mount or generation state",
             }
         );
 
@@ -571,7 +571,9 @@ impl NetworkTestRunner {
         host = KernelHostOwner::new(kernel_config.clone())
             .start()
             .context(InterceptorSnafu)?;
-        bindings
+        let mut recovered_bindings =
+            WorkloadBindingOwner::system(node_boot_id, 1).context(NodeSnafu)?;
+        recovered_bindings
             .publish_all(&host, &node_config.workload_bindings)
             .context(NodeSnafu)?;
         policy = policy
@@ -587,9 +589,11 @@ impl NetworkTestRunner {
                 0
             })
             .context(InterceptorSnafu)?;
-        let restart_preserved_task_state = map_snapshot(&host, "task_labels")? == task_state_before;
-        let restart_preserved_socket_state =
-            map_snapshot(&host, "network_socket_states")? == socket_state_before;
+        let restart_preserved_task_state = identity_inspector
+            .snapshot(fixture.pid())
+            .context(NodeSnafu)?
+            .as_ref()
+            == Some(&task_state_before);
         let restart_preserved_response_floor = host
             .lookup_map("network_response_floors", fence_key.as_bytes())
             .context(InterceptorSnafu)?
@@ -601,13 +605,13 @@ impl NetworkTestRunner {
             map_snapshot(&host, "active_profile_generations")? == active_generation_before;
         ensure!(
             restart_preserved_task_state
-                && restart_preserved_socket_state
                 && restart_preserved_response_floor
                 && restart_preserved_mount_state
                 && restart_preserved_active_generation,
             InvalidInputSnafu {
                 path: Path::new("retained recovery maps"),
-                reason: "loader restart changed retained task, socket, response, mount, or generation state",
+                reason:
+                    "loader restart changed retained task, response, mount, or generation state",
             }
         );
         let fence_marker = observations.cursor();
@@ -626,6 +630,21 @@ impl NetworkTestRunner {
             "NETWORK_RESPONSE_FENCE",
             (KernelEffectFamilyV1::Network, KernelEffectOperationV1::Send),
         )?;
+        let restart_preserved_socket_state =
+            observations.recent_since(fence_marker).iter().any(|event| {
+                event.reason == "NETWORK_RESPONSE_FENCE"
+                    && event.network_creator_profile_generation_ref_id
+                        == allowed_event.network_creator_profile_generation_ref_id
+                    && event.network_socket_key_id == allowed_event.network_socket_key_id
+                    && event.network_socket_generation == allowed_event.network_socket_generation
+            });
+        ensure!(
+            restart_preserved_socket_state,
+            InvalidInputSnafu {
+                path: Path::new("retained network socket"),
+                reason: "the post-restart fence did not retain the exact live socket identity",
+            }
+        );
         let post_fence_shutdown_denied = fixture.network_shutdown()?.denied();
         let post_fence_sendmsg = fixture.network_sendmsg(b"sendmsg-blocked")?;
         let post_fence_sendfile = fixture.network_sendfile(&token_path)?;
