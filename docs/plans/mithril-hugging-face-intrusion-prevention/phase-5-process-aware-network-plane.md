@@ -7,6 +7,7 @@ Design: [Validated readable architecture](./policy-and-protection-algorithm-arch
 Manual acceptance: [Phase 5 runbook](./manual-testing/phase-5-manual-acceptance.md)  
 Environment setup: [shared setup guide](./manual-testing/environment-setup.md)
 Closure: [Phase 5 closure matrix](./phase-5-closure-matrix.md)  
+Implementation review: [Phase 5 review guide](./phase-5-implementation-review.md)  
 Research basis:
 [Cilium and Tetragon network enforcement lessons](../../research/cilium-tetragon-network-enforcement-lessons.md)
 
