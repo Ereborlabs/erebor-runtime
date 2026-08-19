@@ -150,9 +150,10 @@ case ${1:-} in
       "https://raw.githubusercontent.com/k3s-io/k3s/$version/install.sh"
     INSTALL_K3S_VERSION=$version INSTALL_K3S_SYMLINK=skip \
       INSTALL_K3S_EXEC='agent --with-node-id' \
+      INSTALL_K3S_SKIP_START=true \
       K3S_URL=$server K3S_TOKEN=$token sh "$installer" agent
     rm -f -- "$installer"
-    systemctl is-active --quiet k3s-agent
+    systemctl start --no-block k3s-agent
     actual_version=$(/usr/local/bin/k3s --version | awk 'NR == 1 {print $3}')
     [[ $actual_version == "$version" ]] || {
       echo "installed k3s version $actual_version, expected $version" >&2
