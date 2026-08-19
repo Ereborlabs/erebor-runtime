@@ -174,6 +174,13 @@ grep -q '^        exact_object_key_ids: \[12\]$' \
 grep -q '^  k3s-cri-effect)$' "$directory/guest.sh"
 grep -q '^  k3s-administrative-exec)$' "$directory/guest.sh"
 grep -Fq "INSTALL_K3S_EXEC='agent --with-node-id'" "$directory/guest.sh"
+grep -Fq 'INSTALL_K3S_SKIP_START=true' "$directory/guest.sh"
+grep -Fq 'systemctl start --no-block k3s-agent' "$directory/guest.sh"
+grep -Fq 'namespace=mithril-two-node-network' "$directory/two-node-network.sh"
+grep -Fq 'sudo nsenter --target "$peer_pid" --net --' \
+  "$directory/two-node-network.sh"
+grep -Fq 'node_a_cni_peer: $node_a_cni_peer' \
+  "$directory/two-node-network.sh"
 grep -Fq "printf 'mithril-k3s-cri-benign\\n' >\"\$fixture_root/benign\"" \
   "$directory/guest.sh"
 grep -Fq 'chmod 444 "$fixture_root/benign"' "$directory/guest.sh"
