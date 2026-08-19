@@ -23,6 +23,7 @@ use mithril_node::{
 };
 use serde::Serialize;
 use snafu::{ensure, ResultExt as _};
+use zerocopy::IntoBytes as _;
 
 use super::child::EffectProcessFixture;
 use super::support::{
@@ -82,6 +83,11 @@ pub struct NetworkPhysicalProbeBundleV1 {
     pub allowed_receive: bool,
     pub allowed_socket_control: bool,
     pub whole_socket_fence_installed: bool,
+    pub restart_preserved_task_state: bool,
+    pub restart_preserved_socket_state: bool,
+    pub restart_preserved_response_floor: bool,
+    pub restart_preserved_mount_state: bool,
+    pub restart_preserved_active_generation: bool,
     pub post_fence_send_denied: bool,
     pub post_fence_shutdown_denied: bool,
     pub post_fence_bytes_absent: bool,
@@ -266,7 +272,7 @@ impl NetworkTestRunner {
             1,
         )
         .with_network_cgroup_root(&cgroup_path);
-        let mut host = KernelHostOwner::new(kernel_config)
+        let mut host = KernelHostOwner::new(kernel_config.clone())
             .start()
             .context(InterceptorSnafu)?;
         let binding_ids = [
@@ -363,7 +369,7 @@ impl NetworkTestRunner {
             binding_specs,
             vec![token_object],
         );
-        let policy =
+        let mut policy =
             NodePolicyGenerationOwner::load_and_install(&node_config, &mut host, node_boot_id, 1)
                 .context(NodeSnafu)?;
         ensure!(
@@ -378,7 +384,7 @@ impl NetworkTestRunner {
             .context(NodeSnafu)?;
         let observations = EffectObservationStore::default();
         let sink = observations.clone();
-        let reader = host
+        let mut reader = host
             .effect_observation_reader(move |bytes| {
                 sink.record_bytes(bytes);
                 0
@@ -530,21 +536,80 @@ impl NetworkTestRunner {
             }
         );
 
+        let fence_key = NetworkResponseFloorKeyV1 {
+            profile_generation_ref_id: allowed_event.network_creator_profile_generation_ref_id,
+            socket_key_id: allowed_event.network_socket_key_id,
+            socket_generation: allowed_event.network_socket_generation,
+        };
         let fence = policy
-            .fence_network_socket(
-                &host,
-                NetworkResponseFloorKeyV1 {
-                    profile_generation_ref_id: allowed_event
-                        .network_creator_profile_generation_ref_id,
-                    socket_key_id: allowed_event.network_socket_key_id,
-                    socket_generation: allowed_event.network_socket_generation,
-                },
-                1,
-            )
+            .fence_network_socket(&host, fence_key, 1)
             .context(NodeSnafu)?;
         let profile_generation_ref_id = allowed_event.network_creator_profile_generation_ref_id;
         let whole_socket_fence_installed =
             fence.scope == NetworkResponseScopeV1::WholeSocket && fence.inserted;
+        let task_state_before = map_snapshot(&host, "task_labels")?;
+        let socket_state_before = map_snapshot(&host, "network_socket_states")?;
+        let response_floor_before = host
+            .lookup_map("network_response_floors", fence_key.as_bytes())
+            .context(InterceptorSnafu)?
+            .ok_or_else(|| invalid_probe("the installed network response floor is missing"))?;
+        let mount_state_before = map_snapshot(&host, "mount_security_views")?;
+        let active_generation_before = map_snapshot(&host, "active_profile_generations")?;
+        ensure!(
+            !task_state_before.is_empty()
+                && !socket_state_before.is_empty()
+                && !mount_state_before.is_empty()
+                && !active_generation_before.is_empty(),
+            InvalidInputSnafu {
+                path: Path::new("retained recovery maps"),
+                reason: "the restart fixture has no live task, socket, mount, or generation state",
+            }
+        );
+
+        drop(reader);
+        host.shutdown().context(InterceptorSnafu)?;
+        host = KernelHostOwner::new(kernel_config.clone())
+            .start()
+            .context(InterceptorSnafu)?;
+        bindings
+            .publish_all(&host, &node_config.workload_bindings)
+            .context(NodeSnafu)?;
+        policy = policy
+            .reload_and_install(&node_config, &mut host, node_boot_id, 1)
+            .context(NodeSnafu)?;
+        NativeSecurityStateOwner::new(node_boot_id, 1)
+            .activate_with_effect_policy(&mut host, true)
+            .context(NodeSnafu)?;
+        let sink = observations.clone();
+        reader = host
+            .effect_observation_reader(move |bytes| {
+                sink.record_bytes(bytes);
+                0
+            })
+            .context(InterceptorSnafu)?;
+        let restart_preserved_task_state = map_snapshot(&host, "task_labels")? == task_state_before;
+        let restart_preserved_socket_state =
+            map_snapshot(&host, "network_socket_states")? == socket_state_before;
+        let restart_preserved_response_floor = host
+            .lookup_map("network_response_floors", fence_key.as_bytes())
+            .context(InterceptorSnafu)?
+            .as_deref()
+            == Some(response_floor_before.as_slice());
+        let restart_preserved_mount_state =
+            map_snapshot(&host, "mount_security_views")? == mount_state_before;
+        let restart_preserved_active_generation =
+            map_snapshot(&host, "active_profile_generations")? == active_generation_before;
+        ensure!(
+            restart_preserved_task_state
+                && restart_preserved_socket_state
+                && restart_preserved_response_floor
+                && restart_preserved_mount_state
+                && restart_preserved_active_generation,
+            InvalidInputSnafu {
+                path: Path::new("retained recovery maps"),
+                reason: "loader restart changed retained task, socket, response, mount, or generation state",
+            }
+        );
         let fence_marker = observations.cursor();
         let post_fence_send_denied = fixture.network_send(b"blocked")?.denied();
         ensure!(
@@ -1172,6 +1237,11 @@ impl NetworkTestRunner {
             allowed_receive,
             allowed_socket_control,
             whole_socket_fence_installed,
+            restart_preserved_task_state,
+            restart_preserved_socket_state,
+            restart_preserved_response_floor,
+            restart_preserved_mount_state,
+            restart_preserved_active_generation,
             post_fence_send_denied,
             post_fence_shutdown_denied,
             post_fence_bytes_absent,
@@ -1652,6 +1722,22 @@ fn socket_reference_count(host: &KernelHost, profile_generation_ref_id: u64) -> 
         .try_into()
         .map_err(|_| invalid_probe("the socket reference count has an invalid size"))?;
     Ok(u64::from_ne_bytes(bytes))
+}
+
+fn map_snapshot(host: &KernelHost, map: &str) -> Result<Vec<(Vec<u8>, Vec<u8>)>> {
+    let mut keys = host.map_keys(map).context(InterceptorSnafu)?;
+    keys.sort_unstable();
+    keys.into_iter()
+        .map(|key| {
+            let value = host
+                .lookup_map(map, &key)
+                .context(InterceptorSnafu)?
+                .ok_or_else(|| {
+                    invalid_probe(format!("map `{map}` changed during recovery snapshot"))
+                })?;
+            Ok((key, value))
+        })
+        .collect()
 }
 
 fn invalid_probe(reason: impl Into<String>) -> crate::Error {
