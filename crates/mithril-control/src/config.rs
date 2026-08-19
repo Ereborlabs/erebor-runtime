@@ -70,8 +70,7 @@ impl ControlConfig {
         let mut node_ids = BTreeSet::new();
         for identity in &self.allowed_nodes {
             ensure!(
-                !identity.node_id.is_empty()
-                    && !identity.node_id.chars().any(char::is_whitespace)
+                crate::node_id_is_valid(&identity.node_id)
                     && is_sha256_hex(&identity.certificate_sha256)
                     && node_ids.insert(identity.node_id.as_str()),
                 InvalidConfigurationSnafu {

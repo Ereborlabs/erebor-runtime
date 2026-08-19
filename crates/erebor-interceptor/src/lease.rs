@@ -138,22 +138,13 @@ mod tests {
     }
 
     #[test]
-    fn lease_health_rejects_a_replaced_path() -> crate::Result<()> {
-        let directory = tempfile::tempdir().context(IoSnafu {
-            action: "create temporary lease directory",
-            path: "temporary lease directory",
-        })?;
+    fn lease_health_rejects_a_replaced_path() -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
         let path = directory.path().join("owner.lock");
         let lease = PinRootLease::acquire(&path)?;
         let displaced = directory.path().join("displaced.lock");
-        std::fs::rename(&path, &displaced).context(IoSnafu {
-            action: "displace held lease path",
-            path: &path,
-        })?;
-        std::fs::write(&path, b"replacement").context(IoSnafu {
-            action: "replace held lease path",
-            path: &path,
-        })?;
+        std::fs::rename(&path, &displaced)?;
+        std::fs::write(&path, b"replacement")?;
         assert!(lease.verify().is_err());
         Ok(())
     }

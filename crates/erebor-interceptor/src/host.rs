@@ -561,8 +561,7 @@ impl KernelHostOwner {
                     action: "read attached BPF program",
                     path: self.config.object_path(),
                 })?
-                .tag()
-                .to_vec();
+                .tag();
             link_records.push(KernelLinkManifestV1 {
                 program: name,
                 link_id: info.id,
@@ -802,7 +801,7 @@ impl KernelHostOwner {
                 program: name.to_owned(),
                 link_id: info.id,
                 program_id: info.prog_id,
-                program_tag: old_program.tag().to_vec(),
+                program_tag: old_program.tag(),
                 pin_path: Some(path),
             });
             links.push(link);
@@ -1170,7 +1169,7 @@ impl KernelHost {
             ensure!(
                 info.id == record.link_id
                     && info.prog_id == record.program_id
-                    && program.tag().to_vec() == record.program_tag,
+                    && program.tag() == record.program_tag,
                 ManifestMismatchSnafu {
                     path,
                     reason: format!(
@@ -1665,7 +1664,7 @@ mod tests {
                 program: "program".to_owned(),
                 link_id: 1,
                 program_id: 2,
-                program_tag: vec![0; 8],
+                program_tag: [0; 8],
                 pin_path: None,
             }],
             preflight,

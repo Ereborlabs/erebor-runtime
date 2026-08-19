@@ -20,9 +20,9 @@ use crate::error::{
     EvidenceStateSnafu, IdentityStateSnafu, InterceptorSnafu, JsonSnafu, LocalTaskSnafu,
 };
 use crate::{
-    AdministrativeControlRequest, CoverageGapReasonV1, EvidenceAckV1, EvidenceIdV1,
-    EvidenceWalLimits, NativeSecurityStateOwner, NodeConfig, NodeControlConnector,
-    NodeControlMessage, ObservationCanonicalizer, Result, TrustCache, WorkloadBindingOwner,
+    AdministrativeControlRequest, CoverageGapReasonV1, NativeSecurityStateOwner, NodeConfig,
+    NodeControlConnector, NodeControlMessage, ObservationCanonicalizer, Result, TrustCache,
+    WorkloadBindingOwner,
 };
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize)]
@@ -106,7 +106,7 @@ impl NodeChassis {
             );
         }
         let boot_id = NodeEpochs::boot_id()?;
-        let node_boot_id = id_from_uuid_bytes(boot_id);
+        let node_boot_id = boot_id.into();
         let recover_identity = config
             .interceptor
             .pin_root
@@ -208,21 +208,13 @@ impl NodeChassis {
                 .build()
             })?;
             let source_epoch = NodeEpochs::source_epoch(&config.state_directory, recover_identity)?;
-            let canonicalizer = ObservationCanonicalizer::new(
-                evidence_id_from_uuid(&evidence.tenant_id)?,
-                evidence_id_from_uuid(&evidence.source_id)?,
-                source_epoch,
-                EvidenceIdV1::from(node_boot_id),
-            )?;
+            let (tenant_id, source_id) = evidence.identities()?;
+            let canonicalizer =
+                ObservationCanonicalizer::new(tenant_id, source_id, source_epoch, node_boot_id)?;
             crate::EffectObservationStore::durable(
                 1_024,
                 NodeEpochs::evidence_wal_directory(&config.state_directory),
-                EvidenceWalLimits {
-                    maximum_record_bytes: evidence.maximum_record_bytes,
-                    maximum_retained_bytes: evidence.maximum_retained_bytes,
-                    maximum_retained_records: evidence.maximum_retained_records,
-                    maximum_batch_records: evidence.maximum_batch_records,
-                },
+                evidence.into(),
                 canonicalizer,
             )?
         } else {
@@ -465,14 +457,10 @@ impl NodeChassis {
                                         }
                                     }
                                     NodeControlMessage::EvidenceAck(ack) => {
-                                        let Ok(batch_sha256) = ack.batch_sha256.try_into() else {
+                                        let Ok(ack) = ack.try_into() else {
                                             break;
                                         };
-                                        if self.observations.acknowledge_evidence(EvidenceAckV1 {
-                                            first_cursor: ack.first_cursor,
-                                            last_cursor: ack.last_cursor,
-                                            batch_sha256,
-                                        }).is_err() {
+                                        if self.observations.acknowledge_evidence(ack).is_err() {
                                             break;
                                         }
                                         evidence_in_flight = false;
@@ -488,6 +476,15 @@ impl NodeChassis {
                                 }
                             }
                             _instant = evidence_upload.tick() => {
+                                if self.observations.evidence_errors() > 0 {
+                                    evidence_healthy = false;
+                                    close_evidence_claims(&mut self.registration);
+                                    self.readiness.send_modify(|readiness| {
+                                        readiness.admission_ready = false;
+                                        readiness.effect_prevention_claims_enabled = false;
+                                    });
+                                    break;
+                                }
                                 if !evidence_in_flight {
                                     if let Some(batch) = self.observations.next_evidence_batch() {
                                     if connection.send_evidence_batch(batch).await.is_err() {
@@ -528,6 +525,8 @@ impl NodeChassis {
                             } => {
                                 match self.reconcile_bindings(true).await {
                                     ReconciliationOutcome::Healthy => {
+                                        let recovered = !evidence_healthy
+                                            || (!identity_healthy && kernel_healthy);
                                         if !evidence_healthy {
                                             evidence_healthy = true;
                                             restore_evidence_claims(
@@ -561,7 +560,10 @@ impl NodeChassis {
                                                 admission_ready: true,
                                                 effect_prevention_claims_enabled:
                                                     healthy_effect_prevention_claims,
-                                            });
+                                                });
+                                        }
+                                        if recovered {
+                                            break;
                                         }
                                     }
                                     ReconciliationOutcome::EvidenceUnhealthy => {
@@ -734,7 +736,11 @@ impl NodeChassis {
                 .mark_coverage_gapped(CoverageGapReasonV1::WalFailure);
             return ReconciliationOutcome::EvidenceUnhealthy;
         }
-        if self.identity.reconcile(host).is_err() {
+        if self
+            .identity
+            .reconcile(host, self.policy.is_some())
+            .is_err()
+        {
             return ReconciliationOutcome::IdentityUnhealthy;
         }
         if self
@@ -857,6 +863,12 @@ fn sample_effect_health(
     observations: &crate::EffectObservationStore,
     recover: bool,
 ) -> Result<()> {
+    if observations.evidence_errors() > 0 {
+        return EvidenceStateSnafu {
+            reason: "durable effect evidence has a prior write failure".to_owned(),
+        }
+        .fail();
+    }
     let bytes = host
         .lookup_map("effect_observation_health", &0_u32.to_ne_bytes())
         .context(InterceptorSnafu)?
@@ -984,22 +996,6 @@ async fn effect_reader_finished(
     .fail()
 }
 
-fn id_from_uuid_bytes(bytes: [u8; 16]) -> erebor_interceptor_abi::Id128V1 {
-    let value = u128::from_be_bytes(bytes);
-    erebor_interceptor_abi::Id128V1::new((value >> 64) as u64, value as u64)
-}
-
-fn evidence_id_from_uuid(value: &str) -> Result<EvidenceIdV1> {
-    let uuid = uuid::Uuid::parse_str(value).map_err(|error| {
-        IdentityStateSnafu {
-            reason: format!("evidence identity is invalid: {error}"),
-        }
-        .build()
-    })?;
-    let value = u128::from_be_bytes(*uuid.as_bytes());
-    Ok(EvidenceIdV1::new((value >> 64) as u64, value as u64))
-}
-
 fn ensure_request_id(request_id: &[u8]) -> std::result::Result<(), ()> {
     if request_id.len() != 16 || request_id.iter().all(|byte| *byte == 0) {
         return Err(());
@@ -1008,10 +1004,7 @@ fn ensure_request_id(request_id: &[u8]) -> std::result::Result<(), ()> {
 }
 
 fn portable_id_bytes(value: erebor_interceptor_abi::Id128V1) -> Vec<u8> {
-    let mut bytes = Vec::with_capacity(16);
-    bytes.extend_from_slice(&value.high.to_be_bytes());
-    bytes.extend_from_slice(&value.low.to_be_bytes());
-    bytes
+    value.to_be_bytes().to_vec()
 }
 
 fn resolution_response(

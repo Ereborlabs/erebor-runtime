@@ -9,7 +9,9 @@ use snafu::{ensure, ResultExt as _};
 use tonic::transport::{Certificate, Identity, Server, ServerTlsConfig};
 
 use crate::error::{InvalidConfigurationSnafu, IoSnafu, ServeSnafu, TlsSnafu};
-use crate::{node_control_server::NodeControlServer, ControlPlane, Result};
+use crate::{
+    node_control_server::NodeControlServer, ControlPlane, Result, MAX_EVIDENCE_GRPC_MESSAGE_BYTES,
+};
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -43,7 +45,10 @@ pub async fn serve(
         .http2_keepalive_timeout(Some(Duration::from_secs(10)))
         .tls_config(tls)
         .context(TlsSnafu)?
-        .add_service(NodeControlServer::new(control))
+        .add_service(
+            NodeControlServer::new(control)
+                .max_decoding_message_size(MAX_EVIDENCE_GRPC_MESSAGE_BYTES),
+        )
         .serve_with_shutdown(address, shutdown)
         .await
         .context(ServeSnafu { address })
