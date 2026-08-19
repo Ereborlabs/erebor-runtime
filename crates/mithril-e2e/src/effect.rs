@@ -1,6 +1,7 @@
 mod child;
 mod fixture_syscalls;
 mod mailbox;
+mod network;
 mod support;
 
 use std::collections::BTreeSet;
@@ -47,6 +48,7 @@ use crate::LatencyDistributionV1;
 use crate::Result;
 
 pub use child::{run_effect_child, run_mount_setattr_child};
+pub use network::{NetworkFixtureResultV1, NetworkPhysicalProbeBundleV1, NetworkTestRunner};
 
 pub(super) const PROFILE_GENERATION_REF_ID: u64 = 1;
 const NEXT_PROFILE_GENERATION_REF_ID: u64 = 2;

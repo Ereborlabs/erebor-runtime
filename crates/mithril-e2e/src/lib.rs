@@ -25,7 +25,8 @@ pub use digest::DigestV1;
 pub use effect::{
     run_effect_child, run_mount_setattr_child, EffectHealthV1, EffectPhysicalProbeBundleV1,
     EffectTestRunner, HfStaticEffectClassificationCaseV1, HfStaticEffectClassificationV1,
-    LocalEnforcementFixtureResultV1,
+    LocalEnforcementFixtureResultV1, NetworkFixtureResultV1, NetworkPhysicalProbeBundleV1,
+    NetworkTestRunner,
 };
 pub use error::{Error, Result};
 pub use fixture::FixtureBaselineRecordV1;

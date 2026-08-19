@@ -1,6 +1,6 @@
 use std::fs;
 use std::io::{self, Read as _, Write as _};
-use std::net::TcpStream;
+use std::net::{Shutdown, SocketAddr as InetSocketAddr, TcpStream};
 use std::os::fd::{AsFd as _, AsRawFd as _, FromRawFd as _, OwnedFd};
 use std::os::linux::net::SocketAddrExt as _;
 use std::os::unix::fs::{symlink, OpenOptionsExt as _, PermissionsExt as _};
@@ -93,6 +93,16 @@ enum ChildRequest {
     PropagationPeerOpen,
     PropagationPeerHasMarker,
     Connect,
+    NetworkConnect {
+        address: String,
+    },
+    NetworkSend {
+        payload: Vec<u8>,
+    },
+    NetworkReceive,
+    NetworkSetNoDelay,
+    NetworkShutdown,
+    NetworkClose,
     PrepareHardClosed {
         truncate_path: PathBuf,
         exec_path: PathBuf,
@@ -499,6 +509,64 @@ impl EffectProcessFixture {
         }
     }
 
+    pub(super) fn network_connect(&mut self, address: InetSocketAddr) -> Result<IoOutcome> {
+        match self.request(&ChildRequest::NetworkConnect {
+            address: address.to_string(),
+        })? {
+            ChildResponse::Outcome(outcome) => Ok(outcome),
+            _ => Err(invalid_state(
+                "effect child returned the wrong network-connect response",
+            )),
+        }
+    }
+
+    pub(super) fn network_send(&mut self, payload: &[u8]) -> Result<IoOutcome> {
+        match self.request(&ChildRequest::NetworkSend {
+            payload: payload.to_vec(),
+        })? {
+            ChildResponse::Outcome(outcome) => Ok(outcome),
+            _ => Err(invalid_state(
+                "effect child returned the wrong network-send response",
+            )),
+        }
+    }
+
+    pub(super) fn network_receive(&mut self) -> Result<IoOutcome> {
+        match self.request(&ChildRequest::NetworkReceive)? {
+            ChildResponse::Outcome(outcome) => Ok(outcome),
+            _ => Err(invalid_state(
+                "effect child returned the wrong network-receive response",
+            )),
+        }
+    }
+
+    pub(super) fn network_set_nodelay(&mut self) -> Result<IoOutcome> {
+        match self.request(&ChildRequest::NetworkSetNoDelay)? {
+            ChildResponse::Outcome(outcome) => Ok(outcome),
+            _ => Err(invalid_state(
+                "effect child returned the wrong network-control response",
+            )),
+        }
+    }
+
+    pub(super) fn network_shutdown(&mut self) -> Result<IoOutcome> {
+        match self.request(&ChildRequest::NetworkShutdown)? {
+            ChildResponse::Outcome(outcome) => Ok(outcome),
+            _ => Err(invalid_state(
+                "effect child returned the wrong network-shutdown response",
+            )),
+        }
+    }
+
+    pub(super) fn network_close(&mut self) -> Result<()> {
+        match self.request(&ChildRequest::NetworkClose)? {
+            ChildResponse::Prepared => Ok(()),
+            _ => Err(invalid_state(
+                "effect child returned the wrong network-close response",
+            )),
+        }
+    }
+
     pub(super) fn prepare_operations(
         &mut self,
         paths: &EffectPaths,
@@ -673,6 +741,7 @@ pub fn run_effect_child(fixture_root: &Path, mailbox_path: &Path) -> Result<()> 
     let mut prepared_write_race = None;
     let mut prepared_file = None;
     let mut prepared_hard_closed = None;
+    let mut prepared_network_stream = None;
     let mut propagation_peer = None;
     mailbox.publish(
         READY,
@@ -800,6 +869,67 @@ pub fn run_effect_child(fixture_root: &Path, mailbox_path: &Path) -> Result<()> 
                 ),
             },
             ChildRequest::Connect => (Ok(ChildResponse::Outcome(connect_outcome())), false),
+            ChildRequest::NetworkConnect { address } => match address.parse::<InetSocketAddr>() {
+                Ok(address) => match TcpStream::connect(address) {
+                    Ok(stream) => {
+                        prepared_network_stream = Some(stream);
+                        (Ok(ChildResponse::Outcome(allowed_outcome())), false)
+                    }
+                    Err(error) => (Ok(ChildResponse::Outcome(error_outcome(error))), false),
+                },
+                Err(error) => (
+                    Err(invalid_state(format!(
+                        "network address is invalid: {error}"
+                    ))),
+                    false,
+                ),
+            },
+            ChildRequest::NetworkSend { payload } => (
+                Ok(ChildResponse::Outcome(
+                    prepared_network_stream
+                        .as_mut()
+                        .map_or_else(missing_prepared_network, |stream| {
+                            io_outcome(stream.write_all(&payload))
+                        }),
+                )),
+                false,
+            ),
+            ChildRequest::NetworkReceive => (
+                Ok(ChildResponse::Outcome(
+                    prepared_network_stream.as_mut().map_or_else(
+                        missing_prepared_network,
+                        |stream| {
+                            let mut byte = [0_u8; 1];
+                            io_outcome(stream.read_exact(&mut byte))
+                        },
+                    ),
+                )),
+                false,
+            ),
+            ChildRequest::NetworkSetNoDelay => (
+                Ok(ChildResponse::Outcome(
+                    prepared_network_stream
+                        .as_ref()
+                        .map_or_else(missing_prepared_network, |stream| {
+                            io_outcome(stream.set_nodelay(true))
+                        }),
+                )),
+                false,
+            ),
+            ChildRequest::NetworkShutdown => (
+                Ok(ChildResponse::Outcome(
+                    prepared_network_stream
+                        .as_ref()
+                        .map_or_else(missing_prepared_network, |stream| {
+                            io_outcome(stream.shutdown(Shutdown::Write))
+                        }),
+                )),
+                false,
+            ),
+            ChildRequest::NetworkClose => {
+                prepared_network_stream = None;
+                (Ok(ChildResponse::Prepared), false)
+            }
             ChildRequest::PrepareHardClosed {
                 truncate_path,
                 exec_path,
@@ -1129,6 +1259,13 @@ fn missing_prepared_file() -> IoOutcome {
     IoOutcome {
         allowed: false,
         errno: Some(rustix::io::Errno::BADF.raw_os_error()),
+    }
+}
+
+fn missing_prepared_network() -> IoOutcome {
+    IoOutcome {
+        allowed: false,
+        errno: Some(rustix::io::Errno::NOTCONN.raw_os_error()),
     }
 }
 
