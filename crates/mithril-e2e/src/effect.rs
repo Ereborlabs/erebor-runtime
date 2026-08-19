@@ -24,8 +24,9 @@ use mithril_control::{
     PolicyDocumentV1, ProfileSealRequestV1,
 };
 use mithril_node::{
-    EffectObservationHealth, EffectObservationStore, ExactFileObjectResolver,
-    NativeSecurityStateOwner, NodePolicyGenerationOwner, WorkloadBindingOwner,
+    CoverageGapReasonV1, EffectObservationHealth, EffectObservationStore, EvidenceBatchV1,
+    EvidenceIdV1, EvidenceWalLimits, ExactFileObjectResolver, NativeSecurityStateOwner,
+    NodePolicyGenerationOwner, ObservationCanonicalizer, WorkloadBindingOwner,
 };
 use serde::Serialize;
 use snafu::{ensure, ResultExt as _};
@@ -35,7 +36,7 @@ use self::child::{EffectProcessFixture, HardClosedOperation};
 use self::support::{
     effect_binding, effect_node_config, effect_peer_binding, effect_propagation_binding,
     global_mount_view_is_dirty, health_delta, inode_generation, mount_view_is_dirty,
-    mount_views_are_clean, observation_health, wait_for_effect, wait_for_exact_effect,
+    mount_views_are_clean, sample_observation_health, wait_for_effect, wait_for_exact_effect,
     wait_for_exact_io_uring_effect, wait_for_reason, wait_for_unsupported_effect,
     ExternalMountNamespace,
 };
@@ -468,6 +469,12 @@ pub struct EffectPhysicalProbeBundleV1 {
     pub saturation_preserved_network_denial: bool,
     pub saturation_preserved_benign_allow: bool,
     pub emitted_source_sequences_monotonic: bool,
+    pub durable_evidence_batch_records: usize,
+    pub durable_evidence_batch_integrity_valid: bool,
+    pub wal_capacity_gapped: bool,
+    pub ring_loss_gapped: bool,
+    pub negative_claim_blocked: bool,
+    pub evidence_errors: u64,
     pub pin_root_removed: bool,
     pub lease_removed: bool,
     pub cgroup_removed: bool,
@@ -1385,7 +1392,24 @@ impl EffectTestRunner {
         NativeSecurityStateOwner::new(node_boot_id, 1)
             .activate_with_effect_policy(&mut host, true)
             .context(NodeSnafu)?;
-        let observations = EffectObservationStore::default();
+        let observations = EffectObservationStore::durable(
+            1_024,
+            output_directory.join("evidence-wal-v1"),
+            EvidenceWalLimits {
+                maximum_record_bytes: 128 * 1_024,
+                maximum_retained_bytes: 32 * 1_024 * 1_024,
+                maximum_retained_records: 1_024,
+                maximum_batch_records: 256,
+            },
+            ObservationCanonicalizer::new(
+                EvidenceIdV1::new(0x6000_0000_0000_4000, 0x8000_0000_0000_0001),
+                EvidenceIdV1::new(0x6000_0000_0000_4000, 0x8000_0000_0000_0002),
+                1,
+                node_boot_id.into(),
+            )
+            .context(NodeSnafu)?,
+        )
+        .context(NodeSnafu)?;
         let sink = observations.clone();
         let mut reader = host
             .effect_observation_reader(move |bytes| {
@@ -1393,6 +1417,7 @@ impl EffectTestRunner {
                 0
             })
             .context(InterceptorSnafu)?;
+        sample_observation_health(&host, &observations)?;
 
         let mut path_tree_future_namespace_denied = false;
         let mut path_tree_meta_depth_denied = false;
@@ -3744,7 +3769,7 @@ impl EffectTestRunner {
             }
         );
 
-        let before_latency = observation_health(&host, &observations)?;
+        let before_latency = sample_observation_health(&host, &observations)?;
         let observed_samples = fixture.open_samples(&paths.secret, measured_opens)?;
         let observed = observed_samples.batch;
         ensure!(
@@ -3762,7 +3787,7 @@ impl EffectTestRunner {
         reader
             .poll(Duration::from_millis(100))
             .context(InterceptorSnafu)?;
-        let pre_saturation = observation_health(&host, &observations)?;
+        let pre_saturation = sample_observation_health(&host, &observations)?;
         ensure!(
             health_delta(pre_saturation, before_latency).lost == 0
                 && health_delta(pre_saturation, before_latency).attempted
@@ -3810,7 +3835,7 @@ impl EffectTestRunner {
                 reason: "ring saturation changed the exact benign allow decision",
             }
         );
-        let saturated = observation_health(&host, &observations)?;
+        let saturated = sample_observation_health(&host, &observations)?;
         let saturation_delta = health_delta(saturated, pre_saturation);
         ensure!(
             saturation_delta.lost > 0
@@ -3821,6 +3846,48 @@ impl EffectTestRunner {
             InvalidInputSnafu {
                 path: Path::new("effect_observation_health"),
                 reason: "ring saturation did not preserve exact attempted=emitted+lost accounting",
+            }
+        );
+        let coverage = observations.coverage_snapshot().ok_or_else(|| {
+            InvalidInputSnafu {
+                path: Path::new("evidence-coverage-v1.json"),
+                reason: "the durable effect fixture has no coverage snapshot",
+            }
+            .build()
+        })?;
+        let intervals = coverage.all_intervals();
+        let wal_capacity_gapped = intervals.iter().any(|interval| {
+            interval
+                .gap_reasons
+                .contains(&CoverageGapReasonV1::WalCapacity)
+        });
+        let ring_loss_gapped = intervals.iter().any(|interval| {
+            interval
+                .gap_reasons
+                .contains(&CoverageGapReasonV1::RingLoss)
+        });
+        let negative_claim_blocked = !coverage.supports_negative_claim();
+        let evidence_errors = observations.evidence_errors();
+        let evidence_batch = observations.next_evidence_batch().ok_or_else(|| {
+            InvalidInputSnafu {
+                path: Path::new("evidence-wal-v1"),
+                reason: "the durable effect fixture produced no replay batch",
+            }
+            .build()
+        })?;
+        let durable_evidence_batch_records = evidence_batch.records.len();
+        let durable_evidence_batch_integrity_valid =
+            evidence_batch.batch_sha256 == EvidenceBatchV1::digest(&evidence_batch.records);
+        ensure!(
+            wal_capacity_gapped
+                && ring_loss_gapped
+                && negative_claim_blocked
+                && evidence_errors > 0
+                && durable_evidence_batch_records > 0
+                && durable_evidence_batch_integrity_valid,
+            InvalidInputSnafu {
+                path: Path::new("durable effect evidence"),
+                reason: "saturation did not preserve an integrity-checked replay batch and explicit coverage gaps",
             }
         );
 
@@ -3977,6 +4044,12 @@ impl EffectTestRunner {
             saturation_preserved_network_denial: true,
             saturation_preserved_benign_allow: true,
             emitted_source_sequences_monotonic,
+            durable_evidence_batch_records,
+            durable_evidence_batch_integrity_valid,
+            wal_capacity_gapped,
+            ring_loss_gapped,
+            negative_claim_blocked,
+            evidence_errors,
             pin_root_removed: true,
             lease_removed: true,
             cgroup_removed: true,
