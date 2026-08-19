@@ -4,6 +4,7 @@
 - Architecture: [validated readable architecture](./policy-and-protection-algorithm-architecture-readable.md)
 - Research basis: [Cilium and Tetragon network enforcement lessons](../../research/cilium-tetragon-network-enforcement-lessons.md)
 - Manual acceptance: [Phase 5 runbook](./manual-testing/phase-5-manual-acceptance.md)
+- Implementation review: [Phase 5 review guide](./phase-5-implementation-review.md)
 
 ## Closure Decision
 
