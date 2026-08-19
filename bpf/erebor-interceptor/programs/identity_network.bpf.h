@@ -929,7 +929,8 @@ int BPF_PROG(erebor_identity_socket_bind, struct socket *socket,
     if (!network_socket_is_inet(socket))
         return ret;
     return network_apply_destination(
-        socket, address, addrlen, kernel_effect_operation_v1_bind,
+        socket, address, addrlen,
+        kernel_effect_operation_v1_bind | NETWORK_REQUEST_RETAIN_FLOW,
         network_current_actor(kernel_effect_operation_v1_bind, ret));
 }
 
