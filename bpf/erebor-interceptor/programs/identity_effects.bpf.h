@@ -59,26 +59,32 @@ static __always_inline int emit_effect_observation(
     effect_observation_health_v1 *health = effect_health_record();
     effect_observation_v1 *event;
 
-    if (health)
-        health->attempted++;
-    if (!scratch) {
-        if (health)
-            health->lost++;
+    if (!health)
+        return result;
+    health->attempted++;
+    health->requested++;
+    if (health->next_sequence == ~0ULL) {
+        health->lost++;
         return result;
     }
+    health->next_sequence++;
+    if (!scratch) {
+        health->lost++;
+        return result;
+    }
+    scratch->observation.source_sequence = health->next_sequence;
+    scratch->observation.source_cpu_id = bpf_get_smp_processor_id();
     scratch->observation.kernel_result = result;
     scratch->observation.reason = reason;
     scratch->observation.physical_result = physical_result;
     event = bpf_ringbuf_reserve(&effect_observations, sizeof(*event), 0);
     if (!event) {
-        if (health)
-            health->lost++;
+        health->lost++;
         return result;
     }
     __builtin_memcpy(event, &scratch->observation, sizeof(*event));
     bpf_ringbuf_submit(event, 0);
-    if (health)
-        health->emitted++;
+    health->emitted++;
     return result;
 }
 
@@ -91,8 +97,10 @@ static __always_inline int hard_effect_result(
     if (reason == effect_observation_reason_v1_unresolved_object ||
         reason == effect_observation_reason_v1_unsupported_object) {
         effect_observation_health_v1 *health = effect_health_record();
-        if (health)
+        if (health) {
             health->unresolved++;
+            health->classifier_miss_count++;
+        }
     }
     return emit_effect_observation(
         scratch, result, reason,
