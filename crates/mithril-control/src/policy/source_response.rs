@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use super::source::SeverityV1;
 use super::source_proof::{ProofQualityPredicateV1, ProviderV1};
+use crate::{EvidenceFieldKeyV1, EvidenceSensitivityV1};
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
@@ -25,37 +26,6 @@ pub enum FindingGroupingFieldV1 {
     ExactObjectId,
     ProviderPrincipalId,
     ProviderResourceId,
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-pub enum EvidenceFieldKeyV1 {
-    FindingId,
-    ReasonCode,
-    Decision,
-    Errno,
-    TaskCookie,
-    ProcessLineageId,
-    AuthorityDomainId,
-    ExecutionSetId,
-    ExactObjectId,
-    ObjectClassId,
-    DestinationId,
-    ProviderRequestId,
-    ProviderResult,
-    CoverageIntervalIds,
-    PolicyRuleIds,
-    ResponseResult,
-    ProviderPrincipalId,
-    ProviderResourceId,
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-pub enum EvidenceSensitivityV1 {
-    Public,
-    Internal,
-    SensitiveIdentifier,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]

@@ -326,7 +326,8 @@ fn update_coverage(
         snapshot.negative_claim_eligible = false;
         return;
     };
-    snapshot.negative_claim_eligible = coverage.supports_negative_claim();
+    let evidence_failed = observations.evidence_errors() > 0;
+    snapshot.negative_claim_eligible = !evidence_failed && coverage.supports_negative_claim();
     if !snapshot.negative_claim_eligible {
         if let Some(capability) = snapshot
             .capabilities
@@ -334,7 +335,12 @@ fn update_coverage(
             .find(|capability| capability.capability_id == "LOCAL_EFFECT_OBSERVATION")
         {
             capability.state = "UNHEALTHY".to_owned();
-            capability.reason_code = "DURABLE_EVIDENCE_COVERAGE_GAPPED".to_owned();
+            capability.reason_code = if evidence_failed {
+                "DURABLE_EVIDENCE_WRITE_FAILED"
+            } else {
+                "DURABLE_EVIDENCE_COVERAGE_GAPPED"
+            }
+            .to_owned();
         }
     }
     snapshot.coverage_intervals = coverage
@@ -346,8 +352,8 @@ fn update_coverage(
                 .closing_counters
                 .unwrap_or(interval.opening_counters);
             MithrilCoverageInterval {
-                interval_id: evidence_id_hex(interval.interval_id),
-                source_id: evidence_id_hex(interval.source_id),
+                interval_id: hex::encode(interval.interval_id.to_be_bytes()),
+                source_id: hex::encode(interval.source_id.to_be_bytes()),
                 source_epoch: interval.source_epoch,
                 cpu_id: interval.cpu_id,
                 revision: interval.revision,
@@ -371,10 +377,6 @@ fn update_coverage(
             }
         })
         .collect();
-}
-
-fn evidence_id_hex(id: crate::EvidenceIdV1) -> String {
-    format!("{:016x}{:016x}", id.high, id.low)
 }
 
 fn peer_in_cgroup_scope(pid: i32, allowed_scope: &str) -> bool {

@@ -456,7 +456,7 @@ fn bounded_exception_binds_one_exact_allow_cell() -> mithril_control::Result<()>
         write_cell.compiled_cells[0]
             .key
             .digest(document.profile_id())?,
-        "5c0e91f06548ddcf908971608bf5e656c55c2be27c18249678b82a9811a5a72d"
+        "501b6f332e0cb9d64d878fd1269a51d792a1c2769a04fe5c6d8e1178ba5e7438"
     );
     document.exceptions.push(ExceptionV1 {
         exception_id: "one-token-open".to_owned(),

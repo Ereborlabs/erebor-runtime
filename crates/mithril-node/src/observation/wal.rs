@@ -1,7 +1,7 @@
-use std::fs::{self, File, OpenOptions};
-use std::io::Write as _;
+use std::fs;
 use std::path::{Path, PathBuf};
 
+use prost::Message as _;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 use snafu::ResultExt as _;
@@ -9,6 +9,8 @@ use snafu::ResultExt as _;
 use super::{CoverageGapReasonV1, EvidenceDigestV1, ObservationEnvelopeV1};
 use crate::error::{EvidenceStateSnafu, IoSnafu};
 use crate::Result;
+
+use super::persistence::{atomic_write, sync_directory};
 
 const WAL_FORMAT_VERSION: u32 = 1;
 const ACK_FILE: &str = "acknowledged.json";
@@ -24,9 +26,11 @@ pub struct EvidenceWalLimits {
 impl EvidenceWalLimits {
     pub fn validate(self) -> Result<()> {
         if self.maximum_record_bytes == 0
+            || self.maximum_record_bytes > mithril_control::MAX_EVIDENCE_RECORD_BYTES as u64
             || self.maximum_retained_bytes < self.maximum_record_bytes
             || self.maximum_retained_records == 0
             || self.maximum_batch_records == 0
+            || self.maximum_batch_records > mithril_control::MAX_EVIDENCE_BATCH_RECORDS
             || self.maximum_batch_records > self.maximum_retained_records
         {
             return EvidenceStateSnafu {
@@ -41,10 +45,10 @@ impl EvidenceWalLimits {
 impl Default for EvidenceWalLimits {
     fn default() -> Self {
         Self {
-            maximum_record_bytes: 128 * 1_024,
+            maximum_record_bytes: mithril_control::MAX_EVIDENCE_RECORD_BYTES as u64,
             maximum_retained_bytes: 256 * 1_024 * 1_024,
             maximum_retained_records: 100_000,
-            maximum_batch_records: 256,
+            maximum_batch_records: mithril_control::MAX_EVIDENCE_BATCH_RECORDS,
         }
     }
 }
@@ -133,12 +137,53 @@ impl EvidenceBatchV1 {
     }
 }
 
+impl From<EvidenceRecordV1> for mithril_control::EvidenceRecord {
+    fn from(record: EvidenceRecordV1) -> Self {
+        Self {
+            cursor: record.cursor,
+            observation_id: record.observation_id.to_vec(),
+            payload: record.payload,
+            payload_sha256: record.payload_sha256.to_vec(),
+            previous_record_sha256: record.previous_record_sha256.to_vec(),
+            record_sha256: record.record_sha256.to_vec(),
+        }
+    }
+}
+
+impl From<EvidenceBatchV1> for mithril_control::EvidenceBatch {
+    fn from(batch: EvidenceBatchV1) -> Self {
+        Self {
+            first_cursor: batch.first_cursor,
+            last_cursor: batch.last_cursor,
+            records: batch.records.into_iter().map(Into::into).collect(),
+            batch_sha256: batch.batch_sha256.to_vec(),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct EvidenceAckV1 {
     pub first_cursor: u64,
     pub last_cursor: u64,
     pub batch_sha256: EvidenceDigestV1,
+}
+
+impl TryFrom<mithril_control::EvidenceAck> for EvidenceAckV1 {
+    type Error = crate::Error;
+
+    fn try_from(ack: mithril_control::EvidenceAck) -> Result<Self> {
+        Ok(Self {
+            first_cursor: ack.first_cursor,
+            last_cursor: ack.last_cursor,
+            batch_sha256: ack.batch_sha256.try_into().map_err(|_| {
+                EvidenceStateSnafu {
+                    reason: "evidence acknowledgement digest is not SHA-256".to_owned(),
+                }
+                .build()
+            })?,
+        })
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -196,6 +241,15 @@ impl EvidenceWal {
         let mut retained_bytes = 0_u64;
         for path in paths {
             let bytes = fs::read(&path).context(IoSnafu { path: &path })?;
+            if bytes.len() as u64 > limits.maximum_record_bytes {
+                return EvidenceStateSnafu {
+                    reason: format!(
+                        "evidence WAL segment `{}` exceeds the record bound",
+                        path.display()
+                    ),
+                }
+                .fail();
+            }
             let record: EvidenceRecordV1 = serde_json::from_slice(&bytes).map_err(|error| {
                 EvidenceStateSnafu {
                     reason: format!(
@@ -279,9 +333,15 @@ impl EvidenceWal {
             }
             .build()
         })?;
+        let retained_bytes = self.retained_bytes.checked_add(bytes_len).ok_or_else(|| {
+            EvidenceStateSnafu {
+                reason: "evidence WAL retained byte count overflowed".to_owned(),
+            }
+            .build()
+        })?;
         if bytes_len > self.limits.maximum_record_bytes
             || self.records.len() == self.limits.maximum_retained_records
-            || self.retained_bytes.saturating_add(bytes_len) > self.limits.maximum_retained_bytes
+            || retained_bytes > self.limits.maximum_retained_bytes
         {
             return Err(EvidenceWalAppendFailure {
                 error: EvidenceStateSnafu {
@@ -300,20 +360,30 @@ impl EvidenceWal {
             .into());
         }
         atomic_write(&path, &bytes)?;
-        self.retained_bytes += bytes_len;
+        self.retained_bytes = retained_bytes;
         self.records.push(record);
         Ok(cursor)
     }
 
     #[must_use]
     pub fn next_batch(&self) -> Option<EvidenceBatchV1> {
-        let records = self
-            .records
-            .iter()
-            .take(self.limits.maximum_batch_records)
-            .cloned()
-            .collect::<Vec<_>>();
-        let first_cursor = records.first()?.cursor;
+        let first_cursor = self.records.first()?.cursor;
+        let mut records = Vec::new();
+        let mut wire = mithril_control::EvidenceBatch {
+            first_cursor,
+            last_cursor: first_cursor,
+            records: Vec::new(),
+            batch_sha256: vec![0; 32],
+        };
+        for record in self.records.iter().take(self.limits.maximum_batch_records) {
+            records.push(record.clone());
+            wire.last_cursor = record.cursor;
+            wire.records.push(record.clone().into());
+            if wire.encoded_len() > mithril_control::MAX_EVIDENCE_BATCH_PAYLOAD_BYTES {
+                records.pop();
+                break;
+            }
+        }
         let last_cursor = records.last()?.cursor;
         let batch_sha256 = EvidenceBatchV1::digest(&records);
         Some(EvidenceBatchV1 {
@@ -528,36 +598,14 @@ fn segment_path(root: &Path, cursor: u64) -> PathBuf {
     root.join(format!("{cursor:020}.wal"))
 }
 
-fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
-    let temporary = path.with_extension("tmp");
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&temporary)
-        .context(IoSnafu { path: &temporary })?;
-    file.write_all(bytes)
-        .context(IoSnafu { path: &temporary })?;
-    file.sync_all().context(IoSnafu { path: &temporary })?;
-    fs::rename(&temporary, path).context(IoSnafu { path })?;
-    let parent = path.parent().ok_or_else(|| {
-        EvidenceStateSnafu {
-            reason: "evidence state path has no parent".to_owned(),
-        }
-        .build()
-    })?;
-    sync_directory(parent)
-}
-
-fn sync_directory(path: &Path) -> Result<()> {
-    File::open(path)
-        .context(IoSnafu { path })?
-        .sync_all()
-        .context(IoSnafu { path })
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{segment_path, EvidenceAckV1, EvidenceWal, EvidenceWalLimits, ACK_FILE};
+    use prost::Message as _;
+
+    use super::{
+        segment_path, AckStateV1, EvidenceAckV1, EvidenceRecordV1, EvidenceWal, EvidenceWalLimits,
+        ACK_FILE, WAL_FORMAT_VERSION,
+    };
     use crate::{EvidenceIdV1, ObservationCanonicalizer, TemporalCoverageV1};
 
     fn kernel_observation(sequence: u64) -> crate::Result<crate::ObservationEnvelopeV1> {
@@ -592,22 +640,14 @@ mod tests {
     }
 
     #[test]
-    fn wal_replays_and_removes_only_an_exact_acknowledged_prefix() -> crate::Result<()> {
-        let directory = tempfile::tempdir().map_err(|source| crate::Error::Io {
-            path: std::path::PathBuf::from("temporary evidence directory"),
-            source,
-            location: snafu::Location::new(file!(), line!(), column!()),
-        })?;
+    fn wal_replays_and_removes_only_an_exact_acknowledged_prefix(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
         let mut wal = EvidenceWal::open(directory.path(), limits())?;
         wal.append(&kernel_observation(1)?)?;
         wal.append(&kernel_observation(2)?)?;
         wal.append(&kernel_observation(3)?)?;
-        let batch = wal
-            .next_batch()
-            .ok_or_else(|| crate::Error::EvidenceState {
-                reason: "test batch is missing".to_owned(),
-                location: snafu::Location::new(file!(), line!(), column!()),
-            })?;
+        let batch = wal.next_batch().ok_or("test batch is missing")?;
         assert_eq!((batch.first_cursor, batch.last_cursor), (1, 2));
         assert!(wal
             .acknowledge(EvidenceAckV1 {
@@ -617,11 +657,7 @@ mod tests {
             })
             .is_err());
         let first_path = segment_path(directory.path(), 1);
-        std::fs::remove_file(&first_path).map_err(|source| crate::Error::Io {
-            path: first_path,
-            source,
-            location: snafu::Location::new(file!(), line!(), column!()),
-        })?;
+        std::fs::remove_file(&first_path)?;
         wal.acknowledge(EvidenceAckV1 {
             first_cursor: batch.first_cursor,
             last_cursor: batch.last_cursor,
@@ -633,25 +669,15 @@ mod tests {
         assert_eq!(wal.pending_records(), 1);
         assert_eq!(
             wal.retained_bytes(),
-            std::fs::metadata(segment_path(directory.path(), 3))
-                .map_err(|source| crate::Error::Io {
-                    path: segment_path(directory.path(), 3),
-                    source,
-                    location: snafu::Location::new(file!(), line!(), column!()),
-                })?
-                .len()
+            std::fs::metadata(segment_path(directory.path(), 3))?.len()
         );
         assert_eq!(wal.next_batch().map(|batch| batch.first_cursor), Some(3));
         Ok(())
     }
 
     #[test]
-    fn wal_refuses_corruption_and_retention_exhaustion() -> crate::Result<()> {
-        let directory = tempfile::tempdir().map_err(|source| crate::Error::Io {
-            path: std::path::PathBuf::from("temporary evidence directory"),
-            source,
-            location: snafu::Location::new(file!(), line!(), column!()),
-        })?;
+    fn wal_refuses_corruption_and_retention_exhaustion() -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
         let mut wal = EvidenceWal::open(directory.path(), limits())?;
         for sequence in 1..=4 {
             wal.append(&kernel_observation(sequence)?)?;
@@ -659,44 +685,24 @@ mod tests {
         assert!(wal.append(&kernel_observation(5)?).is_err());
         drop(wal);
         let path = directory.path().join("00000000000000000002.wal");
-        let mut bytes = std::fs::read(&path).map_err(|source| crate::Error::Io {
-            path: path.clone(),
-            source,
-            location: snafu::Location::new(file!(), line!(), column!()),
-        })?;
+        let mut bytes = std::fs::read(&path)?;
         let middle = bytes.len() / 2;
         bytes[middle] ^= 1;
-        std::fs::write(&path, bytes).map_err(|source| crate::Error::Io {
-            path: path.clone(),
-            source,
-            location: snafu::Location::new(file!(), line!(), column!()),
-        })?;
+        std::fs::write(&path, bytes)?;
         assert!(EvidenceWal::open(directory.path(), limits()).is_err());
         Ok(())
     }
 
     #[test]
-    fn wal_recovers_acknowledged_residue_and_owned_torn_writes() -> crate::Result<()> {
-        let directory = tempfile::tempdir().map_err(|source| crate::Error::Io {
-            path: std::path::PathBuf::from("temporary evidence directory"),
-            source,
-            location: snafu::Location::new(file!(), line!(), column!()),
-        })?;
+    fn wal_recovers_acknowledged_residue_and_owned_torn_writes(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
         let mut wal = EvidenceWal::open(directory.path(), limits())?;
         wal.append(&kernel_observation(1)?)?;
         wal.append(&kernel_observation(2)?)?;
         let first_path = segment_path(directory.path(), 1);
-        let first_bytes = std::fs::read(&first_path).map_err(|source| crate::Error::Io {
-            path: first_path.clone(),
-            source,
-            location: snafu::Location::new(file!(), line!(), column!()),
-        })?;
-        let batch = wal
-            .next_batch()
-            .ok_or_else(|| crate::Error::EvidenceState {
-                reason: "test batch is missing".to_owned(),
-                location: snafu::Location::new(file!(), line!(), column!()),
-            })?;
+        let first_bytes = std::fs::read(&first_path)?;
+        let batch = wal.next_batch().ok_or("test batch is missing")?;
         let ack = EvidenceAckV1 {
             first_cursor: batch.first_cursor,
             last_cursor: batch.last_cursor,
@@ -712,23 +718,11 @@ mod tests {
         wal.acknowledge(ack)?;
         drop(wal);
 
-        std::fs::write(&first_path, first_bytes).map_err(|source| crate::Error::Io {
-            path: first_path.clone(),
-            source,
-            location: snafu::Location::new(file!(), line!(), column!()),
-        })?;
+        std::fs::write(&first_path, first_bytes)?;
         let segment_temporary = segment_path(directory.path(), 3).with_extension("tmp");
-        std::fs::write(&segment_temporary, b"torn segment").map_err(|source| crate::Error::Io {
-            path: segment_temporary.clone(),
-            source,
-            location: snafu::Location::new(file!(), line!(), column!()),
-        })?;
+        std::fs::write(&segment_temporary, b"torn segment")?;
         let ack_temporary = directory.path().join(ACK_FILE).with_extension("tmp");
-        std::fs::write(&ack_temporary, b"torn ack").map_err(|source| crate::Error::Io {
-            path: ack_temporary.clone(),
-            source,
-            location: snafu::Location::new(file!(), line!(), column!()),
-        })?;
+        std::fs::write(&ack_temporary, b"torn ack")?;
 
         let mut wal = EvidenceWal::open(directory.path(), limits())?;
         assert_eq!(wal.acknowledged_cursor(), 2);
@@ -737,6 +731,39 @@ mod tests {
         assert!(!segment_temporary.exists());
         assert!(!ack_temporary.exists());
         assert_eq!(wal.append(&kernel_observation(3)?)?, 3);
+        Ok(())
+    }
+
+    #[test]
+    fn next_batch_stays_within_the_control_message_budget() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let records = (1..=mithril_control::MAX_EVIDENCE_BATCH_RECORDS as u64)
+            .map(|cursor| EvidenceRecordV1 {
+                format_version: WAL_FORMAT_VERSION,
+                cursor,
+                observation_id: [1; 32],
+                payload: vec![2; 127 * 1_024],
+                payload_sha256: [3; 32],
+                previous_record_sha256: [4; 32],
+                record_sha256: [5; 32],
+            })
+            .collect::<Vec<_>>();
+        let wal = EvidenceWal {
+            root: std::path::PathBuf::from("unused-test-WAL"),
+            limits: EvidenceWalLimits {
+                maximum_retained_bytes: u64::MAX,
+                maximum_retained_records: records.len(),
+                ..EvidenceWalLimits::default()
+            },
+            records,
+            retained_bytes: 0,
+            acknowledged: AckStateV1::default(),
+        };
+
+        let batch = wal.next_batch().ok_or("bounded test batch is missing")?;
+        let wire: mithril_control::EvidenceBatch = batch.clone().into();
+        assert!(wire.encoded_len() <= mithril_control::MAX_EVIDENCE_BATCH_PAYLOAD_BYTES);
+        assert!(batch.records.len() < mithril_control::MAX_EVIDENCE_BATCH_RECORDS);
         Ok(())
     }
 }

@@ -34,22 +34,7 @@ impl NodeEpochs {
             path: state_directory,
         })?;
         let path = state_directory.join("label-epoch");
-        let current = match fs::read_to_string(&path) {
-            Ok(value) => value.trim().parse::<u64>().map_err(|error| {
-                InvalidConfigurationSnafu {
-                    reason: format!("stored label epoch is invalid: {error}"),
-                }
-                .build()
-            })?,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => 0,
-            Err(source) => {
-                return Err(crate::Error::Io {
-                    path,
-                    source,
-                    location: snafu::Location::default(),
-                })
-            }
-        };
+        let current = read_epoch(&path, "label")?;
         if recover {
             ensure!(
                 current > 0,
@@ -59,33 +44,7 @@ impl NodeEpochs {
             );
             return Ok(current);
         }
-        let next = current.checked_add(1).ok_or_else(|| {
-            InvalidConfigurationSnafu {
-                reason: "label epoch exhausted".to_owned(),
-            }
-            .build()
-        })?;
-        ensure!(
-            next > 0,
-            InvalidConfigurationSnafu {
-                reason: "label epoch must be nonzero",
-            }
-        );
-        let temporary = state_directory.join("label-epoch.next");
-        let mut file = File::create(&temporary).context(IoSnafu { path: &temporary })?;
-        file.write_all(format!("{next}\n").as_bytes())
-            .context(IoSnafu { path: &temporary })?;
-        file.sync_all().context(IoSnafu { path: &temporary })?;
-        fs::rename(&temporary, &path).context(IoSnafu { path: &path })?;
-        File::open(state_directory)
-            .context(IoSnafu {
-                path: state_directory,
-            })?
-            .sync_all()
-            .context(IoSnafu {
-                path: state_directory,
-            })?;
-        Ok(next)
+        write_next_epoch(state_directory, &path, current, "label")
     }
 
     pub(crate) fn source_epoch(state_directory: &Path, recover: bool) -> Result<u64> {
@@ -93,22 +52,7 @@ impl NodeEpochs {
             path: state_directory,
         })?;
         let path = state_directory.join("evidence-source-epoch");
-        let current = match fs::read_to_string(&path) {
-            Ok(value) => value.trim().parse::<u64>().map_err(|error| {
-                InvalidConfigurationSnafu {
-                    reason: format!("stored evidence source epoch is invalid: {error}"),
-                }
-                .build()
-            })?,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => 0,
-            Err(source) => {
-                return Err(crate::Error::Io {
-                    path,
-                    source,
-                    location: snafu::Location::default(),
-                })
-            }
-        };
+        let current = read_epoch(&path, "evidence source")?;
         let durable_state_exists = Self::evidence_wal_directory(state_directory).exists()
             || state_directory.join("evidence-coverage-v1.json").exists();
         if recover && current > 0 {
@@ -122,43 +66,59 @@ impl NodeEpochs {
                 }
             );
         }
-        let next = current.checked_add(1).ok_or_else(|| {
+        write_next_epoch(state_directory, &path, current, "evidence source")
+    }
+}
+
+fn read_epoch(path: &Path, name: &str) -> Result<u64> {
+    match fs::read_to_string(path) {
+        Ok(value) => value.trim().parse::<u64>().map_err(|error| {
             InvalidConfigurationSnafu {
-                reason: "evidence source epoch exhausted".to_owned(),
+                reason: format!("stored {name} epoch is invalid: {error}"),
             }
             .build()
-        })?;
-        let temporary = state_directory.join("evidence-source-epoch.next");
-        let mut file = File::create(&temporary).context(IoSnafu { path: &temporary })?;
-        file.write_all(format!("{next}\n").as_bytes())
-            .context(IoSnafu { path: &temporary })?;
-        file.sync_all().context(IoSnafu { path: &temporary })?;
-        fs::rename(&temporary, &path).context(IoSnafu { path: &path })?;
-        File::open(state_directory)
-            .context(IoSnafu {
-                path: state_directory,
-            })?
-            .sync_all()
-            .context(IoSnafu {
-                path: state_directory,
-            })?;
-        Ok(next)
+        }),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(0),
+        Err(source) => Err(crate::Error::Io {
+            path: path.to_owned(),
+            source,
+            location: snafu::Location::default(),
+        }),
     }
+}
+
+fn write_next_epoch(state_directory: &Path, path: &Path, current: u64, name: &str) -> Result<u64> {
+    let next = current.checked_add(1).ok_or_else(|| {
+        InvalidConfigurationSnafu {
+            reason: format!("{name} epoch exhausted"),
+        }
+        .build()
+    })?;
+    let temporary = path.with_extension("next");
+    let mut file = File::create(&temporary).context(IoSnafu { path: &temporary })?;
+    file.write_all(format!("{next}\n").as_bytes())
+        .context(IoSnafu { path: &temporary })?;
+    file.sync_all().context(IoSnafu { path: &temporary })?;
+    fs::rename(&temporary, path).context(IoSnafu { path })?;
+    File::open(state_directory)
+        .context(IoSnafu {
+            path: state_directory,
+        })?
+        .sync_all()
+        .context(IoSnafu {
+            path: state_directory,
+        })?;
+    Ok(next)
 }
 
 #[cfg(test)]
 mod tests {
-    use snafu::ResultExt as _;
-
     use super::NodeEpochs;
-    use crate::error::IoSnafu;
     use crate::{EvidenceWal, EvidenceWalLimits};
 
     #[test]
-    fn label_epoch_is_persistent_monotonic_and_nonzero() -> crate::Result<()> {
-        let directory = tempfile::tempdir().context(IoSnafu {
-            path: "temporary epoch directory",
-        })?;
+    fn epochs_are_persistent_monotonic_and_nonzero() -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
         assert_eq!(NodeEpochs::label_epoch(directory.path(), false)?, 1);
         assert_eq!(NodeEpochs::label_epoch(directory.path(), true)?, 1);
         assert_eq!(NodeEpochs::label_epoch(directory.path(), false)?, 2);
@@ -169,20 +129,18 @@ mod tests {
     }
 
     #[test]
-    fn first_effect_source_can_follow_identity_only_recovery() -> crate::Result<()> {
-        let directory = tempfile::tempdir().context(IoSnafu {
-            path: "temporary epoch directory",
-        })?;
+    fn first_effect_source_can_follow_identity_only_recovery(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
         assert_eq!(NodeEpochs::label_epoch(directory.path(), false)?, 1);
         assert_eq!(NodeEpochs::source_epoch(directory.path(), true)?, 1);
         Ok(())
     }
 
     #[test]
-    fn durable_evidence_without_its_source_epoch_is_rejected() -> crate::Result<()> {
-        let directory = tempfile::tempdir().context(IoSnafu {
-            path: "temporary epoch directory",
-        })?;
+    fn durable_evidence_without_its_source_epoch_is_rejected(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
         let _wal = EvidenceWal::open(
             NodeEpochs::evidence_wal_directory(directory.path()),
             EvidenceWalLimits::default(),

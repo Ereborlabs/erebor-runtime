@@ -14,16 +14,17 @@ use zerocopy::FromBytes as _;
 
 mod coverage;
 mod model;
+mod persistence;
 mod wal;
 mod window;
 
 pub use coverage::{
-    CoverageCountersV1, CoverageGapReasonV1, CoverageHealthOwner, CoverageIntervalV1,
-    CoverageSnapshotV1, EffectObservationCpuHealth,
+    CoverageCountersV1, CoverageHealthOwner, CoverageIntervalV1, CoverageSnapshotV1,
+    EffectObservationCpuHealth,
 };
 pub use model::{
-    CoverageStateV1, EvidenceDigestV1, EvidenceFieldKeyV1, EvidenceFieldV1, EvidenceIdV1,
-    EvidencePayloadV1, EvidenceValueV1, IntegrityV1, LocalSubjectBindingV1,
+    CoverageGapReasonV1, CoverageStateV1, EvidenceDigestV1, EvidenceFieldKeyV1, EvidenceFieldV1,
+    EvidenceIdV1, EvidencePayloadV1, EvidenceValueV1, IntegrityV1, LocalSubjectBindingV1,
     ObservationCanonicalizer, ObservationEnvelopeV1, OperationResultAuthorityV1, ProofQualityV1,
     RemoteSubjectBindingV1, SensitivityV1, SourceAuthorityV1, TemporalCoverageV1,
     MAX_EVIDENCE_FIELDS_V1, MAX_PROVENANCE_OBSERVATIONS_V1,
@@ -127,6 +128,14 @@ impl EffectObservationStore {
     pub fn record_bytes(&self, bytes: &[u8]) {
         let Ok(event) = EffectObservationV1::read_from_bytes(bytes) else {
             self.inner.decoder_errors.fetch_add(1, Ordering::Relaxed);
+            if let Some(durable) = &self.inner.durable {
+                self.inner.evidence_errors.fetch_add(1, Ordering::Relaxed);
+                let _result = durable
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .coverage
+                    .mark_all_gapped(CoverageGapReasonV1::DecoderError);
+            }
             return;
         };
         {
@@ -171,19 +180,7 @@ impl EffectObservationStore {
     }
 
     pub fn acknowledge_evidence(&self, ack: EvidenceAckV1) -> crate::Result<()> {
-        let durable = self
-            .inner
-            .durable
-            .as_ref()
-            .ok_or_else(|| crate::Error::EvidenceState {
-                reason: "node has no durable evidence owner".to_owned(),
-                location: snafu::Location::new(file!(), line!(), column!()),
-            })?;
-        durable
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .wal
-            .acknowledge(ack)
+        self.lock_durable()?.wal.acknowledge(ack)
     }
 
     #[must_use]
@@ -197,19 +194,7 @@ impl EffectObservationStore {
                 reason: "effect observation health bytes are invalid".to_owned(),
                 location: snafu::Location::new(file!(), line!(), column!()),
             })?;
-        let durable = self
-            .inner
-            .durable
-            .as_ref()
-            .ok_or_else(|| crate::Error::EvidenceState {
-                reason: "node has no durable coverage owner".to_owned(),
-                location: snafu::Location::new(file!(), line!(), column!()),
-            })?;
-        durable
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .coverage
-            .sample_health(&samples)
+        self.lock_durable()?.coverage.sample_health(&samples)
     }
 
     pub fn recover_coverage_after_probe(&self, per_cpu_bytes: &[u8]) -> crate::Result<()> {
@@ -218,35 +203,11 @@ impl EffectObservationStore {
                 reason: "effect observation health bytes are invalid".to_owned(),
                 location: snafu::Location::new(file!(), line!(), column!()),
             })?;
-        let durable = self
-            .inner
-            .durable
-            .as_ref()
-            .ok_or_else(|| crate::Error::EvidenceState {
-                reason: "node has no durable coverage owner".to_owned(),
-                location: snafu::Location::new(file!(), line!(), column!()),
-            })?;
-        durable
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .coverage
-            .recover_after_probe(&samples)
+        self.lock_durable()?.coverage.recover_after_probe(&samples)
     }
 
     pub fn mark_coverage_gapped(&self, reason: CoverageGapReasonV1) -> crate::Result<()> {
-        let durable = self
-            .inner
-            .durable
-            .as_ref()
-            .ok_or_else(|| crate::Error::EvidenceState {
-                reason: "node has no durable coverage owner".to_owned(),
-                location: snafu::Location::new(file!(), line!(), column!()),
-            })?;
-        durable
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .coverage
-            .mark_all_gapped(reason)
+        self.lock_durable()?.coverage.mark_all_gapped(reason)
     }
 
     #[must_use]
@@ -313,6 +274,19 @@ impl EffectObservationStore {
             .recent
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn lock_durable(&self) -> crate::Result<MutexGuard<'_, DurableEvidence>> {
+        Ok(self
+            .inner
+            .durable
+            .as_ref()
+            .ok_or_else(|| crate::Error::EvidenceState {
+                reason: "node has no durable evidence owner".to_owned(),
+                location: snafu::Location::new(file!(), line!(), column!()),
+            })?
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner))
     }
 }
 
@@ -432,7 +406,7 @@ fn to_ipc(event: EffectObservationV1) -> MithrilEffectObservation {
 }
 
 fn id_hex(id: Id128V1) -> String {
-    format!("{:016x}{:016x}", id.high, id.low)
+    hex::encode(id.to_be_bytes())
 }
 
 const fn reason_name(reason: u8) -> &'static str {
@@ -688,10 +662,9 @@ mod tests {
             4,
             directory.path().join("wal"),
             EvidenceWalLimits {
-                maximum_record_bytes: 128 * 1_024,
-                maximum_retained_bytes: 256 * 1_024,
                 maximum_retained_records: 1,
                 maximum_batch_records: 1,
+                ..EvidenceWalLimits::default()
             },
             ObservationCanonicalizer::new(
                 EvidenceIdV1::new(1, 2),

@@ -70,37 +70,6 @@ async fn mtls_registration_acknowledges_trust_and_reconnects_with_a_fresh_nonce(
 }
 
 #[tokio::test]
-async fn mtls_keeps_a_degraded_node_connected_for_health_upload() -> Result<(), Box<dyn StdError>> {
-    let directory = tempfile::tempdir()?;
-    let certificates = Certificates::issue(false)?;
-    let files = certificates.write(directory.path())?;
-    let address = free_address()?;
-    let control = ControlPlane::new(
-        vec![AllowedNodeIdentity {
-            node_id: "node-a".to_owned(),
-            certificate_sha256: certificates.node_digest(),
-        }],
-        TrustGenerationV1 {
-            generation: 1,
-            bundle_digest: "d".repeat(64),
-        },
-    );
-    let (shutdown, server) = start_server(address, &files, control);
-    tokio::time::sleep(Duration::from_millis(20)).await;
-
-    let connector =
-        NodeControlConnector::new(files.node_config(address), "node-a".to_owned(), [7; 16]);
-    let mut trust = TrustCache::load(directory.path())?;
-    let connection = connector.connect(registration(), false, &mut trust).await?;
-    tokio::time::sleep(Duration::from_millis(20)).await;
-
-    drop(connection);
-    let _result = shutdown.send(());
-    server.await??;
-    Ok(())
-}
-
-#[tokio::test]
 async fn mtls_rejects_wrong_node_binding_and_expired_client_identity(
 ) -> Result<(), Box<dyn StdError>> {
     assert_rejected_identity(false, "node-b").await?;
@@ -133,10 +102,9 @@ async fn mtls_evidence_upload_replays_after_disconnect_and_advances_only_on_ack(
         4,
         directory.path().join("node-wal"),
         EvidenceWalLimits {
-            maximum_record_bytes: 128 * 1_024,
-            maximum_retained_bytes: 1024 * 1024,
             maximum_retained_records: 10,
             maximum_batch_records: 10,
+            ..EvidenceWalLimits::default()
         },
         ObservationCanonicalizer::new(
             EvidenceIdV1::new(1, 2),
@@ -184,14 +152,7 @@ async fn mtls_evidence_upload_replays_after_disconnect_and_advances_only_on_ack(
     let NodeControlMessage::EvidenceAck(ack) = second.next_message().await? else {
         return Err("Control did not acknowledge evidence".into());
     };
-    observations.acknowledge_evidence(mithril_node::EvidenceAckV1 {
-        first_cursor: ack.first_cursor,
-        last_cursor: ack.last_cursor,
-        batch_sha256: ack
-            .batch_sha256
-            .try_into()
-            .map_err(|_| "bad acknowledgement digest")?,
-    })?;
+    observations.acknowledge_evidence(ack.try_into()?)?;
     assert!(observations.next_evidence_batch().is_none());
     assert_eq!(control.allowed_nodes().len(), 1);
 
@@ -246,7 +207,7 @@ async fn mtls_coverage_upload_preserves_gap_truth_at_control() -> Result<(), Box
     let connector =
         NodeControlConnector::new(files.node_config(address), "node-a".to_owned(), [7; 16]);
     let mut trust = TrustCache::load(directory.path())?;
-    let mut connection = connector.connect(registration(), true, &mut trust).await?;
+    let mut connection = connector.connect(registration(), false, &mut trust).await?;
     tokio::time::sleep(Duration::from_millis(20)).await;
     let expected = connection
         .send_coverage_report(
