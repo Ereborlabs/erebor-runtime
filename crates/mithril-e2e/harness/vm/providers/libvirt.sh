@@ -37,6 +37,11 @@ ssh_options() {
 }
 
 case ${1:-} in
+  address)
+    (($# == 2)) || { echo "usage: $0 address NAME" >&2; exit 2; }
+    require_command virsh
+    address "$2"
+    ;;
   create)
     (($# == 4)) || { echo "usage: $0 create NAME WORK_DIRECTORY PUBLIC_KEY" >&2; exit 2; }
     name=$2
@@ -244,7 +249,7 @@ case ${1:-} in
     rm -f -- "$owner_file"
     ;;
   *)
-    echo "usage: $0 {create|wait|put|get|run|ssh|destroy} ..." >&2
+    echo "usage: $0 {address|create|wait|put|get|run|ssh|destroy} ..." >&2
     exit 2
     ;;
 esac

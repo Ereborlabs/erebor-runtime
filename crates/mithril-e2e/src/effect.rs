@@ -48,7 +48,11 @@ use crate::LatencyDistributionV1;
 use crate::Result;
 
 pub use child::{run_effect_child, run_mount_setattr_child};
-pub use network::{NetworkFixtureResultV1, NetworkPhysicalProbeBundleV1, NetworkTestRunner};
+pub use network::{
+    run_network_peer_server, NetworkFixtureResultV1, NetworkPeerServerResultV1,
+    NetworkPeerTargetV1, NetworkPhysicalProbeBundleV1, NetworkTestRunner, NETWORK_PEER_DENIED_PORT,
+    NETWORK_PEER_TCP_PORT, NETWORK_PEER_UDP_PORT,
+};
 
 pub(super) const PROFILE_GENERATION_REF_ID: u64 = 1;
 const NEXT_PROFILE_GENERATION_REF_ID: u64 = 2;
