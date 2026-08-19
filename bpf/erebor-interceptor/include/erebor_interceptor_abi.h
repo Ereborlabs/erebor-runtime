@@ -1168,9 +1168,13 @@ typedef struct device_effect_key_v1 {
 
 typedef struct effect_observation_health_v1 {
   uint64_t attempted;
+  uint64_t suppressed;
+  uint64_t requested;
   uint64_t emitted;
   uint64_t lost;
+  uint64_t classifier_miss_count;
   uint64_t unresolved;
+  uint64_t next_sequence;
 } effect_observation_health_v1;
 
 typedef struct exact_file_object_key_v1 {
@@ -1191,6 +1195,9 @@ typedef struct network_namespace_generation_v1 {
 
 typedef struct effect_observation_v1 {
   uint64_t observed_boottime_ns;
+  uint64_t source_sequence;
+  uint32_t source_cpu_id;
+  uint8_t reserved_source[4];
   uint64_t task_cookie;
   uint64_t profile_generation_ref_id;
   struct id128_v1 process_lineage_id;

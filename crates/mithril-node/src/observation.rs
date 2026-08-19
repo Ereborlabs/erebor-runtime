@@ -10,6 +10,16 @@ use erebor_interceptor_abi::{
 use erebor_runtime_ipc::v1::MithrilEffectObservation;
 use zerocopy::FromBytes as _;
 
+mod model;
+
+pub use model::{
+    CoverageStateV1, EvidenceFieldKeyV1, EvidenceFieldV1, EvidenceIdV1, EvidencePayloadV1,
+    EvidenceValueV1, IntegrityV1, LocalSubjectBindingV1, ObservationCanonicalizer,
+    ObservationEnvelopeV1, OperationResultAuthorityV1, ProofQualityV1, RemoteSubjectBindingV1,
+    SensitivityV1, SourceAuthorityV1, TemporalCoverageV1, MAX_EVIDENCE_FIELDS_V1,
+    MAX_PROVENANCE_OBSERVATIONS_V1,
+};
+
 const DEFAULT_RECENT_EFFECT_CAPACITY: usize = 1_024;
 
 #[derive(Clone)]
@@ -31,8 +41,11 @@ struct RecentEffects {
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct EffectObservationHealth {
     pub attempted: u64,
+    pub suppressed: u64,
+    pub requested: u64,
     pub emitted: u64,
     pub lost: u64,
+    pub classifier_miss_count: u64,
     pub unresolved: u64,
     pub decoder_errors: u64,
 }
@@ -115,8 +128,13 @@ impl EffectObservationStore {
                 continue;
             };
             health.attempted = health.attempted.saturating_add(cpu.attempted);
+            health.suppressed = health.suppressed.saturating_add(cpu.suppressed);
+            health.requested = health.requested.saturating_add(cpu.requested);
             health.emitted = health.emitted.saturating_add(cpu.emitted);
             health.lost = health.lost.saturating_add(cpu.lost);
+            health.classifier_miss_count = health
+                .classifier_miss_count
+                .saturating_add(cpu.classifier_miss_count);
             health.unresolved = health.unresolved.saturating_add(cpu.unresolved);
         }
         health
@@ -133,6 +151,8 @@ impl EffectObservationStore {
 fn to_ipc(event: EffectObservationV1) -> MithrilEffectObservation {
     MithrilEffectObservation {
         observed_boottime_ns: event.observed_boottime_ns,
+        source_sequence: event.source_sequence,
+        source_cpu_id: event.source_cpu_id,
         task_cookie: event.task_cookie,
         profile_generation_ref_id: event.profile_generation_ref_id,
         process_lineage_id: id_hex(event.process_lineage_id),
@@ -292,6 +312,8 @@ mod tests {
         let store = EffectObservationStore::new(1);
         for task_cookie in [7, 8] {
             let event = EffectObservationV1 {
+                source_sequence: task_cookie + 100,
+                source_cpu_id: 3,
                 task_cookie,
                 process_lineage_id: Id128V1::new(1, 2),
                 controller_process_state_id: Id128V1::new(3, 4),
@@ -335,6 +357,8 @@ mod tests {
         let recent = store.recent();
         assert_eq!(recent.len(), 1);
         assert_eq!(recent[0].task_cookie, 8);
+        assert_eq!(recent[0].source_sequence, 108);
+        assert_eq!(recent[0].source_cpu_id, 3);
         assert_eq!(
             recent[0].process_lineage_id,
             "00000000000000010000000000000002"
@@ -420,21 +444,32 @@ mod tests {
         store.record_bytes(&[1, 2, 3]);
         let first = EffectObservationHealthV1 {
             attempted: 4,
+            suppressed: 0,
+            requested: 4,
             emitted: 3,
             lost: 1,
+            classifier_miss_count: 1,
             unresolved: 2,
+            next_sequence: 4,
         };
         let second = EffectObservationHealthV1 {
             attempted: 6,
+            suppressed: 1,
+            requested: 5,
             emitted: 5,
-            lost: 1,
+            lost: 0,
+            classifier_miss_count: 2,
             unresolved: 4,
+            next_sequence: 6,
         };
         let bytes = [first.as_bytes(), second.as_bytes()].concat();
         let health = store.health(Some(&bytes));
         assert_eq!(health.attempted, 10);
+        assert_eq!(health.suppressed, 1);
+        assert_eq!(health.requested, 9);
         assert_eq!(health.emitted, 8);
-        assert_eq!(health.lost, 2);
+        assert_eq!(health.lost, 1);
+        assert_eq!(health.classifier_miss_count, 3);
         assert_eq!(health.unresolved, 6);
         assert_eq!(health.decoder_errors, 1);
     }

@@ -105,4 +105,6 @@ message MithrilEffectObservation {
   uint64 network_parent_socket_generation = 68;
   uint64 network_current_namespace_address = 69;
   uint32 network_current_namespace_inode = 70;
+  uint64 source_sequence = 71;
+  uint32 source_cpu_id = 72;
 }

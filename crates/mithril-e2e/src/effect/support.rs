@@ -138,8 +138,13 @@ pub(super) fn health_delta(
 ) -> EffectObservationHealth {
     EffectObservationHealth {
         attempted: later.attempted.saturating_sub(earlier.attempted),
+        suppressed: later.suppressed.saturating_sub(earlier.suppressed),
+        requested: later.requested.saturating_sub(earlier.requested),
         emitted: later.emitted.saturating_sub(earlier.emitted),
         lost: later.lost.saturating_sub(earlier.lost),
+        classifier_miss_count: later
+            .classifier_miss_count
+            .saturating_sub(earlier.classifier_miss_count),
         unresolved: later.unresolved.saturating_sub(earlier.unresolved),
         decoder_errors: later.decoder_errors.saturating_sub(earlier.decoder_errors),
     }
@@ -703,20 +708,27 @@ mod tests {
     fn health_delta_preserves_ring_accounting() {
         let before = EffectObservationHealth {
             attempted: 10,
+            suppressed: 0,
+            requested: 10,
             emitted: 8,
             lost: 2,
+            classifier_miss_count: 0,
             unresolved: 1,
             decoder_errors: 0,
         };
         let after = EffectObservationHealth {
             attempted: 25,
+            suppressed: 0,
+            requested: 25,
             emitted: 17,
             lost: 8,
+            classifier_miss_count: 0,
             unresolved: 3,
             decoder_errors: 0,
         };
         let delta = health_delta(after, before);
-        assert_eq!(delta.attempted, delta.emitted + delta.lost);
+        assert_eq!(delta.attempted, delta.suppressed + delta.requested);
+        assert_eq!(delta.requested, delta.emitted + delta.lost);
         assert_eq!(delta.lost, 6);
     }
 

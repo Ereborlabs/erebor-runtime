@@ -1144,6 +1144,31 @@ mod tests {
     }
 
     #[test]
+    fn effect_observation_accounting_allocates_sequence_after_the_decision() {
+        let source =
+            include_str!("../../../bpf/erebor-interceptor/programs/identity_effects.bpf.h");
+        let emission = source
+            .split("static __always_inline int emit_effect_observation")
+            .nth(1)
+            .and_then(|source| {
+                source
+                    .split("static __always_inline int hard_effect_result")
+                    .next()
+            })
+            .unwrap_or_default();
+
+        assert!(emission.contains("health->attempted++;"));
+        assert!(emission.contains("health->requested++;"));
+        assert!(emission.contains("health->next_sequence == ~0ULL"));
+        assert!(emission.contains("scratch->observation.source_sequence"));
+        assert!(emission.contains("scratch->observation.source_cpu_id"));
+        assert!(emission.contains("health->lost++;"));
+        assert!(emission.contains("health->emitted++;"));
+        assert!(emission.contains("return result;"));
+        assert!(!emission.contains("\n    result ="));
+    }
+
+    #[test]
     fn unrepresentable_exec_candidate_reaches_effect_policy_without_allocating_ids() {
         let source = include_str!("../../../bpf/erebor-interceptor/programs/identity_exec.bpf.h");
         let initial = source
