@@ -212,6 +212,27 @@ impl EffectObservationStore {
             .sample_health(&samples)
     }
 
+    pub fn recover_coverage_after_probe(&self, per_cpu_bytes: &[u8]) -> crate::Result<()> {
+        let samples =
+            decode_cpu_health(per_cpu_bytes).ok_or_else(|| crate::Error::EvidenceState {
+                reason: "effect observation health bytes are invalid".to_owned(),
+                location: snafu::Location::new(file!(), line!(), column!()),
+            })?;
+        let durable = self
+            .inner
+            .durable
+            .as_ref()
+            .ok_or_else(|| crate::Error::EvidenceState {
+                reason: "node has no durable coverage owner".to_owned(),
+                location: snafu::Location::new(file!(), line!(), column!()),
+            })?;
+        durable
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .coverage
+            .recover_after_probe(&samples)
+    }
+
     pub fn mark_coverage_gapped(&self, reason: CoverageGapReasonV1) -> crate::Result<()> {
         let durable = self
             .inner

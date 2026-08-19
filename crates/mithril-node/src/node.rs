@@ -238,7 +238,8 @@ impl NodeChassis {
             })
             .transpose()
             .context(InterceptorSnafu)?;
-        let evidence_healthy = !policy_loaded || sample_effect_health(&host, &observations).is_ok();
+        let evidence_healthy =
+            !policy_loaded || sample_effect_health(&host, &observations, true).is_ok();
         let manifest = host.manifest();
         let capabilities = vec![
             CapabilityRecord {
@@ -525,7 +526,7 @@ impl NodeChassis {
                                     _instant = reconciliation.tick() => {}
                                 }
                             } => {
-                                match self.reconcile_bindings().await {
+                                match self.reconcile_bindings(true).await {
                                     ReconciliationOutcome::Healthy => {
                                         if !evidence_healthy {
                                             evidence_healthy = true;
@@ -640,7 +641,7 @@ impl NodeChassis {
                             _instant = reconciliation.tick() => {}
                         }
                     } => {
-                        match self.reconcile_bindings().await {
+                        match self.reconcile_bindings(false).await {
                             ReconciliationOutcome::Healthy => {
                                 if !evidence_healthy {
                                     evidence_healthy = true;
@@ -714,7 +715,7 @@ impl NodeChassis {
         Ok(())
     }
 
-    async fn reconcile_bindings(&mut self) -> ReconciliationOutcome {
+    async fn reconcile_bindings(&mut self, recover_evidence: bool) -> ReconciliationOutcome {
         let Some(host) = self.host.as_mut() else {
             return ReconciliationOutcome::KernelUnhealthy;
         };
@@ -726,7 +727,7 @@ impl NodeChassis {
         }
         if self.policy.is_some()
             && (self.observations.evidence_errors() > 0
-                || sample_effect_health(host, &self.observations).is_err())
+                || sample_effect_health(host, &self.observations, recover_evidence).is_err())
         {
             let _result = self
                 .observations
@@ -854,6 +855,7 @@ impl NodeChassis {
 fn sample_effect_health(
     host: &KernelHost,
     observations: &crate::EffectObservationStore,
+    recover: bool,
 ) -> Result<()> {
     let bytes = host
         .lookup_map("effect_observation_health", &0_u32.to_ne_bytes())
@@ -869,10 +871,18 @@ fn sample_effect_health(
         .coverage_snapshot()
         .is_some_and(|snapshot| snapshot.supports_negative_claim())
     {
-        return EvidenceStateSnafu {
-            reason: "effect observation coverage cannot support a negative claim".to_owned(),
+        if recover {
+            observations.recover_coverage_after_probe(&bytes)?;
         }
-        .fail();
+        if !observations
+            .coverage_snapshot()
+            .is_some_and(|snapshot| snapshot.supports_negative_claim())
+        {
+            return EvidenceStateSnafu {
+                reason: "effect observation coverage cannot support a negative claim".to_owned(),
+            }
+            .fail();
+        }
     }
     Ok(())
 }
