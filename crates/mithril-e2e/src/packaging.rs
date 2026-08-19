@@ -98,7 +98,9 @@ impl VmTestHarness {
 
         ensure!(
             run.contains("cargo build --locked -p mithril-e2e")
-                && run.matches(" physical-probe").count() == 5
+                && run.matches(" physical-probe").count() == 6
+                && run.contains("--bin mithril-network-test")
+                && run.contains("network-physical-probe.json")
                 && run.contains("physical-probe --protect")
                 && run.contains("--with-kubernetes")
                 && run.contains("--previous-bundle")
