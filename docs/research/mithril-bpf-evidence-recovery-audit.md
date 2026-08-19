@@ -180,3 +180,51 @@ and a controlled probe.
 The physical record must measure the configured queue, ring, WAL, batch,
 latency, and recovery bounds. Generated result digests and other CI-owned
 qualification artifacts must not be committed.
+
+## Post-Implementation Re-Audit
+
+The final re-audit used source commit `6686a23` on 2026-08-19. It read the
+checked-in C and Rust implementation and inspected the compiled BPF object.
+
+The production effect path has this order:
+
+1. `begin_effect_observation` clears the complete scratch observation.
+2. The policy path fixes the physical result.
+3. `emit_effect_observation` updates the per-CPU health record and allocates a
+   nonzero source sequence.
+4. The helper copies the fixed result and exact CPU into the record.
+5. The helper reserves and submits the ring record. A missing health record,
+   exhausted sequence, missing scratch record, or failed reservation returns
+   the unchanged physical result. Represented loss increments `lost`.
+
+The checked-in path requests every represented effect. Therefore,
+`suppressed` is zero, and the complete equations remain explicit:
+
+```text
+attempted = suppressed + requested
+requested = emitted + lost
+```
+
+An unresolved or unsupported object increments both `unresolved` and
+`classifier_miss_count`. Node validates the equations and each per-CPU source
+sequence. A decoder error, counter regression, or first-sequence gap closes
+coverage.
+
+The re-audit also confirmed these lifecycle properties:
+
+- `effect_observations` is the one 4 MiB ring buffer written by the BPF effect
+  helpers and drained by the sole Node reader;
+- `effect_observation_health` is the one-entry per-CPU array written by the
+  BPF helpers and read by Node health and coverage accounting;
+- `KernelHostOwner` owns both maps, the exclusive pin-root lease, required
+  links, and startup manifest;
+- recovery compares held lease identity, map IDs and layouts, link IDs,
+  program IDs, and 8-byte program tags before it restores readiness; and
+- a mismatch closes readiness and evidence claims. It does not create another
+  loader, scanner, or authority owner.
+
+The automated BPF checks inspect ABI layouts, the compiled object, BTF map
+shapes, required programs, and instruction behavior. They do not search C or
+Rust source text for implementation phrases. The final physical run confirmed
+that fixed denies and benign allows remain correct during ring saturation and
+after restart.

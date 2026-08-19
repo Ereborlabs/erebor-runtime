@@ -96,7 +96,7 @@ Distributed graph joins, notifications, provider connectors, and response.
 
 | Deliverable | Result | Durable owner and proof |
 | --- | --- | --- |
-| D6.1 | Done | Production BPF emits CPU-scoped ordered records after it fixes the decision. `ObservationCanonicalizer` validates bounded `ObservationEnvelopeV1` records and deterministic identifiers. |
+| D6.1 | Done | Production BPF emits CPU-scoped ordered records after it fixes the decision. The shared Control evidence model owns `ObservationEnvelopeV1`, proof, coverage, and identifier validation. Node owns kernel normalization. |
 | D6.2 | Done | `EvidenceWal` owns immutable hash-chained segments, synchronization, bounds, replay, and exact acknowledgement removal. `EvidenceIntakeOwner` validates and synchronizes Control records and cursors before acknowledgement. |
 | D6.3 | Done | `CoverageHealthOwner` owns durable healthy and gapped intervals, counter equations, exact gap reasons, recovery transitions, and negative-claim eligibility. Physical saturation proves fixed decisions and explicit ring and WAL gaps. |
 | D6.4 | Done | Existing policy, native identity, mount, socket, exception, and response-floor owners recover exact retained state. The physical restart probe preserves live restrictions and installs an exact post-restart fence. |
@@ -111,16 +111,17 @@ Validated architecture revision/digest:
   22678b9c0379ff915fe595059f3da2789c3e32cdf54d61656c7257175263d14a.
 Completed deliverable IDs: D6.1-D6.6.
 Files and durable owners changed: Interceptor ABI and BPF effect accounting;
-  Interceptor lease, manifest, host recovery, and bundled-object tests; node
-  observation model, WAL, coverage, source epochs, deterministic windows,
-  Control connector, startup, policy recovery, and native reconciliation;
-  Control protocol, durable evidence intake, configuration, and service;
-  current-source behavioral tests and VM physical probes; BPF audit, manual
-  acceptance record, and implementation review guide.
+  Interceptor lease, manifest, host recovery, and bundled-object tests;
+  Control-owned shared evidence model, protocol, durable intake,
+  configuration, and service; node kernel normalization, WAL, coverage,
+  source epochs, deterministic windows, Control connector, startup, policy
+  recovery, and native reconciliation; current-source behavioral tests and VM
+  physical probes; BPF audit, manual acceptance record, and implementation
+  review guide.
 Upstream-adoption dossier IDs used: none. The BPF evidence and recovery audit
   re-audited the checked-in production programs and local Cilium and Tetragon
   sources. Audit digest:
-  0e83ba85185bacb24d46c8c1c0fbc58604e1b05ca67372fa7fd338a9c1244611.
+  7419f9c2f847a86f668973f9adb4e117ea136a78a375043835b18e983b269875.
 Fixture cases and exact physical results: IPC-ENDPOINT-RESTART-006,
   IPC-RELATIONSHIP-LOSS-002, LSM-DENY-SATURATION-001,
   SOURCE-KA-READER-LOSS-003, SOURCE-KA-CAPACITY-005, and
@@ -130,27 +131,27 @@ Fixture cases and exact physical results: IPC-ENDPOINT-RESTART-006,
   recovery, network enforcement, benchmark, cleanup, and legitimate-control
   checks. The final two-node K3s harness reports two Ready nodes and passes
   both directions.
-Commands and exact source state covered: source commit df80630;
+Commands and exact source state covered: source commit 6686a23;
   `bash .github/scripts/verify-rust-ci.sh`; `cargo test --workspace
   --all-targets --all-features -- --skip
   verification_bundle_is_frozen_only_for_recorded_physical_surfaces`;
   `crates/mithril-e2e/harness/vm/run.sh --with-k3s
   --skip-administrative-exec --output-directory
-  /tmp/mithril-phase6-physical-20260819-r12`; and
+  /tmp/mithril-phase6-simplicity-20260819-r2`; and
   `crates/mithril-e2e/harness/vm/two-node-network.sh --output-directory
-  /tmp/mithril-phase6-two-node-20260819-r2`. The source-only suite passes 948
-  tests, with 15 ignored and 5 filtered fixture lanes. The repository gate
-  passes formatting, check, Clippy, and every ordinary test. Its only failure
-  is the intentionally stale generated qualification-record assertion. The
-  user prohibited committing generated CI/CD digest artifacts.
+  /tmp/mithril-phase6-two-node-simplicity-20260819-r1`. The source-only
+  workspace command passes. The repository gate passes formatting, check,
+  Clippy, and every ordinary test. Its only failure is the intentionally stale
+  generated qualification-record assertion. The user prohibited committing
+  generated CI/CD digest artifacts.
 Platform/kernel/runtime manifests: Ubuntu 24.04, x86_64 Linux
   6.8.0-137-generic, cgroup v2, BPF filesystem, runtime BTF, active
   lockdown/capability/Landlock/Yama/AppArmor/BPF LSM order, K3s
   v1.35.5+k3s1, and two Ready Kubernetes nodes.
 Performance/capacity results: each OPEN benchmark measures 1,000,000
-  operations after 100,000 warmups. Baseline is 167,317 operations/s at one
-  worker and 317,599 operations/s at 32 workers. Protected is 155,272
-  operations/s at one worker and 297,459 operations/s at 32 workers. Each
+  operations after 100,000 warmups. Baseline is 199,861 operations/s at one
+  worker and 382,870 operations/s at 32 workers. Protected is 187,540
+  operations/s at one worker and 357,666 operations/s at 32 workers. Each
   effect mode attempts 50,000 saturation opens, reports 42,293 lost ring
   records, validates a 256-record durable batch, opens ring and WAL gaps, and
   blocks a negative claim while deny and benign-allow controls remain correct.
