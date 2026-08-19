@@ -304,6 +304,8 @@ The current evidence is:
 
 - implementation commit:
   `e0438d920d5071295ab733db0d7df0eb03a95b8c`;
+- architecture SHA-256:
+  `22678b9c0379ff915fe595059f3da2789c3e32cdf54d61656c7257175263d14a`;
 - probe binary SHA-256:
   `eee25b63425be5ec7ba8d7b9f8510cabea8c1b1af6aa832c90e1181373245fd0`;
 - result:

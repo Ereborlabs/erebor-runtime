@@ -1,14 +1,14 @@
 # How To Manually Accept Phase 4
 
-Status: The qualified local-enforcement slices have runnable automated and
-manual cases. The current source passed the privileged VM enforcement probe.
-A K3s CRI lane also passed one exact secret-deny and benign-control check.
-The signed recursive path-tree denial has automated and manual VM evidence.
-The complete catalog below remains the acceptance target. The complete
-policy-aware local surface does not have an implementation.
+Status: Done for the limited x86_64 local-enforcement claim. The current
+protected result has 15 `PASS` and 14 exact `UNSUPPORTED` fixture results.
+The catalog below remains the qualification target for a later, broader
+claim.
 
 Phase: [Signed Local Pre-Effect Enforcement](../phase-4-signed-local-pre-effect-enforcement.md)  
-Setup: [`SINGLE-NODE`](./environment-setup.md)
+Setup: [`SINGLE-NODE`](./environment-setup.md)  
+Closure: [local fixture matrix](../phase-4-closure-matrix.md)  
+Review: [implementation review guide](../phase-4-implementation-review.md)
 
 ## Outcome
 
@@ -19,7 +19,8 @@ work continues.
 ## Automated Companion
 
 ```sh
-cargo build -p mithril-node --bins -p mithril-control --bin mithril-policy \
+rtk cargo build --locked -p mithril-node --bins \
+  -p mithril-control --bin mithril-policy \
   -p mithril-e2e --bin mithril-effect-test
 
 sudo target/debug/mithril-effect-test --repo-root . physical-probe \
@@ -33,14 +34,16 @@ sudo target/debug/mithril-effect-test --repo-root . physical-probe \
 The probe is assertion-bearing and self-cleaning. It uses the production
 libbpf-rs loader and BPF object, not a second test implementation. It retains
 only its JSON result under the requested output directory. Its current exact
-slice covers exact file open/read/mmap/mprotect allow and deny, exact image
-allow and deny across the supported exec entry variants, exact character-device
-ioctl allow and deny, exact signal and ptrace denial, the configured AF_UNIX
-`SOCK_STREAM` unmatched-policy denial, concurrent N/N+1 exception consumption,
-hard-link/bind aliases, denied protected mounts, external mount replacement,
-reconciliation, ring saturation, latency, and cleanup. Unqualified anonymous
-and memfd execution, file mutation, SysV IPC, namespace creation, BPF map
-creation, and pinned-link removal remain hard closed.
+slice covers exact file open/read/mmap/mprotect allow and deny, exact
+file-backed exec controls and denials across the represented entry variants,
+exact character-device ioctl allow and deny, unmatched signal and exact ptrace
+denial, configured AF_UNIX `SOCK_STREAM` relationships, concurrent N/N+1
+exception consumption, hard-link/bind aliases, denied protected mounts,
+external mount replacement, reconciliation, ring saturation, latency, and
+cleanup.
+Unqualified anonymous and memfd execution, file mutation, SysV IPC, namespace
+creation, BPF map creation, and pinned-link removal remain hard closed. An
+exact file-backed exec control does not prove immutable executable authority.
 
 Before the probe enables effects or opens a protected file, it verifies every
 configured mount view is `CLEAN` at the current global epoch. A policy install
@@ -56,11 +59,10 @@ mounts, sockets, FIFOs, and temporary state. It leaves the supplied container
 and cgroup intact. The prepared task waits on a FIFO; the host does not signal
 it after policy activation. The checked policy
 includes exact benign, executable, and device allow and deny controls; exact
-process-control denials; an AF_UNIX unmatched-policy denial; and a two-use
-exact write-open exception. Positive process-control and positive exact Unix
-relationships are rejected. Raw BPF map creation remains in
-the automated probe because it uses the vendored libbpf API instead of copied
-architecture-specific syscall numbers.
+process-control denials; exact AF_UNIX relationship allow and unmatched-policy
+deny controls; and a two-use exact write-open exception. Raw BPF map creation
+remains in the automated probe because it uses the vendored libbpf API instead
+of copied architecture-specific syscall numbers.
 
 ## K3s CRI Paired Control
 
@@ -212,7 +214,7 @@ mount and dentry walk accepts 4,351 callbacks. These are checked verifier
 bounds. The proof does not qualify idmapped mounts, full propagation coverage,
 token rotation, or administrative exec.
 
-### Current-source local enforcement record — 2026-08-18
+### Earlier local enforcement record — 2026-08-18
 
 The repository VM harness passed at implementation commit `5dd695e`. The guest
 ran x86-64 Ubuntu Linux
@@ -271,9 +273,43 @@ records prove distinct task, process-lineage, and process-instance identities.
 This tier makes no per-load, per-store, or byte-taint claim after an admitted
 mapping.
 
-This result does not qualify the 14 implementation-open rows in the closure
-matrix. It does not qualify projected-token rotation, immutable content and
+This result did not qualify the 14 rows that now have exact `UNSUPPORTED`
+results. It did not qualify projected-token rotation, immutable content and
 VMA provenance, complete self-protection, or administrative exec.
+
+### Closure record — 2026-08-18
+
+The retained isolated x86_64 VM ran the explicitly rebuilt standalone probe at
+implementation commit
+`e0438d920d5071295ab733db0d7df0eb03a95b8c`. The probe binary SHA-256 is
+`eee25b63425be5ec7ba8d7b9f8510cabea8c1b1af6aa832c90e1181373245fd0`.
+
+The result is
+`/tmp/mithril-phase4-e0438d9-final/local-enforcement-physical-probe.json`.
+Its SHA-256 is
+`8fc1f4ad4536d00afd29754255410fed4b1290c3a138687f51c70edac079c793`.
+It records 15 `PASS`, 14 `UNSUPPORTED`, zero `FAIL`, and zero `DEGRADED`
+fixture results. The exact statuses and reason codes are in the
+[closure matrix](../phase-4-closure-matrix.md).
+
+The guest ran Linux `6.8.0-137-generic` with cgroup v2 and BPF LSM. The active
+LSM order was `lockdown,capability,landlock,yama,apparmor,bpf`. The runtime BTF
+SHA-256 was
+`6da9f6b4ebcae9b07e6a717b517884abf7f6b524e46340e40fb164eed4a49a7c`.
+The protected deployment digest was
+`741a9fd0857e360a8b3096924f52dd59695d9f6440aa6610370e4e092b23b1dc`.
+
+The result has 10,000 measured opens and 50,000 saturation opens. It lost
+39,081 observation records during saturation. The protected denial and benign
+allow remained correct. `pin_root_removed`, `lease_removed`,
+`cgroup_removed`, and `fixture_root_removed` are true. Independent postflight
+found no probe pin root, cgroup, or owner lease.
+
+The repository command `bash .github/scripts/verify-rust-ci.sh` passed at the
+same implementation commit. One earlier run exposed an unrelated parallel
+temporary-file collision in `start_preserves_absolute_policy_paths`. The exact
+test passed alone, and the unchanged repository gate passed on rerun. Do not
+use the transient first run as Mithril evidence.
 
 ## Procedure
 
@@ -285,8 +321,8 @@ VMA provenance, complete self-protection, or administrative exec.
    topology/kernel postcondition independently from the event stream.
 4. Repeat with event saturation, missing dynamic state, earlier LSM denial,
    aliasing, object reuse, and concurrency.
-5. Run the legitimate worker, controller, probe, lifecycle, and approved admin
-   controls after every policy/fault variant.
+5. Run each advertised legitimate control after every policy or fault
+   variant.
 
 ## Fixture Matrix
 
@@ -341,8 +377,9 @@ transitions plus a raced protected-effect oracle.
 
 ## Mandatory Incident And Exception Checks
 
-- `HF-008`: the hostile HDF5 reference receives no forbidden fd or bytes;
-  the normal dataset/runtime/scratch/output object succeeds.
+- `HF-008`: the safe in-process driver receives no forbidden fd or bytes from
+  the protected object; the normal conversion object succeeds. The baseline
+  does not need a weaponized HDF5 or Jinja payload.
 - `HF-002`-`HF-012`: every managed non-network branch uses its first real
   physical effect; pure computation and already-in-memory data are not called
   prevented.
