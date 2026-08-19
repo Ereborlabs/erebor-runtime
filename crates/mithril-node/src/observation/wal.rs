@@ -141,10 +141,11 @@ pub struct EvidenceAckV1 {
     pub batch_sha256: EvidenceDigestV1,
 }
 
-#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 struct AckStateV1 {
     contiguous_cursor: u64,
+    last_first_cursor: u64,
     last_batch_sha256: EvidenceDigestV1,
     last_record_sha256: EvidenceDigestV1,
 }
@@ -177,14 +178,7 @@ impl EvidenceWal {
         let root = root.into();
         fs::create_dir_all(&root).context(IoSnafu { path: &root })?;
         let acknowledged = read_ack(&root)?;
-        let mut paths = fs::read_dir(&root)
-            .context(IoSnafu { path: &root })?
-            .collect::<std::result::Result<Vec<_>, _>>()
-            .context(IoSnafu { path: &root })?
-            .into_iter()
-            .map(|entry| entry.path())
-            .filter(|path| path.extension().is_some_and(|extension| extension == "wal"))
-            .collect::<Vec<_>>();
+        let mut paths = recover_directory(&root, acknowledged)?;
         paths.sort_unstable();
 
         let mut records = Vec::with_capacity(paths.len());
@@ -331,7 +325,8 @@ impl EvidenceWal {
     }
 
     pub fn acknowledge(&mut self, ack: EvidenceAckV1) -> Result<()> {
-        if ack.last_cursor <= self.acknowledged.contiguous_cursor
+        if ack.first_cursor == self.acknowledged.last_first_cursor
+            && ack.last_cursor == self.acknowledged.contiguous_cursor
             && ack.batch_sha256 == self.acknowledged.last_batch_sha256
         {
             return Ok(());
@@ -354,6 +349,7 @@ impl EvidenceWal {
         }
         let state = AckStateV1 {
             contiguous_cursor: ack.last_cursor,
+            last_first_cursor: ack.first_cursor,
             last_batch_sha256: ack.batch_sha256,
             last_record_sha256: batch
                 .records
@@ -370,14 +366,52 @@ impl EvidenceWal {
         })?;
         atomic_write(&self.root.join(ACK_FILE), &bytes)?;
         let acknowledged_count = batch.records.len();
+        let remaining_bytes =
+            self.records
+                .iter()
+                .skip(acknowledged_count)
+                .try_fold(0_u64, |total, record| {
+                    let bytes = serde_json::to_vec(record).map_err(|error| {
+                        EvidenceStateSnafu {
+                            reason: format!("evidence WAL segment encoding failed: {error}"),
+                        }
+                        .build()
+                    })?;
+                    total.checked_add(bytes.len() as u64).ok_or_else(|| {
+                        EvidenceStateSnafu {
+                            reason: "evidence WAL retained byte count overflowed".to_owned(),
+                        }
+                        .build()
+                    })
+                })?;
         for record in self.records.iter().take(acknowledged_count) {
             let path = segment_path(&self.root, record.cursor);
-            let bytes = fs::metadata(&path).context(IoSnafu { path: &path })?.len();
-            fs::remove_file(&path).context(IoSnafu { path: &path })?;
-            self.retained_bytes = self.retained_bytes.saturating_sub(bytes);
+            match fs::metadata(&path) {
+                Ok(_metadata) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(source) => {
+                    return Err(crate::Error::Io {
+                        path,
+                        source,
+                        location: snafu::Location::default(),
+                    })
+                }
+            }
+            match fs::remove_file(&path) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(source) => {
+                    return Err(crate::Error::Io {
+                        path,
+                        source,
+                        location: snafu::Location::default(),
+                    })
+                }
+            }
         }
         sync_directory(&self.root)?;
         self.records.drain(..acknowledged_count);
+        self.retained_bytes = remaining_bytes;
         self.acknowledged = state;
         Ok(())
     }
@@ -404,12 +438,90 @@ fn read_ack(root: &Path) -> Result<AckStateV1> {
         return Ok(AckStateV1::default());
     }
     let bytes = fs::read(&path).context(IoSnafu { path: &path })?;
-    serde_json::from_slice(&bytes).map_err(|error| {
+    let state: AckStateV1 = serde_json::from_slice(&bytes).map_err(|error| {
         EvidenceStateSnafu {
             reason: format!("evidence acknowledgement state is invalid: {error}"),
         }
         .build()
+    })?;
+    let empty = state == AckStateV1::default();
+    let populated = state.contiguous_cursor > 0
+        && state.last_first_cursor > 0
+        && state.last_first_cursor <= state.contiguous_cursor
+        && state.last_batch_sha256 != [0; 32]
+        && state.last_record_sha256 != [0; 32];
+    if !empty && !populated {
+        return EvidenceStateSnafu {
+            reason: "evidence acknowledgement state has inconsistent cursors or digests".to_owned(),
+        }
+        .fail();
+    }
+    Ok(state)
+}
+
+fn recover_directory(root: &Path, acknowledged: AckStateV1) -> Result<Vec<PathBuf>> {
+    let mut paths = Vec::new();
+    let mut changed = false;
+    for entry in fs::read_dir(root)
+        .context(IoSnafu { path: root })?
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .context(IoSnafu { path: root })?
+    {
+        let path = entry.path();
+        match path.extension().and_then(|extension| extension.to_str()) {
+            Some("wal") => {
+                let cursor = segment_cursor(&path)?;
+                if cursor <= acknowledged.contiguous_cursor {
+                    fs::remove_file(&path).context(IoSnafu { path: &path })?;
+                    changed = true;
+                } else {
+                    paths.push(path);
+                }
+            }
+            Some("tmp") if is_owned_temporary(&path) => {
+                fs::remove_file(&path).context(IoSnafu { path: &path })?;
+                changed = true;
+            }
+            _ => {}
+        }
+    }
+    if changed {
+        sync_directory(root)?;
+    }
+    Ok(paths)
+}
+
+fn segment_cursor(path: &Path) -> Result<u64> {
+    let stem = path
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or_default();
+    if stem.len() != 20 || !stem.bytes().all(|byte| byte.is_ascii_digit()) {
+        return EvidenceStateSnafu {
+            reason: format!(
+                "evidence WAL segment `{}` has an invalid name",
+                path.display()
+            ),
+        }
+        .fail();
+    }
+    stem.parse::<u64>().map_err(|error| {
+        EvidenceStateSnafu {
+            reason: format!(
+                "evidence WAL segment `{}` has an invalid cursor: {error}",
+                path.display()
+            ),
+        }
+        .build()
     })
+}
+
+fn is_owned_temporary(path: &Path) -> bool {
+    let stem = path
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or_default();
+    stem == "acknowledged" || (stem.len() == 20 && stem.bytes().all(|byte| byte.is_ascii_digit()))
 }
 
 fn segment_path(root: &Path, cursor: u64) -> PathBuf {
@@ -445,7 +557,7 @@ fn sync_directory(path: &Path) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{EvidenceAckV1, EvidenceWal, EvidenceWalLimits};
+    use super::{segment_path, EvidenceAckV1, EvidenceWal, EvidenceWalLimits, ACK_FILE};
     use crate::{EvidenceIdV1, ObservationCanonicalizer, TemporalCoverageV1};
 
     fn kernel_observation(sequence: u64) -> crate::Result<crate::ObservationEnvelopeV1> {
@@ -504,6 +616,12 @@ mod tests {
                 batch_sha256: [9; 32],
             })
             .is_err());
+        let first_path = segment_path(directory.path(), 1);
+        std::fs::remove_file(&first_path).map_err(|source| crate::Error::Io {
+            path: first_path,
+            source,
+            location: snafu::Location::new(file!(), line!(), column!()),
+        })?;
         wal.acknowledge(EvidenceAckV1 {
             first_cursor: batch.first_cursor,
             last_cursor: batch.last_cursor,
@@ -513,6 +631,16 @@ mod tests {
         let wal = EvidenceWal::open(directory.path(), limits())?;
         assert_eq!(wal.acknowledged_cursor(), 2);
         assert_eq!(wal.pending_records(), 1);
+        assert_eq!(
+            wal.retained_bytes(),
+            std::fs::metadata(segment_path(directory.path(), 3))
+                .map_err(|source| crate::Error::Io {
+                    path: segment_path(directory.path(), 3),
+                    source,
+                    location: snafu::Location::new(file!(), line!(), column!()),
+                })?
+                .len()
+        );
         assert_eq!(wal.next_batch().map(|batch| batch.first_cursor), Some(3));
         Ok(())
     }
@@ -544,6 +672,71 @@ mod tests {
             location: snafu::Location::new(file!(), line!(), column!()),
         })?;
         assert!(EvidenceWal::open(directory.path(), limits()).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn wal_recovers_acknowledged_residue_and_owned_torn_writes() -> crate::Result<()> {
+        let directory = tempfile::tempdir().map_err(|source| crate::Error::Io {
+            path: std::path::PathBuf::from("temporary evidence directory"),
+            source,
+            location: snafu::Location::new(file!(), line!(), column!()),
+        })?;
+        let mut wal = EvidenceWal::open(directory.path(), limits())?;
+        wal.append(&kernel_observation(1)?)?;
+        wal.append(&kernel_observation(2)?)?;
+        let first_path = segment_path(directory.path(), 1);
+        let first_bytes = std::fs::read(&first_path).map_err(|source| crate::Error::Io {
+            path: first_path.clone(),
+            source,
+            location: snafu::Location::new(file!(), line!(), column!()),
+        })?;
+        let batch = wal
+            .next_batch()
+            .ok_or_else(|| crate::Error::EvidenceState {
+                reason: "test batch is missing".to_owned(),
+                location: snafu::Location::new(file!(), line!(), column!()),
+            })?;
+        let ack = EvidenceAckV1 {
+            first_cursor: batch.first_cursor,
+            last_cursor: batch.last_cursor,
+            batch_sha256: batch.batch_sha256,
+        };
+        wal.acknowledge(ack)?;
+        assert!(wal
+            .acknowledge(EvidenceAckV1 {
+                first_cursor: 2,
+                ..ack
+            })
+            .is_err());
+        wal.acknowledge(ack)?;
+        drop(wal);
+
+        std::fs::write(&first_path, first_bytes).map_err(|source| crate::Error::Io {
+            path: first_path.clone(),
+            source,
+            location: snafu::Location::new(file!(), line!(), column!()),
+        })?;
+        let segment_temporary = segment_path(directory.path(), 3).with_extension("tmp");
+        std::fs::write(&segment_temporary, b"torn segment").map_err(|source| crate::Error::Io {
+            path: segment_temporary.clone(),
+            source,
+            location: snafu::Location::new(file!(), line!(), column!()),
+        })?;
+        let ack_temporary = directory.path().join(ACK_FILE).with_extension("tmp");
+        std::fs::write(&ack_temporary, b"torn ack").map_err(|source| crate::Error::Io {
+            path: ack_temporary.clone(),
+            source,
+            location: snafu::Location::new(file!(), line!(), column!()),
+        })?;
+
+        let mut wal = EvidenceWal::open(directory.path(), limits())?;
+        assert_eq!(wal.acknowledged_cursor(), 2);
+        assert_eq!(wal.pending_records(), 0);
+        assert!(!first_path.exists());
+        assert!(!segment_temporary.exists());
+        assert!(!ack_temporary.exists());
+        assert_eq!(wal.append(&kernel_observation(3)?)?, 3);
         Ok(())
     }
 }
