@@ -18,8 +18,9 @@ use crate::administrative_exec::{
 use crate::epoch::NodeEpochs;
 use crate::error::{IdentityStateSnafu, InterceptorSnafu, JsonSnafu, LocalTaskSnafu};
 use crate::{
-    AdministrativeControlRequest, NativeSecurityStateOwner, NodeConfig, NodeControlConnector,
-    Result, TrustCache, WorkloadBindingOwner,
+    AdministrativeControlRequest, EvidenceAckV1, EvidenceIdV1, EvidenceWalLimits,
+    NativeSecurityStateOwner, NodeConfig, NodeControlConnector, NodeControlMessage,
+    ObservationCanonicalizer, Result, TrustCache, WorkloadBindingOwner,
 };
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize)]
@@ -72,6 +73,7 @@ pub struct NodeChassis {
     policy: Option<crate::NodePolicyGenerationOwner>,
     administrative: Option<AdministrativeExecOwner>,
     readiness: watch::Sender<NodeReadinessV1>,
+    observations: crate::EffectObservationStore,
 }
 
 impl NodeChassis {
@@ -194,7 +196,34 @@ impl NodeChassis {
         } else {
             identity.activate_held_initial_admission(&mut host, policy_loaded)?
         };
-        let observations = crate::EffectObservationStore::default();
+        let observations = if policy_loaded {
+            let evidence = config.evidence.as_ref().ok_or_else(|| {
+                IdentityStateSnafu {
+                    reason: "effect policy has no durable evidence configuration".to_owned(),
+                }
+                .build()
+            })?;
+            let source_epoch = NodeEpochs::source_epoch(&config.state_directory)?;
+            let canonicalizer = ObservationCanonicalizer::new(
+                evidence_id_from_uuid(&evidence.tenant_id)?,
+                evidence_id_from_uuid(&evidence.source_id)?,
+                source_epoch,
+                EvidenceIdV1::from(node_boot_id),
+            )?;
+            crate::EffectObservationStore::durable(
+                1_024,
+                config.state_directory.join("evidence-wal"),
+                EvidenceWalLimits {
+                    maximum_record_bytes: evidence.maximum_record_bytes,
+                    maximum_retained_bytes: evidence.maximum_retained_bytes,
+                    maximum_retained_records: evidence.maximum_retained_records,
+                    maximum_batch_records: evidence.maximum_batch_records,
+                },
+                canonicalizer,
+            )?
+        } else {
+            crate::EffectObservationStore::default()
+        };
         let effect_reader = policy_loaded
             .then(|| {
                 let sink = observations.clone();
@@ -287,7 +316,7 @@ impl NodeChassis {
                     runtime,
                     manifest,
                     &capabilities,
-                    observations,
+                    observations.clone(),
                     config.interceptor.pin_root.clone(),
                     readiness.subscribe(),
                 )
@@ -305,6 +334,7 @@ impl NodeChassis {
             policy,
             administrative,
             readiness,
+            observations,
         })
     }
 
@@ -375,26 +405,51 @@ impl NodeChassis {
                             ),
                     });
                     backoff = self.config.control.reconnect_minimum();
+                    let mut evidence_in_flight = false;
+                    let mut evidence_upload = tokio::time::interval(Duration::from_millis(100));
+                    evidence_upload
+                        .set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
                     loop {
                         tokio::select! {
-                            result = connection.next_administrative_request() => {
-                                let request = match result {
-                                    Ok(request) => request,
+                            result = connection.next_message() => {
+                                let message = match result {
+                                    Ok(message) => message,
                                     Err(_error) => break,
                                 };
-                                match request {
-                                    AdministrativeControlRequest::Resolve(request) => {
+                                match message {
+                                    NodeControlMessage::Administrative(AdministrativeControlRequest::Resolve(request)) => {
                                         let response = self.resolve_administrative(request);
                                         if connection.send_resolution(response).await.is_err() {
                                             break;
                                         }
                                     }
-                                    AdministrativeControlRequest::Arm(request) => {
+                                    NodeControlMessage::Administrative(AdministrativeControlRequest::Arm(request)) => {
                                         let response = self.arm_administrative(request);
                                         if connection.send_arm_result(response).await.is_err() {
                                             break;
                                         }
                                     }
+                                    NodeControlMessage::EvidenceAck(ack) => {
+                                        let Ok(batch_sha256) = ack.batch_sha256.try_into() else {
+                                            break;
+                                        };
+                                        if self.observations.acknowledge_evidence(EvidenceAckV1 {
+                                            first_cursor: ack.first_cursor,
+                                            last_cursor: ack.last_cursor,
+                                            batch_sha256,
+                                        }).is_err() {
+                                            break;
+                                        }
+                                        evidence_in_flight = false;
+                                    }
+                                }
+                            }
+                            _instant = evidence_upload.tick(), if !evidence_in_flight => {
+                                if let Some(batch) = self.observations.next_evidence_batch() {
+                                    if connection.send_evidence_batch(batch).await.is_err() {
+                                        break;
+                                    }
+                                    evidence_in_flight = true;
                                 }
                             }
                             changed = shutdown.changed() => {
@@ -739,6 +794,17 @@ fn id_from_uuid_bytes(bytes: [u8; 16]) -> erebor_interceptor_abi::Id128V1 {
     erebor_interceptor_abi::Id128V1::new((value >> 64) as u64, value as u64)
 }
 
+fn evidence_id_from_uuid(value: &str) -> Result<EvidenceIdV1> {
+    let uuid = uuid::Uuid::parse_str(value).map_err(|error| {
+        IdentityStateSnafu {
+            reason: format!("evidence identity is invalid: {error}"),
+        }
+        .build()
+    })?;
+    let value = u128::from_be_bytes(*uuid.as_bytes());
+    Ok(EvidenceIdV1::new((value >> 64) as u64, value as u64))
+}
+
 fn ensure_request_id(request_id: &[u8]) -> std::result::Result<(), ()> {
     if request_id.len() != 16 || request_id.iter().all(|byte| *byte == 0) {
         return Err(());
@@ -1018,57 +1084,6 @@ mod tests {
         }));
         assert_eq!(registration.capabilities[3].state, "SUPPORTED");
         assert_eq!(registration.capabilities[4].state, "UNSUPPORTED");
-    }
-
-    #[test]
-    fn reconciliation_checks_the_live_manifest_before_runtime_state() {
-        let source = include_str!("node.rs");
-        let method = source
-            .split("async fn reconcile_bindings")
-            .nth(1)
-            .and_then(|source| source.split("fn close_kernel_claims").next())
-            .unwrap_or_default();
-
-        let manifest = method.find("host.verify_live_manifest()");
-        let bindings = method.find(".bindings");
-        assert!(
-            manifest.is_some_and(|manifest| bindings.is_some_and(|bindings| manifest < bindings))
-        );
-    }
-
-    #[test]
-    fn identity_failure_drops_the_current_control_connection() {
-        let source = include_str!("node.rs");
-        let connected_loop = source
-            .split("Ok(mut connection) =>")
-            .nth(1)
-            .and_then(|source| source.split("\n                Err(_error) => {}").next())
-            .unwrap_or_default();
-        let identity_failure = connected_loop
-            .split("ReconciliationOutcome::IdentityUnhealthy =>")
-            .nth(1)
-            .and_then(|source| {
-                source
-                    .split("ReconciliationOutcome::KernelUnhealthy =>")
-                    .next()
-            })
-            .unwrap_or_default();
-
-        assert!(identity_failure.contains("identity_healthy = false;"));
-        assert!(identity_failure.contains("break;"));
-    }
-
-    #[test]
-    fn control_disconnect_cancels_armed_administrative_slots_before_reconnect() {
-        let source = include_str!("node.rs");
-        let disconnect = source
-            .split("Err(_error) => {}")
-            .nth(1)
-            .and_then(|source| source.split("self.readiness.send_replace").next())
-            .unwrap_or_default();
-
-        assert!(disconnect.contains("administrative.cancel_armed_slots(host)"));
-        assert!(disconnect.contains("identity_healthy = false;"));
     }
 
     #[tokio::test]

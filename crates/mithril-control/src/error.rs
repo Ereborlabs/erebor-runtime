@@ -77,6 +77,13 @@ pub enum Error {
         #[snafu(implicit)]
         location: Location,
     },
+    #[snafu(display("Mithril evidence state `{}` is invalid: {reason}", path.display()))]
+    EvidenceState {
+        path: PathBuf,
+        reason: String,
+        #[snafu(implicit)]
+        location: Location,
+    },
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -90,6 +97,7 @@ impl ErrorExt for Error {
             | Self::PolicyValidation { .. }
             | Self::PolicySignature { .. }
             | Self::PolicyState { .. }
+            | Self::EvidenceState { .. }
             | Self::AdministrativeApproval { .. } => StatusCode::InvalidArguments,
             Self::Io { .. } | Self::Tls { .. } | Self::Serve { .. } => StatusCode::External,
         }
@@ -106,6 +114,7 @@ impl ErrorExt for Error {
             | Self::PolicyValidation { .. }
             | Self::PolicySignature { .. }
             | Self::PolicyState { .. }
+            | Self::EvidenceState { .. }
             | Self::AdministrativeApproval { .. } => RetryHint::NonRetryable,
         }
     }

@@ -8,13 +8,17 @@ use mithril_control::{
     serve, AllowedNodeIdentity, CapabilityRecord, ControlPlane, ControlServerTls, NodeRegistration,
     TrustGenerationV1,
 };
-use mithril_node::{NodeControlConfig, NodeControlConnector, TrustCache};
+use mithril_node::{
+    EffectObservationStore, EvidenceIdV1, EvidenceWalLimits, NodeControlConfig,
+    NodeControlConnector, NodeControlMessage, ObservationCanonicalizer, TrustCache,
+};
 use rcgen::{
     date_time_ymd, BasicConstraints, Certificate, CertificateParams, ExtendedKeyUsagePurpose, IsCa,
     KeyPair,
 };
 use sha2::{Digest as _, Sha256};
 use tokio::sync::oneshot;
+use zerocopy::IntoBytes as _;
 
 #[tokio::test]
 async fn mtls_registration_acknowledges_trust_and_reconnects_with_a_fresh_nonce(
@@ -105,6 +109,99 @@ async fn mtls_rejects_wrong_node_binding_and_expired_client_identity(
     assert_rejected_identity(false, "node-b").await?;
     assert_rejected_identity(true, "node-a").await?;
     assert_wrong_ca_rejected().await
+}
+
+#[tokio::test]
+async fn mtls_evidence_upload_replays_after_disconnect_and_advances_only_on_ack(
+) -> Result<(), Box<dyn StdError>> {
+    let directory = tempfile::tempdir()?;
+    let certificates = Certificates::issue(false)?;
+    let files = certificates.write(directory.path())?;
+    let address = free_address()?;
+    let intake_path = directory.path().join("control-evidence");
+    let control = ControlPlane::with_evidence_directory(
+        vec![AllowedNodeIdentity {
+            node_id: "node-a".to_owned(),
+            certificate_sha256: certificates.node_digest(),
+        }],
+        TrustGenerationV1 {
+            generation: 1,
+            bundle_digest: "d".repeat(64),
+        },
+        &intake_path,
+    )?;
+    let (shutdown, server) = start_server(address, &files, control.clone());
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    let observations = EffectObservationStore::durable(
+        4,
+        directory.path().join("node-wal"),
+        EvidenceWalLimits {
+            maximum_record_bytes: 128 * 1_024,
+            maximum_retained_bytes: 1024 * 1024,
+            maximum_retained_records: 10,
+            maximum_batch_records: 10,
+        },
+        ObservationCanonicalizer::new(
+            EvidenceIdV1::new(1, 2),
+            EvidenceIdV1::new(3, 4),
+            1,
+            EvidenceIdV1::new(5, 6),
+        )?,
+    )?;
+    observations.record_bytes(
+        erebor_interceptor_abi::EffectObservationV1 {
+            source_sequence: 1,
+            source_cpu_id: 0,
+            task_cookie: 7,
+            reason: 9,
+            physical_result: 1,
+            ..erebor_interceptor_abi::EffectObservationV1::default()
+        }
+        .as_bytes(),
+    );
+    let connector =
+        NodeControlConnector::new(files.node_config(address), "node-a".to_owned(), [7; 16]);
+    let mut trust = TrustCache::load(directory.path())?;
+    let mut first = connector.connect(registration(), true, &mut trust).await?;
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    first
+        .send_evidence_batch(
+            observations
+                .next_evidence_batch()
+                .ok_or("missing WAL batch")?,
+        )
+        .await?;
+    drop(first);
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    assert!(observations.next_evidence_batch().is_some());
+
+    let mut second = connector.connect(registration(), true, &mut trust).await?;
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    second
+        .send_evidence_batch(
+            observations
+                .next_evidence_batch()
+                .ok_or("missing replay batch")?,
+        )
+        .await?;
+    let NodeControlMessage::EvidenceAck(ack) = second.next_message().await? else {
+        return Err("Control did not acknowledge evidence".into());
+    };
+    observations.acknowledge_evidence(mithril_node::EvidenceAckV1 {
+        first_cursor: ack.first_cursor,
+        last_cursor: ack.last_cursor,
+        batch_sha256: ack
+            .batch_sha256
+            .try_into()
+            .map_err(|_| "bad acknowledgement digest")?,
+    })?;
+    assert!(observations.next_evidence_batch().is_none());
+    assert_eq!(control.allowed_nodes().len(), 1);
+
+    drop(second);
+    let _result = shutdown.send(());
+    server.await??;
+    Ok(())
 }
 
 async fn assert_wrong_ca_rejected() -> Result<(), Box<dyn StdError>> {

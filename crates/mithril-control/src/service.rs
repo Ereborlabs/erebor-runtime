@@ -61,6 +61,7 @@ pub struct ControlPlane {
     allowed_nodes: Arc<BTreeMap<String, String>>,
     trust: TrustGenerationV1,
     state: Arc<Mutex<ControlState>>,
+    evidence: Option<crate::EvidenceIntakeOwner>,
 }
 
 impl ControlPlane {
@@ -75,7 +76,26 @@ impl ControlPlane {
             ),
             trust,
             state: Arc::new(Mutex::new(ControlState::default())),
+            evidence: None,
         }
+    }
+
+    pub fn with_evidence_directory(
+        allowed: Vec<AllowedNodeIdentity>,
+        trust: TrustGenerationV1,
+        directory: impl Into<std::path::PathBuf>,
+    ) -> crate::Result<Self> {
+        Ok(Self {
+            allowed_nodes: Arc::new(
+                allowed
+                    .into_iter()
+                    .map(|identity| (identity.node_id, identity.certificate_sha256))
+                    .collect(),
+            ),
+            trust,
+            state: Arc::new(Mutex::new(ControlState::default())),
+            evidence: Some(crate::EvidenceIntakeOwner::open(directory)?),
+        })
     }
 
     #[must_use]
@@ -368,6 +388,47 @@ impl ControlPlane {
         }
     }
 
+    #[allow(clippy::result_large_err)]
+    fn accept_evidence(
+        &self,
+        identity: &StreamIdentity,
+        batch: &crate::EvidenceBatch,
+    ) -> Result<
+        (
+            mpsc::Sender<Result<ControlEnvelope, Status>>,
+            ControlEnvelope,
+        ),
+        Status,
+    > {
+        let evidence = self.evidence.as_ref().ok_or_else(|| {
+            Status::failed_precondition("Control has no durable evidence intake owner")
+        })?;
+        let ack = evidence.receive(&identity.node_id, batch)?;
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| Status::internal("control session state is poisoned"))?;
+        let session = state
+            .sessions
+            .get_mut(&identity.node_id)
+            .ok_or_else(|| Status::failed_precondition("evidence arrived before node readiness"))?;
+        if session.identity.connection_nonce != identity.connection_nonce {
+            return Err(Status::unauthenticated(
+                "evidence stream does not own the ready node session",
+            ));
+        }
+        let sequence = session.next_sequence;
+        session.next_sequence = sequence
+            .checked_add(1)
+            .ok_or_else(|| Status::out_of_range("control stream sequence exhausted"))?;
+        Ok((
+            session.output.clone(),
+            session
+                .identity
+                .envelope(sequence, ControlPayload::EvidenceAck(ack)),
+        ))
+    }
+
     fn unregister(&self, identity: &StreamIdentity) {
         if let Ok(mut state) = self.state.lock() {
             if state
@@ -476,6 +537,14 @@ impl NodeControl for ControlPlane {
                         }
                         Some(NodePayload::ArmResult(response)) => {
                             control.deliver_arm_result(&identity.node_id, response)
+                        }
+                        Some(NodePayload::EvidenceBatch(batch)) => {
+                            let (ack_output, ack) = control.accept_evidence(&identity, &batch)?;
+                            ack_output.try_send(Ok(ack)).map_err(|_| {
+                                Status::unavailable(
+                                    "evidence acknowledgement output is full or closed",
+                                )
+                            })
                         }
                         Some(NodePayload::Registration(_)) | None => Err(Status::invalid_argument(
                             "registration is allowed only as the first stream message",

@@ -6,8 +6,8 @@ use mithril_control::node_control_client::NodeControlClient as GrpcNodeControlCl
 use mithril_control::node_envelope::Payload as NodePayload;
 use mithril_control::{
     AdministrativeExecArmResult, AdministrativeExecResolution, ArmAdministrativeExec,
-    ControlEnvelope, NodeEnvelope, NodeReadinessReport, NodeRegistration,
-    ResolveAdministrativeExec, TrustGenerationAck, CONTROL_PROTOCOL_VERSION,
+    ControlEnvelope, EvidenceAck, EvidenceBatch, EvidenceRecord, NodeEnvelope, NodeReadinessReport,
+    NodeRegistration, ResolveAdministrativeExec, TrustGenerationAck, CONTROL_PROTOCOL_VERSION,
 };
 use snafu::ResultExt as _;
 use tokio::sync::mpsc;
@@ -38,6 +38,11 @@ pub struct ControlConnection {
 pub enum AdministrativeControlRequest {
     Resolve(ResolveAdministrativeExec),
     Arm(ArmAdministrativeExec),
+}
+
+pub enum NodeControlMessage {
+    Administrative(AdministrativeControlRequest),
+    EvidenceAck(EvidenceAck),
 }
 
 struct ConnectionIdentity {
@@ -167,7 +172,7 @@ impl NodeControlConnector {
 }
 
 impl ControlConnection {
-    pub async fn next_administrative_request(&mut self) -> Result<AdministrativeControlRequest> {
+    pub async fn next_message(&mut self) -> Result<NodeControlMessage> {
         let Some(message) = self.input.message().await.context(ControlRpcSnafu)? else {
             return ControlProtocolSnafu {
                 reason: "Control closed the node stream".to_owned(),
@@ -183,17 +188,51 @@ impl ControlConnection {
                 .build()
             })?;
         match message.payload {
-            Some(ControlPayload::ResolveAdministrativeExec(request)) => {
-                Ok(AdministrativeControlRequest::Resolve(request))
-            }
-            Some(ControlPayload::ArmAdministrativeExec(request)) => {
-                Ok(AdministrativeControlRequest::Arm(request))
-            }
+            Some(ControlPayload::ResolveAdministrativeExec(request)) => Ok(
+                NodeControlMessage::Administrative(AdministrativeControlRequest::Resolve(request)),
+            ),
+            Some(ControlPayload::ArmAdministrativeExec(request)) => Ok(
+                NodeControlMessage::Administrative(AdministrativeControlRequest::Arm(request)),
+            ),
+            Some(ControlPayload::EvidenceAck(ack)) => Ok(NodeControlMessage::EvidenceAck(ack)),
             _ => ControlProtocolSnafu {
                 reason: "Control sent an unexpected post-registration message".to_owned(),
             }
             .fail(),
         }
+    }
+
+    pub async fn next_administrative_request(&mut self) -> Result<AdministrativeControlRequest> {
+        match self.next_message().await? {
+            NodeControlMessage::Administrative(request) => Ok(request),
+            NodeControlMessage::EvidenceAck(_) => ControlProtocolSnafu {
+                reason: "Control sent evidence acknowledgement to an administrative-only owner"
+                    .to_owned(),
+            }
+            .fail(),
+        }
+    }
+
+    pub async fn send_evidence_batch(&mut self, batch: crate::EvidenceBatchV1) -> Result<()> {
+        let records = batch
+            .records
+            .into_iter()
+            .map(|record| EvidenceRecord {
+                cursor: record.cursor,
+                observation_id: record.observation_id.to_vec(),
+                payload: record.payload,
+                payload_sha256: record.payload_sha256.to_vec(),
+                previous_record_sha256: record.previous_record_sha256.to_vec(),
+                record_sha256: record.record_sha256.to_vec(),
+            })
+            .collect();
+        self.send(NodePayload::EvidenceBatch(EvidenceBatch {
+            first_cursor: batch.first_cursor,
+            last_cursor: batch.last_cursor,
+            records,
+            batch_sha256: batch.batch_sha256.to_vec(),
+        }))
+        .await
     }
 
     pub async fn send_resolution(&mut self, response: AdministrativeExecResolution) -> Result<()> {

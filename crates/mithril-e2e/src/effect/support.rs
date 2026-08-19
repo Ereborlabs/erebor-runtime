@@ -10,8 +10,8 @@ use erebor_interceptor_abi::{
     KernelEffectFamilyV1, KernelEffectOperationV1, MountSecurityViewStateV1, MountTopologyStateV1,
 };
 use mithril_node::{
-    ContainerKindV1, EffectObservationHealth, EffectObservationStore, InterceptorConfig,
-    NodeConfig, NodeControlConfig, PolicyCandidateConfig, WorkloadBindingConfig,
+    ContainerKindV1, EffectObservationHealth, EffectObservationStore, EvidenceConfig,
+    InterceptorConfig, NodeConfig, NodeControlConfig, PolicyCandidateConfig, WorkloadBindingConfig,
 };
 use snafu::{ensure, ResultExt as _};
 use zerocopy::TryFromBytes as _;
@@ -48,6 +48,14 @@ pub(super) fn effect_node_config(
             reconnect_minimum_ms: 100,
             reconnect_maximum_ms: 5_000,
         },
+        evidence: Some(EvidenceConfig {
+            tenant_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa".to_owned(),
+            source_id: "66666666-6666-4666-8666-666666666666".to_owned(),
+            maximum_record_bytes: 128 * 1_024,
+            maximum_retained_bytes: 16 * 1_024 * 1_024,
+            maximum_retained_records: 10_000,
+            maximum_batch_records: 256,
+        }),
         runtime_observation: None,
         container_runtime: None,
         workload_bindings: bindings,

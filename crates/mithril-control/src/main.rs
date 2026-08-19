@@ -20,7 +20,7 @@ async fn main() {
 
 async fn run() -> mithril_control::Result<()> {
     let config = ControlConfig::load(&Cli::parse().config)?;
-    let (address, tls, control, administrative_exec) = config.into_parts();
+    let (address, tls, control, administrative_exec) = config.into_parts()?;
     if let Some(administrative_exec) = administrative_exec {
         let shutdown = std::sync::Arc::new(tokio::sync::Notify::new());
         let control_shutdown = shutdown.clone();
