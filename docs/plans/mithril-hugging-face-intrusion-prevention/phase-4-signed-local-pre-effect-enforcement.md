@@ -1,18 +1,16 @@
 # Phase 4: Signed Local Pre-Effect Enforcement
 
-Status: Not done. The source has signed exact-file, recursive path-tree deny,
-exec, device-ioctl, derived-device-mint hard-close, denial-only
-process-control, unmatched Unix-stream, bounded-exception, and hard-close
-slices. The current source passed the
-disposable privileged VM enforcement probe. The complete policy-aware local
-surface remains incomplete.
+Status: Done for the limited x86_64 local-enforcement claim. The protected
+result has 14 Appendix C `PASS` results, 14 exact `UNSUPPORTED` results, and
+one additional `PASS` result for the plan-owned path-tree fixture. An
+unsupported surface is not part of the advertised claim.
 
 Master: [Mithril Hugging Face Intrusion Prevention](./README.md)
 Design: [Validated readable architecture](./policy-and-protection-algorithm-architecture-readable.md)
 Manual acceptance: [Phase 4 runbook](./manual-testing/phase-4-manual-acceptance.md)  
 Closure matrix: [Phase 4 closure matrix](./phase-4-closure-matrix.md)  
 Environment setup: [shared setup guide](./manual-testing/environment-setup.md)
-Implementation review: [signed path-tree denial](./path-tree-denial-implementation-review.md)
+Implementation review: [local pre-effect enforcement](./phase-4-implementation-review.md)
 
 ## Purpose
 
@@ -91,17 +89,19 @@ request-to-task join.
 
 If the Phase 0 platform/start path qualified Landlock target-context install,
 install and prove the monotonic floor before untrusted code. Otherwise record
-Landlock absent. Local BPF enforcement and this phase's release result cannot
-depend on an unavailable Landlock path.
+the capability as unsupported because the target-context path is absent.
+Local BPF enforcement and this phase's release result cannot depend on an
+unavailable Landlock path.
 
 ### D4.8 — HF local prevention increment
 
 For each managed/local non-network branch of `HF-002` through `HF-012`,
 identify and deny the first distinguishable forbidden effect, prove it did not
 complete, and prove the legitimate same-deployment control still succeeds.
-`HF-008` is the mandatory earliest complete block: the hostile HDF5 reference
-must receive no forbidden fd or bytes. Pure in-memory and outside-authority
-branches retain their honest result rather than a fabricated denial.
+Use the safe in-process post-compromise driver from the normative acceptance
+contract. It does not need to weaponize HDF5 or Jinja. Pure in-memory and
+outside-authority branches retain their honest result rather than a fabricated
+denial.
 
 ## Checkpoint
 
@@ -139,8 +139,8 @@ remain outside the checkpoint.
   file under the canonical tree without a child inode binding. A path-only
   rule cannot allow a file effect.
 - Exceptions cannot exceed `maximum_uses` or be consumed by unrelated entries.
-- Normal worker, controller, probes, lifecycle, and approved admin controls
-  remain functional.
+- Each advertised worker, controller, probe, lifecycle, or administrative
+  control remains functional.
 
 ## Excluded
 
@@ -150,17 +150,17 @@ correlation, and response coordination.
 ## Phase Result
 
 ```text
-State: Not done.
-Last implementation-validated architecture revision/digest: policy-and-protection-algorithm-architecture-readable.md sha256 f62e7e0075bbbfae142034fe421bf9fe4dbfd950b265acfc0536d786d2dcfca4.
-Completed deliverable IDs: D4.1 is partial: generation staging, readback, active selection, and per-binding expected-value recheck exist, but controlled activation probes, one all-binding atomic switch, and complete retirement do not. D4.2 is partial for exact exec variants and qualified file-backed executable mappings; immutable provenance, script and binfmt chains, loader state, pkey transitions, and complete VMA state remain incomplete. D4.3 is partial for exact files, represented aliases, mutations, independent-root shared-mapping denial, DIRTY mount handling, and the bounded signed recursive path-tree deny floor; rotation, overlay copy-up, persistent objects, delegated I/O, and complete propagation remain incomplete. D4.4 is partial for denial-only process-control and unmatched Unix-stream decisions; positive exact relationships remain rejected. D4.5 is partial for exact device ioctl and hard-close floors. A descriptor-producing PTMX operation now fails closed before it installs a derived object. Granular post-mint derived-object authority remains unadvertised. Complete privilege authority and self-protection remain incomplete. D4.6 has stable exception-instance, receipt, and WAL ownership, but the administrative ingress and end-to-end administrative-exec proof remain incomplete. D4.7 is complete as `ABSENT`: the node reports `LANDLOCK_TARGET_CONTEXT_FLOOR=ABSENT` with reason `NO_QUALIFIED_TARGET_CONTEXT_INSTALL`. D4.8 is partial. The current physical record covers 24 HF local branches: 6 PREVENTED, 1 HARD_CLOSED_UNQUALIFIED, 5 NO_COVERED_EFFECT, 4 OUTSIDE_AUTHORITY, 4 DEFERRED_NETWORK, and 4 UNSUPPORTED. The complete HF local prevention matrix is not qualified.
-Files and durable owners changed: mithril-control owns PROTECT compilation and exact exception binding. NodePolicyGenerationOwner owns generation staging, readback, anti-rollback, active state, and typed rule installation. ExceptionAuthorityOwner owns stable exception instances, successful-use receipts, WAL recovery, restart restoration, and reboot separation. The production BPF effect gate owns pre-effect decisions and atomic exception consumption. mithril-e2e owns the disposable physical oracle. examples/mithril-local-enforcement-manual owns operator cases.
-Upstream-adoption dossier IDs used: existing Phase 0 libbpf-rs/libbpf-cargo and checked vmlinux-header decisions; no new runtime or BPF framework.
-Fixture cases and exact physical results: compiler, ABI, interceptor, node, and effect suites contain source-level cases for the implemented slices. The current PROTECT record has exact_open_denied_before_effect=true, inherited_fd_read_denied=true, file_mmap_denied=true, writable_shared_mmap_denied=true, independent_root_shared_mmap_denied=true, independent_root_benign_mmap_allowed=true, independent_root_shared_mmap_distinct_identity=true, executable_mmap_denied=true, file_mprotect_exec_denied=true, and benign_read_allowed=true. path_tree_preexisting_child_denied=true, path_tree_later_child_denied=true, path_tree_replacement_child_denied=true, path_tree_outside_control_allowed=true, and path_tree_mount_attack_failed_closed=true. execve_denied=true, execveat_denied=true, fexecve_denied=true, script_exec_denied=true, deleted_exec_denied=true, non_leader_exec_denied=true, approved_exec_allowed=true, and memfd_exec_failed_closed=true. ptmx_ioctl_exact_allowed=true, ptmx_derived_peer_hard_closed=true, ptmx_derived_peer_installed_nothing=true, and zero_device_ioctl_exact_denied=true. process_ptrace_exact_denied=true, process_signal_exact_denied=true, and unix_stream_unmatched_denied=true. bounded_exception_maximum_uses=2, bounded_exception_n_allows=true, bounded_exception_n_plus_one_denied=true, bounded_exception_expiry_denied=true, and bounded_exception_restart_preserved=true. hard_link_alias_denied=true, symlink_alias_denied=true, proc_fd_alias_denied=true, passed_fd_read_denied=true, passed_benign_fd_read_allowed=true, and bind_alias_canonicalized=true. protected_mount_race_denied=true, external_mount_replacement_failed_closed=true, and exact_object_restored_after_reconciliation=true. The hard-close fields for anonymous exec, file creation and mutation, IPC, ptrace, signal, namespace privilege, device ioctl, BPF, and self-protection are true. saturation_preserved_network_denial=true and saturation_preserved_benign_allow=true after saturation_opens=50000. pin_root_removed=true, lease_removed=true, cgroup_removed=true, and fixture_root_removed=true. The path-tree local-enforcement evidence SHA-256 is 20c34a1afbfad23d5d8940fb190f2228b57b614fd814c6555eafd9a1b5707e37. The derived-device slice evidence SHA-256 is 1d10974f2bc42c62e645b6d3fa07605912f5f72165b448dff955edffb053a7a3. The independent-root shared-mapping evidence SHA-256 is d41f0f133ffeb38b37431d5a77bf8515bfc5485f711120f94788ae375bf75b8f.
-Commands and exact source state covered: the disposable VM record under /tmp/mithril-vm-source18-final covers the current typed-effect and durable-exception implementation. Repository CI results are recorded separately after the final repository edit. The production BPF translation unit compiles with `-Wall -Werror` for checked x86, arm64, arm, and riscv vmlinux headers. This is compile evidence, not non-x86 physical evidence.
-Platform/kernel/runtime manifests: the current probe ran on x86_64 Ubuntu kernel 6.8.0-136-generic with LSM order lockdown,capability,landlock,yama,apparmor,bpf, runtime BTF SHA-256 9aa9eb9e8108bff44e685830315fb7a442bafd99778314cdd6de0fb72868829f, cgroup v2, and unique mount IDs. The optional k3s lane recorded k3s v1.35.5+k3s1, Pod readiness, CRI endpoint unix:///run/k3s/containerd/containerd.sock, workload-root discovery, overlay storage, and projected-token discovery. Its record SHA-256 is 905a3ad84106e975cc1cde8b68cb24c861079f8baf3b616c597ec14e234f2503. This is substrate evidence only. It does not run a Mithril CRI binding or local effect decision.
-Performance/capacity results: exception-definition capacity is compiler-checked at 4,096, and the successful-use receipt map is bounded at 65,536 entries. The VM record has measured_opens=10000 and saturation_opens=50000. Its BASELINE distribution has sample_count=10000, p50=6832 ns, p95=6941 ns, p99=75565 ns, maximum=480479 ns, and raw_samples_sha256=16f5b7fc870feb31bdef7fafbc0487b78da77a4c8e813ca33c93b16bcb222eec. Its PROTECT distribution has sample_count=10000, p50=6215 ns, p95=6623 ns, p99=82638 ns, maximum=568239 ns, and raw_samples_sha256=0f341d456eae547df2f6a540536c4759cf81588714f4bc12c6c8e45ceed92768. The recorded averages are baseline_average_open_ns=7990 and observed_average_open_ns=7525.
-Unsupported/degraded paths: exact file, qualified exec, exact device-ioctl, denial-only process-control, unmatched Unix-stream, stable exception receipt and WAL, and explicit hard-close slices exist. Positive process-control and positive exact Unix-stream relationships remain rejected. Immutable exec provenance and complete script, binfmt, loader, pkey, and VMA handling remain incomplete. Token rotation, overlay copy-up, persistent objects, delegated I/O, propagation, complete privilege authority, and self-protection remain incomplete. Derived capability minting is hard-closed; granular authority after a mint is not advertised. Landlock is an advertised `ABSENT` capability, not an unqualified implementation gap. Administrative ingress and the complete HF local matrix remain incomplete. Network remains outside this outcome.
-Remaining work in this phase: complete controlled activation probes, all-binding atomic activation, and retirement; complete the remaining exec, file, IPC, process, device-use, privilege, and self-protection surfaces; finish administrative approval-to-profile resolution and physical administrative-exec proof; and run the full fixture matrix with legitimate controls. Native identity and effect observation retain their own unresolved acceptance work.
+State: Done for the limited x86_64 local-enforcement claim.
+Last implementation-validated architecture revision/digest: policy-and-protection-algorithm-architecture-readable.md sha256 22678b9c0379ff915fe595059f3da2789c3e32cdf54d61656c7257175263d14a.
+Completed deliverable IDs: D4.1 through D4.8 close as capability results. Fifteen qualified fixture outcomes have physical `PASS` results. Fourteen unqualified fixture outcomes have exact `UNSUPPORTED` results and are not advertised.
+Files and durable owners changed: mithril-control owns PROTECT compilation and exact exception binding. NodePolicyGenerationOwner owns generation staging, readback, anti-rollback, publication, and retirement. ExceptionAuthorityOwner owns stable exception instances, receipts, WAL recovery, restart restoration, and reboot separation. The production BPF effect gate owns pre-effect decisions and atomic exception consumption. mithril-e2e owns the physical oracle and typed fixture results.
+Upstream-adoption dossier IDs used: existing Phase 0 libbpf-rs, libbpf-cargo, and checked vmlinux-header decisions. No new runtime or BPF framework was added.
+Fixture cases and exact physical results: the protected result has 15 `PASS`, 14 `UNSUPPORTED`, zero `FAIL`, and zero `DEGRADED` fixture results. The 15 passes include the 14 allocated Appendix C fixtures and `FILE-PATH-TREE-DENY-001`. The exact table and reason codes are in phase-4-closure-matrix.md.
+Commands and exact source state covered: bash .github/scripts/verify-rust-ci.sh passed at implementation commit e0438d920d5071295ab733db0d7df0eb03a95b8c. The explicitly rebuilt mithril-effect-test binary SHA-256 is eee25b63425be5ec7ba8d7b9f8510cabea8c1b1af6aa832c90e1181373245fd0. The physical result is /tmp/mithril-phase4-e0438d9-final/local-enforcement-physical-probe.json with SHA-256 8fc1f4ad4536d00afd29754255410fed4b1290c3a138687f51c70edac079c793.
+Platform/kernel/runtime manifests: x86_64 Linux 6.8.0-137-generic, cgroup v2, BPF LSM, active LSM order lockdown,capability,landlock,yama,apparmor,bpf, and runtime BTF SHA-256 6da9f6b4ebcae9b07e6a717b517884abf7f6b524e46340e40fb164eed4a49a7c. No non-x86 physical claim is made.
+Performance/capacity results: the physical result has 10,000 measured opens and 50,000 saturation opens. It lost 39,081 observation records under saturation while the protected denial and benign allow remained correct. All four cleanup fields are true.
+Unsupported/degraded paths: administrative exec, immutable executable and file-content proof, complete mm/VMA state, overlay copy-up provenance, projected-token rotation and controller binding, complete mount variants and propagation, persistent file-instance lifetime, protected exec and role races, and complete local self-protection remain unsupported. Landlock target-context installation is unsupported with reason NO_QUALIFIED_TARGET_CONTEXT_INSTALL. Network and distributed results remain outside this outcome.
+Remaining work in this phase: none inside the limited claim. A missing hook, field, identity, or authority model must return to the prototype and type-closure gate before a later authorized plan can advertise it. The stock-runc administrative bootstrap also needs an architecture decision.
 Next phase not authorized: yes.
 ```
 
