@@ -443,9 +443,6 @@ impl NetworkTestRunner {
         let delegated_denied_server =
             thread::spawn(move || server_absent(delegated_denied_listener));
         let provider_server = thread::spawn(move || server_receive(provider_listener, b"provider"));
-        let udp_ipv4_server = thread::spawn(move || udp_receive(udp_ipv4, 2));
-        let udp_ipv6_server = thread::spawn(move || udp_receive(udp_ipv6, 2));
-
         let governed_read = fixture.read_prepared()?;
         let governed_mmap = fixture.mmap_prepared()?;
         let governed_read_allowed = governed_read.allowed;
@@ -738,6 +735,8 @@ impl NetworkTestRunner {
                 reason: "the signed IPv6 TCP control failed",
             }
         );
+        let udp_ipv4_server = thread::spawn(move || udp_receive(udp_ipv4, 2));
+        let udp_ipv6_server = thread::spawn(move || udp_receive(udp_ipv6, 2));
         let udp_unconnected_allowed = fixture
             .network_udp_send(udp_ipv4_address, b"u4", false)?
             .allowed
@@ -1819,11 +1818,20 @@ fn server_absent(listener: TcpListener) -> io::Result<bool> {
 fn udp_receive(socket: UdpSocket, expected_messages: usize) -> io::Result<bool> {
     socket.set_read_timeout(Some(Duration::from_secs(5)))?;
     let mut buffer = [0_u8; 64];
+    let mut received_messages = Vec::with_capacity(expected_messages);
     for _ in 0..expected_messages {
-        let received = socket.recv(&mut buffer)?;
+        let received = socket.recv(&mut buffer).map_err(|error| {
+            io::Error::new(
+                error.kind(),
+                format!(
+                    "received UDP payloads {received_messages:?} before receive failed: {error}"
+                ),
+            )
+        })?;
         if received == 0 {
             return Ok(false);
         }
+        received_messages.push(buffer[..received].to_vec());
     }
     Ok(true)
 }
