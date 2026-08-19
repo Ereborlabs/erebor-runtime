@@ -17,7 +17,7 @@ use snafu::{ensure, ResultExt as _};
 use zerocopy::TryFromBytes as _;
 
 use super::PROFILE_GENERATION_REF_ID;
-use crate::error::{CommandSnafu, InterceptorSnafu, InvalidInputSnafu, IoSnafu};
+use crate::error::{CommandSnafu, InterceptorSnafu, InvalidInputSnafu, IoSnafu, NodeSnafu};
 use crate::Result;
 
 const WAIT_LIMIT: Duration = Duration::from_secs(5);
@@ -131,14 +131,22 @@ pub(super) fn effect_binding_with_identity(
     }
 }
 
-pub(super) fn observation_health(
+pub(super) fn sample_observation_health(
     host: &KernelHost,
     store: &EffectObservationStore,
 ) -> Result<EffectObservationHealth> {
     let bytes = host
         .lookup_map("effect_observation_health", &0_u32.to_ne_bytes())
         .context(InterceptorSnafu)?;
-    Ok(store.health(bytes.as_deref()))
+    let bytes = bytes.ok_or_else(|| {
+        InvalidInputSnafu {
+            path: Path::new("effect_observation_health"),
+            reason: "the live observation-health map has no per-CPU value",
+        }
+        .build()
+    })?;
+    store.sample_coverage_health(&bytes).context(NodeSnafu)?;
+    Ok(store.health(Some(&bytes)))
 }
 
 pub(super) fn health_delta(

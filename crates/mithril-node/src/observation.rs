@@ -151,11 +151,9 @@ impl EffectObservationStore {
                     temporal_coverage,
                     utc_now_ns(),
                 )?;
-                if let Err(error) = durable.wal.append(&observation) {
-                    let _result = durable
-                        .coverage
-                        .mark_all_gapped(CoverageGapReasonV1::WalFailure);
-                    return Err(error);
+                if let Err(failure) = durable.wal.append_classified(&observation) {
+                    let _result = durable.coverage.mark_all_gapped(failure.gap_reason);
+                    return Err(failure.error);
                 }
                 crate::Result::Ok(())
             })();
@@ -702,7 +700,7 @@ mod tests {
         assert!(!snapshot.supports_negative_claim());
         assert!(snapshot.current_intervals()[0]
             .gap_reasons
-            .contains(&CoverageGapReasonV1::WalFailure));
+            .contains(&CoverageGapReasonV1::WalCapacity));
         Ok(())
     }
 }

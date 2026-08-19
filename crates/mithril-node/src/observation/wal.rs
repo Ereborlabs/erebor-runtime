@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 use snafu::ResultExt as _;
 
-use super::{EvidenceDigestV1, ObservationEnvelopeV1};
+use super::{CoverageGapReasonV1, EvidenceDigestV1, ObservationEnvelopeV1};
 use crate::error::{EvidenceStateSnafu, IoSnafu};
 use crate::Result;
 
@@ -157,6 +157,20 @@ pub struct EvidenceWal {
     acknowledged: AckStateV1,
 }
 
+pub(super) struct EvidenceWalAppendFailure {
+    pub error: crate::Error,
+    pub gap_reason: CoverageGapReasonV1,
+}
+
+impl From<crate::Error> for EvidenceWalAppendFailure {
+    fn from(error: crate::Error) -> Self {
+        Self {
+            error,
+            gap_reason: CoverageGapReasonV1::WalFailure,
+        }
+    }
+}
+
 impl EvidenceWal {
     pub fn open(root: impl Into<PathBuf>, limits: EvidenceWalLimits) -> Result<Self> {
         limits.validate()?;
@@ -233,6 +247,14 @@ impl EvidenceWal {
     }
 
     pub fn append(&mut self, observation: &ObservationEnvelopeV1) -> Result<u64> {
+        self.append_classified(observation)
+            .map_err(|failure| failure.error)
+    }
+
+    pub(super) fn append_classified(
+        &mut self,
+        observation: &ObservationEnvelopeV1,
+    ) -> std::result::Result<u64, EvidenceWalAppendFailure> {
         let cursor = self
             .records
             .last()
@@ -267,17 +289,21 @@ impl EvidenceWal {
             || self.records.len() == self.limits.maximum_retained_records
             || self.retained_bytes.saturating_add(bytes_len) > self.limits.maximum_retained_bytes
         {
-            return EvidenceStateSnafu {
-                reason: "evidence WAL retention or record capacity is exhausted".to_owned(),
-            }
-            .fail();
+            return Err(EvidenceWalAppendFailure {
+                error: EvidenceStateSnafu {
+                    reason: "evidence WAL retention or record capacity is exhausted".to_owned(),
+                }
+                .build(),
+                gap_reason: CoverageGapReasonV1::WalCapacity,
+            });
         }
         let path = segment_path(&self.root, cursor);
         if path.exists() {
-            return EvidenceStateSnafu {
+            return Err(EvidenceStateSnafu {
                 reason: format!("evidence WAL segment `{}` already exists", path.display()),
             }
-            .fail();
+            .build()
+            .into());
         }
         atomic_write(&path, &bytes)?;
         self.retained_bytes += bytes_len;
