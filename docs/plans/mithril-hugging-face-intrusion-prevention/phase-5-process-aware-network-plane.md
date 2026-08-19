@@ -1,6 +1,7 @@
 # Phase 5: Process-Aware Network Plane
 
-Status: Done for the qualified x86_64 single-host network tier.
+Status: Done for the qualified x86_64 network tier, including the tested
+two-node K3s Flannel route.
 
 Master: [Mithril Hugging Face Intrusion Prevention](./README.md)
 Design: [Validated readable architecture](./policy-and-protection-algorithm-architecture-readable.md)
@@ -98,29 +99,34 @@ distributed response authorization.
 ## Phase Result
 
 ```text
-State: Done for the qualified x86_64 single-host network tier.
+State: Done for the qualified x86_64 network tier, including the tested
+  two-node K3s Flannel route.
 Validated architecture revision/digest: current checked architecture document.
 Completed deliverable IDs: D5.1-D5.6 within the limited advertised tier.
 Files and durable owners changed: network policy source and validation; portable
   Interceptor ABI and generated C ABI; node generation lowering, lifecycle,
   response fence, and retirement; Interceptor host attachment and BPF socket,
   packet, response, and release programs; Rust and manual physical fixtures;
-  VM harness; qualification record; closure and review documents.
+  single-node and two-node VM harnesses; closure and review documents.
 Upstream-adoption dossier IDs used: none; the checked Cilium and Tetragon
   learning document records the source study and adopted design lessons.
-Fixture cases and exact physical results: all 13 allocated fixtures are PASS;
-  every network Boolean oracle in the disposable VM result is true.
+Fixture cases and exact physical results: all 13 allocated fixtures are PASS
+  in the single-host probe and in both two-node directions; allowed peer TCP
+  and UDP payloads arrive, and the denied peer receives no connection.
 Commands and exact source state covered: current checked worktree source;
   formatting, focused clippy, Mithril e2e library tests, complete repository
-  Rust CI, the standalone network manual probe, and the complete VM harness.
-Platform/kernel/runtime manifests: x86_64 Linux 6.8.0-137-generic, cgroup v2,
-  BPF filesystem, runtime BTF, and active BPF LSM.
+  Rust CI, the standalone network manual probe, the complete single-node VM
+  harness, and the bidirectional two-node K3s Flannel harness.
+Platform/kernel/runtime manifests: x86_64 Linux 6.8.0-137-generic on both
+  independently booted nodes, cgroup v2, BPF filesystem, runtime BTF, active
+  BPF LSM, K3s v1.35.5+k3s1, and two Ready Kubernetes nodes.
 Performance/capacity results: generation-map capacity is bounded and checked;
   no Phase 5 network throughput or latency claim is advertised.
 Unsupported/degraded allocated paths: none. DNS payload and TLS semantics,
-  rewrite topologies beyond the qualified local-output DNAT path, transfer
-  mechanisms beyond the qualified descriptor and pidfd paths, and broader
-  protocols are not advertised. No fixture is DEGRADED.
+  CNIs beyond the tested Flannel route, Pod-origin enforcement, arbitrary
+  service meshes, SNAT and dynamic route mutation, transfer mechanisms beyond
+  the qualified descriptor and pidfd paths, and broader protocols are not
+  advertised. No fixture is DEGRADED.
 Remaining work in this phase: none. Claim expansion requires a new
   qualification outcome.
 Next phase not authorized: yes.

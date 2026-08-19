@@ -1,7 +1,7 @@
 # Live Two-Node Lifecycle Probe
 
-Status: Required for applicable implementation phases. No live probe has been
-run by this documentation change.
+Status: The Phase 5 network-route portion is verified. The complete lifecycle
+probe remains required for later applicable phases.
 
 ## Purpose
 
@@ -22,6 +22,25 @@ Kind-on-one-host, mocked audit, and synthetic event replay are useful CI layers.
 They do not replace the final two-node proof because they cannot independently
 prove node boot identity, host ownership, remote root binding, or node-local
 actuation.
+
+## Verified Phase 5 Network Portion
+
+The Phase 5 companion creates two disposable VMs with different boot
+identities and installs K3s `v1.35.5+k3s1`. It waits for exactly two Ready
+nodes and pins one peer Pod to each node. A Rust peer server runs inside each
+Pod network namespace. The opposite host sends to the remote Pod IP through
+the Flannel CNI route.
+
+Both directions delivered the allowed TCP and UDP payloads. The denied port
+had no peer receipt. The complete 13-row network fixture matrix passed on each
+source node. The harness removed the namespace, K3s installations, and its two
+VMs after the result.
+
+This result closes only the Phase 5 network-route requirement. It does not
+claim Kubernetes audit joins, remote task-root binding, distributed lineage,
+Control coordination, cross-node response authorization, Pod-origin
+enforcement, another CNI, or an arbitrary service mesh. Those requirements
+remain with their owning later phases or a future claim-expansion result.
 
 ## Required Testbed
 
