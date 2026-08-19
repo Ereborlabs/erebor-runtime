@@ -23,7 +23,7 @@ enum Command {
         lease_path: PathBuf,
         #[arg(long)]
         cgroup_path: PathBuf,
-        #[arg(long, default_value_t = 10_000)]
+        #[arg(long, default_value_t = 6_000)]
         measured_opens: u32,
         #[arg(long, default_value_t = 50_000)]
         saturation_opens: u32,

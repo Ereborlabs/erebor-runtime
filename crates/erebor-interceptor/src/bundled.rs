@@ -1281,7 +1281,7 @@ mod tests {
         let source =
             include_str!("../../../bpf/erebor-interceptor/programs/identity_network.bpf.h");
         let destination = source
-            .split("static __always_inline int network_apply_destination")
+            .split("static __noinline int network_apply_destination")
             .nth(1)
             .and_then(|source| {
                 source
@@ -1295,6 +1295,20 @@ mod tests {
         assert!(destination.contains("network_decision_allows(creator, creator_generation)"));
         assert!(destination.contains("network_apply_decision(config, scratch, current_generation"));
         assert!(destination.contains("network_replace_flow_authorizer"));
+    }
+
+    #[test]
+    fn network_control_hooks_leave_unix_sockets_to_the_ipc_owner() {
+        let source =
+            include_str!("../../../bpf/erebor-interceptor/programs/identity_network.bpf.h");
+
+        assert!(source.contains("static __always_inline bool network_socket_is_inet"));
+        assert_eq!(
+            source
+                .matches("if (!network_socket_is_inet(socket))")
+                .count(),
+            5
+        );
     }
 
     #[test]
