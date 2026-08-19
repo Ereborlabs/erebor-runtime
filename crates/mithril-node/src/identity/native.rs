@@ -81,9 +81,10 @@ impl NativeSecurityStateOwner {
                 reason: "live identity configuration differs from its node owner",
             }
         );
+        let before = self.health(host)?;
         host.reconcile_tasks().context(InterceptorSnafu)?;
         let report = self.health(host)?;
-        ensure_healthy(report)?;
+        ensure_no_new_failures(before, report)?;
         Ok(report)
     }
 
@@ -129,11 +130,12 @@ impl NativeSecurityStateOwner {
             host.update_map("identity_config", &key, config.as_bytes())
                 .context(InterceptorSnafu)?;
         }
+        let before = self.health(host)?;
         if reconcile_tasks {
             host.reconcile_tasks().context(InterceptorSnafu)?;
         }
         let report = self.health(host)?;
-        ensure_healthy(report)?;
+        ensure_no_new_failures(before, report)?;
         Ok(report)
     }
 
@@ -151,14 +153,19 @@ impl NativeSecurityStateOwner {
     }
 }
 
-fn ensure_healthy(report: ReconciliationReportV1) -> Result<()> {
+fn ensure_no_new_failures(
+    before: ReconciliationReportV1,
+    after: ReconciliationReportV1,
+) -> Result<()> {
     ensure!(
-        report.allocation_failures == 0
-            && report.coordinate_failures == 0
-            && report.placement_mismatches == 0
-            && report.reconciliation_required == 0,
+        after.allocation_failures == before.allocation_failures
+            && after.coordinate_failures == before.coordinate_failures
+            && after.placement_mismatches == before.placement_mismatches
+            && after.reconciliation_required == before.reconciliation_required,
         IdentityStateSnafu {
-            reason: format!("task reconciliation did not close cleanly: {report:?}"),
+            reason: format!(
+                "task reconciliation changed a failure counter: before {before:?}; after {after:?}"
+            ),
         }
     );
     Ok(())
@@ -215,7 +222,7 @@ mod tests {
     use erebor_interceptor_abi::{IdentityHealthV1, IdentityRuntimeConfigV1};
     use zerocopy::IntoBytes as _;
 
-    use super::{aggregate_health, ensure_healthy, recover_config, ReconciliationReportV1};
+    use super::{aggregate_health, ensure_no_new_failures, recover_config, ReconciliationReportV1};
 
     #[test]
     fn health_values_use_native_kernel_layout() -> crate::Result<()> {
@@ -231,16 +238,30 @@ mod tests {
     }
 
     #[test]
-    fn live_identity_health_rejects_capacity_and_placement_failures() {
-        assert!(ensure_healthy(ReconciliationReportV1 {
-            allocation_failures: 1,
+    fn reconciliation_accepts_retained_history_and_rejects_new_failures() {
+        let retained = ReconciliationReportV1 {
+            allocation_failures: 2,
+            coordinate_failures: 3,
+            placement_mismatches: 5,
+            reconciliation_required: 7,
             ..ReconciliationReportV1::default()
-        })
+        };
+        assert!(ensure_no_new_failures(retained, retained).is_ok());
+        assert!(ensure_no_new_failures(
+            retained,
+            ReconciliationReportV1 {
+                placement_mismatches: 6,
+                ..retained
+            }
+        )
         .is_err());
-        assert!(ensure_healthy(ReconciliationReportV1 {
-            placement_mismatches: 1,
-            ..ReconciliationReportV1::default()
-        })
+        assert!(ensure_no_new_failures(
+            retained,
+            ReconciliationReportV1 {
+                allocation_failures: 3,
+                ..retained
+            }
+        )
         .is_err());
     }
 
