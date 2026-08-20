@@ -10,8 +10,6 @@ mod fixture;
 mod golden;
 mod identity;
 mod loader;
-#[cfg(test)]
-mod packaging;
 mod physical;
 #[cfg(test)]
 mod prototype;

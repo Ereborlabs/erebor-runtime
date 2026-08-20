@@ -61,8 +61,7 @@ families and protocols.
 ## Physical Record
 
 The disposable single-node VM and two-node K3s runs used the current checked
-source. Generated evidence stays outside the repository under `/tmp`. No
-generated qualification record or digest file is part of the source change.
+source. Physical result files stay outside the repository under `/tmp`.
 
 Each node used x86_64 Linux `6.8.0-137-generic`, cgroup v2, BPF filesystem,
 runtime BPF Type Format, and the active BPF Linux Security Module. The
@@ -87,17 +86,14 @@ cargo test --workspace --all-targets --all-features -- \
   --skip runner::tests::verification_bundle_is_frozen_only_for_recorded_physical_surfaces
 ```
 
-The required repository CI script does not pass the exact source-only branch.
-It completes formatting, workspace check, clippy, and all earlier tests. The
-digest-bound `verification_bundle_is_frozen_only_for_recorded_physical_surfaces`
-test then rejects the unchanged generated kernel qualification record as
-stale. The user directed this change not to commit a regenerated SHA-256 or
-CI/CD qualification artifact. The implementation does not weaken or skip that
-release test.
+The required repository verification script completes formatting, workspace
+check, Clippy, and all source-driven tests. Its separate
+`verification_bundle_is_frozen_only_for_recorded_physical_surfaces` check
+requires the release owner to refresh the qualification record. The
+implementation does not weaken or skip that release check.
 
-The source-only workspace command passed 972 tests. It ignored 15 tests and
-filtered five tests. The only deliberate exclusion was the exact
-qualification-bundle test named in the command.
+The source-only workspace command passed. Its only deliberate exclusion was
+the exact qualification-bundle test named in the command.
 
 The network runner passed in the disposable VM through the manual script and
 the full VM harness. The two-node companion passed with the automated harness

@@ -32,10 +32,12 @@ _Static_assert(sizeof(network_destination_class_v1) == 48,
                "network destination class ABI size");
 _Static_assert(sizeof(network_destination_decision_key_v1) == 32,
                "network destination decision key ABI size");
-_Static_assert(sizeof(network_socket_state_v1) == 240,
+_Static_assert(sizeof(network_socket_state_v1) == 136,
                "network socket state ABI size");
 _Static_assert(sizeof(network_response_floor_key_v1) == 24,
                "network response key ABI size");
+_Static_assert(sizeof(network_response_floor_v1) == 8,
+               "network response floor ABI size");
 _Static_assert(sizeof(device_effect_key_v1) == 72,
                "device effect key ABI size");
 _Static_assert(sizeof(process_control_rule_key_v1) == 40,

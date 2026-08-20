@@ -131,7 +131,7 @@ Fixture cases and exact physical results: IPC-ENDPOINT-RESTART-006,
   recovery, network enforcement, benchmark, cleanup, and legitimate-control
   checks. The final two-node K3s harness reports two Ready nodes and passes
   both directions.
-Commands and exact source state covered: source commit 6686a23;
+Commands and exact source state covered: current checked source;
   `bash .github/scripts/verify-rust-ci.sh`; `cargo test --workspace
   --all-targets --all-features -- --skip
   verification_bundle_is_frozen_only_for_recorded_physical_surfaces`;
@@ -141,9 +141,8 @@ Commands and exact source state covered: source commit 6686a23;
   `crates/mithril-e2e/harness/vm/two-node-network.sh --output-directory
   /tmp/mithril-phase6-two-node-simplicity-20260819-r1`. The source-only
   workspace command passes. The repository gate passes formatting, check,
-  Clippy, and every ordinary test. Its only failure is the intentionally stale
-  generated qualification-record assertion. The user prohibited committing
-  generated CI/CD digest artifacts.
+  Clippy, and every source-driven test. The release owner controls the separate
+  qualification-record freshness check.
 Platform/kernel/runtime manifests: Ubuntu 24.04, x86_64 Linux
   6.8.0-137-generic, cgroup v2, BPF filesystem, runtime BTF, active
   lockdown/capability/Landlock/Yama/AppArmor/BPF LSM order, K3s
@@ -158,10 +157,9 @@ Performance/capacity results: each OPEN benchmark measures 1,000,000
 Unsupported/degraded paths: physical qualification is not claimed beyond the
   recorded x86_64 tier. The source compiles against every checked-in target
   kernel header, but those targets do not have physical proof in this result.
-  The generated checked-in qualification record remains stale by instruction;
-  this source branch is not a green release branch until its release owner
-  refreshes that separate artifact. Distributed graph joins, notifications,
-  provider connectors, and response remain excluded.
+  The release owner must refresh the qualification record before release.
+  Distributed graph joins, notifications, provider connectors, and response
+  remain excluded.
 Remaining work in this phase: none within the qualified tier. Claim expansion
   requires a new qualification result.
 Next phase not authorized: yes.

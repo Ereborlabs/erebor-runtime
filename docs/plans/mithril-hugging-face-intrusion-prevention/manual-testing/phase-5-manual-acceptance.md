@@ -100,7 +100,7 @@ only the admitted channel activity. Only an authenticated server or provider
 source can report the semantic operation and its result. Do not record a
 kernel Layer 7 prevention result.
 
-## Required Artifacts And Pass Rule
+## Required Results And Pass Rule
 
 Retain the network JSON result, platform record, socket and flow identity,
 syscall results, server receipt, response-fence result, reference-release
@@ -114,6 +114,24 @@ The pass rule applies only to the exact delegated-I/O, token-read,
 accepted-socket, namespace-transfer, local-output DNAT, and
 host-to-remote-Pod Flannel variants described above. A broader topology or
 protocol needs its own negative oracle and legitimate positive control.
+
+## Executed Acceptance Record
+
+The current checked source passed the physical review on 2026-08-19. The
+single-node Ubuntu 24.04 VM ran Linux `6.8.0-137-generic` on x86_64 with
+cgroup v2, the BPF filesystem, runtime BPF Type Format, and BPF LSM active.
+The identity, kernel-qualification, and both effect modes passed. The network
+probe then passed all 13 fixture rows. Its result is in
+`/tmp/mithril-phase5-simplify-single5-20260819/network-physical-probe.json`.
+The probe removed its pin root, lease, cgroup, rewrite table, and fixture
+paths. The harness destroyed the owned VM.
+
+The two-node K3s `v1.35.5+k3s1` review reported two Ready nodes with distinct
+boot identities. Node A reached Node B and Node B reached Node A through
+Flannel. Each direction passed all 13 fixture rows, including exact TCP and
+UDP payload receipt and denied-port absence. The results are in
+`/tmp/mithril-phase5-simplify-two-node-20260819`. The harness removed the
+namespace, both K3s installations, and both owned VMs.
 
 ## Troubleshooting
 

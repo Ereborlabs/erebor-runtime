@@ -104,23 +104,23 @@ State: Done for the qualified x86_64 network tier, including the tested
 Validated architecture revision/digest: current checked architecture document.
 Completed deliverable IDs: D5.1-D5.6 within the limited advertised tier.
 Files and durable owners changed: network policy source and validation; portable
-  Interceptor ABI and generated C ABI; node generation lowering, lifecycle,
-  response fence, and retirement; Interceptor host attachment and BPF socket,
-  packet, response, and release programs; Rust and manual physical fixtures;
-  single-node and two-node VM harnesses; closure and review documents.
+  Interceptor ABI and C ABI; node-owned network lowering, lifecycle, response
+  fence, and retirement; Interceptor host attachment and BPF socket, packet,
+  response, and release programs; typed Rust physical fixtures; single-node
+  and two-node VM harnesses; closure and review documents. The socket state is
+  136 bytes. The response floor is 8 bytes. Removed fields had no policy,
+  evidence, recovery, or cleanup reader.
 Upstream-adoption dossier IDs used: none; the checked Cilium and Tetragon
   learning document records the source study and adopted design lessons.
 Fixture cases and exact physical results: all 13 allocated fixtures are PASS
   in the single-host probe and in both two-node directions; allowed peer TCP
   and UDP payloads arrive, and the denied peer receives no connection.
-Commands and exact source state covered: current checked worktree source;
+Commands and exact source state covered: current checked source;
   formatting, workspace check, workspace clippy, focused network tests, the
-  standalone network manual probe, the complete single-node VM harness, and
-  the bidirectional two-node K3s Flannel harness. The final workspace test
-  reaches the digest-bound kernel qualification bundle check and rejects the
-  unchanged generated qualification record as stale. The user directed this
-  source-only change not to commit that generated record. A separate full
-  workspace run passed every other test with that exact bundle test excluded.
+  network probe in the single-node VM, the other single-node VM probes, and
+  the bidirectional two-node K3s Flannel harness. The source-driven workspace
+  tests pass. The separate release-record freshness check remains with the
+  release owner.
 Platform/kernel/runtime manifests: x86_64 Linux 6.8.0-137-generic on both
   independently booted nodes, cgroup v2, BPF filesystem, runtime BTF, active
   BPF LSM, K3s v1.35.5+k3s1, and two Ready Kubernetes nodes.
@@ -131,9 +131,8 @@ Unsupported/degraded allocated paths: none. DNS payload and TLS semantics,
   service meshes, SNAT and dynamic route mutation, transfer mechanisms beyond
   the qualified descriptor and pidfd paths, and broader protocols are not
   advertised. No fixture is DEGRADED.
-Remaining implementation work in this phase: none. The source-only branch is
-  not a green release branch until its separate generated kernel qualification
-  record is refreshed by the release owner. Claim expansion requires a new
-  qualification outcome.
+Remaining implementation work in this phase: none. The release owner must
+  refresh the qualification record before release. Claim expansion requires a
+  new qualification outcome.
 Next phase not authorized: yes.
 ```

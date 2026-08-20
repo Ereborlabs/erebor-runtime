@@ -320,11 +320,29 @@ pub enum NetworkProtocolV1 {
     Udp,
 }
 
+impl From<NetworkProtocolV1> for erebor_interceptor_abi::NetworkProtocolV1 {
+    fn from(protocol: NetworkProtocolV1) -> Self {
+        match protocol {
+            NetworkProtocolV1::Tcp => Self::Tcp,
+            NetworkProtocolV1::Udp => Self::Udp,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct NetworkPortRangeV1 {
     pub first: u16,
     pub last: u16,
+}
+
+impl From<NetworkPortRangeV1> for erebor_interceptor_abi::NetworkPortRangeV1 {
+    fn from(range: NetworkPortRangeV1) -> Self {
+        Self {
+            first: range.first,
+            last: range.last,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

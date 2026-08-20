@@ -1502,8 +1502,7 @@ typedef struct network_destination_class_v1 {
   uint64_t destination_policy_handle;
   struct network_port_range_v1 port_ranges[MAX_NETWORK_PORT_RANGES_V1];
   uint8_t port_range_count;
-  uint8_t final_address_required;
-  uint8_t reserved[6];
+  uint8_t reserved[7];
 } network_destination_class_v1;
 
 typedef struct network_destination_decision_key_v1 {
@@ -1544,23 +1543,13 @@ typedef struct network_response_floor_key_v1 {
 } network_response_floor_key_v1;
 
 typedef struct network_response_floor_v1 {
-  uint64_t transition_version;
-  uint64_t response_reason_id;
   network_response_scope_v1 scope;
-  uint8_t fenced;
-  uint8_t reserved[6];
+  uint8_t reserved[7];
 } network_response_floor_v1;
 
 typedef struct network_socket_state_v1 {
-  struct id128_v1 creator_process_state_id;
-  struct id128_v1 creator_authority_domain_id;
-  struct id128_v1 creator_binding_id;
-  struct id128_v1 creator_binding_nonce;
-  struct id128_v1 creator_execution_set_id;
   struct network_namespace_generation_v1 socket_network_namespace;
   uint64_t creator_profile_generation_ref_id;
-  uint64_t creator_process_transition_version;
-  uint64_t creator_root_cgroup_id;
   uint64_t socket_key_id;
   uint64_t socket_generation;
   uint64_t flow_generation;
@@ -1575,12 +1564,10 @@ typedef struct network_socket_state_v1 {
   uint16_t creator_entry_kind;
   network_address_family_v1 address_family;
   network_protocol_v1 protocol;
-  uint16_t socket_type;
   uint16_t peer_port;
   uint8_t peer_address[16];
   binding_lifecycle_state_v1 creator_binding_lifecycle_state;
   network_socket_state_kind_v1 state;
-  uint8_t reserved[6];
 } network_socket_state_v1;
 
 typedef struct mount_mutation_attempt_v1 {

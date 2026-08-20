@@ -10,7 +10,6 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use erebor_interceptor::{KernelHost, KernelHostConfig, KernelHostOwner};
 use erebor_interceptor_abi::{
     KernelEffectFamilyV1, KernelEffectOperationV1, NetworkResponseFloorKeyV1,
-    NetworkResponseScopeV1,
 };
 use mithril_control::{
     DestinationPolicyRecordV1, DnsPolicyModeV1, EffectFamilyDefaultV1, EffectFamilyV1, EntryKindV1,
@@ -23,7 +22,7 @@ use mithril_node::{
 };
 use serde::Serialize;
 use snafu::{ensure, ResultExt as _};
-use zerocopy::IntoBytes as _;
+use zerocopy::{FromBytes as _, IntoBytes as _};
 
 use super::child::EffectProcessFixture;
 use super::support::{
@@ -143,6 +142,20 @@ struct NetworkFixtureProof {
     socket_life: bool,
 }
 
+#[derive(Clone, Copy)]
+struct NetworkActorSpec {
+    name: &'static str,
+    binding_id: &'static str,
+    label: char,
+    initial_role: bool,
+    private_network_namespace: bool,
+}
+
+struct NetworkActor {
+    spec: NetworkActorSpec,
+    cgroup: ProbeCgroup,
+}
+
 pub struct NetworkTestRunner {
     repo_root: PathBuf,
 }
@@ -198,23 +211,73 @@ impl NetworkTestRunner {
         let lease_cleanup = ProbeFile::new(lease_path);
         let cgroup_cleanup = ProbeCgroup::create(cgroup_path)?;
         let cgroup_path = cgroup_cleanup.path().to_path_buf();
-        let actor_names = [
-            "main",
-            "server",
-            "external-receiver",
-            "converter-receiver",
-            "namespace-external",
-            "namespace-converter",
-            "proxy-requester",
-            "proxy-delegate",
+        let actor_specs = [
+            NetworkActorSpec {
+                name: "main",
+                binding_id: "99999999-9999-4999-8999-999999999991",
+                label: 'a',
+                initial_role: true,
+                private_network_namespace: false,
+            },
+            NetworkActorSpec {
+                name: "server",
+                binding_id: "99999999-9999-4999-8999-999999999992",
+                label: 'b',
+                initial_role: true,
+                private_network_namespace: false,
+            },
+            NetworkActorSpec {
+                name: "external-receiver",
+                binding_id: "99999999-9999-4999-8999-999999999993",
+                label: 'c',
+                initial_role: false,
+                private_network_namespace: false,
+            },
+            NetworkActorSpec {
+                name: "converter-receiver",
+                binding_id: "99999999-9999-4999-8999-999999999994",
+                label: 'd',
+                initial_role: true,
+                private_network_namespace: false,
+            },
+            NetworkActorSpec {
+                name: "namespace-external",
+                binding_id: "99999999-9999-4999-8999-999999999995",
+                label: 'e',
+                initial_role: false,
+                private_network_namespace: true,
+            },
+            NetworkActorSpec {
+                name: "namespace-converter",
+                binding_id: "99999999-9999-4999-8999-999999999996",
+                label: 'f',
+                initial_role: true,
+                private_network_namespace: true,
+            },
+            NetworkActorSpec {
+                name: "proxy-requester",
+                binding_id: "99999999-9999-4999-8999-999999999997",
+                label: 'g',
+                initial_role: true,
+                private_network_namespace: false,
+            },
+            NetworkActorSpec {
+                name: "proxy-delegate",
+                binding_id: "99999999-9999-4999-8999-999999999998",
+                label: 'h',
+                initial_role: true,
+                private_network_namespace: false,
+            },
         ];
-        let mut actor_cgroup_cleanups = Vec::new();
-        let mut actor_cgroups = Vec::new();
-        for name in actor_names {
-            let cleanup = ProbeCgroup::create(&cgroup_path.join(name))?;
-            actor_cgroups.push(cleanup.path().to_path_buf());
-            actor_cgroup_cleanups.push(cleanup);
-        }
+        let mut actors = actor_specs
+            .into_iter()
+            .map(|spec| {
+                Ok(NetworkActor {
+                    cgroup: ProbeCgroup::create(&cgroup_path.join(spec.name))?,
+                    spec,
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
         let repo_root = fs::canonicalize(&self.repo_root).context(IoSnafu {
             path: &self.repo_root,
         })?;
@@ -264,38 +327,29 @@ impl NetworkTestRunner {
         let accepted_address = available_tcp_address([127, 0, 0, 2])?;
 
         let (boot_id, node_boot_id) = boot_identity()?;
-        let kernel_config = KernelHostConfig::identity(
+        let mut kernel_config = KernelHostConfig::identity(
             "/sys/kernel/btf/vmlinux",
             lease_path,
             Some(pin_root.to_path_buf()),
             boot_id,
             1,
-        )
-        .with_network_cgroup_root(&cgroup_path);
+        );
+        kernel_config.network_cgroup_root = cgroup_path.clone();
         let mut host = KernelHostOwner::new(kernel_config.clone())
             .start()
             .context(InterceptorSnafu)?;
-        let binding_ids = [
-            "99999999-9999-4999-8999-999999999991",
-            "99999999-9999-4999-8999-999999999992",
-            "99999999-9999-4999-8999-999999999993",
-            "99999999-9999-4999-8999-999999999994",
-            "99999999-9999-4999-8999-999999999995",
-            "99999999-9999-4999-8999-999999999996",
-            "99999999-9999-4999-8999-999999999997",
-            "99999999-9999-4999-8999-999999999998",
-        ];
-        let initial_roles = [true, true, false, true, false, true, true, true];
-        let mut binding_specs = Vec::new();
-        for (index, path) in actor_cgroups.iter().enumerate() {
-            binding_specs.push(effect_binding_with_identity(
-                path,
-                binding_ids[index],
-                char::from(b'a' + u8::try_from(index).unwrap_or(0)),
-                actor_names[index],
-                initial_roles[index],
-            ));
-        }
+        let binding_specs = actors
+            .iter()
+            .map(|actor| {
+                effect_binding_with_identity(
+                    actor.cgroup.path(),
+                    actor.spec.binding_id,
+                    actor.spec.label,
+                    actor.spec.name,
+                    actor.spec.initial_role,
+                )
+            })
+            .collect::<Vec<_>>();
         let mut bindings = WorkloadBindingOwner::system(node_boot_id, 1).context(NodeSnafu)?;
         bindings
             .publish_all(&host, &binding_specs)
@@ -304,25 +358,53 @@ impl NetworkTestRunner {
             .activate(&mut host)
             .context(NodeSnafu)?;
 
-        let main_root = actor_root(&fixture_root, actor_names[0])?;
+        let main_root = actor_root(&fixture_root, actors[0].spec.name)?;
         let token_path = main_root.join("token");
         fs::write(&token_path, TOKEN_PAYLOAD).context(IoSnafu { path: &token_path })?;
         let mut fixture = EffectProcessFixture::start(&main_root)?;
-        move_actor(&fixture, &actor_cgroups[0])?;
-        let mut server_fixture =
-            start_actor(&fixture_root, actor_names[1], &actor_cgroups[1], false)?;
-        let mut external_receiver =
-            start_actor(&fixture_root, actor_names[2], &actor_cgroups[2], false)?;
-        let mut converter_receiver =
-            start_actor(&fixture_root, actor_names[3], &actor_cgroups[3], false)?;
-        let mut namespace_external =
-            start_actor(&fixture_root, actor_names[4], &actor_cgroups[4], true)?;
-        let mut namespace_converter =
-            start_actor(&fixture_root, actor_names[5], &actor_cgroups[5], true)?;
-        let mut proxy_requester =
-            start_actor(&fixture_root, actor_names[6], &actor_cgroups[6], false)?;
-        let mut proxy_delegate =
-            start_actor(&fixture_root, actor_names[7], &actor_cgroups[7], false)?;
+        move_actor(&fixture, actors[0].cgroup.path())?;
+        let mut server_fixture = start_actor(
+            &fixture_root,
+            actors[1].spec.name,
+            actors[1].cgroup.path(),
+            actors[1].spec.private_network_namespace,
+        )?;
+        let mut external_receiver = start_actor(
+            &fixture_root,
+            actors[2].spec.name,
+            actors[2].cgroup.path(),
+            actors[2].spec.private_network_namespace,
+        )?;
+        let mut converter_receiver = start_actor(
+            &fixture_root,
+            actors[3].spec.name,
+            actors[3].cgroup.path(),
+            actors[3].spec.private_network_namespace,
+        )?;
+        let mut namespace_external = start_actor(
+            &fixture_root,
+            actors[4].spec.name,
+            actors[4].cgroup.path(),
+            actors[4].spec.private_network_namespace,
+        )?;
+        let mut namespace_converter = start_actor(
+            &fixture_root,
+            actors[5].spec.name,
+            actors[5].cgroup.path(),
+            actors[5].spec.private_network_namespace,
+        )?;
+        let mut proxy_requester = start_actor(
+            &fixture_root,
+            actors[6].spec.name,
+            actors[6].cgroup.path(),
+            actors[6].spec.private_network_namespace,
+        )?;
+        let mut proxy_delegate = start_actor(
+            &fixture_root,
+            actors[7].spec.name,
+            actors[7].cgroup.path(),
+            actors[7].spec.private_network_namespace,
+        )?;
         for actor in [
             &mut fixture,
             &mut server_fixture,
@@ -494,7 +576,7 @@ impl NetworkTestRunner {
             .into_iter()
             .find(|event| {
                 event.reason == "EXACT_POLICY_AUDIT_ALLOW"
-                    && event.operation == u32::from(KernelEffectOperationV1::Connect as u16)
+                    && event.operation == KernelEffectOperationV1::Connect as u32
             })
             .ok_or_else(|| {
                 InvalidInputSnafu {
@@ -539,11 +621,10 @@ impl NetworkTestRunner {
             socket_generation: allowed_event.network_socket_generation,
         };
         let fence = policy
-            .fence_network_socket(&host, fence_key, 1)
+            .fence_network_socket(&host, fence_key)
             .context(NodeSnafu)?;
         let profile_generation_ref_id = allowed_event.network_creator_profile_generation_ref_id;
-        let whole_socket_fence_installed =
-            fence.scope == NetworkResponseScopeV1::WholeSocket && fence.inserted;
+        let whole_socket_fence_installed = fence;
         let identity_inspector = NativeIdentityInspector::new(pin_root);
         let task_state_before = identity_inspector
             .snapshot(fixture.pid())
@@ -705,7 +786,7 @@ impl NetworkTestRunner {
             .recent_since(reuse_marker)
             .into_iter()
             .rev()
-            .find(|event| event.operation == u32::from(KernelEffectOperationV1::Connect as u16))
+            .find(|event| event.operation == KernelEffectOperationV1::Connect as u32)
             .ok_or_else(|| invalid_probe("the reused socket has no connect observation"))?;
         let socket_generation_not_reused =
             reused_event.network_socket_generation != allowed_event.network_socket_generation;
@@ -735,8 +816,10 @@ impl NetworkTestRunner {
                 reason: "the signed IPv6 TCP control failed",
             }
         );
-        let udp_ipv4_server = thread::spawn(move || udp_receive(udp_ipv4, 2));
-        let udp_ipv6_server = thread::spawn(move || udp_receive(udp_ipv6, 2));
+        let udp_ipv4_server =
+            thread::spawn(move || udp_receive(udp_ipv4, [b"u4".as_slice(), b"c4".as_slice()]));
+        let udp_ipv6_server =
+            thread::spawn(move || udp_receive(udp_ipv6, [b"u6".as_slice(), b"c6".as_slice()]));
         let udp_unconnected_allowed = fixture
             .network_udp_send(udp_ipv4_address, b"u4", false)?
             .allowed
@@ -889,11 +972,9 @@ impl NetworkTestRunner {
                 ),
             }
         );
-        let server_address: SocketAddr = listen
+        let server_address = listen
             .address
-            .ok_or_else(|| invalid_probe("the approved listener returned no address"))?
-            .parse()
-            .map_err(|error| invalid_probe(format!("the listener address is invalid: {error}")))?;
+            .ok_or_else(|| invalid_probe("the approved listener returned no address"))?;
 
         let mut external_client = TcpStream::connect(server_address).context(IoSnafu {
             path: Path::new("external accepted-socket client"),
@@ -961,7 +1042,7 @@ impl NetworkTestRunner {
             .recent_since(shared_marker)
             .into_iter()
             .rev()
-            .find(|event| event.operation == u32::from(KernelEffectOperationV1::Send as u16))
+            .find(|event| event.operation == KernelEffectOperationV1::Send as u32)
             .ok_or_else(|| invalid_probe("the passed socket has no send observation"))?;
         let mut approved_bytes = [0_u8; 2];
         converter_client
@@ -978,7 +1059,6 @@ impl NetworkTestRunner {
                     socket_key_id: shared_event.network_socket_key_id,
                     socket_generation: shared_event.network_socket_generation,
                 },
-                2,
             )
             .context(NodeSnafu)?;
         let receiver_fenced = converter_receiver
@@ -997,7 +1077,7 @@ impl NetworkTestRunner {
             && approved_send
             && approved_bytes == *b"ok";
         let shared_socket_holders_denied =
-            shared_floor.inserted && receiver_fenced && accepter_fenced && shared_bytes_absent;
+            shared_floor && receiver_fenced && accepter_fenced && shared_bytes_absent;
         server_fixture.network_close()?;
         ensure!(
             socket_reference_count(
@@ -1076,7 +1156,7 @@ impl NetworkTestRunner {
             .recent_since(namespace_marker)
             .into_iter()
             .rev()
-            .find(|event| event.operation == u32::from(KernelEffectOperationV1::Send as u16))
+            .find(|event| event.operation == KernelEffectOperationV1::Send as u32)
             .ok_or_else(|| invalid_probe("the namespace socket has no send observation"))?;
         let mut namespace_byte = [0_u8; 1];
         namespace_converter_client
@@ -1106,7 +1186,7 @@ impl NetworkTestRunner {
                 path: Path::new("accepted and namespace socket transfer"),
                 reason: format!(
                     "a transferred socket widened authority or lost namespace evidence: accepted_narrow={accepted_socket_narrow_actor_denied}, accepted_approved={accepted_socket_approved_actor_allowed}, shared_fence={shared_socket_holders_denied} (inserted={}, receiver_denied={receiver_fenced}, accepter_denied={accepter_fenced}, bytes_absent={shared_bytes_absent}), namespace_narrow={cross_namespace_narrow_actor_denied}, namespace_approved={cross_namespace_approved_actor_allowed}, namespace_evidence={cross_namespace_evidence_distinct}",
-                    shared_floor.inserted,
+                    shared_floor,
                 ),
             }
         );
@@ -1150,9 +1230,8 @@ impl NetworkTestRunner {
 
         let rewrite = NetworkRewriteOwner::install(rewrite_address.port())?;
         let rewritten_marker = observations.cursor();
-        let rewritten_denied = fixture
-            .network_connect(SocketAddr::from(([198, 18, 0, 1], rewrite_address.port())))?
-            .failed();
+        let rewritten_denied =
+            fixture.network_connect(SocketAddr::from(([198, 18, 0, 1], rewrite_address.port())))?;
         wait_for_effect(
             &reader,
             &observations,
@@ -1160,14 +1239,40 @@ impl NetworkTestRunner {
             "EXACT_POLICY_DENY",
             (KernelEffectFamilyV1::Network, KernelEffectOperationV1::Send),
         )?;
-        let rewritten_forbidden_packet_absent = rewritten_denied;
-        let rewritten_allowed = fixture
-            .network_connect(SocketAddr::from(([198, 18, 0, 2], rewrite_address.port())))?
-            .allowed
-            && fixture.network_send(b"rewrite")?.allowed;
+        let rewritten_forbidden_packet_absent = rewritten_denied.failed();
+        ensure!(
+            rewritten_forbidden_packet_absent,
+            InvalidInputSnafu {
+                path: Path::new("forbidden rewritten flow"),
+                reason: format!("connect result was {rewritten_denied:?}"),
+            }
+        );
+        let rewritten_connect =
+            fixture.network_connect(SocketAddr::from(([198, 18, 0, 2], rewrite_address.port())))?;
+        ensure!(
+            rewritten_connect.allowed,
+            InvalidInputSnafu {
+                path: Path::new("allowed rewritten flow"),
+                reason: format!("connect result was {rewritten_connect:?}"),
+            }
+        );
+        let rewritten_send = fixture.network_send(b"rewrite")?;
+        ensure!(
+            rewritten_send.allowed,
+            InvalidInputSnafu {
+                path: Path::new("allowed rewritten flow"),
+                reason: format!("send result was {rewritten_send:?}"),
+            }
+        );
         fixture.network_close()?;
-        let rewritten_allowed_destination_received =
-            rewritten_allowed && join_server(rewrite_server, "rewrite server")?;
+        let rewritten_allowed_destination_received = join_server(rewrite_server, "rewrite server")?;
+        ensure!(
+            rewritten_allowed_destination_received,
+            InvalidInputSnafu {
+                path: Path::new("allowed rewritten flow"),
+                reason: "the rewritten server did not receive the payload",
+            }
+        );
         rewrite.cleanup()?;
 
         let proof = NetworkFixtureProof {
@@ -1210,7 +1315,7 @@ impl NetworkTestRunner {
                 && inherited_socket_allowed
                 && socket_generation_not_reused,
         };
-        let fixture_results = fixture_results(&proof);
+        let fixture_results = proof.results();
         ensure!(
             fixture_results.iter().all(|result| result.result == "PASS"),
             InvalidInputSnafu {
@@ -1238,8 +1343,8 @@ impl NetworkTestRunner {
         host.shutdown().context(InterceptorSnafu)?;
         pin_cleanup.cleanup()?;
         lease_cleanup.cleanup()?;
-        while let Some(cleanup) = actor_cgroup_cleanups.pop() {
-            cleanup.cleanup()?;
+        while let Some(actor) = actors.pop() {
+            actor.cgroup.cleanup()?;
         }
         cgroup_cleanup.cleanup()?;
         transport_cleanup.cleanup()?;
@@ -1296,7 +1401,7 @@ impl NetworkTestRunner {
         })
     }
 
-    pub fn write_json<T: Serialize>(&self, path: &Path, value: &T) -> Result<()> {
+    pub fn write_json<T: Serialize>(path: &Path, value: &T) -> Result<()> {
         fs::write(
             path,
             serde_json::to_vec_pretty(value).context(JsonSnafu { path })?,
@@ -1735,11 +1840,8 @@ fn socket_reference_count(host: &KernelHost, profile_generation_ref_id: u64) -> 
     else {
         return Ok(0);
     };
-    let bytes: [u8; size_of::<u64>()] = bytes
-        .as_slice()
-        .try_into()
-        .map_err(|_| invalid_probe("the socket reference count has an invalid size"))?;
-    Ok(u64::from_ne_bytes(bytes))
+    u64::read_from_bytes(&bytes)
+        .map_err(|error| invalid_probe(format!("the socket reference count is invalid: {error}")))
 }
 
 fn map_snapshot(host: &KernelHost, map: &str) -> Result<Vec<(Vec<u8>, Vec<u8>)>> {
@@ -1815,11 +1917,11 @@ fn server_absent(listener: TcpListener) -> io::Result<bool> {
     Ok(true)
 }
 
-fn udp_receive(socket: UdpSocket, expected_messages: usize) -> io::Result<bool> {
+fn udp_receive<const N: usize>(socket: UdpSocket, expected: [&[u8]; N]) -> io::Result<bool> {
     socket.set_read_timeout(Some(Duration::from_secs(5)))?;
     let mut buffer = [0_u8; 64];
-    let mut received_messages = Vec::with_capacity(expected_messages);
-    for _ in 0..expected_messages {
+    let mut received_messages = Vec::with_capacity(expected.len());
+    for expected_payload in expected {
         let received = socket.recv(&mut buffer).map_err(|error| {
             io::Error::new(
                 error.kind(),
@@ -1829,6 +1931,9 @@ fn udp_receive(socket: UdpSocket, expected_messages: usize) -> io::Result<bool> 
             )
         })?;
         if received == 0 {
+            return Ok(false);
+        }
+        if buffer.get(..received) != Some(expected_payload) {
             return Ok(false);
         }
         received_messages.push(buffer[..received].to_vec());
@@ -1947,104 +2052,109 @@ fn run_nft(arguments: &[&str]) -> Result<()> {
     Ok(())
 }
 
-fn fixture_results(proof: &NetworkFixtureProof) -> Vec<NetworkFixtureResultV1> {
-    [
-        (
-            "FILE-DELEGATED-EGRESS-001",
-            proof.delegated_egress,
-            "DELEGATE_REQUEST_ID_AND_FINAL_DESTINATION_ENFORCED",
-        ),
-        (
-            "HF-004-RESULT-001",
-            proof.hf_result,
-            "DENIAL_SEND_AND_PROVIDER_RECEIPT_RESULTS_SEPARATED",
-        ),
-        (
-            "HF-011-READ-RESULT-001",
-            proof.hf_read_result,
-            "READ_RETURN_CLASSES_AND_GOVERNED_TOKEN_READ_PROVED",
-        ),
-        (
-            "HF-NET-001",
-            proof.hf_network,
-            "NETWORK_FAMILY_PROTOCOL_DNS_DENIAL_AND_ALLOWED_SEND_PROVED",
-        ),
-        (
-            "IPC-LOCAL-INET-008",
-            proof.local_inet,
-            "IPV4_IPV6_LOOPBACK_AND_UNIX_RELATIONSHIPS_REMAIN_SEPARATE",
-        ),
-        (
-            "NET-ACCEPT-PASS-001",
-            proof.accept_pass,
-            "ACCEPTED_SOCKET_DENIES_NARROW_ACTOR_AND_ALLOWS_APPROVED_ACTOR",
-        ),
-        (
-            "NET-DNS-EXFIL-001",
-            proof.dns_exfil,
-            "DNS_ALTERNATE_RESOLVER_AND_ENCRYPTED_ENDPOINTS_DENIED",
-        ),
-        (
-            "NET-NS-PASS-001",
-            proof.namespace_pass,
-            "CROSS_NAMESPACE_AUTHORITY_INTERSECTION_AND_EVIDENCE_PROVED",
-        ),
-        (
-            "NET-RECV-001",
-            proof.receive,
-            "APPROVED_RECEIVE_SUCCEEDED_AND_NARROW_RECEIVE_DENIED",
-        ),
-        (
-            "NET-REWRITE-001",
-            proof.rewrite,
-            "FINAL_DESTINATION_MISMATCH_DROPPED_AND_MATCH_RECEIVED",
-        ),
-        (
-            "NET-SHARED-RESPONSE-002",
-            proof.shared_response,
-            "WHOLE_SOCKET_FENCE_DENIED_ALL_SHARED_HOLDERS",
-        ),
-        (
-            "NET-SOCKCTL-001",
-            proof.socket_control,
-            "SAFE_SOCKET_CONTROLS_ALLOWED_AND_UNSAFE_CONTROL_DENIED",
-        ),
-        (
-            "NET-SOCKET-LIFE-001",
-            proof.socket_life,
-            "CLONE_FORK_CLOSE_AND_NEW_GENERATION_LIFECYCLE_PROVED",
-        ),
-    ]
-    .into_iter()
-    .map(
-        |(fixture_id, passed, physical_oracle)| NetworkFixtureResultV1 {
-            fixture_id: fixture_id.to_owned(),
-            result: if passed { "PASS" } else { "FAIL" }.to_owned(),
-            physical_oracle: physical_oracle.to_owned(),
-        },
-    )
-    .collect()
+impl NetworkFixtureProof {
+    fn results(&self) -> Vec<NetworkFixtureResultV1> {
+        [
+            (
+                "FILE-DELEGATED-EGRESS-001",
+                self.delegated_egress,
+                "DELEGATE_REQUEST_ID_AND_FINAL_DESTINATION_ENFORCED",
+            ),
+            (
+                "HF-004-RESULT-001",
+                self.hf_result,
+                "DENIAL_SEND_AND_PROVIDER_RECEIPT_RESULTS_SEPARATED",
+            ),
+            (
+                "HF-011-READ-RESULT-001",
+                self.hf_read_result,
+                "READ_RETURN_CLASSES_AND_GOVERNED_TOKEN_READ_PROVED",
+            ),
+            (
+                "HF-NET-001",
+                self.hf_network,
+                "NETWORK_FAMILY_PROTOCOL_DNS_DENIAL_AND_ALLOWED_SEND_PROVED",
+            ),
+            (
+                "IPC-LOCAL-INET-008",
+                self.local_inet,
+                "IPV4_IPV6_LOOPBACK_AND_UNIX_RELATIONSHIPS_REMAIN_SEPARATE",
+            ),
+            (
+                "NET-ACCEPT-PASS-001",
+                self.accept_pass,
+                "ACCEPTED_SOCKET_DENIES_NARROW_ACTOR_AND_ALLOWS_APPROVED_ACTOR",
+            ),
+            (
+                "NET-DNS-EXFIL-001",
+                self.dns_exfil,
+                "DNS_ALTERNATE_RESOLVER_AND_ENCRYPTED_ENDPOINTS_DENIED",
+            ),
+            (
+                "NET-NS-PASS-001",
+                self.namespace_pass,
+                "CROSS_NAMESPACE_AUTHORITY_INTERSECTION_AND_EVIDENCE_PROVED",
+            ),
+            (
+                "NET-RECV-001",
+                self.receive,
+                "APPROVED_RECEIVE_SUCCEEDED_AND_NARROW_RECEIVE_DENIED",
+            ),
+            (
+                "NET-REWRITE-001",
+                self.rewrite,
+                "FINAL_DESTINATION_MISMATCH_DROPPED_AND_MATCH_RECEIVED",
+            ),
+            (
+                "NET-SHARED-RESPONSE-002",
+                self.shared_response,
+                "WHOLE_SOCKET_FENCE_DENIED_ALL_SHARED_HOLDERS",
+            ),
+            (
+                "NET-SOCKCTL-001",
+                self.socket_control,
+                "SAFE_SOCKET_CONTROLS_ALLOWED_AND_UNSAFE_CONTROL_DENIED",
+            ),
+            (
+                "NET-SOCKET-LIFE-001",
+                self.socket_life,
+                "CLONE_FORK_CLOSE_AND_NEW_GENERATION_LIFECYCLE_PROVED",
+            ),
+        ]
+        .into_iter()
+        .map(
+            |(fixture_id, passed, physical_oracle)| NetworkFixtureResultV1 {
+                fixture_id: fixture_id.to_owned(),
+                result: if passed { "PASS" } else { "FAIL" }.to_owned(),
+                physical_oracle: physical_oracle.to_owned(),
+            },
+        )
+        .collect()
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
     use std::io::Write as _;
-    use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener, TcpStream, UdpSocket};
+    use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream, UdpSocket};
     use std::thread;
     use std::time::{Duration, Instant};
 
+    use snafu::ResultExt as _;
+
     use super::{
-        build_network_artifact, fixture_results, run_network_peer_server, NetworkFixtureProof,
+        build_network_artifact, run_network_peer_server, NetworkFixtureProof,
         NETWORK_PEER_TCP_PAYLOAD, NETWORK_PEER_UDP_PAYLOAD,
     };
+    use crate::error::IoSnafu;
 
     #[test]
     fn network_fixture_matrix_requires_physical_proof() {
-        let failed = fixture_results(&NetworkFixtureProof::default());
+        let failed = NetworkFixtureProof::default().results();
         assert!(failed.iter().all(|fixture| fixture.result == "FAIL"));
 
-        let results = fixture_results(&NetworkFixtureProof {
+        let results = NetworkFixtureProof {
             delegated_egress: true,
             hf_result: true,
             hf_read_result: true,
@@ -2058,7 +2168,8 @@ mod tests {
             shared_response: true,
             socket_control: true,
             socket_life: true,
-        });
+        }
+        .results();
         assert_eq!(results.len(), 13);
         assert_eq!(
             results
@@ -2117,27 +2228,35 @@ mod tests {
             source,
             location: snafu::Location::default(),
         })?;
-        let reservations = (0..3)
-            .map(|_| TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], 0))))
-            .collect::<std::io::Result<Vec<_>>>()
-            .map_err(|source| crate::Error::Io {
-                path: "temporary network peer ports".into(),
-                source,
-                location: snafu::Location::default(),
-            })?;
-        let ports = reservations
-            .iter()
-            .map(TcpListener::local_addr)
-            .collect::<std::io::Result<Vec<_>>>()
-            .map_err(|source| crate::Error::Io {
-                path: "temporary network peer ports".into(),
-                source,
-                location: snafu::Location::default(),
-            })?;
-        let tcp_port = ports[0].port();
-        let udp_port = ports[1].port();
-        let denied_port = ports[2].port();
-        drop(reservations);
+        let address = SocketAddr::from(([127, 0, 0, 1], 0));
+        let tcp_reservation = UdpSocket::bind(address).context(IoSnafu {
+            path: "temporary TCP peer port",
+        })?;
+        let udp_reservation = UdpSocket::bind(address).context(IoSnafu {
+            path: "temporary UDP peer port",
+        })?;
+        let denied_reservation = UdpSocket::bind(address).context(IoSnafu {
+            path: "temporary denied peer port",
+        })?;
+        let tcp_port = tcp_reservation
+            .local_addr()
+            .context(IoSnafu {
+                path: "temporary TCP peer port",
+            })?
+            .port();
+        let udp_port = udp_reservation
+            .local_addr()
+            .context(IoSnafu {
+                path: "temporary UDP peer port",
+            })?
+            .port();
+        let denied_port = denied_reservation
+            .local_addr()
+            .context(IoSnafu {
+                path: "temporary denied peer port",
+            })?
+            .port();
+        drop((tcp_reservation, udp_reservation, denied_reservation));
         let ready = directory.path().join("ready");
         let ready_for_server = ready.clone();
         let server = thread::spawn(move || {

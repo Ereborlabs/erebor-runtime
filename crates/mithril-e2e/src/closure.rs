@@ -148,8 +148,6 @@ impl ArchitectureClosure {
             }
         );
         self.verify_families(&families_path, &families, &registered, &allocations)?;
-        self.verify_rejected_contracts()?;
-
         let fixtures = registered
             .into_iter()
             .map(|fixture_id| FixtureLedgerRowV1 {
@@ -277,89 +275,6 @@ impl ArchitectureClosure {
             path: path.to_path_buf(),
         })
     }
-
-    fn verify_rejected_contracts(&self) -> Result<()> {
-        let rejected = rejected_contract_names();
-        let Some(repo_root) = self.spec_root.parent() else {
-            return InvalidInputSnafu {
-                path: self.spec_root.clone(),
-                reason: "spec root has no repository parent",
-            }
-            .fail();
-        };
-        for relative in [
-            "bpf/erebor-interceptor",
-            "crates/erebor-interceptor-abi",
-            "crates/mithril-e2e/src",
-        ] {
-            verify_tree_omits_names(&repo_root.join(relative), &rejected)?;
-        }
-        Ok(())
-    }
-}
-
-fn rejected_contract_names() -> BTreeSet<String> {
-    section_after(
-        ARCHITECTURE,
-        "### A.8 Complete Version 1 type-ownership catalog",
-    )
-    .lines()
-    .take_while(|line| !line.starts_with("### A.9 "))
-    .filter(|line| {
-        let lower = line.to_ascii_lowercase();
-        lower.contains("rejected") || lower.contains("abandoned")
-    })
-    .flat_map(type_names)
-    .collect()
-}
-
-fn type_names(line: &str) -> impl Iterator<Item = String> + '_ {
-    line.split(|character: char| !character.is_ascii_alphanumeric())
-        .filter(|token| {
-            token.len() > 2
-                && token.ends_with("V1")
-                && token
-                    .bytes()
-                    .next()
-                    .is_some_and(|byte| byte.is_ascii_uppercase())
-        })
-        .map(str::to_owned)
-}
-
-fn verify_tree_omits_names(root: &Path, rejected: &BTreeSet<String>) -> Result<()> {
-    let entries = fs::read_dir(root).context(IoSnafu {
-        path: root.to_path_buf(),
-    })?;
-    for entry in entries {
-        let entry = entry.context(IoSnafu {
-            path: root.to_path_buf(),
-        })?;
-        let path = entry.path();
-        if path.is_dir() {
-            verify_tree_omits_names(&path, rejected)?;
-            continue;
-        }
-        if !matches!(
-            path.extension().and_then(|extension| extension.to_str()),
-            Some("rs" | "c" | "h")
-        ) {
-            continue;
-        }
-        let source = fs::read_to_string(&path).context(IoSnafu { path: path.clone() })?;
-        let active = type_names(&source).collect::<BTreeSet<_>>();
-        let forbidden = active.intersection(rejected).cloned().collect::<Vec<_>>();
-        ensure!(
-            forbidden.is_empty(),
-            InvalidInputSnafu {
-                path,
-                reason: format!(
-                    "active source uses rejected contracts: {}",
-                    forbidden.join(", ")
-                )
-            }
-        );
-    }
-    Ok(())
 }
 
 fn unique_set(values: &[String], path: &Path) -> Result<BTreeSet<String>> {

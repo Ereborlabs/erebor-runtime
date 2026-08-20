@@ -1,4 +1,4 @@
-use zerocopy::{Immutable, IntoBytes, KnownLayout, TryFromBytes};
+use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout, TryFromBytes};
 
 use super::{BindingLifecycleStateV1, Id128V1};
 
@@ -51,16 +51,7 @@ pub enum NetworkResponseScopeV1 {
 
 #[repr(C)]
 #[derive(
-    Clone,
-    Copy,
-    Debug,
-    Default,
-    Eq,
-    zerocopy::FromBytes,
-    Immutable,
-    IntoBytes,
-    KnownLayout,
-    PartialEq,
+    Clone, Copy, Debug, Default, Eq, FromBytes, Immutable, IntoBytes, KnownLayout, PartialEq,
 )]
 pub struct NetworkNamespaceGenerationV1 {
     pub network_namespace_address: u64,
@@ -70,7 +61,7 @@ pub struct NetworkNamespaceGenerationV1 {
 
 #[repr(C)]
 #[derive(
-    Clone, Copy, Debug, Default, Eq, Immutable, IntoBytes, KnownLayout, PartialEq, TryFromBytes,
+    Clone, Copy, Debug, Default, Eq, FromBytes, Immutable, IntoBytes, KnownLayout, PartialEq,
 )]
 pub struct NetworkPortRangeV1 {
     pub first: u16,
@@ -108,14 +99,13 @@ pub struct NetworkIpv6LpmKeyV1 {
 
 #[repr(C)]
 #[derive(
-    Clone, Copy, Debug, Default, Eq, Immutable, IntoBytes, KnownLayout, PartialEq, TryFromBytes,
+    Clone, Copy, Debug, Default, Eq, FromBytes, Immutable, IntoBytes, KnownLayout, PartialEq,
 )]
 pub struct NetworkDestinationClassV1 {
     pub destination_policy_handle: u64,
     pub port_ranges: [NetworkPortRangeV1; MAX_NETWORK_PORT_RANGES_V1],
     pub port_range_count: u8,
-    pub final_address_required: u8,
-    pub reserved: [u8; 6],
+    pub reserved: [u8; 7],
 }
 
 #[repr(C)]
@@ -139,15 +129,8 @@ pub struct NetworkDestinationDecisionKeyV1 {
     Clone, Copy, Debug, Default, Eq, Immutable, IntoBytes, KnownLayout, PartialEq, TryFromBytes,
 )]
 pub struct NetworkSocketStateV1 {
-    pub creator_process_state_id: Id128V1,
-    pub creator_authority_domain_id: Id128V1,
-    pub creator_binding_id: Id128V1,
-    pub creator_binding_nonce: Id128V1,
-    pub creator_execution_set_id: Id128V1,
     pub socket_network_namespace: NetworkNamespaceGenerationV1,
     pub creator_profile_generation_ref_id: u64,
-    pub creator_process_transition_version: u64,
-    pub creator_root_cgroup_id: u64,
     pub socket_key_id: u64,
     pub socket_generation: u64,
     pub flow_generation: u64,
@@ -162,17 +145,15 @@ pub struct NetworkSocketStateV1 {
     pub creator_entry_kind: u16,
     pub address_family: NetworkAddressFamilyV1,
     pub protocol: NetworkProtocolV1,
-    pub socket_type: u16,
     pub peer_port: u16,
     pub peer_address: [u8; 16],
     pub creator_binding_lifecycle_state: BindingLifecycleStateV1,
     pub state: NetworkSocketStateKindV1,
-    pub reserved: [u8; 6],
 }
 
 #[repr(C)]
 #[derive(
-    Clone, Copy, Debug, Default, Eq, Immutable, IntoBytes, KnownLayout, PartialEq, TryFromBytes,
+    Clone, Copy, Debug, Default, Eq, FromBytes, Immutable, IntoBytes, KnownLayout, PartialEq,
 )]
 pub struct NetworkResponseFloorKeyV1 {
     pub profile_generation_ref_id: u64,
@@ -185,11 +166,8 @@ pub struct NetworkResponseFloorKeyV1 {
     Clone, Copy, Debug, Default, Eq, Immutable, IntoBytes, KnownLayout, PartialEq, TryFromBytes,
 )]
 pub struct NetworkResponseFloorV1 {
-    pub transition_version: u64,
-    pub response_reason_id: u64,
     pub scope: NetworkResponseScopeV1,
-    pub fenced: u8,
-    pub reserved: [u8; 6],
+    pub reserved: [u8; 7],
 }
 
 #[cfg(test)]
@@ -198,7 +176,8 @@ mod tests {
 
     use super::{
         NetworkDestinationClassV1, NetworkDestinationDecisionKeyV1, NetworkIpv4LpmKeyV1,
-        NetworkIpv6LpmKeyV1, NetworkResponseFloorKeyV1, NetworkSocketStateV1,
+        NetworkIpv6LpmKeyV1, NetworkResponseFloorKeyV1, NetworkResponseFloorV1,
+        NetworkSocketStateV1,
     };
 
     #[test]
@@ -207,10 +186,11 @@ mod tests {
         assert_eq!(size_of::<NetworkIpv6LpmKeyV1>(), 40);
         assert_eq!(size_of::<NetworkDestinationClassV1>(), 48);
         assert_eq!(size_of::<NetworkDestinationDecisionKeyV1>(), 32);
-        assert_eq!(size_of::<NetworkSocketStateV1>(), 240);
+        assert_eq!(size_of::<NetworkSocketStateV1>(), 136);
         assert_eq!(size_of::<NetworkResponseFloorKeyV1>(), 24);
+        assert_eq!(size_of::<NetworkResponseFloorV1>(), 8);
         assert_eq!(align_of::<NetworkSocketStateV1>(), 8);
-        assert_eq!(offset_of!(NetworkSocketStateV1, socket_key_id), 120);
-        assert_eq!(offset_of!(NetworkSocketStateV1, peer_address), 216);
+        assert_eq!(offset_of!(NetworkSocketStateV1, socket_key_id), 24);
+        assert_eq!(offset_of!(NetworkSocketStateV1, peer_address), 118);
     }
 }

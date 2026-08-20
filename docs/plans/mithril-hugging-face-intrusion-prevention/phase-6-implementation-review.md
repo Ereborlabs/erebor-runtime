@@ -1,7 +1,7 @@
 # Phase 6 Implementation Review Guide
 
-Status: Complete source-grounded review guide for source commit `6686a23` on
-2026-08-19.
+Status: Complete source-grounded review guide for the current checked source
+on 2026-08-19.
 
 - Phase: [Durable Evidence, Coverage, And Recovery](./phase-6-durable-evidence-coverage-and-recovery.md)
 - Architecture: [validated readable architecture](./policy-and-protection-algorithm-architecture-readable.md)
@@ -110,7 +110,7 @@ Do not infer any of these broader claims:
 | Shared Control evidence model | Canonical envelope, payload, proof, coverage, sensitivity, identifier, and validation types used by both Control and Node. | Kernel record normalization or durable storage. |
 | `EvidenceIntakeOwner` | Control-side record validation, hash-chain validation, durable storage, contiguous cursors, coverage revisions, and acknowledgements. | Node WAL deletion or physical enforcement. |
 | `DeterministicLocalWindowOwner` | Fixed sequence windows, stable identifiers, deterministic revisions, contradiction state, and coverage qualification. | Detection package evaluation or distributed graph joins. |
-| Physical runners | Production-owner startup, deliberate saturation and restart, syscall or packet oracles, result capture, and owned cleanup. | A second implementation or release-artifact generation. |
+| Physical runners | Production-owner startup, deliberate saturation and restart, syscall or packet oracles, result capture, and owned cleanup. | A second implementation or release-record ownership. |
 
 Mithril Node remains the single gatherer. The Interceptor remains the single
 kernel loader. Control acknowledges only data that its evidence owner made
@@ -271,6 +271,11 @@ Identity reconciliation compares cumulative failure counters before and after
 the reconciliation operation. Historical retained counts remain visible, but
 a new failure in the current pass rejects recovery.
 
+The recovered network state uses the same minimal Phase 5 ABI. The 136-byte
+socket value retains only fields read by policy, evidence, recovery, or final
+cleanup. The 8-byte response value stores only its closed whole-socket scope;
+row existence is the fence. Recovery does not reconstruct removed metadata.
+
 ### BPF Evidence Map Lifecycle
 
 | Map | Kernel shape | Writer | Reader | Lifetime and recovery |
@@ -314,7 +319,7 @@ the same range.
 The Rust tests execute public behavior and durable state. They do not inspect
 Rust or C implementation source text.
 
-The committed suites cover:
+The tests cover:
 
 - ABI sizes, offsets, compiled BPF object content, required programs, and map
   layouts;
@@ -356,32 +361,25 @@ crates/mithril-e2e/harness/vm/run.sh --with-k3s \
 ```
 
 The [manual runbook](./manual-testing/phase-6-manual-acceptance.md) records the
-exact source commit, platform, results, artifact paths, and SHA-256 values for
-the closure runs.
+source state, platform, results, and result paths for the closure runs.
 
 ## Verification Record
 
-The final source-only workspace command passed. The repository CI command
-passed formatting, checks, Clippy, and all ordinary tests. It rejected only
-the generated qualification-record assertion. The checked-in qualification
-record was intentionally not regenerated.
+The final source-only workspace command passed. Repository verification passed
+formatting, checks, Clippy, and all ordinary tests. The separate release-record
+freshness assertion was not part of this source-only delivery.
 
-The single-node K3s run at source commit `6686a23` passed. Its evidence is in
+The single-node K3s run with the checked source passed. Its evidence is in
 `/tmp/mithril-phase6-simplicity-20260819-r2`. The run covered native and
 Kubernetes identity, CRI OBSERVE and PROTECT effects, kernel qualification,
 effect observation, local enforcement, saturation, restart recovery, network
-enforcement, benchmarks, cleanup, and legitimate controls. The qualification
-record SHA-256 is
-`1e9039a1469982ef495abf04b53d08fb826f0455faaf9373b5079e13cf3615e7`.
+enforcement, benchmarks, cleanup, and legitimate controls.
 
 The final two-node K3s run passed in both directions and removed both VMs. Its
 evidence is in `/tmp/mithril-phase6-two-node-simplicity-20260819-r1`. The
-summary record SHA-256 is
-`b7df18709c41cecbef72dd49ac2de6ea229f91b81ae19f8a29560ea03727ef6d`.
-The closure commit contains no generated qualification or CI/CD digest
-artifact.
+result records remain outside the repository.
 
-## CI And Generated Evidence Boundary
+## Source Verification Boundary
 
 Run the repository gate after the last Rust edit:
 
@@ -391,10 +389,8 @@ bash .github/scripts/verify-rust-ci.sh
 
 The source-only verification command may exclude only
 `verification_bundle_is_frozen_only_for_recorded_physical_surfaces` when the
-checked-in generated qualification record is intentionally not regenerated.
-That exclusion does not weaken the release test. The phase result must record
-the exact failure, and no generated CI/CD digest or qualification result may
-be committed as part of this source delivery.
+release owner has not refreshed its qualification record. That exclusion does
+not weaken the source tests. The phase result must record the exact boundary.
 
 ## Reviewer Checklist
 
@@ -409,4 +405,4 @@ be committed as part of this source delivery.
   manifest check closes readiness.
 - Restart with a live task, socket, response floor, mount view, and policy
   generation; confirm exact state and post-restart behavior.
-- Confirm all evidence artifacts remain outside the repository.
+- Confirm all physical result files remain outside the repository.

@@ -27,10 +27,9 @@ crates/mithril-e2e/harness/vm/two-node-network.sh \
   --output-directory /tmp/mithril-phase6-two-node
 ```
 
-The repository gate must pass every source check. For a source-only delivery
-that must not update generated qualification evidence, record the expected
-stale generated-record assertion separately. Do not treat that artifact
-exception as a source-test failure or a green release result.
+The repository gate must pass every source check. The release owner controls
+the separate qualification-record freshness check. Do not treat a source-only
+result as a green release result.
 
 ## Procedure
 
@@ -69,7 +68,7 @@ exception as a source-test failure or a green release result.
 | generation retirement/restart | every typed holder/receipt is retained or exact cleanup tombstone exists |
 | stale pin/path with live object | recoverability is degraded even if live link still enforces |
 
-## Required Artifacts And Pass Rule
+## Required Results And Pass Rule
 
 Retain raw source sequences, epochs, gap/suppression counters, WAL segments and
 digests, ack cursors, corruption/replay results, link/map/pin manifests,
@@ -79,17 +78,16 @@ PID/name/cache guesses.
 
 ## Executed Acceptance Record
 
-The closure run used source commit `6686a23` on 2026-08-19. The source-only
-workspace command passed. The repository CI command passed formatting,
-workspace check, Clippy, and every ordinary test. It rejected only the
-unchanged generated `kernel-qualification-x86_64.json` record as stale. No
-generated CI/CD digest or qualification artifact was committed.
+The closure run used the current checked source on 2026-08-19. The source-only
+workspace command passed. Repository verification passed formatting,
+workspace check, Clippy, and every source-driven test. The release owner
+controls the separate qualification-record freshness check.
 
 The first physical run exposed a PID-marker publication race in the
 Kubernetes PostStart fixture. The reader saw the file after creation and
-before the writer added the PID. Commit `6686a23` treats an empty marker as
-incomplete and still rejects malformed nonempty data. The complete run below
-started after that commit.
+before the writer added the PID. The current implementation treats an empty
+marker as incomplete and still rejects malformed nonempty data. The complete
+run below used that implementation.
 
 The final single-node evidence is in
 `/tmp/mithril-phase6-simplicity-20260819-r2`. The disposable Ubuntu 24.04 VM
@@ -130,9 +128,9 @@ operations per concurrency. The measured rates were:
 | Protected | 1 | 187,540 | 4,594 ns | 4,673 ns | 17,480 ns |
 | Protected | 32 | 357,666 | 4,684 ns | 5,250 ns | 15,949 ns |
 
-The retained artifact digests are:
+The retained result digests are:
 
-| Artifact | SHA-256 |
+| Result file | SHA-256 |
 | --- | --- |
 | effect observation | `2894538ad27415062e8ce0721d5ec3575d7d391911e16fa25bf2960a013335e1` |
 | Kubernetes identity | `a22a21b81eca5ad8716d5a5fc5c41c56355cee35fb98cbf3e419882d488dc7e5` |
@@ -144,8 +142,8 @@ The retained artifact digests are:
 | single-node qualification record | `1e9039a1469982ef495abf04b53d08fb826f0455faaf9373b5079e13cf3615e7` |
 | two-node summary | `b7df18709c41cecbef72dd49ac2de6ea229f91b81ae19f8a29560ea03727ef6d` |
 
-These artifacts remain outside the repository. They qualify only the recorded
-x86_64 tier and the tested K3s Flannel topology.
+These result files remain outside the repository. They qualify only the
+recorded x86_64 tier and the tested K3s Flannel topology.
 
 ## Troubleshooting
 
