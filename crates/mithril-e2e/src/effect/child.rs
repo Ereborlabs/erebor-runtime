@@ -1,12 +1,12 @@
 use std::fs;
 use std::io::{self, Read as _, Seek as _, Write as _};
 use std::mem::size_of;
-use std::net::{Shutdown, SocketAddr as InetSocketAddr, TcpListener, TcpStream, UdpSocket};
+use std::net::{Shutdown, SocketAddr, TcpListener, TcpStream, UdpSocket};
 use std::os::fd::{AsFd as _, AsRawFd as _, FromRawFd as _, OwnedFd};
 use std::os::linux::net::SocketAddrExt as _;
 use std::os::unix::ffi::OsStrExt as _;
 use std::os::unix::fs::{symlink, FileExt as _, OpenOptionsExt as _, PermissionsExt as _};
-use std::os::unix::net::{SocketAddr, UnixListener, UnixStream};
+use std::os::unix::net::{SocketAddr as UnixSocketAddr, UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStderr, Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -24,7 +24,6 @@ use super::fixture_syscalls;
 use super::mailbox::{SharedMailbox, EMPTY, READY, REQUEST, RESPONSE};
 
 const CHILD_WAIT_LIMIT: Duration = Duration::from_secs(120);
-const NETWORK_CONNECT_LIMIT: Duration = Duration::from_secs(3);
 const UNIX_STREAM_FAILURE_BASE: u32 = 1 << 16;
 const SHARED_MMAP_PROTECTED_REQUEST: u32 = 10;
 const SHARED_MMAP_BENIGN_REQUEST: u32 = 11;
@@ -97,7 +96,7 @@ enum ChildRequest {
     PropagationPeerHasMarker,
     Connect,
     NetworkConnect {
-        address: String,
+        address: SocketAddr,
     },
     NetworkSend {
         payload: Vec<u8>,
@@ -117,7 +116,7 @@ enum ChildRequest {
     NetworkClose,
     NetworkEnterNamespace,
     NetworkListen {
-        address: String,
+        address: SocketAddr,
     },
     NetworkAccept,
     NetworkPreparePassReceiver {
@@ -143,7 +142,7 @@ enum ChildRequest {
         payload: Vec<u8>,
     },
     NetworkUdpSend {
-        address: String,
+        address: SocketAddr,
         payload: Vec<u8>,
         connected: bool,
     },
@@ -164,7 +163,7 @@ enum ChildRequest {
     NetworkProxyRequest {
         path: PathBuf,
         request_id: String,
-        address: String,
+        address: SocketAddr,
     },
     NetworkProxyOnce,
     NetworkReadResults {
@@ -308,6 +307,19 @@ impl IoOutcome {
     }
 }
 
+impl TryFrom<ChildResponse> for IoOutcome {
+    type Error = crate::Error;
+
+    fn try_from(response: ChildResponse) -> Result<Self> {
+        match response {
+            ChildResponse::Outcome(outcome) => Ok(outcome),
+            _ => Err(invalid_state(
+                "effect child returned the wrong I/O response",
+            )),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 pub(super) struct DescriptorTransferOutcome {
     pub(super) payload_received: bool,
@@ -324,7 +336,7 @@ pub(super) struct NetworkProxyOutcome {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub(super) struct NetworkListenOutcome {
-    pub(super) address: Option<String>,
+    pub(super) address: Option<SocketAddr>,
     pub(super) outcome: IoOutcome,
 }
 
@@ -606,86 +618,49 @@ impl EffectProcessFixture {
         }
     }
 
-    pub(super) fn network_connect(&mut self, address: InetSocketAddr) -> Result<IoOutcome> {
-        match self.request(&ChildRequest::NetworkConnect {
-            address: address.to_string(),
-        })? {
-            ChildResponse::Outcome(outcome) => Ok(outcome),
-            _ => Err(invalid_state(
-                "effect child returned the wrong network-connect response",
-            )),
-        }
+    pub(super) fn network_connect(&mut self, address: SocketAddr) -> Result<IoOutcome> {
+        self.request(&ChildRequest::NetworkConnect { address })?
+            .try_into()
     }
 
     pub(super) fn network_send(&mut self, payload: &[u8]) -> Result<IoOutcome> {
-        match self.request(&ChildRequest::NetworkSend {
+        self.request(&ChildRequest::NetworkSend {
             payload: payload.to_vec(),
-        })? {
-            ChildResponse::Outcome(outcome) => Ok(outcome),
-            _ => Err(invalid_state(
-                "effect child returned the wrong network-send response",
-            )),
-        }
+        })?
+        .try_into()
     }
 
     pub(super) fn network_sendmsg(&mut self, payload: &[u8]) -> Result<IoOutcome> {
-        match self.request(&ChildRequest::NetworkSendMsg {
+        self.request(&ChildRequest::NetworkSendMsg {
             payload: payload.to_vec(),
-        })? {
-            ChildResponse::Outcome(outcome) => Ok(outcome),
-            _ => Err(invalid_state(
-                "effect child returned the wrong network-sendmsg response",
-            )),
-        }
+        })?
+        .try_into()
     }
 
     pub(super) fn network_sendfile(&mut self, path: &Path) -> Result<IoOutcome> {
-        match self.request(&ChildRequest::NetworkSendFile {
+        self.request(&ChildRequest::NetworkSendFile {
             path: path.to_path_buf(),
-        })? {
-            ChildResponse::Outcome(outcome) => Ok(outcome),
-            _ => Err(invalid_state(
-                "effect child returned the wrong network-sendfile response",
-            )),
-        }
+        })?
+        .try_into()
     }
 
     pub(super) fn network_splice(&mut self, path: &Path) -> Result<IoOutcome> {
-        match self.request(&ChildRequest::NetworkSplice {
+        self.request(&ChildRequest::NetworkSplice {
             path: path.to_path_buf(),
-        })? {
-            ChildResponse::Outcome(outcome) => Ok(outcome),
-            _ => Err(invalid_state(
-                "effect child returned the wrong network-splice response",
-            )),
-        }
+        })?
+        .try_into()
     }
 
     pub(super) fn network_receive(&mut self) -> Result<IoOutcome> {
-        match self.request(&ChildRequest::NetworkReceive)? {
-            ChildResponse::Outcome(outcome) => Ok(outcome),
-            _ => Err(invalid_state(
-                "effect child returned the wrong network-receive response",
-            )),
-        }
+        self.request(&ChildRequest::NetworkReceive)?.try_into()
     }
 
     pub(super) fn network_set_nodelay(&mut self) -> Result<IoOutcome> {
-        match self.request(&ChildRequest::NetworkSetNoDelay)? {
-            ChildResponse::Outcome(outcome) => Ok(outcome),
-            _ => Err(invalid_state(
-                "effect child returned the wrong network-control response",
-            )),
-        }
+        self.request(&ChildRequest::NetworkSetNoDelay)?.try_into()
     }
 
     pub(super) fn network_shutdown(&mut self) -> Result<IoOutcome> {
-        match self.request(&ChildRequest::NetworkShutdown)? {
-            ChildResponse::Outcome(outcome) => Ok(outcome),
-            _ => Err(invalid_state(
-                "effect child returned the wrong network-shutdown response",
-            )),
-        }
+        self.request(&ChildRequest::NetworkShutdown)?.try_into()
     }
 
     pub(super) fn network_close(&mut self) -> Result<()> {
@@ -706,13 +681,8 @@ impl EffectProcessFixture {
         }
     }
 
-    pub(super) fn network_listen(
-        &mut self,
-        address: InetSocketAddr,
-    ) -> Result<NetworkListenOutcome> {
-        match self.request(&ChildRequest::NetworkListen {
-            address: address.to_string(),
-        })? {
+    pub(super) fn network_listen(&mut self, address: SocketAddr) -> Result<NetworkListenOutcome> {
+        match self.request(&ChildRequest::NetworkListen { address })? {
             ChildResponse::NetworkListen(outcome) => Ok(outcome),
             _ => Err(invalid_state(
                 "effect child returned the wrong network-listen response",
@@ -721,34 +691,21 @@ impl EffectProcessFixture {
     }
 
     pub(super) fn network_accept(&mut self) -> Result<IoOutcome> {
-        match self.request(&ChildRequest::NetworkAccept)? {
-            ChildResponse::Outcome(outcome) => Ok(outcome),
-            _ => Err(invalid_state(
-                "effect child returned the wrong network-accept response",
-            )),
-        }
+        self.request(&ChildRequest::NetworkAccept)?.try_into()
     }
 
     pub(super) fn network_prepare_pass_receiver(&mut self, path: &Path) -> Result<IoOutcome> {
-        match self.request(&ChildRequest::NetworkPreparePassReceiver {
+        self.request(&ChildRequest::NetworkPreparePassReceiver {
             path: path.to_path_buf(),
-        })? {
-            ChildResponse::Outcome(outcome) => Ok(outcome),
-            _ => Err(invalid_state(
-                "effect child returned the wrong socket-pass preparation response",
-            )),
-        }
+        })?
+        .try_into()
     }
 
     pub(super) fn network_pass(&mut self, path: &Path) -> Result<IoOutcome> {
-        match self.request(&ChildRequest::NetworkPass {
+        self.request(&ChildRequest::NetworkPass {
             path: path.to_path_buf(),
-        })? {
-            ChildResponse::Outcome(outcome) => Ok(outcome),
-            _ => Err(invalid_state(
-                "effect child returned the wrong socket-pass response",
-            )),
-        }
+        })?
+        .try_into()
     }
 
     pub(super) fn network_receive_passed(&mut self) -> Result<DescriptorTransferOutcome> {
@@ -761,12 +718,8 @@ impl EffectProcessFixture {
     }
 
     pub(super) fn network_allow_ptracer(&mut self, pid: u32) -> Result<IoOutcome> {
-        match self.request(&ChildRequest::NetworkAllowPtracer { pid })? {
-            ChildResponse::Outcome(outcome) => Ok(outcome),
-            _ => Err(invalid_state(
-                "effect child returned the wrong ptracer response",
-            )),
-        }
+        self.request(&ChildRequest::NetworkAllowPtracer { pid })?
+            .try_into()
     }
 
     pub(super) fn network_descriptor(&mut self) -> Result<i32> {
@@ -799,43 +752,31 @@ impl EffectProcessFixture {
     }
 
     pub(super) fn network_clone_send(&mut self, payload: &[u8]) -> Result<IoOutcome> {
-        match self.request(&ChildRequest::NetworkCloneSend {
+        self.request(&ChildRequest::NetworkCloneSend {
             payload: payload.to_vec(),
-        })? {
-            ChildResponse::Outcome(outcome) => Ok(outcome),
-            _ => Err(invalid_state(
-                "effect child returned the wrong cloned-socket response",
-            )),
-        }
+        })?
+        .try_into()
     }
 
     pub(super) fn network_fork_send(&mut self, payload: &[u8]) -> Result<IoOutcome> {
-        match self.request(&ChildRequest::NetworkForkSend {
+        self.request(&ChildRequest::NetworkForkSend {
             payload: payload.to_vec(),
-        })? {
-            ChildResponse::Outcome(outcome) => Ok(outcome),
-            _ => Err(invalid_state(
-                "effect child returned the wrong inherited-socket response",
-            )),
-        }
+        })?
+        .try_into()
     }
 
     pub(super) fn network_udp_send(
         &mut self,
-        address: InetSocketAddr,
+        address: SocketAddr,
         payload: &[u8],
         connected: bool,
     ) -> Result<IoOutcome> {
-        match self.request(&ChildRequest::NetworkUdpSend {
-            address: address.to_string(),
+        self.request(&ChildRequest::NetworkUdpSend {
+            address,
             payload: payload.to_vec(),
             connected,
-        })? {
-            ChildResponse::Outcome(outcome) => Ok(outcome),
-            _ => Err(invalid_state(
-                "effect child returned the wrong UDP response",
-            )),
-        }
+        })?
+        .try_into()
     }
 
     pub(super) fn network_socket(
@@ -844,81 +785,51 @@ impl EffectProcessFixture {
         socket_type: i32,
         protocol: i32,
     ) -> Result<IoOutcome> {
-        match self.request(&ChildRequest::NetworkSocket {
+        self.request(&ChildRequest::NetworkSocket {
             family,
             socket_type,
             protocol,
-        })? {
-            ChildResponse::Outcome(outcome) => Ok(outcome),
-            _ => Err(invalid_state(
-                "effect child returned the wrong socket-create response",
-            )),
-        }
+        })?
+        .try_into()
     }
 
     pub(super) fn network_set_mark(&mut self, value: u32) -> Result<IoOutcome> {
-        match self.request(&ChildRequest::NetworkSetMark { value })? {
-            ChildResponse::Outcome(outcome) => Ok(outcome),
-            _ => Err(invalid_state(
-                "effect child returned the wrong socket-mark response",
-            )),
-        }
+        self.request(&ChildRequest::NetworkSetMark { value })?
+            .try_into()
     }
 
     pub(super) fn network_io_uring_sqpoll(&mut self) -> Result<IoOutcome> {
-        match self.request(&ChildRequest::NetworkIoUringSqpoll)? {
-            ChildResponse::Outcome(outcome) => Ok(outcome),
-            _ => Err(invalid_state(
-                "effect child returned the wrong network-io_uring response",
-            )),
-        }
+        self.request(&ChildRequest::NetworkIoUringSqpoll)?
+            .try_into()
     }
 
     pub(super) fn network_tun_tap(&mut self) -> Result<IoOutcome> {
-        match self.request(&ChildRequest::NetworkTunTap)? {
-            ChildResponse::Outcome(outcome) => Ok(outcome),
-            _ => Err(invalid_state(
-                "effect child returned the wrong network-TUN response",
-            )),
-        }
+        self.request(&ChildRequest::NetworkTunTap)?.try_into()
     }
 
     pub(super) fn network_bpf_setup(&mut self) -> Result<IoOutcome> {
-        match self.request(&ChildRequest::NetworkBpfSetup)? {
-            ChildResponse::Outcome(outcome) => Ok(outcome),
-            _ => Err(invalid_state(
-                "effect child returned the wrong network-BPF response",
-            )),
-        }
+        self.request(&ChildRequest::NetworkBpfSetup)?.try_into()
     }
 
     pub(super) fn network_prepare_proxy(&mut self, path: &Path) -> Result<IoOutcome> {
-        match self.request(&ChildRequest::NetworkPrepareProxy {
+        self.request(&ChildRequest::NetworkPrepareProxy {
             path: path.to_path_buf(),
-        })? {
-            ChildResponse::Outcome(outcome) => Ok(outcome),
-            _ => Err(invalid_state(
-                "effect child returned the wrong proxy preparation response",
-            )),
-        }
+        })?
+        .try_into()
     }
 
     pub(super) fn network_proxy_request(
         &mut self,
         path: &Path,
         request_id: &str,
-        address: InetSocketAddr,
+        address: SocketAddr,
     ) -> Result<IoOutcome> {
-        match self.request(&ChildRequest::NetworkProxyRequest {
+        self.request(&ChildRequest::NetworkProxyRequest {
             path: path.to_path_buf(),
             request_id: request_id.to_owned(),
-            address: address.to_string(),
-        })? {
-            ChildResponse::Outcome(outcome) => Ok(outcome),
-            _ => Err(invalid_state(
-                "effect child returned the wrong proxy-request response",
-            )),
-        }
+            address,
+        })?
+        .try_into()
     }
 
     pub(super) fn network_proxy_once(&mut self) -> Result<NetworkProxyOutcome> {
@@ -1252,20 +1163,12 @@ pub fn run_effect_child(fixture_root: &Path, mailbox_path: &Path) -> Result<()> 
                 ),
             },
             ChildRequest::Connect => (Ok(ChildResponse::Outcome(connect_outcome())), false),
-            ChildRequest::NetworkConnect { address } => match address.parse::<InetSocketAddr>() {
-                Ok(address) => match network_connect_with_timeout(address) {
-                    Ok(stream) => {
-                        prepared_network_stream = Some(stream);
-                        (Ok(ChildResponse::Outcome(allowed_outcome())), false)
-                    }
-                    Err(error) => (Ok(ChildResponse::Outcome(error_outcome(error))), false),
-                },
-                Err(error) => (
-                    Err(invalid_state(format!(
-                        "network address is invalid: {error}"
-                    ))),
-                    false,
-                ),
+            ChildRequest::NetworkConnect { address } => match network_connect(address) {
+                Ok(stream) => {
+                    prepared_network_stream = Some(stream);
+                    (Ok(ChildResponse::Outcome(allowed_outcome())), false)
+                }
+                Err(error) => (Ok(ChildResponse::Outcome(error_outcome(error))), false),
             },
             ChildRequest::NetworkSend { payload } => (
                 Ok(ChildResponse::Outcome(
@@ -1349,28 +1252,25 @@ pub fn run_effect_child(fixture_root: &Path, mailbox_path: &Path) -> Result<()> 
                 false,
             ),
             ChildRequest::NetworkListen { address } => (
-                address
-                    .parse::<InetSocketAddr>()
-                    .map_err(|error| invalid_state(format!("network address is invalid: {error}")))
-                    .map(|address| match network_listener(address) {
-                        Ok(listener) => match listener.local_addr() {
-                            Ok(address) => {
-                                prepared_network_listener = Some(listener);
-                                ChildResponse::NetworkListen(NetworkListenOutcome {
-                                    address: Some(address.to_string()),
-                                    outcome: allowed_outcome(),
-                                })
-                            }
-                            Err(error) => ChildResponse::NetworkListen(NetworkListenOutcome {
-                                address: None,
-                                outcome: error_outcome(error),
-                            }),
-                        },
+                Ok(match network_listener(address) {
+                    Ok(listener) => match listener.local_addr() {
+                        Ok(address) => {
+                            prepared_network_listener = Some(listener);
+                            ChildResponse::NetworkListen(NetworkListenOutcome {
+                                address: Some(address),
+                                outcome: allowed_outcome(),
+                            })
+                        }
                         Err(error) => ChildResponse::NetworkListen(NetworkListenOutcome {
                             address: None,
                             outcome: error_outcome(error),
                         }),
+                    },
+                    Err(error) => ChildResponse::NetworkListen(NetworkListenOutcome {
+                        address: None,
+                        outcome: error_outcome(error),
                     }),
+                }),
                 false,
             ),
             ChildRequest::NetworkAccept => (
@@ -1522,7 +1422,7 @@ pub fn run_effect_child(fixture_root: &Path, mailbox_path: &Path) -> Result<()> 
                 connected,
             } => (
                 Ok(ChildResponse::Outcome(network_udp_send(
-                    &address, &payload, connected,
+                    address, &payload, connected,
                 ))),
                 false,
             ),
@@ -1581,7 +1481,7 @@ pub fn run_effect_child(fixture_root: &Path, mailbox_path: &Path) -> Result<()> 
                 Ok(ChildResponse::Outcome(network_proxy_request(
                     &path,
                     &request_id,
-                    &address,
+                    address,
                 ))),
                 false,
             ),
@@ -1629,10 +1529,10 @@ pub fn run_effect_child(fixture_root: &Path, mailbox_path: &Path) -> Result<()> 
                                 reason: "delegated request has extra fields",
                             }
                         );
-                        let address = address.parse::<InetSocketAddr>().map_err(|error| {
+                        let address = address.parse::<SocketAddr>().map_err(|error| {
                             invalid_state(format!("delegated network address is invalid: {error}"))
                         })?;
-                        let connect = match network_connect_with_timeout(address) {
+                        let connect = match network_connect(address) {
                             Ok(stream) => {
                                 prepared_network_stream = Some(stream);
                                 allowed_outcome()
@@ -3234,7 +3134,7 @@ impl UnixStreamTarget {
             ));
         }
         let client_result = (|| -> io::Result<UnixStream> {
-            let address = SocketAddr::from_abstract_name(&self.abstract_name)?;
+            let address = UnixSocketAddr::from_abstract_name(&self.abstract_name)?;
             let mut stream = UnixStream::connect_addr(&address)?;
             stream.write_all(&[1])?;
             let mut response = [0_u8; 1];
@@ -3577,7 +3477,7 @@ fn network_sendfile(fd: libc::c_int, path: &Path) -> IoOutcome {
         Err(error) => return error_outcome(error),
     };
     let length = match file.metadata() {
-        Ok(metadata) => usize::try_from(metadata.len()).unwrap_or(usize::MAX),
+        Ok(metadata) => metadata.len().try_into().unwrap_or(usize::MAX),
         Err(error) => return error_outcome(error),
     };
     // SAFETY: both descriptors are live and the kernel owns the implicit input offset.
@@ -3601,7 +3501,7 @@ fn network_splice(fd: libc::c_int, path: &Path) -> IoOutcome {
         Err(error) => return error_outcome(error),
     };
     let length = match file.metadata() {
-        Ok(metadata) => usize::try_from(metadata.len()).unwrap_or(usize::MAX),
+        Ok(metadata) => metadata.len().try_into().unwrap_or(usize::MAX),
         Err(error) => return error_outcome(error),
     };
     let mut pipe = [-1_i32; 2];
@@ -3634,7 +3534,7 @@ fn network_splice(fd: libc::c_int, path: &Path) -> IoOutcome {
             std::ptr::null_mut(),
             fd,
             std::ptr::null_mut(),
-            usize::try_from(loaded).unwrap_or(usize::MAX),
+            loaded.try_into().unwrap_or(usize::MAX),
             libc::SPLICE_F_MOVE,
         )
     };
@@ -3651,16 +3551,7 @@ fn network_splice(fd: libc::c_int, path: &Path) -> IoOutcome {
 }
 
 #[allow(unsafe_code)]
-fn network_udp_send(address: &str, payload: &[u8], connected: bool) -> IoOutcome {
-    let address = match address.parse::<InetSocketAddr>() {
-        Ok(address) => address,
-        Err(_) => {
-            return IoOutcome {
-                allowed: false,
-                errno: Some(rustix::io::Errno::INVAL.raw_os_error()),
-            };
-        }
-    };
+fn network_udp_send(address: SocketAddr, payload: &[u8], connected: bool) -> IoOutcome {
     let family = if address.is_ipv4() {
         libc::AF_INET
     } else {
@@ -3706,7 +3597,7 @@ fn network_tun_tap() -> IoOutcome {
     };
     let mut request = [0_u8; libc::IFNAMSIZ + 24];
     request[..8].copy_from_slice(b"mithril0");
-    let flags = i16::try_from(libc::IFF_TUN | libc::IFF_NO_PI).unwrap_or_default();
+    let flags = (libc::IFF_TUN | libc::IFF_NO_PI) as i16;
     request[libc::IFNAMSIZ..libc::IFNAMSIZ + size_of::<i16>()]
         .copy_from_slice(&flags.to_ne_bytes());
     const TUNSETIFF: libc::c_ulong = 0x4004_54ca;
@@ -3753,8 +3644,9 @@ fn network_set_mark(fd: libc::c_int, value: u32) -> IoOutcome {
 
 #[allow(unsafe_code)]
 fn network_allow_ptracer(pid: u32) -> IoOutcome {
+    let pid = libc::c_ulong::from(pid);
     // SAFETY: PR_SET_PTRACER reads the exact process ID value and no pointer.
-    let result = unsafe { libc::prctl(libc::PR_SET_PTRACER, pid as libc::c_ulong, 0, 0, 0) };
+    let result = unsafe { libc::prctl(libc::PR_SET_PTRACER, pid, 0, 0, 0) };
     if result == 0 {
         allowed_outcome()
     } else {
@@ -3782,7 +3674,7 @@ fn duplicate_process_descriptor(pid: u32, descriptor: i32) -> io::Result<OwnedFd
     }
 }
 
-fn network_proxy_request(path: &Path, request_id: &str, address: &str) -> IoOutcome {
+fn network_proxy_request(path: &Path, request_id: &str, address: SocketAddr) -> IoOutcome {
     if request_id.is_empty()
         || !request_id
             .chars()
@@ -3796,199 +3688,71 @@ fn network_proxy_request(path: &Path, request_id: &str, address: &str) -> IoOutc
     match network_unix_address(path)
         .and_then(|address| UnixStream::connect_addr(&address))
         .and_then(|mut stream| {
-            stream.write_all(request_id.as_bytes())?;
-            stream.write_all(b"\n")?;
-            stream.write_all(address.as_bytes())?;
-            stream.write_all(b"\n")
+            writeln!(stream, "{request_id}")?;
+            writeln!(stream, "{address}")
         }) {
         Ok(()) => allowed_outcome(),
         Err(error) => error_outcome(error),
     }
 }
 
-fn network_unix_address(path: &Path) -> io::Result<SocketAddr> {
-    SocketAddr::from_abstract_name(path.as_os_str().as_bytes())
+fn network_unix_address(path: &Path) -> io::Result<UnixSocketAddr> {
+    UnixSocketAddr::from_abstract_name(path.as_os_str().as_bytes())
 }
 
-#[allow(unsafe_code)]
-fn network_listener(address: InetSocketAddr) -> io::Result<TcpListener> {
-    let family = if address.is_ipv4() {
-        libc::AF_INET
-    } else {
-        libc::AF_INET6
-    };
-    // SAFETY: the arguments create one owned TCP socket.
-    let descriptor = unsafe {
-        libc::socket(
-            family,
-            libc::SOCK_STREAM | libc::SOCK_CLOEXEC,
-            libc::IPPROTO_TCP,
-        )
-    };
-    if descriptor < 0 {
-        return Err(io::Error::last_os_error());
-    }
-    // SAFETY: descriptor is a new owned descriptor.
-    let descriptor = unsafe { OwnedFd::from_raw_fd(descriptor) };
-    // SAFETY: each address points to an initialized socket address for the call duration.
-    let bound = unsafe {
-        match address {
-            InetSocketAddr::V4(address) => {
-                let raw = libc::sockaddr_in {
-                    sin_family: libc::AF_INET as libc::sa_family_t,
-                    sin_port: address.port().to_be(),
-                    sin_addr: libc::in_addr {
-                        s_addr: u32::from_ne_bytes(address.ip().octets()),
-                    },
-                    sin_zero: [0; 8],
-                };
-                libc::bind(
-                    descriptor.as_raw_fd(),
-                    (&raw as *const libc::sockaddr_in).cast(),
-                    u32::try_from(size_of::<libc::sockaddr_in>()).unwrap_or_default(),
-                )
-            }
-            InetSocketAddr::V6(address) => {
-                let raw = libc::sockaddr_in6 {
-                    sin6_family: libc::AF_INET6 as libc::sa_family_t,
-                    sin6_port: address.port().to_be(),
-                    sin6_flowinfo: address.flowinfo(),
-                    sin6_addr: libc::in6_addr {
-                        s6_addr: address.ip().octets(),
-                    },
-                    sin6_scope_id: address.scope_id(),
-                };
-                libc::bind(
-                    descriptor.as_raw_fd(),
-                    (&raw as *const libc::sockaddr_in6).cast(),
-                    u32::try_from(size_of::<libc::sockaddr_in6>()).unwrap_or_default(),
-                )
-            }
-        }
-    };
-    if bound < 0 {
-        return Err(io::Error::last_os_error());
-    }
-    // SAFETY: descriptor is a bound TCP socket.
-    if unsafe { libc::listen(descriptor.as_raw_fd(), 128) } < 0 {
-        return Err(io::Error::last_os_error());
-    }
-    Ok(TcpListener::from(descriptor))
+fn network_listener(address: SocketAddr) -> io::Result<TcpListener> {
+    let socket = network_socket(address, rustix::net::SocketFlags::CLOEXEC)?;
+    rustix::net::bind(&socket, &address).map_err(io::Error::from)?;
+    rustix::net::listen(&socket, 128).map_err(io::Error::from)?;
+    Ok(socket.into())
 }
 
-#[allow(unsafe_code)]
-fn network_connect_with_timeout(address: InetSocketAddr) -> io::Result<TcpStream> {
-    let family = if address.is_ipv4() {
-        libc::AF_INET
-    } else {
-        libc::AF_INET6
-    };
-    // SAFETY: the arguments create one owned TCP socket.
-    let descriptor = unsafe {
-        libc::socket(
-            family,
-            libc::SOCK_STREAM | libc::SOCK_CLOEXEC,
-            libc::IPPROTO_TCP,
-        )
-    };
-    if descriptor < 0 {
-        return Err(io::Error::last_os_error());
+fn network_connect(address: SocketAddr) -> io::Result<TcpStream> {
+    let socket = network_socket(
+        address,
+        rustix::net::SocketFlags::CLOEXEC | rustix::net::SocketFlags::NONBLOCK,
+    )?;
+    match rustix::net::connect(&socket, &address) {
+        Ok(()) => {}
+        Err(rustix::io::Errno::INPROGRESS) => {
+            let mut events = [rustix::event::PollFd::new(
+                &socket,
+                rustix::event::PollFlags::OUT,
+            )];
+            let timeout = rustix::event::Timespec {
+                tv_sec: 5,
+                tv_nsec: 0,
+            };
+            if rustix::event::poll(&mut events, Some(&timeout)).map_err(io::Error::from)? == 0 {
+                return Err(rustix::io::Errno::TIMEDOUT.into());
+            }
+            if let Err(error) =
+                rustix::net::sockopt::socket_error(&socket).map_err(io::Error::from)?
+            {
+                return Err(error.into());
+            }
+        }
+        Err(error) => return Err(error.into()),
     }
-    // SAFETY: descriptor is a new owned descriptor.
-    let descriptor = unsafe { OwnedFd::from_raw_fd(descriptor) };
-    // SAFETY: F_GETFL and F_SETFL operate on the owned descriptor.
-    let flags = unsafe { libc::fcntl(descriptor.as_raw_fd(), libc::F_GETFL) };
-    if flags < 0
-        || unsafe {
-            libc::fcntl(
-                descriptor.as_raw_fd(),
-                libc::F_SETFL,
-                flags | libc::O_NONBLOCK,
-            )
-        } < 0
-    {
-        return Err(io::Error::last_os_error());
-    }
+    let flags = rustix::fs::fcntl_getfl(&socket).map_err(io::Error::from)?;
+    rustix::fs::fcntl_setfl(&socket, flags - rustix::fs::OFlags::NONBLOCK)
+        .map_err(io::Error::from)?;
+    Ok(socket.into())
+}
 
-    // SAFETY: each address points to an initialized socket address for the call duration.
-    let connected = unsafe {
-        match address {
-            InetSocketAddr::V4(address) => {
-                let raw = libc::sockaddr_in {
-                    sin_family: libc::AF_INET as libc::sa_family_t,
-                    sin_port: address.port().to_be(),
-                    sin_addr: libc::in_addr {
-                        s_addr: u32::from_ne_bytes(address.ip().octets()),
-                    },
-                    sin_zero: [0; 8],
-                };
-                libc::connect(
-                    descriptor.as_raw_fd(),
-                    (&raw as *const libc::sockaddr_in).cast(),
-                    u32::try_from(size_of::<libc::sockaddr_in>()).unwrap_or_default(),
-                )
-            }
-            InetSocketAddr::V6(address) => {
-                let raw = libc::sockaddr_in6 {
-                    sin6_family: libc::AF_INET6 as libc::sa_family_t,
-                    sin6_port: address.port().to_be(),
-                    sin6_flowinfo: address.flowinfo(),
-                    sin6_addr: libc::in6_addr {
-                        s6_addr: address.ip().octets(),
-                    },
-                    sin6_scope_id: address.scope_id(),
-                };
-                libc::connect(
-                    descriptor.as_raw_fd(),
-                    (&raw as *const libc::sockaddr_in6).cast(),
-                    u32::try_from(size_of::<libc::sockaddr_in6>()).unwrap_or_default(),
-                )
-            }
-        }
+fn network_socket(address: SocketAddr, flags: rustix::net::SocketFlags) -> io::Result<OwnedFd> {
+    let family = if address.is_ipv4() {
+        rustix::net::AddressFamily::INET
+    } else {
+        rustix::net::AddressFamily::INET6
     };
-    if connected < 0 {
-        let error = io::Error::last_os_error();
-        if error.raw_os_error() != Some(libc::EINPROGRESS) {
-            return Err(error);
-        }
-        let mut poll_descriptor = libc::pollfd {
-            fd: descriptor.as_raw_fd(),
-            events: libc::POLLOUT,
-            revents: 0,
-        };
-        let timeout = i32::try_from(NETWORK_CONNECT_LIMIT.as_millis()).unwrap_or(i32::MAX);
-        // SAFETY: poll_descriptor points to one initialized pollfd.
-        let ready = unsafe { libc::poll(&raw mut poll_descriptor, 1, timeout) };
-        if ready < 0 {
-            return Err(io::Error::last_os_error());
-        }
-        if ready == 0 {
-            return Err(io::Error::from_raw_os_error(libc::ETIMEDOUT));
-        }
-        let mut socket_error = 0_i32;
-        let mut length = u32::try_from(size_of::<i32>()).unwrap_or_default();
-        // SAFETY: socket_error and length are writable for getsockopt.
-        if unsafe {
-            libc::getsockopt(
-                descriptor.as_raw_fd(),
-                libc::SOL_SOCKET,
-                libc::SO_ERROR,
-                (&raw mut socket_error).cast(),
-                &raw mut length,
-            )
-        } < 0
-        {
-            return Err(io::Error::last_os_error());
-        }
-        if socket_error != 0 {
-            return Err(io::Error::from_raw_os_error(socket_error));
-        }
-    }
-    // SAFETY: the owned descriptor remains valid while its original flags are restored.
-    if unsafe { libc::fcntl(descriptor.as_raw_fd(), libc::F_SETFL, flags) } < 0 {
-        return Err(io::Error::last_os_error());
-    }
-    Ok(TcpStream::from(descriptor))
+    rustix::net::socket_with(
+        family,
+        rustix::net::SocketType::STREAM,
+        flags,
+        Some(rustix::net::ipproto::TCP),
+    )
+    .map_err(io::Error::from)
 }
 
 #[allow(unsafe_code)]

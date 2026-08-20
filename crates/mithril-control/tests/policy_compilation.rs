@@ -791,7 +791,7 @@ fn destination_policy_compiles_only_canonical_bounded_network_rules() -> mithril
             }],
             required_network_namespace_ids: Vec::new(),
             service_identities: Vec::new(),
-            final_address_required: false,
+            final_address_required: true,
         }],
     });
     let mithril_control::RuleMatchV1::LocalPreEffect(effect) = &mut document.rules[0].rule_match
@@ -821,6 +821,15 @@ fn destination_policy_compiles_only_canonical_bounded_network_rules() -> mithril
     assert!(PolicyCompiler
         .compile(&invalid)
         .is_err_and(|error| error.to_string().contains("CFG_NETWORK_PREFIX")));
+
+    let mut no_final_address = document.clone();
+    let Some(network) = no_final_address.network_policy.as_mut() else {
+        unreachable!("fixture has a network policy")
+    };
+    network.destination_policies[0].final_address_required = false;
+    assert!(PolicyCompiler
+        .compile(&no_final_address)
+        .is_err_and(|error| error.to_string().contains("CFG_NETWORK_FINAL_ADDRESS")));
 
     let mut dns = document;
     let Some(network) = dns.network_policy.as_mut() else {

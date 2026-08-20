@@ -2,13 +2,10 @@ use std::collections::BTreeMap;
 use std::net::{Ipv4Addr, Ipv6Addr};
 
 use erebor_interceptor_abi::{
-    BindingLifecycleStateV1, NetworkDestinationClassV1, NetworkDestinationDecisionKeyV1,
-    NetworkIpv4LpmKeyV1, NetworkIpv6LpmKeyV1, NetworkPortRangeV1,
-    NetworkProtocolV1 as KernelNetworkProtocolV1, PhysicalDecisionV1, MAX_NETWORK_PORT_RANGES_V1,
+    NetworkDestinationClassV1, NetworkDestinationDecisionKeyV1, NetworkIpv4LpmKeyV1,
+    NetworkIpv6LpmKeyV1, NetworkPortRangeV1, PhysicalDecisionV1, MAX_NETWORK_PORT_RANGES_V1,
 };
-use mithril_control::{
-    DestinationPolicyRecordV1, EffectFamilyV1, NetworkProtocolV1, PolicyDocumentV1,
-};
+use mithril_control::{DestinationPolicyRecordV1, NetworkProtocolV1, PolicyDocumentV1};
 use snafu::ensure;
 use zerocopy::IntoBytes as _;
 
@@ -24,112 +21,78 @@ pub(super) struct LoweredNetworkPolicy {
     pub(super) ipv4_classes: BTreeMap<Vec<u8>, Vec<u8>>,
     pub(super) ipv6_classes: BTreeMap<Vec<u8>, Vec<u8>>,
     pub(super) decisions: BTreeMap<Vec<u8>, Vec<u8>>,
+    handles: BTreeMap<String, u64>,
 }
 
-pub(super) fn destination_handles(document: &PolicyDocumentV1) -> BTreeMap<String, u64> {
-    document
-        .network_policy
-        .iter()
-        .flat_map(|policy| &policy.destination_policies)
-        .enumerate()
-        .map(|(index, policy)| {
-            (
-                policy.destination_policy_id.clone(),
-                u64::try_from(index).unwrap_or(u64::MAX - 1) + 1,
-            )
-        })
-        .collect()
-}
-
-pub(super) fn lower_destination_classes(
-    document: &PolicyDocumentV1,
-    profile_generation_ref_id: u64,
-    handles: &BTreeMap<String, u64>,
-) -> Result<LoweredNetworkPolicy> {
-    let mut tables = LoweredNetworkPolicy::default();
-    for policy in document
-        .network_policy
-        .iter()
-        .flat_map(|network| &network.destination_policies)
-    {
-        let value = destination_class(policy, handles[&policy.destination_policy_id])?;
-        for protocol in &policy.protocols {
-            let protocol = kernel_protocol(*protocol);
-            for prefix in &policy.ipv4_prefixes {
-                let (address, length) = parse_ipv4(prefix)?;
-                let key = NetworkIpv4LpmKeyV1 {
-                    prefix_length: LPM_FIXED_PREFIX_BITS + length,
-                    reserved_alignment: 0,
-                    profile_generation_ref_id,
-                    protocol,
-                    reserved: [0; 7],
-                    address: address.octets(),
-                    reserved_tail: [0; 4],
-                };
-                insert_exact(&mut tables.ipv4_classes, key.as_bytes(), value.as_bytes())?;
-            }
-            for prefix in &policy.ipv6_prefixes {
-                let (address, length) = parse_ipv6(prefix)?;
-                let key = NetworkIpv6LpmKeyV1 {
-                    prefix_length: LPM_FIXED_PREFIX_BITS + length,
-                    reserved_alignment: 0,
-                    profile_generation_ref_id,
-                    protocol,
-                    reserved: [0; 7],
-                    address: address.octets(),
-                };
-                insert_exact(&mut tables.ipv6_classes, key.as_bytes(), value.as_bytes())?;
-            }
-        }
-    }
-    Ok(tables)
-}
-
-#[allow(clippy::too_many_arguments)]
-pub(super) fn lower_destination_decision(
-    tables: &mut LoweredNetworkPolicy,
-    object_selector: &str,
-    family: EffectFamilyV1,
-    profile_generation_ref_id: u64,
-    active_role_id: u32,
-    process_state_vector_id: u32,
-    entry_kind: u16,
-    operation: u16,
-    binding_lifecycle_state: BindingLifecycleStateV1,
-    handles: &BTreeMap<String, u64>,
-    protocols: &[NetworkProtocolV1],
-    decision: PhysicalDecisionV1,
-) -> Result<bool> {
-    let Some(destination_id) = object_selector.strip_prefix("DESTINATION:") else {
-        return Ok(false);
-    };
-    ensure!(
-        family == EffectFamilyV1::Network,
-        IdentityStateSnafu {
-            reason: "a destination selector lowered outside NETWORK".to_owned(),
-        }
-    );
-    let destination_policy_handle = *handles.get(destination_id).ok_or_else(|| {
-        IdentityStateSnafu {
-            reason: format!("unknown destination policy `{destination_id}`"),
-        }
-        .build()
-    })?;
-    for protocol in protocols {
-        let key = NetworkDestinationDecisionKeyV1 {
-            profile_generation_ref_id,
-            destination_policy_handle,
-            active_role_id,
-            process_state_vector_id,
-            entry_kind,
-            operation,
-            protocol: kernel_protocol(*protocol),
-            binding_lifecycle_state,
-            reserved: [0; 2],
+impl LoweredNetworkPolicy {
+    pub(super) fn lower(
+        document: &PolicyDocumentV1,
+        profile_generation_ref_id: u64,
+    ) -> Result<Self> {
+        let mut tables = Self {
+            handles: document
+                .network_policy
+                .iter()
+                .flat_map(|policy| &policy.destination_policies)
+                .zip(1_u64..)
+                .map(|(policy, handle)| (policy.destination_policy_id.clone(), handle))
+                .collect(),
+            ..Self::default()
         };
-        insert_exact(&mut tables.decisions, key.as_bytes(), decision.as_bytes())?;
+        for policy in document
+            .network_policy
+            .iter()
+            .flat_map(|network| &network.destination_policies)
+        {
+            let value = destination_class(policy, tables.handles[&policy.destination_policy_id])?;
+            for protocol in &policy.protocols {
+                let protocol = (*protocol).into();
+                for prefix in &policy.ipv4_prefixes {
+                    let (address, length) = parse_ipv4(prefix)?;
+                    let key = NetworkIpv4LpmKeyV1 {
+                        prefix_length: LPM_FIXED_PREFIX_BITS + length,
+                        reserved_alignment: 0,
+                        profile_generation_ref_id,
+                        protocol,
+                        reserved: [0; 7],
+                        address: address.octets(),
+                        reserved_tail: [0; 4],
+                    };
+                    insert_exact(&mut tables.ipv4_classes, key.as_bytes(), value.as_bytes())?;
+                }
+                for prefix in &policy.ipv6_prefixes {
+                    let (address, length) = parse_ipv6(prefix)?;
+                    let key = NetworkIpv6LpmKeyV1 {
+                        prefix_length: LPM_FIXED_PREFIX_BITS + length,
+                        reserved_alignment: 0,
+                        profile_generation_ref_id,
+                        protocol,
+                        reserved: [0; 7],
+                        address: address.octets(),
+                    };
+                    insert_exact(&mut tables.ipv6_classes, key.as_bytes(), value.as_bytes())?;
+                }
+            }
+        }
+        Ok(tables)
     }
-    Ok(true)
+
+    pub(super) fn destination_handle(&self, destination_id: &str) -> Option<u64> {
+        self.handles.get(destination_id).copied()
+    }
+
+    pub(super) fn insert_decisions(
+        &mut self,
+        mut key: NetworkDestinationDecisionKeyV1,
+        protocols: &[NetworkProtocolV1],
+        decision: PhysicalDecisionV1,
+    ) -> Result<()> {
+        for protocol in protocols {
+            key.protocol = (*protocol).into();
+            insert_exact(&mut self.decisions, key.as_bytes(), decision.as_bytes())?;
+        }
+        Ok(())
+    }
 }
 
 fn destination_class(
@@ -143,31 +106,18 @@ fn destination_class(
         }
     );
     let mut port_ranges = [NetworkPortRangeV1::default(); MAX_NETWORK_PORT_RANGES_V1];
-    for (target, source) in port_ranges.iter_mut().zip(&policy.port_ranges) {
-        *target = NetworkPortRangeV1 {
-            first: source.first,
-            last: source.last,
-        };
+    for (target, source) in port_ranges
+        .iter_mut()
+        .zip(policy.port_ranges.iter().copied())
+    {
+        *target = source.into();
     }
     Ok(NetworkDestinationClassV1 {
         destination_policy_handle,
         port_ranges,
-        port_range_count: policy.port_ranges.len().try_into().map_err(|error| {
-            IdentityStateSnafu {
-                reason: format!("network port range count is invalid: {error}"),
-            }
-            .build()
-        })?,
-        final_address_required: u8::from(policy.final_address_required),
-        reserved: [0; 6],
+        port_range_count: policy.port_ranges.len() as u8,
+        reserved: [0; 7],
     })
-}
-
-const fn kernel_protocol(protocol: NetworkProtocolV1) -> KernelNetworkProtocolV1 {
-    match protocol {
-        NetworkProtocolV1::Tcp => KernelNetworkProtocolV1::Tcp,
-        NetworkProtocolV1::Udp => KernelNetworkProtocolV1::Udp,
-    }
 }
 
 fn parse_ipv4(prefix: &str) -> Result<(Ipv4Addr, u32)> {
@@ -225,15 +175,12 @@ mod tests {
         NetworkIpv4LpmKeyV1, PhysicalDecisionKindV1, PhysicalDecisionV1,
     };
     use mithril_control::{
-        DestinationPolicyRecordV1, DnsPolicyModeV1, EffectFamilyV1, NetworkPolicyV1,
-        NetworkPortRangeV1, NetworkProtocolV1, PolicyDocumentV1,
+        DestinationPolicyRecordV1, DnsPolicyModeV1, NetworkPolicyV1, NetworkPortRangeV1,
+        NetworkProtocolV1, PolicyDocumentV1,
     };
-    use zerocopy::TryFromBytes as _;
+    use zerocopy::{FromBytes as _, TryFromBytes as _};
 
-    use super::{
-        destination_handles, lower_destination_classes, lower_destination_decision,
-        LoweredNetworkPolicy,
-    };
+    use super::LoweredNetworkPolicy;
 
     fn network_document() -> crate::Result<PolicyDocumentV1> {
         let mut document = PolicyDocumentV1::parse(
@@ -266,8 +213,7 @@ mod tests {
     #[test]
     fn destination_classes_are_generation_scoped_lpm_rows() -> crate::Result<()> {
         let document = network_document()?;
-        let handles = destination_handles(&document);
-        let lowered = lower_destination_classes(&document, 17, &handles)?;
+        let lowered = LoweredNetworkPolicy::lower(&document, 17)?;
         let (key, value) = lowered.ipv4_classes.first_key_value().ok_or_else(|| {
             crate::error::IdentityStateSnafu {
                 reason: "network test has no IPv4 class".to_owned(),
@@ -280,7 +226,7 @@ mod tests {
             }
             .build()
         })?;
-        let value = NetworkDestinationClassV1::try_read_from_bytes(value).map_err(|error| {
+        let value = NetworkDestinationClassV1::read_from_bytes(value).map_err(|error| {
             crate::error::IdentityStateSnafu {
                 reason: format!("network destination class is invalid: {error}"),
             }
@@ -291,7 +237,6 @@ mod tests {
         assert_eq!(key.profile_generation_ref_id, 17);
         assert_eq!(value.destination_policy_handle, 1);
         assert_eq!(value.port_ranges[0].first, 8_443);
-        assert_eq!(value.final_address_required, 1);
         assert_eq!(lowered.ipv6_classes.len(), 1);
         Ok(())
     }
@@ -299,8 +244,7 @@ mod tests {
     #[test]
     fn destination_decisions_keep_protocol_and_actor_dimensions() -> crate::Result<()> {
         let document = network_document()?;
-        let handles = destination_handles(&document);
-        let mut lowered = LoweredNetworkPolicy::default();
+        let mut lowered = LoweredNetworkPolicy::lower(&document, 17)?;
         let decision = PhysicalDecisionV1 {
             decision: PhysicalDecisionKindV1::Deny,
             reserved: 0,
@@ -309,20 +253,28 @@ mod tests {
             transition_id: 0,
             exception_numeric_handle: 0,
         };
-        assert!(lower_destination_decision(
-            &mut lowered,
-            "DESTINATION:result-service",
-            EffectFamilyV1::Network,
-            17,
-            19,
-            23,
-            2,
-            26,
-            BindingLifecycleStateV1::Active,
-            &handles,
+        lowered.insert_decisions(
+            NetworkDestinationDecisionKeyV1 {
+                profile_generation_ref_id: 17,
+                destination_policy_handle: lowered
+                    .destination_handle("result-service")
+                    .ok_or_else(|| {
+                        crate::error::IdentityStateSnafu {
+                            reason: "network test has no destination handle".to_owned(),
+                        }
+                        .build()
+                    })?,
+                active_role_id: 19,
+                process_state_vector_id: 23,
+                entry_kind: 2,
+                operation: 26,
+                protocol: Default::default(),
+                binding_lifecycle_state: BindingLifecycleStateV1::Active,
+                reserved: [0; 2],
+            },
             &[NetworkProtocolV1::Tcp],
             decision,
-        )?);
+        )?;
         let key = lowered.decisions.keys().next().ok_or_else(|| {
             crate::error::IdentityStateSnafu {
                 reason: "network test has no destination decision".to_owned(),

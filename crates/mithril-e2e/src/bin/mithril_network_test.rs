@@ -1,5 +1,5 @@
+use std::net::IpAddr;
 use std::path::PathBuf;
-use std::{net::IpAddr, path::Path};
 
 use clap::{Parser, Subcommand};
 use mithril_e2e::{
@@ -93,7 +93,7 @@ fn run() -> Result<()> {
                 &cgroup_path,
                 peer,
             )?;
-            runner.write_json(
+            NetworkTestRunner::write_json(
                 &output_directory.join("network-physical-probe.json"),
                 &bundle,
             )?;
@@ -115,7 +115,7 @@ fn run() -> Result<()> {
                 denied_port,
                 &ready_path,
             )?;
-            NetworkTestRunner::new(Path::new(".")).write_json(&output, &result)?;
+            NetworkTestRunner::write_json(&output, &result)?;
             println!("Mithril network peer server passed");
             Ok(())
         }

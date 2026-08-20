@@ -80,17 +80,15 @@ export MITHRIL_VM_KNOWN_HOSTS=$work_a/known_hosts
 ssh_public_key=${MITHRIL_VM_SSH_PUBLIC_KEY:-$HOME/.ssh/id_rsa.pub}
 created_a=false
 created_b=false
-k3s_server_installed=false
-k3s_agent_installed=false
-peer_jobs=()
+peer_job=
 
 cleanup() {
   local status=$?
   trap - EXIT
-  for job in "${peer_jobs[@]}"; do
-    kill "$job" >/dev/null 2>&1 || true
-    wait "$job" >/dev/null 2>&1 || true
-  done
+  if [[ -n $peer_job ]]; then
+    kill "$peer_job" >/dev/null 2>&1 || true
+    wait "$peer_job" >/dev/null 2>&1 || true
+  fi
   if [[ $created_b == true && $keep_vms == false ]]; then
     "$provider" destroy "$vm_b" "$work_b" || status=1
   fi
@@ -174,11 +172,9 @@ boot_b=$(awk -F= '$1 == "boot_id" {print $2}' "$output_directory/$vm_b-platform.
 
 "$provider" run "$vm_a" sudo bash "$remote_a/harness/guest.sh" \
   k3s-install "$k3s_version" "$remote_a/harness/k3s-config-v1.yaml" "$remote_a"
-k3s_server_installed=true
 node_token=$("$provider" run "$vm_a" sudo cat /var/lib/rancher/k3s/server/node-token)
 "$provider" run "$vm_b" sudo bash "$remote_b/harness/guest.sh" \
   k3s-agent-install "$k3s_version" "https://$address_a:6443" "$node_token" "$remote_b"
-k3s_agent_installed=true
 node_count=0
 for attempt in {1..300}; do
   node_count=$("$provider" run "$vm_a" sudo /usr/local/bin/k3s kubectl get nodes \
@@ -272,8 +268,7 @@ run_direction() {
     "$peer_remote/bin/mithril-network-test" peer-server \
     --ready-path "$ready" --output "$peer_result" \
     >"$output_directory/$label-peer.log" 2>&1 &
-  local peer_job=$!
-  peer_jobs+=("$peer_job")
+  peer_job=$!
   for attempt in {1..120}; do
     if "$provider" run "$peer_node" test -f "$ready"; then
       break
@@ -293,7 +288,7 @@ run_direction() {
     --cgroup-path "/sys/fs/cgroup/$source_node-$label" \
     --peer-address "$peer_address"
   wait "$peer_job"
-  peer_jobs=()
+  peer_job=
   "$provider" get "$source_node" "$probe_result/network-physical-probe.json" \
     "$output_directory/$label-probe.json"
   "$provider" get "$peer_node" "$peer_result" "$output_directory/$label-peer.json"
@@ -321,16 +316,10 @@ run_direction "$vm_b" "$remote_b" "$vm_a" "$remote_a" "$pod_a_ip" "$pod_a_pid" \
 "$provider" run "$vm_a" sudo /usr/local/bin/k3s kubectl delete namespace "$namespace" \
   --wait=true --timeout=120s
 
-if [[ $k3s_agent_installed == true ]]; then
-  "$provider" run "$vm_b" sudo bash "$remote_b/harness/guest.sh" \
-    k3s-agent-remove "$remote_b"
-  k3s_agent_installed=false
-fi
-if [[ $k3s_server_installed == true ]]; then
-  "$provider" run "$vm_a" sudo bash "$remote_a/harness/guest.sh" \
-    k3s-remove "$remote_a"
-  k3s_server_installed=false
-fi
+"$provider" run "$vm_b" sudo bash "$remote_b/harness/guest.sh" \
+  k3s-agent-remove "$remote_b"
+"$provider" run "$vm_a" sudo bash "$remote_a/harness/guest.sh" \
+  k3s-remove "$remote_a"
 
 jq -n \
   --arg node_a "$vm_a" --arg node_a_boot_id "$boot_a" \

@@ -85,6 +85,11 @@ impl Validate for DestinationPolicyRecordV1 {
             "CFG_NETWORK_SERVICE_AUTHORITY",
             "service identity resolution is not qualified for active policy"
         );
+        require!(
+            self.final_address_required,
+            "CFG_NETWORK_FINAL_ADDRESS",
+            "active network policy requires final-address enforcement"
+        );
         Ok(())
     }
 }
@@ -101,7 +106,7 @@ fn canonical_ipv4(value: &str) -> bool {
     let (Ok(address), Ok(length)) = (address.parse::<Ipv4Addr>(), length.parse::<u32>()) else {
         return false;
     };
-    length <= 32 && u128::from(u32::from(address)) & host_mask(32, length) == 0
+    length <= 32 && u32::from(address).trailing_zeros() >= 32 - length
 }
 
 fn canonical_ipv6(value: &str) -> bool {
@@ -111,21 +116,7 @@ fn canonical_ipv6(value: &str) -> bool {
     let (Ok(address), Ok(length)) = (address.parse::<Ipv6Addr>(), length.parse::<u32>()) else {
         return false;
     };
-    length <= 128 && u128::from(address) & host_mask(128, length) == 0
-}
-
-fn host_mask(bits: u32, prefix: u32) -> u128 {
-    if prefix == 0 {
-        if bits == 128 {
-            u128::MAX
-        } else {
-            (1_u128 << bits) - 1
-        }
-    } else if prefix == bits {
-        0
-    } else {
-        (1_u128 << (bits - prefix)) - 1
-    }
+    length <= 128 && u128::from(address).trailing_zeros() >= 128 - length
 }
 
 #[cfg(test)]
@@ -134,9 +125,15 @@ mod tests {
 
     #[test]
     fn prefixes_must_name_the_canonical_network() {
+        assert!(canonical_ipv4("0.0.0.0/0"));
+        assert!(!canonical_ipv4("1.0.0.0/0"));
         assert!(canonical_ipv4("10.0.0.0/24"));
         assert!(!canonical_ipv4("10.0.0.1/24"));
+        assert!(canonical_ipv4("10.0.0.1/32"));
+        assert!(canonical_ipv6("::/0"));
+        assert!(!canonical_ipv6("2001:db8::/0"));
         assert!(canonical_ipv6("2001:db8::/32"));
         assert!(!canonical_ipv6("2001:db8::1/32"));
+        assert!(canonical_ipv6("2001:db8::1/128"));
     }
 }

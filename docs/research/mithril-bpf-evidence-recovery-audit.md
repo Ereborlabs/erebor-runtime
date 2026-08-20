@@ -178,12 +178,12 @@ authority, and resumes evidence in a new healthy interval only after readback
 and a controlled probe.
 
 The physical record must measure the configured queue, ring, WAL, batch,
-latency, and recovery bounds. Generated result digests and other CI-owned
-qualification artifacts must not be committed.
+latency, and recovery bounds. The release owner controls qualification-record
+publication.
 
 ## Post-Implementation Re-Audit
 
-The final re-audit used source commit `6686a23` on 2026-08-19. It read the
+The final re-audit used the current checked source on 2026-08-19. It read the
 checked-in C and Rust implementation and inspected the compiled BPF object.
 
 The production effect path has this order:

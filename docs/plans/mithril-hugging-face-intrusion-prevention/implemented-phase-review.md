@@ -1,14 +1,16 @@
 # Implemented Phase Review
 
-This guide explains the current implementation. It uses source links so that a
-reviewer can follow each owner, state transition, and BPF decision. It does not
-replace an acceptance record.
+This guide retains the detailed Phase 0 through Phase 4 implementation review.
+It uses source links so that a reviewer can follow each owner, state
+transition, and BPF decision. Use the dedicated
+[Phase 5](./phase-5-implementation-review.md) and
+[Phase 6](./phase-6-implementation-review.md) guides for the later network and
+evidence paths. This guide does not replace an acceptance record.
 
 The dedicated [signed path-tree denial review](./path-tree-denial-implementation-review.md)
-explains the recursive path enforcement and its exact-commit VM evidence.
+explains the recursive path enforcement and its exact VM evidence.
 
-Source reviewed: code commit `434060190384f426b1c7da6d498adca76aae5b8a`
-plus the current documentation changes on `mithril-phase-2-4`. The production
+Source reviewed: current checked source on 2026-08-19. The production
 identity object loaded by the 2026-08-18 VM has SHA-256
 `02408c371aafaeeb044cbf11195a25dca35013bcdea44e37aa0756ebd2f2f3e6`.
 The checked kernel-qualification object has SHA-256
@@ -21,11 +23,8 @@ local policy rows, exact file decisions, typed device and process decisions,
 exact Unix-stream relationships, restricted io_uring read and write ownership,
 global mount invalidation, restart-safe bounded exceptions, generation
 activation and retirement owners, and a Kubernetes administrative-exec path.
-The latest identity, OBSERVE, and PROTECT probes passed on the qualified VM.
-They prove only their stated local slices. The administrative-exec lane reaches
-Control, admission, and slot arm, but stock runc fails closed before the target
-exec. The source therefore does not have one complete final VM acceptance
-record.
+The identity, OBSERVE, and PROTECT probes passed on the qualified VM. They
+prove only their stated local slices.
 
 The latest phase results remain:
 
@@ -36,14 +35,12 @@ The latest phase results remain:
   evidence. Operator-runnable rows also have manual evidence. Each row records
   its exact limit. Phase 4 owns saturation, raced-policy, IPC-policy, and
   protected-effect results.
-- Phase 3: **Blocked**. Exact observation has current privileged VM and K3s
-  direct-CRI exact-file `OBSERVE` and `PROTECT` evidence. The full manual
-  matrix is not complete.
-- Phase 4: **Not done**. The source now contains narrow positive and negative
-  enforcement for the listed file, exec, IPC, process, device, io_uring,
-  mount, exception, generation, and administrative paths. The final current
-  VM record, administrative approval transaction, complete provenance and
-  lifetime models, and branch-specific incident proofs are not complete.
+- Phase 3: **Done** for observation, classification, and simulation.
+- Phase 4: **Done** for its limited x86_64 local-enforcement claim.
+- Phase 5: **Done** for its qualified x86_64 network tier and tested two-node
+  K3s Flannel route.
+- Phase 6: **Done** for its qualified x86_64 durable-evidence and recovery
+  tier.
 
 ## Phase 4 Concurrent-Exec Linux Control — 2026-08-17
 
@@ -77,11 +74,9 @@ oracle. It is not a Phase 2 closure gate.
 
 ## Labeled Native Mount-Namespace Entry — 2026-08-17
 
-This review update covers source commit `da4e1996c8e3ec4450d5b9e0ca5da7d6bacd6f89`
-for the automated fixture and commit
-`af1e1c3eae202354b413beda085032930776fee3` for the manual shell. The
-automation adds one JSON field to the existing physical bundle. It adds no BPF
-map, BPF program, runner, role, or durable type.
+This review update covers the automated fixture and manual shell. The
+automation adds one JSON field to the existing physical bundle. It adds no
+BPF map, BPF program, runner, role, or durable type.
 
 Review this path in order:
 
@@ -193,11 +188,11 @@ Those statements remain as historical diagnostics only.
 
 ### Review route for the current changes
 
-1. Read [`KernelHostOwner::start`](../../../crates/erebor-interceptor/src/host.rs#L415).
+1. Read [`KernelHostOwner::start`](../../../crates/erebor-interceptor/src/host.rs).
    It takes the fixed host lease and the selected instance lease before it
    loads or attaches a fresh object. It then rejects retained Mithril LSM links
    outside the requested recovery root.
-2. Read [`KernelHostOwner::recover`](../../../crates/erebor-interceptor/src/host.rs#L602).
+2. Read [`KernelHostOwner::recover`](../../../crates/erebor-interceptor/src/host.rs).
    Recovery opens its expected pinned links, permits only their link IDs, and
    rejects another retained Mithril LSM link. It does not detach or reuse a
    foreign link.
@@ -206,7 +201,7 @@ Those statements remain as historical diagnostics only.
    view spin lock. It accepts a DIRTY view or a CLEAN view from an older global
    generation. It rejects an UNKNOWN view, a current CLEAN view, pending work,
    a changed epoch, or a changed transition version.
-4. Read [`NodePolicyGenerationOwner::reconcile_mount_views`](../../../crates/mithril-node/src/policy.rs#L595).
+4. Read [`NodePolicyGenerationOwner::reconcile_mount_views`](../../../crates/mithril-node/src/policy.rs).
    The node writes a proposal, asks BPF to commit every view, reads every view
    back, and then publishes the global clean epoch. A workload file access is
    not an activation step.
@@ -215,7 +210,7 @@ Those statements remain as historical diagnostics only.
    and
    [`EffectTestRunner::physical_probe`](../../../crates/mithril-e2e/src/effect.rs#L639).
    They load the production object and check cleanup after each probe.
-6. Read [`KernelHostOwner::start`](../../../crates/erebor-interceptor/src/host.rs#L415).
+6. Read [`KernelHostOwner::start`](../../../crates/erebor-interceptor/src/host.rs).
    Fresh pin directories now exist before the object attaches.
 7. Read [`ControlPlane::register`](../../../crates/mithril-control/src/service.rs#L218).
    It preserves the nonce sequence ledger after a stream closes.
@@ -295,11 +290,11 @@ sequenceDiagram
     end
 ```
 
-[`KernelHostOwner::start`](../../../crates/erebor-interceptor/src/host.rs#L415)
+[`KernelHostOwner::start`](../../../crates/erebor-interceptor/src/host.rs)
 creates fresh directories through
-[`prepare_fresh_pin_directories`](../../../crates/erebor-interceptor/src/host.rs#L905)
+[`prepare_fresh_pin_directories`](../../../crates/erebor-interceptor/src/host.rs)
 before `open.load()` attaches an LSM program.
-[`PinRollback`](../../../crates/erebor-interceptor/src/host.rs#L1457) removes
+[`PinRollback`](../../../crates/erebor-interceptor/src/host.rs) removes
 only paths that this start owns. Recovery does not use this path.
 
 ### Current evidence and limits
@@ -314,9 +309,9 @@ The VM ran on x86_64 Linux `6.8.0-137-generic` with active LSM order
 | Effect OBSERVE | Passed. It checks exact observation, mount revalidation, external replacement fail-close, propagation, and cleanup. | `3317b52ede0b9d4ea4acd3b5ab3e4926d9d8edecad96a40801a7bcbed0ad275c` |
 | Effect PROTECT | Passed. It checks pre-effect denial, held descriptors, io_uring, mount revalidation, external replacement fail-close, and cleanup. | `74dec05c7984076a908db509733b078492407a145298fee684e20ed1ef9cc8c6` |
 
-The retained K3s VM also passed the CRI OBSERVE lane at source commit
-`bd325aa`. A real `kubectl exec` task had task cookie 19 and a restricted
-external-root classification. Its exact file read completed with
+The retained K3s VM also passed the CRI OBSERVE lane with the tested source. A
+real `kubectl exec` task had task cookie 19 and a restricted external-root
+classification. Its exact file read completed with
 `WOULD_DENY`, `UNKNOWN_AFTER_PRE_EFFECT`, exact object key 7, and kernel
 result 0. The lane removed its namespace, fixture, pin root, and Mithril links.
 
@@ -471,7 +466,7 @@ and real-parent cookie `230`, no root or installed-role class, and role `11`.
 The runner does not infer purpose from command bytes, timing, TTY shape,
 cgroup, or namespaces.
 
-Source commit `53fbd287aad8b6012eb4f80dcd4fe83e34ed5470` ran the
+The tested source ran the
 Kubernetes-only extension in the retained x86_64 Ubuntu 24.04 VM on kernel
 `6.8.0-137-generic`. Kubernetes `v1.35.5` used the K3s
 `v1.35.5+k3s1` distribution. The physical JSON path is
@@ -544,13 +539,13 @@ durable owner. The oracle is kernel-visible task membership, not an inferred
 Kubernetes purpose. A pass requires exactly one cgroup task, and that task must
 be the CRI-reported container init PID while the Pod is not Ready.
 
-Source commit `828fdec76c5753790c526d87e6757fde6134002e` produced the
+The tested source produced the
 accepted schema-16 JSON at
 `/tmp/mithril-phase2-kubernetes-sleep-20260818-029/identity-physical-probe.json`.
 Its SHA-256 is
 `a62e82352a3153c65895d69265e4e0265d78ec6a76679e50a7d1f0bbcc2804fb`.
 The retained physical VM also ran `kubernetes-lifecycle-sleep.sh` as root from
-that commit. The shell printed one init PID, the same single cgroup task, and
+that source. The shell printed one init PID, the same single cgroup task, and
 `PASS`. Automated and manual cleanup removed the Namespace, fixture, pin,
 lease, cgroup, node process, and loaded Erebor Interceptor programs. The VM was
 destroyed, and `virsh list --all` was empty.
@@ -604,13 +599,13 @@ optional booleans. It adds no map, role, generic runner, or durable owner. The
 oracle is kernel-visible task membership. It does not infer purpose from a
 network probe or claim that the application received the probe.
 
-Source commit `f9b7c8bc2be84f2a39f3db7b43dae3ab1914c0d0` produced the
+The tested source produced the
 accepted schema-17 JSON at
 `/tmp/mithril-phase2-kubernetes-network-20260818-033/identity-physical-probe.json`.
 Its SHA-256 is
 `cbc024f56ce366a84aa2b0ffdbb7efaab58599b282d1f24295f30c08702fac07`.
 The retained physical VM also ran `kubernetes-network-probes.sh` as root from
-that commit. The shell printed one init PID and the same single cgroup task for
+that source. The shell printed one init PID and the same single cgroup task for
 each probe container, then printed `PASS`. Automated and manual cleanup removed
 the Namespace and fixture. Postflight also found no Mithril pin, lease, cgroup,
 node process, or loaded Erebor Interceptor program. The VM was destroyed, and
@@ -664,7 +659,7 @@ optional task snapshots and one distinctness boolean. The snapshot exposes the
 execution-set ID already present in `TaskLabelV1`. The change adds no map, role,
 generic runner, durable owner, or kernel state.
 
-Source commit `6e23a23e327f70b3462faf932b0845f7e52ec67f` produced the
+The tested source produced the
 accepted schema-18 JSON at
 `/tmp/mithril-phase2-kubernetes-containers-20260818-034/identity-physical-probe.json`.
 Its SHA-256 is
@@ -722,7 +717,7 @@ The implementation reuses the existing physical bundle. Schema 19 adds two
 optional task snapshots and two result booleans. It adds no map, role, generic
 runner, durable owner, or kernel state.
 
-Source commit `76d0145c2ecd7991ab7160773faf452c383df6a9` freezes the
+The tested source freezes the
 source bytes that produced the accepted schema-19 JSON at
 `/tmp/mithril-phase2-kubernetes-ephemeral-20260818-035/identity-physical-probe.json`.
 Its SHA-256 is
@@ -789,7 +784,7 @@ The implementation reuses the existing physical bundle. Schema 20 adds seven
 optional snapshots and one distinctness result. It adds no map, role, generic
 runner, durable owner, or kernel state.
 
-Source commit `4ca2d26bd90ad6a9cd85b7fe5e9e615a6ea4fa14` produced the
+The tested source produced the
 accepted schema-20 JSON at
 `/tmp/mithril-phase2-kubernetes-probes-20260818-042/identity-physical-probe.json`.
 Its SHA-256 is
@@ -803,7 +798,7 @@ The retained VM ran `kubernetes-probe-impersonation.sh` as root from the same
 source bytes. It printed `PASS`. Automated and manual cleanup removed the
 Namespace, fixture, pin, lease, cgroup, node process, and loaded Erebor
 Interceptor programs. The VM was destroyed, and `virsh list --all --name` was
-empty. Full Rust CI passed.
+empty. Full Rust verification passed.
 
 This completes `ENTRY-PROBE-001`, `ENTRY-PROBE-002`, and
 `ENTRY-PROBE-IMPERSONATION-003`. The exact limit is one held invocation from
@@ -852,7 +847,7 @@ The implementation reuses the existing physical bundle. Schema 21 adds three
 optional snapshots and two reference counts. It adds no map, role, generic
 runner, durable owner, or kernel state.
 
-Source commit `098f167c88755f88acabf7f387da5095d568869d` produced the
+The tested source produced the
 accepted schema-21 JSON at
 `/tmp/mithril-phase2-kubernetes-prestop-20260818-044/identity-physical-probe.json`.
 Its SHA-256 is
@@ -865,7 +860,7 @@ The retained VM ran `kubernetes-prestop.sh` as root from the same source bytes.
 It printed both task identities and `PASS`. Automated and manual cleanup
 removed the Namespace, fixture, pin, lease, cgroup, node process, and loaded
 Erebor Interceptor programs. The VM was destroyed, and
-`virsh list --all --name` was empty. Full Rust CI passed.
+`virsh list --all --name` was empty. Full Rust verification passed.
 
 This completes `ENTRY-PRESTOP-001`. The exact limit is identity and profile-
 reference retention during PreStop. Phase 4 owns containment and effect
@@ -921,7 +916,7 @@ Schema 22 adds the ordered application and hook snapshots, the restart
 application snapshots, the two hook snapshots, and two Boolean oracles. It
 adds no production map, role, durable type, or second runner.
 
-Source commit `a056f00fd7d110cc0582b6e8a476de1d1e233a59` produced the
+The tested source produced the
 accepted JSON at
 `/tmp/mithril-phase2-kubernetes-poststart-20260818-049/identity-physical-probe.json`.
 Its SHA-256 is
@@ -933,7 +928,7 @@ Both real PostStart orders passed. Each application was an initial root. Each
 hook was a distinct restricted external root. The restart application stayed
 unchanged, and the repeated exact hook delivery received a fresh task and
 process identity. The manual shell passed in the retained VM. Automated and
-manual cleanup removed every case-owned object. Full Rust CI passed.
+manual cleanup removed every case-owned object. Full Rust verification passed.
 
 K3s did not automatically resend the in-flight PostStart hook. The repeated
 delivery used the exact command from the live Pod through CRI `ExecSync` after
@@ -992,7 +987,7 @@ sequenceDiagram
 [`ExternalMountNamespace`](../../../crates/mithril-e2e/src/effect/support.rs#L490)
 creates the external mutation. The runner reads the old proposal, reinserts it,
 and requires
-[`KernelHost::apply_mount_reconciliation_proposal`](../../../crates/erebor-interceptor/src/host.rs#L1246)
+[`KernelHost::apply_mount_reconciliation_proposal`](../../../crates/erebor-interceptor/src/host.rs)
 to reject it. Only the current node reconciliation may restore the exact result.
 
 The automatic probe does not replace the full qualification matrix. The
@@ -1003,7 +998,7 @@ inputs. The fresh x86_64 qualification record at
 `spec/qualification/v1/results/kernel-qualification-x86_64.json` records
 kernel `6.8.0-137-generic`, 41 LSM programs, and the current ABI, BPF source,
 object, probe, and benchmark digests. `mithril-kernel-qualification verify`
-passes for that record. The final repository CI command still needs to run.
+passes for that record. The final repository verification command still needs to run.
 
 The administrative transaction now reaches draft creation, admission, and slot
 arm. Stock runc `1.4.2` then executes a sealed self-clone and uses inherited
@@ -1025,8 +1020,7 @@ evidence. Do not treat it as a privileged physical result.
 ### Double-fork native-child source review
 
 Source change `6190ca7` adds the double-fork branch of the existing native
-identity probe. The isolated privileged probe ran at source commit
-`2f3dad0081377651a8d2b52ca9479439ac7176b0`; the identity, BPF, and inspector
+identity probe. The isolated privileged probe ran with the tested source; the identity, BPF, and inspector
 paths were unchanged from `6190ca75641cb73d585712e2900afb520576db26`. Its
 result JSON SHA-256 is
 `e69b94754c479ceeddaf55d847b4d89d870793cf30d5a0139eead12fc28c4f64`, and its
@@ -1132,8 +1126,7 @@ controlled fixture.
 
 ### Moved-parent ordinary-fork physical qualification
 
-The isolated identity probe passed at source commit
-`bd48b5a474273510c92611fa90285632883d13cb`. The copied
+The isolated identity probe passed with the tested source. The copied
 `mithril-identity-test` binary SHA-256 was
 `5bf7300dc74ff6792727210a3d4907dfb50cf1fe32ca855ab40f2db815c288d1`. The
 result JSON is
@@ -1206,7 +1199,7 @@ not run `nsenter`, restore, or a protected effect. It does not complete
 
 ### Entry-migration manual VM qualification
 
-At source commit `e6352f8`, the retained x86_64 Ubuntu 24.04 VM ran
+With the tested source, the retained x86_64 Ubuntu 24.04 VM ran
 [`nsenter-move.sh`](../../../examples/mithril-identity-manual/nsenter-move.sh).
 The shell SHA-256 was
 `871f3dc975a31cf423a97296462581a16a224d16650270ca59f962ffdbb5adec`.
@@ -1232,7 +1225,7 @@ current recheck below supplies that result.
 
 ### Current entry-migration recheck
 
-At source commit `ff129206ca610689c68b1de475b982f6e86ea97e`, the retained
+With the tested source, the retained
 x86_64 Ubuntu 24.04 VM ran the two current operator commands as root:
 
 ```sh
@@ -1263,7 +1256,7 @@ restore through `ENTRY-RESTORE-001`.
 
 ### Pre-PONR failed-exec physical qualification
 
-At source commit `af685cd6a8dd73f22bd44234b3346298dd04dcd1`, the isolated
+With the tested source, the isolated
 [`IdentityTestRunner::physical_probe`](../../../crates/mithril-e2e/src/identity.rs#L269)
 passed. The copied `mithril-identity-test` binary SHA-256 was
 `b23d8be165d9b88532dcd15db1905233134a86a2be8f7f40042e508a302c49a0`. The
@@ -1323,7 +1316,7 @@ execution and image identities that the runner checks.
 
 ### Native terminal-state physical qualification
 
-Source commit `e63488e` closes the four native rows that the earlier
+The tested source closes the four native rows that the earlier
 pre-PONR result left open. The accepted schema-23 JSON is
 `/tmp/mithril-phase2-native-terminal-20260818-8/identity-physical-probe.json`.
 Its SHA-256 is
@@ -1340,10 +1333,10 @@ Read these owners in this order:
 | 3 | [`IdentityTestRunner` PID/TID-reuse case](../../../crates/mithril-e2e/src/identity.rs#L1853) | One held PID namespace reuses namespace PID `2` and TID `3`. The runner requires fresh task, process, execution, and coordinate identity. |
 | 4 | [`native-pid-reuse.sh`](../../../examples/mithril-identity-manual/native-pid-reuse.sh#L1) | The operator case uses `identity_prepare_k3s_case`, moves the held namespace init into the protected cgroup, and checks two real processes with the same namespace PID. |
 
-Cleanup correction commit `6b9537e` keeps cleanup in that shell. It validates
-the exact fixture command before it signals a PID. It terminates a surviving
-PID-namespace init before Kubernetes cleanup. A successful rerun left no
-fixture process, Namespace, cgroup, pin, lease, node, or work path.
+The cleanup correction stays in that shell. It validates the exact fixture
+command before it signals a PID. It terminates a surviving PID-namespace init
+before Kubernetes cleanup. A successful rerun left no fixture process,
+Namespace, cgroup, pin, lease, node, or work path.
 
 The post-PONR case records pending state `PostPonrFatal`, exec guard
 `OutcomeUnknown`, and coordinate `Exited`. It retains the source role and
@@ -1389,16 +1382,16 @@ smallest complete explanation of who does what.
 | --- | --- | --- |
 | 1 | [`mithril-node` main](../../../crates/mithril-node/src/main.rs#L22) | The CLI loads `NodeConfig` and starts one `NodeChassis`. It does not load a second object or decide effects. |
 | 2 | [`NodeChassis::start`](../../../crates/mithril-node/src/node.rs#L78) | Startup order is: load or recover one object, publish bindings, install an optional signed generation, activate identity, and start observation and control. |
-| 3 | [`KernelHostOwner::start`](../../../crates/erebor-interceptor/src/host.rs#L415) | `KernelHostOwner` is the only production load, attach, pin, manifest, and lease owner. It loads one object for one node. It does not load one object for each container. |
+| 3 | [`KernelHostOwner::start`](../../../crates/erebor-interceptor/src/host.rs) | `KernelHostOwner` is the only production load, attach, pin, manifest, and lease owner. It loads one object for one node. It does not load one object for each container. |
 | 4 | [`WorkloadBindingOwner::publish_configured`](../../../crates/mithril-node/src/identity/binding.rs#L131) | The binding owner turns a validated live cgroup into one `execution_set_bindings` row. It owns container placement in userspace. |
 | 5 | [`ContainerRuntimeInventory::snapshot`](../../../crates/mithril-node/src/identity/runtime.rs#L160) and [`ContainerRuntimeInventory::wait_for_change`](../../../crates/mithril-node/src/identity/runtime.rs#L108) | The optional Container Runtime Interface (CRI) owner verifies configured container identity and resolves its local cgroup. When configured, it retains one containerd event stream and wakes that same snapshot. It publishes no BPF program. |
-| 6 | [`NodePolicyGenerationOwner::load_and_install`](../../../crates/mithril-node/src/policy.rs#L111) | A verified candidate becomes node-local map rows. The node reads and probes the required rows before it publishes the profile pointer. |
+| 6 | [`NodePolicyGenerationOwner::load_and_install`](../../../crates/mithril-node/src/policy.rs) | A verified candidate becomes node-local map rows. The node reads and probes the required rows before it publishes the profile pointer. |
 | 7 | [`NativeSecurityStateOwner::activate_with_effect_policy`](../../../crates/mithril-node/src/identity/native.rs#L40) | The identity owner writes or recovers one runtime configuration record. It then runs the task iterator. It does not load another BPF object. |
 | 8 | [`identity.bpf.c`](../../../bpf/erebor-interceptor/programs/identity.bpf.c#L3) | One C translation unit includes the maps and all hook families in one ELF object. Read this file before an individual BPF header. |
 | 9 | [`identity_maps.h`](../../../bpf/erebor-interceptor/programs/identity_maps.h#L54) | This file declares BPF state and common helpers. It separates durable map state from per-CPU scratch state. |
 | 10 | [`erebor_task_alloc`](../../../bpf/erebor-interceptor/programs/identity_lifecycle.bpf.h#L35) | Read the complete explanation in [Task allocation](#task-allocation-source-walk). |
 | 11 | [`resolved_identity_effect_gate`](../../../bpf/erebor-interceptor/programs/identity_effects.bpf.h#L271) | The common gate validates actor identity, binding, generation, object state, and the selected decision. Typed wrappers add device, process, IPC, file, and mount data. |
-| 12 | [`LoweredGeneration::install`](../../../crates/mithril-node/src/policy.rs#L1633) | This function fills the policy maps. It also prevents a partial generation from becoming active. |
+| 12 | [`LoweredGeneration::install`](../../../crates/mithril-node/src/policy.rs) | This function fills the policy maps. It also prevents a partial generation from becoming active. |
 | 13 | [`ExceptionAuthorityOwner`](../../../crates/mithril-node/src/policy/exception_authority.rs#L87) | This owner reconciles the kernel exception counters and receipts with the append-only local WAL. |
 | 14 | [`IdentityTestRunner`](../../../crates/mithril-e2e/src/identity.rs#L179), [`EffectTestRunner::physical_probe`](../../../crates/mithril-e2e/src/effect.rs#L639), and [the VM harness](../../../crates/mithril-e2e/harness/vm/README.md) | Automated tests use the production object. Their cleanup owners remove pins, cgroups, leases, processes, mounts, and temporary files. |
 | 15 | [Identity manual cases](../../../examples/mithril-identity-manual/README.md), [effect-observation manual cases](../../../examples/mithril-effect-observation-manual/README.md), and [local-enforcement manual cases](../../../examples/mithril-local-enforcement-manual/README.md) | These shells start the real node and perform operator actions. The examples link to the automated harness but do not own it. |
@@ -1467,7 +1460,7 @@ It names the four checked BTF headers and invokes
 The embedded bytes are in
 [`bundled.rs`](../../../crates/erebor-interceptor/src/bundled.rs#L1), and
 the runtime `libbpf-rs` open/load/attach path is in
-[`KernelHostOwner::start`](../../../crates/erebor-interceptor/src/host.rs#L415).
+[`KernelHostOwner::start`](../../../crates/erebor-interceptor/src/host.rs).
 
 `vmlinux.h` is present. It is the small architecture selector at
 [`bpf/erebor-interceptor/include/vmlinux.h`](../../../bpf/erebor-interceptor/include/vmlinux.h#L1-L22),
@@ -1514,7 +1507,7 @@ offsets or a new parser framework.
 | ABI case | Conversion | Validation result | Example |
 | --- | --- | --- | --- |
 | All bit patterns are valid | `FromBytes::read_from_bytes` | Rejects a wrong input size | [`IdentityRuntimeConfigV1` recovery](../../../crates/mithril-node/src/identity/native.rs#L68) and [`IdentityHealthV1` aggregation](../../../crates/mithril-node/src/identity/native.rs#L117) |
-| An enum or closed field can contain an invalid bit pattern | `TryFromBytes::try_read_from_bytes` | Rejects a wrong input size and an invalid field value | [`ExecutionSetBindingStateV1` recovery](../../../crates/mithril-node/src/identity/binding.rs#L759) and [generic policy ABI reads](../../../crates/mithril-node/src/policy.rs#L1278) |
+| An enum or closed field can contain an invalid bit pattern | `TryFromBytes::try_read_from_bytes` | Rejects a wrong input size and an invalid field value | [`ExecutionSetBindingStateV1` recovery](../../../crates/mithril-node/src/identity/binding.rs#L759) and [generic policy ABI reads](../../../crates/mithril-node/src/policy.rs) |
 | Rust value to map bytes | `IntoBytes::as_bytes` | Preserves the `repr(C)` value layout | [`execution_set_bindings` publication](../../../crates/mithril-node/src/identity/binding.rs#L180) |
 
 Each conversion maps an invalid value to a crate-owned SNAFU error. The
@@ -1572,34 +1565,34 @@ it does not unlink the lease file, maps, links, or pin directories. It is not a
 policy lock. BPF map atomics and spin locks protect event-time state.
 
 The recovery branch starts at
-[`KernelHostOwner::recover`](../../../crates/erebor-interceptor/src/host.rs#L602).
+[`KernelHostOwner::recover`](../../../crates/erebor-interceptor/src/host.rs).
 It reuses existing map pins and verifies the complete expected link set. It
 allows only those retained link IDs before it loads the recovered object. A
 Mithril LSM link outside the requested root returns `RetainedLsmLink`; recovery
 does not attach another persistent hook set or detach the other link. The task
 iterator is the one exception:
-[`KernelHost::reconcile_tasks`](../../../crates/erebor-interceptor/src/host.rs#L1205)
+[`KernelHost::reconcile_tasks`](../../../crates/erebor-interceptor/src/host.rs)
 attaches the iterator only while it is read to completion during activation.
 
 On normal node shutdown the production identity pins intentionally remain, so
 a later process can validate and recover them. The disposable qualification
 object removes its pins. See
-[`KernelHost::shutdown`](../../../crates/erebor-interceptor/src/host.rs#L1380).
+[`KernelHost::shutdown`](../../../crates/erebor-interceptor/src/host.rs).
 
 Two loader details answer common review questions:
 
 - A vector capacity is not a membership rule. The fresh loader starts
   `link_records` empty, attaches only programs selected by
-  [`KernelObjectKind::attaches`](../../../crates/erebor-interceptor/src/host.rs#L288),
+  [`KernelObjectKind::attaches`](../../../crates/erebor-interceptor/src/host.rs),
   and then compares the attached names with the exact required set in
-  [`validate_attached_set`](../../../crates/erebor-interceptor/src/host.rs#L1010).
+  [`validate_attached_set`](../../../crates/erebor-interceptor/src/host.rs).
   Recovery uses `Vec::with_capacity(expected_links.len())` only to reserve
   memory. Before that loop, it derives `expected_links` from the required list
   and compares the complete pin-directory names with that set. It validates
   the resulting records again. The final validation compares sorted vectors,
   not mathematical sets. An extra duplicate therefore also fails. Capacity
   does not accept an extra, duplicate, or missing program.
-- [`KernelHost::map`](../../../crates/erebor-interceptor/src/host.rs#L1103)
+- [`KernelHost::map`](../../../crates/erebor-interceptor/src/host.rs)
   finds a map by name in the `libbpf-rs` object. `lookup_map` then handles a
   normal or per-CPU lookup. A Rust `HashMap<String, Map<'_>>` inside
   `KernelHost` would borrow the `Object` stored in the same structure. That is
@@ -1612,18 +1605,18 @@ Two loader details answer common review questions:
 
 | State or capability | Durable owner | First implementation location | Not owned here |
 | --- | --- | --- | --- |
-| BPF ELF, map/link lifecycle, pins and manifest | `KernelHostOwner` / `KernelHost` | [`host.rs`](../../../crates/erebor-interceptor/src/host.rs#L382) | Workload semantics or policy compilation |
+| BPF ELF, map/link lifecycle, pins and manifest | `KernelHostOwner` / `KernelHost` | [`host.rs`](../../../crates/erebor-interceptor/src/host.rs) | Workload semantics or policy compilation |
 | One node process and shutdown/reconnect loop | `NodeChassis` | [`node.rs`](../../../crates/mithril-node/src/node.rs#L35) | A second privileged daemon |
 | Cgroup workload binding | `WorkloadBindingOwner` | [`binding.rs`](../../../crates/mithril-node/src/identity/binding.rs#L51) | Task labels, process state, policy decision rows |
 | Identity configuration and reconciliation health | `NativeSecurityStateOwner` | [`native.rs`](../../../crates/mithril-node/src/identity/native.rs#L22) | Object loading or container discovery |
 | Portable policy/signature/simulation | `mithril-control` policy owners | [`mithril-control/src/policy/mod.rs`](../../../crates/mithril-control/src/policy/mod.rs) | BPF map handles or node startup |
-| Node-local policy rows, active handles, and mount reconstruction | `NodePolicyGenerationOwner` | [`policy.rs`](../../../crates/mithril-node/src/policy.rs#L41) | Signature creation or cgroup binding lifecycle |
+| Node-local policy rows, active handles, and mount reconstruction | `NodePolicyGenerationOwner` | [`policy.rs`](../../../crates/mithril-node/src/policy.rs) | Signature creation or cgroup binding lifecycle |
 | Durable bounded-exception state and receipts | `ExceptionAuthorityOwner` | [`exception_authority.rs`](../../../crates/mithril-node/src/policy/exception_authority.rs#L85) | Policy selection or online approval delivery |
 | Human approval and one-use credential | `AdministrativeApprovalOwner` and the administrative HTTPS owner | [`administrative_exec.rs`](../../../crates/mithril-control/src/administrative_exec.rs), [`administrative_http.rs`](../../../crates/mithril-control/src/administrative_http.rs) | BPF slot mutation or task identity |
 | Exact target resolution and slot state | node `AdministrativeExecOwner` and `AuthorizationProofOwner` | [`administrative_exec.rs`](../../../crates/mithril-node/src/administrative_exec.rs), [`authorization/mod.rs`](../../../crates/mithril-node/src/identity/authorization/mod.rs#L110) | Browser authentication or Kubernetes admission |
 | Task/process/exec state | BPF lifecycle, exec, and exit programs | [`identity_lifecycle.bpf.h`](../../../bpf/erebor-interceptor/programs/identity_lifecycle.bpf.h), [`identity_exec.bpf.h`](../../../bpf/erebor-interceptor/programs/identity_exec.bpf.h), [`identity_exit.bpf.h`](../../../bpf/erebor-interceptor/programs/identity_exit.bpf.h) | Userspace task enrollment after the fact |
 | Per-effect result | BPF common and typed gates | [`identity_effects.bpf.h`](../../../bpf/erebor-interceptor/programs/identity_effects.bpf.h#L271), [`identity_device_process.bpf.h`](../../../bpf/erebor-interceptor/programs/identity_device_process.bpf.h#L32), [`identity_ipc.bpf.h`](../../../bpf/erebor-interceptor/programs/identity_ipc.bpf.h#L223) | Control round trips or ring-buffer delivery |
-| Ring consumption and recent records | `EffectObservationReader` / `EffectObservationStore` | [`EffectObservationReader`](../../../crates/erebor-interceptor/src/host.rs#L36), [`observation.rs`](../../../crates/mithril-node/src/observation.rs) | Policy decisions or durable audit |
+| Ring consumption and recent records | `EffectObservationReader` / `EffectObservationStore` | [`EffectObservationReader`](../../../crates/erebor-interceptor/src/host.rs), [`observation.rs`](../../../crates/mithril-node/src/observation.rs) | Policy decisions or durable audit |
 
 ### Node startup order
 
@@ -1806,7 +1799,7 @@ A bpffs pin keeps a map or link alive after the loader process exits. Process
 exit does not delete a pinned object. Production identity shutdown keeps the
 pins for recovery. The test owners explicitly remove disposable pins and then
 assert that the paths no longer exist. The production shutdown implementation
-starts at [`KernelHost::shutdown`](../../../crates/erebor-interceptor/src/host.rs#L1380).
+starts at [`KernelHost::shutdown`](../../../crates/erebor-interceptor/src/host.rs).
 
 ## The BPF object: source relationship and hook families
 
@@ -1833,7 +1826,7 @@ identity_path.bpf.h         -- bounded path graph and mount-view state
 ```
 
 The loader requires 68 named programs from this one ELF. The exact list is
-[`REQUIRED_IDENTITY_PROGRAMS`](../../../crates/erebor-interceptor/src/host.rs#L141).
+[`REQUIRED_IDENTITY_PROGRAMS`](../../../crates/erebor-interceptor/src/host.rs).
 It permanently attaches 66 programs. The task iterator is attached only while
 userspace reads it. The activation probe runs through `Program::test_run` and
 does not have a persistent link. The following catalog accounts for every
@@ -2168,8 +2161,8 @@ sequenceDiagram
     G->>M: use rows only after matching ACTIVE descriptor
 ```
 
-[`LoweredGeneration::install`](../../../crates/mithril-node/src/policy.rs#L1633)
-contains the row sequence. [`reconcile_pending_activations`](../../../crates/mithril-node/src/policy.rs#L1204)
+[`LoweredGeneration::install`](../../../crates/mithril-node/src/policy.rs)
+contains the row sequence. [`reconcile_pending_activations`](../../../crates/mithril-node/src/policy.rs)
 compares a durable pending activation with the active profile pointer and the
 descriptor digest after restart. A failed pre-commit stage leaves the prior
 pointer active. A successful pointer update is the commit point. A readback
@@ -2177,7 +2170,7 @@ failure after that update closes readiness and retains the committed state for
 recovery. The code does not roll the pointer back after the commit point.
 
 The active-generation switch starts at
-[`activate_profile`](../../../crates/mithril-node/src/policy.rs#L1326).
+[`activate_profile`](../../../crates/mithril-node/src/policy.rs).
 It stages immutable target rows in `binding_activation_targets`, checks the
 old pointer again, and updates one profile-keyed pointer. It is a serialized
 userspace transaction under the exclusive pin-root owner. It is not a
@@ -3138,7 +3131,7 @@ records for the final source.
   disconnect, and contention physical matrix.
 - Run one final current-source VM that completes kernel qualification, native
   identity, observation, protection, CRI effect, administrative exec, cleanup,
-  and evidence validation. Run the final repository CI gate after that VM.
+  and evidence validation. Run the final repository verification gate after that VM.
 - Qualify generation retirement across crashes, concurrent task and async
   holders, pending exec and administrative state, and the architecture-required
   grace boundary after the final reference clears.
@@ -3235,18 +3228,18 @@ Exact outcome:
 The continuation point is the HTTP 400 response. Preserve the response body in
 the client or harness, identify which request validation failed, fix that exact
 boundary, rerun the command with a new empty output directory, review every
-record, and then run the final repository CI gate. Do not copy historical JSON
-into the checked result path.
+record, and then run the final repository verification gate. Do not copy
+historical JSON into the checked result path.
 
-This guide covers commit `997d7ffddc65630941164262dab1db92f2ab0f9e` plus the
-Mithril working tree on 2026-08-13. It covers BPF object SHA-256
+This historical section covers the Mithril source reviewed on 2026-08-13. It
+covers BPF object SHA-256
 `c1c4215a7b645344507cf02f27fcaeb085970d1b20cbfda402bdabcc019ce403`.
 A later source or BPF-object change needs new source checks and a new
 privileged record.
 
 ## Current Moved-Native Fixture Review — 2026-08-17
 
-This update covers source commit `c1b15be02553ae6cd18210d23f9e2bb2447a9511`.
+This update covers the tested source.
 Read the existing physical fixture path in this order:
 
 1. [`IdentityTestRunner::physical_probe`](../../../crates/mithril-e2e/src/identity.rs#L272)
@@ -3273,7 +3266,7 @@ qualify any other fixture row.
 
 ## Subreaper Reparenting Fixture Review — 2026-08-17
 
-This update covers source commit `7f742772b5f6bf51a9eee9e48cc63197c08480a1`.
+This update covers the tested source.
 It adds no BPF map, role, or runner. It extends the existing physical bundle
 and task inspection record with the existing real-parent coordinates.
 
@@ -3335,7 +3328,7 @@ reparenting, ptrace reparenting, and PID reuse remain open. Phase 2 remains
 
 ## PID-Namespace-Init Reparenting Fixture Review — 2026-08-17
 
-This update covers source commit `6b1cf72`. It extends the existing
+This update covers the tested source. It extends the existing
 `NativeProcessFixture`, `IdentityTestRunner`, physical result bundle, and
 manual shell. It adds no map, role, generic runner, or durable owner.
 
@@ -3406,7 +3399,7 @@ postflight found no case namespace, fixture, pin, node process, lease, cgroup,
 or manual work directory.
 
 `cargo test -p mithril-e2e native_process_fixture --all-features -- --nocapture`
-passed all nine native fixture tests. The required repository CI reached the
+passed all nine native fixture tests. The required repository verification reached the
 Mithril e2e suite and stopped at the pre-existing readable-architecture digest
 mismatch in `spec/qualification/v1/fixtures.yaml`. This row does not change
 that registry. This result qualifies the PID-namespace-init subcase only.
@@ -3414,7 +3407,7 @@ Ptrace reparenting and PID reuse remain open. Phase 2 remains **Blocked**.
 
 ## Live Binding-Gap Fixture Review — 2026-08-17
 
-Source commit `e3962e8` extends the existing binding owner, task-label map,
+The tested source extends the existing binding owner, task-label map,
 physical bundle, and manual case. It adds no map, role, generic runner, or
 durable type.
 
@@ -3464,7 +3457,7 @@ open. Phase 2 remains **Blocked**.
 
 ## Concurrent External-Root Fixture Review — 2026-08-17
 
-Source commit `e0e2af9` extends the existing `IdentityTestRunner` and physical
+The tested source extends the existing `IdentityTestRunner` and physical
 bundle. It adds no map, role, generic runner, or durable type.
 
 1. [`IdentityTestRunner::physical_probe`](../../../crates/mithril-e2e/src/identity.rs)
@@ -3504,7 +3497,7 @@ rows are open. Phase 2 remains **Blocked**.
 
 ## Cgroup-Escape Fixture Review — 2026-08-17
 
-Source commit `c5b2147b537fa411978f7a9c9533de5eab1f7a4f` uses the existing
+The tested source uses the existing
 fixture owner and physical bundle. It adds no map, role, generic runner, or
 durable type.
 
@@ -3541,7 +3534,7 @@ open. Phase 2 remains **Blocked**.
 
 ## Clone-Into-Cgroup Native-Child First-Effect Review — 2026-08-17
 
-Source commits `bae628d` and `4b4d669` extend existing fixture owners only.
+The tested source extends existing fixture owners only.
 They add no map, role, runner, or durable type.
 
 1. [`CloneIntoCgroupFixture`](../../../crates/mithril-e2e/src/identity/clone3.rs)
@@ -3594,7 +3587,7 @@ Phase 2 remains **Blocked**.
 
 ## Authorization-Replay Fixture Review — 2026-08-18
 
-Source commit `8c4adcb` extends the existing `IdentityTestRunner` and physical
+The tested source extends the existing `IdentityTestRunner` and physical
 bundle. It adds no map, role, runner, or durable type.
 
 Review this path in order:
@@ -3632,7 +3625,7 @@ rows.
 
 ## Entry-Source Loss Fixture Review — 2026-08-18
 
-Source commit `dd236af` extends existing owners only. It adds no map, role,
+The tested source extends existing owners only. It adds no map, role,
 runner, or durable type.
 
 Review this path in order:
@@ -3684,7 +3677,7 @@ review below reduces the open set to two rows.
 
 ## Kubernetes Service And Node Restart Fixture Review — 2026-08-18
 
-Source commit `838fc8f` changes existing owners only. It adds no map, role,
+The tested source changes existing owners only. It adds no map, role,
 generic runner, or durable type.
 
 Review this path in order:
@@ -3737,7 +3730,7 @@ observation was unavailable only while the node was down.
 
 The manual shell printed `PASS`. Automated and manual postflight checks found
 no case Namespace, fixture, pin, node process, lease, cgroup, or work
-directory. K3s was active. The full Rust CI script passed.
+directory. K3s was active. The full Rust verification script passed.
 
 This closes only `ENTRY-RESTART-001`. The K3s service owns its embedded
 kubelet and container runtime. The result does not qualify other service
@@ -3746,7 +3739,7 @@ closes `ENTRY-REUSE-001`; `ENTRY-STOCK-HOOK-FAILURE-002` remains open.
 
 ## Identity Lifetime Reuse Fixture Review — 2026-08-18
 
-Source commit `adafcdd` extends existing owners only. It adds no map, role,
+The tested source extends existing owners only. It adds no map, role,
 generic runner, or durable type.
 
 Review this path in order:
@@ -3803,7 +3796,7 @@ The retained VM ran `native-pid-reuse.sh`, `native-cgroup-reuse.sh`, and
 `kubernetes-reuse.sh` as root. Each case printed `PASS`. Automated and manual
 cleanup removed each Namespace, fixture, pin, node process, lease, cgroup, and
 work directory. The Kubernetes service was active. Focused Rust tests and the
-full Rust CI script passed.
+full Rust verification script passed.
 
 The physical cgroup case does not force a kernel cgroup-ID collision. Linux
 allocated a fresh ID when the exact path was recreated. The strict recovery
@@ -3816,14 +3809,14 @@ required row.
 
 ## Stock OCI Prestart Failure Fixture Review — 2026-08-18
 
-Source commits `9820ca7`, `5534d1b`, and `4340601` extend existing owners. No
+The tested source extends existing owners. No
 new map, role, generic runner, or durable type was added.
 
 Review this path in order:
 
 1. [`kubernetes-stock-hook-failure-workload-v1.yaml`](../../../crates/mithril-e2e/fixtures/identity/kubernetes-stock-hook-failure-workload-v1.yaml)
    defines a payload that writes a host marker before it sleeps.
-2. [`mithril-identity-prestart-hook`](../../../crates/mithril-e2e/src/bin/mithril-identity-prestart-hook.rs)
+2. [`oci-prestart-admission-v1.sh`](../../../crates/mithril-e2e/fixtures/identity/oci-prestart-admission-v1.sh)
    sends the OCI state and returns nonzero after timeout or rejection.
 3. [`kubernetes_prestart_binding`](../../../crates/mithril-e2e/src/identity.rs)
    verifies the exact live CRI container, Pod UID, sandbox, container name,
@@ -3872,7 +3865,7 @@ All three payload markers were absent. The retained VM ran
 `kubernetes-stock-hook-failure.sh` as root and printed `PASS`. Automated and
 manual cleanup removed the Namespace, fixture, prestart request, Mithril pin,
 node process, lease, cgroup, and work directory. The Kubernetes service was
-active. Focused Rust tests and the full Rust CI script passed.
+active. Focused Rust tests and the full Rust verification script passed.
 
 The exact limit is the qualified Kubernetes `v1.35.5` environment through the
 K3s `v1.35.5+k3s1` distribution, containerd `v2.2.3-k3s1`, and the configured

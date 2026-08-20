@@ -1,14 +1,13 @@
 # Signed Path-Tree Denial And Meta Algorithm Implementation Review
 
-This guide covers the Berkeley Packet Filter (BPF) and Rust source on `main`
-at commit `370bd21f007af44fbe845d4ed54709191fc29bac`. The path resolver in
+This guide covers the current checked Berkeley Packet Filter (BPF) and Rust
+source. The path resolver in
 [`identity_path.bpf.h`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h)
 and its private state in
 [`identity_maps.h`](../../../bpf/erebor-interceptor/programs/identity_maps.h)
-are unchanged from physical source commit
-`c04d6a1e44b019649b23111365b17467c2faf751`. Later source changes affect other
-local-enforcement owners. The current protected result remains the limited
-x86_64 result in the
+are unchanged from the physically qualified Phase 4 source. Later source
+changes affect other local-enforcement owners. The current protected result
+remains the limited x86_64 result in the
 [closure matrix](./phase-4-closure-matrix.md).
 
 - Architecture: [validated readable architecture](./policy-and-protection-algorithm-architecture-readable.md#path-selector-resolution-path-tree-floors-and-exact-object-authority)
@@ -30,7 +29,7 @@ BPF programs before the covered effects.
 
 Read the implementation in this order:
 
-1. Read [`PathTreeDenyFloorV1`](../../../crates/mithril-control/src/policy/source.rs#L435)
+1. Read [`PathTreeDenyFloorV1`](../../../crates/mithril-control/src/policy/source.rs)
    and its
    [`Validate` implementation](../../../crates/mithril-control/src/policy/validation/records.rs#L180).
    These sources define and validate the signed restriction.
@@ -51,11 +50,11 @@ Read the implementation in this order:
    and
    [`insert_path_tree_deny`](../../../crates/mithril-control/src/policy/path.rs#L552).
    These functions create the recursive graph terminal and operation mask.
-5. Read [`lower_path_tables`](../../../crates/mithril-node/src/policy.rs#L3331).
+5. Read [`lower_path_tables`](../../../crates/mithril-node/src/policy.rs).
    This function compiles static policy components to generation-scoped map
    rows. It does not inspect a filesystem or mount namespace for a path-tree
    floor.
-6. Read [`LoweredGeneration::install`](../../../crates/mithril-node/src/policy.rs#L1643).
+6. Read [`LoweredGeneration::install`](../../../crates/mithril-node/src/policy.rs).
    This function installs and reads back the graph before generation
    activation.
 7. Read
@@ -191,13 +190,13 @@ deterministic state contains the union of its active denial operation IDs.
 This conversion preserves the recursive wildcard when another exact edge also
 starts at the same state.
 
-[`lower_path_tables`](../../../crates/mithril-node/src/policy.rs#L3331)
+[`lower_path_tables`](../../../crates/mithril-node/src/policy.rs)
 adds `profile_generation_ref_id` to every exact-transition, wildcard-transition,
 and terminal key. The terminal value contains a 64-bit denied-operation mask.
 The function does not require a Pod, target file, target directory, or mount
 namespace.
 
-[`LoweredGeneration::install`](../../../crates/mithril-node/src/policy.rs#L1643)
+[`LoweredGeneration::install`](../../../crates/mithril-node/src/policy.rs)
 writes the three graph tables, verifies the immutable rows, and then changes
 the generation descriptor to active. The graph is complete before a task can
 use the generation.
@@ -729,9 +728,9 @@ source.
 
 The old split did not meet this table. Rust previously resolved the namespace
 mount chain and installed a graph prefix. BPF walked only from the leaf to the
-current mount root. Commit `03775b7` removes that path-tree dependency. The
-path-tree branch does not read `canonical_mount_roots` or require a clean Rust
-mount snapshot.
+current mount root. The current implementation removes that path-tree
+dependency. The path-tree branch does not read `canonical_mount_roots` or
+require a clean Rust mount snapshot.
 
 ## Kubernetes and profile binding
 
@@ -759,7 +758,7 @@ sequenceDiagram
 Different cgroups can select different profile generations. BPF places the
 active generation in every graph key. It cannot traverse another profile's
 rows by state ID alone. The
-[`path_graph_rows_are_scoped_to_the_bound_generation`](../../../crates/mithril-node/src/policy.rs#L4168)
+[`path_graph_rows_are_scoped_to_the_bound_generation`](../../../crates/mithril-node/src/policy.rs)
 test checks that equal policy paths in two generations produce disjoint keys.
 
 The repository has signed artifact, Container Runtime Interface (CRI)
@@ -899,7 +898,7 @@ engine, or userspace namespace helper.
 
 One per-CPU `identity_scratch_v1` value owns cache-build, path-walk, component,
 and graph-match state. `bpf_loop` callbacks receive only a pointer to this
-state. The checked object at commit `c04d6a1` has these maximum stack offsets:
+state. The qualified object has these maximum stack offsets:
 
 | Function | Stack bytes |
 | --- | ---: |
@@ -942,7 +941,7 @@ The graph maps and BPF caches are declared in
 [`identity_maps.h`](../../../bpf/erebor-interceptor/programs/identity_maps.h#L564).
 Generation retirement deletes exact transitions, wildcard transitions, and
 terminals for the retired generation. The
-[`generation_retirement_waits_for_async_io_authority`](../../../crates/mithril-node/src/policy.rs#L4073)
+[`generation_retirement_waits_for_async_io_authority`](../../../crates/mithril-node/src/policy.rs)
 test checks these three cleanup targets. The node does not delete policy rows
 while a task or asynchronous request retains the generation.
 
@@ -956,7 +955,7 @@ qualification limit.
 A Berkeley Packet Filter filesystem (bpffs) pin keeps a map or link alive
 after the loader process exits. Generation retirement removes only the
 generation-scoped policy rows. Qualification shutdown calls
-[`KernelHostOwner::shutdown`](../../../crates/erebor-interceptor/src/host.rs#L1380)
+[`KernelHostOwner::shutdown`](../../../crates/erebor-interceptor/src/host.rs)
 and removes harness-owned pins. Production recovery reuses the expected pins.
 A process exit does not remove a pinned map or link.
 
@@ -970,7 +969,7 @@ Mount caches can survive loader recovery because they are keyed by live
 namespace identity and event. A failed cache validation causes a new build or
 an unresolved decision. It does not authorize from a stale address alone.
 
-[`retire_generation_rows`](../../../crates/mithril-node/src/policy.rs#L2658)
+[`retire_generation_rows`](../../../crates/mithril-node/src/policy.rs)
 removes the retired generation's exact transitions, wildcard transitions, and
 terminals after the generation has no retained authority. Cache rows are not
 generation rows. They remain policy-neutral and bounded by map capacity.
@@ -1011,10 +1010,10 @@ typed identity or policy error before activation.
 | `bpf_path_walks_use_meta_component_and_namespace_budgets` | Inspects the compiled object for the 255-component and 4,351-callback `bpf_loop` limits. It also checks the 255-entry scan-stack source bound. |
 | `generation_retirement_waits_for_async_io_authority` | Checks retained asynchronous authority and removal of all three generation-scoped path maps. |
 | Cross-architecture compile | The production object compiles with `-Wall -Werror` against checked x86, arm64, arm, and RISC-V kernel headers. This is not non-x86 physical proof. |
-| Merged source comparison | The current `identity_path.bpf.h` and `identity_maps.h` files match physical source commit `c04d6a1`. The merged main tree contains the patch-equivalent path implementation and later local-enforcement changes. |
-| Repository Rust CI | `bash .github/scripts/verify-rust-ci.sh` passed for path source commit `c04d6a1` and for patch-equivalent local-enforcement source commit `e0438d9`. It ran formatting, workspace check, warnings-as-errors clippy, and the full workspace tests. The focused path policy compilation suite at `c04d6a1` passed all 30 tests. |
+| Merged source comparison | The current `identity_path.bpf.h` and `identity_maps.h` files match the physically qualified path implementation. The current tree contains that path implementation and later local-enforcement changes. |
+| Repository Rust verification | `bash .github/scripts/verify-rust-ci.sh` passed for the path source and for the patch-equivalent local-enforcement source. It ran formatting, workspace check, warnings-as-errors Clippy, and the full workspace tests. The focused path policy compilation suite passed all 30 tests. |
 | Phase 2 companion | The exact four-crate, all-targets, all-features suite passed 224 tests. Identity source verification and the identity probe build also passed. |
-| Disposable VM | The kernel, identity, observation, local-enforcement, K3s observe, K3s protect, and Kubernetes identity lanes passed at exact physical source commit `c04d6a1`. The documented administrative-exec lane was skipped. |
+| Disposable VM | The kernel, identity, observation, local-enforcement, K3s observe, K3s protect, and Kubernetes identity lanes passed with the qualified path source. The documented administrative-exec lane was skipped. |
 
 The path-tree source VM command was:
 
@@ -1036,8 +1035,8 @@ The platform was x86_64 Ubuntu with Linux `6.8.0-137-generic` and BPF in the
 active LSM order. The harness removed the VM. An independent libvirt query
 found no remaining domain.
 
-The current limited local-enforcement result uses patch-equivalent source
-commit `e0438d920d5071295ab733db0d7df0eb03a95b8c`. Its result is
+The current limited local-enforcement result uses the same path
+implementation. Its result is
 `/tmp/mithril-phase4-e0438d9-final/local-enforcement-physical-probe.json`.
 The result SHA-256 is
 `8fc1f4ad4536d00afd29754255410fed4b1290c3a138687f51c70edac079c793`.
@@ -1106,11 +1105,10 @@ rejected artifact contributes to the checked qualification record.
 
 ## Source state and guide verification
 
-This guide was checked against `main` source commit
-`370bd21f007af44fbe845d4ed54709191fc29bac` on 2026-08-18. This documentation
-update changes no Rust, BPF, ABI, build, or test source.
+This guide was checked against the current source on 2026-08-19. This
+documentation update changes no path Rust, BPF, ABI, build, or test source.
 
-These focused committed tests passed against that source:
+These focused tests passed against that source:
 
 - `exact_file_lookup_uses_the_bpf_selected_oldest_mount`;
 - `path_tree_deny_uses_the_live_bpf_mount_path_before_object_lookup`; and

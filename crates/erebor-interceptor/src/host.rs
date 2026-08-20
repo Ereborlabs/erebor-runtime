@@ -398,12 +398,6 @@ impl KernelHostConfig {
         }
     }
 
-    #[must_use]
-    pub fn with_network_cgroup_root(mut self, path: impl Into<PathBuf>) -> Self {
-        self.network_cgroup_root = path.into();
-        self
-    }
-
     fn object_path(&self) -> &Path {
         match &self.object_source {
             KernelObjectSource::File { path, .. } => path,

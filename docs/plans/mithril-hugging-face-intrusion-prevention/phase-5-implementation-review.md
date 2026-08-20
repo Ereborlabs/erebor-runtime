@@ -1,6 +1,6 @@
 # Phase 5 Implementation Review Guide
 
-Status: Source-grounded review guide for the current isolated worktree on
+Status: Source-grounded review guide for the current checked source on
 2026-08-19.
 
 - Phase: [Process-Aware Network Plane](./phase-5-process-aware-network-plane.md)
@@ -126,10 +126,14 @@ Active validation rejects these inputs:
 - an empty, zero, overlapping, unsorted, or over-capacity port set;
 - a network namespace selector;
 - a service identity selector; and
+- a destination that does not require final-address enforcement; and
 - port 53 in `DENY_DNS_AND_USE_POLICY_RESOLVED_ADDRESSES` mode.
 
-Node lowering assigns deterministic nonzero destination handles in document
-order. It emits generation-scoped IPv4 and IPv6 longest-prefix-match keys.
+`LoweredNetworkPolicy` owns destination handles, IPv4 and IPv6 class rows, and
+destination-decision rows. It assigns deterministic nonzero handles in
+document order. Standard `From` conversions map policy protocols and port
+ranges to their kernel ABI forms. It emits generation-scoped IPv4 and IPv6
+longest-prefix-match keys.
 The fixed key prefix includes profile generation and protocol before the
 address prefix. One destination decision key then binds:
 
@@ -243,7 +247,7 @@ sequenceDiagram
     participant L as BPF socket hook
     participant X as Socket release hook
 
-    R->>N: Exact generation, socket key, socket generation, reason
+    R->>N: Exact generation, socket key, and socket generation
     N->>H: Verify live local generation and nonzero socket references
     N->>F: Insert whole-socket floor without replacement
     N->>H: Read back exact floor
@@ -368,8 +372,8 @@ limit. Per-CPU scratch owns temporary destination and socket buffers.
 | `network_ipv4_destination_classes` | `NetworkIpv4LpmKeyV1` / `NetworkDestinationClassV1` | `NodePolicyGenerationOwner` through `KernelHost` | None | Network LSM helpers and cgroup egress program | Immutable generation row. Installed and read back before publication. Deleted only after generation retirement. |
 | `network_ipv6_destination_classes` | `NetworkIpv6LpmKeyV1` / `NetworkDestinationClassV1` | `NodePolicyGenerationOwner` through `KernelHost` | None | Network LSM helpers and cgroup egress program | Same lifecycle as the IPv4 trie. |
 | `network_destination_decisions` | `NetworkDestinationDecisionKeyV1` / `PhysicalDecisionV1` | `NodePolicyGenerationOwner` through `KernelHost` | None | Network LSM helpers and packet decision path | Immutable generation row. Capacity and exact readback precede publication. |
-| `network_socket_states` | Implicit kernel socket key / `NetworkSocketStateV1` | None | Post-create and accepted-socket paths create or update; flow use updates; release tombstones | Network LSM hooks, cgroup egress, and release | Kernel socket lifetime with clone support. It is not file descriptor or process lifetime. |
-| `network_response_floors` | `NetworkResponseFloorKeyV1` / `NetworkResponseFloorV1` | `NodePolicyGenerationOwner` inserts an exact floor through `KernelHost` | Final socket release deletes the exact floor | Network LSM helpers and cgroup egress program | One live whole-socket fence. Insert does not replace an existing row. Release removes it. |
+| `network_socket_states` | Implicit kernel socket key / 136-byte `NetworkSocketStateV1` | None | Post-create and accepted-socket paths create or update; flow use updates; release tombstones | Network LSM hooks, cgroup egress, and release | Kernel socket lifetime with clone support. It stores only fields read by policy, evidence, recovery, or cleanup. It is not file descriptor or process lifetime. |
+| `network_response_floors` | `NetworkResponseFloorKeyV1` / 8-byte `NetworkResponseFloorV1` | `NodePolicyGenerationOwner` inserts an exact floor through `KernelHost` | Final socket release deletes the exact floor | Network LSM helpers and cgroup egress program | Row existence plus `WholeSocket` scope is the fence. Insert does not replace an existing row. Release removes it. |
 | `profile_generation_socket_refs` | Native `u64` / native `u64` | Node stages a zero row and deletes it after retirement | Socket creation and accepted-socket paths increment; flow-authorizer changes transfer; release decrements | Node fence validation and retirement; BPF generation validation | One row per policy generation. A nonzero value blocks generation retirement and proves a live socket holder. |
 
 The network path also reads shared identity configuration, task, process,
@@ -381,14 +385,17 @@ not duplicate them.
 
 [`abi/network.rs`](../../../crates/erebor-interceptor-abi/src/abi/network.rs)
 owns the portable Rust map keys, values, and closed enums. Address family,
-protocol, socket state, and response scope use `TryFromBytes`; an invalid enum
-value is rejected. `Unknown` is zero. Namespace identity contains only integer
-fields, so every bit pattern is representable and it can use `FromBytes`.
+protocol, socket state, and response scope remain closed enums; an invalid enum
+value is rejected. `Unknown` is zero. Plain data values use `FromBytes` when
+every bit pattern is valid. Values that contain a closed enum use
+`TryFromBytes`.
 
 Every map struct uses `repr(C)`, explicit reserved bytes, fixed-size arrays,
 and layout tests. The tests check exact sizes, alignment, and selected field
 offsets. The generated C header is checked against the Rust ABI during the
-build. The BPF translation unit also has static layout assertions.
+build. The BPF translation unit also has static layout assertions. The socket
+state is 136 bytes. The response floor is 8 bytes and contains only its closed
+scope plus reserved bytes.
 
 The effect observation ABI includes socket, creator generation, flow,
 destination, peer, response scope, and packet physical-result fields. A reader
@@ -423,8 +430,12 @@ a current network event.
 `NetworkTestRunner::physical_probe` builds a signed network fixture policy from
 the checked test key. It removes unrelated administrative, exception, and
 default state. It adds only the exact network, token-read, process-transfer,
-and Unix relationship rules needed by the fixture. This prevents an earlier
-fixture family from becoming ambient authority.
+and Unix relationship rules needed by the fixture. `NetworkActor` owns each
+managed process and its cgroup. Child requests carry `SocketAddr` directly;
+they do not serialize an address as text and parse it again. The fixture uses
+the existing `rustix` boundary for exact TCP socket creation, bind, connect,
+bounded readiness wait, and listen operations. This prevents hidden socket
+options from becoming part of the physical scenario.
 
 The runner starts local TCP and UDP controls and eight managed actors in
 dedicated cgroups. It then performs this assertion sequence:
@@ -479,6 +490,11 @@ accepts either direction.
 | Manual example | [`mithril-network-manual`](../../../examples/mithril-network-manual/README.md) | A readable single-host command that uses the production runner and does not own VM lifecycle. |
 | Disposable VM harness | [`run.sh`](../../../crates/mithril-e2e/harness/vm/run.sh) and [`two-node-network.sh`](../../../crates/mithril-e2e/harness/vm/two-node-network.sh) | Explicit build, isolated kernel execution, exact two-node and peer-Pod placement, evidence collection, cross-probe compatibility, and cleanup. |
 
+The Rust and shell tests execute behavior. They do not read Rust, C, header,
+Docker, workflow, or shell source and assert that selected strings exist.
+Compiled-object tests remain because they inspect the BPF object that the
+Interceptor loads.
+
 ## Verification Route
 
 Run the repository checks after the last Rust or BPF edit:
@@ -513,15 +529,15 @@ crates/mithril-e2e/harness/vm/two-node-network.sh \
   --output-directory /tmp/mithril-network-two-node-review
 ```
 
-The physical results use run-scoped directories under `/tmp`; they are not
-source artifacts. The platform was x86_64 Linux `6.8.0-137-generic`, cgroup
+The physical results use run-scoped directories under `/tmp`. The platform
+was x86_64 Linux `6.8.0-137-generic`, cgroup
 v2, BPF filesystem, runtime BPF Type Format, and active BPF LSM. Every network
 Boolean oracle was true, and all 13 fixture rows were `PASS`. The two-node run
 used the same kernel and source on two independently booted VMs. It observed
 two Ready K3s nodes, delivered allowed TCP and UDP through Flannel in both
 directions, observed no denied peer connection, and passed all 13 fixture rows
-on each source node. The full repository CI script passed against the same
-implementation source.
+on each source node. The repository source verification passed against the
+same implementation.
 
 ## Future And Unallocated Work
 
@@ -565,15 +581,13 @@ widen the qualified network claim without its own physical proof.
 
 ## Source State And Guide Verification
 
-This guide was checked against the current isolated worktree on 2026-08-19.
+This guide was checked against the current source on 2026-08-19.
 The documentation change does not modify Rust, BPF, ABI, build, or test source.
 
 The single-node disposable-VM physical suite and bidirectional two-node K3s
-Flannel suite passed after the last implementation edit. The Rust CI procedure
-passed formatting, workspace check, and workspace clippy. Its workspace tests
-then rejected the unchanged generated kernel qualification record as stale.
-The user directed this source-only change not to commit the regenerated
-SHA-256 or CI/CD qualification artifact. A separate workspace run passed every
-other test with that exact bundle test excluded. The documentation diff check
-and local link-target check passed after this guide was updated. The guide
-records no broader result than the closure matrix.
+Flannel suite passed after the last implementation edit. Formatting,
+workspace check, Clippy, and all source-driven workspace tests passed. The
+release-record freshness assertion remains outside this source-only delivery.
+The documentation diff check and local link-target check passed after this
+guide was updated. The guide records no broader result than the closure
+matrix.

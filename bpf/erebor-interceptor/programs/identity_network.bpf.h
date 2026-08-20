@@ -236,8 +236,7 @@ static __always_inline int network_response_result(
                                 &scratch->network_response_key);
     if (!floor)
         return 0;
-    if (!floor->fenced ||
-        floor->scope != network_response_scope_v1_whole_socket)
+    if (floor->scope != network_response_scope_v1_whole_socket)
         return hard_effect_result(
             config, scratch,
             effect_observation_reason_v1_corrupt_identity_or_generation);
@@ -690,17 +689,8 @@ static __noinline int network_socket_post_create_result(
             config, scratch,
             effect_observation_reason_v1_corrupt_identity_or_generation);
     __builtin_memset(state, 0, sizeof(*state));
-    state->creator_process_state_id = scratch->process.process_state_id;
-    state->creator_authority_domain_id =
-        scratch->process.authority_domain_id;
-    state->creator_binding_id = binding->binding_id;
-    state->creator_binding_nonce = binding->binding_nonce;
-    state->creator_execution_set_id = binding->execution_set_id;
     state->creator_profile_generation_ref_id =
         scratch->process.active_profile_generation_ref_id;
-    state->creator_process_transition_version =
-        scratch->process.transition_version;
-    state->creator_root_cgroup_id = binding->root_cgroup_id;
     state->socket_key_id = (__u64)sock;
     if (allocate_id(config, &socket_generation_id)) {
         decrement_nonzero_counter(socket_refs);
@@ -723,7 +713,6 @@ static __noinline int network_socket_post_create_result(
     state->creator_binding_lifecycle_state = binding->lifecycle_state;
     state->address_family = network_family(family);
     state->protocol = network_protocol(type, protocol);
-    state->socket_type = type & SOCK_TYPE_MASK;
     state->state = network_socket_state_kind_v1_active;
     network_populate_observation(scratch, state);
     return 0;
@@ -880,8 +869,7 @@ int erebor_network_final_flow(struct __sk_buff *skb)
         scratch->observation.network_response_scope = floor->scope;
         return network_packet_drop(
             scratch, state,
-            floor->fenced &&
-                    floor->scope == network_response_scope_v1_whole_socket
+            floor->scope == network_response_scope_v1_whole_socket
                 ? effect_observation_reason_v1_network_response_fence
                 : effect_observation_reason_v1_corrupt_identity_or_generation,
             peer_address, peer_port);
@@ -1050,17 +1038,9 @@ static __noinline int network_accept_post_result(struct sock *accepted,
         return 0;
     }
     __builtin_memset(state, 0, sizeof(*state));
-    state->creator_process_state_id = scratch->process.process_state_id;
-    state->creator_authority_domain_id = scratch->process.authority_domain_id;
-    state->creator_binding_id = binding->binding_id;
-    state->creator_binding_nonce = binding->binding_nonce;
-    state->creator_execution_set_id = binding->execution_set_id;
     state->socket_network_namespace = current_namespace;
     state->creator_profile_generation_ref_id =
         scratch->process.active_profile_generation_ref_id;
-    state->creator_process_transition_version =
-        scratch->process.transition_version;
-    state->creator_root_cgroup_id = binding->root_cgroup_id;
     state->socket_key_id = (__u64)accepted;
     state->socket_generation = socket_generation_id.low;
     state->flow_generation = 1;
@@ -1081,7 +1061,6 @@ static __noinline int network_accept_post_result(struct sock *accepted,
     state->creator_entry_kind = scratch->observation.entry_kind;
     state->address_family = scratch->network_socket_state.address_family;
     state->protocol = scratch->network_socket_state.protocol;
-    state->socket_type = scratch->network_socket_state.socket_type;
     state->peer_port = peer_port;
     __builtin_memcpy(state->peer_address, peer_address, 16);
     state->creator_binding_lifecycle_state = binding->lifecycle_state;

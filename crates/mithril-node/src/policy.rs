@@ -15,14 +15,14 @@ use erebor_interceptor_abi::{
     ExceptionHandleBindingV1, ExceptionRuntimeStateKeyV1, ExceptionRuntimeStateKindV1,
     ExceptionRuntimeStateV1, ExecutionSetBindingStateV1, Id128V1, IoUringRequestStateV1,
     IoUringRingStateV1, KernelEffectFamilyV1, MountReconciliationProposalV1,
-    MountSecurityViewStateV1, MountTopologyStateV1, NetworkResponseFloorKeyV1,
-    NetworkResponseFloorV1, NetworkResponseScopeV1, PathGraphStateKeyV1, PathGraphTerminalV1,
-    PathGraphTransitionKeyV1, PathGraphTransitionV1, PendingAdministrativeMatchV1, PendingExecV1,
-    PhysicalDecisionKindV1, PhysicalDecisionV1, PolicyActivationProbeMapKindV1,
-    PolicyActivationProbeV1, PolicyGenerationModeV1, PolicyGenerationStateV1,
-    ProcessSecurityStateKindV1, ProcessSecurityStateV1, ProfileGenerationDescriptorV1,
-    ReferenceTombstoneStateV1, TaskReferenceTombstoneV1, MAX_CANONICAL_COMPONENT_BYTES_V1,
-    MAX_POLICY_ACTIVATION_PROBE_KEY_BYTES_V1,
+    MountSecurityViewStateV1, MountTopologyStateV1, NetworkDestinationDecisionKeyV1,
+    NetworkResponseFloorKeyV1, NetworkResponseFloorV1, NetworkResponseScopeV1, PathGraphStateKeyV1,
+    PathGraphTerminalV1, PathGraphTransitionKeyV1, PathGraphTransitionV1,
+    PendingAdministrativeMatchV1, PendingExecV1, PhysicalDecisionKindV1, PhysicalDecisionV1,
+    PolicyActivationProbeMapKindV1, PolicyActivationProbeV1, PolicyGenerationModeV1,
+    PolicyGenerationStateV1, ProcessSecurityStateKindV1, ProcessSecurityStateV1,
+    ProfileGenerationDescriptorV1, ReferenceTombstoneStateV1, TaskReferenceTombstoneV1,
+    MAX_CANONICAL_COMPONENT_BYTES_V1, MAX_POLICY_ACTIVATION_PROBE_KEY_BYTES_V1,
 };
 use mithril_control::{
     canonical_path_components, AntiRollbackStore, CanonicalPathGraphV1, CompiledOperationV1,
@@ -55,7 +55,7 @@ use self::device_process::{lower_typed_effect, TypedEffectContext};
 use self::exception_authority::ExceptionAuthorityOwner;
 use self::generation_allocator::GenerationHandleAllocator;
 use self::ipc::lower_ipc_relationships;
-use self::network::{destination_handles, lower_destination_classes, lower_destination_decision};
+use self::network::LoweredNetworkPolicy;
 
 pub struct NodePolicyGenerationOwner {
     node_boot_id: Id128V1,
@@ -65,12 +65,6 @@ pub struct NodePolicyGenerationOwner {
     prevention_enabled: bool,
     administrative_plans: Vec<AdministrativePolicyPlanV1>,
     exception_authority: Mutex<ExceptionAuthorityOwner>,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct NetworkSocketFenceResultV1 {
-    pub scope: NetworkResponseScopeV1,
-    pub inserted: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -121,13 +115,9 @@ impl NodePolicyGenerationOwner {
         &self,
         host: &KernelHost,
         key: NetworkResponseFloorKeyV1,
-        response_reason_id: u64,
-    ) -> Result<NetworkSocketFenceResultV1> {
+    ) -> Result<bool> {
         ensure!(
-            key.profile_generation_ref_id > 0
-                && key.socket_key_id > 0
-                && key.socket_generation > 0
-                && response_reason_id > 0,
+            key.profile_generation_ref_id > 0 && key.socket_key_id > 0 && key.socket_generation > 0,
             IdentityStateSnafu {
                 reason: "a network response fence needs exact nonzero socket identity",
             }
@@ -176,11 +166,8 @@ impl NodePolicyGenerationOwner {
             }
         );
         let floor = NetworkResponseFloorV1 {
-            transition_version: 1,
-            response_reason_id,
             scope: NetworkResponseScopeV1::WholeSocket,
-            fenced: 1,
-            reserved: [0; 6],
+            reserved: [0; 7],
         };
         let inserted = host
             .insert_map("network_response_floors", key.as_bytes(), floor.as_bytes())
@@ -195,10 +182,7 @@ impl NodePolicyGenerationOwner {
                 reason: "the whole-socket response fence failed exact readback",
             }
         );
-        Ok(NetworkSocketFenceResultV1 {
-            scope: NetworkResponseScopeV1::WholeSocket,
-            inserted,
-        })
+        Ok(inserted)
     }
 
     pub fn load_and_install(
@@ -1167,7 +1151,6 @@ impl LoweredGeneration {
             })
             .collect::<Result<BTreeMap<_, _>>>()?;
         let composite_handles = composite_handles(artifact);
-        let destination_handles = destination_handles(&artifact.policy_document);
         let exception_handles = handles(
             artifact
                 .policy_document
@@ -1233,10 +1216,9 @@ impl LoweredGeneration {
         let mut defaults = BTreeMap::new();
         let mut device_decisions = BTreeMap::new();
         let mut process_control_rules = BTreeMap::new();
-        let mut network = lower_destination_classes(
+        let mut network = LoweredNetworkPolicy::lower(
             &artifact.policy_document,
             binding.active_profile_generation_ref_id,
-            &destination_handles,
         )?;
         for cell in &artifact.compiled_profile.compiled_cells {
             if !cell_matches_binding(&cell.key, binding) {
@@ -1284,6 +1266,12 @@ impl LoweredGeneration {
             let physical =
                 physical_decision(cell.physical_result, cell.errno, exception_numeric_handle);
             if let Some(destination_id) = cell.key.object_selector.strip_prefix("DESTINATION:") {
+                ensure!(
+                    cell.key.effect_family == mithril_control::EffectFamilyV1::Network,
+                    IdentityStateSnafu {
+                        reason: "a destination selector lowered outside NETWORK".to_owned(),
+                    }
+                );
                 let destination = artifact
                     .policy_document
                     .network_policy
@@ -1298,22 +1286,31 @@ impl LoweredGeneration {
                         }
                         .build()
                     })?;
-                if lower_destination_decision(
-                    &mut network,
-                    &cell.key.object_selector,
-                    cell.key.effect_family,
-                    binding.active_profile_generation_ref_id,
-                    role,
-                    process_state,
-                    entry_kind(cell.key.entry_kind),
-                    operation,
-                    lifecycle(cell.key.binding_lifecycle),
-                    &destination_handles,
+                let destination_policy_handle =
+                    network.destination_handle(destination_id).ok_or_else(|| {
+                        IdentityStateSnafu {
+                            reason: format!(
+                                "compiled cell has no handle for destination `{destination_id}`"
+                            ),
+                        }
+                        .build()
+                    })?;
+                network.insert_decisions(
+                    NetworkDestinationDecisionKeyV1 {
+                        profile_generation_ref_id: binding.active_profile_generation_ref_id,
+                        destination_policy_handle,
+                        active_role_id: role,
+                        process_state_vector_id: process_state,
+                        entry_kind: entry_kind(cell.key.entry_kind),
+                        operation,
+                        protocol: Default::default(),
+                        binding_lifecycle_state: lifecycle(cell.key.binding_lifecycle),
+                        reserved: [0; 2],
+                    },
                     &destination.protocols,
                     physical,
-                )? {
-                    continue;
-                }
+                )?;
+                continue;
             }
             if lower_typed_effect(
                 cell,

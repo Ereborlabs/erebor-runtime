@@ -1,10 +1,7 @@
 # Phase 4 Implementation Review Guide
 
-Status: Source-grounded review guide for `main` at commit
-`370bd21f007af44fbe845d4ed54709191fc29bac`. The merged implementation source
-ends at commit `a2c00014c71645cbe99fedb74629e6d89a6c242c`. The physical result used the
-patch-equivalent source commit
-`e0438d920d5071295ab733db0d7df0eb03a95b8c`.
+Status: Source-grounded review guide for the current checked source. The
+physical result covers the same Phase 4 implementation.
 
 - Phase: [Signed Local Pre-Effect Enforcement](./phase-4-signed-local-pre-effect-enforcement.md)
 - Architecture: [validated readable architecture](./policy-and-protection-algorithm-architecture-readable.md)
@@ -53,18 +50,18 @@ Do not infer any of these broader claims:
    [surface qualification](./policy-and-protection-algorithm-architecture-readable.md#a137-surface-qualification).
    A missing hook, field, or identity returns to prototype and type closure.
 3. Review closed policy input and deterministic compilation in
-   [`PolicyDocumentV1`](../../../crates/mithril-control/src/policy/source.rs#L19),
+   [`PolicyDocumentV1`](../../../crates/mithril-control/src/policy/source.rs),
    [`PolicyCompiler`](../../../crates/mithril-control/src/policy/compiler.rs#L82),
    and
    [`PolicyArtifactOwner`](../../../crates/mithril-control/src/policy/artifact.rs#L16).
 4. Review the node transaction from
-   [`NodePolicyGenerationOwner`](../../../crates/mithril-node/src/policy.rs#L57)
+   [`NodePolicyGenerationOwner`](../../../crates/mithril-node/src/policy.rs)
    through generation lowering, capacity preflight, staged readback,
    activation, recovery, and retirement.
 5. Review the shared loader boundary in
-   [`KernelHostOwner`](../../../crates/erebor-interceptor/src/host.rs#L391)
+   [`KernelHostOwner`](../../../crates/erebor-interceptor/src/host.rs)
    and its narrow map API in
-   [`KernelHost`](../../../crates/erebor-interceptor/src/host.rs#L1053).
+   [`KernelHost`](../../../crates/erebor-interceptor/src/host.rs).
 6. Read the BPF application binary interface (ABI) and map inventory in
    [`identity_maps.h`](../../../bpf/erebor-interceptor/programs/identity_maps.h#L206).
    Then follow the decision core in
@@ -145,12 +142,12 @@ Review these failure rules:
   generation. Retirement waits for task and asynchronous references.
 
 The main source route is capacity preflight at
-[`policy.rs`](../../../crates/mithril-node/src/policy.rs#L1792), pending
+[`policy.rs`](../../../crates/mithril-node/src/policy.rs), pending
 activation recovery at
-[`policy.rs`](../../../crates/mithril-node/src/policy.rs#L1881), pointer
+[`policy.rs`](../../../crates/mithril-node/src/policy.rs), pointer
 publication at
-[`policy.rs`](../../../crates/mithril-node/src/policy.rs#L2003), and retirement
-at [`policy.rs`](../../../crates/mithril-node/src/policy.rs#L2658).
+[`policy.rs`](../../../crates/mithril-node/src/policy.rs), and retirement
+at [`policy.rs`](../../../crates/mithril-node/src/policy.rs).
 
 ## Pre-Effect Decision Flow
 
@@ -288,7 +285,7 @@ provides the human-readable proof and limit for each row.
 | Layer | Source | What it proves |
 | --- | --- | --- |
 | Policy unit and integration tests | [`policy_compilation.rs`](../../../crates/mithril-control/tests/policy_compilation.rs#L1) and policy module tests | Closed input, deterministic decisions, capacity, path-tree validation, signatures, rollback, and exception binding. |
-| Node owner tests | Tests beside [`NodePolicyGenerationOwner`](../../../crates/mithril-node/src/policy.rs#L57) and [`ExceptionAuthorityOwner`](../../../crates/mithril-node/src/policy/exception_authority.rs#L86) | Staging, readback, publication, recovery, retirement, WAL transitions, receipts, and reboot separation. |
+| Node owner tests | Tests beside [`NodePolicyGenerationOwner`](../../../crates/mithril-node/src/policy.rs) and [`ExceptionAuthorityOwner`](../../../crates/mithril-node/src/policy/exception_authority.rs#L86) | Staging, readback, publication, recovery, retirement, WAL transitions, receipts, and reboot separation. |
 | Interceptor and BPF-shape tests | [`bundled.rs`](../../../crates/erebor-interceptor/src/bundled.rs#L1) plus Rust/C layout tests | Required hooks and maps exist, prior LSM results are preserved, bounded exception layout is valid, and generated ABI matches. |
 | Privileged physical runner | [`EffectTestRunner::physical_probe`](../../../crates/mithril-e2e/src/effect.rs#L920) | Production object load, real syscalls, negative postconditions, legitimate controls, loss independence, lifecycle, and cleanup. |
 | Readable operator cases | [`mithril-local-enforcement-manual`](../../../examples/mithril-local-enforcement-manual/README.md) | Selected Docker, raw-namespace, Container Runtime Interface (CRI), alias, mount, path-tree, and control flows. These support but do not replace the Rust runner. |
@@ -313,16 +310,11 @@ rtk cargo build --locked -p mithril-e2e --bin mithril-effect-test
 ```
 
 Then follow the [manual acceptance runbook](./manual-testing/phase-4-manual-acceptance.md).
-Do not reuse an artifact from an earlier source commit.
+Do not reuse a physical result from an earlier source state.
 
 The current evidence is:
 
-- merged implementation source commit:
-  `a2c00014c71645cbe99fedb74629e6d89a6c242c`;
-- reviewed `main` commit:
-  `370bd21f007af44fbe845d4ed54709191fc29bac`;
-- physical source commit:
-  `e0438d920d5071295ab733db0d7df0eb03a95b8c`;
+- source state: the current checked Phase 4 implementation;
 - architecture SHA-256:
   `22678b9c0379ff915fe595059f3da2789c3e32cdf54d61656c7257175263d14a`;
 - probe binary SHA-256:
@@ -337,7 +329,7 @@ The current evidence is:
 - protected deployment digest:
   `741a9fd0857e360a8b3096924f52dd59695d9f6440aa6610370e4e092b23b1dc`;
   and
-- repository Rust CI: passed at the same source commit.
+- repository Rust verification: passed with the qualified source.
 
 ## Future And Unallocated Work
 
@@ -381,14 +373,13 @@ The closure matrix is authoritative for allocation. In short:
 - [ ] Mapping review makes no byte-taint claim after admission.
 - [ ] Cleanup removes only the exact probe-owned pins, lease, cgroup, and
       fixture root.
-- [ ] The evidence binary, source commit, JSON digest, architecture digest,
+- [ ] The evidence binary, source state, JSON digest, architecture digest,
       kernel, BTF, and protected deployment digest all match.
 
 ## Source State And Guide Verification
 
-This guide was checked against `main` source commit
-`370bd21f007af44fbe845d4ed54709191fc29bac` on 2026-08-18. This documentation
-update changes no Rust, BPF, ABI, build, or test source.
+This guide was checked against the current source on 2026-08-19. This
+documentation update changes no Phase 4 Rust, BPF, ABI, build, or test source.
 
 The three focused Interceptor tests named in the
 [Meta-algorithm guide](./path-tree-denial-implementation-review.md#source-state-and-guide-verification)

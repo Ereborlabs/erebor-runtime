@@ -1,5 +1,8 @@
 # Phase 3 Implementation Review Guide
 
+Status: Source-grounded review guide checked against the current source on
+2026-08-19.
+
 Phase: [Effect Observation And Profile Simulation](./phase-3-effect-observation-and-profile-simulation.md)  
 Architecture: [validated readable architecture](./policy-and-protection-algorithm-architecture-readable.md)  
 Closure: [checked closure matrix](./phase-3-closure-matrix.md)  
@@ -35,12 +38,12 @@ limit and later owner for every required future fixture.
    [`artifact.rs`](../../../crates/mithril-control/src/policy/artifact.rs), and
    [`rollback.rs`](../../../crates/mithril-control/src/policy/rollback.rs).
 5. Read the generation transaction from
-   [`NodePolicyGenerationOwner::install`](../../../crates/mithril-node/src/policy.rs#L130)
+   [`NodePolicyGenerationOwner::install`](../../../crates/mithril-node/src/policy.rs)
    through capacity preflight, row installation, readback probes, activation,
    and retirement.
 6. Read exact object and mount-view ownership in
    [`exact_object.rs`](../../../crates/mithril-node/src/exact_object.rs) and
-   [`reconcile_mount_views`](../../../crates/mithril-node/src/policy.rs#L595).
+   [`reconcile_mount_views`](../../../crates/mithril-node/src/policy.rs).
 7. Compare the Rust ABI in
    [`erebor-interceptor-abi`](../../../crates/erebor-interceptor-abi/src/abi.rs#L178)
    with the C ABI in
@@ -52,7 +55,7 @@ limit and later owner for every required future fixture.
    and decision helpers in
    [`identity_effects.bpf.h`](../../../bpf/erebor-interceptor/programs/identity_effects.bpf.h#L39).
 9. Follow effect delivery through
-   [`KernelHost::effect_observation_reader`](../../../crates/erebor-interceptor/src/host.rs#L1188),
+   [`KernelHost::effect_observation_reader`](../../../crates/erebor-interceptor/src/host.rs),
    [`Node::run`](../../../crates/mithril-node/src/node.rs#L310),
    [`EffectObservationStore`](../../../crates/mithril-node/src/observation.rs#L16),
    and the bounded local response in
@@ -157,7 +160,7 @@ closure matrix before assigning a physical claim to a simulated row.
 
 ## Generation Transaction And Recovery
 
-[`NodePolicyGenerationOwner::install`](../../../crates/mithril-node/src/policy.rs#L130)
+[`NodePolicyGenerationOwner::install`](../../../crates/mithril-node/src/policy.rs)
 is the sole generation transaction owner:
 
 1. Load and verify one candidate per profile.
@@ -322,6 +325,10 @@ recovery. A Rust-only or C-only edit is incomplete.
 
 ## Test And Evidence Route
 
+The tests execute parser, owner, ABI, compiled-object, lifecycle, and physical
+behavior. They do not inspect Rust, C, header, workflow, or shell source text
+for selected strings.
+
 Run focused tests first:
 
 ```sh
@@ -339,11 +346,11 @@ Important focused checks include:
   [`exact_object.rs`](../../../crates/mithril-node/src/exact_object.rs#L782);
 - staged generation, activation, retirement, map capacity, and global mount
   clean-epoch checks in
-  [`policy.rs`](../../../crates/mithril-node/src/policy.rs#L3724);
+  [`policy.rs`](../../../crates/mithril-node/src/policy.rs);
 - production-source structural assertions in
   [`bundled.rs`](../../../crates/erebor-interceptor/src/bundled.rs);
 - interrupted ring-poll recovery in
-  [`host.rs`](../../../crates/erebor-interceptor/src/host.rs#L1495);
+  [`host.rs`](../../../crates/erebor-interceptor/src/host.rs);
 - newest-event retention within the IPC frame in
   [`local.rs`](../../../crates/mithril-node/src/local.rs#L369); and
 - the assertion-bearing physical cases in
