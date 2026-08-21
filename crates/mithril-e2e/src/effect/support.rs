@@ -29,7 +29,6 @@ pub(super) fn effect_node_config(
     manual: &Path,
     artifact_path: PathBuf,
     bindings: Vec<WorkloadBindingConfig>,
-    exact_file_objects: Vec<mithril_node::ExactFileObjectConfig>,
 ) -> NodeConfig {
     NodeConfig {
         node_id: "mithril-effect-test".to_owned(),
@@ -66,7 +65,6 @@ pub(super) fn effect_node_config(
             rollback_authorization_path: None,
             rollback_public_key_path: None,
         }],
-        exact_file_objects,
         administrative_authorization: None,
     }
 }
@@ -806,7 +804,7 @@ mod tests {
                 cell.source_rule_ids == ["allow-manual-exec-allowed"]
                     && cell.key.effect_family == EffectFamilyV1::Exec
                     && cell.key.operation_id == operation
-                    && cell.key.object_selector == "EXACT:12"
+                    && cell.key.object_selector == "PATH:manual-exec-allowed"
                     && cell.physical_result == CompiledPhysicalResultV1::AllowEffect
             }));
         }

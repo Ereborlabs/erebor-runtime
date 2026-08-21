@@ -875,6 +875,7 @@ pub struct IdentityRuntimeConfigV1 {
     pub node_boot_id: Id128V1,
     pub label_epoch: u64,
     pub next_id: u64,
+    pub effect_controller_cgroup_id: u64,
     pub first_effect_errno: i32,
     pub enabled: u8,
     pub effect_policy_enabled: u8,
@@ -918,7 +919,7 @@ mod tests {
         );
         assert_eq!(size_of::<ExactExecutableCandidateV1>(), 24);
         assert_eq!(size_of::<ProcessExecutionInstanceV1>(), 80);
-        assert_eq!(size_of::<IdentityRuntimeConfigV1>(), 40);
+        assert_eq!(size_of::<IdentityRuntimeConfigV1>(), 48);
         assert_eq!(size_of::<ApprovedExecArgumentKeyV1>(), 4_120);
         assert_eq!(size_of::<ApprovedExecSlotV1>(), 4_776);
         assert_eq!(

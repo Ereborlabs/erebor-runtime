@@ -324,6 +324,7 @@ case ${1:-} in
     require_command lsattr
     require_command date
     require_command busybox
+    require_command bpftool
     require_harness_guest "$work_directory"
     for input in "$node" "$inspect" "$policy" "$template" "$policy_source" \
       "$seal_request" "$signing_key" "$public_key" "$manifest"; do
@@ -344,8 +345,6 @@ case ${1:-} in
     identity_config=$lane_root/identity-node.json
     effect_config=$lane_root/effect-node.json
     artifact=$lane_root/profile.json
-    object=$lane_root/exact-file-object.json
-    benign_object=$lane_root/benign-exact-file-object.json
     node_log=$lane_root/mithril-node.log
     pod_state=/tmp/mithril-k3s-cri-effect
     cri_state=$pod_state/cri-exec
@@ -353,11 +352,13 @@ case ${1:-} in
     pod_pid_file=$kubectl_state/exec.pid
     pod_release_file=$kubectl_state/release
     cri_pid_file=$cri_state/exec.pid
-    cri_baseline_file=$cri_state/baseline
     initial_snapshot=$lane_root/pod-initial-root.json
     cri_snapshot=$lane_root/cri-exec-root.json
     external_snapshot=$lane_root/kubectl-exec-root.json
     effects=$lane_root/effects.txt
+    controller_cgroup=/sys/fs/cgroup/mithril-k3s-cri-effect-controller
+    secret_selector_handle=943398411243188049
+    benign_selector_handle=442755278878333200
     node_pid=
     cri_client_pid=
     cri_host_pid=
@@ -436,6 +437,15 @@ case ${1:-} in
       echo "k3s CRI effect qualification pin root already exists" >&2
       exit 2
     }
+    [[ ! -e $controller_cgroup || -d $controller_cgroup ]] || {
+      echo "effect controller cgroup path is not a directory" >&2
+      exit 2
+    }
+    install -d -m 700 "$controller_cgroup"
+    [[ ! -s $controller_cgroup/cgroup.procs ]] || {
+      echo "effect controller cgroup is not empty" >&2
+      exit 2
+    }
     install -d -m 700 "$fixture_root" "$lane_root"
     fixture_owned=true
     printf 'mithril-k3s-cri-effect\n' >"$fixture_path"
@@ -501,22 +511,17 @@ case ${1:-} in
       exit 1
     }
     [[ $container_state == CONTAINER_RUNNING ]] || {
-      echo "k3s CRI did not report the pre-existing container as running" >&2
+      echo "k3s CRI did not report the container as running" >&2
       exit 1
     }
-    [[ -r /proc/$init_pid/root/var/lib/mithril/secret ]] || {
-      echo "read-only qualification fixture is not visible through the Pod root" >&2
+    [[ -r /proc/$init_pid/root/var/lib/mithril/secret \
+      && -r /proc/$init_pid/root/var/lib/mithril/benign \
+      && -r /proc/$init_pid/root/var/lib/mithril/release ]] || {
+      echo "qualification fixtures are not visible through the Pod root" >&2
       exit 1
     }
-    [[ -r /proc/$init_pid/root/var/lib/mithril/benign ]] || {
-      echo "read-only benign control is not visible through the Pod root" >&2
-      exit 1
-    }
-    [[ -r /proc/$init_pid/root/var/lib/mithril/release ]] || {
-      echo "read-only direct CRI release fixture is not visible through the Pod root" >&2
-      exit 1
-    }
-
+    rm -rf -- "/proc/$init_pid/root$pod_state"
+    mkdir -m 700 -- "/proc/$init_pid/root$pod_state"
     sed \
       -e "s|/var/tmp/mithril-runtime-qualification-0|$work_directory|g" \
       -e "s|MITHRIL_CONTAINER_ID|$container_id|g" \
@@ -525,25 +530,6 @@ case ${1:-} in
       -e "s|\"container_generation\": 1|\"container_generation\": $generation|" \
       -e "s|MITHRIL_IMAGE_DIGEST|$image_digest|g" \
       "$template" >"$identity_config"
-
-    inode_generation=$(lsattr -v "$fixture_path" | awk 'NR == 1 {print $1}')
-    [[ $inode_generation =~ ^[1-9][0-9]*$ ]] || {
-      echo "qualification fixture has no nonzero inode generation" >&2
-      exit 1
-    }
-    "$inspect" file-object --root-pid "$init_pid" \
-      --path /var/lib/mithril/secret --profile-generation 1 \
-      --exact-object-key 7 --object-class MANUAL_SECRET \
-      --inode-generation "$inode_generation" >"$object"
-    benign_inode_generation=$(lsattr -v "$benign_fixture_path" | awk 'NR == 1 {print $1}')
-    [[ $benign_inode_generation =~ ^[1-9][0-9]*$ ]] || {
-      echo "benign control has no nonzero inode generation" >&2
-      exit 1
-    }
-    "$inspect" file-object --root-pid "$init_pid" \
-      --path /var/lib/mithril/benign --profile-generation 1 \
-      --exact-object-key 8 --object-class MANUAL_BENIGN \
-      --inode-generation "$benign_inode_generation" >"$benign_object"
 
     effect_policy_source=$policy_source
     if [[ $effect_mode == PROTECT ]]; then
@@ -556,24 +542,33 @@ case ${1:-} in
       --signing-key "$signing_key" --output "$artifact"
     "$policy" verify --artifact "$artifact" --public-key "$public_key"
     jq --arg artifact "$artifact" --arg public_key "$public_key" \
-      --slurpfile object "$object" \
-      --slurpfile benign "$benign_object" \
-      '.policy_candidates = [{artifact_path: $artifact, public_key_path: $public_key}]
-       | .exact_file_objects = ($object + $benign)' "$identity_config" >"$effect_config"
+      '.policy_candidates = [{artifact_path: $artifact, public_key_path: $public_key}]' \
+      "$identity_config" >"$effect_config"
 
     pin_owned=true
-    "$node" --config "$identity_config" >>"$node_log" 2>&1 &
+    (
+      printf '%s\n' "$BASHPID" >"$controller_cgroup/cgroup.procs"
+      exec "$node" --config "$identity_config"
+    ) >>"$node_log" 2>&1 &
     node_pid=$!
+    for _attempt in {1..200}; do
+      [[ -S $lane_root/observation.sock ]] && break
+      kill -0 "$node_pid" 2>/dev/null || {
+        echo "Mithril node exited before signed policy activation" >&2
+        tail -n 40 "$node_log" >&2
+        exit 1
+      }
+      sleep 0.1
+    done
+    [[ -S $lane_root/observation.sock ]] || {
+      echo "Mithril did not activate signed policy" >&2
+      exit 1
+    }
     for _attempt in {1..200}; do
       if "$inspect" --pin-root /sys/fs/bpf/mithril-k3s-cri-effect \
         task --host-pid "$init_pid" >"$initial_snapshot" 2>/dev/null; then
         break
       fi
-      kill -0 "$node_pid" 2>/dev/null || {
-        echo "Mithril node exited before it labeled the Pod root" >&2
-        tail -n 40 "$node_log" >&2
-        exit 1
-      }
       sleep 0.1
     done
     jq -e '.creator_task_cookie == null
@@ -584,24 +579,15 @@ case ${1:-} in
       cat "$initial_snapshot" >&2
       exit 1
     }
-
     cgroup_path=$(sed -n 's|^0::|/sys/fs/cgroup|p' "/proc/$init_pid/cgroup")
     [[ -d $cgroup_path ]] || {
       echo "Pod init has no live unified cgroup" >&2
       exit 1
     }
 
-    rm -rf -- "/proc/$init_pid/root$pod_state"
-    mkdir -m 700 -- "/proc/$init_pid/root$pod_state"
     /usr/local/bin/k3s crictl exec "$container_id" \
       sh -c '
         mkdir -m 700 "$1"
-        if IFS= read -r _ <"$3"; then
-          printf "CRI_BASELINE_ALLOWED\\n" >"$4"
-        else
-          printf "CRI_BASELINE_DENIED\\n" >"$4"
-          exit 42
-        fi
         echo $$ >"$2"
         while [ ! -s /var/lib/mithril/release ]; do :; done
         if IFS= read -r _ <"$3"; then
@@ -609,22 +595,25 @@ case ${1:-} in
         else
           cri_result=CRI_EXACT_DENIED
         fi
-        if [ "$5" = OBSERVE ] && [ "$cri_result" = CRI_EXACT_ALLOWED ]; then
+        if [ "$4" = OBSERVE ] && [ "$cri_result" = CRI_EXACT_ALLOWED ]; then
           exit 0
         fi
-        if [ "$5" = PROTECT ] && [ "$cri_result" = CRI_EXACT_DENIED ]; then
+        if [ "$4" = PROTECT ] && [ "$cri_result" = CRI_EXACT_DENIED ]; then
           exit 0
         fi
         exit 43
       ' \
       sh "$cri_state" "$cri_pid_file" /var/lib/mithril/secret \
-      "$cri_baseline_file" "$effect_mode" \
+      "$effect_mode" \
       >"$lane_root/cri-result.out" 2>&1 &
     cri_client_pid=$!
     for _attempt in {1..200}; do
       [[ -s /proc/$init_pid/root$cri_pid_file ]] && break
       kill -0 "$cri_client_pid" 2>/dev/null || {
         echo "direct CRI exec exited before publishing its namespace PID" >&2
+        cat "$lane_root/cri-result.out" >&2
+        "$inspect" effects --socket-path "$lane_root/observation.sock" \
+          --cgroup-scope / >&2 || true
         exit 1
       }
       sleep 0.1
@@ -661,31 +650,16 @@ case ${1:-} in
       echo "direct CRI exec has no exact Mithril task cookie" >&2
       exit 1
     }
-    for _attempt in {1..200}; do
-      [[ -s /proc/$init_pid/root$cri_baseline_file ]] && break
-      kill -0 "$cri_client_pid" 2>/dev/null || {
-        echo "direct CRI exec exited before its baseline file read" >&2
-        cat "$lane_root/cri-result.out" >&2
-        exit 1
-      }
-      sleep 0.1
-    done
-    cri_baseline_result=$(head -n 1 "/proc/$init_pid/root$cri_baseline_file")
-    [[ $cri_baseline_result == CRI_BASELINE_ALLOWED ]] || {
-      echo "direct CRI exec could not read the fixture before $effect_mode" >&2
-      cat "/proc/$init_pid/root$cri_baseline_file" >&2
-      exit 1
-    }
     [[ ! -s $release_fixture_path \
       && ! -s /proc/$init_pid/root/var/lib/mithril/release ]] || {
-      echo "direct CRI release fixture is not empty before signed recovery" >&2
+      echo "direct CRI release fixture is not empty before the exact check" >&2
       exit 1
     }
 
     exec 8>"$lane_root/exec-result"
     result_fd_open=true
     /usr/local/bin/k3s kubectl -n "$namespace" exec "$pod" -c "$container" -- \
-      sh -c 'mkdir -m 700 "$1"; mkfifo "$3"; if IFS= read -r _ <"$4" && IFS= read -r _ <"$5"; then printf "BASELINE_ALLOWED\n"; else printf "BASELINE_DENIED\n"; exit 42; fi; echo $$ >"$2"; IFS= read -r _ <"$3"; if IFS= read -r _ <"$4"; then secret_result=SECRET_ALLOWED; else secret_result=SECRET_DENIED; fi; if IFS= read -r _ <"$5"; then benign_result=BENIGN_ALLOWED; else benign_result=BENIGN_DENIED; fi; if [ "$6" = OBSERVE ] && [ "$secret_result" = SECRET_ALLOWED ] && [ "$benign_result" = BENIGN_ALLOWED ]; then chmod 777 "$1" "$3"; exit 0; fi; if [ "$6" = PROTECT ] && [ "$secret_result" = SECRET_DENIED ] && [ "$benign_result" = BENIGN_ALLOWED ]; then chmod 777 "$1" "$3"; exit 0; fi; chmod 777 "$1" "$3"; exit 43' \
+      sh -c 'mkdir -m 700 "$1"; mkfifo "$3"; echo $$ >"$2"; IFS= read -r _ <"$3"; if IFS= read -r _ <"$4"; then secret_result=SECRET_ALLOWED; else secret_result=SECRET_DENIED; fi; if IFS= read -r _ <"$5"; then benign_result=BENIGN_ALLOWED; else benign_result=BENIGN_DENIED; fi; if [ "$6" = OBSERVE ] && [ "$secret_result" = SECRET_ALLOWED ] && [ "$benign_result" = BENIGN_ALLOWED ]; then chmod 777 "$1" "$3"; exit 0; fi; if [ "$6" = PROTECT ] && [ "$secret_result" = SECRET_DENIED ] && [ "$benign_result" = BENIGN_ALLOWED ]; then chmod 777 "$1" "$3"; exit 0; fi; chmod 777 "$1" "$3"; [ "$secret_result" = SECRET_ALLOWED ] || exit 44; [ "$benign_result" = BENIGN_ALLOWED ] || exit 45; exit 43' \
       sh "$kubectl_state" "$pod_pid_file" "$pod_release_file" \
       /var/lib/mithril/secret /var/lib/mithril/benign "$effect_mode" >&8 &
     exec_client_pid=$!
@@ -700,16 +674,6 @@ case ${1:-} in
     namespace_pid=$(<"/proc/$init_pid/root$pod_pid_file")
     [[ $namespace_pid =~ ^[1-9][0-9]*$ ]] || {
       echo "kubectl exec wrote an invalid namespace PID" >&2
-      exit 1
-    }
-    for _attempt in {1..200}; do
-      [[ -s $lane_root/exec-result ]] && break
-      kill -0 "$exec_client_pid" 2>/dev/null || break
-      sleep 0.1
-    done
-    baseline_result=$(head -n 1 "$lane_root/exec-result")
-    [[ $baseline_result == BASELINE_ALLOWED ]] || {
-      echo "the kubectl exec task could not read the fixture before $effect_mode" >&2
       exit 1
     }
     exec_host_pid=
@@ -744,21 +708,51 @@ case ${1:-} in
     release_fd_open=true
 
     stop_node
-    "$node" --config "$effect_config" >>"$node_log" 2>&1 &
+    (
+      printf '%s\n' "$BASHPID" >"$controller_cgroup/cgroup.procs"
+      exec "$node" --config "$effect_config"
+    ) >>"$node_log" 2>&1 &
     node_pid=$!
     for _attempt in {1..200}; do
       [[ -S $lane_root/observation.sock ]] && break
       kill -0 "$node_pid" 2>/dev/null || {
         echo "Mithril node exited before signed $effect_mode recovery" >&2
-        tail -n 40 "$node_log" >&2
+        tail -n 80 "$node_log" >&2
         exit 1
       }
       sleep 0.1
     done
     [[ -S $lane_root/observation.sock ]] || {
-      echo "Mithril did not publish the observation socket" >&2
+      echo "Mithril did not recover the signed $effect_mode policy" >&2
       exit 1
     }
+    exact_object_map=/sys/fs/bpf/mithril-k3s-cri-effect/maps/exact_file_objects
+    exact_object_count=0
+    for _attempt in {1..200}; do
+      if [[ -e $exact_object_map ]]; then
+        exact_object_count=$(bpftool -j map dump pinned "$exact_object_map" \
+          | jq 'length')
+      fi
+      [[ $exact_object_count -eq 2 ]] && break
+      kill -0 "$node_pid" 2>/dev/null || {
+        echo "Mithril node exited before the containerd Running binding" >&2
+        tail -n 80 "$node_log" >&2
+        exit 1
+      }
+      sleep 0.1
+    done
+    [[ $exact_object_count -eq 2 ]] || {
+      echo "containerd Running inventory did not install both signed Exact selectors" >&2
+      [[ ! -e $exact_object_map ]] \
+        || bpftool -j map dump pinned "$exact_object_map" >&2
+      tail -n 80 "$node_log" >&2
+      exit 1
+    }
+    if { exec {namespace_probe_fd}<"/proc/$init_pid/ns/mnt"; } 2>/dev/null; then
+      exec {namespace_probe_fd}<&-
+      echo "external process used the effect controller inspection path" >&2
+      exit 1
+    fi
 
     printf '1\n' >"$release_fixture_path"
     printf '1\n' >&9 || true
@@ -771,6 +765,11 @@ case ${1:-} in
     exec_client_pid=
     [[ $exec_status -eq 0 ]] || {
       echo "kubectl exec did not complete the expected $effect_mode file-open result: $exec_status" >&2
+      cat "$lane_root/exec-result" >&2
+      tail -n 80 "$node_log" >&2
+      cat "$lane_root/cri-result.out" >&2
+      "$inspect" effects --socket-path "$lane_root/observation.sock" \
+        --cgroup-scope / >&2 || true
       exit 1
     }
     set +e
@@ -788,78 +787,78 @@ case ${1:-} in
         expected_cri_effect="task_cookie=$cri_task_cookie family=2 operation=2 reason=WOULD_DENY result=UNKNOWN_AFTER_PRE_EFFECT"
         expected_effect="task_cookie=$external_task_cookie family=2 operation=2 reason=WOULD_DENY result=UNKNOWN_AFTER_PRE_EFFECT"
         expected_benign_effect="task_cookie=$external_task_cookie family=2 operation=2 reason=EXACT_POLICY_ALLOW result=UNKNOWN_AFTER_PRE_EFFECT"
-        cri_baseline_file_open=allowed-before-observe
-        cri_exact_file_open=allowed-after-effect:WOULD_DENY
-        baseline_file_open=allowed-before-observe
-        exact_file_open=allowed-after-effect:WOULD_DENY
-        benign_file_open=allowed-after-effect:EXACT_POLICY_ALLOW
+        cri_exact_file_open=allowed-after-running-binding:WOULD_DENY
+        exact_file_open=allowed-after-running-binding:WOULD_DENY
+        benign_file_open=allowed-after-running-binding:EXACT_POLICY_ALLOW
         ;;
       PROTECT)
         expected_cri_effect="task_cookie=$cri_task_cookie family=2 operation=2 reason=EXACT_POLICY_DENY result=DENIED_BEFORE_EFFECT"
         expected_effect="task_cookie=$external_task_cookie family=2 operation=2 reason=EXACT_POLICY_DENY result=DENIED_BEFORE_EFFECT"
         expected_benign_effect="task_cookie=$external_task_cookie family=2 operation=2 reason=EXACT_POLICY_ALLOW result=UNKNOWN_AFTER_PRE_EFFECT"
-        cri_baseline_file_open=allowed-before-protect
-        cri_exact_file_open=denied-before-effect:EXACT_POLICY_DENY
-        baseline_file_open=allowed-before-protect
-        exact_file_open=denied-before-effect:EXACT_POLICY_DENY
-        benign_file_open=allowed-after-effect:EXACT_POLICY_ALLOW
+        cri_exact_file_open=denied-after-running-binding:EXACT_POLICY_DENY
+        exact_file_open=denied-after-running-binding:EXACT_POLICY_DENY
+        benign_file_open=allowed-after-running-binding:EXACT_POLICY_ALLOW
         ;;
     esac
     for _attempt in {1..100}; do
       "$inspect" effects --socket-path "$lane_root/observation.sock" \
         --cgroup-scope / >"$effects"
       if grep -F "$expected_cri_effect" "$effects" \
-        | grep -Fq 'exact_object_key_id=7' \
+        | grep -Fq "exact_object_key_id=$secret_selector_handle" \
         && grep -F "$expected_effect" "$effects" \
-        | grep -Fq 'exact_object_key_id=7' \
+        | grep -Fq "exact_object_key_id=$secret_selector_handle" \
         && grep -F "$expected_benign_effect" "$effects" \
-          | grep -Fq 'exact_object_key_id=8'; then
+          | grep -Fq "exact_object_key_id=$benign_selector_handle"; then
         break
       fi
       sleep 0.1
     done
     grep -F "$expected_cri_effect" "$effects" \
-      | grep -Fq 'exact_object_key_id=7' || {
+      | grep -Fq "exact_object_key_id=$secret_selector_handle" || {
       echo "Mithril did not report the expected $effect_mode direct CRI exact file-open result" >&2
       cat "$effects" >&2
       exit 1
     }
     grep -F "$expected_effect" "$effects" \
-      | grep -Fq 'exact_object_key_id=7' || {
+      | grep -Fq "exact_object_key_id=$secret_selector_handle" || {
       echo "Mithril did not report the expected $effect_mode exact file-open result" >&2
       cat "$effects" >&2
       exit 1
     }
     grep -F "$expected_benign_effect" "$effects" \
-      | grep -Fq 'exact_object_key_id=8' || {
+      | grep -Fq "exact_object_key_id=$benign_selector_handle" || {
       echo "Mithril did not report the expected $effect_mode benign file-open result" >&2
       cat "$effects" >&2
       exit 1
     }
 
     cri_exact_effect=$(grep -F "$expected_cri_effect" "$effects" \
-      | grep -F 'exact_object_key_id=7' | sed -n '1p')
-    exact_effect=$(grep -F "$expected_effect" "$effects" | grep -F 'exact_object_key_id=7' | sed -n '1p')
-    benign_effect=$(grep -F "$expected_benign_effect" "$effects" | grep -F 'exact_object_key_id=8' | sed -n '1p')
+      | grep -F "exact_object_key_id=$secret_selector_handle" | sed -n '1p')
+    exact_effect=$(grep -F "$expected_effect" "$effects" | grep -F "exact_object_key_id=$secret_selector_handle" | sed -n '1p')
+    benign_effect=$(grep -F "$expected_benign_effect" "$effects" | grep -F "exact_object_key_id=$benign_selector_handle" | sed -n '1p')
 
     printf 'lane=k3s-cri-effect\n'
     printf 'pod_uid=%s\n' "$pod_uid"
     printf 'container_id=%s\n' "$container_ref"
     printf 'pod_initial_root=restored_or_unknown_root:fail_closed_unknown\n'
-    printf 'initial_binding_start_gap=recorded:container_running_before_node_binding\n'
+    printf 'exact_binding_stage=containerd-running-inventory\n'
+    printf 'initial_binding_start_gap=recorded:container-running-before-node-binding\n'
+    printf 'effect_controller_scope=dedicated-cgroup-read-inspection\n'
     printf 'cri_exec_root=external_runtime_root:runtime_external_restricted\n'
-    printf 'cri_baseline_file_open=%s\n' "$cri_baseline_file_open"
     printf 'cri_exact_file_open=%s\n' "$cri_exact_file_open"
     printf 'cri_exact_effect=%s\n' "$cri_exact_effect"
     printf 'kubectl_exec_root=external_runtime_root:runtime_external_restricted\n'
     printf 'policy_mode=%s\n' "$effect_mode"
-    printf 'baseline_file_open=%s\n' "$baseline_file_open"
     printf 'exact_file_open=%s\n' "$exact_file_open"
     printf 'exact_effect=%s\n' "$exact_effect"
     printf 'benign_file_open=%s\n' "$benign_file_open"
     printf 'benign_effect=%s\n' "$benign_effect"
     printf 'qualification_fixture=read-only-hostPath-secret-benign-and-release-files\n'
     stop_node
+    [[ -d $controller_cgroup && ! -s $controller_cgroup/cgroup.procs ]] || {
+      echo "effect controller cgroup did not become reusable" >&2
+      exit 1
+    }
     exec 9>&-
     release_fd_open=false
     [[ $pin_owned == false ]] || rm -rf -- /sys/fs/bpf/mithril-k3s-cri-effect
@@ -929,11 +928,11 @@ case ${1:-} in
     node_config=$lane_root/node.json
     control_config=$lane_root/control.json
     artifact=$lane_root/profile.json
-    executable_object=$lane_root/executable-object.json
     node_log=$lane_root/node.log
     control_log=$lane_root/control.log
     oidc_log=$lane_root/oidc.log
     plugin_log=$lane_root/kubectl-mithril.log
+    controller_cgroup=/sys/fs/cgroup/mithril-k3s-administrative-controller
     plugin_pid=
     runtime_client_pid=
     node_pid=
@@ -980,6 +979,9 @@ case ${1:-} in
       stop_process "$plugin_pid"
       stop_process "$runtime_client_pid"
       stop_process "$node_pid"
+      if [[ -d $controller_cgroup && -s $controller_cgroup/cgroup.procs ]]; then
+        status=1
+      fi
       stop_process "$control_pid"
       stop_process "$oidc_pid"
       /usr/local/bin/k3s kubectl delete validatingwebhookconfiguration \
@@ -1015,10 +1017,22 @@ case ${1:-} in
       echo "k3s administrative-exec fixture, pin, or state already exists" >&2
       exit 2
     }
+    [[ ! -e $controller_cgroup || -d $controller_cgroup ]] || {
+      echo "administrative controller cgroup path is not a directory" >&2
+      exit 2
+    }
+    install -d -m 700 "$controller_cgroup"
+    [[ ! -s $controller_cgroup/cgroup.procs ]] || {
+      echo "administrative controller cgroup is not empty" >&2
+      exit 2
+    }
     install -d -m 700 "$fixture_root" "$lane_root" "$lane_root/control-state"
     fixture_owned=true
     printf 'mithril-k3s-administrative-exec\n' >"$fixture_root/secret"
-    chmod 400 "$fixture_root/secret"
+    printf 'mithril-k3s-administrative-benign\n' >"$fixture_root/benign"
+    : >"$fixture_root/release"
+    chmod 400 "$fixture_root/secret" "$fixture_root/benign" \
+      "$fixture_root/release"
     install -m 0555 "$(command -v busybox)" "$executable_path"
 
     ca_key=$lane_root/ca-key.pem
@@ -1141,22 +1155,12 @@ EOF
       -e "s|\"container_generation\": 1|\"container_generation\": $generation|" \
       -e "s|MITHRIL_IMAGE_DIGEST|$image_digest|g" \
       "$template" >"$node_config"
-    inode_generation=$(lsattr -v "$executable_path" | awk 'NR == 1 {print $1}')
-    [[ $inode_generation =~ ^[1-9][0-9]*$ ]] || {
-      echo "administrative executable has no nonzero inode generation" >&2
-      exit 1
-    }
-    "$inspect" file-object --root-pid "$init_pid" \
-      --path /var/lib/mithril/busybox --profile-generation 1 \
-      --exact-object-key 12 --object-class MANUAL_EXEC_ALLOWED \
-      --inode-generation "$inode_generation" >"$executable_object"
     "$policy" compile --source "$policy_source" --seal-request "$seal_request" \
       --signing-key "$signing_key" --output "$artifact"
     "$policy" verify --artifact "$artifact" --public-key "$public_key"
     jq --arg artifact "$artifact" --arg public_key "$public_key" \
-      --slurpfile object "$executable_object" \
-      '.policy_candidates = [{artifact_path: $artifact, public_key_path: $public_key}]
-       | .exact_file_objects = $object' "$node_config" >"$lane_root/node-prepared.json"
+      '.policy_candidates = [{artifact_path: $artifact, public_key_path: $public_key}]' \
+      "$node_config" >"$lane_root/node-prepared.json"
     mv -- "$lane_root/node-prepared.json" "$node_config"
 
     jq -n --arg ca "$ca" --arg server_certificate "$server_certificate" \
@@ -1216,7 +1220,10 @@ EOF
       sleep 0.1
     done
     pin_owned=true
-    "$node" --config "$node_config" >"$node_log" 2>&1 &
+    (
+      printf '%s\n' "$BASHPID" >"$controller_cgroup/cgroup.procs"
+      exec "$node" --config "$node_config"
+    ) >"$node_log" 2>&1 &
     node_pid=$!
     for _attempt in {1..300}; do
       if [[ -S $lane_root/observation.sock ]] \
@@ -1377,6 +1384,9 @@ EOF
       kill -0 "$plugin_pid" 2>/dev/null || {
         echo "approved kubectl exec exited before the role was inspected" >&2
         cat "$plugin_log" >&2
+        tail -n 80 "$node_log" >&2
+        "$inspect" effects --socket-path "$lane_root/observation.sock" \
+          --cgroup-scope / >&2 || true
         exit 1
       }
       sleep 0.1

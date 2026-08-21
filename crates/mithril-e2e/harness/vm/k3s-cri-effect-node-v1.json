@@ -30,6 +30,7 @@
   },
   "container_runtime": {
     "socket_path": "/run/k3s/containerd/containerd.sock",
+    "effect_controller_cgroup_path": "/sys/fs/cgroup/mithril-k3s-cri-effect-controller",
     "reconciliation_interval_ms": 100
   },
   "workload_bindings": [
@@ -54,6 +55,5 @@
       "arm_initial_root": false
     }
   ],
-  "policy_candidates": [],
-  "exact_file_objects": []
+  "policy_candidates": []
 }

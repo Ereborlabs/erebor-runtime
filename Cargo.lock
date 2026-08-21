@@ -3216,6 +3216,7 @@ dependencies = [
  "hex",
  "hyper-util",
  "k8s-cri",
+ "libc",
  "minicbor",
  "mithril-control",
  "procfs",

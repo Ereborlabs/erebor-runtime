@@ -116,6 +116,24 @@ pub struct WorkloadBindingOwner {
     runtime: Option<ContainerRuntimeInventory>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct ExactObjectBindingTargetV1<'a> {
+    pub binding_id: &'a str,
+    pub init_pid: u32,
+}
+
+struct RuntimeBindingUpdate {
+    root_id: u64,
+    identity: RuntimeContainerIdentity,
+}
+
+#[derive(Default)]
+struct RuntimeReconciliationPlan {
+    missing_root_ids: Vec<u64>,
+    new_identities: Vec<RuntimeContainerIdentity>,
+    updates: Vec<RuntimeBindingUpdate>,
+}
+
 impl WorkloadBindingOwner {
     pub fn system(node_boot_id: Id128V1, label_epoch: u64) -> Result<Self> {
         Self::at("/sys/fs/cgroup", node_boot_id, label_epoch)
@@ -446,13 +464,15 @@ impl WorkloadBindingOwner {
         host: &KernelHost,
         configured: &[WorkloadBindingConfig],
     ) -> Result<()> {
-        for spec in configured {
-            let binding = self
-                .bindings
-                .values_mut()
-                .find(|binding| binding.spec.binding_id == spec.binding_id)
+        for binding in self.bindings.values_mut() {
+            let spec = configured
+                .iter()
+                .find(|spec| spec.binding_id == binding.spec.binding_id)
                 .context(IdentityStateSnafu {
-                    reason: format!("configured binding `{}` is not published", spec.binding_id),
+                    reason: format!(
+                        "published binding `{}` is not configured",
+                        binding.spec.binding_id
+                    ),
                 })?;
             binding.validate_live_cgroup()?;
 
@@ -541,6 +561,28 @@ impl WorkloadBindingOwner {
         Ok(())
     }
 
+    pub(crate) fn exact_object_binding_targets(
+        &self,
+    ) -> impl Iterator<Item = ExactObjectBindingTargetV1<'_>> {
+        self.bindings
+            .values()
+            .filter(|binding| binding.state.lifecycle_state == BindingLifecycleStateV1::Active)
+            .filter_map(|binding| {
+                binding
+                    .runtime_identity
+                    .as_ref()
+                    .filter(|runtime| {
+                        runtime.state == super::runtime::RuntimeContainerState::Running
+                    })
+                    .map(|runtime| runtime.init_pid)
+                    .filter(|pid| *pid > 0)
+                    .map(|init_pid| ExactObjectBindingTargetV1 {
+                        binding_id: &binding.spec.binding_id,
+                        init_pid,
+                    })
+            })
+    }
+
     pub async fn reconcile(
         &mut self,
         host: &KernelHost,
@@ -592,12 +634,21 @@ impl WorkloadBindingOwner {
             .into_iter()
             .map(|identity| (identity.full_container_id.clone(), identity))
             .collect();
-        let (missing, new) = self.plan_runtime_reconciliation(observed)?;
-        for root_id in missing {
+        let plan = self.plan_runtime_reconciliation(observed)?;
+        for root_id in plan.missing_root_ids {
             self.terminate(host, root_id)?;
             self.bindings.remove(&root_id);
         }
-        for identity in new {
+        for update in plan.updates {
+            let binding = self
+                .bindings
+                .get_mut(&update.root_id)
+                .context(IdentityStateSnafu {
+                    reason: "runtime state update lost its published binding",
+                })?;
+            binding.runtime_identity = Some(update.identity);
+        }
+        for identity in plan.new_identities {
             let configured = configured
                 .iter()
                 .find(|binding| binding.container_id == identity.full_container_id)
@@ -636,15 +687,15 @@ impl WorkloadBindingOwner {
     fn plan_runtime_reconciliation(
         &self,
         mut observed: BTreeMap<String, RuntimeContainerIdentity>,
-    ) -> Result<(Vec<u64>, Vec<RuntimeContainerIdentity>)> {
-        let mut missing = Vec::new();
+    ) -> Result<RuntimeReconciliationPlan> {
+        let mut plan = RuntimeReconciliationPlan::default();
         for (&root_id, binding) in &self.bindings {
             let Some(expected) = binding.runtime_identity.as_ref() else {
                 binding.validate_live_cgroup()?;
                 continue;
             };
-            let Some(current) = observed.get(&binding.spec.container_id) else {
-                missing.push(root_id);
+            let Some(current) = observed.remove(&binding.spec.container_id) else {
+                plan.missing_root_ids.push(root_id);
                 continue;
             };
             binding.validate_live_cgroup()?;
@@ -657,9 +708,22 @@ impl WorkloadBindingOwner {
                     ),
                 }
             );
-            observed.remove(&binding.spec.container_id);
+            if current.state != expected.state {
+                ensure!(
+                    expected.state == super::runtime::RuntimeContainerState::Created
+                        && current.state == super::runtime::RuntimeContainerState::Running,
+                    IdentityStateSnafu {
+                        reason: format!("CRI state regressed for `{}`", binding.spec.container_id),
+                    }
+                );
+                plan.updates.push(RuntimeBindingUpdate {
+                    root_id,
+                    identity: current,
+                });
+            }
         }
-        Ok((missing, observed.into_values().collect()))
+        plan.new_identities = observed.into_values().collect();
+        Ok(plan)
     }
 
     #[must_use]
@@ -980,13 +1044,13 @@ mod tests {
     use std::fs;
     use std::path::{Path, PathBuf};
 
-    use snafu::ResultExt as _;
+    use snafu::{OptionExt as _, ResultExt as _};
 
     use super::{
         same_activation_identity, same_runtime_binding, RuntimeContainerIdentity,
         WorkloadBindingOwner,
     };
-    use crate::error::IoSnafu;
+    use crate::error::{IdentityStateSnafu, IoSnafu};
     use crate::identity::runtime::RuntimeContainerState;
     use crate::WorkloadBindingConfig;
     use erebor_interceptor_abi::{Id128V1, InitialRootStateV1};
@@ -1059,7 +1123,7 @@ mod tests {
         let root = temporary.path().join("workload");
         fs::create_dir(&root).context(IoSnafu { path: &root })?;
         fs::write(root.join("cgroup.procs"), "42\n").context(IoSnafu { path: &root })?;
-        let owner = WorkloadBindingOwner::at(temporary.path(), Id128V1::new(1, 2), 3)?;
+        let mut owner = WorkloadBindingOwner::at(temporary.path(), Id128V1::new(1, 2), 3)?;
         let mut binding = owner.prepare(&spec(&root))?;
         binding.held_initial_pid = Some(42);
         binding.require_initial_root_admission()?;
@@ -1069,6 +1133,12 @@ mod tests {
         fs::write(root.join("cgroup.procs"), "42\n43\n").context(IoSnafu { path: &root })?;
         binding.held_initial_pid = Some(42);
         assert!(binding.require_initial_root_admission().is_err());
+
+        fs::write(root.join("cgroup.procs"), "42\n").context(IoSnafu { path: &root })?;
+        binding.held_initial_pid = Some(42);
+        let root_id = binding.root_cgroup_id;
+        owner.bindings.insert(root_id, binding);
+        assert_eq!(owner.exact_object_binding_targets().count(), 0);
         Ok(())
     }
 
@@ -1155,7 +1225,8 @@ mod tests {
     }
 
     #[test]
-    fn runtime_inventory_keeps_or_retires_exact_container_lifetimes() -> crate::Result<()> {
+    fn runtime_inventory_advances_running_bindings_and_retires_missing_lifetimes(
+    ) -> crate::Result<()> {
         let temporary = tempfile::tempdir().context(IoSnafu {
             path: "temporary cgroup root",
         })?;
@@ -1182,19 +1253,31 @@ mod tests {
         let root_id = binding.root_cgroup_id;
         binding.runtime_identity = Some(identity.clone());
         owner.bindings.insert(root_id, binding);
+        assert_eq!(owner.exact_object_binding_targets().count(), 0);
 
         let running = RuntimeContainerIdentity {
             state: RuntimeContainerState::Running,
             ..identity
         };
-        let observed = BTreeMap::from([(running.full_container_id.clone(), running)]);
-        let (missing, new) = owner.plan_runtime_reconciliation(observed)?;
-        assert!(missing.is_empty());
-        assert!(new.is_empty());
+        let observed = BTreeMap::from([(running.full_container_id.clone(), running.clone())]);
+        let plan = owner.plan_runtime_reconciliation(observed)?;
+        assert!(plan.missing_root_ids.is_empty());
+        assert!(plan.new_identities.is_empty());
+        assert_eq!(plan.updates.len(), 1);
+        assert_eq!(plan.updates[0].root_id, root_id);
+        owner
+            .bindings
+            .get_mut(&root_id)
+            .context(IdentityStateSnafu {
+                reason: "test binding disappeared before its running transition",
+            })?
+            .runtime_identity = Some(running);
+        assert_eq!(owner.exact_object_binding_targets().count(), 1);
 
-        let (missing, new) = owner.plan_runtime_reconciliation(BTreeMap::new())?;
-        assert_eq!(missing, vec![root_id]);
-        assert!(new.is_empty());
+        let plan = owner.plan_runtime_reconciliation(BTreeMap::new())?;
+        assert_eq!(plan.missing_root_ids, vec![root_id]);
+        assert!(plan.new_identities.is_empty());
+        assert!(plan.updates.is_empty());
         Ok(())
     }
 }

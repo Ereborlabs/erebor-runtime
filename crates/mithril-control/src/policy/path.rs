@@ -6,6 +6,8 @@ use serde::{Deserialize, Serialize};
 use crate::error::PolicyValidationSnafu;
 use crate::Result;
 
+use super::PathSelectorTargetV1;
+
 pub const MAX_PATH_GRAPH_STATES_V1: usize = 4096;
 
 pub type DentryIdV1 = u64;
@@ -196,6 +198,36 @@ pub enum PathUnresolvedReasonV1 {
 pub enum PathPatternComponentV1 {
     Exact(Vec<u8>),
     Wildcard,
+    RecursiveWildcard,
+}
+
+impl PathSelectorTargetV1 {
+    pub fn pattern_components(&self, policy_id: &str) -> Result<Vec<PathPatternComponentV1>> {
+        let components = canonical_path_components(policy_id, self.path_expression())?;
+        match self {
+            Self::Path { .. } => components
+                .into_iter()
+                .map(|component| match component.as_slice() {
+                    b"*" => Ok(PathPatternComponentV1::Wildcard),
+                    b"**" => Ok(PathPatternComponentV1::RecursiveWildcard),
+                    _ => Ok(PathPatternComponentV1::Exact(component)),
+                })
+                .collect(),
+            Self::Exact { .. } => Ok(components
+                .into_iter()
+                .map(PathPatternComponentV1::Exact)
+                .collect()),
+        }
+    }
+
+    pub fn exact_components(&self, policy_id: &str) -> Result<Option<Vec<Vec<u8>>>> {
+        match self {
+            Self::Path { .. } => Ok(None),
+            Self::Exact { canonical_path } => {
+                canonical_path_components(policy_id, canonical_path).map(Some)
+            }
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -489,6 +521,10 @@ impl CanonicalPathGraphV1 {
     fn insert(&mut self, policy_id: &str, pattern: &PathPatternV1) -> Result<()> {
         let mut state_id = 0;
         for component in &pattern.components {
+            if matches!(component, PathPatternComponentV1::RecursiveWildcard) {
+                self.states[state_id].wildcards.insert(state_id);
+                continue;
+            }
             let existing = match component {
                 PathPatternComponentV1::Exact(bytes) => {
                     ensure_path(
@@ -503,9 +539,8 @@ impl CanonicalPathGraphV1 {
                     )?;
                     self.states[state_id].exact.get(bytes).copied()
                 }
-                PathPatternComponentV1::Wildcard => {
-                    self.states[state_id].wildcards.iter().next().copied()
-                }
+                PathPatternComponentV1::Wildcard => None,
+                PathPatternComponentV1::RecursiveWildcard => unreachable!(),
             };
             let next = if let Some(existing) = existing {
                 existing
@@ -525,6 +560,7 @@ impl CanonicalPathGraphV1 {
                     PathPatternComponentV1::Wildcard => {
                         self.states[state_id].wildcards.insert(next);
                     }
+                    PathPatternComponentV1::RecursiveWildcard => unreachable!(),
                 }
                 next
             };
@@ -719,7 +755,13 @@ fn select_path_terminal<'a>(
 }
 
 fn pattern_strictly_contains(left: &PathTerminalV1, right: &PathTerminalV1) -> bool {
-    left.components.len() == right.components.len()
+    !left
+        .components
+        .contains(&PathPatternComponentV1::RecursiveWildcard)
+        && !right
+            .components
+            .contains(&PathPatternComponentV1::RecursiveWildcard)
+        && left.components.len() == right.components.len()
         && left
             .components
             .iter()
@@ -730,6 +772,8 @@ fn pattern_strictly_contains(left: &PathTerminalV1, right: &PathTerminalV1) -> b
                 }
                 (PathPatternComponentV1::Wildcard, _) => true,
                 (PathPatternComponentV1::Exact(_), PathPatternComponentV1::Wildcard) => false,
+                (PathPatternComponentV1::RecursiveWildcard, _)
+                | (_, PathPatternComponentV1::RecursiveWildcard) => false,
             })
         && left.components != right.components
 }
@@ -869,6 +913,98 @@ mod tests {
             });
         };
         assert_eq!(graph.candidate(&components), None);
+        Ok(())
+    }
+
+    #[test]
+    fn signed_path_patterns_distinguish_one_component_and_recursive_wildcards() -> crate::Result<()>
+    {
+        let one_component = PathSelectorTargetV1::Path {
+            path_pattern: "/x/*/y".to_owned(),
+        };
+        let recursive = PathSelectorTargetV1::Path {
+            path_pattern: "/x/**/y".to_owned(),
+        };
+        assert_eq!(
+            one_component.pattern_components("test")?,
+            vec![
+                PathPatternComponentV1::Exact(b"x".to_vec()),
+                PathPatternComponentV1::Wildcard,
+                PathPatternComponentV1::Exact(b"y".to_vec()),
+            ]
+        );
+        assert_eq!(
+            recursive.pattern_components("test")?,
+            vec![
+                PathPatternComponentV1::Exact(b"x".to_vec()),
+                PathPatternComponentV1::RecursiveWildcard,
+                PathPatternComponentV1::Exact(b"y".to_vec()),
+            ]
+        );
+
+        let one_component_graph = CanonicalPathGraphV1::compile(
+            "test",
+            &[PathPatternV1 {
+                rule_id: "one-component".to_owned(),
+                components: one_component.pattern_components("test")?,
+                candidate_object_class_id: "ONE".to_owned(),
+                physical_result_id: "ONE".to_owned(),
+                overrides_rule_ids: Vec::new(),
+            }],
+        )?;
+        let recursive_graph = CanonicalPathGraphV1::compile(
+            "test",
+            &[PathPatternV1 {
+                rule_id: "recursive".to_owned(),
+                components: recursive.pattern_components("test")?,
+                candidate_object_class_id: "RECURSIVE".to_owned(),
+                physical_result_id: "RECURSIVE".to_owned(),
+                overrides_rule_ids: Vec::new(),
+            }],
+        )?;
+        assert_eq!(
+            one_component_graph
+                .candidate(&[b"x".to_vec(), b"a".to_vec(), b"y".to_vec()])
+                .map(|candidate| candidate.rule_id),
+            Some("one-component".to_owned())
+        );
+        assert!(one_component_graph
+            .candidate(&[b"x".to_vec(), b"a".to_vec(), b"b".to_vec(), b"y".to_vec(),])
+            .is_none());
+        assert_eq!(
+            recursive_graph
+                .candidate(&[b"x".to_vec(), b"a".to_vec(), b"b".to_vec(), b"y".to_vec(),])
+                .map(|candidate| candidate.rule_id),
+            Some("recursive".to_owned())
+        );
+        assert_eq!(
+            recursive_graph
+                .candidate(&[b"x".to_vec(), b"y".to_vec()])
+                .map(|candidate| candidate.rule_id),
+            Some("recursive".to_owned())
+        );
+        assert!(recursive_graph
+            .candidate(&[b"x".to_vec(), b"a".to_vec(), b"z".to_vec()])
+            .is_none());
+        let deterministic = recursive_graph.determinize("test")?;
+        for components in [
+            vec![b"x".to_vec(), b"y".to_vec()],
+            vec![b"x".to_vec(), b"a".to_vec(), b"y".to_vec()],
+            vec![b"x".to_vec(), b"a".to_vec(), b"b".to_vec(), b"y".to_vec()],
+        ] {
+            let state = deterministic.state_after(&components).ok_or_else(|| {
+                PolicyValidationSnafu {
+                    policy_id: "test",
+                    code: "PATH_TEST",
+                    reason: "recursive DFA did not retain a matching state".to_owned(),
+                }
+                .build()
+            })?;
+            assert!(deterministic
+                .terminals
+                .iter()
+                .any(|terminal| terminal.state_id == state));
+        }
         Ok(())
     }
 

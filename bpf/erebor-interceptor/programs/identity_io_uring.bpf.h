@@ -383,6 +383,26 @@ static __noinline int resolved_io_uring_effect_gate(
                 effect_observation_reason_v1_corrupt_identity_or_generation);
         return path_tree_effect_result(config, scratch);
     }
+    if (!scratch->path_terminal.exact_object_required) {
+        __builtin_memset(&scratch->effect_default, 0,
+                         sizeof(scratch->effect_default));
+        scratch->effect_default.profile_generation_ref_id =
+            request->actor.profile_generation_ref_id;
+        scratch->effect_default.active_role_id = request->actor.active_role_id;
+        scratch->effect_default.entry_kind = request->actor.entry_kind;
+        scratch->effect_default.effect_family = effect_family;
+        scratch->effect_default.operation = operation;
+        scratch->effect_default.composite_atom_id =
+            scratch->observation.composite_atom_id;
+        scratch->effect_default.process_state_vector_id =
+            request->actor.process_state_vector_id;
+        scratch->effect_default.binding_lifecycle_state =
+            request->actor.binding_lifecycle_state;
+        decision =
+            bpf_map_lookup_elem(&effect_defaults, &scratch->effect_default);
+        return apply_effect_decision(config, scratch, generation, decision,
+                                     false, false);
+    }
     object_binding = configured_file_object_binding(scratch);
     if (!object_binding ||
         object_binding->state != exact_object_binding_state_v1_read_back ||

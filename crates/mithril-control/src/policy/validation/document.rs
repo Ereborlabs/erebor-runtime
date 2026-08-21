@@ -46,7 +46,7 @@ impl Validate for PolicyDocumentV1 {
             PolicyValue::RegistrySymbol(id).validate()?;
         }
         validate_each!(self;
-            workload_selectors, classifier_bindings, roles, entry_role_assignments,
+            workload_selectors, classifier_bindings, path_selectors, roles, entry_role_assignments,
             native_transition_rules, state_bit_definitions, process_state_definitions,
             ipc_relationship_rules, effect_family_defaults, path_tree_deny_floors,
             notification_routes, response_bindings, exceptions, rules,
@@ -127,6 +127,33 @@ impl PolicyDocumentV1 {
         let scopes = string_set!(&self.protected_universe.protected_scope_ids);
         let execution_sets = string_set!(&self.protected_universe.execution_set_ids);
         let object_classes = string_set!(&self.protected_universe.object_class_ids);
+        let mut path_selectors = BTreeMap::new();
+        let mut path_selector_handles = BTreeSet::new();
+        let mut path_selector_targets = BTreeSet::new();
+        let mut valid_path_selector_references = true;
+        let mut exact_path_selector_count = 0;
+        for selector in &self.path_selectors {
+            valid_path_selector_references &= object_classes
+                .contains(selector.object_class_id.as_str())
+                && self.classifier_bindings.iter().any(|binding| {
+                    binding.object_class_id == selector.object_class_id
+                        && match (&selector.device_class_id, &binding.selector) {
+                            (
+                                Some(device_class_id),
+                                ObjectClassifierSelectorV1::Device { device_class_ids },
+                            ) => device_class_ids.contains(device_class_id),
+                            (None, ObjectClassifierSelectorV1::Device { .. }) => false,
+                            (None, _) => true,
+                            (Some(_), _) => false,
+                        }
+                });
+            path_selectors.insert(selector.path_selector_id.as_str(), selector);
+            path_selector_targets.insert(&selector.target);
+            if selector.requires_exact_object() {
+                exact_path_selector_count += 1;
+                path_selector_handles.insert(selector.kernel_handle());
+            }
+        }
         let rule_ids = self
             .rules
             .iter()
@@ -159,11 +186,19 @@ impl PolicyDocumentV1 {
                     .map_or(0, |policy| policy.destination_policies.len())
             && authority_ids.len() == self.authority_behavior_rules.len()
             && coverage_ids.len() == self.source_coverage_health_rules.len()
+            && path_selectors.len() == self.path_selectors.len()
+            && path_selector_handles.len() == exact_path_selector_count
+            && path_selector_targets.len() == self.path_selectors.len()
             && rule_ids.len() == self.rules.len() + self.path_tree_deny_floors.len();
         require!(
             unique_ids,
             "CFG_DUPLICATE_ID",
             "policy IDs must be unique by kind"
+        );
+        require!(
+            valid_path_selector_references,
+            "CFG_PATH_SELECTOR_REFERENCE",
+            "path selectors need unique path kinds and signed object classes"
         );
         for role in &self.roles {
             require!(
@@ -357,6 +392,16 @@ impl PolicyDocumentV1 {
                 );
             }
             if let RuleMatchV1::LocalPreEffect(effect) = &rule.rule_match {
+                if let LocalObjectSelectorV1::PathSelectors { path_selector_ids } = &effect.object {
+                    require!(
+                        ordered_unique(path_selector_ids)
+                            && path_selector_ids
+                                .iter()
+                                .all(|id| path_selectors.contains_key(id.as_str())),
+                        "CFG_PATH_SELECTOR_REFERENCE",
+                        format!("rule `{}` has an invalid path selector", rule.rule_id)
+                    );
+                }
                 if let LocalObjectSelectorV1::Destinations {
                     destination_policy_ids,
                 } = &effect.object
@@ -400,9 +445,17 @@ impl PolicyDocumentV1 {
                         .source_role_ids
                         .iter()
                         .chain(&value.target_role_ids)
-                        .all(|id| roles.contains(id.as_str())),
+                        .all(|id| roles.contains(id.as_str()))
+                        && value.executable_path_selector_ids.iter().all(|id| {
+                            path_selectors
+                                .get(id.as_str())
+                                .is_some_and(|selector| selector.requires_exact_object())
+                        }),
                     "CFG_NATIVE_TRANSITION_MATCH",
-                    format!("rule `{}` has an unknown transition role", rule.rule_id)
+                    format!(
+                        "rule `{}` has an unknown role or non-exact executable selector",
+                        rule.rule_id
+                    )
                 );
             }
         }

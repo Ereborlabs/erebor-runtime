@@ -12,7 +12,7 @@
 
 _Static_assert(sizeof(task_label_v1) == 328, "task label ABI size");
 _Static_assert(sizeof(task_coordinate_v1) == 88, "task coordinate ABI size");
-_Static_assert(sizeof(identity_runtime_config_v1) == 40,
+_Static_assert(sizeof(identity_runtime_config_v1) == 48,
                "identity runtime config ABI size");
 _Static_assert(__builtin_offsetof(task_label_v1, process_state_id) == 64,
                "task process-state offset");

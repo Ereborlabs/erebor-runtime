@@ -84,6 +84,22 @@ classifier_bindings:
       device_class_ids: [ZERO_DEVICE]
     required_capability_ids: [EXACT_FILE_OBJECT]
     unknown_result: DENY
+path_selectors:
+  - schema_version: 1
+    path_selector_id: manual-benign
+    selector_kind: EXACT
+    canonical_path: /var/lib/mithril/benign
+    object_class_id: MANUAL_BENIGN
+  - schema_version: 1
+    path_selector_id: manual-exec-allowed
+    selector_kind: EXACT
+    canonical_path: /var/lib/mithril/busybox
+    object_class_id: MANUAL_EXEC_ALLOWED
+  - schema_version: 1
+    path_selector_id: manual-secret
+    selector_kind: EXACT
+    canonical_path: /var/lib/mithril/secret
+    object_class_id: MANUAL_SECRET
 roles:
   - role_id: runtime-external-administrative
     maximum_native_depth: 1
@@ -718,8 +734,8 @@ rules:
       effect_families: [EXEC]
       operation_ids: [EXECUTE, MMAP_EXEC, MPROTECT]
       object:
-        kind: EXACT_OBJECT_KEYS
-        exact_object_key_ids: [12]
+        kind: PATH_SELECTORS
+        path_selector_ids: [manual-exec-allowed]
       binding_lifecycle_states: [ACTIVE]
       required_proof:
         source_authority: [KERNEL_DECISION]

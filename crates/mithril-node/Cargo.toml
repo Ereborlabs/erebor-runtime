@@ -5,6 +5,9 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[features]
+test-support = []
+
 [dependencies]
 clap.workspace = true
 containerd-client.workspace = true
@@ -16,6 +19,7 @@ erebor-runtime-error = { path = "../erebor-runtime-error" }
 erebor-runtime-ipc = { path = "../erebor-runtime-ipc" }
 hyper-util.workspace = true
 hex.workspace = true
+libc = "0.2.186"
 k8s-cri.workspace = true
 mithril-control = { path = "../mithril-control" }
 minicbor.workspace = true

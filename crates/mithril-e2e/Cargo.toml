@@ -19,7 +19,7 @@ libc = "0.2.186"
 linux-raw-sys = { version = "0.12.1", features = ["general"] }
 memmap2 = "0.9.11"
 mithril-control = { path = "../mithril-control", features = ["test-fixtures"] }
-mithril-node = { path = "../mithril-node" }
+mithril-node = { path = "../mithril-node", features = ["test-support"] }
 rustix = { version = "1.1.4", features = [
     "event",
     "fs",

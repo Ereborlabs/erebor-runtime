@@ -37,6 +37,12 @@ classifier_bindings:
       required_object_type: REGULAR_FILE
     required_capability_ids: [EXACT_FILE_OBJECT]
     unknown_result: DENY
+path_selectors:
+  - schema_version: 1
+    path_selector_id: administrative-executable
+    selector_kind: EXACT
+    canonical_path: /var/lib/mithril/busybox
+    object_class_id: MANUAL_EXEC_ALLOWED
 roles:
   - role_id: converter
     maximum_native_depth: 32
@@ -148,8 +154,8 @@ rules:
       effect_families: [FILE]
       operation_ids: [MMAP_READ, MMAP_WRITE, OPEN_READ, READ]
       object:
-        kind: EXACT_OBJECT_KEYS
-        exact_object_key_ids: [12]
+        kind: PATH_SELECTORS
+        path_selector_ids: [administrative-executable]
       binding_lifecycle_states: [ACTIVE]
       required_proof:
         source_authority: [KERNEL_DECISION]
@@ -190,8 +196,8 @@ rules:
       effect_families: [EXEC]
       operation_ids: [EXECUTE, MMAP_EXEC, MPROTECT]
       object:
-        kind: EXACT_OBJECT_KEYS
-        exact_object_key_ids: [12]
+        kind: PATH_SELECTORS
+        path_selector_ids: [administrative-executable]
       binding_lifecycle_states: [ACTIVE]
       required_proof:
         source_authority: [KERNEL_DECISION]

@@ -101,7 +101,7 @@ impl NodeChassis {
                     && held_initial_pids.iter().all(|pid| *pid > 0),
                 IdentityStateSnafu {
                     reason:
-                        "prestart admission requires one held PID for each armed static binding",
+                        "prestart admission requires one held root for each armed static binding",
                 }
             );
         }
@@ -119,6 +119,14 @@ impl NodeChassis {
             }
         );
         let label_epoch = NodeEpochs::label_epoch(&config.state_directory, recover_identity)?;
+        let identity = match config.container_runtime.as_ref() {
+            Some(runtime) => NativeSecurityStateOwner::for_effect_controller(
+                node_boot_id,
+                label_epoch,
+                &runtime.effect_controller_cgroup_path,
+            )?,
+            None => NativeSecurityStateOwner::new(node_boot_id, label_epoch),
+        };
         let owner = KernelHostOwner::new(KernelHostConfig::identity(
             &config.interceptor.runtime_btf_path,
             &config.interceptor.lease_path,
@@ -127,6 +135,7 @@ impl NodeChassis {
             label_epoch,
         ));
         let mut host = owner.start().context(InterceptorSnafu)?;
+        identity.claim_effect_controller(&host)?;
         let mut bindings = if let Some(runtime) = config.container_runtime.as_ref() {
             WorkloadBindingOwner::system_with_runtime(node_boot_id, label_epoch, runtime).await?
         } else {
@@ -148,12 +157,15 @@ impl NodeChassis {
         let policy = if config.policy_candidates.is_empty() {
             None
         } else {
-            Some(crate::NodePolicyGenerationOwner::load_and_install(
-                &config,
-                &mut host,
-                node_boot_id,
-                label_epoch,
-            )?)
+            Some(
+                crate::NodePolicyGenerationOwner::load_and_install_for_bindings(
+                    &config,
+                    &mut host,
+                    &bindings,
+                    node_boot_id,
+                    label_epoch,
+                )?,
+            )
         };
         if policy.is_some() {
             bindings.adopt_activated_profiles(&host, &config.workload_bindings)?;
@@ -194,7 +206,6 @@ impl NodeChassis {
         let prevention_enabled = policy
             .as_ref()
             .is_some_and(crate::NodePolicyGenerationOwner::prevention_enabled);
-        let identity = NativeSecurityStateOwner::new(node_boot_id, label_epoch);
         let reconciliation = if held_initial_pids.is_empty() {
             identity.activate_with_effect_policy(&mut host, policy_loaded)?
         } else {
@@ -751,12 +762,18 @@ impl NodeChassis {
         {
             return ReconciliationOutcome::IdentityUnhealthy;
         }
-        if self
-            .policy
-            .as_ref()
-            .is_some_and(|policy| policy.reconcile_mount_views(host).is_err())
-        {
-            return ReconciliationOutcome::IdentityUnhealthy;
+        if let Some(policy) = self.policy.as_mut() {
+            if self
+                .bindings
+                .adopt_activated_profiles(host, &self.config.workload_bindings)
+                .is_err()
+                || policy
+                    .reconcile_cri_exact_bindings(&self.config, host, &self.bindings)
+                    .is_err()
+                || policy.reconcile_mount_views(host).is_err()
+            {
+                return ReconciliationOutcome::IdentityUnhealthy;
+            }
         }
         if self
             .administrative

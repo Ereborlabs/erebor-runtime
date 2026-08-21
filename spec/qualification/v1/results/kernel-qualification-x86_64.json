@@ -1,16 +1,16 @@
 {
   "schema_version": 1,
-  "architecture_revision_sha256": "22678b9c0379ff915fe595059f3da2789c3e32cdf54d61656c7257175263d14a",
+  "architecture_revision_sha256": "580becbcd8f2872f954fb4e3857e27ec0f5528e55d8561096f3a16d10cf26d4e",
   "platform_architecture": "x86_64",
   "kernel_release": "6.8.0-137-generic",
   "active_lsm_order": "lockdown,capability,landlock,yama,apparmor,bpf",
   "runtime_btf_sha256": "6da9f6b4ebcae9b07e6a717b517884abf7f6b524e46340e40fb164eed4a49a7c",
-  "abi_header_sha256": "c37219728bd11661afd36447acf02765a0f4b2590bacf91d27989c5780fa0bff",
-  "bpf_source_sha256": "6447fb9501f1f7b05f634b549b9c89a6483b50d8055548fafa1df59664677586",
-  "bpf_object_sha256": "e44e761a8bfa2c33f02475beb4162d41efdbe704ee10960bd03fafb31b4d13d8",
-  "physical_probe_artifact_sha256": "688812391d74069eb04772ddcb67a790f8c493b5c89fb3b4c6e84d96a163c0dc",
-  "physical_evidence_sha256": "6dc5863855070e86490c2c1efc8900f96f6fa36acba4fea4127ed5395182f7dd",
-  "lsm_program_count": 41,
+  "abi_header_sha256": "2f55e84a211468b1382329951f2119a4db80259b7df9c4b1a68843195abbb4cf",
+  "bpf_source_sha256": "90df6fc2d9cad8de26a8be1829b92ec44ab75b3fd0756aee0c6e745cde632233",
+  "bpf_object_sha256": "70734e40a067fda0c6056be4f1ffe742adae38b8d99e73b7590c7356dbdf4a65",
+  "physical_probe_artifact_sha256": "c9255572a78cc7dda59c30558b3e125cb0765354db9abe297c80512358123a52",
+  "physical_evidence_sha256": "0c71fbbe413e819b9f9aef50b85dcbf471566b5ae57ea58c5650d00b27451d0e",
+  "lsm_program_count": 47,
   "map_count": 3,
   "file_open_allow_deny_allow": true,
   "supported_capability_ids": [
@@ -20,8 +20,8 @@
   ],
   "unsupported_capability_count": 16,
   "benchmark_artifacts": {
-    "baseline_sha256": "bfc45630f3c1eea874803bc49167d215585b139f07c789002a24966daa0015bc",
-    "protected_sha256": "36377299a087917b6e83b97f44e5bdab467d2a266135b42468e164b717003441"
+    "baseline_sha256": "64635bae1448767d0e8378a74c55d3f42b34d73c13fe6af717ae45cac724f851",
+    "protected_sha256": "abda47c109a64de461ede33a62036de0771ba45a79c5fc9fea816bd3d72b4b3f"
   },
   "benchmarks": [
     {
@@ -29,52 +29,52 @@
       "concurrency": 1,
       "warmup_iterations": 100000,
       "measured_iterations": 1000000,
-      "elapsed_ns": 5037503711,
-      "operations_per_second": 198511.02001500837,
-      "p50_ns": 4325,
-      "p95_ns": 4444,
-      "p99_ns": 17112,
-      "maximum_ns": 831813,
-      "raw_samples_sha256": "52cf77d7a718dbe175fce47ba0f7055746a7bcbd6e1f33998d70130d2f4464c2"
+      "elapsed_ns": 5121351923,
+      "operations_per_second": 195260.9418440858,
+      "p50_ns": 4396,
+      "p95_ns": 4486,
+      "p99_ns": 16908,
+      "maximum_ns": 903962,
+      "raw_samples_sha256": "79a5ce43d3eba758a962228079c8e0d23ab3fa49117f76bf17d40b21c22173ee"
     },
     {
       "mode": "BASELINE",
       "concurrency": 32,
       "warmup_iterations": 100000,
       "measured_iterations": 1000000,
-      "elapsed_ns": 2625153221,
-      "operations_per_second": 380930.1460960324,
-      "p50_ns": 4385,
-      "p95_ns": 4972,
-      "p99_ns": 14637,
-      "maximum_ns": 54233407,
-      "raw_samples_sha256": "02125f2cc9ee41721b44e1fb2662be44c235080fe3194366a0db9014515c6315"
+      "elapsed_ns": 2676099529,
+      "operations_per_second": 373678.17944113543,
+      "p50_ns": 4466,
+      "p95_ns": 5221,
+      "p99_ns": 14989,
+      "maximum_ns": 65970683,
+      "raw_samples_sha256": "d376318bb006c7496186f0849fe249c3465e5819e55ecfcf415af71283056e69"
     },
     {
       "mode": "PROTECTED",
       "concurrency": 1,
       "warmup_iterations": 100000,
       "measured_iterations": 1000000,
-      "elapsed_ns": 5331774855,
-      "operations_per_second": 187554.80626910305,
-      "p50_ns": 4574,
-      "p95_ns": 4653,
-      "p99_ns": 17799,
-      "maximum_ns": 1342167,
-      "raw_samples_sha256": "f14d0aef5bf288cdbb02ce3889d023aa0f87a8dd1055c056bc09e2ca59055567"
+      "elapsed_ns": 5463631173,
+      "operations_per_second": 183028.46007281172,
+      "p50_ns": 4704,
+      "p95_ns": 4774,
+      "p99_ns": 17684,
+      "maximum_ns": 1238557,
+      "raw_samples_sha256": "0bda3cd160eb3135a4982a36558a27baabe09eeb9e91e8267c818b0dfe3ebb63"
     },
     {
       "mode": "PROTECTED",
       "concurrency": 32,
       "warmup_iterations": 100000,
       "measured_iterations": 1000000,
-      "elapsed_ns": 2781327404,
-      "operations_per_second": 359540.5555497845,
-      "p50_ns": 4655,
-      "p95_ns": 5230,
-      "p99_ns": 15254,
-      "maximum_ns": 60034627,
-      "raw_samples_sha256": "dede75ddf9a45f4760b4e0bd6a67f1c2f2ad3b295f3a551cca59ab0caa4feb89"
+      "elapsed_ns": 2889378383,
+      "operations_per_second": 346095.20368935354,
+      "p50_ns": 4823,
+      "p95_ns": 5609,
+      "p99_ns": 16370,
+      "maximum_ns": 54046026,
+      "raw_samples_sha256": "bf60e26120ca64b8aff53ca206928798e9e5a8f86f6b94d902d30c82ad78f309"
     }
   ]
 }

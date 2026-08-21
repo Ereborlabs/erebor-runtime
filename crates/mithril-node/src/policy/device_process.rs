@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use erebor_interceptor_abi::{
     BindingLifecycleStateV1, DeviceEffectKeyV1, ExactDeviceTypeV1, KernelEffectFamilyV1,
@@ -20,6 +20,7 @@ pub(super) struct TypedEffectContext<'a> {
     pub entry_kind: u16,
     pub binding_lifecycle_state: BindingLifecycleStateV1,
     pub exact_objects: &'a [&'a ExactFileObjectConfig],
+    pub signed_device_classes: &'a BTreeSet<String>,
     pub role_states: &'a BTreeMap<String, (u32, u32)>,
 }
 
@@ -68,6 +69,12 @@ fn lower_device(
             reason: "a compiled device selector has an empty device class",
         }
     );
+    ensure!(
+        context.signed_device_classes.contains(device_class),
+        IdentityStateSnafu {
+            reason: format!("device class `{device_class}` has no signed path selector"),
+        }
+    );
     let (ioctl_command, command_wildcard) = if command == "*" {
         (0, 1)
     } else {
@@ -81,7 +88,6 @@ fn lower_device(
             0,
         )
     };
-    let mut matched = false;
     for object in context.exact_objects {
         let Some(device) = object
             .device
@@ -90,7 +96,6 @@ fn lower_device(
         else {
             continue;
         };
-        matched = true;
         let key = DeviceEffectKeyV1 {
             profile_generation_ref_id: context.profile_generation_ref_id,
             mount_id_unique: object.mount_id_unique,
@@ -116,14 +121,6 @@ fn lower_device(
         };
         insert_exact(rows, key.as_bytes(), decision.as_bytes())?;
     }
-    ensure!(
-        matched,
-        IdentityStateSnafu {
-            reason: format!(
-                "device class `{device_class}` has no exact live configured device object"
-            ),
-        }
-    );
     Ok(())
 }
 
@@ -193,7 +190,8 @@ fn lower_process(
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
+    use std::collections::{BTreeMap, BTreeSet};
+    use std::sync::LazyLock;
 
     use erebor_interceptor_abi::{
         BindingLifecycleStateV1, DeviceEffectKeyV1, PhysicalDecisionKindV1, PhysicalDecisionV1,
@@ -208,6 +206,9 @@ mod tests {
     use crate::{ExactDeviceConfig, ExactDeviceType, ExactFileObjectConfig};
 
     use super::{lower_typed_effect, TypedEffectContext};
+
+    static SIGNED_DEVICE_CLASSES: LazyLock<BTreeSet<String>> =
+        LazyLock::new(|| BTreeSet::from(["gpu".to_owned()]));
 
     #[test]
     fn exact_and_explicit_wildcard_ioctl_rows_are_distinct() -> crate::Result<()> {
@@ -341,6 +342,7 @@ mod tests {
             entry_kind: 1,
             binding_lifecycle_state: BindingLifecycleStateV1::Active,
             exact_objects,
+            signed_device_classes: &SIGNED_DEVICE_CLASSES,
             role_states,
         }
     }

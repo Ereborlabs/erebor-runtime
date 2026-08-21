@@ -135,11 +135,9 @@ impl From<EffectFamilyV1> for KernelEffectFamilyV1 {
 impl From<&LocalObjectSelectorV1> for Vec<String> {
     fn from(selector: &LocalObjectSelectorV1) -> Self {
         match selector {
-            LocalObjectSelectorV1::ExactObjectKeys {
-                exact_object_key_ids,
-            } => exact_object_key_ids
+            LocalObjectSelectorV1::PathSelectors { path_selector_ids } => path_selector_ids
                 .iter()
-                .map(|id| format!("EXACT:{id}"))
+                .map(|id| format!("PATH:{id}"))
                 .collect(),
             LocalObjectSelectorV1::ObjectClasses { object_class_ids } => object_class_ids
                 .iter()

@@ -59,6 +59,17 @@ classifier_bindings:
       required_object_type: REGULAR_FILE
     required_capability_ids: [EXACT_FILE_OBJECT]
     unknown_result: DENY
+path_selectors:
+  - schema_version: 1
+    path_selector_id: manual-benign
+    selector_kind: EXACT
+    canonical_path: /var/lib/mithril/benign
+    object_class_id: MANUAL_BENIGN
+  - schema_version: 1
+    path_selector_id: manual-secret
+    selector_kind: EXACT
+    canonical_path: /var/lib/mithril/secret
+    object_class_id: MANUAL_SECRET
 roles:
   - role_id: converter
     maximum_native_depth: 32

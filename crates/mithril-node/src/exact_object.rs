@@ -1,7 +1,10 @@
+#![allow(unsafe_code)]
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
 use std::fs::File;
 use std::io::{Read as _, Seek as _, SeekFrom};
+use std::os::fd::AsRawFd as _;
 use std::os::unix::ffi::{OsStrExt as _, OsStringExt as _};
 use std::os::unix::fs::MetadataExt as _;
 use std::path::{Path, PathBuf};
@@ -34,6 +37,7 @@ pub(crate) struct LiveExactFileObjectV1 {
     pub mount_id_unique: u64,
     pub filesystem_device: u32,
     pub inode: u64,
+    pub inode_generation: u32,
     pub mode: u16,
     pub device_type: Option<ExactDeviceType>,
     pub device_major: u32,
@@ -52,6 +56,7 @@ impl LiveExactFileObjectV1 {
             && self.mount_id_unique == configured.mount_id_unique
             && self.filesystem_device == configured.filesystem_device
             && self.inode == configured.inode
+            && self.inode_generation == configured.inode_generation
             && self.canonical_component_hex == configured.canonical_component_hex
             && self.mount_relative_component_count == configured.mount_relative_component_count
             && self.mount_root_filesystem_device == configured.mount_root_filesystem_device
@@ -203,6 +208,55 @@ impl ExactFileObjectView {
         })
     }
 
+    pub(crate) fn try_resolve_signed_selector(
+        &self,
+        path: &Path,
+        profile_generation_ref_id: u64,
+        path_selector_handle: u64,
+        object_class_id: String,
+        device_class_id: Option<String>,
+        mount_topology_generation: u64,
+    ) -> Result<Option<ExactFileObjectConfig>> {
+        let Some(live) = self.try_inspect(path)? else {
+            return Ok(None);
+        };
+        let device = live.device_type.map(|device_type| ExactDeviceConfig {
+            device_class_id: device_class_id.clone().unwrap_or_default(),
+            device_type,
+            major: live.device_major,
+            minor: live.device_minor,
+        });
+        ensure!(
+            live.mount_namespace_inode > 0
+                && mount_topology_generation > 0
+                && (live.inode_generation > 0 || device.is_some())
+                && device.is_some() == device_class_id.is_some()
+                && device_class_id.as_ref().is_none_or(|id| !id.is_empty()),
+            IdentityStateSnafu {
+                reason: "signed path selector did not resolve to the required exact object kind",
+            }
+        );
+        Ok(Some(ExactFileObjectConfig {
+            profile_generation_ref_id,
+            exact_object_key_id: path_selector_handle,
+            object_class_id,
+            mount_namespace_inode: live.mount_namespace_inode,
+            mount_id_unique: live.mount_id_unique,
+            filesystem_device: live.filesystem_device,
+            inode: live.inode,
+            inode_generation: live.inode_generation,
+            device,
+            canonical_component_hex: live.canonical_component_hex,
+            mount_relative_component_count: live.mount_relative_component_count,
+            mount_root_filesystem_device: live.mount_root_filesystem_device,
+            mount_root_inode: live.mount_root_inode,
+            selected_mount_id_unique: live.selected_mount_id_unique,
+            mount_snapshot_digest_id: live.mount_snapshot_digest_id,
+            mount_topology_generation,
+            mount_view_root_pid: self.root_pid,
+        }))
+    }
+
     pub(crate) fn inspect(&self, path: &Path) -> Result<LiveExactFileObjectV1> {
         ensure!(
             path.is_absolute(),
@@ -211,7 +265,7 @@ impl ExactFileObjectView {
             }
         );
         let file = self.open_path(path)?;
-        self.inspect_file(path, &file)
+        self.inspect_file(path, &file, false)
     }
 
     pub(crate) fn try_inspect(&self, path: &Path) -> Result<Option<LiveExactFileObjectV1>> {
@@ -224,10 +278,15 @@ impl ExactFileObjectView {
         let Some(file) = self.try_open_path(path)? else {
             return Ok(None);
         };
-        self.inspect_file(path, &file).map(Some)
+        self.inspect_file(path, &file, true).map(Some)
     }
 
-    fn inspect_file(&self, path: &Path, file: &File) -> Result<LiveExactFileObjectV1> {
+    fn inspect_file(
+        &self,
+        path: &Path,
+        file: &File,
+        measure_inode_generation: bool,
+    ) -> Result<LiveExactFileObjectV1> {
         let mount_namespace_inode = self.mount_namespace_inode()?;
         let unique_mount = StatxFlags::from_bits_retain(STATX_MNT_ID_UNIQUE);
         let status = statx(
@@ -251,6 +310,11 @@ impl ExactFileObjectView {
             0o060_000 => Some(ExactDeviceType::Block),
             _ => None,
         };
+        let inode_generation = Self::inode_generation(
+            file,
+            device_type.is_some() || !measure_inode_generation,
+            path,
+        )?;
         let mount_snapshot = MountInfoSnapshot::read(self, path)?;
         Ok(LiveExactFileObjectV1 {
             mount_namespace_inode,
@@ -258,6 +322,7 @@ impl ExactFileObjectView {
             mount_id_unique: status.stx_mnt_id,
             filesystem_device: encoded_device(status.stx_dev_major, status.stx_dev_minor)?,
             inode: status.stx_ino,
+            inode_generation,
             mode: status.stx_mode,
             device_type,
             device_major: status.stx_rdev_major,
@@ -324,6 +389,39 @@ impl ExactFileObjectView {
             .build()
         })?;
         read_mountinfo_file(&mut file, self.root_pid)
+    }
+
+    fn inode_generation(file: &File, skip_measurement: bool, path: &Path) -> Result<u32> {
+        if skip_measurement {
+            return Ok(0);
+        }
+        let mut generation: libc::c_long = 0;
+        // SAFETY: FS_IOC_GETVERSION writes one long to the valid pointer for this open file.
+        let result =
+            unsafe { libc::ioctl(file.as_raw_fd(), libc::FS_IOC_GETVERSION, &mut generation) };
+        let error = std::io::Error::last_os_error();
+        ensure!(
+            result == 0,
+            IdentityStateSnafu {
+                reason: format!(
+                    "filesystem did not return an inode generation for `{}`: {}",
+                    path.display(),
+                    error
+                ),
+            }
+        );
+        u32::try_from(generation)
+            .ok()
+            .filter(|generation| *generation > 0)
+            .ok_or_else(|| {
+                IdentityStateSnafu {
+                    reason: format!(
+                        "filesystem returned an invalid inode generation for `{}`",
+                        path.display()
+                    ),
+                }
+                .build()
+            })
     }
 }
 

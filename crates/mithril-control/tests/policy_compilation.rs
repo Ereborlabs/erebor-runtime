@@ -7,9 +7,9 @@ use mithril_control::{
     DestinationPolicyRecordV1, DnsPolicyModeV1, EffectFamilyDefaultV1, EffectFamilyV1, EntryKindV1,
     ErrnoV1, ExactExceptionSubjectSelectorV1, ExceptionConsumptionScopeV1, ExceptionV1,
     HardSafetyConditionV1, IpcRelationshipRuleV1, NetworkPolicyV1, NetworkPortRangeV1,
-    NetworkProtocolV1, PathPatternPrecedenceV1, PathTreeDenyFloorV1, PermittedAuthorityDeltaV1,
-    PolicyCompiler, PolicyDispositionV1, PolicyDocumentV1, PolicySimulator,
-    ProfileActivationMetadataV1, ProfileCandidateArtifactV1, ProfileSealRequestV1,
+    NetworkProtocolV1, PathPatternPrecedenceV1, PathSelectorV1, PathTreeDenyFloorV1,
+    PermittedAuthorityDeltaV1, PolicyCompiler, PolicyDispositionV1, PolicyDocumentV1,
+    PolicySimulator, ProfileActivationMetadataV1, ProfileCandidateArtifactV1, ProfileSealRequestV1,
     RegistryDigestsV1, RollbackAuthorizationArtifactV1, RollbackAuthorizationPayloadV1,
     RootClassificationV1, SimulatedDispositionV1,
 };
@@ -43,6 +43,68 @@ fn path_pattern_precedence_is_signed_policy_input() -> mithril_control::Result<(
         wildcard_wins.source_policy_digest,
         exact_wins.source_policy_digest
     );
+    Ok(())
+}
+
+#[test]
+fn path_authority_fields_change_the_signed_policy_input() -> mithril_control::Result<()> {
+    let mut document = parse(VALID_POLICY)?;
+    document
+        .protected_universe
+        .object_class_ids
+        .push("SECOND_CLASS".to_owned());
+    let mut second_classifier = document.classifier_bindings[0].clone();
+    second_classifier.classifier_binding_id = "second-class".to_owned();
+    second_classifier.object_class_id = "SECOND_CLASS".to_owned();
+    document.classifier_bindings.push(second_classifier);
+    document.path_selectors = vec![PathSelectorV1::exact(
+        "projected-token",
+        "/var/run/secrets/token",
+        "PROJECTED_TOKEN",
+    )];
+    let mithril_control::RuleMatchV1::LocalPreEffect(effect) = &mut document.rules[0].rule_match
+    else {
+        unreachable!("fixture has a local effect rule")
+    };
+    effect.object = mithril_control::LocalObjectSelectorV1::PathSelectors {
+        path_selector_ids: vec!["projected-token".to_owned()],
+    };
+    let base = PolicyCompiler.compile(&document)?.canonical_policy;
+
+    let mut changed_path = document.clone();
+    changed_path.path_selectors[0] = PathSelectorV1::exact(
+        "projected-token",
+        "/var/run/secrets/other",
+        "PROJECTED_TOKEN",
+    );
+    let mut changed_class = document.clone();
+    changed_class.path_selectors[0].object_class_id = "SECOND_CLASS".to_owned();
+    let mut changed_kind = document.clone();
+    changed_kind.path_selectors[0] = PathSelectorV1::path(
+        "projected-token",
+        "/var/run/secrets/token",
+        "PROJECTED_TOKEN",
+    );
+    let mut changed_operation = document.clone();
+    let mithril_control::RuleMatchV1::LocalPreEffect(effect) =
+        &mut changed_operation.rules[0].rule_match
+    else {
+        unreachable!("fixture has a local effect rule")
+    };
+    effect.operation_ids = vec!["OPEN_WRITE".to_owned()];
+    let mut changed_disposition = document.clone();
+    changed_disposition.rules[0].requested_disposition = PolicyDispositionV1::Allow;
+    changed_disposition.rules[0].errno = None;
+
+    for changed in [
+        changed_path,
+        changed_class,
+        changed_kind,
+        changed_operation,
+        changed_disposition,
+    ] {
+        assert_ne!(base, PolicyCompiler.compile(&changed)?.canonical_policy);
+    }
     Ok(())
 }
 
@@ -156,6 +218,42 @@ fn path_tree_rules_are_signed_denial_floors_only() -> mithril_control::Result<()
     assert!(PolicyCompiler
         .compile(&excepted)
         .is_err_and(|error| error.to_string().contains("CFG_PATH_TREE_DENY")));
+    Ok(())
+}
+
+#[test]
+fn recursive_live_path_selectors_support_signed_allow_and_deny() -> mithril_control::Result<()> {
+    let mut document = parse(&VALID_POLICY.replacen(
+        "desired_profile_mode: OBSERVE",
+        "desired_profile_mode: PROTECT",
+        1,
+    ))?;
+    document.path_selectors = vec![PathSelectorV1::recursive(
+        "recursive-secret",
+        "/tmp/secret-dir",
+        "PROJECTED_TOKEN",
+    )];
+    let mithril_control::RuleMatchV1::LocalPreEffect(effect) = &mut document.rules[0].rule_match
+    else {
+        unreachable!("fixture has a local effect rule")
+    };
+    effect.subject.workload_selector_ids.clear();
+    effect.subject.protected_scope_ids.clear();
+    effect.subject.execution_set_ids.clear();
+    effect.subject.entry_kind_ids.clear();
+    effect.subject.role_ids.clear();
+    effect.subject.required_process_state_ids.clear();
+    effect.subject.forbidden_process_state_ids.clear();
+    effect.binding_lifecycle_states.clear();
+    effect.object = mithril_control::LocalObjectSelectorV1::PathSelectors {
+        path_selector_ids: vec!["recursive-secret".to_owned()],
+    };
+    let denied = PolicyCompiler.compile(&document)?.canonical_policy;
+
+    document.rules[0].requested_disposition = PolicyDispositionV1::Allow;
+    document.rules[0].errno = None;
+    let allowed = PolicyCompiler.compile(&document)?.canonical_policy;
+    assert_ne!(denied, allowed);
     Ok(())
 }
 
@@ -632,13 +730,18 @@ fn compiler_rejects_unknown_or_ambiguous_kernel_dimensions() -> mithril_control:
     assert!(PolicyCompiler.compile(&unknown_role).is_err());
 
     let mut duplicate_object = parse(VALID_POLICY)?;
+    duplicate_object.path_selectors = vec![PathSelectorV1::exact(
+        "projected-token",
+        "/var/run/secrets/token",
+        "PROJECTED_TOKEN",
+    )];
     let mithril_control::RuleMatchV1::LocalPreEffect(effect) =
         &mut duplicate_object.rules[0].rule_match
     else {
         unreachable!("fixture has a local effect rule")
     };
-    effect.object = mithril_control::LocalObjectSelectorV1::ExactObjectKeys {
-        exact_object_key_ids: vec![7, 7],
+    effect.object = mithril_control::LocalObjectSelectorV1::PathSelectors {
+        path_selector_ids: vec!["projected-token".to_owned(), "projected-token".to_owned()],
     };
     assert!(PolicyCompiler.compile(&duplicate_object).is_err());
     Ok(())
@@ -892,14 +995,19 @@ fn mount_effect_defaults_are_denial_only() -> mithril_control::Result<()> {
 fn executable_memory_rules_require_exact_objects_for_authority() -> mithril_control::Result<()> {
     for operation in ["MMAP_EXEC", "MPROTECT"] {
         let mut exact = parse(VALID_POLICY)?;
+        exact.path_selectors = vec![PathSelectorV1::exact(
+            "projected-token",
+            "/var/run/secrets/token",
+            "PROJECTED_TOKEN",
+        )];
         let mithril_control::RuleMatchV1::LocalPreEffect(effect) = &mut exact.rules[0].rule_match
         else {
             unreachable!("fixture has a local effect rule")
         };
         effect.effect_families = vec![EffectFamilyV1::Exec];
         effect.operation_ids = vec![operation.to_owned()];
-        effect.object = mithril_control::LocalObjectSelectorV1::ExactObjectKeys {
-            exact_object_key_ids: vec![7],
+        effect.object = mithril_control::LocalObjectSelectorV1::PathSelectors {
+            path_selector_ids: vec!["projected-token".to_owned()],
         };
         exact.rules[0].requested_disposition = PolicyDispositionV1::Allow;
         exact.rules[0].errno = None;

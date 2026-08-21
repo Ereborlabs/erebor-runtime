@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use serde_saphyr::granit_parser::{Event, Parser};
 use serde_saphyr::{Budget, DuplicateKeyPolicy, MergeKeyPolicy, Options};
+use sha2::{Digest as _, Sha256};
 use snafu::ResultExt as _;
 
 use crate::error::{PolicySourceSnafu, PolicyValidationSnafu};
@@ -29,6 +30,8 @@ pub struct PolicyDocumentV1 {
     pub protected_universe: ProtectedUniverseV1,
     pub workload_selectors: Vec<WorkloadSelectorV1>,
     pub classifier_bindings: Vec<ObjectClassifierBindingV1>,
+    #[serde(default)]
+    pub path_selectors: Vec<PathSelectorV1>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub network_policy: Option<NetworkPolicyV1>,
     #[serde(default)]
@@ -416,7 +419,7 @@ pub struct NativeRoleTransitionRuleV1 {
     pub transition_rule_id: String,
     pub source_role_ids: Vec<String>,
     pub operation: NativeOperationV1,
-    pub executable_object_ids: Vec<u64>,
+    pub executable_path_selector_ids: Vec<String>,
     pub required_process_state_ids: Vec<String>,
     pub resulting_role_id: String,
     pub resulting_process_state_id: String,
@@ -655,6 +658,133 @@ pub struct LocalEffectMatchV1 {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct PathSelectorV1 {
+    pub schema_version: u32,
+    pub path_selector_id: String,
+    #[serde(flatten)]
+    pub target: PathSelectorTargetV1,
+    pub object_class_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub device_class_id: Option<String>,
+}
+
+impl PathSelectorV1 {
+    #[must_use]
+    pub fn path(
+        path_selector_id: impl Into<String>,
+        path_pattern: impl Into<String>,
+        object_class_id: impl Into<String>,
+    ) -> Self {
+        Self {
+            schema_version: 1,
+            path_selector_id: path_selector_id.into(),
+            target: PathSelectorTargetV1::Path {
+                path_pattern: path_pattern.into(),
+            },
+            object_class_id: object_class_id.into(),
+            device_class_id: None,
+        }
+    }
+
+    #[must_use]
+    pub fn recursive(
+        path_selector_id: impl Into<String>,
+        canonical_path: impl Into<String>,
+        object_class_id: impl Into<String>,
+    ) -> Self {
+        let canonical_path = canonical_path.into();
+        let path_pattern = if canonical_path == "/" {
+            "/**".to_owned()
+        } else {
+            format!("{canonical_path}/**")
+        };
+        Self::path(path_selector_id, path_pattern, object_class_id)
+    }
+
+    #[must_use]
+    pub fn exact(
+        path_selector_id: impl Into<String>,
+        canonical_path: impl Into<String>,
+        object_class_id: impl Into<String>,
+    ) -> Self {
+        Self {
+            schema_version: 1,
+            path_selector_id: path_selector_id.into(),
+            target: PathSelectorTargetV1::Exact {
+                canonical_path: canonical_path.into(),
+            },
+            object_class_id: object_class_id.into(),
+            device_class_id: None,
+        }
+    }
+
+    #[must_use]
+    pub fn with_device_class(mut self, device_class_id: impl Into<String>) -> Self {
+        self.device_class_id = Some(device_class_id.into());
+        self
+    }
+
+    #[must_use]
+    pub const fn requires_exact_object(&self) -> bool {
+        matches!(self.target, PathSelectorTargetV1::Exact { .. })
+    }
+
+    #[must_use]
+    pub fn path_expression(&self) -> &str {
+        self.target.path_expression()
+    }
+
+    #[must_use]
+    pub fn exact_canonical_path(&self) -> Option<&str> {
+        match &self.target {
+            PathSelectorTargetV1::Exact { canonical_path } => Some(canonical_path),
+            PathSelectorTargetV1::Path { .. } => None,
+        }
+    }
+
+    #[must_use]
+    pub fn kernel_handle(&self) -> u64 {
+        Self::kernel_handle_for_id(&self.path_selector_id)
+    }
+
+    #[must_use]
+    pub fn kernel_handle_for_id(path_selector_id: &str) -> u64 {
+        let mut hasher = Sha256::new();
+        hasher.update(b"MITHRIL-PATH-SELECTOR-HANDLE-V1\0");
+        hasher.update(path_selector_id.as_bytes());
+        let digest = hasher.finalize();
+        let mut bytes = [0; 8];
+        bytes.copy_from_slice(&digest[..8]);
+        let mut handle = u64::from_be_bytes(bytes) & ((1_u64 << 63) - 1);
+        if handle == 0 {
+            handle = 1;
+        }
+        handle
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(
+    tag = "selector_kind",
+    rename_all = "SCREAMING_SNAKE_CASE",
+    deny_unknown_fields
+)]
+pub enum PathSelectorTargetV1 {
+    Path { path_pattern: String },
+    Exact { canonical_path: String },
+}
+
+impl PathSelectorTargetV1 {
+    #[must_use]
+    pub fn path_expression(&self) -> &str {
+        match self {
+            Self::Path { path_pattern } => path_pattern,
+            Self::Exact { canonical_path } => canonical_path,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct EntryAdmissionMatchV1 {
     pub subject: CommonSubjectMatchV1,
@@ -670,7 +800,7 @@ pub struct EntryAdmissionMatchV1 {
 pub struct NativeTransitionMatchV1 {
     pub subject: CommonSubjectMatchV1,
     pub operations: Vec<NativeOperationV1>,
-    pub executable_object_ids: Vec<u64>,
+    pub executable_path_selector_ids: Vec<String>,
     pub source_role_ids: Vec<String>,
     pub target_role_ids: Vec<String>,
 }
@@ -717,8 +847,8 @@ pub enum PostEffectMatchV1 {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum LocalObjectSelectorV1 {
-    ExactObjectKeys {
-        exact_object_key_ids: Vec<u64>,
+    PathSelectors {
+        path_selector_ids: Vec<String>,
     },
     ObjectClasses {
         object_class_ids: Vec<String>,
@@ -921,4 +1051,46 @@ pub enum CohortSelectionV1 {
 
 pub(crate) fn ordered_unique<T: Ord>(values: &[T]) -> bool {
     values.windows(2).all(|pair| pair[0] < pair[1])
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::{PathSelectorTargetV1, PathSelectorV1};
+
+    #[test]
+    fn path_selector_target_is_selected_by_its_tag() -> serde_json::Result<()> {
+        let exact: PathSelectorV1 = serde_json::from_value(json!({
+            "schema_version": 1,
+            "path_selector_id": "secret",
+            "selector_kind": "EXACT",
+            "canonical_path": "/x/y",
+            "object_class_id": "SECRET"
+        }))?;
+        let path: PathSelectorV1 = serde_json::from_value(json!({
+            "path_pattern": "/x/*/y",
+            "object_class_id": "LIVE_PATH",
+            "selector_kind": "PATH",
+            "path_selector_id": "live-path",
+            "schema_version": 1
+        }))?;
+
+        assert!(matches!(exact.target, PathSelectorTargetV1::Exact { .. }));
+        assert!(matches!(path.target, PathSelectorTargetV1::Path { .. }));
+        Ok(())
+    }
+
+    #[test]
+    fn path_selector_target_rejects_fields_from_another_variant() {
+        let source = json!({
+            "schema_version": 1,
+            "path_selector_id": "secret",
+            "selector_kind": "EXACT",
+            "canonical_path": "/x/y",
+            "path_pattern": "/x/*/y",
+            "object_class_id": "SECRET"
+        });
+        assert!(serde_json::from_value::<PathSelectorV1>(source).is_err());
+    }
 }

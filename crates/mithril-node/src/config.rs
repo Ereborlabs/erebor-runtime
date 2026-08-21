@@ -3,7 +3,6 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use erebor_interceptor_abi::{MAX_CANONICAL_COMPONENT_BYTES_V1, MAX_CANONICAL_PATH_COMPONENTS_V1};
 use serde::{Deserialize, Serialize};
 use snafu::{ensure, ResultExt as _};
 
@@ -93,6 +92,7 @@ impl EvidenceConfig {
 #[serde(deny_unknown_fields)]
 pub struct ContainerRuntimeConfig {
     pub socket_path: PathBuf,
+    pub effect_controller_cgroup_path: PathBuf,
     #[serde(default)]
     pub containerd_event_socket_path: Option<PathBuf>,
     #[serde(default = "default_runtime_reconciliation_ms")]
@@ -126,7 +126,7 @@ pub struct AdministrativeAuthorizationConfig {
     pub maximum_clock_skew_ns: i64,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ExactDeviceConfig {
     pub device_class_id: String,
@@ -142,7 +142,7 @@ pub enum ExactDeviceType {
     Block,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ExactFileObjectConfig {
     pub profile_generation_ref_id: u64,
@@ -218,8 +218,6 @@ pub struct NodeConfig {
     #[serde(default)]
     pub policy_candidates: Vec<PolicyCandidateConfig>,
     #[serde(default)]
-    pub exact_file_objects: Vec<ExactFileObjectConfig>,
-    #[serde(default)]
     pub administrative_authorization: Option<AdministrativeAuthorizationConfig>,
 }
 
@@ -276,13 +274,15 @@ impl NodeConfig {
         if let Some(runtime) = &self.container_runtime {
             ensure!(
                 runtime.socket_path.is_absolute()
+                    && runtime.effect_controller_cgroup_path.is_absolute()
+                    && runtime.effect_controller_cgroup_path != Path::new("/sys/fs/cgroup")
                     && runtime
                         .containerd_event_socket_path
                         .as_ref()
                         .is_none_or(|path| path.is_absolute())
                     && runtime.reconciliation_interval_ms > 0,
                 InvalidConfigurationSnafu {
-                    reason: "container runtime requires absolute CRI and optional containerd-event socket paths plus a nonzero reconciliation interval",
+                    reason: "container runtime requires absolute CRI, effect-controller cgroup, and optional containerd-event socket paths plus a nonzero reconciliation interval",
                 }
             );
         }
@@ -350,58 +350,6 @@ impl NodeConfig {
                 reason: "effect policy requires a durable evidence owner",
             }
         );
-        let mut exact_object_ids = BTreeSet::new();
-        let mut exact_kernel_objects = BTreeSet::new();
-        for object in &self.exact_file_objects {
-            ensure!(
-                object.profile_generation_ref_id > 0
-                    && object.exact_object_key_id > 0
-                    && object.exact_object_key_id < (1_u64 << 63)
-                    && !object.object_class_id.is_empty()
-                    && object.mount_namespace_inode > 0
-                    && object.mount_id_unique > 0
-                    && object.inode > 0
-                    && (object.inode_generation > 0 || object.device.is_some())
-                    && object
-                        .device
-                        .as_ref()
-                        .is_none_or(|device| !device.device_class_id.is_empty())
-                    && !object.canonical_component_hex.is_empty()
-                    && object.canonical_component_hex.len()
-                        <= MAX_CANONICAL_PATH_COMPONENTS_V1
-                    && usize::from(object.mount_relative_component_count)
-                        <= object.canonical_component_hex.len()
-                    && object.mount_root_inode > 0
-                    && object.selected_mount_id_unique > 0
-                    && object.mount_snapshot_digest_id > 0
-                    && object.mount_topology_generation > 0
-                    && object.mount_view_root_pid > 0
-                    && object.canonical_component_hex.iter().all(|component| {
-                        hex::decode(component).is_ok_and(|bytes| {
-                            !bytes.is_empty()
-                                && bytes.len() <= MAX_CANONICAL_COMPONENT_BYTES_V1
-                                && !bytes.contains(&0)
-                                && bytes.as_slice() != b"."
-                                && bytes.as_slice() != b".."
-                        })
-                    })
-                    && exact_object_ids.insert((
-                        object.profile_generation_ref_id,
-                        object.exact_object_key_id,
-                    ))
-                    && exact_kernel_objects.insert((
-                        object.profile_generation_ref_id,
-                        object.mount_namespace_inode,
-                        object.mount_id_unique,
-                        object.filesystem_device,
-                        object.inode,
-                        object.inode_generation,
-                    )),
-                InvalidConfigurationSnafu {
-                    reason: "exact file-object bindings need unique IDs and unique nonzero kernel identities",
-                }
-            );
-        }
         if let Some(authorization) = &self.administrative_authorization {
             ensure!(
                 canonical_uuid(&authorization.tenant_id)
@@ -491,8 +439,8 @@ mod tests {
     use std::time::Duration;
 
     use super::{
-        ContainerKindV1, EvidenceConfig, ExactFileObjectConfig, InterceptorConfig, NodeConfig,
-        NodeControlConfig, PolicyCandidateConfig, WorkloadBindingConfig,
+        ContainerKindV1, EvidenceConfig, InterceptorConfig, NodeConfig, NodeControlConfig,
+        PolicyCandidateConfig, WorkloadBindingConfig,
     };
 
     fn config() -> NodeConfig {
@@ -546,7 +494,6 @@ mod tests {
                 arm_initial_root: false,
             }],
             policy_candidates: Vec::new(),
-            exact_file_objects: Vec::new(),
             administrative_authorization: None,
         }
     }
@@ -573,6 +520,7 @@ mod tests {
         let mut config = config();
         config.container_runtime = Some(super::ContainerRuntimeConfig {
             socket_path: PathBuf::from("/run/containerd/containerd.sock"),
+            effect_controller_cgroup_path: PathBuf::from("/sys/fs/cgroup/mithril-node"),
             containerd_event_socket_path: Some(PathBuf::from("/run/containerd/containerd.sock")),
             reconciliation_interval_ms: 2_000,
         });
@@ -585,9 +533,27 @@ mod tests {
         let mut config = config();
         config.container_runtime = Some(super::ContainerRuntimeConfig {
             socket_path: PathBuf::from("/run/containerd/containerd.sock"),
+            effect_controller_cgroup_path: PathBuf::from("/sys/fs/cgroup/mithril-node"),
             containerd_event_socket_path: Some(PathBuf::from("containerd.sock")),
             reconciliation_interval_ms: 2_000,
         });
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn effect_controller_cgroup_must_be_absolute_and_non_root() {
+        let mut config = config();
+        config.container_runtime = Some(super::ContainerRuntimeConfig {
+            socket_path: PathBuf::from("/run/containerd/containerd.sock"),
+            effect_controller_cgroup_path: PathBuf::from("mithril-node"),
+            containerd_event_socket_path: None,
+            reconciliation_interval_ms: 2_000,
+        });
+        assert!(config.validate().is_err());
+
+        if let Some(runtime) = config.container_runtime.as_mut() {
+            runtime.effect_controller_cgroup_path = PathBuf::from("/sys/fs/cgroup");
+        }
         assert!(config.validate().is_err());
     }
 
@@ -633,39 +599,5 @@ mod tests {
         config.policy_candidates[0].rollback_public_key_path =
             Some(PathBuf::from("/tmp/rollback-key.hex"));
         assert!(config.validate().is_ok());
-    }
-
-    #[test]
-    fn exact_object_ids_and_kernel_identities_are_one_to_one() {
-        let mut config = config();
-        config.exact_file_objects = vec![exact_object(7, 11), exact_object(7, 12)];
-        assert!(config.validate().is_err());
-
-        config.exact_file_objects = vec![exact_object(7, 11), exact_object(8, 11)];
-        assert!(config.validate().is_err());
-    }
-
-    fn exact_object(exact_object_key_id: u64, inode: u64) -> ExactFileObjectConfig {
-        ExactFileObjectConfig {
-            profile_generation_ref_id: 1,
-            exact_object_key_id,
-            object_class_id: "DATASET_INPUT".to_owned(),
-            mount_namespace_inode: 10,
-            mount_id_unique: 20,
-            filesystem_device: 30,
-            inode,
-            inode_generation: 1,
-            device: None,
-            canonical_component_hex: ["var", "run", "secret"]
-                .map(|component| hex::encode(component.as_bytes()))
-                .to_vec(),
-            mount_relative_component_count: 3,
-            mount_root_filesystem_device: 30,
-            mount_root_inode: 2,
-            selected_mount_id_unique: 20,
-            mount_snapshot_digest_id: 40,
-            mount_topology_generation: 1,
-            mount_view_root_pid: 1,
-        }
     }
 }

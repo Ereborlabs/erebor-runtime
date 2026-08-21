@@ -1352,6 +1352,7 @@ typedef struct identity_runtime_config_v1 {
   struct id128_v1 node_boot_id;
   uint64_t label_epoch;
   uint64_t next_id;
+  uint64_t effect_controller_cgroup_id;
   int32_t first_effect_errno;
   uint8_t enabled;
   uint8_t effect_policy_enabled;
@@ -1653,7 +1654,9 @@ typedef struct path_graph_state_key_v1 {
 
 typedef struct path_graph_terminal_v1 {
   uint64_t composite_atom_id;
-  uint64_t rule_numeric_id;
+  uint32_t rule_numeric_id;
+  uint8_t exact_object_required;
+  uint8_t reserved[3];
   uint64_t path_tree_deny_operation_mask;
 } path_graph_terminal_v1;
 

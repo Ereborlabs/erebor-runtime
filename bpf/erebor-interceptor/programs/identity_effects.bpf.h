@@ -532,6 +532,20 @@ static __noinline int resolved_identity_effect_gate(struct file *file,
                 effect_observation_reason_v1_corrupt_identity_or_generation);
         return path_tree_effect_result(config, scratch);
     }
+    if (!scratch->path_terminal.exact_object_required) {
+        if (scratch->effect_gate_flags & EFFECT_GATE_DEFER_DECISION_V1)
+            return 0;
+        decision = effect_base_decision(scratch, &scratch->process,
+                                        process_vector, entry, binding);
+        if (!decision)
+            return hard_effect_result(
+                config, scratch,
+                effect_observation_reason_v1_corrupt_identity_or_generation);
+        return apply_effect_decision(
+            config, scratch, generation, decision,
+            !(scratch->effect_gate_flags & EFFECT_GATE_DENY_EXCEPTION_V1),
+            scratch->effect_gate_flags & EFFECT_GATE_FILE_OPEN_ATTEMPT_V1);
+    }
     if (!scratch->file_object.inode)
         return hard_effect_result(
             config, scratch,

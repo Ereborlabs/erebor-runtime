@@ -64,7 +64,11 @@ impl RuntimeContainerIdentity {
             && self.image_digest == other.image_digest
             && self.generation == other.generation
             && self.cgroup_path == other.cgroup_path
-            && self.init_pid == other.init_pid
+            && (self.init_pid == other.init_pid
+                || (self.state == RuntimeContainerState::Created
+                    && self.init_pid == 0
+                    && other.state == RuntimeContainerState::Running
+                    && other.init_pid > 0))
             && self.working_directory == other.working_directory
             && self.path_entries == other.path_entries
     }
@@ -126,7 +130,7 @@ impl ContainerRuntimeInventory {
                     continue;
                 };
                 self.event_stream = Some(response.into_inner());
-                return;
+                continue;
             }
             let Some(events) = self.event_stream.as_mut() else {
                 continue;
@@ -272,7 +276,7 @@ impl ContainerRuntimeInventory {
                 ),
             }
         );
-        let runtime = runtime_process_from_info(&response.info, &self.cgroup_root)?;
+        let runtime = runtime_process_from_info(&response.info, &self.cgroup_root, status_state)?;
         Ok(Some(RuntimeContainerIdentity {
             full_container_id: status.id,
             namespace: namespace.clone(),
@@ -310,6 +314,7 @@ struct RuntimeProcessIdentity {
 fn runtime_process_from_info(
     info: &std::collections::HashMap<String, String>,
     cgroup_root: &Path,
+    state: RuntimeContainerState,
 ) -> Result<RuntimeProcessIdentity> {
     let json = info.get("info").ok_or_else(|| {
         IdentityStateSnafu {
@@ -327,13 +332,13 @@ fn runtime_process_from_info(
         .get("pid")
         .and_then(serde_json::Value::as_i64)
         .and_then(|pid| u32::try_from(pid).ok())
-        .filter(|pid| *pid > 0)
-        .ok_or_else(|| {
-            IdentityStateSnafu {
-                reason: "CRI verbose status has no live container init PID".to_owned(),
-            }
-            .build()
-        })?;
+        .unwrap_or_default();
+    ensure!(
+        state == RuntimeContainerState::Created || init_pid > 0,
+        IdentityStateSnafu {
+            reason: "running CRI container has no live init PID".to_owned(),
+        }
+    );
     let working_directory = value
         .pointer("/runtimeSpec/process/cwd")
         .and_then(serde_json::Value::as_str)
@@ -618,8 +623,10 @@ mod tests {
 
         let mut created = identity;
         created.state = RuntimeContainerState::Created;
+        created.init_pid = 0;
         assert!(created.resolve(&configured).arm_initial_root);
         assert!(created.same_lifetime_as(&RuntimeContainerIdentity {
+            init_pid: 42,
             state: RuntimeContainerState::Running,
             ..created.clone()
         }));

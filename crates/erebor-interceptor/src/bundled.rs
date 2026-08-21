@@ -219,11 +219,14 @@ mod tests {
 
     #[test]
     fn task_alloc_bounds_the_configured_errno_for_lsm() -> crate::Result<()> {
+        use erebor_interceptor_abi::IdentityRuntimeConfigV1;
         use libbpf_rs::libbpf_sys::{
             BPF_ALU64, BPF_ARSH, BPF_JMP, BPF_JSLT, BPF_K, BPF_LDX, BPF_LSH, BPF_MEM, BPF_MOV,
             BPF_W,
         };
 
+        const FIRST_EFFECT_ERRNO_OFFSET: i16 =
+            std::mem::offset_of!(IdentityRuntimeConfigV1, first_effect_errno) as i16;
         const MAX_ERRNO: i32 = 4095;
         let object = open_object()?;
         let mut found = false;
@@ -235,7 +238,7 @@ mod tests {
             let sign_extends = instructions.windows(3).any(|instructions| {
                 let errno_register = instructions[0].dst_reg();
                 instructions[0].code == (BPF_LDX | BPF_MEM | BPF_W) as u8
-                    && instructions[0].off == 32
+                    && instructions[0].off == FIRST_EFFECT_ERRNO_OFFSET
                     && instructions[1].code == (BPF_ALU64 | BPF_LSH | BPF_K) as u8
                     && instructions[1].dst_reg() == errno_register
                     && instructions[1].imm == 32

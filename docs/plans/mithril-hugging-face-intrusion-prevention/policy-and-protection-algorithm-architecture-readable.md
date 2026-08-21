@@ -1171,6 +1171,14 @@ honest result is either a denied protected effect or a recorded start gap. A
 qualified synchronous OCI prestart hook can prove the ordering for its exact
 runtime configuration. Snapshot CRI discovery cannot make that claim.
 
+This prestart ordering applies to task identity. It does not make the held
+task's final mount topology available on the qualified runc configuration.
+Mithril therefore does not resolve an `EXACT` path selector from the OCI
+prestart request. The current stock containerd path resolves `EXACT` selectors
+when authenticated CRI inventory reports the container as `Running` and
+supplies its final init PID. This path records a start gap. It does not claim
+that exact-object authority existed before the container process started.
+
 #### What a supported hook may add
 
 A supported hook is useful, but each claim is limited to its actual contract:
@@ -2408,8 +2416,45 @@ mount, propagation, overlay copy-up, and a process dying during snapshot.
 
 #### Path selector resolution, path-tree floors, and exact object authority
 
-Paths are policy-authoring inputs. A signed path can be final authority only
-for a restrictive path-tree `DENY` floor. It can never grant file authority.
+Paths are signed policy inputs. A `PATH` selector is a live path expression.
+It supports literal components, `*` for one component, and `**` for zero or
+more components. It can supply an `ALLOW` or `DENY` decision without userspace
+inode resolution. These examples have distinct meanings:
+
+```text
+x/y       live path with literal components
+x/*/y     live path with one wildcard component
+x/**/y    recursive live path pattern
+EXACT x/y path-to-inode binding for one live container mount view
+```
+
+An `EXACT` selector is the separate inode-authority option. The node resolves
+its signed canonical path in the authenticated CRI container mount view. It
+then measures and reads back the live object. The selector grants no exact
+authority when this binding is absent or stale. `WorkloadBindingOwner` uses
+the existing CRI inventory and containerd event stream. A create notification
+does not provide the final live init PID and mount view. When CRI reports the
+container as `Running`, one reconciliation advances the workload binding and
+supplies its authenticated PID for resolution. A later container, object, or
+mount replacement starts the same resolution again. This stock notification
+arrives after process start, so the current implementation records a start
+gap for `EXACT` binding.
+
+The node runs alone in a configured non-root effect-controller cgroup. It
+verifies this ownership before it publishes the cgroup ID. BPF permits that
+controller to perform read-mode protected-task inspection for current active
+bindings. The exception does not permit ptrace attach, signal delivery, or an
+external task in the controller cgroup. This narrow inspection permission lets
+the node open the authenticated task mount namespace after the restrictive
+effect profile is active.
+
+This controller permission does not authorize runc bootstrap. On the current
+qualified stock path, a new policy-active runc exec needs unlabelled read-mode
+process inspection and an anonymous bootstrap pipe before the child reaches
+its signed executable. The strict process-control and unsupported-file floors
+deny that setup. Policy-active runtime exec remains `UNSUPPORTED` until a
+separate runtime-bootstrap authority owns those exact operations. An Exact
+path selector must not create a broad runtime bypass.
 Mithril resolves paths with Meta's bounded canonical-path algorithm:
 reconstruct the path through a verified mount tree, canonicalizing a repeated
 mount-root dentry to its oldest mount before matching components with a
@@ -2428,7 +2473,7 @@ here to the supplied PDF SHA-256
 | Canonical path reconstruction | Enumerate one root mount namespace, index `mount-root dentry -> mounts`, select the oldest (`lowest mnt_id_unique`) mount for that dentry, then cross through that selected mount's parent mountpoint | A verified `MountSecurityViewV1` is the selected root domain; its complete clean snapshot supplies the mount index, unique IDs, parent, and mountpoint | A later bind alias cannot select its own target spelling when the same root dentry already belongs to an older tracked mount. |
 | Large rule matching | Bounded component graph/state machine with exact and wildcard transitions | Compile-time bounds, terminal-overlap rejection or signed exact override, no priority-by-specificity | Large hierarchical policies evaluate without linear rule scans or an unbounded string map. |
 | Cache correctness | Cache/invalidate path work around rename and mount changes | Cache key includes policy generation, actor mount view, topology snapshot, live mount, and exact object; DIRTY stops decisions before topology change | A cache cannot grant access through an old bind alias, reused inode, overlay copy-up, or remount. |
-| Authorization result | A matched path rule | A signed path-tree `DENY` terminal can deny directly. Any positive decision revalidates live object/integrity and all task, policy, response, and generation state. | A path match can impose a restriction, but it cannot grant access. Positive authority remains exact and fail closed. |
+| Authorization result | A matched path rule | A signed `PATH` terminal can allow or deny from the live canonical path. A signed `EXACT` terminal also requires the current measured inode binding. | Live path policy and inode policy remain separate selector kinds. An unresolved `EXACT` selector cannot grant authority. |
 
 Mithril's compiler and hot path therefore use this single bounded algorithm:
 
@@ -2457,15 +2502,14 @@ Mithril's compiler and hot path therefore use this single bounded algorithm:
    with different physical results unless a signed override names the exact
    selector delta; YAML order, wildcard count, and “more specific” never
    choose authority.
-5. If the terminal is a signed path-tree `DENY` floor for this effect, deny
-   before resolving an exact file object. The canonical path and clean mount
-   view are sufficient for this restriction. The leaf can be new, replaced, or
-   lack an inode generation. It is still denied.
-6. For every other terminal, revalidate the task mount view, topology
-   generation, selected canonical mount chain, exact file object, and retained
-   policy generation before returning a positive physical decision. A selector
-   match never authorizes a later bind alias, inode generation, overlay object,
-   or a different selected root.
+5. If the terminal is a signed `PATH` selector, apply its compiled `ALLOW` or
+   `DENY` decision from the live canonical path. Do not resolve an exact file
+   object. A separate signed path-tree deny floor can also deny at this stage.
+6. If the terminal is a signed `EXACT` selector, revalidate the task mount
+   view, topology generation, selected canonical mount chain, measured file
+   object, and retained policy generation before returning its physical
+   decision. A selector match never authorizes a later inode generation,
+   overlay object, or different selected root.
 
 ##### Signed path-tree deny floors
 
@@ -4338,6 +4382,13 @@ exec. Mithril permits mount mutations only while this exact committed initial
 container root still has its process-birth execution. The first successful
 application exec replaces that execution and closes the setup allowance. All
 other effect families continue through their normal identity gate.
+
+The qualified prestart hook commits task identity only. On the qualified runc
+path, it does not expose the final mount topology that an `EXACT` selector
+needs. Exact path-to-inode binding uses the separate authenticated CRI
+`Running` inventory path. Stock containerd supplies that state after process
+start, so this path records an initial Exact-binding gap. Live `PATH` selectors
+remain kernel path-graph decisions and do not use this userspace resolution.
 
 **Example.** The prestart hook reports PID A and cgroup C. CRI readback must
 show the same full container ID in `Created` state, and C must contain only A.
@@ -7564,6 +7615,17 @@ NativeAuthorityStateRuleV1 {
   monotonic:exactly true
 }
 
+PathSelectorV1 {
+  schema_version: exactly 1
+  path_selector_id: PolicyLocalIdV1
+  selector_kind: PATH | EXACT
+  PATH => path_pattern: absolute bounded live path expression with
+    literal, `*`, or `**` components
+  EXACT => canonical_path: absolute bounded path with literal components only
+  object_class_id: ObjectClassIdV1
+  device_class_id?: RegistrySymbolV1
+}
+
 RoleDefinitionV1 {
   role_id: PolicyLocalIdV1
   maximum_native_depth: u16
@@ -7593,7 +7655,7 @@ NativeRoleTransitionRuleV1 {
   transition_rule_id: PolicyLocalIdV1
   source_role_ids[1..32]
   operation: FORK | THREAD_CREATE | EXEC | PRIVILEGE_TRANSITION
-  executable_object_ids[0..256]
+  executable_path_selector_ids[0..256]: PolicyLocalIdV1
   required_process_state_ids[1..64]
   resulting_role_id, resulting_process_state_id: PolicyLocalIdV1
   requested_disposition: ALLOW | ALERT | DENY
@@ -7781,7 +7843,7 @@ NativeTransitionMatchV1 {
   kind: exactly NATIVE_TRANSITION
   subject: CommonSubjectMatchV1
   operations[1..4]: FORK | THREAD_CREATE | EXEC | PRIVILEGE_TRANSITION
-  executable_object_ids[0..256]: nonzero u64
+  executable_path_selector_ids[0..256]: PolicyLocalIdV1
   source_role_ids[0..32], target_role_ids[0..32]: PolicyLocalIdV1
 }
 
@@ -7797,13 +7859,23 @@ LocalEffectMatchV1 {
 }
 
 LocalObjectSelectorV1 =
-  EXACT_OBJECT_KEYS { exact_object_key_ids[1..256]: nonzero u64 }
+  PATH_SELECTORS { path_selector_ids[1..256]: PolicyLocalIdV1 }
   | OBJECT_CLASSES { object_class_ids[1..256]: ObjectClassIdV1 }
   | DESTINATIONS { destination_policy_ids[1..64]: PolicyLocalIdV1 }
   | DEVICES { device_class_ids[1..64]: PolicyLocalIdV1,
               ioctl_command_ids[0..256]: u32 }
   | SECURITY_OBJECTS { security_object_ids[1..64]: PolicyLocalIdV1,
                        target_selector_ids[0..64]: PolicyLocalIdV1 }
+
+A `PATH_SELECTORS` rule signs the selector ID, tagged selector target, object
+class, operations, and disposition. `PATH` matches the live canonical path.
+`x/y`, `x/*/y`, and `x/**/y` mean literal, one-component wildcard, and
+recursive live path matching. `PATH` does not require userspace inode
+resolution. `EXACT x/y` is usable only after the node resolves it through an
+authenticated `Running` CRI root and reads back the measured exact-object,
+mount-view, and topology rows. The node derives the kernel handle from the
+signed selector ID. Node configuration cannot supply this handle or an
+exact-object authority row.
 
 RemoteAdmissionMatchV1 {
   kind: exactly REMOTE_PRE_ADMISSION

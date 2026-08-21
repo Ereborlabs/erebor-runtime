@@ -30,6 +30,7 @@
   },
   "container_runtime": {
     "socket_path": "/run/k3s/containerd/containerd.sock",
+    "effect_controller_cgroup_path": "/sys/fs/cgroup/mithril-k3s-administrative-controller",
     "reconciliation_interval_ms": 100
   },
   "workload_bindings": [
@@ -55,7 +56,6 @@
     }
   ],
   "policy_candidates": [],
-  "exact_file_objects": [],
   "administrative_authorization": {
     "tenant_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
     "cluster_uid": "55555555-5555-4555-8555-555555555555",

@@ -1,4 +1,7 @@
+use std::fs;
 use std::mem::size_of;
+use std::os::unix::fs::MetadataExt as _;
+use std::path::{Path, PathBuf};
 
 use erebor_interceptor::KernelHost;
 use erebor_interceptor_abi::{Id128V1, IdentityHealthV1, IdentityRuntimeConfigV1};
@@ -6,7 +9,7 @@ use serde::Serialize;
 use snafu::{ensure, ResultExt as _};
 use zerocopy::{FromBytes as _, IntoBytes as _};
 
-use crate::error::{IdentityStateSnafu, InterceptorSnafu};
+use crate::error::{IdentityStateSnafu, InterceptorSnafu, IoSnafu};
 use crate::Result;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize)]
@@ -22,6 +25,66 @@ pub struct ReconciliationReportV1 {
 pub struct NativeSecurityStateOwner {
     node_boot_id: Id128V1,
     label_epoch: u64,
+    effect_controller_cgroup_id: u64,
+}
+
+struct EffectControllerCgroupV1 {
+    id: u64,
+}
+
+impl EffectControllerCgroupV1 {
+    fn acquire(expected: &Path) -> Result<Self> {
+        let source_path = Path::new("/proc/self/cgroup");
+        let source = fs::read_to_string(source_path).context(IoSnafu { path: source_path })?;
+        let mut unified = source.lines().filter_map(|line| line.strip_prefix("0::"));
+        let relative = unified.next().ok_or_else(|| {
+            IdentityStateSnafu {
+                reason: "the effect controller has no unified cgroup".to_owned(),
+            }
+            .build()
+        })?;
+        ensure!(
+            unified.next().is_none() && relative.starts_with('/'),
+            IdentityStateSnafu {
+                reason: "the effect controller has an ambiguous unified cgroup",
+            }
+        );
+        let current = PathBuf::from("/sys/fs/cgroup").join(relative.trim_start_matches('/'));
+        let expected = fs::canonicalize(expected).context(IoSnafu { path: expected })?;
+        let current = fs::canonicalize(&current).context(IoSnafu { path: &current })?;
+        ensure!(
+            expected == current && current != Path::new("/sys/fs/cgroup"),
+            IdentityStateSnafu {
+                reason: "the effect controller process is outside its dedicated cgroup",
+            }
+        );
+        let procs_path = current.join("cgroup.procs");
+        let processes = fs::read_to_string(&procs_path).context(IoSnafu { path: &procs_path })?;
+        let processes = processes
+            .lines()
+            .map(str::parse::<u32>)
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(|error| {
+                IdentityStateSnafu {
+                    reason: format!("effect controller cgroup has an invalid PID: {error}"),
+                }
+                .build()
+            })?;
+        ensure!(
+            processes.as_slice() == [std::process::id()],
+            IdentityStateSnafu {
+                reason: "the effect controller cgroup must contain only the node process",
+            }
+        );
+        let metadata = fs::metadata(&current).context(IoSnafu { path: &current })?;
+        ensure!(
+            metadata.is_dir() && metadata.ino() > 0,
+            IdentityStateSnafu {
+                reason: "the effect controller cgroup has no live kernel identity",
+            }
+        );
+        Ok(Self { id: metadata.ino() })
+    }
 }
 
 impl NativeSecurityStateOwner {
@@ -30,7 +93,67 @@ impl NativeSecurityStateOwner {
         Self {
             node_boot_id,
             label_epoch,
+            effect_controller_cgroup_id: 0,
         }
+    }
+
+    pub(crate) fn for_effect_controller(
+        node_boot_id: Id128V1,
+        label_epoch: u64,
+        cgroup_path: &Path,
+    ) -> Result<Self> {
+        let effect_controller_cgroup_id = EffectControllerCgroupV1::acquire(cgroup_path)?.id;
+        Ok(Self {
+            node_boot_id,
+            label_epoch,
+            effect_controller_cgroup_id,
+        })
+    }
+
+    pub(crate) fn claim_effect_controller(&self, host: &KernelHost) -> Result<()> {
+        if self.effect_controller_cgroup_id == 0 {
+            return Ok(());
+        }
+        let key = 0_u32.to_ne_bytes();
+        let bytes = host
+            .lookup_map("identity_config", &key)
+            .context(InterceptorSnafu)?
+            .ok_or_else(|| {
+                IdentityStateSnafu {
+                    reason: "identity config map has no zero-key record".to_owned(),
+                }
+                .build()
+            })?;
+        if bytes.iter().all(|byte| *byte == 0) {
+            return Ok(());
+        }
+        let mut config = IdentityRuntimeConfigV1::read_from_bytes(&bytes).map_err(|error| {
+            IdentityStateSnafu {
+                reason: format!("identity config map has an invalid ABI value: {error}"),
+            }
+            .build()
+        })?;
+        ensure!(
+            config.node_boot_id == self.node_boot_id
+                && config.label_epoch == self.label_epoch
+                && config.enabled == 1,
+            IdentityStateSnafu {
+                reason: "the recovered effect controller has a different identity",
+            }
+        );
+        config.effect_controller_cgroup_id = self.effect_controller_cgroup_id;
+        host.update_map("identity_config", &key, config.as_bytes())
+            .context(InterceptorSnafu)?;
+        ensure!(
+            host.lookup_map("identity_config", &key)
+                .context(InterceptorSnafu)?
+                .as_deref()
+                == Some(config.as_bytes()),
+            IdentityStateSnafu {
+                reason: "the effect controller cgroup failed kernel readback",
+            }
+        );
+        Ok(())
     }
 
     pub fn activate(&self, host: &mut KernelHost) -> Result<ReconciliationReportV1> {
@@ -78,6 +201,7 @@ impl NativeSecurityStateOwner {
             config.node_boot_id == self.node_boot_id
                 && config.label_epoch == self.label_epoch
                 && config.next_id > 0
+                && config.effect_controller_cgroup_id == self.effect_controller_cgroup_id
                 && config.enabled == 1
                 && config.effect_policy_enabled == u8::from(effect_policy_enabled)
                 && config.first_effect_errno == -rustix::io::Errno::ACCESS.raw_os_error(),
@@ -102,6 +226,7 @@ impl NativeSecurityStateOwner {
             node_boot_id: self.node_boot_id,
             label_epoch: self.label_epoch,
             next_id: 1,
+            effect_controller_cgroup_id: self.effect_controller_cgroup_id,
             first_effect_errno: -rustix::io::Errno::ACCESS.raw_os_error(),
             enabled: 1,
             effect_policy_enabled: u8::from(effect_policy_enabled),

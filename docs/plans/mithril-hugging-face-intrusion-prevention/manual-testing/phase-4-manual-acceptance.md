@@ -81,11 +81,13 @@ Inspect `k3s-cri-observe.txt` and `k3s-cri-effect.txt` before using later
 probe output as an overall result. The CRI files are complete evidence when
 they show these facts for one task cookie:
 
-- Observe: secret key 7 is `WOULD_DENY`; benign key 8 is
-  `EXACT_POLICY_ALLOW`; both have `UNKNOWN_AFTER_PRE_EFFECT`.
-- Protect: secret key 7 is `EXACT_POLICY_DENY` with
-  `DENIED_BEFORE_EFFECT` and `kernel_result=-13`; benign key 8 is
-  `EXACT_POLICY_ALLOW` with `kernel_result=0`.
+- Observe: secret selector `manual-secret` (handle
+  `943398411243188049`) is `WOULD_DENY`; benign selector
+  `manual-benign` (handle `442755278878333200`) is
+  `EXACT_POLICY_ALLOW`. Both have `UNKNOWN_AFTER_PRE_EFFECT`.
+- Protect: secret selector `manual-secret` is `EXACT_POLICY_DENY` with
+  `DENIED_BEFORE_EFFECT` and `kernel_result=-13`. Benign selector
+  `manual-benign` is `EXACT_POLICY_ALLOW` with `kernel_result=0`.
 
 For an operator-driven benign-only CRI case, use
 [`cri-benign-allow.sh`](../../../../examples/mithril-local-enforcement-manual/cri-benign-allow.sh).
@@ -96,6 +98,52 @@ administrative-exec path.
 
 Each record below applies only to its named source state and date. Its old
 status sentence does not override the final closure record.
+
+### Signed Exact selectors from containerd Running inventory — 2026-08-21
+
+State: **Done** for signed selector authority and Exact binding after an
+authenticated CRI `Running` transition. Exact binding before process start is
+**Not done** on the qualified stock containerd interface.
+
+The retained x86_64 K3s VM `mithril-runtime-qualification-344630` ran the final
+node binary with SHA-256
+`904088e728a6e8eead6b25c2d1976082a4a54c52f369bfe9fbf2a57b7ea63f34`.
+The VM, K3s installation, image cache, and empty controller cgroups remain
+available for compatible later tests.
+
+The OBSERVE output is
+`/tmp/mithril-session-exact-20260821/k3s-cri-observe-final.txt`, SHA-256
+`6af613db8e881be8f3cfc498ee5646821bb2bf2a19826c26271a5e99c85a5c1b`.
+Direct CRI and `kubectl exec` roots were
+`runtime_external_restricted`. Both secret reads used signed selector handle
+`943398411243188049` and reported `WOULD_DENY` with kernel result 0. The
+benign read used signed selector handle `442755278878333200` and reported
+`EXACT_POLICY_ALLOW` with kernel result 0.
+
+The PROTECT output is
+`/tmp/mithril-session-exact-20260821/k3s-cri-protect-final.txt`, SHA-256
+`29ef205dc4d09a89392fa1fcc31a5d3a249810b3c3508de24617da284afbf0ed`.
+Direct CRI and `kubectl exec` secret reads reported `EXACT_POLICY_DENY`,
+`DENIED_BEFORE_EFFECT`, and kernel result -13. The benign Exact read remained
+allowed. Both lanes exited 0 after they removed their Pod, namespace, pins,
+node process, and lane state. The dedicated controller cgroup was empty and
+reusable after each node exit.
+
+Each output records
+`exact_binding_stage=containerd-running-inventory` and
+`initial_binding_start_gap=recorded:container-running-before-node-binding`.
+The OCI prestart identity hook does not resolve Exact selectors because the
+qualified runc task does not yet expose its final mount topology.
+
+The administrative-exec diagnostic reached signed Exact executable binding
+without a node-config object. It then failed before the approved process exec:
+the policy-active runc bootstrap used unlabelled read-mode process inspection
+and an anonymous bootstrap pipe, and the process-control and unsupported-file
+floors denied those operations. Its diagnostic output SHA-256 is
+`72708b25d1f098410d0ee27869af7f9b0ec2ad07eea2b0e2a4dcee360b0e552e`.
+This is **Not done** for policy-active administrative runc bootstrap. It does
+not change the passing CRI Exact result. A future fix needs explicit runtime
+bootstrap authority; it must not add a broad runtime bypass.
 
 ### Retained VM alias and mount evidence — 2026-08-15
 

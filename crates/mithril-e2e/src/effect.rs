@@ -20,7 +20,7 @@ use erebor_interceptor_abi::{
     ProfileGenerationDescriptorV1, QualificationResultV1, MAX_CANONICAL_PATH_COMPONENTS_V1,
 };
 use mithril_control::{
-    EffectFamilyV1, PathTreeDenyFloorV1, PolicyArtifactOwner, PolicyDispositionV1,
+    EffectFamilyV1, PathSelectorV1, PathTreeDenyFloorV1, PolicyArtifactOwner, PolicyDispositionV1,
     PolicyDocumentV1, ProfileSealRequestV1,
 };
 use mithril_node::{
@@ -57,14 +57,6 @@ pub use network::{
 
 pub(super) const PROFILE_GENERATION_REF_ID: u64 = 1;
 const NEXT_PROFILE_GENERATION_REF_ID: u64 = 2;
-pub(super) const EXACT_OBJECT_KEY_ID: u64 = 7;
-pub(super) const BENIGN_OBJECT_KEY_ID: u64 = 8;
-pub(super) const EXEC_OBJECT_KEY_ID: u64 = 9;
-pub(super) const SCRIPT_OBJECT_KEY_ID: u64 = 10;
-pub(super) const ALLOWED_EXEC_OBJECT_KEY_ID: u64 = 12;
-pub(super) const DEVICE_PTMX_OBJECT_KEY_ID: u64 = 13;
-pub(super) const DEVICE_ZERO_OBJECT_KEY_ID: u64 = 14;
-pub(super) const PROPAGATION_BENIGN_OBJECT_KEY_ID: u64 = 15;
 const QUALIFIED_TIOCGPTN_IOCTL: u32 = 2_147_767_344;
 const QUALIFIED_TIOCGPTPEER_IOCTL: u32 = 0x5441;
 const BOUNDED_EXCEPTION_INSTANCE_ID: Id128V1 =
@@ -509,6 +501,72 @@ fn build_generation_artifact(
         })?,
     )
     .context(PolicySnafu)?;
+    document.path_selectors.clear();
+    for (path_selector_id, path, object_class_id, device_class_id) in [
+        (
+            "manual-secret",
+            fixture_root.join("source/secret"),
+            "MANUAL_SECRET",
+            None,
+        ),
+        (
+            "manual-benign",
+            fixture_root.join("benign"),
+            "MANUAL_BENIGN",
+            None,
+        ),
+        (
+            "manual-exec",
+            fixture_root.join("exec-target"),
+            "MANUAL_EXEC",
+            None,
+        ),
+        (
+            "manual-script",
+            fixture_root.join("script-target"),
+            "MANUAL_EXEC",
+            None,
+        ),
+        (
+            "manual-exec-allowed",
+            fixture_root.join("allowed-exec-target"),
+            "MANUAL_EXEC_ALLOWED",
+            None,
+        ),
+        (
+            "manual-device-ptmx",
+            PathBuf::from("/dev/pts/ptmx"),
+            "MANUAL_DEVICE_ALLOWED",
+            Some("PTMX_DEVICE"),
+        ),
+        (
+            "manual-device-zero",
+            PathBuf::from("/dev/zero"),
+            "MANUAL_DEVICE_DENIED",
+            Some("ZERO_DEVICE"),
+        ),
+    ] {
+        if !document
+            .protected_universe
+            .object_class_ids
+            .iter()
+            .any(|class| class == object_class_id)
+        {
+            continue;
+        }
+        let canonical_path = path.to_str().ok_or_else(|| {
+            InvalidInputSnafu {
+                path: &path,
+                reason: "the signed fixture path selector must be UTF-8",
+            }
+            .build()
+        })?;
+        let selector = PathSelectorV1::exact(path_selector_id, canonical_path, object_class_id);
+        document.path_selectors.push(match device_class_id {
+            Some(device_class_id) => selector.with_device_class(device_class_id),
+            None => selector,
+        });
+    }
     if let Some(path_tree_root) = path_tree_root {
         let canonical_path = path_tree_root.to_str().ok_or_else(|| {
             InvalidInputSnafu {
@@ -1205,7 +1263,7 @@ impl EffectTestRunner {
             fixture.pid(),
             &paths.secret,
             PROFILE_GENERATION_REF_ID,
-            EXACT_OBJECT_KEY_ID,
+            PathSelectorV1::kernel_handle_for_id("manual-secret"),
             "MANUAL_SECRET".to_owned(),
             secret_inode_generation,
             None,
@@ -1215,7 +1273,7 @@ impl EffectTestRunner {
             fixture.pid(),
             &paths.bind_alias,
             PROFILE_GENERATION_REF_ID,
-            EXACT_OBJECT_KEY_ID,
+            PathSelectorV1::kernel_handle_for_id("manual-secret"),
             "MANUAL_SECRET".to_owned(),
             secret_inode_generation,
             None,
@@ -1225,7 +1283,7 @@ impl EffectTestRunner {
             fixture.pid(),
             &paths.second_bind_alias,
             PROFILE_GENERATION_REF_ID,
-            EXACT_OBJECT_KEY_ID,
+            PathSelectorV1::kernel_handle_for_id("manual-secret"),
             "MANUAL_SECRET".to_owned(),
             secret_inode_generation,
             None,
@@ -1264,7 +1322,7 @@ impl EffectTestRunner {
             fixture.pid(),
             &paths.benign,
             PROFILE_GENERATION_REF_ID,
-            BENIGN_OBJECT_KEY_ID,
+            PathSelectorV1::kernel_handle_for_id("manual-benign"),
             "MANUAL_BENIGN".to_owned(),
             benign_inode_generation,
             None,
@@ -1274,7 +1332,7 @@ impl EffectTestRunner {
             propagation_peer_pid,
             &paths.benign,
             PROFILE_GENERATION_REF_ID,
-            PROPAGATION_BENIGN_OBJECT_KEY_ID,
+            PathSelectorV1::kernel_handle_for_id("manual-benign"),
             "MANUAL_BENIGN".to_owned(),
             inode_generation(propagation_peer_pid, &paths.benign)?,
             None,
@@ -1284,7 +1342,7 @@ impl EffectTestRunner {
             fixture.pid(),
             &paths.exec_target,
             PROFILE_GENERATION_REF_ID,
-            EXEC_OBJECT_KEY_ID,
+            PathSelectorV1::kernel_handle_for_id("manual-exec"),
             "MANUAL_EXEC".to_owned(),
             exec_inode_generation,
             None,
@@ -1294,7 +1352,7 @@ impl EffectTestRunner {
             fixture.pid(),
             &paths.script_target,
             PROFILE_GENERATION_REF_ID,
-            SCRIPT_OBJECT_KEY_ID,
+            PathSelectorV1::kernel_handle_for_id("manual-script"),
             "MANUAL_EXEC".to_owned(),
             inode_generation(fixture.pid(), &paths.script_target)?,
             None,
@@ -1313,7 +1371,7 @@ impl EffectTestRunner {
                     fixture.pid(),
                     &paths.allowed_exec_target,
                     PROFILE_GENERATION_REF_ID,
-                    ALLOWED_EXEC_OBJECT_KEY_ID,
+                    PathSelectorV1::kernel_handle_for_id("manual-exec-allowed"),
                     "MANUAL_EXEC_ALLOWED".to_owned(),
                     inode_generation(fixture.pid(), &paths.allowed_exec_target)?,
                     None,
@@ -1325,7 +1383,7 @@ impl EffectTestRunner {
                     fixture.pid(),
                     Path::new("/dev/pts/ptmx"),
                     PROFILE_GENERATION_REF_ID,
-                    DEVICE_PTMX_OBJECT_KEY_ID,
+                    PathSelectorV1::kernel_handle_for_id("manual-device-ptmx"),
                     "MANUAL_DEVICE_ALLOWED".to_owned(),
                     0,
                     Some("PTMX_DEVICE".to_owned()),
@@ -1337,7 +1395,7 @@ impl EffectTestRunner {
                     fixture.pid(),
                     Path::new("/dev/zero"),
                     PROFILE_GENERATION_REF_ID,
-                    DEVICE_ZERO_OBJECT_KEY_ID,
+                    PathSelectorV1::kernel_handle_for_id("manual-device-zero"),
                     "MANUAL_DEVICE_DENIED".to_owned(),
                     0,
                     Some("ZERO_DEVICE".to_owned()),
@@ -1349,6 +1407,18 @@ impl EffectTestRunner {
             .iter()
             .map(|object| object.mount_namespace_inode)
             .collect::<BTreeSet<_>>();
+        let test_exact_objects = exact_objects
+            .iter()
+            .cloned()
+            .map(|object| {
+                let binding_id = if object.mount_view_root_pid == propagation_peer_pid {
+                    propagation_binding.binding_id.clone()
+                } else {
+                    binding.binding_id.clone()
+                };
+                (binding_id, object)
+            })
+            .collect::<Vec<_>>();
         let node_config = effect_node_config(
             &fixture_root,
             pin_root,
@@ -1356,14 +1426,13 @@ impl EffectTestRunner {
             &policy_fixture,
             artifact_path,
             binding_set.to_vec(),
-            exact_objects.clone(),
         );
         let mut next_bindings = binding_set.to_vec();
         for binding in &mut next_bindings {
             binding.active_profile_generation_ref_id = NEXT_PROFILE_GENERATION_REF_ID;
         }
-        let mut next_exact_objects = exact_objects;
-        for object in &mut next_exact_objects {
+        let mut next_test_exact_objects = test_exact_objects.clone();
+        for (_, object) in &mut next_test_exact_objects {
             object.profile_generation_ref_id = NEXT_PROFILE_GENERATION_REF_ID;
         }
         let next_node_config = effect_node_config(
@@ -1373,7 +1442,6 @@ impl EffectTestRunner {
             &policy_fixture,
             next_artifact_path,
             next_bindings,
-            next_exact_objects,
         );
 
         host.shutdown().context(InterceptorSnafu)?;
@@ -1385,9 +1453,14 @@ impl EffectTestRunner {
         recovered_bindings
             .publish_all(&host, &binding_set)
             .context(NodeSnafu)?;
-        let mut policy =
-            NodePolicyGenerationOwner::load_and_install(&node_config, &mut host, node_boot_id, 1)
-                .context(NodeSnafu)?;
+        let mut policy = NodePolicyGenerationOwner::load_and_install_for_test_objects(
+            &node_config,
+            &mut host,
+            node_boot_id,
+            1,
+            test_exact_objects.clone(),
+        )
+        .context(NodeSnafu)?;
         ensure!(
             mount_views_are_clean(&host, &mount_namespaces)?,
             InvalidInputSnafu {
@@ -1590,7 +1663,7 @@ impl EffectTestRunner {
                 outside_marker,
                 "EXACT_POLICY_ALLOW",
                 (KernelEffectFamilyV1::File, KernelEffectOperationV1::Read),
-                BENIGN_OBJECT_KEY_ID,
+                PathSelectorV1::kernel_handle_for_id("manual-benign"),
                 None,
             )?;
 
@@ -1741,7 +1814,13 @@ impl EffectTestRunner {
                 .start()
                 .context(InterceptorSnafu)?;
             policy = policy
-                .reload_and_install(&node_config, &mut host, node_boot_id, 1)
+                .reload_and_install_for_test_objects(
+                    &node_config,
+                    &mut host,
+                    node_boot_id,
+                    1,
+                    test_exact_objects.clone(),
+                )
                 .context(NodeSnafu)?;
             NativeSecurityStateOwner::new(node_boot_id, 1)
                 .activate_with_effect_policy(&mut host, true)
@@ -1868,7 +1947,7 @@ impl EffectTestRunner {
                 inherited_marker,
                 "EXACT_POLICY_DENY",
                 (KernelEffectFamilyV1::File, KernelEffectOperationV1::Read),
-                EXACT_OBJECT_KEY_ID,
+                PathSelectorV1::kernel_handle_for_id("manual-secret"),
                 None,
             )?;
             let mmap_marker = observations.cursor();
@@ -1888,7 +1967,7 @@ impl EffectTestRunner {
                     KernelEffectFamilyV1::File,
                     KernelEffectOperationV1::MmapRead,
                 ),
-                EXACT_OBJECT_KEY_ID,
+                PathSelectorV1::kernel_handle_for_id("manual-secret"),
                 None,
             )?;
             let main_mapping_identity = observations
@@ -1898,7 +1977,8 @@ impl EffectTestRunner {
                     event.reason == "EXACT_POLICY_DENY"
                         && event.effect_family == u32::from(KernelEffectFamilyV1::File as u16)
                         && event.operation == u32::from(KernelEffectOperationV1::MmapRead as u16)
-                        && event.exact_object_key_id == EXACT_OBJECT_KEY_ID
+                        && event.exact_object_key_id
+                            == PathSelectorV1::kernel_handle_for_id("manual-secret")
                 })
                 .map(|event| {
                     (
@@ -1933,7 +2013,7 @@ impl EffectTestRunner {
                     KernelEffectFamilyV1::File,
                     KernelEffectOperationV1::MmapWrite,
                 ),
-                EXACT_OBJECT_KEY_ID,
+                PathSelectorV1::kernel_handle_for_id("manual-secret"),
                 None,
             )?;
             let independent_mapping_identity = observations
@@ -1943,7 +2023,8 @@ impl EffectTestRunner {
                     event.reason == "EXACT_POLICY_DENY"
                         && event.effect_family == u32::from(KernelEffectFamilyV1::File as u16)
                         && event.operation == u32::from(KernelEffectOperationV1::MmapWrite as u16)
-                        && event.exact_object_key_id == EXACT_OBJECT_KEY_ID
+                        && event.exact_object_key_id
+                            == PathSelectorV1::kernel_handle_for_id("manual-secret")
                 })
                 .map(|event| {
                     (
@@ -1988,7 +2069,7 @@ impl EffectTestRunner {
                     KernelEffectFamilyV1::File,
                     KernelEffectOperationV1::MmapRead,
                 ),
-                BENIGN_OBJECT_KEY_ID,
+                PathSelectorV1::kernel_handle_for_id("manual-benign"),
                 None,
             )?;
         }
@@ -2060,7 +2141,7 @@ impl EffectTestRunner {
             } else {
                 "WOULD_DENY"
             },
-            EXACT_OBJECT_KEY_ID,
+            PathSelectorV1::kernel_handle_for_id("manual-secret"),
         )?;
         let io_uring_benign_marker = observations.cursor();
         let io_uring_benign = fixture.run_prepared(HardClosedOperation::IoUringBenignRead)?;
@@ -2111,7 +2192,7 @@ impl EffectTestRunner {
             &observations,
             io_uring_benign_marker,
             "EXACT_POLICY_ALLOW",
-            BENIGN_OBJECT_KEY_ID,
+            PathSelectorV1::kernel_handle_for_id("manual-benign"),
         )?;
         let io_uring_sqpoll_marker = observations.cursor();
         ensure!(
@@ -2236,27 +2317,27 @@ impl EffectTestRunner {
                 (
                     HardClosedOperation::Execve,
                     "execve image",
-                    EXEC_OBJECT_KEY_ID,
+                    PathSelectorV1::kernel_handle_for_id("manual-exec"),
                 ),
                 (
                     HardClosedOperation::Execveat,
                     "execveat image",
-                    EXEC_OBJECT_KEY_ID,
+                    PathSelectorV1::kernel_handle_for_id("manual-exec"),
                 ),
                 (
                     HardClosedOperation::Fexecve,
                     "fexecve image",
-                    EXEC_OBJECT_KEY_ID,
+                    PathSelectorV1::kernel_handle_for_id("manual-exec"),
                 ),
                 (
                     HardClosedOperation::ScriptExec,
                     "script image",
-                    SCRIPT_OBJECT_KEY_ID,
+                    PathSelectorV1::kernel_handle_for_id("manual-script"),
                 ),
                 (
                     HardClosedOperation::NonLeaderExec,
                     "non-leader-thread image",
-                    EXEC_OBJECT_KEY_ID,
+                    PathSelectorV1::kernel_handle_for_id("manual-exec"),
                 ),
             ] {
                 let marker = require_hard_close(
@@ -2324,7 +2405,7 @@ impl EffectTestRunner {
                 approved_exec_marker,
                 "EXACT_POLICY_ALLOW",
                 (KernelEffectFamilyV1::Exec, KernelEffectOperationV1::Execute),
-                ALLOWED_EXEC_OBJECT_KEY_ID,
+                PathSelectorV1::kernel_handle_for_id("manual-exec-allowed"),
                 None,
             )?;
 
@@ -2357,7 +2438,7 @@ impl EffectTestRunner {
                 exec_marker,
                 "WOULD_DENY",
                 (KernelEffectFamilyV1::Exec, KernelEffectOperationV1::Execute),
-                EXEC_OBJECT_KEY_ID,
+                PathSelectorV1::kernel_handle_for_id("manual-exec"),
                 None,
             )?;
         }
@@ -2457,7 +2538,7 @@ impl EffectTestRunner {
                     marker,
                     "EXACT_POLICY_DENY",
                     (family, kernel_operation),
-                    EXACT_OBJECT_KEY_ID,
+                    PathSelectorV1::kernel_handle_for_id("manual-secret"),
                     None,
                 )?;
             }
@@ -2526,7 +2607,7 @@ impl EffectTestRunner {
                     KernelEffectFamilyV1::File,
                     KernelEffectOperationV1::MmapRead,
                 ),
-                BENIGN_OBJECT_KEY_ID,
+                PathSelectorV1::kernel_handle_for_id("manual-benign"),
                 None,
             )?;
         }
@@ -2947,7 +3028,7 @@ impl EffectTestRunner {
                 device_allow_marker,
                 "EXACT_POLICY_ALLOW",
                 (KernelEffectFamilyV1::Device, KernelEffectOperationV1::Ioctl),
-                DEVICE_PTMX_OBJECT_KEY_ID,
+                PathSelectorV1::kernel_handle_for_id("manual-device-ptmx"),
                 Some(QUALIFIED_TIOCGPTN_IOCTL),
             )?;
             let descriptors_before = process_descriptor_set(fixture.pid())?;
@@ -2974,7 +3055,7 @@ impl EffectTestRunner {
                 derived_peer_marker,
                 "UNSUPPORTED_OBJECT",
                 (KernelEffectFamilyV1::Device, KernelEffectOperationV1::Ioctl),
-                DEVICE_PTMX_OBJECT_KEY_ID,
+                PathSelectorV1::kernel_handle_for_id("manual-device-ptmx"),
                 Some(QUALIFIED_TIOCGPTPEER_IOCTL),
             )?;
             let device_deny_marker = require_hard_close(
@@ -2992,7 +3073,7 @@ impl EffectTestRunner {
                 device_deny_marker,
                 "EXACT_POLICY_DENY",
                 (KernelEffectFamilyV1::Device, KernelEffectOperationV1::Ioctl),
-                DEVICE_ZERO_OBJECT_KEY_ID,
+                PathSelectorV1::kernel_handle_for_id("manual-device-zero"),
                 Some(QUALIFIED_TIOCGPTN_IOCTL),
             )?;
         } else {
@@ -3090,7 +3171,7 @@ impl EffectTestRunner {
             .iter()
             .find(|event| {
                 event.reason == exact_reason
-                    && event.exact_object_key_id == EXACT_OBJECT_KEY_ID
+                    && event.exact_object_key_id == PathSelectorV1::kernel_handle_for_id("manual-secret")
                     && event.composite_atom_id > 0
             })
             .map(|event| event.composite_atom_id)
@@ -3123,7 +3204,7 @@ impl EffectTestRunner {
                         KernelEffectFamilyV1::File,
                         KernelEffectOperationV1::OpenRead,
                     ),
-                    EXACT_OBJECT_KEY_ID,
+                    PathSelectorV1::kernel_handle_for_id("manual-secret"),
                     None,
                 )?;
             }
@@ -3150,7 +3231,7 @@ impl EffectTestRunner {
                 KernelEffectFamilyV1::File,
                 KernelEffectOperationV1::OpenRead,
             ),
-            EXACT_OBJECT_KEY_ID,
+            PathSelectorV1::kernel_handle_for_id("manual-secret"),
             None,
         )?;
 
@@ -3174,7 +3255,7 @@ impl EffectTestRunner {
                     KernelEffectFamilyV1::File,
                     KernelEffectOperationV1::OpenRead,
                 ),
-                EXACT_OBJECT_KEY_ID,
+                PathSelectorV1::kernel_handle_for_id("manual-secret"),
                 None,
             )?;
 
@@ -3195,7 +3276,7 @@ impl EffectTestRunner {
                 passed_secret_marker,
                 "EXACT_POLICY_DENY",
                 (KernelEffectFamilyV1::File, KernelEffectOperationV1::Read),
-                EXACT_OBJECT_KEY_ID,
+                PathSelectorV1::kernel_handle_for_id("manual-secret"),
                 None,
             )?;
 
@@ -3215,7 +3296,7 @@ impl EffectTestRunner {
                 passed_benign_marker,
                 "EXACT_POLICY_ALLOW",
                 (KernelEffectFamilyV1::File, KernelEffectOperationV1::Read),
-                BENIGN_OBJECT_KEY_ID,
+                PathSelectorV1::kernel_handle_for_id("manual-benign"),
                 None,
             )?;
         }
@@ -3278,7 +3359,7 @@ impl EffectTestRunner {
                             && event.filesystem_device == bind_alias_object.filesystem_device
                             && event.inode == bind_alias_object.inode
                             && event.inode_generation == bind_alias_object.inode_generation
-                            && event.exact_object_key_id == EXACT_OBJECT_KEY_ID
+                            && event.exact_object_key_id == PathSelectorV1::kernel_handle_for_id("manual-secret")
                             && event.composite_atom_id == original_composite_atom_id
                     }),
                 InvalidInputSnafu {
@@ -3360,7 +3441,7 @@ impl EffectTestRunner {
                 KernelEffectFamilyV1::File,
                 KernelEffectOperationV1::OpenRead,
             ),
-            EXACT_OBJECT_KEY_ID,
+            PathSelectorV1::kernel_handle_for_id("manual-secret"),
             None,
         )?;
 
@@ -3492,7 +3573,7 @@ impl EffectTestRunner {
                 KernelEffectFamilyV1::File,
                 KernelEffectOperationV1::OpenRead,
             ),
-            EXACT_OBJECT_KEY_ID,
+            PathSelectorV1::kernel_handle_for_id("manual-secret"),
             None,
         )?;
         external_mount_namespace.unmount(&paths.mount_target)?;
@@ -3552,7 +3633,7 @@ impl EffectTestRunner {
                 KernelEffectFamilyV1::File,
                 KernelEffectOperationV1::OpenRead,
             ),
-            EXACT_OBJECT_KEY_ID,
+            PathSelectorV1::kernel_handle_for_id("manual-secret"),
             None,
         )?;
 
@@ -3687,7 +3768,13 @@ impl EffectTestRunner {
         );
 
         policy = policy
-            .reload_and_install(&next_node_config, &mut host, node_boot_id, 1)
+            .reload_and_install_for_test_objects(
+                &next_node_config,
+                &mut host,
+                node_boot_id,
+                1,
+                next_test_exact_objects,
+            )
             .context(NodeSnafu)?;
         let active_generation = host
             .lookup_map(
@@ -3754,7 +3841,7 @@ impl EffectTestRunner {
             retained_marker,
             "EXACT_POLICY_ALLOW",
             (KernelEffectFamilyV1::File, KernelEffectOperationV1::Read),
-            BENIGN_OBJECT_KEY_ID,
+            PathSelectorV1::kernel_handle_for_id("manual-benign"),
             None,
         )?;
         let existing_tasks_retained_old_generation = observations
@@ -3763,7 +3850,8 @@ impl EffectTestRunner {
             .any(|event| {
                 event.reason == "EXACT_POLICY_ALLOW"
                     && event.profile_generation_ref_id == PROFILE_GENERATION_REF_ID
-                    && event.exact_object_key_id == BENIGN_OBJECT_KEY_ID
+                    && event.exact_object_key_id
+                        == PathSelectorV1::kernel_handle_for_id("manual-benign")
             });
         ensure!(
             existing_tasks_retained_old_generation,

@@ -10,13 +10,13 @@ evidence paths. This guide does not replace an acceptance record.
 The dedicated [signed path-tree denial review](./path-tree-denial-implementation-review.md)
 explains the recursive path enforcement and its exact VM evidence.
 
-Source reviewed: current checked source on 2026-08-19. The production
-identity object loaded by the 2026-08-18 VM has SHA-256
-`02408c371aafaeeb044cbf11195a25dca35013bcdea44e37aa0756ebd2f2f3e6`.
+Source reviewed: current checked source on 2026-08-21. The production
+identity object loaded by the 2026-08-21 VM has SHA-256
+`a499847a7b2a8b236b67171357a7b6f28f712246e0db2f68a3fd1ad4978bf29b`.
 The checked kernel-qualification object has SHA-256
-`4d56e05b36bb310af66c7ec553aa13fa4b29d4839096a7dd0e5708edddaa1eac`.
+`70734e40a067fda0c6056be4f1ffe742adae38b8d99e73b7590c7356dbdf4a65`.
 The current architecture digest is
-`22678b9c0379ff915fe595059f3da2789c3e32cdf54d61656c7257175263d14a`.
+`580becbcd8f2872f954fb4e3857e27ec0f5528e55d8561096f3a16d10cf26d4e`.
 
 The source contains one production BPF object, native task identity, signed
 local policy rows, exact file decisions, typed device and process decisions,
@@ -41,6 +41,99 @@ The latest phase results remain:
   K3s Flannel route.
 - Phase 6: **Done** for its qualified x86_64 durable-evidence and recovery
   tier.
+
+## Signed Path Authority And CRI Exact Binding — 2026-08-21
+
+This section supersedes older exact-file examples in this guide that use a
+numeric key from node configuration. Those examples remain dated evidence for
+their named source state. They do not describe the current authority source.
+
+Review the current path in this order:
+
+1. [`PathSelectorV1`](../../../crates/mithril-control/src/policy/source.rs#L661)
+   owns the signed selector. Its tagged target is `PATH` or `EXACT`.
+   `PathSelectorV1::path`, `recursive`, and `exact` construct valid Version 1
+   values. There is no default selector because no arbitrary selector is
+   valid.
+2. [`PathSelectorTargetV1::pattern_components`](../../../crates/mithril-control/src/policy/path.rs#L205)
+   parses `PATH` expressions. A literal component matches itself, `*` matches
+   one component, and `**` matches zero or more components. `EXACT` accepts
+   literal components only.
+3. [`PolicyDocumentV1::validate`](../../../crates/mithril-control/src/policy/validation/document.rs#L130)
+   validates selector IDs, kernel handles, targets, and references in one
+   iteration. The signed canonical bytes include the selector target, object
+   class, operations, and disposition.
+4. [`WorkloadBindingOwner::exact_object_binding_targets`](../../../crates/mithril-node/src/identity/binding.rs#L564)
+   publishes an Exact-resolution target only for an authenticated active CRI
+   binding in `Running` state with a nonzero init PID. A `Created` container
+   is valid identity input, but it is not an Exact-resolution target.
+5. [`NodePolicyGenerationOwner::resolve_cri_exact_objects`](../../../crates/mithril-node/src/policy.rs#L602)
+   reads verified signed `EXACT` selectors and resolves them in that init
+   process mount view. Missing paths add no measured object. A changed runtime
+   target revokes dynamic path authority before the owner installs and reads
+   back replacement rows.
+6. [`LoweredGeneration::lower_path_tables`](../../../crates/mithril-node/src/policy.rs#L4060)
+   belongs to the generation that owns the resulting rows. It lowers both
+   selector kinds into one bounded path graph. A `PATH` terminal
+   uses its live path result directly. An `EXACT` terminal has the
+   `exact_object_required` bit and cannot use the decision without a matching
+   measured inode row. The selector and its declared object class use the same
+   composite atom.
+7. [`EffectControllerCgroupV1`](../../../crates/mithril-node/src/identity/native.rs#L31)
+   verifies that the node is the only process in its configured non-root
+   cgroup. [`effect_controller_may_read_target`](../../../bpf/erebor-interceptor/programs/identity_device_process.bpf.h#L248)
+   permits only read-mode protected-task inspection from that cgroup. It does
+   not permit ptrace attach, signal delivery, or external controller tasks.
+
+The path meanings are:
+
+| Signed selector | Kernel meaning | Userspace inode resolution |
+| --- | --- | --- |
+| `PATH x/y` | Live literal-component path | No |
+| `PATH x/*/y` | Live path with one wildcard component | No |
+| `PATH x/**/y` | Recursive live path pattern | No |
+| `EXACT x/y` | Live path plus the measured inode in one container mount view | Yes |
+
+```mermaid
+sequenceDiagram
+    participant C as signed Control artifact
+    participant R as containerd and CRI inventory
+    participant W as WorkloadBindingOwner
+    participant P as NodePolicyGenerationOwner
+    participant B as BPF path and exact-object gates
+
+    C->>P: verified PATH and EXACT selectors
+    P->>B: install live PATH graph
+    R->>W: Created identity without final PID
+    W->>B: publish identity binding
+    R->>W: Running identity with final init PID
+    W->>P: authenticated Exact-resolution target
+    P->>P: resolve signed path in task mount view
+    P->>B: install and read back measured inode rows
+    R->>W: container or PID changes
+    W->>P: changed Exact-resolution target
+    P->>B: revoke old dynamic rows before replacement
+```
+
+The stock containerd `Running` inventory transition occurs after the process
+starts. The current implementation records this initial Exact-binding gap. The
+qualified OCI prestart hook still gates task identity before application
+start, but its runc mount topology is not the final topology. It does not
+resolve `EXACT` selectors. This implementation does not intercept CRI traffic
+or replace the container runtime endpoint.
+
+The retained K3s VM passed the final OBSERVE and PROTECT CRI lanes. OBSERVE
+reported the signed secret selector as `WOULD_DENY`. PROTECT denied the same
+selector before effect with kernel result -13. The signed benign Exact
+selector remained allowed in both modes. Both lanes recorded the Running
+inventory stage, start gap, and dedicated controller scope, then completed
+their cleanup assertions.
+
+The separate administrative-exec diagnostic resolved its signed Exact
+executable without a node-config object. Policy-active runc bootstrap then
+failed on unlabelled read-mode process inspection and an unsupported anonymous
+bootstrap pipe. This path is **Not done**. It needs explicit runtime-bootstrap
+authority and is not solved by path-selector binding.
 
 ## Phase 4 Concurrent-Exec Linux Control — 2026-08-17
 
@@ -1960,7 +2053,7 @@ loader has the file descriptor; it does not invent map contents.
 
 | Map | Filled by | Read by | Plain meaning |
 | --- | --- | --- | --- |
-| `identity_config` (array, one record) | `NativeSecurityStateOwner`; `allocate_id` advances `next_id` atomically | Every identity/effect hook | Node boot ID, label epoch, enabled flags, configured deny errno, and opaque-ID allocator. |
+| `identity_config` (array, one record) | `NativeSecurityStateOwner`; `allocate_id` advances `next_id` atomically | Every identity/effect hook | Node boot ID, label epoch, enabled flags, configured deny errno, opaque-ID allocator, and the verified effect-controller cgroup ID. |
 | `identity_health` (per-CPU array) | BPF hook families increment counters | `NativeSecurityStateOwner` aggregates all CPU values | Diagnostic counters; missing health storage never authorizes anything. |
 | `identity_scratch` (per-CPU array) | The currently running BPF invocation | That same invocation only | Reusable temporary construction area, not durable task identity. One invocation completes on one CPU. A later invocation uses the slot for its current CPU. Durable data is published to task storage or hash maps before return. |
 | `policy_activation_probe_requests` (array, one record) | `NodePolicyGenerationOwner` before publication | On-demand policy activation probe | One exact staged-row request. The probe result must succeed before the active profile pointer changes. |
@@ -1999,10 +2092,10 @@ loader has the file descriptor; it does not invent map contents.
 | `exception_handle_bindings`, `exception_runtime_states`, `exception_use_receipts` | Policy and exception owners install bindings/state and restore durable consumed receipts | BPF claims one receipt, locks one runtime value, checks deadline/count, and consumes one use | Stable exception instance and use identity. The WAL owns restart reconciliation. |
 | `task_effect_attempt_states` | Raw syscall entry/exit and `file_open` BPF code | Exception consumption | Task-local syscall state and bounded `file_open` frames. Each current synchronous file-open decision gets a new effect-attempt sequence. |
 | `io_uring_setup_states`, `io_uring_ring_states`, `io_uring_request_states`, `io_uring_execution_states`, `profile_generation_async_refs` | BPF io_uring setup, create, submit, issue, complete, and free hooks | BPF io_uring and file-effect paths; node retirement | Exact restricted ring and request ownership plus generation retention. These rows do not authorize SQPOLL, credential override, uring commands, arbitrary opcodes, AIO, or unqualified registered resources. |
-| `exact_file_objects` | `NodePolicyGenerationOwner` writes configured tuple rows | Effect and device gates read only | Exact object key: generation, mount namespace, unique mount identity, device, inode, and inode generation. BPF does not create a new authority row from a pathname. |
+| `exact_file_objects` | `NodePolicyGenerationOwner` resolves signed `EXACT` selectors from authenticated `Running` CRI identities, then writes measured rows | Effect and device gates read only | Selector-derived handle plus generation, mount namespace, unique mount identity, device, inode, and inode generation. BPF does not create a new authority row from a pathname. Node configuration cannot provide this row. |
 | `mount_security_views`, `mount_mutation_epochs`, `mount_security_view_locks`, `mount_reconciliation_proposals` | Policy owner initializes/reconciles; BPF mount hooks dirty/advance state; BPF file gate commits an exact proposal | BPF path and policy reconciliation | Per-namespace topology safety state. A dirty or racing view cannot produce a strict file decision. |
 | `mount_global_mutation_epoch`, `mount_global_clean_epoch`, `mount_global_pending_mutations` | Policy owner initializes and reconciles; mount LSM and syscall-entry programs advance global state | Every exact path gate and mount reconciliation | Conservative cross-namespace barrier for mount APIs and propagation. Exact decisions require the global clean epoch to match. |
-| `canonical_mount_roots`, `path_graph_exact_transitions`, `path_graph_wildcard_transitions`, `path_graph_terminals` | Policy owner after resolving the represented mount view | BPF canonical path candidate | The bounded Meta component graph and trusted root prefix used to turn live dentry components into a signed class candidate. |
+| `canonical_mount_roots`, `path_graph_exact_transitions`, `path_graph_wildcard_transitions`, `path_graph_terminals` | Policy owner from signed `PATH` and `EXACT` selectors; exact mount roots come from measured CRI views | BPF canonical path candidate | The bounded component graph and trusted root prefix used to turn live dentry components into a signed class candidate. Terminals state whether a measured Exact object is also required. |
 | `mount_mutation_attempts` (task storage) | BPF mount and exit paths | BPF mount completion | A small task-local pairing record only. Namespace topology authority stays in namespace-keyed maps. |
 
 ### Complete map lifecycle matrix
@@ -2067,7 +2160,7 @@ the active handle and immutable generation keys.
 | `io_uring_ring_states` | `Id128V1 ring_id` → `IoUringRingStateV1` | None | create, register, submit, and free programs | io_uring and retirement owners | Pin-root lifetime; ring and pinned-generation lifetime |
 | `io_uring_request_states` | `IoUringRequestKeyV1` → `IoUringRequestStateV1` | None | submit, issue, complete, and free programs | io_uring executor and completion paths | Pin-root lifetime; exact request lifetime |
 | `io_uring_execution_states` | `u64 task_cookie` → `IoUringExecutionStateV1` | None | issue entry and exit programs | File-effect attribution and completion | Pin-root lifetime; one in-flight executor binding |
-| `exact_file_objects` | `ExactFileObjectKeyV1` → `ExactObjectBindingV1` | `NodePolicyGenerationOwner` | None | Common effect and device gates | Pin-root lifetime; generation and mount-view validity limit use |
+| `exact_file_objects` | `ExactFileObjectKeyV1` → `ExactObjectBindingV1` | `NodePolicyGenerationOwner`, from signed `EXACT` selectors and authenticated `Running` CRI identities | None | Common effect and device gates | Dynamic generation and container mount-view lifetime; revoked before a changed runtime target is installed |
 | `mount_security_views` | `u32 mount_namespace_inode` → `MountSecurityViewStateV1` | `NodePolicyGenerationOwner` | Mount hooks dirty and advance the view; file gate can commit reconciliation | Policy owner, mount hooks, path gate | Pin-root lifetime; namespace view lifetime |
 | `mount_global_mutation_epoch` | `u32` → `u64` | `NodePolicyGenerationOwner` initializes | Mount LSM and syscall-entry programs increment | Exact path gate and reconciliation | Pin-root lifetime; node-global mutation epoch |
 | `mount_global_clean_epoch` | `u32` → `u64` | `NodePolicyGenerationOwner` advances after exact reconciliation | None | Exact path gate and reconciliation | Pin-root lifetime; node-global reconciled epoch |

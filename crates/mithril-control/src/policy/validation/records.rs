@@ -220,6 +220,32 @@ impl Validate for PathTreeDenyFloorV1 {
     }
 }
 
+impl Validate for PathSelectorV1 {
+    fn validate(&self) -> ValidationResult {
+        PolicyValue::LocalId(&self.path_selector_id).validate()?;
+        PolicyValue::RegistrySymbol(&self.object_class_id).validate()?;
+        if let Some(device_class_id) = &self.device_class_id {
+            PolicyValue::RegistrySymbol(device_class_id).validate()?;
+        }
+        self.target
+            .pattern_components("<validation>")
+            .map_err(|error| ValidationIssue {
+                code: "CFG_PATH_SELECTOR",
+                reason: error.to_string(),
+            })?;
+        require!(
+            self.schema_version == 1
+                && (self.device_class_id.is_none() || self.requires_exact_object()),
+            "CFG_PATH_SELECTOR",
+            format!(
+                "path selector `{}` is not a valid Version 1 selector",
+                self.path_selector_id
+            )
+        );
+        Ok(())
+    }
+}
+
 impl Validate for NotificationRouteV1 {
     fn validate(&self) -> ValidationResult {
         PolicyValue::LocalId(&self.route_id).validate()?;

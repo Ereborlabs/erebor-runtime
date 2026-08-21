@@ -234,6 +234,49 @@ static __always_inline int snapshot_process_control_target(
     return 0;
 }
 
+#define EFFECT_CONTROLLER_PTRACE_READ_V1 0x01U
+#define EFFECT_CONTROLLER_PTRACE_ATTACH_V1 0x02U
+#define EFFECT_CONTROLLER_PTRACE_NOAUDIT_V1 0x04U
+#define EFFECT_CONTROLLER_PTRACE_FSCREDS_V1 0x08U
+#define EFFECT_CONTROLLER_PTRACE_REALCREDS_V1 0x10U
+#define EFFECT_CONTROLLER_PTRACE_ALLOWED_V1                                  \
+    (EFFECT_CONTROLLER_PTRACE_READ_V1 |                                    \
+     EFFECT_CONTROLLER_PTRACE_NOAUDIT_V1 |                                 \
+     EFFECT_CONTROLLER_PTRACE_FSCREDS_V1 |                                 \
+     EFFECT_CONTROLLER_PTRACE_REALCREDS_V1)
+
+static __always_inline bool ptrace_mode_is_read_only(__u16 operation,
+                                                      __u32 argument)
+{
+    return operation == kernel_effect_operation_v1_ptrace &&
+           argument & EFFECT_CONTROLLER_PTRACE_READ_V1 &&
+           !(argument & EFFECT_CONTROLLER_PTRACE_ATTACH_V1) &&
+           !(argument & ~EFFECT_CONTROLLER_PTRACE_ALLOWED_V1) &&
+           !!(argument & EFFECT_CONTROLLER_PTRACE_FSCREDS_V1) !=
+               !!(argument & EFFECT_CONTROLLER_PTRACE_REALCREDS_V1);
+}
+
+static __always_inline bool effect_controller_may_read_target(
+    const identity_runtime_config_v1 *config, struct task_struct *target,
+    __u16 operation, __u32 operation_argument)
+{
+    execution_set_binding_state_v1 *binding;
+    struct cgroup *target_cgroup = NULL;
+    int binding_lookup;
+
+    if (!ptrace_mode_is_read_only(operation, operation_argument) ||
+        !config->effect_controller_cgroup_id ||
+        bpf_get_current_cgroup_id() !=
+            config->effect_controller_cgroup_id ||
+        task_cgroup(target, &target_cgroup))
+        return false;
+    binding = binding_for_cgroup(target_cgroup, &binding_lookup);
+    return !binding_lookup && binding &&
+           binding->lifecycle_state == binding_lifecycle_state_v1_active &&
+           binding->label_epoch == config->label_epoch &&
+           id128_equal(&binding->node_boot_id, &config->node_boot_id);
+}
+
 static __noinline int identity_process_control_effect(
     struct task_struct *target, __u16 operation, __u32 operation_argument)
 {
@@ -262,6 +305,9 @@ static __noinline int identity_process_control_effect(
     controller = bpf_get_current_task_btf();
     controller_label = bpf_task_storage_get(&task_labels, controller, 0, 0);
     if (!controller_label) {
+        if (effect_controller_may_read_target(
+                config, target, operation, operation_argument))
+            return 0;
         target_live_label = bpf_task_storage_get(&task_labels, target, 0, 0);
         if (target_live_label && label_matches_runtime(target_live_label, config))
             return hard_effect_result(

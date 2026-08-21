@@ -118,7 +118,9 @@ pub struct PathGraphTransitionV1 {
 )]
 pub struct PathGraphTerminalV1 {
     pub composite_atom_id: u64,
-    pub rule_numeric_id: u64,
+    pub rule_numeric_id: u32,
+    pub exact_object_required: u8,
+    pub reserved: [u8; 3],
     pub path_tree_deny_operation_mask: u64,
 }
 

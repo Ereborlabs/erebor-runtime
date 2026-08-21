@@ -164,7 +164,7 @@ impl Validate for RuleMatchV1 {
                     !value.operations.is_empty()
                         && ordered!(
                             &value.operations,
-                            &value.executable_object_ids,
+                            &value.executable_path_selector_ids,
                             &value.source_role_ids,
                             &value.target_role_ids
                         ),
@@ -411,7 +411,7 @@ impl DetectionDispositionRuleV1 {
                     .operation_ids
                     .iter()
                     .all(|operation| !matches!(operation.as_str(), "MMAP_EXEC" | "MPROTECT"))
-                || matches!(effect.object, LocalObjectSelectorV1::ExactObjectKeys { .. }),
+                || matches!(effect.object, LocalObjectSelectorV1::PathSelectors { .. }),
             "CFG_EXECUTABLE_MEMORY_AUTHORITY",
             format!(
                 "rule `{}` must use exact executable-memory objects",
@@ -419,13 +419,10 @@ impl DetectionDispositionRuleV1 {
             )
         );
         match &effect.object {
-            LocalObjectSelectorV1::ExactObjectKeys {
-                exact_object_key_ids,
-            } => require!(
-                ordered_unique(exact_object_key_ids)
-                    && exact_object_key_ids.iter().all(|id| *id > 0),
-                "CFG_EXACT_OBJECT_SELECTOR",
-                format!("rule `{}` has invalid exact object IDs", self.rule_id)
+            LocalObjectSelectorV1::PathSelectors { path_selector_ids } => require!(
+                ordered_unique(path_selector_ids),
+                "CFG_PATH_SELECTOR",
+                format!("rule `{}` has invalid path selector IDs", self.rule_id)
             ),
             LocalObjectSelectorV1::Devices {
                 ioctl_command_ids, ..

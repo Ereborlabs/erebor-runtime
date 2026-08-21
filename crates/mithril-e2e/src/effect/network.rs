@@ -13,7 +13,7 @@ use erebor_interceptor_abi::{
 };
 use mithril_control::{
     DestinationPolicyRecordV1, DnsPolicyModeV1, EffectFamilyDefaultV1, EffectFamilyV1, EntryKindV1,
-    LocalObjectSelectorV1, NetworkPolicyV1, NetworkPortRangeV1, NetworkProtocolV1,
+    LocalObjectSelectorV1, NetworkPolicyV1, NetworkPortRangeV1, NetworkProtocolV1, PathSelectorV1,
     PolicyArtifactOwner, PolicyDispositionV1, PolicyDocumentV1, RuleMatchV1,
 };
 use mithril_node::{
@@ -40,7 +40,6 @@ const DUP_PAYLOAD: &[u8] = b"dup";
 const FORK_PAYLOAD: &[u8] = b"fork";
 const SENDMSG_PAYLOAD: &[u8] = b"sendmsg";
 const TOKEN_PAYLOAD: &[u8] = b"token";
-const TOKEN_OBJECT_KEY_ID: u64 = 9_001;
 pub const NETWORK_PEER_TCP_PORT: u16 = 46_051;
 pub const NETWORK_PEER_UDP_PORT: u16 = 46_052;
 pub const NETWORK_PEER_DENIED_PORT: u16 = 46_053;
@@ -434,7 +433,7 @@ impl NetworkTestRunner {
             fixture.pid(),
             &token_path,
             1,
-            TOKEN_OBJECT_KEY_ID,
+            PathSelectorV1::kernel_handle_for_id("network-token"),
             "NETWORK_TOKEN".to_owned(),
             inode_generation(fixture.pid(), &token_path)?,
             None,
@@ -449,11 +448,19 @@ impl NetworkTestRunner {
             &policy_fixture,
             artifact_path,
             binding_specs,
-            vec![token_object],
         );
-        let mut policy =
-            NodePolicyGenerationOwner::load_and_install(&node_config, &mut host, node_boot_id, 1)
-                .context(NodeSnafu)?;
+        let test_token_object = vec![(
+            node_config.workload_bindings[0].binding_id.clone(),
+            token_object,
+        )];
+        let mut policy = NodePolicyGenerationOwner::load_and_install_for_test_objects(
+            &node_config,
+            &mut host,
+            node_boot_id,
+            1,
+            test_token_object.clone(),
+        )
+        .context(NodeSnafu)?;
         ensure!(
             mount_views_are_clean(&host, &token_mount_namespaces)?,
             InvalidInputSnafu {
@@ -655,7 +662,13 @@ impl NetworkTestRunner {
             .publish_all(&host, &node_config.workload_bindings)
             .context(NodeSnafu)?;
         policy = policy
-            .reload_and_install(&node_config, &mut host, node_boot_id, 1)
+            .reload_and_install_for_test_objects(
+                &node_config,
+                &mut host,
+                node_boot_id,
+                1,
+                test_token_object,
+            )
             .context(NodeSnafu)?;
         NativeSecurityStateOwner::new(node_boot_id, 1)
             .activate_with_effect_policy(&mut host, true)
@@ -1567,7 +1580,19 @@ fn build_network_artifact(
     let mut token_rule = document.rules[0].clone();
     let mut converter_ptrace_rule = document.rules[0].clone();
     let mut external_ptrace_rule = document.rules[0].clone();
+    let mut token_classifier = document.classifier_bindings[0].clone();
     document.protected_universe.object_class_ids = vec!["NETWORK_TOKEN".to_owned()];
+    document.path_selectors = vec![PathSelectorV1::exact(
+        "network-token",
+        fixture_root.join("main/token").to_str().ok_or_else(|| {
+            InvalidInputSnafu {
+                path: fixture_root,
+                reason: "the network token selector path must be UTF-8",
+            }
+            .build()
+        })?,
+        "NETWORK_TOKEN",
+    )];
     document
         .protected_universe
         .role_ids
@@ -1576,7 +1601,9 @@ fn build_network_artifact(
         .protected_universe
         .entry_kind_ids
         .retain(|entry| *entry != EntryKindV1::ApprovedAdministrativeExec);
-    document.classifier_bindings.clear();
+    token_classifier.classifier_binding_id = "network-token".to_owned();
+    token_classifier.object_class_id = "NETWORK_TOKEN".to_owned();
+    document.classifier_bindings = vec![token_classifier];
     document
         .roles
         .retain(|role| role.role_id != "runtime-external-administrative");
@@ -1727,8 +1754,8 @@ fn build_network_artifact(
     effect.operation_ids = ["MMAP_READ", "OPEN_READ", "READ"]
         .map(str::to_owned)
         .to_vec();
-    effect.object = LocalObjectSelectorV1::ExactObjectKeys {
-        exact_object_key_ids: vec![TOKEN_OBJECT_KEY_ID],
+    effect.object = LocalObjectSelectorV1::PathSelectors {
+        path_selector_ids: vec!["network-token".to_owned()],
     };
     token_rule.requested_disposition = PolicyDispositionV1::Allow;
     token_rule.errno = None;

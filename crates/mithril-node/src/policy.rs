@@ -27,7 +27,7 @@ use erebor_interceptor_abi::{
 use mithril_control::{
     canonical_path_components, AntiRollbackStore, CanonicalPathGraphV1, CompiledOperationV1,
     CompiledPhysicalResultV1, ContainerKindV1 as PolicyContainerKindV1, EntryKindV1,
-    ObjectClassifierSelectorV1, PathPatternComponentV1, PathPatternV1, PathTreeDenyPatternV1,
+    ObjectClassifierSelectorV1, PathPatternV1, PathSelectorTargetV1, PathTreeDenyPatternV1,
     PendingProfileActivationV1, PolicyArtifactOwner, ProfileActivationMetadataV1,
     ProfileCandidateArtifactV1, ProfileModeV1, StaticDecisionKeyV1, ValidatedProfileCandidateV1,
 };
@@ -38,11 +38,12 @@ use zerocopy::{FromBytes as _, IntoBytes as _, KnownLayout, TryFromBytes};
 
 use crate::error::{IdentityStateSnafu, InterceptorSnafu, PolicySnafu};
 use crate::identity::{
-    AdministrativeFileObjectIdentityV1, PortableProfileGenerationIdentityV1,
-    ResolvedAdministrativeExecutableIdentityV1,
+    AdministrativeFileObjectIdentityV1, ExactObjectBindingTargetV1,
+    PortableProfileGenerationIdentityV1, ResolvedAdministrativeExecutableIdentityV1,
 };
 use crate::{
-    AdministrativeBindingTargetV1, ExactFileObjectConfig, NodeConfig, Result, WorkloadBindingConfig,
+    AdministrativeBindingTargetV1, ExactFileObjectConfig, NodeConfig, Result,
+    WorkloadBindingConfig, WorkloadBindingOwner,
 };
 
 mod device_process;
@@ -63,8 +64,17 @@ pub struct NodePolicyGenerationOwner {
     mount_roots: Vec<MountRootReconciliation>,
     mount_view_handles: BTreeMap<u32, crate::exact_object::ExactFileObjectView>,
     prevention_enabled: bool,
+    administrative_required: bool,
     administrative_plans: Vec<AdministrativePolicyPlanV1>,
+    measured_exact_objects: Vec<MeasuredExactObjectV1>,
+    dynamic_rows: BTreeMap<&'static str, BTreeSet<Vec<u8>>>,
     exception_authority: Mutex<ExceptionAuthorityOwner>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct MeasuredExactObjectV1 {
+    binding_id: String,
+    object: ExactFileObjectConfig,
 }
 
 #[derive(Clone, Debug)]
@@ -191,7 +201,33 @@ impl NodePolicyGenerationOwner {
         node_boot_id: Id128V1,
         label_epoch: u64,
     ) -> Result<Self> {
-        Self::install(config, host, node_boot_id, label_epoch, BTreeMap::new())
+        Self::install(
+            config,
+            host,
+            node_boot_id,
+            label_epoch,
+            Vec::new(),
+            BTreeMap::new(),
+        )
+    }
+
+    pub(crate) fn load_and_install_for_bindings(
+        config: &NodeConfig,
+        host: &mut KernelHost,
+        bindings: &WorkloadBindingOwner,
+        node_boot_id: Id128V1,
+        label_epoch: u64,
+    ) -> Result<Self> {
+        let measured_exact_objects =
+            Self::resolve_cri_exact_objects(config, host, bindings.exact_object_binding_targets())?;
+        Self::install(
+            config,
+            host,
+            node_boot_id,
+            label_epoch,
+            measured_exact_objects,
+            BTreeMap::new(),
+        )
     }
 
     pub fn reload_and_install(
@@ -201,11 +237,60 @@ impl NodePolicyGenerationOwner {
         node_boot_id: Id128V1,
         label_epoch: u64,
     ) -> Result<Self> {
+        let measured_exact_objects = self.measured_exact_objects;
         Self::install(
             config,
             host,
             node_boot_id,
             label_epoch,
+            measured_exact_objects,
+            self.mount_view_handles,
+        )
+    }
+
+    #[cfg(feature = "test-support")]
+    pub fn load_and_install_for_test_objects<I, S>(
+        config: &NodeConfig,
+        host: &mut KernelHost,
+        node_boot_id: Id128V1,
+        label_epoch: u64,
+        objects: I,
+    ) -> Result<Self>
+    where
+        I: IntoIterator<Item = (S, ExactFileObjectConfig)>,
+        S: Into<String>,
+    {
+        let measured_exact_objects = Self::resolve_test_exact_objects(config, objects)?;
+        Self::install(
+            config,
+            host,
+            node_boot_id,
+            label_epoch,
+            measured_exact_objects,
+            BTreeMap::new(),
+        )
+    }
+
+    #[cfg(feature = "test-support")]
+    pub fn reload_and_install_for_test_objects<I, S>(
+        self,
+        config: &NodeConfig,
+        host: &mut KernelHost,
+        node_boot_id: Id128V1,
+        label_epoch: u64,
+        objects: I,
+    ) -> Result<Self>
+    where
+        I: IntoIterator<Item = (S, ExactFileObjectConfig)>,
+        S: Into<String>,
+    {
+        let measured_exact_objects = Self::resolve_test_exact_objects(config, objects)?;
+        Self::install(
+            config,
+            host,
+            node_boot_id,
+            label_epoch,
+            measured_exact_objects,
             self.mount_view_handles,
         )
     }
@@ -215,6 +300,7 @@ impl NodePolicyGenerationOwner {
         host: &mut KernelHost,
         node_boot_id: Id128V1,
         label_epoch: u64,
+        measured_exact_objects: Vec<MeasuredExactObjectV1>,
         mut retained_mount_views: BTreeMap<u32, crate::exact_object::ExactFileObjectView>,
     ) -> Result<Self> {
         let platform_scope_digest = format!(
@@ -297,10 +383,15 @@ impl NodePolicyGenerationOwner {
             }
             let binding_id = parse_id("binding_id", &binding.binding_id)?;
             add_binding_activation(&mut activations, profile_id, binding_id, binding)?;
+            let measured_for_binding = measured_exact_objects
+                .iter()
+                .filter(|measured| measured.binding_id == binding.binding_id)
+                .map(|measured| measured.object.clone())
+                .collect::<Vec<_>>();
             let lowered = LoweredGeneration::for_binding(
                 artifact,
                 binding,
-                &config.exact_file_objects,
+                &measured_for_binding,
                 node_boot_id,
                 node_id,
                 label_epoch,
@@ -398,6 +489,10 @@ impl NodePolicyGenerationOwner {
             .values()
             .flat_map(|generation| generation.administrative_plans.iter().cloned())
             .collect();
+        let administrative_required = generations
+            .values()
+            .any(|generation| generation.administrative_required);
+        let dynamic_rows = Self::dynamic_generation_rows(&generations);
         let owner = Self {
             node_boot_id,
             label_epoch,
@@ -406,7 +501,10 @@ impl NodePolicyGenerationOwner {
             prevention_enabled: generations
                 .values()
                 .any(|generation| generation.descriptor.mode == PolicyGenerationModeV1::Protect),
+            administrative_required,
             administrative_plans,
+            measured_exact_objects,
+            dynamic_rows,
             exception_authority: Mutex::new(exception_authority),
         };
         owner.reconcile_mount_views(host)?;
@@ -420,7 +518,308 @@ impl NodePolicyGenerationOwner {
 
     #[must_use]
     pub(crate) fn administrative_enabled(&self) -> bool {
-        !self.administrative_plans.is_empty()
+        self.administrative_required
+    }
+
+    pub(crate) fn reconcile_cri_exact_bindings(
+        &mut self,
+        config: &NodeConfig,
+        host: &mut KernelHost,
+        bindings: &WorkloadBindingOwner,
+    ) -> Result<()> {
+        let measured_exact_objects = match Self::resolve_cri_exact_objects(
+            config,
+            host,
+            bindings.exact_object_binding_targets(),
+        ) {
+            Ok(measured) => measured,
+            Err(error) => {
+                self.revoke_dynamic_path_authority(host)?;
+                return Err(error);
+            }
+        };
+        if measured_exact_objects == self.measured_exact_objects {
+            return Ok(());
+        }
+
+        self.revoke_dynamic_path_authority(host)?;
+        let retained_mount_views = std::mem::take(&mut self.mount_view_handles);
+        let next = Self::install(
+            config,
+            host,
+            self.node_boot_id,
+            self.label_epoch,
+            measured_exact_objects,
+            retained_mount_views,
+        )?;
+        *self = next;
+        Ok(())
+    }
+
+    fn revoke_dynamic_path_authority(&mut self, host: &KernelHost) -> Result<()> {
+        for map in [
+            "device_effect_decisions",
+            "exact_file_objects",
+            "canonical_mount_roots",
+            "mount_security_views",
+            "mount_mutation_epochs",
+            "mount_security_view_locks",
+        ] {
+            let Some(keys) = self.dynamic_rows.get(map) else {
+                continue;
+            };
+            for key in keys {
+                if host
+                    .lookup_map(map, key)
+                    .context(InterceptorSnafu)?
+                    .is_some()
+                {
+                    host.delete_map_entry(map, key).context(InterceptorSnafu)?;
+                }
+                ensure!(
+                    host.lookup_map(map, key)
+                        .context(InterceptorSnafu)?
+                        .is_none(),
+                    IdentityStateSnafu {
+                        reason: format!(
+                            "dynamic path authority remained in `{map}` after revocation"
+                        ),
+                    }
+                );
+            }
+        }
+        self.dynamic_rows.clear();
+        self.measured_exact_objects.clear();
+        self.administrative_plans.clear();
+        Ok(())
+    }
+
+    fn resolve_cri_exact_objects<'a>(
+        config: &NodeConfig,
+        host: &KernelHost,
+        bindings: impl IntoIterator<Item = ExactObjectBindingTargetV1<'a>>,
+    ) -> Result<Vec<MeasuredExactObjectV1>> {
+        let now_utc_ns = current_utc_ns()?;
+        let artifact_owner = PolicyArtifactOwner::default();
+        let mut artifacts = BTreeMap::new();
+        for candidate in &config.policy_candidates {
+            let artifact = artifact_owner
+                .load_verified_at(
+                    &candidate.artifact_path,
+                    &candidate.public_key_path,
+                    now_utc_ns,
+                )
+                .context(PolicySnafu)?;
+            ensure!(
+                artifacts
+                    .insert(artifact.header.profile_id.clone(), artifact)
+                    .is_none(),
+                IdentityStateSnafu {
+                    reason: "one node candidate is allowed per profile ID",
+                }
+            );
+        }
+        let topology_generation = Self::current_mount_topology_generation(host)?;
+        let mut measured = Vec::new();
+        let mut target_bindings = BTreeSet::new();
+        for target in bindings {
+            ensure!(
+                target_bindings.insert(target.binding_id),
+                IdentityStateSnafu {
+                    reason: format!(
+                        "binding `{}` has more than one authenticated CRI exact-object target",
+                        target.binding_id
+                    ),
+                }
+            );
+            let binding = config
+                .workload_bindings
+                .iter()
+                .find(|binding| binding.binding_id == target.binding_id)
+                .context(IdentityStateSnafu {
+                    reason: format!(
+                        "authenticated CRI exact-object target `{}` is not configured",
+                        target.binding_id
+                    ),
+                })?;
+            let artifact = artifacts
+                .get(&binding.profile_id)
+                .context(IdentityStateSnafu {
+                    reason: format!(
+                        "binding `{}` has no verified candidate for exact-object resolution",
+                        binding.binding_id
+                    ),
+                })?;
+            let selectors = artifact
+                .policy_document
+                .path_selectors
+                .iter()
+                .filter(|selector| selector.requires_exact_object());
+            let view = crate::exact_object::ExactFileObjectView::acquire(target.init_pid)?;
+            for selector in selectors {
+                let canonical_path =
+                    selector
+                        .exact_canonical_path()
+                        .context(IdentityStateSnafu {
+                            reason: "exact path selector lost its canonical path",
+                        })?;
+                let path = PathBuf::from(canonical_path);
+                let Some(object) = view.try_resolve_signed_selector(
+                    &path,
+                    binding.active_profile_generation_ref_id,
+                    selector.kernel_handle(),
+                    selector.object_class_id.clone(),
+                    selector.device_class_id.clone(),
+                    topology_generation,
+                )?
+                else {
+                    continue;
+                };
+                let expected_components = selector
+                    .target
+                    .exact_components(artifact.header.profile_id.as_str())
+                    .context(PolicySnafu)?
+                    .context(IdentityStateSnafu {
+                        reason: "exact path selector lost its literal components",
+                    })?;
+                ensure!(
+                    object.canonical_component_hex
+                        == expected_components
+                            .iter()
+                            .map(hex::encode)
+                            .collect::<Vec<_>>(),
+                    IdentityStateSnafu {
+                        reason: format!(
+                            "signed path selector `{}` resolved to a different canonical path",
+                            selector.path_selector_id
+                        ),
+                    }
+                );
+                measured.push(MeasuredExactObjectV1 {
+                    binding_id: binding.binding_id.clone(),
+                    object,
+                });
+            }
+        }
+        Ok(measured)
+    }
+
+    #[cfg(feature = "test-support")]
+    fn resolve_test_exact_objects<I, S>(
+        config: &NodeConfig,
+        objects: I,
+    ) -> Result<Vec<MeasuredExactObjectV1>>
+    where
+        I: IntoIterator<Item = (S, ExactFileObjectConfig)>,
+        S: Into<String>,
+    {
+        let now_utc_ns = current_utc_ns()?;
+        let artifact_owner = PolicyArtifactOwner::default();
+        let mut artifacts = BTreeMap::new();
+        for candidate in &config.policy_candidates {
+            let artifact = artifact_owner
+                .load_verified_at(
+                    &candidate.artifact_path,
+                    &candidate.public_key_path,
+                    now_utc_ns,
+                )
+                .context(PolicySnafu)?;
+            artifacts.insert(artifact.header.profile_id.clone(), artifact);
+        }
+
+        objects
+            .into_iter()
+            .map(|(binding_id, mut object)| {
+                let binding_id = binding_id.into();
+                let binding = config
+                    .workload_bindings
+                    .iter()
+                    .find(|binding| binding.binding_id == binding_id)
+                    .context(IdentityStateSnafu {
+                        reason: format!("test object binding `{binding_id}` is not configured"),
+                    })?;
+                let artifact = artifacts.get(&binding.profile_id).context(IdentityStateSnafu {
+                    reason: format!("test object binding `{binding_id}` has no verified policy"),
+                })?;
+                let mut selectors = artifact
+                    .policy_document
+                    .path_selectors
+                    .iter()
+                    .filter(|selector| {
+                        if !selector.requires_exact_object()
+                            || selector.object_class_id != object.object_class_id
+                            || selector.device_class_id.as_deref()
+                                != object
+                                    .device
+                                    .as_ref()
+                                    .map(|device| device.device_class_id.as_str())
+                        {
+                            return false;
+                        }
+                        selector
+                            .target
+                            .exact_components(artifact.header.profile_id.as_str())
+                            .is_ok_and(|components| components.is_some_and(|components| {
+                            object.canonical_component_hex
+                                == components.iter().map(hex::encode).collect::<Vec<_>>()
+                            }))
+                    });
+                let selector = selectors.next().context(IdentityStateSnafu {
+                    reason: format!(
+                        "test object for binding `{binding_id}` has no signed path selector"
+                    ),
+                })?;
+                ensure!(
+                    selectors.next().is_none(),
+                    IdentityStateSnafu {
+                        reason: format!(
+                            "test object for binding `{binding_id}` matches more than one signed path selector"
+                        ),
+                    }
+                );
+                object.profile_generation_ref_id = binding.active_profile_generation_ref_id;
+                object.exact_object_key_id = selector.kernel_handle();
+                Ok(MeasuredExactObjectV1 { binding_id, object })
+            })
+            .collect()
+    }
+
+    fn current_mount_topology_generation(host: &KernelHost) -> Result<u64> {
+        let key = 0_u32.to_ne_bytes();
+        let Some(bytes) = host
+            .lookup_map("mount_global_mutation_epoch", &key)
+            .context(InterceptorSnafu)?
+        else {
+            return Ok(1);
+        };
+        let epoch = u64::read_from_bytes(&bytes).map_err(|error| {
+            IdentityStateSnafu {
+                reason: format!("global mount mutation epoch is invalid: {error}"),
+            }
+            .build()
+        })?;
+        Ok(epoch.max(1))
+    }
+
+    fn dynamic_generation_rows(
+        generations: &BTreeMap<u64, LoweredGeneration>,
+    ) -> BTreeMap<&'static str, BTreeSet<Vec<u8>>> {
+        let mut rows = BTreeMap::<&'static str, BTreeSet<Vec<u8>>>::new();
+        for generation in generations.values() {
+            for (map, generation_rows) in [
+                ("device_effect_decisions", &generation.device_decisions),
+                ("exact_file_objects", &generation.file_objects),
+                ("mount_security_views", &generation.mount_views),
+                ("mount_mutation_epochs", &generation.mount_epochs),
+                ("mount_security_view_locks", &generation.mount_locks),
+                ("canonical_mount_roots", &generation.mount_roots),
+            ] {
+                rows.entry(map)
+                    .or_default()
+                    .extend(generation_rows.keys().cloned());
+            }
+        }
+        rows
     }
 
     pub(crate) fn resolve_administrative_policy(
@@ -1089,6 +1488,7 @@ struct LoweredGeneration {
     path_exact: BTreeMap<Vec<u8>, Vec<u8>>,
     path_wildcards: BTreeMap<Vec<u8>, Vec<u8>>,
     path_terminals: BTreeMap<Vec<u8>, Vec<u8>>,
+    administrative_required: bool,
     administrative_plans: Vec<AdministrativePolicyPlanV1>,
     mount_reconciliation: Vec<MountRootReconciliation>,
 }
@@ -1098,7 +1498,7 @@ impl LoweredGeneration {
     fn for_binding(
         artifact: &ProfileCandidateArtifactV1,
         binding: &WorkloadBindingConfig,
-        configured_objects: &[ExactFileObjectConfig],
+        measured_objects: &[ExactFileObjectConfig],
         node_boot_id: Id128V1,
         node_id: Id128V1,
         label_epoch: u64,
@@ -1150,7 +1550,13 @@ impl LoweredGeneration {
                 ))
             })
             .collect::<Result<BTreeMap<_, _>>>()?;
-        let composite_handles = composite_handles(artifact);
+        let composite_handles = Self::composite_handles(artifact);
+        let signed_device_classes = artifact
+            .policy_document
+            .path_selectors
+            .iter()
+            .filter_map(|selector| selector.device_class_id.clone())
+            .collect::<BTreeSet<_>>();
         let exception_handles = handles(
             artifact
                 .policy_document
@@ -1158,39 +1564,94 @@ impl LoweredGeneration {
                 .iter()
                 .map(|exception| exception.exception_id.as_str()),
         );
-        let generation_objects = configured_objects
+        let generation_objects = measured_objects
             .iter()
             .filter(|object| {
                 object.profile_generation_ref_id == binding.active_profile_generation_ref_id
             })
             .collect::<Vec<_>>();
         let mut exact_object_handles = BTreeMap::new();
-        for object in &generation_objects {
+        for selector in artifact
+            .policy_document
+            .path_selectors
+            .iter()
+            .filter(|selector| selector.requires_exact_object())
+        {
             let composite_atom_id = *composite_handles
-                .get(&format!("CLASS:{}", object.object_class_id))
+                .get(&format!("PATH:{}", selector.path_selector_id))
                 .ok_or_else(|| {
                     IdentityStateSnafu {
                         reason: format!(
-                            "object class `{}` is outside the signed policy universe",
-                            object.object_class_id
+                            "path selector `{}` has an unknown signed object class",
+                            selector.path_selector_id
                         ),
                     }
                     .build()
                 })?;
+            ensure!(
+                exact_object_handles
+                    .insert(
+                        selector.path_selector_id.clone(),
+                        (selector.kernel_handle(), composite_atom_id),
+                    )
+                    .is_none(),
+                IdentityStateSnafu {
+                    reason: "signed path selector IDs are not unique",
+                }
+            );
+        }
+        for object in &generation_objects {
+            let selector = artifact
+                .policy_document
+                .path_selectors
+                .iter()
+                .find(|selector| {
+                    selector.requires_exact_object()
+                        && selector.kernel_handle() == object.exact_object_key_id
+                })
+                .ok_or_else(|| {
+                    IdentityStateSnafu {
+                        reason: format!(
+                            "measured object handle {} has no signed path selector",
+                            object.exact_object_key_id
+                        ),
+                    }
+                    .build()
+                })?;
+            let (handle, composite_atom_id) = exact_object_handles[&selector.path_selector_id];
+            let signed_components = selector
+                .target
+                .exact_components(artifact.header.profile_id.as_str())
+                .context(PolicySnafu)?
+                .context(IdentityStateSnafu {
+                    reason: "measured exact object selector has no literal path",
+                })?;
+            ensure!(
+                handle == object.exact_object_key_id
+                    && selector.object_class_id == object.object_class_id
+                    && selector.device_class_id.is_some() == object.device.is_some()
+                    && object.canonical_component_hex
+                        == signed_components
+                            .iter()
+                            .map(hex::encode)
+                            .collect::<Vec<_>>(),
+                IdentityStateSnafu {
+                    reason: "measured exact object differs from its signed path selector",
+                }
+            );
             if let Some(device) = &object.device {
                 ensure!(
-                    artifact
-                        .policy_document
-                        .classifier_bindings
-                        .iter()
-                        .any(|binding| {
-                            binding.object_class_id == object.object_class_id
-                                && matches!(
-                                    &binding.selector,
+                    selector.device_class_id.as_deref() == Some(device.device_class_id.as_str())
+                        && artifact
+                            .policy_document
+                            .classifier_bindings
+                            .iter()
+                            .any(|binding| {
+                                binding.object_class_id == selector.object_class_id
+                                    && matches!(&binding.selector,
                                     ObjectClassifierSelectorV1::Device { device_class_ids }
-                                        if device_class_ids.contains(&device.device_class_id)
-                                )
-                        }),
+                                        if device_class_ids.contains(&device.device_class_id))
+                            }),
                     IdentityStateSnafu {
                         reason: format!(
                             "device class `{}` is not signed for object class `{}`",
@@ -1200,14 +1661,9 @@ impl LoweredGeneration {
                 );
             }
             ensure!(
-                exact_object_handles
-                    .insert(object.exact_object_key_id, composite_atom_id)
-                    .is_none(),
+                composite_atom_id > 0,
                 IdentityStateSnafu {
-                    reason: format!(
-                        "exact object key {} is configured more than once",
-                        object.exact_object_key_id
-                    ),
+                    reason: "signed path selector has no composite object class",
                 }
             );
         }
@@ -1321,6 +1777,7 @@ impl LoweredGeneration {
                     entry_kind: entry_kind(cell.key.entry_kind),
                     binding_lifecycle_state: lifecycle(cell.key.binding_lifecycle),
                     exact_objects: &generation_objects,
+                    signed_device_classes: &signed_device_classes,
                     role_states: &role_states,
                 },
                 physical,
@@ -1329,37 +1786,60 @@ impl LoweredGeneration {
             )? {
                 continue;
             }
-            if let Some(exact_object_key_id) = cell.key.object_selector.strip_prefix("EXACT:") {
-                let exact_object_key_id = exact_object_key_id.parse::<u64>().map_err(|error| {
-                    IdentityStateSnafu {
-                        reason: format!("invalid exact object key: {error}"),
+            if let Some(path_selector_id) = cell.key.object_selector.strip_prefix("PATH:") {
+                let selector = artifact
+                    .policy_document
+                    .path_selectors
+                    .iter()
+                    .find(|selector| selector.path_selector_id == path_selector_id)
+                    .context(IdentityStateSnafu {
+                        reason: format!(
+                            "compiled cell has unknown path selector `{path_selector_id}`"
+                        ),
+                    })?;
+                match &selector.target {
+                    PathSelectorTargetV1::Path { .. } => {
+                        let key = EffectDefaultKeyV1 {
+                            profile_generation_ref_id: binding.active_profile_generation_ref_id,
+                            active_role_id: role,
+                            entry_kind: entry_kind(cell.key.entry_kind),
+                            effect_family: family,
+                            operation,
+                            reserved: 0,
+                            reserved_alignment: [0; 4],
+                            composite_atom_id: composite_handles[&cell.key.object_selector],
+                            process_state_vector_id: process_state,
+                            binding_lifecycle_state: lifecycle(cell.key.binding_lifecycle),
+                            reserved_tail: [0; 3],
+                        };
+                        insert_exact(&mut defaults, key.as_bytes(), physical.as_bytes())?;
                     }
-                    .build()
-                })?;
-                let key = EffectDecisionKeyV1 {
-                    profile_generation_ref_id: binding.active_profile_generation_ref_id,
-                    active_role_id: role,
-                    entry_kind: entry_kind(cell.key.entry_kind),
-                    effect_family: family,
-                    operation,
-                    reserved: 0,
-                    reserved_alignment: [0; 4],
-                    composite_atom_id: *exact_object_handles
-                        .get(&exact_object_key_id)
-                        .ok_or_else(|| {
-                            IdentityStateSnafu {
+                    PathSelectorTargetV1::Exact { .. } => {
+                        let (exact_object_key_id, composite_atom_id) = exact_object_handles
+                            .get(path_selector_id)
+                            .copied()
+                            .context(IdentityStateSnafu {
                                 reason: format!(
-                                    "exact object key {exact_object_key_id} has no configured kernel object and signed class"
+                                    "exact selector `{path_selector_id}` has no object handle"
                                 ),
-                            }
-                            .build()
-                        })?,
-                    exact_object_key_id,
-                    process_state_vector_id: process_state,
-                    binding_lifecycle_state: lifecycle(cell.key.binding_lifecycle),
-                    reserved_tail: [0; 3],
-                };
-                insert_exact(&mut decisions, key.as_bytes(), physical.as_bytes())?;
+                            })?;
+                        let key = EffectDecisionKeyV1 {
+                            profile_generation_ref_id: binding.active_profile_generation_ref_id,
+                            active_role_id: role,
+                            entry_kind: entry_kind(cell.key.entry_kind),
+                            effect_family: family,
+                            operation,
+                            reserved: 0,
+                            reserved_alignment: [0; 4],
+                            composite_atom_id,
+                            exact_object_key_id,
+                            process_state_vector_id: process_state,
+                            binding_lifecycle_state: lifecycle(cell.key.binding_lifecycle),
+                            reserved_tail: [0; 3],
+                        };
+                        insert_exact(&mut decisions, key.as_bytes(), physical.as_bytes())?;
+                    }
+                }
             } else {
                 let key = EffectDefaultKeyV1 {
                     profile_generation_ref_id: binding.active_profile_generation_ref_id,
@@ -1540,13 +2020,23 @@ impl LoweredGeneration {
             let value = ExactObjectBindingV1 {
                 profile_generation_ref_id: object.profile_generation_ref_id,
                 exact_object_key_id: object.exact_object_key_id,
-                composite_atom_id: exact_object_handles[&object.exact_object_key_id],
+                composite_atom_id: exact_object_handles
+                    .values()
+                    .find_map(|(handle, atom)| {
+                        (*handle == object.exact_object_key_id).then_some(*atom)
+                    })
+                    .ok_or_else(|| {
+                        IdentityStateSnafu {
+                            reason: "measured object lost its signed selector class".to_owned(),
+                        }
+                        .build()
+                    })?,
                 state: ExactObjectBindingStateV1::ReadBack,
                 reserved: [0; 7],
             };
             insert_exact(&mut file_objects, key.as_bytes(), value.as_bytes())?;
         }
-        let administrative_plans = lower_administrative_plans(
+        let (administrative_required, administrative_plans) = lower_administrative_plans(
             artifact,
             binding,
             &role_handles,
@@ -1555,17 +2045,15 @@ impl LoweredGeneration {
             &generation_objects,
         )?;
         let path_tables =
-            lower_path_tables(artifact, binding, &generation_objects, &composite_handles)?;
+            Self::lower_path_tables(artifact, binding, &generation_objects, &composite_handles)?;
         let tables = [
             ("decision", &decisions),
             ("default", &defaults),
-            ("device-decision", &device_decisions),
             ("process-control-rule", &process_control_rules),
             ("ipc-relationship", &ipc_relationships),
             ("network-ipv4-class", &network.ipv4_classes),
             ("network-ipv6-class", &network.ipv6_classes),
             ("network-decision", &network.decisions),
-            ("object", &file_objects),
             ("path-exact", &path_tables.exact),
             ("path-wildcard", &path_tables.wildcards),
             ("path-terminal", &path_tables.terminals),
@@ -1579,8 +2067,7 @@ impl LoweredGeneration {
             owner_generation: artifact.header.profile_version,
             row_count: decisions
                 .len()
-                .checked_add(device_decisions.len())
-                .and_then(|count| count.checked_add(process_control_rules.len()))
+                .checked_add(process_control_rules.len())
                 .and_then(|count| count.checked_add(ipc_relationships.len()))
                 .and_then(|count| count.checked_add(network.ipv4_classes.len()))
                 .and_then(|count| count.checked_add(network.ipv6_classes.len()))
@@ -1628,6 +2115,7 @@ impl LoweredGeneration {
             path_exact: path_tables.exact,
             path_wildcards: path_tables.wildcards,
             path_terminals: path_tables.terminals,
+            administrative_required,
             administrative_plans,
             mount_reconciliation: path_tables.reconciliation,
         })
@@ -1672,13 +2160,13 @@ impl LoweredGeneration {
         merge_rows(&mut self.path_exact, other.path_exact)?;
         merge_rows(&mut self.path_wildcards, other.path_wildcards)?;
         merge_rows(&mut self.path_terminals, other.path_terminals)?;
+        self.administrative_required |= other.administrative_required;
         self.administrative_plans.extend(other.administrative_plans);
         self.mount_reconciliation.extend(other.mount_reconciliation);
         self.descriptor.row_count = self
             .decisions
             .len()
-            .checked_add(self.device_decisions.len())
-            .and_then(|count| count.checked_add(self.process_control_rules.len()))
+            .checked_add(self.process_control_rules.len())
             .and_then(|count| count.checked_add(self.ipc_relationships.len()))
             .and_then(|count| count.checked_add(self.network_ipv4_classes.len()))
             .and_then(|count| count.checked_add(self.network_ipv6_classes.len()))
@@ -1694,13 +2182,11 @@ impl LoweredGeneration {
         self.descriptor.table_digest = table_digest(&[
             ("decision", &self.decisions),
             ("default", &self.defaults),
-            ("device-decision", &self.device_decisions),
             ("process-control-rule", &self.process_control_rules),
             ("ipc-relationship", &self.ipc_relationships),
             ("network-ipv4-class", &self.network_ipv4_classes),
             ("network-ipv6-class", &self.network_ipv6_classes),
             ("network-decision", &self.network_decisions),
-            ("object", &self.file_objects),
             ("path-exact", &self.path_exact),
             ("path-wildcard", &self.path_wildcards),
             ("path-terminal", &self.path_terminals),
@@ -1828,6 +2314,7 @@ impl LoweredGeneration {
             );
             if existing == active.as_bytes() {
                 self.verify_immutable_rows(host)?;
+                install_rows(host, "device_effect_decisions", &self.device_decisions)?;
                 install_exception_rows(
                     host,
                     &self.exceptions,
@@ -1837,7 +2324,9 @@ impl LoweredGeneration {
                     now_boottime_ns,
                 )?;
                 install_rows(host, "exception_handle_bindings", &self.exception_bindings)?;
+                install_rows(host, "exact_file_objects", &self.file_objects)?;
                 self.install_missing_mount_rows(host)?;
+                self.verify_dynamic_authority_rows(host)?;
                 return Ok(());
             }
         }
@@ -1888,6 +2377,7 @@ impl LoweredGeneration {
         )?;
         install_rows(host, "path_graph_terminals", &self.path_terminals)?;
         self.verify_immutable_rows(host)?;
+        self.verify_dynamic_authority_rows(host)?;
         let read_back = self.read_back_descriptor();
         host.update_map(
             "profile_generation_descriptors",
@@ -1941,7 +2431,6 @@ impl LoweredGeneration {
         for (map, rows) in [
             ("effect_decisions", &self.decisions),
             ("effect_defaults", &self.defaults),
-            ("device_effect_decisions", &self.device_decisions),
             ("process_control_rules", &self.process_control_rules),
             ("ipc_relationship_decisions", &self.ipc_relationships),
             (
@@ -1953,10 +2442,20 @@ impl LoweredGeneration {
                 &self.network_ipv6_classes,
             ),
             ("network_destination_decisions", &self.network_decisions),
-            ("exact_file_objects", &self.file_objects),
             ("path_graph_exact_transitions", &self.path_exact),
             ("path_graph_wildcard_transitions", &self.path_wildcards),
             ("path_graph_terminals", &self.path_terminals),
+        ] {
+            verify_rows(host, map, rows)?;
+        }
+        Ok(())
+    }
+
+    fn verify_dynamic_authority_rows(&self, host: &KernelHost) -> Result<()> {
+        for (map, rows) in [
+            ("device_effect_decisions", &self.device_decisions),
+            ("exact_file_objects", &self.file_objects),
+            ("canonical_mount_roots", &self.mount_roots),
         ] {
             verify_rows(host, map, rows)?;
         }
@@ -3261,7 +3760,7 @@ fn lower_administrative_plans(
     process_state_handles: &BTreeMap<String, u32>,
     exception_handles: &BTreeMap<String, u32>,
     generation_objects: &[&ExactFileObjectConfig],
-) -> Result<Vec<AdministrativePolicyPlanV1>> {
+) -> Result<(bool, Vec<AdministrativePolicyPlanV1>)> {
     let assignments = artifact
         .policy_document
         .entry_role_assignments
@@ -3278,7 +3777,7 @@ fn lower_administrative_plans(
         })
         .collect::<Vec<_>>();
     if assignments.is_empty() {
-        return Ok(Vec::new());
+        return Ok((false, Vec::new()));
     }
     let external_role_id = role_handles
         .iter()
@@ -3330,7 +3829,7 @@ fn lower_administrative_plans(
             }
         );
         let approved_role_numeric_id = role_handles[&role.role_id];
-        let mut role_plan_count = 0;
+        let mut role_selector_count = 0;
         for cell in artifact
             .compiled_profile
             .compiled_cells
@@ -3349,25 +3848,28 @@ fn lower_administrative_plans(
                     )
             })
         {
-            let Some(exact_object_key_id) = cell.key.object_selector.strip_prefix("EXACT:") else {
+            let Some(path_selector_id) = cell.key.object_selector.strip_prefix("PATH:") else {
                 continue;
             };
-            let exact_object_key_id = exact_object_key_id.parse::<u64>().map_err(|error| {
-                IdentityStateSnafu {
-                    reason: format!("administrative exact object key is invalid: {error}"),
-                }
-                .build()
-            })?;
-            let executable_object = generation_objects
+            role_selector_count += 1;
+            let exact_object_key_id = artifact
+                .policy_document
+                .path_selectors
+                .iter()
+                .find(|selector| selector.path_selector_id == path_selector_id)
+                .context(IdentityStateSnafu {
+                    reason: format!(
+                        "administrative executable references unknown path selector `{path_selector_id}`"
+                    ),
+                })?
+                .kernel_handle();
+            let Some(executable_object) = generation_objects
                 .iter()
                 .find(|object| object.exact_object_key_id == exact_object_key_id)
-                .ok_or_else(|| {
-                    IdentityStateSnafu {
-                        reason: "administrative executable has no exact configured object"
-                            .to_owned(),
-                    }
-                    .build()
-                })?;
+                .copied()
+            else {
+                continue;
+            };
             ensure!(
                 plan_keys.insert((
                     parse_id("binding_id", &binding.binding_id)?,
@@ -3391,19 +3893,18 @@ fn lower_administrative_plans(
                     .unwrap_or_default(),
                 executable_object: (*executable_object).clone(),
             });
-            role_plan_count += 1;
         }
         ensure!(
-            role_plan_count > 0,
+            role_selector_count > 0,
             IdentityStateSnafu {
                 reason: format!(
-                    "administrative role `{}` has no exact allowed executable plan for the restricted external root",
+                    "administrative role `{}` has no signed executable selector for the restricted external root",
                     role.role_id
                 ),
             }
         );
     }
-    Ok(plans)
+    Ok((true, plans))
 }
 
 fn decode_sha256(value: &str) -> Result<[u8; 32]> {
@@ -3516,28 +4017,6 @@ const fn lifecycle(state: mithril_control::BindingLifecycleV1) -> BindingLifecyc
     }
 }
 
-fn composite_handles(artifact: &ProfileCandidateArtifactV1) -> BTreeMap<String, u64> {
-    artifact
-        .policy_document
-        .protected_universe
-        .object_class_ids
-        .iter()
-        .map(|id| format!("CLASS:{id}"))
-        .chain(
-            artifact
-                .compiled_profile
-                .compiled_cells
-                .iter()
-                .map(|cell| cell.key.object_selector.clone())
-                .filter(|selector| !selector.starts_with("EXACT:")),
-        )
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .enumerate()
-        .map(|(index, id)| (id, index as u64 + 1))
-        .collect()
-}
-
 struct PathTables {
     mount_views: BTreeMap<Vec<u8>, Vec<u8>>,
     mount_epochs: BTreeMap<Vec<u8>, Vec<u8>>,
@@ -3549,227 +4028,262 @@ struct PathTables {
     reconciliation: Vec<MountRootReconciliation>,
 }
 
-fn lower_path_tables(
-    artifact: &ProfileCandidateArtifactV1,
-    binding: &WorkloadBindingConfig,
-    objects: &[&ExactFileObjectConfig],
-    composite_handles: &BTreeMap<String, u64>,
-) -> Result<PathTables> {
-    let mut patterns = Vec::with_capacity(objects.len());
-    let mut decoded = BTreeMap::new();
-    for object in objects {
-        let components = object
-            .canonical_component_hex
+impl LoweredGeneration {
+    fn composite_handles(artifact: &ProfileCandidateArtifactV1) -> BTreeMap<String, u64> {
+        let mut handles = artifact
+            .policy_document
+            .protected_universe
+            .object_class_ids
             .iter()
-            .map(|component| {
-                hex::decode(component).map_err(|error| {
-                    IdentityStateSnafu {
-                        reason: format!("invalid canonical path component: {error}"),
-                    }
-                    .build()
+            .map(|id| format!("CLASS:{id}"))
+            .chain(
+                artifact
+                    .compiled_profile
+                    .compiled_cells
+                    .iter()
+                    .map(|cell| cell.key.object_selector.clone()),
+            )
+            .filter(|id| !id.starts_with("PATH:"))
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .enumerate()
+            .map(|(index, id)| (id, index as u64 + 1))
+            .collect::<BTreeMap<_, _>>();
+        for selector in &artifact.policy_document.path_selectors {
+            let object_class = format!("CLASS:{}", selector.object_class_id);
+            let handle = handles[&object_class];
+            handles.insert(format!("PATH:{}", selector.path_selector_id), handle);
+        }
+        handles
+    }
+
+    fn lower_path_tables(
+        artifact: &ProfileCandidateArtifactV1,
+        binding: &WorkloadBindingConfig,
+        objects: &[&ExactFileObjectConfig],
+        composite_handles: &BTreeMap<String, u64>,
+    ) -> Result<PathTables> {
+        let mut patterns = Vec::new();
+        let mut decoded = BTreeMap::new();
+        for selector in &artifact.policy_document.path_selectors {
+            let components = selector
+                .target
+                .pattern_components(artifact.header.profile_id.as_str())
+                .context(PolicySnafu)?;
+            patterns.push(PathPatternV1 {
+                rule_id: selector.path_selector_id.clone(),
+                components,
+                candidate_object_class_id: selector.object_class_id.clone(),
+                physical_result_id: format!("CLASS:{}", selector.object_class_id),
+                overrides_rule_ids: Vec::new(),
+            });
+            if let Some(components) = selector
+                .target
+                .exact_components(artifact.header.profile_id.as_str())
+                .context(PolicySnafu)?
+            {
+                decoded.insert(selector.kernel_handle(), components);
+            }
+        }
+        let path_tree_denies = artifact
+            .policy_document
+            .path_tree_deny_floors
+            .iter()
+            .map(|floor| {
+                let mut operations = floor
+                    .operation_ids
+                    .iter()
+                    .map(|operation| {
+                        CompiledOperationV1::try_from(operation.as_str())
+                            .map(|operation| operation.kernel_id as u16)
+                            .map_err(|_| {
+                                IdentityStateSnafu {
+                                    reason: format!(
+                                        "path-tree rule has unknown operation `{operation}`"
+                                    ),
+                                }
+                                .build()
+                            })
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                operations.sort_unstable();
+                Ok(PathTreeDenyPatternV1 {
+                    components: canonical_path_components(
+                        artifact.header.profile_id.as_str(),
+                        &floor.canonical_path,
+                    )
+                    .context(PolicySnafu)?,
+                    operations,
                 })
             })
             .collect::<Result<Vec<_>>>()?;
-        patterns.push(PathPatternV1 {
-            rule_id: format!("exact-object-{}", object.exact_object_key_id),
-            components: components
-                .iter()
-                .cloned()
-                .map(PathPatternComponentV1::Exact)
-                .collect(),
-            candidate_object_class_id: object.object_class_id.clone(),
-            physical_result_id: format!("CLASS:{}", object.object_class_id),
-            overrides_rule_ids: Vec::new(),
-        });
-        decoded.insert(object.exact_object_key_id, components);
-    }
-    let path_tree_denies = artifact
-        .policy_document
-        .path_tree_deny_floors
-        .iter()
-        .map(|floor| {
-            let mut operations = floor
-                .operation_ids
-                .iter()
-                .map(|operation| {
-                    CompiledOperationV1::try_from(operation.as_str())
-                        .map(|operation| operation.kernel_id as u16)
-                        .map_err(|_| {
-                            IdentityStateSnafu {
-                                reason: format!(
-                                    "path-tree rule has unknown operation `{operation}`"
-                                ),
-                            }
-                            .build()
-                        })
-                })
-                .collect::<Result<Vec<_>>>()?;
-            operations.sort_unstable();
-            Ok(PathTreeDenyPatternV1 {
-                components: canonical_path_components(
-                    artifact.header.profile_id.as_str(),
-                    &floor.canonical_path,
-                )
-                .context(PolicySnafu)?,
-                operations,
-            })
-        })
-        .collect::<Result<Vec<_>>>()?;
-    let graph = CanonicalPathGraphV1::compile_with_path_tree_denies_and_precedence(
-        artifact.header.profile_id.as_str(),
-        &patterns,
-        &path_tree_denies,
-        artifact.policy_document.path_pattern_precedence,
-    )
-    .context(PolicySnafu)?
-    .determinize(artifact.header.profile_id.as_str())
-    .context(PolicySnafu)?;
-    let mut tables = PathTables {
-        mount_views: BTreeMap::new(),
-        mount_epochs: BTreeMap::new(),
-        mount_locks: BTreeMap::new(),
-        mount_roots: BTreeMap::new(),
-        exact: BTreeMap::new(),
-        wildcards: BTreeMap::new(),
-        terminals: BTreeMap::new(),
-        reconciliation: Vec::new(),
-    };
-    for transition in &graph.exact_transitions {
-        let component = path_component(&transition.component)?;
-        let key = PathGraphTransitionKeyV1 {
-            profile_generation_ref_id: binding.active_profile_generation_ref_id,
-            current_state_id: transition.current_state_id,
-            component,
-            reserved: 0,
+        let graph = CanonicalPathGraphV1::compile_with_path_tree_denies_and_precedence(
+            artifact.header.profile_id.as_str(),
+            &patterns,
+            &path_tree_denies,
+            artifact.policy_document.path_pattern_precedence,
+        )
+        .context(PolicySnafu)?
+        .determinize(artifact.header.profile_id.as_str())
+        .context(PolicySnafu)?;
+        let mut tables = PathTables {
+            mount_views: BTreeMap::new(),
+            mount_epochs: BTreeMap::new(),
+            mount_locks: BTreeMap::new(),
+            mount_roots: BTreeMap::new(),
+            exact: BTreeMap::new(),
+            wildcards: BTreeMap::new(),
+            terminals: BTreeMap::new(),
+            reconciliation: Vec::new(),
         };
-        let value = PathGraphTransitionV1 {
-            next_state_id: transition.next_state_id,
-            reserved: 0,
-        };
-        insert_exact(&mut tables.exact, key.as_bytes(), value.as_bytes())?;
-    }
-    for transition in &graph.wildcard_transitions {
-        let key = PathGraphStateKeyV1 {
-            profile_generation_ref_id: binding.active_profile_generation_ref_id,
-            state_id: transition.current_state_id,
-            reserved: 0,
-        };
-        let value = PathGraphTransitionV1 {
-            next_state_id: transition.next_state_id,
-            reserved: 0,
-        };
-        insert_exact(&mut tables.wildcards, key.as_bytes(), value.as_bytes())?;
-    }
-    let rule_handles = handles(
-        graph
-            .terminals
-            .iter()
-            .map(|terminal| terminal.rule_id.as_str()),
-    );
-    let mut terminal_values = BTreeMap::<u32, PathGraphTerminalV1>::new();
-    for terminal in &graph.terminals {
-        let composite_atom_id = *composite_handles
-            .get(&format!("CLASS:{}", terminal.candidate_object_class_id))
-            .ok_or_else(|| {
-                IdentityStateSnafu {
-                    reason: format!(
-                        "path terminal has unknown class `{}`",
-                        terminal.candidate_object_class_id
-                    ),
-                }
-                .build()
-            })?;
-        let value = PathGraphTerminalV1 {
-            composite_atom_id,
-            rule_numeric_id: u64::from(rule_handles[&terminal.rule_id]),
-            path_tree_deny_operation_mask: 0,
-        };
-        ensure!(
-            terminal_values.insert(terminal.state_id, value).is_none(),
-            IdentityStateSnafu {
-                reason: "deterministic path state has multiple exact terminals",
-            }
-        );
-    }
-    for floor in &graph.path_tree_deny_floors {
-        terminal_values
-            .entry(floor.state_id)
-            .or_default()
-            .path_tree_deny_operation_mask |= floor.operation_mask;
-    }
-    for (state_id, value) in terminal_values {
-        let key = PathGraphStateKeyV1 {
-            profile_generation_ref_id: binding.active_profile_generation_ref_id,
-            state_id,
-            reserved: 0,
-        };
-        insert_exact(&mut tables.terminals, key.as_bytes(), value.as_bytes())?;
-    }
-    let binding_id = parse_id("binding_id", &binding.binding_id)?;
-    for object in objects {
-        let components = &decoded[&object.exact_object_key_id];
-        let prefix_len = components
-            .len()
-            .checked_sub(usize::from(object.mount_relative_component_count))
-            .ok_or_else(|| {
-                IdentityStateSnafu {
-                    reason: "mount-relative path count exceeds the canonical path".to_owned(),
-                }
-                .build()
-            })?;
-        let graph_prefix_state_id =
+        for transition in &graph.exact_transitions {
+            let component = path_component(&transition.component)?;
+            let key = PathGraphTransitionKeyV1 {
+                profile_generation_ref_id: binding.active_profile_generation_ref_id,
+                current_state_id: transition.current_state_id,
+                component,
+                reserved: 0,
+            };
+            let value = PathGraphTransitionV1 {
+                next_state_id: transition.next_state_id,
+                reserved: 0,
+            };
+            insert_exact(&mut tables.exact, key.as_bytes(), value.as_bytes())?;
+        }
+        for transition in &graph.wildcard_transitions {
+            let key = PathGraphStateKeyV1 {
+                profile_generation_ref_id: binding.active_profile_generation_ref_id,
+                state_id: transition.current_state_id,
+                reserved: 0,
+            };
+            let value = PathGraphTransitionV1 {
+                next_state_id: transition.next_state_id,
+                reserved: 0,
+            };
+            insert_exact(&mut tables.wildcards, key.as_bytes(), value.as_bytes())?;
+        }
+        let rule_handles = handles(
             graph
-                .state_after(&components[..prefix_len])
+                .terminals
+                .iter()
+                .map(|terminal| terminal.rule_id.as_str()),
+        );
+        let mut terminal_values = BTreeMap::<u32, PathGraphTerminalV1>::new();
+        for terminal in &graph.terminals {
+            let selector = artifact
+                .policy_document
+                .path_selectors
+                .iter()
+                .find(|selector| selector.path_selector_id == terminal.rule_id)
+                .context(IdentityStateSnafu {
+                    reason: format!("path terminal has unknown selector `{}`", terminal.rule_id),
+                })?;
+            let composite_atom_id = *composite_handles
+                .get(&format!("PATH:{}", terminal.rule_id))
                 .ok_or_else(|| {
                     IdentityStateSnafu {
-                        reason: "canonical mount prefix is absent from its path graph".to_owned(),
+                        reason: format!(
+                            "path terminal has no composite atom for `{}`",
+                            terminal.rule_id
+                        ),
                     }
                     .build()
                 })?;
-        let view_map_key = object.mount_namespace_inode.to_ne_bytes();
-        let view = MountSecurityViewStateV1 {
-            topology_generation: object.mount_topology_generation,
-            snapshot_digest_id: 0,
-            pending_mutations: 0,
-            state: MountTopologyStateV1::Dirty,
-            reserved: [0; 7],
-            transition_version: 1,
-        };
-        insert_exact(&mut tables.mount_views, &view_map_key, view.as_bytes())?;
-        insert_exact(
-            &mut tables.mount_epochs,
-            &view_map_key,
-            &object.mount_topology_generation.to_ne_bytes(),
-        )?;
-        insert_exact(&mut tables.mount_locks, &view_map_key, &0_u32.to_ne_bytes())?;
-        let root_key = CanonicalMountRootKeyV1 {
-            profile_generation_ref_id: binding.active_profile_generation_ref_id,
-            mount_namespace_inode: object.mount_namespace_inode,
-            binding_id,
-            topology_generation: object.mount_topology_generation,
-            filesystem_device: object.mount_root_filesystem_device,
-            root_inode: object.mount_root_inode,
-        };
-        let root = CanonicalMountRootV1 {
-            selected_mount_id_unique: object.selected_mount_id_unique,
-            snapshot_digest_id: object.mount_snapshot_digest_id,
-            graph_prefix_state_id,
-            reserved: 0,
-        };
-        insert_exact(
-            &mut tables.mount_roots,
-            root_key.as_bytes(),
-            root.as_bytes(),
-        )?;
-        tables.reconciliation.push(MountRootReconciliation {
-            mount_namespace_inode: object.mount_namespace_inode,
-            binding_id,
-            configured: (*object).clone(),
-            canonical_path: canonical_path(components),
-            graph_prefix_state_id,
-        });
+            let value = PathGraphTerminalV1 {
+                composite_atom_id,
+                rule_numeric_id: rule_handles[&terminal.rule_id],
+                exact_object_required: u8::from(selector.requires_exact_object()),
+                reserved: [0; 3],
+                path_tree_deny_operation_mask: 0,
+            };
+            ensure!(
+                terminal_values.insert(terminal.state_id, value).is_none(),
+                IdentityStateSnafu {
+                    reason: "deterministic path state has multiple exact terminals",
+                }
+            );
+        }
+        for floor in &graph.path_tree_deny_floors {
+            terminal_values
+                .entry(floor.state_id)
+                .or_default()
+                .path_tree_deny_operation_mask |= floor.operation_mask;
+        }
+        for (state_id, value) in terminal_values {
+            let key = PathGraphStateKeyV1 {
+                profile_generation_ref_id: binding.active_profile_generation_ref_id,
+                state_id,
+                reserved: 0,
+            };
+            insert_exact(&mut tables.terminals, key.as_bytes(), value.as_bytes())?;
+        }
+        let binding_id = parse_id("binding_id", &binding.binding_id)?;
+        for object in objects {
+            let components = &decoded[&object.exact_object_key_id];
+            let prefix_len = components
+                .len()
+                .checked_sub(usize::from(object.mount_relative_component_count))
+                .ok_or_else(|| {
+                    IdentityStateSnafu {
+                        reason: "mount-relative path count exceeds the canonical path".to_owned(),
+                    }
+                    .build()
+                })?;
+            let graph_prefix_state_id =
+                graph
+                    .state_after(&components[..prefix_len])
+                    .ok_or_else(|| {
+                        IdentityStateSnafu {
+                            reason: "canonical mount prefix is absent from its path graph"
+                                .to_owned(),
+                        }
+                        .build()
+                    })?;
+            let view_map_key = object.mount_namespace_inode.to_ne_bytes();
+            let view = MountSecurityViewStateV1 {
+                topology_generation: object.mount_topology_generation,
+                snapshot_digest_id: 0,
+                pending_mutations: 0,
+                state: MountTopologyStateV1::Dirty,
+                reserved: [0; 7],
+                transition_version: 1,
+            };
+            insert_exact(&mut tables.mount_views, &view_map_key, view.as_bytes())?;
+            insert_exact(
+                &mut tables.mount_epochs,
+                &view_map_key,
+                &object.mount_topology_generation.to_ne_bytes(),
+            )?;
+            insert_exact(&mut tables.mount_locks, &view_map_key, &0_u32.to_ne_bytes())?;
+            let root_key = CanonicalMountRootKeyV1 {
+                profile_generation_ref_id: binding.active_profile_generation_ref_id,
+                mount_namespace_inode: object.mount_namespace_inode,
+                binding_id,
+                topology_generation: object.mount_topology_generation,
+                filesystem_device: object.mount_root_filesystem_device,
+                root_inode: object.mount_root_inode,
+            };
+            let root = CanonicalMountRootV1 {
+                selected_mount_id_unique: object.selected_mount_id_unique,
+                snapshot_digest_id: object.mount_snapshot_digest_id,
+                graph_prefix_state_id,
+                reserved: 0,
+            };
+            insert_exact(
+                &mut tables.mount_roots,
+                root_key.as_bytes(),
+                root.as_bytes(),
+            )?;
+            tables.reconciliation.push(MountRootReconciliation {
+                mount_namespace_inode: object.mount_namespace_inode,
+                binding_id,
+                configured: (*object).clone(),
+                canonical_path: canonical_path(components),
+                graph_prefix_state_id,
+            });
+        }
+        Ok(tables)
     }
-    Ok(tables)
 }
 
 fn path_component(bytes: &[u8]) -> Result<CanonicalPathComponentV1> {
@@ -3919,22 +4433,24 @@ mod tests {
 
     use ed25519_dalek::SigningKey;
     use erebor_interceptor_abi::{
-        BindingLifecycleStateV1, EffectDecisionKeyV1, EntryKindV1 as AbiEntryKindV1,
-        ExactFileObjectKeyV1, Id128V1, KernelEffectFamilyV1, KernelEffectOperationV1,
+        BindingLifecycleStateV1, EffectDecisionKeyV1, EffectDefaultKeyV1,
+        EntryKindV1 as AbiEntryKindV1, ExactFileObjectKeyV1, ExactObjectBindingStateV1,
+        ExactObjectBindingV1, Id128V1, KernelEffectFamilyV1, KernelEffectOperationV1,
         PathGraphStateKeyV1, PathGraphTerminalV1, PathGraphTransitionKeyV1, PhysicalDecisionKindV1,
         PolicyGenerationModeV1,
     };
     use mithril_control::{
-        EffectFamilyV1, LocalObjectSelectorV1, ObjectClassifierSelectorV1, PathTreeDenyFloorV1,
-        PolicyCompiler, PolicyDispositionV1, PolicyDocumentV1, ProfileCandidateArtifactV1,
-        ProfileModeV1, ProfileSealRequestV1, RegistryDigestsV1, RuleMatchV1,
+        EffectFamilyV1, LocalObjectSelectorV1, ObjectClassifierSelectorV1, PathSelectorTargetV1,
+        PathSelectorV1, PathTreeDenyFloorV1, PolicyCompiler, PolicyDispositionV1, PolicyDocumentV1,
+        ProfileCandidateArtifactV1, ProfileModeV1, ProfileSealRequestV1, RegistryDigestsV1,
+        RuleMatchV1,
     };
     use zerocopy::{FromBytes as _, IntoBytes as _};
 
     use super::{
         add_binding_activation, ensure_active_generation_unchanged, ensure_committed_generation,
-        ensure_map_capacity, exception_counter_is_consistent, lower_path_tables, parse_id,
-        same_exact_file, LoweredGeneration, ProfileActivation,
+        ensure_map_capacity, exception_counter_is_consistent, parse_id, same_exact_file,
+        LoweredGeneration, ProfileActivation,
     };
     use crate::error::IdentityStateSnafu;
     use crate::{
@@ -3961,6 +4477,17 @@ mod tests {
     }
 
     #[test]
+    fn path_selector_and_its_object_class_share_one_kernel_atom() -> crate::Result<()> {
+        let (artifact, _, _) = exact_artifact(ProfileModeV1::Observe)?;
+        let handles = LoweredGeneration::composite_handles(&artifact);
+        assert_eq!(
+            handles["PATH:projected-token"],
+            handles["CLASS:PROJECTED_TOKEN"]
+        );
+        Ok(())
+    }
+
+    #[test]
     fn exact_decision_key_contains_its_signed_composite_atom() -> crate::Result<()> {
         let (artifact, binding, mut object) = exact_artifact(ProfileModeV1::Observe)?;
         object.selected_mount_id_unique = object.mount_id_unique + 1;
@@ -3974,6 +4501,20 @@ mod tests {
             1_800_000_000_000_000_000,
             100,
         )?;
+        let terminal = generation
+            .path_terminals
+            .values()
+            .find_map(|value| {
+                PathGraphTerminalV1::read_from_bytes(value)
+                    .ok()
+                    .filter(|terminal| terminal.exact_object_required == 1)
+            })
+            .ok_or_else(|| {
+                IdentityStateSnafu {
+                    reason: "test generation has no exact path terminal".to_owned(),
+                }
+                .build()
+            })?;
         let expected = EffectDecisionKeyV1 {
             profile_generation_ref_id: 1,
             active_role_id: 1,
@@ -3982,14 +4523,16 @@ mod tests {
             operation: KernelEffectOperationV1::OpenRead as u16,
             reserved: 0,
             reserved_alignment: [0; 4],
-            composite_atom_id: 1,
+            composite_atom_id: terminal.composite_atom_id,
             exact_object_key_id: object.exact_object_key_id,
             process_state_vector_id: 1,
             binding_lifecycle_state: BindingLifecycleStateV1::Active,
             reserved_tail: [0; 3],
         };
-        let expected_bytes = expected.as_bytes().to_vec();
-        assert_eq!(generation.decisions.keys().next(), Some(&expected_bytes));
+        assert_eq!(
+            generation.decisions.keys().next(),
+            Some(&expected.as_bytes().to_vec())
+        );
         let object_key = generation.file_objects.keys().next().ok_or_else(|| {
             IdentityStateSnafu {
                 reason: "test generation has no exact object row".to_owned(),
@@ -4011,8 +4554,19 @@ mod tests {
             generation.mount_views.keys().next(),
             Some(&object.mount_namespace_inode.to_ne_bytes().to_vec())
         );
+        let expected_binding = ExactObjectBindingV1 {
+            profile_generation_ref_id: 1,
+            exact_object_key_id: object.exact_object_key_id,
+            composite_atom_id: terminal.composite_atom_id,
+            state: ExactObjectBindingStateV1::ReadBack,
+            reserved: [0; 7],
+        };
+        assert!(generation
+            .file_objects
+            .values()
+            .any(|binding| binding == expected_binding.as_bytes()));
 
-        assert!(LoweredGeneration::for_binding(
+        let unresolved = LoweredGeneration::for_binding(
             &artifact,
             &binding,
             &[],
@@ -4021,8 +4575,9 @@ mod tests {
             3,
             1_800_000_000_000_000_000,
             100,
-        )
-        .is_err());
+        )?;
+        assert!(unresolved.file_objects.is_empty());
+        assert_eq!(unresolved.decisions, generation.decisions);
         let mut swapped_roles = binding;
         std::mem::swap(
             &mut swapped_roles.initial_role_id,
@@ -4079,6 +4634,84 @@ mod tests {
     }
 
     #[test]
+    fn recursive_signed_selector_stages_without_a_live_object() -> crate::Result<()> {
+        let (mut artifact, binding, _) = exact_artifact(ProfileModeV1::Protect)?;
+        artifact.policy_document.path_selectors[0].target = PathSelectorTargetV1::Path {
+            path_pattern: "/var/**/token".to_owned(),
+        };
+        let generation = LoweredGeneration::for_binding(
+            &artifact,
+            &binding,
+            &[],
+            Id128V1::new(1, 2),
+            Id128V1::new(3, 4),
+            3,
+            1_800_000_000_000_000_000,
+            100,
+        )?;
+        assert!(generation.file_objects.is_empty());
+        assert!(generation.mount_views.is_empty());
+        assert!(generation.decisions.is_empty());
+        assert!(generation
+            .path_terminals
+            .values()
+            .any(|value| PathGraphTerminalV1::read_from_bytes(value)
+                .is_ok_and(|terminal| terminal.exact_object_required == 0)));
+        assert_eq!(generation.defaults.len(), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn path_selector_stages_a_path_decision_without_an_exact_object() -> crate::Result<()> {
+        let (mut artifact, binding, _) = exact_artifact(ProfileModeV1::Protect)?;
+        artifact.policy_document.path_selectors[0].target = PathSelectorTargetV1::Path {
+            path_pattern: "/var/*/token".to_owned(),
+        };
+        let generation = LoweredGeneration::for_binding(
+            &artifact,
+            &binding,
+            &[],
+            Id128V1::new(1, 2),
+            Id128V1::new(3, 4),
+            3,
+            1_800_000_000_000_000_000,
+            100,
+        )?;
+
+        assert!(generation.file_objects.is_empty());
+        assert!(generation.mount_views.is_empty());
+        assert!(generation.decisions.is_empty());
+        let terminal = generation
+            .path_terminals
+            .values()
+            .find_map(|value| PathGraphTerminalV1::read_from_bytes(value).ok())
+            .filter(|terminal| {
+                terminal.composite_atom_id > 0 && terminal.exact_object_required == 0
+            })
+            .ok_or_else(|| {
+                IdentityStateSnafu {
+                    reason: "test generation has no path-only terminal".to_owned(),
+                }
+                .build()
+            })?;
+        let expected = EffectDefaultKeyV1 {
+            profile_generation_ref_id: 1,
+            active_role_id: 1,
+            entry_kind: AbiEntryKindV1::ContainerStart as u16,
+            effect_family: KernelEffectFamilyV1::File as u16,
+            operation: KernelEffectOperationV1::OpenRead as u16,
+            reserved: 0,
+            reserved_alignment: [0; 4],
+            composite_atom_id: terminal.composite_atom_id,
+            process_state_vector_id: 1,
+            binding_lifecycle_state: BindingLifecycleStateV1::Active,
+            reserved_tail: [0; 3],
+        };
+        assert!(generation.defaults.contains_key(expected.as_bytes()));
+        Ok(())
+    }
+
+    #[test]
     fn device_object_requires_its_signed_class_pair() -> crate::Result<()> {
         let (mut artifact, binding, mut object) = exact_artifact(ProfileModeV1::Protect)?;
         object.device = Some(ExactDeviceConfig {
@@ -4114,6 +4747,7 @@ mod tests {
         classifier.selector = ObjectClassifierSelectorV1::Device {
             device_class_ids: vec!["NULL_DEVICE".to_owned()],
         };
+        artifact.policy_document.path_selectors[0].device_class_id = Some("NULL_DEVICE".to_owned());
         assert!(LoweredGeneration::for_binding(
             &artifact,
             &binding,
@@ -4240,7 +4874,9 @@ mod tests {
                 requested_disposition: PolicyDispositionV1::Deny,
                 exception_ids: Vec::new(),
             });
-        let tables = lower_path_tables(&artifact, &binding, &[], &BTreeMap::new())?;
+        let composite_handles = LoweredGeneration::composite_handles(&artifact);
+        let tables =
+            LoweredGeneration::lower_path_tables(&artifact, &binding, &[], &composite_handles)?;
         let open_read_mask = 1_u64 << KernelEffectOperationV1::OpenRead as u16;
 
         assert!(tables.mount_roots.is_empty());
@@ -4271,12 +4907,19 @@ mod tests {
                 requested_disposition: PolicyDispositionV1::Deny,
                 exception_ids: Vec::new(),
             });
-        let first = lower_path_tables(&artifact, &binding, &[], &BTreeMap::new())?;
+        let composite_handles = LoweredGeneration::composite_handles(&artifact);
+        let first =
+            LoweredGeneration::lower_path_tables(&artifact, &binding, &[], &composite_handles)?;
         let second_binding = WorkloadBindingConfig {
             active_profile_generation_ref_id: 2,
             ..binding
         };
-        let second = lower_path_tables(&artifact, &second_binding, &[], &BTreeMap::new())?;
+        let second = LoweredGeneration::lower_path_tables(
+            &artifact,
+            &second_binding,
+            &[],
+            &composite_handles,
+        )?;
 
         assert!(first.exact.keys().all(|key| {
             PathGraphTransitionKeyV1::read_from_bytes(key)
@@ -4365,11 +5008,16 @@ mod tests {
             source,
             location: snafu::Location::default(),
         })?;
+        document.path_selectors = vec![PathSelectorV1::exact(
+            "projected-token",
+            "/var/run/token",
+            "PROJECTED_TOKEN",
+        )];
         let RuleMatchV1::LocalPreEffect(effect) = &mut document.rules[0].rule_match else {
             unreachable!("fixture contains one local rule")
         };
-        effect.object = LocalObjectSelectorV1::ExactObjectKeys {
-            exact_object_key_ids: vec![99],
+        effect.object = LocalObjectSelectorV1::PathSelectors {
+            path_selector_ids: vec!["projected-token".to_owned()],
         };
         document.rollout.desired_profile_mode = mode;
         let compiled =
@@ -4428,7 +5076,7 @@ mod tests {
         };
         let object = ExactFileObjectConfig {
             profile_generation_ref_id: 1,
-            exact_object_key_id: 99,
+            exact_object_key_id: document.path_selectors[0].kernel_handle(),
             object_class_id: "PROJECTED_TOKEN".to_owned(),
             mount_namespace_inode: 10,
             mount_id_unique: 20,
