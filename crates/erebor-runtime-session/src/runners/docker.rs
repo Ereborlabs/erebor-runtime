@@ -31,7 +31,6 @@ const SYSTEMD_RUN_PROGRAM: &str = "systemd-run";
 const DEFAULT_CONTROLLER_PATH: &str = "/usr/libexec/erebor/erebor-docker-session-controller";
 const DEFAULT_DOCKER_PATH: &str = "/usr/bin/docker";
 const DEFAULT_SYSTEMD_RUN_PATH: &str = "/usr/bin/systemd-run";
-pub(crate) const DOCKER_CONTROLLER_PROTOCOL_VERSION: u32 = 1;
 const DOCKER_RECOVERY_FORMAT_VERSION: u32 = 1;
 
 #[derive(Clone, Debug)]
@@ -168,7 +167,6 @@ impl DockerRunnerDriver {
         let unit = format!("erebor-session-{}.scope", spec.session_id().as_str());
         let session_slice = format!("erebor-session-{}.slice", spec.session_id().as_str());
         let handoff = DockerControllerHandoff {
-            protocol_version: DOCKER_CONTROLLER_PROTOCOL_VERSION,
             spec: spec.clone(),
             stdout_path: output.stdout().to_path_buf(),
             stderr_path: output.stderr().to_path_buf(),
@@ -408,8 +406,8 @@ impl RunnerDriver for DockerRunnerDriver {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct DockerControllerHandoff {
-    pub(crate) protocol_version: u32,
     pub(crate) spec: SessionSpec,
     pub(crate) stdout_path: PathBuf,
     pub(crate) stderr_path: PathBuf,

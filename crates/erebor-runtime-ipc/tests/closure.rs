@@ -8,6 +8,7 @@ fn supported_tree_has_no_legacy_framed_ipc_or_guard_launcher() -> Result<(), io:
         concat!("Sync", "FrameCodec"),
         concat!("Erebor", "IpcFrame"),
         concat!("Ipc", "ProtocolError"),
+        concat!("PROTOCOL_", "VERSION"),
         concat!("DAEMON_CONTROL_", "PROTOCOL_", "VERSION"),
         concat!("KIND_", "GUARD_"),
         concat!("KIND_", "DAEMON_"),
@@ -58,14 +59,6 @@ fn scan(
         if source.contains(pattern) {
             violations.push(format!("{} contains `{pattern}`", relative.display()));
         }
-    }
-    if relative.starts_with("crates/erebor-runtime-ipc")
-        && source.contains(concat!("PROTOCOL_", "VERSION"))
-    {
-        violations.push(format!(
-            "{} contains a transport protocol version",
-            relative.display()
-        ));
     }
     Ok(())
 }

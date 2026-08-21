@@ -28,7 +28,6 @@ const CONTROLLER_PROGRAM: &str = "linux-session-controller";
 const SYSTEMD_RUN_PROGRAM: &str = "systemd-run";
 const DEFAULT_CONTROLLER_PATH: &str = "/usr/libexec/erebor/erebor-linux-session-controller";
 const DEFAULT_SYSTEMD_RUN_PATH: &str = "/usr/bin/systemd-run";
-pub(crate) const LINUX_CONTROLLER_PROTOCOL_VERSION: u32 = 2;
 const LINUX_RECOVERY_FORMAT_VERSION: u32 = 1;
 const DEFAULT_SANITIZED_EXECUTABLE_PATH: &str = "/usr/local/bin:/usr/bin:/bin";
 const MAX_SCRIPT_INTERPRETER_CHAIN: usize = 4;
@@ -130,7 +129,6 @@ impl LinuxRunnerDriver {
         let unit = format!("erebor-session-{}.scope", spec.session_id().as_str());
         let session_slice = format!("erebor-session-{}.slice", spec.session_id().as_str());
         let handoff = LinuxControllerHandoff {
-            protocol_version: LINUX_CONTROLLER_PROTOCOL_VERSION,
             spec: spec.clone(),
             stdout_path: output.stdout().to_path_buf(),
             stderr_path: output.stderr().to_path_buf(),
@@ -545,8 +543,8 @@ impl LinuxRunnerDriver {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct LinuxControllerHandoff {
-    pub(crate) protocol_version: u32,
     pub(crate) spec: SessionSpec,
     pub(crate) stdout_path: PathBuf,
     pub(crate) stderr_path: PathBuf,

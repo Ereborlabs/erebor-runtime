@@ -11,10 +11,7 @@ use snafu::ResultExt;
 use crate::{
     controller_support::{linux::LinuxWorkload, output::HelperOutput, workload::WorkloadExit},
     error::session_controller::{CommandChannelSnafu, InvalidHandoffSnafu, ProtocolSnafu},
-    runners::linux::{
-        LinuxControllerCommand, LinuxControllerEvent, LinuxControllerHandoff,
-        LINUX_CONTROLLER_PROTOCOL_VERSION,
-    },
+    runners::linux::{LinuxControllerCommand, LinuxControllerEvent, LinuxControllerHandoff},
     SessionControllerError,
 };
 
@@ -173,12 +170,6 @@ fn apply_command(
 }
 
 fn validate_handoff(handoff: &LinuxControllerHandoff) -> Result<(), SessionControllerError> {
-    if handoff.protocol_version != LINUX_CONTROLLER_PROTOCOL_VERSION {
-        return InvalidHandoffSnafu {
-            reason: format!("unsupported protocol version {}", handoff.protocol_version),
-        }
-        .fail();
-    }
     handoff.spec.validate().map_err(|error| {
         InvalidHandoffSnafu {
             reason: error.to_string(),

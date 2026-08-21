@@ -11,10 +11,7 @@ use snafu::ResultExt;
 use crate::{
     controller_support::{docker::DockerWorkload, output::HelperOutput, workload::WorkloadExit},
     error::session_controller::{CommandChannelSnafu, InvalidHandoffSnafu, ProtocolSnafu},
-    runners::docker::{
-        DockerControllerCommand, DockerControllerEvent, DockerControllerHandoff,
-        DOCKER_CONTROLLER_PROTOCOL_VERSION,
-    },
+    runners::docker::{DockerControllerCommand, DockerControllerEvent, DockerControllerHandoff},
     SessionControllerError,
 };
 
@@ -132,12 +129,6 @@ fn apply_command(
 }
 
 fn validate_handoff(handoff: &DockerControllerHandoff) -> Result<(), SessionControllerError> {
-    if handoff.protocol_version != DOCKER_CONTROLLER_PROTOCOL_VERSION {
-        return InvalidHandoffSnafu {
-            reason: format!("unsupported protocol version {}", handoff.protocol_version),
-        }
-        .fail();
-    }
     handoff.spec.validate().map_err(|error| {
         InvalidHandoffSnafu {
             reason: error.to_string(),
