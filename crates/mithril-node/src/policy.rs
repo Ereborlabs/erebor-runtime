@@ -2090,7 +2090,10 @@ impl LoweredGeneration {
                 ProfileModeV1::Observe => PolicyGenerationModeV1::Observe,
                 ProfileModeV1::Protect => PolicyGenerationModeV1::Protect,
             },
-            reserved: [0; 6],
+            path_tree_deny_active: u8::from(
+                !artifact.policy_document.path_tree_deny_floors.is_empty(),
+            ),
+            reserved: [0; 5],
             table_digest,
             transition_version: 1,
         };
@@ -4860,7 +4863,7 @@ mod tests {
 
     #[test]
     fn path_tree_floor_lowers_without_a_live_mount_view() -> crate::Result<()> {
-        let (mut artifact, binding, _) = exact_artifact(ProfileModeV1::Protect)?;
+        let (mut artifact, binding, object) = exact_artifact(ProfileModeV1::Protect)?;
         artifact
             .policy_document
             .path_tree_deny_floors
@@ -4888,6 +4891,35 @@ mod tests {
                     && terminal.path_tree_deny_operation_mask & open_read_mask != 0
             })
         }));
+        let generation = LoweredGeneration::for_binding(
+            &artifact,
+            &binding,
+            &[object],
+            Id128V1::new(1, 2),
+            Id128V1::new(3, 4),
+            3,
+            1_800_000_000_000_000_000,
+            100,
+        )?;
+        assert_eq!(generation.descriptor.path_tree_deny_active, 1);
+        Ok(())
+    }
+
+    #[test]
+    fn generation_without_a_path_tree_floor_leaves_mount_floor_inactive() -> crate::Result<()> {
+        let (artifact, binding, object) = exact_artifact(ProfileModeV1::Protect)?;
+        let generation = LoweredGeneration::for_binding(
+            &artifact,
+            &binding,
+            &[object],
+            Id128V1::new(1, 2),
+            Id128V1::new(3, 4),
+            3,
+            1_800_000_000_000_000_000,
+            100,
+        )?;
+
+        assert_eq!(generation.descriptor.path_tree_deny_active, 0);
         Ok(())
     }
 

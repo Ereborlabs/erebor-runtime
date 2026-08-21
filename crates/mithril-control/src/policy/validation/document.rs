@@ -392,6 +392,16 @@ impl PolicyDocumentV1 {
                 );
             }
             if let RuleMatchV1::LocalPreEffect(effect) = &rule.rule_match {
+                require!(
+                    self.path_tree_deny_floors.is_empty()
+                        || rule.requested_disposition == PolicyDispositionV1::Deny
+                        || !effect.effect_families.contains(&EffectFamilyV1::Mount),
+                    "CFG_PATH_TREE_MOUNT_AUTHORITY",
+                    format!(
+                        "rule `{}` grants mount authority in a path-tree profile",
+                        rule.rule_id
+                    )
+                );
                 if let LocalObjectSelectorV1::PathSelectors { path_selector_ids } = &effect.object {
                     require!(
                         ordered_unique(path_selector_ids)

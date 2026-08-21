@@ -99,6 +99,49 @@ administrative-exec path.
 Each record below applies only to its named source state and date. Its old
 status sentence does not override the final closure record.
 
+### Post-exec child-bind denial — 2026-08-21
+
+State: **Done** for the bounded path-tree child-bind correction.
+
+The retained x86_64 K3s VM `mithril-runtime-qualification-344630` ran Linux
+`6.8.0-137-generic` with cgroup v2 and BPF in the active LSM order. The test
+used the current delivery binaries and source. It did not use a second policy
+or mount implementation.
+
+The protected physical probe attempted one regular bind and one recursive
+bind from a protected child directory to separate outside targets after
+activation. Both syscalls returned a denial. Neither target exposed the child
+marker. Each attempt emitted `family=7 operation=19
+reason=PATH_TREE_POLICY_DENY`, and the probe passed with
+`path_tree_mount_attack_failed_closed=true`. After both denied attempts, the
+probe allowed the signed exact read outside the protected tree and recorded
+`path_tree_outside_control_allowed=true`.
+
+The operator then ran:
+
+```sh
+examples/mithril-local-enforcement-manual/mount-attack-deny.sh
+```
+
+The VM exposed its K3s-provided `crictl` and `kubectl` commands through a
+temporary PATH. The script created its own K3s workload, started four regular
+and four recursive child-bind attempts after activation, required at least
+eight Mount path-tree denials, and kept the original protected-file denial as
+a control. It printed:
+
+```text
+PASS: child-directory bind and recursive-bind aliases were denied before they exposed the signed path tree.
+Mithril, tasks, pins, state, lease, config, and logs removed.
+```
+
+An independent postflight found no manual namespace, BPF pin tree, unique
+controller cgroup, node process, or fixture directory. The retained VM remains
+available for compatible later tests. No generated result, binary digest, or
+CI artifact is committed with this record.
+
+The record does not qualify positive post-exec mount authority, idmapped
+mounts, complete propagation fan-out, or a source-aware bind-lineage model.
+
 ### Signed Exact selectors from containerd Running inventory — 2026-08-21
 
 State: **Done** for signed selector authority and Exact binding after an

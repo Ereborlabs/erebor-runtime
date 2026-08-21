@@ -7,8 +7,8 @@ not authorize implementation.
 
 Source:
 [`canonical_mount_cache_build_step`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L304),
-[`canonical_mount_path_walk_step`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L522), and
-[`mount_mutation_effect`](../../../bpf/erebor-interceptor/programs/identity_effects.bpf.h#L1148).
+[`canonical_mount_path_walk_step`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L520), and
+[`mount_mutation_effect`](../../../bpf/erebor-interceptor/programs/identity_effects.bpf.h#L1165).
 
 ### Finding
 
@@ -74,3 +74,20 @@ proofs exist.
   post-exec aliasing capability.
 - The test uses the emitted BPF program and the policy activation path, not a
   unit-level model of the walker.
+
+### Resolution — 2026-08-21
+
+The simple safe contract does not support the suggested explicit post-exec
+Mount grant. A signed profile that has a path-tree floor accepts no positive
+Mount rule. The compiler rejects `MOUNT`, `UNMOUNT`, `PIVOT_ROOT`, and
+`MOVE_MOUNT` grants. The active generation marks the floor in its kernel
+descriptor. The post-exec mount gate then returns `PATH_TREE_POLICY_DENY`
+before it evaluates an ordinary Mount decision.
+
+The protected physical probe denies regular and recursive child-directory
+binds and keeps both aliases unreadable. It then allows a signed exact read
+outside the protected tree. The new mount API cases stop at the existing
+capability precondition. They do not yet qualify a reached `move_mount` hook.
+Pre-exec setup remains outside the active identity gate. Source-aware positive
+post-exec Mount authority remains future work. See the
+[path-tree implementation review](./path-tree-denial-implementation-review.md#post-exec-mount-topology-floor).

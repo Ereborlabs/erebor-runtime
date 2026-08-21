@@ -211,6 +211,22 @@ fn path_tree_rules_are_signed_denial_floors_only() -> mithril_control::Result<()
         .compile(&non_recursive)
         .is_err_and(|error| error.to_string().contains("CFG_PATH_TREE_DENY")));
 
+    for operation in ["MOUNT", "UNMOUNT", "PIVOT_ROOT", "MOVE_MOUNT"] {
+        let mut mount_grant = document.clone();
+        let mithril_control::RuleMatchV1::LocalPreEffect(effect) =
+            &mut mount_grant.rules[0].rule_match
+        else {
+            unreachable!("fixture has a local effect rule")
+        };
+        effect.effect_families = vec![EffectFamilyV1::Mount];
+        effect.operation_ids = vec![operation.to_owned()];
+        mount_grant.rules[0].requested_disposition = PolicyDispositionV1::Allow;
+        mount_grant.rules[0].errno = None;
+        assert!(PolicyCompiler
+            .compile(&mount_grant)
+            .is_err_and(|error| error.to_string().contains("CFG_PATH_TREE_MOUNT_AUTHORITY")));
+    }
+
     let mut excepted = document;
     excepted.path_tree_deny_floors[0]
         .exception_ids

@@ -12,6 +12,8 @@ identity_cleanup_functions=()
 identity_success_message=
 identity_work=
 identity_pin_root=
+identity_effect_controller_cgroup_path=
+identity_effect_controller_cgroup_owned=false
 identity_repository=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
 identity_k3s_namespace=
 identity_k3s_namespace_created=false
@@ -91,6 +93,7 @@ identity_begin() {
   trap identity_on_exit EXIT
   identity_work=$(mktemp -d /tmp/mithril-identity-manual.XXXXXX)
   identity_pin_root=/sys/fs/bpf/erebor-mithril-identity-manual-${identity_work##*.}
+  identity_effect_controller_cgroup_path=/sys/fs/cgroup/mithril-effect-controller-${identity_work##*.}
   mkdir -m 700 -- "$identity_pin_root"
   identity_config=$identity_work/node.json
   identity_state=$identity_work/state
@@ -120,7 +123,7 @@ identity_on_exit() {
   for pid in "${identity_task_pids[@]}"; do
     kill -TERM "$pid" 2>/dev/null
   done
-  identity_stop_node
+  identity_stop_node || cleanup_failed=1
   for cleanup in "${identity_cleanup_functions[@]}"; do
     "$cleanup" || cleanup_failed=1
   done
@@ -1150,7 +1153,7 @@ identity_prepare_auto() {
 }
 
 identity_start_node() {
-  local pid
+  local controller_cgroup pid
   local -a command
   [[ -d $identity_cgroup_path ]] || {
     echo "configured container cgroup does not exist: $identity_cgroup_path" >&2
@@ -1160,7 +1163,23 @@ identity_start_node() {
   for pid in "${identity_held_initial_pids[@]}"; do
     command+=(--held-initial-pid "$pid")
   done
-  "${command[@]}" >>"$identity_work/mithril-node.log" 2>&1 &
+  controller_cgroup=$(jq -er '.container_runtime.effect_controller_cgroup_path // empty' \
+    "$identity_config")
+  if [[ -n $controller_cgroup ]]; then
+    [[ $controller_cgroup == "$identity_effect_controller_cgroup_path" \
+      && ! -e $controller_cgroup ]] || {
+      echo "effect controller cgroup is not an unused manual-owned path" >&2
+      return 1
+    }
+    install -d -m 700 -- "$controller_cgroup"
+    identity_effect_controller_cgroup_owned=true
+    (
+      printf '%s\n' "$BASHPID" >"$controller_cgroup/cgroup.procs"
+      exec "${command[@]}"
+    ) >>"$identity_work/mithril-node.log" 2>&1 &
+  else
+    "${command[@]}" >>"$identity_work/mithril-node.log" 2>&1 &
+  fi
   identity_node_pid=$!
 
   for ((attempt = 0; attempt < 600; attempt++)); do
@@ -1198,6 +1217,7 @@ identity_wait_for_initial_binding() {
 
 identity_stop_node() {
   local pid=$identity_node_pid
+  local status=0
   if [[ -n $pid ]] && kill -0 "$pid" 2>/dev/null; then
     kill -INT "$pid"
     for ((attempt = 0; attempt < 50; attempt++)); do
@@ -1215,6 +1235,14 @@ identity_stop_node() {
     wait "$pid" 2>/dev/null || true
   fi
   identity_node_pid=
+  if [[ $identity_effect_controller_cgroup_owned == true ]]; then
+    [[ -d $identity_effect_controller_cgroup_path \
+      && ! -s $identity_effect_controller_cgroup_path/cgroup.procs ]] \
+      && rmdir -- "$identity_effect_controller_cgroup_path" \
+      || status=1
+    identity_effect_controller_cgroup_owned=false
+  fi
+  return "$status"
 }
 
 identity_inspect_task() {

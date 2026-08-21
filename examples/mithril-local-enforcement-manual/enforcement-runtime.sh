@@ -114,7 +114,7 @@ enforcement_prepare_cri_shared() {
   enforcement_configure_policy_source
   [[ -z $enforcement_benign_path ]] || enforcement_configure_benign_control
   observation_configure_secret "$3"
-  observation_configure_cri_shared_directory "$4" "$5"
+  observation_configure_shared_directory cri "$4" "$5"
 }
 
 enforcement_prepare_k3s() {
@@ -123,7 +123,7 @@ enforcement_prepare_k3s() {
   enforcement_configure_policy_source
   [[ -z $enforcement_benign_path ]] || enforcement_configure_benign_control
   observation_configure_secret "$identity_k3s_secret_path"
-  observation_configure_cri_shared_directory \
+  observation_configure_shared_directory cri \
     "$identity_k3s_shared_directory" "$identity_k3s_container_shared_directory"
 }
 

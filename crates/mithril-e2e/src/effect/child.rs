@@ -77,6 +77,11 @@ enum ChildRequest {
     },
     ReadPrepared,
     MmapPrepared,
+    BindMount {
+        source: PathBuf,
+        target: PathBuf,
+        recursive: bool,
+    },
     PrepareMountRace {
         source: PathBuf,
         target: PathBuf,
@@ -538,6 +543,24 @@ impl EffectProcessFixture {
             ChildResponse::Outcome(outcome) => Ok(outcome),
             _ => Err(invalid_state(
                 "effect child returned the wrong prepared-mmap response",
+            )),
+        }
+    }
+
+    pub(super) fn bind_mount(
+        &mut self,
+        source: &Path,
+        target: &Path,
+        recursive: bool,
+    ) -> Result<IoOutcome> {
+        match self.request(&ChildRequest::BindMount {
+            source: source.to_path_buf(),
+            target: target.to_path_buf(),
+            recursive,
+        })? {
+            ChildResponse::Outcome(outcome) => Ok(outcome),
+            _ => Err(invalid_state(
+                "effect child returned the wrong bind-mount response",
             )),
         }
     }
@@ -1109,6 +1132,19 @@ pub fn run_effect_child(fixture_root: &Path, mailbox_path: &Path) -> Result<()> 
                 )),
                 false,
             ),
+            ChildRequest::BindMount {
+                source,
+                target,
+                recursive,
+            } => {
+                let result = if recursive {
+                    rustix::mount::mount_bind_recursive(&source, &target)
+                } else {
+                    rustix::mount::mount_bind(&source, &target)
+                }
+                .map_err(io::Error::from);
+                (Ok(ChildResponse::Outcome(io_outcome(result))), false)
+            }
             ChildRequest::PrepareMountRace {
                 source,
                 target,

@@ -1019,7 +1019,8 @@ pub struct ProfileGenerationDescriptorV1 {
     pub default_count: u32,
     pub state: PolicyGenerationStateV1,
     pub mode: PolicyGenerationModeV1,
-    pub reserved: [u8; 6],
+    pub path_tree_deny_active: u8,
+    pub reserved: [u8; 5],
     pub table_digest: [u8; 32],
     pub transition_version: u64,
 }
@@ -1322,6 +1323,10 @@ mod tests {
         assert_eq!(offset_of!(ProcessControlRuleKeyV1, argument_wildcard), 33);
         assert_eq!(size_of::<ProfileGenerationDescriptorV1>(), 112);
         assert_eq!(offset_of!(ProfileGenerationDescriptorV1, mode), 65);
+        assert_eq!(
+            offset_of!(ProfileGenerationDescriptorV1, path_tree_deny_active),
+            66
+        );
         assert_eq!(size_of::<ExceptionRuntimeStateKeyV1>(), 32);
         assert_eq!(size_of::<ExceptionHandleBindingKeyV1>(), 16);
         assert_eq!(size_of::<ExceptionHandleBindingV1>(), 40);

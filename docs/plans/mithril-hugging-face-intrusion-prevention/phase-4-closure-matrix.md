@@ -91,7 +91,30 @@ must not be added to
 [`fixtures.yaml`](../../../spec/qualification/v1/fixtures.yaml). The signed
 source accepts recursive `DENY` floors only. The protected result proves
 pre-existing, later, replacement, maximum-depth, and future-namespace
-children, an outside-tree control, mount-attack fail closure, and cleanup.
+children, post-exec regular and recursive child-bind denial, an outside-tree
+exact allow after both denied binds, mount-attack fail closure, and cleanup.
+
+The 2026-08-21 correction strengthens this existing `PASS`; it does not add a
+fixture or change the result count. A generation with a path-tree floor denies
+post-exec Mount effects. Positive Mount rules in that profile fail compilation.
+Pre-exec runtime setup remains valid. Positive post-exec mount authority needs
+a separate source-lineage design and qualification.
+
+## Child-Bind Correction Record
+
+The retained x86_64 VM ran Linux `6.8.0-137-generic` with cgroup v2 and BPF
+LSM. The rebuilt protected physical probe passed with
+`path_tree_mount_attack_failed_closed=true` and
+`path_tree_outside_control_allowed=true`. It denied regular and recursive
+binds from a protected child to outside aliases, kept the marker unreachable,
+and then allowed the signed exact read outside the protected tree.
+
+The self-contained K3s `mount-attack-deny.sh` case then started four regular
+and four recursive bind attempts after activation. It required eight Mount
+`PATH_TREE_POLICY_DENY` results and printed `PASS`. Independent postflight
+checks found no owned namespace, BPF pin, controller cgroup, node process, or
+fixture directory. No generated result or binary digest is part of this
+delivery.
 
 ## Current-Source Physical Record
 
