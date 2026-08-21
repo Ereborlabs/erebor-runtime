@@ -1,10 +1,14 @@
-use crate::{error::ProtocolSnafu, DaemonClient, Result};
 use erebor_runtime_core::RunnerCapabilityDocument;
-use erebor_runtime_ipc::v1::{
-    RunnerCapabilityRecord, RunnerInspectRequest, RunnerListRequest, RunnerListResponse,
-    KIND_RUNNER_CAPABILITY_RECORD, KIND_RUNNER_INSPECT_REQUEST, KIND_RUNNER_LIST_REQUEST,
-    KIND_RUNNER_LIST_RESPONSE,
+use erebor_runtime_ipc::{
+    transport::MAX_GRPC_MESSAGE_BYTES,
+    v1::{
+        runner_service_client::RunnerServiceClient, RunnerCapabilityRecord, RunnerInspectRequest,
+        RunnerListRequest,
+    },
 };
+use tonic::Request;
+
+use crate::{error::ProtocolSnafu, rpc, DaemonClient, Result};
 
 #[derive(Clone, Debug)]
 pub struct RunnerCapability {
@@ -15,15 +19,8 @@ pub struct RunnerCapability {
 
 impl DaemonClient {
     pub async fn runner_list(&self) -> Result<Vec<RunnerCapability>> {
-        let mut connection = self.connect().await?;
-        let response: RunnerListResponse = connection
-            .unary(
-                KIND_RUNNER_LIST_REQUEST,
-                &RunnerListRequest {},
-                KIND_RUNNER_LIST_RESPONSE,
-                Vec::new(),
-            )
-            .await?;
+        let mut client = self.runner_client().await?;
+        let response = rpc(client.list(Request::new(RunnerListRequest {})).await)?;
         response
             .runners
             .into_iter()
@@ -32,18 +29,19 @@ impl DaemonClient {
     }
 
     pub async fn runner_inspect(&self, runner_id: impl Into<String>) -> Result<RunnerCapability> {
-        let mut connection = self.connect().await?;
-        let record: RunnerCapabilityRecord = connection
-            .unary(
-                KIND_RUNNER_INSPECT_REQUEST,
-                &RunnerInspectRequest {
-                    runner_id: runner_id.into(),
-                },
-                KIND_RUNNER_CAPABILITY_RECORD,
-                Vec::new(),
-            )
-            .await?;
+        let mut client = self.runner_client().await?;
+        let record = rpc(client
+            .inspect(Request::new(RunnerInspectRequest {
+                runner_id: runner_id.into(),
+            }))
+            .await)?;
         RunnerCapability::from_record(record)
+    }
+
+    async fn runner_client(&self) -> Result<RunnerServiceClient<tonic::transport::Channel>> {
+        Ok(RunnerServiceClient::new(self.connect().await?)
+            .max_decoding_message_size(MAX_GRPC_MESSAGE_BYTES)
+            .max_encoding_message_size(MAX_GRPC_MESSAGE_BYTES))
     }
 }
 

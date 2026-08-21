@@ -1,11 +1,13 @@
-use erebor_runtime_ipc::v1::{
-    Header, SurfaceCreateRequest, SurfaceInspectRequest, SurfaceListRequest, SurfaceListResponse,
-    SurfaceRecord, EREBOR_IDEMPOTENCY_KEY_HEADER, KIND_SURFACE_CREATE_REQUEST,
-    KIND_SURFACE_INSPECT_REQUEST, KIND_SURFACE_LIST_REQUEST, KIND_SURFACE_LIST_RESPONSE,
-    KIND_SURFACE_RECORD,
+use erebor_runtime_ipc::{
+    transport::MAX_GRPC_MESSAGE_BYTES,
+    v1::{
+        surface_service_client::SurfaceServiceClient, SurfaceCreateRequest, SurfaceInspectRequest,
+        SurfaceListRequest, SurfaceListResponse, SurfaceRecord,
+    },
 };
+use tonic::Request;
 
-use crate::{DaemonClient, Result};
+use crate::{rpc, DaemonClient, Result};
 
 impl DaemonClient {
     pub async fn surface_create(
@@ -14,44 +16,33 @@ impl DaemonClient {
         surface_type: impl Into<String>,
         idempotency_key: &str,
     ) -> Result<SurfaceRecord> {
-        let mut connection = self.connect().await?;
-        connection
-            .unary(
-                KIND_SURFACE_CREATE_REQUEST,
-                &SurfaceCreateRequest {
+        let mut client = self.surface_client().await?;
+        rpc(client
+            .create(self.mutation_request(
+                SurfaceCreateRequest {
                     name: name.into(),
                     surface_type: surface_type.into(),
                 },
-                KIND_SURFACE_RECORD,
-                vec![Header {
-                    key: EREBOR_IDEMPOTENCY_KEY_HEADER.to_owned(),
-                    value: idempotency_key.to_owned(),
-                }],
-            )
-            .await
+                idempotency_key,
+            )?)
+            .await)
     }
 
     pub async fn surface_list(&self) -> Result<SurfaceListResponse> {
-        let mut connection = self.connect().await?;
-        connection
-            .unary(
-                KIND_SURFACE_LIST_REQUEST,
-                &SurfaceListRequest {},
-                KIND_SURFACE_LIST_RESPONSE,
-                Vec::new(),
-            )
-            .await
+        let mut client = self.surface_client().await?;
+        rpc(client.list(Request::new(SurfaceListRequest {})).await)
     }
 
     pub async fn surface_inspect(&self, name: impl Into<String>) -> Result<SurfaceRecord> {
-        let mut connection = self.connect().await?;
-        connection
-            .unary(
-                KIND_SURFACE_INSPECT_REQUEST,
-                &SurfaceInspectRequest { name: name.into() },
-                KIND_SURFACE_RECORD,
-                Vec::new(),
-            )
-            .await
+        let mut client = self.surface_client().await?;
+        rpc(client
+            .inspect(Request::new(SurfaceInspectRequest { name: name.into() }))
+            .await)
+    }
+
+    async fn surface_client(&self) -> Result<SurfaceServiceClient<tonic::transport::Channel>> {
+        Ok(SurfaceServiceClient::new(self.connect().await?)
+            .max_decoding_message_size(MAX_GRPC_MESSAGE_BYTES)
+            .max_encoding_message_size(MAX_GRPC_MESSAGE_BYTES))
     }
 }

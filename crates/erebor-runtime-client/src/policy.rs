@@ -1,18 +1,16 @@
-use erebor_runtime_ipc::v1::{
-    Header, PolicyPackageApplyRequest, PolicyPackageInspectRequest, PolicyPackageListRequest,
-    PolicyPackageListResponse, PolicyPackageRecord, PolicyPackageVerifyRequest,
-    PolicySetCreateRequest, PolicySetInspectRequest, PolicySetListRequest, PolicySetListResponse,
-    PolicySetRecord, PolicySetVerifyRequest, PolicyTestRequest, PolicyTestResponse,
-    EREBOR_IDEMPOTENCY_KEY_HEADER, KIND_POLICY_PACKAGE_APPLY_REQUEST,
-    KIND_POLICY_PACKAGE_INSPECT_REQUEST, KIND_POLICY_PACKAGE_LIST_REQUEST,
-    KIND_POLICY_PACKAGE_LIST_RESPONSE, KIND_POLICY_PACKAGE_RECORD,
-    KIND_POLICY_PACKAGE_VERIFY_REQUEST, KIND_POLICY_SET_CREATE_REQUEST,
-    KIND_POLICY_SET_INSPECT_REQUEST, KIND_POLICY_SET_LIST_REQUEST, KIND_POLICY_SET_LIST_RESPONSE,
-    KIND_POLICY_SET_RECORD, KIND_POLICY_SET_VERIFY_REQUEST, KIND_POLICY_TEST_REQUEST,
-    KIND_POLICY_TEST_RESPONSE,
+use erebor_runtime_ipc::{
+    transport::MAX_GRPC_MESSAGE_BYTES,
+    v1::{
+        policy_service_client::PolicyServiceClient, PolicyPackageApplyRequest,
+        PolicyPackageInspectRequest, PolicyPackageListRequest, PolicyPackageListResponse,
+        PolicyPackageRecord, PolicyPackageVerifyRequest, PolicySetCreateRequest,
+        PolicySetInspectRequest, PolicySetListRequest, PolicySetListResponse, PolicySetRecord,
+        PolicySetVerifyRequest, PolicyTestRequest, PolicyTestResponse,
+    },
 };
+use tonic::Request;
 
-use crate::{DaemonClient, Result};
+use crate::{rpc, DaemonClient, Result};
 
 impl DaemonClient {
     pub async fn policy_test(
@@ -20,18 +18,13 @@ impl DaemonClient {
         policy_json: Vec<u8>,
         event_json: Vec<u8>,
     ) -> Result<PolicyTestResponse> {
-        let mut connection = self.connect().await?;
-        connection
-            .unary(
-                KIND_POLICY_TEST_REQUEST,
-                &PolicyTestRequest {
-                    policy_json,
-                    event_json,
-                },
-                KIND_POLICY_TEST_RESPONSE,
-                Vec::new(),
-            )
-            .await
+        let mut client = self.policy_client().await?;
+        rpc(client
+            .test(Request::new(PolicyTestRequest {
+                policy_json,
+                event_json,
+            }))
+            .await)
     }
 
     pub async fn policy_package_apply(
@@ -40,63 +33,47 @@ impl DaemonClient {
         name: impl Into<String>,
         idempotency_key: &str,
     ) -> Result<PolicyPackageRecord> {
-        let mut connection = self.connect().await?;
-        connection
-            .unary(
-                KIND_POLICY_PACKAGE_APPLY_REQUEST,
-                &PolicyPackageApplyRequest {
+        let mut client = self.policy_client().await?;
+        rpc(client
+            .apply_package(self.mutation_request(
+                PolicyPackageApplyRequest {
                     path: path.into(),
                     name: name.into(),
                 },
-                KIND_POLICY_PACKAGE_RECORD,
-                vec![Header {
-                    key: EREBOR_IDEMPOTENCY_KEY_HEADER.to_owned(),
-                    value: idempotency_key.to_owned(),
-                }],
-            )
-            .await
+                idempotency_key,
+            )?)
+            .await)
     }
 
     pub async fn policy_package_list(&self) -> Result<PolicyPackageListResponse> {
-        let mut connection = self.connect().await?;
-        connection
-            .unary(
-                KIND_POLICY_PACKAGE_LIST_REQUEST,
-                &PolicyPackageListRequest {},
-                KIND_POLICY_PACKAGE_LIST_RESPONSE,
-                Vec::new(),
-            )
-            .await
+        let mut client = self.policy_client().await?;
+        rpc(client
+            .list_packages(Request::new(PolicyPackageListRequest {}))
+            .await)
     }
 
     pub async fn policy_package_inspect(
         &self,
         name: impl Into<String>,
     ) -> Result<PolicyPackageRecord> {
-        let mut connection = self.connect().await?;
-        connection
-            .unary(
-                KIND_POLICY_PACKAGE_INSPECT_REQUEST,
-                &PolicyPackageInspectRequest { name: name.into() },
-                KIND_POLICY_PACKAGE_RECORD,
-                Vec::new(),
-            )
-            .await
+        let mut client = self.policy_client().await?;
+        rpc(client
+            .inspect_package(Request::new(PolicyPackageInspectRequest {
+                name: name.into(),
+            }))
+            .await)
     }
 
     pub async fn policy_package_verify(
         &self,
         name: impl Into<String>,
     ) -> Result<PolicyPackageRecord> {
-        let mut connection = self.connect().await?;
-        connection
-            .unary(
-                KIND_POLICY_PACKAGE_VERIFY_REQUEST,
-                &PolicyPackageVerifyRequest { name: name.into() },
-                KIND_POLICY_PACKAGE_RECORD,
-                Vec::new(),
-            )
-            .await
+        let mut client = self.policy_client().await?;
+        rpc(client
+            .verify_package(Request::new(PolicyPackageVerifyRequest {
+                name: name.into(),
+            }))
+            .await)
     }
 
     pub async fn policy_set_create(
@@ -105,56 +82,42 @@ impl DaemonClient {
         package_names: Vec<String>,
         idempotency_key: &str,
     ) -> Result<PolicySetRecord> {
-        let mut connection = self.connect().await?;
-        connection
-            .unary(
-                KIND_POLICY_SET_CREATE_REQUEST,
-                &PolicySetCreateRequest {
+        let mut client = self.policy_client().await?;
+        rpc(client
+            .create_set(self.mutation_request(
+                PolicySetCreateRequest {
                     name: name.into(),
                     package_names,
                 },
-                KIND_POLICY_SET_RECORD,
-                vec![Header {
-                    key: EREBOR_IDEMPOTENCY_KEY_HEADER.to_owned(),
-                    value: idempotency_key.to_owned(),
-                }],
-            )
-            .await
+                idempotency_key,
+            )?)
+            .await)
     }
 
     pub async fn policy_set_list(&self) -> Result<PolicySetListResponse> {
-        let mut connection = self.connect().await?;
-        connection
-            .unary(
-                KIND_POLICY_SET_LIST_REQUEST,
-                &PolicySetListRequest {},
-                KIND_POLICY_SET_LIST_RESPONSE,
-                Vec::new(),
-            )
-            .await
+        let mut client = self.policy_client().await?;
+        rpc(client
+            .list_sets(Request::new(PolicySetListRequest {}))
+            .await)
     }
 
     pub async fn policy_set_inspect(&self, name: impl Into<String>) -> Result<PolicySetRecord> {
-        let mut connection = self.connect().await?;
-        connection
-            .unary(
-                KIND_POLICY_SET_INSPECT_REQUEST,
-                &PolicySetInspectRequest { name: name.into() },
-                KIND_POLICY_SET_RECORD,
-                Vec::new(),
-            )
-            .await
+        let mut client = self.policy_client().await?;
+        rpc(client
+            .inspect_set(Request::new(PolicySetInspectRequest { name: name.into() }))
+            .await)
     }
 
     pub async fn policy_set_verify(&self, name: impl Into<String>) -> Result<PolicySetRecord> {
-        let mut connection = self.connect().await?;
-        connection
-            .unary(
-                KIND_POLICY_SET_VERIFY_REQUEST,
-                &PolicySetVerifyRequest { name: name.into() },
-                KIND_POLICY_SET_RECORD,
-                Vec::new(),
-            )
-            .await
+        let mut client = self.policy_client().await?;
+        rpc(client
+            .verify_set(Request::new(PolicySetVerifyRequest { name: name.into() }))
+            .await)
+    }
+
+    async fn policy_client(&self) -> Result<PolicyServiceClient<tonic::transport::Channel>> {
+        Ok(PolicyServiceClient::new(self.connect().await?)
+            .max_decoding_message_size(MAX_GRPC_MESSAGE_BYTES)
+            .max_encoding_message_size(MAX_GRPC_MESSAGE_BYTES))
     }
 }

@@ -1,8 +1,8 @@
-use std::{any::Any, io, path::PathBuf};
+use std::{any::Any, path::PathBuf};
 
 use erebor_runtime_error::{ErrorExt, RetryHint, StatusCode};
-use erebor_runtime_ipc::IpcProtocolError;
 use snafu::{Location, Snafu};
+use tonic::Code;
 
 #[derive(Debug, Snafu)]
 #[snafu(visibility(pub(crate)))]
@@ -10,13 +10,7 @@ pub enum DaemonClientError {
     #[snafu(display("failed to connect to erebord at `{}`: {source}", path.display()))]
     Connect {
         path: PathBuf,
-        source: io::Error,
-        #[snafu(implicit)]
-        location: Location,
-    },
-    #[snafu(display("daemon client I/O failed: {source}"))]
-    Io {
-        source: io::Error,
+        source: tonic::transport::Error,
         #[snafu(implicit)]
         location: Location,
     },
@@ -26,21 +20,15 @@ pub enum DaemonClientError {
         #[snafu(implicit)]
         location: Location,
     },
-    #[snafu(display("daemon IPC failed: {source}"))]
-    Ipc {
-        source: IpcProtocolError,
-        #[snafu(implicit)]
-        location: Location,
-    },
-    #[snafu(display("daemon protocol failed: {reason}"))]
+    #[snafu(display("daemon gRPC contract failed: {reason}"))]
     Protocol {
         reason: String,
         #[snafu(implicit)]
         location: Location,
     },
     #[snafu(display("daemon rejected the request: {message}"))]
-    Daemon {
-        status_code: u32,
+    Rpc {
+        code: Code,
         message: String,
         #[snafu(implicit)]
         location: Location,
@@ -52,25 +40,32 @@ pub type Result<T> = std::result::Result<T, DaemonClientError>;
 impl ErrorExt for DaemonClientError {
     fn status_code(&self) -> StatusCode {
         match self {
-            Self::Connect { .. } | Self::Io { .. } | Self::TimedOut { .. } => {
-                StatusCode::Unavailable
-            }
-            Self::Ipc { source, .. } => source.status_code(),
+            Self::Connect { .. } | Self::TimedOut { .. } => StatusCode::Unavailable,
             Self::Protocol { .. } => StatusCode::InvalidArguments,
-            Self::Daemon { status_code, .. } => {
-                StatusCode::from_u32(*status_code).unwrap_or(StatusCode::Unknown)
-            }
+            Self::Rpc { code, .. } => match code {
+                Code::Cancelled => StatusCode::Cancelled,
+                Code::InvalidArgument | Code::OutOfRange => StatusCode::InvalidArguments,
+                Code::DeadlineExceeded => StatusCode::DeadlineExceeded,
+                Code::NotFound => StatusCode::NotFound,
+                Code::AlreadyExists => StatusCode::AlreadyExists,
+                Code::PermissionDenied | Code::Unauthenticated => StatusCode::PermissionDenied,
+                Code::FailedPrecondition | Code::Aborted => StatusCode::IllegalState,
+                Code::Unimplemented => StatusCode::Unsupported,
+                Code::Unavailable | Code::ResourceExhausted => StatusCode::Unavailable,
+                Code::Unknown | Code::Internal | Code::DataLoss => StatusCode::Internal,
+                Code::Ok => StatusCode::Success,
+            },
         }
     }
 
     fn retry_hint(&self) -> RetryHint {
         match self {
-            Self::Connect { source, .. } | Self::Io { source, .. } => {
-                RetryHint::from_io_error(source)
-            }
-            Self::TimedOut { .. } => RetryHint::Retryable,
-            Self::Ipc { source, .. } => source.retry_hint(),
-            Self::Protocol { .. } | Self::Daemon { .. } => RetryHint::NonRetryable,
+            Self::Connect { .. } | Self::TimedOut { .. } => RetryHint::Retryable,
+            Self::Rpc {
+                code: Code::Unavailable | Code::ResourceExhausted,
+                ..
+            } => RetryHint::Retryable,
+            Self::Protocol { .. } | Self::Rpc { .. } => RetryHint::NonRetryable,
         }
     }
 

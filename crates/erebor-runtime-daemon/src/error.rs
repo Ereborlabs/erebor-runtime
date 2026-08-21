@@ -103,6 +103,12 @@ pub enum DaemonError {
         #[snafu(implicit)]
         location: Location,
     },
+    #[snafu(display("daemon gRPC service failed: {source}"))]
+    Grpc {
+        source: tonic::transport::Error,
+        #[snafu(implicit)]
+        location: Location,
+    },
 }
 
 pub type Result<T> = std::result::Result<T, DaemonError>;
@@ -125,6 +131,7 @@ impl ErrorExt for DaemonError {
             Self::Session { source, .. } => source.status_code(),
             Self::Approval { source, .. } => source.status_code(),
             Self::Telemetry { source, .. } => source.status_code(),
+            Self::Grpc { .. } => StatusCode::Unavailable,
         }
     }
 
@@ -135,6 +142,7 @@ impl ErrorExt for DaemonError {
             Self::Session { source, .. } => source.retry_hint(),
             Self::Approval { source, .. } => source.retry_hint(),
             Self::Telemetry { source, .. } => source.retry_hint(),
+            Self::Grpc { .. } => RetryHint::Retryable,
             Self::LockUnavailable { .. } | Self::AlreadyRunning { .. } => RetryHint::Retryable,
             _ => RetryHint::NonRetryable,
         }

@@ -1,50 +1,34 @@
-use erebor_runtime_ipc::v1::{
-    AdminSessionInspectRequest, AdminSessionKillRequest, AdminSessionListRequest,
-    AdminSessionSetRetentionHoldRequest, AdminSessionStopRequest, CodexAppServerAttachRequest,
-    CodexAppServerAttachResponse, CodexAppServerInputCloseRequest,
-    CodexAppServerInputCloseResponse, CodexAppServerInputRequest, CodexAppServerInputResponse,
-    ContextDeliveryDecisionResponse, ContextDeliveryInboxRequest, ContextDeliveryInboxResponse,
-    ContextDeliveryReceiveRequest, ContextDeliveryRejectRequest, ContextGraphRequest,
-    ContextGraphResponse, Header, SessionAliasListRequest, SessionAliasListResponse,
-    SessionAliasRecord, SessionAliasRemoveRequest, SessionAliasSetRequest, SessionAttachRequest,
-    SessionAttachResponse, SessionCreateRequest, SessionCreateResponse, SessionEventRecord,
-    SessionEventsEnd, SessionEventsRequest, SessionEvidenceEnd, SessionEvidenceRecord,
-    SessionEvidenceRequest, SessionInputLeaseReleaseRequest, SessionInputLeaseRenewRequest,
-    SessionInputLeaseResponse, SessionInputRequest, SessionInputResponse, SessionInspectRequest,
-    SessionKillRequest, SessionListRequest, SessionListResponse, SessionLogChunk, SessionLogsEnd,
-    SessionLogsRequest, SessionPruneRequest, SessionPruneResponse, SessionRecord,
-    SessionRemoveRequest, SessionStartRequest, SessionStopRequest, SessionTerminalResizeRequest,
-    SessionTerminalResizeResponse, SessionWaitRequest, EREBOR_IDEMPOTENCY_KEY_HEADER,
-    KIND_ADMIN_SESSION_INSPECT_REQUEST, KIND_ADMIN_SESSION_KILL_REQUEST,
-    KIND_ADMIN_SESSION_LIST_REQUEST, KIND_ADMIN_SESSION_SET_RETENTION_HOLD_REQUEST,
-    KIND_ADMIN_SESSION_STOP_REQUEST, KIND_CODEX_APP_SERVER_ATTACH_REQUEST,
-    KIND_CODEX_APP_SERVER_ATTACH_RESPONSE, KIND_CODEX_APP_SERVER_INPUT_CLOSE_REQUEST,
-    KIND_CODEX_APP_SERVER_INPUT_CLOSE_RESPONSE, KIND_CODEX_APP_SERVER_INPUT_REQUEST,
-    KIND_CODEX_APP_SERVER_INPUT_RESPONSE, KIND_CONTEXT_DELIVERY_DECISION_RESPONSE,
-    KIND_CONTEXT_DELIVERY_INBOX_REQUEST, KIND_CONTEXT_DELIVERY_INBOX_RESPONSE,
-    KIND_CONTEXT_DELIVERY_RECEIVE_REQUEST, KIND_CONTEXT_DELIVERY_REJECT_REQUEST,
-    KIND_CONTEXT_GRAPH_REQUEST, KIND_CONTEXT_GRAPH_RESPONSE, KIND_DAEMON_ERROR,
-    KIND_SESSION_ALIAS_LIST_REQUEST, KIND_SESSION_ALIAS_LIST_RESPONSE, KIND_SESSION_ALIAS_RECORD,
-    KIND_SESSION_ALIAS_REMOVE_REQUEST, KIND_SESSION_ALIAS_SET_REQUEST, KIND_SESSION_ATTACH_REQUEST,
-    KIND_SESSION_ATTACH_RESPONSE, KIND_SESSION_CREATE_REQUEST, KIND_SESSION_CREATE_RESPONSE,
-    KIND_SESSION_EVENTS_END, KIND_SESSION_EVENTS_REQUEST, KIND_SESSION_EVENT_RECORD,
-    KIND_SESSION_EVIDENCE_END, KIND_SESSION_EVIDENCE_RECORD, KIND_SESSION_EVIDENCE_REQUEST,
-    KIND_SESSION_INPUT_LEASE_RELEASE_REQUEST, KIND_SESSION_INPUT_LEASE_RENEW_REQUEST,
-    KIND_SESSION_INPUT_LEASE_RESPONSE, KIND_SESSION_INPUT_REQUEST, KIND_SESSION_INPUT_RESPONSE,
-    KIND_SESSION_INSPECT_REQUEST, KIND_SESSION_KILL_REQUEST, KIND_SESSION_LIST_REQUEST,
-    KIND_SESSION_LIST_RESPONSE, KIND_SESSION_LOGS_END, KIND_SESSION_LOGS_REQUEST,
-    KIND_SESSION_LOG_CHUNK, KIND_SESSION_PRUNE_REQUEST, KIND_SESSION_PRUNE_RESPONSE,
-    KIND_SESSION_RECORD, KIND_SESSION_REMOVE_REQUEST, KIND_SESSION_START_REQUEST,
-    KIND_SESSION_STOP_REQUEST, KIND_SESSION_TERMINAL_RESIZE_REQUEST,
-    KIND_SESSION_TERMINAL_RESIZE_RESPONSE, KIND_SESSION_WAIT_REQUEST,
-};
-use snafu::ResultExt;
 use std::time::Duration;
 
-use crate::{
-    error::{IpcSnafu, ProtocolSnafu},
-    DaemonClient, Result, SESSION_MUTATION_TIMEOUT,
+use erebor_runtime_ipc::{
+    transport::MAX_GRPC_MESSAGE_BYTES,
+    v1::{
+        administration_service_client::AdministrationServiceClient,
+        context_service_client::ContextServiceClient, session_event_stream_item,
+        session_evidence_stream_item, session_log_stream_item,
+        session_service_client::SessionServiceClient, AdminSessionInspectRequest,
+        AdminSessionKillRequest, AdminSessionListRequest, AdminSessionSetRetentionHoldRequest,
+        AdminSessionStopRequest, CodexAppServerAttachRequest, CodexAppServerAttachResponse,
+        CodexAppServerInputCloseRequest, CodexAppServerInputCloseResponse,
+        CodexAppServerInputRequest, CodexAppServerInputResponse, ContextDeliveryDecisionResponse,
+        ContextDeliveryInboxRequest, ContextDeliveryInboxResponse, ContextDeliveryReceiveRequest,
+        ContextDeliveryRejectRequest, ContextGraphRequest, ContextGraphResponse,
+        SessionAliasListRequest, SessionAliasListResponse, SessionAliasRecord,
+        SessionAliasRemoveRequest, SessionAliasSetRequest, SessionAttachRequest,
+        SessionAttachResponse, SessionCreateRequest, SessionCreateResponse, SessionEventRecord,
+        SessionEventsEnd, SessionEventsRequest, SessionEvidenceEnd, SessionEvidenceRecord,
+        SessionEvidenceRequest, SessionInputLeaseReleaseRequest, SessionInputLeaseRenewRequest,
+        SessionInputLeaseResponse, SessionInputRequest, SessionInputResponse,
+        SessionInspectRequest, SessionKillRequest, SessionListRequest, SessionListResponse,
+        SessionLogChunk, SessionLogsEnd, SessionLogsRequest, SessionPruneRequest,
+        SessionPruneResponse, SessionRecord, SessionRemoveRequest, SessionStartRequest,
+        SessionStopRequest, SessionTerminalResizeRequest, SessionTerminalResizeResponse,
+        SessionWaitRequest,
+    },
 };
+use tonic::Request;
+
+use crate::{error::ProtocolSnafu, rpc, rpc_error, DaemonClient, Result};
 
 const SESSION_WAIT_TIMEOUT: Duration = Duration::from_secs(24 * 60 * 60);
 
@@ -71,34 +55,24 @@ impl DaemonClient {
         &self,
         parent_session_id: impl Into<String>,
     ) -> Result<ContextDeliveryInboxResponse> {
-        let mut connection = self.connect().await?;
-        connection
-            .unary(
-                KIND_CONTEXT_DELIVERY_INBOX_REQUEST,
-                &ContextDeliveryInboxRequest {
-                    parent_session_id: parent_session_id.into(),
-                },
-                KIND_CONTEXT_DELIVERY_INBOX_RESPONSE,
-                Vec::new(),
-            )
-            .await
+        let mut client = self.context_client().await?;
+        rpc(client
+            .delivery_inbox(Request::new(ContextDeliveryInboxRequest {
+                parent_session_id: parent_session_id.into(),
+            }))
+            .await)
     }
 
     pub async fn context_graph(
         &self,
         session_id: impl Into<String>,
     ) -> Result<ContextGraphResponse> {
-        let mut connection = self.connect().await?;
-        connection
-            .unary(
-                KIND_CONTEXT_GRAPH_REQUEST,
-                &ContextGraphRequest {
-                    session_id: session_id.into(),
-                },
-                KIND_CONTEXT_GRAPH_RESPONSE,
-                Vec::new(),
-            )
-            .await
+        let mut client = self.context_client().await?;
+        rpc(client
+            .graph(Request::new(ContextGraphRequest {
+                session_id: session_id.into(),
+            }))
+            .await)
     }
 
     pub async fn context_delivery_receive(
@@ -106,13 +80,10 @@ impl DaemonClient {
         request: ContextDeliveryReceiveRequest,
         idempotency_key: &str,
     ) -> Result<ContextDeliveryDecisionResponse> {
-        self.session_mutation(
-            KIND_CONTEXT_DELIVERY_RECEIVE_REQUEST,
-            &request,
-            KIND_CONTEXT_DELIVERY_DECISION_RESPONSE,
-            idempotency_key,
-        )
-        .await
+        let mut client = self.context_client().await?;
+        rpc(client
+            .receive_delivery(self.mutation_request(request, idempotency_key)?)
+            .await)
     }
 
     pub async fn context_delivery_reject(
@@ -120,13 +91,10 @@ impl DaemonClient {
         request: ContextDeliveryRejectRequest,
         idempotency_key: &str,
     ) -> Result<ContextDeliveryDecisionResponse> {
-        self.session_mutation(
-            KIND_CONTEXT_DELIVERY_REJECT_REQUEST,
-            &request,
-            KIND_CONTEXT_DELIVERY_DECISION_RESPONSE,
-            idempotency_key,
-        )
-        .await
+        let mut client = self.context_client().await?;
+        rpc(client
+            .reject_delivery(self.mutation_request(request, idempotency_key)?)
+            .await)
     }
 
     pub async fn session_create(
@@ -134,13 +102,10 @@ impl DaemonClient {
         request: SessionCreateRequest,
         idempotency_key: &str,
     ) -> Result<SessionCreateResponse> {
-        self.session_mutation(
-            KIND_SESSION_CREATE_REQUEST,
-            &request,
-            KIND_SESSION_CREATE_RESPONSE,
-            idempotency_key,
-        )
-        .await
+        let mut client = self.session_client().await?;
+        rpc(client
+            .create(self.mutation_request(request, idempotency_key)?)
+            .await)
     }
 
     pub async fn session_start(
@@ -148,15 +113,15 @@ impl DaemonClient {
         session_id: impl Into<String>,
         idempotency_key: &str,
     ) -> Result<SessionRecord> {
-        self.session_mutation(
-            KIND_SESSION_START_REQUEST,
-            &SessionStartRequest {
-                session_id: session_id.into(),
-            },
-            KIND_SESSION_RECORD,
-            idempotency_key,
-        )
-        .await
+        let mut client = self.session_client().await?;
+        rpc(client
+            .start(self.mutation_request(
+                SessionStartRequest {
+                    session_id: session_id.into(),
+                },
+                idempotency_key,
+            )?)
+            .await)
     }
 
     pub async fn session_stop(
@@ -165,16 +130,16 @@ impl DaemonClient {
         grace_period_seconds: u64,
         idempotency_key: &str,
     ) -> Result<SessionRecord> {
-        self.session_mutation(
-            KIND_SESSION_STOP_REQUEST,
-            &SessionStopRequest {
-                session_id: session_id.into(),
-                grace_period_seconds,
-            },
-            KIND_SESSION_RECORD,
-            idempotency_key,
-        )
-        .await
+        let mut client = self.session_client().await?;
+        rpc(client
+            .stop(self.mutation_request(
+                SessionStopRequest {
+                    session_id: session_id.into(),
+                    grace_period_seconds,
+                },
+                idempotency_key,
+            )?)
+            .await)
     }
 
     pub async fn session_kill(
@@ -183,16 +148,16 @@ impl DaemonClient {
         signal: impl Into<String>,
         idempotency_key: &str,
     ) -> Result<SessionRecord> {
-        self.session_mutation(
-            KIND_SESSION_KILL_REQUEST,
-            &SessionKillRequest {
-                session_id: session_id.into(),
-                signal: signal.into(),
-            },
-            KIND_SESSION_RECORD,
-            idempotency_key,
-        )
-        .await
+        let mut client = self.session_client().await?;
+        rpc(client
+            .kill(self.mutation_request(
+                SessionKillRequest {
+                    session_id: session_id.into(),
+                    signal: signal.into(),
+                },
+                idempotency_key,
+            )?)
+            .await)
     }
 
     pub async fn session_remove(
@@ -201,42 +166,30 @@ impl DaemonClient {
         force: bool,
         idempotency_key: &str,
     ) -> Result<SessionRecord> {
-        self.session_mutation(
-            KIND_SESSION_REMOVE_REQUEST,
-            &SessionRemoveRequest {
-                session_id: session_id.into(),
-                force,
-            },
-            KIND_SESSION_RECORD,
-            idempotency_key,
-        )
-        .await
+        let mut client = self.session_client().await?;
+        rpc(client
+            .remove(self.mutation_request(
+                SessionRemoveRequest {
+                    session_id: session_id.into(),
+                    force,
+                },
+                idempotency_key,
+            )?)
+            .await)
     }
 
     pub async fn session_inspect(&self, session_id: impl Into<String>) -> Result<SessionRecord> {
-        let mut connection = self.connect().await?;
-        connection
-            .unary(
-                KIND_SESSION_INSPECT_REQUEST,
-                &SessionInspectRequest {
-                    session_id: session_id.into(),
-                },
-                KIND_SESSION_RECORD,
-                Vec::new(),
-            )
-            .await
+        let mut client = self.session_client().await?;
+        rpc(client
+            .inspect(Request::new(SessionInspectRequest {
+                session_id: session_id.into(),
+            }))
+            .await)
     }
 
     pub async fn session_list(&self) -> Result<SessionListResponse> {
-        let mut connection = self.connect().await?;
-        connection
-            .unary(
-                KIND_SESSION_LIST_REQUEST,
-                &SessionListRequest {},
-                KIND_SESSION_LIST_RESPONSE,
-                Vec::new(),
-            )
-            .await
+        let mut client = self.session_client().await?;
+        rpc(client.list(Request::new(SessionListRequest {})).await)
     }
 
     pub async fn session_alias_set(
@@ -245,16 +198,16 @@ impl DaemonClient {
         session_id: impl Into<String>,
         idempotency_key: &str,
     ) -> Result<SessionAliasRecord> {
-        self.session_mutation(
-            KIND_SESSION_ALIAS_SET_REQUEST,
-            &SessionAliasSetRequest {
-                alias: alias.into(),
-                session_id: session_id.into(),
-            },
-            KIND_SESSION_ALIAS_RECORD,
-            idempotency_key,
-        )
-        .await
+        let mut client = self.session_client().await?;
+        rpc(client
+            .set_alias(self.mutation_request(
+                SessionAliasSetRequest {
+                    alias: alias.into(),
+                    session_id: session_id.into(),
+                },
+                idempotency_key,
+            )?)
+            .await)
     }
 
     pub async fn session_alias_remove(
@@ -262,27 +215,22 @@ impl DaemonClient {
         alias: impl Into<String>,
         idempotency_key: &str,
     ) -> Result<SessionAliasRecord> {
-        self.session_mutation(
-            KIND_SESSION_ALIAS_REMOVE_REQUEST,
-            &SessionAliasRemoveRequest {
-                alias: alias.into(),
-            },
-            KIND_SESSION_ALIAS_RECORD,
-            idempotency_key,
-        )
-        .await
+        let mut client = self.session_client().await?;
+        rpc(client
+            .remove_alias(self.mutation_request(
+                SessionAliasRemoveRequest {
+                    alias: alias.into(),
+                },
+                idempotency_key,
+            )?)
+            .await)
     }
 
     pub async fn session_alias_list(&self) -> Result<SessionAliasListResponse> {
-        let mut connection = self.connect().await?;
-        connection
-            .unary(
-                KIND_SESSION_ALIAS_LIST_REQUEST,
-                &SessionAliasListRequest {},
-                KIND_SESSION_ALIAS_LIST_RESPONSE,
-                Vec::new(),
-            )
-            .await
+        let mut client = self.session_client().await?;
+        rpc(client
+            .list_aliases(Request::new(SessionAliasListRequest {}))
+            .await)
     }
 
     pub async fn session_wait(
@@ -290,72 +238,46 @@ impl DaemonClient {
         session_id: impl Into<String>,
         after_generation: u64,
     ) -> Result<SessionRecord> {
-        let mut connection = self.connect().await?;
-        let request_id = connection
-            .send(
-                KIND_SESSION_WAIT_REQUEST,
-                &SessionWaitRequest {
-                    session_id: session_id.into(),
-                    after_generation,
-                },
-                Vec::new(),
-            )
-            .await?;
-        let envelope = connection
-            .receive_with_timeout(request_id, SESSION_WAIT_TIMEOUT)
-            .await?;
-        if envelope.message_kind == KIND_DAEMON_ERROR {
-            return Err(connection.daemon_error(envelope)?);
-        }
-        envelope
-            .decode_typed_payload(KIND_SESSION_RECORD)
-            .context(IpcSnafu)
+        let mut client = self.session_client().await?;
+        let mut request = Request::new(SessionWaitRequest {
+            session_id: session_id.into(),
+            after_generation,
+        });
+        request.set_timeout(SESSION_WAIT_TIMEOUT);
+        rpc(client.wait(request).await)
     }
 
     pub async fn session_logs(
         &self,
         session_id: impl Into<String>,
-        stream: impl Into<String>,
+        stream_name: impl Into<String>,
         after_sequence: u64,
         maximum_records: u32,
     ) -> Result<SessionLogPage> {
-        let mut connection = self.connect().await?;
-        let request_id = connection
-            .send(
-                KIND_SESSION_LOGS_REQUEST,
-                &SessionLogsRequest {
-                    session_id: session_id.into(),
-                    stream: stream.into(),
-                    after_sequence,
-                    maximum_records,
-                },
-                Vec::new(),
-            )
-            .await?;
+        let mut client = self.session_client().await?;
+        let mut stream = client
+            .logs(Request::new(SessionLogsRequest {
+                session_id: session_id.into(),
+                stream: stream_name.into(),
+                after_sequence,
+                maximum_records,
+            }))
+            .await
+            .map_err(rpc_error)?
+            .into_inner();
         let mut records = Vec::new();
-        loop {
-            let envelope = connection.receive(request_id).await?;
-            match envelope.message_kind.as_str() {
-                KIND_SESSION_LOG_CHUNK => records.push(
-                    envelope
-                        .decode_typed_payload(KIND_SESSION_LOG_CHUNK)
-                        .context(IpcSnafu)?,
-                ),
-                KIND_SESSION_LOGS_END => {
-                    let end = envelope
-                        .decode_typed_payload(KIND_SESSION_LOGS_END)
-                        .context(IpcSnafu)?;
-                    return Ok(SessionLogPage { records, end });
-                }
-                KIND_DAEMON_ERROR => return Err(connection.daemon_error(envelope)?),
-                actual => {
-                    return ProtocolSnafu {
-                        reason: format!("unexpected session logs response kind `{actual}`"),
-                    }
-                    .fail();
-                }
+        let mut end = None;
+        while let Some(item) = stream.message().await.map_err(rpc_error)? {
+            match item.item {
+                Some(session_log_stream_item::Item::Record(record)) => records.push(record),
+                Some(session_log_stream_item::Item::End(value)) => end = Some(value),
+                None => return missing_stream_item("session logs"),
             }
         }
+        Ok(SessionLogPage {
+            records,
+            end: end.ok_or_else(|| missing_stream_end("session logs"))?,
+        })
     }
 
     pub async fn session_events(
@@ -364,42 +286,29 @@ impl DaemonClient {
         after_sequence: u64,
         maximum_records: u32,
     ) -> Result<SessionEventPage> {
-        let mut connection = self.connect().await?;
-        let request_id = connection
-            .send(
-                KIND_SESSION_EVENTS_REQUEST,
-                &SessionEventsRequest {
-                    session_id: session_id.into(),
-                    after_sequence,
-                    maximum_records,
-                },
-                Vec::new(),
-            )
-            .await?;
+        let mut client = self.session_client().await?;
+        let mut stream = client
+            .events(Request::new(SessionEventsRequest {
+                session_id: session_id.into(),
+                after_sequence,
+                maximum_records,
+            }))
+            .await
+            .map_err(rpc_error)?
+            .into_inner();
         let mut records = Vec::new();
-        loop {
-            let envelope = connection.receive(request_id).await?;
-            match envelope.message_kind.as_str() {
-                KIND_SESSION_EVENT_RECORD => records.push(
-                    envelope
-                        .decode_typed_payload(KIND_SESSION_EVENT_RECORD)
-                        .context(IpcSnafu)?,
-                ),
-                KIND_SESSION_EVENTS_END => {
-                    let end = envelope
-                        .decode_typed_payload(KIND_SESSION_EVENTS_END)
-                        .context(IpcSnafu)?;
-                    return Ok(SessionEventPage { records, end });
-                }
-                KIND_DAEMON_ERROR => return Err(connection.daemon_error(envelope)?),
-                actual => {
-                    return ProtocolSnafu {
-                        reason: format!("unexpected session events response kind `{actual}`"),
-                    }
-                    .fail();
-                }
+        let mut end = None;
+        while let Some(item) = stream.message().await.map_err(rpc_error)? {
+            match item.item {
+                Some(session_event_stream_item::Item::Record(record)) => records.push(record),
+                Some(session_event_stream_item::Item::End(value)) => end = Some(value),
+                None => return missing_stream_item("session events"),
             }
         }
+        Ok(SessionEventPage {
+            records,
+            end: end.ok_or_else(|| missing_stream_end("session events"))?,
+        })
     }
 
     pub async fn session_evidence(
@@ -408,42 +317,29 @@ impl DaemonClient {
         after_sequence: u64,
         maximum_records: u32,
     ) -> Result<SessionEvidencePage> {
-        let mut connection = self.connect().await?;
-        let request_id = connection
-            .send(
-                KIND_SESSION_EVIDENCE_REQUEST,
-                &SessionEvidenceRequest {
-                    session_id: session_id.into(),
-                    after_sequence,
-                    maximum_records,
-                },
-                Vec::new(),
-            )
-            .await?;
+        let mut client = self.session_client().await?;
+        let mut stream = client
+            .evidence(Request::new(SessionEvidenceRequest {
+                session_id: session_id.into(),
+                after_sequence,
+                maximum_records,
+            }))
+            .await
+            .map_err(rpc_error)?
+            .into_inner();
         let mut records = Vec::new();
-        loop {
-            let envelope = connection.receive(request_id).await?;
-            match envelope.message_kind.as_str() {
-                KIND_SESSION_EVIDENCE_RECORD => records.push(
-                    envelope
-                        .decode_typed_payload(KIND_SESSION_EVIDENCE_RECORD)
-                        .context(IpcSnafu)?,
-                ),
-                KIND_SESSION_EVIDENCE_END => {
-                    let end = envelope
-                        .decode_typed_payload(KIND_SESSION_EVIDENCE_END)
-                        .context(IpcSnafu)?;
-                    return Ok(SessionEvidencePage { records, end });
-                }
-                KIND_DAEMON_ERROR => return Err(connection.daemon_error(envelope)?),
-                actual => {
-                    return ProtocolSnafu {
-                        reason: format!("unexpected session evidence response kind `{actual}`"),
-                    }
-                    .fail();
-                }
+        let mut end = None;
+        while let Some(item) = stream.message().await.map_err(rpc_error)? {
+            match item.item {
+                Some(session_evidence_stream_item::Item::Record(record)) => records.push(record),
+                Some(session_evidence_stream_item::Item::End(value)) => end = Some(value),
+                None => return missing_stream_item("session evidence"),
             }
         }
+        Ok(SessionEvidencePage {
+            records,
+            end: end.ok_or_else(|| missing_stream_end("session evidence"))?,
+        })
     }
 
     pub async fn session_attach(
@@ -451,13 +347,10 @@ impl DaemonClient {
         request: SessionAttachRequest,
         idempotency_key: &str,
     ) -> Result<SessionAttachResponse> {
-        self.session_mutation(
-            KIND_SESSION_ATTACH_REQUEST,
-            &request,
-            KIND_SESSION_ATTACH_RESPONSE,
-            idempotency_key,
-        )
-        .await
+        let mut client = self.session_client().await?;
+        rpc(client
+            .attach(self.mutation_request(request, idempotency_key)?)
+            .await)
     }
 
     pub async fn session_input_lease_renew(
@@ -465,13 +358,10 @@ impl DaemonClient {
         request: SessionInputLeaseRenewRequest,
         idempotency_key: &str,
     ) -> Result<SessionInputLeaseResponse> {
-        self.session_mutation(
-            KIND_SESSION_INPUT_LEASE_RENEW_REQUEST,
-            &request,
-            KIND_SESSION_INPUT_LEASE_RESPONSE,
-            idempotency_key,
-        )
-        .await
+        let mut client = self.session_client().await?;
+        rpc(client
+            .renew_input_lease(self.mutation_request(request, idempotency_key)?)
+            .await)
     }
 
     pub async fn session_input_lease_release(
@@ -479,28 +369,18 @@ impl DaemonClient {
         request: SessionInputLeaseReleaseRequest,
         idempotency_key: &str,
     ) -> Result<SessionInputLeaseResponse> {
-        self.session_mutation(
-            KIND_SESSION_INPUT_LEASE_RELEASE_REQUEST,
-            &request,
-            KIND_SESSION_INPUT_LEASE_RESPONSE,
-            idempotency_key,
-        )
-        .await
+        let mut client = self.session_client().await?;
+        rpc(client
+            .release_input_lease(self.mutation_request(request, idempotency_key)?)
+            .await)
     }
 
     pub async fn session_input(
         &self,
         request: SessionInputRequest,
     ) -> Result<SessionInputResponse> {
-        let mut connection = self.connect().await?;
-        connection
-            .unary(
-                KIND_SESSION_INPUT_REQUEST,
-                &request,
-                KIND_SESSION_INPUT_RESPONSE,
-                Vec::new(),
-            )
-            .await
+        let mut client = self.session_client().await?;
+        rpc(client.input(Request::new(request)).await)
     }
 
     pub async fn session_prune(
@@ -508,28 +388,18 @@ impl DaemonClient {
         request: SessionPruneRequest,
         idempotency_key: &str,
     ) -> Result<SessionPruneResponse> {
-        self.session_mutation(
-            KIND_SESSION_PRUNE_REQUEST,
-            &request,
-            KIND_SESSION_PRUNE_RESPONSE,
-            idempotency_key,
-        )
-        .await
+        let mut client = self.session_client().await?;
+        rpc(client
+            .prune(self.mutation_request(request, idempotency_key)?)
+            .await)
     }
 
     pub async fn session_terminal_resize(
         &self,
         request: SessionTerminalResizeRequest,
     ) -> Result<SessionTerminalResizeResponse> {
-        let mut connection = self.connect().await?;
-        connection
-            .unary(
-                KIND_SESSION_TERMINAL_RESIZE_REQUEST,
-                &request,
-                KIND_SESSION_TERMINAL_RESIZE_RESPONSE,
-                Vec::new(),
-            )
-            .await
+        let mut client = self.session_client().await?;
+        rpc(client.resize_terminal(Request::new(request)).await)
     }
 
     pub async fn codex_app_server_attach(
@@ -537,43 +407,28 @@ impl DaemonClient {
         request: CodexAppServerAttachRequest,
         idempotency_key: &str,
     ) -> Result<CodexAppServerAttachResponse> {
-        self.session_mutation(
-            KIND_CODEX_APP_SERVER_ATTACH_REQUEST,
-            &request,
-            KIND_CODEX_APP_SERVER_ATTACH_RESPONSE,
-            idempotency_key,
-        )
-        .await
+        let mut client = self.session_client().await?;
+        rpc(client
+            .attach_codex_app_server(self.mutation_request(request, idempotency_key)?)
+            .await)
     }
 
     pub async fn codex_app_server_input(
         &self,
         request: CodexAppServerInputRequest,
     ) -> Result<CodexAppServerInputResponse> {
-        let mut connection = self.connect().await?;
-        connection
-            .unary(
-                KIND_CODEX_APP_SERVER_INPUT_REQUEST,
-                &request,
-                KIND_CODEX_APP_SERVER_INPUT_RESPONSE,
-                Vec::new(),
-            )
-            .await
+        let mut client = self.session_client().await?;
+        rpc(client.input_codex_app_server(Request::new(request)).await)
     }
 
     pub async fn codex_app_server_input_close(
         &self,
         request: CodexAppServerInputCloseRequest,
     ) -> Result<CodexAppServerInputCloseResponse> {
-        let mut connection = self.connect().await?;
-        connection
-            .unary(
-                KIND_CODEX_APP_SERVER_INPUT_CLOSE_REQUEST,
-                &request,
-                KIND_CODEX_APP_SERVER_INPUT_CLOSE_RESPONSE,
-                Vec::new(),
-            )
-            .await
+        let mut client = self.session_client().await?;
+        rpc(client
+            .close_codex_app_server_input(Request::new(request))
+            .await)
     }
 
     pub async fn admin_session_list(
@@ -581,18 +436,13 @@ impl DaemonClient {
         target_uid: u32,
         all_users: bool,
     ) -> Result<SessionListResponse> {
-        let mut connection = self.connect().await?;
-        connection
-            .unary(
-                KIND_ADMIN_SESSION_LIST_REQUEST,
-                &AdminSessionListRequest {
-                    target_uid,
-                    all_users,
-                },
-                KIND_SESSION_LIST_RESPONSE,
-                Vec::new(),
-            )
-            .await
+        let mut client = self.administration_client().await?;
+        rpc(client
+            .list_sessions(Request::new(AdminSessionListRequest {
+                target_uid,
+                all_users,
+            }))
+            .await)
     }
 
     pub async fn admin_session_inspect(
@@ -600,18 +450,13 @@ impl DaemonClient {
         target_uid: u32,
         session_id: impl Into<String>,
     ) -> Result<SessionRecord> {
-        let mut connection = self.connect().await?;
-        connection
-            .unary(
-                KIND_ADMIN_SESSION_INSPECT_REQUEST,
-                &AdminSessionInspectRequest {
-                    target_uid,
-                    session_id: session_id.into(),
-                },
-                KIND_SESSION_RECORD,
-                Vec::new(),
-            )
-            .await
+        let mut client = self.administration_client().await?;
+        rpc(client
+            .inspect_session(Request::new(AdminSessionInspectRequest {
+                target_uid,
+                session_id: session_id.into(),
+            }))
+            .await)
     }
 
     pub async fn admin_session_stop(
@@ -619,13 +464,10 @@ impl DaemonClient {
         request: AdminSessionStopRequest,
         idempotency_key: &str,
     ) -> Result<SessionRecord> {
-        self.session_mutation(
-            KIND_ADMIN_SESSION_STOP_REQUEST,
-            &request,
-            KIND_SESSION_RECORD,
-            idempotency_key,
-        )
-        .await
+        let mut client = self.administration_client().await?;
+        rpc(client
+            .stop_session(self.mutation_request(request, idempotency_key)?)
+            .await)
     }
 
     pub async fn admin_session_kill(
@@ -633,13 +475,10 @@ impl DaemonClient {
         request: AdminSessionKillRequest,
         idempotency_key: &str,
     ) -> Result<SessionRecord> {
-        self.session_mutation(
-            KIND_ADMIN_SESSION_KILL_REQUEST,
-            &request,
-            KIND_SESSION_RECORD,
-            idempotency_key,
-        )
-        .await
+        let mut client = self.administration_client().await?;
+        rpc(client
+            .kill_session(self.mutation_request(request, idempotency_key)?)
+            .await)
     }
 
     pub async fn admin_session_set_retention_hold(
@@ -647,34 +486,43 @@ impl DaemonClient {
         request: AdminSessionSetRetentionHoldRequest,
         idempotency_key: &str,
     ) -> Result<SessionRecord> {
-        self.session_mutation(
-            KIND_ADMIN_SESSION_SET_RETENTION_HOLD_REQUEST,
-            &request,
-            KIND_SESSION_RECORD,
-            idempotency_key,
-        )
-        .await
+        let mut client = self.administration_client().await?;
+        rpc(client
+            .set_session_retention_hold(self.mutation_request(request, idempotency_key)?)
+            .await)
     }
 
-    pub(crate) async fn session_mutation<T: prost::Message, R: prost::Message + Default>(
-        &self,
-        kind: &str,
-        request: &T,
-        response_kind: &str,
-        idempotency_key: &str,
-    ) -> Result<R> {
-        let mut connection = self.connect().await?;
-        connection
-            .unary_with_timeout(
-                kind,
-                request,
-                response_kind,
-                vec![Header {
-                    key: EREBOR_IDEMPOTENCY_KEY_HEADER.to_owned(),
-                    value: idempotency_key.to_owned(),
-                }],
-                SESSION_MUTATION_TIMEOUT,
-            )
-            .await
+    async fn session_client(&self) -> Result<SessionServiceClient<tonic::transport::Channel>> {
+        Ok(SessionServiceClient::new(self.connect().await?)
+            .max_decoding_message_size(MAX_GRPC_MESSAGE_BYTES)
+            .max_encoding_message_size(MAX_GRPC_MESSAGE_BYTES))
     }
+
+    async fn context_client(&self) -> Result<ContextServiceClient<tonic::transport::Channel>> {
+        Ok(ContextServiceClient::new(self.connect().await?)
+            .max_decoding_message_size(MAX_GRPC_MESSAGE_BYTES)
+            .max_encoding_message_size(MAX_GRPC_MESSAGE_BYTES))
+    }
+
+    async fn administration_client(
+        &self,
+    ) -> Result<AdministrationServiceClient<tonic::transport::Channel>> {
+        Ok(AdministrationServiceClient::new(self.connect().await?)
+            .max_decoding_message_size(MAX_GRPC_MESSAGE_BYTES)
+            .max_encoding_message_size(MAX_GRPC_MESSAGE_BYTES))
+    }
+}
+
+fn missing_stream_item<T>(name: &str) -> Result<T> {
+    ProtocolSnafu {
+        reason: format!("the {name} stream returned an empty item"),
+    }
+    .fail()
+}
+
+fn missing_stream_end(name: &str) -> crate::DaemonClientError {
+    ProtocolSnafu {
+        reason: format!("the {name} stream ended without its durable cursor"),
+    }
+    .build()
 }

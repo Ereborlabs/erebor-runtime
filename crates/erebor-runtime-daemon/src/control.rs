@@ -112,11 +112,13 @@ use erebor_runtime_session::{
     ContextOperationAdmissionHandler, StreamKind,
 };
 
+mod grpc;
+
 const CONNECTION_LIMIT: usize = 32;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub struct DaemonControlService {
-    listener: UnixListener,
+    listener: Option<UnixListener>,
     state: Arc<DaemonControlState>,
     socket: DaemonSocket,
     _lock: DaemonLock,
@@ -309,7 +311,7 @@ impl DaemonControlService {
         let agent_controls: Arc<dyn ContextAgentControlHandler> = state.clone();
         state.sessions.bind_agent_control_handler(agent_controls)?;
         Ok(Self {
-            listener,
+            listener: Some(listener),
             state,
             socket,
             _lock: lock,
@@ -318,33 +320,18 @@ impl DaemonControlService {
     }
 
     pub async fn serve(mut self) -> Result<()> {
-        let result = loop {
-            tokio::select! {
-                changed = self.shutdown.changed() => {
-                    if changed.is_err() || *self.shutdown.borrow() {
-                        break Ok(());
-                    }
-                }
-                accepted = self.listener.accept() => {
-                    let (stream, _address) = match accepted {
-                        Ok(accepted) => accepted,
-                        Err(source) => break Err(DaemonError::Io {
-                            action: "accepting daemon client",
-                            path: self.socket.path.clone(),
-                            source,
-                            location: snafu::Location::default(),
-                        }),
-                    };
-                    let Some(permit) = self.state.connections.clone().try_acquire_owned().ok() else {
-                        continue;
-                    };
-                    let state = Arc::clone(&self.state);
-                    tokio::spawn(async move {
-                        state.serve_connection(stream, permit).await;
-                    });
-                }
+        let listener = self.listener.take().ok_or_else(|| {
+            InvalidRequestSnafu {
+                reason: String::from("daemon gRPC listener is unavailable"),
             }
-        };
+            .build()
+        })?;
+        let result = grpc::serve(listener, Arc::clone(&self.state), self.shutdown.clone())
+            .await
+            .map_err(|source| DaemonError::Grpc {
+                source,
+                location: snafu::Location::default(),
+            });
         if result.is_err() {
             let _result = self
                 .state
@@ -3206,10 +3193,11 @@ mod tests {
         seed_static_session_resources(&test_state, owner_uid)?;
         let socket_path = test_state._root.path().join("static-session.sock");
         let listener = UnixListener::bind(&socket_path)?;
-        let server = tokio::spawn(serve_client_connections(
-            Arc::clone(&test_state.state),
+        let (shutdown, receiver) = tokio::sync::watch::channel(false);
+        let server = tokio::spawn(super::grpc::serve(
             listener,
-            7,
+            Arc::clone(&test_state.state),
+            receiver,
         ));
         let client = DaemonClient::at(socket_path);
 
@@ -3278,7 +3266,8 @@ mod tests {
             .join(&created.session_id)
             .exists());
 
-        server.await?;
+        shutdown.send(true)?;
+        server.await??;
         Ok(())
     }
 
@@ -3371,22 +3360,6 @@ mod tests {
         first.set_nonblocking(true)?;
         second.set_nonblocking(true)?;
         Ok((UnixStream::from_std(first)?, UnixStream::from_std(second)?))
-    }
-
-    async fn serve_client_connections(
-        state: Arc<DaemonControlState>,
-        listener: UnixListener,
-        connection_count: usize,
-    ) {
-        for _ in 0..connection_count {
-            let Ok((stream, _address)) = listener.accept().await else {
-                return;
-            };
-            let Ok(permit) = state.connections.clone().acquire_owned().await else {
-                return;
-            };
-            Arc::clone(&state).serve_connection(stream, permit).await;
-        }
     }
 
     fn seed_static_session_resources(

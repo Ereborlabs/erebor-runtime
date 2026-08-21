@@ -6,11 +6,8 @@ use std::{
 };
 
 use erebor_runtime_ipc::{
-    v1::{
-        DaemonHello, DaemonHelloAck, Envelope, DAEMON_CONTROL_PROTOCOL_VERSION, KIND_DAEMON_HELLO,
-        KIND_DAEMON_HELLO_ACK,
-    },
-    AsyncFrameCodec,
+    transport::{connect_unix, MAX_GRPC_MESSAGE_BYTES},
+    v1::{daemon_lifecycle_service_client::DaemonLifecycleServiceClient, DaemonStatusRequest},
 };
 #[cfg(test)]
 use rustix::process::{getegid, geteuid};
@@ -20,9 +17,10 @@ use rustix::{
 };
 use snafu::ResultExt;
 use tokio::{net::UnixStream, time::timeout};
+use tonic::Request;
 
 use crate::{
-    error::{AlreadyRunningSnafu, IoSnafu, IpcSnafu, LockUnavailableSnafu, UnsafePathSnafu},
+    error::{AlreadyRunningSnafu, IoSnafu, LockUnavailableSnafu, UnsafePathSnafu},
     Result,
 };
 
@@ -273,8 +271,8 @@ impl DaemonPaths {
             .fail();
         }
         match timeout(SOCKET_PROBE_TIMEOUT, UnixStream::connect(&socket)).await {
-            Ok(Ok(mut stream)) => {
-                self.probe_live_socket(&mut stream, security).await?;
+            Ok(Ok(stream)) => {
+                self.probe_live_socket(&stream, security).await?;
                 AlreadyRunningSnafu { path: socket }.fail()
             }
             Ok(Err(error)) if error.kind() == std::io::ErrorKind::ConnectionRefused => {
@@ -288,11 +286,7 @@ impl DaemonPaths {
         }
     }
 
-    async fn probe_live_socket(
-        &self,
-        stream: &mut UnixStream,
-        security: DaemonSecurity,
-    ) -> Result<()> {
+    async fn probe_live_socket(&self, stream: &UnixStream, security: DaemonSecurity) -> Result<()> {
         let credentials = stream
             .peer_cred()
             .map_err(|source| crate::DaemonError::Io {
@@ -307,54 +301,23 @@ impl DaemonPaths {
             }
             .fail();
         }
-        let hello = Envelope::wrap_message(
-            1,
-            0,
-            KIND_DAEMON_HELLO,
-            &DaemonHello {
-                protocol_version: DAEMON_CONTROL_PROTOCOL_VERSION,
-                client_name: String::from("erebord stale-socket probe"),
-                capabilities: Vec::new(),
-            },
-        )
-        .context(IpcSnafu)?;
-        let frame = hello.into_frame().context(IpcSnafu)?;
-        timeout(
-            SOCKET_PROBE_TIMEOUT,
-            AsyncFrameCodec::write_frame(stream, &frame),
-        )
-        .await
-        .map_err(|_elapsed| crate::DaemonError::AlreadyRunning {
+        let failure = || crate::DaemonError::AlreadyRunning {
             path: self.socket_path(),
             location: snafu::Location::default(),
-        })?
-        .context(IpcSnafu)?;
-        let response = timeout(SOCKET_PROBE_TIMEOUT, AsyncFrameCodec::read_frame(stream))
+        };
+        let channel = timeout(SOCKET_PROBE_TIMEOUT, connect_unix(self.socket_path()))
             .await
-            .map_err(|_elapsed| crate::DaemonError::AlreadyRunning {
-                path: self.socket_path(),
-                location: snafu::Location::default(),
-            })?
-            .context(IpcSnafu)?
-            .decode_payload::<Envelope>()
-            .context(IpcSnafu)?;
-        if response.require_supported_protocol().is_err()
-            || response.message_kind != KIND_DAEMON_HELLO_ACK
-        {
-            return AlreadyRunningSnafu {
-                path: self.socket_path(),
-            }
-            .fail();
-        }
-        let hello: DaemonHelloAck = response
-            .decode_typed_payload(KIND_DAEMON_HELLO_ACK)
-            .context(IpcSnafu)?;
-        if !hello.uses_supported_control_protocol() {
-            return AlreadyRunningSnafu {
-                path: self.socket_path(),
-            }
-            .fail();
-        }
+            .map_err(|_elapsed| failure())?
+            .map_err(|_source| failure())?;
+        let mut client = DaemonLifecycleServiceClient::new(channel)
+            .max_decoding_message_size(MAX_GRPC_MESSAGE_BYTES)
+            .max_encoding_message_size(MAX_GRPC_MESSAGE_BYTES);
+        let mut request = Request::new(DaemonStatusRequest {});
+        request.set_timeout(SOCKET_PROBE_TIMEOUT);
+        timeout(SOCKET_PROBE_TIMEOUT, client.status(request))
+            .await
+            .map_err(|_elapsed| failure())?
+            .map_err(|_status| failure())?;
         Ok(())
     }
 

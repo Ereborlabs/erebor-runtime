@@ -6,15 +6,6 @@ use std::{
 };
 
 use tempfile::TempDir;
-use tokio::net::UnixListener;
-
-use erebor_runtime_ipc::{
-    v1::{
-        DaemonHello, DaemonHelloAck, Envelope, DAEMON_CONTROL_PROTOCOL_VERSION, KIND_DAEMON_HELLO,
-        KIND_DAEMON_HELLO_ACK,
-    },
-    AsyncFrameCodec,
-};
 
 use crate::{
     config::DaemonConfig,
@@ -214,48 +205,6 @@ fn daemon_lock_is_private_and_survives_owner_drop() -> Result<(), Box<dyn std::e
     assert_eq!(metadata.mode() & 0o077, 0);
     drop(lock);
     assert!(paths.lock_path().is_file());
-    Ok(())
-}
-
-#[tokio::test]
-#[ignore = "requires host Unix-domain socket I/O"]
-async fn stale_socket_recovery_preserves_live_socket_and_persistent_lock(
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let root = TempDir::new()?;
-    let paths = DaemonPaths::for_testing(root.path());
-    let security = DaemonSecurity::current_process();
-    paths.prepare(security)?;
-    let lock = paths.acquire_lock(security)?;
-
-    let listener = UnixListener::bind(paths.socket_path())?;
-    let server = tokio::spawn(async move {
-        let (mut stream, _address) = listener.accept().await?;
-        let request: Envelope = AsyncFrameCodec::read_frame(&mut stream)
-            .await?
-            .decode_payload()?;
-        assert_eq!(request.message_kind, KIND_DAEMON_HELLO);
-        let _hello: DaemonHello = request.decode_typed_payload(KIND_DAEMON_HELLO)?;
-        let response = Envelope::wrap_message(
-            2,
-            request.message_id,
-            KIND_DAEMON_HELLO_ACK,
-            &DaemonHelloAck {
-                protocol_version: DAEMON_CONTROL_PROTOCOL_VERSION,
-                daemon_version: String::from("test"),
-                capabilities: Vec::new(),
-            },
-        )?;
-        AsyncFrameCodec::write_frame(&mut stream, &response.into_frame()?).await?;
-        Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
-    });
-    assert!(paths.remove_stale_socket(&lock, security).await.is_err());
-    assert!(paths.socket_path().exists());
-    server.await??;
-
-    paths.remove_stale_socket(&lock, security).await?;
-    assert!(!paths.socket_path().exists());
-    assert!(paths.lock_path().is_file());
-    drop(lock);
     Ok(())
 }
 

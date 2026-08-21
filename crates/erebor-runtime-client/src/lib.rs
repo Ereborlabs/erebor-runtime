@@ -1,4 +1,4 @@
-//! Typed local transport for the daemon-control service.
+//! Typed gRPC clients for Erebor local services.
 
 mod agent;
 mod approvals;
@@ -13,39 +13,28 @@ mod surface;
 use std::{path::PathBuf, time::Duration};
 
 use erebor_runtime_ipc::{
+    transport::{connect_unix, IDEMPOTENCY_KEY_METADATA, MAX_GRPC_MESSAGE_BYTES},
     v1::{
-        DaemonCommandResult, DaemonError, DaemonHello, DaemonHelloAck, DaemonLogRecord,
-        DaemonLogsEnd, DaemonLogsRequest, DaemonReloadRequest, DaemonStatusRequest,
-        DaemonStatusResponse, DaemonStopRequest, Envelope, Header, DAEMON_CONTROL_PROTOCOL_VERSION,
-        EREBOR_IDEMPOTENCY_KEY_HEADER, KIND_DAEMON_COMMAND_RESULT, KIND_DAEMON_ERROR,
-        KIND_DAEMON_HELLO, KIND_DAEMON_HELLO_ACK, KIND_DAEMON_LOGS_END, KIND_DAEMON_LOGS_REQUEST,
-        KIND_DAEMON_LOG_RECORD, KIND_DAEMON_RELOAD_REQUEST, KIND_DAEMON_STATUS_REQUEST,
-        KIND_DAEMON_STATUS_RESPONSE, KIND_DAEMON_STOP_REQUEST,
+        daemon_lifecycle_service_client::DaemonLifecycleServiceClient, DaemonCommandResult,
+        DaemonLogRecord, DaemonLogsRequest, DaemonReloadRequest, DaemonStatusRequest,
+        DaemonStatusResponse, DaemonStopRequest,
     },
-    AsyncFrameCodec,
 };
-use snafu::ResultExt;
-use tokio::{
-    io::{AsyncRead, AsyncWrite},
-    net::UnixStream,
-};
+use tonic::{metadata::MetadataValue, transport::Channel, Request, Status};
 
 pub use approvals::{ApprovalPage, ApprovalRecord};
 pub use erebor_runtime_ipc::v1::{
     PolicyPackageListResponse, PolicyPackageRecord, PolicySetListResponse, PolicySetRecord,
     PolicyTestResponse, SurfaceListResponse, SurfaceRecord,
 };
-use error::{ConnectSnafu, DaemonSnafu, IpcSnafu, ProtocolSnafu, TimedOutSnafu};
 pub use error::{DaemonClientError, Result};
 pub use mithril::MithrilObservationClient;
 pub use runner::RunnerCapability;
 pub use session::{SessionEventPage, SessionEvidencePage, SessionLogPage};
 
+use error::{ProtocolSnafu, RpcSnafu, TimedOutSnafu};
+
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
-// Daemon mutations may synchronously perform bounded, root-owned admission
-// work (for example descriptor re-verification). Keep connection, write, and
-// ordinary response operations short, but allow the mutation response budget
-// to cover that work.
 pub(crate) const SESSION_MUTATION_TIMEOUT: Duration = Duration::from_secs(35);
 
 #[derive(Clone, Debug)]
@@ -67,15 +56,8 @@ impl DaemonClient {
     }
 
     pub async fn status(&self) -> Result<DaemonStatusResponse> {
-        let mut connection = self.connect().await?;
-        connection
-            .unary(
-                KIND_DAEMON_STATUS_REQUEST,
-                &DaemonStatusRequest {},
-                KIND_DAEMON_STATUS_RESPONSE,
-                Vec::new(),
-            )
-            .await
+        let mut client = self.lifecycle_client().await?;
+        rpc(client.status(Request::new(DaemonStatusRequest {})).await)
     }
 
     pub async fn logs(
@@ -83,84 +65,40 @@ impl DaemonClient {
         after_sequence: u64,
         maximum_records: u32,
     ) -> Result<Vec<DaemonLogRecord>> {
-        let mut connection = self.connect().await?;
-        let request_id = connection
-            .send(
-                KIND_DAEMON_LOGS_REQUEST,
-                &DaemonLogsRequest {
-                    after_sequence,
-                    maximum_records,
-                },
-                Vec::new(),
-            )
-            .await?;
+        let mut client = self.lifecycle_client().await?;
+        let mut stream = client
+            .logs(Request::new(DaemonLogsRequest {
+                after_sequence,
+                maximum_records,
+            }))
+            .await
+            .map_err(rpc_error)?
+            .into_inner();
         let mut records = Vec::new();
-        loop {
-            let envelope = connection.receive(request_id).await?;
-            match envelope.message_kind.as_str() {
-                KIND_DAEMON_LOG_RECORD => records.push(
-                    envelope
-                        .decode_typed_payload(KIND_DAEMON_LOG_RECORD)
-                        .context(IpcSnafu)?,
-                ),
-                KIND_DAEMON_LOGS_END => {
-                    let _end: DaemonLogsEnd = envelope
-                        .decode_typed_payload(KIND_DAEMON_LOGS_END)
-                        .context(IpcSnafu)?;
-                    return Ok(records);
-                }
-                KIND_DAEMON_ERROR => return Err(connection.daemon_error(envelope)?),
-                actual => {
-                    return ProtocolSnafu {
-                        reason: format!("unexpected daemon logs response kind `{actual}`"),
-                    }
-                    .fail()
-                }
-            }
+        while let Some(record) = stream.message().await.map_err(rpc_error)? {
+            records.push(record);
         }
+        Ok(records)
     }
 
     pub async fn reload(&self, idempotency_key: &str) -> Result<String> {
-        self.mutate(
-            KIND_DAEMON_RELOAD_REQUEST,
-            &DaemonReloadRequest {},
-            idempotency_key,
-        )
-        .await
+        let mut client = self.lifecycle_client().await?;
+        let response: DaemonCommandResult = rpc(client
+            .reload(self.mutation_request(DaemonReloadRequest {}, idempotency_key)?)
+            .await)?;
+        Ok(response.message)
     }
 
     pub async fn stop(&self, idempotency_key: &str) -> Result<String> {
-        self.mutate(
-            KIND_DAEMON_STOP_REQUEST,
-            &DaemonStopRequest {},
-            idempotency_key,
-        )
-        .await
+        let mut client = self.lifecycle_client().await?;
+        let response: DaemonCommandResult = rpc(client
+            .stop(self.mutation_request(DaemonStopRequest {}, idempotency_key)?)
+            .await)?;
+        Ok(response.message)
     }
 
-    async fn mutate<T: prost::Message>(
-        &self,
-        kind: &str,
-        request: &T,
-        idempotency_key: &str,
-    ) -> Result<String> {
-        let mut connection = self.connect().await?;
-        let result: DaemonCommandResult = connection
-            .unary(
-                kind,
-                request,
-                KIND_DAEMON_COMMAND_RESULT,
-                vec![Header {
-                    key: EREBOR_IDEMPOTENCY_KEY_HEADER.to_string(),
-                    value: idempotency_key.to_string(),
-                }],
-            )
-            .await?;
-        Ok(result.message)
-    }
-
-    async fn connect(&self) -> Result<DaemonConnection> {
-        let stream = tokio::time::timeout(REQUEST_TIMEOUT, UnixStream::connect(&self.socket_path))
+    pub(crate) async fn connect(&self) -> Result<Channel> {
+        tokio::time::timeout(REQUEST_TIMEOUT, connect_unix(&self.socket_path))
             .await
             .map_err(|_elapsed| {
                 TimedOutSnafu {
@@ -168,154 +106,56 @@ impl DaemonClient {
                 }
                 .build()
             })?
-            .context(ConnectSnafu {
+            .map_err(|source| DaemonClientError::Connect {
                 path: self.socket_path.clone(),
-            })?;
-        let mut connection = DaemonConnection {
-            stream,
-            next_message_id: 1,
-        };
-        let ack: DaemonHelloAck = connection
-            .unary(
-                KIND_DAEMON_HELLO,
-                &DaemonHello {
-                    protocol_version: DAEMON_CONTROL_PROTOCOL_VERSION,
-                    client_name: String::from("erebor-runtime-client"),
-                    capabilities: Vec::new(),
-                },
-                KIND_DAEMON_HELLO_ACK,
-                Vec::new(),
-            )
-            .await?;
-        if !ack.uses_supported_control_protocol() {
-            return ProtocolSnafu {
-                reason: String::from("daemon negotiated an unsupported protocol version"),
-            }
-            .fail();
-        }
-        Ok(connection)
-    }
-}
-
-struct DaemonConnection<S = UnixStream> {
-    stream: S,
-    next_message_id: u64,
-}
-
-impl<S> DaemonConnection<S>
-where
-    S: AsyncRead + AsyncWrite + Unpin,
-{
-    async fn unary<T: prost::Message, R: prost::Message + Default>(
-        &mut self,
-        kind: &str,
-        request: &T,
-        response_kind: &str,
-        headers: Vec<Header>,
-    ) -> Result<R> {
-        self.unary_with_timeout(kind, request, response_kind, headers, REQUEST_TIMEOUT)
-            .await
+                source,
+                location: snafu::Location::default(),
+            })
     }
 
-    async fn unary_with_timeout<T: prost::Message, R: prost::Message + Default>(
-        &mut self,
-        kind: &str,
-        request: &T,
-        response_kind: &str,
-        headers: Vec<Header>,
-        timeout: Duration,
-    ) -> Result<R> {
-        let request_id = self.send(kind, request, headers).await?;
-        let envelope = self.receive_with_timeout(request_id, timeout).await?;
-        if envelope.message_kind == KIND_DAEMON_ERROR {
-            return Err(self.daemon_error(envelope)?);
-        }
-        envelope
-            .decode_typed_payload(response_kind)
-            .context(IpcSnafu)
-    }
-
-    async fn send<T: prost::Message>(
-        &mut self,
-        kind: &str,
-        request: &T,
-        headers: Vec<Header>,
-    ) -> Result<u64> {
-        let message_id = self.next_message_id;
-        self.next_message_id = self.next_message_id.saturating_add(1);
-        let mut envelope =
-            Envelope::wrap_message(message_id, 0, kind, request).context(IpcSnafu)?;
-        envelope.headers = headers;
-        let frame = envelope.into_frame().context(IpcSnafu)?;
-        tokio::time::timeout(
-            REQUEST_TIMEOUT,
-            AsyncFrameCodec::write_frame(&mut self.stream, &frame),
-        )
-        .await
-        .map_err(|_elapsed| {
-            TimedOutSnafu {
-                operation: "writing daemon request",
+    pub(crate) fn mutation_request<T>(
+        &self,
+        message: T,
+        idempotency_key: &str,
+    ) -> Result<Request<T>> {
+        let value = MetadataValue::try_from(idempotency_key).map_err(|_error| {
+            ProtocolSnafu {
+                reason: String::from("the idempotency key is not valid gRPC metadata"),
             }
             .build()
-        })?
-        .context(IpcSnafu)?;
-        Ok(message_id)
+        })?;
+        let mut request = Request::new(message);
+        request.set_timeout(SESSION_MUTATION_TIMEOUT);
+        request
+            .metadata_mut()
+            .insert(IDEMPOTENCY_KEY_METADATA, value);
+        Ok(request)
     }
 
-    async fn receive(&mut self, request_id: u64) -> Result<Envelope> {
-        self.receive_with_timeout(request_id, REQUEST_TIMEOUT).await
+    async fn lifecycle_client(&self) -> Result<DaemonLifecycleServiceClient<Channel>> {
+        Ok(DaemonLifecycleServiceClient::new(self.connect().await?)
+            .max_decoding_message_size(MAX_GRPC_MESSAGE_BYTES)
+            .max_encoding_message_size(MAX_GRPC_MESSAGE_BYTES))
     }
+}
 
-    async fn receive_with_timeout(
-        &mut self,
-        request_id: u64,
-        timeout: Duration,
-    ) -> Result<Envelope> {
-        let frame = tokio::time::timeout(timeout, AsyncFrameCodec::read_frame(&mut self.stream))
-            .await
-            .map_err(|_elapsed| {
-                TimedOutSnafu {
-                    operation: "reading daemon response",
-                }
-                .build()
-            })?
-            .context(IpcSnafu)?;
-        let envelope: Envelope = frame.decode_payload().context(IpcSnafu)?;
-        envelope.require_supported_protocol().context(IpcSnafu)?;
-        if envelope.correlation_id != request_id {
-            return ProtocolSnafu {
-                reason: format!(
-                    "daemon response correlation {} does not match request {request_id}",
-                    envelope.correlation_id
-                ),
-            }
-            .fail();
-        }
-        Ok(envelope)
-    }
+pub(crate) fn rpc<T>(result: std::result::Result<tonic::Response<T>, Status>) -> Result<T> {
+    result.map(tonic::Response::into_inner).map_err(rpc_error)
+}
 
-    fn daemon_error(&self, envelope: Envelope) -> Result<DaemonClientError> {
-        let error: DaemonError = envelope
-            .decode_typed_payload(KIND_DAEMON_ERROR)
-            .context(IpcSnafu)?;
-        Ok(DaemonSnafu {
-            status_code: error.status_code,
-            message: error.message,
-        }
-        .build())
+pub(crate) fn rpc_error(status: Status) -> DaemonClientError {
+    RpcSnafu {
+        code: status.code(),
+        message: status.message().to_owned(),
     }
+    .build()
 }
 
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
 
-    use erebor_runtime_ipc::{
-        v1::{DaemonStatusResponse, Envelope, KIND_DAEMON_STATUS_RESPONSE},
-        AsyncFrameCodec,
-    };
-
-    use super::{DaemonClient, DaemonConnection};
+    use super::DaemonClient;
 
     #[test]
     fn explicit_local_socket_replaces_only_the_default_path() {
@@ -328,53 +168,5 @@ mod tests {
             DaemonClient::local().socket_path,
             PathBuf::from("/run/erebor/daemon.sock")
         );
-    }
-
-    #[tokio::test]
-    async fn client_rejects_response_with_wrong_correlation_id(
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        let (first, mut second) = tokio::io::duplex(1024);
-        let mut connection = DaemonConnection {
-            stream: first,
-            next_message_id: 1,
-        };
-        let response = Envelope::wrap_message(
-            2,
-            99,
-            KIND_DAEMON_STATUS_RESPONSE,
-            &DaemonStatusResponse {
-                daemon_pid: 7,
-                configuration_generation: 1,
-                service_state: String::from("running"),
-            },
-        )?;
-        AsyncFrameCodec::write_frame(&mut second, &response.into_frame()?).await?;
-        assert!(connection.receive(1).await.is_err());
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn client_rejects_response_with_unsupported_protocol(
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        let (first, mut second) = tokio::io::duplex(1024);
-        let mut connection = DaemonConnection {
-            stream: first,
-            next_message_id: 1,
-        };
-        let mut response = Envelope::wrap_message(
-            2,
-            1,
-            KIND_DAEMON_STATUS_RESPONSE,
-            &DaemonStatusResponse {
-                daemon_pid: 1,
-                configuration_generation: 1,
-                service_state: String::from("running"),
-            },
-        )?;
-        response.protocol_version = 2;
-        AsyncFrameCodec::write_frame(&mut second, &response.into_frame()?).await?;
-
-        assert!(connection.receive(1).await.is_err());
-        Ok(())
     }
 }

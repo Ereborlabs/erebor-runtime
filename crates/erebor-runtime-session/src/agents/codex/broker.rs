@@ -222,7 +222,11 @@ impl CodexHookService {
             else {
                 return;
             };
-            let Ok(listener) = tokio::net::UnixListener::from_std(listener) else {
+            let listener = {
+                let _runtime_guard = runtime.enter();
+                tokio::net::UnixListener::from_std(listener)
+            };
+            let Ok(listener) = listener else {
                 return;
             };
             let service = HookGrpc {
