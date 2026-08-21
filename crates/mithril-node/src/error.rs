@@ -110,6 +110,12 @@ pub enum Error {
         #[snafu(implicit)]
         location: Location,
     },
+    #[snafu(display("Mithril Runtime observation gRPC service failed: {source}"))]
+    LocalTransport {
+        source: tonic::transport::Error,
+        #[snafu(implicit)]
+        location: Location,
+    },
     #[snafu(display("Mithril Runtime observation task failed: {source}"))]
     LocalTask {
         source: tokio::task::JoinError,
@@ -143,6 +149,7 @@ impl ErrorExt for Error {
             Self::Interceptor { source, .. } => source.status_code(),
             Self::Policy { source, .. } => source.status_code(),
             Self::Io { .. }
+            | Self::LocalTransport { .. }
             | Self::ControlTransport { .. }
             | Self::ControlRpc { .. }
             | Self::ContainerRuntimeTransport { .. }
@@ -159,6 +166,7 @@ impl ErrorExt for Error {
             Self::Policy { source, .. } => source.retry_hint(),
             Self::LocalIpc { source, .. } => source.retry_hint(),
             Self::ControlTransport { .. }
+            | Self::LocalTransport { .. }
             | Self::ControlRpc { .. }
             | Self::ContainerRuntimeTransport { .. }
             | Self::ContainerRuntimeRpc { .. }

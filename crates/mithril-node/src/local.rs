@@ -1,27 +1,33 @@
 use std::fs;
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use erebor_interceptor::{KernelObjectManifestV1, KernelStateReader};
-use erebor_runtime_ipc::v1::{
-    Envelope, EnvelopeServiceFamily, MithrilCapabilityRecord, MithrilCoverageInterval,
-    MithrilObservationSnapshot, MithrilObservationSnapshotRequest,
-    MithrilObservationSnapshotResponse, KIND_MITHRIL_OBSERVATION_SNAPSHOT_REQUEST,
-    KIND_MITHRIL_OBSERVATION_SNAPSHOT_RESPONSE,
+use erebor_runtime_ipc::{
+    transport::{UnixIncoming, UnixPeerIdentity, MAX_GRPC_MESSAGE_BYTES},
+    v1::{
+        runtime_observation_service_server::{
+            RuntimeObservationService, RuntimeObservationServiceServer,
+        },
+        MithrilCapabilityRecord, MithrilCoverageInterval, MithrilObservationSnapshot,
+        MithrilObservationSnapshotRequest, MithrilObservationSnapshotResponse,
+    },
 };
-use erebor_runtime_ipc::{AsyncFrameCodec, IpcProtocolError};
 use mithril_control::CapabilityRecord;
+use prost::Message as _;
 use rustix::{fs::chown, process::Uid};
 use snafu::ResultExt as _;
-use tokio::net::{UnixListener, UnixStream};
+use tokio::net::UnixListener;
 use tokio::sync::watch;
+use tonic::{Request, Response, Status};
 
-use crate::error::{ControlProtocolSnafu, IoSnafu, LocalIpcSnafu};
+use crate::error::{ControlProtocolSnafu, IoSnafu};
 use crate::{EffectObservationStore, NodeReadinessV1, Result, RuntimeObservationConfig};
 
 pub struct RuntimeObservationServer {
     config: RuntimeObservationConfig,
-    listener: UnixListener,
+    listener: Option<UnixListener>,
     snapshot: MithrilObservationSnapshot,
     observations: EffectObservationStore,
     kernel_reader: Option<KernelStateReader>,
@@ -133,7 +139,7 @@ impl RuntimeObservationServer {
         };
         Ok(Self {
             config,
-            listener,
+            listener: Some(listener),
             snapshot,
             observations,
             kernel_reader,
@@ -141,37 +147,40 @@ impl RuntimeObservationServer {
         })
     }
 
-    pub async fn serve(self, mut shutdown: watch::Receiver<bool>) -> Result<()> {
-        loop {
-            tokio::select! {
-                accepted = self.listener.accept() => {
-                    let (stream, _address) = accepted.context(IoSnafu {
-                        path: &self.config.socket_path,
-                    })?;
-                    let allowed_uid = self.config.allowed_uid;
-                    let scope = self.config.cgroup_scope.clone();
-                    let snapshot = self.snapshot.clone();
-                    let observations = self.observations.clone();
-                    let kernel_reader = self.kernel_reader.clone();
-                    let readiness = self.readiness.clone();
-                    tokio::spawn(async move {
-                        let _result = handle(
-                            stream,
-                            allowed_uid,
-                            &scope,
-                            snapshot,
-                            observations,
-                            kernel_reader,
-                            readiness,
-                        ).await;
-                    });
-                }
-                changed = shutdown.changed() => {
-                    let _result = changed;
-                    return Ok(());
-                }
+    pub async fn serve(mut self, mut shutdown: watch::Receiver<bool>) -> Result<()> {
+        let listener = self.listener.take().ok_or_else(|| {
+            crate::error::ControlProtocolSnafu {
+                reason: String::from("Runtime observation listener is unavailable"),
             }
-        }
+            .build()
+        })?;
+        let service = ObservationGrpc {
+            allowed_uid: self.config.allowed_uid,
+            allowed_scope: Arc::from(self.config.cgroup_scope.as_str()),
+            snapshot: self.snapshot.clone(),
+            observations: self.observations.clone(),
+            kernel_reader: self.kernel_reader.clone(),
+            readiness: self.readiness.clone(),
+        };
+        tonic::transport::Server::builder()
+            .concurrency_limit_per_connection(32)
+            .add_service(
+                RuntimeObservationServiceServer::new(service)
+                    .max_decoding_message_size(MAX_GRPC_MESSAGE_BYTES)
+                    .max_encoding_message_size(MAX_GRPC_MESSAGE_BYTES),
+            )
+            .serve_with_incoming_shutdown(UnixIncoming::new(listener), async move {
+                while !*shutdown.borrow() {
+                    if shutdown.changed().await.is_err() {
+                        break;
+                    }
+                }
+            })
+            .await
+            .map_err(|source| crate::Error::LocalTransport {
+                source,
+                location: snafu::Location::default(),
+            })
     }
 }
 
@@ -181,87 +190,79 @@ impl Drop for RuntimeObservationServer {
     }
 }
 
-async fn handle(
-    mut stream: UnixStream,
+#[derive(Clone)]
+struct ObservationGrpc {
     allowed_uid: u32,
-    allowed_scope: &str,
-    mut snapshot: MithrilObservationSnapshot,
+    allowed_scope: Arc<str>,
+    snapshot: MithrilObservationSnapshot,
     observations: EffectObservationStore,
     kernel_reader: Option<KernelStateReader>,
     readiness: watch::Receiver<NodeReadinessV1>,
-) -> Result<()> {
-    let peer = stream.peer_cred().context(IoSnafu {
-        path: Path::new("Runtime observation peer"),
-    })?;
-    let envelope = receive(&mut stream).await?;
-    let request: MithrilObservationSnapshotRequest = envelope
-        .decode_typed_payload(KIND_MITHRIL_OBSERVATION_SNAPSHOT_REQUEST)
-        .context(LocalIpcSnafu)?;
-    let accepted = peer.uid() == allowed_uid
-        && request.cgroup_scope == allowed_scope
-        && peer
-            .pid()
-            .is_some_and(|pid| peer_in_cgroup_scope(pid, allowed_scope));
-    let reason = if accepted {
-        "accepted"
-    } else {
-        "peer identity or cgroup scope was rejected"
-    };
-    if accepted {
-        let readiness = *readiness.borrow();
-        apply_readiness(&mut snapshot, readiness);
-        snapshot.recent_effects = observations.recent();
-        update_effect_health(&mut snapshot, &observations, || {
-            kernel_reader.as_ref().and_then(|reader| {
+}
+
+#[tonic::async_trait]
+impl RuntimeObservationService for ObservationGrpc {
+    async fn get_snapshot(
+        &self,
+        request: Request<MithrilObservationSnapshotRequest>,
+    ) -> std::result::Result<Response<MithrilObservationSnapshotResponse>, Status> {
+        let peer = request
+            .extensions()
+            .get::<UnixPeerIdentity>()
+            .copied()
+            .ok_or_else(|| Status::unauthenticated("local peer credentials are unavailable"))?;
+        let request = request.into_inner();
+        let accepted = peer.uid == self.allowed_uid
+            && request.cgroup_scope == self.allowed_scope.as_ref()
+            && peer
+                .pid
+                .is_some_and(|pid| peer_in_cgroup_scope(pid, &self.allowed_scope));
+        if !accepted {
+            return Err(Status::permission_denied(
+                "the local peer is outside the authorized Runtime scope",
+            ));
+        }
+        let mut snapshot = self.snapshot.clone();
+        apply_readiness(&mut snapshot, *self.readiness.borrow());
+        snapshot.recent_effects = self.observations.recent();
+        update_effect_health(&mut snapshot, &self.observations, || {
+            self.kernel_reader.as_ref().and_then(|reader| {
                 reader
                     .lookup("effect_observation_health", &0_u32.to_ne_bytes())
                     .ok()
                     .flatten()
             })
         });
-        update_coverage(&mut snapshot, &observations);
+        update_coverage(&mut snapshot, &self.observations);
+        Ok(Response::new(bounded_observation_response(
+            MithrilObservationSnapshotResponse {
+                accepted: true,
+                reason: String::from("accepted"),
+                snapshot: Some(snapshot),
+            },
+        )))
     }
-    let response = bounded_observation_response(
-        envelope.message_id,
-        MithrilObservationSnapshotResponse {
-            accepted,
-            reason: reason.to_owned(),
-            snapshot: accepted.then_some(snapshot),
-        },
-    )
-    .context(LocalIpcSnafu)?;
-    send(&mut stream, response).await
 }
 
 fn bounded_observation_response(
-    correlation_id: u64,
     mut response: MithrilObservationSnapshotResponse,
-) -> erebor_runtime_ipc::Result<Envelope> {
+) -> MithrilObservationSnapshotResponse {
     loop {
-        let envelope = Envelope::wrap_message(
-            2,
-            correlation_id,
-            KIND_MITHRIL_OBSERVATION_SNAPSHOT_RESPONSE,
-            &response,
-        )?;
-        match envelope.into_frame() {
-            Ok(_frame) => return Ok(envelope),
-            Err(IpcProtocolError::PayloadTooLarge { .. }) => {
-                let Some(recent) = response
-                    .snapshot
-                    .as_mut()
-                    .map(|snapshot| &mut snapshot.recent_effects)
-                else {
-                    return envelope.into_frame().map(|_frame| envelope);
-                };
-                if recent.is_empty() {
-                    return envelope.into_frame().map(|_frame| envelope);
-                }
-                let remove = recent.len().div_ceil(2);
-                recent.drain(..remove);
-            }
-            Err(error) => return Err(error),
+        if response.encoded_len() <= MAX_GRPC_MESSAGE_BYTES {
+            return response;
         }
+        let Some(recent) = response
+            .snapshot
+            .as_mut()
+            .map(|snapshot| &mut snapshot.recent_effects)
+        else {
+            return response;
+        };
+        if recent.is_empty() {
+            return response;
+        }
+        let remove = recent.len().div_ceil(2);
+        recent.drain(..remove);
     }
 }
 
@@ -400,43 +401,25 @@ fn peer_in_cgroup_scope(pid: i32, allowed_scope: &str) -> bool {
     })
 }
 
-async fn receive(stream: &mut UnixStream) -> Result<Envelope> {
-    let frame = AsyncFrameCodec::read_frame(stream)
-        .await
-        .context(LocalIpcSnafu)?;
-    let envelope: Envelope = frame.decode_payload().context(LocalIpcSnafu)?;
-    envelope
-        .require_supported_protocol()
-        .context(LocalIpcSnafu)?;
-    envelope
-        .validate_headers(EnvelopeServiceFamily::MithrilObservation)
-        .context(LocalIpcSnafu)?;
-    Ok(envelope)
-}
-
-async fn send(stream: &mut UnixStream, envelope: Envelope) -> Result<()> {
-    let frame = envelope.into_frame().context(LocalIpcSnafu)?;
-    AsyncFrameCodec::write_frame(stream, &frame)
-        .await
-        .context(LocalIpcSnafu)
-}
-
 #[cfg(test)]
 mod tests {
     use std::cell::Cell;
 
-    use erebor_runtime_ipc::v1::{
-        MithrilCapabilityRecord, MithrilEffectObservation, MithrilObservationSnapshot,
-        MithrilObservationSnapshotResponse, KIND_MITHRIL_OBSERVATION_SNAPSHOT_RESPONSE,
+    use erebor_runtime_ipc::{
+        transport::MAX_GRPC_MESSAGE_BYTES,
+        v1::{
+            MithrilCapabilityRecord, MithrilEffectObservation, MithrilObservationSnapshot,
+            MithrilObservationSnapshotResponse,
+        },
     };
+    use prost::Message as _;
 
     use super::{apply_readiness, bounded_observation_response, update_effect_health};
     use crate::{EffectObservationStore, NodeReadinessV1};
 
     #[test]
-    fn observation_response_retains_the_newest_events_within_the_frame_bound(
-    ) -> erebor_runtime_ipc::Result<()> {
-        let string_field = "f".repeat(64);
+    fn observation_response_retains_the_newest_events_within_the_grpc_bound() {
+        let string_field = "f".repeat(1_024);
         let template = MithrilEffectObservation {
             process_lineage_id: string_field.clone(),
             process_instance_id: string_field.clone(),
@@ -467,10 +450,8 @@ mod tests {
             }),
         };
 
-        let envelope = bounded_observation_response(7, response)?;
-        envelope.into_frame()?;
-        let response: MithrilObservationSnapshotResponse =
-            envelope.decode_typed_payload(KIND_MITHRIL_OBSERVATION_SNAPSHOT_RESPONSE)?;
+        let response = bounded_observation_response(response);
+        assert!(response.encoded_len() <= MAX_GRPC_MESSAGE_BYTES);
         let retained = response
             .snapshot
             .map(|snapshot| snapshot.recent_effects)
@@ -480,7 +461,6 @@ mod tests {
         assert!(retained.len() < 1_024);
         assert_eq!(retained.last().map(|event| event.task_cookie), Some(1_023));
         assert!(retained.first().is_some_and(|event| event.task_cookie > 0));
-        Ok(())
     }
 
     #[test]
