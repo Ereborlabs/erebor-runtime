@@ -2,25 +2,71 @@ syntax = "proto3";
 
 package erebor.mithril.control.v1;
 
-service NodeControl {
-  rpc OpenStream(stream NodeEnvelope) returns (stream ControlEnvelope);
+service NodeRegistry {
+  rpc Register(NodeRegistrationRequest) returns (RegistrationAccepted);
+  rpc ReportReadiness(NodeReadinessRequest) returns (RegistrationAccepted);
 }
 
-message NodeEnvelope {
-  uint32 protocol_version = 1;
-  string node_id = 2;
-  bytes node_boot_id = 3;
-  bytes connection_nonce = 4;
-  uint64 sequence = 5;
-  oneof payload {
-    NodeRegistration registration = 10;
-    NodeReadinessReport readiness_report = 11;
-    TrustGenerationAck trust_ack = 12;
-    AdministrativeExecResolution resolution = 13;
-    AdministrativeExecArmResult arm_result = 14;
-    EvidenceBatch evidence_batch = 15;
-    CoverageReport coverage_report = 16;
-  }
+service NodeTrust {
+  rpc Watch(NodeSessionContext) returns (stream TrustGeneration);
+  rpc Acknowledge(TrustGenerationAckRequest) returns (RegistrationAccepted);
+}
+
+service NodeEvidence {
+  rpc Upload(EvidenceBatchRequest) returns (EvidenceAck);
+}
+
+service NodeCoverage {
+  rpc Report(CoverageReportRequest) returns (CoverageAck);
+}
+
+service NodeAdministrativeResolution {
+  rpc Open(stream AdministrativeExecResolutionStreamRequest) returns (stream ResolveAdministrativeExec);
+}
+
+service NodeAdministrativeArm {
+  rpc Open(stream AdministrativeExecArmStreamRequest) returns (stream ArmAdministrativeExec);
+}
+
+message NodeSessionContext {
+  string node_id = 1;
+  bytes node_boot_id = 2;
+  bytes connection_nonce = 3;
+}
+
+message NodeRegistrationRequest {
+  NodeSessionContext session = 1;
+  NodeRegistration registration = 2;
+}
+
+message NodeReadinessRequest {
+  NodeSessionContext session = 1;
+  NodeReadinessReport report = 2;
+}
+
+message TrustGenerationAckRequest {
+  NodeSessionContext session = 1;
+  TrustGenerationAck acknowledgement = 2;
+}
+
+message EvidenceBatchRequest {
+  NodeSessionContext session = 1;
+  EvidenceBatch batch = 2;
+}
+
+message CoverageReportRequest {
+  NodeSessionContext session = 1;
+  CoverageReport report = 2;
+}
+
+message AdministrativeExecResolutionStreamRequest {
+  NodeSessionContext session = 1;
+  AdministrativeExecResolution result = 2;
+}
+
+message AdministrativeExecArmStreamRequest {
+  NodeSessionContext session = 1;
+  AdministrativeExecArmResult result = 2;
 }
 
 message CapabilityRecord {
@@ -47,22 +93,6 @@ message NodeReadinessReport {
   bool kernel_ready = 1;
   bool control_ready = 2;
   bool admission_ready = 3;
-}
-
-message ControlEnvelope {
-  uint32 protocol_version = 1;
-  string node_id = 2;
-  bytes node_boot_id = 3;
-  bytes connection_nonce = 4;
-  uint64 sequence = 5;
-  oneof payload {
-    RegistrationAccepted registration_accepted = 10;
-    TrustGeneration trust_generation = 11;
-    ResolveAdministrativeExec resolve_administrative_exec = 12;
-    ArmAdministrativeExec arm_administrative_exec = 13;
-    EvidenceAck evidence_ack = 14;
-    CoverageAck coverage_ack = 15;
-  }
 }
 
 message EvidenceRecord {

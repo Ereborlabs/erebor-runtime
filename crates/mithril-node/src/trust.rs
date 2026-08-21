@@ -14,7 +14,6 @@ pub struct InstalledTrustGenerationV1 {
     pub generation: u64,
     pub bundle_digest: String,
     pub control_connection_nonce: String,
-    pub control_sequence: u64,
 }
 
 pub struct TrustCache {
@@ -61,13 +60,9 @@ impl TrustCache {
         generation: u64,
         bundle_digest: String,
         control_connection_nonce: &[u8],
-        control_sequence: u64,
     ) -> Result<()> {
         ensure!(
-            generation > 0
-                && is_sha256_hex(&bundle_digest)
-                && control_connection_nonce.len() == 16
-                && control_sequence > 0,
+            generation > 0 && is_sha256_hex(&bundle_digest) && control_connection_nonce.len() == 16,
             ControlProtocolSnafu {
                 reason: "Control delivered an invalid trust generation",
             }
@@ -87,18 +82,10 @@ impl TrustCache {
             }
         );
         let control_connection_nonce = hex(control_connection_nonce);
-        ensure!(
-            control_connection_nonce != self.installed.control_connection_nonce
-                || control_sequence > self.installed.control_sequence,
-            ControlProtocolSnafu {
-                reason: "Control replayed an authority-bearing stream sequence",
-            }
-        );
         let installed = InstalledTrustGenerationV1 {
             generation,
             bundle_digest,
             control_connection_nonce,
-            control_sequence,
         };
         if let Some(parent) = self.path.parent() {
             fs::create_dir_all(parent).context(IoSnafu { path: parent })?;
@@ -131,7 +118,6 @@ impl InstalledTrustGenerationV1 {
                 .control_connection_nonce
                 .bytes()
                 .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
-            && self.control_sequence > 0
     }
 }
 
@@ -167,18 +153,11 @@ mod tests {
             path: "temporary trust directory",
         })?;
         let mut cache = TrustCache::load(directory.path())?;
-        cache.install(2, "a".repeat(64), &[1; 16], 2)?;
-        assert!(cache.install(1, "a".repeat(64), &[2; 16], 2).is_err());
-        assert!(cache.install(2, "b".repeat(64), &[2; 16], 2).is_err());
-        assert!(cache.install(2, "a".repeat(64), &[1; 16], 2).is_err());
+        cache.install(2, "a".repeat(64), &[1; 16])?;
+        assert!(cache.install(1, "a".repeat(64), &[2; 16]).is_err());
+        assert!(cache.install(2, "b".repeat(64), &[2; 16]).is_err());
         assert_eq!(
             TrustCache::load(directory.path())?.installed().generation,
-            2
-        );
-        assert_eq!(
-            TrustCache::load(directory.path())?
-                .installed()
-                .control_sequence,
             2
         );
         Ok(())
@@ -194,8 +173,7 @@ mod tests {
             br#"{
                 "generation": 0,
                 "bundle_digest": "",
-                "control_connection_nonce": "",
-                "control_sequence": 0
+                "control_connection_nonce": ""
             }"#,
         )
         .context(IoSnafu {

@@ -1,23 +1,26 @@
-use std::collections::BTreeSet;
-use std::fs;
-use std::time::Duration;
+use std::{collections::BTreeSet, fs, time::Duration};
 
-use mithril_control::control_envelope::Payload as ControlPayload;
-use mithril_control::node_control_client::NodeControlClient as GrpcNodeControlClient;
-use mithril_control::node_envelope::Payload as NodePayload;
 use mithril_control::{
-    AdministrativeExecArmResult, AdministrativeExecResolution, ArmAdministrativeExec,
-    ControlEnvelope, CoverageAck, CoverageCounters, CoverageInterval, CoverageReport, EvidenceAck,
-    NodeEnvelope, NodeReadinessReport, NodeRegistration, ResolveAdministrativeExec,
-    TrustGenerationAck, CONTROL_PROTOCOL_VERSION,
+    node_administrative_arm_client::NodeAdministrativeArmClient,
+    node_administrative_resolution_client::NodeAdministrativeResolutionClient,
+    node_coverage_client::NodeCoverageClient, node_evidence_client::NodeEvidenceClient,
+    node_registry_client::NodeRegistryClient, node_trust_client::NodeTrustClient,
+    AdministrativeExecArmResult, AdministrativeExecArmStreamRequest, AdministrativeExecResolution,
+    AdministrativeExecResolutionStreamRequest, ArmAdministrativeExec, CoverageAck,
+    CoverageCounters, CoverageInterval, CoverageReport, CoverageReportRequest, EvidenceAck,
+    EvidenceBatchRequest, NodeReadinessReport, NodeReadinessRequest, NodeRegistration,
+    NodeRegistrationRequest, NodeSessionContext, ResolveAdministrativeExec, TrustGenerationAck,
+    TrustGenerationAckRequest, MAX_EVIDENCE_GRPC_MESSAGE_BYTES,
 };
 use prost::Message as _;
 use sha2::{Digest as _, Sha256};
 use snafu::ResultExt as _;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
-use tonic::transport::{Certificate, ClientTlsConfig, Endpoint, Identity};
-use tonic::Streaming;
+use tonic::{
+    transport::{Certificate, Channel, ClientTlsConfig, Endpoint, Identity},
+    Request, Streaming,
+};
 use uuid::Uuid;
 
 use crate::error::{ControlProtocolSnafu, ControlRpcSnafu, ControlTransportSnafu, IoSnafu};
@@ -32,11 +35,16 @@ pub struct NodeControlConnector {
 }
 
 pub struct ControlConnection {
-    output: mpsc::Sender<NodeEnvelope>,
-    input: Streaming<ControlEnvelope>,
-    identity: ConnectionIdentity,
-    next_control_sequence: u64,
-    next_node_sequence: u64,
+    identity: NodeSessionContext,
+    resolution_output: mpsc::Sender<AdministrativeExecResolutionStreamRequest>,
+    resolution_input: Streaming<ResolveAdministrativeExec>,
+    arm_output: mpsc::Sender<AdministrativeExecArmStreamRequest>,
+    arm_input: Streaming<ArmAdministrativeExec>,
+    evidence: NodeEvidenceClient<Channel>,
+    coverage: NodeCoverageClient<Channel>,
+    queued: std::collections::VecDeque<NodeControlMessage>,
+    resolution_closed: bool,
+    arm_closed: bool,
 }
 
 pub enum AdministrativeControlRequest {
@@ -48,12 +56,6 @@ pub enum NodeControlMessage {
     Administrative(AdministrativeControlRequest),
     EvidenceAck(EvidenceAck),
     CoverageAck(CoverageAck),
-}
-
-struct ConnectionIdentity {
-    node_id: String,
-    node_boot_id: Vec<u8>,
-    nonce: Vec<u8>,
 }
 
 impl NodeControlConnector {
@@ -73,6 +75,120 @@ impl NodeControlConnector {
         trust_cache: &mut TrustCache,
     ) -> Result<ControlConnection> {
         let kernel_ready = registration.kernel_ready;
+        let channel = self.channel().await?;
+        let identity = NodeSessionContext {
+            node_id: self.node_id.clone(),
+            node_boot_id: self.node_boot_id.to_vec(),
+            connection_nonce: Uuid::new_v4().as_bytes().to_vec(),
+        };
+
+        NodeRegistryClient::new(channel.clone())
+            .register(Request::new(NodeRegistrationRequest {
+                session: Some(identity.clone()),
+                registration: Some(registration),
+            }))
+            .await
+            .context(ControlRpcSnafu)?;
+
+        let mut trust_stream = NodeTrustClient::new(channel.clone())
+            .watch(Request::new(identity.clone()))
+            .await
+            .context(ControlRpcSnafu)?
+            .into_inner();
+        let trust = trust_stream
+            .message()
+            .await
+            .context(ControlRpcSnafu)?
+            .ok_or_else(|| {
+                ControlProtocolSnafu {
+                    reason: String::from("Control did not deliver a trust generation"),
+                }
+                .build()
+            })?;
+        trust_cache.install(
+            trust.generation,
+            trust.bundle_digest.clone(),
+            &identity.connection_nonce,
+        )?;
+        NodeTrustClient::new(channel.clone())
+            .acknowledge(Request::new(TrustGenerationAckRequest {
+                session: Some(identity.clone()),
+                acknowledgement: Some(TrustGenerationAck {
+                    generation: trust.generation,
+                    bundle_digest: trust.bundle_digest,
+                }),
+            }))
+            .await
+            .context(ControlRpcSnafu)?;
+        NodeRegistryClient::new(channel.clone())
+            .report_readiness(Request::new(NodeReadinessRequest {
+                session: Some(identity.clone()),
+                report: Some(NodeReadinessReport {
+                    kernel_ready,
+                    control_ready: true,
+                    admission_ready,
+                }),
+            }))
+            .await
+            .context(ControlRpcSnafu)?;
+
+        let (resolution_output, resolution_receiver) = mpsc::channel(8);
+        resolution_output
+            .send(AdministrativeExecResolutionStreamRequest {
+                session: Some(identity.clone()),
+                result: None,
+            })
+            .await
+            .map_err(|_closed| {
+                ControlProtocolSnafu {
+                    reason: String::from("resolution stream closed before registration"),
+                }
+                .build()
+            })?;
+        let resolution_input = NodeAdministrativeResolutionClient::new(channel.clone())
+            .open(ReceiverStream::new(resolution_receiver))
+            .await
+            .context(ControlRpcSnafu)?
+            .into_inner();
+
+        let (arm_output, arm_receiver) = mpsc::channel(8);
+        arm_output
+            .send(AdministrativeExecArmStreamRequest {
+                session: Some(identity.clone()),
+                result: None,
+            })
+            .await
+            .map_err(|_closed| {
+                ControlProtocolSnafu {
+                    reason: String::from("administrative arm stream closed before registration"),
+                }
+                .build()
+            })?;
+        let arm_input = NodeAdministrativeArmClient::new(channel.clone())
+            .open(ReceiverStream::new(arm_receiver))
+            .await
+            .context(ControlRpcSnafu)?
+            .into_inner();
+
+        Ok(ControlConnection {
+            identity,
+            resolution_output,
+            resolution_input,
+            arm_output,
+            arm_input,
+            evidence: NodeEvidenceClient::new(channel.clone())
+                .max_decoding_message_size(MAX_EVIDENCE_GRPC_MESSAGE_BYTES)
+                .max_encoding_message_size(MAX_EVIDENCE_GRPC_MESSAGE_BYTES),
+            coverage: NodeCoverageClient::new(channel)
+                .max_decoding_message_size(MAX_EVIDENCE_GRPC_MESSAGE_BYTES)
+                .max_encoding_message_size(MAX_EVIDENCE_GRPC_MESSAGE_BYTES),
+            queued: std::collections::VecDeque::new(),
+            resolution_closed: false,
+            arm_closed: false,
+        })
+    }
+
+    async fn channel(&self) -> Result<Channel> {
         let ca = read(&self.config.ca_path)?;
         let certificate = read(&self.config.certificate_path)?;
         let private_key = read(&self.config.private_key_path)?;
@@ -80,7 +196,7 @@ impl NodeControlConnector {
             .ca_certificate(Certificate::from_pem(ca))
             .identity(Identity::from_pem(certificate, private_key))
             .domain_name(self.config.server_name.clone());
-        let channel = Endpoint::from_shared(self.config.endpoint.clone())
+        Endpoint::from_shared(self.config.endpoint.clone())
             .context(ControlTransportSnafu)?
             .tls_config(tls)
             .context(ControlTransportSnafu)?
@@ -90,121 +206,40 @@ impl NodeControlConnector {
             .connect_timeout(CONTROL_CONNECT_TIMEOUT)
             .connect()
             .await
-            .context(ControlTransportSnafu)?;
-        let mut client = GrpcNodeControlClient::new(channel);
-        let (output, receiver) = mpsc::channel(8);
-        let identity = ConnectionIdentity {
-            node_id: self.node_id.clone(),
-            node_boot_id: self.node_boot_id.to_vec(),
-            nonce: Uuid::new_v4().as_bytes().to_vec(),
-        };
-        output
-            .send(identity.envelope(1, NodePayload::Registration(registration)))
-            .await
-            .map_err(|_| {
-                ControlProtocolSnafu {
-                    reason: "registration stream closed before send".to_owned(),
-                }
-                .build()
-            })?;
-        let mut input = client
-            .open_stream(ReceiverStream::new(receiver))
-            .await
-            .context(ControlRpcSnafu)?
-            .into_inner();
-        let accepted = next_control(&mut input, &identity, 1).await?;
-        if !matches!(
-            accepted.payload,
-            Some(ControlPayload::RegistrationAccepted(_))
-        ) {
-            return ControlProtocolSnafu {
-                reason: "Control did not accept registration first".to_owned(),
-            }
-            .fail();
-        }
-        let trust = next_control(&mut input, &identity, 2).await?;
-        let Some(ControlPayload::TrustGeneration(trust)) = trust.payload else {
-            return ControlProtocolSnafu {
-                reason: "Control did not deliver trust after registration".to_owned(),
-            }
-            .fail();
-        };
-        trust_cache.install(
-            trust.generation,
-            trust.bundle_digest.clone(),
-            &identity.nonce,
-            2,
-        )?;
-        output
-            .send(identity.envelope(
-                2,
-                NodePayload::TrustAck(TrustGenerationAck {
-                    generation: trust.generation,
-                    bundle_digest: trust.bundle_digest,
-                }),
-            ))
-            .await
-            .map_err(|_| {
-                ControlProtocolSnafu {
-                    reason: "registration stream closed before trust acknowledgement".to_owned(),
-                }
-                .build()
-            })?;
-        output
-            .send(identity.envelope(
-                3,
-                NodePayload::ReadinessReport(NodeReadinessReport {
-                    kernel_ready,
-                    control_ready: true,
-                    admission_ready,
-                }),
-            ))
-            .await
-            .map_err(|_| {
-                ControlProtocolSnafu {
-                    reason: "registration stream closed before readiness report".to_owned(),
-                }
-                .build()
-            })?;
-        Ok(ControlConnection {
-            output,
-            input,
-            identity,
-            next_control_sequence: 3,
-            next_node_sequence: 4,
-        })
+            .context(ControlTransportSnafu)
     }
 }
 
 impl ControlConnection {
     pub async fn next_message(&mut self) -> Result<NodeControlMessage> {
-        let Some(message) = self.input.message().await.context(ControlRpcSnafu)? else {
-            return ControlProtocolSnafu {
-                reason: "Control closed the node stream".to_owned(),
-            }
-            .fail();
-        };
-        validate_control(&message, &self.identity, self.next_control_sequence)?;
-        self.next_control_sequence =
-            self.next_control_sequence.checked_add(1).ok_or_else(|| {
-                ControlProtocolSnafu {
-                    reason: "Control input sequence exhausted".to_owned(),
+        if let Some(message) = self.queued.pop_front() {
+            return Ok(message);
+        }
+        loop {
+            if self.resolution_closed && self.arm_closed {
+                return ControlProtocolSnafu {
+                    reason: String::from("Control closed all administrative streams"),
                 }
-                .build()
-            })?;
-        match message.payload {
-            Some(ControlPayload::ResolveAdministrativeExec(request)) => Ok(
-                NodeControlMessage::Administrative(AdministrativeControlRequest::Resolve(request)),
-            ),
-            Some(ControlPayload::ArmAdministrativeExec(request)) => Ok(
-                NodeControlMessage::Administrative(AdministrativeControlRequest::Arm(request)),
-            ),
-            Some(ControlPayload::EvidenceAck(ack)) => Ok(NodeControlMessage::EvidenceAck(ack)),
-            Some(ControlPayload::CoverageAck(ack)) => Ok(NodeControlMessage::CoverageAck(ack)),
-            _ => ControlProtocolSnafu {
-                reason: "Control sent an unexpected post-registration message".to_owned(),
+                .fail();
             }
-            .fail(),
+            tokio::select! {
+                message = self.resolution_input.message(), if !self.resolution_closed => {
+                    match message.context(ControlRpcSnafu)? {
+                        Some(request) => return Ok(NodeControlMessage::Administrative(
+                            AdministrativeControlRequest::Resolve(request),
+                        )),
+                        None => self.resolution_closed = true,
+                    }
+                }
+                message = self.arm_input.message(), if !self.arm_closed => {
+                    match message.context(ControlRpcSnafu)? {
+                        Some(request) => return Ok(NodeControlMessage::Administrative(
+                            AdministrativeControlRequest::Arm(request),
+                        )),
+                        None => self.arm_closed = true,
+                    }
+                }
+            }
         }
     }
 
@@ -212,20 +247,33 @@ impl ControlConnection {
         match self.next_message().await? {
             NodeControlMessage::Administrative(request) => Ok(request),
             NodeControlMessage::EvidenceAck(_) => ControlProtocolSnafu {
-                reason: "Control sent evidence acknowledgement to an administrative-only owner"
-                    .to_owned(),
+                reason: String::from(
+                    "Control returned evidence acknowledgement to an administrative owner",
+                ),
             }
             .fail(),
             NodeControlMessage::CoverageAck(_) => ControlProtocolSnafu {
-                reason: "Control sent coverage acknowledgement to an administrative-only owner"
-                    .to_owned(),
+                reason: String::from(
+                    "Control returned coverage acknowledgement to an administrative owner",
+                ),
             }
             .fail(),
         }
     }
 
     pub async fn send_evidence_batch(&mut self, batch: crate::EvidenceBatchV1) -> Result<()> {
-        self.send(NodePayload::EvidenceBatch(batch.into())).await
+        let response = self
+            .evidence
+            .upload(Request::new(EvidenceBatchRequest {
+                session: Some(self.identity.clone()),
+                batch: Some(batch.into()),
+            }))
+            .await
+            .context(ControlRpcSnafu)?
+            .into_inner();
+        self.queued
+            .push_back(NodeControlMessage::EvidenceAck(response));
+        Ok(())
     }
 
     pub async fn send_coverage_report(
@@ -241,7 +289,7 @@ impl ControlConnection {
             .all_intervals()
             .into_iter()
             .map(|interval| {
-                let current_interval = current.contains(&interval.interval_id);
+                let is_current = current.contains(&interval.interval_id);
                 CoverageInterval {
                     interval_id: interval.interval_id.to_be_bytes().to_vec(),
                     source_id: interval.source_id.to_be_bytes().to_vec(),
@@ -258,7 +306,7 @@ impl ControlConnection {
                         .into_iter()
                         .map(|reason| reason.as_str().to_owned())
                         .collect(),
-                    current: current_interval,
+                    current: is_current,
                 }
             })
             .collect();
@@ -275,32 +323,45 @@ impl ControlConnection {
             revision: report.revision,
             report_sha256: report.report_sha256.clone(),
         };
-        self.send(NodePayload::CoverageReport(report)).await?;
+        let response = self
+            .coverage
+            .report(Request::new(CoverageReportRequest {
+                session: Some(self.identity.clone()),
+                report: Some(report),
+            }))
+            .await
+            .context(ControlRpcSnafu)?
+            .into_inner();
+        self.queued
+            .push_back(NodeControlMessage::CoverageAck(response));
         Ok(expected)
     }
 
     pub async fn send_resolution(&mut self, response: AdministrativeExecResolution) -> Result<()> {
-        self.send(NodePayload::Resolution(Box::new(response))).await
+        self.resolution_output
+            .send(AdministrativeExecResolutionStreamRequest {
+                session: Some(self.identity.clone()),
+                result: Some(response),
+            })
+            .await
+            .map_err(|_closed| {
+                ControlProtocolSnafu {
+                    reason: String::from("Control closed the administrative resolution stream"),
+                }
+                .build()
+            })
     }
 
     pub async fn send_arm_result(&mut self, response: AdministrativeExecArmResult) -> Result<()> {
-        self.send(NodePayload::ArmResult(response)).await
-    }
-
-    async fn send(&mut self, payload: NodePayload) -> Result<()> {
-        let sequence = self.next_node_sequence;
-        self.next_node_sequence = sequence.checked_add(1).ok_or_else(|| {
-            ControlProtocolSnafu {
-                reason: "node output sequence exhausted".to_owned(),
-            }
-            .build()
-        })?;
-        self.output
-            .send(self.identity.envelope(sequence, payload))
+        self.arm_output
+            .send(AdministrativeExecArmStreamRequest {
+                session: Some(self.identity.clone()),
+                result: Some(response),
+            })
             .await
-            .map_err(|_| {
+            .map_err(|_closed| {
                 ControlProtocolSnafu {
-                    reason: "Control stream closed before administrative response".to_owned(),
+                    reason: String::from("Control closed the administrative arm stream"),
                 }
                 .build()
             })
@@ -312,8 +373,9 @@ impl ControlConnection {
             .map(|_| ())
             .and_then(|()| {
                 ControlProtocolSnafu {
-                    reason: "Control sent an administrative request to a node without an owner"
-                        .to_owned(),
+                    reason: String::from(
+                        "Control sent an administrative request to a node without an owner",
+                    ),
                 }
                 .fail()
             })
@@ -341,57 +403,6 @@ impl AdministrativeControlRequest {
             Self::Arm(request) => &request.request_id,
         }
     }
-}
-
-impl ConnectionIdentity {
-    fn envelope(&self, sequence: u64, payload: NodePayload) -> NodeEnvelope {
-        NodeEnvelope {
-            protocol_version: CONTROL_PROTOCOL_VERSION,
-            node_id: self.node_id.clone(),
-            node_boot_id: self.node_boot_id.clone(),
-            connection_nonce: self.nonce.clone(),
-            sequence,
-            payload: Some(payload),
-        }
-    }
-}
-
-async fn next_control(
-    input: &mut Streaming<ControlEnvelope>,
-    identity: &ConnectionIdentity,
-    expected_sequence: u64,
-) -> Result<ControlEnvelope> {
-    let message = input
-        .message()
-        .await
-        .context(ControlRpcSnafu)?
-        .ok_or_else(|| {
-            ControlProtocolSnafu {
-                reason: "Control closed registration stream".to_owned(),
-            }
-            .build()
-        })?;
-    validate_control(&message, identity, expected_sequence)?;
-    Ok(message)
-}
-
-fn validate_control(
-    message: &ControlEnvelope,
-    identity: &ConnectionIdentity,
-    expected_sequence: u64,
-) -> Result<()> {
-    if !message.has_supported_header()
-        || message.node_id != identity.node_id
-        || message.node_boot_id != identity.node_boot_id
-        || message.connection_nonce != identity.nonce
-        || message.sequence != expected_sequence
-    {
-        return ControlProtocolSnafu {
-            reason: "Control stream version, identity, nonce, or sequence changed".to_owned(),
-        }
-        .fail();
-    }
-    Ok(())
 }
 
 fn read(path: &std::path::Path) -> Result<Vec<u8>> {

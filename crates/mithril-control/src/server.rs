@@ -10,7 +10,11 @@ use tonic::transport::{Certificate, Identity, Server, ServerTlsConfig};
 
 use crate::error::{InvalidConfigurationSnafu, IoSnafu, ServeSnafu, TlsSnafu};
 use crate::{
-    node_control_server::NodeControlServer, ControlPlane, Result, MAX_EVIDENCE_GRPC_MESSAGE_BYTES,
+    node_administrative_arm_server::NodeAdministrativeArmServer,
+    node_administrative_resolution_server::NodeAdministrativeResolutionServer,
+    node_coverage_server::NodeCoverageServer, node_evidence_server::NodeEvidenceServer,
+    node_registry_server::NodeRegistryServer, node_trust_server::NodeTrustServer, ControlPlane,
+    Result, MAX_EVIDENCE_GRPC_MESSAGE_BYTES,
 };
 
 #[derive(Clone, Debug, Deserialize)]
@@ -45,10 +49,20 @@ pub async fn serve(
         .http2_keepalive_timeout(Some(Duration::from_secs(10)))
         .tls_config(tls)
         .context(TlsSnafu)?
+        .add_service(NodeRegistryServer::new(control.clone()))
+        .add_service(NodeTrustServer::new(control.clone()))
         .add_service(
-            NodeControlServer::new(control)
-                .max_decoding_message_size(MAX_EVIDENCE_GRPC_MESSAGE_BYTES),
+            NodeEvidenceServer::new(control.clone())
+                .max_decoding_message_size(MAX_EVIDENCE_GRPC_MESSAGE_BYTES)
+                .max_encoding_message_size(MAX_EVIDENCE_GRPC_MESSAGE_BYTES),
         )
+        .add_service(
+            NodeCoverageServer::new(control.clone())
+                .max_decoding_message_size(MAX_EVIDENCE_GRPC_MESSAGE_BYTES)
+                .max_encoding_message_size(MAX_EVIDENCE_GRPC_MESSAGE_BYTES),
+        )
+        .add_service(NodeAdministrativeResolutionServer::new(control.clone()))
+        .add_service(NodeAdministrativeArmServer::new(control))
         .serve_with_shutdown(address, shutdown)
         .await
         .context(ServeSnafu { address })

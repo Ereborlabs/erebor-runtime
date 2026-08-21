@@ -7,6 +7,5 @@ fn main() -> Result<(), io::Error> {
     tonic_build::configure()
         .build_server(true)
         .build_client(true)
-        .boxed(".erebor.mithril.control.v1.NodeEnvelope.payload.resolution")
         .compile_protos(&[proto], &[PathBuf::from("proto")])
 }
