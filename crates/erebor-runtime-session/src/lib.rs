@@ -26,9 +26,9 @@ mod tests;
 
 pub use adoption::SessionAdoptionService;
 pub use agents::codex::{
-    CodexAppServerInput, CodexAppServerService, CodexHookClient, CodexHookResultOutput,
-    CodexHookService, CodexHookSessionHandlers, CodexHookTicket, CodexHookTicketRegistry,
-    CodexManagedSession, CodexNativeHookEvent, CodexSessionError, CodexSessionHookRegistration,
+    CodexAppServerInput, CodexAppServerService, CodexHookClient, CodexHookPeerRegistry,
+    CodexHookResultOutput, CodexHookService, CodexHookSessionHandlers, CodexManagedSession,
+    CodexNativeHookEvent, CodexSessionError, CodexSessionHookRegistration,
     MAX_APP_SERVER_FRAME_BYTES,
 };
 pub use agents::{AgentAdapter, AgentAdapterRegistry, PreparedAgentInvocation};

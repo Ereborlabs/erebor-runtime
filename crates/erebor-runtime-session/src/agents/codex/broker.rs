@@ -39,9 +39,9 @@ use crate::{
 
 use super::{
     error::{HookBrokerIoSnafu, InvalidHookEventSnafu},
-    CodexAppServerRegistration, CodexCommandDispatch, CodexInvocationLeaseOwner,
-    CodexInvocationLeaseProfile, CodexInvocationLeaseTrust, CodexLeaseRuntimeEvidence,
-    CodexManagedSession, CodexNativeHookEvent, CodexPromptReconciliation, CodexSessionError,
+    CodexAppServerRegistration, CodexInvocationLeaseOwner, CodexInvocationLeaseProfile,
+    CodexLeaseRuntimeEvidence, CodexManagedSession, CodexNativeHookEvent,
+    CodexPromptReconciliation, CodexSessionError,
 };
 
 const BROKER_SOCKET: &str = "codex-hook.sock";
@@ -121,28 +121,8 @@ impl CodexSessionHookRegistration {
             runtime_executable.to_path_buf(),
             definition,
         )?;
-        let dispatch = definition
-            .hook_contract()
-            .command_dispatch()
-            .map(|dispatch| {
-                CodexCommandDispatch::new(
-                    dispatch.program().to_owned(),
-                    dispatch.shell().display().to_string(),
-                )
-            });
-        let trust = dispatch
-            .map(CodexInvocationLeaseTrust::with_command_dispatch)
-            .unwrap_or_default();
-        let mut lease_profile = CodexInvocationLeaseProfile::new(
-            managed_session.profile().id().to_owned(),
-            managed_session.profile().executable().display().to_string(),
-            managed_session
-                .profile()
-                .hook_exec_history()
-                .iter()
-                .map(|path| path.display().to_string())
-                .collect(),
-        );
+        let mut lease_profile =
+            CodexInvocationLeaseProfile::new(managed_session.profile().id().to_owned());
         lease_profile.set_terminal_root_context(spec.tty());
         let lease_owner = Arc::new(CodexInvocationLeaseOwner::new(
             spec.session_id().as_str(),
@@ -151,7 +131,6 @@ impl CodexSessionHookRegistration {
                 kind: erebor_runtime_events::ActorKind::Agent,
             },
             lease_profile,
-            trust,
             Some(
                 spec.output()
                     .root()
@@ -268,7 +247,7 @@ impl CodexHookService {
         let mut registrations = self
             .registrations
             .lock()
-            .map_err(|_error| super::error::TicketRegistryLockSnafu.build())?;
+            .map_err(|_error| super::error::HookRegistryLockSnafu.build())?;
         if registrations.contains_key(&session_id) {
             return Err(CodexSessionError::InvalidHookEvent {
                 reason: format!("Codex hook session `{session_id}` is already registered"),
@@ -323,7 +302,7 @@ impl CodexHookService {
     pub fn unregister(&self, session_id: &str) -> Result<(), CodexSessionError> {
         self.registrations
             .lock()
-            .map_err(|_error| super::error::TicketRegistryLockSnafu.build())?
+            .map_err(|_error| super::error::HookRegistryLockSnafu.build())?
             .remove(session_id);
         Ok(())
     }
@@ -554,16 +533,23 @@ impl CodexHookBrokerProtocol {
                 reason: String::from("Unix peer credentials changed during hook authentication")
             }
         );
+        ensure!(
+            self.managed_session
+                .profile()
+                .allows_hook_executable(&observed_peer.executable),
+            InvalidHookEventSnafu {
+                reason: String::from(
+                    "managed hook executable is not allowed by the registered profile"
+                )
+            }
+        );
         let runtime = LinuxHookPeerInspector::runtime_evidence(
             &observed_peer,
             self.managed_session.profile().executable(),
         )?;
-        let _ticket = self.managed_session.hook_tickets().authenticate_peer(
-            self.managed_session.session_id(),
-            self.managed_session.profile().id(),
-            observed_peer.clone(),
-            runtime.clone(),
-        )?;
+        self.managed_session
+            .hook_peers()
+            .authenticate_peer(observed_peer.clone())?;
         Ok((runtime, observed_peer))
     }
 
@@ -1421,7 +1407,7 @@ mod tests {
     }
 
     #[test]
-    fn managed_profile_uses_workload_executable_and_private_hook_path(
+    fn managed_profile_uses_workload_executable_and_allowed_hook_history(
     ) -> Result<(), Box<dyn std::error::Error>> {
         let workload_executable = "/run/erebor/admitted-executable";
         let definition = package()?;
@@ -1437,16 +1423,14 @@ mod tests {
             std::path::Path::new(workload_executable)
         );
         assert_eq!(
-            profile.managed_hook_path(),
-            std::path::Path::new("/run/erebor/codex/hooks/erebor-codex-hook")
-        );
-        assert_eq!(
             profile.hook_exec_history(),
             [
                 std::path::PathBuf::from(workload_executable),
                 std::path::PathBuf::from("/run/erebor/codex/hooks/erebor-codex-hook"),
             ]
         );
+        assert!(profile.allows_hook_executable("/run/erebor/codex/hooks/erebor-codex-hook"));
+        assert!(!profile.allows_hook_executable("/tmp/unregistered-hook"));
         Ok(())
     }
 
@@ -1531,14 +1515,7 @@ mod tests {
                 id: String::from("agent-test"),
                 kind: ActorKind::Agent,
             },
-            CodexInvocationLeaseProfile::new(
-                String::from("profile-test"),
-                String::from("/opt/codex/codex"),
-                vec![String::from(
-                    "/usr/lib/erebor/codex-hooks/erebor-codex-hook",
-                )],
-            ),
-            super::super::CodexInvocationLeaseTrust::default(),
+            CodexInvocationLeaseProfile::new(String::from("profile-test")),
             audit_path,
         ))
     }

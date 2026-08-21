@@ -20,9 +20,8 @@ pub use error::CodexSessionError;
 pub use hook_client::CodexHookClient;
 pub use hook_output::CodexHookResultOutput;
 pub(crate) use leases::{
-    CodexCommandDispatch, CodexInvocationLeaseOwner, CodexInvocationLeaseProfile,
-    CodexInvocationLeaseTrust, CodexLeaseRuntimeEvidence,
+    CodexInvocationLeaseOwner, CodexInvocationLeaseProfile, CodexLeaseRuntimeEvidence,
 };
 pub use native_event::CodexNativeHookEvent;
 pub(crate) use reconciliation::CodexPromptReconciliation;
-pub use ticket::{CodexHookTicket, CodexHookTicketRegistry, CodexManagedSession};
+pub use ticket::{CodexHookPeerRegistry, CodexManagedSession};

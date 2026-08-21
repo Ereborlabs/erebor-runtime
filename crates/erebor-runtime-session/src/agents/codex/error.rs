@@ -15,13 +15,6 @@ pub enum CodexSessionError {
         #[snafu(implicit)]
         location: Location,
     },
-    #[snafu(display("failed to read Codex profile artifact `{}`: {source}", path.display()))]
-    ReadArtifact {
-        path: PathBuf,
-        source: io::Error,
-        #[snafu(implicit)]
-        location: Location,
-    },
     #[snafu(display("Codex profile artifact `{}` does not match its SHA-256 pin", path.display()))]
     ArtifactDigestMismatch {
         path: PathBuf,
@@ -47,8 +40,8 @@ pub enum CodexSessionError {
         #[snafu(implicit)]
         location: Location,
     },
-    #[snafu(display("Codex hook ticket registry lock failed"))]
-    TicketRegistryLock {
+    #[snafu(display("Codex hook registry lock failed"))]
+    HookRegistryLock {
         #[snafu(implicit)]
         location: Location,
     },
@@ -73,45 +66,13 @@ pub enum CodexSessionError {
         #[snafu(implicit)]
         location: Location,
     },
-    #[snafu(display("Codex hook ticket `{ticket_id}` was not found"))]
-    TicketNotFound {
-        ticket_id: String,
-        #[snafu(implicit)]
-        location: Location,
-    },
-    #[snafu(display("Codex hook ticket `{ticket_id}` expired"))]
-    TicketExpired {
-        ticket_id: String,
-        #[snafu(implicit)]
-        location: Location,
-    },
-    #[snafu(display("Codex hook ticket `{ticket_id}` belongs to an exited hook process"))]
-    TicketProcessExited {
-        ticket_id: String,
-        #[snafu(implicit)]
-        location: Location,
-    },
-    #[snafu(display("Codex hook ticket `{ticket_id}` peer identity did not match"))]
-    TicketPeerMismatch {
-        ticket_id: String,
-        #[snafu(implicit)]
-        location: Location,
-    },
-    #[snafu(display("Codex hook ticket `{ticket_id}` was already consumed"))]
-    TicketReplayed {
-        ticket_id: String,
+    #[snafu(display("Codex hook peer identity was already authenticated"))]
+    HookPeerReplayed {
         #[snafu(implicit)]
         location: Location,
     },
     #[snafu(display("Codex hook broker I/O failed: {source}"))]
     HookBrokerIo {
-        source: io::Error,
-        #[snafu(implicit)]
-        location: Location,
-    },
-    #[snafu(display("failed to bind Codex hook ticket to pid {pid}: {source}"))]
-    Pidfd {
-        pid: i32,
         source: io::Error,
         #[snafu(implicit)]
         location: Location,
@@ -177,20 +138,14 @@ impl ErrorExt for CodexSessionError {
             | Self::ArtifactDigestMismatch { .. }
             | Self::ArtifactDirectoryUnsafe { .. }
             | Self::ArtifactNotFleetProtected { .. }
-            | Self::TicketNotFound { .. }
-            | Self::TicketExpired { .. }
-            | Self::TicketProcessExited { .. }
-            | Self::TicketPeerMismatch { .. }
-            | Self::TicketReplayed { .. } => StatusCode::InvalidArguments,
-            Self::ReadArtifact { .. } => StatusCode::External,
+            | Self::HookPeerReplayed { .. } => StatusCode::InvalidArguments,
             Self::FilesystemProjection { source, .. } => source.status_code(),
-            Self::TicketRegistryLock { .. }
+            Self::HookRegistryLock { .. }
             | Self::PromptReconciliationStateLock { .. }
             | Self::ContextDagStateLock { .. }
             | Self::InvocationLeaseStateLock { .. } => StatusCode::Internal,
             Self::InvocationLeaseAudit { source, .. } => source.status_code(),
             Self::HookBrokerIo { .. } => StatusCode::External,
-            Self::Pidfd { .. } => StatusCode::External,
             Self::HookBrokerProtocol { .. }
             | Self::InvalidHookEvent { .. }
             | Self::HookRejected { .. }
@@ -205,24 +160,18 @@ impl ErrorExt for CodexSessionError {
 
     fn retry_hint(&self) -> RetryHint {
         match self {
-            Self::ReadArtifact { source, .. } => RetryHint::from_io_error(source),
             Self::FilesystemProjection { source, .. } => source.retry_hint(),
             Self::IncompatibleProfile { .. }
             | Self::ArtifactDigestMismatch { .. }
             | Self::ArtifactDirectoryUnsafe { .. }
             | Self::ArtifactNotFleetProtected { .. }
-            | Self::TicketRegistryLock { .. }
+            | Self::HookRegistryLock { .. }
             | Self::PromptReconciliationStateLock { .. }
             | Self::ContextDagStateLock { .. }
             | Self::InvocationLeaseStateLock { .. }
-            | Self::TicketNotFound { .. }
-            | Self::TicketExpired { .. }
-            | Self::TicketProcessExited { .. }
-            | Self::TicketPeerMismatch { .. }
-            | Self::TicketReplayed { .. } => RetryHint::NonRetryable,
+            | Self::HookPeerReplayed { .. } => RetryHint::NonRetryable,
             Self::InvocationLeaseAudit { source, .. } => source.retry_hint(),
             Self::HookBrokerIo { source, .. } => RetryHint::from_io_error(source),
-            Self::Pidfd { source, .. } => RetryHint::from_io_error(source),
             Self::HookBrokerProtocol { .. }
             | Self::InvalidHookEvent { .. }
             | Self::HookRejected { .. }

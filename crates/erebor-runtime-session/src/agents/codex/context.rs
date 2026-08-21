@@ -82,7 +82,6 @@ struct CodexContextDagState {
     bindings: HashMap<(String, String), CodexScopeContextBinding>,
     next_prompt: u64,
     next_hook_event: u64,
-    next_physical_effect: u64,
 }
 
 struct CodexContextScope {
@@ -842,60 +841,6 @@ impl CodexContextDag {
         )
     }
 
-    /// Retain one lease-validated process-guard observation in the source
-    /// scope's Git history. The JSONL audit remains an operational sink; this
-    /// record is the graph's sole source for physical execution activity.
-    pub(crate) fn record_guarded_physical_effect(
-        &self,
-        source_context: &ContextPin,
-        effect_scope: &ScopeRef,
-        detail: Value,
-    ) -> Result<ContextPin, CodexSessionError> {
-        if effect_scope.session_id() != self.session_id {
-            return Err(CodexSessionError::IncompatibleProfile {
-                reason: String::from("guarded Codex physical effect belongs to another session"),
-                location: snafu::Location::default(),
-            });
-        }
-        self.repository
-            .validate_pin(source_context)
-            .map_err(Self::context_error)?;
-        let mut state = self.lock_state()?;
-        let head = self
-            .repository
-            .scope_head(effect_scope)
-            .map_err(Self::context_error)?;
-        state.next_physical_effect = state.next_physical_effect.saturating_add(1);
-        let mut path_identity = head.to_string();
-        path_identity.push('\0');
-        path_identity.push_str(&Self::digest(
-            &serde_json::to_vec(&detail).unwrap_or_default(),
-        ));
-        let path = format!(
-            "agents/codex/physical-effects/{:020}-{}.json",
-            state.next_physical_effect,
-            &Self::digest(path_identity.as_bytes())[..20],
-        );
-        let bytes = serde_json::to_vec_pretty(&json!({
-            "schema_version": 1,
-            "source": "erebor_guarded_physical_effect",
-            "kind": "physical-effect",
-            "source_context": source_context,
-            "effect": detail,
-        }))
-        .map_err(|error| CodexSessionError::IncompatibleProfile {
-            reason: format!("could not encode guarded Codex physical effect: {error}"),
-            location: snafu::Location::default(),
-        })?;
-        self.append_scope_locked(
-            &mut state,
-            effect_scope,
-            &path,
-            bytes,
-            "Record guarded Codex physical effect",
-        )
-    }
-
     /// Append one immutable fact to a scope that another daemon-owned writer
     /// may also advance, such as a child-delivery publisher. The cached head
     /// only accelerates local routing; the ref remains authoritative.
@@ -1191,7 +1136,7 @@ impl CodexContextDag {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{Arc, Barrier, Mutex};
+    use std::sync::{Arc, Mutex};
 
     use erebor_runtime_context::{
         CommitMetadata, CommitMetadataSource, CommitMetadataSourceError, CommitSignature,
@@ -1199,10 +1144,10 @@ mod tests {
     };
     use erebor_runtime_ipc::v1::HookEventKind;
     use erebor_runtime_packages::CodexFrozenContextMode;
-    use serde_json::{json, Value};
+    use serde_json::json;
     use sha2::{Digest, Sha256};
 
-    use super::{CodexContextDag, CodexSessionError, PROMPT_PREFIX};
+    use super::{CodexContextDag, PROMPT_PREFIX};
     use crate::{
         context_operation::{ContextOperationAdmission, ContextOperationAdmissionHandler},
         ContextAgentControlAction,
@@ -1567,204 +1512,6 @@ mod tests {
         assert_eq!(
             dag.exact_binding("terminal-thread", "terminal-turn")?,
             Some(binding)
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn guarded_physical_effect_is_retained_in_its_source_scope_git_history(
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        let temporary = tempfile::tempdir()?;
-        let repository = Arc::new(erebor_runtime_context::ContextRepository::init(
-            temporary.path().join("context"),
-            FixedMetadataSource,
-        )?);
-        repository.initialize_root("session-effect", Default::default(), "Initialize")?;
-        let dag = CodexContextDag::new(Arc::clone(&repository), "session-effect");
-        let turn = json!({"session_id": "terminal-thread", "turn_id": "terminal-turn"});
-        dag.bind_terminal_turn(&turn)?
-            .ok_or("terminal turn did not bind")?;
-        let source_context = dag.record_authenticated_hook(
-            erebor_runtime_ipc::v1::HookEventKind::PreToolUse,
-            &turn,
-            json!({"hook_pid": 7}),
-        )?;
-        let root = ScopeRef::root("session-effect")?;
-
-        let effect = dag.record_guarded_physical_effect(
-            &source_context,
-            &root,
-            json!({
-                "allowed": true,
-                "operation": "process_exec",
-                "pid": 44,
-                "ppid": 7,
-                "executable": "/bin/ls",
-                "argv": ["/bin/ls"],
-                "lease": {
-                    "id": "lease-1",
-                    "scope_ref": root.as_str(),
-                    "item_node_stream": "item",
-                    "decision_head": "head",
-                    "codex_session_id": "terminal-thread",
-                    "turn_id": "terminal-turn",
-                    "tool_use_id": "tool-1",
-                    "tool_name": "bash",
-                    "operation_scope": null,
-                },
-            }),
-        )?;
-
-        repository.validate_pin(&effect)?;
-        let path = effect.used_paths().first().ok_or("missing effect path")?;
-        assert!(path.starts_with("agents/codex/physical-effects/"));
-        let retained = repository.read_pinned_context(&effect)?;
-        let detail: Value = serde_json::from_slice(
-            retained
-                .selected_blobs()
-                .first()
-                .ok_or("missing effect blob")?
-                .bytes(),
-        )?;
-        assert_eq!(
-            detail.get("source").and_then(Value::as_str),
-            Some("erebor_guarded_physical_effect")
-        );
-        assert_eq!(
-            detail.pointer("/effect/executable").and_then(Value::as_str),
-            Some("/bin/ls")
-        );
-
-        let recovered = CodexContextDag::new(Arc::clone(&repository), "session-effect");
-        let recovered_effect = recovered.record_guarded_physical_effect(
-            &source_context,
-            &root,
-            json!({
-                "allowed": true,
-                "operation": "process_exec",
-                "pid": 44,
-                "ppid": 7,
-                "executable": "/bin/ls",
-                "argv": ["/bin/ls"],
-                "lease": {
-                    "id": "lease-1",
-                    "scope_ref": root.as_str(),
-                    "item_node_stream": "item",
-                    "decision_head": "head",
-                    "codex_session_id": "terminal-thread",
-                    "turn_id": "terminal-turn",
-                    "tool_use_id": "tool-1",
-                    "tool_name": "bash",
-                    "operation_scope": null,
-                },
-            }),
-        )?;
-        assert_ne!(effect.used_paths(), recovered_effect.used_paths());
-        let head = repository.scope_head(&root)?;
-        for path in effect
-            .used_paths()
-            .iter()
-            .chain(recovered_effect.used_paths())
-        {
-            assert!(repository.read_commit_blob(head, path)?.is_some());
-        }
-        Ok(())
-    }
-
-    #[test]
-    fn concurrent_operation_hooks_and_physical_effects_serialize_one_operation_scope(
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        const RECORDS_PER_WRITER: usize = 16;
-
-        let temporary = tempfile::tempdir()?;
-        let repository = Arc::new(erebor_runtime_context::ContextRepository::init(
-            temporary.path().join("context"),
-            FixedMetadataSource,
-        )?);
-        let root = repository.initialize_root(
-            "session-concurrent-operation",
-            Default::default(),
-            "Initialize",
-        )?;
-        let operation =
-            ScopeRef::scope("session-concurrent-operation", "codex-operation-concurrent")?;
-        repository.create_scope(
-            operation.clone(),
-            erebor_runtime_context::ScopeStart::existing_commit(root),
-        )?;
-        let source_context = repository
-            .pin_scope_head(operation.clone(), &[])?
-            .pin()
-            .clone();
-        let dag = Arc::new(CodexContextDag::new(
-            Arc::clone(&repository),
-            "session-concurrent-operation",
-        ));
-        let start = Arc::new(Barrier::new(3));
-
-        let hook_writer = {
-            let dag = Arc::clone(&dag);
-            let operation = operation.clone();
-            let start = Arc::clone(&start);
-            std::thread::spawn(move || -> Result<(), CodexSessionError> {
-                start.wait();
-                for index in 0..RECORDS_PER_WRITER {
-                    dag.record_authenticated_operation_hook(
-                        HookEventKind::PostToolUse,
-                        &json!({
-                            "hook_event_name": "PostToolUse",
-                            "tool_use_id": format!("operation-hook-{index}"),
-                        }),
-                        json!({"hook_pid": 7}),
-                        &operation,
-                    )?;
-                }
-                Ok(())
-            })
-        };
-        let effect_writer = {
-            let dag = Arc::clone(&dag);
-            let operation = operation.clone();
-            let source_context = source_context.clone();
-            let start = Arc::clone(&start);
-            std::thread::spawn(move || -> Result<(), CodexSessionError> {
-                start.wait();
-                for index in 0..RECORDS_PER_WRITER {
-                    dag.record_guarded_physical_effect(
-                        &source_context,
-                        &operation,
-                        json!({
-                            "allowed": true,
-                            "operation": "process_exec",
-                            "pid": index,
-                            "lease": {"tool_use_id": format!("operation-effect-{index}")},
-                        }),
-                    )?;
-                }
-                Ok(())
-            })
-        };
-
-        start.wait();
-        hook_writer
-            .join()
-            .map_err(|_error| "operation hook writer panicked")??;
-        effect_writer
-            .join()
-            .map_err(|_error| "physical-effect writer panicked")??;
-
-        let head = repository.scope_head(&operation)?;
-        assert_eq!(
-            repository
-                .list_commit_blobs_under(head, "agents/codex/hooks")?
-                .len(),
-            RECORDS_PER_WRITER
-        );
-        assert_eq!(
-            repository
-                .list_commit_blobs_under(head, "agents/codex/physical-effects")?
-                .len(),
-            RECORDS_PER_WRITER
         );
         Ok(())
     }

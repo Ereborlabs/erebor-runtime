@@ -480,7 +480,7 @@ mod tests {
     };
     use crate::agents::codex::{
         CodexContextDag, CodexInvocationLeaseOwner, CodexInvocationLeaseProfile,
-        CodexInvocationLeaseTrust, CodexPromptReconciliation,
+        CodexPromptReconciliation,
     };
 
     #[test]
@@ -676,12 +676,7 @@ mod tests {
                     id: String::from("agent-test"),
                     kind: ActorKind::Agent,
                 },
-                CodexInvocationLeaseProfile::new(
-                    String::from("codex-test"),
-                    String::from("/opt/codex/codex"),
-                    Vec::new(),
-                ),
-                CodexInvocationLeaseTrust::default(),
+                CodexInvocationLeaseProfile::new(String::from("codex-test")),
                 None,
             )),
         ))?;
