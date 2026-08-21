@@ -148,10 +148,108 @@ pub(crate) enum MutationIntent {
     },
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum MutationResponseType {
+    DaemonCommandResult,
+    AgentInstallResponse,
+    ApprovalRecord,
+    CodexAppServerAttachResponse,
+    FilesystemOperationResponse,
+    PolicyPackageRecord,
+    PolicySetRecord,
+    SessionAliasRecord,
+    SessionAttachResponse,
+    SessionCreateResponse,
+    SessionInputLeaseResponse,
+    SessionPruneResponse,
+    SessionRecord,
+    SurfaceRecord,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub(crate) struct MutationResponse {
-    pub(crate) message_kind: String,
-    pub(crate) payload: Vec<u8>,
+    #[serde(alias = "message_kind", deserialize_with = "deserialize_response_type")]
+    response_type: MutationResponseType,
+    #[serde(alias = "payload")]
+    encoded_message: Vec<u8>,
+}
+
+impl MutationResponse {
+    pub(crate) fn new(response_type: MutationResponseType, encoded_message: Vec<u8>) -> Self {
+        Self {
+            response_type,
+            encoded_message,
+        }
+    }
+
+    pub(crate) const fn response_type(&self) -> MutationResponseType {
+        self.response_type
+    }
+
+    pub(crate) fn into_encoded_message(self) -> Vec<u8> {
+        self.encoded_message
+    }
+}
+
+impl Serialize for MutationResponseType {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_str(self.name())
+    }
+}
+
+impl MutationResponseType {
+    const fn name(self) -> &'static str {
+        match self {
+            Self::DaemonCommandResult => "DaemonCommandResult",
+            Self::AgentInstallResponse => "AgentInstallResponse",
+            Self::ApprovalRecord => "ApprovalRecord",
+            Self::CodexAppServerAttachResponse => "CodexAppServerAttachResponse",
+            Self::FilesystemOperationResponse => "FilesystemOperationResponse",
+            Self::PolicyPackageRecord => "PolicyPackageRecord",
+            Self::PolicySetRecord => "PolicySetRecord",
+            Self::SessionAliasRecord => "SessionAliasRecord",
+            Self::SessionAttachResponse => "SessionAttachResponse",
+            Self::SessionCreateResponse => "SessionCreateResponse",
+            Self::SessionInputLeaseResponse => "SessionInputLeaseResponse",
+            Self::SessionPruneResponse => "SessionPruneResponse",
+            Self::SessionRecord => "SessionRecord",
+            Self::SurfaceRecord => "SurfaceRecord",
+        }
+    }
+
+    fn from_stored_name(value: &str) -> Option<Self> {
+        match value.rsplit('.').next()? {
+            "DaemonCommandResult" => Some(Self::DaemonCommandResult),
+            "AgentInstallResponse" => Some(Self::AgentInstallResponse),
+            "ApprovalRecord" => Some(Self::ApprovalRecord),
+            "CodexAppServerAttachResponse" => Some(Self::CodexAppServerAttachResponse),
+            "FilesystemOperationResponse" => Some(Self::FilesystemOperationResponse),
+            "PolicyPackageRecord" => Some(Self::PolicyPackageRecord),
+            "PolicySetRecord" => Some(Self::PolicySetRecord),
+            "SessionAliasRecord" => Some(Self::SessionAliasRecord),
+            "SessionAttachResponse" => Some(Self::SessionAttachResponse),
+            "SessionCreateResponse" => Some(Self::SessionCreateResponse),
+            "SessionInputLeaseResponse" => Some(Self::SessionInputLeaseResponse),
+            "SessionPruneResponse" => Some(Self::SessionPruneResponse),
+            "SessionRecord" => Some(Self::SessionRecord),
+            "SurfaceRecord" => Some(Self::SurfaceRecord),
+            _ => None,
+        }
+    }
+}
+
+fn deserialize_response_type<'de, D>(
+    deserializer: D,
+) -> std::result::Result<MutationResponseType, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let stored = String::deserialize(deserializer)?;
+    MutationResponseType::from_stored_name(&stored)
+        .ok_or_else(|| serde::de::Error::custom("unknown durable mutation response type"))
 }
 
 #[derive(Deserialize, Serialize)]

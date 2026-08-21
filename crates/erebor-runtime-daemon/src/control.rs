@@ -11,9 +11,8 @@ use std::{
 
 use erebor_runtime_approvals::{ApprovalRecord, ApprovalRepository};
 use erebor_runtime_ipc::v1::{
-    ApprovalRecord as ApprovalRecordMessage, DaemonCommandResult, Envelope, PolicyTestRequest,
-    PolicyTestResponse, RunnerCapabilityRecord, KIND_AGENT_INSTALL_RESPONSE, KIND_APPROVAL_RECORD,
-    KIND_DAEMON_COMMAND_RESULT,
+    ApprovalRecord as ApprovalRecordMessage, DaemonCommandResult, PolicyTestRequest,
+    PolicyTestResponse, RunnerCapabilityRecord,
 };
 use erebor_runtime_telemetry::{error, info, JsonlTelemetry};
 use prost::Message;
@@ -27,10 +26,8 @@ use tokio::{net::UnixListener, sync::watch};
 use crate::{
     approvals::DaemonApprovalRepository,
     config::DaemonConfig,
-    error::{
-        InvalidRequestSnafu, IoSnafu, IpcSnafu, StateLockSnafu, TelemetrySnafu, UnauthorizedSnafu,
-    },
-    idempotency::{DaemonIdempotencyStore, MutationIntent},
+    error::{InvalidRequestSnafu, IoSnafu, StateLockSnafu, TelemetrySnafu, UnauthorizedSnafu},
+    idempotency::{DaemonIdempotencyStore, MutationIntent, MutationResponseType},
     paths::{DaemonLock, DaemonSecurity},
     session_api::DaemonSessionApi,
     DaemonError, DaemonPaths, Result,
@@ -350,12 +347,12 @@ impl DaemonControlState {
             } => {
                 let message = self.publish_configuration(configuration.clone(), *generation)?;
                 encode_mutation_response(
-                    KIND_DAEMON_COMMAND_RESULT,
+                    MutationResponseType::DaemonCommandResult,
                     &DaemonCommandResult { message },
                 )
             }
             MutationIntent::Stop => encode_mutation_response(
-                KIND_DAEMON_COMMAND_RESULT,
+                MutationResponseType::DaemonCommandResult,
                 &DaemonCommandResult {
                     message: String::from("daemon stop accepted"),
                 },
@@ -374,7 +371,7 @@ impl DaemonControlState {
                     artifact.clone(),
                     *installed_at_unix_ms,
                 )?;
-                encode_mutation_response(KIND_AGENT_INSTALL_RESPONSE, &response)
+                encode_mutation_response(MutationResponseType::AgentInstallResponse, &response)
             }
             MutationIntent::SessionStart { uid, session_id } => {
                 let active = self
@@ -417,7 +414,10 @@ impl DaemonControlState {
                     }
                     .fail();
                 }
-                encode_mutation_response(KIND_APPROVAL_RECORD, &Self::approval_record(&record))
+                encode_mutation_response(
+                    MutationResponseType::ApprovalRecord,
+                    &Self::approval_record(&record),
+                )
             }
             MutationIntent::ApprovalDeny {
                 owner_uid,
@@ -446,7 +446,10 @@ impl DaemonControlState {
                     }
                     .fail();
                 }
-                encode_mutation_response(KIND_APPROVAL_RECORD, &Self::approval_record(&record))
+                encode_mutation_response(
+                    MutationResponseType::ApprovalRecord,
+                    &Self::approval_record(&record),
+                )
             }
             session => self.sessions.apply(session),
         }
@@ -610,14 +613,13 @@ fn parse_signal(value: &str) -> Result<ActiveSessionSignal> {
 }
 
 fn encode_mutation_response(
-    kind: &str,
+    response_type: MutationResponseType,
     message: &impl Message,
 ) -> Result<crate::idempotency::MutationResponse> {
-    let envelope = Envelope::wrap_message(1, 0, kind, message).context(IpcSnafu)?;
-    Ok(crate::idempotency::MutationResponse {
-        message_kind: envelope.message_kind,
-        payload: envelope.payload,
-    })
+    Ok(crate::idempotency::MutationResponse::new(
+        response_type,
+        message.encode_to_vec(),
+    ))
 }
 
 impl DaemonSocket {

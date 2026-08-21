@@ -9,7 +9,10 @@ use tempfile::TempDir;
 
 use crate::{
     config::DaemonConfig,
-    idempotency::{DaemonIdempotencyStore, IdempotencyAction, MutationIntent, MutationResponse},
+    idempotency::{
+        DaemonIdempotencyStore, IdempotencyAction, MutationIntent, MutationResponse,
+        MutationResponseType,
+    },
     paths::DaemonSecurity,
     DaemonPaths,
 };
@@ -160,6 +163,29 @@ fn idempotency_store_retains_session_mutations_until_tombstone_horizon_and_prune
 }
 
 #[test]
+fn typed_idempotency_response_reads_legacy_records_and_writes_typed_records(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let legacy: MutationResponse = serde_json::from_slice(
+        br#"{"message_kind":"erebor.runtime.ipc.v1.DaemonCommandResult","payload":[1,2,3]}"#,
+    )?;
+    assert_eq!(
+        legacy.response_type(),
+        MutationResponseType::DaemonCommandResult
+    );
+    assert_eq!(legacy.into_encoded_message(), [1, 2, 3]);
+
+    let stored = serde_json::to_value(response())?;
+    assert_eq!(stored["response_type"], "DaemonCommandResult");
+    assert_eq!(
+        stored["encoded_message"],
+        serde_json::to_value(b"configuration reloaded".as_slice())?
+    );
+    assert!(stored.get("message_kind").is_none());
+    assert!(stored.get("payload").is_none());
+    Ok(())
+}
+
+#[test]
 fn daemon_configuration_rejects_symlinks_before_opening_them(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let root = TempDir::new()?;
@@ -222,10 +248,10 @@ fn reload_intent(generation: u64) -> MutationIntent {
 }
 
 fn response() -> MutationResponse {
-    MutationResponse {
-        message_kind: String::from("test"),
-        payload: b"configuration reloaded".to_vec(),
-    }
+    MutationResponse::new(
+        crate::idempotency::MutationResponseType::DaemonCommandResult,
+        b"configuration reloaded".to_vec(),
+    )
 }
 
 fn fixture_config_source() -> String {

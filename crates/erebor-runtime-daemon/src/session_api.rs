@@ -25,10 +25,7 @@ use erebor_runtime_ipc::v1::{
     SessionAliasRecord, SessionAttachResponse, SessionCreateRequest, SessionCreateResponse,
     SessionEnvironmentEntry, SessionInputLeaseResponse, SessionInputResponse, SessionListResponse,
     SessionPruneResponse, SessionRecord, SessionTerminalResizeResponse, SurfaceListResponse,
-    SurfaceRecord, KIND_CODEX_APP_SERVER_ATTACH_RESPONSE, KIND_POLICY_PACKAGE_RECORD,
-    KIND_POLICY_SET_RECORD, KIND_SESSION_ALIAS_RECORD, KIND_SESSION_ATTACH_RESPONSE,
-    KIND_SESSION_CREATE_RESPONSE, KIND_SESSION_INPUT_LEASE_RESPONSE, KIND_SESSION_PRUNE_RESPONSE,
-    KIND_SESSION_RECORD, KIND_SURFACE_RECORD,
+    SurfaceRecord,
 };
 use erebor_runtime_packages::{
     CodexHookContract, ContentDigest, LocalArtifactProvider, VerifiedLocalArtifact,
@@ -59,7 +56,7 @@ use crate::{
         ContextScopeGraphActivity, ContextScopeGraphNode, SessionContextResolver,
     },
     error::SessionSnafu,
-    idempotency::{MutationIntent, MutationResponse},
+    idempotency::{MutationIntent, MutationResponse, MutationResponseType},
     local_store::{DaemonLocalStore, StaticSessionAdmission, StoredStaticSession},
     path_broker::DescriptorBroker,
     DaemonPaths, Result,
@@ -1571,10 +1568,7 @@ impl DaemonSessionApi {
             } => self
                 .filesystem_mutation(*uid, session_id, *operation, target, name, output_format)
                 .and_then(|response| {
-                    message(
-                        erebor_runtime_ipc::v1::KIND_FILESYSTEM_OPERATION_RESPONSE,
-                        &response,
-                    )
+                    message(MutationResponseType::FilesystemOperationResponse, &response)
                 }),
             MutationIntent::PolicyPackageApply {
                 uid,
@@ -1691,7 +1685,7 @@ impl DaemonSessionApi {
         self.local_store
             .store_user_policy_package(owner_uid, policy, maximum_stored_bytes)?;
         message(
-            KIND_POLICY_PACKAGE_RECORD,
+            MutationResponseType::PolicyPackageRecord,
             &PolicyPackageRecord {
                 name: policy.manifest().name().to_owned(),
             },
@@ -1708,7 +1702,7 @@ impl DaemonSessionApi {
             .local_store
             .create_user_policy_set(owner_uid, name, package_names)?;
         message(
-            KIND_POLICY_SET_RECORD,
+            MutationResponseType::PolicySetRecord,
             &PolicySetRecord {
                 name: policy_set.name().to_owned(),
             },
@@ -1725,7 +1719,7 @@ impl DaemonSessionApi {
             .local_store
             .create_user_surface(owner_uid, name, surface_type)?;
         message(
-            KIND_SURFACE_RECORD,
+            MutationResponseType::SurfaceRecord,
             &SurfaceRecord {
                 name: surface.name().to_owned(),
                 surface_type: surface.surface_type().to_owned(),
@@ -1965,7 +1959,7 @@ impl DaemonSessionApi {
         };
         self.local_store.record_session_lease(record.spec())?;
         message(
-            KIND_SESSION_CREATE_RESPONSE,
+            MutationResponseType::SessionCreateResponse,
             &SessionCreateResponse {
                 session_id: record.spec().session_id().as_str().to_owned(),
                 state: record.state().as_str().to_owned(),
@@ -1984,7 +1978,7 @@ impl DaemonSessionApi {
             .local_store
             .create_static_session(owner_uid, admission)?;
         message(
-            KIND_SESSION_CREATE_RESPONSE,
+            MutationResponseType::SessionCreateResponse,
             &SessionCreateResponse {
                 session_id: session.name().to_owned(),
                 state: String::from("admitted"),
@@ -2007,7 +2001,7 @@ impl DaemonSessionApi {
             .start(uid, &session_id, constraints, resume_pending)
             .context(SessionSnafu)?;
         self.monitor_codex_app_server_output(uid, &session_id)?;
-        message(KIND_SESSION_RECORD, &self.record(&record))
+        message(MutationResponseType::SessionRecord, &self.record(&record))
     }
 
     fn stop(
@@ -2025,7 +2019,7 @@ impl DaemonSessionApi {
                 Duration::from_secs(grace_period_seconds.max(1)),
             )
             .context(SessionSnafu)?;
-        message(KIND_SESSION_RECORD, &self.record(&record))
+        message(MutationResponseType::SessionRecord, &self.record(&record))
     }
 
     fn kill(
@@ -2039,7 +2033,7 @@ impl DaemonSessionApi {
             .manager
             .kill(uid, &session_id, signal)
             .context(SessionSnafu)?;
-        message(KIND_SESSION_RECORD, &self.record(&record))
+        message(MutationResponseType::SessionRecord, &self.record(&record))
     }
 
     fn remove(&self, uid: u32, session_id: &str, force: bool) -> Result<MutationResponse> {
@@ -2056,7 +2050,7 @@ impl DaemonSessionApi {
                 }
                 .build()
             })?;
-        message(KIND_SESSION_RECORD, &self.record(&record))
+        message(MutationResponseType::SessionRecord, &self.record(&record))
     }
 
     fn attach(
@@ -2073,7 +2067,7 @@ impl DaemonSessionApi {
             .context(SessionSnafu)?;
         let lease = outcome.lease();
         message(
-            KIND_SESSION_ATTACH_RESPONSE,
+            MutationResponseType::SessionAttachResponse,
             &SessionAttachResponse {
                 session_id,
                 read_only: lease.is_none(),
@@ -2101,7 +2095,7 @@ impl DaemonSessionApi {
             .context(SessionSnafu)?;
         let lease = outcome.lease();
         message(
-            KIND_CODEX_APP_SERVER_ATTACH_RESPONSE,
+            MutationResponseType::CodexAppServerAttachResponse,
             &CodexAppServerAttachResponse {
                 session_id,
                 read_only: lease.is_none(),
@@ -2128,7 +2122,7 @@ impl DaemonSessionApi {
             .renew_input_lease(uid, &session_id, lease_id, client_instance_id)
             .context(SessionSnafu)?;
         message(
-            KIND_SESSION_INPUT_LEASE_RESPONSE,
+            MutationResponseType::SessionInputLeaseResponse,
             &SessionInputLeaseResponse {
                 session_id,
                 input_lease_id: lease.lease_id().to_owned(),
@@ -2150,7 +2144,7 @@ impl DaemonSessionApi {
             .release_input_lease(uid, &session_id, lease_id, client_instance_id)
             .context(SessionSnafu)?;
         message(
-            KIND_SESSION_INPUT_LEASE_RESPONSE,
+            MutationResponseType::SessionInputLeaseResponse,
             &SessionInputLeaseResponse {
                 session_id,
                 input_lease_id: lease_id.to_owned(),
@@ -2501,7 +2495,7 @@ impl DaemonSessionApi {
             }
         }
         message(
-            KIND_SESSION_PRUNE_RESPONSE,
+            MutationResponseType::SessionPruneResponse,
             &SessionPruneResponse {
                 pruned_sessions: result.pruned as u32,
                 retained_session_ids: result.retained_session_ids,
@@ -2516,7 +2510,7 @@ impl DaemonSessionApi {
             .set_alias(uid, alias, &session_id)
             .context(SessionSnafu)?;
         message(
-            KIND_SESSION_ALIAS_RECORD,
+            MutationResponseType::SessionAliasRecord,
             &SessionAliasRecord {
                 alias: alias.alias().to_owned(),
                 session_id: alias.session_id().to_owned(),
@@ -2530,7 +2524,7 @@ impl DaemonSessionApi {
             .remove_alias(uid, alias)
             .context(SessionSnafu)?;
         message(
-            KIND_SESSION_ALIAS_RECORD,
+            MutationResponseType::SessionAliasRecord,
             &SessionAliasRecord {
                 alias: alias.alias().to_owned(),
                 session_id: alias.session_id().to_owned(),
@@ -2549,7 +2543,7 @@ impl DaemonSessionApi {
             .manager
             .set_retention_hold(uid, &session_id, retention_hold)
             .context(SessionSnafu)?;
-        message(KIND_SESSION_RECORD, &self.record(&record))
+        message(MutationResponseType::SessionRecord, &self.record(&record))
     }
 
     fn record(&self, record: &DurableSessionRecord) -> SessionRecord {
@@ -2658,21 +2652,8 @@ impl DaemonSessionApi {
     }
 }
 
-fn message(kind: &str, value: &impl Message) -> Result<MutationResponse> {
-    let mut payload = Vec::with_capacity(value.encoded_len());
-    value
-        .encode(&mut payload)
-        .map_err(|source| crate::DaemonError::Ipc {
-            source: erebor_runtime_ipc::IpcProtocolError::EncodePayload {
-                source,
-                location: snafu::Location::default(),
-            },
-            location: snafu::Location::default(),
-        })?;
-    Ok(MutationResponse {
-        message_kind: kind.to_owned(),
-        payload,
-    })
+fn message(response_type: MutationResponseType, value: &impl Message) -> Result<MutationResponse> {
+    Ok(MutationResponse::new(response_type, value.encode_to_vec()))
 }
 
 #[cfg(test)]

@@ -31,31 +31,27 @@ use erebor_runtime_ipc::{
         PolicyPackageInspectRequest, PolicyPackageListRequest, PolicyPackageListResponse,
         PolicyPackageRecord, PolicyPackageVerifyRequest, PolicySetCreateRequest,
         PolicySetInspectRequest, PolicySetListRequest, PolicySetListResponse, PolicySetRecord,
-        PolicySetVerifyRequest, PolicyTestRequest, PolicyTestResponse, RunnerCapabilityRecord,
-        RunnerInspectRequest, RunnerListRequest, RunnerListResponse, SessionAliasListRequest,
-        SessionAliasListResponse, SessionAliasRecord, SessionAliasRemoveRequest,
-        SessionAliasSetRequest, SessionAttachRequest, SessionAttachResponse, SessionCreateRequest,
-        SessionCreateResponse, SessionEventRecord, SessionEventStreamItem, SessionEventsEnd,
-        SessionEventsRequest, SessionEvidenceEnd, SessionEvidenceRecord, SessionEvidenceRequest,
-        SessionEvidenceStreamItem, SessionInputLeaseReleaseRequest, SessionInputLeaseRenewRequest,
-        SessionInputLeaseResponse, SessionInputRequest, SessionInputResponse,
-        SessionInspectRequest, SessionKillRequest, SessionListRequest, SessionListResponse,
-        SessionLogChunk, SessionLogStreamItem, SessionLogsEnd, SessionLogsRequest,
-        SessionPruneRequest, SessionPruneResponse, SessionRecord, SessionRemoveRequest,
-        SessionStartRequest, SessionStopRequest, SessionTerminalResizeRequest,
-        SessionTerminalResizeResponse, SessionWaitRequest, SurfaceCreateRequest,
-        SurfaceInspectRequest, SurfaceListRequest, SurfaceListResponse, SurfaceRecord,
-        KIND_AGENT_INSTALL_RESPONSE, KIND_APPROVAL_RECORD, KIND_CODEX_APP_SERVER_ATTACH_RESPONSE,
-        KIND_DAEMON_COMMAND_RESULT, KIND_FILESYSTEM_OPERATION_RESPONSE, KIND_POLICY_PACKAGE_RECORD,
-        KIND_POLICY_SET_RECORD, KIND_SESSION_ALIAS_RECORD, KIND_SESSION_ATTACH_RESPONSE,
-        KIND_SESSION_CREATE_RESPONSE, KIND_SESSION_INPUT_LEASE_RESPONSE,
-        KIND_SESSION_PRUNE_RESPONSE, KIND_SESSION_RECORD, KIND_SURFACE_RECORD,
+        PolicySetVerifyRequest, PolicyTestRequest, PolicyTestResponse, RpcErrorDetail,
+        RunnerCapabilityRecord, RunnerInspectRequest, RunnerListRequest, RunnerListResponse,
+        SessionAliasListRequest, SessionAliasListResponse, SessionAliasRecord,
+        SessionAliasRemoveRequest, SessionAliasSetRequest, SessionAttachRequest,
+        SessionAttachResponse, SessionCreateRequest, SessionCreateResponse, SessionEventRecord,
+        SessionEventStreamItem, SessionEventsEnd, SessionEventsRequest, SessionEvidenceEnd,
+        SessionEvidenceRecord, SessionEvidenceRequest, SessionEvidenceStreamItem,
+        SessionInputLeaseReleaseRequest, SessionInputLeaseRenewRequest, SessionInputLeaseResponse,
+        SessionInputRequest, SessionInputResponse, SessionInspectRequest, SessionKillRequest,
+        SessionListRequest, SessionListResponse, SessionLogChunk, SessionLogStreamItem,
+        SessionLogsEnd, SessionLogsRequest, SessionPruneRequest, SessionPruneResponse,
+        SessionRecord, SessionRemoveRequest, SessionStartRequest, SessionStopRequest,
+        SessionTerminalResizeRequest, SessionTerminalResizeResponse, SessionWaitRequest,
+        SurfaceCreateRequest, SurfaceInspectRequest, SurfaceListRequest, SurfaceListResponse,
+        SurfaceRecord,
     },
 };
 use futures_util::{stream, Stream, StreamExt};
 use prost::Message;
 use sha2::{Digest, Sha256};
-use tonic::{transport::Server, Request, Response, Status};
+use tonic::{transport::Server, Code, Request, Response, Status};
 
 use super::{
     evaluate_policy_test, parse_signal, runner_capability_record, DaemonControlState, PeerIdentity,
@@ -63,7 +59,7 @@ use super::{
 };
 use crate::{
     error::StateLockSnafu,
-    idempotency::{IdempotencyAction, MutationIntent, MutationResponse},
+    idempotency::{IdempotencyAction, MutationIntent, MutationResponse, MutationResponseType},
     DaemonError, Result,
 };
 use erebor_runtime_session::StreamKind;
@@ -135,7 +131,7 @@ impl DaemonGrpc {
         operation: &'static str,
         context: MutationContext,
         intent: MutationIntent,
-        response_kind: &'static str,
+        response_type: MutationResponseType,
     ) -> std::result::Result<(R, bool), Status> {
         let store = self
             .state
@@ -182,7 +178,7 @@ impl DaemonGrpc {
                 (response, true)
             }
         };
-        decode_mutation(response, response_kind).map(|response| (response, applied))
+        decode_mutation(response, response_type).map(|response| (response, applied))
     }
 
     fn stream<T: Send + 'static>(&self, permit: PerUidStreamPermit, items: Vec<T>) -> RpcStream<T> {
@@ -349,7 +345,7 @@ impl DaemonLifecycleService for DaemonGrpc {
                 configuration,
                 generation,
             },
-            KIND_DAEMON_COMMAND_RESULT,
+            MutationResponseType::DaemonCommandResult,
         )?;
         Ok(Response::new(response))
     }
@@ -376,7 +372,7 @@ impl DaemonLifecycleService for DaemonGrpc {
             "stop",
             context,
             MutationIntent::Stop,
-            KIND_DAEMON_COMMAND_RESULT,
+            MutationResponseType::DaemonCommandResult,
         )?;
         let _result = self.state.shutdown.send(true);
         Ok(Response::new(response))
@@ -414,7 +410,7 @@ impl AgentService for DaemonGrpc {
                 installed_at_unix_ms: crate::session_api::DaemonSessionApi::installation_time(),
                 artifact: verified.artifact().clone(),
             },
-            KIND_AGENT_INSTALL_RESPONSE,
+            MutationResponseType::AgentInstallResponse,
         )?;
         Ok(Response::new(response))
     }
@@ -451,7 +447,7 @@ impl AgentService for DaemonGrpc {
             MutationIntent::SessionCreate {
                 spec: Box::new(spec),
             },
-            KIND_SESSION_CREATE_RESPONSE,
+            MutationResponseType::SessionCreateResponse,
         )?;
         Ok(Response::new(response))
     }
@@ -503,7 +499,7 @@ impl SessionService for DaemonGrpc {
             "session-create",
             context,
             intent,
-            KIND_SESSION_CREATE_RESPONSE,
+            MutationResponseType::SessionCreateResponse,
         )?;
         Ok(Response::new(response))
     }
@@ -523,7 +519,7 @@ impl SessionService for DaemonGrpc {
                 uid: peer.uid,
                 session_id: request.session_id,
             },
-            KIND_SESSION_RECORD,
+            MutationResponseType::SessionRecord,
         )?;
         Ok(Response::new(response))
     }
@@ -544,7 +540,7 @@ impl SessionService for DaemonGrpc {
                 session_id: request.session_id,
                 grace_period_seconds: request.grace_period_seconds.max(1),
             },
-            KIND_SESSION_RECORD,
+            MutationResponseType::SessionRecord,
         )?;
         Ok(Response::new(response))
     }
@@ -566,7 +562,7 @@ impl SessionService for DaemonGrpc {
                 session_id: request.session_id,
                 signal,
             },
-            KIND_SESSION_RECORD,
+            MutationResponseType::SessionRecord,
         )?;
         Ok(Response::new(response))
     }
@@ -587,7 +583,7 @@ impl SessionService for DaemonGrpc {
                 session_id: request.session_id,
                 force: request.force,
             },
-            KIND_SESSION_RECORD,
+            MutationResponseType::SessionRecord,
         )?;
         Ok(Response::new(response))
     }
@@ -817,7 +813,7 @@ impl SessionService for DaemonGrpc {
                 request_input_lease: request.request_input_lease,
                 client_instance_id: request.client_instance_id,
             },
-            KIND_SESSION_ATTACH_RESPONSE,
+            MutationResponseType::SessionAttachResponse,
         )?;
         Ok(Response::new(response))
     }
@@ -839,7 +835,7 @@ impl SessionService for DaemonGrpc {
                 lease_id: request.input_lease_id,
                 client_instance_id: request.client_instance_id,
             },
-            KIND_SESSION_INPUT_LEASE_RESPONSE,
+            MutationResponseType::SessionInputLeaseResponse,
         )?;
         Ok(Response::new(response))
     }
@@ -861,7 +857,7 @@ impl SessionService for DaemonGrpc {
                 lease_id: request.input_lease_id,
                 client_instance_id: request.client_instance_id,
             },
-            KIND_SESSION_INPUT_LEASE_RESPONSE,
+            MutationResponseType::SessionInputLeaseResponse,
         )?;
         Ok(Response::new(response))
     }
@@ -935,7 +931,7 @@ impl SessionService for DaemonGrpc {
                 session_id: request.session_id,
                 client_instance_id: request.client_instance_id,
             },
-            KIND_CODEX_APP_SERVER_ATTACH_RESPONSE,
+            MutationResponseType::CodexAppServerAttachResponse,
         )?;
         Ok(Response::new(response))
     }
@@ -1007,7 +1003,7 @@ impl SessionService for DaemonGrpc {
                 terminal_before_unix_ms: request.terminal_before_unix_ms,
                 maximum_sessions: request.maximum_sessions,
             },
-            KIND_SESSION_PRUNE_RESPONSE,
+            MutationResponseType::SessionPruneResponse,
         )?;
         Ok(Response::new(response))
     }
@@ -1033,7 +1029,7 @@ impl SessionService for DaemonGrpc {
                 alias: request.alias,
                 session_id,
             },
-            KIND_SESSION_ALIAS_RECORD,
+            MutationResponseType::SessionAliasRecord,
         )?;
         Ok(Response::new(response))
     }
@@ -1053,7 +1049,7 @@ impl SessionService for DaemonGrpc {
                 uid: peer.uid,
                 alias: request.alias,
             },
-            KIND_SESSION_ALIAS_RECORD,
+            MutationResponseType::SessionAliasRecord,
         )?;
         Ok(Response::new(response))
     }
@@ -1115,7 +1111,7 @@ impl FilesystemService for DaemonGrpc {
                 name: request.name,
                 output_format: request.output_format,
             },
-            KIND_FILESYSTEM_OPERATION_RESPONSE,
+            MutationResponseType::FilesystemOperationResponse,
         )?;
         Ok(Response::new(response))
     }
@@ -1290,7 +1286,7 @@ impl AdministrationService for DaemonGrpc {
                 session_id: request.session_id,
                 grace_period_seconds: request.grace_period_seconds.max(1),
             },
-            KIND_SESSION_RECORD,
+            MutationResponseType::SessionRecord,
         )?;
         Ok(Response::new(response))
     }
@@ -1313,7 +1309,7 @@ impl AdministrationService for DaemonGrpc {
                 session_id: request.session_id,
                 signal,
             },
-            KIND_SESSION_RECORD,
+            MutationResponseType::SessionRecord,
         )?;
         Ok(Response::new(response))
     }
@@ -1336,7 +1332,7 @@ impl AdministrationService for DaemonGrpc {
                 session_id: request.session_id,
                 retention_hold: request.retention_hold,
             },
-            KIND_SESSION_RECORD,
+            MutationResponseType::SessionRecord,
         )?;
         Ok(Response::new(response))
     }
@@ -1404,7 +1400,7 @@ impl ApprovalService for DaemonGrpc {
                 owner_uid: request.owner_uid,
                 approval_id: request.approval_id,
             },
-            KIND_APPROVAL_RECORD,
+            MutationResponseType::ApprovalRecord,
         )?;
         Ok(Response::new(response))
     }
@@ -1431,7 +1427,7 @@ impl ApprovalService for DaemonGrpc {
                 approval_id: request.approval_id,
                 reason: request.reason,
             },
-            KIND_APPROVAL_RECORD,
+            MutationResponseType::ApprovalRecord,
         )?;
         Ok(Response::new(response))
     }
@@ -1499,7 +1495,7 @@ impl PolicyService for DaemonGrpc {
                 policy,
                 maximum_stored_bytes,
             },
-            KIND_POLICY_PACKAGE_RECORD,
+            MutationResponseType::PolicyPackageRecord,
         )?;
         Ok(Response::new(response))
     }
@@ -1560,7 +1556,7 @@ impl PolicyService for DaemonGrpc {
                 name: request.name,
                 package_names: request.package_names,
             },
-            KIND_POLICY_SET_RECORD,
+            MutationResponseType::PolicySetRecord,
         )?;
         Ok(Response::new(response))
     }
@@ -1624,7 +1620,7 @@ impl SurfaceService for DaemonGrpc {
                 name: request.name,
                 surface_type: request.surface_type,
             },
-            KIND_SURFACE_RECORD,
+            MutationResponseType::SurfaceRecord,
         )?;
         Ok(Response::new(response))
     }
@@ -1693,36 +1689,78 @@ impl RunnerService for DaemonGrpc {
 
 fn decode_mutation<T: Message + Default>(
     response: MutationResponse,
-    expected_kind: &'static str,
+    expected_type: MutationResponseType,
 ) -> std::result::Result<T, Status> {
-    if response.message_kind != expected_kind {
+    if response.response_type() != expected_type {
         return Err(Status::internal(
             "the durable mutation response type is invalid",
         ));
     }
-    T::decode(response.payload.as_slice())
+    T::decode(response.into_encoded_message().as_slice())
         .map_err(|_error| Status::internal("the durable mutation response is invalid"))
 }
 
 fn status(error: DaemonError) -> Status {
     let message = error.output_msg();
-    match error.status_code() {
-        StatusCode::Success => Status::ok(message),
-        StatusCode::Unsupported => Status::unimplemented(message),
+    let (code, reason_code, retryable) = match error.status_code() {
+        StatusCode::Success => (Code::Ok, "SUCCESS", false),
+        StatusCode::Unsupported => (Code::Unimplemented, "UNSUPPORTED", false),
         StatusCode::InvalidArguments | StatusCode::InvalidSyntax => {
-            Status::invalid_argument(message)
+            (Code::InvalidArgument, "INVALID_ARGUMENT", false)
         }
-        StatusCode::NotFound => Status::not_found(message),
-        StatusCode::AlreadyExists => Status::already_exists(message),
+        StatusCode::NotFound => (Code::NotFound, "NOT_FOUND", false),
+        StatusCode::AlreadyExists => (Code::AlreadyExists, "ALREADY_EXISTS", false),
         StatusCode::PolicyDenied | StatusCode::PermissionDenied => {
-            Status::permission_denied(message)
+            (Code::PermissionDenied, "PERMISSION_DENIED", false)
         }
-        StatusCode::Cancelled => Status::cancelled(message),
-        StatusCode::DeadlineExceeded => Status::deadline_exceeded(message),
-        StatusCode::IllegalState => Status::failed_precondition(message),
-        StatusCode::Unavailable | StatusCode::External => Status::unavailable(message),
+        StatusCode::Cancelled => (Code::Cancelled, "CANCELLED", true),
+        StatusCode::DeadlineExceeded => (Code::DeadlineExceeded, "DEADLINE_EXCEEDED", true),
+        StatusCode::IllegalState => (Code::FailedPrecondition, "FAILED_PRECONDITION", false),
+        StatusCode::Unavailable | StatusCode::External => (Code::Unavailable, "UNAVAILABLE", true),
         StatusCode::Unknown | StatusCode::Unexpected | StatusCode::Internal => {
-            Status::internal(message)
+            (Code::Internal, "INTERNAL", false)
         }
+    };
+    Status::with_details(
+        code,
+        message,
+        RpcErrorDetail {
+            reason_code: reason_code.to_owned(),
+            retryable,
+        }
+        .encode_to_vec()
+        .into(),
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use prost::Message as _;
+    use tonic::Code;
+
+    use super::{status, RpcErrorDetail};
+
+    #[test]
+    fn daemon_errors_have_stable_codes_and_safe_structured_details(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let status = status(
+            crate::error::InvalidRequestSnafu {
+                reason: String::from("request is invalid"),
+            }
+            .build(),
+        );
+        assert_eq!(status.code(), Code::InvalidArgument);
+        assert_eq!(
+            status.message(),
+            "daemon request is invalid: request is invalid"
+        );
+        assert_eq!(
+            RpcErrorDetail::decode(status.details())?,
+            RpcErrorDetail {
+                reason_code: String::from("INVALID_ARGUMENT"),
+                retryable: false,
+            }
+        );
+        Ok(())
     }
 }

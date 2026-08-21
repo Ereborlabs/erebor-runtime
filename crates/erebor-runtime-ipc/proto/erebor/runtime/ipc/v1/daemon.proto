@@ -643,9 +643,9 @@ message DaemonCommandResult {
   string message = 1;
 }
 
-message DaemonError {
-  uint32 status_code = 1;
-  string message = 2;
+message RpcErrorDetail {
+  string reason_code = 1;
+  bool retryable = 2;
 }
 
 message ApprovalListRequest {}
