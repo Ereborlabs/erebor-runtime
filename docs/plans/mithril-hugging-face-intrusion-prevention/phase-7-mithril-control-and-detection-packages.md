@@ -1,6 +1,6 @@
 # Phase 7: Mithril Control And Detection Packages
 
-Status: Proposed; depends on Phase 6.1 `Done`.
+Status: Proposed; depends on Phase 6.2 `Done`.
 
 Master: [Mithril Hugging Face Intrusion Prevention](./README.md)
 Design: [Validated readable architecture](./policy-and-protection-algorithm-architecture-readable.md)
@@ -9,7 +9,7 @@ Environment setup: [shared setup guide](./manual-testing/environment-setup.md)
 
 ## Purpose
 
-Extend the Phase 6.1 policy and evidence service with one durable graph and
+Extend the Phase 6.2 policy and evidence service with one durable graph and
 finding owner. Produce deterministic local incident findings, notifications,
 and provider-neutral authority records. Preserve the exact policy provenance
 and source coverage that limit every conclusion.
@@ -22,7 +22,7 @@ Chapters 8, 22-25, 30, 32, and 34-35; Appendices A.10 and A.15.
 
 ### D7.1 — Accepted-evidence index and merged coverage
 
-Consume only records committed by the Phase 6.1 `EvidenceIntakeOwner`. Build
+Consume only records committed by the Phase 6.2 `EvidenceIntakeOwner`. Build
 bounded indexes and merged source views without changing the accepted
 observation, intake cursor, or node coverage interval. An absent, delayed,
 gapped, or offline source never becomes a clean interval. Index rebuild after
@@ -64,7 +64,7 @@ Join each observation to its exact CRD source revision, signed candidate,
 target snapshot, node-bound generation, and activation acknowledgement when
 those records exist. Persist this join as
 `PolicyObservationProvenanceV1`. A missing or mixed rollout state limits the
-finding and negative claim. Graph and package code may read Phase 6.1 policy
+finding and negative claim. Graph and package code may read Phase 6.2 policy
 inventory but cannot change desired state, sign or distribute a candidate,
 update CRD status, or activate a node generation.
 

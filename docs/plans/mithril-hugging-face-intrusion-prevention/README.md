@@ -1,9 +1,9 @@
 # Mithril Hugging Face Intrusion Prevention Master Plan
 
-Status: Rewritten from the validated architecture on 2026-08-08 and amended
-for Control policy and evidence convergence on 2026-08-19. Proposed; this
-document does not authorize implementation until the user approves one phase
-by name.
+Status: Rewritten from the validated architecture on 2026-08-08, amended for
+Control policy and evidence convergence on 2026-08-19, and amended for gRPC
+service and IPC convergence on 2026-08-21. Proposed; this document does not
+authorize implementation until the user approves one phase by name.
 
 Design authority:
 
@@ -20,9 +20,16 @@ define implementation behavior.
 
 The 2026-08-19 architecture amendment is additive to completed local phases.
 Do not rewrite a historical phase result or change the frozen BPF ABI because
-of this plan. Phase 6.1 updates the affected exact-type closure and Control
-protocol goldens, proves compatibility with the final Phase 6 node contract,
-and records the amended architecture digest for Phase 6.1 and later work.
+of this plan. Phase 6.2 updates the affected exact-type closure and Control
+RPC and schema goldens, proves compatibility with the final Phase 6 node
+contract, and records the amended architecture digest for Phase 6.2 and later
+work.
+
+The 2026-08-21 amendment inserts Phase 6.1 before that work. Phase 6.1 removes
+the obsolete ptrace IPC constraint, replaces supported custom-framed IPC with
+typed gRPC services, and splits node-control operations by service family.
+It removes redundant transport versions and envelopes. It keeps domain
+generations, cursors, digests, and replay rules that gRPC does not replace.
 
 ## Goal And Release Boundary
 
@@ -117,7 +124,8 @@ The shared **Interceptor** is a component family, not another daemon:
 
 `mithril-control` is required, not postponed to the detection phase. Phase 1
 creates its service chassis and mutually authenticated gRPC node channel.
-Later phases add only the messages needed for policy delivery, evidence,
+Phase 6.1 splits that channel into typed operation-specific services. Later
+phases extend the owning service needed for policy delivery, evidence,
 findings, and response. This plan does not require a public API contract yet.
 
 The target policy and evidence data flow is:
@@ -148,20 +156,20 @@ computable local deny into allow.
 
 | Validated durable owner | First/full owning phase(s) |
 | --- | --- |
-| `TrustBundleOwner` | 1 bootstrap; 6.1 rotation/revocation/distribution |
+| `TrustBundleOwner` | 1 bootstrap; 6.2 rotation/revocation/distribution |
 | `AdministrativeApprovalOwner` | 4 approved administrative-exec transaction |
 | `AuthorizationProofOwner` | 2 foundations; 4, 7, and 10 owning authorization families |
 | `WorkloadBindingOwner` | 2 runtime roots; 8 Kubernetes admission/node floor |
 | `NativeSecurityStateOwner` | 2 identity; 4 enforcement; 9 response references |
-| `PolicyDesiredStateOwner` | 6.1 CRD source reconciliation |
-| `PolicyCompiler` | 3 compile/sign; 6.1 Control operation |
-| `PolicyRolloutOwner` | 6.1 target snapshots, distribution, and rollout inventory |
+| `PolicyDesiredStateOwner` | 6.2 CRD source reconciliation |
+| `PolicyCompiler` | 3 compile/sign; 6.2 Control operation |
+| `PolicyRolloutOwner` | 6.2 target snapshots, distribution, and rollout inventory |
 | `PolicyActivationOwner` | 3 candidate/readback; 4 activation; 6 recovery/retirement |
 | `KernelHostOwner` | 1 load/link/map/pin lease; 6 integrity/recovery |
 | `ObjectAndSocketStateOwner` | 3 models; 4-5 physical decisions; 6 recovery |
 | `CoverageHealthOwner` | 6 local source; 7-10 merged source views |
 | `LocalEvidenceOwner` | 6 canonical observation/WAL/upload |
-| `EvidenceIntakeOwner` | 6.1 durable Control append and contiguous acknowledgement |
+| `EvidenceIntakeOwner` | 6 durable append and acknowledgement; 6.2 production Control transaction and source cursor |
 | `GraphAndFindingOwner` | 7 local; 8 Kubernetes; 10 provider/artifact branches |
 | `NotificationRouter` | 7 |
 | `ResponseCoordinator` | 9 local/Kubernetes; 10 provider plans |
@@ -201,7 +209,8 @@ writer under a different type or process name.
 | 4 | Signed pre-effect exec/file/memory/IPC/device/privilege enforcement and bounded exceptions | Ch. 10-18, 20-21; A.11-A.14 |
 | 5 | Process-aware socket/network/DNS/final-flow enforcement and packet response floor | Ch. 18-19; A.13.4, A.14 |
 | 6 | Durable evidence, coverage intervals, WAL, generation/restart recovery, loss and owner-health truth | Ch. 9, 22, 31-33; A.3-A.7, A.15.1-A.15.2 |
-| 6.1 | Kubernetes policy desired state, Control reconciliation/signing/rollout, secure node delivery, and durable Control evidence intake | Ch. 5, 11-12, 22, 30, 32, 34-37; A.8.1, A.11, A.15.1 |
+| 6.1 | Typed gRPC services for all supported IPC, removal of the ptrace protocol exception, and node-control service separation | Ch. 5, 22, 30, 32-35; A.3-A.7, A.15.1 |
+| 6.2 | Kubernetes policy desired state, Control reconciliation/signing/rollout, secure node delivery, and durable Control evidence intake | Ch. 5, 11-12, 22, 30, 32, 34-37; A.8.1, A.11, A.15.1 |
 | 7 | Accepted-evidence indexes, deterministic graph/finding packages, policy provenance, notifications, and provider-neutral authority leases | Ch. 8, 22-25, 30, 32, 34-35; A.10, A.15 |
 | 8 | Kubernetes/runtime/audit multi-node causality and conservative purpose classification | Ch. 7-8, 23, 25, 30-31; A.9-A.10, A.15.3 |
 | 9 | Authorized local and distributed response with blast-radius disclosure and verified postconditions | Ch. 24-25, 32, 34; A.15.4-A.15.6 |
@@ -209,16 +218,17 @@ writer under a different type or process name.
 | 11 | Packaging, upgrade, platform qualification, performance, complete HF conformance, and signed release claims | Ch. 25, 30-33, 37; A.4-A.7; C |
 | 12 | Independent decisions/prototypes for deferred surfaces and optional upstream evidence adapters | Ch. 5, 7, 14, 21, 26, 35.1; A.13.6, A.16 |
 
-Phase order is strict through Phase 11, including Phase 6.1 between Phases 6
-and 7. Phase 12 allocation decisions may begin after Phase 0, but a physical
-evaluation must wait for the owning prerequisite named in Phase 12. Phase 12
-cannot satisfy a Phase 11 core gate.
+Phase order is strict through Phase 11, including Phases 6.1 and 6.2 between
+Phases 6 and 7. Phase 12 allocation decisions may begin after Phase 0, but a
+physical evaluation must wait for the owning prerequisite named in Phase 12.
+Phase 12 cannot satisfy a Phase 11 core gate.
 
 Phase 6 owns the node WAL, upload client, replay behavior, and protocol-facing
-acknowledgement cursor. Phase 6.1 owns the production Control transaction that
-makes an acknowledgement durable and the source cursor that Phase 7 may read.
-This boundary lets Phase 6 close without assigning graph or Control-store
-ownership to the node.
+acknowledgement cursor. Phase 6.1 moves that behavior to typed gRPC services
+without changing its durable meaning. Phase 6.2 owns the production Control
+transaction that makes an acknowledgement durable and the source cursor that
+Phase 7 may read. This boundary lets Phase 6 close without assigning graph or
+Control-store ownership to the node.
 
 ## Complete Design-To-Phase Coverage Ledger
 
@@ -228,14 +238,14 @@ the named phase file contains a matching deliverable and proof.
 | Architecture section or feature | Implementing phase(s) | Completion evidence |
 | --- | --- | --- |
 | Ch. 1-4 product, gap, claim/result vocabulary | 0, 11 | checked claim registry; release claims limited to proven boundaries |
-| Ch. 5 node/trust architecture, one owner, unchanged workloads, secure control | 0, 1, 6.1, 11 | exclusive pin lease; unchanged fixture; mTLS gRPC; CRD/RBAC boundary; root-compromise limits |
+| Ch. 5 node/trust architecture, one owner, unchanged workloads, secure control | 0, 1, 6.1, 6.2, 11 | exclusive pin lease; unchanged fixture; typed mTLS gRPC services; CRD/RBAC boundary; root-compromise limits |
 | Ch. 6 actor/task/process/thread/exec/native identity | 2 | fork/thread/vfork/non-leader-exec/PID-reuse fixtures |
 | Ch. 7 runtime-created roots, probes, lifecycle, admin exec, unmatched workloads | 2, 4, 8, 11 | stock-runtime matrix; restricted external role; one-use admin exception |
-| Ch. 8 authorization proof, intent, trust/time/replay | 0, 2, 6.1, 7, 10 | signed-envelope goldens; replay/mismatch/restart tests |
+| Ch. 8 authorization proof, intent, trust/time/replay | 0, 2, 6.1, 6.2, 7, 10 | typed-service peer binding; signed-envelope goldens; replay/mismatch/restart tests |
 | Ch. 9 exit, shutdown, reference retention | 2, 6 | exact cleanup/tombstone/reconciliation tests |
 | Ch. 10 invariants | 0 and every phase | invariant-to-test ledger cannot lose a row |
-| Ch. 11 readable policy, roles, effects, dispositions, exceptions | 0, 3, 4, 6.1 | CRD/offline-source canonical equality; parser/compiler goldens; bounded-use exception consumption |
-| Ch. 12 compiler, signatures, activation, rollback | 0, 3, 4, 6, 6.1 | deterministic bytes; source provenance; inactive readback; one CAS; retirement recovery |
+| Ch. 11 readable policy, roles, effects, dispositions, exceptions | 0, 3, 4, 6.2 | CRD/offline-source canonical equality; parser/compiler goldens; bounded-use exception consumption |
+| Ch. 12 compiler, signatures, activation, rollback | 0, 3, 4, 6, 6.2 | deterministic bytes; source provenance; inactive readback; one CAS; retirement recovery |
 | Ch. 13 one local decision and atomic state | 0, 2-5 | Rust/BPF lookup golden; task-first and contention tests |
 | Ch. 14 mechanism boundaries and deferred Seccomp | 0, 1, 3-5, 12 | hook/capability matrix; Seccomp remains absent unless Phase 12 gate passes |
 | Ch. 15 mounts, canonical oldest-mount path, exact objects | 0, 3, 4 | Meta bind-alias fixture; DIRTY topology races; object revalidation |
@@ -245,25 +255,25 @@ the named phase file contains a matching deliverable and proof.
 | Ch. 19 network/DNS/TLS limits | 3, 5, 7, 10 | socket lifetime, rewrite, DNS exfiltration, same-TLS honest-result tests |
 | Ch. 20 devices and derived authority | 0, 3, 4 | device/ioctl/derived-fd fixtures |
 | Ch. 21 privilege, self-protection, Landlock, deferred Seccomp | 0, 3, 4, 11, 12 | escape matrix; self-protection oracle; optional-layer records |
-| Ch. 22 evidence, coverage, proof quality, findings | 0, 6, 6.1, 7 | source epoch/gap tests; durable intake acknowledgement; deterministic replay |
+| Ch. 22 evidence, coverage, proof quality, findings | 0, 6, 6.1, 6.2, 7 | typed evidence service; source epoch/gap tests; durable intake acknowledgement; deterministic replay |
 | Ch. 23 cross-node/provider causality | 7, 8, 10 | one Control graph owner; registered edge contracts; fan-out/contradiction/shared-principal tests |
 | Ch. 24 response transaction and blast radius | 9, 10 | authorization, simulation, exact re-resolution, physical readback |
 | Ch. 25 complete HF proof package | 0, 3-11 | standing incident fixture grows in every phase; complete Phase 11 matrix |
 | Ch. 26 CI/CD model and honest tiers | 10, 12 | provider/artifact foundations in 10; named CI adapters remain Phase 12 allocations |
 | Ch. 27-29 Jailer/Meta/KubeArmor/Tetragon lessons | 0, 1-6 | pinned source dossier plus adopted-code provenance/test IDs |
-| Ch. 30 combined pipeline | 1-10, including 6.1 | CRD-to-node policy and node-to-Control evidence flow; end-to-end native and identical-probe examples |
+| Ch. 30 combined pipeline | 1-10, including 6.1 and 6.2 | typed node services; CRD-to-node policy and node-to-Control evidence flow; end-to-end native and identical-probe examples |
 | Ch. 31 acceptance | every phase, final 11 | exact fixture cases and physical oracles |
-| Ch. 32 failure/recovery | 1, 2, 6, 6.1, 9, 11 | daemon/reader/control/API-watch/intake/link/map/restart fault matrix |
-| Ch. 33 boundedness/performance | 0, 1-6, 11 | per-hook distributions, N/N+1 maps, evidence-preserving benchmarks |
-| Ch. 34 durable owners | 0, 1, 6.1, 7, 9, 10 | one writer per source, rollout, intake, graph, and actuator state family; no duplicate daemon/loader |
-| Ch. 35 delivery/unallocated surfaces | this master, 6.1, 7, 12 | Control boundary, coverage linter, and deferred-surface ledger |
-| Ch. 36 approval defaults | 0, 6.1, owning phase | recorded source, deletion, rollout, and security decisions before ABI/policy changes |
-| Ch. 37 completion | 6.1, 11 | policy convergence proof and digest-bound qualification bundle with signed limited claim |
+| Ch. 32 failure/recovery | 1, 2, 6, 6.1, 6.2, 9, 11 | transport/daemon/reader/control/API-watch/intake/link/map/restart fault matrix |
+| Ch. 33 boundedness/performance | 0, 1-6, 6.1, 11 | per-hook distributions, gRPC flow-control bounds, N/N+1 maps, evidence-preserving benchmarks |
+| Ch. 34 durable owners | 0, 1, 6.2, 7, 9, 10 | one writer per source, rollout, intake, graph, and actuator state family; no duplicate daemon/loader |
+| Ch. 35 delivery/unallocated surfaces | this master, 6.1, 6.2, 7, 12 | typed service boundary, Control boundary, coverage linter, and deferred-surface ledger |
+| Ch. 36 approval defaults | 0, 6.2, owning phase | recorded source, deletion, rollout, and security decisions before ABI/policy changes |
+| Ch. 37 completion | 6.2, 11 | policy convergence proof and digest-bound qualification bundle with signed limited claim |
 | A.1-A.7 foundations/qualification records | 0, 6, 11 | closure, bundles, result records, release envelope |
-| A.8-A.12 identity/policy/kernel ABI | 0, 2-4, 6.1 | generated types, CRD source revisions, rollout records, goldens, lifecycle and lookup fixtures |
+| A.8-A.12 identity/policy/kernel ABI | 0, 2-4, 6.2 | generated types, CRD source revisions, rollout records, goldens, lifecycle and lookup fixtures |
 | A.13 Linux effects | 0, 3-5, 11, optional 12 | hook matrix and per-effect physical oracle |
 | A.14 native authority/IPC | 2-4 | exact state and relationship fixtures |
-| A.15 evidence/graph/response | 6, 6.1, 7-10 | durable intake, deterministic artifacts, and physical response results |
+| A.15 evidence/graph/response | 6, 6.1, 6.2, 7-10 | typed evidence service, durable intake, deterministic artifacts, and physical response results |
 | A.16 CI/artifact/provider authority | 10, optional 12 | provider/artifact contracts; separately allocated CI adapters |
 | Appendix B rejected designs | 0 and review in every phase | forbidden-contract lint and no historical authority |
 | Appendix C fixtures/completion | every phase, final 11 | exact registry equality and criterion mapping |
@@ -305,8 +315,8 @@ required local, provider, outside-authority, or honest-limit branches.
 | same TLS endpoint | 5 local result; 10 provider result |
 | several logical jobs in one process | 2 exact process limit; 7/9 finding and blast-radius disclosure |
 | learning is review-only | 3 candidate generation; 7 finding workflow |
-| production policy source and deletion | 6.1 CRD reconciliation, signed retirement, and last-valid-generation retention |
-| partial policy rollout | 6.1 exact per-node inventory; 7 finding and claim limits; 11 scale/failover qualification |
+| production policy source and deletion | 6.2 CRD reconciliation, signed retirement, and last-valid-generation retention |
+| partial policy rollout | 6.2 exact per-node inventory; 7 finding and claim limits; 11 scale/failover qualification |
 | upstream code reuse/license | 0 dossier; each consuming phase cites it |
 | real signed intent only | 0 schema; 2, 4, 7, and 10 owning issuers/consumers |
 | disposition/stage separation | 0 schema; 3 simulation; 4-5 local; 10 provider |
@@ -520,12 +530,13 @@ HF-GRAN-CI-BUILDRS-001
 SECCOMP-QUAL-001
 ```
 
-Phases 3, 6.1, 7, and 11 have no new first-owned Appendix C IDs: Phase 3 must
-prove the observation/simulation form of the exact Phase 4/5 IDs, Phase 6.1
-must prove its named reconciliation, rollout, and intake cases, Phase 7 must
-prove the named detection packages using already-owned inputs, and Phase 11
-must prove registry equality and every criterion active in the signed claim.
-A phase-owned test that is not an Appendix C fixture remains required by its
+Phases 3, 6.1, 6.2, 7, and 11 have no new first-owned Appendix C IDs. Phase 3
+must prove the observation/simulation form of the exact Phase 4/5 IDs. Phase
+6.1 must prove its named gRPC service and cutover cases. Phase 6.2 must
+prove its named reconciliation, rollout, and intake cases. Phase 7 must prove
+the named detection packages using already-owned inputs. Phase 11 must prove
+registry equality and every criterion active in the signed claim. A
+phase-owned test that is not an Appendix C fixture remains required by its
 phase but cannot silently expand the closed registry.
 
 No phase may rename, add, or remove a fixture without updating Appendix C,
@@ -541,7 +552,8 @@ the registry artifact, criterion mapping, and this allocation in one review.
 | mount/path/object ambiguity or bound overflow | 3-4 | strict unresolved result; never cached/fallback allow |
 | socket peer/rewrite/final-flow ambiguity | 5 | configured unmatched/deny result and exact claim limit |
 | ring/reader/WAL/map/link/pin/restart failure | 6 | physical decision preserved where live; coverage gap/claim closure |
-| CRD watch, compile, rollout, Control intake, or acknowledgement failure | 6.1 | last valid local generation remains; mixed state and missing durable acknowledgement stay explicit |
+| gRPC peer, method, stream, bound, cancellation, or cutover failure | 6.1 | no fallback dispatch or authorization change; durable state advances only through its domain rule |
+| CRD watch, compile, rollout, Control intake, or acknowledgement failure | 6.2 | last valid local generation remains; mixed state and missing durable acknowledgement stay explicit |
 | Control, audit, notification, or provider source outage | 6-10 | local generation remains authoritative; remote conclusion/action becomes unavailable or weaker |
 | stale/reused/wider response target | 9-10 | no actuation until exact re-resolution and blast-radius approval |
 | unsupported platform, upgrade, or performance/capacity failure | 11 | signed claim omitted or narrowed for that exact manifest |
@@ -556,7 +568,8 @@ the registry artifact, criterion mapping, and this allocation in one review.
 - [Phase 4: Signed Local Pre-Effect Enforcement](./phase-4-signed-local-pre-effect-enforcement.md)
 - [Phase 5: Process-Aware Network Plane](./phase-5-process-aware-network-plane.md)
 - [Phase 6: Durable Evidence, Coverage, And Recovery](./phase-6-durable-evidence-coverage-and-recovery.md)
-- [Phase 6.1: Control Policy And Evidence Convergence](./phase-6-1-control-policy-and-evidence-convergence.md)
+- [Phase 6.1: gRPC Service And IPC Convergence](./phase-6-1-grpc-service-and-ipc-convergence.md)
+- [Phase 6.2: Control Policy And Evidence Convergence](./phase-6-2-control-policy-and-evidence-convergence.md)
 - [Phase 7: Mithril Control And Detection Packages](./phase-7-mithril-control-and-detection-packages.md)
 - [Phase 8: Kubernetes Distributed Causality](./phase-8-kubernetes-distributed-causality.md)
 - [Phase 9: Local And Distributed Response](./phase-9-local-and-distributed-response.md)

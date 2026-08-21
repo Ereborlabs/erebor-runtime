@@ -61,7 +61,8 @@ Phase 11 result must contain one row for every exact active ID.
 | Phase 4 | [local pre-effect enforcement](./phase-4-manual-acceptance.md) |
 | Phase 5 | [process-aware network plane](./phase-5-manual-acceptance.md) |
 | Phase 6 | [evidence, coverage, and recovery](./phase-6-manual-acceptance.md) |
-| Phase 6.1 | [Control policy and evidence convergence](./phase-6-1-manual-acceptance.md) |
+| Phase 6.1 | [gRPC service and IPC convergence](./phase-6-1-manual-acceptance.md) |
+| Phase 6.2 | [Control policy and evidence convergence](./phase-6-2-manual-acceptance.md) |
 | Phase 7 | [Control and detection packages](./phase-7-manual-acceptance.md) |
 | Phase 8 | [Kubernetes distributed causality](./phase-8-manual-acceptance.md) |
 | Phase 9 | [local and distributed response](./phase-9-manual-acceptance.md) |

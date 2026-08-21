@@ -24,7 +24,7 @@ Chapters 7-8, 23, 25, and 30-31; Appendices A.9-A.10 and A.15.3.
 Ingest authenticated audit, object history/watch, scheduler binding, admission,
 runtime/CRI, and node-binding facts with source-specific IDs, actors, resource
 UID/resourceVersion, request/result, timestamps, gaps, and proof quality. Do not
-invent probe/lifecycle purpose missing from stock CRI. Extend the Phase 6.1
+invent probe/lifecycle purpose missing from stock CRI. Extend the Phase 6.2
 Kubernetes client and source-coverage family. Do not create another policy
 desired-state owner, rollout owner, graph owner, or uncoordinated object-watch
 cursor.

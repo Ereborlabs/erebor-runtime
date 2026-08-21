@@ -8,7 +8,7 @@ an isolated notification sink
 
 ## Outcome
 
-Prove Control consumes immutable Phase 6.1 evidence, deterministically builds
+Prove Control consumes immutable Phase 6.2 evidence, deterministically builds
 local graph/finding revisions, preserves policy provenance, delivers
 notifications, and records authority without gaining policy or local physical
 authority.
@@ -23,7 +23,7 @@ notification, graph lifecycle, tenancy, and authority-record suites.
 
 ## Procedure
 
-1. Select one complete Phase 6 evidence window that Phase 6.1 durably accepted.
+1. Select one complete Phase 6 evidence window that Phase 6.2 durably accepted.
    Record its intake cursor, digest, coverage intervals, source policy revision,
    signed candidate, target snapshot, and node activation acknowledgement.
 2. Rebuild the Phase 7 indexes and replay the same accepted records in every
@@ -82,4 +82,4 @@ isolation, and zero graph-to-policy or Control-to-node authority bypass.
 - Notification success/failure cannot change the finding or local policy.
 - Shared ServiceAccount/principal plus time is not an exact task edge.
 - A CRD status or rollout summary is not evidence that a node activated a
-  generation. Use the exact Phase 6.1 acknowledgement and node readback.
+  generation. Use the exact Phase 6.2 acknowledgement and node readback.

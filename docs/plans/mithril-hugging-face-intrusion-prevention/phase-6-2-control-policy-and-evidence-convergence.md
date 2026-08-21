@@ -1,12 +1,12 @@
-# Phase 6.1: Control Policy And Evidence Convergence
+# Phase 6.2: Control Policy And Evidence Convergence
 
-Status: Proposed; depends on Phase 6 `Done`.
+Status: Proposed; depends on Phase 6.1 `Done`.
 
 Master: [Mithril Hugging Face Intrusion Prevention](./README.md)
 
 Design: [Validated readable architecture](./policy-and-protection-algorithm-architecture-readable.md)
 
-Manual acceptance: [Phase 6.1 runbook](./manual-testing/phase-6-1-manual-acceptance.md)
+Manual acceptance: [Phase 6.2 runbook](./manual-testing/phase-6-2-manual-acceptance.md)
 
 Environment setup: [shared setup guide](./manual-testing/environment-setup.md)
 
@@ -14,10 +14,11 @@ Environment setup: [shared setup guide](./manual-testing/environment-setup.md)
 
 Make Kubernetes custom resources the production desired-state source for
 Mithril policy. Make `mithril-control` reconcile that source into immutable
-signed candidates, distribute each candidate to the selected nodes, and
-durably accept Phase 6 evidence. Keep node activation and physical enforcement
-inside `mithril-node`. Give Phase 7 one stable evidence and policy-provenance
-foundation on which it can build the cross-node graph.
+signed candidates, distribute each candidate to the selected nodes, and move
+the existing Phase 6 evidence intake into the production Control transaction.
+Keep node activation and physical enforcement inside `mithril-node`. Give
+Phase 7 one stable evidence and policy-provenance foundation on which it can
+build the cross-node graph.
 
 ## Scope And Design Coverage
 
@@ -32,12 +33,12 @@ WorkloadProtectionProfile CRD desired revision
   -> closed PolicyDocumentV1
   -> PolicyCompiler validation, simulation, approval, and signature
   -> immutable rollout snapshot and signed node candidate
-  -> mTLS Control-to-node delivery
+  -> typed mTLS NodePolicy delivery
   -> PolicyActivationOwner stage, readback, probes, and pointer CAS
   -> authenticated node acknowledgement and Control rollout inventory
 
 Phase 6 node WAL and coverage
-  -> mTLS evidence batch
+  -> typed mTLS NodeEvidence and NodeCoverage RPCs
   -> EvidenceIntakeOwner durable append and contiguous acknowledgement
   -> immutable accepted evidence for Phase 7 graph replay
 ```
@@ -49,7 +50,7 @@ active-generation pointer.
 
 ## Deliverables
 
-### D6.1.1 — Closed Kubernetes policy API
+### D6.2.1 — Closed Kubernetes policy API
 
 Add the namespaced `WorkloadProtectionProfile.mithril.erebor.dev` CRD with a
 served `v1alpha1` version, a structural OpenAPI schema, size and count bounds,
@@ -82,9 +83,9 @@ Treat the CRD, source-revision, rollout, candidate, acknowledgement, evidence
 batch, and intake-receipt types as an additive architecture amendment. Update
 the exact-type closure and canonical goldens, and rerun the affected Phase 0
 schema checks. Do not change the frozen BPF ABI or rewrite a historical phase
-result. Phase 6.1 and later results bind the amended architecture digest.
+result. Phase 6.2 and later results bind the amended architecture digest.
 
-### D6.1.2 — Desired-state reconciliation and signing
+### D6.2.2 — Desired-state reconciliation and signing
 
 Add one `PolicyDesiredStateOwner` to `mithril-control`. It alone may accept a
 CRD revision and change the desired policy revision. It must use list/watch,
@@ -120,7 +121,7 @@ candidate signed by a new key. Revocation and key rotation cannot make an old
 or partially delivered candidate current. Keep the policy-issuer sequence and
 the target-bound candidate-distribution sequence as separate replay domains.
 
-### D6.1.3 — Immutable targeting and rollout ownership
+### D6.2.3 — Immutable targeting and rollout ownership
 
 Add one `PolicyRolloutOwner` to `mithril-control`. It alone may create the
 immutable target snapshot, assign the desired signed candidate to a node, and
@@ -135,10 +136,11 @@ Control reports `PENDING`, `DELIVERED`, `STAGED`, `ACTIVE`, `REJECTED`,
 conditions. A mixed-generation rollout is visible and limits policy and
 finding claims. It never appears as globally active.
 
-### D6.1.4 — Secure node policy protocol
+### D6.2.4 — Secure node policy service
 
-Extend the Phase 1 mTLS protocol with bounded, versioned messages for candidate
-delivery, inventory, acknowledgement, rejection, retirement, and reconnect.
+Add a `NodePolicy` service through the Phase 6.1 generated contract and
+transport owner. Define bounded typed RPCs for candidate delivery, inventory,
+acknowledgement, rejection, retirement, and reconnect.
 Control sends immutable signed candidates together with the referenced signed
 profile, registry, and static compilation artifacts. Use content-addressed,
 bounded, resumable chunks when the complete bundle exceeds one message. A node
@@ -156,15 +158,17 @@ node-local profile-generation reference, activation state, readback digest,
 and rejection reason. A delayed acknowledgement from an old boot, target
 snapshot, or candidate cannot advance the current rollout.
 
-### D6.1.5 — Durable Control evidence intake
+### D6.2.5 — Durable Control evidence intake
 
-Consume the final Phase 6 WAL/upload protocol as the node-side source
-contract. If Phase 6 closes with an earlier negotiated wire version, add a
-bounded compatibility adapter or version negotiation in Control. Do not
-invalidate Phase 6 source identities, WAL records, or accepted test results.
+Consume the final Phase 6 WAL/upload contract through the typed Phase 6.1
+`NodeEvidence` and `NodeCoverage` services. Do not add an envelope, transport
+version switch, or compatibility dispatcher. Do not invalidate Phase 6 source
+identities, WAL records, or accepted test results.
 
-Add one `EvidenceIntakeOwner` to `mithril-control`. It authenticates bounded
-Phase 6 evidence batches and durably appends immutable
+Extend the one Phase 6 `EvidenceIntakeOwner` in `mithril-control`. Keep its
+durable acknowledgement contract and move its accepted records and cursor
+into the versioned transactional Control store. It authenticates bounded Phase
+6 evidence batches and durably appends immutable
 `ObservationEnvelopeV1` and `CoverageIntervalV1` records by tenant, node,
 boot, label epoch, source, source epoch, and sequence. A source epoch cannot
 cross a label-epoch change. It rejects conflicting duplicates, invalid digests,
@@ -184,7 +188,7 @@ acknowledged record until Phase 7 installs and proves its declared retention,
 reference, and consumer-watermark rules. An intake acknowledgement cannot make
 Control's sole durable copy immediately eligible for deletion.
 
-### D6.1.6 — Deletion, restart, and outage behavior
+### D6.2.6 — Deletion, restart, and outage behavior
 
 CRD deletion enters `RETIRING`. It does not tell a node to erase its active
 generation. Control produces a signed monotonic retirement candidate that
@@ -210,7 +214,7 @@ The initial implementation has one logical writer for each new durable owner.
 Phase 11 qualifies leader election, failover, backup, restore, and upgrade for
 the advertised production mode.
 
-### D6.1.7 — Status, tenancy, and operational limits
+### D6.2.7 — Status, tenancy, and operational limits
 
 Write bounded CRD status with `observedGeneration`, source and candidate
 digests, aggregate rollout counts, and `Accepted`, `Compiled`, `Progressing`,
@@ -228,7 +232,7 @@ acknowledgements, evidence, and status updates. Expose queue, storage, watch,
 compile, rollout, target, node, and evidence-cursor health without policy
 source, evidence, or secret payloads in logs or metrics.
 
-### D6.1.8 — End-to-end convergence proof
+### D6.2.8 — End-to-end convergence proof
 
 Create, update, roll back, delete, and recreate one profile while two selected
 nodes disconnect, reconnect, restart, and reject selected candidates. Prove
@@ -272,7 +276,7 @@ evidence. No graph or finding is created in this phase.
   restart, and WAL truncation tests.
 - CRD status projection, bounded inventory, tenant isolation, secret
   filtering, and status-is-not-authority tests.
-- Phase 6.1 owns no new Appendix C fixture ID. These named phase tests remain
+- Phase 6.2 owns no new Appendix C fixture ID. These named phase tests remain
   mandatory and Phase 11 must run them for each advertised Kubernetes mode.
 
 ## Acceptance

@@ -5,6 +5,12 @@ to be revisited. Phase 3 is in progress. Phase 4 implementation was recovered,
 but its acceptance evidence and host-lab changes were lost; it is therefore
 **not accepted**. Phase 5 and later are planned work.
 
+Transport amendment: the proposed
+[gRPC service and IPC convergence phase](../mithril-hugging-face-intrusion-prevention/phase-6-1-grpc-service-and-ipc-convergence.md)
+supersedes this plan's custom-frame direction for future work. Completed phase
+results remain historical evidence. The amendment preserves the separate
+daemon-control, Runtime guard, hook, and owner boundaries defined here.
+
 Parent plan: [Erebor Runtime development plan](../../development-plan.md)
 
 ## Recovery Authority
@@ -122,7 +128,7 @@ upon. This table is grounding, not an acceptance claim.
 
 | Responsibility | Current owner(s) | Required direction |
 | --- | --- | --- |
-| Framed typed IPC | `erebor-runtime-ipc` | Keep bounded frame and per-service message-family separation. |
+| Typed gRPC IPC | `erebor-runtime-ipc` | Replace the custom frame with bounded typed services and preserve per-service authorization and ownership. |
 | Client/daemon boundary | `erebor-runtime-client`, `erebor-runtime-daemon/src/control.rs` | Keep client wiring thin; daemon owns mutations and streams. |
 | Admission and local objects | `erebor-runtime-daemon/src/session_api.rs`, `session_api/admission.rs`, `local_store.rs` | Finish only the Phase 3/4 local identities and revalidation required by their plans. |
 | Generic adapter | `erebor-runtime-session/src/agents/generic.rs` | Retain one compiled `generic-process-v1` adapter; no plugin loader. |

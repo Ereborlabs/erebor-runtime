@@ -1,17 +1,25 @@
 # Mithril: Linux-Native Prevention, Evidence, And Verified Response
 
 **Status: VALIDATED DESIGN AUTHORITY — 2026-08-08; CONTROL POLICY AND EVIDENCE
-AMENDMENT — 2026-08-19.** This is the sole normative Mithril architecture for
-implementation planning. Implementation still requires allocation and
-approval through the master plan and one named phase. Historical architecture
-text may explain rejected designs, but cannot override this file.
+AMENDMENT — 2026-08-19; gRPC SERVICE AND IPC AMENDMENT — 2026-08-21.** This is
+the sole normative Mithril architecture for implementation planning.
+Implementation still requires allocation and approval through the master plan
+and one named phase. Historical architecture text may explain rejected
+designs, but cannot override this file.
 
 The 2026-08-19 amendment adds Control-plane source, rollout, and durable-intake
 contracts. It does not change the frozen local BPF decision ABI. Historical
-phase results remain bound to their recorded architecture digest. Phase 6.1
-must update the affected exact-type closure and Control protocol goldens, prove
-compatibility with the completed Phase 6 node contract, and bind its result and
-later results to this amended document.
+phase results remain bound to their recorded architecture digest. Phase 6.2
+must update the affected exact-type closure and Control RPC and schema goldens,
+prove compatibility with the completed Phase 6 node contract, and bind its
+result and later results to this amended document.
+
+The 2026-08-21 amendment replaces supported custom-framed IPC and the
+multiplexed node-control stream with typed gRPC services. It removes generic
+transport versions, message kinds, payload envelopes, and correlation fields.
+It does not remove domain generations, cursors, digests, request IDs, boot
+epochs, or replay rules. Local gRPC retains Unix peer-credential and cgroup
+authorization. Remote node gRPC retains mTLS identity binding.
 
 Status: proposed architecture. This document does not authorize an
 implementation phase. The
@@ -4886,6 +4894,16 @@ schema, enum, fixture, and golden bytes freeze. “Freeze first and discover the
 real hook in Phase 3” is forbidden. A surface that has not passed the prototype
 gate remains `UNALLOCATED` or `UNSUPPORTED` and is absent from the frozen claim.
 
+Supported userspace IPC uses typed gRPC methods. Each product boundary keeps
+one versioned Protobuf API package and can declare multiple typed services.
+Unary and streaming shapes follow the domain flow. A generic `Execute`,
+message-kind dispatcher, or payload union cannot replace typed service
+routing. Local services use Unix sockets and authorize the `SO_PEERCRED`
+identity carried in request extensions. Node-control services use mTLS and
+separate typed streams when Control must send work over a node-initiated
+connection. A gRPC stream does not replace a durable cursor or anti-replay
+generation.
+
 | Phase | Product slice and required exit |
 | --- | --- |
 | 0 | Inventory every allocated surface and run hostile feasibility prototypes against its selected stock hooks and integrations first. Record real fields, helper availability, ordering, failure behavior, installation boundary, and unsupported paths. Then close every active type in `ExactTypeClosureRecordV1` and freeze only the proven Rust/BPF ABI, source and compiled schemas, capability/performance records, source-evidence registry, fixture registry, result words, and golden bytes. |
@@ -4895,8 +4913,9 @@ gate remains `UNALLOCATED` or `UNSUPPORTED` and is absent from the frozen claim.
 | 4 | Enforce signed immutable exec/file/device/privilege policy, entry miss behavior, exact decision precedence, IPC relationships, optional descriptor-passing evidence, and local deny/reject semantics. |
 | 5 | Enforce role-aware socket lifecycle, local peer relationships, final destination, DNS/IP floor, packet and established-flow fence, and shared-socket blast radius. |
 | 6 | Complete source sequences, WAL, coverage intervals, immutable generation recovery, link/map/pin health, restart/reuse truth, and sole-gatherer failure. |
-| 6.1 | Add the production `WorkloadProtectionProfile` CRD, Control desired-state reconciliation, compile/sign/target/distribution, exact node rollout inventory, and durable Control evidence intake. Keep node activation and graph ownership separate. |
-| 7 | Extend committed Phase 6.1 evidence and policy provenance into the one Control graph owner. Implement `HF-PROC-001`, `HF-DW-001`, authority behavior, deterministic package replay, notification routing, and provider-neutral leases. |
+| 6.1 | Replace supported custom-framed IPC with typed gRPC services, remove the ptrace protocol exception, split node-control operations by service family, and prove peer identity, bounds, cancellation, reconnect, and durable cursor behavior. |
+| 6.2 | Add the production `WorkloadProtectionProfile` CRD, Control desired-state reconciliation, compile/sign/target/distribution, exact node rollout inventory, and durable Control evidence intake. Keep node activation and graph ownership separate. |
+| 7 | Extend committed Phase 6.2 evidence and policy provenance into the one Control graph owner. Implement `HF-PROC-001`, `HF-DW-001`, authority behavior, deterministic package replay, notification routing, and provider-neutral leases. |
 | 8 | Join Kubernetes audit/object/runtime evidence, build typed multi-node graph, and prove fan-out/reuse/contradiction behavior. |
 | 9 | Implement response roots, cgroup/socket actions, explicit blast-radius approval, replacement-controller watch, readback, and verified postconditions. |
 | 10 | Add separately qualified mesh, AWS, connector, artifact, GitHub evidence/lease/response packages. Each adapter proves identity limits and one typed actuator. |
@@ -4912,14 +4931,15 @@ listed proof.
 | Contract | First schema / physical phase | Proposed owner and code family | Concrete exit proof |
 | --- | --- | --- | --- |
 | Shared Rust/BPF ABI, exact-type closure, closed enums, map/link manifest, capability and source registries, golden bytes | 0 / 1 | `erebor-linux-sensor-abi`; generated C header + Rust types; `erebor-linux-sensor-host::KernelHostOwner`; Phase 0 schema checker | Every active `*V1` name is exact or an exact alias; Rust/C byte equality; second loader cannot acquire pin-root lease; failed attach is `UNSUPPORTED`. |
-| Offline policy YAML, Kubernetes CRD desired state, signed compiled artifact, rollout, rollback, dispositions | 0 / 4 / 6.1 | `mithril-control::policy_schema`, `PolicyDesiredStateOwner`, `PolicyCompiler`, `PolicyRolloutOwner`; node `PolicyActivationOwner` | `CFG-V1-GOLDEN-002`, CRD/offline canonical equality, duplicate/unknown rejection, relist/restart, stale acknowledgement, partial rollout, rollback/replay, inactive readback, allow/deny probes, one pointer CAS. |
+| Typed local and node-control gRPC services | 1 / 6.1 | `erebor-runtime-ipc` generated local services; `mithril-control` generated mTLS node services; existing Runtime, node, and Control domain owners | Descriptor closure; Unix peer and mTLS identity rejection; no custom frame, generic envelope, ptrace exception, fallback listener, false durable acknowledgement, or owner change. |
+| Offline policy YAML, Kubernetes CRD desired state, signed compiled artifact, rollout, rollback, dispositions | 0 / 4 / 6.2 | `mithril-control::policy_schema`, `PolicyDesiredStateOwner`, `PolicyCompiler`, `PolicyRolloutOwner`; node `PolicyActivationOwner` | `CFG-V1-GOLDEN-002`, CRD/offline canonical equality, duplicate/unknown rejection, relist/restart, stale acknowledgement, partial rollout, rollback/replay, inactive readback, allow/deny probes, one pointer CAS. |
 | Fixture/family/claim/qualification schemas | 0 / 11 | `mithril-e2e::qualification_schema` and `QualificationOwner` | `FIXTURE-REGISTRY-COMPLETE-001`; digest splice, missing negative control, degraded-PASS, and wrong platform all reject. |
 | Task/process/exec identity and native inheritance | 0 / 2 | `mithril-node::identity::NativeSecurityStateOwner`; owned `lifecycle.bpf.c`, `exec.bpf.c` | Fork-without-exec label before token open; moved-task/non-leader exec/PID reuse/ref cleanup pass. |
 | Process/native-state/set/mm state | 0 / 2-4 | Same `NativeSecurityStateOwner`; kernel maps hold native-family restrictions, while `KernelHostOwner` only owns their lifecycle | Thread races cannot recover authority; map N+1 fails closed; Rust/BPF decision bytes agree; partial VMA snapshot never relaxes. |
 | Runtime roots and cgroup binding | 0 / 1-4; platform claim 11 | `mithril-node::identity::WorkloadBindingOwner`; configured stock adapter only forwards documented facts | Identical application-child/probe/admin/direct-runtime commands: native child keeps lineage; indistinguishable external roots get the same restricted role. The approved administrative exception is stronger only through the configured short-lived one-use next-match slot, with the rare race explicitly accepted. Unresolved protected effects deny. No general command-based purpose. |
 | File, descriptor, mapping, IPC, process-control and persistent object classification | 0 / observe 3, deny 4 | `mithril-node::effect`; direct actor transitions requested from `NativeSecurityStateOwner` | Symlink/bind/proc-fd/rotation/mmap/fd-pass/io_uring/persistent volume either allow, alert, deny, or return exact unsupported. |
 | Socket identity, local peer relationship, destination, packet fence | 0 / observe 3, deny 5 | `mithril-node::effect::network` | Broad-created socket passed to a narrow actor cannot restore egress; loopback/Pod-IP/Unix communication uses the resolved peer relationship; established-flow oracle states blast radius. |
-| Source sequence, coverage, WAL, restart reconstruction, durable Control intake | 0 / 6 / 6.1 | `mithril-node::evidence::{CoverageHealthOwner,LocalEvidenceOwner}`; `mithril-control::intake::EvidenceIntakeOwner` | Ring pressure preserves deny but gaps absence claim; restart changes epoch and reconciles live tasks/sockets/claims before admission; storage failure withholds contiguous acknowledgement and node WAL truncation. |
+| Source sequence, coverage, WAL, restart reconstruction, durable Control intake | 0 / 6 / 6.1 / 6.2 | `mithril-node::evidence::{CoverageHealthOwner,LocalEvidenceOwner}`; `mithril-control::intake::EvidenceIntakeOwner` | Typed evidence RPC preserves the Phase 6 cursor; ring pressure preserves deny but gaps absence claim; restart changes epoch and reconciles live tasks/sockets/claims before admission; storage failure withholds contiguous acknowledgement and node WAL truncation. |
 | Local and distributed detection graph | 0 / 7-8, provider 10 | `mithril-control::graph`, `mithril-control::detections` | Node-A process to node-B root uses audit/object/binding edges; shared credential plus time remains contextual. |
 | Notification delivery | 0 / 7 | `mithril-control::notifications::NotificationRouter` | Secret fields reject; retry/dedupe do not duplicate finding or response; sink outage never relaxes enforcement. |
 | Local/Kubernetes/provider response | 0 / 9-10 | `mithril-control::response::ResponseCoordinator`; authenticated node actuator; one provider actuator per capability | Stale PID/object UID denies; any wider cgroup/socket/workload effect requires explicit blast-radius approval; readback plus healthy watch is required for verified response. |
@@ -8607,7 +8627,7 @@ CBOR, every registry payload/digest, header, signature, envelope, compiler
 cells, and round trip. Prose substitutions and the retained stale
 `CFG-V1-GOLDEN-001` bytes are not conformance data.
 
-The Phase 6.1 source golden adds the stored CRD `.spec`,
+The Phase 6.2 source golden adds the stored CRD `.spec`,
 `PolicySourceRevisionV1`, target snapshot, signed delivery candidate, and
 activation acknowledgement. It proves that the CRD and offline source forms
 produce the same `PolicyDocumentV1` bytes. It also covers unknown CRD fields,

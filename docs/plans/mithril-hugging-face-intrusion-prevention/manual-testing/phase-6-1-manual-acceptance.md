@@ -2,90 +2,92 @@
 
 Status: Proposed runbook; no Phase 6.1 implementation or test has been run.
 
-Phase: [Control Policy And Evidence Convergence](../phase-6-1-control-policy-and-evidence-convergence.md)
+Phase: [gRPC Service And IPC Convergence](../phase-6-1-grpc-service-and-ipc-convergence.md)
 
-Setup: [`SINGLE-NODE`](./environment-setup.md), extended to two nodes with a
-durable Control store and Kubernetes API access
+Setup: [`SINGLE-NODE`](./environment-setup.md), with one Runtime daemon,
+one local client, one hook client, one `mithril-node`, and one
+`mithril-control`
 
 ## Outcome
 
-Prove that one CRD revision converges through Control to the exact selected
-nodes without giving Control ownership of node activation. Prove that Phase 6
-evidence reaches durable Control storage before the node truncates its WAL.
+Prove that supported local and node-control operations use typed gRPC methods.
+Prove that authorization, streaming, bounds, replay state, and durable
+acknowledgements remain correct without the custom envelope protocol.
 
 ## Automated Companion
 
 ```text
-IMPLEMENTATION COMMAND REQUIRED: run Phase 6.1 CRD schema/reconciliation,
-policy compile/sign/distribution, node activation acknowledgement, durable
-evidence intake, restart, outage, tenancy, and status-authority suites.
+IMPLEMENTATION COMMAND REQUIRED: run the Phase 6.1 generated-service closure,
+Runtime daemon/client, hook, local observation, node-control, transport fault,
+restart, and repository verification suites.
 ```
 
 ## Procedure
 
-1. Record the cluster UID, Control store revision, two node identities and boot
-   and label epochs, and the current active candidate digest on each node.
-2. Create one valid `WorkloadProtectionProfile`. Record its UID, generation,
-   canonical spec digest, compiled candidate digest, rollout snapshot, and
-   status conditions.
-3. Create a second CRD with the same profile ID and another with an overlapping
-   workload selector. Verify that both conflicts reject without changing the
-   first profile's active node generations.
-4. Verify each selected node receives the signed candidate, stages and reads
-   it back, runs the controlled probes, changes one active pointer, and returns
-   an acknowledgement bound to its current boot and candidate.
-5. Disconnect one node. Update the profile and prove that Control reports a
-   mixed rollout while the disconnected node keeps its last valid generation.
-6. Reconnect the node. Deliver stale, replayed, wrong-target, invalid-signature,
-   and current candidates. Prove that only the current valid candidate can
-   advance rollout state.
-7. Submit an invalid update, stop Control, stop the Kubernetes API, and remove
-   the CRD finalizer. Prove that none of these actions remove the last valid
-   node generation.
-8. Restore Control and the API, force watch compaction and relist, then delete
-   and recreate the CRD. Verify UID, generation, retirement, and replacement
-   behavior without stale-state reuse.
-9. Upload a Phase 6 evidence window with duplicates, delay, reordering, a gap,
-   and one conflicting duplicate. Stop storage before acknowledgement, restart
-   Control, restore storage, and complete the upload.
-10. Verify the node truncates only the durable contiguous range. Record the
-   immutable accepted observations, source cursor, coverage state, and policy
-   provenance that Phase 7 will consume.
+1. Record the source revision, generated descriptor digest, service and method
+   list, binaries, socket paths, socket owners and modes, local peer UIDs, node
+   certificate identity, node boot epoch, and Control address.
+2. Start the Runtime daemon. Use generated clients to run one unary lifecycle
+   request, one server stream, and one attach or input bidirectional stream.
+3. Submit one valid hook event. Repeat with a wrong ticket, a replayed ticket,
+   a wrong peer, and an oversized event. Verify that only the valid event
+   reaches the existing session owner.
+4. Request one Mithril observation snapshot from the allowed UID and cgroup.
+   Repeat from a wrong UID and a process outside the allowed cgroup.
+5. Connect `mithril-node` to Control. Exercise registration, readiness, trust,
+   evidence, coverage, administrative resolution, and administrative arm on
+   their separate service methods.
+6. Delay and cancel each streaming RPC. Stop and restart each endpoint. Verify
+   bounded cancellation, reconnect, socket cleanup, boot identity, replay,
+   and durable cursor behavior.
+7. Apply request, response, concurrency, and slow-consumer pressure at each
+   transport boundary. Verify stable gRPC status, bounded memory, and no
+   authorization or durable-acknowledgement change.
+8. Attempt the old frame protocol, a wrong gRPC service method, an unavailable
+   package version, and a stale client. Verify a bounded rejection without
+   cross-service dispatch or fallback.
+9. Inspect the built binaries, generated descriptors, source references, and
+   packaging. Verify that no supported path contains the custom envelope,
+   frame codec, message-kind dispatcher, standalone codec, or ptrace
+   process-guard launch path. If a non-ptrace Runtime guard remains, verify its
+   typed gRPC service.
+10. Repeat the Phase 6 evidence outage and replay control. Verify that Control
+    acknowledges only a durable contiguous range and that the node removes no
+    earlier WAL record.
 
 ## Required Oracles
 
 | Case | Required result |
 | --- | --- |
-| Valid CRD | One canonical source revision and candidate; exact selected targets only |
-| Invalid CRD or compile | Rejected condition; previous active generations stay active |
-| Duplicate or overlapping CRD | Conflict condition; no precedence or composed candidate; previous valid generation stays active |
-| Partial rollout | Per-node state and mixed generation are explicit; no global-active claim |
-| Stale node message | Old boot, target, source, or candidate cannot advance current state |
-| CRD deletion | Signed retirement or replacement uses normal activation; disappearance alone removes nothing |
-| Control/API outage | Installed local policy continues; new Control-owned work is unavailable |
-| Watch relist | Same source revision and target state reconstruct without duplicate authority |
-| Evidence retry | Duplicate is idempotent; conflicting duplicate rejects |
-| Storage failure | No durable acknowledgement and no node WAL truncation |
-| Tenant/RBAC violation | Cross-tenant policy, evidence, acknowledgement, and status access reject |
-| CRD status mutation | Status cannot select, sign, deliver, or activate policy |
+| Typed unary RPC | One method reaches one existing owner and returns its typed result |
+| Typed stream | Cancellation, backpressure, reconnect, and completion remain bounded |
+| Wrong local peer | The RPC rejects before domain state changes |
+| Wrong TLS peer | The RPC rejects before registration or durable state changes |
+| Wrong service or version | gRPC rejects the method; no generic dispatcher handles it |
+| Oversized message | `RESOURCE_EXHAUSTED` or the documented bounded equivalent; no partial state |
+| Deadline or cancellation | Work stops at the owning cancellation boundary; no false success |
+| Evidence retry | Only a durable contiguous Control commit advances the node cursor |
+| Old frame client | Connection or method rejection; no protocol downgrade |
+| Removed ptrace configuration | Configuration rejection; no silent ungoverned fallback |
+| Remaining Runtime guard | Typed gRPC service on the common Unix transport; no standalone codec |
 
 ## Required Artifacts And Pass Rule
 
-Retain the CRD revisions, source and candidate digests, compiler and approval
-records, target snapshots, node activation readbacks, acknowledgements,
-rollout inventory, restart/relist history, evidence batches, durable commits,
-contiguous acknowledgements, WAL before/after state, RBAC denials, and health
-metrics. Pass requires the same canonical state after replay and restart, no
-stale authority, no premature WAL truncation, and no Control write to node BPF
-state.
+Retain the generated descriptor set, method inventory, local peer records,
+socket metadata, TLS identities, gRPC status results, stream cancellation and
+pressure results, reconnect history, evidence batches, durable commits,
+acknowledgements, WAL before and after state, binary reference scan, and
+packaging inventory. Pass requires one typed method per supported operation,
+no custom-frame fallback, no ptrace process-guard exception, no authorization
+regression, and no false durable acknowledgement.
 
 ## Troubleshooting
 
-- Kubernetes `resourceVersion` is a watch cursor. Do not compare it as a
-  policy version.
-- CRD status is a projection. Inspect the Control durable record and the node
-  readback before accepting activation.
-- If one node is unreachable, expect a mixed rollout. Do not repair the report
-  by marking the policy globally active.
-- If the CRD disappears without a valid retirement candidate, the last valid
-  node generation must remain active.
+- A gRPC package version replaces a generic transport-version field. It does
+  not replace a policy, trust, boot, coverage, or evidence generation.
+- HTTP/2 stream order does not prove replay safety after reconnect. Inspect the
+  domain cursor or generation.
+- A successful Unix connection does not authorize the request. Inspect
+  `SO_PEERCRED` and the service-specific authorization result.
+- If a supported path still launches the ptrace process guard, record
+  `Blocked`. Do not keep the old codec as an exception.

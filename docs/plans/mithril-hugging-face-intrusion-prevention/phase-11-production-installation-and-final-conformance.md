@@ -1,6 +1,7 @@
 # Phase 11: Production Installation And Final Conformance
 
-Status: Proposed; depends on Phases 0-10, including Phase 6.1, `Done`.
+Status: Proposed; depends on Phases 0-10, including Phases 6.1 and 6.2,
+`Done`.
 
 Master: [Mithril Hugging Face Intrusion Prevention](./README.md)
 Design: [Validated readable architecture](./policy-and-protection-algorithm-architecture-readable.md)
