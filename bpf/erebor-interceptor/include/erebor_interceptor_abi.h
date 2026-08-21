@@ -1682,8 +1682,7 @@ typedef struct profile_generation_descriptor_v1 {
   uint32_t default_count;
   policy_generation_state_v1 state;
   policy_generation_mode_v1 mode;
-  uint8_t path_tree_deny_active;
-  uint8_t reserved[5];
+  uint8_t reserved[6];
   uint8_t table_digest[32];
   uint64_t transition_version;
 } profile_generation_descriptor_v1;

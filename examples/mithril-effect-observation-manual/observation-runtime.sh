@@ -142,20 +142,33 @@ observation_configure_secret() {
     --artifact "$artifact" \
     --public-key "$observation_policy_fixture_directory/test-public-key.hex" >/dev/null
 
+  local inode_generation object
+  inode_generation=$(lsattr -v "/proc/$identity_init_pid/root$secret_path" | awk 'NR == 1 {print $1}')
+  [[ $inode_generation =~ ^[1-9][0-9]*$ ]] || {
+    echo "filesystem did not expose a nonzero inode generation through lsattr -v" >&2
+    exit 2
+  }
+  object=$identity_work/exact-file-object.json
+  "$identity_inspect" file-object \
+    --root-pid "$identity_init_pid" \
+    --path "$secret_path" \
+    --profile-generation 1 \
+    --exact-object-key 7 \
+    --object-class MANUAL_SECRET \
+    --inode-generation "$inode_generation" >"$object"
+
   jq --arg artifact "$artifact" \
     --arg public_key "$observation_policy_fixture_directory/test-public-key.hex" \
     --arg socket "$observation_socket" \
     --arg scope "$observation_scope" \
-    --arg controller_cgroup "$identity_effect_controller_cgroup_path" \
+    --slurpfile object "$object" \
     '.workload_bindings[0].profile_id = "11111111-1111-4111-8111-111111111111"
      | .workload_bindings[0].protected_scope_id = "33333333-3333-4333-8333-333333333333"
      | .workload_bindings[0].execution_set_id = "44444444-4444-4444-8444-444444444444"
      | .workload_bindings[0].initial_role_id = 1
      | .workload_bindings[0].external_role_id = 2
      | .policy_candidates = [{artifact_path: $artifact, public_key_path: $public_key}]
-     | if .container_runtime == null then .
-       else .container_runtime.effect_controller_cgroup_path = $controller_cgroup
-       end
+     | .exact_file_objects = $object
      | .runtime_observation = {socket_path: $socket, allowed_uid: 0, cgroup_scope: $scope}' \
     "$identity_config" >"$observation_final_config"
   if [[ -n $observation_extra_exact_path ]]; then
@@ -185,7 +198,9 @@ observation_configure_secret() {
       "$observation_final_config" >"$observation_final_config.extra"
     mv -- "$observation_final_config.extra" "$observation_final_config"
   fi
-  jq '.policy_candidates = [] | .runtime_observation = null' \
+  jq '.policy_candidates = []
+      | .exact_file_objects = []
+      | .runtime_observation = null' \
     "$observation_final_config" >"$observation_identity_config"
   cp -- "$observation_final_config" "$identity_config"
   identity_cleanup_functions+=(observation_cleanup_probe_files)

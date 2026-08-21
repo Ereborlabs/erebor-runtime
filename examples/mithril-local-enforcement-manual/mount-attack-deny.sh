@@ -35,21 +35,13 @@ case $# in
 esac
 enforcement_mount_target=/tmp/mithril-local-enforcement-mount-target-$$
 enforcement_attack_target=$(dirname -- "$secret_path")
-enforcement_alias_source=$enforcement_attack_target/mithril-child-bind-source-$$
-enforcement_alias_marker=$enforcement_alias_source/x
 exec {enforcement_mount_namespace_fd}<"/proc/$identity_init_pid/ns/mnt"
 exec {enforcement_root_fd}<"/proc/$identity_init_pid/root"
 mkdir -- "/proc/$identity_init_pid/root$enforcement_mount_target"
 enforcement_cleanup_mount_target() {
   nsenter --mount="/proc/self/fd/$enforcement_mount_namespace_fd" \
     --root="/proc/self/fd/$enforcement_root_fd" -- \
-    umount -- "$enforcement_mount_target" 2>/dev/null || true
-  nsenter --mount="/proc/self/fd/$enforcement_mount_namespace_fd" \
-    --root="/proc/self/fd/$enforcement_root_fd" -- \
-    rm -f -- "$enforcement_alias_marker"
-  nsenter --mount="/proc/self/fd/$enforcement_mount_namespace_fd" \
-    --root="/proc/self/fd/$enforcement_root_fd" -- \
-    rmdir -- "$enforcement_alias_source"
+    umount -- "$enforcement_attack_target" 2>/dev/null || true
   nsenter --mount="/proc/self/fd/$enforcement_mount_namespace_fd" \
     --root="/proc/self/fd/$enforcement_root_fd" -- \
     rmdir -- "$enforcement_mount_target"
@@ -61,9 +53,6 @@ identity_cleanup_functions+=(enforcement_cleanup_mount_target)
 observation_preload_nsenter_probe python3 -c '
 import ctypes, errno, os, sys, threading, time
 ready, source, target, protected_file = sys.argv[1:]
-os.mkdir(source)
-with open(os.path.join(source, "x"), "wb") as handle:
-    handle.write(b"protected child bind marker\n")
 libc = ctypes.CDLL(None, use_errno=True)
 libc.mount.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_char_p,
                        ctypes.c_ulong, ctypes.c_void_p]
@@ -71,13 +60,12 @@ libc.mount.restype = ctypes.c_int
 barrier = threading.Barrier(9)
 release = threading.Event()
 results = []
-def attack(flags):
+def attack():
     barrier.wait()
     release.wait()
-    result = libc.mount(source.encode(), target.encode(), None, flags, None)
+    result = libc.mount(source.encode(), target.encode(), None, 4096, None)
     results.append((result, ctypes.get_errno()))
-threads = [threading.Thread(target=attack, args=(4096,)) for _ in range(4)]
-threads += [threading.Thread(target=attack, args=(4096 | 16384,)) for _ in range(4)]
+threads = [threading.Thread(target=attack) for _ in range(8)]
 for thread in threads:
     thread.start()
 barrier.wait()
@@ -95,13 +83,6 @@ if any(result == 0 for result, _error in results):
     raise SystemExit("protected bind mount unexpectedly completed")
 if any(error not in (errno.EACCES, errno.EPERM) for _result, error in results):
     raise SystemExit(f"unexpected mount errors: {results}")
-try:
-    with open(os.path.join(target, "x"), "rb") as handle:
-        handle.read(1)
-except (FileNotFoundError, PermissionError):
-    pass
-else:
-    raise SystemExit("child-directory bind alias exposed the protected marker")
 for _ in range(25):
     try:
         with open(protected_file, "rb") as handle:
@@ -110,10 +91,9 @@ for _ in range(25):
         time.sleep(0.02)
         continue
     raise SystemExit("mount race widened access to the protected file")
-' "$observation_probe_ready" "$enforcement_alias_source" "$enforcement_mount_target" "$secret_path"
+' "$observation_probe_ready" "$enforcement_mount_target" "$enforcement_attack_target" "$secret_path"
 observation_release_probe
-mount_denial='family=7 operation=19 reason=PATH_TREE_POLICY_DENY'
-observation_wait_for_observation "$mount_denial" "$identity_work/effects.txt"
-[[ $(grep -c "$mount_denial" "$identity_work/effects.txt") -ge 8 ]]
+observation_wait_for_observation 'reason=UNSUPPORTED_OBJECT' "$identity_work/effects.txt"
+[[ $(grep -c 'reason=UNSUPPORTED_OBJECT' "$identity_work/effects.txt") -ge 8 ]]
 enforcement_expect_path_tree_denial
-identity_pass "PASS: child-directory bind and recursive-bind aliases were denied before they exposed the signed path tree."
+identity_pass "PASS: every mount over the signed path tree was denied and no file retry widened authority."

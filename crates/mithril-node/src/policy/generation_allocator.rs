@@ -217,8 +217,7 @@ mod tests {
             default_count: 0,
             state: PolicyGenerationStateV1::Preparing,
             mode: PolicyGenerationModeV1::Protect,
-            path_tree_deny_active: 0,
-            reserved: [0; 5],
+            reserved: [0; 6],
             table_digest: [digest_byte; 32],
             transition_version: 1,
         }

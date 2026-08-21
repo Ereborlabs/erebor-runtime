@@ -1163,25 +1163,8 @@ impl EffectTestRunner {
         let path_tree_later = path_tree_root.join("created-after-activation");
         let path_tree_replacement = path_tree_root.join("replacement");
         let path_tree_actor_create = path_tree_root.join("actor-created");
-        let path_tree_alias_source = path_tree_root.join("models");
-        let path_tree_alias_marker = path_tree_alias_source.join("x");
-        let path_tree_alias_target = paths.mutation_root.join("child-bind-alias");
-        let path_tree_recursive_alias_target =
-            paths.mutation_root.join("recursive-child-bind-alias");
         fs::create_dir_all(&path_tree_root).context(IoSnafu {
             path: &path_tree_root,
-        })?;
-        fs::create_dir(&path_tree_alias_source).context(IoSnafu {
-            path: &path_tree_alias_source,
-        })?;
-        fs::write(&path_tree_alias_marker, b"restricted child bind source\n").context(IoSnafu {
-            path: &path_tree_alias_marker,
-        })?;
-        fs::create_dir(&path_tree_alias_target).context(IoSnafu {
-            path: &path_tree_alias_target,
-        })?;
-        fs::create_dir(&path_tree_recursive_alias_target).context(IoSnafu {
-            path: &path_tree_recursive_alias_target,
         })?;
         ensure!(
             !protect
@@ -1515,8 +1498,6 @@ impl EffectTestRunner {
 
         let mut path_tree_future_namespace_denied = false;
         let mut path_tree_meta_depth_denied = false;
-        let mut path_tree_outside_control_allowed = false;
-        let mut path_tree_mount_attack_failed_closed = false;
         if protect {
             let future_fixture_root = fixture_root.join("future-mount-namespace");
             fs::create_dir(&future_fixture_root).context(IoSnafu {
@@ -1666,6 +1647,24 @@ impl EffectTestRunner {
                     KernelEffectFamilyV1::File,
                     KernelEffectOperationV1::OpenRead,
                 ),
+            )?;
+
+            let outside_marker = observations.cursor();
+            ensure!(
+                fixture.read(&paths.benign)?.allowed,
+                InvalidInputSnafu {
+                    path: &paths.benign,
+                    reason: "the exact file outside the protected tree was denied",
+                }
+            );
+            wait_for_exact_effect(
+                &reader,
+                &observations,
+                outside_marker,
+                "EXACT_POLICY_ALLOW",
+                (KernelEffectFamilyV1::File, KernelEffectOperationV1::Read),
+                PathSelectorV1::kernel_handle_for_id("manual-benign"),
+                None,
             )?;
 
             let exception_marker = observations.cursor();
@@ -3370,56 +3369,9 @@ impl EffectTestRunner {
             );
         }
 
-        if protect {
-            for (target, recursive) in [
-                (&path_tree_alias_target, false),
-                (&path_tree_recursive_alias_target, true),
-            ] {
-                let marker = observations.cursor();
-                ensure!(
-                    fixture
-                        .bind_mount(&path_tree_alias_source, target, recursive)?
-                        .denied()
-                        && fixture.open(&target.join("x"))?.failed(),
-                    InvalidInputSnafu {
-                        path: target,
-                        reason: "a post-exec child-directory bind exposed the protected marker",
-                    }
-                );
-                wait_for_effect(
-                    &reader,
-                    &observations,
-                    marker,
-                    "PATH_TREE_POLICY_DENY",
-                    (KernelEffectFamilyV1::Mount, KernelEffectOperationV1::Mount),
-                )?;
-            }
-
-            let outside_marker = observations.cursor();
-            ensure!(
-                fixture.read(&paths.benign)?.allowed,
-                InvalidInputSnafu {
-                    path: &paths.benign,
-                    reason: "the exact file outside the protected tree was denied after the bind-mount attacks",
-                }
-            );
-            wait_for_exact_effect(
-                &reader,
-                &observations,
-                outside_marker,
-                "EXACT_POLICY_ALLOW",
-                (KernelEffectFamilyV1::File, KernelEffectOperationV1::Read),
-                PathSelectorV1::kernel_handle_for_id("manual-benign"),
-                None,
-            )?;
-            path_tree_outside_control_allowed = true;
-            path_tree_mount_attack_failed_closed = true;
-        }
-
-        for (operation, expected_reason, expected_effect, label) in [
+        for (operation, expected_effect, label) in [
             (
                 HardClosedOperation::MoveMount,
-                "UNSUPPORTED_OBJECT",
                 (
                     KernelEffectFamilyV1::Privilege,
                     KernelEffectOperationV1::Capability,
@@ -3428,7 +3380,6 @@ impl EffectTestRunner {
             ),
             (
                 HardClosedOperation::MountSetattr,
-                "UNSUPPORTED_OBJECT",
                 (
                     KernelEffectFamilyV1::Privilege,
                     KernelEffectOperationV1::Capability,
@@ -3437,11 +3388,6 @@ impl EffectTestRunner {
             ),
             (
                 HardClosedOperation::MountPropagation,
-                if protect {
-                    "PATH_TREE_POLICY_DENY"
-                } else {
-                    "UNSUPPORTED_OBJECT"
-                },
                 (KernelEffectFamilyV1::Mount, KernelEffectOperationV1::Mount),
                 "mount propagation mutation",
             ),
@@ -3451,7 +3397,7 @@ impl EffectTestRunner {
                 &reader,
                 &observations,
                 operation,
-                expected_reason,
+                "UNSUPPORTED_OBJECT",
                 expected_effect,
                 label,
             )?;
@@ -3470,11 +3416,7 @@ impl EffectTestRunner {
             &reader,
             &observations,
             mount_marker,
-            if protect {
-                "PATH_TREE_POLICY_DENY"
-            } else {
-                "UNSUPPORTED_OBJECT"
-            },
+            "UNSUPPORTED_OBJECT",
             (KernelEffectFamilyV1::Mount, KernelEffectOperationV1::Mount),
         )?;
         reconcile_mount_views_until_clean(&policy, &mut host, &mount_namespaces)?;
@@ -4166,8 +4108,8 @@ impl EffectTestRunner {
             path_tree_future_namespace_denied,
             path_tree_later_child_denied: protect,
             path_tree_replacement_child_denied: protect,
-            path_tree_outside_control_allowed,
-            path_tree_mount_attack_failed_closed,
+            path_tree_outside_control_allowed: protect,
+            path_tree_mount_attack_failed_closed: protect,
             protected_mount_race_denied: true,
             mount_stale_proposal_failed_closed: true,
             mount_propagation_reached_peer: true,

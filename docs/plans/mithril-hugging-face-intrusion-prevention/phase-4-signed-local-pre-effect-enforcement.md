@@ -167,41 +167,6 @@ Next phase not authorized: yes.
 The dated records below describe earlier source states. Their status sentences
 do not override the current Phase Result.
 
-## Child-directory bind escape closure — 2026-08-21
-
-State: **Done** for the bounded `FILE-PATH-TREE-DENY-001` correction. The
-limited x86_64 phase result does not change.
-
-The oldest-mount cache selects the lowest `mnt_id_unique` only for mounts that
-have the same root dentry. It cannot connect a bind mount of a child directory
-to the mount that contains that child. A later bind could therefore make a
-protected child reachable through a new alias path before this correction.
-
-The generation descriptor now identifies a profile that contains a path-tree
-floor. After the first exec, the BPF gate denies each Mount effect for that
-generation before ordinary mount policy lookup. The compiler rejects positive
-Mount rules in the same profile with `CFG_PATH_TREE_MOUNT_AUTHORITY`. Initial
-container namespace setup remains outside the post-exec gate.
-
-The protected physical probe denied regular and recursive binds from a
-protected child directory to outside aliases. Neither alias exposed its marker,
-and both attempts emitted Mount `PATH_TREE_POLICY_DENY`. The probe then allowed
-the signed exact read outside the protected tree. The self-contained K3s manual
-case ran four regular and four recursive attempts and printed its `PASS`
-result. Independent postflight checks found no owned namespace, BPF pin,
-controller cgroup, node process, or fixture directory.
-
-Current-source formatting, workspace check, warnings-as-errors Clippy, and 970
-workspace tests passed. The workspace run skipped only the frozen physical
-qualification digest assertion. The exact repository script stops at that
-assertion because the checked qualification record predates the changed BPF
-source and ABI header. Qualification-record refresh is **Not done** in this
-delivery. No generated qualification or digest artifact is updated.
-
-Source-aware post-exec mount authority remains **Not done**. A later owner can
-extend the descriptor gate only after it models bind source lineage and the
-complete mount lifecycle.
-
 ## Path-tree protection design update — 2026-08-17
 
 State: Not done. This is a design requirement. It is not implementation or

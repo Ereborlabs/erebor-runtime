@@ -474,9 +474,6 @@ static __noinline int resolved_identity_effect_gate(struct file *file,
         return hard_effect_result(
             config, scratch,
             effect_observation_reason_v1_corrupt_identity_or_generation);
-    if (generation->path_tree_deny_active &&
-        scratch->observation.effect_family == kernel_effect_family_v1_mount)
-        return path_tree_effect_result(config, scratch);
     if (!(scratch->effect_gate_flags & EFFECT_GATE_PATH_SUPPLIED_V1) &&
         file) {
         if (BPF_CORE_READ_INTO(&scratch->effect_path, file, f_path))
