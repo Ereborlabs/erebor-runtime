@@ -31,7 +31,7 @@ use crate::context_dag::SessionContextResolver;
 use crate::local_store::DaemonLocalStore;
 
 // The Linux controller moves the descriptor-held executable to this private
-// path before the process guard observes Codex or its hook descendants.
+// path before it starts Codex.
 const CODEX_LINUX_WORKLOAD_EXECUTABLE: &str = "/run/erebor/admitted-executable";
 
 /// The session-bound policy route. It reconstructs every immutable policy

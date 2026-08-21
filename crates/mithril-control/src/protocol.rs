@@ -1,5 +1,8 @@
 tonic::include_proto!("erebor.mithril.control.v1");
 
+pub const FILE_DESCRIPTOR_SET: &[u8] =
+    tonic::include_file_descriptor_set!("erebor.mithril.control.v1");
+
 pub const IDENTITY_BYTES: usize = 16;
 pub const MAX_NODE_ID_BYTES: usize = 128;
 

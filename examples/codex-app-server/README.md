@@ -1,8 +1,8 @@
 # Codex App Server Host Lab
 
 This is the Phase 5.1 host example. It exercises the real local `erebord`,
-`erebor`, Linux runner, process guard, descriptor broker, package admission,
-TTY attachment, and typed App Server bridge. It does so with the deterministic
+`erebor`, Linux runner, descriptor broker, package admission, TTY attachment,
+and typed App Server bridge. It does so with the deterministic
 `codex-v1-fixture`, not your installed Codex, login, `HOME`, or `CODEX_HOME`.
 The fixture keeps the lab deterministic while exercising the same named Agent,
 PolicyPackage, and PolicySet lifecycle.
@@ -115,7 +115,7 @@ they are compare-and-set inputs, unlike the safely abbreviated session IDs.
 An ordinary `erebor run … codex` fixture is a root session, so its inbox is
 correctly empty until the fixture creates a logical child scope. A Codex
 thread is such a scope inside this same session, never a second session or
-TTY. In the first terminal, create B and run a real guarded descendant from B:
+TTY. In the first terminal, create B and run an authenticated operation from B:
 
 ```text
 fixture/turn
@@ -126,9 +126,10 @@ fixture/deliver {"sequence":1,"selected_text":"B completed ls"}
 fixture/command {"command":"ls"}
 ```
 
-`erebor_lab session ps` must still show exactly one session. The `ls` process
-is physically governed by that one session's Linux guard and causally bound to
-B's scope. `fixture/start-q` declares retained operation key `fixture-q` before
+`erebor_lab session ps` must still show exactly one session. Authenticated hook
+events bind the `ls` operation to B's scope. This example does not claim
+syscall-level physical enforcement. `fixture/start-q` declares retained
+operation key `fixture-q` before
 the shell starts; q is therefore a separate operation scope below B, while B
 continues to run `ls`. It is not inferred later from an alive PID or from the
 next command. Each `fixture/command` without `tool_use_id` receives a fresh
@@ -149,14 +150,12 @@ The graph is a compact Git-style tree of durable scopes and their retained,
 authenticated activity. `HEAD` is each scope's current commit; `FROM` is the
 exact immutable parent commit selected when that branch was admitted. The B
 branch nests q immediately below the `tool bash command="printf …"` activity
-that admitted it. q's branch shows its physical `exec` and queued delivery
-leaves, including q's shell descendants such as `sleep`. B's later
-`tool bash command="ls"` and its `exec … allowed pid=… via Bash <tool-use-id>`
-leaves remain siblings in B because `ls` is not a retained operation. q owns
-its process effects; a normal process does not create another context scope.
-The execution leaves are retained Git facts bound to the same invocation lease,
-not guesses from hook output or terminal text. It also shows whether the edge
-is native-logical or daemon-physical and its authenticated source identity.
+that admitted it. q's branch shows its authenticated hook activity and queued
+delivery leaves. B's later `tool bash command="ls"` leaves remain siblings in
+B because `ls` is not a retained operation. A normal process does not create
+another context scope. The activity leaves are retained Git facts bound to the
+same invocation lease, not guesses from terminal text. The graph also shows
+the authenticated source identity.
 Inherited activity is not repeated on descendants. Scope and commit IDs are
 safely abbreviated for display; the full values remain available in the
 delivery inbox when a compare-and-set receive or reject needs them. The client

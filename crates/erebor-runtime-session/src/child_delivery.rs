@@ -4,7 +4,7 @@ use erebor_runtime_context::ScopeRef;
 
 /// A bounded child-owned Codex result accepted only from the existing
 /// authenticated hook route. This is an in-process daemon callback, not a
-/// workload socket or a second process-guard protocol.
+/// second workload transport.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ChildContextDelivery {
     source_session_id: String,

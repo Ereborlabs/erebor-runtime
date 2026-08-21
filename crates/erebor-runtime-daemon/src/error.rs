@@ -2,7 +2,6 @@ use std::{any::Any, io, path::PathBuf};
 
 use erebor_runtime_approvals::ApprovalError;
 use erebor_runtime_error::{ErrorExt, RetryHint, StatusCode};
-use erebor_runtime_ipc::IpcProtocolError;
 use erebor_runtime_session::SessionManagerError;
 use erebor_runtime_telemetry::TelemetryError;
 use snafu::{Location, Snafu};
@@ -78,12 +77,6 @@ pub enum DaemonError {
         #[snafu(implicit)]
         location: Location,
     },
-    #[snafu(display("daemon IPC failed: {source}"))]
-    Ipc {
-        source: IpcProtocolError,
-        #[snafu(implicit)]
-        location: Location,
-    },
     #[snafu(display("daemon session operation failed: {source}"))]
     Session {
         #[snafu(source(from(SessionManagerError, Box::new)))]
@@ -127,7 +120,6 @@ impl ErrorExt for DaemonError {
             | Self::IdempotencyCapacity { .. } => StatusCode::Unavailable,
             Self::Unauthorized { .. } => StatusCode::PermissionDenied,
             Self::StateLock { .. } => StatusCode::Internal,
-            Self::Ipc { source, .. } => source.status_code(),
             Self::Session { source, .. } => source.status_code(),
             Self::Approval { source, .. } => source.status_code(),
             Self::Telemetry { source, .. } => source.status_code(),
@@ -138,7 +130,6 @@ impl ErrorExt for DaemonError {
     fn retry_hint(&self) -> RetryHint {
         match self {
             Self::Io { source, .. } => RetryHint::from_io_error(source),
-            Self::Ipc { source, .. } => source.retry_hint(),
             Self::Session { source, .. } => source.retry_hint(),
             Self::Approval { source, .. } => source.retry_hint(),
             Self::Telemetry { source, .. } => source.retry_hint(),

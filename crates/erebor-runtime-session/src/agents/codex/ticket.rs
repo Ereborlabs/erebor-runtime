@@ -55,10 +55,6 @@ impl CodexManagedProfile {
         &self.executable
     }
 
-    pub(crate) fn hook_exec_history(&self) -> &[PathBuf] {
-        &self.hook_exec_history
-    }
-
     pub(crate) fn allows_hook_executable(&self, executable: &str) -> bool {
         self.hook_exec_history
             .iter()

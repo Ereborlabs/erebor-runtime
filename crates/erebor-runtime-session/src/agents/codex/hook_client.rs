@@ -74,7 +74,6 @@ impl CodexHookClient {
         sender
             .send(HookClientMessage {
                 item: Some(hook_client_message::Item::Hello(HookHello {
-                    ticket_id: String::new(),
                     session_id: session_id.into(),
                 })),
             })

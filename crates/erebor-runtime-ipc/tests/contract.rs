@@ -1,535 +1,479 @@
-use std::error::Error;
+use std::collections::BTreeSet;
 
-use erebor_runtime_ipc::{
-    v1::{
-        AgentInstallRequest, AllowDecision, CodexAppServerInputCloseRequest,
-        CodexAppServerInputRequest, CodexRunRequest, ContextGraphActivity, ContextGraphRequest,
-        ContextGraphResponse, ContextScopeGraphNode, DecisionKind, DenyDecision, Envelope,
-        GuardHello, GuardLifecycleEvent, GuardLifecycleEventKind, GuardLifecycleReply,
-        GuardLifecycleReplyKind, InterceptionDecision, InterceptionOperation, InterceptionRequest,
-        InterceptionSource, MediateDecision, PolicyPackageApplyRequest, PolicySetCreateRequest,
-        ProcessExecOperation, SessionCreateRequest, SessionEnvironmentEntry,
-        SessionEvidenceRequest, SessionInputRequest, SessionTerminalResizeRequest,
-        SurfaceCreateRequest, DAEMON_CONTROL_PROTOCOL_VERSION, KIND_AGENT_INSTALL_REQUEST,
-        KIND_CODEX_APP_SERVER_INPUT_CLOSE_REQUEST, KIND_CODEX_APP_SERVER_INPUT_REQUEST,
-        KIND_CODEX_RUN_REQUEST, KIND_CONTEXT_GRAPH_REQUEST, KIND_CONTEXT_GRAPH_RESPONSE,
-        KIND_GUARD_HELLO, KIND_GUARD_LIFECYCLE_EVENT, KIND_GUARD_LIFECYCLE_REPLY,
-        KIND_INTERCEPTION_DECISION, KIND_INTERCEPTION_REQUEST, KIND_POLICY_PACKAGE_APPLY_REQUEST,
-        KIND_POLICY_SET_CREATE_REQUEST, KIND_SESSION_EVIDENCE_REQUEST, KIND_SESSION_INPUT_REQUEST,
-        KIND_SESSION_TERMINAL_RESIZE_REQUEST, KIND_SURFACE_CREATE_REQUEST, PROTOCOL_VERSION,
-    },
-    EreborIpcFrame, IpcProtocolError, FRAME_VERSION, HEADER_LEN, MAX_PAYLOAD_LEN,
-};
+use prost::Message as _;
+use prost_types::FileDescriptorSet;
 
-#[test]
-fn public_named_resource_requests_round_trip_without_integrity_reference_fields(
-) -> Result<(), Box<dyn Error>> {
-    let agent = AgentInstallRequest {
-        package_name: String::from("codex-v1"),
-        source_path: String::from("/opt/codex/bin/codex"),
-        name: String::from("local-codex"),
-        adapter: String::from("codex-v1"),
-    };
-    let policy_set = PolicySetCreateRequest {
-        name: String::from("company-workspace"),
-        package_names: vec![
-            String::from("company-baseline"),
-            String::from("workspace-write"),
-        ],
-    };
-    let policy_package = PolicyPackageApplyRequest {
-        path: String::from("/work/fixture-baseline"),
-        name: String::from("fixture-baseline"),
-    };
-    let run = CodexRunRequest {
-        agent_name: String::from("local-codex"),
-        workspace: String::from("/work"),
-        policy_set_name: String::from("company-workspace"),
-        daemon_failure_mode: String::from("terminate"),
-        requested_loss_grace_seconds: 2,
-        tty: true,
-        detached: false,
-        terminal_rows: 24,
-        terminal_columns: 80,
-        app_server: false,
-        environment: vec![SessionEnvironmentEntry {
-            key: String::from("PATH"),
-            value: String::from("/usr/bin:/bin"),
-        }],
-        caller_home_sources: Vec::new(),
-    };
-    let session = SessionCreateRequest {
-        runner_id: String::new(),
-        command: Vec::new(),
-        workspace: String::new(),
-        daemon_failure_mode: String::new(),
-        requested_loss_grace_seconds: 0,
-        environment: Vec::new(),
-        secret_references: Vec::new(),
-        tty: false,
-        detached: false,
-        terminal_rows: 0,
-        terminal_columns: 0,
-        agent_name: String::from("local-codex"),
-        policy_set_name: String::from("company-workspace"),
-        surface_names: vec![String::from("engineering-browser")],
-        caller_home_sources: Vec::new(),
-    };
-    let surface = SurfaceCreateRequest {
-        name: String::from("engineering-browser"),
-        surface_type: String::from("browser_cdp"),
-    };
-    let agent_envelope = Envelope::wrap_message(101, 0, KIND_AGENT_INSTALL_REQUEST, &agent)?;
-    let policy_envelope =
-        Envelope::wrap_message(102, 0, KIND_POLICY_SET_CREATE_REQUEST, &policy_set)?;
-    let policy_package_envelope =
-        Envelope::wrap_message(103, 0, KIND_POLICY_PACKAGE_APPLY_REQUEST, &policy_package)?;
-    let run_envelope = Envelope::wrap_message(104, 0, KIND_CODEX_RUN_REQUEST, &run)?;
-    let session_envelope = Envelope::wrap_message(
-        105,
-        0,
-        erebor_runtime_ipc::v1::KIND_SESSION_CREATE_REQUEST,
-        &session,
-    )?;
-    let surface_envelope = Envelope::wrap_message(106, 0, KIND_SURFACE_CREATE_REQUEST, &surface)?;
-    let decoded_agent: AgentInstallRequest =
-        EreborIpcFrame::decode(&agent_envelope.into_frame()?.encode()?)?
-            .decode_payload::<Envelope>()?
-            .decode_typed_payload(KIND_AGENT_INSTALL_REQUEST)?;
-    let decoded_policy: PolicySetCreateRequest =
-        EreborIpcFrame::decode(&policy_envelope.into_frame()?.encode()?)?
-            .decode_payload::<Envelope>()?
-            .decode_typed_payload(KIND_POLICY_SET_CREATE_REQUEST)?;
-    let decoded_policy_package: PolicyPackageApplyRequest =
-        EreborIpcFrame::decode(&policy_package_envelope.into_frame()?.encode()?)?
-            .decode_payload::<Envelope>()?
-            .decode_typed_payload(KIND_POLICY_PACKAGE_APPLY_REQUEST)?;
-    let decoded_run: CodexRunRequest =
-        EreborIpcFrame::decode(&run_envelope.into_frame()?.encode()?)?
-            .decode_payload::<Envelope>()?
-            .decode_typed_payload(KIND_CODEX_RUN_REQUEST)?;
-    let decoded_session: SessionCreateRequest =
-        EreborIpcFrame::decode(&session_envelope.into_frame()?.encode()?)?
-            .decode_payload::<Envelope>()?
-            .decode_typed_payload(erebor_runtime_ipc::v1::KIND_SESSION_CREATE_REQUEST)?;
-    let decoded_surface: SurfaceCreateRequest =
-        EreborIpcFrame::decode(&surface_envelope.into_frame()?.encode()?)?
-            .decode_payload::<Envelope>()?
-            .decode_typed_payload(KIND_SURFACE_CREATE_REQUEST)?;
-    assert_eq!(decoded_agent, agent);
-    assert_eq!(decoded_policy, policy_set);
-    assert_eq!(decoded_policy_package, policy_package);
-    assert_eq!(decoded_run, run);
-    assert_eq!(decoded_session, session);
-    assert_eq!(decoded_surface, surface);
-    Ok(())
+const PACKAGE: &str = "erebor.runtime.ipc.v1";
+
+struct ExpectedMethod {
+    service: &'static str,
+    method: &'static str,
+    input: &'static str,
+    output: &'static str,
+    client_streaming: bool,
+    server_streaming: bool,
 }
 
-#[test]
-fn daemon_control_protocol_rejects_the_prior_control_contract() {
-    let prior = erebor_runtime_ipc::v1::DaemonHello {
-        protocol_version: PROTOCOL_VERSION,
-        client_name: String::from("prior-client"),
-        capabilities: Vec::new(),
+macro_rules! method {
+    ($service:literal, $method:literal, $input:literal, $output:literal) => {
+        ExpectedMethod {
+            service: $service,
+            method: $method,
+            input: $input,
+            output: $output,
+            client_streaming: false,
+            server_streaming: false,
+        }
     };
-    let prior_control = erebor_runtime_ipc::v1::DaemonHello {
-        protocol_version: 2,
-        client_name: String::from("phase-5-1-client"),
-        capabilities: Vec::new(),
+    ($service:literal, $method:literal, $input:literal, $output:literal, $client:literal, $server:literal) => {
+        ExpectedMethod {
+            service: $service,
+            method: $method,
+            input: $input,
+            output: $output,
+            client_streaming: $client,
+            server_streaming: $server,
+        }
     };
-    let current = erebor_runtime_ipc::v1::DaemonHello {
-        protocol_version: DAEMON_CONTROL_PROTOCOL_VERSION,
-        client_name: String::from("current-client"),
-        capabilities: Vec::new(),
-    };
-    let prior_ack = erebor_runtime_ipc::v1::DaemonHelloAck {
-        protocol_version: PROTOCOL_VERSION,
-        daemon_version: String::from("prior-daemon"),
-        capabilities: Vec::new(),
-    };
-
-    assert!(!prior.uses_supported_control_protocol());
-    assert!(!prior_control.uses_supported_control_protocol());
-    assert!(current.uses_supported_control_protocol());
-    assert!(!prior_ack.uses_supported_control_protocol());
 }
 
+const EXPECTED_METHODS: &[ExpectedMethod] = &[
+    method!(
+        "DaemonLifecycleService",
+        "Status",
+        "DaemonStatusRequest",
+        "DaemonStatusResponse"
+    ),
+    method!(
+        "DaemonLifecycleService",
+        "Logs",
+        "DaemonLogsRequest",
+        "DaemonLogRecord",
+        false,
+        true
+    ),
+    method!(
+        "DaemonLifecycleService",
+        "Reload",
+        "DaemonReloadRequest",
+        "DaemonCommandResult"
+    ),
+    method!(
+        "DaemonLifecycleService",
+        "Stop",
+        "DaemonStopRequest",
+        "DaemonCommandResult"
+    ),
+    method!(
+        "AgentService",
+        "Install",
+        "AgentInstallRequest",
+        "AgentInstallResponse"
+    ),
+    method!(
+        "AgentService",
+        "RunCodex",
+        "CodexRunRequest",
+        "SessionCreateResponse"
+    ),
+    method!(
+        "SessionService",
+        "Create",
+        "SessionCreateRequest",
+        "SessionCreateResponse"
+    ),
+    method!(
+        "SessionService",
+        "Start",
+        "SessionStartRequest",
+        "SessionRecord"
+    ),
+    method!(
+        "SessionService",
+        "Stop",
+        "SessionStopRequest",
+        "SessionRecord"
+    ),
+    method!(
+        "SessionService",
+        "Kill",
+        "SessionKillRequest",
+        "SessionRecord"
+    ),
+    method!(
+        "SessionService",
+        "Remove",
+        "SessionRemoveRequest",
+        "SessionRecord"
+    ),
+    method!(
+        "SessionService",
+        "Inspect",
+        "SessionInspectRequest",
+        "SessionRecord"
+    ),
+    method!(
+        "SessionService",
+        "List",
+        "SessionListRequest",
+        "SessionListResponse"
+    ),
+    method!(
+        "SessionService",
+        "Wait",
+        "SessionWaitRequest",
+        "SessionRecord"
+    ),
+    method!(
+        "SessionService",
+        "Logs",
+        "SessionLogsRequest",
+        "SessionLogStreamItem",
+        false,
+        true
+    ),
+    method!(
+        "SessionService",
+        "Events",
+        "SessionEventsRequest",
+        "SessionEventStreamItem",
+        false,
+        true
+    ),
+    method!(
+        "SessionService",
+        "Evidence",
+        "SessionEvidenceRequest",
+        "SessionEvidenceStreamItem",
+        false,
+        true
+    ),
+    method!(
+        "SessionService",
+        "Attach",
+        "SessionAttachRequest",
+        "SessionAttachResponse"
+    ),
+    method!(
+        "SessionService",
+        "RenewInputLease",
+        "SessionInputLeaseRenewRequest",
+        "SessionInputLeaseResponse"
+    ),
+    method!(
+        "SessionService",
+        "ReleaseInputLease",
+        "SessionInputLeaseReleaseRequest",
+        "SessionInputLeaseResponse"
+    ),
+    method!(
+        "SessionService",
+        "Input",
+        "SessionInputRequest",
+        "SessionInputResponse"
+    ),
+    method!(
+        "SessionService",
+        "ResizeTerminal",
+        "SessionTerminalResizeRequest",
+        "SessionTerminalResizeResponse"
+    ),
+    method!(
+        "SessionService",
+        "AttachCodexAppServer",
+        "CodexAppServerAttachRequest",
+        "CodexAppServerAttachResponse"
+    ),
+    method!(
+        "SessionService",
+        "InputCodexAppServer",
+        "CodexAppServerInputRequest",
+        "CodexAppServerInputResponse"
+    ),
+    method!(
+        "SessionService",
+        "CloseCodexAppServerInput",
+        "CodexAppServerInputCloseRequest",
+        "CodexAppServerInputCloseResponse"
+    ),
+    method!(
+        "SessionService",
+        "Prune",
+        "SessionPruneRequest",
+        "SessionPruneResponse"
+    ),
+    method!(
+        "SessionService",
+        "SetAlias",
+        "SessionAliasSetRequest",
+        "SessionAliasRecord"
+    ),
+    method!(
+        "SessionService",
+        "RemoveAlias",
+        "SessionAliasRemoveRequest",
+        "SessionAliasRecord"
+    ),
+    method!(
+        "SessionService",
+        "ListAliases",
+        "SessionAliasListRequest",
+        "SessionAliasListResponse"
+    ),
+    method!(
+        "FilesystemService",
+        "Query",
+        "FilesystemQueryRequest",
+        "FilesystemOperationResponse"
+    ),
+    method!(
+        "FilesystemService",
+        "Mutate",
+        "FilesystemMutationRequest",
+        "FilesystemOperationResponse"
+    ),
+    method!(
+        "ContextService",
+        "DeliveryInbox",
+        "ContextDeliveryInboxRequest",
+        "ContextDeliveryInboxResponse"
+    ),
+    method!(
+        "ContextService",
+        "Graph",
+        "ContextGraphRequest",
+        "ContextGraphResponse"
+    ),
+    method!(
+        "ContextService",
+        "ReceiveDelivery",
+        "ContextDeliveryReceiveRequest",
+        "ContextDeliveryDecisionResponse"
+    ),
+    method!(
+        "ContextService",
+        "RejectDelivery",
+        "ContextDeliveryRejectRequest",
+        "ContextDeliveryDecisionResponse"
+    ),
+    method!(
+        "AdministrationService",
+        "ListSessions",
+        "AdminSessionListRequest",
+        "SessionListResponse"
+    ),
+    method!(
+        "AdministrationService",
+        "InspectSession",
+        "AdminSessionInspectRequest",
+        "SessionRecord"
+    ),
+    method!(
+        "AdministrationService",
+        "StopSession",
+        "AdminSessionStopRequest",
+        "SessionRecord"
+    ),
+    method!(
+        "AdministrationService",
+        "KillSession",
+        "AdminSessionKillRequest",
+        "SessionRecord"
+    ),
+    method!(
+        "AdministrationService",
+        "SetSessionRetentionHold",
+        "AdminSessionSetRetentionHoldRequest",
+        "SessionRecord"
+    ),
+    method!(
+        "ApprovalService",
+        "List",
+        "ApprovalListRequest",
+        "ApprovalListResponse"
+    ),
+    method!(
+        "ApprovalService",
+        "Inspect",
+        "ApprovalInspectRequest",
+        "ApprovalRecord"
+    ),
+    method!(
+        "ApprovalService",
+        "Approve",
+        "ApprovalApproveRequest",
+        "ApprovalRecord"
+    ),
+    method!(
+        "ApprovalService",
+        "Deny",
+        "ApprovalDenyRequest",
+        "ApprovalRecord"
+    ),
+    method!(
+        "PolicyService",
+        "Test",
+        "PolicyTestRequest",
+        "PolicyTestResponse"
+    ),
+    method!(
+        "PolicyService",
+        "ApplyPackage",
+        "PolicyPackageApplyRequest",
+        "PolicyPackageRecord"
+    ),
+    method!(
+        "PolicyService",
+        "ListPackages",
+        "PolicyPackageListRequest",
+        "PolicyPackageListResponse"
+    ),
+    method!(
+        "PolicyService",
+        "InspectPackage",
+        "PolicyPackageInspectRequest",
+        "PolicyPackageRecord"
+    ),
+    method!(
+        "PolicyService",
+        "VerifyPackage",
+        "PolicyPackageVerifyRequest",
+        "PolicyPackageRecord"
+    ),
+    method!(
+        "PolicyService",
+        "CreateSet",
+        "PolicySetCreateRequest",
+        "PolicySetRecord"
+    ),
+    method!(
+        "PolicyService",
+        "ListSets",
+        "PolicySetListRequest",
+        "PolicySetListResponse"
+    ),
+    method!(
+        "PolicyService",
+        "InspectSet",
+        "PolicySetInspectRequest",
+        "PolicySetRecord"
+    ),
+    method!(
+        "PolicyService",
+        "VerifySet",
+        "PolicySetVerifyRequest",
+        "PolicySetRecord"
+    ),
+    method!(
+        "SurfaceService",
+        "Create",
+        "SurfaceCreateRequest",
+        "SurfaceRecord"
+    ),
+    method!(
+        "SurfaceService",
+        "List",
+        "SurfaceListRequest",
+        "SurfaceListResponse"
+    ),
+    method!(
+        "SurfaceService",
+        "Inspect",
+        "SurfaceInspectRequest",
+        "SurfaceRecord"
+    ),
+    method!(
+        "RunnerService",
+        "List",
+        "RunnerListRequest",
+        "RunnerListResponse"
+    ),
+    method!(
+        "RunnerService",
+        "Inspect",
+        "RunnerInspectRequest",
+        "RunnerCapabilityRecord"
+    ),
+    method!(
+        "HookService",
+        "Open",
+        "HookClientMessage",
+        "HookServerMessage",
+        true,
+        true
+    ),
+    method!(
+        "RuntimeObservationService",
+        "GetSnapshot",
+        "MithrilObservationSnapshotRequest",
+        "MithrilObservationSnapshotResponse"
+    ),
+];
+
 #[test]
-fn public_api_round_trips_guard_hello_through_envelope_and_frame() -> Result<(), Box<dyn Error>> {
-    let hello = GuardHello {
-        protocol_version: PROTOCOL_VERSION,
-        session_id: String::from("session-public-contract"),
-        actor_id: String::from("openclaw"),
-        guard_pid: 1234,
-        runner_kind: String::from("linux_host"),
-        platform: String::from("linux-x86_64"),
-        capabilities: vec![String::from("interception_request")],
-    };
-
-    let envelope = Envelope::wrap_message(1, 0, KIND_GUARD_HELLO, &hello)?;
-    let encoded = envelope.into_frame()?.encode()?;
-    let decoded_frame = EreborIpcFrame::decode(&encoded)?;
-    let decoded_envelope: Envelope = decoded_frame.decode_payload()?;
-    let decoded_hello: GuardHello = decoded_envelope.decode_typed_payload(KIND_GUARD_HELLO)?;
-
-    assert_eq!(decoded_envelope.protocol_version, PROTOCOL_VERSION);
-    assert_eq!(decoded_envelope.message_kind, KIND_GUARD_HELLO);
-    assert_eq!(decoded_hello, hello);
-    Ok(())
-}
-
-#[test]
-fn public_api_round_trips_daemon_owned_evidence_stream_request() -> Result<(), Box<dyn Error>> {
-    let request = SessionEvidenceRequest {
-        session_id: String::from("session-evidence-contract"),
-        after_sequence: 41,
-        maximum_records: 128,
-    };
-    let envelope = Envelope::wrap_message(6, 0, KIND_SESSION_EVIDENCE_REQUEST, &request)?;
-    let frame = EreborIpcFrame::decode(&envelope.into_frame()?.encode()?)?;
-    let decoded: SessionEvidenceRequest = frame
-        .decode_payload::<Envelope>()?
-        .decode_typed_payload(KIND_SESSION_EVIDENCE_REQUEST)?;
-
-    assert_eq!(decoded, request);
-    Ok(())
-}
-
-#[test]
-fn public_api_round_trips_daemon_owned_context_graph() -> Result<(), Box<dyn Error>> {
-    let request = ContextGraphRequest {
-        session_id: String::from("session-context-contract"),
-    };
-    let request_envelope = Envelope::wrap_message(61, 0, KIND_CONTEXT_GRAPH_REQUEST, &request)?;
-    let request_frame = EreborIpcFrame::decode(&request_envelope.into_frame()?.encode()?)?;
-    let decoded_request: ContextGraphRequest = request_frame
-        .decode_payload::<Envelope>()?
-        .decode_typed_payload(KIND_CONTEXT_GRAPH_REQUEST)?;
-    assert_eq!(decoded_request, request);
-
-    let response = ContextGraphResponse {
-        root_scope: String::from("refs/scopes/session-context-contract/root"),
-        nodes: vec![ContextScopeGraphNode {
-            scope: String::from("refs/scopes/session-context-contract/root"),
-            parent_scope: String::new(),
-            head_commit: String::from(
-                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-            ),
-            fork_parent_commit: String::new(),
-            source_identity: String::new(),
-            execution_binding: String::new(),
-            depth: 0,
-            source_tool_use_id: String::new(),
-        }],
-        activities: vec![ContextGraphActivity {
-            scope: String::from("refs/scopes/session-context-contract/root"),
-            summary: String::from("tool bash command=\"ls\""),
-            tool_use_id: String::from("fixture-command-1"),
-        }],
-    };
-    let response_envelope = Envelope::wrap_message(62, 61, KIND_CONTEXT_GRAPH_RESPONSE, &response)?;
-    let response_frame = EreborIpcFrame::decode(&response_envelope.into_frame()?.encode()?)?;
-    let decoded_response: ContextGraphResponse = response_frame
-        .decode_payload::<Envelope>()?
-        .decode_typed_payload(KIND_CONTEXT_GRAPH_RESPONSE)?;
-    assert_eq!(decoded_response, response);
-    Ok(())
-}
-
-#[test]
-fn public_api_round_trips_lease_bound_interactive_input() -> Result<(), Box<dyn Error>> {
-    let request = SessionInputRequest {
-        session_id: String::from("session-input-contract"),
-        input_lease_id: String::from("lease-contract"),
-        client_instance_id: String::from("cli-contract"),
-        data: b"echo governed\n".to_vec(),
-    };
-    let envelope = Envelope::wrap_message(7, 0, KIND_SESSION_INPUT_REQUEST, &request)?;
-    let frame = EreborIpcFrame::decode(&envelope.into_frame()?.encode()?)?;
-    let decoded: SessionInputRequest = frame
-        .decode_payload::<Envelope>()?
-        .decode_typed_payload(KIND_SESSION_INPUT_REQUEST)?;
-
-    assert_eq!(decoded, request);
-    Ok(())
-}
-
-#[test]
-fn public_api_round_trips_lease_bound_terminal_resize() -> Result<(), Box<dyn Error>> {
-    let request = SessionTerminalResizeRequest {
-        session_id: String::from("session-terminal-contract"),
-        input_lease_id: String::from("lease-contract"),
-        client_instance_id: String::from("cli-contract"),
-        rows: 40,
-        columns: 120,
-    };
-    let envelope = Envelope::wrap_message(10, 0, KIND_SESSION_TERMINAL_RESIZE_REQUEST, &request)?;
-    let frame = EreborIpcFrame::decode(&envelope.into_frame()?.encode()?)?;
-    let decoded: SessionTerminalResizeRequest = frame
-        .decode_payload::<Envelope>()?
-        .decode_typed_payload(KIND_SESSION_TERMINAL_RESIZE_REQUEST)?;
-
-    assert_eq!(decoded, request);
-    Ok(())
-}
-
-#[test]
-fn public_api_round_trips_bounded_codex_app_server_input() -> Result<(), Box<dyn Error>> {
-    let request = CodexAppServerInputRequest {
-        session_id: String::from("session-app-server-contract"),
-        input_lease_id: String::from("lease-contract"),
-        client_instance_id: String::from("cli-contract"),
-        jsonl_frame: b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"turn/start\"}\n".to_vec(),
-    };
-    let envelope = Envelope::wrap_message(8, 0, KIND_CODEX_APP_SERVER_INPUT_REQUEST, &request)?;
-    let frame = EreborIpcFrame::decode(&envelope.into_frame()?.encode()?)?;
-    let decoded: CodexAppServerInputRequest = frame
-        .decode_payload::<Envelope>()?
-        .decode_typed_payload(KIND_CODEX_APP_SERVER_INPUT_REQUEST)?;
-
-    assert_eq!(decoded, request);
-    Ok(())
-}
-
-#[test]
-fn public_api_round_trips_codex_app_server_input_eof() -> Result<(), Box<dyn Error>> {
-    let request = CodexAppServerInputCloseRequest {
-        session_id: String::from("session-app-server-contract"),
-        input_lease_id: String::from("lease-contract"),
-        client_instance_id: String::from("cli-contract"),
-    };
-    let envelope =
-        Envelope::wrap_message(9, 0, KIND_CODEX_APP_SERVER_INPUT_CLOSE_REQUEST, &request)?;
-    let frame = EreborIpcFrame::decode(&envelope.into_frame()?.encode()?)?;
-    let decoded: CodexAppServerInputCloseRequest = frame
-        .decode_payload::<Envelope>()?
-        .decode_typed_payload(KIND_CODEX_APP_SERVER_INPUT_CLOSE_REQUEST)?;
-
-    assert_eq!(decoded, request);
-    Ok(())
-}
-
-#[test]
-fn public_api_round_trips_interception_request_and_deny_decision() -> Result<(), Box<dyn Error>> {
-    let request = InterceptionRequest {
-        request_id: 77,
-        actor_id: String::from("openclaw"),
-        source: InterceptionSource::Shim as i32,
-        pid: 2001,
-        ppid: 2000,
-        executable: String::from("google-chrome"),
-        argv: vec![
-            String::from("google-chrome"),
-            String::from("--remote-debugging-port=9222"),
-        ],
-        cwd: String::from("/workspace"),
-        selected_env: Vec::new(),
-        requested_endpoint: None,
-        matched_handler_id: String::from("managed-browser-cdp"),
-        timestamp: String::from("unix:1781200100"),
-        operation: InterceptionOperation::ProcessExec as i32,
-        process_exec: Some(ProcessExecOperation {
-            executable: String::from("google-chrome"),
-            argv: vec![
-                String::from("google-chrome"),
-                String::from("--remote-debugging-port=9222"),
-            ],
-            requested_endpoint: None,
-            matched_handler_id: String::from("managed-browser-cdp"),
-        }),
-        file: None,
-        socket: None,
-    };
-    let request_envelope = Envelope::wrap_message(2, 0, KIND_INTERCEPTION_REQUEST, &request)?;
-    let request_frame = EreborIpcFrame::decode(&request_envelope.into_frame()?.encode()?)?;
-    let decoded_request_envelope: Envelope = request_frame.decode_payload()?;
-    let decoded_request: InterceptionRequest =
-        decoded_request_envelope.decode_typed_payload(KIND_INTERCEPTION_REQUEST)?;
-
-    assert_eq!(decoded_request, request);
-
-    let decision = InterceptionDecision {
-        request_id: decoded_request.request_id,
-        decision: DecisionKind::Deny as i32,
-        rule_id: String::from("deny-raw-cdp"),
-        reason: String::from("raw browser CDP launch denied"),
-        timeout_ms: 25,
-        allow: None,
-        deny: Some(DenyDecision { exit_code: 126 }),
-        mediate: None,
-    };
-    let decision_envelope =
-        Envelope::wrap_message(3, request.request_id, KIND_INTERCEPTION_DECISION, &decision)?;
-    let decision_frame = EreborIpcFrame::decode(&decision_envelope.into_frame()?.encode()?)?;
-    let decoded_decision_envelope: Envelope = decision_frame.decode_payload()?;
-    let decoded_decision: InterceptionDecision =
-        decoded_decision_envelope.decode_typed_payload(KIND_INTERCEPTION_DECISION)?;
-
-    assert_eq!(decoded_decision_envelope.correlation_id, request.request_id);
-    assert_eq!(decoded_decision.decision, DecisionKind::Deny as i32);
-    assert_eq!(decoded_decision, decision);
-    Ok(())
-}
-
-#[test]
-fn public_api_round_trips_guard_lifecycle_hold_and_release() -> Result<(), Box<dyn Error>> {
-    let event = GuardLifecycleEvent {
-        request_id: 78,
-        event: GuardLifecycleEventKind::Exec as i32,
-        pid: 2002,
-        exec_history: vec![
-            String::from("/bin/sh"),
-            String::from("/usr/lib/erebor/hook"),
-        ],
-        parent_pid: 2001,
-        child_pid: 0,
-        exited_successfully: false,
-    };
-    let event_envelope = Envelope::wrap_message(4, 0, KIND_GUARD_LIFECYCLE_EVENT, &event)?;
-    let event_frame = EreborIpcFrame::decode(&event_envelope.into_frame()?.encode()?)?;
-    let decoded_event: GuardLifecycleEvent = event_frame
-        .decode_payload::<Envelope>()?
-        .decode_typed_payload(KIND_GUARD_LIFECYCLE_EVENT)?;
-    assert_eq!(decoded_event, event);
-
-    let reply = GuardLifecycleReply {
-        request_id: event.request_id,
-        decision: GuardLifecycleReplyKind::Release as i32,
-        reason: String::from("managed hook lease released"),
-    };
-    let reply_envelope =
-        Envelope::wrap_message(5, event.request_id, KIND_GUARD_LIFECYCLE_REPLY, &reply)?;
-    let reply_frame = EreborIpcFrame::decode(&reply_envelope.into_frame()?.encode()?)?;
-    let decoded_reply: GuardLifecycleReply = reply_frame
-        .decode_payload::<Envelope>()?
-        .decode_typed_payload(KIND_GUARD_LIFECYCLE_REPLY)?;
-    assert_eq!(decoded_reply, reply);
-    Ok(())
-}
-
-#[test]
-fn frame_header_is_generic_and_future_envelope_kinds_survive_round_trip(
-) -> Result<(), Box<dyn Error>> {
-    let envelope = Envelope {
-        protocol_version: PROTOCOL_VERSION,
-        message_id: 9,
-        correlation_id: 8,
-        message_kind: String::from("erebor.runtime.ipc.v1.FuturePayload"),
-        payload: vec![1, 2, 3, 4],
-        headers: Vec::new(),
-    };
-    let encoded = envelope.into_frame()?.encode()?;
-
-    assert_eq!(&encoded[0..4], b"ERB1");
-    assert_eq!(u16::from_le_bytes([encoded[4], encoded[5]]), FRAME_VERSION);
-    let encoded_payload_len =
-        u32::from_le_bytes([encoded[8], encoded[9], encoded[10], encoded[11]]) as usize;
-    assert_eq!(encoded_payload_len, encoded.len() - HEADER_LEN);
-
-    let decoded_frame = EreborIpcFrame::decode(&encoded)?;
-    let decoded_envelope: Envelope = decoded_frame.decode_payload()?;
-
+fn descriptor_has_the_approved_grpc_inventory() -> Result<(), Box<dyn std::error::Error>> {
+    let descriptors = FileDescriptorSet::decode(erebor_runtime_ipc::v1::FILE_DESCRIPTOR_SET)?;
+    let files = descriptors
+        .file
+        .iter()
+        .filter(|file| file.package.as_deref() == Some(PACKAGE))
+        .collect::<Vec<_>>();
+    let file_names = files
+        .iter()
+        .filter_map(|file| file.name.as_deref())
+        .collect::<BTreeSet<_>>();
     assert_eq!(
-        decoded_envelope.message_kind,
-        "erebor.runtime.ipc.v1.FuturePayload"
+        file_names,
+        BTreeSet::from([
+            "erebor/runtime/ipc/v1/daemon.proto",
+            "erebor/runtime/ipc/v1/hook.proto",
+            "erebor/runtime/ipc/v1/mithril.proto",
+        ])
     );
-    assert_eq!(decoded_envelope.payload, &[1, 2, 3, 4]);
+
+    let actual = files
+        .iter()
+        .flat_map(|file| &file.service)
+        .flat_map(|service| {
+            service.method.iter().map(|method| {
+                signature(
+                    service.name.as_deref().unwrap_or_default(),
+                    method.name.as_deref().unwrap_or_default(),
+                    method.input_type.as_deref().unwrap_or_default(),
+                    method.output_type.as_deref().unwrap_or_default(),
+                    method.client_streaming.unwrap_or_default(),
+                    method.server_streaming.unwrap_or_default(),
+                )
+            })
+        })
+        .collect::<BTreeSet<_>>();
+    let expected = EXPECTED_METHODS
+        .iter()
+        .map(|method| {
+            signature(
+                method.service,
+                method.method,
+                &format!(".{PACKAGE}.{}", method.input),
+                &format!(".{PACKAGE}.{}", method.output),
+                method.client_streaming,
+                method.server_streaming,
+            )
+        })
+        .collect::<BTreeSet<_>>();
+
+    assert_eq!(actual, expected);
     Ok(())
 }
 
-#[test]
-fn public_api_supports_all_phase_zero_decision_kinds() -> Result<(), Box<dyn Error>> {
-    let decisions = [
-        InterceptionDecision {
-            request_id: 88,
-            decision: DecisionKind::Allow as i32,
-            rule_id: String::from("allow-process"),
-            reason: String::from("process allowed"),
-            timeout_ms: 25,
-            allow: Some(AllowDecision {
-                exec_target: String::from("/usr/bin/true"),
-            }),
-            deny: None,
-            mediate: None,
-        },
-        InterceptionDecision {
-            request_id: 88,
-            decision: DecisionKind::Deny as i32,
-            rule_id: String::from("deny-process"),
-            reason: String::from("process denied"),
-            timeout_ms: 25,
-            allow: None,
-            deny: Some(DenyDecision { exit_code: 126 }),
-            mediate: None,
-        },
-        InterceptionDecision {
-            request_id: 88,
-            decision: DecisionKind::RequireApproval as i32,
-            rule_id: String::from("approve-process"),
-            reason: String::from("process requires approval"),
-            timeout_ms: 25,
-            allow: None,
-            deny: None,
-            mediate: None,
-        },
-        InterceptionDecision {
-            request_id: 88,
-            decision: DecisionKind::Mediate as i32,
-            rule_id: String::from("mediate-browser"),
-            reason: String::from("browser launch mediated"),
-            timeout_ms: 25,
-            allow: None,
-            deny: None,
-            mediate: Some(MediateDecision {
-                kind: String::from("managed_browser_cdp"),
-                replacement_surface: String::from("browser_cdp"),
-                endpoint: String::from("ws://127.0.0.1:9222/"),
-                lease_id: String::from("lease-public-contract"),
-                print_line: String::from("DevTools listening on ws://127.0.0.1:9222/"),
-                keepalive: true,
-            }),
-        },
-    ];
-
-    for decision in decisions {
-        let envelope = Envelope::wrap_message(
-            10,
-            decision.request_id,
-            KIND_INTERCEPTION_DECISION,
-            &decision,
-        )?;
-        let frame = EreborIpcFrame::decode(&envelope.into_frame()?.encode()?)?;
-        let decoded_envelope: Envelope = frame.decode_payload()?;
-        let decoded_decision: InterceptionDecision =
-            decoded_envelope.decode_typed_payload(KIND_INTERCEPTION_DECISION)?;
-
-        assert_eq!(decoded_decision, decision);
-    }
-
-    Ok(())
-}
-
-#[test]
-fn frame_payload_boundary_is_enforced_on_create_and_decode() -> Result<(), Box<dyn Error>> {
-    let max_payload_frame = EreborIpcFrame::new(0, vec![7; MAX_PAYLOAD_LEN])?;
-    let encoded = max_payload_frame.encode()?;
-    let decoded = EreborIpcFrame::decode(&encoded)?;
-
-    assert_eq!(decoded.payload().len(), MAX_PAYLOAD_LEN);
-
-    let too_large = EreborIpcFrame::new(0, vec![7; MAX_PAYLOAD_LEN + 1]);
-    assert!(matches!(
-        too_large,
-        Err(IpcProtocolError::PayloadTooLarge { .. })
-    ));
-
-    let mut oversized_decode = Vec::from(*b"ERB1");
-    oversized_decode.extend_from_slice(&FRAME_VERSION.to_le_bytes());
-    oversized_decode.extend_from_slice(&0u16.to_le_bytes());
-    oversized_decode.extend_from_slice(&((MAX_PAYLOAD_LEN + 1) as u32).to_le_bytes());
-    assert!(matches!(
-        EreborIpcFrame::decode(&oversized_decode),
-        Err(IpcProtocolError::PayloadTooLarge { .. })
-    ));
-    Ok(())
+fn signature(
+    service: &str,
+    method: &str,
+    input: &str,
+    output: &str,
+    client_streaming: bool,
+    server_streaming: bool,
+) -> String {
+    format!(
+        "{service}/{method}:{input}->{output}:client_stream={client_streaming}:server_stream={server_streaming}"
+    )
 }

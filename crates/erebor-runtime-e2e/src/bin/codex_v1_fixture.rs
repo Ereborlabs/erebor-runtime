@@ -809,7 +809,6 @@ fn hook_hello_is_accepted(session_id: &str) -> FixtureResult<bool> {
         sender
             .send(HookClientMessage {
                 item: Some(hook_client_message::Item::Hello(HookHello {
-                    ticket_id: String::new(),
                     session_id: session_id.to_owned(),
                 })),
             })

@@ -307,8 +307,7 @@ impl CodexContextDag {
 
     /// Bind a daemon-admitted logical child scope to an exact Codex
     /// `(thread_id, turn_id)` pair. This is an in-session routing fact: it
-    /// neither starts a child session nor projects a second hook socket or
-    /// process guard.
+    /// neither starts a child session nor projects a second hook socket.
     pub(crate) fn bind_admitted_scope(
         &self,
         thread_id: String,

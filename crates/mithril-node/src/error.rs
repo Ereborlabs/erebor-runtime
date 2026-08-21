@@ -2,7 +2,6 @@ use std::any::Any;
 use std::path::PathBuf;
 
 use erebor_runtime_error::{ErrorExt, RetryHint, StatusCode};
-use erebor_runtime_ipc::IpcProtocolError;
 use snafu::{Location, Snafu};
 
 #[derive(Debug, Snafu)]
@@ -104,12 +103,6 @@ pub enum Error {
         #[snafu(implicit)]
         location: Location,
     },
-    #[snafu(display("Mithril Runtime observation IPC failed: {source}"))]
-    LocalIpc {
-        source: IpcProtocolError,
-        #[snafu(implicit)]
-        location: Location,
-    },
     #[snafu(display("Mithril Runtime observation gRPC service failed: {source}"))]
     LocalTransport {
         source: tonic::transport::Error,
@@ -145,7 +138,6 @@ impl ErrorExt for Error {
             | Self::Json { .. }
             | Self::ControlProtocol { .. } => StatusCode::InvalidArguments,
             Self::Authorization { .. } => StatusCode::PermissionDenied,
-            Self::LocalIpc { source, .. } => source.status_code(),
             Self::Interceptor { source, .. } => source.status_code(),
             Self::Policy { source, .. } => source.status_code(),
             Self::Io { .. }
@@ -164,7 +156,6 @@ impl ErrorExt for Error {
             Self::Io { source, .. } => RetryHint::from_io_error(source),
             Self::Interceptor { source, .. } => source.retry_hint(),
             Self::Policy { source, .. } => source.retry_hint(),
-            Self::LocalIpc { source, .. } => source.retry_hint(),
             Self::ControlTransport { .. }
             | Self::LocalTransport { .. }
             | Self::ControlRpc { .. }

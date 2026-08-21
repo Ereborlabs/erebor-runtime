@@ -4,7 +4,7 @@ use erebor_runtime_context::{ContextPin, ScopeRef};
 
 /// Daemon-owned facts that identify one authenticated operation within an
 /// already-running agent session. This is an in-process callback payload, not
-/// a workload IPC message or a second process-guard protocol.
+/// a workload RPC message.
 #[derive(Clone, Debug)]
 pub struct ContextOperationAdmission {
     session_id: String,

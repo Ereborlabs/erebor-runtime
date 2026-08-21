@@ -6,7 +6,7 @@ use std::{
 
 use clap::{Args, Subcommand};
 use erebor_runtime_client::DaemonClient;
-use erebor_runtime_ipc::MAX_PAYLOAD_LEN;
+use erebor_runtime_ipc::transport::MAX_GRPC_MESSAGE_BYTES;
 use snafu::ResultExt;
 
 use crate::error::{
@@ -16,7 +16,7 @@ use crate::error::{
 
 use super::parse_non_empty_path;
 
-const MAX_POLICY_TEST_REQUEST_BYTES: u64 = (MAX_PAYLOAD_LEN - 1024) as u64;
+const MAX_POLICY_TEST_REQUEST_BYTES: u64 = (MAX_GRPC_MESSAGE_BYTES - 1024) as u64;
 
 #[derive(Debug, Args)]
 pub(super) struct PolicyArgs {

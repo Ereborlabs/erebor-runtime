@@ -5,7 +5,7 @@ use std::{
 };
 
 use erebor_runtime_core::AgentAdapterDescriptor;
-use erebor_runtime_ipc::MAX_PAYLOAD_LEN;
+use erebor_runtime_ipc::transport::MAX_GRPC_MESSAGE_BYTES;
 use erebor_runtime_packages::{
     AgentPackageManifest, CanonicalEncoding, CodexPackageDefinition, InstallationRecord,
     PolicyPackageRevision, PolicySetRevision,
@@ -29,7 +29,7 @@ const DEFAULT_MAX_CONCURRENT_STREAMS_PER_UID: u32 = 8;
 const DEFAULT_MAX_RETAINED_SESSION_OUTPUT_BYTES_PER_UID: u64 =
     DEFAULT_MAX_SESSION_OUTPUT_BYTES * DEFAULT_MAX_CONCURRENT_SESSIONS_PER_UID as u64;
 const DEFAULT_MAX_STORED_POLICY_BYTES_PER_UID: u64 = 64 * 1024 * 1024;
-const DEFAULT_MAX_IPC_UPLOAD_BYTES_PER_UID: u64 = (MAX_PAYLOAD_LEN - 1024) as u64;
+const DEFAULT_MAX_IPC_UPLOAD_BYTES_PER_UID: u64 = (MAX_GRPC_MESSAGE_BYTES - 1024) as u64;
 const MIN_LOG_BYTES: u64 = 4096;
 const MAX_LOG_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_LOG_RECORDS: u32 = 4096;
@@ -485,7 +485,7 @@ mod tests {
     use std::collections::BTreeMap;
     use std::path::Path;
 
-    use erebor_runtime_ipc::MAX_PAYLOAD_LEN;
+    use erebor_runtime_ipc::transport::MAX_GRPC_MESSAGE_BYTES;
     use erebor_runtime_packages::{
         AgentPackageManifest, CanonicalEncoding, ContentDigest, InstallationRecord,
         PolicyPackageRevision, PolicySetRevision,
@@ -564,7 +564,7 @@ mod tests {
 
         let config = DaemonConfig {
             max_concurrent_streams_per_uid: 1,
-            max_ipc_upload_bytes_per_uid: (MAX_PAYLOAD_LEN as u64).saturating_add(1),
+            max_ipc_upload_bytes_per_uid: (MAX_GRPC_MESSAGE_BYTES as u64).saturating_add(1),
             ..DaemonConfig::default()
         };
         assert!(config.validate(Path::new("<test-config>")).is_err());

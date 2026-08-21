@@ -1311,12 +1311,10 @@ dependencies = [
 name = "erebor-runtime-ipc"
 version = "0.1.0"
 dependencies = [
- "erebor-runtime-error",
  "futures-util",
  "hyper-util",
  "prost",
- "sha2 0.10.9",
- "snafu",
+ "prost-types",
  "tokio",
  "tonic",
  "tonic-build",
@@ -3169,6 +3167,7 @@ dependencies = [
  "minicbor",
  "openidconnect",
  "prost",
+ "prost-types",
  "rcgen",
  "reqwest",
  "secrecy",

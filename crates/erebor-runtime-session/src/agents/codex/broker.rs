@@ -514,19 +514,13 @@ impl CodexHookBrokerProtocol {
             }
             .fail();
         }
-        if !hello.ticket_id.is_empty() {
-            return InvalidHookEventSnafu {
-                reason: String::from("client-supplied hook tickets are not accepted"),
-            }
-            .fail();
-        }
         let pid = peer
             .pid
             .ok_or_else(|| CodexSessionError::InvalidHookEvent {
                 reason: String::from("Unix peer pid is unavailable"),
                 location: snafu::Location::default(),
             })?;
-        let observed_peer = LinuxHookPeerInspector::inspect_pid(pid, "")?;
+        let observed_peer = LinuxHookPeerInspector::inspect_pid(pid)?;
         ensure!(
             observed_peer.observed_uid == peer.uid && observed_peer.observed_gid == peer.gid,
             InvalidHookEventSnafu {
@@ -811,12 +805,10 @@ pub(super) struct LinuxHookPeerInspector;
 impl LinuxHookPeerInspector {
     pub(super) fn inspect_pid(
         pid: i32,
-        ticket_id: &str,
     ) -> Result<erebor_runtime_ipc::v1::HookPeerEvidence, CodexSessionError> {
         let process = LinuxHookProcess::inspect(pid)?;
         let metadata = fs::metadata(format!("/proc/{pid}")).context(HookBrokerIoSnafu)?;
         Ok(erebor_runtime_ipc::v1::HookPeerEvidence {
-            ticket_id: ticket_id.to_owned(),
             observed_pid: i64::from(pid),
             process_start_time_ticks: process.start_time_ticks,
             executable: process.executable,
@@ -1149,18 +1141,15 @@ mod tests {
     #[test]
     fn inspector_observes_kernel_bound_unix_peer_identity() -> Result<(), Box<dyn std::error::Error>>
     {
-        let peer =
-            match LinuxHookPeerInspector::inspect_pid(i32::try_from(std::process::id())?, "ticket")
+        let peer = match LinuxHookPeerInspector::inspect_pid(i32::try_from(std::process::id())?) {
+            Ok(peer) => peer,
+            Err(CodexSessionError::HookBrokerIo { source, .. })
+                if source.kind() == std::io::ErrorKind::PermissionDenied =>
             {
-                Ok(peer) => peer,
-                Err(CodexSessionError::HookBrokerIo { source, .. })
-                    if source.kind() == std::io::ErrorKind::PermissionDenied =>
-                {
-                    return Ok(());
-                }
-                Err(error) => return Err(error.into()),
-            };
-        assert_eq!(peer.ticket_id, "ticket");
+                return Ok(());
+            }
+            Err(error) => return Err(error.into()),
+        };
         assert_eq!(peer.observed_pid, i64::from(std::process::id()));
         assert!(!peer.executable.is_empty());
         assert!(!peer.exec_chain.is_empty());
@@ -1422,13 +1411,7 @@ mod tests {
             profile.executable(),
             std::path::Path::new(workload_executable)
         );
-        assert_eq!(
-            profile.hook_exec_history(),
-            [
-                std::path::PathBuf::from(workload_executable),
-                std::path::PathBuf::from("/run/erebor/codex/hooks/erebor-codex-hook"),
-            ]
-        );
+        assert!(profile.allows_hook_executable(workload_executable));
         assert!(profile.allows_hook_executable("/run/erebor/codex/hooks/erebor-codex-hook"));
         assert!(!profile.allows_hook_executable("/tmp/unregistered-hook"));
         Ok(())

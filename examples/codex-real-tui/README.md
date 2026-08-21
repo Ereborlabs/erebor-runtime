@@ -18,9 +18,6 @@ cargo build --package erebor-runtime-cli --bin erebor
 cargo build --package erebor-runtime-daemon --bin erebord --bin erebor-path-broker
 cargo build --package erebor-runtime-session --bin erebor-linux-session-controller \
   --bin erebor-codex-hook
-cargo build --package erebor-runtime-session \
-  --features editor-process-guard-target \
-  --bin erebor-linux-process-guard
 ```
 
 ## Install the checked-in configuration once
@@ -49,7 +46,6 @@ test -d "$HOME/.codex"
 sudo install -d -o root -g 1000 -m 0750 "$EREBOR_ROOT/bin" "$EREBOR_TRUST"
 sudo install -o root -g root -m 0755 \
   "$EREBOR_BIN/erebor-linux-session-controller" \
-  "$EREBOR_BIN/erebor-linux-process-guard" \
   "$EREBOR_BIN/erebor-path-broker" \
   "$EREBOR_ROOT/bin/"
 sudo install -o root -g root -m 0755 \
@@ -150,8 +146,9 @@ host system base       -> Bash and system tools for LinuxHostRunner
 The daemon creates Codex's writable private state view at
 `/run/erebor/state/codex` from a verified snapshot. The live
 `~/.codex/ipc/` directory is masked: it is IDE authority, not a general
-filesystem source. Filesystem policy denies creation or mutation of
-`.erebor-denied` before it takes effect.
+filesystem source. The policy package still supports daemon-owned policy
+evaluation. This example does not provide syscall-level process or filesystem
+denial.
 
 See the [Phase 5.5 plan](../../docs/plans/daemon-client/phase-5-agent-policy-surface-model/phase-5-5-real-codex-tui-governed-acceptance.md)
 for the complete resource and enforcement contract.
