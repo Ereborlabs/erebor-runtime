@@ -1,9 +1,17 @@
 # Mithril: Linux-Native Prevention, Evidence, And Verified Response
 
-**Status: VALIDATED DESIGN AUTHORITY — 2026-08-08.** This is the sole normative
-Mithril architecture for implementation planning. Implementation still requires
-allocation and approval through the master plan and one named phase. Historical
-architecture text may explain rejected designs, but cannot override this file.
+**Status: VALIDATED DESIGN AUTHORITY — 2026-08-08; CONTROL POLICY AND EVIDENCE
+AMENDMENT — 2026-08-19.** This is the sole normative Mithril architecture for
+implementation planning. Implementation still requires allocation and
+approval through the master plan and one named phase. Historical architecture
+text may explain rejected designs, but cannot override this file.
+
+The 2026-08-19 amendment adds Control-plane source, rollout, and durable-intake
+contracts. It does not change the frozen local BPF decision ABI. Historical
+phase results remain bound to their recorded architecture digest. Phase 6.1
+must update the affected exact-type closure and Control protocol goldens, prove
+compatibility with the completed Phase 6 node contract, and bind its result and
+later results to this amended document.
 
 Status: proposed architecture. This document does not authorize an
 implementation phase. The
@@ -69,9 +77,10 @@ For every protected Linux effect, Mithril answers four questions:
 
 On each protected node, one Rust binary, `mithril-node`, owns the BPF programs,
 runtime-entry protocol, local policy state, evidence sequence, and local
-response actuators. A control plane receives normalized evidence, builds the
-cross-node and provider graph, authorizes broader response, and tracks whether
-the physical result was verified.
+response actuators. The control plane reconciles Kubernetes policy desired
+state, compiles and distributes immutable signed candidates, durably accepts
+normalized evidence, builds the cross-node and provider graph, authorizes
+broader response, and tracks whether the physical result was verified.
 
 Mithril and Erebor Runtime may use the same node gatherer and BPF ABI. Their
 purposes are different:
@@ -352,6 +361,7 @@ redesigning the protected system is not.
 allowed additions:
   one mithril-node DaemonSet Pod or equivalent host package per node
   Mithril's control service
+  one WorkloadProtectionProfile CRD and least-privilege Control RBAC
   configuration of documented OCI, NRI, runtime, Kubernetes audit/API,
     CI provider, and verification extension points
   small stateless hook adapters that forward to mithril-node when the
@@ -366,8 +376,14 @@ not allowed in the no-change baseline:
   changes to applications, PodSpecs, images, process layout, probes,
     lifecycle hooks, workload credentials, or the agent harness
   traffic redirection, DNS replacement, TLS interception, or a mandatory
-    provider proxy
+  provider proxy
 ```
+
+The CRD is a Control input. It is not a node policy artifact, node activation
+record, evidence store, or graph store. Only `mithril-control` watches the CRD.
+It converts an accepted desired revision to the closed policy contract and
+distributes an immutable signed candidate. Only `mithril-node` can stage,
+read back, probe, and activate the corresponding local generation.
 
 Mithril may read APIs and files the existing system already exposes. It may
 also be registered through an official hook or plugin interface. That
@@ -1719,7 +1735,21 @@ result.
 
 ### 11. The Operator Writes One Policy Model
 
-The human source object is one `WorkloadProtectionProfile`. It contains:
+The human source object is one `WorkloadProtectionProfile`. In production
+Kubernetes mode, it is a namespaced
+`WorkloadProtectionProfile.mithril.erebor.dev` custom resource. Its stored
+`.spec` is the desired policy source. The Kubernetes object identity,
+generation, and canonical spec digest form a separate immutable source
+revision. Kubernetes status and `resourceVersion` do not grant authority.
+
+The restricted YAML form remains available for offline review, import, and
+qualification. It cannot activate production Kubernetes policy directly. Both
+forms normalize to the same closed `PolicyDocumentV1`, and a golden must prove
+byte equality for the same semantic policy. The original submitted Kubernetes
+YAML is not authoritative after API-server storage and conversion; the stored
+typed `.spec` is authoritative.
+
+The policy contains:
 
 ```text
 identity and signature
@@ -1736,6 +1766,14 @@ notification and response rules
 coverage requirements
 rollout and exact exceptions
 ```
+
+Version 1 permits one live CRD owner for each `(tenant, trust domain,
+profile_id)` and one active `WorkloadProtectionProfile` for each exact workload
+binding. If two CRDs claim the same profile ID or resolve to the same workload,
+Control reports a conflict and creates no conflicting candidate. Namespace or
+object name, creation time, YAML order, priority, and “deny wins” cannot choose
+between profiles. The previous valid non-conflicting generation remains
+active. Cross-profile composition requires a later closed composition contract.
 
 Selectors find candidate workloads in userspace. They never become kernel
 authority. Binding resolves a selector to exact Pod UID, full container ID,
@@ -1963,8 +2001,9 @@ activation explanation and full-claim exclusions.
 
 ### 12. Compiler, Signature, And Atomic Activation
 
-Human YAML is normalized into closed `PolicyDocumentV1` bytes. The signed
-profile uses deterministic CBOR and Ed25519 with domain separator
+An accepted CRD `.spec` or the offline restricted YAML form is normalized into
+closed `PolicyDocumentV1` bytes. The signed profile uses deterministic CBOR
+and Ed25519 with domain separator
 `MITHRIL-PROFILE-V1`. The signature header binds the policy digest and the
 numeric registries for providers, capabilities, selectors, object classifiers,
 reason codes, correlation packages, and provider vocabularies.
@@ -1994,8 +2033,10 @@ wrong target, wrong platform, expired, or replayed rollback proof fails.
 #### Compilation pipeline
 
 ```text
-signed source
-  -> bounded schema/signature/anti-rollback validation
+stored CRD desired revision or offline review source
+  -> immutable PolicySourceRevisionV1 in production Kubernetes mode
+  -> closed canonical PolicyDocumentV1
+  -> bounded schema, registry, capability, and source-revision validation
   -> selectors resolved to immutable workload snapshots
   -> entries, roles, states, transitions, and effects checked for reachability
   -> non-path selectors expanded to a finite exact decision universe;
@@ -2005,11 +2046,31 @@ signed source
   -> objects, composite atoms, responses, coverage, and provider vocabularies lowered
   -> simulate against a recorded legitimate-workload baseline
   -> human approval
+  -> assign issuer sequence and sign the immutable profile
+  -> immutable signed per-node delivery candidate and target snapshot
+  -> authenticated Control-to-node delivery
+  -> node signature, validity, target, replay, and anti-rollback validation
   -> write a completely inactive generation
   -> read back every descriptor, row, default, membership, and digest
   -> run controlled allow and deny probes
   -> atomically publish the active-generation handle for new admissions
+  -> authenticated node activation acknowledgement and rollout inventory
 ```
+
+The API server's accepted object under configured RBAC records desired state.
+A watch event does not prove the human actor. Any separate human approval
+required by `RolloutV1` remains required and binds the exact source revision.
+The Control signing key proves candidate authenticity; it does not invent
+approval. There is no cluster-wide atomic activation. Each node reports its
+exact candidate and generation state. A partial rollout stays visible and
+limits later findings and policy claims.
+
+CRD deletion starts a monotonic retirement transaction. It does not erase a
+node generation. The retirement candidate names the exact current candidate
+and an approved successor or restrictive terminal state. If no valid
+retirement candidate can activate, the last valid local generation remains
+active. A Kubernetes finalizer reports reconciliation progress only; removal
+of the finalizer is not node authority.
 
 Compilation rejects ambiguous unequal-budget entries, escalation cycles,
 unreachable roles, unsupported deny hooks, path-only objects marked immutable,
@@ -3148,6 +3209,20 @@ truncated only below a durable contiguous acknowledgment. If restart cannot
 prove prior sequence/interval state, it starts a new epoch with an explicit
 gap.
 
+`EvidenceIntakeOwner` in Control authenticates each bounded node batch and
+appends accepted envelopes and coverage records by tenant, node, source,
+epoch, and sequence. It advances the durable contiguous cursor only in the
+same committed transaction as the accepted records. A duplicate with the same
+identity and bytes is idempotent. A duplicate with different bytes rejects.
+Out-of-order records remain pending inside a bounded window. Storage failure or
+backpressure withholds acknowledgement, so the node keeps the WAL range.
+
+Intake does not change node evidence, repair a coverage gap, or create a graph
+edge. The graph owner reads only committed intake records and cursors. CRDs do
+not store observation payloads, intake cursors, graph state, or findings. An
+acknowledged record remains in Control until the graph owner has installed and
+proved its declared retention, reference, and consumer-watermark rules.
+
 Coverage is a vector, not one boolean:
 
 ```text
@@ -3265,6 +3340,12 @@ stay contextual. Policy may authorize containment of the whole credential or
 workload scope, but not an invented exact task.
 
 #### Canonical graph
+
+A single `GraphAndFindingOwner` in `mithril-control` materializes local,
+cross-node, and provider graph revisions. Nodes and CRD reconcilers emit or
+retain source records; they never create graph edges. Phase 7 creates the
+node-agnostic graph store and replay owner. Phases 8 and 10 extend that same
+owner with qualified Kubernetes and provider edge contracts.
 
 A subject ID is a digest of tenant, kind, authority, and immutable identity.
 Subjects include task, process, execution set, socket, request, lease,
@@ -4351,7 +4432,8 @@ The useful upstream ideas fit one pipeline. They are not two daemons and not
 two independent sources of authority.
 
 ```text
-kernel task creation + runtime/Kubernetes inventory + optional stock hooks
+WorkloadProtectionProfile CRD -> Control compile/sign/target -> node activation
+  -> kernel task creation + runtime/Kubernetes inventory + optional stock hooks
   -> classify labeled native child, known initial root, external root, or unknown
   -> install or retain restrictive task/process identity before covered effects
   -> inherit identity on every fork/thread before child effects
@@ -4360,7 +4442,8 @@ kernel task creation + runtime/Kubernetes inventory + optional stock hooks
   -> evaluate IPC relationships and optional descriptor-passing evidence without merging actors
   -> fix the physical result
   -> emit bounded evidence with source sequence and coverage
-  -> build typed local/multi-node/provider edges in control
+  -> durably acknowledge accepted evidence in Control
+  -> build typed local/multi-node/provider edges in Control
   -> authorize, apply, read back, and watch any response
 ```
 
@@ -4514,7 +4597,11 @@ ready” is not enough.
 | Required map entry is missing while program remains | Record map miss and coverage defect | Use that program's qualified fail-closed miss result | Only if exact path was tested |
 | Required map is replaced/lost | Mark link/map integrity failed | Reject strict new admission; independently freeze/fence if authorized | Affected prevention family unknown |
 | New policy fails compile/readback/probe | Keep previous generation | Reject update; keep previous generation | No partial activation |
+| Kubernetes policy watch closes, compacts, reorders, or loses API access | Relist from the durable object identity and report source delay | Keep every installed local generation; block an unproved new desired revision | No claim that CRD state converged until source and rollout readback recover |
+| CRD is deleted or recreated while Control or a node is unavailable | Record `RETIRING`, UID change, and unreachable targets | Keep the last valid generation until an exact signed successor or restrictive retirement activates | Object disappearance or finalizer removal never proves policy removal |
+| Policy rollout is partial or an acknowledgement is stale | Report exact per-node candidate and generation state | Each node keeps its last valid complete generation; stale boot/target/candidate acknowledgement rejects | No cluster-wide active claim |
 | WAL fills | Apply configured retention/backpressure before overwrite and expose gap | Local enforcement continues; evidence-dependent conclusions stop | No safe/contained claim across loss |
+| Control evidence storage or intake acknowledgement fails | Retry the bounded batch and expose intake delay | Local enforcement and WAL retention continue | No WAL truncation or graph input beyond the durable contiguous acknowledgement |
 | Kubernetes/provider audit is absent | Local evidence continues | Local controls continue | Provider verb and distributed edge are unknown/contextual |
 | Runtime/kubelet restarts | Reconcile live tasks and external/initial classifications; open a gap where history is missing | Preserve pinned bindings; unknown new roots stay restricted | No stale purpose or lifecycle claim |
 | Node reboots | Close old boot subjects and start new source epoch | Every workload is admitted again | Old response keys cannot target new tasks |
@@ -4699,12 +4786,15 @@ and no competing daemon that can assign security identity.
 | `AuthorizationProofOwner` | `mithril-node` | Validate real Mithril/operator/provider authorizations, replay protection, and target scope | Invent kubelet/runner purpose, infer intent from argv/timing, or let an adapter grant a role |
 | `WorkloadBindingOwner` | `mithril-node` | Container execution sets, cgroup lifetime/storage, initial/native/external classification, node-floor binding | Create namespaces, perform the OCI runtime's normal job, or claim a hook field that stock runtime did not send |
 | `NativeSecurityStateOwner` | `mithril-node` plus owned BPF transitions | Task/process/native-family/mm state, inherited restrictions, and local response refs | Build provider graph conclusions or merge independent IPC peers |
+| `PolicyDesiredStateOwner` | Control | Accept one CRD source revision, reconcile list/watch state, and project bounded CRD status | Sign or activate a candidate, treat status as authority, or store evidence/graph data in the CRD |
 | `PolicyCompiler` | Control | Validate/lower source policy and sign immutable artifact | Change a node's active pointer |
+| `PolicyRolloutOwner` | Control | Freeze target snapshots, deliver signed candidates, and maintain exact per-node rollout inventory | Write node BPF maps, claim cluster-wide atomic activation, or accept a stale acknowledgement |
 | `PolicyActivationOwner` | `mithril-node` | Stage/read back/probe generation, pointer CAS, generation-retention counts, retirement/rollback | Own native-family membership, pending intent, or response semantics |
 | `KernelHostOwner` | `mithril-node` | One loader, link/map object lifecycle, ABI, capability state | Invent roles or semantic transitions |
 | `ObjectAndSocketStateOwner` | `mithril-node` effect modules | Exact object/socket identity, lifetime, peer resolution, and IPC relationship result | Mutate native-family membership or infer byte provenance |
 | `CoverageHealthOwner` | Node source plus merged control view | Source epochs, sequences, intervals, gaps, negative-claim eligibility | Change physical decisions |
 | `LocalEvidenceOwner` | `mithril-node` | Canonical local observations, WAL, upload acknowledgement | Repair a deny after the fact |
+| `EvidenceIntakeOwner` | Control | Authenticate and durably append node evidence, then advance the contiguous acknowledgement | Rewrite node evidence, repair gaps, or build graph edges |
 | `GraphAndFindingOwner` | Control | Immutable graph/finding revisions and deterministic replay | Fabricate native parents or actuate PIDs |
 | `NotificationRouter` | Control | Sensitivity-checked delivery, retry, dedupe, route health | Mutate findings or response plans |
 | `ResponseCoordinator` | Control | Response authorization, plan revisions, target dispatch | Issue raw shell commands or use stale graph coordinates |
@@ -4721,6 +4811,13 @@ real signed authorization; it does not authorize ordinary external roots.
 tasks. Only `NativeSecurityStateOwner` installs matching task, process, and
 native-family state. `PolicyActivationOwner` changes only the generation reference
 those objects hold.
+
+`PolicyDesiredStateOwner`, `PolicyCompiler`, `PolicyRolloutOwner`, and
+`PolicyActivationOwner` form one ordered policy path, but each retains one
+state transition. `EvidenceIntakeOwner` ends the transport transaction.
+`GraphAndFindingOwner` starts a separate derived-state transaction from the
+committed input. A module name, CRD controller, or shared database does not
+permit one owner to perform another owner's transition.
 
 The same gatherer may expose a cgroup-scoped, read-only observation stream to
 Erebor Runtime. Runtime cannot load overlapping BPF programs/maps, assign a
@@ -4747,7 +4844,8 @@ gate remains `UNALLOCATED` or `UNSUPPORTED` and is absent from the frozen claim.
 | 4 | Enforce signed immutable exec/file/device/privilege policy, entry miss behavior, exact decision precedence, IPC relationships, optional descriptor-passing evidence, and local deny/reject semantics. |
 | 5 | Enforce role-aware socket lifecycle, local peer relationships, final destination, DNS/IP floor, packet and established-flow fence, and shared-socket blast radius. |
 | 6 | Complete source sequences, WAL, coverage intervals, immutable generation recovery, link/map/pin health, restart/reuse truth, and sole-gatherer failure. |
-| 7 | Implement `HF-PROC-001`, `HF-DW-001`, authority behavior, deterministic package replay, notification routing, and provider-neutral leases. |
+| 6.1 | Add the production `WorkloadProtectionProfile` CRD, Control desired-state reconciliation, compile/sign/target/distribution, exact node rollout inventory, and durable Control evidence intake. Keep node activation and graph ownership separate. |
+| 7 | Extend committed Phase 6.1 evidence and policy provenance into the one Control graph owner. Implement `HF-PROC-001`, `HF-DW-001`, authority behavior, deterministic package replay, notification routing, and provider-neutral leases. |
 | 8 | Join Kubernetes audit/object/runtime evidence, build typed multi-node graph, and prove fan-out/reuse/contradiction behavior. |
 | 9 | Implement response roots, cgroup/socket actions, explicit blast-radius approval, replacement-controller watch, readback, and verified postconditions. |
 | 10 | Add separately qualified mesh, AWS, connector, artifact, GitHub evidence/lease/response packages. Each adapter proves identity limits and one typed actuator. |
@@ -4763,14 +4861,14 @@ listed proof.
 | Contract | First schema / physical phase | Proposed owner and code family | Concrete exit proof |
 | --- | --- | --- | --- |
 | Shared Rust/BPF ABI, exact-type closure, closed enums, map/link manifest, capability and source registries, golden bytes | 0 / 1 | `erebor-linux-sensor-abi`; generated C header + Rust types; `erebor-linux-sensor-host::KernelHostOwner`; Phase 0 schema checker | Every active `*V1` name is exact or an exact alias; Rust/C byte equality; second loader cannot acquire pin-root lease; failed attach is `UNSUPPORTED`. |
-| Policy/config YAML, signed compiled artifact, rollback, dispositions | 0 / 4 | `mithril-control::policy_schema`, `PolicyCompiler`; node `PolicyActivationOwner` | `CFG-V1-GOLDEN-002`, duplicate/unknown rejection, rollback/replay, inactive readback, allow/deny probes, one pointer CAS. |
+| Offline policy YAML, Kubernetes CRD desired state, signed compiled artifact, rollout, rollback, dispositions | 0 / 4 / 6.1 | `mithril-control::policy_schema`, `PolicyDesiredStateOwner`, `PolicyCompiler`, `PolicyRolloutOwner`; node `PolicyActivationOwner` | `CFG-V1-GOLDEN-002`, CRD/offline canonical equality, duplicate/unknown rejection, relist/restart, stale acknowledgement, partial rollout, rollback/replay, inactive readback, allow/deny probes, one pointer CAS. |
 | Fixture/family/claim/qualification schemas | 0 / 11 | `mithril-e2e::qualification_schema` and `QualificationOwner` | `FIXTURE-REGISTRY-COMPLETE-001`; digest splice, missing negative control, degraded-PASS, and wrong platform all reject. |
 | Task/process/exec identity and native inheritance | 0 / 2 | `mithril-node::identity::NativeSecurityStateOwner`; owned `lifecycle.bpf.c`, `exec.bpf.c` | Fork-without-exec label before token open; moved-task/non-leader exec/PID reuse/ref cleanup pass. |
 | Process/native-state/set/mm state | 0 / 2-4 | Same `NativeSecurityStateOwner`; kernel maps hold native-family restrictions, while `KernelHostOwner` only owns their lifecycle | Thread races cannot recover authority; map N+1 fails closed; Rust/BPF decision bytes agree; partial VMA snapshot never relaxes. |
 | Runtime roots and cgroup binding | 0 / 1-4; platform claim 11 | `mithril-node::identity::WorkloadBindingOwner`; configured stock adapter only forwards documented facts | Identical application-child/probe/admin/direct-runtime commands: native child keeps lineage; indistinguishable external roots get the same restricted role. The approved administrative exception is stronger only through the configured short-lived one-use next-match slot, with the rare race explicitly accepted. Unresolved protected effects deny. No general command-based purpose. |
 | File, descriptor, mapping, IPC, process-control and persistent object classification | 0 / observe 3, deny 4 | `mithril-node::effect`; direct actor transitions requested from `NativeSecurityStateOwner` | Symlink/bind/proc-fd/rotation/mmap/fd-pass/io_uring/persistent volume either allow, alert, deny, or return exact unsupported. |
 | Socket identity, local peer relationship, destination, packet fence | 0 / observe 3, deny 5 | `mithril-node::effect::network` | Broad-created socket passed to a narrow actor cannot restore egress; loopback/Pod-IP/Unix communication uses the resolved peer relationship; established-flow oracle states blast radius. |
-| Source sequence, coverage, WAL, restart reconstruction | 0 / 6 | `mithril-node::evidence::{CoverageHealthOwner,LocalEvidenceOwner}`; control `mithril-control::intake` | Ring pressure preserves deny but gaps absence claim; restart changes epoch and reconciles live tasks/sockets/claims before admission. |
+| Source sequence, coverage, WAL, restart reconstruction, durable Control intake | 0 / 6 / 6.1 | `mithril-node::evidence::{CoverageHealthOwner,LocalEvidenceOwner}`; `mithril-control::intake::EvidenceIntakeOwner` | Ring pressure preserves deny but gaps absence claim; restart changes epoch and reconciles live tasks/sockets/claims before admission; storage failure withholds contiguous acknowledgement and node WAL truncation. |
 | Local and distributed detection graph | 0 / 7-8, provider 10 | `mithril-control::graph`, `mithril-control::detections` | Node-A process to node-B root uses audit/object/binding edges; shared credential plus time remains contextual. |
 | Notification delivery | 0 / 7 | `mithril-control::notifications::NotificationRouter` | Secret fields reject; retry/dedupe do not duplicate finding or response; sink outage never relaxes enforcement. |
 | Local/Kubernetes/provider response | 0 / 9-10 | `mithril-control::response::ResponseCoordinator`; authenticated node actuator; one provider actuator per capability | Stale PID/object UID denies; any wider cgroup/socket/workload effect requires explicit blast-radius approval; readback plus healthy watch is required for verified response. |
@@ -4843,6 +4941,10 @@ amendment.
 | Same TLS endpoint | Existing provider permission/authorization or honest audit; no MITM | Whole-channel deny blocks both allowed and forbidden verbs. |
 | Several logical jobs in one process | Exact native process only; logical job remains unknown when the existing platform exposes no boundary | Apply process-wide policy and disclose the blast radius; Mithril does not require application instrumentation. |
 | Learning | Observations create review-only candidates | Auto-authorizing observed behavior is rejected because compromise trains it. |
+| Production policy source | Stored typed `WorkloadProtectionProfile` CRD `.spec`; offline restricted YAML is review/import input | Node-side watches, free-form YAML in a CRD string, and CRD status as authority are rejected. |
+| CRD deletion | Signed monotonic retirement to an approved successor or restrictive terminal state; otherwise keep the last valid local generation | Object disappearance, namespace deletion, or finalizer removal cannot erase protection. |
+| Partial rollout | Report the exact candidate and active generation for each target; stop on signed rollout conditions | A Kubernetes `Available` condition or aggregate count cannot mean cluster-wide atomic activation. |
+| Overlapping policy CRDs | One live profile ID and one active profile per exact workload binding; reject conflicts and keep the previous valid generation | Name, namespace, creation time, priority, source order, and “deny wins” cannot compose profiles. |
 | Upstream code | Reuse ideas/code only after Phase 0 license/provenance review; keep Mithril Rust chassis | A fork must replace, not duplicate, the single owner. |
 | Intent | Signed envelopes only for real Mithril/operator/provider authorization | Stock kubelet/runner events remain facts with their actual proof quality; signing a normalized observation does not create missing purpose. |
 | `aws`/`gcloud`/`gsutil` | Normal native processes; login is separate authority lease | CLI-specific entry kinds are rejected. |
@@ -4852,7 +4954,7 @@ amendment.
 ### 37. When The Architecture Is Actually Complete
 
 Completion is not “the daemon stayed alive” and not “an alert was emitted.” It
-requires these eleven results on every advertised platform:
+requires these twelve results on every advertised platform:
 
 1. Unchanged concurrent workers, lifecycle hooks, probes, init/sidecars, and
    legitimate controllers still work.
@@ -4878,6 +4980,11 @@ requires these eleven results on every advertised platform:
     substitute for missing purpose.
 11. Every advertised CI integration passes native/container/service/fan-out,
     artifact/cache/OIDC/credential/deploy/cleanup/cancel/retry/debug/reuse.
+12. Every production policy revision has an exact CRD source, signed candidate,
+    target snapshot, node acknowledgement, and active-generation chain.
+    Reconcile, deletion, partial rollout, restart, and Control/API outage cannot
+    create stale authority, silent policy removal, or premature evidence
+    acknowledgement.
 
 The release is decided from a digest-bound artifact set, not from two loose
 files: platform manifest, capability bundle, exact-type-closure bundle, fixture
@@ -5519,6 +5626,11 @@ The remaining intentionally non-struct names have explicit status:
 | Type | One job |
 | --- | --- |
 | `PolicyDocumentV1` | Closed source-policy root whose canonical bytes are signed and compiled |
+| `PolicySourceRevisionV1` | Immutable tenant/cluster/CRD identity, generation, canonical spec, policy digest, and deletion state for one accepted desired revision |
+| `PolicyTargetV1` / `PolicyTargetSnapshotV1` | Exact immutable node/workload target set for one rollout revision |
+| `PolicyDeliveryCandidateV1` | Signed target-bound activation or retirement candidate sent by Control to one node |
+| `PolicyActivationAcknowledgementV1` | Authenticated node receipt that binds candidate, boot/label epoch, node-bound generation, readback, probe, and state |
+| `PolicyRolloutStateV1` | Durable per-target Control projection of delivery and activation truth; never node authority |
 | `PolicyLocalIdV1` | Bounded ID that is meaningful only inside one signed profile; never a global object identity |
 | `RegistrySymbolV1` | Bounded symbolic atom resolved inside one signed registry generation; it is not a durable numeric identity |
 | `ObjectClassIdV1` | Closed composite object-class atom selected by the compiler |
@@ -5743,6 +5855,9 @@ The remaining intentionally non-struct names have explicit status:
 | --- | --- |
 | `ObservationEnvelopeV1` | Source sequence, time, typed payload, proof vector, coverage interval, and transport integrity for one observation |
 | `CoverageIntervalV1` | Healthy/gapped source interval and exact loss/suppression accounting under one source epoch |
+| `EvidenceBatchV1` | Bounded one-source-epoch node upload with ordered envelopes, coverage records, and batch integrity |
+| `EvidenceIntakeReceiptV1` | Durable Control commit and contiguous acknowledgement for one node/source epoch |
+| `PolicyObservationProvenanceV1` | Exact or explicitly incomplete join from accepted node observations to source revision, candidate, target snapshot, and active node generation |
 | `ProofQualityV1` | Orthogonal source, subject, result, temporal, and integrity proof axes |
 | `FindingV1` | Deterministic revision over evidence, coverage, subject, package, and window |
 | `GraphSubjectKindV1` / `SourceKindV1` / `EvidenceFieldIdV1` | Closed graph/provider-edge registry atoms |
@@ -7135,16 +7250,36 @@ change that decision.
 
 #### A.11.1 Source-file rules
 
-The source is UTF-8 YAML 1.2 restricted to the JSON data model. The decoder
-rejects duplicate keys, anchors, aliases, merge keys, custom tags, non-string
-map keys, implicit timestamps, NaN/infinity, integers outside the declared
-type, unknown fields, unknown enums, and input beyond the signed size, depth,
-and count limits. Enum source values are uppercase ASCII. Durations match
-`^[0-9]+(ns|us|ms|s|m|h)$`; zero is legal only where the field says so.
+Production Kubernetes mode serves the structural
+`WorkloadProtectionProfile.mithril.erebor.dev/v1alpha1` CRD. The API server's
+stored typed `.spec`, after the declared storage-version conversion, is the
+desired-state source. The CRD schema and Control decoder reject unknown
+fields, unknown enums, lossy conversions, and input beyond the declared size,
+depth, and count limits. The original submitted YAML bytes, comments, map
+order, Kubernetes status, managed fields, and watch order carry no authority.
 
-Comments and YAML key order carry no authority. After parsing closed types,
-the document is encoded as deterministic CBOR. Version 1 has no generic
-extension or metadata bag.
+The exact Kubernetes identity is group `mithril.erebor.dev`, plural
+`workloadprotectionprofiles`, kind `WorkloadProtectionProfile`, namespaced
+scope, served version `v1alpha1`, and one declared storage version.
+
+The supported Kubernetes write path requires strict API field validation. An
+unknown field cannot reach stored state or a candidate. A server/client mode
+that silently prunes unknown input is unsupported for the exact-source claim;
+the operator must not mistake a pruned request for the policy that Control
+compiled.
+
+Offline review, import, and qualification use UTF-8 YAML 1.2 restricted to the
+JSON data model. That decoder rejects duplicate keys, anchors, aliases, merge
+keys, custom tags, non-string map keys, implicit timestamps, NaN/infinity,
+integers outside the declared type, unknown fields, unknown enums, and input
+beyond the signed size, depth, and count limits. Enum source values are
+uppercase ASCII. Durations match `^[0-9]+(ns|us|ms|s|m|h)$`; zero is legal only
+where the field says so. Offline YAML cannot activate production Kubernetes
+policy without creating or updating the CRD through the authenticated API.
+
+Both source forms map to the same closed `PolicyDocumentV1` and deterministic
+CBOR. A required golden compares their canonical bytes. Version 1 has no
+generic extension or metadata bag.
 
 ```text
 PolicyDocumentV1 {
@@ -7211,6 +7346,48 @@ argument bytes. Embedded NUL is rejected where Linux/Kubernetes cannot
 represent it. There is no shell parsing, `PATH` resolution, Unicode folding,
 or whitespace normalization in this encoding. A digest is calculated only
 when a containing signed or content-addressed contract needs the argv identity.
+
+In production Kubernetes mode, Control records the source before it can create
+a candidate:
+
+```text
+PolicySourceRevisionV1 {
+  schema_version: exactly 1
+  tenant_id, cluster_uid, namespace_uid, object_uid: Id128
+  namespace_name: UTF-8 Kubernetes namespace name
+  object_name: UTF-8 Kubernetes object name
+  api_version: exactly "mithril.erebor.dev/v1alpha1"
+  kind: exactly "WorkloadProtectionProfile"
+  object_generation: nonzero u64
+  opaque_resource_version: bstr(1..1024)
+  canonical_spec_digest: DigestV1
+  policy_document_digest: DigestV1
+  state: ACCEPTED | DELETION_REQUESTED
+}
+
+policy_source_revision_id =
+  SHA-256(ASCII("MITHRIL-POLICY-SOURCE-REVISION-V1") || 0x00 ||
+    deterministic-CBOR(tenant_id, cluster_uid, namespace_uid, object_uid,
+      object_generation, canonical_spec_digest, policy_document_digest, state))
+```
+
+The `PolicyDocumentV1.metadata` fields are policy fields in `.spec`; Kubernetes
+object metadata does not replace them. A conversion between served and stored
+CRD versions must preserve the canonical `PolicyDocumentV1` bytes or reject.
+`opaque_resource_version` supports watch resumption only. Control uses object
+UID, generation, and canonical spec digest for source identity and uses the
+policy version and issuer sequence for anti-rollback.
+
+Control derives tenant, cluster, namespace UID, and object UID from its
+authenticated cluster configuration and API-server records. A CRD field,
+label, annotation, or status cannot select its own tenant. Control watches only
+configured tenant namespaces. Cross-tenant selectors reject before candidate
+creation.
+
+List/watch delivery is at-least-once and may close, repeat, or compact. Control
+persists the accepted source revision, relists after compaction, and produces
+the same desired state after restart. A watch event by itself cannot sign,
+target, distribute, retire, or activate policy.
 
 #### A.11.2 Selectors classify candidates; bindings create authority
 
@@ -8068,7 +8245,8 @@ ProfileSignatureHeaderV1 = {
   14: DigestV1 object_classifier_registry_digest,
   15: DigestV1 reason_code_registry_digest,
   16: DigestV1 correlation_package_registry_digest,
-  17: DigestV1 provider_vocabulary_registry_digest
+  17: DigestV1 provider_vocabulary_registry_digest,
+  18?: DigestV1 policy_source_revision_id
 }
 
 SignedWorkloadProtectionProfileV1 = {
@@ -8130,20 +8308,29 @@ The activation owner durably records the greatest accepted issuer sequence and
 profile version before publishing a generation. Lower signed values reject
 unless the exact rollback authorization is valid and unused.
 
+`policy_source_revision_id` is required for a profile produced from the
+production Kubernetes source and absent for an offline qualification profile.
+It binds the signed semantic policy to the accepted CRD revision without
+making Kubernetes metadata or status part of the policy document.
+
 #### A.11.7 Build, read back, probe, activate, and retire
 
 ```text
-parse and validate closed source
-verify signature, registries, validity, replay, and anti-rollback
+accept and persist the CRD source revision, or load the offline review source
+parse and validate the closed source, registries, and capabilities
 resolve selectors into immutable workload/object snapshots
 validate the role/transition graph and required capabilities
 expand every exact decision cell and reject conflicts/capacity overflow
 simulate against a recorded legitimate-workload baseline
 obtain human approval
+assign issuer sequence and sign the immutable profile and target candidate
+deliver through the authenticated node channel
+verify signature, target, validity, replay, and anti-rollback on the node
 build a completely inactive generation
 read back every descriptor, row, default, membership, and digest
 run isolated allow and deny probes
 publish one active-generation handle for new admissions
+return an authenticated activation acknowledgement to Control
 ```
 
 Expansion happens in two immutable stages:
@@ -8238,6 +8425,108 @@ use the active generation. Version 1 does not migrate live processes. A
 retiring generation is deleted only after every typed reference is zero,
 iterator/WAL reconciliation agrees, and the BPF grace period passes.
 
+Control freezes selection and delivery in these records:
+
+```text
+PolicyTargetV1 {
+  tenant_id, cluster_uid: Id128
+  node_identity: NodeIdentityV1
+  workload_binding_generation_digests[0..4096]: DigestV1,
+    sorted unique
+}
+
+PolicyTargetSnapshotV1 {
+  policy_source_revision_id: DigestV1
+  signed_profile_digest: DigestV1
+  rollout_generation: nonzero u64
+  targets[1..65536]: PolicyTargetV1, sorted unique,
+    with at most 65536 aggregate workload-binding digests
+  target_snapshot_digest: ArtifactContentIdV1
+}
+
+PolicyDeliveryCandidateV1 {
+  schema_version: exactly 1
+  tenant_id: Id128
+  policy_source_revision_id: DigestV1
+  signed_profile_digest: DigestV1
+  target_snapshot_digest: DigestV1
+  exact_target: PolicyTargetV1
+  operation: ACTIVATE | REPLACE | RETIRE_TO_RESTRICTIVE_TERMINAL
+  predecessor_candidate_content_id?: ArtifactContentIdV1
+  distribution_sequence_epoch, distribution_sequence: nonzero u64
+  issued_utc_ns, expires_utc_ns: i64
+  candidate_content_id: ArtifactContentIdV1
+  seal: SignedArtifactSealV1
+}
+
+PolicyActivationAcknowledgementV1 {
+  acknowledgement_content_id: ArtifactContentIdV1
+  tenant_id: Id128
+  node_identity: NodeIdentityV1
+  node_boot_id: Id128
+  label_epoch: nonzero u64
+  candidate_content_id: ArtifactContentIdV1
+  policy_source_revision_id, target_snapshot_digest: DigestV1
+  state: RECEIVED | STAGED | ACTIVE | REJECTED | STALE | UNKNOWN
+  node_bound_generation_digest?: DigestV1
+  profile_generation_ref_id?: nonzero u64
+  readback_digest?: DigestV1
+  probe_result_digest?: DigestV1
+  reason_code?: ReasonCodeIdV1
+  observed_utc_ns: i64
+  authenticated_channel_receipt_digest: DigestV1
+}
+
+PolicyRolloutStateV1 {
+  policy_source_revision_id, target_snapshot_digest: DigestV1
+  target: PolicyTargetV1
+  desired_candidate_content_id: ArtifactContentIdV1
+  state: PENDING | DELIVERED | STAGED | ACTIVE | REJECTED | STALE | UNKNOWN
+  latest_acknowledgement_content_id?: ArtifactContentIdV1
+  transition_version: u64
+  updated_utc_ns: i64
+}
+```
+
+The candidate signature binds the exact target and operation. A node rejects
+a candidate for another node, tenant, source revision, target snapshot, or
+distribution sequence. The signed profile keeps its separate policy-issuer
+sequence and rollback rules. The candidate sequence is keyed by distribution
+signer and exact target and prevents an older target assignment from becoming
+current. Idempotent redelivery requires the same candidate content ID. Control
+accepts an acknowledgement only from the candidate's authenticated node
+identity and current boot, label epoch, target snapshot, and candidate. The
+channel receipt is a durable Control record of the mTLS peer and canonical
+acknowledgement bytes; it is not a node policy signature.
+`PolicyDeliveryCandidateV1` uses domain separator
+`MITHRIL-POLICY-CANDIDATE-V1`; its content ID covers the deterministic
+canonical unsigned record, and its seal stays outside that unsigned record.
+An `ACTIVE` acknowledgement requires the node-bound generation,
+profile-generation reference, complete readback, and passing probe digests. A
+`REJECTED` acknowledgement requires a closed reason and cannot carry an active
+claim. Other state-specific optional fields reject if they contradict the
+named transition.
+Delivery includes the referenced signed profile, registries, and static
+compilation artifacts. Bounded content-addressed chunks may carry the bundle.
+The node stages nothing until every referenced artifact is durable, complete,
+and digest-verified. A reference to an artifact already on the node is valid
+only after exact durable readback of that digest.
+
+Selection is immutable per snapshot. A changed Pod, workload binding, or node
+inventory creates a new target snapshot and rollout transition. Control does
+not edit an old snapshot to make rollout health look complete. CRD status may
+project `observedGeneration`, source and candidate digests, aggregate bounded
+counts, and `Accepted`, `Compiled`, `Progressing`, `Available`, `Degraded`, or
+`Retiring` conditions. The durable per-target record remains
+`PolicyRolloutStateV1`, and status cannot authorize any transition.
+
+Deletion creates `DELETION_REQUESTED` source state and a signed `REPLACE` or
+`RETIRE_TO_RESTRICTIVE_TERMINAL` candidate. The candidate names the exact
+predecessor. A node never removes a generation merely because the CRD, its
+namespace, or its finalizer disappeared. If no valid successor activates, the
+last valid generation remains available to its existing and new applicable
+admissions according to its signed validity and local failure posture.
+
 #### A.11.8 Required goldens and stable failures
 
 `CFG-V1-GOLDEN-002` must be generated from one complete checked-in source after
@@ -8245,6 +8534,16 @@ the final schema exists. It includes restricted YAML, deterministic policy
 CBOR, every registry payload/digest, header, signature, envelope, compiler
 cells, and round trip. Prose substitutions and the retained stale
 `CFG-V1-GOLDEN-001` bytes are not conformance data.
+
+The Phase 6.1 source golden adds the stored CRD `.spec`,
+`PolicySourceRevisionV1`, target snapshot, signed delivery candidate, and
+activation acknowledgement. It proves that the CRD and offline source forms
+produce the same `PolicyDocumentV1` bytes. It also covers unknown CRD fields,
+lossy version conversion, duplicate watch delivery, stale UID/generation,
+duplicate profile ID, overlapping workload selection, watch
+compaction/relist, delete/recreate, wrong target, stale boot, partial rollout,
+and status mutation. These are phase-owned tests; they do not add an Appendix
+C fixture ID.
 
 `CFG-ROLLBACK-GOLDEN-002` covers exact current-to-older success and wrong
 current, wrong target, wrong platform, expired, replayed, and signed-without-
@@ -8260,7 +8559,9 @@ generation, entry slot, response binding, or partial map becomes active.
 Mithril must never call the design-level YAML in Chapter 11 a valid wire file,
 interpret an empty selector as wildcard, combine several operations into one
 authority key, activate a partial map, let a finding decide the entry that must
-exist before the finding, or claim rollback from a signature alone.
+exist before the finding, claim rollback from a signature alone, let a node
+watch policy CRDs, use CRD status as authority, or erase a local generation
+because a Kubernetes object disappeared.
 
 ### A.12 Exact Kernel Decision ABI And Lookup
 
@@ -9821,6 +10122,37 @@ CoverageIntervalV1 {
   gap_reason_code?: u32
   recovery_probe_artifact_id?: Id128
 }
+
+EvidenceBatchV1 {
+  schema_version: exactly 1
+  tenant_id: Id128
+  node_identity: NodeIdentityV1
+  node_boot_id, source_id: Id128
+  label_epoch: nonzero u64
+  source_epoch: u64
+  first_sequence, last_sequence: u64
+  prior_durable_contiguous_acknowledgement: u64
+  observations[1..1024]: ObservationEnvelopeV1,
+    sorted unique by source_sequence
+  coverage_intervals[0..64]: CoverageIntervalV1,
+    sorted unique by coverage_interval_id
+  batch_content_id: ArtifactContentIdV1
+}
+
+EvidenceIntakeReceiptV1 {
+  schema_version: exactly 1
+  tenant_id: Id128
+  node_identity: NodeIdentityV1
+  node_boot_id, source_id: Id128
+  label_epoch: nonzero u64
+  source_epoch: u64
+  batch_content_id: ArtifactContentIdV1
+  durable_contiguous_sequence: u64
+  accepted_record_set_digest: DigestV1
+  control_commit_index: nonzero u64
+  committed_utc_ns: i64
+  authenticated_channel_receipt_digest: DigestV1
+}
 ```
 
 The field variant determines its key and value type; a decoder rejects a
@@ -9844,6 +10176,20 @@ The WAL truncates only through a durable contiguous acknowledgement. A restart
 that cannot prove sequence continuity creates a new epoch and explicit gap.
 Enforcement health, identity coverage, event coverage, semantic admission,
 correlation feeds, and response verification remain separate axes.
+
+One batch contains one node source epoch. It can contain a bounded
+out-of-order set, but every envelope must repeat the same tenant, node, source,
+and epoch coordinates. One source epoch cannot cross a label-epoch change; the
+node opens a new source epoch first. Control verifies each observation ID and
+batch content ID over the canonical batch content before transport. The mTLS
+peer identity and canonical batch bytes produce the separate durable channel
+receipt. An
+existing `(tenant, node, source, epoch, sequence)` with different bytes
+rejects the batch. The receipt is created only after the records and source
+cursor share one durable commit. The node validates the authenticated Control
+peer and receipt coordinates, persists the new cursor, and truncates only the
+covered contiguous WAL range. A graph package cannot read an uncommitted batch
+or use a transport receipt as an observation.
 
 #### A.15.2 Proof quality and findings
 
@@ -9875,8 +10221,26 @@ FindingV1 {
   graph_version_id: DigestV1
   sorted_evidence_ids[]: DigestV1
   required_coverage_interval_ids[]: Id128
+  policy_provenance_ids[0..64]: DigestV1, sorted unique
   superseded_revision?: u64
   closed_reason_code?: u32
+}
+
+PolicyObservationProvenanceV1 {
+  provenance_content_id: ArtifactContentIdV1
+  tenant_id: Id128
+  node_identity: NodeIdentityV1
+  node_boot_id: Id128
+  label_epoch, profile_generation_ref_id: nonzero u64
+  source_id: Id128
+  source_epoch: u64
+  observation_ids[1..4096]: DigestV1, sorted unique
+  policy_source_revision_id?: DigestV1
+  candidate_content_id?: ArtifactContentIdV1
+  target_snapshot_digest?: DigestV1
+  node_bound_generation_digest?: DigestV1
+  activation_acknowledgement_content_id?: ArtifactContentIdV1
+  state: EXACT | MISSING | CONTRADICTED
 }
 ```
 
@@ -9889,6 +10253,15 @@ Packages declare sources, coverage, maximum lateness, time uncertainty,
 retention, exact/contextual join fields, and late-event behavior. Delivery
 order and duplicate redelivery cannot change the terminal finding bytes. Time
 never upgrades an edge to exact.
+
+The intake source registration and evidence batch bind node identity, boot,
+label epoch, source, and source epoch. The activation acknowledgement binds
+that coordinate and the node-local profile-generation reference to the source
+revision, candidate, target snapshot, and node-bound generation. Phase 7
+creates `PolicyObservationProvenanceV1` from those exact records. Time, CRD
+status, and aggregate rollout counts cannot fill a missing join. A finding that
+depends on policy state lists the exact provenance ID or reports it missing or
+contradicted.
 
 #### A.15.3 Multi-node graph
 
@@ -9921,6 +10294,7 @@ GraphVersionV1 {
   parent_graph_version_id?: DigestV1
   input_source_watermarks[]
   package_versions[]
+  sorted_policy_provenance_ids[]: DigestV1
   sorted_subject_ids[], sorted_edge_ids[]: DigestV1
   canonical_graph_digest: DigestV1
 }
@@ -10590,6 +10964,11 @@ accidentally revive them. They are history, not a second normative contract.
 | Rejected or corrected idea | Why it is wrong | Replacement |
 | --- | --- | --- |
 | Version 1 generic metadata extensions | Unknown signed fields create divergent interpretations | Closed schema; unknown/duplicate key rejects (§12) |
+| Put free-form policy YAML in one CRD string | API schema, conversion, field ownership, and typed rejection cannot protect the policy shape | Structural `WorkloadProtectionProfile` `.spec` mapped exactly to closed `PolicyDocumentV1` (Ch. 11-12, Appendix A.11) |
+| Every node watches policy CRDs | It creates many policy-source owners and bypasses Control compilation, signing, targeting, and rollout truth | Control alone reconciles CRDs and sends signed target-bound candidates; node alone activates them (Ch. 5, §12, §34) |
+| CRD status or finalizer grants node authority | Status is mutable reporting state and finalizers can be removed | Authenticated signed candidate plus node readback/probe/CAS; status is a bounded projection only (§12, Appendix A.11.7) |
+| CRD deletion erases active node policy | API or Control outage could remove protection without a safe node transaction | Signed exact retirement or successor through normal activation; otherwise keep the last valid generation (§12, §32) |
+| Compose overlapping CRDs by priority, creation order, or “deny wins” | The result depends on mutable metadata or an incomplete conflict rule and can create two policy owners for one workload | Version 1 rejects duplicate profile IDs and exact workload overlap; a later composition model must define one closed exact-cell compiler (§11-12) |
 | Two independent transition authorities | Role shorthand and explicit transition could disagree | Compiler lowers both to one table and rejects conflicts (§11-12) |
 | Cgroup lookup before existing task label | Moving a task can escape policy | Task-first lookup everywhere (§13) |
 | Prose specificity, YAML order, priority, or “deny wins” resolves source conflict | These rules are ambiguous before exact lowering | Expand exact cell; identical physical results merge; differing results need explicit signed override (§12) |
@@ -10623,6 +11002,7 @@ accidentally revive them. They are history, not a second normative contract.
 | Rejected or corrected idea | Why it is wrong | Replacement |
 | --- | --- | --- |
 | Scalar `sourceQualityAtLeast` | Identity, time, result, coverage, and causal proof fail independently | `ProofQualityV1` vector and package predicates (§22-23) |
+| Store evidence, intake cursors, graph edges, or findings in policy CRDs | CRD update semantics and status bounds do not provide the immutable evidence/graph lifecycle, and policy RBAC would cross the trust boundary | Durable Control intake and graph stores with CRDs limited to policy desired state and bounded status (§22-23, §34) |
 | Always connect a process directly to Kubernetes audit | Shared credential/time does not prove which process sent TLS request | Typed exact, shared-principal, temporal-context, or contradiction edges (§23) |
 | Matching identifier creates any direct edge | IDs can be shared/reused and need provider-specific semantics | `ProviderEdgeContractV1` with join fields, direction, cardinality, time, and degradation (§23) |
 | Bounded ancestor list alone controls future descendants | New child can appear after list is built | Response root/reference inherited at task creation plus reconciliation (§24) |

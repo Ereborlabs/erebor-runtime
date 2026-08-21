@@ -79,7 +79,7 @@ authority.
 | Evaluation | Minimum completed prerequisite before physical prototype |
 | --- | --- |
 | Seccomp direct-launch/OCI/NRI | Phase 0 mechanism dossier; Phase 1 node/Interceptor for integrated tests; Phase 2 identity for scope/lifetime claims |
-| L7 mediation | Phase 5 direct-TLS/network baseline and Phase 7 authenticated evidence/control intake |
+| L7 mediation | Phase 5 direct-TLS/network baseline, Phase 6.1 authenticated Control intake, and Phase 7 graph contracts |
 | Host/developer/non-Kubernetes agent | Phases 1-2 shared Interceptor and first-effect identity |
 | Checkpoint create/restore | Phases 2, 4, and 6 identity/effects/recovery |
 | Attach/port-forward evidence | Phases 7-8 Control and Kubernetes source/graph contracts |

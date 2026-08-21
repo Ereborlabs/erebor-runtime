@@ -36,8 +36,9 @@ the final source state.
 4. Execute every active row from its owning manual guide and the corresponding
    automated fixture. Record `pass`, `fail`, `blocked`, or `not-applicable`
    with the exact activation condition; no row may silently disappear.
-5. Run upgrade, rollback, interrupted install, node/control loss, mixed-version,
-   stale-pin, policy/trust rotation, WAL/cursor recovery, scale, capacity, and
+5. Run upgrade, rollback, interrupted install, node/control loss, CRD
+   conversion and relist, Control leader failover, mixed-version, stale-pin,
+   policy/trust rotation, WAL/intake-cursor recovery, scale, capacity, and
    performance matrices.
 6. Run the complete Hugging Face acceptance contract and live two-node probe.
 7. Uninstall, inventory remaining resources, and verify no active program,
@@ -60,6 +61,7 @@ Phase 11 result must contain one row for every exact active ID.
 | Phase 4 | [local pre-effect enforcement](./phase-4-manual-acceptance.md) |
 | Phase 5 | [process-aware network plane](./phase-5-manual-acceptance.md) |
 | Phase 6 | [evidence, coverage, and recovery](./phase-6-manual-acceptance.md) |
+| Phase 6.1 | [Control policy and evidence convergence](./phase-6-1-manual-acceptance.md) |
 | Phase 7 | [Control and detection packages](./phase-7-manual-acceptance.md) |
 | Phase 8 | [Kubernetes distributed causality](./phase-8-manual-acceptance.md) |
 | Phase 9 | [local and distributed response](./phase-9-manual-acceptance.md) |
@@ -79,31 +81,37 @@ mode:
 - compare detected capability to direct kernel/runtime probes;
 - verify full, reduced, observe-only, and unsupported states honestly;
 - test least-privilege ServiceAccounts/RBAC, host mounts, capabilities,
-  network policy, storage, mTLS, bootstrap, and config rejection;
+  CRD/status access, network policy, storage, mTLS, bootstrap, and config
+  rejection;
 - upgrade and roll back BPF link/map/ABI, node/control, policy, and trust state
-  without an unmeasured allow window; and
+  without an unmeasured allow window;
+- convert the CRD storage version, relist after watch compaction, fail over the
+  Control writer, and prove that stale source, target, and node receipts cannot
+  win; and
 - uninstall and compare the final inventory to the clean baseline.
 
 ## Scale, Performance, And Correctness Matrix
 
 Measure open, exec, and network latency distributions plus CPU, memory, WAL,
-Control/provider backpressure, canonical path bounds, and maps at N and N+1.
-Use the same evidence load and fixture correctness checks as baseline. Include
-I/O-heavy workers, maximum advertised tasks/sockets/policies/nodes, source
-loss, and recovery. A faster run that drops evidence, changes enforcement, or
-loses the legitimate control fails.
+intake/graph/Control/provider backpressure, CRD watch/relist and status bounds,
+rollout fanout, canonical path bounds, and maps at N and N+1. Use the same
+evidence load and fixture correctness checks as baseline. Include I/O-heavy
+workers, maximum advertised tasks/sockets/policies/nodes, source loss, and
+recovery. A faster run that drops evidence, changes enforcement, or loses the
+legitimate control fails.
 
 ## Security And Release-Envelope Checks
 
 Manually review one Interceptor owner, one writer per durable state, node/
-Control mTLS, tenant isolation, replay/anti-rollback, secret handling,
-self-protection, absence of arbitrary response/provider calls, and the direct-
-TLS semantic limit. Recalculate every digest referenced by the qualification
-envelope and verify its signature from an independent verifier environment.
+Control mTLS, CRD and status RBAC, tenant isolation, status-is-not-authority,
+replay/anti-rollback, secret handling, self-protection, absence of arbitrary
+response/provider calls, and the direct-TLS semantic limit. Recalculate every
+digest referenced by the qualification envelope and verify its signature from
+an independent verifier environment.
 
 ## Required Artifacts And Pass Rule
 
-Retain all eleven Chapter 37 result records, exact registry-equality output,
+Retain all twelve Chapter 37 result records, exact registry-equality output,
 complete active-fixture run sheet, owner-guide artifacts, HF/two-node bundles,
 platform manifests, install/upgrade/recovery/uninstall inventories, raw
 capacity/performance results, security review, signed artifacts, SBOM,
@@ -116,4 +124,3 @@ degraded-but-unreported, or post-signing input blocks the affected claim.
 - Never merge results from different artifact digests or platform vectors.
 - If one active fixture lacks an executable/manual result, registry equality
   and final conformance fail even when all other rows pass.
-

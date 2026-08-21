@@ -20,6 +20,7 @@ the approved phase:
 | 4 | [Signed local pre-effect enforcement](./phase-4-manual-acceptance.md) |
 | 5 | [Process-aware network enforcement](./phase-5-manual-acceptance.md) |
 | 6 | [Evidence, coverage, WAL, and recovery](./phase-6-manual-acceptance.md) |
+| 6.1 | [Control policy and evidence convergence](./phase-6-1-manual-acceptance.md) |
 | 7 | [Mithril Control and detection packages](./phase-7-manual-acceptance.md) |
 | 8 | [Kubernetes distributed causality and node floor](./phase-8-manual-acceptance.md) |
 | 9 | [Local and distributed response](./phase-9-manual-acceptance.md) |

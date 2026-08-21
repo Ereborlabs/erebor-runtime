@@ -204,14 +204,16 @@ use the generation.
 
 ### 2. Select the task's generation and live path
 
-An LSM hook calls
-[`resolved_identity_effect_gate`](../../../bpf/erebor-interceptor/programs/identity_effects.bpf.h#L292)
-with a live `struct file` or a path that a name hook supplied. The gate finds
-the current task and its cgroup binding. It reads
-`active_profile_generation_ref_id` from the task's process state. It then
-checks that the active generation belongs to the bound profile.
+The applicable LSM hooks reach the resolved gate through a file, path, or
+dentry effect gate. A file gate derives `file->f_path`. A path gate supplies
+the hook's `struct path`. A dentry gate combines the hook's directory mount
+with its target dentry. The shared dispatcher then selects the normal resolved
+gate or the io_uring resolved gate. The resolved gate finds the current task
+and its cgroup binding. It reads `active_profile_generation_ref_id` from the
+task's process state. It then checks that the active generation belongs to the
+bound profile.
 
-The gate passes the live `struct path` and the active generation to
+The resolved gate passes the live `struct path` and the active generation to
 [`canonical_path_candidate`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L810).
 The candidate function has two operations:
 
@@ -317,29 +319,72 @@ mount index. The second callback walks one dentry or one mount boundary per
 iteration. The wrapper supplies the input, controls both loops, and publishes
 output only after the final topology checks pass.
 
-#### Call graph and result ownership
+#### BPF call graph and result ownership
+
+This graph starts at the BPF LSM program. It covers the file, path, and
+dentry hooks that can reach the path resolver. It does not describe LSM
+programs that have no file or path candidate.
 
 ```mermaid
 flowchart TD
-    A[canonical_path_candidate] --> B[collect_mount_components]
-    B --> C[Snapshot global mount epoch]
-    B --> D[Read live path and task mount namespace]
-    D --> E[ensure_canonical_mount_cache]
-    E --> F[bpf_loop: at most 4096 calls]
-    F --> G[canonical_mount_cache_build_step]
-    G --> H[Cache: root dentry to oldest mount]
-    E --> I[Initialize per-CPU walk state]
-    I --> J[bpf_loop: at most 4351 calls]
-    J --> K[canonical_mount_path_walk_step]
-    K --> L[selected_mount_for_root]
-    L --> H
-    K --> M[Leaf-first component views]
-    J --> N[Recheck namespace event and global epoch]
-    N --> O{Complete and unchanged?}
-    O -- No --> P[Return -EACCES]
-    O -- Yes --> Q[Publish component count and canonical mount ID]
-    Q --> R[Reverse components and traverse policy graph]
+    A[Linux calls an attached BPF LSM program]
+    A --> B[File hook: file_open, file_permission, mmap_file, or file_truncate]
+    A --> C[Path hook: path_chmod, path_chown, or path_truncate]
+    A --> D[Dentry hook: path_unlink, path_mkdir, path_link, or path_rename]
+    B --> E[file_mode_effects or a file effect gate]
+    C --> F[identity_path_effect_gate]
+    D --> G[identity_dentry_effect_gate: build a path from directory mount and dentry]
+    E --> H[prepare_effect_identity when prior LSM result is zero]
+    F --> H
+    G --> H
+    H --> I[dispatch_identity_effect_gate: record operation and live path]
+    I --> J{Active io_uring execution?}
+    J -- No --> K[resolved_identity_effect_gate]
+    J -- Yes --> L[resolved_io_uring_effect_gate]
+    K --> M[Validate identity and active profile generation]
+    L --> M
+    M --> N[canonical_path_candidate]
+    N --> O[collect_mount_components]
+    O --> P[Snapshot epoch; read live path and mount namespace]
+    P --> Q[ensure_canonical_mount_cache]
+    Q --> R[bpf_loop: canonical_mount_cache_build_step, at most 4096 calls]
+    R --> S[Cache: root dentry to oldest mount]
+    Q --> T[bpf_loop: canonical_mount_path_walk_step, at most 4351 calls]
+    T --> U[selected_mount_for_root]
+    U --> S
+    T --> V[Leaf-first component views]
+    T --> W[Recheck namespace event and global epoch]
+    W --> X{Complete and unchanged?}
+    X -- No --> Y[Candidate fails; resolved gate denies before effect]
+    X -- Yes --> Z[canonical_path_match_step: reverse and traverse active-generation graph]
+    Z --> AA[Read path_graph_terminals]
+    AA --> AB{Terminal denies this operation?}
+    AB -- Yes --> AC[path_tree_effect_result: emit denial and return errno]
+    AB -- No --> AD[Continue to exact-object lookup and the remaining effect decision]
 ```
+
+The file LSM programs enter through
+[`file_open`](../../../bpf/erebor-interceptor/programs/identity_effects.bpf.h#L839),
+[`file_permission`](../../../bpf/erebor-interceptor/programs/identity_effects.bpf.h#L853),
+and the other file sections. The direct path hooks enter
+[`identity_path_effect_gate`](../../../bpf/erebor-interceptor/programs/identity_effects.bpf.h#L679).
+The dentry hooks enter
+[`identity_dentry_effect_gate`](../../../bpf/erebor-interceptor/programs/identity_effects.bpf.h#L742),
+which combines the directory mount with the target dentry. All three routes
+call
+[`dispatch_identity_effect_gate`](../../../bpf/erebor-interceptor/programs/identity_effects.bpf.h#L577).
+
+The dispatcher selects either
+[`resolved_identity_effect_gate`](../../../bpf/erebor-interceptor/programs/identity_effects.bpf.h#L292)
+or, for an active io_uring execution,
+[`resolved_io_uring_effect_gate`](../../../bpf/erebor-interceptor/programs/identity_io_uring.bpf.h#L267).
+After their resolver preconditions pass for a covered file effect, both routes
+invoke
+[`canonical_path_candidate`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L810)
+and apply a matched path-tree denial before
+`configured_file_object_binding` performs an exact-object lookup. A prior
+LSM denial is preserved and emitted before either resolver reaches the path
+candidate.
 
 The callback return value controls `bpf_loop`:
 

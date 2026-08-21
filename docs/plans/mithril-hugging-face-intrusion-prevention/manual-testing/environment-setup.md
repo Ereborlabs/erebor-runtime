@@ -241,6 +241,8 @@ manual inventory task and the environment must be disposable.
 | second pin-root owner | stop; remove the exact stale/test owner before a new run |
 | Kubernetes audit gap | local tests may continue, but semantic/cross-node results are ineligible |
 | Control unavailable | installed local policy may continue; new trust/policy/graph/response work is unavailable |
+| Kubernetes policy watch or API unavailable | installed local policy continues; desired-state convergence and new rollout claims are unavailable |
+| CRD deletion without valid retirement | keep the last valid node generation; object or finalizer disappearance is not deactivation proof |
 | WAL/ring/source loss | preserve physical decision result and close the affected evidence interval |
 | legitimate control fails | invalidate the environment or policy; hostile denials do not pass |
 | provider sandbox cannot expose required IDs/readback | record the exact weaker proof or unsupported actuator |
