@@ -551,7 +551,7 @@ fn relevant_mount_entries(
             continue;
         };
         for candidate in entries.iter().filter(|candidate| {
-            candidate.device == current.device && candidate.root == current.root
+            candidate.device == current.device && current.root.starts_with(&candidate.root)
         }) {
             relevant.insert(candidate.mount_id);
             if candidate.parent_mount_id != candidate.mount_id
@@ -572,6 +572,7 @@ fn relevant_mount_entries(
 struct LiveMount {
     mount_id: u32,
     parent_mount_id: u32,
+    root: PathBuf,
     mountpoint: PathBuf,
     filesystem_device: u32,
     inode: u64,
@@ -600,6 +601,7 @@ fn live_mount(view: &ExactFileObjectView, entry: &MountInfoEntry) -> Result<Live
     Ok(LiveMount {
         mount_id: entry.mount_id,
         parent_mount_id: entry.parent_mount_id,
+        root: entry.root.clone(),
         mountpoint: entry.mountpoint.clone(),
         filesystem_device: encoded_device(status.stx_dev_major, status.stx_dev_minor)?,
         inode: status.stx_ino,
@@ -691,9 +693,6 @@ fn canonicalize_mount_path(
                 }
                 .build()
             })?;
-        if first_selected_mount_id_unique == 0 {
-            first_selected_mount_id_unique = selected.mount_id_unique;
-        }
         let Some(parent) = by_id.get(&selected.parent_mount_id).copied() else {
             ensure!(
                 selected.mountpoint == Path::new("/"),
@@ -701,6 +700,9 @@ fn canonicalize_mount_path(
                     reason: "non-root selected mount has no represented parent",
                 }
             );
+            if first_selected_mount_id_unique == 0 {
+                first_selected_mount_id_unique = selected.mount_id_unique;
+            }
             return Ok(CanonicalMountPath {
                 components,
                 first_selected_mount_id_unique,
@@ -713,10 +715,57 @@ fn canonicalize_mount_path(
                     reason: "self-parent mount is not the namespace root",
                 }
             );
+            if first_selected_mount_id_unique == 0 {
+                first_selected_mount_id_unique = selected.mount_id_unique;
+            }
             return Ok(CanonicalMountPath {
                 components,
                 first_selected_mount_id_unique,
             });
+        }
+        if current.root != Path::new("/") {
+            let source = mounts
+                .iter()
+                .filter(|mount| {
+                    mount.filesystem_device == current.filesystem_device
+                        && mount.root != current.root
+                        && current.root.starts_with(&mount.root)
+                })
+                .max_by(|left, right| {
+                    left.root
+                        .components()
+                        .count()
+                        .cmp(&right.root.components().count())
+                        .then_with(|| right.mount_id_unique.cmp(&left.mount_id_unique))
+                })
+                .ok_or_else(|| {
+                    IdentityStateSnafu {
+                        reason: "source-side mount ancestry is incomplete".to_owned(),
+                    }
+                    .build()
+                })?;
+            let source_relative = current.root.strip_prefix(&source.root).map_err(|error| {
+                IdentityStateSnafu {
+                    reason: format!("mount root is outside its source root: {error}"),
+                }
+                .build()
+            })?;
+            let mut source_components = path_components(source_relative)?;
+            source_components.append(&mut components);
+            ensure!(
+                source_components.len() <= MAX_CANONICAL_PATH_COMPONENTS_V1,
+                IdentityStateSnafu {
+                    reason: format!(
+                        "canonical mount path exceeds {MAX_CANONICAL_PATH_COMPONENTS_V1} components"
+                    ),
+                }
+            );
+            components = source_components;
+            current = source;
+            continue;
+        }
+        if first_selected_mount_id_unique == 0 {
+            first_selected_mount_id_unique = selected.mount_id_unique;
         }
         let attachment = selected
             .mountpoint
@@ -921,6 +970,7 @@ mod tests {
             LiveMount {
                 mount_id: 1,
                 parent_mount_id: 0,
+                root: PathBuf::from("/"),
                 mountpoint: PathBuf::from("/"),
                 filesystem_device: 1,
                 inode: 1,
@@ -929,6 +979,7 @@ mod tests {
             LiveMount {
                 mount_id: 5,
                 parent_mount_id: 1,
+                root: PathBuf::from("/"),
                 mountpoint: PathBuf::from("/var/run/secrets/service"),
                 filesystem_device: 42,
                 inode: 2,
@@ -937,6 +988,7 @@ mod tests {
             LiveMount {
                 mount_id: 9,
                 parent_mount_id: 1,
+                root: PathBuf::from("/"),
                 mountpoint: PathBuf::from("/work/input/job-42"),
                 filesystem_device: 42,
                 inode: 2,
@@ -954,6 +1006,48 @@ mod tests {
     }
 
     #[test]
+    fn canonical_mount_walk_uses_source_ancestry_for_a_child_bind() -> crate::Result<()> {
+        let mounts = vec![
+            LiveMount {
+                mount_id: 1,
+                parent_mount_id: 1,
+                root: PathBuf::from("/"),
+                mountpoint: PathBuf::from("/"),
+                filesystem_device: 1,
+                inode: 1,
+                mount_id_unique: 1,
+            },
+            LiveMount {
+                mount_id: 5,
+                parent_mount_id: 1,
+                root: PathBuf::from("/"),
+                mountpoint: PathBuf::from("/mnt/data"),
+                filesystem_device: 42,
+                inode: 2,
+                mount_id_unique: 41,
+            },
+            LiveMount {
+                mount_id: 9,
+                parent_mount_id: 1,
+                root: PathBuf::from("/models"),
+                mountpoint: PathBuf::from("/work/models"),
+                filesystem_device: 42,
+                inode: 3,
+                mount_id_unique: 92,
+            },
+        ];
+
+        let result = canonicalize_mount_path(9, vec![b"model.bin".to_vec()], &mounts)?;
+
+        assert_eq!(
+            result.components,
+            ["mnt", "data", "models", "model.bin"].map(|component| component.as_bytes().to_vec())
+        );
+        assert_eq!(result.first_selected_mount_id_unique, 41);
+        Ok(())
+    }
+
+    #[test]
     fn mount_walk_does_not_open_unrelated_mounts() -> crate::Result<()> {
         let entries = parse_mountinfo(
             b"1 1 0:1 / / rw - rootfs rootfs rw\n\
@@ -963,6 +1057,27 @@ mod tests {
         )?;
 
         let relevant = relevant_mount_entries(&entries, 9)?;
+        assert_eq!(
+            relevant
+                .iter()
+                .map(|entry| entry.mount_id)
+                .collect::<Vec<_>>(),
+            vec![1, 5, 9]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn mount_walk_includes_source_ancestor_roots() -> crate::Result<()> {
+        let entries = parse_mountinfo(
+            b"1 1 0:1 / / rw - rootfs rootfs rw\n\
+              5 1 0:42 / /mnt/data rw - tmpfs tmpfs rw\n\
+              9 1 0:42 /models /work/models rw - tmpfs tmpfs rw\n\
+              335 1 0:65 / /run/user/1000/doc ro - fuse.portal portal rw\n",
+        )?;
+
+        let relevant = relevant_mount_entries(&entries, 9)?;
+
         assert_eq!(
             relevant
                 .iter()

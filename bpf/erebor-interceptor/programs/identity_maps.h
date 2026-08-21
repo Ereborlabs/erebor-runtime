@@ -50,6 +50,7 @@ struct exception_runtime_state_bpf_v1 {
 #define EFFECT_GATE_PATH_SUPPLIED_V1 8
 #define MAX_CANONICAL_MOUNTS_V1 4096
 #define CANONICAL_MOUNT_CACHE_READY_V1 1
+#define CANONICAL_MOUNT_CACHE_MISS_V1 1
 
 struct canonical_mount_cache_key_v1 {
     __u64 mount_namespace_address;

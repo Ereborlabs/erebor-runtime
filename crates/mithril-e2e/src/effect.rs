@@ -48,7 +48,7 @@ use crate::physical::{boot_identity, ProbeCgroup, ProbeDirectory, ProbeFile};
 use crate::LatencyDistributionV1;
 use crate::Result;
 
-pub use child::{run_effect_child, run_mount_setattr_child};
+pub use child::{run_effect_child, run_mount_move_child, run_mount_setattr_child};
 pub use network::{
     run_network_peer_server, NetworkFixtureResultV1, NetworkPeerServerResultV1,
     NetworkPeerTargetV1, NetworkPhysicalProbeBundleV1, NetworkTestRunner, NETWORK_PEER_DENIED_PORT,
@@ -443,6 +443,13 @@ pub struct EffectPhysicalProbeBundleV1 {
     pub path_tree_later_child_denied: bool,
     pub path_tree_replacement_child_denied: bool,
     pub path_tree_outside_control_allowed: bool,
+    pub path_tree_preexisting_bind_alias_denied: bool,
+    pub path_tree_postactivation_bind_alias_denied: bool,
+    pub allowed_bind_alias_allowed: bool,
+    pub path_tree_recursive_bind_alias_denied: bool,
+    pub allowed_recursive_bind_alias_allowed: bool,
+    pub path_tree_move_mount_alias_denied: bool,
+    pub allowed_move_mount_alias_allowed: bool,
     pub path_tree_mount_attack_failed_closed: bool,
     pub protected_mount_race_denied: bool,
     pub mount_stale_proposal_failed_closed: bool,
@@ -512,6 +519,12 @@ fn build_generation_artifact(
         (
             "manual-benign",
             fixture_root.join("benign"),
+            "MANUAL_BENIGN",
+            None,
+        ),
+        (
+            "manual-benign-bind",
+            fixture_root.join("allowed-bind-source/allowed"),
             "MANUAL_BENIGN",
             None,
         ),
@@ -1163,9 +1176,40 @@ impl EffectTestRunner {
         let path_tree_later = path_tree_root.join("created-after-activation");
         let path_tree_replacement = path_tree_root.join("replacement");
         let path_tree_actor_create = path_tree_root.join("actor-created");
+        let path_tree_preexisting_bind_target =
+            fixture_root.join("path-tree-preexisting-bind-alias");
+        let path_tree_postactivation_bind_target =
+            fixture_root.join("path-tree-postactivation-bind-alias");
+        let path_tree_recursive_bind_target = fixture_root.join("path-tree-recursive-bind-alias");
+        let path_tree_move_mount_target = fixture_root.join("path-tree-move-mount-alias");
+        let allowed_bind_source = fixture_root.join("allowed-bind-source");
+        let allowed_bind_source_file = allowed_bind_source.join("allowed");
+        let allowed_bind_target = fixture_root.join("allowed-bind-alias");
+        let allowed_bind_alias = allowed_bind_target.join("allowed");
+        let allowed_recursive_bind_target = fixture_root.join("allowed-recursive-bind-alias");
+        let allowed_recursive_bind_alias = allowed_recursive_bind_target.join("allowed");
+        let allowed_move_mount_target = fixture_root.join("allowed-move-mount-alias");
+        let allowed_move_mount_alias = allowed_move_mount_target.join("allowed");
         fs::create_dir_all(&path_tree_root).context(IoSnafu {
             path: &path_tree_root,
         })?;
+        fs::create_dir(&allowed_bind_source).context(IoSnafu {
+            path: &allowed_bind_source,
+        })?;
+        fs::write(&allowed_bind_source_file, b"allowed bind source\n").context(IoSnafu {
+            path: &allowed_bind_source_file,
+        })?;
+        for target in [
+            &path_tree_preexisting_bind_target,
+            &path_tree_postactivation_bind_target,
+            &path_tree_recursive_bind_target,
+            &path_tree_move_mount_target,
+            &allowed_bind_target,
+            &allowed_recursive_bind_target,
+            &allowed_move_mount_target,
+        ] {
+            fs::create_dir(target).context(IoSnafu { path: target })?;
+        }
         ensure!(
             !protect
                 || path_tree_preexisting
@@ -1186,6 +1230,8 @@ impl EffectTestRunner {
         })?;
         let propagation_peer_pid = fixture.prepare_propagation_peer(&paths)?;
         let external_mount_namespace = ExternalMountNamespace::acquire(fixture.pid())?;
+        external_mount_namespace.bind_mount(&path_tree_root, &path_tree_preexisting_bind_target)?;
+        external_mount_namespace.bind_mount(&allowed_bind_source, &allowed_bind_target)?;
         let create_target = paths.mutation_root.join("forbidden-create");
         let setattr_target = paths.mutation_root.join("setattr-target");
         let truncate_target = paths.mutation_root.join("truncate-target");
@@ -1328,6 +1374,45 @@ impl EffectTestRunner {
             None,
         )
         .context(NodeSnafu)?;
+        let allowed_bind_inode_generation =
+            inode_generation(fixture.pid(), &allowed_bind_source_file)?;
+        let allowed_bind_object = ExactFileObjectResolver::resolve(
+            fixture.pid(),
+            &allowed_bind_source_file,
+            PROFILE_GENERATION_REF_ID,
+            PathSelectorV1::kernel_handle_for_id("manual-benign-bind"),
+            "MANUAL_BENIGN".to_owned(),
+            allowed_bind_inode_generation,
+            None,
+        )
+        .context(NodeSnafu)?;
+        let allowed_bind_alias_object = ExactFileObjectResolver::resolve(
+            fixture.pid(),
+            &allowed_bind_alias,
+            PROFILE_GENERATION_REF_ID,
+            PathSelectorV1::kernel_handle_for_id("manual-benign-bind"),
+            "MANUAL_BENIGN".to_owned(),
+            allowed_bind_inode_generation,
+            None,
+        )
+        .context(NodeSnafu)?;
+        ensure!(
+            allowed_bind_object.mount_id_unique != allowed_bind_alias_object.mount_id_unique
+                && allowed_bind_object.selected_mount_id_unique
+                    == allowed_bind_alias_object.selected_mount_id_unique
+                && allowed_bind_object.canonical_component_hex
+                    == allowed_bind_alias_object.canonical_component_hex
+                && allowed_bind_object.filesystem_device
+                    == allowed_bind_alias_object.filesystem_device
+                && allowed_bind_object.inode == allowed_bind_alias_object.inode
+                && allowed_bind_object.inode_generation
+                    == allowed_bind_alias_object.inode_generation,
+            InvalidInputSnafu {
+                path: &allowed_bind_alias,
+                reason:
+                    "the allowed bind fixture is not a distinct mount of the same canonical file",
+            }
+        );
         let propagation_benign_object = ExactFileObjectResolver::resolve(
             propagation_peer_pid,
             &paths.benign,
@@ -1361,6 +1446,7 @@ impl EffectTestRunner {
         let mut exact_objects = vec![
             exact_object.clone(),
             benign_object,
+            allowed_bind_object,
             propagation_benign_object,
             exec_object,
             script_object,
@@ -1498,7 +1584,57 @@ impl EffectTestRunner {
 
         let mut path_tree_future_namespace_denied = false;
         let mut path_tree_meta_depth_denied = false;
+        let mut path_tree_preexisting_bind_alias_denied = false;
+        let mut path_tree_postactivation_bind_alias_denied = false;
+        let mut allowed_bind_alias_allowed = false;
+        let mut path_tree_recursive_bind_alias_denied = false;
+        let mut allowed_recursive_bind_alias_allowed = false;
+        let mut path_tree_move_mount_alias_denied = false;
+        let mut allowed_move_mount_alias_allowed = false;
         if protect {
+            let protected_alias_child = path_tree_preexisting_bind_target.join("pre-existing");
+            let protected_alias_marker = observations.cursor();
+            ensure!(
+                fixture.open(&protected_alias_child)?.denied(),
+                InvalidInputSnafu {
+                    path: &protected_alias_child,
+                    reason: "a pre-existing successful bind exposed a protected child",
+                }
+            );
+            wait_for_effect(
+                &reader,
+                &observations,
+                protected_alias_marker,
+                "PATH_TREE_POLICY_DENY",
+                (
+                    KernelEffectFamilyV1::File,
+                    KernelEffectOperationV1::OpenRead,
+                ),
+            )?;
+            path_tree_preexisting_bind_alias_denied = true;
+
+            let allowed_alias_marker = observations.cursor();
+            ensure!(
+                fixture.open(&allowed_bind_alias)?.allowed,
+                InvalidInputSnafu {
+                    path: &allowed_bind_alias,
+                    reason: "the allowed pre-existing bind alias was denied",
+                }
+            );
+            wait_for_exact_effect(
+                &reader,
+                &observations,
+                allowed_alias_marker,
+                "EXACT_POLICY_ALLOW",
+                (
+                    KernelEffectFamilyV1::File,
+                    KernelEffectOperationV1::OpenRead,
+                ),
+                PathSelectorV1::kernel_handle_for_id("manual-benign-bind"),
+                None,
+            )?;
+            allowed_bind_alias_allowed = true;
+
             let future_fixture_root = fixture_root.join("future-mount-namespace");
             fs::create_dir(&future_fixture_root).context(IoSnafu {
                 path: &future_fixture_root,
@@ -3638,50 +3774,169 @@ impl EffectTestRunner {
         )?;
 
         if protect {
-            external_mount_namespace.bind_mount(&paths.source, &path_tree_root)?;
+            external_mount_namespace
+                .bind_mount(&path_tree_root, &path_tree_postactivation_bind_target)?;
             ensure!(
                 global_mount_view_is_dirty(&host)?
                     && mount_view_is_dirty(&host, exact_object.mount_namespace_inode)?,
                 InvalidInputSnafu {
-                    path: &path_tree_root,
-                    reason: "a mount over the protected tree did not dirty its mount view",
+                    path: &path_tree_postactivation_bind_target,
+                    reason: "a successful protected-tree bind did not dirty its mount view",
                 }
             );
+            reconcile_mount_views_until_clean(&policy, &mut host, &mount_namespaces)?;
             let path_tree_mount_marker = observations.cursor();
-            let mounted_child = path_tree_root.join("secret");
+            let mounted_child = path_tree_postactivation_bind_target.join("pre-existing");
             ensure!(
                 fixture.open(&mounted_child)?.denied(),
                 InvalidInputSnafu {
                     path: &mounted_child,
-                    reason: "a mount replacement bypassed the protected tree while DIRTY",
-                }
-            );
-            wait_for_reason(
-                &reader,
-                &observations,
-                path_tree_mount_marker,
-                "UNRESOLVED_OBJECT",
-            )?;
-            external_mount_namespace.unmount(&path_tree_root)?;
-            reconcile_mount_views_until_clean(&policy, &mut host, &mount_namespaces)?;
-            let path_tree_restored_marker = observations.cursor();
-            ensure!(
-                fixture.open(&path_tree_preexisting)?.denied(),
-                InvalidInputSnafu {
-                    path: &path_tree_preexisting,
-                    reason: "the path-tree floor did not recover after hostile unmount",
+                    reason: "a successful reconciled bind exposed a protected child",
                 }
             );
             wait_for_effect(
                 &reader,
                 &observations,
-                path_tree_restored_marker,
+                path_tree_mount_marker,
                 "PATH_TREE_POLICY_DENY",
                 (
                     KernelEffectFamilyV1::File,
                     KernelEffectOperationV1::OpenRead,
                 ),
             )?;
+            path_tree_postactivation_bind_alias_denied = true;
+
+            let allowed_alias_marker = observations.cursor();
+            ensure!(
+                fixture.open(&allowed_bind_alias)?.allowed,
+                InvalidInputSnafu {
+                    path: &allowed_bind_alias,
+                    reason: "the allowed bind alias was denied after mount reconciliation",
+                }
+            );
+            wait_for_exact_effect(
+                &reader,
+                &observations,
+                allowed_alias_marker,
+                "EXACT_POLICY_ALLOW",
+                (
+                    KernelEffectFamilyV1::File,
+                    KernelEffectOperationV1::OpenRead,
+                ),
+                PathSelectorV1::kernel_handle_for_id("manual-benign-bind"),
+                None,
+            )?;
+            external_mount_namespace.unmount(&path_tree_postactivation_bind_target)?;
+        }
+        external_mount_namespace.unmount(&path_tree_preexisting_bind_target)?;
+        external_mount_namespace.unmount(&allowed_bind_target)?;
+        reconcile_mount_views_until_clean(&policy, &mut host, &mount_namespaces)?;
+
+        if protect {
+            external_mount_namespace
+                .recursive_bind_mount(&path_tree_root, &path_tree_recursive_bind_target)?;
+            external_mount_namespace
+                .recursive_bind_mount(&allowed_bind_source, &allowed_recursive_bind_target)?;
+            reconcile_mount_views_until_clean(&policy, &mut host, &mount_namespaces)?;
+
+            let protected_recursive_child = path_tree_recursive_bind_target.join("pre-existing");
+            let protected_recursive_marker = observations.cursor();
+            ensure!(
+                fixture.open(&protected_recursive_child)?.denied(),
+                InvalidInputSnafu {
+                    path: &protected_recursive_child,
+                    reason: "a successful recursive bind exposed a protected child",
+                }
+            );
+            wait_for_effect(
+                &reader,
+                &observations,
+                protected_recursive_marker,
+                "PATH_TREE_POLICY_DENY",
+                (
+                    KernelEffectFamilyV1::File,
+                    KernelEffectOperationV1::OpenRead,
+                ),
+            )?;
+            path_tree_recursive_bind_alias_denied = true;
+
+            let allowed_recursive_marker = observations.cursor();
+            ensure!(
+                fixture.open(&allowed_recursive_bind_alias)?.allowed,
+                InvalidInputSnafu {
+                    path: &allowed_recursive_bind_alias,
+                    reason: "the allowed recursive bind alias was denied",
+                }
+            );
+            wait_for_exact_effect(
+                &reader,
+                &observations,
+                allowed_recursive_marker,
+                "EXACT_POLICY_ALLOW",
+                (
+                    KernelEffectFamilyV1::File,
+                    KernelEffectOperationV1::OpenRead,
+                ),
+                PathSelectorV1::kernel_handle_for_id("manual-benign-bind"),
+                None,
+            )?;
+            allowed_recursive_bind_alias_allowed = true;
+
+            external_mount_namespace.unmount(&path_tree_recursive_bind_target)?;
+            external_mount_namespace.unmount(&allowed_recursive_bind_target)?;
+            reconcile_mount_views_until_clean(&policy, &mut host, &mount_namespaces)?;
+
+            external_mount_namespace.move_mount(&path_tree_root, &path_tree_move_mount_target)?;
+            external_mount_namespace
+                .move_mount(&allowed_bind_source, &allowed_move_mount_target)?;
+            reconcile_mount_views_until_clean(&policy, &mut host, &mount_namespaces)?;
+
+            let protected_move_child = path_tree_move_mount_target.join("pre-existing");
+            let protected_move_marker = observations.cursor();
+            ensure!(
+                fixture.open(&protected_move_child)?.denied(),
+                InvalidInputSnafu {
+                    path: &protected_move_child,
+                    reason: "a successful move_mount attachment exposed a protected child",
+                }
+            );
+            wait_for_effect(
+                &reader,
+                &observations,
+                protected_move_marker,
+                "PATH_TREE_POLICY_DENY",
+                (
+                    KernelEffectFamilyV1::File,
+                    KernelEffectOperationV1::OpenRead,
+                ),
+            )?;
+            path_tree_move_mount_alias_denied = true;
+
+            let allowed_move_marker = observations.cursor();
+            ensure!(
+                fixture.open(&allowed_move_mount_alias)?.allowed,
+                InvalidInputSnafu {
+                    path: &allowed_move_mount_alias,
+                    reason: "the allowed move_mount alias was denied",
+                }
+            );
+            wait_for_exact_effect(
+                &reader,
+                &observations,
+                allowed_move_marker,
+                "EXACT_POLICY_ALLOW",
+                (
+                    KernelEffectFamilyV1::File,
+                    KernelEffectOperationV1::OpenRead,
+                ),
+                PathSelectorV1::kernel_handle_for_id("manual-benign-bind"),
+                None,
+            )?;
+            allowed_move_mount_alias_allowed = true;
+
+            external_mount_namespace.unmount(&path_tree_move_mount_target)?;
+            external_mount_namespace.unmount(&allowed_move_mount_target)?;
+            reconcile_mount_views_until_clean(&policy, &mut host, &mount_namespaces)?;
         }
 
         ensure!(
@@ -4109,7 +4364,14 @@ impl EffectTestRunner {
             path_tree_later_child_denied: protect,
             path_tree_replacement_child_denied: protect,
             path_tree_outside_control_allowed: protect,
-            path_tree_mount_attack_failed_closed: protect,
+            path_tree_preexisting_bind_alias_denied,
+            path_tree_postactivation_bind_alias_denied,
+            allowed_bind_alias_allowed,
+            path_tree_recursive_bind_alias_denied,
+            allowed_recursive_bind_alias_allowed,
+            path_tree_move_mount_alias_denied,
+            allowed_move_mount_alias_allowed,
+            path_tree_mount_attack_failed_closed: path_tree_postactivation_bind_alias_denied,
             protected_mount_race_denied: true,
             mount_stale_proposal_failed_closed: true,
             mount_propagation_reached_peer: true,

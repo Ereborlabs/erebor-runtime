@@ -526,6 +526,24 @@ impl ExternalMountNamespace {
         self.run(["mount", "--bind"], [source, target])
     }
 
+    pub(super) fn recursive_bind_mount(&self, source: &Path, target: &Path) -> Result<()> {
+        self.run(["mount", "--rbind"], [source, target])
+    }
+
+    pub(super) fn move_mount(&self, source: &Path, target: &Path) -> Result<()> {
+        let executable = std::env::current_exe().context(IoSnafu {
+            path: Path::new("current executable"),
+        })?;
+        let executable = executable.to_str().ok_or_else(|| {
+            InvalidInputSnafu {
+                path: &executable,
+                reason: "the effect-test executable path must be UTF-8",
+            }
+            .build()
+        })?;
+        self.run([executable, "mount-move"], [source, target])
+    }
+
     pub(super) fn unmount(&self, target: &Path) -> Result<()> {
         self.run(["umount", "--"], [target])
     }

@@ -1695,6 +1695,11 @@ pub fn run_mount_setattr_child(namespace: &Path, path: &Path, read_only: bool) -
     .context(IoSnafu { path })
 }
 
+pub fn run_mount_move_child(source: &Path, target: &Path) -> Result<()> {
+    let tree = fixture_syscalls::open_mount_tree(source).context(IoSnafu { path: source })?;
+    fixture_syscalls::move_mount(tree.as_raw_fd(), target).context(IoSnafu { path: target })
+}
+
 #[allow(deprecated)]
 fn enter_private_mount_namespace() -> Result<()> {
     rustix::thread::unshare(rustix::thread::UnshareFlags::NEWNS)

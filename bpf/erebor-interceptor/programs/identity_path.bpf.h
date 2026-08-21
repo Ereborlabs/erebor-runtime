@@ -487,7 +487,7 @@ static __always_inline int selected_mount_for_root(
     key->root_dentry_address = (__u64)root;
     cached = bpf_map_lookup_elem(&canonical_mount_cache, key);
     if (!cached)
-        return -EACCES;
+        return CANONICAL_MOUNT_CACHE_MISS_V1;
     walk->selected_mount_address = 0;
     walk->selected_mount_id_unique = 0;
     walk->selected_mount_namespace_address = 0;
@@ -513,6 +513,43 @@ static __always_inline int selected_mount_for_root(
     return 0;
 }
 
+static __always_inline int record_canonical_dentry_component(
+    struct identity_scratch_v1 *scratch, struct dentry *current)
+{
+    struct canonical_mount_path_walk_state_v1 *walk =
+        &scratch->mount_path_walk;
+    struct canonical_path_view_v1 *component;
+    __u64 index;
+
+    if (walk->component_count >= MAX_CANONICAL_PATH_COMPONENTS_V1)
+        return -EACCES;
+    asm volatile("%[bounded] = %[raw] ;\n"
+                 "%[bounded] &= %2 ;\n"
+                 : [bounded] "=&r"(index)
+                 : [raw] "r"((__u64)walk->component_count),
+                   "i"(MAX_CANONICAL_PATH_COMPONENTS_V1));
+    walk->next_dentry_address = 0;
+    walk->component_name_address = 0;
+    walk->component_length = 0;
+    if (BPF_CORE_READ_INTO(&walk->next_dentry_address, current, d_parent) ||
+        !walk->next_dentry_address ||
+        walk->next_dentry_address == (__u64)current ||
+        BPF_CORE_READ_INTO(&walk->component_length, current, d_name.len) ||
+        !walk->component_length ||
+        walk->component_length > MAX_CANONICAL_COMPONENT_BYTES_V1 ||
+        BPF_CORE_READ_INTO(&walk->component_name_address, current,
+                           d_name.name) ||
+        !walk->component_name_address)
+        return -EACCES;
+    component = &scratch->path_component_views[index];
+    __builtin_memset(component, 0, sizeof(*component));
+    component->name_address = walk->component_name_address;
+    component->length = walk->component_length;
+    walk->component_count++;
+    walk->current_dentry_address = walk->next_dentry_address;
+    return 0;
+}
+
 struct canonical_mount_path_walk_context_v1 {
     struct identity_scratch_v1 *scratch;
 };
@@ -523,13 +560,13 @@ static long canonical_mount_path_walk_step(__u32 offset, void *data)
     struct identity_scratch_v1 *scratch = context->scratch;
     struct canonical_mount_path_walk_state_v1 *walk =
         &scratch->mount_path_walk;
-    struct canonical_path_view_v1 *component;
     struct mnt_namespace *mount_namespace;
     struct mount *selected_mount;
     struct mount *current_mount;
     struct dentry *mount_root = NULL;
     struct dentry *current;
-    __u64 index;
+    struct dentry *source_parent = NULL;
+    int selected_result;
 
     (void)offset;
     if (walk->failed || walk->reached_namespace_root)
@@ -541,48 +578,35 @@ static long canonical_mount_path_walk_step(__u32 offset, void *data)
     if (BPF_CORE_READ_INTO(&mount_root, current_mount, mnt.mnt_root) ||
         !mount_root)
         goto failed;
-    if (current != mount_root) {
-        if (walk->component_count >= MAX_CANONICAL_PATH_COMPONENTS_V1)
+    selected_result = selected_mount_for_root(
+        scratch, mount_namespace, walk->namespace_event,
+        walk->namespace_root_mount_id_unique, current);
+    if (selected_result == CANONICAL_MOUNT_CACHE_MISS_V1) {
+        if (current == mount_root ||
+            record_canonical_dentry_component(scratch, current))
             goto failed;
-        asm volatile("%[bounded] = %[raw] ;\n"
-                     "%[bounded] &= %2 ;\n"
-                     : [bounded] "=&r"(index)
-                     : [raw] "r"((__u64)walk->component_count),
-                       "i"(MAX_CANONICAL_PATH_COMPONENTS_V1));
-        walk->next_dentry_address = 0;
-        walk->component_name_address = 0;
-        walk->component_length = 0;
-        if (BPF_CORE_READ_INTO(&walk->next_dentry_address, current,
-                               d_parent) ||
-            !walk->next_dentry_address ||
-            walk->next_dentry_address == (__u64)current ||
-            BPF_CORE_READ_INTO(&walk->component_length, current,
-                               d_name.len) ||
-            !walk->component_length ||
-            walk->component_length > MAX_CANONICAL_COMPONENT_BYTES_V1 ||
-            BPF_CORE_READ_INTO(&walk->component_name_address, current,
-                               d_name.name) ||
-            !walk->component_name_address)
-            goto failed;
-        component = &scratch->path_component_views[index];
-        __builtin_memset(component, 0, sizeof(*component));
-        component->name_address = walk->component_name_address;
-        component->length = walk->component_length;
-        walk->component_count++;
-        walk->current_dentry_address = walk->next_dentry_address;
         return 0;
     }
-    if (selected_mount_for_root(
-            scratch, mount_namespace, walk->namespace_event,
-            walk->namespace_root_mount_id_unique, mount_root))
+    if (selected_result)
         goto failed;
-    if (!walk->first_selected_mount_id_unique)
-        walk->first_selected_mount_id_unique =
-            walk->selected_mount_id_unique;
     if (walk->selected_mount_address == walk->namespace_root_address) {
+        if (!walk->first_selected_mount_id_unique)
+            walk->first_selected_mount_id_unique =
+                walk->selected_mount_id_unique;
         walk->reached_namespace_root = 1;
         return 1;
     }
+    if (BPF_CORE_READ_INTO(&source_parent, current, d_parent) ||
+        !source_parent)
+        goto failed;
+    if (source_parent != current) {
+        if (record_canonical_dentry_component(scratch, current))
+            goto failed;
+        return 0;
+    }
+    if (!walk->first_selected_mount_id_unique)
+        walk->first_selected_mount_id_unique =
+            walk->selected_mount_id_unique;
     walk->next_mount_address = 0;
     walk->next_dentry_address = 0;
     selected_mount = (struct mount *)walk->selected_mount_address;

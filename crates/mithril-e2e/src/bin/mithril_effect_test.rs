@@ -1,7 +1,9 @@
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
-use mithril_e2e::{run_effect_child, run_mount_setattr_child, EffectTestRunner, Result};
+use mithril_e2e::{
+    run_effect_child, run_mount_move_child, run_mount_setattr_child, EffectTestRunner, Result,
+};
 
 #[derive(Parser)]
 #[command(name = "mithril-effect-test")]
@@ -47,6 +49,8 @@ enum Command {
         #[arg(long, action = clap::ArgAction::Set)]
         read_only: bool,
     },
+    #[command(hide = true)]
+    MountMove { source: PathBuf, target: PathBuf },
 }
 
 fn main() {
@@ -94,5 +98,6 @@ fn run() -> Result<()> {
             path,
             read_only,
         } => run_mount_setattr_child(&namespace, &path, read_only),
+        Command::MountMove { source, target } => run_mount_move_child(&source, &target),
     }
 }
