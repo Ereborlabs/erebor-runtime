@@ -198,6 +198,15 @@ pub enum PathPatternComponentV1 {
     Wildcard,
 }
 
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum PathPatternPrecedenceV1 {
+    #[default]
+    WildcardWins,
+    ExactWins,
+    ExplicitOnly,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PathPatternV1 {
     pub rule_id: String,
@@ -210,13 +219,14 @@ pub struct PathPatternV1 {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CanonicalPathGraphV1 {
     states: Vec<PathGraphStateV1>,
+    precedence: PathPatternPrecedenceV1,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 struct PathGraphStateV1 {
     exact: BTreeMap<Vec<u8>, usize>,
     wildcards: BTreeSet<usize>,
-    terminal: Option<PathTerminalV1>,
+    terminals: Vec<PathTerminalV1>,
     path_tree_deny_operations: BTreeSet<u16>,
 }
 
@@ -226,6 +236,7 @@ struct PathTerminalV1 {
     candidate_object_class_id: String,
     physical_result_id: String,
     overrides_rule_ids: Vec<String>,
+    components: Vec<PathPatternComponentV1>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -314,8 +325,23 @@ impl CanonicalPathGraphV1 {
         patterns: &[PathPatternV1],
         deny_patterns: &[PathTreeDenyPatternV1],
     ) -> Result<Self> {
+        Self::compile_with_path_tree_denies_and_precedence(
+            policy_id,
+            patterns,
+            deny_patterns,
+            PathPatternPrecedenceV1::default(),
+        )
+    }
+
+    pub fn compile_with_path_tree_denies_and_precedence(
+        policy_id: &str,
+        patterns: &[PathPatternV1],
+        deny_patterns: &[PathTreeDenyPatternV1],
+        precedence: PathPatternPrecedenceV1,
+    ) -> Result<Self> {
         let mut graph = Self {
             states: vec![PathGraphStateV1::default()],
+            precedence,
         };
         for pattern in patterns {
             ensure_path(
@@ -326,23 +352,6 @@ impl CanonicalPathGraphV1 {
                 "path patterns must be nonempty and within the component bound",
             )?;
             graph.insert(policy_id, pattern)?;
-        }
-        for (index, left) in patterns.iter().enumerate() {
-            for right in &patterns[index + 1..] {
-                if !patterns_overlap(left, right)
-                    || (left.physical_result_id == right.physical_result_id
-                        && left.candidate_object_class_id == right.candidate_object_class_id)
-                {
-                    continue;
-                }
-                ensure_path(
-                    policy_id,
-                    left.overrides_rule_ids.contains(&right.rule_id)
-                        || right.overrides_rule_ids.contains(&left.rule_id),
-                    "PATH_TERMINAL_CONFLICT",
-                    "an overlapping terminal with unequal authority needs one exact override",
-                )?;
-            }
         }
         for pattern in deny_patterns {
             graph.insert_path_tree_deny(policy_id, pattern)?;
@@ -368,16 +377,11 @@ impl CanonicalPathGraphV1 {
         }
         let terminals = active
             .iter()
-            .filter_map(|state| self.states.get(*state)?.terminal.as_ref())
+            .flat_map(|state| self.states[*state].terminals.iter())
             .collect::<Vec<_>>();
-        let terminal = terminals.iter().find(|candidate| {
-            terminals.iter().all(|other| {
-                candidate.rule_id == other.rule_id
-                    || (candidate.physical_result_id == other.physical_result_id
-                        && candidate.candidate_object_class_id == other.candidate_object_class_id)
-                    || candidate.overrides_rule_ids.contains(&other.rule_id)
-            })
-        })?;
+        let terminal = select_path_terminal("<in-memory>", self.precedence, &terminals)
+            .ok()
+            .flatten()?;
         Some(PathCandidateV1 {
             rule_id: terminal.rule_id.clone(),
             candidate_object_class_id: terminal.candidate_object_class_id.clone(),
@@ -395,7 +399,7 @@ impl CanonicalPathGraphV1 {
         let mut path_tree_deny_floors = Vec::new();
         while let Some(active) = pending.pop_front() {
             let current_state_id = state_ids[&active];
-            if let Some(terminal) = self.terminal_for(&active) {
+            if let Some(terminal) = self.terminal_for(policy_id, &active)? {
                 terminals.push(DeterministicPathTerminalV1 {
                     state_id: current_state_id,
                     rule_id: terminal.rule_id.clone(),
@@ -470,19 +474,16 @@ impl CanonicalPathGraphV1 {
         next
     }
 
-    fn terminal_for(&self, active: &BTreeSet<usize>) -> Option<&PathTerminalV1> {
+    fn terminal_for<'a>(
+        &'a self,
+        policy_id: &str,
+        active: &BTreeSet<usize>,
+    ) -> Result<Option<&'a PathTerminalV1>> {
         let terminals = active
             .iter()
-            .filter_map(|state| self.states.get(*state)?.terminal.as_ref())
+            .flat_map(|state| self.states[*state].terminals.iter())
             .collect::<Vec<_>>();
-        terminals.iter().copied().find(|candidate| {
-            terminals.iter().all(|other| {
-                candidate.rule_id == other.rule_id
-                    || (candidate.physical_result_id == other.physical_result_id
-                        && candidate.candidate_object_class_id == other.candidate_object_class_id)
-                    || candidate.overrides_rule_ids.contains(&other.rule_id)
-            })
-        })
+        select_path_terminal(policy_id, self.precedence, &terminals)
     }
 
     fn insert(&mut self, policy_id: &str, pattern: &PathPatternV1) -> Result<()> {
@@ -534,18 +535,9 @@ impl CanonicalPathGraphV1 {
             candidate_object_class_id: pattern.candidate_object_class_id.clone(),
             physical_result_id: pattern.physical_result_id.clone(),
             overrides_rule_ids: pattern.overrides_rule_ids.clone(),
+            components: pattern.components.clone(),
         };
-        match &self.states[state_id].terminal {
-            None => self.states[state_id].terminal = Some(incoming),
-            Some(existing)
-                if existing.physical_result_id == incoming.physical_result_id
-                    && existing.candidate_object_class_id == incoming.candidate_object_class_id => {
-            }
-            Some(existing) if pattern.overrides_rule_ids.contains(&existing.rule_id) => {
-                self.states[state_id].terminal = Some(incoming);
-            }
-            Some(_) => {}
-        }
+        self.states[state_id].terminals.push(incoming);
         Ok(())
     }
 
@@ -644,7 +636,89 @@ fn deterministic_state_id(
     Ok(id)
 }
 
-fn patterns_overlap(left: &PathPatternV1, right: &PathPatternV1) -> bool {
+fn select_path_terminal<'a>(
+    policy_id: &str,
+    precedence: PathPatternPrecedenceV1,
+    terminals: &[&'a PathTerminalV1],
+) -> Result<Option<&'a PathTerminalV1>> {
+    let mut authorities = BTreeMap::<(&str, &str), Vec<&PathTerminalV1>>::new();
+    for terminal in terminals {
+        authorities
+            .entry((
+                &terminal.physical_result_id,
+                &terminal.candidate_object_class_id,
+            ))
+            .or_default()
+            .push(*terminal);
+    }
+    if authorities.len() <= 1 {
+        return Ok(authorities
+            .into_values()
+            .next()
+            .and_then(|group| group.into_iter().min_by_key(|terminal| &terminal.rule_id)));
+    }
+
+    let groups = authorities.into_values().collect::<Vec<_>>();
+    let mut incoming = vec![0_usize; groups.len()];
+    let mut outgoing = vec![BTreeSet::new(); groups.len()];
+    for (higher, source) in groups.iter().enumerate() {
+        for (lower, target) in groups.iter().enumerate() {
+            if higher == lower {
+                continue;
+            }
+            let explicit = source.iter().any(|candidate| {
+                candidate
+                    .overrides_rule_ids
+                    .iter()
+                    .any(|rule_id| target.iter().any(|other| other.rule_id == *rule_id))
+            });
+            let implicit = match precedence {
+                PathPatternPrecedenceV1::WildcardWins => source.iter().any(|candidate| {
+                    target
+                        .iter()
+                        .any(|other| pattern_strictly_contains(candidate, other))
+                }),
+                PathPatternPrecedenceV1::ExactWins => source.iter().any(|candidate| {
+                    target
+                        .iter()
+                        .any(|other| pattern_strictly_contains(other, candidate))
+                }),
+                PathPatternPrecedenceV1::ExplicitOnly => false,
+            };
+            if (explicit || implicit) && outgoing[higher].insert(lower) {
+                incoming[lower] += 1;
+            }
+        }
+    }
+    let mut pending = incoming
+        .iter()
+        .enumerate()
+        .filter_map(|(index, count)| (*count == 0).then_some(index))
+        .collect::<Vec<_>>();
+    let sources = pending.clone();
+    let mut visited = 0_usize;
+    while let Some(current) = pending.pop() {
+        visited += 1;
+        for next in &outgoing[current] {
+            incoming[*next] -= 1;
+            if incoming[*next] == 0 {
+                pending.push(*next);
+            }
+        }
+    }
+    ensure_path(
+        policy_id,
+        visited == groups.len() && sources.len() == 1,
+        "PATH_TERMINAL_CONFLICT",
+        "conflicting path terminals need one acyclic precedence source",
+    )?;
+    Ok(groups[sources[0]]
+        .iter()
+        .copied()
+        .min_by_key(|terminal| &terminal.rule_id))
+}
+
+fn pattern_strictly_contains(left: &PathTerminalV1, right: &PathTerminalV1) -> bool {
     left.components.len() == right.components.len()
         && left
             .components
@@ -654,8 +728,10 @@ fn patterns_overlap(left: &PathPatternV1, right: &PathPatternV1) -> bool {
                 (PathPatternComponentV1::Exact(left), PathPatternComponentV1::Exact(right)) => {
                     left == right
                 }
-                _ => true,
+                (PathPatternComponentV1::Wildcard, _) => true,
+                (PathPatternComponentV1::Exact(_), PathPatternComponentV1::Wildcard) => false,
             })
+        && left.components != right.components
 }
 
 fn ensure_path(policy_id: &str, condition: bool, code: &'static str, reason: &str) -> Result<()> {
@@ -864,6 +940,182 @@ mod tests {
                 .binary_search_by_key(&state, |terminal| terminal.state_id)
                 .is_ok());
         }
+        Ok(())
+    }
+
+    fn terminal_pattern(
+        rule_id: &str,
+        components: Vec<PathPatternComponentV1>,
+        class: &str,
+        overrides_rule_ids: &[&str],
+    ) -> PathPatternV1 {
+        PathPatternV1 {
+            rule_id: rule_id.to_owned(),
+            components,
+            candidate_object_class_id: class.to_owned(),
+            physical_result_id: format!("RESULT_{class}"),
+            overrides_rule_ids: overrides_rule_ids.iter().map(ToString::to_string).collect(),
+        }
+    }
+
+    fn exact_path() -> Vec<PathPatternComponentV1> {
+        vec![
+            PathPatternComponentV1::Exact(b"srv".to_vec()),
+            PathPatternComponentV1::Exact(b"models".to_vec()),
+        ]
+    }
+
+    #[test]
+    fn exact_terminal_override_chain_selects_the_transitive_source() -> crate::Result<()> {
+        let graph = CanonicalPathGraphV1::compile(
+            "test",
+            &[
+                terminal_pattern("A", exact_path(), "A", &["B"]),
+                terminal_pattern("B", exact_path(), "B", &["C"]),
+                terminal_pattern("C", exact_path(), "C", &[]),
+            ],
+        )?;
+
+        assert_eq!(
+            graph
+                .determinize("test")?
+                .terminals
+                .first()
+                .map(|terminal| terminal.rule_id.as_str()),
+            Some("A")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn unequal_exact_terminals_need_one_precedence_source() -> crate::Result<()> {
+        let unrelated = CanonicalPathGraphV1::compile(
+            "test",
+            &[
+                terminal_pattern("A", exact_path(), "A", &[]),
+                terminal_pattern("B", exact_path(), "B", &[]),
+            ],
+        )?;
+        assert!(unrelated.determinize("test").is_err());
+
+        let two_sources = CanonicalPathGraphV1::compile(
+            "test",
+            &[
+                terminal_pattern("A", exact_path(), "A", &["C"]),
+                terminal_pattern("B", exact_path(), "B", &["C"]),
+                terminal_pattern("C", exact_path(), "C", &[]),
+            ],
+        )?;
+        assert!(two_sources.determinize("test").is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn cyclic_terminal_precedence_fails_determinization() -> crate::Result<()> {
+        let graph = CanonicalPathGraphV1::compile(
+            "test",
+            &[
+                terminal_pattern("A", exact_path(), "A", &["B"]),
+                terminal_pattern("B", exact_path(), "B", &["C"]),
+                terminal_pattern("C", exact_path(), "C", &["A"]),
+            ],
+        )?;
+        assert!(graph.determinize("test").is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn signed_precedence_controls_wildcard_and_exact_conflicts() -> crate::Result<()> {
+        let patterns = [
+            terminal_pattern(
+                "wildcard",
+                vec![
+                    PathPatternComponentV1::Exact(b"app".to_vec()),
+                    PathPatternComponentV1::Wildcard,
+                ],
+                "WILDCARD",
+                &[],
+            ),
+            terminal_pattern(
+                "exact",
+                vec![
+                    PathPatternComponentV1::Exact(b"app".to_vec()),
+                    PathPatternComponentV1::Exact(b"config".to_vec()),
+                ],
+                "EXACT",
+                &[],
+            ),
+        ];
+        let wildcard_wins = CanonicalPathGraphV1::compile("test", &patterns)?;
+        let wildcard_wins = wildcard_wins.determinize("test")?;
+        let matching_state = wildcard_wins
+            .state_after(&[b"app".to_vec(), b"config".to_vec()])
+            .ok_or_else(|| crate::Error::PolicyValidation {
+                policy_id: "test".to_owned(),
+                code: "PATH_TEST",
+                reason: "the wildcard/exact test path is absent".to_owned(),
+                location: snafu::Location::default(),
+            })?;
+        assert_eq!(
+            wildcard_wins
+                .terminals
+                .iter()
+                .find(|terminal| terminal.state_id == matching_state)
+                .map(|terminal| terminal.rule_id.as_str()),
+            Some("wildcard")
+        );
+        let exact_wins = CanonicalPathGraphV1::compile_with_path_tree_denies_and_precedence(
+            "test",
+            &patterns,
+            &[],
+            PathPatternPrecedenceV1::ExactWins,
+        )?;
+        let exact_wins = exact_wins.determinize("test")?;
+        let matching_state = exact_wins
+            .state_after(&[b"app".to_vec(), b"config".to_vec()])
+            .ok_or_else(|| crate::Error::PolicyValidation {
+                policy_id: "test".to_owned(),
+                code: "PATH_TEST",
+                reason: "the wildcard/exact test path is absent".to_owned(),
+                location: snafu::Location::default(),
+            })?;
+        assert_eq!(
+            exact_wins
+                .terminals
+                .iter()
+                .find(|terminal| terminal.state_id == matching_state)
+                .map(|terminal| terminal.rule_id.as_str()),
+            Some("exact")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn cross_wildcards_need_explicit_precedence() -> crate::Result<()> {
+        let graph = CanonicalPathGraphV1::compile(
+            "test",
+            &[
+                terminal_pattern(
+                    "left",
+                    vec![
+                        PathPatternComponentV1::Exact(b"app".to_vec()),
+                        PathPatternComponentV1::Wildcard,
+                    ],
+                    "LEFT",
+                    &[],
+                ),
+                terminal_pattern(
+                    "right",
+                    vec![
+                        PathPatternComponentV1::Wildcard,
+                        PathPatternComponentV1::Exact(b"config".to_vec()),
+                    ],
+                    "RIGHT",
+                    &[],
+                ),
+            ],
+        )?;
+        assert!(graph.determinize("test").is_err());
         Ok(())
     }
 

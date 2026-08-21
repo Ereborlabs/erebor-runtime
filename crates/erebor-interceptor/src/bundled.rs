@@ -344,12 +344,17 @@ mod tests {
 
     #[test]
     fn bpf_path_walks_use_compiled_component_and_namespace_budgets() {
+        use erebor_interceptor_abi::{
+            MAX_CANONICAL_MOUNT_SCAN_DEPTH_V1, MAX_CANONICAL_PATH_COMPONENTS_V1,
+        };
         use libbpf_rs::libbpf_sys::{BPF_ALU64, BPF_K, BPF_MOV};
 
-        const PATH_COMPONENT_BUDGET: i32 = 255;
-        const PATH_WALK_BUDGET: i32 = 4_096 + PATH_COMPONENT_BUDGET;
+        let path_component_budget = MAX_CANONICAL_PATH_COMPONENTS_V1 as i32;
+        let mount_scan_depth = MAX_CANONICAL_MOUNT_SCAN_DEPTH_V1 as i32;
+        let path_walk_budget = 4_096 + path_component_budget;
+        assert_eq!(mount_scan_depth, path_component_budget);
         let instructions = BUNDLED_BPF_OBJECT.chunks_exact(8).collect::<Vec<_>>();
-        for budget in [PATH_COMPONENT_BUDGET, PATH_WALK_BUDGET] {
+        for budget in [mount_scan_depth, path_component_budget, path_walk_budget] {
             assert!(instructions.iter().enumerate().any(|(index, instruction)| {
                 instruction[0] == 0x85
                     && bpf_immediate(instruction)

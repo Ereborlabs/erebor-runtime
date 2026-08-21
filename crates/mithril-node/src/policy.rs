@@ -3615,10 +3615,11 @@ fn lower_path_tables(
             })
         })
         .collect::<Result<Vec<_>>>()?;
-    let graph = CanonicalPathGraphV1::compile_with_path_tree_denies(
+    let graph = CanonicalPathGraphV1::compile_with_path_tree_denies_and_precedence(
         artifact.header.profile_id.as_str(),
         &patterns,
         &path_tree_denies,
+        artifact.policy_document.path_pattern_precedence,
     )
     .context(PolicySnafu)?
     .determinize(artifact.header.profile_id.as_str())

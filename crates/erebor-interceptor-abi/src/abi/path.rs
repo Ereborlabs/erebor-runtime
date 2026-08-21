@@ -3,6 +3,7 @@ use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout, TryFromBytes};
 use super::Id128V1;
 
 pub const MAX_CANONICAL_PATH_COMPONENTS_V1: usize = 255;
+pub const MAX_CANONICAL_MOUNT_SCAN_DEPTH_V1: usize = 255;
 pub const MAX_CANONICAL_COMPONENT_BYTES_V1: usize = 255;
 pub const CANONICAL_COMPONENT_STORAGE_BYTES_V1: usize = 256;
 

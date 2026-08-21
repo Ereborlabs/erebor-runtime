@@ -13,6 +13,7 @@ use super::source_proof::{
     ResourceSelectorV1, RuntimeOperationV1,
 };
 use super::source_response::{BlastRadiusLimitV1, NotificationRouteV1, ResponseBindingV1};
+use super::PathPatternPrecedenceV1;
 
 pub const MAX_POLICY_SOURCE_BYTES: usize = 1_048_576;
 const MAX_POLICY_NODES: usize = 32_768;
@@ -32,6 +33,8 @@ pub struct PolicyDocumentV1 {
     pub network_policy: Option<NetworkPolicyV1>,
     #[serde(default)]
     pub path_tree_deny_floors: Vec<PathTreeDenyFloorV1>,
+    #[serde(default)]
+    pub path_pattern_precedence: PathPatternPrecedenceV1,
     pub roles: Vec<RoleDefinitionV1>,
     pub entry_role_assignments: Vec<EntryRoleAssignmentV1>,
     pub native_transition_rules: Vec<NativeRoleTransitionRuleV1>,

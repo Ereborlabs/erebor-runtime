@@ -197,7 +197,7 @@ struct identity_scratch_v1 {
     struct exact_mount_event_key_v1 exact_mount_event_key;
     struct exact_mount_event_v1 exact_mount_event;
     struct canonical_mount_cache_build_state_v1 mount_cache_build;
-    __u64 mount_scan_stack[MAX_CANONICAL_PATH_COMPONENTS_V1 + 1];
+    __u64 mount_scan_stack[MAX_CANONICAL_MOUNT_SCAN_DEPTH_V1 + 1];
     struct canonical_mount_path_walk_state_v1 mount_path_walk;
     struct canonical_path_match_state_v1 path_match;
     struct canonical_path_view_v1

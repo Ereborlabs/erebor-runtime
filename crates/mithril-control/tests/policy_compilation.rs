@@ -7,11 +7,11 @@ use mithril_control::{
     DestinationPolicyRecordV1, DnsPolicyModeV1, EffectFamilyDefaultV1, EffectFamilyV1, EntryKindV1,
     ErrnoV1, ExactExceptionSubjectSelectorV1, ExceptionConsumptionScopeV1, ExceptionV1,
     HardSafetyConditionV1, IpcRelationshipRuleV1, NetworkPolicyV1, NetworkPortRangeV1,
-    NetworkProtocolV1, PathTreeDenyFloorV1, PermittedAuthorityDeltaV1, PolicyCompiler,
-    PolicyDispositionV1, PolicyDocumentV1, PolicySimulator, ProfileActivationMetadataV1,
-    ProfileCandidateArtifactV1, ProfileSealRequestV1, RegistryDigestsV1,
-    RollbackAuthorizationArtifactV1, RollbackAuthorizationPayloadV1, RootClassificationV1,
-    SimulatedDispositionV1,
+    NetworkProtocolV1, PathPatternPrecedenceV1, PathTreeDenyFloorV1, PermittedAuthorityDeltaV1,
+    PolicyCompiler, PolicyDispositionV1, PolicyDocumentV1, PolicySimulator,
+    ProfileActivationMetadataV1, ProfileCandidateArtifactV1, ProfileSealRequestV1,
+    RegistryDigestsV1, RollbackAuthorizationArtifactV1, RollbackAuthorizationPayloadV1,
+    RootClassificationV1, SimulatedDispositionV1,
 };
 
 const VALID_POLICY: &str = include_str!("fixtures/policy-v1.yaml");
@@ -27,6 +27,22 @@ fn checked_policy_is_closed_and_compiles_deterministically() -> mithril_control:
     let second = PolicyCompiler.compile(&document)?;
     assert_eq!(first, second);
     assert_eq!(first.compiled_cells.len(), 1);
+    Ok(())
+}
+
+#[test]
+fn path_pattern_precedence_is_signed_policy_input() -> mithril_control::Result<()> {
+    let document = parse(VALID_POLICY)?;
+    let wildcard_wins = PolicyCompiler.compile(&document)?;
+    let mut exact_wins = document;
+    exact_wins.path_pattern_precedence = PathPatternPrecedenceV1::ExactWins;
+    let exact_wins = PolicyCompiler.compile(&exact_wins)?;
+
+    assert_ne!(wildcard_wins.canonical_policy, exact_wins.canonical_policy);
+    assert_ne!(
+        wildcard_wins.source_policy_digest,
+        exact_wins.source_policy_digest
+    );
     Ok(())
 }
 
