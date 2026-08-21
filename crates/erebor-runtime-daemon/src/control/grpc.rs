@@ -91,7 +91,6 @@ impl DaemonGrpc {
             .get::<UnixPeerIdentity>()
             .copied()
             .map(|peer| PeerIdentity {
-                pid: peer.pid,
                 uid: peer.uid,
                 gid: peer.gid,
             })
