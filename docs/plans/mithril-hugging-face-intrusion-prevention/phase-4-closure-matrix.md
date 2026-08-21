@@ -6,12 +6,11 @@
 
 ## Closure Decision
 
-Phase 4 is **Not done** for the signed path-tree denial claim. The earlier
-limited x86_64 record remains evidence for the narrower operations that it
-exercised. A current source review found that the live path resolver does not
-preserve source ancestry after a successful first bind of a child directory.
-The open finding is in
-[`code-review-suggestions.md`](./code-review-suggestions.md).
+Phase 4 is **Not done** for the complete phase. The signed path-tree denial
+claim is **Done** for the tested mount forms. The live resolver preserves
+source ancestry after successful ordinary binds, the tested recursive-bind
+form, and the tested `open_tree` plus `move_mount` form. The closed finding is
+in [`code-review-suggestions.md`](./code-review-suggestions.md).
 
 This is capability closure. It does not say that an absent authority model was
 implemented. Appendix A.13.7 requires a physical oracle for each advertised
@@ -26,9 +25,8 @@ recorded results are historical evidence, with this correction:
 
 - 14 Appendix C fixtures are `PASS`.
 - 14 Appendix C fixtures are `UNSUPPORTED`.
-- `FILE-PATH-TREE-DENY-001` is **Not done**. The artifact recorded `PASS`, but
-  its mount-attack case denied the mount syscall and did not test access after
-  a successful child-directory bind.
+- `FILE-PATH-TREE-DENY-001` is **Done** for the tested mount forms. The current
+  probe accesses protected and allowed aliases after successful mounts.
 - No fixture is `FAIL` or `DEGRADED` in the protected result.
 
 The status terms in this matrix have these meanings:
@@ -39,8 +37,7 @@ The status terms in this matrix have these meanings:
   missing qualification. A broader default denial can still hard-close an
   attempt, but that denial does not create positive support.
 
-Source-aware child-bind traversal and its physical controls are open. Adding
-one of the unsupported capabilities still requires a new authorized
+Adding one of the unsupported capabilities still requires a new authorized
 qualification outcome.
 
 ## Deliverable Closure
@@ -49,7 +46,7 @@ qualification outcome.
 | --- | --- | --- |
 | `D4.1` | Signed generation verification, capacity preflight, staged readback, activation probes, one generation publication, retained holders, asynchronous references, recovery, and retirement are implemented. The protected probe records atomic publication, retained old holders, and deletion after the last holder. | The claim covers the represented generation owners. A new authority type must pass its own capacity, recovery, and retirement proof before it can join activation. |
 | `D4.2` | Exact file-backed exec denials and represented executable mapping denials are physical. Unrepresented anonymous, memfd, deleted, and pkey paths hard-close. | Immutable executable source proof, complete script/interpreter/loader provenance, complete VMA state, and the protected concurrent-exec fixture are `UNSUPPORTED`. The exact file-backed executable control is not an immutable-image claim. |
-| `D4.3` | Exact file, descriptor acquisition and use, represented mappings, namespace-aware identity, mount CAS, and exact snapshot recovery are physical for their recorded cases. The path-tree record proves direct paths, repeated-root aliases, future namespaces, and denied mount mutations. | Recursive path-tree denial after a successful first child-directory bind is **Not done**. Overlay copy-up provenance, projected-token rotation, complete VMA state, complete mount-attribute coverage, full propagation fan-out, and persistent file-instance lifetime are `UNSUPPORTED`. |
+| `D4.3` | Exact file, descriptor acquisition and use, represented mappings, namespace-aware identity, mount CAS, and exact snapshot recovery are physical for their recorded cases. The path-tree record proves direct paths, repeated-root aliases, future namespaces, successful ordinary binds, the recursive-bind syscall form, `open_tree` plus `move_mount`, denied mount mutations, and allowed controls. | A recursive bind with nested submounts is not qualified. Overlay copy-up provenance, projected-token rotation, complete VMA state, complete mount-attribute coverage, full propagation fan-out, and persistent file-instance lifetime are `UNSUPPORTED`. |
 | `D4.4` | Exact Unix-stream relationships, stale and unmatched peer denial, inherited endpoint denial, exact ptrace denial, unmatched signal denial, and signal-zero control are physical. | The claim does not include arbitrary pipes, datagrams, shared memory, zero-copy channels, or unqualified asynchronous operations. |
 | `D4.5` | Exact device ioctl policy and pre-install denial of a descriptor-producing PTMX operation are physical. Represented namespace, BPF, and managed-pin operations hard-close. | Granular authority after a derived object is minted and complete privilege or self-protection authority are not advertised. |
 | `D4.6` | Exact signed exceptions, atomic N/N+1 consumption, expiry, receipts, and restart-safe exception WAL behavior are physical. | Administrative exec is not advertised. The stock-runc bootstrap path needs a validated authority decision before implementation. |
@@ -91,22 +88,45 @@ qualification outcome.
 
 ## Additional Plan-Owned Qualification
 
-`FILE-PATH-TREE-DENY-001` is **Not done**. It is not an Appendix C fixture and
+`FILE-PATH-TREE-DENY-001` is **Done** for the tested mount forms. It is not an Appendix C fixture and
 must not be added to
 [`fixtures.yaml`](../../../spec/qualification/v1/fixtures.yaml). The signed
-source accepts recursive `DENY` floors only. The retained result proves
+source accepts recursive `DENY` floors only. The current result proves
 pre-existing, later, replacement, maximum-depth, and future-namespace
-children, an outside-tree control, denied mount mutations, and cleanup. It
-does not prove source-path reconstruction after a successful child bind.
+children, an outside-tree control, denied mount mutations, successful bind
+aliases, matching allowed aliases, and cleanup. The recursive-bind source has
+no nested submount.
 
-Closure requires a successful child bind before activation and a successful
-bind by a separate qualified mount owner after activation. The protected
-source-tree access must deny through each alias. An allowed bound subtree and
-an allowed file outside the protected tree must remain readable.
+The probe creates one child bind before activation. A separate mount owner
+creates another bind after activation. The node reconciles that namespace.
+Both protected aliases deny. The recursive-bind and `open_tree` plus
+`move_mount` aliases also deny. The matching allowed aliases remain readable.
 
 ## Current-Source Physical Record
 
-The retained isolated VM ran the explicitly rebuilt standalone probe at source
+The retained x86_64 qualification VM ran the rebuilt protected effect probe
+from the current working tree. The probe records all of these fields as true:
+
+- `path_tree_preexisting_bind_alias_denied`
+- `path_tree_postactivation_bind_alias_denied`
+- `allowed_bind_alias_allowed`
+- `path_tree_recursive_bind_alias_denied`
+- `allowed_recursive_bind_alias_allowed`
+- `path_tree_move_mount_alias_denied`
+- `allowed_move_mount_alias_allowed`
+- `path_tree_outside_control_allowed`
+- `pin_root_removed`
+- `lease_removed`
+- `cgroup_removed`
+- `fixture_root_removed`
+
+The repository formatting, check, Clippy, and full workspace test gates pass.
+The full workspace test command passes 972 tests. This delivery adds no
+generated probe result or digest to the repository.
+
+### Earlier record
+
+The retained isolated VM ran the earlier standalone probe at source
 commit `e0438d920d5071295ab733db0d7df0eb03a95b8c`.
 
 - Probe binary SHA-256:

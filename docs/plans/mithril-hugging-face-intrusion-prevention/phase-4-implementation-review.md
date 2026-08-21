@@ -1,8 +1,8 @@
 # Phase 4 Implementation Review Guide
 
 Status: Source-grounded review guide for the current checked source. The
-retained physical result covers the same implementation, but its path-tree
-entry does not prove access after a successful child-directory bind.
+current protected probe proves access decisions after successful ordinary
+binds, a recursive bind, and `open_tree` plus `move_mount`.
 
 - Phase: [Signed Local Pre-Effect Enforcement](./phase-4-signed-local-pre-effect-enforcement.md)
 - Architecture: [validated readable architecture](./policy-and-protection-algorithm-architecture-readable.md)
@@ -14,11 +14,12 @@ hooks for the qualified pre-effect decisions.
 
 ## Review Claim
 
-The retained x86_64 artifact records 15 physical `PASS` results and 14 exact
+The current x86_64 result records 15 physical `PASS` results and 14 exact
 `UNSUPPORTED` results. Fourteen passes are allocated Appendix C fixtures. The
-other recorded pass is the plan-owned recursive path-tree denial. The current
-review reopens that path-tree claim because its mount case denied the mount
-syscall and did not access through a successful child bind.
+other pass is the plan-owned recursive path-tree denial. The current probe
+closes its child-bind gap for the tested mount forms. It requires successful
+mounts, completed reconciliation, protected denials, and matching allowed
+aliases.
 
 An unsupported row is not an implementation claim. A default hard-close can
 prevent an unqualified operation, but it does not supply the missing positive
@@ -281,8 +282,8 @@ The unit test at
 unique IDs, 15 protected passes, 14 unsupported results, nonempty reason codes,
 and the plan-owned path-tree fixture. The [closure matrix](./phase-4-closure-matrix.md)
 provides the human-readable proof and limit for each row. This test validates
-the retained record shape. It does not make the missing successful-bind
-physical case pass.
+the result shape. The privileged probe owns the successful-bind physical
+assertions.
 
 ## Test Layers
 
@@ -292,7 +293,7 @@ physical case pass.
 | Node owner tests | Tests beside [`NodePolicyGenerationOwner`](../../../crates/mithril-node/src/policy.rs) and [`ExceptionAuthorityOwner`](../../../crates/mithril-node/src/policy/exception_authority.rs#L86) | Staging, readback, publication, recovery, retirement, WAL transitions, receipts, and reboot separation. |
 | Interceptor and BPF-shape tests | [`bundled.rs`](../../../crates/erebor-interceptor/src/bundled.rs#L1) plus Rust/C layout tests | Required hooks and maps exist, prior LSM results are preserved, bounded exception layout is valid, and generated ABI matches. |
 | Privileged physical runner | [`EffectTestRunner::physical_probe`](../../../crates/mithril-e2e/src/effect.rs#L920) | Production object load, real syscalls, negative postconditions, legitimate controls, loss independence, lifecycle, and cleanup. |
-| Readable operator cases | [`mithril-local-enforcement-manual`](../../../examples/mithril-local-enforcement-manual/README.md) | Selected Docker, raw-namespace, Container Runtime Interface (CRI), alias, denied-mount, path-tree, and control flows. They do not contain the required successful child-bind case. |
+| Readable operator cases | [`mithril-local-enforcement-manual`](../../../examples/mithril-local-enforcement-manual/README.md) | Selected Docker, raw-namespace, Container Runtime Interface (CRI), alias, denied-mount, path-tree, and control flows. The automated privileged runner owns the successful child-bind proof. |
 
 Review a fixture at its narrowest owner first. Use the physical runner for a
 claim that crosses compilation, node lifecycle, the loader, BPF, a process,

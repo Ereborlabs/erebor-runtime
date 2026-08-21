@@ -5,15 +5,14 @@ source. The path resolver in
 [`identity_path.bpf.h`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h)
 and its private state in
 [`identity_maps.h`](../../../bpf/erebor-interceptor/programs/identity_maps.h)
-are unchanged from the source used for the earlier Phase 4 physical record.
-Later source changes affect other local-enforcement owners. That record proves
-the listed direct-path, repeated-root, and mount-denial cases. It does not
-prove denial after a successful first bind of a child directory. See the
-[closure matrix](./phase-4-closure-matrix.md) for the corrected boundary.
+contain the source-aware live walk. The current protected physical probe
+proves direct paths, repeated-root aliases, successful child-directory binds,
+recursive binds, `open_tree` plus `move_mount`, allowed aliases, mount denial,
+and cleanup. See the [closure matrix](./phase-4-closure-matrix.md) for the
+remaining Phase 4 boundary.
 
-Status: **Partial**. The current resolver handles repeated mounts that have the
-same root dentry. It does not preserve the source path of a successful first
-bind of a child directory. The open finding is in
+Status: **Implemented** for the signed path-tree denial claim and the tested
+mount forms. The closed finding is in
 [`code-review-suggestions.md`](./code-review-suggestions.md).
 
 - Architecture: [validated readable architecture](./policy-and-protection-algorithm-architecture-readable.md#path-selector-resolution-path-tree-floors-and-exact-object-authority)
@@ -67,18 +66,19 @@ Read the implementation in this order:
    This function installs and reads back the graph before generation
    activation.
 7. Read
-   [`canonical_mount_cache_build_step`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L304),
-   [`canonical_mount_path_walk_step`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L520),
+   [`canonical_mount_cache_build_step`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h),
+   [`canonical_mount_path_walk_step`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h),
    and
-   [`collect_mount_components`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L606).
+   [`collect_mount_components`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h).
    These functions inspect the task's live mount namespace, select the oldest
-   mount, and walk from the leaf to the namespace root. Use the
+   mount, follow source dentry ancestry, and walk from the leaf to the
+   namespace root. Use the
    [detailed BPF Meta walkthrough](#detailed-bpf-meta-walkthrough) to review
    each source block, callback result, state change, and fail-closed check.
 8. Read
-   [`canonical_path_match_step`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L739)
+   [`canonical_path_match_step`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L763)
    and
-   [`canonical_path_candidate`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L808).
+   [`canonical_path_candidate`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L832).
    These functions reverse the collected components and traverse only the
    task's active profile generation.
 9. Read
@@ -86,10 +86,9 @@ Read the implementation in this order:
    The path-tree decision occurs before exact-object lookup.
 10. Read
    [`bpf_path_walks_use_compiled_component_and_namespace_budgets`](../../../crates/erebor-interceptor/src/bundled.rs#L349).
-   This test checks the compiled BPF loop limits. The current source has no
-   automated source-shape test for successful-bind path reconstruction.
-11. Read [`EffectTestRunner::physical_probe`](../../../crates/mithril-e2e/src/effect.rs#L705).
-   This test checks the physical result at the 255-component limit.
+   This test checks the compiled BPF loop limits.
+11. Read [`EffectTestRunner::physical_probe`](../../../crates/mithril-e2e/src/effect.rs).
+   This test checks the 255-component limit and the successful mount forms.
 
 ## Implemented result
 
@@ -110,21 +109,24 @@ time, BPF reads that generation from the task's process state. BPF then:
 2. Finds the task's live `mnt_namespace` and namespace root.
 3. Enumerates the namespace mount red-black tree.
 4. Selects the lowest `mnt_id_unique` for each repeated root dentry.
-5. Walks `d_parent` from the leaf to a mount root.
-6. Crosses to the selected mount's `mnt_parent` and `mnt_mountpoint`.
-7. Stops only at the live namespace root.
-8. Reverses the leaf-first component vector.
-9. Traverses graph rows for the active profile generation from state zero.
-10. Applies the terminal operation mask before exact-object lookup.
+5. Probes the root-dentry cache at each dentry in the leaf-to-root walk.
+6. Records the name and follows source `d_parent` when the dentry has a
+   non-self parent.
+7. Crosses to the selected mount's `mnt_parent` and `mnt_mountpoint` only at a
+   self-parent filesystem root.
+8. Stops at the selected live namespace root.
+9. Reverses the leaf-first component vector.
+10. Traverses graph rows for the active profile generation from state zero.
+11. Applies the terminal operation mask before exact-object lookup.
 
 The walk does not test the inode type. A file and a directory both use their
 path. Name operations can deny a negative dentry before an inode exists.
 
-The current walk crosses to `mnt_parent` when it reaches the current mount's
-root dentry. For a child-directory bind, that root dentry still has a source
-`d_parent`. The current branch ignores that source ancestry and follows the
-bind target. Mount protection can prevent a mutation. It does not correct a
-successful mount that is already visible to the resolver.
+The path-tree decision uses names from the live walk. It does not use inode
+matching as the path-tree authority. The shared walker also supplies the
+canonical mount identity for the later exact-object branch. The Rust resolver
+mirrors the source-side mount ancestry so exact-object configuration remains
+consistent with the BPF representation.
 
 ## Meta slides 19 through 21 in readable form
 
@@ -170,10 +172,9 @@ canonical path use `/home/liamwishart` instead of `/tmp/evil_bind` when both
 mounts share that root dentry.
 
 The slide does not show the distinct-root child-bind case. In that case, the
-source mount root and bind mount root are different dentries. The current
-exact-root cache cannot compare their mount IDs. The separate
-[successful child-bind gap](#successful-child-bind-gap) diagram shows that
-case.
+source mount root and bind mount root are different dentries. The
+[successful child-bind source walk](#successful-child-bind-source-walk)
+diagram shows how the walker follows their dentry ancestry.
 
 ### Slide 20: mount traversal
 
@@ -382,7 +383,7 @@ task's process state. It then checks that the active generation belongs to the
 bound profile.
 
 The resolved gate passes the live `struct path` and the active generation to
-[`canonical_path_candidate`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L808).
+[`canonical_path_candidate`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L832).
 The candidate function has two operations:
 
 1. Reconstruct the path from the live mount namespace.
@@ -428,8 +429,8 @@ Several mounts can have the same root dentry. This condition occurs with bind
 mounts and other aliases. The callback uses a BPF spin lock and keeps the
 lowest nonzero `mnt_id_unique`. The lowest unique ID identifies the oldest
 mount for that exact root dentry. A later mount with the same root cannot
-replace that selected edge. This statement does not cover a first bind of a
-child dentry whose source mount has a different root dentry.
+replace that selected edge. The path walk connects different root dentries
+through source `d_parent` edges.
 
 After the scan, BPF requires all of these conditions:
 
@@ -448,27 +449,23 @@ returns `-EACCES` on the other checked architectures.
 
 ### 4. Walk from the leaf to the namespace root
 
-[`collect_mount_components`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L606)
+[`collect_mount_components`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L630)
 starts with `path->dentry` and `path->mnt`. It converts the virtual filesystem
 mount to its containing `struct mount`, finds that mount's live namespace, and
 initializes the per-CPU walk state.
 
-[`canonical_mount_path_walk_step`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L520)
-runs one of two actions for each callback:
+[`canonical_mount_path_walk_step`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L557)
+probes the oldest-mount index for the current dentry. A miss below the active
+mount root records the current name and follows `d_parent`. A miss at the
+active mount root fails.
 
-1. If the current dentry is not the current mount root, record its `d_name`
-   address and length. Then move to `d_parent`. This operation collects the
-   path from leaf to head.
-2. If the current dentry is the mount root, call
-   [`selected_mount_for_root`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L472).
-   That function reads the oldest-mount index under its spin lock. It then
-   rechecks the selected mount's namespace, root dentry, and live
-   `mnt_id_unique`.
-
-If the selected mount is `mnt_namespace.root`, the walk is complete. Otherwise,
-the callback changes the current position to the selected mount's `mnt_parent`
-and `mnt_mountpoint`. The next callback continues toward the namespace root.
-This step is the mount-boundary traversal in Meta's algorithm.
+On a cache hit,
+[`selected_mount_for_root`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L472)
+rechecks the selected mount's namespace, root dentry, and live
+`mnt_id_unique`. The walk stops if that mount is `mnt_namespace.root`. A
+non-self dentry records its name and follows source `d_parent`. A self-parent
+filesystem root crosses the selected mount's `mnt_parent` and
+`mnt_mountpoint`. The next callback continues toward the namespace root.
 
 The combined loop allows 4,351 callbacks. This bound covers 4,096 mount
 crossings and 255 dentry components. The walk fails when it reaches a bad
@@ -483,10 +480,11 @@ concurrent mount change therefore invalidates the complete result.
 ### Detailed BPF Meta walkthrough
 
 This section follows the current C source in execution order. It explains the
-three functions as one bounded transaction. The first callback builds a live
-mount index. The second callback walks one dentry or one mount boundary per
-iteration. The wrapper supplies the input, controls both loops, and publishes
-output only after the final topology checks pass.
+cache builder, cache lookup, component helper, walk callback, and wrapper as
+one bounded transaction. The first callback builds a live mount index. The
+second callback walks one dentry or one mount boundary per iteration. The
+wrapper supplies the input, controls both loops, and publishes output only
+after the final topology checks pass.
 
 #### BPF call graph and result ownership
 
@@ -549,7 +547,7 @@ or, for an active io_uring execution,
 [`resolved_io_uring_effect_gate`](../../../bpf/erebor-interceptor/programs/identity_io_uring.bpf.h#L267).
 After their resolver preconditions pass for a covered file effect, both routes
 invoke
-[`canonical_path_candidate`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L808)
+[`canonical_path_candidate`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L832)
 and apply a matched path-tree denial before
 `configured_file_object_binding` performs an exact-object lookup. A prior
 LSM denial is preserved and emitted before either resolver reaches the path
@@ -674,11 +672,12 @@ it publish `CANONICAL_MOUNT_CACHE_READY_V1` for that namespace-event key.
 #### `selected_mount_for_root`, the boundary recheck
 
 The walk does not trust a cached kernel pointer by itself.
-[`selected_mount_for_root`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L472)
-performs these checks for each mount-root crossing:
+[`selected_mount_for_root`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h)
+performs these checks at each visited dentry:
 
 1. Build the same namespace, root-ID, event, and root-dentry key.
-2. Require a cache row.
+2. Return `CANONICAL_MOUNT_CACHE_MISS_V1` when no mount uses this dentry as a
+   root.
 3. Lock the row and copy the selected mount address and unique ID together.
 4. Require both copied values to be nonzero.
 5. Read the selected mount's live namespace and require the current namespace.
@@ -686,56 +685,62 @@ performs these checks for each mount-root crossing:
 7. Read its live `mnt_id_unique` and require the cached unique ID.
 
 A stale pointer, reused address, wrong namespace, changed root, or changed
-mount ID returns `-EACCES`. The helper does not return a fallback mount.
+mount ID returns `-EACCES`. A cache miss is a separate result. The caller can
+follow `d_parent` on a miss below the active mount root.
+
+#### `record_canonical_dentry_component`, bounded parent progress
+
+[`record_canonical_dentry_component`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h)
+owns one component step. It rejects a full component vector, a null parent, a
+self parent, an empty name, a name longer than 255 bytes, and a null name
+address. It stores one name view in per-CPU scratch. It then advances the
+current dentry to `d_parent`.
+
+The helper uses an inline verifier mask for the array index. The semantic
+component-count check occurs before that mask. The graph callback copies the
+name bytes only after the complete mount walk passes its topology checks.
 
 #### `canonical_mount_path_walk_step`, source order
 
-[`canonical_mount_path_walk_step`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L520)
-performs one of two actions. It records one dentry component, or it crosses one
-mount boundary.
+[`canonical_mount_path_walk_step`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h)
+performs one bounded dentry or mount step.
 
 ```mermaid
 flowchart TD
     A[Current mount and dentry] --> B[Read current mount root]
-    B --> C{Current dentry is mount root?}
-    C -- No --> D[Validate component count]
-    D --> E[Read parent, name length, and name address]
-    E --> F[Append name view]
-    F --> G[Move current dentry to parent]
-    G --> H[Continue loop]
-    C -- Yes --> I[Look up and revalidate oldest mount for root]
-    I --> J{Selected mount is namespace root?}
-    J -- Yes --> K[Mark complete and stop]
-    J -- No --> L[Read selected mount parent and mountpoint]
-    L --> M[Move to parent mount and mountpoint]
-    M --> H
+    B --> C[Probe cache for current dentry]
+    C --> D{Cache hit?}
+    D -- No --> E{Current dentry is active mount root?}
+    E -- Yes --> F[Fail closed]
+    E -- No --> G[Record name and follow d_parent]
+    D -- Yes --> H{Selected mount is namespace root?}
+    H -- Yes --> I[Mark complete and stop]
+    H -- No --> J{Current dentry has a non-self parent?}
+    J -- Yes --> K[Record name and follow source d_parent]
+    J -- No --> L[Save first selected mount ID]
+    L --> M[Cross selected mnt_parent and mnt_mountpoint]
+    G --> N[Continue loop]
+    K --> N
+    M --> N
 ```
 
-| Source | Step | Exact behavior |
-| --- | ---: | --- |
-| [`520-532`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L520) | 1 | Converts the callback context to per-CPU scratch and creates local aliases. The large walk state remains in the per-CPU map. |
-| [`534-536`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L534) | 2 | Ignores `offset` because the current pointers define progress. It stops when an earlier callback failed or reached the namespace root. |
-| [`537-540`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L537) | 3 | Converts the saved integer addresses back to the selected mount namespace, current mount, and current dentry pointers. These addresses came from live kernel objects that the wrapper read. |
-| [`541-543`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L541) | 4 | CO-RE reads the current mount's root dentry. A read failure or null root marks the walk as failed. |
-| [`544-546`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L544) | 5 | Enters the dentry branch when the current dentry is below the current mount root. It rejects a 256th component before it writes scratch. |
-| [`547-551`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L547) | 6 | Masks the component index with `255` in inline assembly. This instruction gives the verifier a bounded index into the 256-slot backing array. The prior semantic check remains authoritative. |
-| [`552-566`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L552) | 7 | Clears temporary fields. It reads `d_parent`, rejects null and self-parent progress, reads a name length from 1 through 255, and reads a non-null name address. Any invalid field stops the walk. |
-| [`567-573`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L567) | 8 | Clears one `canonical_path_view_v1`, stores the kernel name address and length, increments the component count, and moves to `d_parent`. It records a view, not copied bytes. The later graph callback copies the bytes with `bpf_probe_read_kernel`. |
-| [`575-578`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L575) | 9 | Enters the mount-root branch. It calls `selected_mount_for_root` with the exact namespace identity, namespace event, namespace-root unique ID, and current root dentry. A failed lookup or live recheck marks the walk as failed. |
-| [`579-581`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L579) | 10 | Saves the unique ID from the first selected mount boundary. After complete validation, the wrapper stores this value as the canonical exact-file mount ID. A later bind alias therefore does not supply its own mount ID. |
-| [`582-585`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L582) | 11 | Compares the selected mount address with `mnt_namespace.root`. Equality marks successful completion and stops the loop. The comparison targets the task's live mount-namespace root, not the host root and not a pathname string. |
-| [`586-596`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L586) | 12 | For a non-root selected mount, clears the next pointers and reads that selected mount's `mnt_parent` and `mnt_mountpoint`. It rejects null pointers and an immediate self-parent mount. |
-| [`597-599`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L597) | 13 | Changes the current position to the selected mount's parent mount and its attachment dentry. The next callback continues the dentry walk in the parent mount. |
-| [`601-603`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L601) | 14 | Sets the persistent failure flag and stops. A longer invalid cycle cannot run without a bound; it exhausts the wrapper's callback limit and fails the final `reached_namespace_root` check. |
+| Result | Condition | Next action |
+| --- | --- | --- |
+| Cache miss | The current dentry is below the active mount root. | Record the name and follow `d_parent`. |
+| Invalid miss | The current dentry is the active mount root. | Set `walk->failed` and stop. |
+| Namespace root | The cache selects `mnt_namespace.root`. | Save the selected unique ID, mark completion, and stop. |
+| Source parent | The cached dentry has a non-self `d_parent`. | Record the name and follow source ancestry. |
+| Filesystem root | The cached dentry has a self parent. | Save the first selected unique ID and cross the selected mount attachment. |
+| Invalid state | A kernel read, component check, parent check, or mount-edge check fails. | Set `walk->failed` and stop. |
 
 The component vector is leaf-first because the walk starts at the supplied
 leaf. The callback does not add a slash or a synthetic root component. It
-does not choose the mount by which the caller entered the shared dentry. It
-always uses the cache-selected oldest mount for that root.
+does not use the bind target as source ancestry. At a filesystem root, it uses
+the cache-selected oldest mount for that root.
 
 #### `collect_mount_components`, source order
 
-[`collect_mount_components`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L606)
+[`collect_mount_components`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L630)
 is the transaction owner for mount-path collection. Internal callers supply a
 valid per-CPU scratch pointer and result-count pointer.
 
@@ -763,15 +768,15 @@ sequenceDiagram
 
 | Source | Step | Exact behavior |
 | --- | ---: | --- |
-| [`606-622`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L606) | 1 | Declares live kernel pointers, topology snapshots, the walk-state alias, the callback context, and the `bpf_loop` result. Large arrays remain in per-CPU scratch. |
-| [`624-627`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L624) | 2 | Calls `global_mount_epoch_snapshot` first. That helper requires the epoch and pending maps, a nonzero epoch, and zero pending mutations. The wrapper then requires a path and reads non-null live `dentry` and `vfsmount` pointers. Any failure returns `-EACCES`. |
-| [`628`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L628) | 3 | Uses `mount_from_vfsmount` to recover the enclosing `struct mount` from the embedded `struct vfsmount`. The helper uses a CO-RE container offset. |
-| [`629-637`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L629) | 4 | Requires the current mount. It reads and requires the mount's live namespace and that namespace's root mount. It then calls `ensure_canonical_mount_cache` with the same global epoch. The cache helper returns the namespace event and namespace-root unique mount ID only after a complete or previously ready index is valid. |
-| [`638-645`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L638) | 5 | Clears the complete walk state. It seeds the namespace address, namespace-root mount address, supplied current mount, supplied current dentry, namespace event, and namespace-root unique mount ID. No state from an earlier per-CPU use remains authoritative. |
-| [`646-648`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L646) | 6 | Runs at most 4,351 callbacks. This is 4,096 possible mount-boundary steps plus 255 possible dentry-component steps. The two limits form one fixed verifier-visible constant. |
-| [`649-654`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L649) | 7 | Rejects a negative loop-helper result, any callback failure, a walk that did not reach the namespace root, or a walk with no selected mount ID. It re-reads the namespace event and requires the original value. It then requires the same global epoch and zero pending mutations. A bound exhaustion leaves `reached_namespace_root` clear and fails here. |
-| [`655-658`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L655) | 8 | Publishes outputs only after all checks pass. It writes the first canonical selected mount ID to the exact-file candidate, stores the validated global epoch as the topology generation, and returns the leaf-first component count. |
-| [`659`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L659) | 9 | Returns success. The caller can now reverse the component views and traverse the active generation's graph. |
+| [`630-646`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L630) | 1 | Declares live kernel pointers, topology snapshots, the walk-state alias, the callback context, and the `bpf_loop` result. Large arrays remain in per-CPU scratch. |
+| [`648-652`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L648) | 2 | Calls `global_mount_epoch_snapshot` first. That helper requires the epoch and pending maps, a nonzero epoch, and zero pending mutations. The wrapper then requires a path and reads non-null live `dentry` and `vfsmount` pointers. Any failure returns `-EACCES`. |
+| [`653`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L653) | 3 | Uses `mount_from_vfsmount` to recover the enclosing `struct mount` from the embedded `struct vfsmount`. The helper uses a CO-RE container offset. |
+| [`654-663`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L654) | 4 | Requires the current mount. It reads and requires the mount's live namespace and that namespace's root mount. It then calls `ensure_canonical_mount_cache` with the same global epoch. The cache helper returns the namespace event and namespace-root unique mount ID only after a complete or previously ready index is valid. |
+| [`665-673`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L665) | 5 | Clears the complete walk state. It seeds the namespace address, namespace-root mount address, supplied current mount, supplied current dentry, namespace event, and namespace-root unique mount ID. No state from an earlier per-CPU use remains authoritative. |
+| [`674-677`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L674) | 6 | Runs at most 4,351 callbacks. This is 4,096 possible mount-boundary steps plus 255 possible dentry-component steps. The two limits form one fixed verifier-visible constant. |
+| [`678-684`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L678) | 7 | Rejects a negative loop-helper result, any callback failure, a walk that did not reach the namespace root, or a walk with no selected mount ID. It re-reads the namespace event and requires the original value. It then requires the same global epoch and zero pending mutations. A bound exhaustion leaves `reached_namespace_root` clear and fails here. |
+| [`685-688`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L685) | 8 | Publishes outputs only after all checks pass. It writes the first canonical selected mount ID to the exact-file candidate, stores the validated global epoch as the topology generation, and returns the leaf-first component count. |
+| [`689`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L689) | 9 | Returns success. The caller can now reverse the component views and traverse the active generation's graph. |
 
 The wrapper never returns a shortened component list as success. Scratch can
 contain partial data after a failure, but the caller receives `-EACCES` and
@@ -779,7 +784,7 @@ must not use that data.
 
 #### Worked bind-alias trace
 
-Assume two mounts share root dentry `D`:
+Assume two mounts share the self-parent filesystem-root dentry `D`:
 
 - `M5` attaches `D` at `/var/run/secrets/service` and has unique ID `41`.
 - `M9` attaches the same `D` at `/work/input/job-42` and has unique ID `92`.
@@ -817,9 +822,9 @@ An allow selector under `/work/input` cannot match this canonical chain. A
 signed recursive denial under `/var/run/secrets/service` can match before the
 exact-object lookup.
 
-This trace covers two mounts that share the exact root dentry `D`. It does not
-cover a child-directory bind where the source mount is rooted at `D_data` and
-the bind mount is rooted at its descendant `D_models`.
+This trace covers two mounts that share a self-parent root dentry. The
+[successful child-bind source walk](#successful-child-bind-source-walk)
+covers a bind root whose dentry has a source parent.
 
 #### Failure points and physical result
 
@@ -830,6 +835,7 @@ the bind mount is rooted at its descendant `D_models`.
 | Namespace has zero mounts or more than 4,096 mounts. | `ensure_canonical_mount_cache` | The candidate is unresolved. The input is not truncated. |
 | Tree stack reaches its semantic limit, a CO-RE field read fails, a candidate belongs to another namespace, or the cache map cannot hold a required row. | `canonical_mount_cache_build_step` | The callback sets `build->failed`; the wrapper returns `-EACCES`. |
 | Cache row points to a mount with a different live namespace, root, or unique ID. | `selected_mount_for_root` | The boundary lookup returns `-EACCES`; the walk marks failure. |
+| The active mount root has no cache row, or a source walk reaches a self-parent dentry with no represented mount. | `canonical_mount_path_walk_step` | The walk cannot select a valid mount edge and marks failure. |
 | Component count reaches 255, name length is zero or greater than 255, name address is null, or parent progress is invalid. | `canonical_mount_path_walk_step` | The walk stops with `walk->failed`. |
 | Mount chain does not reach the task's namespace root within 4,351 callbacks. | `collect_mount_components` final checks | The missing `reached_namespace_root` flag returns `-EACCES`. |
 | Namespace event, global epoch, or pending count changes during the transaction. | Cache completion and collection completion | The complete candidate is rejected. A prior cache or partial vector cannot authorize. |
@@ -846,7 +852,7 @@ The component vector is in leaf-first order. For example, the live path
 `/srv/secret/team/a` produces `a`, `team`, `secret`, `srv` during the kernel
 walk.
 
-[`canonical_path_match_step`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L739)
+[`canonical_path_match_step`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L763)
 reads the vector in reverse order. It therefore submits `srv`, `secret`,
 `team`, and `a` to the graph. For each component, the callback:
 
@@ -888,32 +894,28 @@ denial. It does not convert an unresolved path to an allow.
 
 The implementation uses the same bounded mount index and path-matching model.
 It does not copy Meta source code because the presentation does not publish
-that source. The mount traversal is partial for a successful first bind of a
-child directory.
+that source. The live traversal preserves source ancestry for the tested bind
+forms.
 
 | Meta property | Implementation | Review source |
 | --- | --- | --- |
-| Walk from the target leaf toward the head. | BPF records `d_name` and follows `d_parent` until the current mount root. This stops too early at a child-bind root. | [`canonical_mount_path_walk_step`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L520) |
+| Walk from the target leaf toward the head. | BPF probes the mount-root cache, records `d_name`, and follows `d_parent` at each dentry. | [`canonical_mount_path_walk_step`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h) |
 | Resolve repeated mount roots through the oldest mount. | BPF scans `mnt_namespace.mounts` and retains the lowest nonzero `mnt_id_unique` for each root dentry. | [`canonical_mount_cache_build_step`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L304) |
-| Continue across mount boundaries. | At a mount root, BPF uses the selected mount's `mnt_parent` and `mnt_mountpoint`. The current branch can follow the attacker-selected bind target instead of the source ancestry. | [`canonical_mount_path_walk_step`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L520) |
-| Stop at the task's namespace root. | The walk succeeds only after the selected mount equals `mnt_namespace.root`. | [`collect_mount_components`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L606) |
-| Hash a name and find node or initializer IDs. | Rust compiles name choices into exact and wildcard transition keys. BPF map lookup hashes each full key. | [`PathGraphTransitionKeyV1`](../../../crates/erebor-interceptor-abi/src/abi/path.rs), [`canonical_path_match_step`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L739) |
+| Continue across mount boundaries. | A non-self root follows source `d_parent`. A self-parent filesystem root crosses the selected mount's `mnt_parent` and `mnt_mountpoint`. | [`canonical_mount_path_walk_step`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h) |
+| Stop at the task's namespace root. | The walk succeeds only after the selected mount equals `mnt_namespace.root`. | [`collect_mount_components`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L630) |
+| Hash a name and find node or initializer IDs. | Rust compiles name choices into exact and wildcard transition keys. BPF map lookup hashes each full key. | [`PathGraphTransitionKeyV1`](../../../crates/erebor-interceptor-abi/src/abi/path.rs), [`canonical_path_match_step`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L763) |
 | Advance and remove iterators. | Rust determinizes the active iterator set. BPF advances one deterministic state. A missing exact and wildcard transition makes the match unresolved. | [`CanonicalPathGraphV1::determinize`](../../../crates/mithril-control/src/policy/path.rs#L388) |
 | Start initializer iterators. | The initial deterministic state contains every pattern that can start at the first component. | [`CanonicalPathGraphV1::determinize`](../../../crates/mithril-control/src/policy/path.rs#L388) |
 | Keep glob iterators active. | A wildcard transition represents the next deterministic set after all applicable glob and exact advances. | [`path_graph_wildcard_transitions`](../../../bpf/erebor-interceptor/programs/identity_maps.h) |
 | Extract a path ID and role policy at a root node. | A terminal stores the path-tree denied-operation mask. The task's active generation and role remain in the surrounding effect decision. | [`PathGraphTerminalV1`](../../../crates/erebor-interceptor-abi/src/abi/path.rs), [`resolved_identity_effect_gate`](../../../bpf/erebor-interceptor/programs/identity_effects.bpf.h#L300) |
-| Reverse leaf-first components before graph lookup. | The graph callback reads `component_count - offset - 1`. | [`canonical_path_match_step`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L739) |
-| Reject a topology race. | BPF checks the global mutation epoch, pending count, namespace event, and mount count before and after cache construction and path collection. | [`ensure_canonical_mount_cache`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L385), [`collect_mount_components`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L606) |
+| Reverse leaf-first components before graph lookup. | The graph callback reads `component_count - offset - 1`. | [`canonical_path_match_step`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L763) |
+| Reject a topology race. | BPF checks the global mutation epoch, pending count, namespace event, and mount count before and after cache construction and path collection. | [`ensure_canonical_mount_cache`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L385), [`collect_mount_components`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L630) |
 
 The old split did not meet this table. Rust previously resolved the namespace
 mount chain and installed a graph prefix. BPF walked only from the leaf to the
 current mount root. The current implementation removes that path-tree
 dependency. The path-tree branch does not read `canonical_mount_roots` or
 require a clean Rust mount snapshot.
-
-The current implementation still does not complete the first two mount rows
-for a successful child bind. The deterministic state-machine rows cannot
-repair an incorrect component sequence.
 
 ## Kubernetes and profile binding
 
@@ -1003,16 +1005,16 @@ mount ID, namespace event, and root-dentry address. A mount event therefore
 selects a new cache generation. The selected cache value is revalidated
 against the live namespace, root dentry, and unique mount ID before use.
 
-## Successful child-bind gap
+## Successful child-bind source walk
 
-The path-tree decision uses the live mount tree on every effect. This removes
-the old userspace graph-prefix dependency. It does not make the current mount
-walk source-aware for every bind shape.
+The path-tree decision uses the live mount tree on every effect. The first bind
+of a child directory creates different roots for the source mount and the bind
+mount. The walker must use dentry ancestry to connect these roots.
 
-The first bind of a child directory creates different mount roots for the
-source mount and bind mount. The current cache therefore cannot compare their
-mount IDs. When the walk reaches the bind root, it follows the bind target
-mountpoint and constructs the alias path.
+The walker probes the root-dentry cache at each node. A cache hit validates the
+selected mount. A non-self `d_parent` identifies source ancestry. The walker
+records that dentry name and follows the parent. A self-parent dentry is a
+filesystem root. The walker then crosses the selected mount attachment.
 
 ```mermaid
 flowchart TD
@@ -1020,35 +1022,31 @@ flowchart TD
     B[Source child D_models]
     C[Bind mount M3 at /backup/models<br/>root D_models]
     D[Open /backup/models/x]
-    E[Current walk reaches D_models as the M3 root]
-    F[Exact-root cache contains M3 for D_models]
-    G[Current walk crosses the target mountpoint]
-    H[Construct /backup/models/x]
-    I[/mnt/data/** terminal does not match]
-    J[Required walk records models and follows source d_parent]
-    K[Reach D_data and select the source-side oldest mount]
+    E[Walk reaches D_models]
+    F[Cache selects M3 for D_models]
+    G[D_models has a source parent]
+    H[Record models and follow source d_parent]
+    I[Reach the source filesystem root]
+    J[Select its oldest represented mount]
+    K[Cross that mount attachment]
     L[Construct /mnt/data/models/x]
     M[/mnt/data/** terminal denies]
 
     A --> B --> C --> D --> E --> F
-    F --> G --> H --> I
-    F -. required correction .-> J --> K --> L --> M
+    F --> G --> H --> I --> J --> K --> L --> M
 ```
 
-The namespace-root boundary must be checked before a source-side dentry walk
-can escape it. At a non-root child-bind root, the corrected walk must record
-that root dentry name and follow its source `d_parent` chain. It must inspect
-the root-dentry cache while it walks that chain. At the filesystem root, it
-must select the oldest represented source mount and continue through that
-mount's parent and mountpoint. A missing source-side mount edge is unresolved
-and must deny.
+The walker checks the selected namespace root before it follows a source
+parent. A cache miss at the active mount root fails. A self-parent dentry with
+no represented mount also fails. Component overflow, invalid names, cache
+revalidation errors, and topology races fail closed.
 
 Mount mutation hooks still publish global and represented-namespace state for
 the separate exact-object reconciliation path. BPF counts a mutation when the
 task is managed or its current mount namespace already has a represented view.
 This rule prevents construction of a not-yet-bound Pod namespace from
-invalidating an unrelated Pod's exact-object policy. It does not reconstruct
-the source ancestry of a successful child bind.
+invalidating an unrelated Pod's exact-object policy. The path-tree decision
+does not depend on that exact-object reconciliation state.
 
 `open_tree`, `fsconfig`, `fsmount`, and `mount_setattr` use one represented
 namespace ambiguity epoch. Exact-object decisions remain closed until
@@ -1225,15 +1223,16 @@ typed identity or policy error before activation.
 | `canonical_path_accepts_meta_depth_and_rejects_one_more` | Accepts 255 canonical components and rejects 256 components. |
 | `path_tree_floor_lowers_without_a_live_mount_view` | Checks that Rust lowers the floor with no exact object, mount namespace, or mount root row. |
 | `path_graph_rows_are_scoped_to_the_bound_generation` | Checks that two generations have disjoint graph keys. |
-| Current BPF source inspection | Confirms namespace filtering, minimum unique mount ID per exact root dentry, cross-mount walk, leaf-to-head collection, reversal, and path-tree decision order. It also exposes the distinct-root child-bind gap. |
+| Current BPF source inspection | Confirms namespace filtering, minimum unique mount ID per root dentry, source-side `d_parent` traversal, filesystem-root mount crossing, leaf-to-head collection, reversal, and path-tree decision order. |
 | `bpf_path_walks_use_compiled_component_and_namespace_budgets` | Inspects the compiled object for the 255-component and 4,351-callback `bpf_loop` limits. It also checks the 255-entry scan-stack source bound. |
-| Successful child-directory bind | **Not covered.** The current physical case rejects the mount syscall. It never reads through a child bind that completed before the access. |
+| Successful child-directory bind | The protected physical probe creates one bind before activation and one bind after activation. It reconciles the second bind. Both alias opens return `PATH_TREE_POLICY_DENY`. |
+| Recursive bind and new mount API | Successful recursive-bind and `open_tree` plus `move_mount` aliases return `PATH_TREE_POLICY_DENY`. Matching allowed aliases return `EXACT_POLICY_ALLOW`. |
 | `generation_retirement_waits_for_async_io_authority` | Checks retained asynchronous authority and removal of all three generation-scoped path maps. |
 | Cross-architecture compile | The production object compiles with `-Wall -Werror` against checked x86, arm64, arm, and RISC-V kernel headers. This is not non-x86 physical proof. |
 | Merged source comparison | The current `identity_path.bpf.h` and `identity_maps.h` files match the physically qualified path implementation. The current tree contains that path implementation and later local-enforcement changes. |
-| Repository Rust verification | `bash .github/scripts/verify-rust-ci.sh` passed for the path source and for the patch-equivalent local-enforcement source. It ran formatting, workspace check, warnings-as-errors Clippy, and the full workspace tests. The focused path policy compilation suite passed all 30 tests. |
+| Repository Rust verification | The repository gate passed formatting, workspace check, and warnings-as-errors Clippy. The full workspace test command passed 972 tests; 15 tests were ignored and 4 were filtered out. |
 | Phase 2 companion | The exact four-crate, all-targets, all-features suite passed 224 tests. Identity source verification and the identity probe build also passed. |
-| Disposable VM | The kernel, identity, observation, local-enforcement, K3s observe, K3s protect, and Kubernetes identity lanes passed with the qualified path source. The documented administrative-exec lane was skipped. |
+| Qualification VM | The current protected effect probe passed with the production BPF object. Its result records all protected and allowed bind-form fields as true. It also records pin-root, lease, cgroup, and fixture cleanup as true. |
 
 The path-tree source VM command was:
 
@@ -1255,7 +1254,22 @@ The platform was x86_64 Ubuntu with Linux `6.8.0-137-generic` and BPF in the
 active LSM order. The harness removed the VM. An independent libvirt query
 found no remaining domain.
 
-The current limited local-enforcement result uses the same path
+The current protected probe records these new true results:
+
+- `path_tree_preexisting_bind_alias_denied`
+- `path_tree_postactivation_bind_alias_denied`
+- `allowed_bind_alias_allowed`
+- `path_tree_recursive_bind_alias_denied`
+- `allowed_recursive_bind_alias_allowed`
+- `path_tree_move_mount_alias_denied`
+- `allowed_move_mount_alias_allowed`
+- `path_tree_outside_control_allowed`
+- `pin_root_removed`
+- `lease_removed`
+- `cgroup_removed`
+- `fixture_root_removed`
+
+The earlier limited local-enforcement result used the old path
 implementation. Its result is
 `/tmp/mithril-phase4-e0438d9-final/local-enforcement-physical-probe.json`.
 The result SHA-256 is
@@ -1322,20 +1336,21 @@ rejected artifact contributes to the checked qualification record.
   Pods with different custom-resource policies.
 - Automount, referral, idmapped-mount, overlay copy-up, non-x86 runtime, and
   mount-cache saturation need separate physical qualification.
-- A successful first bind of a child directory is not qualified. The current
-  resolver can construct the bind target path instead of the source path.
-- The focused signed recursive path-tree claim is **Not done** until the
-  source-aware traversal and its denied and allowed physical controls pass.
+- The recursive-bind proof uses the recursive syscall form. Its source has no
+  nested submount. A recursive tree with nested mounts needs separate proof.
+- The new mount API proof uses `open_tree` plus `move_mount`. It does not prove
+  an `fsopen` plus `fsmount` filesystem construction.
+- The focused signed path-tree denial claim is **Done** for the tested mount
+  forms. Unrelated Phase 4 work remains outside this result.
 
 ## Source state and guide verification
 
-This guide was checked against the current source on 2026-08-21. This
-documentation update changes no path Rust, BPF, ABI, build, or test source.
+This guide was checked against the current working tree on 2026-08-21. The
+working tree contains the source-aware BPF walk, its Rust compatibility
+resolver, the physical mount-form fixture, and this documentation update.
 
-The earlier result for
-`bpf_path_walks_use_compiled_component_and_namespace_budgets` applies to the
-unchanged source. It does not cover a successful child-directory bind. The
-local link check, source-line check, and `git diff --check` are the
-verification gates for this documentation update. The full Rust gate and
-physical VM qualification were not rerun. Use the physical records above only
-for the narrower behaviors that they exercised.
+The focused Rust suites passed. The compiled BPF-object tests passed. The
+repository formatting, check, Clippy, and full workspace test gates passed.
+The protected physical probe passed in the retained x86_64 qualification VM.
+The probe used the production BPF object and cleaned its owned kernel and
+filesystem state. The source state is not a non-x86 physical result.

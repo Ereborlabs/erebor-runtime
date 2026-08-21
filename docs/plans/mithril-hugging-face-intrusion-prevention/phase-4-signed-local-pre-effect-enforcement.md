@@ -1,10 +1,9 @@
 # Phase 4: Signed Local Pre-Effect Enforcement
 
-Status: **Not done** for the signed path-tree denial claim. The retained
-x86_64 result has 14 Appendix C `PASS` results and 14 exact `UNSUPPORTED`
-results. It also records a `PASS` for the plan-owned path-tree fixture, but
-that fixture did not access a file after a successful child-directory bind.
-The current review does not accept that entry as closure.
+Status: **Not done** for the complete phase. The signed path-tree denial claim
+is **Done** for the tested ordinary bind, recursive-bind, and `move_mount`
+forms. The remaining unsupported capabilities and the stock-runc
+administrative bootstrap keep the phase open.
 
 - Master: [Mithril Hugging Face Intrusion Prevention](./README.md)
 - Design: [Validated readable architecture](./policy-and-protection-algorithm-architecture-readable.md)
@@ -151,17 +150,17 @@ correlation, and response coordination.
 ## Phase Result
 
 ```text
-State: Not done for the signed path-tree denial claim.
+State: Not done for the complete phase. The signed path-tree denial claim is Done for the tested mount forms.
 Last implementation-validated architecture: policy-and-protection-algorithm-architecture-readable.md.
-Completed deliverable IDs: The earlier record contains completed capability results for D4.1 through D4.8, but D4.3 is reopened for successful child-bind path reconstruction. Fourteen Appendix C fixture outcomes have physical `PASS` results. Fourteen unqualified fixture outcomes have exact `UNSUPPORTED` results and are not advertised.
+Completed deliverable IDs: The earlier record contains completed capability results for D4.1 through D4.8. The current probe closes the D4.3 successful child-bind path reconstruction gap. Fourteen Appendix C fixture outcomes have physical `PASS` results. Fourteen unqualified fixture outcomes have exact `UNSUPPORTED` results and are not advertised.
 Files and durable owners changed: mithril-control owns PROTECT compilation and exact exception binding. NodePolicyGenerationOwner owns generation staging, readback, anti-rollback, publication, and retirement. ExceptionAuthorityOwner owns stable exception instances, receipts, WAL recovery, restart restoration, and reboot separation. The production BPF effect gate owns pre-effect decisions and atomic exception consumption. mithril-e2e owns the physical oracle and typed fixture results.
 Upstream-adoption dossier IDs used: existing Phase 0 libbpf-rs, libbpf-cargo, and checked vmlinux-header decisions. No new runtime or BPF framework was added.
-Fixture cases and exact physical results: the retained artifact records 15 `PASS`, 14 `UNSUPPORTED`, zero `FAIL`, and zero `DEGRADED` results. Fourteen passes are allocated Appendix C fixtures. `FILE-PATH-TREE-DENY-001` is now Not done because its mount-attack case denied the mount syscall instead of testing a successful child bind. The exact table and reason codes are in phase-4-closure-matrix.md.
-Commands and exact source state covered: bash .github/scripts/verify-rust-ci.sh passed at implementation commit e0438d920d5071295ab733db0d7df0eb03a95b8c. The explicitly rebuilt mithril-effect-test binary SHA-256 is eee25b63425be5ec7ba8d7b9f8510cabea8c1b1af6aa832c90e1181373245fd0. The physical result is /tmp/mithril-phase4-e0438d9-final/local-enforcement-physical-probe.json with SHA-256 8fc1f4ad4536d00afd29754255410fed4b1290c3a138687f51c70edac079c793.
+Fixture cases and exact physical results: the current protected probe records 15 `PASS`, 14 `UNSUPPORTED`, zero `FAIL`, and zero `DEGRADED` results. Fourteen passes are allocated Appendix C fixtures. `FILE-PATH-TREE-DENY-001` is Done for the tested mount forms. The probe denies preactivation and postactivation child binds, a recursive bind, and an `open_tree` plus `move_mount` alias. The matching allowed aliases and outside-tree file remain readable. The exact table and reason codes are in phase-4-closure-matrix.md.
+Commands and exact source state covered: the repository formatting, workspace check, warnings-as-errors Clippy, and full workspace test gates passed. The full workspace test command passed 972 tests. The rebuilt `mithril-effect-test` protected probe passed in the retained qualification VM. No generated artifact or digest is part of this delivery.
 Platform/kernel/runtime manifests: x86_64 Linux 6.8.0-137-generic, cgroup v2, BPF LSM, active LSM order lockdown,capability,landlock,yama,apparmor,bpf, and runtime BTF SHA-256 6da9f6b4ebcae9b07e6a717b517884abf7f6b524e46340e40fb164eed4a49a7c. No non-x86 physical claim is made.
 Performance/capacity results: the physical result has 10,000 measured opens and 50,000 saturation opens. It lost 39,081 observation records under saturation while the protected denial and benign allow remained correct. All four cleanup fields are true.
 Unsupported/degraded paths: administrative exec, immutable executable and file-content proof, complete mm/VMA state, overlay copy-up provenance, projected-token rotation and controller binding, complete mount variants and propagation, persistent file-instance lifetime, protected exec and role races, and complete local self-protection remain unsupported. Landlock target-context installation is unsupported with reason NO_QUALIFIED_TARGET_CONTEXT_INSTALL. Network and distributed results remain outside this outcome.
-Remaining work in this phase: implement source-aware traversal for a successful first bind of a child directory. Prove denial through the successful alias and prove allowed bound and outside-tree controls. A missing hook, field, identity, or authority model must return to the prototype and type-closure gate before a later authorized plan can advertise it. The stock-runc administrative bootstrap also needs an architecture decision.
+Remaining work in this phase: qualify the capabilities that remain `UNSUPPORTED`. A missing hook, field, identity, or authority model must return to the prototype and type-closure gate before a later authorized plan can advertise it. The stock-runc administrative bootstrap also needs an architecture decision.
 Next phase not authorized: yes.
 ```
 
@@ -234,22 +233,18 @@ The disposable VM artifact and manual operator result are recorded in the
 
 ## Successful child-bind correction — 2026-08-21
 
-State: **Not done**.
+State: **Done** for the tested mount forms.
 
-The current mount cache selects the oldest mount only among mounts that share
-one exact root dentry. A first bind of `/mnt/data/models` has root dentry
-`models`, while the containing source mount has a different root dentry. The
-current walker reaches `models`, selects the bind mount, and follows its
-target mountpoint. It can therefore construct `/backup/models/x` instead of
-`/mnt/data/models/x`.
+The mount cache selects the oldest mount for each exact root dentry. The live
+walker probes that cache at each dentry. It records a non-self root name and
+follows source `d_parent`. It crosses a selected mount attachment only at a
+self-parent filesystem root.
 
-Mount policy remains a separate owner. Rejecting a mount mutation does not
-repair traversal after a bind has succeeded. Closure requires source-aware
-bounded traversal, a successful preactivation bind, a successful bind by a
-separate qualified mount owner, a denied protected alias, and successful
-allowed bound and outside-tree controls. The readable algorithm and open
-implementation suggestion are in the
-[path-tree implementation review](./path-tree-denial-implementation-review.md#successful-child-bind-gap).
+Mount policy remains a separate owner. The physical probe lets each tested
+mount complete. It reconciles postactivation topology before access. The
+protected aliases return `PATH_TREE_POLICY_DENY`. Matching allowed aliases and
+the outside-tree file remain readable. The readable algorithm is in the
+[path-tree implementation review](./path-tree-denial-implementation-review.md#successful-child-bind-source-walk).
 
 ## Qualification update — 2026-08-12
 

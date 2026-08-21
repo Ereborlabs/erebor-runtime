@@ -1,10 +1,8 @@
 # How To Manually Accept Phase 4
 
-Status: **Not done** for the signed path-tree denial claim. The retained
-protected result records 15 `PASS` and 14 exact `UNSUPPORTED` results, but the
-current review rejects the plan-owned path-tree entry as closure. Its mount
-case denied the mount syscall. It did not access through a successful
-child-directory bind.
+Status: **Not done** for the complete phase. The signed path-tree denial claim
+is **Done** for the tested mount forms. The remaining unsupported capabilities
+and the stock-runc administrative bootstrap keep the phase open.
 
 - Phase: [Signed Local Pre-Effect Enforcement](../phase-4-signed-local-pre-effect-enforcement.md)
 - Setup: [`SINGLE-NODE`](./environment-setup.md)
@@ -40,9 +38,10 @@ file-backed exec controls and denials across the represented entry variants,
 exact character-device ioctl allow and deny, unmatched signal and exact ptrace
 denial, configured AF_UNIX `SOCK_STREAM` relationships, concurrent N/N+1
 exception consumption, hard-link/bind aliases, denied protected mounts,
-external mount replacement, reconciliation, ring saturation, latency, and
-cleanup. A denied mount mutation is a mount-policy result. It is not
-successful-bind path reconstruction evidence.
+successful protected and allowed bind aliases, recursive binds, `open_tree`
+plus `move_mount`, external mount replacement, reconciliation, ring
+saturation, latency, and cleanup. A denied mount mutation remains a separate
+mount-policy result.
 Unqualified anonymous and memfd execution, file mutation, SysV IPC, namespace
 creation, BPF map creation, and pinned-link removal remain hard closed. An
 exact file-backed exec control does not prove immutable executable authority.
@@ -204,6 +203,34 @@ This is one CRI bind-alias case and one CRI mount-attack case. It does not
 qualify propagation, idmapped mounts, token rotation, or administrative exec.
 The phase remains **Not done**.
 
+### Automated successful-mount proof — 2026-08-21
+
+State: **Done** for the tested path-tree mount forms.
+
+The retained x86_64 qualification VM ran the protected physical probe from the
+current working tree. The test used the production BPF object. It required
+successful mounts and completed reconciliation before it accepted a
+path-tree denial.
+
+The result records these fields as true:
+
+- `path_tree_preexisting_bind_alias_denied`
+- `path_tree_postactivation_bind_alias_denied`
+- `allowed_bind_alias_allowed`
+- `path_tree_recursive_bind_alias_denied`
+- `allowed_recursive_bind_alias_allowed`
+- `path_tree_move_mount_alias_denied`
+- `allowed_move_mount_alias_allowed`
+- `path_tree_outside_control_allowed`
+- `pin_root_removed`
+- `lease_removed`
+- `cgroup_removed`
+- `fixture_root_removed`
+
+Each protected alias emitted `PATH_TREE_POLICY_DENY`. Each matching allowed
+alias emitted `EXACT_POLICY_ALLOW`. The recursive-bind source had no nested
+submount. The new mount API case used `open_tree` plus `move_mount`.
+
 ### Self-contained manual VM cases — 2026-08-17
 
 On the retained manual VM, the operator ran `nsenter-bind-alias-deny.sh` and
@@ -221,7 +248,7 @@ done**.
 ### Signed path-tree denial — 2026-08-17
 
 State: Superseded. This record proves a narrower path-tree and mount-denial
-slice. `FILE-PATH-TREE-DENY-001` remains **Not done**.
+slice. This historical record left `FILE-PATH-TREE-DENY-001` **Not done**.
 
 The disposable x86_64 VM harness ran exact implementation commit `d38248f`.
 The kernel was `6.8.0-137-generic`, and the active LSM order included `bpf`.
