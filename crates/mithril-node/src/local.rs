@@ -403,18 +403,22 @@ fn peer_in_cgroup_scope(pid: i32, allowed_scope: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use std::cell::Cell;
+    use std::{cell::Cell, sync::Arc};
 
     use erebor_runtime_ipc::{
-        transport::MAX_GRPC_MESSAGE_BYTES,
+        transport::{UnixPeerIdentity, MAX_GRPC_MESSAGE_BYTES},
         v1::{
-            MithrilCapabilityRecord, MithrilEffectObservation, MithrilObservationSnapshot,
-            MithrilObservationSnapshotResponse,
+            runtime_observation_service_server::RuntimeObservationService, MithrilCapabilityRecord,
+            MithrilEffectObservation, MithrilObservationSnapshot,
+            MithrilObservationSnapshotRequest, MithrilObservationSnapshotResponse,
         },
     };
     use prost::Message as _;
+    use tonic::{Code, Request};
 
-    use super::{apply_readiness, bounded_observation_response, update_effect_health};
+    use super::{
+        apply_readiness, bounded_observation_response, update_effect_health, ObservationGrpc,
+    };
     use crate::{EffectObservationStore, NodeReadinessV1};
 
     #[test]
@@ -461,6 +465,65 @@ mod tests {
         assert!(retained.len() < 1_024);
         assert_eq!(retained.last().map(|event| event.task_cookie), Some(1_023));
         assert!(retained.first().is_some_and(|event| event.task_cookie > 0));
+    }
+
+    #[tokio::test]
+    async fn observation_rpc_requires_transport_uid_pid_and_cgroup_identity(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let allowed_uid = rustix::process::geteuid().as_raw();
+        let allowed_scope = std::fs::read_to_string("/proc/self/cgroup")?
+            .lines()
+            .find_map(|line| line.strip_prefix("0::").map(str::to_owned))
+            .ok_or("test process has no unified cgroup")?;
+        let (_readiness, readiness) = tokio::sync::watch::channel(NodeReadinessV1::default());
+        let service = ObservationGrpc {
+            allowed_uid,
+            allowed_scope: Arc::from(allowed_scope.as_str()),
+            snapshot: MithrilObservationSnapshot::default(),
+            observations: EffectObservationStore::default(),
+            kernel_reader: None,
+            readiness,
+        };
+
+        let missing = RuntimeObservationService::get_snapshot(
+            &service,
+            Request::new(MithrilObservationSnapshotRequest {
+                cgroup_scope: allowed_scope.clone(),
+            }),
+        )
+        .await
+        .err()
+        .ok_or("observation RPC accepted missing peer credentials")?;
+        assert_eq!(missing.code(), Code::Unauthenticated);
+
+        let mut wrong_uid = Request::new(MithrilObservationSnapshotRequest {
+            cgroup_scope: allowed_scope.clone(),
+        });
+        wrong_uid.extensions_mut().insert(UnixPeerIdentity {
+            pid: Some(i32::try_from(std::process::id())?),
+            uid: allowed_uid.saturating_add(1),
+            gid: 0,
+        });
+        let wrong_uid = RuntimeObservationService::get_snapshot(&service, wrong_uid)
+            .await
+            .err()
+            .ok_or("observation RPC accepted the wrong UID")?;
+        assert_eq!(wrong_uid.code(), Code::PermissionDenied);
+
+        let mut missing_pid = Request::new(MithrilObservationSnapshotRequest {
+            cgroup_scope: allowed_scope,
+        });
+        missing_pid.extensions_mut().insert(UnixPeerIdentity {
+            pid: None,
+            uid: allowed_uid,
+            gid: 0,
+        });
+        let missing_pid = RuntimeObservationService::get_snapshot(&service, missing_pid)
+            .await
+            .err()
+            .ok_or("observation RPC accepted a missing peer PID")?;
+        assert_eq!(missing_pid.code(), Code::PermissionDenied);
+        Ok(())
     }
 
     #[test]

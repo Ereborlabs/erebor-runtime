@@ -679,7 +679,14 @@ mod tests {
     };
 
     use erebor_runtime_client::DaemonClient;
-    use erebor_runtime_ipc::v1::PolicyTestRequest;
+    use erebor_runtime_ipc::{
+        transport::{connect_unix, MAX_GRPC_MESSAGE_BYTES},
+        v1::{
+            hook_client_message, hook_service_client::HookServiceClient,
+            policy_service_client::PolicyServiceClient, HookClientMessage, HookHello,
+            PolicyTestRequest,
+        },
+    };
     use erebor_runtime_packages::{
         AgentPackageManifest, CanonicalEncoding, ContentDigest, InstallationRecord,
         PolicyPackageRevision, PolicySetRevision,
@@ -687,7 +694,8 @@ mod tests {
     use erebor_runtime_telemetry::JsonlTelemetry;
     use rustix::process::geteuid;
     use tempfile::TempDir;
-    use tokio::net::UnixListener;
+    use tokio::{io::AsyncWriteExt as _, net::UnixListener};
+    use tonic::{Code, Request};
 
     use super::{
         evaluate_policy_test, DaemonApprovalRepository, DaemonConfiguration, DaemonControlState,
@@ -870,6 +878,58 @@ mod tests {
 
         shutdown.send(true)?;
         server.await??;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn grpc_endpoint_rejects_wrong_service_oversize_and_stale_frame_bytes(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let test_state = state()?;
+        let socket_path = test_state._root.path().join("transport-boundaries.sock");
+        let listener = UnixListener::bind(&socket_path)?;
+        let (shutdown, receiver) = tokio::sync::watch::channel(false);
+        let server = tokio::spawn(super::grpc::serve(
+            listener,
+            Arc::clone(&test_state.state),
+            receiver,
+        ));
+        let channel = connect_unix(&socket_path).await?;
+
+        let wrong_service = HookServiceClient::new(channel.clone())
+            .open(Request::new(futures_util::stream::iter([
+                HookClientMessage {
+                    item: Some(hook_client_message::Item::Hello(HookHello {
+                        session_id: String::from("not-a-daemon-hook"),
+                    })),
+                },
+            ])))
+            .await
+            .err()
+            .ok_or("the daemon accepted an unregistered service")?;
+        assert_eq!(wrong_service.code(), Code::Unimplemented);
+
+        let oversized = PolicyServiceClient::new(channel)
+            .max_encoding_message_size(MAX_GRPC_MESSAGE_BYTES * 2)
+            .test(Request::new(PolicyTestRequest {
+                policy_json: vec![b'x'; MAX_GRPC_MESSAGE_BYTES + 1],
+                event_json: Vec::new(),
+            }))
+            .await
+            .err()
+            .ok_or("the daemon accepted an oversized gRPC request")?;
+        assert_eq!(oversized.code(), Code::OutOfRange);
+
+        let mut stale = tokio::net::UnixStream::connect(&socket_path).await?;
+        stale.write_all(b"ERBR\0\0\0\x01stale-frame").await?;
+        stale.shutdown().await?;
+        drop(stale);
+        assert_eq!(
+            DaemonClient::at(socket_path).status().await?.service_state,
+            "running"
+        );
+
+        shutdown.send(true)?;
+        tokio::time::timeout(Duration::from_secs(2), server).await???;
         Ok(())
     }
 

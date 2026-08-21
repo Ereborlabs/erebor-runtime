@@ -5,12 +5,14 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use mithril_control::{
-    serve, AllowedNodeIdentity, CapabilityRecord, ControlPlane, ControlServerTls,
-    EvidenceIntakeOwner, NodeRegistration, TrustGenerationV1,
+    serve, AdministrativeExecArmResult, AdministrativeExecResolution, AllowedNodeIdentity,
+    ArmAdministrativeExec, CapabilityRecord, ControlPlane, ControlServerTls, EvidenceIntakeOwner,
+    NodeRegistration, ResolveAdministrativeExec, TrustGenerationV1,
 };
 use mithril_node::{
-    EffectObservationStore, EvidenceIdV1, EvidenceWalLimits, NodeControlConfig,
-    NodeControlConnector, NodeControlMessage, ObservationCanonicalizer, TrustCache,
+    AdministrativeControlRequest, EffectObservationStore, EvidenceIdV1, EvidenceWalLimits,
+    NodeControlConfig, NodeControlConnector, NodeControlMessage, ObservationCanonicalizer,
+    TrustCache,
 };
 use rcgen::{
     date_time_ymd, BasicConstraints, Certificate, CertificateParams, ExtendedKeyUsagePurpose, IsCa,
@@ -228,6 +230,121 @@ async fn mtls_coverage_upload_preserves_gap_truth_at_control() -> Result<(), Box
         .intervals
         .iter()
         .any(|interval| interval.current && interval.state != "HEALTHY"));
+
+    drop(connection);
+    let _result = shutdown.send(());
+    server.await??;
+    Ok(())
+}
+
+#[tokio::test]
+async fn mtls_administrative_services_route_matching_results_and_cancel_waiters(
+) -> Result<(), Box<dyn StdError>> {
+    let directory = tempfile::tempdir()?;
+    let certificates = Certificates::issue(false)?;
+    let files = certificates.write(directory.path())?;
+    let address = free_address()?;
+    let control = ControlPlane::new(
+        vec![AllowedNodeIdentity {
+            node_id: "node-a".to_owned(),
+            certificate_sha256: certificates.node_digest(),
+        }],
+        TrustGenerationV1 {
+            generation: 1,
+            bundle_digest: "d".repeat(64),
+        },
+    );
+    let (shutdown, server) = start_server(address, &files, control.clone());
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    let connector =
+        NodeControlConnector::new(files.node_config(address), "node-a".to_owned(), [7; 16]);
+    let mut trust = TrustCache::load(directory.path())?;
+    let mut connection = connector.connect(registration(), true, &mut trust).await?;
+
+    let resolution_request = ResolveAdministrativeExec {
+        request_id: vec![1; 16],
+        ..ResolveAdministrativeExec::default()
+    };
+    let resolution_control = control.clone();
+    let resolution_task = tokio::spawn(async move {
+        resolution_control
+            .resolve_administrative_exec("node-a", resolution_request)
+            .await
+    });
+    let AdministrativeControlRequest::Resolve(received) = tokio::time::timeout(
+        Duration::from_secs(1),
+        connection.next_administrative_request(),
+    )
+    .await??
+    else {
+        return Err("resolution request crossed into the arm service".into());
+    };
+    let resolution = AdministrativeExecResolution {
+        request_id: received.request_id,
+        resolved: true,
+        ..AdministrativeExecResolution::default()
+    };
+    connection.send_resolution(resolution.clone()).await?;
+    assert_eq!(resolution_task.await??, resolution);
+
+    let arm_request = ArmAdministrativeExec {
+        request_id: vec![2; 16],
+        ..ArmAdministrativeExec::default()
+    };
+    let arm_control = control.clone();
+    let arm_task = tokio::spawn(async move {
+        arm_control
+            .arm_administrative_exec("node-a", arm_request)
+            .await
+    });
+    let AdministrativeControlRequest::Arm(received) = tokio::time::timeout(
+        Duration::from_secs(1),
+        connection.next_administrative_request(),
+    )
+    .await??
+    else {
+        return Err("arm request crossed into the resolution service".into());
+    };
+    let arm_result = AdministrativeExecArmResult {
+        request_id: received.request_id,
+        armed: true,
+        ..AdministrativeExecArmResult::default()
+    };
+    connection.send_arm_result(arm_result.clone()).await?;
+    assert_eq!(arm_task.await??, arm_result);
+
+    let cancelled_request = ResolveAdministrativeExec {
+        request_id: vec![3; 16],
+        ..ResolveAdministrativeExec::default()
+    };
+    let cancelled_control = control;
+    let cancelled_task = tokio::spawn(async move {
+        cancelled_control
+            .resolve_administrative_exec("node-a", cancelled_request)
+            .await
+    });
+    let AdministrativeControlRequest::Resolve(cancelled) = tokio::time::timeout(
+        Duration::from_secs(1),
+        connection.next_administrative_request(),
+    )
+    .await??
+    else {
+        return Err("cancelled resolution crossed into the arm service".into());
+    };
+    cancelled_task.abort();
+    let _cancelled = cancelled_task.await;
+    connection
+        .send_resolution(AdministrativeExecResolution {
+            request_id: cancelled.request_id,
+            resolved: true,
+            ..AdministrativeExecResolution::default()
+        })
+        .await?;
+    assert!(
+        tokio::time::timeout(Duration::from_secs(1), connection.next_message())
+            .await?
+            .is_err()
+    );
 
     drop(connection);
     let _result = shutdown.send(());

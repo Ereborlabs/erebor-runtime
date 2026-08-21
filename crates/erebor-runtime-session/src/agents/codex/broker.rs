@@ -55,8 +55,8 @@ const INVOCATION_LEASE_AUDIT_FILE: &str = "codex-invocation-leases.jsonl";
 /// The daemon owns its process lifetime and supplies registrations. Those
 /// registrations retain all session-local authorization state. The listener
 /// selects a registration only after the managed hook identifies its session;
-/// the selected registration still performs one-use ticket and kernel-peer
-/// validation before processing any native event.
+/// the selected registration still validates the kernel peer and rejects a
+/// repeated peer identity before it processes a native event.
 pub struct CodexHookService {
     endpoint: PathBuf,
     registrations: Arc<Mutex<HashMap<String, CodexHookRegistration>>>,
@@ -65,7 +65,7 @@ pub struct CodexHookService {
 }
 
 /// The daemon-owned callbacks available to one registered Codex session.
-/// They remain in-process extensions of the existing guarded hook listener;
+/// They remain in-process extensions of the authenticated hook listener;
 /// none is a workload-facing channel.
 pub struct CodexHookSessionHandlers {
     child_deliveries: Arc<dyn ChildContextDeliveryHandler>,
@@ -1008,7 +1008,10 @@ impl LinuxHookProcess {
 #[cfg(test)]
 mod tests {
     use std::{
+        fs,
+        os::unix::fs::PermissionsExt as _,
         path::PathBuf,
+        process::Command,
         sync::{Arc, Mutex},
     };
 
@@ -1017,7 +1020,13 @@ mod tests {
         CommitTime, Snapshot, TreeEdit,
     };
     use erebor_runtime_events::{ActorIdentity, ActorKind};
-    use erebor_runtime_ipc::v1::HookEvent;
+    use erebor_runtime_ipc::{
+        transport::connect_unix,
+        v1::{
+            hook_client_message, hook_server_message, hook_service_client::HookServiceClient,
+            HookClientMessage, HookEvent, HookHello, HookRejectionCode, HookServerMessage,
+        },
+    };
     use erebor_runtime_packages::{
         CodexArtifact, CodexEntrypoint, CodexHookContract, CodexHookEventName, CodexHookExec,
         CodexHookShell, CodexManagedArtifacts, CodexPackageDefinition, CodexSupportedPlatform,
@@ -1025,9 +1034,9 @@ mod tests {
     };
 
     use super::{
-        CodexHookBrokerProtocol, CodexInvocationLeaseOwner, CodexLeaseRuntimeEvidence,
-        CodexPromptReconciliation, HookEventKind, LinuxHookPeerInspector, LinuxHookProcess,
-        LinuxProcessIdentity,
+        CodexHookBrokerProtocol, CodexHookService, CodexInvocationLeaseOwner,
+        CodexLeaseRuntimeEvidence, CodexPromptReconciliation, HookEventKind,
+        LinuxHookPeerInspector, LinuxHookProcess, LinuxProcessIdentity,
     };
     use crate::{
         agents::codex::{
@@ -1154,6 +1163,186 @@ mod tests {
         assert!(!peer.executable.is_empty());
         assert!(!peer.exec_chain.is_empty());
         Ok(())
+    }
+
+    #[test]
+    fn grpc_hook_stream_enforces_peer_replay_bounds_and_cancellation(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let temporary = tempfile::tempdir()?;
+        let service = CodexHookService::start(temporary.path())?;
+        let executable = std::env::current_exe()?;
+        service.register(
+            CodexManagedSession::from_package("session-test", executable.clone(), &package()?)?,
+            Arc::new(CodexPromptReconciliation::default()),
+            test_lease_owner(),
+            None,
+            child_deliveries(),
+            agent_controls(),
+        )?;
+        service.register(
+            CodexManagedSession::from_package("wrong-peer", executable.clone(), &package()?)?,
+            Arc::new(CodexPromptReconciliation::default()),
+            test_lease_owner(),
+            None,
+            child_deliveries(),
+            agent_controls(),
+        )?;
+
+        run_hook_peer_fixture(service.endpoint(), "event", "session-test")?;
+        run_hook_peer_fixture(service.endpoint(), "wrong-session", "missing-session")?;
+        run_hook_peer_fixture(service.endpoint(), "oversize", "session-test")?;
+        run_hook_peer_fixture(service.endpoint(), "cancel", "session-test")?;
+        run_hook_peer_fixture(service.endpoint(), "replay", "session-test")?;
+        let unregistered_hook = temporary.path().join("unregistered-hook");
+        fs::copy(executable, &unregistered_hook)?;
+        fs::set_permissions(&unregistered_hook, fs::Permissions::from_mode(0o755))?;
+        run_hook_peer_fixture_with_program(
+            &unregistered_hook,
+            service.endpoint(),
+            "wrong-peer",
+            "wrong-peer",
+        )?;
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "child fixture for the live hook peer test"]
+    fn hook_grpc_child_peer_fixture() -> Result<(), Box<dyn std::error::Error>> {
+        let endpoint = std::env::var("EREBOR_HOOK_TEST_ENDPOINT")?;
+        let mode = std::env::var("EREBOR_HOOK_TEST_MODE")?;
+        let session_id = std::env::var("EREBOR_HOOK_TEST_SESSION")?;
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()?;
+        runtime.block_on(async move {
+            let (sender, mut output, accepted) = hook_handshake(&endpoint, &session_id).await?;
+            match mode.as_str() {
+                "wrong-session" | "wrong-peer" => {
+                    if accepted {
+                        return Err("hook authentication unexpectedly succeeded".into());
+                    }
+                }
+                "cancel" => {
+                    if !accepted {
+                        return Err("hook authentication failed before cancellation".into());
+                    }
+                    drop(sender);
+                    drop(output);
+                }
+                "replay" => {
+                    if !accepted {
+                        return Err("first hook authentication failed".into());
+                    }
+                    drop(sender);
+                    drop(output);
+                    let (_sender, _output, replay_accepted) =
+                        hook_handshake(&endpoint, &session_id).await?;
+                    if replay_accepted {
+                        return Err("repeated hook peer identity was accepted".into());
+                    }
+                }
+                "event" | "oversize" => {
+                    if !accepted {
+                        return Err("hook authentication failed".into());
+                    }
+                    sender
+                        .send(HookClientMessage {
+                            item: Some(hook_client_message::Item::Event(HookEvent {
+                                event: HookEventKind::SessionStart as i32,
+                                native_event_json: if mode == "oversize" {
+                                    vec![b'x'; super::MAX_NATIVE_EVENT_BYTES + 1]
+                                } else {
+                                    SESSION_START_EVENT.to_vec()
+                                },
+                            })),
+                        })
+                        .await?;
+                    drop(sender);
+                    let response = output.message().await?.ok_or("hook result is missing")?;
+                    match (mode.as_str(), response.item) {
+                        ("event", Some(hook_server_message::Item::Result(result)))
+                            if result.accepted => {}
+                        ("oversize", Some(hook_server_message::Item::Rejection(rejection)))
+                            if rejection.code == HookRejectionCode::EventTooLarge as i32 => {}
+                        _ => {
+                            return Err(
+                                "hook result did not match the requested fixture mode".into()
+                            )
+                        }
+                    }
+                }
+                _ => return Err("unknown hook peer fixture mode".into()),
+            }
+            Ok(())
+        })
+    }
+
+    fn run_hook_peer_fixture(
+        endpoint: &std::path::Path,
+        mode: &str,
+        session_id: &str,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        run_hook_peer_fixture_with_program(&std::env::current_exe()?, endpoint, mode, session_id)
+    }
+
+    fn run_hook_peer_fixture_with_program(
+        program: &std::path::Path,
+        endpoint: &std::path::Path,
+        mode: &str,
+        session_id: &str,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let output = Command::new(program)
+            .args(["--ignored", "hook_grpc_child_peer_fixture", "--nocapture"])
+            .env("EREBOR_HOOK_TEST_ENDPOINT", endpoint)
+            .env("EREBOR_HOOK_TEST_MODE", mode)
+            .env("EREBOR_HOOK_TEST_SESSION", session_id)
+            .output()?;
+        if !output.status.success() {
+            return Err(format!(
+                "hook peer fixture `{mode}` failed: {}{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr),
+            )
+            .into());
+        }
+        Ok(())
+    }
+
+    async fn hook_handshake(
+        endpoint: &str,
+        session_id: &str,
+    ) -> Result<
+        (
+            tokio::sync::mpsc::Sender<HookClientMessage>,
+            tonic::Streaming<HookServerMessage>,
+            bool,
+        ),
+        Box<dyn std::error::Error>,
+    > {
+        let channel = connect_unix(endpoint).await?;
+        let mut client = HookServiceClient::new(channel);
+        let (sender, receiver) = tokio::sync::mpsc::channel(2);
+        let mut output = client
+            .open(tonic::Request::new(
+                tokio_stream::wrappers::ReceiverStream::new(receiver),
+            ))
+            .await?
+            .into_inner();
+        sender
+            .send(HookClientMessage {
+                item: Some(hook_client_message::Item::Hello(HookHello {
+                    session_id: session_id.to_owned(),
+                })),
+            })
+            .await?;
+        let response = output
+            .message()
+            .await?
+            .ok_or("hook hello acknowledgement is missing")?;
+        let Some(hook_server_message::Item::HelloAck(ack)) = response.item else {
+            return Err("hook hello returned the wrong message type".into());
+        };
+        Ok((sender, output, ack.accepted))
     }
 
     #[test]
