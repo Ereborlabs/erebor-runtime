@@ -738,7 +738,6 @@ impl DaemonSessionApi {
                     executable_search_path,
                     request.workspace(),
                     request.container_image_sha256(),
-                    &self.runtime_root.join("runtime-interception.sock"),
                 ),
                 self.descriptor_broker.as_ref(),
             )

@@ -2,8 +2,7 @@ use std::io;
 
 use crate::{
     FilesystemBackendKind, FilesystemPreimageBackendKind, FilesystemVolumeMode, RuntimeConfig,
-    RuntimeConfigError, SessionInterceptionOperation, SessionInterceptionOperationCapability,
-    SessionSurfaceKind,
+    RuntimeConfigError, SessionSurfaceKind,
 };
 
 #[test]
@@ -13,13 +12,6 @@ fn accepts_filesystem_surface_config_and_reports_file_capabilities(
         r#"
         {
           "policies": ["policy.json"],
-          "session": {
-            "interception": {
-              "enabled": true,
-              "backend": "linux_ptrace",
-              "operations": ["file_open", "file_read", "file_mutation"]
-            }
-          },
           "surfaces": {
             "filesystem": {
               "enabled": true,
@@ -88,19 +80,6 @@ fn accepts_filesystem_surface_config_and_reports_file_capabilities(
         .session_finish_rule()
         .ok_or_else(|| io::Error::other("missing session-finish autocommit rule"))?;
     assert_eq!(session_finish_rule.id(), "session-finish");
-
-    let capabilities = config.session_interception_capabilities();
-    for operation in [
-        SessionInterceptionOperation::FileOpen,
-        SessionInterceptionOperation::FileRead,
-        SessionInterceptionOperation::FileMutation,
-    ] {
-        let capability = capability_for(capabilities.operations(), operation)?;
-        assert_eq!(capability.owning_surface(), "filesystem");
-        assert!(capability.surface_enabled());
-        assert!(capability.backend_supported());
-        assert!(capability.effective());
-    }
 
     Ok(())
 }
@@ -306,16 +285,6 @@ fn rejects_duplicate_filesystem_autocommit_rule_ids() {
         }
         "#,
     );
-}
-
-fn capability_for(
-    capabilities: &[SessionInterceptionOperationCapability],
-    operation: SessionInterceptionOperation,
-) -> Result<&SessionInterceptionOperationCapability, io::Error> {
-    capabilities
-        .iter()
-        .find(|capability| capability.operation() == operation)
-        .ok_or_else(|| io::Error::other("missing interception capability"))
 }
 
 fn assert_invalid_filesystem_config(source: &str) {

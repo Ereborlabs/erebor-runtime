@@ -103,12 +103,6 @@ pub enum CodexSessionError {
         #[snafu(implicit)]
         location: Location,
     },
-    #[snafu(display("Codex hook protocol version `{version}` is unsupported"))]
-    UnsupportedHookProtocol {
-        version: u32,
-        #[snafu(implicit)]
-        location: Location,
-    },
     #[snafu(display("Codex hook broker I/O failed: {source}"))]
     HookBrokerIo {
         source: io::Error,
@@ -122,9 +116,9 @@ pub enum CodexSessionError {
         #[snafu(implicit)]
         location: Location,
     },
-    #[snafu(display("Codex hook broker IPC failed: {source}"))]
+    #[snafu(display("Codex hook broker RPC failed: {reason}"))]
     HookBrokerProtocol {
-        source: erebor_runtime_ipc::IpcProtocolError,
+        reason: String,
         #[snafu(implicit)]
         location: Location,
     },
@@ -187,8 +181,7 @@ impl ErrorExt for CodexSessionError {
             | Self::TicketExpired { .. }
             | Self::TicketProcessExited { .. }
             | Self::TicketPeerMismatch { .. }
-            | Self::TicketReplayed { .. }
-            | Self::UnsupportedHookProtocol { .. } => StatusCode::InvalidArguments,
+            | Self::TicketReplayed { .. } => StatusCode::InvalidArguments,
             Self::ReadArtifact { .. } => StatusCode::External,
             Self::FilesystemProjection { source, .. } => source.status_code(),
             Self::TicketRegistryLock { .. }
@@ -226,8 +219,7 @@ impl ErrorExt for CodexSessionError {
             | Self::TicketExpired { .. }
             | Self::TicketProcessExited { .. }
             | Self::TicketPeerMismatch { .. }
-            | Self::TicketReplayed { .. }
-            | Self::UnsupportedHookProtocol { .. } => RetryHint::NonRetryable,
+            | Self::TicketReplayed { .. } => RetryHint::NonRetryable,
             Self::InvocationLeaseAudit { source, .. } => source.retry_hint(),
             Self::HookBrokerIo { source, .. } => RetryHint::from_io_error(source),
             Self::Pidfd { source, .. } => RetryHint::from_io_error(source),

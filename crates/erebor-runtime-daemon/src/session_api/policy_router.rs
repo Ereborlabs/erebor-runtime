@@ -19,11 +19,11 @@ use erebor_runtime_packages::PolicyPackageRevision;
 use erebor_runtime_policy::{
     Decision, LayeredDecision, LayeredPolicySet, LocalPolicy, PolicyLayer, PolicySet,
 };
+use erebor_runtime_session::SessionInterceptionRouterFactory;
 use erebor_runtime_session::{
     ChildContextDeliveryHandler, CodexAppServerService, CodexHookService, CodexHookSessionHandlers,
     ContextAgentControlHandler, ContextOperationAdmissionHandler, SessionManagerError,
 };
-use erebor_runtime_session::{SessionInterceptionRouter, SessionInterceptionRouterFactory};
 use erebor_runtime_telemetry::warn;
 use uuid::Uuid;
 
@@ -70,26 +70,17 @@ impl StoredPolicyInterceptionRouterFactory {
 }
 
 impl SessionInterceptionRouterFactory for StoredPolicyInterceptionRouterFactory {
-    fn router(
+    fn register(
         &self,
         spec: &SessionSpec,
         output: &OutputEndpoints,
-    ) -> Result<SessionInterceptionRouter, SessionManagerError> {
-        let router = SessionInterceptionRouter::new()
-            .with_process_exec_handler(StoredPolicyProcessExecHandler::from_session(
-                Arc::clone(&self.local_store),
-                spec,
-            ))
-            .with_file_operation_handler(StoredPolicyFileOperationHandler::from_session(
-                Arc::clone(&self.local_store),
-                spec,
-            ));
+    ) -> Result<(), SessionManagerError> {
         let admission = self
             .local_store
             .validate_session_spec(spec)
             .map_err(|error| self.invalid_error(spec, error.to_string()))?;
         if admission.package().adapter_id() != "codex-v1" {
-            return Ok(router);
+            return Ok(());
         }
         let codex = self
             .local_store
@@ -127,7 +118,7 @@ impl SessionInterceptionRouterFactory for StoredPolicyInterceptionRouterFactory 
                 return Err(self.invalid_error(spec, error.to_string()));
             }
         }
-        Ok(registration.with_interception_router(router))
+        Ok(())
     }
 
     fn cleanup(&self, spec: &SessionSpec) -> Result<(), SessionManagerError> {

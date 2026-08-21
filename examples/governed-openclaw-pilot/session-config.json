@@ -26,76 +26,16 @@
           "1,80p",
           "examples/governed-openclaw-pilot/prompt.txt"
         ]
-      },
-      {
-        "name": "raw-cdp-browser-denied",
-        "description": "Attempt a raw CDP browser launch that should be denied by terminal/process policy.",
-        "command": [
-          "sh",
-          "-lc",
-          "b=s; c=h; r=remote; d=debugging; p=port; \"$b$c\" \"--$r-$d-$p=9222\""
-        ]
       }
     ],
     "runner": {
       "kind": "linux_host"
-    },
-    "interception": {
-      "enabled": true,
-      "backend": "linux_ptrace"
     }
   },
   "surfaces": {
     "terminal": {
       "enabled": true,
-      "tty": true,
-      "process_interception": {
-        "enabled": true,
-        "mode": "shim",
-        "handlers": [
-          {
-            "id": "managed-browser-cdp",
-            "decision": "mediate",
-            "kind": "managed_browser_cdp",
-            "match": {
-              "executables": [
-                "google-chrome",
-                "chrome",
-                "chromium",
-                "chromium-browser"
-              ],
-              "required_args": [
-                "--remote-debugging-port"
-              ],
-              "require_remote_debugging_port": true
-            },
-            "requested_endpoint": {
-              "source": "remote_debugging_port",
-              "bind": "127.0.0.1"
-            },
-            "replacement": {
-              "surface": "browser_cdp",
-              "private_endpoint": {
-                "port_strategy": "requested_plus_offset",
-                "port_offset": 1
-              }
-            },
-            "environment": {
-              "prepend_path": true,
-              "executable_env": [
-                "CHROME_PATH",
-                "BROWSER",
-                "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH",
-                "PUPPETEER_EXECUTABLE_PATH"
-              ]
-            },
-            "compatibility": {
-              "print_devtools_listening_line": true,
-              "keepalive": true
-            }
-          }
-        ]
-      }
+      "tty": true
     },
     "browser_cdp": {
       "enabled": true,

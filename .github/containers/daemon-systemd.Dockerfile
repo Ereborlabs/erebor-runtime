@@ -24,7 +24,6 @@ COPY target/debug/erebord /usr/lib/erebor/erebord
 COPY target/debug/erebor /usr/local/bin/erebor
 COPY target/debug/erebor-linux-session-controller \
     /usr/libexec/erebor/erebor-linux-session-controller
-COPY target/debug/erebor-linux-process-guard /usr/libexec/erebor/erebor-linux-process-guard
 COPY target/debug/erebor-path-broker /usr/libexec/erebor/erebor-path-broker
 COPY target/debug/erebor-codex-hook /usr/lib/erebor/erebor-codex-hook
 COPY target/debug/codex-v1-fixture /usr/lib/erebor/codex-v1-fixture
@@ -45,7 +44,6 @@ COPY .github/scripts/codex-real-tui-mock.py \
 RUN chmod 0755 \
         /usr/lib/erebor/erebord \
         /usr/libexec/erebor/erebor-linux-session-controller \
-        /usr/libexec/erebor/erebor-linux-process-guard \
         /usr/libexec/erebor/erebor-path-broker \
         /usr/lib/erebor/erebor-codex-hook \
         /usr/lib/erebor/codex-v1-fixture \

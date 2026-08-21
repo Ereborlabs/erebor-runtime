@@ -61,7 +61,6 @@ pub struct RunnerAdmissionRequest<'a> {
     executable_search_path: Option<&'a str>,
     workspace: &'a Path,
     container_image_digest: Option<&'a str>,
-    runtime_guard_host_path: &'a Path,
 }
 
 impl<'a> RunnerAdmissionRequest<'a> {
@@ -73,7 +72,6 @@ impl<'a> RunnerAdmissionRequest<'a> {
         executable_search_path: Option<&'a str>,
         workspace: &'a Path,
         container_image_digest: Option<&'a str>,
-        runtime_guard_host_path: &'a Path,
     ) -> Self {
         Self {
             session_id,
@@ -82,7 +80,6 @@ impl<'a> RunnerAdmissionRequest<'a> {
             executable_search_path,
             workspace,
             container_image_digest,
-            runtime_guard_host_path,
         }
     }
 }
@@ -208,10 +205,6 @@ impl<'request, 'resolver> RunnerAdmissionContext<'request, 'resolver> {
     }
 
     #[must_use]
-    pub fn runtime_guard_host_path(&self) -> &Path {
-        self.request.runtime_guard_host_path
-    }
-
     pub fn invalid(&self, reason: impl Into<String>) -> SessionManagerError {
         SessionManagerError::InvalidOperation {
             session_id: self.session_id().to_owned(),
@@ -281,13 +274,13 @@ impl<'a> RunnerPreparation<'a> {
         self.runtime.prepare_execution(spec, self.recovering)
     }
 
-    pub fn start_runtime_guard(
+    pub fn start_session_services(
         &self,
         spec: &SessionSpec,
         output: OutputEndpoints,
     ) -> Result<OutputEndpoints, SessionManagerError> {
         self.runtime
-            .start_runtime_guard(spec, &output, self.recovering)
+            .start_session_services(spec, &output, self.recovering)
             .map(|environment| output.with_runtime_environment(environment))
     }
 }

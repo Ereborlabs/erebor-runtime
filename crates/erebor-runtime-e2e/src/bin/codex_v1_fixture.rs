@@ -10,7 +10,7 @@ use std::{
     error::Error,
     fs,
     io::{self, BufRead, Read, Write},
-    os::unix::{fs::PermissionsExt, net::UnixStream},
+    os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
     process::{Command, Stdio},
     sync::mpsc,
@@ -19,11 +19,11 @@ use std::{
 
 use erebor_runtime_core::AgentAdapterDescriptor;
 use erebor_runtime_ipc::{
+    transport::{connect_unix, MAX_GRPC_MESSAGE_BYTES},
     v1::{
-        Envelope, EnvelopeServiceFamily, HookHello, HookHelloAck, KIND_HOOK_HELLO,
-        KIND_HOOK_HELLO_ACK, PROTOCOL_VERSION,
+        hook_client_message, hook_server_message, hook_service_client::HookServiceClient,
+        HookClientMessage, HookHello,
     },
-    SyncFrameCodec,
 };
 use erebor_runtime_packages::{
     AgentPackageManifest, CanonicalEncoding, CodexArtifact, CodexEntrypoint, CodexHookContract,
@@ -37,6 +37,8 @@ use erebor_runtime_session::{
 use rustix::termios::tcgetwinsize;
 use serde_json::{json, Value};
 use tokio::signal::unix::{signal, SignalKind};
+use tokio_stream::wrappers::ReceiverStream;
+use tonic::Request;
 
 const FIXTURE_NAME: &str = "codex-v1-fixture";
 const MANAGED_HOOK_PATH: &str = "/run/erebor/codex/erebor-codex-hook";
@@ -795,22 +797,38 @@ fn invoke_managed_hook_with_environment(
 }
 
 fn hook_hello_is_accepted(session_id: &str) -> FixtureResult<bool> {
-    let mut stream = UnixStream::connect(CodexHookService::session_endpoint())?;
-    let hello = HookHello {
-        protocol_version: PROTOCOL_VERSION,
-        // The real managed-hook protocol intentionally carries no ticket
-        // string. The adapter receives the ticket-derived authority from the
-        // guarded process's kernel peer instead.
-        ticket_id: String::new(),
-        session_id: session_id.to_owned(),
-    };
-    let request = Envelope::wrap_message(1, 0, KIND_HOOK_HELLO, &hello)?;
-    SyncFrameCodec::write_frame(&mut stream, &request.into_frame()?)?;
-    let frame = SyncFrameCodec::read_frame(&mut stream)?;
-    let response: Envelope = frame.decode_payload()?;
-    response.validate_headers(EnvelopeServiceFamily::Hook)?;
-    let acknowledgement: HookHelloAck = response.decode_typed_payload(KIND_HOOK_HELLO_ACK)?;
-    Ok(acknowledgement.accepted)
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+    runtime.block_on(async {
+        let channel = connect_unix(CodexHookService::session_endpoint()).await?;
+        let mut client = HookServiceClient::new(channel)
+            .max_decoding_message_size(MAX_GRPC_MESSAGE_BYTES)
+            .max_encoding_message_size(MAX_GRPC_MESSAGE_BYTES);
+        let (sender, receiver) = tokio::sync::mpsc::channel(1);
+        sender
+            .send(HookClientMessage {
+                item: Some(hook_client_message::Item::Hello(HookHello {
+                    ticket_id: String::new(),
+                    session_id: session_id.to_owned(),
+                })),
+            })
+            .await
+            .map_err(|_closed| "hook request stream closed before hello")?;
+        drop(sender);
+        let mut response = client
+            .open(Request::new(ReceiverStream::new(receiver)))
+            .await?
+            .into_inner();
+        let message = response
+            .message()
+            .await?
+            .ok_or("hook service closed before hello acknowledgement")?;
+        match message.item {
+            Some(hook_server_message::Item::HelloAck(ack)) => Ok(ack.accepted),
+            _ => Err("hook service returned an invalid hello response".into()),
+        }
+    })
 }
 
 fn delegation_event(request: &Value, turn: &FixtureTurn) -> FixtureResult<Vec<u8>> {
@@ -1242,7 +1260,6 @@ fn configure(arguments: &[String]) -> FixtureResult<()> {
         "linux_runner": {
             "containment": options.linux_runner_containment,
             "controller_path": options.linux_runner_controller,
-            "process_guard_path": options.linux_process_guard,
             "descriptor_broker_path": options.descriptor_broker,
             "systemd_run_path": options.systemd_run,
         },
@@ -1270,7 +1287,6 @@ struct ConfigureOptions {
     owner_uids: Vec<u32>,
     linux_runner_containment: String,
     linux_runner_controller: Option<PathBuf>,
-    linux_process_guard: Option<PathBuf>,
     descriptor_broker: Option<PathBuf>,
     systemd_run: Option<PathBuf>,
 }
@@ -1283,7 +1299,6 @@ impl ConfigureOptions {
         let mut owner_uids = Vec::new();
         let mut linux_runner_containment = String::from("direct");
         let mut linux_runner_controller = None;
-        let mut linux_process_guard = None;
         let mut descriptor_broker = None;
         let mut systemd_run = None;
         let mut index = 0;
@@ -1308,9 +1323,6 @@ impl ConfigureOptions {
                 "--linux-runner-controller" => {
                     linux_runner_controller = Some(absolute_option_path(option, value)?);
                 }
-                "--linux-process-guard" => {
-                    linux_process_guard = Some(absolute_option_path(option, value)?);
-                }
                 "--descriptor-broker" => {
                     descriptor_broker = Some(absolute_option_path(option, value)?);
                 }
@@ -1326,7 +1338,6 @@ impl ConfigureOptions {
             owner_uids,
             linux_runner_containment,
             linux_runner_controller,
-            linux_process_guard,
             descriptor_broker,
             systemd_run,
         })

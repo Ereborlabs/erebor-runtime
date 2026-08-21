@@ -3,7 +3,6 @@
   "linux_runner": {
     "containment": "direct",
     "controller_path": "/var/lib/erebor/codex-real/bin/erebor-linux-session-controller",
-    "process_guard_path": "/var/lib/erebor/codex-real/bin/erebor-linux-process-guard",
     "descriptor_broker_path": "/var/lib/erebor/codex-real/bin/erebor-path-broker",
     "systemd_run_path": null
   },

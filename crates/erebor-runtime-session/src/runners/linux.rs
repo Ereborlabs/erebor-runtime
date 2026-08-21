@@ -10,10 +10,9 @@ use std::{
 
 use erebor_runtime_core::{
     ActiveSession, ActiveSessionExit, ActiveSessionHealth, ActiveSessionSignal,
-    ActiveSessionSignalKind, DaemonFailureMode, EndpointProjection, OutputEndpoints,
-    PreparedFilesystemProjection, RunnerBinding, RunnerCapabilityDocument, RunnerId,
-    RunnerRecovery, RuntimeError, SafePathBinding, ScriptInterpreterBinding, SessionSpec,
-    TerminalSize, WorkloadPrivilegePlan,
+    ActiveSessionSignalKind, DaemonFailureMode, OutputEndpoints, PreparedFilesystemProjection,
+    RunnerBinding, RunnerCapabilityDocument, RunnerId, RunnerRecovery, RuntimeError,
+    SafePathBinding, ScriptInterpreterBinding, SessionSpec, TerminalSize, WorkloadPrivilegePlan,
 };
 use serde::{Deserialize, Serialize};
 
@@ -26,10 +25,8 @@ use crate::SessionManagerError;
 const RUNNER_ID: &str = "linux-host";
 const IMPLEMENTATION_ID: &str = "erebor-linux-host";
 const CONTROLLER_PROGRAM: &str = "linux-session-controller";
-const PROCESS_GUARD_PROGRAM: &str = "linux-process-guard";
 const SYSTEMD_RUN_PROGRAM: &str = "systemd-run";
 const DEFAULT_CONTROLLER_PATH: &str = "/usr/libexec/erebor/erebor-linux-session-controller";
-const DEFAULT_PROCESS_GUARD_PATH: &str = "/usr/libexec/erebor/erebor-linux-process-guard";
 const DEFAULT_SYSTEMD_RUN_PATH: &str = "/usr/bin/systemd-run";
 pub(crate) const LINUX_CONTROLLER_PROTOCOL_VERSION: u32 = 2;
 const LINUX_RECOVERY_FORMAT_VERSION: u32 = 1;
@@ -47,7 +44,6 @@ struct LinuxExecutableAdmission {
 pub(crate) struct LinuxRunnerDriver {
     id: RunnerId,
     controller_path: PathBuf,
-    process_guard_path: PathBuf,
     systemd_run_path: PathBuf,
     use_systemd_scope: bool,
 }
@@ -63,8 +59,6 @@ impl LinuxRunnerDriver {
                 }
             })?,
             controller_path: config.program(CONTROLLER_PROGRAM, Path::new(DEFAULT_CONTROLLER_PATH)),
-            process_guard_path: config
-                .program(PROCESS_GUARD_PROGRAM, Path::new(DEFAULT_PROCESS_GUARD_PATH)),
             systemd_run_path: config
                 .program(SYSTEMD_RUN_PROGRAM, Path::new(DEFAULT_SYSTEMD_RUN_PATH)),
             use_systemd_scope: config.use_systemd_scope(),
@@ -77,7 +71,6 @@ impl LinuxRunnerDriver {
             &self.controller_path,
             "private Linux session controller",
         )?;
-        require_executable(&self.id, &self.process_guard_path, "Linux process guard")?;
         if self.use_systemd_scope {
             require_executable(&self.id, &self.systemd_run_path, "systemd-run")?;
         }
@@ -117,7 +110,7 @@ impl LinuxRunnerDriver {
                 ),
                 (
                     String::from("privilege-plan"),
-                    String::from("process-guard-rlimit-umask-groups-v1"),
+                    String::from("controller-rlimit-umask-groups-v1"),
                 ),
             ]),
         )
@@ -150,7 +143,6 @@ impl LinuxRunnerDriver {
             prepared_interpreters: output.prepared_interpreters().to_vec(),
             prepared_filesystem_projections: output.prepared_filesystem_projections().to_vec(),
             prepared_private_state_projection: output.prepared_private_state_projection().cloned(),
-            process_guard_path: self.process_guard_path.clone(),
             systemd_scope_unit: self.use_systemd_scope.then_some(unit.clone()),
             systemd_session_slice: self.use_systemd_scope.then_some(session_slice.clone()),
         };
@@ -321,12 +313,7 @@ impl RunnerDriver for LinuxRunnerDriver {
         // is not a separate namespace projection, so do not claim a `/workspace`
         // mount that the controller never created.
         let filesystem_projections = Vec::new();
-        let endpoint_projections = vec![EndpointProjection::new(
-            "runtime-guard",
-            context.runtime_guard_host_path().to_path_buf(),
-            PathBuf::from("/run/erebor/runtime-interception.sock"),
-        )
-        .map_err(|source| context.invalid(source.to_string()))?];
+        let endpoint_projections = Vec::new();
         Ok(RunnerExecutionAdmission {
             workspace: context.workspace().clone(),
             workload_privileges,
@@ -358,7 +345,7 @@ impl RunnerDriver for LinuxRunnerDriver {
         resources: &RunnerPreparation<'_>,
     ) -> Result<OutputEndpoints, SessionManagerError> {
         let output = resources.prepare_execution(spec)?;
-        resources.start_runtime_guard(spec, output)
+        resources.start_session_services(spec, output)
     }
 
     fn start(
@@ -573,7 +560,6 @@ pub(crate) struct LinuxControllerHandoff {
     pub(crate) prepared_filesystem_projections: Vec<PreparedFilesystemProjection>,
     pub(crate) prepared_private_state_projection:
         Option<erebor_runtime_core::PreparedPrivateStateProjection>,
-    pub(crate) process_guard_path: PathBuf,
     pub(crate) systemd_scope_unit: Option<String>,
     pub(crate) systemd_session_slice: Option<String>,
 }
@@ -1167,7 +1153,6 @@ mod tests {
                 None,
                 root.path(),
                 None,
-                Path::new("/run/erebor/runtime-interception.sock"),
             ),
             &ScriptResolver,
         )?;

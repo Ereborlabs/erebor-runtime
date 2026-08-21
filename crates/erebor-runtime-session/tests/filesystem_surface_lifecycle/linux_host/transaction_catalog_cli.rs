@@ -106,12 +106,7 @@ pub(super) fn config_source(
             "actor": {{ "id": "openclaw" }},
             "workspace": "{}",
             "diagnostics": [{{ "name": "{}", "command": ["sh", "-lc", "{}"] }}],
-            "runner": {{ "kind": "linux_host" }},
-            "interception": {{
-              "enabled": true,
-              "backend": "linux_ptrace",
-              "operations": ["process_exec", "file_open", "file_read", "file_mutation"]
-            }}
+            "runner": {{ "kind": "linux_host" }}
           }},
           "surfaces": {{
             "terminal": {{ "enabled": true }},

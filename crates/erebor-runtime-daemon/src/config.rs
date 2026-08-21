@@ -51,8 +51,6 @@ pub struct LinuxRunnerConfig {
     #[serde(default)]
     controller_path: Option<PathBuf>,
     #[serde(default)]
-    process_guard_path: Option<PathBuf>,
-    #[serde(default)]
     descriptor_broker_path: Option<PathBuf>,
     #[serde(default)]
     systemd_run_path: Option<PathBuf>,
@@ -62,7 +60,6 @@ impl LinuxRunnerConfig {
     fn validate(&self) -> bool {
         [
             self.controller_path.as_deref(),
-            self.process_guard_path.as_deref(),
             self.descriptor_broker_path.as_deref(),
             self.systemd_run_path.as_deref(),
         ]
@@ -75,9 +72,6 @@ impl LinuxRunnerConfig {
         let mut program_overrides = BTreeMap::new();
         if let Some(path) = &self.controller_path {
             program_overrides.insert(String::from("linux-session-controller"), path.clone());
-        }
-        if let Some(path) = &self.process_guard_path {
-            program_overrides.insert(String::from("linux-process-guard"), path.clone());
         }
         if let Some(path) = &self.systemd_run_path {
             program_overrides.insert(String::from("systemd-run"), path.clone());

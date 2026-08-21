@@ -7,13 +7,17 @@ repository.workspace = true
 
 [dependencies]
 erebor-runtime-error = { path = "../erebor-runtime-error" }
+futures-util.workspace = true
+hyper-util.workspace = true
 prost.workspace = true
 sha2.workspace = true
 snafu.workspace = true
 tokio.workspace = true
+tonic.workspace = true
+tower.workspace = true
 
 [build-dependencies]
-prost-build.workspace = true
+tonic-build.workspace = true
 
 [lints]
 workspace = true

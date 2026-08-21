@@ -3,7 +3,6 @@ mod app_server;
 mod broker;
 mod context;
 mod error;
-mod guard_lifecycle;
 mod hook_client;
 mod hook_output;
 mod leases;
@@ -18,7 +17,6 @@ pub use app_server::{CodexAppServerInput, CodexAppServerService, MAX_APP_SERVER_
 pub use broker::{CodexHookService, CodexHookSessionHandlers, CodexSessionHookRegistration};
 pub(crate) use context::{CodexContextDag, CodexScopeContextBinding};
 pub use error::CodexSessionError;
-pub(crate) use guard_lifecycle::CodexGuardLifecycleHandler;
 pub use hook_client::CodexHookClient;
 pub use hook_output::CodexHookResultOutput;
 pub(crate) use leases::{

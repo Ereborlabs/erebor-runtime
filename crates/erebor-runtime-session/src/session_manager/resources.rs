@@ -1,10 +1,6 @@
 use std::{
-    fs::{self, File, OpenOptions},
-    io::Write,
-    os::{
-        fd::AsRawFd,
-        unix::fs::{OpenOptionsExt, PermissionsExt},
-    },
+    fs::{self, File},
+    os::{fd::AsRawFd, unix::fs::PermissionsExt},
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -18,22 +14,15 @@ use rustix::{
     fs::{makedev, open, statx, AtFlags, FileType, Mode, OFlags, StatxFlags},
     mount::{mount_bind, mount_remount, unmount, MountFlags, UnmountFlags},
 };
-use serde::{Deserialize, Serialize};
 use snafu::ResultExt;
-use uuid::Uuid;
 
 use crate::{
     error::session_manager::{OutputSnafu, RuntimeIoSnafu},
-    surfaces::intrinsic::{
-        FilesystemBinding, LinuxOstreeOverlayFilesystemRuntime, TerminalSurfaceRuntime,
-    },
-    DurableStreamCursor, SessionInterceptionRouter, SessionManagerError, SessionOutputStores,
-    StreamKind,
+    surfaces::intrinsic::{FilesystemBinding, LinuxOstreeOverlayFilesystemRuntime},
+    DurableStreamCursor, SessionManagerError, SessionOutputStores, StreamKind,
 };
 
 use super::output_endpoints;
-
-const GUARD_CREDENTIAL_FILE: &str = "runtime-guard.json";
 
 pub type SessionPathResolverError = crate::error::session_manager::SessionPathResolverError;
 
@@ -48,11 +37,11 @@ pub trait SessionPathResolver: Send + Sync {
 }
 
 pub trait SessionInterceptionRouterFactory: Send + Sync {
-    fn router(
+    fn register(
         &self,
         spec: &SessionSpec,
         output: &OutputEndpoints,
-    ) -> Result<SessionInterceptionRouter, SessionManagerError>;
+    ) -> Result<(), SessionManagerError>;
 
     fn cleanup(&self, _spec: &SessionSpec) -> Result<(), SessionManagerError> {
         Ok(())
@@ -87,7 +76,6 @@ impl ResolvedSessionPath {
 pub struct SessionRuntimeResources {
     state_root: PathBuf,
     runtime_root: PathBuf,
-    terminal: TerminalSurfaceRuntime,
     filesystem: LinuxOstreeOverlayFilesystemRuntime,
     path_resolver: Arc<dyn SessionPathResolver>,
     router_factory: Arc<dyn SessionInterceptionRouterFactory>,
@@ -112,12 +100,10 @@ impl SessionRuntimeResources {
         path_resolver: Arc<dyn SessionPathResolver>,
         router_factory: Arc<dyn SessionInterceptionRouterFactory>,
     ) -> Result<Self, SessionManagerError> {
-        let terminal = TerminalSurfaceRuntime::new(&runtime_root)?;
         let filesystem = LinuxOstreeOverlayFilesystemRuntime::new(state_root.clone());
         Ok(Self {
             state_root,
             runtime_root,
-            terminal,
             filesystem,
             path_resolver,
             router_factory,
@@ -438,98 +424,6 @@ impl SessionRuntimeResources {
         Ok(())
     }
 
-    fn guard_credential(
-        &self,
-        spec: &SessionSpec,
-        recovering: bool,
-    ) -> Result<GuardCredential, SessionManagerError> {
-        let path = self.guard_credential_path(spec);
-        if recovering || path.exists() {
-            let encoded = fs::read(&path).context(RuntimeIoSnafu {
-                action: "reading runtime guard credential",
-                path: &path,
-            })?;
-            return serde_json::from_slice(&encoded).map_err(|source| {
-                SessionManagerError::InvalidRuntime {
-                    session_id: spec.session_id().as_str().to_owned(),
-                    reason: format!(
-                        "runtime guard credential `{}` is invalid: {source}",
-                        path.display()
-                    ),
-                    location: snafu::Location::default(),
-                }
-            });
-        }
-        let credential = GuardCredential {
-            schema_version: 1,
-            token: Uuid::new_v4().simple().to_string(),
-        };
-        self.write_guard_credential(spec, &path, &credential)?;
-        Ok(credential)
-    }
-
-    fn write_guard_credential(
-        &self,
-        spec: &SessionSpec,
-        path: &Path,
-        credential: &GuardCredential,
-    ) -> Result<(), SessionManagerError> {
-        let parent = path
-            .parent()
-            .ok_or_else(|| SessionManagerError::InvalidRuntime {
-                session_id: spec.session_id().as_str().to_owned(),
-                reason: format!("credential path `{}` has no parent", path.display()),
-                location: snafu::Location::default(),
-            })?;
-        fs::create_dir_all(parent).context(RuntimeIoSnafu {
-            action: "creating runtime guard credential directory",
-            path: parent,
-        })?;
-        let temporary = path.with_extension("tmp");
-        let encoded = serde_json::to_vec(credential).map_err(|source| {
-            SessionManagerError::InvalidRuntime {
-                session_id: spec.session_id().as_str().to_owned(),
-                reason: format!(
-                    "runtime guard credential `{}` cannot be encoded: {source}",
-                    path.display()
-                ),
-                location: snafu::Location::default(),
-            }
-        })?;
-        let mut file = OpenOptions::new()
-            .create(true)
-            .truncate(true)
-            .write(true)
-            .mode(0o600)
-            .open(&temporary)
-            .context(RuntimeIoSnafu {
-                action: "writing runtime guard credential",
-                path: &temporary,
-            })?;
-        file.write_all(&encoded).context(RuntimeIoSnafu {
-            action: "writing runtime guard credential",
-            path: &temporary,
-        })?;
-        file.sync_all().context(RuntimeIoSnafu {
-            action: "syncing runtime guard credential",
-            path: &temporary,
-        })?;
-        fs::rename(&temporary, path).context(RuntimeIoSnafu {
-            action: "publishing runtime guard credential",
-            path,
-        })?;
-        File::open(parent)
-            .context(RuntimeIoSnafu {
-                action: "opening runtime guard credential directory",
-                path: parent,
-            })?
-            .sync_all()
-            .context(RuntimeIoSnafu {
-                action: "syncing runtime guard credential directory",
-                path: parent,
-            })
-    }
-
     fn output_stores(
         &self,
         spec: &SessionSpec,
@@ -592,15 +486,6 @@ impl SessionRuntimeResources {
         Ok(())
     }
 
-    fn guard_credential_path(&self, spec: &SessionSpec) -> PathBuf {
-        self.state_root
-            .join("users")
-            .join(spec.owner().uid().to_string())
-            .join("sessions")
-            .join(spec.session_id().as_str())
-            .join(GUARD_CREDENTIAL_FILE)
-    }
-
     fn session_runtime_path(&self, spec: &SessionSpec) -> PathBuf {
         self.runtime_root
             .join(spec.owner().uid().to_string())
@@ -633,9 +518,8 @@ pub(crate) trait SessionRuntime: Send + Sync {
         recovering: bool,
     ) -> Result<OutputEndpoints, SessionManagerError>;
 
-    /// Starts a session-local runtime guard and returns only the environment
-    /// projection needed by a runner that elected to use it.
-    fn start_runtime_guard(
+    /// Registers session-local services before the runner starts.
+    fn start_session_services(
         &self,
         spec: &SessionSpec,
         output: &OutputEndpoints,
@@ -685,36 +569,18 @@ impl SessionRuntime for SessionRuntimeResources {
         }
     }
 
-    fn start_runtime_guard(
+    fn start_session_services(
         &self,
         spec: &SessionSpec,
         output: &OutputEndpoints,
-        recovering: bool,
+        _recovering: bool,
     ) -> Result<Vec<(String, String)>, SessionManagerError> {
-        let credential = self.guard_credential(spec, recovering)?;
-        self.terminal
-            .bind(
-                spec,
-                self.router_factory.router(spec, output)?,
-                credential.token,
-            )
-            .map(|binding| binding.environment())
+        self.router_factory.register(spec, output)?;
+        Ok(Vec::new())
     }
 
     fn cleanup(&self, spec: &SessionSpec) -> Result<(), SessionManagerError> {
-        self.terminal.release(spec)?;
         self.router_factory.cleanup(spec)?;
-        let credential = self.guard_credential_path(spec);
-        match fs::remove_file(&credential) {
-            Ok(()) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(source) => {
-                return Err(source).context(RuntimeIoSnafu {
-                    action: "removing terminal runtime guard credential",
-                    path: credential,
-                });
-            }
-        }
         self.cleanup_staging(spec)
     }
 
@@ -741,12 +607,6 @@ impl SessionRuntime for SessionRuntimeResources {
             .read_after(after_sequence, maximum_records)
             .context(OutputSnafu)
     }
-}
-
-#[derive(Deserialize, Serialize)]
-struct GuardCredential {
-    schema_version: u32,
-    token: String,
 }
 
 fn bind_descriptor(

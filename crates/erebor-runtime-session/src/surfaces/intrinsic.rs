@@ -30,9 +30,8 @@ use snafu::ResultExt;
 use users::os::unix::UserExt;
 
 use crate::{
-    error::session_manager::{RuntimeFilesystemSnafu, RuntimeGuardSnafu, RuntimeIoSnafu},
-    ResolvedSessionPath, RuntimeGuardService, SessionInterceptionRouter, SessionManagerError,
-    SessionPathResolver,
+    error::session_manager::{RuntimeFilesystemSnafu, RuntimeIoSnafu},
+    ResolvedSessionPath, SessionManagerError, SessionPathResolver,
 };
 
 const CODEX_STATE_DIRECTORY: &str = ".codex";
@@ -40,62 +39,6 @@ const STATE_VOLUME_ID: &str = "agent-state";
 const CALLER_SOURCE_VOLUME_PREFIX: &str = "caller-source-";
 const PRIVATE_FILE_SOURCE_NAME: &str = "source";
 const SNAPSHOT_MANIFEST: &str = "state-snapshot-manifest.json";
-
-/// Daemon-long-lived realization of the intrinsic `terminal` Surface.
-///
-/// It owns one shared broker/listener. A Session receives only a
-/// [`TerminalBinding`] registered against that broker.
-pub struct TerminalSurfaceRuntime {
-    guard: RuntimeGuardService,
-}
-
-pub struct TerminalBinding {
-    environment: Vec<(String, String)>,
-}
-
-impl TerminalSurfaceRuntime {
-    pub(crate) fn new(runtime_root: &Path) -> Result<Self, SessionManagerError> {
-        let guard = RuntimeGuardService::new(runtime_root).context(RuntimeGuardSnafu)?;
-        Ok(Self { guard })
-    }
-
-    pub(crate) fn bind(
-        &self,
-        spec: &SessionSpec,
-        router: SessionInterceptionRouter,
-        token: String,
-    ) -> Result<TerminalBinding, SessionManagerError> {
-        self.guard
-            .start_session_with_token(
-                spec.owner().uid(),
-                spec.session_id().as_str(),
-                "agent",
-                router,
-                Some(token),
-            )
-            .context(RuntimeGuardSnafu)
-            .map(|endpoint| {
-                let mut environment = endpoint.environment();
-                environment.push((
-                    String::from("EREBOR_GUARD_INTERCEPTION_OPERATIONS"),
-                    String::from("process_exec,file_open,file_read,file_mutation"),
-                ));
-                TerminalBinding { environment }
-            })
-    }
-
-    pub(crate) fn release(&self, spec: &SessionSpec) -> Result<(), SessionManagerError> {
-        self.guard
-            .stop_session(spec.owner().uid(), spec.session_id().as_str())
-            .context(RuntimeGuardSnafu)
-    }
-}
-
-impl TerminalBinding {
-    pub(crate) fn environment(self) -> Vec<(String, String)> {
-        self.environment
-    }
-}
 
 /// Daemon-long-lived realization of the intrinsic `filesystem` Surface.
 ///

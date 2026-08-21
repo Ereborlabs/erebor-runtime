@@ -3,7 +3,6 @@
   "linux_runner": {
     "containment": "systemd",
     "controller_path": "/usr/libexec/erebor/erebor-linux-session-controller",
-    "process_guard_path": "/usr/libexec/erebor/erebor-linux-process-guard",
     "descriptor_broker_path": "/usr/libexec/erebor/erebor-path-broker",
     "systemd_run_path": "/usr/bin/systemd-run"
   },

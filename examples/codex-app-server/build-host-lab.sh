@@ -11,9 +11,6 @@ cd -- "$repo_root"
 cargo build --package erebor-runtime-cli --bin erebor
 cargo build --package erebor-runtime-daemon --bin erebord --bin erebor-path-broker
 cargo build --package erebor-runtime-session --bin erebor-linux-session-controller
-cargo build --package erebor-runtime-session \
-  --features editor-process-guard-target \
-  --bin erebor-linux-process-guard
 cargo build --package erebor-runtime-e2e --bin codex-v1-fixture
 
 printf 'host-lab binaries are ready under %s/target/debug\n' "$repo_root"

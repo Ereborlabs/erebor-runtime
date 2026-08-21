@@ -9,9 +9,6 @@ pub(in crate::config) use snafu::OptionExt;
 pub(in crate::config) use crate::error::NoSessionSurfacesSnafu;
 pub(in crate::config) use crate::{
     AuditCommandLogLevel, DockerSessionCommandPlan, LinuxHostSessionCommandOptions,
-    LinuxHostSessionCommandPlan, ProcessInterceptionDecision, ProcessMediationEndpointSource,
-    ProcessMediationHandlerKind, ProcessMediationPrivatePortStrategy, RuntimeConfig,
-    RuntimeConfigError, SessionAdoptPlan, SessionInterceptionBackendKind,
-    SessionInterceptionOperation, SessionRunPlan, SessionRunnerKind, SessionSurfaceKind,
-    TerminalProcessMediationMode,
+    LinuxHostSessionCommandPlan, RuntimeConfig, RuntimeConfigError, SessionAdoptPlan,
+    SessionRunPlan, SessionRunnerKind, SessionSurfaceKind,
 };

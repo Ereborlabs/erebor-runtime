@@ -180,13 +180,6 @@ pub enum EnvelopeServiceFamily {
     MithrilObservation,
 }
 
-impl HookHello {
-    #[must_use]
-    pub const fn uses_supported_protocol(&self) -> bool {
-        self.protocol_version == PROTOCOL_VERSION
-    }
-}
-
 impl DaemonHello {
     #[must_use]
     pub const fn uses_supported_control_protocol(&self) -> bool {

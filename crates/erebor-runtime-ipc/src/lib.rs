@@ -1,10 +1,9 @@
-//! Fast local IPC contract between Erebor session brokers and process guards.
+//! Generated gRPC contracts and bounded Unix transport for Erebor Runtime IPC.
 
 mod codec;
 mod error;
 mod frame;
-#[cfg(test)]
-mod standalone;
+pub mod transport;
 pub mod v1;
 
 pub use codec::{AsyncFrameCodec, SyncFrameCodec};

@@ -7,13 +7,10 @@ mod controller_support;
 mod diagnostic;
 mod docker_controller;
 mod error;
-mod interception_backend;
-mod interception_setup;
 mod linux_controller;
 mod policies;
 mod registry_lifecycle;
 mod runners;
-mod runtime_interception_broker;
 mod session_context;
 mod session_manager;
 mod session_output;
@@ -63,11 +60,6 @@ pub use runners::{
     RunnerAdmissionContext, RunnerAdmissionRequest, RunnerCapabilityReport, RunnerDriver,
     RunnerExecutionAdmission, RunnerInstallConfig, RunnerPreparation, RunnerRegistry,
 };
-pub use runtime_interception_broker::{
-    InterceptionBrokerClient, RuntimeGuardService, RuntimeInterceptionBroker,
-    RuntimeInterceptionBrokerError, RuntimeInterceptionEndpoint, SessionInterceptionRegistration,
-    SessionInterceptionRouter,
-};
 pub use session_manager::{
     output_endpoints, ResolvedSessionPath, SessionAttachOutcome, SessionInterceptionRouterFactory,
     SessionManager, SessionPathResolver, SessionPathResolverError, SessionRuntimeResources,
@@ -85,6 +77,5 @@ pub use surface_services::SurfaceServiceRunner;
 pub use surfaces::filesystem::{FilesystemFileOperationHandler, FilesystemSessionContext};
 pub use surfaces::terminal::browser_cdp_process_mediation::BrowserCdpProcessMediationCapability;
 
-pub(crate) use registry_lifecycle::SessionStorage;
 pub(crate) use session_context::SessionPlanContext;
 pub(crate) use session_manager::SessionRuntime;

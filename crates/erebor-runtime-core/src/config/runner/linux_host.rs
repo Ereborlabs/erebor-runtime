@@ -19,7 +19,6 @@ pub struct LinuxHostSessionCommandOptions {
     extra_environment: Vec<(String, String)>,
     wrapper_programs: Vec<PathBuf>,
     removed_environment: Vec<String>,
-    adopt_pid: Option<i32>,
 }
 
 impl LinuxHostSessionCommandOptions {
@@ -33,10 +32,6 @@ impl LinuxHostSessionCommandOptions {
 
     pub fn add_outer_wrapper_program(&mut self, wrapper: impl Into<PathBuf>) {
         self.wrapper_programs.insert(0, wrapper.into());
-    }
-
-    pub fn set_adopt_pid(&mut self, pid: i32) {
-        self.adopt_pid = Some(pid);
     }
 
     pub fn remove_environment(&mut self, key: impl Into<String>) {
@@ -161,11 +156,6 @@ impl LinuxHostSessionCommandPlanner {
             LinuxHostSessionEnvironment::base(plan.session_id(), &plan.actor().id);
         combined_environment.extend(environment.iter().cloned());
         combined_environment.extend(options.extra_environment.iter().cloned());
-        combined_environment.push((
-            String::from("EREBOR_GUARD_ADOPT_PID"),
-            options.adopt_pid.unwrap_or_else(|| plan.pid()).to_string(),
-        ));
-
         let (program, args) = options.wrapper_programs.split_first().map_or_else(
             || (String::new(), Vec::new()),
             |(wrapper, wrappers)| {

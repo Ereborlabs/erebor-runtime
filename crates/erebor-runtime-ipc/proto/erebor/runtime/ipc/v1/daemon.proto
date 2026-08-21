@@ -2,6 +2,94 @@ syntax = "proto3";
 
 package erebor.runtime.ipc.v1;
 
+service DaemonLifecycleService {
+  rpc Status(DaemonStatusRequest) returns (DaemonStatusResponse);
+  rpc Logs(DaemonLogsRequest) returns (stream DaemonLogRecord);
+  rpc Reload(DaemonReloadRequest) returns (DaemonCommandResult);
+  rpc Stop(DaemonStopRequest) returns (DaemonCommandResult);
+}
+
+service AgentService {
+  rpc Install(AgentInstallRequest) returns (AgentInstallResponse);
+  rpc RunCodex(CodexRunRequest) returns (SessionCreateResponse);
+}
+
+service SessionService {
+  rpc Create(SessionCreateRequest) returns (SessionCreateResponse);
+  rpc Start(SessionStartRequest) returns (SessionRecord);
+  rpc Stop(SessionStopRequest) returns (SessionRecord);
+  rpc Kill(SessionKillRequest) returns (SessionRecord);
+  rpc Remove(SessionRemoveRequest) returns (SessionRecord);
+  rpc Inspect(SessionInspectRequest) returns (SessionRecord);
+  rpc List(SessionListRequest) returns (SessionListResponse);
+  rpc Wait(SessionWaitRequest) returns (SessionRecord);
+  rpc Logs(SessionLogsRequest) returns (stream SessionLogStreamItem);
+  rpc Events(SessionEventsRequest) returns (stream SessionEventStreamItem);
+  rpc Evidence(SessionEvidenceRequest) returns (stream SessionEvidenceStreamItem);
+  rpc Attach(SessionAttachRequest) returns (SessionAttachResponse);
+  rpc RenewInputLease(SessionInputLeaseRenewRequest) returns (SessionInputLeaseResponse);
+  rpc ReleaseInputLease(SessionInputLeaseReleaseRequest) returns (SessionInputLeaseResponse);
+  rpc Input(SessionInputRequest) returns (SessionInputResponse);
+  rpc ResizeTerminal(SessionTerminalResizeRequest) returns (SessionTerminalResizeResponse);
+  rpc AttachCodexAppServer(CodexAppServerAttachRequest) returns (CodexAppServerAttachResponse);
+  rpc InputCodexAppServer(CodexAppServerInputRequest) returns (CodexAppServerInputResponse);
+  rpc CloseCodexAppServerInput(CodexAppServerInputCloseRequest) returns (CodexAppServerInputCloseResponse);
+  rpc Prune(SessionPruneRequest) returns (SessionPruneResponse);
+  rpc SetAlias(SessionAliasSetRequest) returns (SessionAliasRecord);
+  rpc RemoveAlias(SessionAliasRemoveRequest) returns (SessionAliasRecord);
+  rpc ListAliases(SessionAliasListRequest) returns (SessionAliasListResponse);
+}
+
+service FilesystemService {
+  rpc Query(FilesystemQueryRequest) returns (FilesystemOperationResponse);
+  rpc Mutate(FilesystemMutationRequest) returns (FilesystemOperationResponse);
+}
+
+service ContextService {
+  rpc DeliveryInbox(ContextDeliveryInboxRequest) returns (ContextDeliveryInboxResponse);
+  rpc Graph(ContextGraphRequest) returns (ContextGraphResponse);
+  rpc ReceiveDelivery(ContextDeliveryReceiveRequest) returns (ContextDeliveryDecisionResponse);
+  rpc RejectDelivery(ContextDeliveryRejectRequest) returns (ContextDeliveryDecisionResponse);
+}
+
+service AdministrationService {
+  rpc ListSessions(AdminSessionListRequest) returns (SessionListResponse);
+  rpc InspectSession(AdminSessionInspectRequest) returns (SessionRecord);
+  rpc StopSession(AdminSessionStopRequest) returns (SessionRecord);
+  rpc KillSession(AdminSessionKillRequest) returns (SessionRecord);
+  rpc SetSessionRetentionHold(AdminSessionSetRetentionHoldRequest) returns (SessionRecord);
+}
+
+service ApprovalService {
+  rpc List(ApprovalListRequest) returns (ApprovalListResponse);
+  rpc Inspect(ApprovalInspectRequest) returns (ApprovalRecord);
+  rpc Approve(ApprovalApproveRequest) returns (ApprovalRecord);
+  rpc Deny(ApprovalDenyRequest) returns (ApprovalRecord);
+}
+
+service PolicyService {
+  rpc Test(PolicyTestRequest) returns (PolicyTestResponse);
+  rpc ApplyPackage(PolicyPackageApplyRequest) returns (PolicyPackageRecord);
+  rpc ListPackages(PolicyPackageListRequest) returns (PolicyPackageListResponse);
+  rpc InspectPackage(PolicyPackageInspectRequest) returns (PolicyPackageRecord);
+  rpc VerifyPackage(PolicyPackageVerifyRequest) returns (PolicyPackageRecord);
+  rpc CreateSet(PolicySetCreateRequest) returns (PolicySetRecord);
+  rpc ListSets(PolicySetListRequest) returns (PolicySetListResponse);
+  rpc InspectSet(PolicySetInspectRequest) returns (PolicySetRecord);
+  rpc VerifySet(PolicySetVerifyRequest) returns (PolicySetRecord);
+}
+
+service SurfaceService {
+  rpc Create(SurfaceCreateRequest) returns (SurfaceRecord);
+  rpc List(SurfaceListRequest) returns (SurfaceListResponse);
+  rpc Inspect(SurfaceInspectRequest) returns (SurfaceRecord);
+}
+
+service RunnerService {
+  rpc List(RunnerListRequest) returns (RunnerListResponse);
+  rpc Inspect(RunnerInspectRequest) returns (RunnerCapabilityRecord);
+}
+
 message DaemonHello {
   uint32 protocol_version = 1;
   string client_name = 2;
@@ -246,6 +334,13 @@ message SessionLogsEnd {
   bool truncated_before_cursor = 4;
 }
 
+message SessionLogStreamItem {
+  oneof item {
+    SessionLogChunk record = 1;
+    SessionLogsEnd end = 2;
+  }
+}
+
 message SessionEventsRequest {
   string session_id = 1;
   uint64 after_sequence = 2;
@@ -265,6 +360,13 @@ message SessionEventsEnd {
   string session_id = 1;
   uint64 durable_cursor = 2;
   bool truncated_before_cursor = 3;
+}
+
+message SessionEventStreamItem {
+  oneof item {
+    SessionEventRecord record = 1;
+    SessionEventsEnd end = 2;
+  }
 }
 
 // The daemon-owned evidence stream is distinct from lifecycle events. The
@@ -289,6 +391,13 @@ message SessionEvidenceEnd {
   string session_id = 1;
   uint64 durable_cursor = 2;
   bool truncated_before_cursor = 3;
+}
+
+message SessionEvidenceStreamItem {
+  oneof item {
+    SessionEvidenceRecord record = 1;
+    SessionEvidenceEnd end = 2;
+  }
 }
 
 message SessionAttachRequest {

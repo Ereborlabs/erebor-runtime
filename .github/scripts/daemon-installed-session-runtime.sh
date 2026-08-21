@@ -21,7 +21,6 @@ trap report_failure ERR
 for binary in \
   "$erebor" \
   /usr/libexec/erebor/erebor-linux-session-controller \
-  /usr/libexec/erebor/erebor-linux-process-guard \
   /usr/libexec/erebor/erebor-path-broker; do
   [[ -x "$binary" ]] || {
     echo "installed runtime binary is missing: $binary" >&2

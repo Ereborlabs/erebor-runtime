@@ -1255,7 +1255,7 @@ mod tests {
             Ok(output_endpoints(spec))
         }
 
-        fn start_runtime_guard(
+        fn start_session_services(
             &self,
             _spec: &SessionSpec,
             _output: &OutputEndpoints,
@@ -1659,7 +1659,6 @@ mod tests {
                 None,
                 &workspace,
                 None,
-                Path::new("/run/erebor/runtime-interception.sock"),
             ),
             &StaticPathResolver,
         )?;

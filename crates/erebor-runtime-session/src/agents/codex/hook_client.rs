@@ -1,18 +1,18 @@
-use std::{os::unix::net::UnixStream, path::PathBuf};
+use std::{path::PathBuf, time::Duration};
 
 use erebor_runtime_ipc::{
+    transport::{connect_unix, MAX_GRPC_MESSAGE_BYTES},
     v1::{
-        Envelope, EnvelopeServiceFamily, HookEvent, HookHello, HookHelloAck, HookRejection,
-        HookResult, KIND_HOOK_EVENT, KIND_HOOK_HELLO, KIND_HOOK_HELLO_ACK, KIND_HOOK_REJECTION,
-        KIND_HOOK_RESULT, PROTOCOL_VERSION,
+        hook_client_message, hook_server_message, hook_service_client::HookServiceClient,
+        HookClientMessage, HookEvent, HookHello, HookResult,
     },
-    SyncFrameCodec,
 };
-use snafu::ResultExt;
+use tokio_stream::wrappers::ReceiverStream;
+use tonic::Request;
 
 use super::{
     broker::CodexHookService,
-    error::{HookBrokerIoSnafu, HookBrokerProtocolSnafu, HookRejectedSnafu, InvalidHookEventSnafu},
+    error::{HookRejectedSnafu, InvalidHookEventSnafu},
     CodexSessionError,
 };
 
@@ -36,29 +36,20 @@ impl CodexHookClient {
     pub const MAX_NATIVE_EVENT_BYTES: usize = 32 * 1024;
 
     pub fn submit(&self, event: HookEvent) -> Result<HookResult, CodexSessionError> {
-        let mut stream = UnixStream::connect(&self.endpoint).context(HookBrokerIoSnafu)?;
-        stream
-            .set_read_timeout(Some(std::time::Duration::from_secs(10)))
-            .context(HookBrokerIoSnafu)?;
-        stream
-            .set_write_timeout(Some(std::time::Duration::from_secs(10)))
-            .context(HookBrokerIoSnafu)?;
-        Self::submit_on_stream(&mut stream, event)
-    }
-
-    pub(crate) fn submit_on_stream(
-        stream: &mut UnixStream,
-        event: HookEvent,
-    ) -> Result<HookResult, CodexSessionError> {
-        Self::submit_on_stream_for_session(
-            stream,
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|error| {
+                protocol_error(format!("could not start hook RPC runtime: {error}"))
+            })?;
+        runtime.block_on(self.submit_async(
             std::env::var("EREBOR_SESSION_ID").unwrap_or_default(),
             event,
-        )
+        ))
     }
 
-    pub(crate) fn submit_on_stream_for_session(
-        stream: &mut UnixStream,
+    async fn submit_async(
+        &self,
         session_id: impl Into<String>,
         event: HookEvent,
     ) -> Result<HookResult, CodexSessionError> {
@@ -71,19 +62,40 @@ impl CodexHookClient {
             }
             .fail();
         }
-        let hello = HookHello {
-            protocol_version: PROTOCOL_VERSION,
-            ticket_id: String::new(),
-            session_id: session_id.into(),
+        let channel = connect_unix(&self.endpoint).await.map_err(|error| {
+            protocol_error(format!("could not connect to hook service: {error}"))
+        })?;
+        let mut client = HookServiceClient::new(channel)
+            .max_decoding_message_size(MAX_GRPC_MESSAGE_BYTES)
+            .max_encoding_message_size(MAX_GRPC_MESSAGE_BYTES);
+        let (sender, receiver) = tokio::sync::mpsc::channel(2);
+        let mut request = Request::new(ReceiverStream::new(receiver));
+        request.set_timeout(Duration::from_secs(10));
+        sender
+            .send(HookClientMessage {
+                item: Some(hook_client_message::Item::Hello(HookHello {
+                    ticket_id: String::new(),
+                    session_id: session_id.into(),
+                })),
+            })
+            .await
+            .map_err(|_closed| protocol_error("hook request stream closed before hello"))?;
+        let mut output = client
+            .open(request)
+            .await
+            .map_err(|status| protocol_error(format!("hook open failed: {status}")))?
+            .into_inner();
+        let response = output
+            .message()
+            .await
+            .map_err(|status| protocol_error(format!("hook hello failed: {status}")))?
+            .ok_or_else(|| protocol_error("hook service closed before hello acknowledgement"))?;
+        let Some(hook_server_message::Item::HelloAck(ack)) = response.item else {
+            return Err(protocol_error(
+                "hook service returned an invalid hello response",
+            ));
         };
-        let hello_request = Envelope::wrap_message(1, 0, KIND_HOOK_HELLO, &hello)
-            .context(HookBrokerProtocolSnafu)?;
-        Self::write_envelope(stream, &hello_request)?;
-        let hello_response = Self::read_envelope(stream)?;
-        let ack: HookHelloAck = hello_response
-            .decode_typed_payload(KIND_HOOK_HELLO_ACK)
-            .context(HookBrokerProtocolSnafu)?;
-        if !ack.accepted || ack.protocol_version != PROTOCOL_VERSION {
+        if !ack.accepted {
             return HookRejectedSnafu {
                 stage: String::from("hello"),
                 reason: ack.reason,
@@ -91,47 +103,40 @@ impl CodexHookClient {
             .fail();
         }
 
-        let event_request = Envelope::wrap_message(2, 1, KIND_HOOK_EVENT, &event)
-            .context(HookBrokerProtocolSnafu)?;
-        Self::write_envelope(stream, &event_request)?;
-        let response = Self::read_envelope(stream)?;
-        if response.message_kind == KIND_HOOK_REJECTION {
-            let rejection: HookRejection = response
-                .decode_typed_payload(KIND_HOOK_REJECTION)
-                .context(HookBrokerProtocolSnafu)?;
-            return HookRejectedSnafu {
-                stage: String::from("event"),
-                reason: rejection.reason,
-            }
-            .fail();
-        }
-        let result: HookResult = response
-            .decode_typed_payload(KIND_HOOK_RESULT)
-            .context(HookBrokerProtocolSnafu)?;
-        if !result.accepted {
-            return HookRejectedSnafu {
+        sender
+            .send(HookClientMessage {
+                item: Some(hook_client_message::Item::Event(event)),
+            })
+            .await
+            .map_err(|_closed| protocol_error("hook request stream closed before event"))?;
+        drop(sender);
+        let response = output
+            .message()
+            .await
+            .map_err(|status| protocol_error(format!("hook event failed: {status}")))?
+            .ok_or_else(|| protocol_error("hook service closed before event result"))?;
+        match response.item {
+            Some(hook_server_message::Item::Result(result)) if result.accepted => Ok(result),
+            Some(hook_server_message::Item::Result(_result)) => HookRejectedSnafu {
                 stage: String::from("result"),
                 reason: String::from("broker returned a non-accepted hook result"),
             }
-            .fail();
+            .fail(),
+            Some(hook_server_message::Item::Rejection(rejection)) => HookRejectedSnafu {
+                stage: String::from("event"),
+                reason: rejection.reason,
+            }
+            .fail(),
+            _ => Err(protocol_error(
+                "hook service returned an invalid event result",
+            )),
         }
-        Ok(result)
     }
+}
 
-    fn read_envelope(stream: &mut UnixStream) -> Result<Envelope, CodexSessionError> {
-        let frame = SyncFrameCodec::read_frame(stream).context(HookBrokerProtocolSnafu)?;
-        let envelope: Envelope = frame.decode_payload().context(HookBrokerProtocolSnafu)?;
-        envelope
-            .validate_headers(EnvelopeServiceFamily::Hook)
-            .context(HookBrokerProtocolSnafu)?;
-        Ok(envelope)
-    }
-
-    fn write_envelope(
-        stream: &mut UnixStream,
-        envelope: &Envelope,
-    ) -> Result<(), CodexSessionError> {
-        let frame = envelope.into_frame().context(HookBrokerProtocolSnafu)?;
-        SyncFrameCodec::write_frame(stream, &frame).context(HookBrokerProtocolSnafu)
+fn protocol_error(reason: impl Into<String>) -> CodexSessionError {
+    CodexSessionError::HookBrokerProtocol {
+        reason: reason.into(),
+        location: snafu::Location::default(),
     }
 }

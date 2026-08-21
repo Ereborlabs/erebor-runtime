@@ -14,14 +14,13 @@ use rustix::{
     fd::OwnedFd,
     process::{pidfd_open, Pid, PidfdFlags},
 };
-use snafu::{ensure, ResultExt};
+use snafu::ResultExt;
 
 use super::{
     broker::LinuxHookPeerInspector,
     error::{
         IncompatibleProfileSnafu, TicketExpiredSnafu, TicketNotFoundSnafu, TicketPeerMismatchSnafu,
         TicketProcessExitedSnafu, TicketRegistryLockSnafu, TicketReplayedSnafu,
-        UnsupportedHookProtocolSnafu,
     },
     CodexLeaseRuntimeEvidence, CodexSessionError,
 };
@@ -236,6 +235,36 @@ impl CodexHookTicket {
 }
 
 impl CodexHookTicketRegistry {
+    pub(crate) fn authenticate_peer(
+        &self,
+        session_id: impl Into<String>,
+        profile_id: impl Into<String>,
+        mut observed_peer: HookPeerEvidence,
+        runtime: CodexLeaseRuntimeEvidence,
+    ) -> Result<CodexHookTicket, CodexSessionError> {
+        let ticket_id = random_ticket_id()?;
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_error| TicketRegistryLockSnafu.build())?;
+        if state
+            .consumed
+            .values()
+            .any(|peer| same_peer_identity(peer, &observed_peer))
+        {
+            return TicketReplayedSnafu { ticket_id }.fail();
+        }
+        observed_peer.ticket_id = ticket_id.clone();
+        let ticket = CodexHookTicket {
+            id: ticket_id.clone(),
+            session_id: session_id.into(),
+            profile_id: profile_id.into(),
+            runtime: Some(runtime),
+        };
+        state.consumed.insert(ticket_id, observed_peer);
+        Ok(ticket)
+    }
+
     pub fn issue(
         &self,
         session_id: impl Into<String>,
@@ -281,12 +310,6 @@ impl CodexHookTicketRegistry {
         hello: &HookHello,
         observed_peer: &HookPeerEvidence,
     ) -> Result<CodexHookTicket, CodexSessionError> {
-        ensure!(
-            hello.uses_supported_protocol(),
-            UnsupportedHookProtocolSnafu {
-                version: hello.protocol_version
-            }
-        );
         let mut state = self
             .state
             .lock()
@@ -347,12 +370,6 @@ impl CodexHookTicketRegistry {
         hello: &HookHello,
         observed_peer: &HookPeerEvidence,
     ) -> Result<CodexHookTicket, CodexSessionError> {
-        ensure!(
-            hello.uses_supported_protocol(),
-            UnsupportedHookProtocolSnafu {
-                version: hello.protocol_version
-            }
-        );
         let mut state = self
             .state
             .lock()
@@ -458,7 +475,7 @@ fn random_ticket_id() -> Result<String, CodexSessionError> {
 mod tests {
     use std::{process::Command, time::Duration};
 
-    use erebor_runtime_ipc::v1::{HookHello, HookPeerEvidence, PipeIdentity, PROTOCOL_VERSION};
+    use erebor_runtime_ipc::v1::{HookHello, HookPeerEvidence, PipeIdentity};
     #[cfg(target_os = "linux")]
     use rustix::process::{pidfd_open, Pid, PidfdFlags};
 
@@ -498,7 +515,6 @@ mod tests {
         let registry = CodexHookTicketRegistry::default();
         let ticket = registry.issue("session-1", "codex-1", peer(), Duration::from_secs(1))?;
         let hello = HookHello {
-            protocol_version: PROTOCOL_VERSION,
             ticket_id: ticket.id().to_owned(),
             session_id: String::from("session-1"),
         };
@@ -521,28 +537,18 @@ mod tests {
     }
 
     #[test]
-    fn ticket_rejects_expired_and_unsupported_hello() -> Result<(), Box<dyn std::error::Error>> {
+    fn ticket_rejects_expired_hello() -> Result<(), Box<dyn std::error::Error>> {
         let registry = CodexHookTicketRegistry::default();
         let ticket = registry.issue("session-1", "codex-1", peer(), Duration::ZERO)?;
         let mut observed = peer();
         observed.ticket_id = ticket.id().to_owned();
         let expired = HookHello {
-            protocol_version: PROTOCOL_VERSION,
             ticket_id: ticket.id().to_owned(),
             session_id: String::from("session-1"),
         };
         assert!(matches!(
             registry.consume(&expired, &observed),
             Err(CodexSessionError::TicketExpired { .. })
-        ));
-        let unsupported = HookHello {
-            protocol_version: PROTOCOL_VERSION + 1,
-            ticket_id: String::from("ignored"),
-            session_id: String::from("session-1"),
-        };
-        assert!(matches!(
-            registry.consume(&unsupported, &observed),
-            Err(CodexSessionError::UnsupportedHookProtocol { .. })
         ));
         Ok(())
     }
@@ -571,7 +577,6 @@ mod tests {
 
         expected.ticket_id = ticket.id().to_owned();
         let hello = HookHello {
-            protocol_version: PROTOCOL_VERSION,
             ticket_id: ticket.id().to_owned(),
             session_id: String::from("session-1"),
         };
@@ -588,7 +593,6 @@ mod tests {
         let registry = CodexHookTicketRegistry::default();
         let ticket = registry.issue("session-1", "codex-1", peer(), Duration::from_secs(1))?;
         let hello = HookHello {
-            protocol_version: PROTOCOL_VERSION,
             ticket_id: String::new(),
             session_id: String::from("session-1"),
         };
@@ -606,7 +610,6 @@ mod tests {
         let registry = CodexHookTicketRegistry::default();
         let ticket = registry.issue("session-1", "codex-1", peer(), Duration::from_secs(1))?;
         let hello = HookHello {
-            protocol_version: PROTOCOL_VERSION,
             ticket_id: String::new(),
             session_id: String::from("session-1"),
         };
@@ -685,7 +688,6 @@ mod tests {
             let registry = CodexHookTicketRegistry::default();
             let ticket = registry.issue("session-1", "codex-1", peer(), Duration::from_secs(1))?;
             let hello = HookHello {
-                protocol_version: PROTOCOL_VERSION,
                 ticket_id: ticket.id().to_owned(),
                 session_id: String::from("session-1"),
             };

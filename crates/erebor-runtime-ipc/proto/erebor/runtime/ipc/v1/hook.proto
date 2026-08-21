@@ -2,14 +2,33 @@ syntax = "proto3";
 
 package erebor.runtime.ipc.v1;
 
+service HookService {
+  rpc Open(stream HookClientMessage) returns (stream HookServerMessage);
+}
+
+message HookClientMessage {
+  oneof item {
+    HookHello hello = 1;
+    HookEvent event = 2;
+  }
+}
+
+message HookServerMessage {
+  oneof item {
+    HookHelloAck hello_ack = 1;
+    HookResult result = 2;
+    HookRejection rejection = 3;
+  }
+}
+
 message HookHello {
-  uint32 protocol_version = 1;
+  reserved 1;
   string ticket_id = 2;
   string session_id = 3;
 }
 
 message HookHelloAck {
-  uint32 protocol_version = 1;
+  reserved 1;
   bool accepted = 2;
   string reason = 3;
 }
@@ -65,8 +84,8 @@ enum HookEventKind {
 }
 
 enum HookRejectionCode {
+  reserved 1;
   HOOK_REJECTION_CODE_UNSPECIFIED = 0;
-  HOOK_REJECTION_CODE_UNSUPPORTED_VERSION = 1;
   HOOK_REJECTION_CODE_UNAUTHENTICATED_PEER = 2;
   HOOK_REJECTION_CODE_TICKET_NOT_FOUND = 3;
   HOOK_REJECTION_CODE_TICKET_MISMATCH = 4;

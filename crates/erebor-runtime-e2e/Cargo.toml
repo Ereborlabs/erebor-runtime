@@ -20,7 +20,9 @@ futures-util.workspace = true
 serde_json.workspace = true
 snafu.workspace = true
 tokio.workspace = true
+tokio-stream.workspace = true
 tokio-tungstenite.workspace = true
+tonic.workspace = true
 rustix = { version = "1.1.4", features = ["fs", "process", "stdio", "termios"] }
 
 [dev-dependencies]

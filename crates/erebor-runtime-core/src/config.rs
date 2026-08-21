@@ -22,9 +22,9 @@ pub use runner::{
 };
 pub use runtime::RuntimeConfig;
 pub use session::{
-    SessionActorLayerConfig, SessionDiagnosticLayerConfig, SessionInterceptionBackendKind,
-    SessionInterceptionCapabilityReport, SessionInterceptionConfig, SessionInterceptionLayerConfig,
-    SessionInterceptionOperation, SessionInterceptionOperationCapability, SessionLayerConfig,
+    SessionActorLayerConfig, SessionDiagnosticLayerConfig, SessionInterceptionCapabilityReport,
+    SessionInterceptionConfig, SessionInterceptionLayerConfig, SessionInterceptionOperation,
+    SessionInterceptionOperationCapability, SessionLayerConfig,
 };
 pub use session::{SessionAdoptPlan, SessionAdoptTarget, SessionRunPlan};
 pub use surfaces::{

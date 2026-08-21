@@ -1,10 +1,9 @@
 use std::{
     collections::HashMap,
     fs,
-    os::{
-        fd::AsFd,
-        unix::fs::{MetadataExt, PermissionsExt},
-        unix::net::{UnixListener, UnixStream},
+    os::unix::{
+        fs::{MetadataExt, PermissionsExt},
+        net::UnixListener,
     },
     path::{Path, PathBuf},
     sync::{
@@ -17,18 +16,21 @@ use std::{
 
 use erebor_runtime_core::SessionSpec;
 use erebor_runtime_ipc::{
+    transport::{UnixIncoming, UnixPeerIdentity, MAX_GRPC_MESSAGE_BYTES},
     v1::{
-        Envelope, EnvelopeServiceFamily, HookEvent, HookEventKind, HookHello, HookHelloAck,
-        HookRejection, HookRejectionCode, HookResult, KIND_HOOK_EVENT, KIND_HOOK_HELLO,
-        KIND_HOOK_HELLO_ACK, KIND_HOOK_REJECTION, KIND_HOOK_RESULT, PROTOCOL_VERSION,
+        hook_client_message, hook_server_message,
+        hook_service_server::{HookService, HookServiceServer},
+        HookClientMessage, HookEvent, HookEventKind, HookHello, HookHelloAck, HookRejection,
+        HookRejectionCode, HookResult, HookServerMessage,
     },
-    SyncFrameCodec,
 };
 use erebor_runtime_packages::{CodexHookEventName, CodexPackageDefinition};
 use erebor_runtime_telemetry::warn;
 use serde::Deserialize;
 use serde_json::json;
 use snafu::{ensure, ResultExt};
+use tokio_stream::wrappers::ReceiverStream;
+use tonic::{Request, Response, Status, Streaming};
 
 use crate::{
     ChildContextDelivery, ChildContextDeliveryHandler, ContextAgentControlHandler,
@@ -36,11 +38,10 @@ use crate::{
 };
 
 use super::{
-    error::{HookBrokerIoSnafu, HookBrokerProtocolSnafu, InvalidHookEventSnafu},
-    CodexAppServerRegistration, CodexCommandDispatch, CodexGuardLifecycleHandler,
-    CodexInvocationLeaseOwner, CodexInvocationLeaseProfile, CodexInvocationLeaseTrust,
-    CodexLeaseRuntimeEvidence, CodexManagedSession, CodexNativeHookEvent,
-    CodexPromptReconciliation, CodexSessionError,
+    error::{HookBrokerIoSnafu, InvalidHookEventSnafu},
+    CodexAppServerRegistration, CodexCommandDispatch, CodexInvocationLeaseOwner,
+    CodexInvocationLeaseProfile, CodexInvocationLeaseTrust, CodexLeaseRuntimeEvidence,
+    CodexManagedSession, CodexNativeHookEvent, CodexPromptReconciliation, CodexSessionError,
 };
 
 const BROKER_SOCKET: &str = "codex-hook.sock";
@@ -183,19 +184,6 @@ impl CodexSessionHookRegistration {
     }
 
     #[must_use]
-    pub fn with_interception_router(
-        &self,
-        router: crate::SessionInterceptionRouter,
-    ) -> crate::SessionInterceptionRouter {
-        router
-            .with_codex_invocation_lease_owner(Arc::clone(&self.lease_owner))
-            .with_guard_lifecycle_handler(CodexGuardLifecycleHandler::new(
-                self.managed_session.clone(),
-                Arc::clone(&self.lease_owner),
-            ))
-    }
-
-    #[must_use]
     pub fn app_server_registration(&self) -> CodexAppServerRegistration {
         CodexAppServerRegistration::new(
             self.managed_session.session_id(),
@@ -228,60 +216,32 @@ impl CodexHookService {
         let shutdown = Arc::new(AtomicBool::new(false));
         let worker_shutdown = Arc::clone(&shutdown);
         let worker = thread::spawn(move || {
-            while !worker_shutdown.load(Ordering::SeqCst) {
-                match listener.accept() {
-                    Ok((mut stream, _address)) => {
-                        let registrations = Arc::clone(&worker_registrations);
-                        thread::spawn(move || {
-                            let _result = stream.set_read_timeout(Some(Duration::from_secs(10)));
-                            let _result = stream.set_write_timeout(Some(Duration::from_secs(10)));
-                            let hello_envelope =
-                                CodexHookBrokerProtocol::read_envelope(&mut stream);
-                            let Ok(hello_envelope) = hello_envelope else {
-                                return;
-                            };
-                            let hello: Result<HookHello, _> = hello_envelope
-                                .decode_typed_payload(KIND_HOOK_HELLO)
-                                .context(HookBrokerProtocolSnafu);
-                            let Ok(hello) = hello else {
-                                return;
-                            };
-                            let registration = registrations
-                                .lock()
-                                .ok()
-                                .and_then(|table| table.get(&hello.session_id).cloned());
-                            let Some(registration) = registration else {
-                                let _result = CodexHookBrokerProtocol::write_hello_ack(
-                                    &mut stream,
-                                    &hello_envelope,
-                                    false,
-                                    String::from(
-                                        "no active Codex hook registration for this session",
-                                    ),
-                                );
-                                return;
-                            };
-                            let _result = CodexHookBrokerProtocol::new(
-                                registration.managed_session,
-                                registration.reconciliation,
-                                registration.lease_owner,
-                                registration.session_start_context,
-                                registration.child_deliveries,
-                                registration.agent_controls,
-                            )
-                            .serve_after_hello(
-                                &mut stream,
-                                hello_envelope,
-                                hello,
-                            );
-                        });
-                    }
-                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                        thread::sleep(Duration::from_millis(1));
-                    }
-                    Err(_error) => thread::sleep(Duration::from_millis(1)),
+            let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+            else {
+                return;
+            };
+            let Ok(listener) = tokio::net::UnixListener::from_std(listener) else {
+                return;
+            };
+            let service = HookGrpc {
+                registrations: worker_registrations,
+            };
+            let shutdown = async move {
+                while !worker_shutdown.load(Ordering::SeqCst) {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
                 }
-            }
+            };
+            let _result = runtime.block_on(
+                tonic::transport::Server::builder()
+                    .add_service(
+                        HookServiceServer::new(service)
+                            .max_decoding_message_size(MAX_GRPC_MESSAGE_BYTES)
+                            .max_encoding_message_size(MAX_GRPC_MESSAGE_BYTES),
+                    )
+                    .serve_with_incoming_shutdown(UnixIncoming::new(listener), shutdown),
+            );
         });
         Ok(Self {
             endpoint,
@@ -378,7 +338,6 @@ impl CodexHookService {
 impl Drop for CodexHookService {
     fn drop(&mut self) {
         self.shutdown.store(true, Ordering::SeqCst);
-        let _result = UnixStream::connect(&self.endpoint);
         if let Ok(mut worker) = self.worker.lock() {
             if let Some(worker) = worker.take() {
                 let _result = worker.join();
@@ -395,6 +354,145 @@ struct CodexHookBrokerProtocol {
     session_start_context: Option<String>,
     child_deliveries: Arc<dyn ChildContextDeliveryHandler>,
     agent_controls: Arc<dyn ContextAgentControlHandler>,
+}
+
+#[derive(Clone)]
+struct HookGrpc {
+    registrations: Arc<Mutex<HashMap<String, CodexHookRegistration>>>,
+}
+
+#[tonic::async_trait]
+impl HookService for HookGrpc {
+    type OpenStream = ReceiverStream<Result<HookServerMessage, Status>>;
+
+    async fn open(
+        &self,
+        request: Request<Streaming<HookClientMessage>>,
+    ) -> Result<Response<Self::OpenStream>, Status> {
+        let peer = request
+            .extensions()
+            .get::<UnixPeerIdentity>()
+            .cloned()
+            .ok_or_else(|| Status::unauthenticated("Unix peer credentials are unavailable"))?;
+        let registrations = Arc::clone(&self.registrations);
+        let mut input = request.into_inner();
+        let (output, receiver) = tokio::sync::mpsc::channel(8);
+        tokio::spawn(async move {
+            let first = tokio::time::timeout(Duration::from_secs(10), input.message()).await;
+            let hello = match first {
+                Ok(Ok(Some(HookClientMessage {
+                    item: Some(hook_client_message::Item::Hello(hello)),
+                }))) => hello,
+                Ok(Ok(_)) => {
+                    send_hook_ack(&output, false, "the first hook message must be a hello").await;
+                    return;
+                }
+                Ok(Err(_status)) => return,
+                Err(_elapsed) => {
+                    send_hook_ack(&output, false, "the hook hello deadline expired").await;
+                    return;
+                }
+            };
+            let registration = registrations
+                .lock()
+                .ok()
+                .and_then(|table| table.get(&hello.session_id).cloned());
+            let Some(registration) = registration else {
+                send_hook_ack(
+                    &output,
+                    false,
+                    "no active Codex hook registration exists for this session",
+                )
+                .await;
+                return;
+            };
+            let protocol = CodexHookBrokerProtocol::new(
+                registration.managed_session,
+                registration.reconciliation,
+                registration.lease_owner,
+                registration.session_start_context,
+                registration.child_deliveries,
+                registration.agent_controls,
+            );
+            let (runtime, observed_peer) = match protocol.authenticate(&peer, &hello) {
+                Ok(authenticated) => authenticated,
+                Err(error) => {
+                    send_hook_ack(&output, false, &error.to_string()).await;
+                    return;
+                }
+            };
+            send_hook_ack(&output, true, "").await;
+
+            loop {
+                let message = match input.message().await {
+                    Ok(Some(message)) => message,
+                    Ok(None) | Err(_) => return,
+                };
+                let Some(hook_client_message::Item::Event(event)) = message.item else {
+                    send_hook_rejection(
+                        &output,
+                        HookRejectionCode::InvalidSchema,
+                        "expected a hook event after the hello",
+                    )
+                    .await;
+                    return;
+                };
+                match protocol.process_event(&event, &runtime, observed_peer.observed_pid) {
+                    Ok(result) => {
+                        if output
+                            .send(Ok(HookServerMessage {
+                                item: Some(hook_server_message::Item::Result(result)),
+                            }))
+                            .await
+                            .is_err()
+                        {
+                            return;
+                        }
+                    }
+                    Err(error) => {
+                        let code = if event.native_event_json.len() > MAX_NATIVE_EVENT_BYTES {
+                            HookRejectionCode::EventTooLarge
+                        } else {
+                            HookRejectionCode::InvalidSchema
+                        };
+                        send_hook_rejection(&output, code, &error.to_string()).await;
+                        return;
+                    }
+                }
+            }
+        });
+        Ok(Response::new(ReceiverStream::new(receiver)))
+    }
+}
+
+async fn send_hook_ack(
+    output: &tokio::sync::mpsc::Sender<Result<HookServerMessage, Status>>,
+    accepted: bool,
+    reason: &str,
+) {
+    let _result = output
+        .send(Ok(HookServerMessage {
+            item: Some(hook_server_message::Item::HelloAck(HookHelloAck {
+                accepted,
+                reason: reason.to_owned(),
+            })),
+        }))
+        .await;
+}
+
+async fn send_hook_rejection(
+    output: &tokio::sync::mpsc::Sender<Result<HookServerMessage, Status>>,
+    code: HookRejectionCode,
+    reason: &str,
+) {
+    let _result = output
+        .send(Ok(HookServerMessage {
+            item: Some(hook_server_message::Item::Rejection(HookRejection {
+                code: code as i32,
+                reason: reason.to_owned(),
+            })),
+        }))
+        .await;
 }
 
 impl CodexHookBrokerProtocol {
@@ -416,139 +514,88 @@ impl CodexHookBrokerProtocol {
         }
     }
 
-    #[cfg(test)]
-    fn serve(&self, stream: &mut UnixStream) -> Result<(), CodexSessionError> {
-        let hello_envelope = Self::read_envelope(stream)?;
-        let hello: HookHello = hello_envelope
-            .decode_typed_payload(KIND_HOOK_HELLO)
-            .context(HookBrokerProtocolSnafu)?;
-        self.serve_after_hello(stream, hello_envelope, hello)
+    fn authenticate(
+        &self,
+        peer: &UnixPeerIdentity,
+        hello: &HookHello,
+    ) -> Result<
+        (
+            CodexLeaseRuntimeEvidence,
+            erebor_runtime_ipc::v1::HookPeerEvidence,
+        ),
+        CodexSessionError,
+    > {
+        if hello.session_id != self.managed_session.session_id() {
+            return InvalidHookEventSnafu {
+                reason: String::from("Codex hook hello session does not match its registration"),
+            }
+            .fail();
+        }
+        if !hello.ticket_id.is_empty() {
+            return InvalidHookEventSnafu {
+                reason: String::from("client-supplied hook tickets are not accepted"),
+            }
+            .fail();
+        }
+        let pid = peer
+            .pid
+            .ok_or_else(|| CodexSessionError::InvalidHookEvent {
+                reason: String::from("Unix peer pid is unavailable"),
+                location: snafu::Location::default(),
+            })?;
+        let observed_peer = LinuxHookPeerInspector::inspect_pid(pid, "")?;
+        ensure!(
+            observed_peer.observed_uid == peer.uid && observed_peer.observed_gid == peer.gid,
+            InvalidHookEventSnafu {
+                reason: String::from("Unix peer credentials changed during hook authentication")
+            }
+        );
+        let runtime = LinuxHookPeerInspector::runtime_evidence(
+            &observed_peer,
+            self.managed_session.profile().executable(),
+        )?;
+        let _ticket = self.managed_session.hook_tickets().authenticate_peer(
+            self.managed_session.session_id(),
+            self.managed_session.profile().id(),
+            observed_peer.clone(),
+            runtime.clone(),
+        )?;
+        Ok((runtime, observed_peer))
     }
 
-    fn serve_after_hello(
+    fn process_event(
         &self,
-        stream: &mut UnixStream,
-        hello_envelope: Envelope,
-        hello: HookHello,
-    ) -> Result<(), CodexSessionError> {
-        if hello.session_id != self.managed_session.session_id() {
-            Self::write_hello_ack(
-                stream,
-                &hello_envelope,
-                false,
-                String::from("Codex hook hello session does not match its registration"),
+        event: &HookEvent,
+        runtime: &CodexLeaseRuntimeEvidence,
+        observed_pid: i64,
+    ) -> Result<HookResult, CodexSessionError> {
+        let event_kind = self.validate_event(event)?;
+        let control = (|| {
+            self.reconciliation
+                .record_authenticated_hook(event_kind, &event.native_event_json)?;
+            self.lease_owner.record_authenticated_hook(
+                event_kind,
+                &event.native_event_json,
+                runtime.clone(),
+                observed_pid,
             )?;
-            return Ok(());
-        }
-        let observed_peer = LinuxHookPeerInspector::inspect(stream, &hello.ticket_id)?;
-        let tickets = self.managed_session.hook_tickets();
-        let ticket = match if hello.ticket_id.is_empty() {
-            tickets.consume_matching_peer(&hello, &observed_peer)
-        } else {
-            tickets.consume(&hello, &observed_peer)
-        } {
-            Ok(ticket) => ticket,
-            Err(error) => {
-                Self::write_hello_ack(stream, &hello_envelope, false, error.to_string())?;
-                return Ok(());
-            }
-        };
-        let Some(runtime) = ticket.runtime_evidence() else {
-            Self::write_hello_ack(
-                stream,
-                &hello_envelope,
-                false,
-                String::from("guard-issued hook ticket is missing profile runtime evidence"),
-            )?;
-            return Ok(());
-        };
-        Self::write_hello_ack(stream, &hello_envelope, true, String::new())?;
-
-        while let Ok(envelope) = Self::read_envelope(stream) {
-            if envelope.message_kind != KIND_HOOK_EVENT {
-                Self::write_rejection(
-                    stream,
-                    &envelope,
-                    HookRejectionCode::InvalidSchema,
-                    "expected a hook event after successful hello",
-                )?;
-                break;
-            }
-            let event: HookEvent = match envelope
-                .decode_typed_payload(KIND_HOOK_EVENT)
-                .context(HookBrokerProtocolSnafu)
-            {
-                Ok(event) => event,
-                Err(error) => {
-                    Self::write_rejection(
-                        stream,
-                        &envelope,
-                        HookRejectionCode::InvalidSchema,
-                        error.to_string(),
-                    )?;
-                    break;
-                }
-            };
-            match self.validate_event(&event) {
-                Ok(event_kind) => {
-                    let control = match (|| {
-                        self.reconciliation
-                            .record_authenticated_hook(event_kind, &event.native_event_json)?;
-                        self.lease_owner.record_authenticated_hook(
-                            event_kind,
-                            &event.native_event_json,
-                            runtime.clone(),
-                            observed_peer.observed_pid,
-                        )?;
-                        let control =
-                            self.execute_agent_control(event_kind, &event.native_event_json)?;
-                        self.publish_child_delivery(event_kind, &event.native_event_json, &runtime)
-                            .map(|()| control)
-                    })() {
-                        Ok(control) => control,
-                        Err(error) => {
-                            warn!(
-                                error;
-                                "rejected authenticated Codex hook event",
-                                session_id = %self.managed_session.session_id(),
-                                hook_event = %event_kind.as_str_name()
-                            );
-                            Self::write_rejection(
-                                stream,
-                                &envelope,
-                                HookRejectionCode::BrokerUnavailable,
-                                error.to_string(),
-                            )?;
-                            break;
-                        }
-                    };
-                    let result = HookResult {
-                        event: event_kind as i32,
-                        accepted: true,
-                        result_json: self.hook_result(event_kind, control)?,
-                    };
-                    let response = Envelope::wrap_message(
-                        envelope.message_id.saturating_add(1),
-                        envelope.message_id,
-                        KIND_HOOK_RESULT,
-                        &result,
-                    )
-                    .context(HookBrokerProtocolSnafu)?;
-                    Self::write_envelope(stream, &response)?;
-                }
-                Err(error) => {
-                    let code = if event.native_event_json.len() > MAX_NATIVE_EVENT_BYTES {
-                        HookRejectionCode::EventTooLarge
-                    } else {
-                        HookRejectionCode::InvalidSchema
-                    };
-                    Self::write_rejection(stream, &envelope, code, error.to_string())?;
-                    break;
-                }
-            }
-        }
-        let _ticket = ticket;
-        Ok(())
+            let control = self.execute_agent_control(event_kind, &event.native_event_json)?;
+            self.publish_child_delivery(event_kind, &event.native_event_json, runtime)
+                .map(|()| control)
+        })()
+        .inspect_err(|error| {
+            warn!(
+                error;
+                "rejected authenticated Codex hook event",
+                session_id = %self.managed_session.session_id(),
+                hook_event = %event_kind.as_str_name()
+            );
+        })?;
+        Ok(HookResult {
+            event: event_kind as i32,
+            accepted: true,
+            result_json: self.hook_result(event_kind, control)?,
+        })
     }
 
     fn hook_result(
@@ -706,64 +753,6 @@ impl CodexHookBrokerProtocol {
         );
         Ok(event_kind)
     }
-
-    fn read_envelope(stream: &mut UnixStream) -> Result<Envelope, CodexSessionError> {
-        let frame = SyncFrameCodec::read_frame(stream).context(HookBrokerProtocolSnafu)?;
-        let envelope: Envelope = frame.decode_payload().context(HookBrokerProtocolSnafu)?;
-        envelope
-            .validate_headers(EnvelopeServiceFamily::Hook)
-            .context(HookBrokerProtocolSnafu)?;
-        Ok(envelope)
-    }
-
-    fn write_hello_ack(
-        stream: &mut UnixStream,
-        request: &Envelope,
-        accepted: bool,
-        reason: String,
-    ) -> Result<(), CodexSessionError> {
-        let ack = HookHelloAck {
-            protocol_version: PROTOCOL_VERSION,
-            accepted,
-            reason,
-        };
-        let response = Envelope::wrap_message(
-            request.message_id.saturating_add(1),
-            request.message_id,
-            KIND_HOOK_HELLO_ACK,
-            &ack,
-        )
-        .context(HookBrokerProtocolSnafu)?;
-        Self::write_envelope(stream, &response)
-    }
-
-    fn write_rejection(
-        stream: &mut UnixStream,
-        request: &Envelope,
-        code: HookRejectionCode,
-        reason: impl Into<String>,
-    ) -> Result<(), CodexSessionError> {
-        let rejection = HookRejection {
-            code: code as i32,
-            reason: reason.into(),
-        };
-        let response = Envelope::wrap_message(
-            request.message_id.saturating_add(1),
-            request.message_id,
-            KIND_HOOK_REJECTION,
-            &rejection,
-        )
-        .context(HookBrokerProtocolSnafu)?;
-        Self::write_envelope(stream, &response)
-    }
-
-    fn write_envelope(
-        stream: &mut UnixStream,
-        envelope: &Envelope,
-    ) -> Result<(), CodexSessionError> {
-        let frame = envelope.into_frame().context(HookBrokerProtocolSnafu)?;
-        SyncFrameCodec::write_frame(stream, &frame).context(HookBrokerProtocolSnafu)
-    }
 }
 
 #[derive(Deserialize)]
@@ -830,32 +819,6 @@ fn package_event(event: erebor_runtime_ipc::v1::HookEventKind) -> CodexHookEvent
 pub(super) struct LinuxHookPeerInspector;
 
 impl LinuxHookPeerInspector {
-    fn inspect(
-        stream: &UnixStream,
-        ticket_id: &str,
-    ) -> Result<erebor_runtime_ipc::v1::HookPeerEvidence, CodexSessionError> {
-        let credentials = rustix::net::sockopt::socket_peercred(stream.as_fd())
-            .map_err(std::io::Error::from)
-            .context(HookBrokerIoSnafu)?;
-        let pid = credentials.pid.as_raw_pid();
-        let process = LinuxHookProcess::inspect(pid)?;
-        Ok(erebor_runtime_ipc::v1::HookPeerEvidence {
-            ticket_id: ticket_id.to_owned(),
-            observed_pid: i64::from(pid),
-            process_start_time_ticks: process.start_time_ticks,
-            executable: process.executable,
-            argv: process.argv,
-            cgroup_inode: process.cgroup_namespace_inode,
-            mount_namespace_inode: process.mount_namespace_inode,
-            stdin: Some(process.stdin),
-            stdout: Some(process.stdout),
-            pidfd_identity: process.start_time_ticks,
-            exec_chain: process.exec_chain,
-            observed_uid: credentials.uid.as_raw(),
-            observed_gid: credentials.gid.as_raw(),
-        })
-    }
-
     pub(super) fn inspect_pid(
         pid: i32,
         ticket_id: &str,
@@ -1063,7 +1026,6 @@ impl LinuxHookProcess {
 #[cfg(test)]
 mod tests {
     use std::{
-        os::unix::net::UnixStream,
         path::PathBuf,
         sync::{Arc, Mutex},
     };
@@ -1087,8 +1049,7 @@ mod tests {
     };
     use crate::{
         agents::codex::{
-            CodexHookClient, CodexInvocationLeaseProfile, CodexManagedSession,
-            CodexScopeContextBinding,
+            CodexInvocationLeaseProfile, CodexManagedSession, CodexScopeContextBinding,
         },
         ChildContextDelivery, ChildContextDeliveryHandler, CodexSessionError, ContextAgentControl,
         ContextAgentControlHandler, ContextAgentControlResult,
@@ -1198,21 +1159,21 @@ mod tests {
     #[test]
     fn inspector_observes_kernel_bound_unix_peer_identity() -> Result<(), Box<dyn std::error::Error>>
     {
-        let (first, second) = UnixStream::pair()?;
-        let peer = match LinuxHookPeerInspector::inspect(&first, "ticket") {
-            Ok(peer) => peer,
-            Err(CodexSessionError::HookBrokerIo { source, .. })
-                if source.kind() == std::io::ErrorKind::PermissionDenied =>
+        let peer =
+            match LinuxHookPeerInspector::inspect_pid(i32::try_from(std::process::id())?, "ticket")
             {
-                return Ok(());
-            }
-            Err(error) => return Err(error.into()),
-        };
+                Ok(peer) => peer,
+                Err(CodexSessionError::HookBrokerIo { source, .. })
+                    if source.kind() == std::io::ErrorKind::PermissionDenied =>
+                {
+                    return Ok(());
+                }
+                Err(error) => return Err(error.into()),
+            };
         assert_eq!(peer.ticket_id, "ticket");
         assert_eq!(peer.observed_pid, i64::from(std::process::id()));
         assert!(!peer.executable.is_empty());
         assert!(!peer.exec_chain.is_empty());
-        drop(second);
         Ok(())
     }
 
@@ -1452,131 +1413,6 @@ mod tests {
         assert_eq!(runtime.pid, 100);
         assert_eq!(runtime.start_time_ticks, 10);
         assert_eq!(runtime.executable, "/opt/codex/codex");
-        Ok(())
-    }
-
-    #[test]
-    fn managed_hook_client_requires_a_guard_issued_kernel_peer_ticket(
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        let (mut broker_stream, mut hook_stream) = UnixStream::pair()?;
-        let observed_peer = match LinuxHookPeerInspector::inspect(&broker_stream, "") {
-            Ok(peer) => peer,
-            Err(CodexSessionError::HookBrokerIo { source, .. })
-                if source.kind() == std::io::ErrorKind::PermissionDenied =>
-            {
-                return Ok(());
-            }
-            Err(error) => return Err(error.into()),
-        };
-        let native_event_json = SESSION_START_EVENT.to_vec();
-        let executable = observed_peer
-            .exec_chain
-            .first()
-            .ok_or("test peer omitted its parent executable")?
-            .clone();
-        let session = session(executable)?;
-        let _ticket = session.issue_guarded_hook_ticket(observed_peer)?;
-        let broker_session = session.clone();
-        let frozen_context = String::from(
-            r#"{"schema_version":1,"source":"erebor_frozen_codex_prompt_projection","prompts":[{"prompt":"selected"}]}"#,
-        );
-        let expected_context = frozen_context.clone();
-        let worker = std::thread::spawn(move || {
-            CodexHookBrokerProtocol::new(
-                broker_session,
-                Arc::new(CodexPromptReconciliation::default()),
-                test_lease_owner(),
-                Some(frozen_context),
-                child_deliveries(),
-                agent_controls(),
-            )
-            .serve(&mut broker_stream)
-        });
-
-        let result = CodexHookClient::submit_on_stream_for_session(
-            &mut hook_stream,
-            "session-test",
-            HookEvent {
-                event: HookEventKind::SessionStart as i32,
-                native_event_json,
-            },
-        )?;
-        assert!(result.accepted);
-        let result_json: serde_json::Value = serde_json::from_slice(&result.result_json)?;
-        assert_eq!(
-            result_json
-                .pointer("/hookSpecificOutput/hookEventName")
-                .and_then(serde_json::Value::as_str),
-            Some("SessionStart")
-        );
-        assert_eq!(
-            result_json
-                .pointer("/hookSpecificOutput/additionalContext")
-                .and_then(serde_json::Value::as_str),
-            Some(expected_context.as_str())
-        );
-        drop(hook_stream);
-        let worker_result = worker
-            .join()
-            .map_err(|_panic| std::io::Error::other("broker worker panicked"))?;
-        worker_result?;
-        Ok(())
-    }
-
-    #[test]
-    fn broker_rejects_a_ticket_without_guard_captured_runtime(
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        let (mut broker_stream, mut hook_stream) = UnixStream::pair()?;
-        let observed_peer = match LinuxHookPeerInspector::inspect(&broker_stream, "") {
-            Ok(peer) => peer,
-            Err(CodexSessionError::HookBrokerIo { source, .. })
-                if source.kind() == std::io::ErrorKind::PermissionDenied =>
-            {
-                return Ok(());
-            }
-            Err(error) => return Err(error.into()),
-        };
-        let native_event_json = SESSION_START_EVENT.to_vec();
-        let session = session("/opt/codex/codex")?;
-        let _ticket = session.issue_hook_ticket(observed_peer)?;
-        let broker_session = session.clone();
-        let worker = std::thread::spawn(move || {
-            CodexHookBrokerProtocol::new(
-                broker_session,
-                Arc::new(CodexPromptReconciliation::default()),
-                test_lease_owner(),
-                None,
-                child_deliveries(),
-                agent_controls(),
-            )
-            .serve(&mut broker_stream)
-        });
-
-        let error = match CodexHookClient::submit_on_stream_for_session(
-            &mut hook_stream,
-            "session-test",
-            HookEvent {
-                event: HookEventKind::SessionStart as i32,
-                native_event_json,
-            },
-        ) {
-            Ok(_result) => {
-                return Err(std::io::Error::other(
-                    "the broker accepted a ticket without guard-time runtime evidence",
-                )
-                .into());
-            }
-            Err(error) => error,
-        };
-        assert!(matches!(
-            error,
-            CodexSessionError::HookRejected { stage, .. } if stage == "hello"
-        ));
-        drop(hook_stream);
-        let worker_result = worker
-            .join()
-            .map_err(|_panic| std::io::Error::other("broker worker panicked"))?;
-        worker_result?;
         Ok(())
     }
 

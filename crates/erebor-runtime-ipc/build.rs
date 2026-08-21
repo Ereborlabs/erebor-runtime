@@ -15,7 +15,10 @@ fn main() -> Result<(), io::Error> {
     println!("cargo:rustc-check-cfg=cfg(erebor_runtime_ipc_contract_tests)");
     println!("cargo:rustc-cfg=erebor_runtime_ipc_contract_tests");
 
-    prost_build::Config::new().compile_protos(&protos, &[PathBuf::from("proto")])?;
+    tonic_build::configure()
+        .build_client(true)
+        .build_server(true)
+        .compile_protos(&protos, &[PathBuf::from("proto")])?;
 
     Ok(())
 }

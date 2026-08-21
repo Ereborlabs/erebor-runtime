@@ -7,7 +7,6 @@ use erebor_runtime_policy::PolicyError;
 use erebor_runtime_terminal::TerminalSurfaceError;
 use snafu::{Location, Snafu};
 
-use super::RuntimeInterceptionBrokerError;
 use crate::agents::codex::CodexSessionError;
 
 #[derive(Debug, Snafu)]
@@ -52,18 +51,6 @@ pub enum SessionExecutionError {
         #[snafu(implicit)]
         location: Location,
     },
-    #[snafu(display("Linux process guard I/O failed: {source}"))]
-    GuardIo {
-        source: io::Error,
-        #[snafu(implicit)]
-        location: Location,
-    },
-    #[snafu(display("Linux process guard config is invalid: {reason}"))]
-    GuardConfig {
-        reason: String,
-        #[snafu(implicit)]
-        location: Location,
-    },
     #[snafu(display("{source}"))]
     SessionRegistry {
         source: SessionRegistryError,
@@ -74,12 +61,6 @@ pub enum SessionExecutionError {
     FilesystemSurface {
         #[snafu(source(from(FilesystemError, Box::new)))]
         source: Box<FilesystemError>,
-        #[snafu(implicit)]
-        location: Location,
-    },
-    #[snafu(display("{source}"))]
-    RuntimeInterceptionBroker {
-        source: RuntimeInterceptionBrokerError,
         #[snafu(implicit)]
         location: Location,
     },
@@ -130,11 +111,8 @@ impl ErrorExt for SessionExecutionError {
             Self::Runtime { source, .. } => source.status_code(),
             Self::TerminalSurface { source, .. } => source.status_code(),
             Self::DiagnosticFailed { .. } => StatusCode::PolicyDenied,
-            Self::GuardIo { .. } => StatusCode::External,
-            Self::GuardConfig { .. } => StatusCode::InvalidArguments,
             Self::SessionRegistry { source, .. } => source.status_code(),
             Self::FilesystemSurface { source, .. } => source.status_code(),
-            Self::RuntimeInterceptionBroker { source, .. } => source.status_code(),
             Self::CodexSession { source, .. } => source.status_code(),
             Self::ReadProcessTable { .. } => StatusCode::External,
             Self::InvalidAdoptTarget { .. } => StatusCode::InvalidArguments,
@@ -146,18 +124,16 @@ impl ErrorExt for SessionExecutionError {
     fn retry_hint(&self) -> RetryHint {
         match self {
             Self::InvalidConfig { source, .. } => source.retry_hint(),
-            Self::ReadPolicy { source, .. }
-            | Self::GuardIo { source, .. }
-            | Self::ReadProcessTable { source, .. } => RetryHint::from_io_error(source),
+            Self::ReadPolicy { source, .. } | Self::ReadProcessTable { source, .. } => {
+                RetryHint::from_io_error(source)
+            }
             Self::InvalidPolicy { source, .. } => source.retry_hint(),
             Self::Runtime { source, .. } => source.retry_hint(),
             Self::TerminalSurface { source, .. } => source.retry_hint(),
             Self::SessionRegistry { source, .. } => source.retry_hint(),
             Self::FilesystemSurface { source, .. } => source.retry_hint(),
-            Self::RuntimeInterceptionBroker { source, .. } => source.retry_hint(),
             Self::CodexSession { source, .. } => source.retry_hint(),
             Self::DiagnosticFailed { .. }
-            | Self::GuardConfig { .. }
             | Self::InvalidAdoptTarget { .. }
             | Self::AdoptMatchNotFound { .. }
             | Self::AdoptMatchAmbiguous { .. } => RetryHint::NonRetryable,
@@ -173,21 +149,14 @@ impl ErrorExt for SessionExecutionError {
 mod tests {
     use std::{io, path::PathBuf};
 
-    use erebor_runtime_error::{ErrorExt, RetryHint, StatusCode};
+    use erebor_runtime_error::{ErrorExt, StatusCode};
     use erebor_runtime_filesystem::FilesystemError;
     use snafu::Location;
 
     use super::SessionExecutionError;
 
     #[test]
-    fn session_execution_statuses_cover_guard_adoption_and_denials() {
-        let guard_io = SessionExecutionError::GuardIo {
-            source: io::Error::from(io::ErrorKind::TimedOut),
-            location: Location::default(),
-        };
-        assert_eq!(guard_io.status_code(), StatusCode::External);
-        assert_eq!(guard_io.retry_hint(), RetryHint::Retryable);
-
+    fn session_execution_statuses_cover_adoption_and_denials() {
         let denied = SessionExecutionError::DiagnosticFailed {
             reason: String::from("raw CDP process launch is denied"),
             location: Location::default(),

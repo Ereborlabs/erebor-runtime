@@ -4,7 +4,7 @@ use erebor_runtime_core::RuntimeError;
 use erebor_runtime_error::{ErrorExt, RetryHint, StatusCode};
 use snafu::{Location, Snafu};
 
-use super::{RuntimeInterceptionBrokerError, SessionOutputError, SessionRepositoryError};
+use super::{SessionOutputError, SessionRepositoryError};
 
 pub type SessionPathResolverError = Box<dyn Error + Send + Sync + 'static>;
 
@@ -53,12 +53,6 @@ pub enum SessionManagerError {
         action: &'static str,
         path: PathBuf,
         source: io::Error,
-        #[snafu(implicit)]
-        location: Location,
-    },
-    #[snafu(display("session runtime guard operation failed: {source}"))]
-    RuntimeGuard {
-        source: RuntimeInterceptionBrokerError,
         #[snafu(implicit)]
         location: Location,
     },
@@ -124,7 +118,6 @@ impl ErrorExt for SessionManagerError {
             Self::Runner { source, .. } => source.status_code(),
             Self::RunnerUnavailable { .. } => StatusCode::Unavailable,
             Self::RuntimeIo { .. } | Self::PathResolution { .. } => StatusCode::External,
-            Self::RuntimeGuard { source, .. } => source.status_code(),
             Self::RuntimeFilesystem { source, .. } => source.status_code(),
             Self::Output { source, .. } => source.status_code(),
             Self::InvalidRuntime { .. } | Self::InvalidOperation { .. } => {
@@ -144,7 +137,6 @@ impl ErrorExt for SessionManagerError {
             Self::Runner { source, .. } => source.retry_hint(),
             Self::RunnerUnavailable { .. } | Self::ActiveHandleLock { .. } => RetryHint::Retryable,
             Self::RuntimeIo { source, .. } => RetryHint::from_io_error(source),
-            Self::RuntimeGuard { source, .. } => source.retry_hint(),
             Self::RuntimeFilesystem { source, .. } => source.retry_hint(),
             Self::Output { source, .. } => source.retry_hint(),
             Self::PathResolution { .. }

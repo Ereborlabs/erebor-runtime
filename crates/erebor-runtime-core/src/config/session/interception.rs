@@ -9,10 +9,9 @@ use crate::RuntimeConfigError;
 use super::super::{RuntimeConfig, SessionSurfaceKind, SessionSurfaceLayers};
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct SessionInterceptionLayerConfig {
     pub enabled: bool,
-    pub backend: SessionInterceptionBackendKind,
     pub operations: Vec<SessionInterceptionOperation>,
 }
 
@@ -20,7 +19,6 @@ impl Default for SessionInterceptionLayerConfig {
     fn default() -> Self {
         Self {
             enabled: false,
-            backend: SessionInterceptionBackendKind::default(),
             operations: vec![SessionInterceptionOperation::ProcessExec],
         }
     }
@@ -29,45 +27,15 @@ impl Default for SessionInterceptionLayerConfig {
 impl SessionInterceptionLayerConfig {
     pub(super) fn validate(&self) -> Result<(), RuntimeConfigError> {
         ensure!(
-            !(self.enabled && self.operations.is_empty()),
+            !self.enabled,
             InvalidSessionInterceptionConfigSnafu {
                 reason: String::from(
-                    "session interception operations cannot be empty when interception is enabled"
+                    "session interception has no supported backend; remove the enabled setting"
                 )
             }
         );
 
         Ok(())
-    }
-}
-
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum SessionInterceptionBackendKind {
-    #[default]
-    #[serde(alias = "linux-ptrace")]
-    LinuxPtrace,
-}
-
-impl SessionInterceptionBackendKind {
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::LinuxPtrace => "linux_ptrace",
-        }
-    }
-
-    #[must_use]
-    const fn supports_operation(self, operation: SessionInterceptionOperation) -> bool {
-        match self {
-            Self::LinuxPtrace => matches!(
-                operation,
-                SessionInterceptionOperation::ProcessExec
-                    | SessionInterceptionOperation::FileOpen
-                    | SessionInterceptionOperation::FileRead
-                    | SessionInterceptionOperation::FileMutation
-            ),
-        }
     }
 }
 
@@ -97,7 +65,6 @@ impl SessionInterceptionOperation {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SessionInterceptionConfig {
     enabled: bool,
-    backend: SessionInterceptionBackendKind,
     operations: Vec<SessionInterceptionOperation>,
 }
 
@@ -106,7 +73,6 @@ impl SessionInterceptionConfig {
     fn disabled() -> Self {
         Self {
             enabled: false,
-            backend: SessionInterceptionBackendKind::LinuxPtrace,
             operations: Vec::new(),
         }
     }
@@ -114,11 +80,6 @@ impl SessionInterceptionConfig {
     #[must_use]
     pub const fn enabled(&self) -> bool {
         self.enabled
-    }
-
-    #[must_use]
-    pub const fn backend(&self) -> SessionInterceptionBackendKind {
-        self.backend
     }
 
     #[must_use]
@@ -132,7 +93,8 @@ impl SessionInterceptionConfig {
 
     #[must_use]
     pub fn operation_supported(&self, operation: SessionInterceptionOperation) -> bool {
-        self.operation_enabled(operation) && self.backend.supports_operation(operation)
+        let _operation_enabled = self.operation_enabled(operation);
+        false
     }
 
     pub(in crate::config) fn from_runtime_config(config: &RuntimeConfig) -> Self {
@@ -140,7 +102,6 @@ impl SessionInterceptionConfig {
         if explicit.enabled {
             return Self {
                 enabled: true,
-                backend: explicit.backend,
                 operations: SessionInterceptionOperations::dedupe(explicit.operations.clone()),
             };
         }

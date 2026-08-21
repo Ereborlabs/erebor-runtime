@@ -166,7 +166,7 @@ pub(super) fn overlay_config(
     session_project: &Path,
     diagnostic_name: &str,
     shell_command: &str,
-    empty_policy_only: bool,
+    _empty_policy_only: bool,
 ) -> Result<RuntimeConfig, Box<dyn std::error::Error>> {
     overlay_config_from_request(OverlayConfigRequest {
         policy_path,
@@ -175,7 +175,6 @@ pub(super) fn overlay_config(
         session_project,
         diagnostic_name,
         shell_command,
-        empty_policy_only,
         promote_on_session_finish: false,
         preimage_size_limit_bytes: 104_857_600,
         preimage_backend: "ostree_bytes",
@@ -197,7 +196,6 @@ pub(super) fn overlay_promoting_config(
         session_project,
         diagnostic_name,
         shell_command,
-        empty_policy_only: true,
         promote_on_session_finish: true,
         preimage_size_limit_bytes: 104_857_600,
         preimage_backend: "ostree_bytes",
@@ -225,7 +223,6 @@ pub(super) fn overlay_promoting_config_with_revert(
         session_project: request.session_project,
         diagnostic_name: request.diagnostic_name,
         shell_command: request.shell_command,
-        empty_policy_only: true,
         promote_on_session_finish: true,
         preimage_size_limit_bytes: request.preimage_size_limit_bytes,
         preimage_backend: request.preimage_backend,
@@ -239,7 +236,6 @@ struct OverlayConfigRequest<'a> {
     session_project: &'a Path,
     diagnostic_name: &'a str,
     shell_command: &'a str,
-    empty_policy_only: bool,
     promote_on_session_finish: bool,
     preimage_size_limit_bytes: u64,
     preimage_backend: &'a str,
@@ -248,11 +244,6 @@ struct OverlayConfigRequest<'a> {
 fn overlay_config_from_request(
     request: OverlayConfigRequest<'_>,
 ) -> Result<RuntimeConfig, Box<dyn std::error::Error>> {
-    let interception = if request.empty_policy_only {
-        r#""operations": ["process_exec", "file_open", "file_read", "file_mutation"]"#
-    } else {
-        r#""operations": ["process_exec", "file_mutation"]"#
-    };
     Ok(RuntimeConfig::from_json_str(&format!(
         r#"{{
           "policies": ["{}"],
@@ -266,12 +257,7 @@ fn overlay_config_from_request(
                 "command": ["sh", "-lc", "{}"]
               }}
             ],
-            "runner": {{ "kind": "linux_host" }},
-            "interception": {{
-              "enabled": true,
-              "backend": "linux_ptrace",
-              {}
-            }}
+            "runner": {{ "kind": "linux_host" }}
           }},
           "surfaces": {{
             "terminal": {{ "enabled": true }},
@@ -299,7 +285,6 @@ fn overlay_config_from_request(
         request.workspace.display(),
         request.diagnostic_name,
         json_escape(request.shell_command),
-        interception,
         request.host_project.display(),
         request.session_project.display(),
         request.promote_on_session_finish,

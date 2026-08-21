@@ -60,7 +60,7 @@ fn linux_host_command_plan_relaunches_local_command_with_session_environment(
 }
 
 #[test]
-fn linux_host_command_plan_can_wrap_command_with_process_guard() -> Result<(), RuntimeConfigError> {
+fn linux_host_command_plan_can_wrap_command() -> Result<(), RuntimeConfigError> {
     let config = RuntimeConfig::from_json_str(
         r#"
             {
@@ -80,7 +80,7 @@ fn linux_host_command_plan_can_wrap_command_with_process_guard() -> Result<(), R
     let plan = SessionRunPlan::from_config(
         &config,
         SessionRunnerKind::LinuxHost,
-        SessionId::new("session-guard"),
+        SessionId::new("session-wrapper"),
         vec![
             String::from("python3"),
             String::from("-c"),
@@ -88,8 +88,8 @@ fn linux_host_command_plan_can_wrap_command_with_process_guard() -> Result<(), R
         ],
     )?;
     let mut options = LinuxHostSessionCommandOptions::default();
-    options.add_wrapper_program("/tmp/erebor-linux-process-guard");
-    options.add_environment("EREBOR_PROCESS_GUARD", "linux-ptrace");
+    options.add_wrapper_program("/tmp/erebor-session-wrapper");
+    options.add_environment("EREBOR_SESSION_WRAPPER", "enabled");
 
     let launch = LinuxHostSessionCommandPlan::from_session_run_plan_with_environment_and_options(
         &plan,
@@ -97,18 +97,17 @@ fn linux_host_command_plan_can_wrap_command_with_process_guard() -> Result<(), R
         &options,
     );
 
-    assert_eq!(launch.program(), "/tmp/erebor-linux-process-guard");
+    assert_eq!(launch.program(), "/tmp/erebor-session-wrapper");
     assert_eq!(launch.args(), &["python3", "-c", "print('hello')"]);
     assert!(launch.environment().contains(&(
-        String::from("EREBOR_PROCESS_GUARD"),
-        String::from("linux-ptrace")
+        String::from("EREBOR_SESSION_WRAPPER"),
+        String::from("enabled")
     )));
     Ok(())
 }
 
 #[test]
-fn linux_host_command_plan_can_stack_outer_wrapper_before_process_guard(
-) -> Result<(), RuntimeConfigError> {
+fn linux_host_command_plan_can_stack_outer_and_inner_wrappers() -> Result<(), RuntimeConfigError> {
     let config = RuntimeConfig::from_json_str(
         r#"
             {
@@ -136,7 +135,7 @@ fn linux_host_command_plan_can_stack_outer_wrapper_before_process_guard(
         ],
     )?;
     let mut options = LinuxHostSessionCommandOptions::default();
-    options.add_wrapper_program("/tmp/erebor-linux-process-guard");
+    options.add_wrapper_program("/tmp/erebor-session-wrapper");
     options.add_outer_wrapper_program("/tmp/erebor-filesystem-overlay");
 
     let launch = LinuxHostSessionCommandPlan::from_session_run_plan_with_environment_and_options(
@@ -149,7 +148,7 @@ fn linux_host_command_plan_can_stack_outer_wrapper_before_process_guard(
     assert_eq!(
         launch.args(),
         &[
-            "/tmp/erebor-linux-process-guard",
+            "/tmp/erebor-session-wrapper",
             "python3",
             "-c",
             "print('hello')"
@@ -203,7 +202,7 @@ fn linux_host_command_plan_removes_inherited_shell_startup_inputs() -> Result<()
 }
 
 #[test]
-fn linux_host_adopt_plan_sets_guard_pid_environment() -> Result<(), RuntimeConfigError> {
+fn linux_host_adopt_plan_preserves_target_working_directory() -> Result<(), RuntimeConfigError> {
     let config = RuntimeConfig::from_json_str(
         r#"
             {
@@ -229,8 +228,7 @@ fn linux_host_adopt_plan_sets_guard_pid_environment() -> Result<(), RuntimeConfi
         4242,
     )?;
     let mut options = LinuxHostSessionCommandOptions::default();
-    options.add_wrapper_program("/tmp/erebor-linux-process-guard");
-    options.add_environment("EREBOR_PROCESS_GUARD", "linux-ptrace");
+    options.add_wrapper_program("/tmp/erebor-session-wrapper");
 
     let launch = LinuxHostSessionCommandPlan::from_session_adopt_plan_with_environment_and_options(
         &plan,
@@ -238,15 +236,12 @@ fn linux_host_adopt_plan_sets_guard_pid_environment() -> Result<(), RuntimeConfi
         &options,
     );
 
-    assert_eq!(launch.program(), "/tmp/erebor-linux-process-guard");
+    assert_eq!(launch.program(), "/tmp/erebor-session-wrapper");
     assert!(launch.args().is_empty());
     assert_eq!(
         launch.current_dir(),
         Some(Path::new("/tmp/erebor-workspace"))
     );
-    assert!(launch
-        .environment()
-        .contains(&(String::from("EREBOR_GUARD_ADOPT_PID"), String::from("4242"))));
     assert!(launch.environment().contains(&(
         String::from("EREBOR_SESSION_RUNNER"),
         String::from("linux-host")

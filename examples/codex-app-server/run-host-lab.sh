@@ -26,7 +26,6 @@ for binary in \
   erebord \
   erebor-path-broker \
   erebor-linux-session-controller \
-  erebor-linux-process-guard \
   codex-v1-fixture; do
   if [[ ! -x "$target_dir/$binary" ]]; then
     printf 'missing %s; first run ./examples/codex-app-server/build-host-lab.sh\n' "$target_dir/$binary" >&2
@@ -61,7 +60,6 @@ stage_root_binary erebor
 stage_root_binary erebord
 stage_root_binary erebor-path-broker
 stage_root_binary erebor-linux-session-controller
-stage_root_binary erebor-linux-process-guard
 stage_root_binary codex-v1-fixture
 install -o "$caller_uid" -g "$caller_gid" -m 0755 \
   "$target_dir/codex-v1-fixture" "$lab_root/caller/codex-v1-fixture"
@@ -79,7 +77,6 @@ fixture_output="$("$lab_root/bin/codex-v1-fixture" configure \
   --owner-uid "$caller_uid" \
   --linux-runner-containment direct \
   --linux-runner-controller "$lab_root/bin/erebor-linux-session-controller" \
-  --linux-process-guard "$lab_root/bin/erebor-linux-process-guard" \
   --descriptor-broker "$lab_root/bin/erebor-path-broker")"
 package_name="$(sed -n 's/^package_name=//p' <<<"$fixture_output")"
 fixture_policy_path="$(sed -n 's/^fixture_policy_path=//p' <<<"$fixture_output")"

@@ -38,7 +38,6 @@ struct ConfigureOptions {
     managed_hook: PathBuf,
     linux_runner_containment: String,
     linux_runner_controller: Option<PathBuf>,
-    linux_process_guard: Option<PathBuf>,
     descriptor_broker: Option<PathBuf>,
     systemd_run: Option<PathBuf>,
 }
@@ -53,7 +52,6 @@ impl ConfigureOptions {
         let mut managed_hook = None;
         let mut linux_runner_containment = String::from("direct");
         let mut linux_runner_controller = None;
-        let mut linux_process_guard = None;
         let mut descriptor_broker = None;
         let mut systemd_run = None;
         let mut index = 0;
@@ -80,9 +78,6 @@ impl ConfigureOptions {
                 "--linux-runner-controller" => {
                     linux_runner_controller = Some(absolute_path(option, value)?);
                 }
-                "--linux-process-guard" => {
-                    linux_process_guard = Some(absolute_path(option, value)?);
-                }
                 "--descriptor-broker" => {
                     descriptor_broker = Some(absolute_path(option, value)?);
                 }
@@ -100,7 +95,6 @@ impl ConfigureOptions {
             managed_hook: managed_hook.ok_or("--managed-hook is required")?,
             linux_runner_containment,
             linux_runner_controller,
-            linux_process_guard,
             descriptor_broker,
             systemd_run,
         })
@@ -146,7 +140,6 @@ impl ConfigureOptions {
             "linux_runner": {
                 "containment": self.linux_runner_containment,
                 "controller_path": self.linux_runner_controller,
-                "process_guard_path": self.linux_process_guard,
                 "descriptor_broker_path": self.descriptor_broker,
                 "systemd_run_path": self.systemd_run,
             },

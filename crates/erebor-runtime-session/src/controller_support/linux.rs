@@ -12,6 +12,8 @@ use std::{
 
 #[path = "linux/prepared.rs"]
 mod prepared;
+#[path = "linux/privileges.rs"]
+mod privileges;
 
 use erebor_runtime_core::{
     ActiveSessionSignal, FilesystemProjectionTarget, PreparedWritableFilesystemView, SafePathKind,
@@ -79,9 +81,15 @@ impl LinuxWorkload {
         let private_namespace = prepare_private_namespace(handoff, &prepared)?;
         let admitted_command =
             prepared.admitted_command(handoff, private_namespace.executable_path.as_deref());
-        let mut command = Command::new(&handoff.process_guard_path);
+        let (program, arguments) = admitted_command.split_first().ok_or_else(|| {
+            SessionControllerError::InvalidHandoff {
+                reason: String::from("admitted Linux command is empty"),
+                location: snafu::Location::default(),
+            }
+        })?;
+        let mut command = Command::new(program);
         command
-            .args(&admitted_command)
+            .args(arguments)
             .env_clear()
             .envs(handoff.spec.environment().iter().cloned())
             .envs(private_namespace.runtime_environment)
@@ -89,49 +97,29 @@ impl LinuxWorkload {
             .env("EREBOR_SESSION_ID", handoff.spec.session_id().as_str())
             .env("EREBOR_ACTOR_ID", "agent")
             .env("EREBOR_SESSION_RUNNER", "linux_host")
-            .env("EREBOR_TARGET_UID", handoff.spec.owner().uid().to_string())
-            .env("EREBOR_TARGET_GID", handoff.spec.owner().gid().to_string())
-            .env(
-                "EREBOR_TARGET_SUPPLEMENTARY_GROUPS",
-                handoff
-                    .spec
-                    .workload_privileges()
-                    .supplementary_groups()
-                    .iter()
-                    .map(u32::to_string)
-                    .collect::<Vec<_>>()
-                    .join(","),
-            )
-            .env(
-                "EREBOR_TARGET_UMASK",
-                handoff.spec.workload_privileges().umask().to_string(),
-            )
-            .env(
-                "EREBOR_TARGET_MAX_OPEN_FILES",
-                handoff
-                    .spec
-                    .workload_privileges()
-                    .maximum_open_files()
-                    .to_string(),
-            )
-            .env(
-                "EREBOR_TARGET_MAX_PROCESSES",
-                handoff
-                    .spec
-                    .workload_privileges()
-                    .maximum_processes()
-                    .to_string(),
-            )
-            .env(
-                "EREBOR_TARGET_MAX_CORE_BYTES",
-                handoff
-                    .spec
-                    .workload_privileges()
-                    .maximum_core_bytes()
-                    .to_string(),
-            )
             .current_dir(private_namespace.workspace_path)
             .env("EREBOR_TERMINAL_TTY", handoff.spec.tty().to_string());
+        let privileges = privileges::WorkloadPrivileges {
+            uid: handoff.spec.owner().uid(),
+            gid: handoff.spec.owner().gid(),
+            supplementary_groups: handoff
+                .spec
+                .workload_privileges()
+                .supplementary_groups()
+                .to_vec(),
+            mask: handoff.spec.workload_privileges().umask(),
+            maximum_open_files: handoff.spec.workload_privileges().maximum_open_files(),
+            maximum_processes: handoff.spec.workload_privileges().maximum_processes(),
+            maximum_core_bytes: handoff.spec.workload_privileges().maximum_core_bytes(),
+        };
+        privileges
+            .apply()
+            .map_err(|source| SessionControllerError::Io {
+                action: "applying Linux workload privileges",
+                path: PathBuf::from(program),
+                source,
+                location: snafu::Location::default(),
+            })?;
         let (mut input, controlling_terminal) = if handoff.spec.tty() {
             setsid().map_err(|source| SessionControllerError::Io {
                 action: "creating Linux pseudoterminal session",
@@ -206,8 +194,8 @@ impl LinuxWorkload {
         let mut child = command
             .spawn()
             .map_err(|source| SessionControllerError::Io {
-                action: "starting Linux process guard",
-                path: handoff.process_guard_path.clone(),
+                action: "starting Linux workload",
+                path: PathBuf::from(program),
                 source,
                 location: snafu::Location::default(),
             })?;
@@ -216,7 +204,7 @@ impl LinuxWorkload {
         }
         let pid = Pid::from_raw(child.id() as i32).ok_or_else(|| {
             SessionControllerError::InvalidHandoff {
-                reason: String::from("process guard returned an invalid pid"),
+                reason: String::from("Linux workload returned an invalid pid"),
                 location: snafu::Location::default(),
             }
         })?;
@@ -396,8 +384,8 @@ impl LinuxWorkload {
             .child
             .try_wait()
             .map_err(|source| SessionControllerError::Io {
-                action: "observing Linux process guard",
-                path: std::path::PathBuf::from("<process-guard>"),
+                action: "observing Linux workload",
+                path: std::path::PathBuf::from("<workload>"),
                 source,
                 location: snafu::Location::default(),
             })?
@@ -524,29 +512,6 @@ fn prepare_private_namespace(
 
     hide_caller_home_for_session_view(handoff)?;
 
-    let guard_host_path = environment_value(
-        &handoff.runtime_environment,
-        "EREBOR_RUNTIME_INTERCEPTION_PATH",
-    );
-    let projection_source = guard_host_path
-        .is_some()
-        .then(|| handoff.evidence_path.join("runtime-guard-projection.sock"));
-    if let (Some(source), Some(target)) = (guard_host_path.as_ref(), projection_source.as_ref()) {
-        File::create(target).map_err(|source_error| SessionControllerError::Io {
-            action: "creating private runtime guard projection",
-            path: target.clone(),
-            source: source_error,
-            location: snafu::Location::default(),
-        })?;
-        mount_bind(Path::new(source), target)
-            .map_err(std::io::Error::from)
-            .map_err(|source_error| SessionControllerError::Io {
-                action: "holding runtime guard socket before hiding host runtime",
-                path: target.clone(),
-                source: source_error,
-                location: snafu::Location::default(),
-            })?;
-    }
     let endpoint_projections = hold_endpoint_projections(handoff)?;
     let filesystem_projections = hold_filesystem_projections(handoff)?;
     let private_state_projection = hold_private_state_projection(handoff)?;
@@ -589,23 +554,6 @@ fn prepare_private_namespace(
 
     let private_executable_path = project_admitted_executable(held_admitted_executable.as_deref())?;
 
-    let private_guard = PathBuf::from("/run/erebor/runtime-interception.sock");
-    if let Some(source) = projection_source {
-        File::create(&private_guard).map_err(|source_error| SessionControllerError::Io {
-            action: "creating private runtime guard endpoint",
-            path: private_guard.clone(),
-            source: source_error,
-            location: snafu::Location::default(),
-        })?;
-        mount_bind(&source, &private_guard)
-            .map_err(std::io::Error::from)
-            .map_err(|source_error| SessionControllerError::Io {
-                action: "projecting only the admitted runtime guard endpoint",
-                path: private_guard.clone(),
-                source: source_error,
-                location: snafu::Location::default(),
-            })?;
-    }
     project_endpoints(&endpoint_projections)?;
     install_session_overlay_projection_roots(handoff, &filesystem_projections)?;
     project_filesystems(&filesystem_projections)?;
@@ -625,17 +573,7 @@ fn prepare_private_namespace(
     if let Some(projection) = private_state_projection.as_ref() {
         project_private_state(projection)?;
     }
-    let mut environment = handoff
-        .runtime_environment
-        .iter()
-        .map(|(key, value)| {
-            if key == "EREBOR_RUNTIME_INTERCEPTION_PATH" {
-                (key.clone(), private_guard.display().to_string())
-            } else {
-                (key.clone(), value.clone())
-            }
-        })
-        .collect::<Vec<_>>();
+    let mut environment = handoff.runtime_environment.clone();
     if let Some(projection) = private_state_projection {
         environment.push((
             String::from("CODEX_HOME"),
@@ -1655,13 +1593,6 @@ fn create_private_projection_parent(
         })?;
     }
     Ok(())
-}
-
-fn environment_value(environment: &[(String, String)], key: &str) -> Option<String> {
-    environment
-        .iter()
-        .find(|(candidate, _value)| candidate == key)
-        .map(|(_key, value)| value.clone())
 }
 
 #[cfg(test)]

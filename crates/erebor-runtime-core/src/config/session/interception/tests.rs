@@ -26,7 +26,8 @@ fn loads_config_with_multiple_session_surfaces() -> Result<(), RuntimeConfigErro
 }
 
 #[test]
-fn session_interception_is_explicit_runtime_config() -> Result<(), RuntimeConfigError> {
+fn removed_session_interception_is_disabled_and_stale_configuration_fails(
+) -> Result<(), RuntimeConfigError> {
     let default_config = RuntimeConfig::from_json_str(
         r#"
             {
@@ -42,7 +43,7 @@ fn session_interception_is_explicit_runtime_config() -> Result<(), RuntimeConfig
     assert!(!default_config.session_interception().enabled());
     assert!(!default_plan.interception().enabled());
 
-    let guarded_config = RuntimeConfig::from_json_str(
+    let stale = RuntimeConfig::from_json_str(
         r#"
             {
               "policies": ["policies/browser.json"],
@@ -64,52 +65,15 @@ fn session_interception_is_explicit_runtime_config() -> Result<(), RuntimeConfig
               }
             }
             "#,
-    )?;
-    let guarded_plan = guarded_config.surface_start_plan()?;
-    let interception = guarded_plan.interception();
-    let capabilities = guarded_config.session_interception_capabilities();
-
-    assert!(interception.enabled());
-    assert_eq!(
-        interception.backend(),
-        SessionInterceptionBackendKind::LinuxPtrace
     );
-    assert_eq!(
-        interception.operations(),
-        &[
-            SessionInterceptionOperation::ProcessExec,
-            SessionInterceptionOperation::FileRead,
-            SessionInterceptionOperation::SocketConnect
-        ]
-    );
-    assert_eq!(capabilities.operations().len(), 3);
-    assert!(capabilities
-        .operations()
-        .iter()
-        .any(
-            |operation| operation.operation() == SessionInterceptionOperation::ProcessExec
-                && operation.backend_supported()
-                && operation.surface_enabled()
-                && operation.effective()
-        ));
-    assert!(capabilities
-        .operations()
-        .iter()
-        .any(
-            |operation| operation.operation() == SessionInterceptionOperation::FileRead
-                && operation.owning_surface() == "filesystem"
-                && operation.backend_supported()
-                && !operation.surface_enabled()
-                && !operation.effective()
-        ));
+    assert!(matches!(stale, Err(RuntimeConfigError::InvalidJson { .. })));
 
     Ok(())
 }
 
 #[test]
-fn session_interception_capabilities_distinguish_backend_and_surface_support(
-) -> Result<(), RuntimeConfigError> {
-    let config = RuntimeConfig::from_json_str(
+fn rejects_enabled_session_interception() {
+    let error = RuntimeConfig::from_json_str(
         r#"
             {
               "policies": ["policies/browser.json"],
@@ -124,35 +88,11 @@ fn session_interception_capabilities_distinguish_backend_and_surface_support(
               }
             }
             "#,
-    )?;
-    let capabilities = config.session_interception_capabilities();
-    let process_exec = capabilities
-        .operations()
-        .iter()
-        .find(|operation| operation.operation() == SessionInterceptionOperation::ProcessExec)
-        .context(NoSessionSurfacesSnafu)?;
-    let file_read = capabilities
-        .operations()
-        .iter()
-        .find(|operation| operation.operation() == SessionInterceptionOperation::FileRead)
-        .context(NoSessionSurfacesSnafu)?;
-    let socket_connect = capabilities
-        .operations()
-        .iter()
-        .find(|operation| operation.operation() == SessionInterceptionOperation::SocketConnect)
-        .context(NoSessionSurfacesSnafu)?;
-
-    assert!(process_exec.backend_supported());
-    assert!(!process_exec.surface_enabled());
-    assert!(!process_exec.effective());
-    assert!(file_read.backend_supported());
-    assert!(!file_read.surface_enabled());
-    assert!(!file_read.effective());
-    assert!(!socket_connect.backend_supported());
-    assert!(socket_connect.surface_enabled());
-    assert!(!socket_connect.effective());
-
-    Ok(())
+    );
+    assert!(matches!(
+        error,
+        Err(RuntimeConfigError::InvalidSessionInterceptionConfig { .. })
+    ));
 }
 
 #[test]

@@ -8,9 +8,8 @@ mod interception;
 mod plan;
 
 pub use interception::{
-    SessionInterceptionBackendKind, SessionInterceptionCapabilityReport, SessionInterceptionConfig,
-    SessionInterceptionLayerConfig, SessionInterceptionOperation,
-    SessionInterceptionOperationCapability,
+    SessionInterceptionCapabilityReport, SessionInterceptionConfig, SessionInterceptionLayerConfig,
+    SessionInterceptionOperation, SessionInterceptionOperationCapability,
 };
 pub use plan::{SessionAdoptPlan, SessionAdoptTarget, SessionRunPlan};
 
