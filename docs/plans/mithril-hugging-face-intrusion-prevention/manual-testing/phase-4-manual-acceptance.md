@@ -1,9 +1,10 @@
 # How To Manually Accept Phase 4
 
-Status: Done for the limited x86_64 local-enforcement claim. The current
-protected result has 15 `PASS` and 14 exact `UNSUPPORTED` fixture results.
-The catalog below remains the qualification target for a later, broader
-claim.
+Status: **Not done** for the signed path-tree denial claim. The retained
+protected result records 15 `PASS` and 14 exact `UNSUPPORTED` results, but the
+current review rejects the plan-owned path-tree entry as closure. Its mount
+case denied the mount syscall. It did not access through a successful
+child-directory bind.
 
 - Phase: [Signed Local Pre-Effect Enforcement](../phase-4-signed-local-pre-effect-enforcement.md)
 - Setup: [`SINGLE-NODE`](./environment-setup.md)
@@ -40,7 +41,8 @@ exact character-device ioctl allow and deny, unmatched signal and exact ptrace
 denial, configured AF_UNIX `SOCK_STREAM` relationships, concurrent N/N+1
 exception consumption, hard-link/bind aliases, denied protected mounts,
 external mount replacement, reconciliation, ring saturation, latency, and
-cleanup.
+cleanup. A denied mount mutation is a mount-policy result. It is not
+successful-bind path reconstruction evidence.
 Unqualified anonymous and memfd execution, file mutation, SysV IPC, namespace
 creation, BPF map creation, and pinned-link removal remain hard closed. An
 exact file-backed exec control does not prove immutable executable authority.
@@ -212,13 +214,14 @@ Mithril state, Pod, and fixture.
 The bind-alias case denied both pre-existing aliases as exact object key `7`.
 The mount-attack case denied all protected mount attempts and the later
 protected open. These are one-container manual cases. They do not qualify
-propagation, idmapped mounts, token rotation, or administrative exec. The
-phase remains **Not done**.
+path access after a successful child-directory bind, propagation, idmapped
+mounts, token rotation, or administrative exec. The phase remains **Not
+done**.
 
 ### Signed path-tree denial — 2026-08-17
 
-State: **Done** for `FILE-PATH-TREE-DENY-001`. The broader phase remains
-**Not done**.
+State: Superseded. This record proves a narrower path-tree and mount-denial
+slice. `FILE-PATH-TREE-DENY-001` remains **Not done**.
 
 The disposable x86_64 VM harness ran exact implementation commit `d38248f`.
 The kernel was `6.8.0-137-generic`, and the active LSM order included `bpf`.
@@ -238,6 +241,9 @@ The artifact records these true fields:
 - `path_tree_replacement_child_denied`
 - `path_tree_outside_control_allowed`
 - `path_tree_mount_attack_failed_closed`
+
+The last field means that the attempted mount operations failed. It does not
+mean that a child-directory bind succeeded and a later alias access denied.
 
 The same run denied a managed `CREATE` before it created the file. It installed
 the graph before it created one test mount namespace, then moved that task to
@@ -266,6 +272,13 @@ mounts. The red-black-tree scan stack accepts 255 entries, and the combined
 mount and dentry walk accepts 4,351 callbacks. These are checked verifier
 bounds. The proof does not qualify idmapped mounts, full propagation coverage,
 token rotation, or administrative exec.
+
+The corrected acceptance case must create the child bind before policy
+activation, then read both a protected file and an allowed file through bound
+subtrees. The protected file must deny with `PATH_TREE_POLICY_DENY`. The
+allowed bound file and a file outside the protected tree must succeed. A
+second case must let a separate qualified mount owner complete the bind after
+activation, reconcile the namespace, and produce the same three results.
 
 ### Earlier local enforcement record — 2026-08-18
 
@@ -389,7 +402,7 @@ use the transient first run as Mithril evidence.
 | `FILE-MMAP-001` | map forbidden file for read/write/execute | forbidden mapping absent; allowed mapping exists with exact state |
 | `FILE-MMAP-SHARED-011` | share writable mapping across roots | forbidden acquisition/attachment denies or exact supported floor applies; no byte-taint claim |
 | `FILE-NAMESPACE-001` | access same spelling/object across mount views | actor-specific exact-object decision; allowed view succeeds and denied view has no effect |
-| `FILE-PATH-TREE-DENY-001` | install before one namespace exists; bind its task later; read old, new, and replaced children; create a child; replace the protected tree with a bind mount | every covered effect denies before an fd, byte, or filesystem mutation; the outside-tree control succeeds; a live mount replacement or topology race fails closed |
+| `FILE-PATH-TREE-DENY-001` | install before one namespace exists; complete a child-directory bind before activation; let a separate qualified mount owner complete one after activation; reconcile; read protected and allowed bound subtrees; read old, new, and replaced children; create a child | every protected effect denies through the successful aliases before an fd, byte, or filesystem mutation; the allowed bound subtree and outside-tree control succeed; a live mount replacement or topology race fails closed |
 | `FILE-SA-TOKEN-OPEN-001` | worker and controller access rotating token | worker gets `EACCES` and no fd/positive bytes; controller succeeds; rotation cannot create a gap |
 | `FILE-VMA-SNAPSHOT-001` | race response/policy decision with VMA changes | incomplete snapshot never relaxes; complete approved snapshot permits its control |
 | `HF-LOCAL-001` | run safe in-process protected-file/effect sequence | first distinguishable forbidden effect is prevented; no later prohibited stage; clean conversion succeeds |

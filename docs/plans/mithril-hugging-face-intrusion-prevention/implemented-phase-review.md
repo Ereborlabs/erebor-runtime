@@ -8,7 +8,8 @@ transition, and BPF decision. Use the dedicated
 evidence paths. This guide does not replace an acceptance record.
 
 The dedicated [signed path-tree denial review](./path-tree-denial-implementation-review.md)
-explains the recursive path enforcement and its exact VM evidence.
+explains the recursive path enforcement, the retained VM evidence, and the
+open successful child-bind gap.
 
 Source reviewed: current checked source on 2026-08-21. The production
 identity object loaded by the 2026-08-21 VM has SHA-256
@@ -36,7 +37,9 @@ The latest phase results remain:
   its exact limit. Phase 4 owns saturation, raced-policy, IPC-policy, and
   protected-effect results.
 - Phase 3: **Done** for observation, classification, and simulation.
-- Phase 4: **Done** for its limited x86_64 local-enforcement claim.
+- Phase 4: **Not done** for signed path-tree denial after a successful first
+  bind of a child directory. Its other retained results keep their documented
+  boundaries.
 - Phase 5: **Done** for its qualified x86_64 network tier and tested two-node
   K3s Flannel route.
 - Phase 6: **Done** for its qualified x86_64 durable-evidence and recovery

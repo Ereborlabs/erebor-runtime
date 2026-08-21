@@ -1,7 +1,8 @@
 # Phase 4 Implementation Review Guide
 
 Status: Source-grounded review guide for the current checked source. The
-physical result covers the same Phase 4 implementation.
+retained physical result covers the same implementation, but its path-tree
+entry does not prove access after a successful child-directory bind.
 
 - Phase: [Signed Local Pre-Effect Enforcement](./phase-4-signed-local-pre-effect-enforcement.md)
 - Architecture: [validated readable architecture](./policy-and-protection-algorithm-architecture-readable.md)
@@ -13,10 +14,11 @@ hooks for the qualified pre-effect decisions.
 
 ## Review Claim
 
-The implemented claim is one limited x86_64 local-enforcement tier. It has 15
-physical `PASS` results and 14 exact `UNSUPPORTED` results. Fourteen passes are
-allocated Appendix C fixtures. The other pass is the plan-owned recursive
-path-tree denial.
+The retained x86_64 artifact records 15 physical `PASS` results and 14 exact
+`UNSUPPORTED` results. Fourteen passes are allocated Appendix C fixtures. The
+other recorded pass is the plan-owned recursive path-tree denial. The current
+review reopens that path-tree claim because its mount case denied the mount
+syscall and did not access through a successful child bind.
 
 An unsupported row is not an implementation claim. A default hard-close can
 prevent an unqualified operation, but it does not supply the missing positive
@@ -278,7 +280,9 @@ The unit test at
 [`effect.rs`](../../../crates/mithril-e2e/src/effect.rs#L4042) requires 29
 unique IDs, 15 protected passes, 14 unsupported results, nonempty reason codes,
 and the plan-owned path-tree fixture. The [closure matrix](./phase-4-closure-matrix.md)
-provides the human-readable proof and limit for each row.
+provides the human-readable proof and limit for each row. This test validates
+the retained record shape. It does not make the missing successful-bind
+physical case pass.
 
 ## Test Layers
 
@@ -288,7 +292,7 @@ provides the human-readable proof and limit for each row.
 | Node owner tests | Tests beside [`NodePolicyGenerationOwner`](../../../crates/mithril-node/src/policy.rs) and [`ExceptionAuthorityOwner`](../../../crates/mithril-node/src/policy/exception_authority.rs#L86) | Staging, readback, publication, recovery, retirement, WAL transitions, receipts, and reboot separation. |
 | Interceptor and BPF-shape tests | [`bundled.rs`](../../../crates/erebor-interceptor/src/bundled.rs#L1) plus Rust/C layout tests | Required hooks and maps exist, prior LSM results are preserved, bounded exception layout is valid, and generated ABI matches. |
 | Privileged physical runner | [`EffectTestRunner::physical_probe`](../../../crates/mithril-e2e/src/effect.rs#L920) | Production object load, real syscalls, negative postconditions, legitimate controls, loss independence, lifecycle, and cleanup. |
-| Readable operator cases | [`mithril-local-enforcement-manual`](../../../examples/mithril-local-enforcement-manual/README.md) | Selected Docker, raw-namespace, Container Runtime Interface (CRI), alias, mount, path-tree, and control flows. These support but do not replace the Rust runner. |
+| Readable operator cases | [`mithril-local-enforcement-manual`](../../../examples/mithril-local-enforcement-manual/README.md) | Selected Docker, raw-namespace, Container Runtime Interface (CRI), alias, denied-mount, path-tree, and control flows. They do not contain the required successful child-bind case. |
 
 Review a fixture at its narrowest owner first. Use the physical runner for a
 claim that crosses compilation, node lifecycle, the loader, BPF, a process,
@@ -378,13 +382,14 @@ The closure matrix is authoritative for allocation. In short:
 
 ## Source State And Guide Verification
 
-This guide was checked against the current source on 2026-08-19. This
+This guide was checked against the current source on 2026-08-21. This
 documentation update changes no Phase 4 Rust, BPF, ABI, build, or test source.
 
-The three focused Interceptor tests named in the
+The focused Interceptor budget test named in the
 [Meta-algorithm guide](./path-tree-denial-implementation-review.md#source-state-and-guide-verification)
-passed against that source. The local link check, source-line check, and
-`git diff --check` passed for both implementation guides. The full Rust gate
-and physical VM qualification were not rerun for this documentation-only
-update. The evidence section above retains the exact qualified source and
-artifact boundary.
+has an earlier result for the unchanged source. It does not cover a successful
+child bind. The local link check, source-line check, and `git diff --check`
+are the verification gates for this documentation-only update. The full Rust
+gate and physical VM qualification were not rerun. The evidence section above
+retains the exact qualified source and artifact boundary for the narrower
+behaviors that it exercised.

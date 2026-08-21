@@ -6,11 +6,12 @@
 
 ## Closure Decision
 
-Phase 4 is **Done for the limited x86_64 local-enforcement claim** at
-implementation commit
-`e0438d920d5071295ab733db0d7df0eb03a95b8c`. The reviewed architecture
-SHA-256 is
-`22678b9c0379ff915fe595059f3da2789c3e32cdf54d61656c7257175263d14a`.
+Phase 4 is **Not done** for the signed path-tree denial claim. The earlier
+limited x86_64 record remains evidence for the narrower operations that it
+exercised. A current source review found that the live path resolver does not
+preserve source ancestry after a successful first bind of a child directory.
+The open finding is in
+[`code-review-suggestions.md`](./code-review-suggestions.md).
 
 This is capability closure. It does not say that an absent authority model was
 implemented. Appendix A.13.7 requires a physical oracle for each advertised
@@ -19,12 +20,15 @@ Chapter 35 requires a surface with a missing hook, field, or identity model to
 return to the prototype and type-closure gate. It must remain unsupported
 until that gate passes.
 
-The protected physical result contains one typed result for all 28 allocated
-Appendix C fixtures and the additional plan-owned path-tree fixture:
+The retained physical result contains one typed result for all 28 allocated
+Appendix C fixtures and the additional plan-owned path-tree fixture. Its
+recorded results are historical evidence, with this correction:
 
 - 14 Appendix C fixtures are `PASS`.
 - 14 Appendix C fixtures are `UNSUPPORTED`.
-- `FILE-PATH-TREE-DENY-001` is `PASS`.
+- `FILE-PATH-TREE-DENY-001` is **Not done**. The artifact recorded `PASS`, but
+  its mount-attack case denied the mount syscall and did not test access after
+  a successful child-directory bind.
 - No fixture is `FAIL` or `DEGRADED` in the protected result.
 
 The status terms in this matrix have these meanings:
@@ -35,8 +39,9 @@ The status terms in this matrix have these meanings:
   missing qualification. A broader default denial can still hard-close an
   attempt, but that denial does not create positive support.
 
-There is no open implementation item inside this limited claim. Adding one of
-the unsupported capabilities requires a new authorized qualification outcome.
+Source-aware child-bind traversal and its physical controls are open. Adding
+one of the unsupported capabilities still requires a new authorized
+qualification outcome.
 
 ## Deliverable Closure
 
@@ -44,7 +49,7 @@ the unsupported capabilities requires a new authorized qualification outcome.
 | --- | --- | --- |
 | `D4.1` | Signed generation verification, capacity preflight, staged readback, activation probes, one generation publication, retained holders, asynchronous references, recovery, and retirement are implemented. The protected probe records atomic publication, retained old holders, and deletion after the last holder. | The claim covers the represented generation owners. A new authority type must pass its own capacity, recovery, and retirement proof before it can join activation. |
 | `D4.2` | Exact file-backed exec denials and represented executable mapping denials are physical. Unrepresented anonymous, memfd, deleted, and pkey paths hard-close. | Immutable executable source proof, complete script/interpreter/loader provenance, complete VMA state, and the protected concurrent-exec fixture are `UNSUPPORTED`. The exact file-backed executable control is not an immutable-image claim. |
-| `D4.3` | Exact file, descriptor acquisition and use, represented mappings, namespace-aware identity, recursive path-tree denial, mount CAS, and exact snapshot recovery are physical. | Overlay copy-up provenance, projected-token rotation, complete VMA state, complete mount-attribute coverage, full propagation fan-out, and persistent file-instance lifetime are `UNSUPPORTED`. |
+| `D4.3` | Exact file, descriptor acquisition and use, represented mappings, namespace-aware identity, mount CAS, and exact snapshot recovery are physical for their recorded cases. The path-tree record proves direct paths, repeated-root aliases, future namespaces, and denied mount mutations. | Recursive path-tree denial after a successful first child-directory bind is **Not done**. Overlay copy-up provenance, projected-token rotation, complete VMA state, complete mount-attribute coverage, full propagation fan-out, and persistent file-instance lifetime are `UNSUPPORTED`. |
 | `D4.4` | Exact Unix-stream relationships, stale and unmatched peer denial, inherited endpoint denial, exact ptrace denial, unmatched signal denial, and signal-zero control are physical. | The claim does not include arbitrary pipes, datagrams, shared memory, zero-copy channels, or unqualified asynchronous operations. |
 | `D4.5` | Exact device ioctl policy and pre-install denial of a descriptor-producing PTMX operation are physical. Represented namespace, BPF, and managed-pin operations hard-close. | Granular authority after a derived object is minted and complete privilege or self-protection authority are not advertised. |
 | `D4.6` | Exact signed exceptions, atomic N/N+1 consumption, expiry, receipts, and restart-safe exception WAL behavior are physical. | Administrative exec is not advertised. The stock-runc bootstrap path needs a validated authority decision before implementation. |
@@ -86,12 +91,18 @@ the unsupported capabilities requires a new authorized qualification outcome.
 
 ## Additional Plan-Owned Qualification
 
-`FILE-PATH-TREE-DENY-001` is `PASS`. It is not an Appendix C fixture and
+`FILE-PATH-TREE-DENY-001` is **Not done**. It is not an Appendix C fixture and
 must not be added to
 [`fixtures.yaml`](../../../spec/qualification/v1/fixtures.yaml). The signed
-source accepts recursive `DENY` floors only. The protected result proves
+source accepts recursive `DENY` floors only. The retained result proves
 pre-existing, later, replacement, maximum-depth, and future-namespace
-children, an outside-tree control, mount-attack fail closure, and cleanup.
+children, an outside-tree control, denied mount mutations, and cleanup. It
+does not prove source-path reconstruction after a successful child bind.
+
+Closure requires a successful child bind before activation and a successful
+bind by a separate qualified mount owner after activation. The protected
+source-tree access must deny through each alias. An allowed bound subtree and
+an allowed file outside the protected tree must remain readable.
 
 ## Current-Source Physical Record
 
@@ -112,8 +123,10 @@ commit `e0438d920d5071295ab733db0d7df0eb03a95b8c`.
 - Protected deployment digest:
   `741a9fd0857e360a8b3096924f52dd59695d9f6440aa6610370e4e092b23b1dc`.
 
-The JSON has 15 `PASS` results and 14 `UNSUPPORTED` results. It has no
-stale fs-verity experiment fields. The probe records 10,000 measured opens,
+The JSON records 15 `PASS` results and 14 `UNSUPPORTED` results. The current
+review does not accept its path-tree entry as closure, so the document does
+not advertise 15 current passes. The JSON has no stale fs-verity experiment
+fields. The probe records 10,000 measured opens,
 50,000 saturation opens, 39,081 lost observations, preserved denial and
 benign results, and all four cleanup fields as `true`. Independent remote
 postflight also found no probe pin root, cgroup, or owner lease.
@@ -127,7 +140,7 @@ transient first result as a Mithril pass.
 
 ## Future And Unallocated Work
 
-The following work does not widen this closed claim:
+The following work does not widen the narrower recorded results:
 
 | Owner or gate | Work outside the closed claim |
 | --- | --- |
@@ -142,6 +155,6 @@ The following work does not widen this closed claim:
 | Phase 11 | Final platform, installation, performance, capacity, and full conformance reruns for each advertised release tier. |
 | Phase 12 | Optional Seccomp compatibility. Landlock remains explicitly absent for the current platform. |
 
-No later-phase allocation converts an `UNSUPPORTED` row into a Phase 4
-`PASS`. A later owner must produce its own qualified result before a product
-claim changes.
+No later-phase allocation converts an `UNSUPPORTED` or **Not done** row into a
+Phase 4 `PASS`. A later owner must produce its own qualified result before a
+product claim changes.
