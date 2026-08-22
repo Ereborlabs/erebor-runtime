@@ -3178,6 +3178,7 @@ dependencies = [
  "erebor-interceptor-abi",
  "erebor-runtime-error",
  "hex",
+ "json-patch",
  "k8s-openapi",
  "kube",
  "minicbor",

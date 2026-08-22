@@ -1,7 +1,10 @@
 use std::path::PathBuf;
 
 use clap::Parser;
-use mithril_control::{serve, serve_administrative_http, ControlConfig, ControlRuntimeParts};
+use mithril_control::{
+    serve, serve_administrative_http, serve_kubernetes_admission, ControlConfig,
+    ControlRuntimeParts,
+};
 
 #[derive(Parser)]
 #[command(about = "Run the private Mithril node control service")]
@@ -26,8 +29,10 @@ async fn run() -> mithril_control::Result<()> {
         control,
         administrative_exec,
         kubernetes_nodes,
+        kubernetes_admission,
     } = config.into_parts()?;
     let policy_owner = control.policy_desired_state();
+    let admission_policy_owner = policy_owner.clone();
     let policy_control = control.clone();
     let policy_reconciler = async move {
         if let Some(owner) = policy_owner {
@@ -38,6 +43,7 @@ async fn run() -> mithril_control::Result<()> {
     };
     tokio::pin!(policy_reconciler);
     let node_control = control.clone();
+    let admission_node_owner = kubernetes_nodes.clone();
     let node_reconciler = async move {
         if let Some(owner) = kubernetes_nodes {
             owner.run_kubernetes(node_control).await;
@@ -46,6 +52,22 @@ async fn run() -> mithril_control::Result<()> {
         }
     };
     tokio::pin!(node_reconciler);
+    let admission_control = control.clone();
+    let admission_server = async move {
+        if let (Some(config), Some(policies), Some(nodes)) = (
+            kubernetes_admission,
+            admission_policy_owner,
+            admission_node_owner,
+        ) {
+            serve_kubernetes_admission(config, admission_control, policies, nodes, async {
+                std::future::pending::<()>().await;
+            })
+            .await
+        } else {
+            std::future::pending::<mithril_control::Result<()>>().await
+        }
+    };
+    tokio::pin!(admission_server);
     if let Some(administrative_exec) = administrative_exec {
         let shutdown = std::sync::Arc::new(tokio::sync::Notify::new());
         let control_shutdown = shutdown.clone();
@@ -78,6 +100,10 @@ async fn run() -> mithril_control::Result<()> {
                 shutdown.notify_waiters();
                 Ok(())
             },
+            result = &mut admission_server => {
+                shutdown.notify_waiters();
+                result
+            },
         }
     } else {
         tokio::select! {
@@ -86,6 +112,7 @@ async fn run() -> mithril_control::Result<()> {
             }) => result,
             _ = &mut policy_reconciler => Ok(()),
             _ = &mut node_reconciler => Ok(()),
+            result = &mut admission_server => result,
         }
     }
 }

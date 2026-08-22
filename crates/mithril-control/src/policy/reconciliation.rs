@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use ed25519_dalek::SigningKey;
+use k8s_openapi::api::core::v1::Namespace;
 use kube::api::{ListParams, Patch, PatchParams, WatchEvent, WatchParams};
 use kube::{Api, Client};
 use serde::{Deserialize, Serialize};
@@ -55,7 +56,6 @@ pub struct PolicySignerConfigV1 {
 pub struct PolicyDesiredStateConfigV1 {
     pub tenant_id: String,
     pub cluster_uid: String,
-    pub namespace_uids: BTreeMap<String, String>,
     pub signer: PolicySignerConfigV1,
 }
 
@@ -121,13 +121,6 @@ impl PolicyDesiredStateConfigV1 {
         ensure!(
             canonical_uuid(&self.tenant_id)
                 && canonical_uuid(&self.cluster_uid)
-                && !self.namespace_uids.is_empty()
-                && self.namespace_uids.iter().all(|(name, uid)| {
-                    !name.is_empty()
-                        && name.len() <= 253
-                        && !name.chars().any(char::is_whitespace)
-                        && canonical_uuid(uid)
-                })
                 && !self.signer.signing_key_id.is_empty()
                 && self.signer.signing_key_path.is_absolute()
                 && self.signer.seal_request_path.is_absolute()
@@ -136,7 +129,7 @@ impl PolicyDesiredStateConfigV1 {
             PolicyValidationSnafu {
                 policy_id: "<kubernetes-control>",
                 code: "CFG_KUBERNETES_CONTROL",
-                reason: "Kubernetes policy control needs trusted identities, namespaces, signer paths, and nonzero sequence bounds",
+                reason: "Kubernetes policy control needs trusted identities, signer paths, and nonzero sequence bounds",
             }
         );
         Ok(())
@@ -189,6 +182,7 @@ impl PolicyDesiredStateOwner {
     pub fn reconcile(
         &self,
         resource: &WorkloadProtectionProfile,
+        namespace_uid: &str,
         inventory: &[WorkloadTargetFactV1],
         now_utc_ns: i64,
     ) -> Result<PolicyReconcileResultV1> {
@@ -196,7 +190,7 @@ impl PolicyDesiredStateOwner {
             let mut state = self.state()?;
             state.reconcile_in_flight = state.reconcile_in_flight.saturating_add(1);
         }
-        let result = self.reconcile_inner(resource, inventory, now_utc_ns);
+        let result = self.reconcile_inner(resource, namespace_uid, inventory, now_utc_ns);
         {
             let mut state = self.state()?;
             state.reconcile_in_flight = state.reconcile_in_flight.saturating_sub(1);
@@ -212,28 +206,13 @@ impl PolicyDesiredStateOwner {
     fn reconcile_inner(
         &self,
         resource: &WorkloadProtectionProfile,
+        namespace_uid: &str,
         inventory: &[WorkloadTargetFactV1],
         now_utc_ns: i64,
     ) -> Result<PolicyReconcileResultV1> {
-        let namespace = resource.metadata.namespace.as_deref().ok_or_else(|| {
-            PolicyValidationSnafu {
-                policy_id: resource.spec.policy.profile_id(),
-                code: "CFG_CRD_METADATA",
-                reason: "the policy object has no namespace".to_owned(),
-            }
-            .build()
-        })?;
-        let namespace_uid = self.config.namespace_uids.get(namespace).ok_or_else(|| {
-            PolicyValidationSnafu {
-                policy_id: resource.spec.policy.profile_id(),
-                code: "CFG_TENANT_NAMESPACE",
-                reason: "the policy object namespace is outside the configured tenant scope"
-                    .to_owned(),
-            }
-            .build()
-        })?;
         ensure!(
-            resource
+            canonical_uuid(namespace_uid)
+                && resource
                 .spec
                 .policy
                 .workload_selectors
@@ -404,6 +383,31 @@ impl PolicyDesiredStateOwner {
         self.store.clone()
     }
 
+    pub fn live_policies_in_namespace(
+        &self,
+        namespace: &str,
+    ) -> Result<Vec<(PolicySourceRevisionV1, PolicyDocumentV1, bool)>> {
+        let policies = self
+            .store
+            .latest_live_sources()?
+            .into_iter()
+            .filter(|(source, _)| source.namespace_name == namespace)
+            .map(|(source, policy)| {
+                let compiled = self
+                    .store
+                    .compiled_artifact(&source.policy_source_revision_id)?
+                    .is_some();
+                Ok((source, policy, compiled))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok(policies)
+    }
+
+    #[must_use]
+    pub fn cluster_uid(&self) -> &str {
+        &self.config.cluster_uid
+    }
+
     #[must_use]
     pub fn rollout_owner(&self) -> PolicyRolloutOwner {
         self.rollout.clone()
@@ -421,7 +425,7 @@ impl PolicyDesiredStateOwner {
     pub fn health(&self) -> Result<PolicyReconcileHealthV1> {
         let state = self.state()?;
         Ok(PolicyReconcileHealthV1 {
-            configured_namespaces: count(self.config.namespace_uids.len()),
+            configured_namespaces: 1,
             watched_namespaces: count(state.watched_namespaces.len()),
             reconcile_in_flight: state.reconcile_in_flight,
             successful_reconciles: state.successful_reconciles,
@@ -467,19 +471,7 @@ impl PolicyDesiredStateOwner {
                 tokio::time::sleep(std::time::Duration::from_secs(5)).await;
                 continue;
             };
-            let mut tasks = tokio::task::JoinSet::new();
-            for namespace in self.config.namespace_uids.keys() {
-                tasks.spawn(reconcile_namespace(
-                    client.clone(),
-                    namespace.clone(),
-                    self.clone(),
-                    control.clone(),
-                ));
-            }
-            if tasks.join_next().await.is_none() {
-                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
-            }
-            tasks.abort_all();
+            reconcile_cluster(client, self.clone(), control.clone()).await;
         }
     }
 
@@ -710,16 +702,17 @@ impl PolicyRolloutOwner {
     }
 }
 
-async fn reconcile_namespace(
+async fn reconcile_cluster(
     client: Client,
-    namespace: String,
     owner: PolicyDesiredStateOwner,
     control: crate::ControlPlane,
 ) {
-    let api = Api::<WorkloadProtectionProfile>::namespaced(client, &namespace);
+    let api = Api::<WorkloadProtectionProfile>::all(client.clone());
+    let namespaces = Api::<Namespace>::all(client);
     loop {
-        owner.record_watch_state(&namespace, false);
-        let Some(resource_version) = relist_namespace(&api, &owner, &control).await else {
+        owner.record_watch_state("*", false);
+        let Some(resource_version) = relist_cluster(&api, &namespaces, &owner, &control).await
+        else {
             tokio::time::sleep(std::time::Duration::from_secs(2)).await;
             continue;
         };
@@ -731,7 +724,7 @@ async fn reconcile_namespace(
             tokio::time::sleep(std::time::Duration::from_secs(2)).await;
             continue;
         };
-        owner.record_watch_state(&namespace, true);
+        owner.record_watch_state("*", true);
         tokio::pin!(stream);
         while let Some(event) = stream.next().await {
             match event {
@@ -740,7 +733,7 @@ async fn reconcile_namespace(
                     | WatchEvent::Modified(resource)
                     | WatchEvent::Deleted(resource),
                 ) => {
-                    reconcile_resource(&api, &owner, &control, resource).await;
+                    reconcile_resource(&api, &namespaces, &owner, &control, resource).await;
                 }
                 Ok(WatchEvent::Bookmark(_)) => {}
                 Ok(WatchEvent::Error(_)) | Err(_) => {
@@ -752,8 +745,9 @@ async fn reconcile_namespace(
     }
 }
 
-async fn relist_namespace(
+async fn relist_cluster(
     api: &Api<WorkloadProtectionProfile>,
+    namespaces: &Api<Namespace>,
     owner: &PolicyDesiredStateOwner,
     control: &crate::ControlPlane,
 ) -> Option<String> {
@@ -772,7 +766,7 @@ async fn relist_namespace(
             }
         };
         for resource in page.items {
-            reconcile_resource(api, owner, control, resource).await;
+            reconcile_resource(api, namespaces, owner, control, resource).await;
         }
         resource_version = page.metadata.resource_version.or(resource_version);
         continuation = page.metadata.continue_;
@@ -787,6 +781,7 @@ async fn relist_namespace(
 
 async fn reconcile_resource(
     api: &Api<WorkloadProtectionProfile>,
+    namespaces: &Api<Namespace>,
     owner: &PolicyDesiredStateOwner,
     control: &crate::ControlPlane,
     resource: WorkloadProtectionProfile,
@@ -799,8 +794,20 @@ async fn reconcile_resource(
         .generation
         .and_then(|value| u64::try_from(value).ok())
         .unwrap_or_default();
+    let Some(namespace_name) = resource.metadata.namespace.as_deref() else {
+        return;
+    };
+    let namespace_uid = match namespaces.get(namespace_name).await {
+        Ok(namespace) => namespace.metadata.uid,
+        Err(_) => None,
+    };
     let status = owner
-        .reconcile(&resource, &control.workload_inventory(), utc_now_ns())
+        .reconcile(
+            &resource,
+            namespace_uid.as_deref().unwrap_or_default(),
+            &control.workload_inventory(),
+            utc_now_ns(),
+        )
         .map_or_else(|_| rejected_status(generation), |result| result.status);
     let patch = Patch::Merge(serde_json::json!({"status": status}));
     let _result = api

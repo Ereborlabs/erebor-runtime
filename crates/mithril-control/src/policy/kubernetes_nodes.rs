@@ -17,6 +17,7 @@ use crate::{ControlPlane, KubernetesNodeSessionV1, Result};
 
 pub const KUBERNETES_READY_LABEL: &str = "mithril.erebor.dev/ready";
 pub const KUBERNETES_NODE_ID_ANNOTATION: &str = "mithril.erebor.dev/node-id";
+pub const KUBERNETES_NODE_UID_ANNOTATION: &str = "mithril.erebor.dev/node-uid";
 pub const KUBERNETES_NODE_BOOT_ANNOTATION: &str = "mithril.erebor.dev/node-boot-id";
 pub const KUBERNETES_LABEL_EPOCH_ANNOTATION: &str = "mithril.erebor.dev/label-epoch";
 pub const KUBERNETES_NOT_READY_TAINT: &str = "mithril.erebor.dev/not-ready";
@@ -66,6 +67,20 @@ impl KubernetesNodeReadinessOwner {
     #[must_use]
     pub const fn config(&self) -> &KubernetesNodeControlConfigV1 {
         &self.config
+    }
+
+    pub async fn live_constraints(&self, client: Client) -> Result<DaemonSetNodeConstraintsV1> {
+        let daemon_sets = Api::<DaemonSet>::namespaced(client, &self.config.daemon_set_namespace);
+        let daemon_set = daemon_sets
+            .get(&self.config.daemon_set_name)
+            .await
+            .map_err(|error| {
+                InvalidConfigurationSnafu {
+                    reason: format!("read the mithril-node DaemonSet: {error}"),
+                }
+                .build()
+            })?;
+        DaemonSetNodeConstraintsV1::from_daemon_set(&daemon_set)
     }
 
     pub async fn run_kubernetes(self, control: ControlPlane) {
@@ -156,6 +171,10 @@ impl KubernetesNodeReadinessOwner {
         node: &Node,
     ) {
         let name = node.name_any();
+        let Some(node_uid) = node.metadata.uid.as_deref() else {
+            return;
+        };
+        let _result = control.bind_kubernetes_node_session(&name, node_uid);
         let sessions = control
             .ready_kubernetes_node_sessions(Duration::from_secs(self.config.session_ttl_seconds));
         let session = sessions
@@ -244,12 +263,19 @@ pub fn node_projection_patch(
             value: Some("true".to_owned()),
         });
     }
-    let (ready_label, node_id, boot_id, label_epoch) = session.filter(|_| ready).map_or(
-        (Value::Null, Value::Null, Value::Null, Value::Null),
+    let (ready_label, node_id, node_uid, boot_id, label_epoch) = session.filter(|_| ready).map_or(
+        (
+            Value::Null,
+            Value::Null,
+            Value::Null,
+            Value::Null,
+            Value::Null,
+        ),
         |session| {
             (
                 json!("true"),
                 json!(session.node_id),
+                json!(session.kubernetes_node_uid),
                 json!(hex::encode(&session.node_boot_id)),
                 json!(session.label_epoch.to_string()),
             )
@@ -260,6 +286,7 @@ pub fn node_projection_patch(
             "labels": { KUBERNETES_READY_LABEL: ready_label },
             "annotations": {
                 KUBERNETES_NODE_ID_ANNOTATION: node_id,
+                KUBERNETES_NODE_UID_ANNOTATION: node_uid,
                 KUBERNETES_NODE_BOOT_ANNOTATION: boot_id,
                 KUBERNETES_LABEL_EPOCH_ANNOTATION: label_epoch,
             }
@@ -449,6 +476,7 @@ mod tests {
         let session = KubernetesNodeSessionV1 {
             node_id: "enrolled-node-a".to_owned(),
             kubernetes_node_name: "node-a".to_owned(),
+            kubernetes_node_uid: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa".to_owned(),
             node_boot_id: vec![7; 16],
             label_epoch: 9,
         };
