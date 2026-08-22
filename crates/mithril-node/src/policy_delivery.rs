@@ -326,12 +326,6 @@ impl NodePolicyDeliveryOwner {
                 reason: "the node does not support every required policy capability",
             }
         );
-        ensure!(
-            candidate.operation != PolicyDeliveryOperationV1::RetireToRestrictiveTerminal,
-            ControlProtocolSnafu {
-                reason: "the retirement candidate has no stageable restrictive terminal artifact",
-            }
-        );
         let issuer = SequenceV1 {
             epoch: profile.header.sequence_epoch,
             sequence: profile.header.issuer_sequence,
@@ -357,9 +351,12 @@ impl NodePolicyDeliveryOwner {
                             && candidate.predecessor_candidate_content_id.is_none()
                     },
                     |current| {
-                        candidate.operation == PolicyDeliveryOperationV1::Replace
-                            && candidate.predecessor_candidate_content_id.as_deref()
-                                == Some(current.candidate_content_id.as_str())
+                        matches!(
+                            candidate.operation,
+                            PolicyDeliveryOperationV1::Replace
+                                | PolicyDeliveryOperationV1::RetireToRestrictiveTerminal
+                        ) && candidate.predecessor_candidate_content_id.as_deref()
+                            == Some(current.candidate_content_id.as_str())
                     }
                 ),
             ControlProtocolSnafu {
@@ -902,7 +899,17 @@ mod tests {
         })?;
         let config = config(directory.path());
         let key = SigningKey::from_bytes(&[9; 32]);
-        let bundle = bundle(&config, &key, 1, 1, None, 10, 100, "node-a")?;
+        let bundle = bundle(
+            &config,
+            &key,
+            1,
+            1,
+            PolicyDeliveryOperationV1::Activate,
+            None,
+            10,
+            100,
+            "node-a",
+        )?;
         let trust = trust(directory.path(), &key)?;
         let capabilities = capabilities();
         let mut owner = NodePolicyDeliveryOwner::load(directory.path())?;
@@ -961,19 +968,137 @@ mod tests {
         let key = SigningKey::from_bytes(&[9; 32]);
         let trust = trust(directory.path(), &key)?;
         let owner = NodePolicyDeliveryOwner::load(directory.path())?;
-        let current = bundle(&config, &key, 1, 1, None, 10, 100, "node-a")?;
+        let current = bundle(
+            &config,
+            &key,
+            1,
+            1,
+            PolicyDeliveryOperationV1::Activate,
+            None,
+            10,
+            100,
+            "node-a",
+        )?;
         assert!(owner
             .prepare_activation(&current, &trust, &config, &capabilities()[..1], 2, 20,)
             .is_err());
 
-        let wrong_target = bundle(&config, &key, 1, 1, None, 10, 100, "node-b")?;
+        let wrong_target = bundle(
+            &config,
+            &key,
+            1,
+            1,
+            PolicyDeliveryOperationV1::Activate,
+            None,
+            10,
+            100,
+            "node-b",
+        )?;
         assert!(owner
             .prepare_activation(&wrong_target, &trust, &config, &capabilities(), 2, 20,)
             .is_err());
 
-        let expired = bundle(&config, &key, 1, 1, None, 10, 19, "node-a")?;
+        let expired = bundle(
+            &config,
+            &key,
+            1,
+            1,
+            PolicyDeliveryOperationV1::Activate,
+            None,
+            10,
+            19,
+            "node-a",
+        )?;
         assert!(owner
             .prepare_activation(&expired, &trust, &config, &capabilities(), 2, 20,)
+            .is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn retirement_stages_the_restrictive_terminal_and_keeps_predecessor_order() -> crate::Result<()>
+    {
+        let directory = tempfile::tempdir().context(IoSnafu {
+            path: "temporary retirement policy directory",
+        })?;
+        let config = config(directory.path());
+        let key = SigningKey::from_bytes(&[9; 32]);
+        let trust = trust(directory.path(), &key)?;
+        let capabilities = capabilities();
+        let mut owner = NodePolicyDeliveryOwner::load(directory.path())?;
+        let active = bundle(
+            &config,
+            &key,
+            1,
+            1,
+            PolicyDeliveryOperationV1::Activate,
+            None,
+            10,
+            100,
+            "node-a",
+        )?;
+        let active_prepared =
+            owner.prepare_activation(&active, &trust, &config, &capabilities, 2, 20)?;
+        owner.begin_activation(&active, &active_prepared)?;
+        owner.commit_activation(
+            &active,
+            &active_prepared,
+            PolicyActivationProofV1 {
+                node_bound_generation_digest: "1".repeat(64),
+                readback_digest: "2".repeat(64),
+                probe_result_digest: "3".repeat(64),
+                observed_utc_ns: 21,
+            },
+        )?;
+
+        let retirement = bundle(
+            &config,
+            &key,
+            2,
+            2,
+            PolicyDeliveryOperationV1::RetireToRestrictiveTerminal,
+            Some(active.candidate.candidate_content_id.clone()),
+            22,
+            100,
+            "node-a",
+        )?;
+        let retirement_prepared =
+            owner.prepare_activation(&retirement, &trust, &config, &capabilities, 3, 23)?;
+        assert_eq!(
+            retirement_prepared.config.workload_bindings[0].active_profile_generation_ref_id,
+            3
+        );
+        owner.begin_activation(&retirement, &retirement_prepared)?;
+        owner.commit_activation(
+            &retirement,
+            &retirement_prepared,
+            PolicyActivationProofV1 {
+                node_bound_generation_digest: "4".repeat(64),
+                readback_digest: "5".repeat(64),
+                probe_result_digest: "6".repeat(64),
+                observed_utc_ns: 24,
+            },
+        )?;
+        assert_eq!(
+            owner
+                .pending_acknowledgement()
+                .map(|acknowledgement| acknowledgement.candidate_content_id),
+            Some(retirement.candidate.candidate_content_id.clone())
+        );
+
+        let wrong_predecessor = bundle(
+            &config,
+            &key,
+            3,
+            3,
+            PolicyDeliveryOperationV1::RetireToRestrictiveTerminal,
+            Some("f".repeat(64)),
+            25,
+            100,
+            "node-a",
+        )?;
+        assert!(owner
+            .prepare_activation(&wrong_predecessor, &trust, &config, &capabilities, 4, 26,)
             .is_err());
         Ok(())
     }
@@ -985,7 +1110,17 @@ mod tests {
         })?;
         let config = config(directory.path());
         let key = SigningKey::from_bytes(&[9; 32]);
-        let bundle = bundle(&config, &key, 1, 1, None, 10, 100, "node-a")?;
+        let bundle = bundle(
+            &config,
+            &key,
+            1,
+            1,
+            PolicyDeliveryOperationV1::Activate,
+            None,
+            10,
+            100,
+            "node-a",
+        )?;
         let bundle_bytes = serde_json::to_vec(&bundle).context(super::JsonSnafu {
             path: "in-memory policy bundle",
         })?;
@@ -1029,6 +1164,7 @@ mod tests {
         key: &SigningKey,
         issuer_sequence: u64,
         distribution_sequence: u64,
+        operation: PolicyDeliveryOperationV1,
         predecessor: Option<String>,
         issued_utc_ns: i64,
         expires_utc_ns: i64,
@@ -1084,11 +1220,6 @@ mod tests {
             vec![target.clone()],
         )
         .context(PolicySnafu)?;
-        let operation = if predecessor.is_some() {
-            PolicyDeliveryOperationV1::Replace
-        } else {
-            PolicyDeliveryOperationV1::Activate
-        };
         let candidate = PolicyDeliveryCandidateV1::sign(
             target.tenant_id.clone(),
             source_revision_id,

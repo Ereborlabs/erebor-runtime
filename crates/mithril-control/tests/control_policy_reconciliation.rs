@@ -3,7 +3,8 @@ use std::path::{Path, PathBuf};
 
 use ed25519_dalek::SigningKey;
 use mithril_control::{
-    canonical_policy_spec_digest, ContainerKindV1, ControlStore, PolicyDeliveryOperationV1,
+    canonical_policy_spec_digest, ContainerKindV1, ControlStore, PolicyActivationAcknowledgementV1,
+    PolicyActivationStateV1, PolicyConditionKindV1, PolicyDeliveryOperationV1,
     PolicyDesiredStateConfigV1, PolicyDesiredStateOwner, PolicyDocumentV1, PolicySignerConfigV1,
     ProfileSealRequestV1, RegistryDigestsV1, WorkloadProtectionProfile, WorkloadTargetFactV1,
     POLICY_API_VERSION, POLICY_KIND, SUBMITTED_SPEC_DIGEST_ANNOTATION,
@@ -239,6 +240,99 @@ fn duplicate_profile_and_exact_workload_claims_do_not_replace_valid_rollout() ->
 }
 
 #[test]
+fn status_refreshes_from_durable_node_rollout_state() -> TestResult {
+    let directory = TempDir::new()?;
+    let store = ControlStore::open(directory.path())?;
+    let owner = make_owner(store.clone());
+    let policy = policy()?;
+    let resource = resource(&policy, "profile", OBJECT_UID, 1, false)?;
+    let first = owner.reconcile(&resource, &inventory(&"1".repeat(64)), NOW)?;
+    let bundle = &first.bundles[0];
+    owner.rollout_owner().acknowledge(
+        PolicyActivationAcknowledgementV1 {
+            acknowledgement_content_id: String::new(),
+            tenant_id: TENANT_ID.to_owned(),
+            node_id: "node-a".to_owned(),
+            node_boot_id: vec![1; 16],
+            label_epoch: 1,
+            candidate_content_id: bundle.candidate.candidate_content_id.clone(),
+            policy_source_revision_id: bundle.candidate.policy_source_revision_id.clone(),
+            target_snapshot_digest: bundle.candidate.target_snapshot_digest.clone(),
+            state: PolicyActivationStateV1::Active,
+            node_bound_generation_digest: Some("1".repeat(64)),
+            profile_generation_ref_id: Some(1),
+            readback_digest: Some("2".repeat(64)),
+            probe_result_digest: Some("3".repeat(64)),
+            reason_code: None,
+            observed_utc_ns: NOW + 1,
+            authenticated_channel_receipt_digest: "4".repeat(64),
+        }
+        .finalize()?,
+    )?;
+
+    let refreshed = owner.reconcile(&resource, &inventory(&"1".repeat(64)), NOW + 2)?;
+    assert_eq!(refreshed.status.rollout_counts.active, 1);
+    assert_eq!(refreshed.status.rollout_counts.total(), 1);
+    assert_eq!(refreshed.status.conditions.len(), 6);
+    assert!(refreshed.status.conditions.iter().any(|condition| {
+        condition.condition == PolicyConditionKindV1::Available && condition.status
+    }));
+    assert!(store
+        .next_bundle_for_node(
+            "node-a",
+            &bundle.candidate.candidate_content_id,
+            std::slice::from_ref(&bundle.bundle_digest),
+        )?
+        .is_none());
+    assert_eq!(store.commit_index(), 4);
+    Ok(())
+}
+
+#[test]
+fn rejected_candidate_stops_redelivery_and_projects_degraded_status() -> TestResult {
+    let directory = TempDir::new()?;
+    let store = ControlStore::open(directory.path())?;
+    let owner = make_owner(store.clone());
+    let policy = policy()?;
+    let resource = resource(&policy, "profile", OBJECT_UID, 1, false)?;
+    let first = owner.reconcile(&resource, &inventory(&"1".repeat(64)), NOW)?;
+    let bundle = &first.bundles[0];
+    assert_eq!(
+        store.next_bundle_for_node("node-a", "", &[])?,
+        Some(bundle.clone())
+    );
+    owner.rollout_owner().acknowledge(
+        PolicyActivationAcknowledgementV1 {
+            acknowledgement_content_id: String::new(),
+            tenant_id: TENANT_ID.to_owned(),
+            node_id: "node-a".to_owned(),
+            node_boot_id: vec![1; 16],
+            label_epoch: 1,
+            candidate_content_id: bundle.candidate.candidate_content_id.clone(),
+            policy_source_revision_id: bundle.candidate.policy_source_revision_id.clone(),
+            target_snapshot_digest: bundle.candidate.target_snapshot_digest.clone(),
+            state: PolicyActivationStateV1::Rejected,
+            node_bound_generation_digest: None,
+            profile_generation_ref_id: None,
+            readback_digest: None,
+            probe_result_digest: None,
+            reason_code: Some("CAPABILITY_REJECTED".to_owned()),
+            observed_utc_ns: NOW + 1,
+            authenticated_channel_receipt_digest: "4".repeat(64),
+        }
+        .finalize()?,
+    )?;
+
+    assert!(store.next_bundle_for_node("node-a", "", &[])?.is_none());
+    let refreshed = owner.reconcile(&resource, &inventory(&"1".repeat(64)), NOW + 2)?;
+    assert_eq!(refreshed.status.rollout_counts.rejected, 1);
+    assert!(refreshed.status.conditions.iter().any(|condition| {
+        condition.condition == PolicyConditionKindV1::Degraded && condition.status
+    }));
+    Ok(())
+}
+
+#[test]
 fn deletion_names_exact_predecessor_and_recreate_gets_a_new_source_identity() -> TestResult {
     let directory = TempDir::new()?;
     let store = ControlStore::open(directory.path())?;
@@ -284,7 +378,18 @@ fn deletion_names_exact_predecessor_and_recreate_gets_a_new_source_identity() ->
     );
     assert_eq!(
         recreated.bundles[0].candidate.operation,
-        PolicyDeliveryOperationV1::Activate
+        PolicyDeliveryOperationV1::Replace
+    );
+    assert_eq!(
+        recreated.bundles[0]
+            .candidate
+            .predecessor_candidate_content_id
+            .as_deref(),
+        Some(retiring.bundles[0].candidate.candidate_content_id.as_str())
+    );
+    assert!(
+        recreated.bundles[0].candidate.distribution_sequence
+            > retiring.bundles[0].candidate.distribution_sequence
     );
     Ok(())
 }
