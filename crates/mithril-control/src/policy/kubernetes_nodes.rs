@@ -385,7 +385,7 @@ mod tests {
     use k8s_openapi::api::apps::v1::{DaemonSet, DaemonSetSpec};
     use k8s_openapi::api::core::v1::{
         Affinity, Node, NodeAffinity, NodeSelector, NodeSelectorRequirement, NodeSelectorTerm,
-        NodeSpec, PodSpec, PodTemplateSpec,
+        NodeSpec, PodSpec, PodTemplateSpec, Taint,
     };
     use k8s_openapi::apimachinery::pkg::apis::meta::v1::{LabelSelector, ObjectMeta};
 
@@ -539,6 +539,71 @@ mod tests {
         };
         requirement.operator = "Gt".to_owned();
         assert!(DaemonSetNodeConstraintsV1::from_daemon_set(&daemon_set).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn empty_daemon_set_constraints_leave_scheduler_choice_open() -> crate::Result<()> {
+        let mut daemon_set = daemon_set();
+        let pod_spec = daemon_set
+            .spec
+            .as_mut()
+            .and_then(|spec| spec.template.spec.as_mut())
+            .ok_or_else(|| crate::Error::InvalidConfiguration {
+                reason: "test DaemonSet has no Pod specification".to_owned(),
+                location: snafu::Location::default(),
+            })?;
+        pod_spec.node_selector = None;
+        pod_spec.affinity = None;
+        let constraints = DaemonSetNodeConstraintsV1::from_daemon_set(&daemon_set)?;
+        assert!(constraints.matches_node(&node("node-a", "general", "c")));
+        assert!(constraints.matches_node(&node("node-b", "protected", "a")));
+        Ok(())
+    }
+
+    #[test]
+    fn daemon_set_selector_change_removes_stale_readiness_projection() -> crate::Result<()> {
+        let original = DaemonSetNodeConstraintsV1::from_daemon_set(&daemon_set())?;
+        let mut changed_daemon_set = daemon_set();
+        changed_daemon_set
+            .spec
+            .as_mut()
+            .and_then(|spec| spec.template.spec.as_mut())
+            .and_then(|spec| spec.node_selector.as_mut())
+            .ok_or_else(|| crate::Error::InvalidConfiguration {
+                reason: "test DaemonSet has no node selector".to_owned(),
+                location: snafu::Location::default(),
+            })?
+            .insert("pool".to_owned(), "next".to_owned());
+        let changed = DaemonSetNodeConstraintsV1::from_daemon_set(&changed_daemon_set)?;
+        let mut selected = node("node-a", "protected", "a");
+        selected
+            .metadata
+            .labels
+            .get_or_insert_default()
+            .insert(KUBERNETES_READY_LABEL.to_owned(), "true".to_owned());
+        selected
+            .spec
+            .get_or_insert_default()
+            .taints
+            .get_or_insert_default()
+            .push(Taint {
+                effect: "NoSchedule".to_owned(),
+                key: KUBERNETES_NOT_READY_TAINT.to_owned(),
+                time_added: None,
+                value: Some("true".to_owned()),
+            });
+        assert!(original.matches_node(&selected));
+        assert!(!changed.matches_node(&selected));
+        let patch = node_projection_patch(&selected, &changed, None);
+        assert_eq!(
+            patch.pointer("/metadata/labels/mithril.erebor.dev~1ready"),
+            Some(&serde_json::Value::Null)
+        );
+        assert!(patch
+            .pointer("/spec/taints")
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(Vec::is_empty));
         Ok(())
     }
 }
