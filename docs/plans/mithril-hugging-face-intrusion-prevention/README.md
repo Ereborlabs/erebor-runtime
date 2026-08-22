@@ -159,7 +159,7 @@ computable local deny into allow.
 | `TrustBundleOwner` | 1 bootstrap; 6.2 rotation/revocation/distribution |
 | `AdministrativeApprovalOwner` | 4 approved administrative-exec transaction |
 | `AuthorizationProofOwner` | 2 foundations; 4, 7, and 10 owning authorization families |
-| `WorkloadBindingOwner` | 2 runtime roots; 8 Kubernetes admission/node floor |
+| `WorkloadBindingOwner` | 2 runtime roots; 6.2 protected Pod scheduling and runtime gate; 8 privileged/unmatched node floor |
 | `NativeSecurityStateOwner` | 2 identity; 4 enforcement; 9 response references |
 | `PolicyDesiredStateOwner` | 6.2 CRD source reconciliation |
 | `PolicyCompiler` | 3 compile/sign; 6.2 Control operation |

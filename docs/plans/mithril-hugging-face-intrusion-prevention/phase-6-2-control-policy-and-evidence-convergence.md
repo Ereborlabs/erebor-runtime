@@ -8,6 +8,8 @@ Master: [Mithril Hugging Face Intrusion Prevention](./README.md)
 
 Design: [Validated readable architecture](./policy-and-protection-algorithm-architecture-readable.md)
 
+Closure matrix: [Phase 6.2 closure matrix](./phase-6-2-closure-matrix.md)
+
 Manual acceptance: [Phase 6.2 runbook](./manual-testing/phase-6-2-manual-acceptance.md)
 
 Implementation review: [Phase 6.2 review guide](./phase-6-2-implementation-review.md)
