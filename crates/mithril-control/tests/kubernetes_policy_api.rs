@@ -118,16 +118,20 @@ fn strict_resource_decode_and_submitted_digest_reject_unknown_or_pruned_input() 
 }
 
 #[test]
-fn status_uses_bounded_informational_fields_and_rbac_cannot_write_policy_spec() -> TestResult {
+fn status_is_bounded_and_control_rbac_has_no_policy_write_authority() -> TestResult {
     let status = mithril_control::WorkloadProtectionProfileStatusV1::default();
     let value = serde_json::to_value(status)?;
     assert!(value.get("observedGeneration").is_some());
     assert!(value.get("rolloutCounts").is_some());
     assert!(value.get("observed_generation").is_none());
 
+    assert!(CONTROL_RBAC.contains("kind: ClusterRole"));
+    assert!(CONTROL_RBAC.contains("resources: [\"workloadprotectionprofiles\"]"));
     assert!(CONTROL_RBAC.contains("workloadprotectionprofiles/status"));
-    assert!(CONTROL_RBAC.contains("workloadprotectionprofiles/finalizers"));
+    assert!(!CONTROL_RBAC.contains("workloadprotectionprofiles/finalizers"));
     assert!(CONTROL_RBAC.contains("verbs: [\"get\", \"list\", \"watch\"]"));
+    assert!(CONTROL_RBAC.contains("resourceNames: [\"mithril-node\"]"));
+    assert!(CONTROL_RBAC.contains("verbs: [\"get\", \"list\", \"watch\", \"patch\"]"));
     assert!(!CONTROL_RBAC.contains("\"create\""));
     assert!(!CONTROL_RBAC.contains("\"delete\""));
     assert!(!CONTROL_RBAC.contains("resources: [\"secrets\"]"));
