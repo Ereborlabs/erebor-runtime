@@ -1,0 +1,1205 @@
+use std::collections::{BTreeMap, BTreeSet};
+use std::fs::{self, File, OpenOptions};
+use std::io::Write as _;
+use std::path::{Path, PathBuf};
+
+use mithril_control::{
+    CapabilityRecord, PolicyActivationAcknowledgement, PolicyBundleV1, PolicyDeliveryOperationV1,
+    PolicyInventory, MAX_POLICY_BUNDLE_BYTES, MAX_POLICY_BUNDLE_CHUNK_BYTES,
+};
+use serde::{Deserialize, Serialize};
+use sha2::{Digest as _, Sha256};
+use snafu::{ensure, ResultExt as _};
+
+use crate::error::{ControlProtocolSnafu, IdentityStateSnafu, IoSnafu, JsonSnafu, PolicySnafu};
+use crate::{ControlConnection, NodeConfig, PolicyCandidateConfig, Result, TrustCache};
+
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct PolicyDeliveryStateV1 {
+    active_candidate_content_id: Option<String>,
+    active_bundle_digest: Option<String>,
+    active_profiles: BTreeMap<String, ActivePolicyRecordV1>,
+    pending_activation: Option<PendingPolicyRecordV1>,
+    issuer_high_water: BTreeMap<String, SequenceV1>,
+    distribution_high_water: BTreeMap<String, SequenceV1>,
+    control_acknowledged_candidate_content_id: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(deny_unknown_fields)]
+struct SequenceV1 {
+    epoch: u64,
+    sequence: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct ActivePolicyRecordV1 {
+    tenant_id: String,
+    candidate_content_id: String,
+    policy_source_revision_id: String,
+    target_snapshot_digest: String,
+    bundle_digest: String,
+    artifact_file: String,
+    public_key_file: String,
+    profile_generation_ref_id: u64,
+    binding_ids: Vec<String>,
+    node_bound_generation_digest: String,
+    readback_digest: String,
+    probe_result_digest: String,
+    observed_utc_ns: i64,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct PendingPolicyRecordV1 {
+    candidate_content_id: String,
+    bundle_digest: String,
+    profile_id: String,
+    artifact_file: String,
+    public_key_file: String,
+    bundle_file: String,
+    profile_generation_ref_id: u64,
+    binding_ids: Vec<String>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct TransferStateV1 {
+    candidate_content_id: String,
+    bundle_digest: String,
+    bundle_bytes: u64,
+    chunk_count: u32,
+    chunk_digests: BTreeMap<u32, String>,
+}
+
+pub(crate) struct PreparedPolicyActivationV1 {
+    pub config: NodeConfig,
+    pub profile_id: String,
+    pub binding_ids: Vec<String>,
+    pub profile_generation_ref_id: u64,
+}
+
+pub(crate) struct PolicyActivationProofV1 {
+    pub node_bound_generation_digest: String,
+    pub readback_digest: String,
+    pub probe_result_digest: String,
+    pub observed_utc_ns: i64,
+}
+
+pub(crate) struct NodePolicyDeliveryOwner {
+    root: PathBuf,
+    state_path: PathBuf,
+    transfer_path: PathBuf,
+    state: PolicyDeliveryStateV1,
+}
+
+impl NodePolicyDeliveryOwner {
+    pub(crate) fn load(state_directory: &Path) -> Result<Self> {
+        let root = state_directory.join("policy-delivery-v1");
+        let state_path = root.join("state.json");
+        let transfer_path = root.join("transfer.json");
+        fs::create_dir_all(root.join("bundles")).context(IoSnafu { path: &root })?;
+        fs::create_dir_all(root.join("transfers")).context(IoSnafu { path: &root })?;
+        let state = match fs::read(&state_path) {
+            Ok(bytes) => serde_json::from_slice(&bytes).context(JsonSnafu { path: &state_path })?,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                PolicyDeliveryStateV1::default()
+            }
+            Err(source) => {
+                return Err(crate::Error::Io {
+                    path: state_path,
+                    source,
+                    location: snafu::Location::default(),
+                });
+            }
+        };
+        let owner = Self {
+            root,
+            state_path,
+            transfer_path,
+            state,
+        };
+        owner.validate_state()?;
+        Ok(owner)
+    }
+
+    pub(crate) fn restore_config(
+        &self,
+        config: &mut NodeConfig,
+        trust: &TrustCache,
+        now_utc_ns: i64,
+    ) -> Result<()> {
+        for (profile_id, record) in &self.state.active_profiles {
+            let artifact_path = self.checked_bundle_file(&record.artifact_file)?;
+            let public_key_path = self.checked_bundle_file(&record.public_key_file)?;
+            ensure!(
+                artifact_path.is_file() && public_key_path.is_file(),
+                IdentityStateSnafu {
+                    reason: "the active policy cache has a missing artifact or public key",
+                }
+            );
+            config.policy_candidates.retain(|candidate| {
+                candidate.artifact_path != artifact_path
+                    && candidate.public_key_path != public_key_path
+            });
+            config.policy_candidates.push(PolicyCandidateConfig {
+                artifact_path,
+                public_key_path,
+                rollback_authorization_path: None,
+                rollback_public_key_path: None,
+            });
+            let binding_ids = record.binding_ids.iter().collect::<BTreeSet<_>>();
+            for binding in &mut config.workload_bindings {
+                if binding.profile_id == *profile_id && binding_ids.contains(&binding.binding_id) {
+                    binding.active_profile_generation_ref_id = record.profile_generation_ref_id;
+                }
+            }
+        }
+        if let Some(pending) = &self.state.pending_activation {
+            let artifact_path = self.checked_bundle_file(&pending.artifact_file)?;
+            let public_key_path = self.checked_bundle_file(&pending.public_key_file)?;
+            let bundle_path = self.checked_bundle_file(&pending.bundle_file)?;
+            ensure!(
+                artifact_path.is_file() && public_key_path.is_file() && bundle_path.is_file(),
+                IdentityStateSnafu {
+                    reason: "the pending policy cache has a missing artifact, key, or bundle",
+                }
+            );
+            let bundle = self.read_bundle(&bundle_path)?;
+            self.verify_pending_bundle(pending, &bundle, trust, config, now_utc_ns)?;
+            config.policy_candidates.retain(|candidate| {
+                candidate.artifact_path != artifact_path
+                    && candidate.public_key_path != public_key_path
+            });
+            config.policy_candidates.push(PolicyCandidateConfig {
+                artifact_path,
+                public_key_path,
+                rollback_authorization_path: None,
+                rollback_public_key_path: None,
+            });
+            let binding_ids = pending.binding_ids.iter().collect::<BTreeSet<_>>();
+            for binding in &mut config.workload_bindings {
+                if binding.profile_id == pending.profile_id
+                    && binding_ids.contains(&binding.binding_id)
+                {
+                    binding.active_profile_generation_ref_id = pending.profile_generation_ref_id;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub(crate) fn active_candidate_content_id(&self) -> Option<&str> {
+        self.state.active_candidate_content_id.as_deref()
+    }
+
+    pub(crate) fn durable_bundle_digests(&self) -> Vec<String> {
+        self.state
+            .active_profiles
+            .values()
+            .map(|record| record.bundle_digest.clone())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect()
+    }
+
+    pub(crate) async fn fetch_candidate(
+        &mut self,
+        connection: &mut ControlConnection,
+    ) -> Result<Option<PolicyBundleV1>> {
+        let inventory = connection
+            .policy_inventory(
+                self.active_candidate_content_id(),
+                self.durable_bundle_digests(),
+            )
+            .await?;
+        if !inventory.candidate_available {
+            return Ok(None);
+        }
+        self.validate_inventory(&inventory)?;
+        if self.state.active_candidate_content_id.as_deref()
+            == Some(inventory.candidate_content_id.as_str())
+        {
+            return Ok(None);
+        }
+        let mut transfer = self.load_transfer()?;
+        if transfer.candidate_content_id != inventory.candidate_content_id
+            || transfer.bundle_digest != inventory.bundle_digest
+            || transfer.bundle_bytes != inventory.bundle_bytes
+            || transfer.chunk_count != inventory.chunk_count
+        {
+            transfer = TransferStateV1 {
+                candidate_content_id: inventory.candidate_content_id.clone(),
+                bundle_digest: inventory.bundle_digest.clone(),
+                bundle_bytes: inventory.bundle_bytes,
+                chunk_count: inventory.chunk_count,
+                chunk_digests: BTreeMap::new(),
+            };
+            self.persist_transfer(&transfer)?;
+        }
+        let directory = self.transfer_directory(&inventory.bundle_digest);
+        fs::create_dir_all(&directory).context(IoSnafu { path: &directory })?;
+        for index in 0..inventory.chunk_count {
+            let path = directory.join(format!("{index:08}.chunk"));
+            if self.transferred_chunk_is_valid(&transfer, index) {
+                continue;
+            }
+            let chunk = connection
+                .fetch_policy_chunk(
+                    inventory.candidate_content_id.clone(),
+                    inventory.bundle_digest.clone(),
+                    index,
+                )
+                .await?;
+            ensure!(
+                chunk.candidate_content_id == inventory.candidate_content_id
+                    && chunk.bundle_digest == inventory.bundle_digest
+                    && chunk.chunk_index == index
+                    && chunk.chunk_count == inventory.chunk_count
+                    && chunk.payload.len() <= MAX_POLICY_BUNDLE_CHUNK_BYTES
+                    && sha256(&chunk.payload) == chunk.chunk_sha256,
+                ControlProtocolSnafu {
+                    reason: "Control delivered an invalid policy chunk",
+                }
+            );
+            write_atomic(&path, &chunk.payload)?;
+            transfer.chunk_digests.insert(index, chunk.chunk_sha256);
+            self.persist_transfer(&transfer)?;
+        }
+        let bytes = self.assemble_transfer(&transfer)?;
+        let bundle: PolicyBundleV1 =
+            serde_json::from_slice(&bytes).context(JsonSnafu { path: &directory })?;
+        ensure!(
+            bundle.bundle_digest == inventory.bundle_digest
+                && bundle.candidate.candidate_content_id == inventory.candidate_content_id,
+            ControlProtocolSnafu {
+                reason: "the assembled policy bundle differs from inventory",
+            }
+        );
+        Ok(Some(bundle))
+    }
+
+    pub(crate) fn prepare_activation(
+        &self,
+        bundle: &PolicyBundleV1,
+        trust: &TrustCache,
+        config: &NodeConfig,
+        capabilities: &[CapabilityRecord],
+        profile_generation_ref_id: u64,
+        now_utc_ns: i64,
+    ) -> Result<PreparedPolicyActivationV1> {
+        let candidate = &bundle.candidate;
+        let profile = &bundle.profile_artifact;
+        let profile_id = profile.header.profile_id.clone();
+        let trusted_key =
+            trust.policy_signing_key(&candidate.signing_key_id, profile.header.sequence_epoch)?;
+        ensure!(
+            candidate.signing_key_id == profile.signed_profile.signing_key_id
+                && trusted_key.to_bytes().as_slice() == bundle.profile_signing_public_key
+                && candidate.tenant_id
+                    == config
+                        .evidence
+                        .as_ref()
+                        .map(|evidence| evidence.tenant_id.as_str())
+                        .unwrap_or_default(),
+            ControlProtocolSnafu {
+                reason: "the policy bundle signer or tenant is not trusted for this node",
+            }
+        );
+        bundle
+            .verify(&trusted_key, &config.node_id, now_utc_ns)
+            .context(PolicySnafu)?;
+        let supported_capabilities = capabilities
+            .iter()
+            .filter(|capability| matches!(capability.state.as_str(), "SUPPORTED" | "DEGRADED"))
+            .map(|capability| capability.capability_id.as_str())
+            .collect::<BTreeSet<_>>();
+        ensure!(
+            profile
+                .policy_document
+                .required_capability_ids
+                .iter()
+                .all(|capability| supported_capabilities.contains(capability.as_str())),
+            ControlProtocolSnafu {
+                reason: "the node does not support every required policy capability",
+            }
+        );
+        ensure!(
+            candidate.operation != PolicyDeliveryOperationV1::RetireToRestrictiveTerminal,
+            ControlProtocolSnafu {
+                reason: "the retirement candidate has no stageable restrictive terminal artifact",
+            }
+        );
+        let issuer = SequenceV1 {
+            epoch: profile.header.sequence_epoch,
+            sequence: profile.header.issuer_sequence,
+        };
+        let distribution = SequenceV1 {
+            epoch: candidate.distribution_sequence_epoch,
+            sequence: candidate.distribution_sequence,
+        };
+        let current = self.state.active_profiles.get(&profile_id);
+        ensure!(
+            self.state
+                .issuer_high_water
+                .get(&candidate.signing_key_id)
+                .is_none_or(|high_water| issuer > *high_water)
+                && self
+                    .state
+                    .distribution_high_water
+                    .get(&profile_id)
+                    .is_none_or(|high_water| distribution > *high_water)
+                && current.map_or_else(
+                    || {
+                        candidate.operation == PolicyDeliveryOperationV1::Activate
+                            && candidate.predecessor_candidate_content_id.is_none()
+                    },
+                    |current| {
+                        candidate.operation == PolicyDeliveryOperationV1::Replace
+                            && candidate.predecessor_candidate_content_id.as_deref()
+                                == Some(current.candidate_content_id.as_str())
+                    }
+                ),
+            ControlProtocolSnafu {
+                reason:
+                    "the policy candidate failed issuer, distribution, or predecessor anti-replay",
+            }
+        );
+        let local_targets = config
+            .workload_bindings
+            .iter()
+            .filter(|binding| binding.profile_id == profile_id)
+            .map(|binding| {
+                Ok((
+                    crate::node::workload_binding_generation_digest(binding)?,
+                    binding.binding_id.clone(),
+                ))
+            })
+            .collect::<Result<BTreeMap<_, _>>>()?;
+        let target_digests = candidate
+            .exact_target
+            .workload_binding_generation_digests
+            .iter()
+            .collect::<BTreeSet<_>>();
+        ensure!(
+            !target_digests.is_empty()
+                && target_digests.len()
+                    == candidate
+                        .exact_target
+                        .workload_binding_generation_digests
+                        .len()
+                && target_digests
+                    .iter()
+                    .all(|digest| local_targets.contains_key(*digest)),
+            ControlProtocolSnafu {
+                reason: "the policy candidate does not bind exact local workloads",
+            }
+        );
+        let mut binding_ids = target_digests
+            .into_iter()
+            .filter_map(|digest| local_targets.get(digest).cloned())
+            .collect::<Vec<_>>();
+        binding_ids.sort();
+        let selected_bindings = config
+            .workload_bindings
+            .iter()
+            .filter(|binding| binding_ids.contains(&binding.binding_id))
+            .collect::<Vec<_>>();
+        let administrative_required =
+            profile
+                .policy_document
+                .entry_role_assignments
+                .iter()
+                .any(|assignment| {
+                    assignment.required_administrative_exec_approval
+                        && selected_bindings.iter().any(|binding| {
+                            assignment
+                                .workload_selector_ids
+                                .contains(&binding.workload_selector_id)
+                        })
+                });
+        ensure!(
+            !administrative_required || config.administrative_authorization.is_some(),
+            ControlProtocolSnafu {
+                reason: "the policy requires administrative authorization that is not configured",
+            }
+        );
+        let bundle_directory = self.root.join("bundles").join(&bundle.bundle_digest);
+        fs::create_dir_all(&bundle_directory).context(IoSnafu {
+            path: &bundle_directory,
+        })?;
+        let artifact_path = bundle_directory.join("profile-artifact.json");
+        let public_key_path = bundle_directory.join("profile-public-key.hex");
+        let bundle_path = bundle_directory.join("bundle.json");
+        write_atomic(
+            &artifact_path,
+            &serde_json::to_vec_pretty(&bundle.profile_artifact).context(JsonSnafu {
+                path: &artifact_path,
+            })?,
+        )?;
+        write_atomic(
+            &public_key_path,
+            hex::encode(&bundle.profile_signing_public_key).as_bytes(),
+        )?;
+        write_atomic(
+            &bundle_path,
+            &serde_json::to_vec(bundle).context(JsonSnafu { path: &bundle_path })?,
+        )?;
+        let mut dynamic = config.clone();
+        dynamic.policy_candidates.retain(|candidate| {
+            self.state.active_profiles.values().any(|active| {
+                self.checked_bundle_file(&active.artifact_file)
+                    .is_ok_and(|path| path == candidate.artifact_path)
+            })
+        });
+        dynamic
+            .policy_candidates
+            .retain(|candidate| candidate.artifact_path != artifact_path);
+        dynamic.policy_candidates.push(PolicyCandidateConfig {
+            artifact_path,
+            public_key_path,
+            rollback_authorization_path: None,
+            rollback_public_key_path: None,
+        });
+        let selected = binding_ids.iter().collect::<BTreeSet<_>>();
+        for binding in &mut dynamic.workload_bindings {
+            if selected.contains(&binding.binding_id) {
+                binding.active_profile_generation_ref_id = profile_generation_ref_id;
+            }
+        }
+        dynamic.validate()?;
+        Ok(PreparedPolicyActivationV1 {
+            config: dynamic,
+            profile_id,
+            binding_ids,
+            profile_generation_ref_id,
+        })
+    }
+
+    pub(crate) fn commit_activation(
+        &mut self,
+        bundle: &PolicyBundleV1,
+        prepared: &PreparedPolicyActivationV1,
+        proof: PolicyActivationProofV1,
+    ) -> Result<()> {
+        let profile = &bundle.profile_artifact;
+        let bundle_directory = self.root.join("bundles").join(&bundle.bundle_digest);
+        let artifact_path = bundle_directory.join("profile-artifact.json");
+        let public_key_path = bundle_directory.join("profile-public-key.hex");
+        let record = ActivePolicyRecordV1 {
+            tenant_id: bundle.candidate.tenant_id.clone(),
+            candidate_content_id: bundle.candidate.candidate_content_id.clone(),
+            policy_source_revision_id: bundle.candidate.policy_source_revision_id.clone(),
+            target_snapshot_digest: bundle.candidate.target_snapshot_digest.clone(),
+            bundle_digest: bundle.bundle_digest.clone(),
+            artifact_file: self.relative_bundle_file(&artifact_path)?,
+            public_key_file: self.relative_bundle_file(&public_key_path)?,
+            profile_generation_ref_id: prepared.profile_generation_ref_id,
+            binding_ids: prepared.binding_ids.clone(),
+            node_bound_generation_digest: proof.node_bound_generation_digest,
+            readback_digest: proof.readback_digest,
+            probe_result_digest: proof.probe_result_digest,
+            observed_utc_ns: proof.observed_utc_ns,
+        };
+        self.state.active_candidate_content_id =
+            Some(bundle.candidate.candidate_content_id.clone());
+        self.state.active_bundle_digest = Some(bundle.bundle_digest.clone());
+        self.state.control_acknowledged_candidate_content_id = None;
+        self.state.pending_activation = None;
+        self.state
+            .active_profiles
+            .insert(prepared.profile_id.clone(), record);
+        self.state.issuer_high_water.insert(
+            bundle.candidate.signing_key_id.clone(),
+            SequenceV1 {
+                epoch: profile.header.sequence_epoch,
+                sequence: profile.header.issuer_sequence,
+            },
+        );
+        self.state.distribution_high_water.insert(
+            prepared.profile_id.clone(),
+            SequenceV1 {
+                epoch: bundle.candidate.distribution_sequence_epoch,
+                sequence: bundle.candidate.distribution_sequence,
+            },
+        );
+        self.persist_state()
+    }
+
+    pub(crate) fn begin_activation(
+        &mut self,
+        bundle: &PolicyBundleV1,
+        prepared: &PreparedPolicyActivationV1,
+    ) -> Result<()> {
+        let bundle_directory = self.root.join("bundles").join(&bundle.bundle_digest);
+        let artifact_file =
+            self.relative_bundle_file(&bundle_directory.join("profile-artifact.json"))?;
+        let public_key_file =
+            self.relative_bundle_file(&bundle_directory.join("profile-public-key.hex"))?;
+        let bundle_file = self.relative_bundle_file(&bundle_directory.join("bundle.json"))?;
+        self.state.pending_activation = Some(PendingPolicyRecordV1 {
+            candidate_content_id: bundle.candidate.candidate_content_id.clone(),
+            bundle_digest: bundle.bundle_digest.clone(),
+            profile_id: prepared.profile_id.clone(),
+            artifact_file,
+            public_key_file,
+            bundle_file,
+            profile_generation_ref_id: prepared.profile_generation_ref_id,
+            binding_ids: prepared.binding_ids.clone(),
+        });
+        self.persist_state()
+    }
+
+    pub(crate) fn recover_pending_activation(
+        &mut self,
+        host: &erebor_interceptor::KernelHost,
+        config: &NodeConfig,
+    ) -> Result<()> {
+        let Some(pending) = self.state.pending_activation.clone() else {
+            return Ok(());
+        };
+        let bundle_path = self.checked_bundle_file(&pending.bundle_file)?;
+        let bundle = self.read_bundle(&bundle_path)?;
+        let receipt = crate::NodePolicyGenerationOwner::activation_receipt(
+            host,
+            &pending.profile_id,
+            pending.profile_generation_ref_id,
+        )?;
+        self.commit_activation(
+            &bundle,
+            &PreparedPolicyActivationV1 {
+                config: config.clone(),
+                profile_id: pending.profile_id,
+                binding_ids: pending.binding_ids,
+                profile_generation_ref_id: pending.profile_generation_ref_id,
+            },
+            PolicyActivationProofV1 {
+                node_bound_generation_digest: receipt.node_bound_generation_digest,
+                readback_digest: receipt.readback_digest,
+                probe_result_digest: receipt.probe_result_digest,
+                observed_utc_ns: crate::policy::current_utc_ns()?,
+            },
+        )
+    }
+
+    pub(crate) fn pending_acknowledgement(&self) -> Option<PolicyActivationAcknowledgement> {
+        let candidate_id = self.state.active_candidate_content_id.as_deref()?;
+        if self
+            .state
+            .control_acknowledged_candidate_content_id
+            .as_deref()
+            == Some(candidate_id)
+        {
+            return None;
+        }
+        let record = self
+            .state
+            .active_profiles
+            .values()
+            .find(|record| record.candidate_content_id == candidate_id)?;
+        Some(PolicyActivationAcknowledgement {
+            tenant_id: record.tenant_id.clone(),
+            candidate_content_id: record.candidate_content_id.clone(),
+            policy_source_revision_id: record.policy_source_revision_id.clone(),
+            target_snapshot_digest: record.target_snapshot_digest.clone(),
+            state: "ACTIVE".to_owned(),
+            node_bound_generation_digest: record.node_bound_generation_digest.clone(),
+            profile_generation_ref_id: record.profile_generation_ref_id,
+            readback_digest: record.readback_digest.clone(),
+            probe_result_digest: record.probe_result_digest.clone(),
+            reason_code: String::new(),
+            observed_utc_ns: record.observed_utc_ns,
+        })
+    }
+
+    pub(crate) fn acknowledge_control(&mut self, candidate_content_id: &str) -> Result<()> {
+        ensure!(
+            self.state.active_candidate_content_id.as_deref() == Some(candidate_content_id),
+            IdentityStateSnafu {
+                reason: "Control accepted an acknowledgement for a noncurrent candidate",
+            }
+        );
+        self.state.control_acknowledged_candidate_content_id =
+            Some(candidate_content_id.to_owned());
+        self.persist_state()
+    }
+
+    fn validate_inventory(&self, inventory: &PolicyInventory) -> Result<()> {
+        ensure!(
+            is_sha256(&inventory.candidate_content_id)
+                && is_sha256(&inventory.policy_source_revision_id)
+                && is_sha256(&inventory.target_snapshot_digest)
+                && is_sha256(&inventory.bundle_digest)
+                && inventory.bundle_bytes > 0
+                && inventory.bundle_bytes
+                    <= u64::try_from(MAX_POLICY_BUNDLE_BYTES).unwrap_or(u64::MAX)
+                && inventory.chunk_count > 0
+                && usize::try_from(inventory.chunk_count).is_ok_and(|count| count
+                    <= MAX_POLICY_BUNDLE_BYTES.div_ceil(MAX_POLICY_BUNDLE_CHUNK_BYTES))
+                && matches!(
+                    inventory.operation.as_str(),
+                    "ACTIVATE" | "REPLACE" | "RETIRE_TO_RESTRICTIVE_TERMINAL"
+                ),
+            ControlProtocolSnafu {
+                reason: "Control delivered invalid policy inventory",
+            }
+        );
+        Ok(())
+    }
+
+    fn load_transfer(&self) -> Result<TransferStateV1> {
+        match fs::read(&self.transfer_path) {
+            Ok(bytes) => serde_json::from_slice(&bytes).context(JsonSnafu {
+                path: &self.transfer_path,
+            }),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                Ok(TransferStateV1::default())
+            }
+            Err(source) => Err(crate::Error::Io {
+                path: self.transfer_path.clone(),
+                source,
+                location: snafu::Location::default(),
+            }),
+        }
+    }
+
+    fn persist_transfer(&self, transfer: &TransferStateV1) -> Result<()> {
+        let bytes = serde_json::to_vec_pretty(transfer).context(JsonSnafu {
+            path: &self.transfer_path,
+        })?;
+        write_atomic(&self.transfer_path, &bytes)
+    }
+
+    fn transfer_directory(&self, bundle_digest: &str) -> PathBuf {
+        self.root.join("transfers").join(bundle_digest)
+    }
+
+    fn transferred_chunk_is_valid(&self, transfer: &TransferStateV1, index: u32) -> bool {
+        transfer.chunk_digests.get(&index).is_some_and(|digest| {
+            file_sha256(
+                &self
+                    .transfer_directory(&transfer.bundle_digest)
+                    .join(format!("{index:08}.chunk")),
+            )
+            .as_deref()
+                == Some(digest)
+        })
+    }
+
+    fn assemble_transfer(&self, transfer: &TransferStateV1) -> Result<Vec<u8>> {
+        ensure!(
+            transfer.chunk_count > 0
+                && transfer.chunk_digests.len()
+                    == usize::try_from(transfer.chunk_count).unwrap_or(usize::MAX),
+            ControlProtocolSnafu {
+                reason: "the policy transfer is incomplete",
+            }
+        );
+        let mut bytes = Vec::with_capacity(
+            usize::try_from(transfer.bundle_bytes).unwrap_or(MAX_POLICY_BUNDLE_BYTES),
+        );
+        for index in 0..transfer.chunk_count {
+            ensure!(
+                self.transferred_chunk_is_valid(transfer, index),
+                ControlProtocolSnafu {
+                    reason: "a durable policy chunk failed exact digest readback",
+                }
+            );
+            let path = self
+                .transfer_directory(&transfer.bundle_digest)
+                .join(format!("{index:08}.chunk"));
+            bytes.extend(fs::read(&path).context(IoSnafu { path: &path })?);
+        }
+        ensure!(
+            bytes.len() == usize::try_from(transfer.bundle_bytes).unwrap_or(usize::MAX)
+                && bytes.len() <= MAX_POLICY_BUNDLE_BYTES,
+            ControlProtocolSnafu {
+                reason: "the assembled policy bundle has an invalid size",
+            }
+        );
+        Ok(bytes)
+    }
+
+    fn persist_state(&self) -> Result<()> {
+        let bytes = serde_json::to_vec_pretty(&self.state).context(JsonSnafu {
+            path: &self.state_path,
+        })?;
+        write_atomic(&self.state_path, &bytes)
+    }
+
+    fn validate_state(&self) -> Result<()> {
+        ensure!(
+            self.state
+                .active_profiles
+                .iter()
+                .all(|(profile_id, record)| {
+                    uuid::Uuid::parse_str(profile_id)
+                        .is_ok_and(|id| id.hyphenated().to_string() == *profile_id)
+                        && uuid::Uuid::parse_str(&record.tenant_id)
+                            .is_ok_and(|id| id.hyphenated().to_string() == record.tenant_id)
+                        && is_sha256(&record.candidate_content_id)
+                        && is_sha256(&record.policy_source_revision_id)
+                        && is_sha256(&record.target_snapshot_digest)
+                        && is_sha256(&record.bundle_digest)
+                        && record.profile_generation_ref_id > 0
+                        && !record.binding_ids.is_empty()
+                        && record.binding_ids.windows(2).all(|pair| pair[0] < pair[1])
+                        && is_sha256(&record.node_bound_generation_digest)
+                        && is_sha256(&record.readback_digest)
+                        && is_sha256(&record.probe_result_digest)
+                        && record.observed_utc_ns > 0
+                })
+                && self
+                    .state
+                    .pending_activation
+                    .as_ref()
+                    .is_none_or(|pending| {
+                        is_sha256(&pending.candidate_content_id)
+                            && is_sha256(&pending.bundle_digest)
+                            && uuid::Uuid::parse_str(&pending.profile_id)
+                                .is_ok_and(|id| id.hyphenated().to_string() == pending.profile_id)
+                            && pending.profile_generation_ref_id > 0
+                            && !pending.binding_ids.is_empty()
+                            && pending.binding_ids.windows(2).all(|pair| pair[0] < pair[1])
+                            && !pending.bundle_file.is_empty()
+                    }),
+            IdentityStateSnafu {
+                reason: "the durable policy delivery state is invalid",
+            }
+        );
+        Ok(())
+    }
+
+    fn relative_bundle_file(&self, path: &Path) -> Result<String> {
+        path.strip_prefix(&self.root)
+            .ok()
+            .and_then(Path::to_str)
+            .filter(|value| !value.is_empty() && !value.split('/').any(|part| part == ".."))
+            .map(str::to_owned)
+            .ok_or_else(|| {
+                IdentityStateSnafu {
+                    reason: "the policy cache path escapes its state directory".to_owned(),
+                }
+                .build()
+            })
+    }
+
+    fn checked_bundle_file(&self, relative: &str) -> Result<PathBuf> {
+        ensure!(
+            !relative.is_empty()
+                && !Path::new(relative).is_absolute()
+                && !relative.split('/').any(|part| part == ".."),
+            IdentityStateSnafu {
+                reason: "the policy cache contains an unsafe relative path",
+            }
+        );
+        Ok(self.root.join(relative))
+    }
+
+    fn read_bundle(&self, path: &Path) -> Result<PolicyBundleV1> {
+        serde_json::from_slice(&fs::read(path).context(IoSnafu { path })?)
+            .context(JsonSnafu { path })
+    }
+
+    fn verify_pending_bundle(
+        &self,
+        pending: &PendingPolicyRecordV1,
+        bundle: &PolicyBundleV1,
+        trust: &TrustCache,
+        config: &NodeConfig,
+        now_utc_ns: i64,
+    ) -> Result<()> {
+        let key = trust.policy_signing_key(
+            &bundle.candidate.signing_key_id,
+            bundle.profile_artifact.header.sequence_epoch,
+        )?;
+        bundle
+            .verify(&key, &config.node_id, now_utc_ns)
+            .context(PolicySnafu)?;
+        ensure!(
+            pending.candidate_content_id == bundle.candidate.candidate_content_id
+                && pending.bundle_digest == bundle.bundle_digest
+                && pending.profile_id == bundle.profile_artifact.header.profile_id
+                && key.to_bytes().as_slice() == bundle.profile_signing_public_key.as_slice(),
+            IdentityStateSnafu {
+                reason: "the pending policy record differs from its verified bundle",
+            }
+        );
+        Ok(())
+    }
+}
+
+fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
+    let parent = path.parent().ok_or_else(|| {
+        IdentityStateSnafu {
+            reason: "the policy state path has no parent".to_owned(),
+        }
+        .build()
+    })?;
+    fs::create_dir_all(parent).context(IoSnafu { path: parent })?;
+    let temporary = path.with_extension("next");
+    let mut file = OpenOptions::new()
+        .create(true)
+        .truncate(true)
+        .write(true)
+        .open(&temporary)
+        .context(IoSnafu { path: &temporary })?;
+    file.write_all(bytes)
+        .context(IoSnafu { path: &temporary })?;
+    file.sync_all().context(IoSnafu { path: &temporary })?;
+    fs::rename(&temporary, path).context(IoSnafu { path })?;
+    File::open(parent)
+        .context(IoSnafu { path: parent })?
+        .sync_all()
+        .context(IoSnafu { path: parent })
+}
+
+fn file_sha256(path: &Path) -> Option<String> {
+    fs::read(path).ok().map(|bytes| sha256(&bytes))
+}
+
+fn sha256(bytes: &[u8]) -> String {
+    format!("{:x}", Sha256::digest(bytes))
+}
+
+fn is_sha256(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use ed25519_dalek::SigningKey;
+    use mithril_control::{
+        CapabilityRecord, PolicyCompiler, PolicyDeliveryCandidateV1, PolicyDocumentV1,
+        PolicySignerTrust, PolicyTargetSnapshotV1, PolicyTargetV1, ProfileCandidateArtifactV1,
+        ProfileSealRequestV1, RegistryDigestsV1,
+    };
+    use sha2::{Digest as _, Sha256};
+    use snafu::ResultExt as _;
+
+    use super::{
+        write_atomic, NodePolicyDeliveryOwner, PolicyActivationProofV1, PolicyDeliveryOperationV1,
+        TransferStateV1,
+    };
+    use crate::error::{IoSnafu, PolicySnafu};
+    use crate::trust::InstalledPolicySignerV1;
+    use crate::{
+        ContainerKindV1, EvidenceConfig, InterceptorConfig, NodeConfig, NodeControlConfig,
+        TrustCache, WorkloadBindingConfig,
+    };
+
+    #[test]
+    fn verified_candidate_is_durable_replay_safe_and_acknowledged_once() -> crate::Result<()> {
+        let directory = tempfile::tempdir().context(IoSnafu {
+            path: "temporary policy delivery directory",
+        })?;
+        let config = config(directory.path());
+        let key = SigningKey::from_bytes(&[9; 32]);
+        let bundle = bundle(&config, &key, 1, 1, None, 10, 100, "node-a")?;
+        let trust = trust(directory.path(), &key)?;
+        let capabilities = capabilities();
+        let mut owner = NodePolicyDeliveryOwner::load(directory.path())?;
+
+        let prepared = owner.prepare_activation(&bundle, &trust, &config, &capabilities, 2, 20)?;
+        assert_eq!(prepared.profile_generation_ref_id, 2);
+        assert!(prepared.config.policy_candidates[0].artifact_path.is_file());
+        owner.begin_activation(&bundle, &prepared)?;
+
+        let mut restored = config.clone();
+        NodePolicyDeliveryOwner::load(directory.path())?.restore_config(
+            &mut restored,
+            &trust,
+            20,
+        )?;
+        assert_eq!(
+            restored.workload_bindings[0].active_profile_generation_ref_id,
+            2
+        );
+
+        owner.commit_activation(
+            &bundle,
+            &prepared,
+            PolicyActivationProofV1 {
+                node_bound_generation_digest: "1".repeat(64),
+                readback_digest: "2".repeat(64),
+                probe_result_digest: "3".repeat(64),
+                observed_utc_ns: 21,
+            },
+        )?;
+        let Some(acknowledgement) = owner.pending_acknowledgement() else {
+            return super::IdentityStateSnafu {
+                reason: "a committed activation needs one Control acknowledgement".to_owned(),
+            }
+            .fail();
+        };
+        assert_eq!(acknowledgement.state, "ACTIVE");
+        assert_eq!(acknowledgement.profile_generation_ref_id, 2);
+
+        let mut reloaded = NodePolicyDeliveryOwner::load(directory.path())?;
+        assert!(reloaded.pending_acknowledgement().is_some());
+        reloaded.acknowledge_control(&bundle.candidate.candidate_content_id)?;
+        assert!(reloaded.pending_acknowledgement().is_none());
+        assert!(reloaded
+            .prepare_activation(&bundle, &trust, &config, &capabilities, 3, 22)
+            .is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn candidate_rejects_missing_capability_wrong_target_and_expiry() -> crate::Result<()> {
+        let directory = tempfile::tempdir().context(IoSnafu {
+            path: "temporary rejected policy directory",
+        })?;
+        let config = config(directory.path());
+        let key = SigningKey::from_bytes(&[9; 32]);
+        let trust = trust(directory.path(), &key)?;
+        let owner = NodePolicyDeliveryOwner::load(directory.path())?;
+        let current = bundle(&config, &key, 1, 1, None, 10, 100, "node-a")?;
+        assert!(owner
+            .prepare_activation(&current, &trust, &config, &capabilities()[..1], 2, 20,)
+            .is_err());
+
+        let wrong_target = bundle(&config, &key, 1, 1, None, 10, 100, "node-b")?;
+        assert!(owner
+            .prepare_activation(&wrong_target, &trust, &config, &capabilities(), 2, 20,)
+            .is_err());
+
+        let expired = bundle(&config, &key, 1, 1, None, 10, 19, "node-a")?;
+        assert!(owner
+            .prepare_activation(&expired, &trust, &config, &capabilities(), 2, 20,)
+            .is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn interrupted_chunk_transfer_resumes_only_from_exact_durable_readback() -> crate::Result<()> {
+        let directory = tempfile::tempdir().context(IoSnafu {
+            path: "temporary interrupted transfer directory",
+        })?;
+        let config = config(directory.path());
+        let key = SigningKey::from_bytes(&[9; 32]);
+        let bundle = bundle(&config, &key, 1, 1, None, 10, 100, "node-a")?;
+        let bundle_bytes = serde_json::to_vec(&bundle).context(super::JsonSnafu {
+            path: "in-memory policy bundle",
+        })?;
+        let split = bundle_bytes.len() / 2;
+        let chunks = [&bundle_bytes[..split], &bundle_bytes[split..]];
+        let owner = NodePolicyDeliveryOwner::load(directory.path())?;
+        let mut transfer = TransferStateV1 {
+            candidate_content_id: bundle.candidate.candidate_content_id.clone(),
+            bundle_digest: bundle.bundle_digest.clone(),
+            bundle_bytes: u64::try_from(bundle_bytes.len()).unwrap_or(u64::MAX),
+            chunk_count: 2,
+            chunk_digests: BTreeMap::new(),
+        };
+        let transfer_directory = owner.transfer_directory(&bundle.bundle_digest);
+        std::fs::create_dir_all(&transfer_directory).context(IoSnafu {
+            path: &transfer_directory,
+        })?;
+        write_atomic(&transfer_directory.join("00000000.chunk"), chunks[0])?;
+        transfer.chunk_digests.insert(0, super::sha256(chunks[0]));
+        owner.persist_transfer(&transfer)?;
+
+        let resumed = NodePolicyDeliveryOwner::load(directory.path())?;
+        let mut transfer = resumed.load_transfer()?;
+        assert!(resumed.transferred_chunk_is_valid(&transfer, 0));
+        for (index, chunk) in chunks.iter().enumerate().skip(1) {
+            let index = u32::try_from(index).unwrap_or(u32::MAX);
+            write_atomic(&transfer_directory.join(format!("{index:08}.chunk")), chunk)?;
+            transfer.chunk_digests.insert(index, super::sha256(chunk));
+        }
+        assert_eq!(resumed.assemble_transfer(&transfer)?, bundle_bytes);
+
+        write_atomic(&transfer_directory.join("00000000.chunk"), b"tampered")?;
+        assert!(!resumed.transferred_chunk_is_valid(&transfer, 0));
+        assert!(resumed.assemble_transfer(&transfer).is_err());
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn bundle(
+        config: &NodeConfig,
+        key: &SigningKey,
+        issuer_sequence: u64,
+        distribution_sequence: u64,
+        predecessor: Option<String>,
+        issued_utc_ns: i64,
+        expires_utc_ns: i64,
+        node_id: &str,
+    ) -> crate::Result<mithril_control::PolicyBundleV1> {
+        let document = PolicyDocumentV1::parse(
+            std::path::Path::new("policy-v1.yaml"),
+            include_bytes!("../../mithril-control/tests/fixtures/policy-v1.yaml"),
+        )
+        .context(PolicySnafu)?;
+        let compiled = PolicyCompiler.compile(&document).context(PolicySnafu)?;
+        let artifact = ProfileCandidateArtifactV1::sign(
+            &document,
+            compiled,
+            ProfileSealRequestV1 {
+                signing_key_id: "test-key".to_owned(),
+                issuer_id: "88888888-8888-4888-8888-888888888888".to_owned(),
+                sequence_epoch: 1,
+                issuer_sequence,
+                rollback_authorization_id: None,
+                registry_digests: RegistryDigestsV1 {
+                    provider_numeric_registry_bundle_digest: "1".repeat(64),
+                    required_capability_schema_digest: "2".repeat(64),
+                    source_selector_registry_digest: "3".repeat(64),
+                    object_classifier_registry_digest: "4".repeat(64),
+                    reason_code_registry_digest: "5".repeat(64),
+                    correlation_package_registry_digest: "6".repeat(64),
+                    provider_vocabulary_registry_digest: "7".repeat(64),
+                },
+            },
+            key,
+        )
+        .context(PolicySnafu)?;
+        let signed_profile_digest = format!(
+            "{:x}",
+            Sha256::digest(serde_json::to_vec(&artifact).context(super::JsonSnafu {
+                path: "in-memory signed profile"
+            })?)
+        );
+        let target = PolicyTargetV1 {
+            tenant_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa".to_owned(),
+            cluster_uid: "55555555-5555-4555-8555-555555555555".to_owned(),
+            node_id: node_id.to_owned(),
+            workload_binding_generation_digests: vec![
+                crate::node::workload_binding_generation_digest(&config.workload_bindings[0])?,
+            ],
+        };
+        let source_revision_id = "a".repeat(64);
+        let snapshot = PolicyTargetSnapshotV1::new(
+            source_revision_id.clone(),
+            signed_profile_digest.clone(),
+            1,
+            vec![target.clone()],
+        )
+        .context(PolicySnafu)?;
+        let operation = if predecessor.is_some() {
+            PolicyDeliveryOperationV1::Replace
+        } else {
+            PolicyDeliveryOperationV1::Activate
+        };
+        let candidate = PolicyDeliveryCandidateV1::sign(
+            target.tenant_id.clone(),
+            source_revision_id,
+            signed_profile_digest,
+            &snapshot,
+            target,
+            operation,
+            predecessor,
+            1,
+            distribution_sequence,
+            issued_utc_ns,
+            expires_utc_ns,
+            "test-key".to_owned(),
+            key,
+        )
+        .context(PolicySnafu)?;
+        mithril_control::PolicyBundleV1::new(
+            candidate,
+            artifact,
+            key.verifying_key().to_bytes().to_vec(),
+        )
+        .context(PolicySnafu)
+    }
+
+    fn trust(state_directory: &std::path::Path, key: &SigningKey) -> crate::Result<TrustCache> {
+        let signer = PolicySignerTrust {
+            signing_key_id: "test-key".to_owned(),
+            ed25519_public_key: key.verifying_key().to_bytes().to_vec(),
+            revoked: false,
+        };
+        let installed = BTreeMap::from([(
+            signer.signing_key_id.clone(),
+            InstalledPolicySignerV1 {
+                ed25519_public_key_hex: hex::encode(&signer.ed25519_public_key),
+                revoked: false,
+            },
+        )]);
+        let digest = crate::trust::trust_bundle_digest(1, 1, &installed);
+        let mut trust = TrustCache::load(state_directory)?;
+        trust.install_with_policy(1, digest, 1, &[signer], &[1; 16])?;
+        Ok(trust)
+    }
+
+    fn capabilities() -> Vec<CapabilityRecord> {
+        ["EXACT_NATIVE_IDENTITY", "LOCAL_EFFECT_OBSERVATION"]
+            .into_iter()
+            .map(|capability_id| CapabilityRecord {
+                capability_id: capability_id.to_owned(),
+                state: "SUPPORTED".to_owned(),
+                reason_code: "TEST_CAPABILITY".to_owned(),
+            })
+            .collect()
+    }
+
+    fn config(state_directory: &std::path::Path) -> NodeConfig {
+        NodeConfig {
+            node_id: "node-a".to_owned(),
+            state_directory: state_directory.to_owned(),
+            interceptor: InterceptorConfig {
+                runtime_btf_path: state_directory.join("vmlinux"),
+                lease_path: state_directory.join("owner.lock"),
+                pin_root: state_directory.join("pins"),
+            },
+            control: NodeControlConfig {
+                endpoint: "https://127.0.0.1:7443".to_owned(),
+                server_name: "mithril-control".to_owned(),
+                ca_path: state_directory.join("ca.pem"),
+                certificate_path: state_directory.join("node.pem"),
+                private_key_path: state_directory.join("node-key.pem"),
+                reconnect_minimum_ms: 100,
+                reconnect_maximum_ms: 5_000,
+            },
+            evidence: Some(EvidenceConfig {
+                tenant_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa".to_owned(),
+                source_id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb".to_owned(),
+                maximum_record_bytes: 128 * 1_024,
+                maximum_retained_bytes: 16 * 1_024 * 1_024,
+                maximum_retained_records: 10_000,
+                maximum_batch_records: 256,
+                maximum_control_delay_ms: 30_000,
+            }),
+            runtime_observation: None,
+            container_runtime: None,
+            workload_bindings: vec![WorkloadBindingConfig {
+                binding_id: "99999999-9999-4999-8999-999999999999".to_owned(),
+                execution_set_id: "44444444-4444-4444-8444-444444444444".to_owned(),
+                protected_scope_id: "33333333-3333-4333-8333-333333333333".to_owned(),
+                workload_selector_id: "worker".to_owned(),
+                profile_id: "11111111-1111-4111-8111-111111111111".to_owned(),
+                container_id: "a".repeat(64),
+                namespace: "default".to_owned(),
+                cluster_uid: "55555555-5555-4555-8555-555555555555".to_owned(),
+                namespace_uid: "66666666-6666-4666-8666-666666666666".to_owned(),
+                controller_uid: "88888888-8888-4888-8888-888888888888".to_owned(),
+                service_account_uid: "77777777-7777-4777-8777-777777777777".to_owned(),
+                pod_labels: BTreeMap::new(),
+                pod_uid: "aaaaaaaa-1111-4111-8111-111111111111".to_owned(),
+                sandbox_id: "sandbox".to_owned(),
+                container_name: "converter".to_owned(),
+                image_digest: "sha256:image".to_owned(),
+                container_kind: ContainerKindV1::Application,
+                container_generation: 1,
+                root_cgroup_path: Some(state_directory.join("cgroup")),
+                lifecycle_generation: 1,
+                active_profile_generation_ref_id: 1,
+                initial_role_id: 1,
+                external_role_id: 2,
+                arm_initial_root: false,
+            }],
+            policy_candidates: Vec::new(),
+            administrative_authorization: None,
+        }
+    }
+}

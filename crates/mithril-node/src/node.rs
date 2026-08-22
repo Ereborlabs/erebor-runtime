@@ -1,7 +1,9 @@
 use erebor_interceptor::{EffectObservationReader, KernelHost, KernelHostConfig, KernelHostOwner};
+use erebor_interceptor_abi::Id128V1;
 use mithril_control::{
     AdministrativeExecArmResult, AdministrativeExecResolution, AdministrativeFileObject,
-    CapabilityRecord, NodeRegistration, RegisteredWorkloadTarget, ResolvedAdministrativeExecutable,
+    CapabilityRecord, NodeRegistration, PolicyActivationAcknowledgement, PolicyBundleV1,
+    RegisteredWorkloadTarget, ResolvedAdministrativeExecutable,
 };
 use serde::Serialize;
 use sha2::{Digest as _, Sha256};
@@ -75,9 +77,12 @@ pub struct NodeChassis {
     bindings: WorkloadBindingOwner,
     identity: NativeSecurityStateOwner,
     policy: Option<crate::NodePolicyGenerationOwner>,
+    policy_delivery: crate::policy_delivery::NodePolicyDeliveryOwner,
     administrative: Option<AdministrativeExecOwner>,
     readiness: watch::Sender<NodeReadinessV1>,
     observations: crate::EffectObservationStore,
+    node_boot_id: Id128V1,
+    label_epoch: u64,
 }
 
 impl NodeChassis {
@@ -86,9 +91,14 @@ impl NodeChassis {
     }
 
     pub async fn start_with_held_initial_pids(
-        config: NodeConfig,
+        mut config: NodeConfig,
         held_initial_pids: &[u32],
     ) -> Result<Self> {
+        config.validate()?;
+        let trust = TrustCache::load(&config.state_directory)?;
+        let policy_delivery =
+            crate::policy_delivery::NodePolicyDeliveryOwner::load(&config.state_directory)?;
+        policy_delivery.restore_config(&mut config, &trust, crate::policy::current_utc_ns()?)?;
         config.validate()?;
         if !held_initial_pids.is_empty() {
             snafu::ensure!(
@@ -170,6 +180,17 @@ impl NodeChassis {
         if policy.is_some() {
             bindings.adopt_activated_profiles(&host, &config.workload_bindings)?;
         }
+        let mut policy_delivery = policy_delivery;
+        if policy.is_some() {
+            policy_delivery.recover_pending_activation(&host, &config)?;
+        }
+        let dynamic_policy_capable = config.evidence.is_some()
+            && config.workload_bindings.iter().any(|binding| {
+                !binding.cluster_uid.is_empty()
+                    && !binding.namespace_uid.is_empty()
+                    && !binding.controller_uid.is_empty()
+                    && !binding.service_account_uid.is_empty()
+            });
         let administrative_required = policy
             .as_ref()
             .is_some_and(crate::NodePolicyGenerationOwner::administrative_enabled);
@@ -190,6 +211,14 @@ impl NodeChassis {
                 }
                 .fail()
             }
+            (Some(authorization), false) if dynamic_policy_capable => {
+                Some(AdministrativeExecOwner::load(
+                    authorization,
+                    &config.state_directory,
+                    crate::policy::stable_node_id(&config.node_id)?,
+                    node_boot_id,
+                )?)
+            }
             (Some(_), false) => {
                 return IdentityStateSnafu {
                     reason: "administrative authorization is configured without a signed administrative entry plan"
@@ -203,6 +232,7 @@ impl NodeChassis {
             administrative.reconcile(&host)?;
         }
         let policy_loaded = policy.is_some();
+        let policy_observation_enabled = policy_loaded || dynamic_policy_capable;
         let prevention_enabled = policy
             .as_ref()
             .is_some_and(crate::NodePolicyGenerationOwner::prevention_enabled);
@@ -211,7 +241,7 @@ impl NodeChassis {
         } else {
             identity.activate_held_initial_admission(&mut host, policy_loaded)?
         };
-        let observations = if policy_loaded {
+        let observations = if policy_observation_enabled {
             let evidence = config.evidence.as_ref().ok_or_else(|| {
                 IdentityStateSnafu {
                     reason: "effect policy has no durable evidence configuration".to_owned(),
@@ -231,7 +261,7 @@ impl NodeChassis {
         } else {
             crate::EffectObservationStore::default()
         };
-        let effect_reader = policy_loaded
+        let effect_reader = policy_observation_enabled
             .then(|| {
                 let sink = observations.clone();
                 host.effect_observation_reader(move |bytes| {
@@ -242,7 +272,7 @@ impl NodeChassis {
             .transpose()
             .context(InterceptorSnafu)?;
         let evidence_healthy =
-            !policy_loaded || sample_effect_health(&host, &observations, true).is_ok();
+            !policy_observation_enabled || sample_effect_health(&host, &observations, true).is_ok();
         let manifest = host.manifest();
         let capabilities = vec![
             CapabilityRecord {
@@ -256,13 +286,15 @@ impl NodeChassis {
             },
             CapabilityRecord {
                 capability_id: "LOCAL_EFFECT_PREVENTION".to_owned(),
-                state: if prevention_enabled {
-                    "DEGRADED".to_owned()
+                state: if prevention_enabled || dynamic_policy_capable {
+                    "SUPPORTED".to_owned()
                 } else {
                     "UNSUPPORTED".to_owned()
                 },
                 reason_code: if prevention_enabled {
                     "SIGNED_ACTIVE_QUALIFIED_LOCAL_SLICE".to_owned()
+                } else if dynamic_policy_capable {
+                    "POLICY_ACTIVATION_OWNER_READY_NO_ACTIVE_GENERATION".to_owned()
                 } else if policy_loaded {
                     "OBSERVE_ONLY_GENERATION".to_owned()
                 } else {
@@ -271,16 +303,16 @@ impl NodeChassis {
             },
             CapabilityRecord {
                 capability_id: "LOCAL_EFFECT_OBSERVATION".to_owned(),
-                state: if policy_loaded && evidence_healthy {
+                state: if policy_observation_enabled && evidence_healthy {
                     "SUPPORTED".to_owned()
-                } else if policy_loaded {
+                } else if policy_observation_enabled {
                     "UNHEALTHY".to_owned()
                 } else {
                     "UNSUPPORTED".to_owned()
                 },
-                reason_code: if policy_loaded && evidence_healthy {
+                reason_code: if policy_observation_enabled && evidence_healthy {
                     "DURABLE_LOSS_AWARE_KERNEL_COVERAGE".to_owned()
-                } else if policy_loaded {
+                } else if policy_observation_enabled {
                     "DURABLE_EVIDENCE_COVERAGE_GAPPED".to_owned()
                 } else {
                     "NO_POLICY_CANDIDATE".to_owned()
@@ -314,7 +346,6 @@ impl NodeChassis {
         )?;
         let connector =
             NodeControlConnector::new(config.control.clone(), config.node_id.clone(), boot_id);
-        let trust = TrustCache::load(&config.state_directory)?;
         let (readiness, _receiver) = watch::channel(NodeReadinessV1 {
             kernel_ready: true,
             identity_ready: true,
@@ -347,9 +378,12 @@ impl NodeChassis {
             bindings,
             identity,
             policy,
+            policy_delivery,
             administrative,
             readiness,
             observations,
+            node_boot_id,
+            label_epoch,
         })
     }
 
@@ -359,7 +393,7 @@ impl NodeChassis {
     }
 
     pub async fn run(mut self, mut shutdown: watch::Receiver<bool>) -> Result<()> {
-        let prevention_enabled = self
+        let mut prevention_enabled = self
             .policy
             .as_ref()
             .is_some_and(crate::NodePolicyGenerationOwner::prevention_enabled);
@@ -388,8 +422,9 @@ impl NodeChassis {
             .is_none_or(|capability| capability.state != "UNHEALTHY");
         let mut control_disconnected_since = tokio::time::Instant::now();
         let mut run_error = None;
-        let healthy_identity_capabilities = self.registration.capabilities.clone();
-        let healthy_effect_prevention_claims = self.registration.effect_prevention_claims_enabled;
+        let mut healthy_identity_capabilities = self.registration.capabilities.clone();
+        let mut healthy_effect_prevention_claims =
+            self.registration.effect_prevention_claims_enabled;
         let mut reconciliation = tokio::time::interval(self.config.reconciliation_interval());
         reconciliation.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         'running: loop {
@@ -398,7 +433,8 @@ impl NodeChassis {
             }
             let evidence_control_deadline =
                 control_disconnected_since + self.evidence_control_delay();
-            let evidence_configured = self.policy.is_some();
+            let evidence_configured =
+                self.effect_reader.is_some() || self.config.evidence.is_some();
             let connection = tokio::select! {
                 result = self.connector.connect(
                     self.registration.clone(),
@@ -448,6 +484,9 @@ impl NodeChassis {
                     let mut evidence_upload = tokio::time::interval(Duration::from_millis(100));
                     evidence_upload
                         .set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+                    let mut policy_poll = tokio::time::interval(Duration::from_millis(250));
+                    policy_poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+                    let mut rejected_candidate = None;
                     loop {
                         tokio::select! {
                             result = connection.next_message() => {
@@ -516,6 +555,88 @@ impl NodeChassis {
                                         }
                                     }
                                 }
+                            }
+                            _instant = policy_poll.tick() => {
+                                let bundle = match self
+                                    .policy_delivery
+                                    .fetch_candidate(&mut connection)
+                                    .await
+                                {
+                                    Ok(Some(bundle)) => bundle,
+                                    Ok(None) => {
+                                        if let Some(acknowledgement) =
+                                            self.policy_delivery.pending_acknowledgement()
+                                        {
+                                            let candidate_content_id =
+                                                acknowledgement.candidate_content_id.clone();
+                                            if connection
+                                                .acknowledge_policy(acknowledgement)
+                                                .await
+                                                .is_err()
+                                            {
+                                                break;
+                                            }
+                                            self.policy_delivery
+                                                .acknowledge_control(&candidate_content_id)?;
+                                        }
+                                        continue;
+                                    }
+                                    Err(_error) => break,
+                                };
+                                if rejected_candidate.as_deref()
+                                    == Some(bundle.candidate.candidate_content_id.as_str())
+                                {
+                                    continue;
+                                }
+                                let prepared = match self.prepare_control_policy(&bundle) {
+                                    Ok(prepared) => prepared,
+                                    Err(_error) => {
+                                        rejected_candidate = Some(
+                                            bundle.candidate.candidate_content_id.clone(),
+                                        );
+                                        if connection
+                                            .acknowledge_policy(rejected_policy_acknowledgement(
+                                                &bundle,
+                                            )?)
+                                            .await
+                                            .is_err()
+                                        {
+                                            break;
+                                        }
+                                        continue;
+                                    }
+                                };
+                                self.activate_control_policy(
+                                    &bundle,
+                                    prepared,
+                                    evidence_healthy,
+                                )?;
+                                prevention_enabled = self
+                                    .policy
+                                    .as_ref()
+                                    .is_some_and(
+                                        crate::NodePolicyGenerationOwner::prevention_enabled,
+                                    );
+                                healthy_identity_capabilities =
+                                    self.registration.capabilities.clone();
+                                healthy_effect_prevention_claims =
+                                    self.registration.effect_prevention_claims_enabled;
+                                if let Some(acknowledgement) =
+                                    self.policy_delivery.pending_acknowledgement()
+                                {
+                                    let candidate_content_id =
+                                        acknowledgement.candidate_content_id.clone();
+                                    if connection
+                                        .acknowledge_policy(acknowledgement)
+                                        .await
+                                        .is_err()
+                                    {
+                                        break;
+                                    }
+                                    self.policy_delivery
+                                        .acknowledge_control(&candidate_content_id)?;
+                                }
+                                break;
                             }
                             changed = shutdown.changed() => {
                                 let _result = changed;
@@ -786,6 +907,99 @@ impl NodeChassis {
         ReconciliationOutcome::Healthy
     }
 
+    fn prepare_control_policy(
+        &self,
+        bundle: &PolicyBundleV1,
+    ) -> Result<crate::policy_delivery::PreparedPolicyActivationV1> {
+        let host = self.host.as_ref().ok_or_else(|| {
+            IdentityStateSnafu {
+                reason: "the policy activation owner has no live kernel host".to_owned(),
+            }
+            .build()
+        })?;
+        let generation = crate::NodePolicyGenerationOwner::next_generation_ref_id(
+            &self.config,
+            host,
+            self.node_boot_id,
+            self.label_epoch,
+        )?;
+        self.policy_delivery.prepare_activation(
+            bundle,
+            &self.trust,
+            &self.config,
+            &self.registration.capabilities,
+            generation,
+            crate::policy::current_utc_ns()?,
+        )
+    }
+
+    fn activate_control_policy(
+        &mut self,
+        bundle: &PolicyBundleV1,
+        prepared: crate::policy_delivery::PreparedPolicyActivationV1,
+        evidence_healthy: bool,
+    ) -> Result<()> {
+        self.policy_delivery.begin_activation(bundle, &prepared)?;
+        let host = self.host.as_mut().ok_or_else(|| {
+            IdentityStateSnafu {
+                reason: "the policy activation owner has no live kernel host".to_owned(),
+            }
+            .build()
+        })?;
+        let owner = crate::NodePolicyGenerationOwner::load_and_install_for_bindings(
+            &prepared.config,
+            host,
+            &self.bindings,
+            self.node_boot_id,
+            self.label_epoch,
+        )?;
+        self.identity.activate_with_effect_policy(host, true)?;
+        self.bindings
+            .adopt_activated_profiles(host, &prepared.config.workload_bindings)?;
+        let receipt = crate::NodePolicyGenerationOwner::activation_receipt(
+            host,
+            &prepared.profile_id,
+            prepared.profile_generation_ref_id,
+        )?;
+        snafu::ensure!(
+            receipt.profile_generation_ref_id == prepared.profile_generation_ref_id,
+            IdentityStateSnafu {
+                reason: "the policy activation receipt names a different generation",
+            }
+        );
+        self.policy_delivery.commit_activation(
+            bundle,
+            &prepared,
+            crate::policy_delivery::PolicyActivationProofV1 {
+                node_bound_generation_digest: receipt.node_bound_generation_digest,
+                readback_digest: receipt.readback_digest,
+                probe_result_digest: receipt.probe_result_digest,
+                observed_utc_ns: crate::policy::current_utc_ns()?,
+            },
+        )?;
+        let prevention_enabled = owner.prevention_enabled();
+        self.config = prepared.config;
+        self.policy = Some(owner);
+        if let Some(capability) = self
+            .registration
+            .capabilities
+            .iter_mut()
+            .find(|capability| capability.capability_id == "LOCAL_EFFECT_PREVENTION")
+        {
+            capability.state = "SUPPORTED".to_owned();
+            capability.reason_code = if prevention_enabled {
+                "SIGNED_ACTIVE_QUALIFIED_LOCAL_SLICE".to_owned()
+            } else {
+                "OBSERVE_ONLY_GENERATION".to_owned()
+            };
+        }
+        self.registration.effect_prevention_claims_enabled = prevention_enabled && evidence_healthy;
+        self.readiness.send_modify(|readiness| {
+            readiness.effect_prevention_claims_enabled = prevention_enabled && evidence_healthy;
+        });
+        Ok(())
+    }
+
     fn resolve_administrative(
         &self,
         request: mithril_control::ResolveAdministrativeExec,
@@ -874,6 +1088,24 @@ impl NodeChassis {
                 .map_or(30_000, |evidence| evidence.maximum_control_delay_ms),
         )
     }
+}
+
+fn rejected_policy_acknowledgement(
+    bundle: &PolicyBundleV1,
+) -> Result<PolicyActivationAcknowledgement> {
+    Ok(PolicyActivationAcknowledgement {
+        tenant_id: bundle.candidate.tenant_id.clone(),
+        candidate_content_id: bundle.candidate.candidate_content_id.clone(),
+        policy_source_revision_id: bundle.candidate.policy_source_revision_id.clone(),
+        target_snapshot_digest: bundle.candidate.target_snapshot_digest.clone(),
+        state: "REJECTED".to_owned(),
+        node_bound_generation_digest: String::new(),
+        profile_generation_ref_id: 0,
+        readback_digest: String::new(),
+        probe_result_digest: String::new(),
+        reason_code: "NODE_POLICY_REJECTED".to_owned(),
+        observed_utc_ns: crate::policy::current_utc_ns()?,
+    })
 }
 
 fn sample_effect_health(
@@ -1126,25 +1358,9 @@ fn registration(
 fn registered_workload_target(
     binding: &crate::WorkloadBindingConfig,
 ) -> Result<RegisteredWorkloadTarget> {
-    let identity = serde_json::to_vec(&(
-        binding.binding_id.as_str(),
-        binding.lifecycle_generation,
-        binding.execution_set_id.as_str(),
-        binding.cluster_uid.as_str(),
-        binding.namespace_uid.as_str(),
-        binding.controller_uid.as_str(),
-        binding.service_account_uid.as_str(),
-        binding.pod_uid.as_str(),
-        binding.container_id.as_str(),
-        binding.container_name.as_str(),
-        binding.image_digest.as_str(),
-        &binding.pod_labels,
-    ))
-    .context(JsonSnafu {
-        path: "in-memory workload target",
-    })?;
+    let workload_binding_generation_digest = workload_binding_generation_digest(binding)?;
     Ok(RegisteredWorkloadTarget {
-        workload_binding_generation_digest: format!("{:x}", Sha256::digest(identity)),
+        workload_binding_generation_digest,
         execution_set_id: binding.execution_set_id.clone(),
         cluster_uid: binding.cluster_uid.clone(),
         namespace_uid: binding.namespace_uid.clone(),
@@ -1167,6 +1383,29 @@ fn registered_workload_target(
             .map(|(key, value)| (key.clone(), value.clone()))
             .collect(),
     })
+}
+
+pub(crate) fn workload_binding_generation_digest(
+    binding: &crate::WorkloadBindingConfig,
+) -> Result<String> {
+    let identity = serde_json::to_vec(&(
+        binding.binding_id.as_str(),
+        binding.lifecycle_generation,
+        binding.execution_set_id.as_str(),
+        binding.cluster_uid.as_str(),
+        binding.namespace_uid.as_str(),
+        binding.controller_uid.as_str(),
+        binding.service_account_uid.as_str(),
+        binding.pod_uid.as_str(),
+        binding.container_id.as_str(),
+        binding.container_name.as_str(),
+        binding.image_digest.as_str(),
+        &binding.pod_labels,
+    ))
+    .context(JsonSnafu {
+        path: "in-memory workload target",
+    })?;
+    Ok(format!("{:x}", Sha256::digest(identity)))
 }
 
 #[cfg(test)]

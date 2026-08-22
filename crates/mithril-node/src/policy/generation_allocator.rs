@@ -147,6 +147,15 @@ impl GenerationHandleAllocator {
         self.persist()
     }
 
+    pub(super) fn next_handle(&self) -> Result<u64> {
+        self.state.high_water.checked_add(1).ok_or_else(|| {
+            IdentityStateSnafu {
+                reason: "the durable generation handle space is exhausted".to_owned(),
+            }
+            .build()
+        })
+    }
+
     fn persist(&self) -> Result<()> {
         let parent = self.path.parent().unwrap_or_else(|| Path::new("."));
         fs::create_dir_all(parent).context(IoSnafu { path: parent })?;

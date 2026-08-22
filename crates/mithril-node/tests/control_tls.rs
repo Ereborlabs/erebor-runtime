@@ -37,6 +37,8 @@ async fn mtls_registration_acknowledges_trust_and_reconnects_with_a_fresh_nonce(
         TrustGenerationV1 {
             generation: 4,
             bundle_digest: "d".repeat(64),
+            policy_issuer_sequence_epoch: 0,
+            policy_signers: Vec::new(),
         },
     );
     let (shutdown, server) = start_server(address, &files, control.clone());
@@ -63,6 +65,8 @@ async fn mtls_registration_acknowledges_trust_and_reconnects_with_a_fresh_nonce(
         Some(TrustGenerationV1 {
             generation: 4,
             bundle_digest: "d".repeat(64),
+            policy_issuer_sequence_epoch: 0,
+            policy_signers: Vec::new(),
         })
     );
     drop(second);
@@ -95,6 +99,8 @@ async fn mtls_evidence_upload_replays_after_disconnect_and_advances_only_on_ack(
         TrustGenerationV1 {
             generation: 1,
             bundle_digest: "d".repeat(64),
+            policy_issuer_sequence_epoch: 0,
+            policy_signers: Vec::new(),
         },
         &intake_path,
     )?;
@@ -179,6 +185,8 @@ async fn mtls_coverage_upload_preserves_gap_truth_at_control() -> Result<(), Box
         TrustGenerationV1 {
             generation: 1,
             bundle_digest: "d".repeat(64),
+            policy_issuer_sequence_epoch: 0,
+            policy_signers: Vec::new(),
         },
         &intake_path,
     )?;
@@ -252,6 +260,8 @@ async fn mtls_administrative_services_route_matching_results_and_cancel_waiters(
         TrustGenerationV1 {
             generation: 1,
             bundle_digest: "d".repeat(64),
+            policy_issuer_sequence_epoch: 0,
+            policy_signers: Vec::new(),
         },
     );
     let (shutdown, server) = start_server(address, &files, control.clone());
@@ -368,6 +378,8 @@ async fn assert_wrong_ca_rejected() -> Result<(), Box<dyn StdError>> {
         TrustGenerationV1 {
             generation: 1,
             bundle_digest: "f".repeat(64),
+            policy_issuer_sequence_epoch: 0,
+            policy_signers: Vec::new(),
         },
     );
     let (shutdown, server) = start_server(address, &files, control);
@@ -401,6 +413,8 @@ async fn assert_rejected_identity(
         TrustGenerationV1 {
             generation: 1,
             bundle_digest: "e".repeat(64),
+            policy_issuer_sequence_epoch: 0,
+            policy_signers: Vec::new(),
         },
     );
     let (shutdown, server) = start_server(address, &files, control);

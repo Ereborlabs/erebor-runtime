@@ -5,6 +5,7 @@ use std::path::Path;
 use std::path::PathBuf;
 
 use serde::Deserialize;
+use sha2::{Digest as _, Sha256};
 use snafu::{ensure, ResultExt as _};
 
 use crate::error::{InvalidConfigurationSnafu, IoSnafu, JsonSnafu};
@@ -46,7 +47,7 @@ impl ControlConfig {
     )> {
         let mut control = ControlPlane::with_evidence_directory(
             self.allowed_nodes,
-            self.trust,
+            self.trust.clone(),
             self.evidence_directory.clone(),
         )?;
         if let Some(policy) = self.kubernetes_policy {
@@ -55,6 +56,18 @@ impl ControlConfig {
                 .unwrap_or_else(|| self.evidence_directory.join("control-store"));
             let owner =
                 PolicyDesiredStateOwner::open(policy, ControlStore::open(store_directory)?)?;
+            let (key_id, public_key, issuer_epoch) = owner.signer_identity();
+            ensure!(
+                self.trust.policy_issuer_sequence_epoch == issuer_epoch
+                    && self.trust.policy_signers.iter().any(|signer| {
+                        signer.signing_key_id == key_id
+                            && signer.ed25519_public_key_hex == public_key
+                            && !signer.revoked
+                    }),
+                InvalidConfigurationSnafu {
+                    reason: "the Kubernetes policy signer is absent, revoked, or outside the current trust epoch",
+                }
+            );
             control = control.with_policy_desired_state(owner);
         }
         Ok((self.listen, self.tls, control, self.administrative_exec))
@@ -85,7 +98,21 @@ impl ControlConfig {
             policy.validate()?;
         }
         ensure!(
-            self.trust.generation > 0 && is_sha256_hex(&self.trust.bundle_digest),
+            self.trust.generation > 0
+                && is_sha256_hex(&self.trust.bundle_digest)
+                && self
+                    .trust
+                    .policy_signers
+                    .windows(2)
+                    .all(|pair| pair[0].signing_key_id < pair[1].signing_key_id)
+                && self.trust.policy_signers.iter().all(|signer| {
+                    !signer.signing_key_id.is_empty()
+                        && signer.signing_key_id.len() <= 128
+                        && is_sha256_hex(&signer.ed25519_public_key_hex)
+                })
+                && (self.trust.policy_signers.is_empty()
+                    || (self.trust.policy_issuer_sequence_epoch > 0
+                        && trust_bundle_digest(&self.trust) == self.trust.bundle_digest)),
             InvalidConfigurationSnafu {
                 reason: "trust generation must be nonzero and its digest must be SHA-256 hex",
             }
@@ -106,6 +133,24 @@ impl ControlConfig {
         }
         Ok(())
     }
+}
+
+fn trust_bundle_digest(trust: &TrustGenerationV1) -> String {
+    let mut digest = Sha256::new();
+    digest.update(b"MITHRIL-CONTROL-TRUST-BUNDLE-V1\0");
+    digest.update(trust.generation.to_be_bytes());
+    digest.update(trust.policy_issuer_sequence_epoch.to_be_bytes());
+    for signer in &trust.policy_signers {
+        digest.update(
+            u64::try_from(signer.signing_key_id.len())
+                .unwrap_or(u64::MAX)
+                .to_be_bytes(),
+        );
+        digest.update(signer.signing_key_id.as_bytes());
+        digest.update(signer.ed25519_public_key_hex.as_bytes());
+        digest.update([u8::from(signer.revoked)]);
+    }
+    format!("{:x}", digest.finalize())
 }
 
 fn is_sha256_hex(value: &str) -> bool {

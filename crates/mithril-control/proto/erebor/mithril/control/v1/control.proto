@@ -310,4 +310,12 @@ message RegistrationAccepted {}
 message TrustGeneration {
   uint64 generation = 1;
   string bundle_digest = 2;
+  uint64 policy_issuer_sequence_epoch = 3;
+  repeated PolicySignerTrust policy_signers = 4;
+}
+
+message PolicySignerTrust {
+  string signing_key_id = 1;
+  bytes ed25519_public_key = 2;
+  bool revoked = 3;
 }
