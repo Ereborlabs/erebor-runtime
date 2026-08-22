@@ -15,7 +15,7 @@ use erebor_runtime_events::{ActionKind, ExecutionSurface};
 #[path = "support/requirements.rs"]
 mod requirements;
 
-pub(crate) use requirements::{require_ostree, require_overlay_lifecycle};
+pub(crate) use requirements::require_overlay_lifecycle;
 
 pub(super) fn test_dir(name: &str) -> Result<PathBuf, io::Error> {
     let path = std::env::temp_dir().join(format!(
@@ -83,24 +83,6 @@ pub(super) fn filesystem_audit_record<'a>(
                 && record.final_decision.rule_id() == Some(rule_id)
         })
         .ok_or_else(|| io::Error::other("missing denied filesystem audit record"))
-}
-
-pub(super) fn assert_storage_layout(filesystem: &Path, volume_id: &str) -> Result<(), io::Error> {
-    let volume = filesystem.join("work/volumes").join(volume_id);
-    for path in [
-        filesystem.join("repo"),
-        volume.join("lower-ro"),
-        volume.join("overlay/upper"),
-        volume.join("overlay/workdir"),
-        volume.join("overlay/merged"),
-    ] {
-        assert!(
-            path.is_dir(),
-            "missing storage directory {}",
-            path.display()
-        );
-    }
-    Ok(())
 }
 
 pub(super) fn ostree_refs(repo: &Path) -> Result<String, Box<dyn std::error::Error>> {

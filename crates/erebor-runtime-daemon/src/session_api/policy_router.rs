@@ -182,18 +182,6 @@ struct StoredPolicyProcessExecHandler {
 }
 
 impl StoredPolicyProcessExecHandler {
-    fn from_session(local_store: Arc<DaemonLocalStore>, spec: &SessionSpec) -> Self {
-        let policies = local_store
-            .policy_packages_for_session(spec)
-            .and_then(Self::compile_layers)
-            .map_err(|error| error.to_string());
-        Self {
-            session_id: spec.session_id().clone(),
-            policy_set_digest: spec.policy_set().sha256().to_owned(),
-            policies,
-        }
-    }
-
     fn compile_layers(revisions: Vec<PolicyPackageRevision>) -> crate::Result<LayeredPolicySet> {
         let layers = revisions
             .into_iter()

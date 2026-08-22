@@ -1,3 +1,5 @@
+#![allow(clippy::result_large_err)]
+
 use std::{pin::Pin, sync::Arc};
 
 use erebor_runtime_approvals::ApprovalRepository;

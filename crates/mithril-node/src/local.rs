@@ -1,6 +1,6 @@
 use std::fs;
 use std::os::unix::fs::PermissionsExt as _;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use erebor_interceptor::{KernelObjectManifestV1, KernelStateReader};

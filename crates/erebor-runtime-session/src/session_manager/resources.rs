@@ -74,7 +74,6 @@ impl ResolvedSessionPath {
 }
 
 pub struct SessionRuntimeResources {
-    state_root: PathBuf,
     runtime_root: PathBuf,
     filesystem: LinuxOstreeOverlayFilesystemRuntime,
     path_resolver: Arc<dyn SessionPathResolver>,
@@ -102,7 +101,6 @@ impl SessionRuntimeResources {
     ) -> Result<Self, SessionManagerError> {
         let filesystem = LinuxOstreeOverlayFilesystemRuntime::new(state_root.clone());
         Ok(Self {
-            state_root,
             runtime_root,
             filesystem,
             path_resolver,

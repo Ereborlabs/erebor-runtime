@@ -162,7 +162,6 @@ mod tests {
             ],
             observed_uid: 1000,
             observed_gid: 1000,
-            ..HookPeerEvidence::default()
         }
     }
 }

@@ -77,5 +77,4 @@ pub use surface_services::SurfaceServiceRunner;
 pub use surfaces::filesystem::{FilesystemFileOperationHandler, FilesystemSessionContext};
 pub use surfaces::terminal::browser_cdp_process_mediation::BrowserCdpProcessMediationCapability;
 
-pub(crate) use session_context::SessionPlanContext;
 pub(crate) use session_manager::SessionRuntime;

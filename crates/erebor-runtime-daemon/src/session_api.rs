@@ -71,7 +71,6 @@ use self::{
 pub(crate) struct DaemonSessionApi {
     manager: Arc<SessionManager>,
     state_root: PathBuf,
-    runtime_root: PathBuf,
     retry_horizon: Duration,
     descriptor_broker: Arc<DescriptorBroker>,
     local_store: Arc<DaemonLocalStore>,
@@ -171,7 +170,6 @@ impl DaemonSessionApi {
                 runtime,
             )),
             state_root,
-            runtime_root,
             retry_horizon: Duration::from_secs(config.session_retry_horizon_seconds),
             descriptor_broker,
             local_store,

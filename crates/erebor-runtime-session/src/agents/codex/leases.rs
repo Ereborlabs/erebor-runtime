@@ -1467,33 +1467,32 @@ impl InvocationCapability {
                 }
             }
         }
-        if matches!(tool.as_str(), "bash" | "shell" | "command") {
-            if input
+        if matches!(tool.as_str(), "bash" | "shell" | "command")
+            && input
                 .tool_input
                 .get("command")
                 .and_then(Value::as_str)
                 .filter(|command| !command.is_empty())
                 .is_some()
+        {
+            let operation_key = match input
+                .tool_input
+                .get("erebor_operation_key")
+                .or_else(|| input.tool_input.get("ereborOperationKey"))
             {
-                let operation_key = match input
-                    .tool_input
-                    .get("erebor_operation_key")
-                    .or_else(|| input.tool_input.get("ereborOperationKey"))
+                None => None,
+                Some(Value::String(key)) if key.is_empty() => None,
+                Some(Value::String(key))
+                    if key.len() <= 128
+                        && key.bytes().all(|byte| {
+                            byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_')
+                        }) =>
                 {
-                    None => None,
-                    Some(Value::String(key)) if key.is_empty() => None,
-                    Some(Value::String(key))
-                        if key.len() <= 128
-                            && key.bytes().all(|byte| {
-                                byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_')
-                            }) =>
-                    {
-                        Some(key.clone())
-                    }
-                    Some(_) => return (EffectClass::Unsupported, Self::Unsupported),
-                };
-                return (EffectClass::Command, Self::Command { operation_key });
-            }
+                    Some(key.clone())
+                }
+                Some(_) => return (EffectClass::Unsupported, Self::Unsupported),
+            };
+            return (EffectClass::Command, Self::Command { operation_key });
         }
         if matches!(tool.as_str(), "apply_patch" | "applypatch") {
             let mut targets = Self::patch_targets(&input.tool_input);

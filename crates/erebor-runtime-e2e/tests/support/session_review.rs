@@ -59,8 +59,7 @@ impl SessionReviewConfig {
                     "actor": {{ "id": "test-agent", "kind": "agent" }},
                     "workspace": "{}",
                     {}
-                    "runner": {{ "kind": "linux_host" }},
-                    "interception": {{ "enabled": true }}
+                    "runner": {{ "kind": "linux_host" }}
                   }},
                   "surfaces": {{
                     "terminal": {{

@@ -19,7 +19,6 @@ use erebor_runtime_telemetry::warn;
 mod mediation;
 mod path;
 
-use crate::SessionPlanContext;
 use mediation::FilesystemMediationDocument;
 use path::normalize_request_path;
 
@@ -229,16 +228,6 @@ impl FilesystemSessionContext {
     #[must_use]
     pub fn new(session_id: SessionId, actor: ActorIdentity) -> Self {
         Self { session_id, actor }
-    }
-
-    pub(crate) fn from_plan(plan: &impl SessionPlanContext) -> Self {
-        Self {
-            session_id: plan.session_id().clone(),
-            actor: ActorIdentity {
-                id: plan.actor().id.clone(),
-                kind: plan.actor().kind.clone(),
-            },
-        }
     }
 }
 
