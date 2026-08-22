@@ -1,7 +1,15 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: mithril-node
+automountServiceAccountToken: false
+---
 apiVersion: apps/v1
 kind: DaemonSet
 metadata:
   name: mithril-node
+  labels:
+    app.kubernetes.io/name: mithril-node
 spec:
   selector:
     matchLabels:
@@ -11,18 +19,81 @@ spec:
       labels:
         app.kubernetes.io/name: mithril-node
     spec:
+      serviceAccountName: mithril-node
+      automountServiceAccountToken: false
       hostPID: true
       terminationGracePeriodSeconds: 10
+      tolerations:
+        - key: mithril.erebor.dev/not-ready
+          operator: Exists
+          effect: NoSchedule
+{{- with .Values.node.nodeSelector }}
+      nodeSelector:
+{{ toYaml . | indent 8 }}
+{{- end }}
+{{- with .Values.node.affinity }}
+      affinity:
+{{ toYaml . | indent 8 }}
+{{- end }}
+{{- if .Values.node.runtimeHook.install }}
+      initContainers:
+        - name: install-runtime-hook
+          image: {{ .Values.node.image | quote }}
+          imagePullPolicy: {{ .Values.node.imagePullPolicy }}
+          command: ["/bin/sh", "-ec"]
+          args:
+            - >-
+              install -m 0755 /usr/local/bin/mithril-oci-hook
+              /host-hook-bin/mithril-oci-hook &&
+              install -m 0644 /hook-source/99-mithril.json
+              /host-hook-config/99-mithril.json
+          securityContext:
+            runAsUser: 0
+            runAsGroup: 0
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: runtime-hook-source
+              mountPath: /hook-source
+              readOnly: true
+            - name: runtime-hook-bin
+              mountPath: /host-hook-bin
+            - name: runtime-hook-config
+              mountPath: /host-hook-config
+{{- end }}
       containers:
         - name: mithril-node
           image: {{ .Values.node.image | quote }}
+          imagePullPolicy: {{ .Values.node.imagePullPolicy }}
           args: ["--config", "/etc/mithril/node.json"]
+          env:
+            - name: MITHRIL_KUBERNETES_NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+          startupProbe:
+            exec:
+              command: ["/bin/sh", "-ec", "test -S /run/mithril/runtime-admission.sock"]
+            failureThreshold: 30
+            periodSeconds: 2
+            timeoutSeconds: 1
+          readinessProbe:
+            exec:
+              command: ["/bin/sh", "-ec", "test -S /run/mithril/runtime-admission.sock"]
+            failureThreshold: 2
+            periodSeconds: 5
+            timeoutSeconds: 1
           securityContext:
             privileged: true
             readOnlyRootFilesystem: true
           volumeMounts:
-            - name: config
-              mountPath: /etc/mithril
+            - name: node-config
+              mountPath: /etc/mithril/node.json
+              readOnly: true
+            - name: node-identity
+              mountPath: /etc/mithril/identity
               readOnly: true
             - name: bpf
               mountPath: /sys/fs/bpf
@@ -41,10 +112,14 @@ spec:
               mountPath: {{ .Values.node.containerRuntimeSocket | quote }}
               readOnly: true
       volumes:
-        - name: config
-          secret:
-            secretName: {{ .Values.node.configSecretName | quote }}
-            defaultMode: 0400
+        - name: node-config
+          hostPath:
+            path: {{ .Values.node.configHostPath | quote }}
+            type: File
+        - name: node-identity
+          hostPath:
+            path: {{ .Values.node.identityHostPath | quote }}
+            type: Directory
         - name: bpf
           hostPath:
             path: /sys/fs/bpf
@@ -69,3 +144,16 @@ spec:
           hostPath:
             path: {{ .Values.node.containerRuntimeSocket | quote }}
             type: Socket
+{{- if .Values.node.runtimeHook.install }}
+        - name: runtime-hook-source
+          configMap:
+            name: mithril-runtime-hook
+        - name: runtime-hook-bin
+          hostPath:
+            path: {{ .Values.node.runtimeHook.hostBinaryDirectory | quote }}
+            type: DirectoryOrCreate
+        - name: runtime-hook-config
+          hostPath:
+            path: {{ .Values.node.runtimeHook.hostConfigDirectory | quote }}
+            type: DirectoryOrCreate
+{{- end }}

@@ -1,0 +1,94 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["node", "control"],
+  "properties": {
+    "node": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "image",
+        "imagePullPolicy",
+        "configHostPath",
+        "identityHostPath",
+        "stateHostPath",
+        "runHostPath",
+        "containerRuntimeSocket",
+        "nodeSelector",
+        "affinity",
+        "runtimeHook"
+      ],
+      "properties": {
+        "image": {"type": "string", "minLength": 1},
+        "imagePullPolicy": {"enum": ["Always", "IfNotPresent", "Never"]},
+        "configHostPath": {"type": "string", "pattern": "^/"},
+        "identityHostPath": {"type": "string", "pattern": "^/"},
+        "stateHostPath": {"type": "string", "pattern": "^/"},
+        "runHostPath": {"type": "string", "pattern": "^/"},
+        "containerRuntimeSocket": {"type": "string", "pattern": "^/"},
+        "nodeSelector": {"type": "object"},
+        "affinity": {"type": "object"},
+        "runtimeHook": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "install",
+            "hostBinaryDirectory",
+            "hostConfigDirectory",
+            "socketPath",
+            "timeoutMs",
+            "runtimeTimeoutSeconds"
+          ],
+          "properties": {
+            "install": {"type": "boolean"},
+            "hostBinaryDirectory": {"type": "string", "pattern": "^/"},
+            "hostConfigDirectory": {"type": "string", "pattern": "^/"},
+            "socketPath": {"type": "string", "pattern": "^/"},
+            "timeoutMs": {"type": "integer", "minimum": 100, "maximum": 30000},
+            "runtimeTimeoutSeconds": {"type": "integer", "minimum": 1, "maximum": 30}
+          }
+        }
+      }
+    },
+    "control": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "enabled",
+        "image",
+        "imagePullPolicy",
+        "configSecretName",
+        "statePersistentVolumeClaim",
+        "grpcPort",
+        "admission"
+      ],
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "image": {"type": "string", "minLength": 1},
+        "imagePullPolicy": {"enum": ["Always", "IfNotPresent", "Never"]},
+        "configSecretName": {"type": "string", "minLength": 1},
+        "statePersistentVolumeClaim": {"type": "string", "minLength": 1},
+        "grpcPort": {"type": "integer", "minimum": 1, "maximum": 65535},
+        "admission": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "enabled",
+            "port",
+            "tlsSecretName",
+            "caBundle",
+            "webhookTimeoutSeconds"
+          ],
+          "properties": {
+            "enabled": {"type": "boolean"},
+            "port": {"type": "integer", "minimum": 1, "maximum": 65535},
+            "tlsSecretName": {"type": "string", "minLength": 1},
+            "caBundle": {"type": "string"},
+            "webhookTimeoutSeconds": {"type": "integer", "minimum": 1, "maximum": 30}
+          }
+        }
+      }
+    }
+  }
+}

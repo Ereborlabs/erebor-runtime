@@ -1,0 +1,28 @@
+{{- if .Values.node.runtimeHook.install }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mithril-runtime-hook
+data:
+  99-mithril.json: |-
+    {
+      "version": "1.0.0",
+      "hook": {
+        "path": {{ printf "%s/mithril-oci-hook" .Values.node.runtimeHook.hostBinaryDirectory | quote }},
+        "args": [
+          "mithril-oci-hook",
+          "--socket",
+          {{ .Values.node.runtimeHook.socketPath | quote }},
+          "--timeout-ms",
+          {{ .Values.node.runtimeHook.timeoutMs | quote }}
+        ],
+        "timeout": {{ .Values.node.runtimeHook.runtimeTimeoutSeconds }}
+      },
+      "when": {
+        "annotations": {
+          "^mithril\\.erebor\\.dev/profile-id$": ".+"
+        }
+      },
+      "stages": ["prestart"]
+    }
+{{- end }}

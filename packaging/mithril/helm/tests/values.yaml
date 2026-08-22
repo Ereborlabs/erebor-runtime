@@ -1,0 +1,14 @@
+node:
+  nodeSelector:
+    mithril.example/pool: protected
+  affinity:
+    nodeAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        nodeSelectorTerms:
+          - matchExpressions:
+              - key: kubernetes.io/arch
+                operator: In
+                values: [amd64]
+control:
+  admission:
+    caBundle: dGVzdA==

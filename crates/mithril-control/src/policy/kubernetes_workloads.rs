@@ -6,7 +6,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use axum::extract::{DefaultBodyLimit, State};
-use axum::routing::post;
+use axum::http::StatusCode;
+use axum::routing::{get, post};
 use axum::{Json, Router};
 use axum_server::tls_rustls::RustlsConfig;
 use k8s_openapi::api::core::v1::{
@@ -42,6 +43,7 @@ pub struct KubernetesAdmissionHttpConfigV1 {
     pub tls_certificate_path: PathBuf,
     pub tls_private_key_path: PathBuf,
     pub maximum_request_bytes: usize,
+    pub request_timeout_ms: u64,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -67,6 +69,7 @@ struct KubernetesAdmissionOwner {
     control: ControlPlane,
     policies: PolicyDesiredStateOwner,
     nodes: KubernetesNodeReadinessOwner,
+    request_timeout_ms: u64,
 }
 
 impl KubernetesAdmissionHttpConfigV1 {
@@ -74,9 +77,10 @@ impl KubernetesAdmissionHttpConfigV1 {
         ensure!(
             self.tls_certificate_path.is_absolute()
                 && self.tls_private_key_path.is_absolute()
-                && (1_024..=4 * 1_024 * 1_024).contains(&self.maximum_request_bytes),
+                && (1_024..=4 * 1_024 * 1_024).contains(&self.maximum_request_bytes)
+                && (100..=30_000).contains(&self.request_timeout_ms),
             InvalidConfigurationSnafu {
-                reason: "Kubernetes admission needs absolute TLS paths and a bounded request size",
+                reason: "Kubernetes admission needs absolute TLS paths and bounded request size and time limits",
             }
         );
         Ok(())
@@ -297,16 +301,27 @@ impl KubernetesAdmissionOwner {
             Ok(request) => request,
             Err(error) => return Json(AdmissionResponse::invalid(error).into_review()),
         };
-        let response = match owner.admit(&request).await {
-            Ok(response) => response,
-            Err(error) => AdmissionResponse::from(&request).deny(error.to_string()),
+        let response = match tokio::time::timeout(
+            Duration::from_millis(owner.request_timeout_ms),
+            owner.admit(&request),
+        )
+        .await
+        {
+            Ok(Ok(response)) => response,
+            Ok(Err(error)) => AdmissionResponse::from(&request).deny(error.to_string()),
+            Err(_) => AdmissionResponse::from(&request).deny("Mithril admission timed out"),
         };
         Json(response.into_review())
+    }
+
+    async fn health() -> StatusCode {
+        StatusCode::OK
     }
 
     fn router(self: Arc<Self>, maximum_request_bytes: usize) -> Router {
         Router::new()
             .route("/admit", post(Self::review))
+            .route("/healthz", get(Self::health))
             .layer(DefaultBodyLimit::max(maximum_request_bytes))
             .with_state(self)
     }
@@ -327,6 +342,7 @@ pub async fn serve_kubernetes_admission(
         control,
         policies,
         nodes,
+        request_timeout_ms: config.request_timeout_ms,
     });
     let tls =
         RustlsConfig::from_pem_file(&config.tls_certificate_path, &config.tls_private_key_path)
@@ -1265,5 +1281,13 @@ mod tests {
             })
         }));
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn admission_health_is_available_without_policy_payload() {
+        assert_eq!(
+            super::KubernetesAdmissionOwner::health().await,
+            axum::http::StatusCode::OK
+        );
     }
 }
