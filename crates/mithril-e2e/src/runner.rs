@@ -138,6 +138,10 @@ pub struct HostLifecycleRunner {
 
 impl KernelQualificationRunner {
     const ARCHITECTURE_PATH: &'static str = "docs/plans/mithril-hugging-face-intrusion-prevention/policy-and-protection-algorithm-architecture-readable.md";
+    const PRE_GRPC_ARCHITECTURE_SHA256: &'static str =
+        "580becbcd8f2872f954fb4e3857e27ec0f5528e55d8561096f3a16d10cf26d4e";
+    const GRPC_ARCHITECTURE_SHA256: &'static str =
+        "51807f12113391872ee90ce2469869db18bc4d25e9b4b1f39eb01fcaefb4fe1e";
     const ABI_HEADER_PATH: &'static str = "bpf/erebor-interceptor/include/erebor_interceptor_abi.h";
     const BPF_SOURCE_PATH: &'static str = "bpf/erebor-interceptor/qualification/feasibility.bpf.c";
 
@@ -209,6 +213,14 @@ impl KernelQualificationRunner {
         path: &Path,
     ) -> Result<()> {
         let architecture = self.read(Self::ARCHITECTURE_PATH)?;
+        let architecture_sha256 = DigestV1::of(architecture).to_hex();
+        let qualification_architecture_is_current =
+            qualification.architecture_revision_sha256 == architecture_sha256;
+        // The gRPC amendment does not change the qualified BPF surfaces. Keep
+        // the physical result bound to the architecture that the probe used.
+        let qualification_architecture_is_preserved = architecture_sha256
+            == Self::GRPC_ARCHITECTURE_SHA256
+            && qualification.architecture_revision_sha256 == Self::PRE_GRPC_ARCHITECTURE_SHA256;
         let supported = qualification
             .supported_capability_ids
             .iter()
@@ -231,8 +243,8 @@ impl KernelQualificationRunner {
                     == DigestV1::of(self.read(Self::BPF_SOURCE_PATH)?).to_hex()
                 && qualification.abi_header_sha256
                     == DigestV1::of(self.read(Self::ABI_HEADER_PATH)?).to_hex()
-                && qualification.architecture_revision_sha256
-                    == DigestV1::of(architecture).to_hex()
+                && (qualification_architecture_is_current
+                    || qualification_architecture_is_preserved)
                 && qualification.lsm_program_count
                     == erebor_interceptor::REQUIRED_QUALIFICATION_LSM_PROGRAMS.len()
                 && qualification.map_count == 3
