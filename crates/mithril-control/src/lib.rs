@@ -13,12 +13,15 @@ mod trust;
 
 pub use administrative_exec::*;
 pub use administrative_http::*;
-pub use config::ControlConfig;
+pub use config::{ControlConfig, ControlRuntimeParts};
 pub use error::{Error, Result};
 pub use evidence::*;
 pub use policy::*;
 pub use protocol::*;
 pub use server::{serve, ControlServerTls};
-pub use service::{AllowedNodeIdentity, ControlPlane, PolicySignerTrustV1, TrustGenerationV1};
+pub use service::{
+    AllowedNodeIdentity, ControlPlane, KubernetesNodeSessionV1, PolicySignerTrustV1,
+    TrustGenerationV1,
+};
 pub use store::{ControlStore, ControlStoreHealthV1};
 pub use trust::*;

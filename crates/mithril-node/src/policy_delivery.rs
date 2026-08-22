@@ -1277,6 +1277,7 @@ mod tests {
     fn config(state_directory: &std::path::Path) -> NodeConfig {
         NodeConfig {
             node_id: "node-a".to_owned(),
+            kubernetes_node_name: None,
             state_directory: state_directory.to_owned(),
             interceptor: InterceptorConfig {
                 runtime_btf_path: state_directory.join("vmlinux"),

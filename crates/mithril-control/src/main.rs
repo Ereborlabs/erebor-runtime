@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use clap::Parser;
-use mithril_control::{serve, serve_administrative_http, ControlConfig};
+use mithril_control::{serve, serve_administrative_http, ControlConfig, ControlRuntimeParts};
 
 #[derive(Parser)]
 #[command(about = "Run the private Mithril node control service")]
@@ -20,7 +20,13 @@ async fn main() {
 
 async fn run() -> mithril_control::Result<()> {
     let config = ControlConfig::load(&Cli::parse().config)?;
-    let (address, tls, control, administrative_exec) = config.into_parts()?;
+    let ControlRuntimeParts {
+        listen: address,
+        tls,
+        control,
+        administrative_exec,
+        kubernetes_nodes,
+    } = config.into_parts()?;
     let policy_owner = control.policy_desired_state();
     let policy_control = control.clone();
     let policy_reconciler = async move {
@@ -31,6 +37,15 @@ async fn run() -> mithril_control::Result<()> {
         }
     };
     tokio::pin!(policy_reconciler);
+    let node_control = control.clone();
+    let node_reconciler = async move {
+        if let Some(owner) = kubernetes_nodes {
+            owner.run_kubernetes(node_control).await;
+        } else {
+            std::future::pending::<()>().await;
+        }
+    };
+    tokio::pin!(node_reconciler);
     if let Some(administrative_exec) = administrative_exec {
         let shutdown = std::sync::Arc::new(tokio::sync::Notify::new());
         let control_shutdown = shutdown.clone();
@@ -59,6 +74,10 @@ async fn run() -> mithril_control::Result<()> {
                 shutdown.notify_waiters();
                 Ok(())
             },
+            _ = &mut node_reconciler => {
+                shutdown.notify_waiters();
+                Ok(())
+            },
         }
     } else {
         tokio::select! {
@@ -66,6 +85,7 @@ async fn run() -> mithril_control::Result<()> {
                 let _result = tokio::signal::ctrl_c().await;
             }) => result,
             _ = &mut policy_reconciler => Ok(()),
+            _ = &mut node_reconciler => Ok(()),
         }
     }
 }

@@ -214,6 +214,8 @@ pub struct WorkloadBindingConfig {
 #[serde(deny_unknown_fields)]
 pub struct NodeConfig {
     pub node_id: String,
+    #[serde(default)]
+    pub kubernetes_node_name: Option<String>,
     pub state_directory: PathBuf,
     pub interceptor: InterceptorConfig,
     pub control: NodeControlConfig,
@@ -244,6 +246,14 @@ impl NodeConfig {
             mithril_control::node_id_is_valid(&self.node_id),
             InvalidConfigurationSnafu {
                 reason: "node_id must be a bounded path-safe identity",
+            }
+        );
+        ensure!(
+            self.kubernetes_node_name
+                .as_deref()
+                .is_none_or(kubernetes_node_name_is_valid),
+            InvalidConfigurationSnafu {
+                reason: "kubernetes_node_name must be a valid DNS subdomain when it is set",
             }
         );
         if let Some(evidence) = &self.evidence {
@@ -413,6 +423,26 @@ impl NodeConfig {
     }
 }
 
+fn kubernetes_node_name_is_valid(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 253
+        && value.split('.').all(|label| {
+            !label.is_empty()
+                && label.len() <= 63
+                && label
+                    .bytes()
+                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+                && label
+                    .as_bytes()
+                    .first()
+                    .is_some_and(u8::is_ascii_alphanumeric)
+                && label
+                    .as_bytes()
+                    .last()
+                    .is_some_and(u8::is_ascii_alphanumeric)
+        })
+}
+
 impl NodeControlConfig {
     #[must_use]
     pub const fn reconnect_minimum(&self) -> Duration {
@@ -479,6 +509,7 @@ mod tests {
     fn config() -> NodeConfig {
         NodeConfig {
             node_id: "node-a".to_owned(),
+            kubernetes_node_name: None,
             state_directory: PathBuf::from("/tmp/mithril-node-test"),
             interceptor: InterceptorConfig {
                 runtime_btf_path: PathBuf::from("/sys/kernel/btf/vmlinux"),
