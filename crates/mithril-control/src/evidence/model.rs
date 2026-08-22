@@ -1,5 +1,6 @@
 use erebor_interceptor_abi::Id128V1;
 use minicbor::Encoder;
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 use snafu::{Location, Snafu};
@@ -26,7 +27,9 @@ pub enum EvidenceModelError {
     },
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[derive(
+    Clone, Copy, Debug, Deserialize, Eq, JsonSchema, Ord, PartialEq, PartialOrd, Serialize,
+)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum EvidenceFieldKeyV1 {
     FindingId,
@@ -52,7 +55,7 @@ pub enum EvidenceFieldKeyV1 {
     ProviderResourceId,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum EvidenceSensitivityV1 {
     Public,

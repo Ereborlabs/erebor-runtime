@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use erebor_interceptor_abi::{MAX_CANONICAL_COMPONENT_BYTES_V1, MAX_CANONICAL_PATH_COMPONENTS_V1};
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::error::PolicyValidationSnafu;
@@ -13,21 +14,21 @@ pub const MAX_PATH_GRAPH_STATES_V1: usize = 4096;
 pub type DentryIdV1 = u64;
 pub type MountIdUniqueV1 = u64;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum MountTopologyStateV1 {
     Clean,
     Dirty,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct DentryRecordV1 {
     pub dentry_id: DentryIdV1,
     pub parent_dentry_id: DentryIdV1,
     pub name: Vec<u8>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct MountRecordV1 {
     pub mount_id_unique: MountIdUniqueV1,
     pub root_dentry_id: DentryIdV1,
@@ -35,7 +36,7 @@ pub struct MountRecordV1 {
     pub mountpoint_dentry_id: Option<DentryIdV1>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct MountSecurityViewV1 {
     pub mount_view_id: String,
     pub topology_epoch: u64,
@@ -169,7 +170,8 @@ impl MountSecurityViewV1 {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[schemars(transform = super::source::tagged_union_schema)]
 #[serde(tag = "state", rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum CanonicalPathResultV1 {
     Resolved {
@@ -181,7 +183,7 @@ pub enum CanonicalPathResultV1 {
     },
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum PathUnresolvedReasonV1 {
     DirtyTopology,
@@ -230,7 +232,7 @@ impl PathSelectorTargetV1 {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize, JsonSchema)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum PathPatternPrecedenceV1 {
     #[default]
@@ -271,7 +273,7 @@ struct PathTerminalV1 {
     components: Vec<PathPatternComponentV1>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct PathCandidateV1 {
     pub rule_id: String,
     pub candidate_object_class_id: String,
