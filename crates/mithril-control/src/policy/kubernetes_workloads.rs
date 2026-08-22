@@ -10,17 +10,21 @@ use axum::routing::post;
 use axum::{Json, Router};
 use axum_server::tls_rustls::RustlsConfig;
 use k8s_openapi::api::core::v1::{
-    Binding, Container, Node, NodeSelector, NodeSelectorTerm, Pod, ServiceAccount,
+    Binding, Container, Namespace, Node, NodeSelector, NodeSelectorTerm, Pod, ServiceAccount,
 };
+use kube::api::{ListParams, Patch, PatchParams};
 use kube::core::admission::{AdmissionRequest, AdmissionResponse, AdmissionReview, Operation};
 use kube::core::DynamicObject;
 use kube::{Api, Client, ResourceExt as _};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use sha2::{Digest as _, Sha256};
 use snafu::ensure;
+use uuid::Uuid;
 
 use super::{
-    ContainerKindV1, DaemonSetNodeConstraintsV1, KubernetesNodeReadinessOwner, LabelOperatorV1,
-    PolicyDesiredStateOwner, PolicyDocumentV1, WorkloadSelectorV1,
+    ContainerKindV1, DaemonSetNodeConstraintsV1, KubernetesNodeReadinessOwner,
+    KubernetesWorkloadIdentityV1, LabelOperatorV1, PolicyDesiredStateOwner, PolicyDocumentV1,
+    WorkloadProtectionProfile, WorkloadSelectorV1, WorkloadTargetFactV1,
     KUBERNETES_LABEL_EPOCH_ANNOTATION, KUBERNETES_NODE_BOOT_ANNOTATION,
     KUBERNETES_NODE_ID_ANNOTATION, KUBERNETES_NODE_UID_ANNOTATION, KUBERNETES_NOT_READY_TAINT,
     KUBERNETES_READY_LABEL,
@@ -147,6 +151,12 @@ impl KubernetesAdmissionOwner {
                 *compiled,
                 InvalidConfigurationSnafu {
                     reason: "the matching WorkloadProtectionProfile is not compiled",
+                }
+            );
+            ensure!(
+                policy_matching_containers_are_pinned(policy, &facts),
+                InvalidConfigurationSnafu {
+                    reason: "each protected container image must use an exact sha256 digest",
                 }
             );
             let constraints = self.nodes.live_constraints(self.kube.clone()).await?;
@@ -337,6 +347,267 @@ pub async fn serve_kubernetes_admission(
         )
         .await
         .map_err(|error| admission_error(format!("Kubernetes admission server failed: {error}")))
+}
+
+pub(super) async fn reconcile_bound_kubernetes_workloads(
+    client: Client,
+    policies: PolicyDesiredStateOwner,
+    control: ControlPlane,
+) {
+    loop {
+        let _result =
+            reconcile_bound_kubernetes_workloads_once(client.clone(), &policies, &control).await;
+        tokio::time::sleep(Duration::from_secs(1)).await;
+    }
+}
+
+async fn reconcile_bound_kubernetes_workloads_once(
+    client: Client,
+    policies: &PolicyDesiredStateOwner,
+    control: &ControlPlane,
+) -> Result<()> {
+    let pods = Api::<Pod>::all(client.clone())
+        .list(&ListParams::default())
+        .await
+        .map_err(|error| admission_error(format!("list bound Pods: {error}")))?;
+    let nodes = Api::<Node>::all(client.clone())
+        .list(&ListParams::default())
+        .await
+        .map_err(|error| admission_error(format!("list Kubernetes Nodes: {error}")))?;
+    let namespaces = Api::<Namespace>::all(client.clone())
+        .list(&ListParams::default())
+        .await
+        .map_err(|error| admission_error(format!("list Kubernetes Namespaces: {error}")))?;
+    let service_accounts = Api::<ServiceAccount>::all(client.clone())
+        .list(&ListParams::default())
+        .await
+        .map_err(|error| admission_error(format!("list Kubernetes ServiceAccounts: {error}")))?;
+    ensure!(
+        pods.items.len() <= 65_536
+            && nodes.items.len() <= 65_536
+            && namespaces.items.len() <= 65_536
+            && service_accounts.items.len() <= 65_536,
+        InvalidConfigurationSnafu {
+            reason: "Kubernetes workload inventory exceeds its object bound",
+        }
+    );
+    let nodes = nodes
+        .items
+        .into_iter()
+        .map(|node| (node.name_any(), node))
+        .collect::<BTreeMap<_, _>>();
+    let namespaces = namespaces
+        .items
+        .into_iter()
+        .filter_map(|namespace| Some((namespace.name_any(), namespace.metadata.uid?)))
+        .collect::<BTreeMap<_, _>>();
+    let service_accounts = service_accounts
+        .items
+        .into_iter()
+        .filter_map(|account| {
+            Some((
+                (account.namespace()?, account.name_any()),
+                account.metadata.uid?,
+            ))
+        })
+        .collect::<BTreeMap<_, _>>();
+    let mut targets = Vec::new();
+    for pod in pods.items {
+        targets.extend(bound_pod_targets(
+            &pod,
+            policies,
+            &nodes,
+            &namespaces,
+            &service_accounts,
+        )?);
+    }
+    if !control
+        .replace_kubernetes_workload_inventory(targets)
+        .map_err(|error| admission_error(error.to_string()))?
+    {
+        return Ok(());
+    }
+    let status_client = client.clone();
+    let resources = Api::<WorkloadProtectionProfile>::all(client)
+        .list(&ListParams::default())
+        .await
+        .map_err(|error| admission_error(format!("list policies after binding change: {error}")))?;
+    for resource in resources.items {
+        let Some(namespace_name) = resource.namespace() else {
+            continue;
+        };
+        let Some(namespace_uid) = namespaces.get(&namespace_name) else {
+            continue;
+        };
+        let Ok(result) = policies.reconcile(
+            &resource,
+            namespace_uid,
+            &control.workload_inventory(),
+            utc_now_ns(),
+        ) else {
+            continue;
+        };
+        let Some(name) = resource.metadata.name.as_deref() else {
+            continue;
+        };
+        let api =
+            Api::<WorkloadProtectionProfile>::namespaced(status_client.clone(), &namespace_name);
+        let patch = Patch::Merge(serde_json::json!({"status": result.status}));
+        let _result = api
+            .patch_status(name, &PatchParams::default(), &patch)
+            .await;
+    }
+    Ok(())
+}
+
+fn bound_pod_targets(
+    pod: &Pod,
+    policies: &PolicyDesiredStateOwner,
+    nodes: &BTreeMap<String, Node>,
+    namespaces: &BTreeMap<String, String>,
+    service_accounts: &BTreeMap<(String, String), String>,
+) -> Result<Vec<WorkloadTargetFactV1>> {
+    let annotations = pod.metadata.annotations.as_ref();
+    let Some(profile_id) = annotations.and_then(|values| values.get(KUBERNETES_PROFILE_ANNOTATION))
+    else {
+        return Ok(Vec::new());
+    };
+    let Some(_admitted_source_revision_id) =
+        annotations.and_then(|values| values.get(KUBERNETES_SOURCE_ANNOTATION))
+    else {
+        return Ok(Vec::new());
+    };
+    let namespace_name = pod
+        .namespace()
+        .ok_or_else(|| admission_error("protected bound Pod has no namespace"))?;
+    let pod_uid = pod
+        .metadata
+        .uid
+        .as_deref()
+        .ok_or_else(|| admission_error("protected bound Pod has no UID"))?;
+    let spec = pod
+        .spec
+        .as_ref()
+        .ok_or_else(|| admission_error("protected bound Pod has no specification"))?;
+    let kubernetes_node_name = spec
+        .node_name
+        .as_deref()
+        .ok_or_else(|| admission_error("protected Pod is not bound to a Node"))?;
+    let node = nodes
+        .get(kubernetes_node_name)
+        .ok_or_else(|| admission_error("protected Pod Node is absent"))?;
+    let node_annotations = node.metadata.annotations.as_ref();
+    let node_id = node_annotations
+        .and_then(|values| values.get(KUBERNETES_NODE_ID_ANNOTATION))
+        .ok_or_else(|| admission_error("protected Pod Node has no Mithril node identity"))?;
+    let kubernetes_node_uid = node
+        .metadata
+        .uid
+        .as_deref()
+        .ok_or_else(|| admission_error("protected Pod Node has no UID"))?;
+    ensure!(
+        node_annotations
+            .and_then(|values| values.get(KUBERNETES_NODE_UID_ANNOTATION))
+            .map(String::as_str)
+            == Some(kubernetes_node_uid),
+        InvalidConfigurationSnafu {
+            reason: "protected Pod Node UID projection is stale",
+        }
+    );
+    let node_boot_id = node_annotations
+        .and_then(|values| values.get(KUBERNETES_NODE_BOOT_ANNOTATION))
+        .ok_or_else(|| admission_error("protected Pod Node has no boot identity"))?;
+    let label_epoch = node_annotations
+        .and_then(|values| values.get(KUBERNETES_LABEL_EPOCH_ANNOTATION))
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|value| *value > 0)
+        .ok_or_else(|| admission_error("protected Pod Node has no valid label epoch"))?;
+    let namespace_uid = namespaces
+        .get(&namespace_name)
+        .ok_or_else(|| admission_error("protected Pod namespace identity is absent"))?;
+    let service_account_name = spec.service_account_name.as_deref().unwrap_or("default");
+    let service_account_uid = service_accounts
+        .get(&(namespace_name.clone(), service_account_name.to_owned()))
+        .ok_or_else(|| admission_error("protected Pod ServiceAccount identity is absent"))?;
+    let controller_uid = pod
+        .metadata
+        .owner_references
+        .iter()
+        .flatten()
+        .find(|owner| owner.controller == Some(true))
+        .map_or(pod_uid, |owner| owner.uid.as_str());
+    let (source_revision, policy, _compiled) = policies
+        .live_policies_in_namespace(&namespace_name)?
+        .into_iter()
+        .find(|(_source, policy, compiled)| policy.profile_id() == profile_id && *compiled)
+        .ok_or_else(|| admission_error("protected Pod profile has no current compiled policy"))?;
+    let source_revision_id = &source_revision.policy_source_revision_id;
+    let facts = pod_admission_facts(
+        pod,
+        policies.cluster_uid(),
+        namespace_uid,
+        service_account_uid,
+    );
+    let mut targets = Vec::new();
+    for container in &facts.containers {
+        let Some(selector_id) = matching_selector_id(&policy, &facts, container)? else {
+            continue;
+        };
+        let image_digest = pinned_image_digest(&container.image).ok_or_else(|| {
+            admission_error("protected bound container image is not digest-pinned")
+        })?;
+        let execution_set_id = derived_uuid(&[
+            b"MITHRIL-KUBERNETES-EXECUTION-SET-V1\0",
+            pod_uid.as_bytes(),
+            container.name.as_bytes(),
+        ]);
+        let container_id = format!(
+            "scheduled:{}",
+            sha256_parts(&[pod_uid.as_bytes(), container.name.as_bytes()])
+        );
+        ensure!(
+            policy.protected_universe.protected_scope_ids.len() == 1,
+            InvalidConfigurationSnafu {
+                reason: "Kubernetes Version 1 needs one protected scope per profile",
+            }
+        );
+        let binding_id = derived_uuid(&[
+            b"MITHRIL-KUBERNETES-BINDING-V1\0",
+            pod_uid.as_bytes(),
+            container.name.as_bytes(),
+        ]);
+        let kubernetes = KubernetesWorkloadIdentityV1 {
+            namespace_name: namespace_name.clone(),
+            profile_id: profile_id.clone(),
+            policy_source_revision_id: source_revision_id.clone(),
+            binding_id,
+            protected_scope_id: policy.protected_universe.protected_scope_ids[0].clone(),
+            workload_selector_id: selector_id,
+            kubernetes_node_name: kubernetes_node_name.to_owned(),
+            kubernetes_node_uid: kubernetes_node_uid.to_owned(),
+            node_boot_id: node_boot_id.clone(),
+            label_epoch,
+        };
+        let mut target = WorkloadTargetFactV1 {
+            node_id: node_id.clone(),
+            workload_binding_generation_digest: String::new(),
+            execution_set_id,
+            cluster_uid: policies.cluster_uid().to_owned(),
+            namespace_uid: namespace_uid.clone(),
+            controller_uid: controller_uid.to_owned(),
+            service_account_uid: service_account_uid.clone(),
+            pod_uid: pod_uid.to_owned(),
+            container_id,
+            container_name: container.name.clone(),
+            container_kind: container.kind,
+            image_digest,
+            pod_labels: facts.labels.clone(),
+            kubernetes: Some(kubernetes),
+        };
+        target.workload_binding_generation_digest = super::workload_target_fact_digest(&target)?;
+        targets.push(target);
+    }
+    Ok(targets)
 }
 
 #[must_use]
@@ -540,17 +811,115 @@ fn selector_matches_pod(selector: &WorkloadSelectorV1, facts: &PodAdmissionFacts
                 LabelOperatorV1::DoesNotExist => value.is_none(),
             }
         })
-        && facts.containers.iter().any(|container| {
-            (selector.container_names.is_empty()
-                || selector.container_names.contains(&container.name))
-                && (selector.container_kinds.is_empty()
-                    || selector.container_kinds.contains(&container.kind))
-                && (selector.image_digests.is_empty()
-                    || selector
-                        .image_digests
-                        .iter()
-                        .any(|digest| image_matches(&container.image, digest)))
+        && facts
+            .containers
+            .iter()
+            .any(|container| selector_matches_container(selector, container))
+}
+
+fn selector_matches_container(
+    selector: &WorkloadSelectorV1,
+    container: &ContainerAdmissionFactV1,
+) -> bool {
+    (selector.container_names.is_empty() || selector.container_names.contains(&container.name))
+        && (selector.container_kinds.is_empty()
+            || selector.container_kinds.contains(&container.kind))
+        && (selector.image_digests.is_empty()
+            || selector
+                .image_digests
+                .iter()
+                .any(|digest| image_matches(&container.image, digest)))
+}
+
+fn matching_selector_id(
+    policy: &PolicyDocumentV1,
+    facts: &PodAdmissionFactsV1,
+    container: &ContainerAdmissionFactV1,
+) -> Result<Option<String>> {
+    let selectors = policy
+        .workload_selectors
+        .iter()
+        .filter(|selector| {
+            selector.cluster_uids.contains(&facts.cluster_uid)
+                && selector.namespace_uids.contains(&facts.namespace_uid)
+                && optional_value_matches(
+                    &selector.controller_uids,
+                    facts.controller_uid.as_deref(),
+                )
+                && optional_value_matches(
+                    &selector.service_account_uids,
+                    Some(&facts.service_account_uid),
+                )
+                && selector.pod_label_requirements.iter().all(|requirement| {
+                    let value = facts.labels.get(&requirement.key);
+                    match requirement.operator {
+                        LabelOperatorV1::In => {
+                            value.is_some_and(|value| requirement.values.contains(value))
+                        }
+                        LabelOperatorV1::NotIn => {
+                            value.is_some_and(|value| !requirement.values.contains(value))
+                        }
+                        LabelOperatorV1::Exists => value.is_some(),
+                        LabelOperatorV1::DoesNotExist => value.is_none(),
+                    }
+                })
+                && selector_matches_container(selector, container)
         })
+        .map(|selector| selector.workload_selector_id.clone())
+        .collect::<Vec<_>>();
+    ensure!(
+        selectors.len() <= 1,
+        InvalidConfigurationSnafu {
+            reason: "more than one workload selector matches one protected container",
+        }
+    );
+    Ok(selectors.into_iter().next())
+}
+
+fn policy_matching_containers_are_pinned(
+    policy: &PolicyDocumentV1,
+    facts: &PodAdmissionFactsV1,
+) -> bool {
+    facts.containers.iter().all(|container| {
+        policy.workload_selectors.iter().all(|selector| {
+            !selector_matches_container(selector, container)
+                || pinned_image_digest(&container.image).is_some()
+        })
+    })
+}
+
+fn pinned_image_digest(image: &str) -> Option<String> {
+    let (_, digest) = image.rsplit_once('@')?;
+    let value = digest.strip_prefix("sha256:")?;
+    (value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase()))
+    .then(|| digest.to_owned())
+}
+
+fn derived_uuid(parts: &[&[u8]]) -> String {
+    let digest = Sha256::digest(parts.concat());
+    let mut bytes = [0_u8; 16];
+    bytes.copy_from_slice(&digest[..16]);
+    bytes[6] = (bytes[6] & 0x0f) | 0x80;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    Uuid::from_bytes(bytes).hyphenated().to_string()
+}
+
+fn sha256_parts(parts: &[&[u8]]) -> String {
+    let mut digest = Sha256::new();
+    for part in parts {
+        digest.update(part);
+    }
+    format!("{:x}", digest.finalize())
+}
+
+fn utc_now_ns() -> i64 {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0_u128, |duration| duration.as_nanos());
+    i64::try_from(nanos).unwrap_or(i64::MAX)
 }
 
 fn optional_value_matches(expected: &[String], actual: Option<&str>) -> bool {

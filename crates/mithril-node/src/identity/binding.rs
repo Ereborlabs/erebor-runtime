@@ -114,6 +114,7 @@ pub struct WorkloadBindingOwner {
     bindings: BTreeMap<u64, PublishedBinding>,
     profile_handles: BTreeMap<u64, Id128V1>,
     runtime: Option<ContainerRuntimeInventory>,
+    pending_runtime_admission: Option<RuntimeContainerIdentity>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -172,6 +173,7 @@ impl WorkloadBindingOwner {
             bindings: BTreeMap::new(),
             profile_handles: BTreeMap::new(),
             runtime: None,
+            pending_runtime_admission: None,
         })
     }
 
@@ -183,7 +185,13 @@ impl WorkloadBindingOwner {
         if self.runtime.is_some() {
             return self.reconcile_runtime(host, configured).await;
         }
-        self.publish_all(host, configured)?;
+        self.publish(
+            host,
+            configured
+                .iter()
+                .filter(|binding| binding.root_cgroup_path.is_some())
+                .map(|binding| (binding, None)),
+        )?;
         self.retain_only_configured(host)
     }
 
@@ -295,6 +303,194 @@ impl WorkloadBindingOwner {
             host,
             configured.iter().map(|(spec, pid)| (spec, Some(*pid))),
         )
+    }
+
+    pub(crate) fn retire_binding_id(&mut self, host: &KernelHost, binding_id: &str) -> Result<()> {
+        let roots = self
+            .bindings
+            .iter()
+            .filter(|(_root, binding)| binding.spec.binding_id == binding_id)
+            .map(|(root, _binding)| *root)
+            .collect::<Vec<_>>();
+        ensure!(
+            roots.len() <= 1,
+            IdentityStateSnafu {
+                reason: "one binding identity names more than one local cgroup",
+            }
+        );
+        if let Some(root) = roots.first().copied() {
+            self.terminate(host, root)?;
+            self.bindings.remove(&root);
+        }
+        Ok(())
+    }
+
+    pub(crate) fn publish_held_activated_root(
+        &mut self,
+        host: &KernelHost,
+        spec: &WorkloadBindingConfig,
+        initial_pid: u32,
+    ) -> Result<()> {
+        if let Err(error) = self.publish_held_initial_roots(host, &[(spec.clone(), initial_pid)]) {
+            self.pending_runtime_admission = None;
+            return Err(error);
+        }
+        let root = self
+            .bindings
+            .iter()
+            .find(|(_root, binding)| binding.spec.binding_id == spec.binding_id)
+            .map(|(root, _binding)| *root)
+            .context(IdentityStateSnafu {
+                reason: "held runtime binding disappeared after publication",
+            })?;
+        if let Some(runtime) = self.pending_runtime_admission.take() {
+            ensure!(
+                runtime.full_container_id == spec.container_id,
+                IdentityStateSnafu {
+                    reason: "verified CRI identity changed before binding publication",
+                }
+            );
+            let binding = self.bindings.get_mut(&root).context(IdentityStateSnafu {
+                reason: "published runtime binding disappeared before CRI adoption",
+            })?;
+            binding.runtime_identity = Some(runtime);
+        }
+        if let Err(error) = self.install_late_activation_target(host, root, spec) {
+            let rollback = self.terminate(host, root);
+            self.bindings.remove(&root);
+            return match rollback {
+                Ok(()) => Err(error),
+                Err(rollback) => IdentityStateSnafu {
+                    reason: format!(
+                        "held runtime binding activation failed: {error}; termination failed: {rollback}"
+                    ),
+                }
+                .fail(),
+            };
+        }
+        Ok(())
+    }
+
+    pub(crate) async fn verify_runtime_admission(
+        &mut self,
+        spec: &mut WorkloadBindingConfig,
+    ) -> Result<()> {
+        ensure!(
+            self.pending_runtime_admission.is_none(),
+            IdentityStateSnafu {
+                reason: "one runtime admission is already pending",
+            }
+        );
+        let runtime = self.runtime.as_mut().context(IdentityStateSnafu {
+            reason: "runtime admission has no CRI inventory owner",
+        })?;
+        let identity = runtime.inspect_created_for_admission(spec).await?;
+        spec.container_generation = identity.generation;
+        self.pending_runtime_admission = Some(identity);
+        Ok(())
+    }
+
+    pub(crate) fn cancel_runtime_admission(&mut self) {
+        self.pending_runtime_admission = None;
+    }
+
+    fn install_late_activation_target(
+        &mut self,
+        host: &KernelHost,
+        root: u64,
+        spec: &WorkloadBindingConfig,
+    ) -> Result<()> {
+        let binding = self.bindings.get(&root).context(IdentityStateSnafu {
+            reason: "held runtime binding is not published",
+        })?;
+        binding.validate_live_cgroup()?;
+        binding.require_initial_root_admission()?;
+        let active = host
+            .lookup_map(
+                "active_profile_generations",
+                binding.state.profile_id.as_bytes(),
+            )
+            .context(InterceptorSnafu)?
+            .context(IdentityStateSnafu {
+                reason: "held runtime binding has no active signed profile",
+            })?;
+        let active = u64::read_from_bytes(&active).map_err(|error| {
+            IdentityStateSnafu {
+                reason: format!("active runtime-gate generation is invalid: {error}"),
+            }
+            .build()
+        })?;
+        ensure!(
+            active == spec.active_profile_generation_ref_id,
+            IdentityStateSnafu {
+                reason: "held runtime binding names a stale profile generation",
+            }
+        );
+        let descriptor = host
+            .lookup_map("profile_generation_descriptors", &active.to_ne_bytes())
+            .context(InterceptorSnafu)?
+            .context(IdentityStateSnafu {
+                reason: "held runtime binding active generation has no descriptor",
+            })?;
+        let descriptor =
+            ProfileGenerationDescriptorV1::try_read_from_bytes(&descriptor).map_err(|error| {
+                IdentityStateSnafu {
+                    reason: format!("held runtime binding descriptor is invalid: {error}"),
+                }
+                .build()
+            })?;
+        ensure!(
+            descriptor.state == PolicyGenerationStateV1::Active
+                && descriptor.profile_generation_ref_id == active
+                && descriptor.profile_id == binding.state.profile_id
+                && descriptor.node_boot_id == self.node_boot_id
+                && descriptor.label_epoch == self.label_epoch,
+            IdentityStateSnafu {
+                reason:
+                    "held runtime binding descriptor is stale or belongs to another node session",
+            }
+        );
+        let key = BindingActivationTargetKeyV1 {
+            binding_id: binding.state.binding_id,
+            profile_generation_ref_id: active,
+        };
+        let previous = host
+            .lookup_map("binding_activation_targets", key.as_bytes())
+            .context(InterceptorSnafu)?;
+        ensure!(
+            previous
+                .as_deref()
+                .is_none_or(|value| value == binding.state.as_bytes()),
+            IdentityStateSnafu {
+                reason: "held runtime binding activation target is not immutable",
+            }
+        );
+        if previous.is_none() {
+            ensure!(
+                host.insert_map(
+                    "binding_activation_targets",
+                    key.as_bytes(),
+                    binding.state.as_bytes(),
+                )
+                .context(InterceptorSnafu)?
+                    == MapInsertResult::Inserted,
+                IdentityStateSnafu {
+                    reason: "held runtime binding activation target changed during publication",
+                }
+            );
+        }
+        ensure!(
+            host.lookup_map("binding_activation_targets", key.as_bytes())
+                .context(InterceptorSnafu)?
+                .as_deref()
+                == Some(binding.state.as_bytes()),
+            IdentityStateSnafu {
+                reason: "held runtime binding activation target failed readback",
+            }
+        );
+        self.profile_handles
+            .insert(active, binding.state.profile_id);
+        Ok(())
     }
 
     fn publish<'a>(
@@ -1058,6 +1254,8 @@ mod tests {
     fn spec(root: &Path) -> WorkloadBindingConfig {
         WorkloadBindingConfig {
             binding_id: "11111111-1111-4111-8111-111111111111".to_owned(),
+            scheduled_binding_authority_id: None,
+            scheduled_target_digest: None,
             execution_set_id: "22222222-2222-4222-8222-222222222222".to_owned(),
             protected_scope_id: "44444444-4444-4444-8444-444444444444".to_owned(),
             workload_selector_id: "worker".to_owned(),

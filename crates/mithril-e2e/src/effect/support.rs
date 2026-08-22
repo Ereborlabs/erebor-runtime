@@ -32,6 +32,7 @@ pub(super) fn effect_node_config(
 ) -> NodeConfig {
     NodeConfig {
         node_id: "mithril-effect-test".to_owned(),
+        kubernetes_node_name: None,
         state_directory: state_directory.to_path_buf(),
         interceptor: InterceptorConfig {
             runtime_btf_path: PathBuf::from("/sys/kernel/btf/vmlinux"),
@@ -57,6 +58,7 @@ pub(super) fn effect_node_config(
             maximum_control_delay_ms: 30_000,
         }),
         runtime_observation: None,
+        runtime_admission: None,
         container_runtime: None,
         workload_bindings: bindings,
         policy_candidates: vec![PolicyCandidateConfig {
@@ -108,6 +110,8 @@ pub(super) fn effect_binding_with_identity(
 ) -> WorkloadBindingConfig {
     WorkloadBindingConfig {
         binding_id: binding_id.to_owned(),
+        scheduled_binding_authority_id: None,
+        scheduled_target_digest: None,
         execution_set_id: "44444444-4444-4444-8444-444444444444".to_owned(),
         protected_scope_id: "33333333-3333-4333-8333-333333333333".to_owned(),
         workload_selector_id: "worker".to_owned(),

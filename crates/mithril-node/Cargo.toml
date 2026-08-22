@@ -49,5 +49,9 @@ path = "src/main.rs"
 name = "mithril-inspect"
 path = "src/bin/mithril_inspect.rs"
 
+[[bin]]
+name = "mithril-oci-hook"
+path = "src/bin/mithril_oci_hook.rs"
+
 [lints]
 workspace = true

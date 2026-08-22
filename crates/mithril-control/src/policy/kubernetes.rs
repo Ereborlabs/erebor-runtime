@@ -137,6 +137,8 @@ pub struct PolicyTargetV1 {
     pub cluster_uid: String,
     pub node_id: String,
     pub workload_binding_generation_digests: Vec<String>,
+    #[serde(default)]
+    pub workload_targets: Vec<super::WorkloadTargetFactV1>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -460,6 +462,23 @@ impl PolicyTargetV1 {
                 .workload_binding_generation_digests
                 .windows(2)
                 .all(|pair| pair[0] < pair[1])
+            && (self.workload_targets.is_empty()
+                || (self.workload_targets.len() <= self.workload_binding_generation_digests.len()
+                    && self.workload_targets.iter().all(|target| {
+                        target.kubernetes.is_some()
+                            && target.node_id == self.node_id
+                            && self
+                                .workload_binding_generation_digests
+                                .binary_search(&target.workload_binding_generation_digest)
+                                .is_ok()
+                            && super::workload_target_fact_digest(target).is_ok_and(|digest| {
+                                digest == target.workload_binding_generation_digest
+                            })
+                    })
+                    && self.workload_targets.windows(2).all(|pair| {
+                        pair[0].workload_binding_generation_digest
+                            < pair[1].workload_binding_generation_digest
+                    })))
     }
 }
 

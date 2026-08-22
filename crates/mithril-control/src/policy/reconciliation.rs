@@ -23,7 +23,7 @@ use super::{
 use crate::error::{IoSnafu, PolicySignatureSnafu, PolicyValidationSnafu};
 use crate::{ControlStore, PolicyCompiler, Result};
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct WorkloadTargetFactV1 {
     pub node_id: String,
@@ -39,6 +39,41 @@ pub struct WorkloadTargetFactV1 {
     pub container_kind: ContainerKindV1,
     pub image_digest: String,
     pub pod_labels: BTreeMap<String, String>,
+    #[serde(default)]
+    pub kubernetes: Option<KubernetesWorkloadIdentityV1>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct KubernetesWorkloadIdentityV1 {
+    pub namespace_name: String,
+    pub profile_id: String,
+    pub policy_source_revision_id: String,
+    pub binding_id: String,
+    pub protected_scope_id: String,
+    pub workload_selector_id: String,
+    pub kubernetes_node_name: String,
+    pub kubernetes_node_uid: String,
+    pub node_boot_id: String,
+    pub label_epoch: u64,
+}
+
+pub fn workload_target_fact_digest(target: &WorkloadTargetFactV1) -> Result<String> {
+    let mut identity = target.clone();
+    identity.workload_binding_generation_digest.clear();
+    serde_json::to_vec(&identity)
+        .map(|bytes| sha256(&bytes))
+        .map_err(|error| {
+            PolicyValidationSnafu {
+                policy_id: target
+                    .kubernetes
+                    .as_ref()
+                    .map_or("<workload-target>", |identity| identity.profile_id.as_str()),
+                code: "CFG_POLICY_TARGET_FACT",
+                reason: format!("the workload target cannot be encoded: {error}"),
+            }
+            .build()
+        })
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -241,30 +276,6 @@ impl PolicyDesiredStateOwner {
                 PolicySourceStateV1::Accepted
             },
         )?;
-        let existing = self
-            .state()?
-            .reconciled
-            .get(&source.policy_source_revision_id)
-            .cloned();
-        if let Some(mut existing) = existing {
-            existing.rollout_states = self
-                .store
-                .rollout_states_for_snapshot(&existing.target_snapshot.target_snapshot_digest)?;
-            existing.status = status_for(
-                &existing.source_revision,
-                existing
-                    .bundles
-                    .first()
-                    .map(|bundle| bundle.candidate.candidate_content_id.clone()),
-                &existing.rollout_states,
-                None,
-            );
-            self.state()?.reconciled.insert(
-                existing.source_revision.policy_source_revision_id.clone(),
-                existing.clone(),
-            );
-            return Ok(existing);
-        }
         self.store
             .accept_source_revision(source.clone(), resource.spec.policy.clone())?;
         let mut targets = resolve_targets(
@@ -471,7 +482,10 @@ impl PolicyDesiredStateOwner {
                 tokio::time::sleep(std::time::Duration::from_secs(5)).await;
                 continue;
             };
-            reconcile_cluster(client, self.clone(), control.clone()).await;
+            tokio::join!(
+                reconcile_cluster(client.clone(), self.clone(), control.clone()),
+                super::reconcile_bound_kubernetes_workloads(client, self.clone(), control.clone()),
+            );
         }
     }
 
@@ -859,7 +873,7 @@ fn resolve_targets(
         .iter()
         .map(|selector| selector.workload_selector_id.as_str())
         .collect::<BTreeSet<_>>();
-    let mut selected = BTreeMap::<String, BTreeSet<String>>::new();
+    let mut selected = BTreeMap::<String, BTreeMap<String, WorkloadTargetFactV1>>::new();
     for fact in inventory {
         let matches_selector = policy.workload_selectors.iter().any(|selector| {
             selector_ids.contains(selector.workload_selector_id.as_str())
@@ -885,7 +899,11 @@ fn resolve_targets(
                     }
                 })
         });
-        if matches_selector && selected_by_rollout(policy, fact) {
+        let profile_matches = fact.kubernetes.as_ref().is_none_or(|identity| {
+            identity.profile_id == policy.profile_id()
+                && !identity.policy_source_revision_id.is_empty()
+        });
+        if matches_selector && profile_matches && selected_by_rollout(policy, fact) {
             ensure!(
                 fact.cluster_uid == cluster_uid
                     && crate::node_id_is_valid(&fact.node_id)
@@ -896,19 +914,27 @@ fn resolve_targets(
                     reason: "a selected workload target has an invalid cluster, node, or digest",
                 }
             );
-            selected
-                .entry(fact.node_id.clone())
-                .or_default()
-                .insert(fact.workload_binding_generation_digest.clone());
+            selected.entry(fact.node_id.clone()).or_default().insert(
+                fact.workload_binding_generation_digest.clone(),
+                fact.clone(),
+            );
         }
     }
     let targets = selected
         .into_iter()
-        .map(|(node_id, bindings)| PolicyTargetV1 {
-            tenant_id: tenant_id.to_owned(),
-            cluster_uid: cluster_uid.to_owned(),
-            node_id,
-            workload_binding_generation_digests: bindings.into_iter().collect(),
+        .map(|(node_id, bindings)| {
+            let workload_binding_generation_digests = bindings.keys().cloned().collect();
+            let workload_targets = bindings
+                .into_values()
+                .filter(|target| target.kubernetes.is_some())
+                .collect();
+            PolicyTargetV1 {
+                tenant_id: tenant_id.to_owned(),
+                cluster_uid: cluster_uid.to_owned(),
+                node_id,
+                workload_binding_generation_digests,
+                workload_targets,
+            }
         })
         .collect::<Vec<_>>();
     ensure!(

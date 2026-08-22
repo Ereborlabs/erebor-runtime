@@ -9347,6 +9347,8 @@ impl Drop for NativeProcessFixture {
 fn test_binding(cgroup_path: &Path) -> WorkloadBindingConfig {
     WorkloadBindingConfig {
         binding_id: "4cd90188-e814-45ec-899f-4e3c9bca3801".to_owned(),
+        scheduled_binding_authority_id: None,
+        scheduled_target_digest: None,
         execution_set_id: "4cd90188-e814-45ec-899f-4e3c9bca3802".to_owned(),
         protected_scope_id: "4cd90188-e814-45ec-899f-4e3c9bca3804".to_owned(),
         workload_selector_id: "worker".to_owned(),
