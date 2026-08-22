@@ -1,13 +1,31 @@
 node:
   image: ereborlabs/mithril-node:dev
-  configSecretName: mithril-node-config
+  imagePullPolicy: IfNotPresent
+  configHostPath: /etc/mithril/node.json
+  identityHostPath: /etc/mithril/identity
   stateHostPath: /var/lib/mithril
   runHostPath: /run/mithril
   containerRuntimeSocket: /run/containerd/containerd.sock
+  nodeSelector: {}
+  affinity: {}
+  runtimeHook:
+    install: true
+    hostBinaryDirectory: /opt/mithril/bin
+    hostConfigDirectory: /usr/share/containers/oci/hooks.d
+    socketPath: /run/mithril/runtime-admission.sock
+    timeoutMs: 4000
+    runtimeTimeoutSeconds: 5
 
 control:
   enabled: true
   image: ereborlabs/mithril-control:dev
+  imagePullPolicy: IfNotPresent
   configSecretName: mithril-control-config
   statePersistentVolumeClaim: mithril-control-state
-  port: 8443
+  grpcPort: 8443
+  admission:
+    enabled: true
+    port: 9443
+    tlsSecretName: mithril-admission-tls
+    caBundle: ""
+    webhookTimeoutSeconds: 5

@@ -12,6 +12,7 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=build /src/target/release/mithril-node /usr/local/bin/mithril-node
+COPY --from=build /src/target/release/mithril-oci-hook /usr/local/bin/mithril-oci-hook
 ENTRYPOINT ["/usr/local/bin/mithril-node"]
 CMD ["--config", "/etc/mithril/node.json"]
 

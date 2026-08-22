@@ -1,0 +1,85 @@
+# Mithril Kubernetes Package
+
+This chart installs the `mithril-node` DaemonSet, `mithril-control`, the
+`WorkloadProtectionProfile` CRD, and the fail-closed admission webhooks.
+
+## Node Selection
+
+Set `node.nodeSelector` and `node.affinity` on the DaemonSet. Control reads
+these fields from the live DaemonSet. There is no second Mithril node-pool
+setting. Pod admission adds the derived constraints and the
+`mithril.erebor.dev/ready=true` requirement. The Kubernetes scheduler then
+selects one ready node.
+
+Each selected host must contain its unique node configuration at
+`node.configHostPath` and its unique mTLS identity directory at
+`node.identityHostPath`. The DaemonSet supplies `spec.nodeName` through
+`MITHRIL_KUBERNETES_NODE_NAME`. In this mode, the node derives its
+effect-controller cgroup from `/proc/self/cgroup`; it does not use a
+precomputed Pod cgroup path. The node service account has no Kubernetes API
+token or RBAC permissions.
+
+## Admission TLS And Control Configuration
+
+Create `control.admission.tlsSecretName` with `tls.crt` and `tls.key`. The
+certificate must authenticate `mithril-control.<namespace>.svc`. Set
+`control.admission.caBundle` to the base64-encoded CA bundle.
+
+The Control configuration Secret must contain `control.json`. Its Kubernetes
+fields must use this contract:
+
+```json
+{
+  "kubernetes_policy": {
+    "tenant_id": "<tenant UUID>",
+    "cluster_uid": "<cluster UUID>",
+    "signer": {
+      "signing_key_id": "<key ID>",
+      "signing_key_path": "/etc/mithril/policy-signing-key",
+      "seal_request_path": "/etc/mithril/profile-seal-request.json",
+      "distribution_sequence_epoch": 1,
+      "candidate_validity_ns": 300000000000
+    }
+  },
+  "kubernetes_nodes": {
+    "daemon_set_namespace": "<release namespace>",
+    "daemon_set_name": "mithril-node",
+    "session_ttl_seconds": 15,
+    "reconcile_interval_ms": 1000
+  },
+  "kubernetes_admission": {
+    "listen": "0.0.0.0:9443",
+    "tls_certificate_path": "/etc/mithril/admission-tls/tls.crt",
+    "tls_private_key_path": "/etc/mithril/admission-tls/tls.key",
+    "maximum_request_bytes": 1048576,
+    "request_timeout_ms": 4000
+  }
+}
+```
+
+Set the server request timeout below the webhook timeout. The chart does not
+define a protected tenant, namespace, or node selector in Control.
+
+The node configuration must enable `container_runtime` and
+`runtime_admission`. Its admission socket must equal
+`node.runtimeHook.socketPath`, and its timeout must equal
+`node.runtimeHook.timeoutMs`. Set `runtimeTimeoutSeconds` above that client
+timeout. The OCI runtime terminates a hook that exceeds this outer limit.
+
+## Runtime Hook
+
+The init container installs `mithril-oci-hook` and a protected-Pod-only OCI
+prestart hook on each selected host. CRI-O can read the default hook directory.
+For containerd, install the stock NRI hook-injector and configure it to read
+`node.runtimeHook.hostConfigDirectory`. Do this before you create a protected
+Pod. The package does not replace or patch the container runtime.
+
+## Verification
+
+```sh
+rtk bash packaging/mithril/helm/tests/verify.sh
+```
+
+The test lints and renders the chart. It checks the DaemonSet-derived selector,
+quarantine toleration, node identity input, runtime hook, webhook rules, TLS,
+timeouts, health probes, and RBAC boundary.

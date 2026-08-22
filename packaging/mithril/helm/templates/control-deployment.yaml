@@ -3,6 +3,8 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: mithril-control
+  labels:
+    app.kubernetes.io/name: mithril-control
 spec:
   replicas: 1
   selector:
@@ -15,13 +17,46 @@ spec:
     spec:
       serviceAccountName: mithril-control
       automountServiceAccountToken: true
+      terminationGracePeriodSeconds: 10
+      securityContext:
+        fsGroup: 65532
+        fsGroupChangePolicy: OnRootMismatch
       containers:
         - name: mithril-control
           image: {{ .Values.control.image | quote }}
+          imagePullPolicy: {{ .Values.control.imagePullPolicy }}
           args: ["--config", "/etc/mithril/control.json"]
           ports:
             - name: grpc
-              containerPort: {{ .Values.control.port }}
+              containerPort: {{ .Values.control.grpcPort }}
+{{- if .Values.control.admission.enabled }}
+            - name: admission
+              containerPort: {{ .Values.control.admission.port }}
+          startupProbe:
+            httpGet:
+              scheme: HTTPS
+              path: /healthz
+              port: admission
+            failureThreshold: 30
+            periodSeconds: 2
+            timeoutSeconds: 1
+          readinessProbe:
+            httpGet:
+              scheme: HTTPS
+              path: /healthz
+              port: admission
+            failureThreshold: 2
+            periodSeconds: 5
+            timeoutSeconds: 1
+          livenessProbe:
+            httpGet:
+              scheme: HTTPS
+              path: /healthz
+              port: admission
+            failureThreshold: 3
+            periodSeconds: 10
+            timeoutSeconds: 1
+{{- end }}
           securityContext:
             runAsNonRoot: true
             runAsUser: 65532
@@ -36,24 +71,42 @@ spec:
               readOnly: true
             - name: state
               mountPath: /var/lib/mithril-control
+{{- if .Values.control.admission.enabled }}
+            - name: admission-tls
+              mountPath: /etc/mithril/admission-tls
+              readOnly: true
+{{- end }}
       volumes:
         - name: config
           secret:
             secretName: {{ .Values.control.configSecretName | quote }}
-            defaultMode: 0400
+            defaultMode: 0440
         - name: state
           persistentVolumeClaim:
             claimName: {{ .Values.control.statePersistentVolumeClaim | quote }}
+{{- if .Values.control.admission.enabled }}
+        - name: admission-tls
+          secret:
+            secretName: {{ .Values.control.admission.tlsSecretName | quote }}
+            defaultMode: 0440
+{{- end }}
 ---
 apiVersion: v1
 kind: Service
 metadata:
   name: mithril-control
+  labels:
+    app.kubernetes.io/name: mithril-control
 spec:
   selector:
     app.kubernetes.io/name: mithril-control
   ports:
     - name: grpc
-      port: {{ .Values.control.port }}
+      port: {{ .Values.control.grpcPort }}
       targetPort: grpc
+{{- if .Values.control.admission.enabled }}
+    - name: admission
+      port: {{ .Values.control.admission.port }}
+      targetPort: admission
+{{- end }}
 {{- end }}

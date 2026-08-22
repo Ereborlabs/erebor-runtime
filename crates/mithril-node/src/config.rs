@@ -257,6 +257,25 @@ impl NodeConfig {
         Ok(config)
     }
 
+    pub fn bind_kubernetes_runtime_identity(&mut self, node_name: String) -> Result<()> {
+        self.kubernetes_node_name = Some(node_name);
+        if let Some(runtime) = self.container_runtime.as_mut() {
+            let source_path = Path::new("/proc/self/cgroup");
+            let cgroups = fs::read_to_string(source_path).context(IoSnafu { path: source_path })?;
+            let relative = unified_cgroup_path(&cgroups).ok_or_else(|| {
+                InvalidConfigurationSnafu {
+                    reason: "Kubernetes node process has no unique non-root unified cgroup"
+                        .to_owned(),
+                }
+                .build()
+            })?;
+            let path = Path::new("/sys/fs/cgroup").join(relative.trim_start_matches('/'));
+            runtime.effect_controller_cgroup_path =
+                fs::canonicalize(&path).context(IoSnafu { path: &path })?;
+        }
+        self.validate()
+    }
+
     pub fn validate(&self) -> Result<()> {
         ensure!(
             mithril_control::node_id_is_valid(&self.node_id),
@@ -506,6 +525,21 @@ fn is_sha256(value: &str) -> bool {
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
+fn unified_cgroup_path(cgroups: &str) -> Option<&str> {
+    let mut paths = cgroups.lines().filter_map(|line| line.strip_prefix("0::"));
+    let path = paths.next()?;
+    (paths.next().is_none()
+        && path.starts_with('/')
+        && path != "/"
+        && !Path::new(path).components().any(|component| {
+            matches!(
+                component,
+                std::path::Component::ParentDir | std::path::Component::CurDir
+            )
+        }))
+    .then_some(path)
+}
+
 impl NodeControlConfig {
     #[must_use]
     pub const fn reconnect_minimum(&self) -> Duration {
@@ -573,8 +607,8 @@ mod tests {
     use std::time::Duration;
 
     use super::{
-        ContainerKindV1, EvidenceConfig, InterceptorConfig, NodeConfig, NodeControlConfig,
-        PolicyCandidateConfig, WorkloadBindingConfig,
+        unified_cgroup_path, ContainerKindV1, EvidenceConfig, InterceptorConfig, NodeConfig,
+        NodeControlConfig, PolicyCandidateConfig, WorkloadBindingConfig,
     };
 
     fn config() -> NodeConfig {
@@ -698,6 +732,17 @@ mod tests {
             runtime.effect_controller_cgroup_path = PathBuf::from("/sys/fs/cgroup");
         }
         assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn kubernetes_effect_controller_requires_one_non_root_unified_cgroup() {
+        assert_eq!(
+            unified_cgroup_path("5:cpu:/legacy\n0::/kubepods/pod-a/node\n"),
+            Some("/kubepods/pod-a/node")
+        );
+        assert_eq!(unified_cgroup_path("0::/\n"), None);
+        assert_eq!(unified_cgroup_path("0::/a\n0::/b\n"), None);
+        assert_eq!(unified_cgroup_path("0::relative\n"), None);
     }
 
     #[test]

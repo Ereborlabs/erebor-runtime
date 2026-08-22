@@ -1,0 +1,73 @@
+{{- if and .Values.control.enabled .Values.control.admission.enabled }}
+{{- $caBundle := required "control.admission.caBundle is required when admission is enabled" .Values.control.admission.caBundle }}
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingWebhookConfiguration
+metadata:
+  name: mithril-control-{{ .Release.Namespace }}
+webhooks:
+  - name: nodes.mithril.erebor.dev
+    admissionReviewVersions: ["v1"]
+    sideEffects: None
+    failurePolicy: Fail
+    matchPolicy: Equivalent
+    reinvocationPolicy: Never
+    timeoutSeconds: {{ .Values.control.admission.webhookTimeoutSeconds }}
+    clientConfig:
+      caBundle: {{ $caBundle | quote }}
+      service:
+        namespace: {{ .Release.Namespace | quote }}
+        name: mithril-control
+        path: /admit
+        port: {{ .Values.control.admission.port }}
+    rules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["nodes"]
+        scope: Cluster
+  - name: pods.mithril.erebor.dev
+    admissionReviewVersions: ["v1"]
+    sideEffects: None
+    failurePolicy: Fail
+    matchPolicy: Equivalent
+    reinvocationPolicy: Never
+    timeoutSeconds: {{ .Values.control.admission.webhookTimeoutSeconds }}
+    clientConfig:
+      caBundle: {{ $caBundle | quote }}
+      service:
+        namespace: {{ .Release.Namespace | quote }}
+        name: mithril-control
+        path: /admit
+        port: {{ .Values.control.admission.port }}
+    rules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["pods"]
+        scope: Namespaced
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingWebhookConfiguration
+metadata:
+  name: mithril-control-bindings-{{ .Release.Namespace }}
+webhooks:
+  - name: bindings.mithril.erebor.dev
+    admissionReviewVersions: ["v1"]
+    sideEffects: None
+    failurePolicy: Fail
+    matchPolicy: Equivalent
+    timeoutSeconds: {{ .Values.control.admission.webhookTimeoutSeconds }}
+    clientConfig:
+      caBundle: {{ $caBundle | quote }}
+      service:
+        namespace: {{ .Release.Namespace | quote }}
+        name: mithril-control
+        path: /admit
+        port: {{ .Values.control.admission.port }}
+    rules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE"]
+        resources: ["pods/binding"]
+        scope: Namespaced
+{{- end }}

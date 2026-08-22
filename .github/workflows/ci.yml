@@ -7,6 +7,19 @@ on:
       - main
 
 jobs:
+  helm:
+    name: Mithril Helm package
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+
+      - name: Verify Mithril Helm package
+        run: bash packaging/mithril/helm/tests/verify.sh
+
   rust:
     name: Rust workspace
     runs-on: ubuntu-latest
