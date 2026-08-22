@@ -14,7 +14,8 @@ use crate::{
     EvidenceStoreOutcomeV1, IntakeStateV1, PolicyActivationAcknowledgementV1, PolicyBundleV1,
     PolicyDocumentV1, PolicyRolloutStateV1, PolicySourceRevisionV1, PolicySourceStateV1,
     PolicyTargetSnapshotV1, ProfileCandidateArtifactV1, Result, StoredCoverageReportV1,
-    StoredEvidenceBatchV1, StoredRecordV1, MAX_PENDING_EVIDENCE_RECORDS,
+    StoredEvidenceBatchV1, StoredRecordV1, TrustGenerationAcknowledgementV1, TrustGenerationV1,
+    MAX_PENDING_EVIDENCE_RECORDS,
 };
 
 const STORE_SCHEMA_VERSION: u32 = 1;
@@ -42,6 +43,9 @@ struct ControlStoreState {
     bundles: BTreeMap<String, PolicyBundleV1>,
     rollout_states: BTreeMap<PolicyRolloutKeyV1, PolicyRolloutStateV1>,
     acknowledgements: BTreeMap<String, PolicyActivationAcknowledgementV1>,
+    trust_generations: BTreeMap<u64, TrustGenerationV1>,
+    trust_acknowledgements:
+        BTreeMap<(String, u64, [u8; 16], u64), TrustGenerationAcknowledgementV1>,
     evidence_cursors: BTreeMap<EvidenceIntakeIdentityV1, IntakeStateV1>,
     evidence_records: BTreeMap<EvidenceRecordKeyV1, StoredRecordV1>,
     evidence_batch_receipts: BTreeMap<EvidenceBatchKeyV1, [u8; 32]>,
@@ -132,6 +136,12 @@ enum ControlTransactionV1 {
     },
     CoverageAccepted {
         report: Box<StoredCoverageReportV1>,
+    },
+    TrustInstalled {
+        generation: Box<TrustGenerationV1>,
+    },
+    TrustAcknowledged {
+        acknowledgement: Box<TrustGenerationAcknowledgementV1>,
     },
 }
 
@@ -577,6 +587,105 @@ impl ControlStore {
             },
         )?;
         Ok(EvidenceStoreOutcomeV1::Accepted)
+    }
+
+    pub fn install_trust_generation(&self, generation: TrustGenerationV1) -> Result<u64> {
+        let mut inner = self.lock()?;
+        if let Some((_number, current)) = inner.state.trust_generations.last_key_value() {
+            if generation.generation < current.generation {
+                return ControlStoreSnafu {
+                    path: inner.root.clone(),
+                    reason: "the configured trust generation rolled back durable state".to_owned(),
+                }
+                .fail();
+            }
+        }
+        if let Some(existing) = inner.state.trust_generations.get(&generation.generation) {
+            if existing == &generation {
+                return Ok(inner.state.commit_index);
+            }
+            return ControlStoreSnafu {
+                path: inner.root.clone(),
+                reason: "one trust generation has conflicting immutable content".to_owned(),
+            }
+            .fail();
+        }
+        commit(
+            &mut inner,
+            ControlTransactionV1::TrustInstalled {
+                generation: Box::new(generation),
+            },
+        )
+    }
+
+    pub fn current_trust_generation(&self) -> Result<Option<TrustGenerationV1>> {
+        Ok(self
+            .lock()?
+            .state
+            .trust_generations
+            .last_key_value()
+            .map(|(_generation, trust)| trust.clone()))
+    }
+
+    pub fn acknowledge_trust_generation(
+        &self,
+        acknowledgement: TrustGenerationAcknowledgementV1,
+    ) -> Result<u64> {
+        let mut inner = self.lock()?;
+        let key = (
+            acknowledgement.node_id.clone(),
+            acknowledgement.generation,
+            acknowledgement.node_boot_id,
+            acknowledgement.label_epoch,
+        );
+        if let Some(existing) = inner.state.trust_acknowledgements.get(&key) {
+            if existing == &acknowledgement {
+                return Ok(inner.state.commit_index);
+            }
+            return ControlStoreSnafu {
+                path: inner.root.clone(),
+                reason: "one node trust acknowledgement has conflicting content".to_owned(),
+            }
+            .fail();
+        }
+        commit(
+            &mut inner,
+            ControlTransactionV1::TrustAcknowledged {
+                acknowledgement: Box::new(acknowledgement),
+            },
+        )
+    }
+
+    pub fn latest_trust_acknowledgement(
+        &self,
+        node_id: &str,
+    ) -> Result<Option<TrustGenerationAcknowledgementV1>> {
+        Ok(self
+            .lock()?
+            .state
+            .trust_acknowledgements
+            .iter()
+            .rfind(
+                |((acknowledged_node, _generation, _boot, _label), _acknowledgement)| {
+                    acknowledged_node == node_id
+                },
+            )
+            .map(|(_key, acknowledgement)| acknowledgement.clone()))
+    }
+
+    pub fn trust_acknowledgement(
+        &self,
+        node_id: &str,
+        node_boot_id: [u8; 16],
+        label_epoch: u64,
+        generation: u64,
+    ) -> Result<Option<TrustGenerationAcknowledgementV1>> {
+        Ok(self
+            .lock()?
+            .state
+            .trust_acknowledgements
+            .get(&(node_id.to_owned(), generation, node_boot_id, label_epoch))
+            .cloned())
     }
 
     pub(crate) fn accept_coverage_report(&self, report: StoredCoverageReportV1) -> Result<u64> {
@@ -1176,8 +1285,143 @@ fn apply_transaction(
                 .coverage_cursors
                 .insert(report.identity.clone(), report.state);
         }
+        ControlTransactionV1::TrustInstalled { generation } => {
+            validate_trust_transition(state, generation, path)?;
+            if state
+                .trust_generations
+                .insert(generation.generation, generation.as_ref().clone())
+                .is_some()
+            {
+                return ControlStoreSnafu {
+                    path: path.to_owned(),
+                    reason: "a trust generation was committed more than once".to_owned(),
+                }
+                .fail();
+            }
+        }
+        ControlTransactionV1::TrustAcknowledged { acknowledgement } => {
+            let current = state
+                .trust_generations
+                .last_key_value()
+                .map(|(_generation, trust)| trust)
+                .ok_or_else(|| {
+                    ControlStoreSnafu {
+                        path: path.to_owned(),
+                        reason: "a node acknowledged trust before any trust generation existed"
+                            .to_owned(),
+                    }
+                    .build()
+                })?;
+            if !crate::node_id_is_valid(&acknowledgement.node_id)
+                || acknowledgement.node_boot_id == [0; 16]
+                || acknowledgement.label_epoch == 0
+                || acknowledgement.generation != current.generation
+                || acknowledgement.bundle_digest != current.bundle_digest
+            {
+                return ControlStoreSnafu {
+                    path: path.to_owned(),
+                    reason: "the committed node trust acknowledgement is stale or invalid"
+                        .to_owned(),
+                }
+                .fail();
+            }
+            let key = (
+                acknowledgement.node_id.clone(),
+                acknowledgement.generation,
+                acknowledgement.node_boot_id,
+                acknowledgement.label_epoch,
+            );
+            if state
+                .trust_acknowledgements
+                .insert(key, acknowledgement.as_ref().clone())
+                .is_some()
+            {
+                return ControlStoreSnafu {
+                    path: path.to_owned(),
+                    reason: "a node trust acknowledgement was committed more than once".to_owned(),
+                }
+                .fail();
+            }
+        }
     }
     Ok(())
+}
+
+fn validate_trust_transition(
+    state: &ControlStoreState,
+    generation: &TrustGenerationV1,
+    path: &Path,
+) -> Result<()> {
+    let valid = generation.generation > 0
+        && valid_sha256(&generation.bundle_digest)
+        && generation
+            .policy_signers
+            .windows(2)
+            .all(|pair| pair[0].signing_key_id < pair[1].signing_key_id)
+        && generation.policy_signers.iter().all(|signer| {
+            !signer.signing_key_id.is_empty()
+                && signer.signing_key_id.len() <= 128
+                && valid_sha256(&signer.ed25519_public_key_hex)
+        })
+        && (generation.policy_signers.is_empty()
+            || (generation.policy_issuer_sequence_epoch > 0
+                && trust_bundle_digest(generation) == generation.bundle_digest));
+    if !valid {
+        return ControlStoreSnafu {
+            path: path.to_owned(),
+            reason: "the trust generation identity, digest, signer set, or issuer epoch is invalid"
+                .to_owned(),
+        }
+        .fail();
+    }
+    if let Some((_current_number, current)) = state.trust_generations.last_key_value() {
+        if generation.generation <= current.generation
+            || generation.policy_issuer_sequence_epoch < current.policy_issuer_sequence_epoch
+        {
+            return ControlStoreSnafu {
+                path: path.to_owned(),
+                reason: "the trust generation or policy issuer epoch rolled back".to_owned(),
+            }
+            .fail();
+        }
+    }
+    for signer in &generation.policy_signers {
+        for prior in state
+            .trust_generations
+            .values()
+            .flat_map(|trust| trust.policy_signers.iter())
+            .filter(|prior| prior.signing_key_id == signer.signing_key_id)
+        {
+            if prior.ed25519_public_key_hex != signer.ed25519_public_key_hex
+                || (prior.revoked && !signer.revoked)
+            {
+                return ControlStoreSnafu {
+                    path: path.to_owned(),
+                    reason: "a policy signer key changed bytes or reversed revocation".to_owned(),
+                }
+                .fail();
+            }
+        }
+    }
+    Ok(())
+}
+
+fn trust_bundle_digest(trust: &TrustGenerationV1) -> String {
+    let mut digest = Sha256::new();
+    digest.update(b"MITHRIL-CONTROL-TRUST-BUNDLE-V1\0");
+    digest.update(trust.generation.to_be_bytes());
+    digest.update(trust.policy_issuer_sequence_epoch.to_be_bytes());
+    for signer in &trust.policy_signers {
+        digest.update(
+            u64::try_from(signer.signing_key_id.len())
+                .unwrap_or(u64::MAX)
+                .to_be_bytes(),
+        );
+        digest.update(signer.signing_key_id.as_bytes());
+        digest.update(signer.ed25519_public_key_hex.as_bytes());
+        digest.update([u8::from(signer.revoked)]);
+    }
+    format!("{:x}", digest.finalize())
 }
 
 fn validate_evidence_identity(identity: &EvidenceIntakeIdentityV1, path: &Path) -> Result<()> {
@@ -1468,6 +1712,13 @@ fn validate_rollout_ordering(
         }
     }
     Ok(())
+}
+
+fn valid_sha256(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
 fn commit_digest(commit: &ControlCommitV1) -> Result<String> {
