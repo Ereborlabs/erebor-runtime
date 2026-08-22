@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use ed25519_dalek::SigningKey;
 use mithril_control::{
     canonical_policy_spec_digest, ContainerKindV1, ControlStore, PolicyActivationAcknowledgementV1,
-    PolicyActivationStateV1, PolicyConditionKindV1, PolicyDeliveryOperationV1,
+    PolicyActivationStateV1, PolicyBundleV1, PolicyConditionKindV1, PolicyDeliveryOperationV1,
     PolicyDesiredStateConfigV1, PolicyDesiredStateOwner, PolicyDocumentV1, PolicySignerConfigV1,
     ProfileSealRequestV1, RegistryDigestsV1, WorkloadProtectionProfile, WorkloadTargetFactV1,
     POLICY_API_VERSION, POLICY_KIND, SUBMITTED_SPEC_DIGEST_ANNOTATION,
@@ -111,6 +111,44 @@ fn inventory(binding_digest: &str) -> Vec<WorkloadTargetFactV1> {
         image_digest: "sha256:converter".to_owned(),
         pod_labels: BTreeMap::new(),
     }]
+}
+
+fn two_node_inventory() -> Vec<WorkloadTargetFactV1> {
+    let node_a = inventory(&"1".repeat(64)).remove(0);
+    let mut node_b = node_a.clone();
+    node_b.node_id = "node-b".to_owned();
+    node_b.workload_binding_generation_digest = "2".repeat(64);
+    node_b.execution_set_id = "44444444-4444-4444-8444-444444444445".to_owned();
+    node_b.pod_uid = "99999999-9999-4999-8999-999999999998".to_owned();
+    node_b.container_id = "containerd://converter-b".to_owned();
+    vec![node_a, node_b]
+}
+
+fn acknowledgement(
+    bundle: &PolicyBundleV1,
+    state: PolicyActivationStateV1,
+    observed_utc_ns: i64,
+) -> TestResult<PolicyActivationAcknowledgementV1> {
+    let active = state == PolicyActivationStateV1::Active;
+    Ok(PolicyActivationAcknowledgementV1 {
+        acknowledgement_content_id: String::new(),
+        tenant_id: TENANT_ID.to_owned(),
+        node_id: bundle.candidate.exact_target.node_id.clone(),
+        node_boot_id: vec![1; 16],
+        label_epoch: 1,
+        candidate_content_id: bundle.candidate.candidate_content_id.clone(),
+        policy_source_revision_id: bundle.candidate.policy_source_revision_id.clone(),
+        target_snapshot_digest: bundle.candidate.target_snapshot_digest.clone(),
+        state,
+        node_bound_generation_digest: active.then(|| "1".repeat(64)),
+        profile_generation_ref_id: active.then_some(1),
+        readback_digest: active.then(|| "2".repeat(64)),
+        probe_result_digest: active.then(|| "3".repeat(64)),
+        reason_code: (!active).then(|| "CANDIDATE_REJECTED".to_owned()),
+        observed_utc_ns,
+        authenticated_channel_receipt_digest: "4".repeat(64),
+    }
+    .finalize()?)
 }
 
 #[test]
@@ -390,6 +428,159 @@ fn deletion_names_exact_predecessor_and_recreate_gets_a_new_source_identity() ->
     assert!(
         recreated.bundles[0].candidate.distribution_sequence
             > retiring.bundles[0].candidate.distribution_sequence
+    );
+    Ok(())
+}
+
+#[test]
+fn two_node_create_update_restart_delete_and_recreate_preserve_provenance() -> TestResult {
+    let directory = TempDir::new()?;
+    let store = ControlStore::open(directory.path())?;
+    let owner = make_owner(store.clone());
+    let inventory = two_node_inventory();
+    let mut first_policy = policy()?;
+    let first_resource = resource(&first_policy, "profile", OBJECT_UID, 1, false)?;
+    let first = owner.reconcile(&first_resource, &inventory, NOW)?;
+    assert_eq!(first.bundles.len(), 2);
+    assert_eq!(
+        first.source_revision.canonical_spec_digest,
+        canonical_policy_spec_digest(&first_policy)?
+    );
+    let first_by_node = first
+        .bundles
+        .iter()
+        .map(|bundle| (bundle.candidate.exact_target.node_id.as_str(), bundle))
+        .collect::<BTreeMap<_, _>>();
+    let node_a_first = first_by_node
+        .get("node-a")
+        .ok_or("node-a has no first bundle")?;
+    let node_b_first = first_by_node
+        .get("node-b")
+        .ok_or("node-b has no first bundle")?;
+    owner.rollout_owner().acknowledge(acknowledgement(
+        node_a_first,
+        PolicyActivationStateV1::Active,
+        NOW + 1,
+    )?)?;
+    owner.rollout_owner().acknowledge(acknowledgement(
+        node_b_first,
+        PolicyActivationStateV1::Rejected,
+        NOW + 1,
+    )?)?;
+    let first_status = owner
+        .reconcile(&first_resource, &inventory, NOW + 2)?
+        .status;
+    assert_eq!(first_status.rollout_counts.active, 1);
+    assert_eq!(first_status.rollout_counts.rejected, 1);
+
+    first_policy.metadata.profile_version = 2;
+    first_policy.rollout.rollout_generation = 2;
+    let second_resource = resource(&first_policy, "profile", OBJECT_UID, 2, false)?;
+    let second = owner.reconcile(&second_resource, &inventory, NOW + 3)?;
+    let second_by_node = second
+        .bundles
+        .iter()
+        .map(|bundle| (bundle.candidate.exact_target.node_id.as_str(), bundle))
+        .collect::<BTreeMap<_, _>>();
+    for node_id in ["node-a", "node-b"] {
+        let prior = first_by_node
+            .get(node_id)
+            .ok_or("node has no first bundle")?;
+        let current = second_by_node
+            .get(node_id)
+            .ok_or("node has no updated bundle")?;
+        assert_eq!(
+            current.candidate.operation,
+            PolicyDeliveryOperationV1::Replace
+        );
+        assert_eq!(
+            current
+                .candidate
+                .predecessor_candidate_content_id
+                .as_deref(),
+            Some(prior.candidate.candidate_content_id.as_str())
+        );
+        assert!(current.candidate.distribution_sequence > prior.candidate.distribution_sequence);
+    }
+    assert!(owner
+        .rollout_owner()
+        .acknowledge(acknowledgement(
+            node_a_first,
+            PolicyActivationStateV1::Active,
+            NOW + 4,
+        )?)
+        .is_err());
+    owner.rollout_owner().acknowledge(acknowledgement(
+        second_by_node
+            .get("node-a")
+            .ok_or("node-a has no updated bundle")?,
+        PolicyActivationStateV1::Active,
+        NOW + 4,
+    )?)?;
+    let mixed = owner.reconcile(&second_resource, &inventory, NOW + 5)?;
+    assert_eq!(mixed.status.rollout_counts.active, 1);
+    assert_eq!(mixed.status.rollout_counts.pending, 1);
+    assert!(mixed.status.conditions.iter().any(|condition| {
+        condition.condition == PolicyConditionKindV1::Progressing && condition.status
+    }));
+
+    drop(owner);
+    drop(store);
+    let reopened = ControlStore::open(directory.path())?;
+    let restarted_owner = make_owner(reopened.clone());
+    let restarted = restarted_owner.reconcile(&second_resource, &inventory, NOW + 6)?;
+    assert_eq!(restarted.bundles, second.bundles);
+    assert_eq!(restarted.status.rollout_counts.active, 1);
+    assert_eq!(restarted.status.rollout_counts.pending, 1);
+
+    let deleting_resource = resource(&first_policy, "profile", OBJECT_UID, 3, true)?;
+    let retiring = restarted_owner.reconcile(&deleting_resource, &[], NOW + 7)?;
+    assert_eq!(retiring.bundles.len(), 2);
+    assert!(retiring.bundles.iter().all(|bundle| {
+        bundle.candidate.operation == PolicyDeliveryOperationV1::RetireToRestrictiveTerminal
+    }));
+    let retiring_by_node = retiring
+        .bundles
+        .iter()
+        .map(|bundle| (bundle.candidate.exact_target.node_id.as_str(), bundle))
+        .collect::<BTreeMap<_, _>>();
+    for node_id in ["node-a", "node-b"] {
+        assert_eq!(
+            retiring_by_node
+                .get(node_id)
+                .and_then(|bundle| bundle.candidate.predecessor_candidate_content_id.as_deref()),
+            second_by_node
+                .get(node_id)
+                .map(|bundle| bundle.candidate.candidate_content_id.as_str())
+        );
+    }
+
+    let recreated_resource = resource(
+        &first_policy,
+        "profile",
+        "30000000-0000-4000-8000-000000000009",
+        1,
+        false,
+    )?;
+    let recreated = restarted_owner.reconcile(&recreated_resource, &inventory, NOW + 8)?;
+    assert_eq!(recreated.bundles.len(), 2);
+    for bundle in &recreated.bundles {
+        let terminal = retiring_by_node
+            .get(bundle.candidate.exact_target.node_id.as_str())
+            .ok_or("recreated target has no terminal predecessor")?;
+        assert_eq!(
+            bundle.candidate.operation,
+            PolicyDeliveryOperationV1::Replace
+        );
+        assert_eq!(
+            bundle.candidate.predecessor_candidate_content_id.as_deref(),
+            Some(terminal.candidate.candidate_content_id.as_str())
+        );
+        assert!(bundle.candidate.distribution_sequence > terminal.candidate.distribution_sequence);
+    }
+    assert_ne!(
+        recreated.source_revision.policy_source_revision_id,
+        retiring.source_revision.policy_source_revision_id
     );
     Ok(())
 }
