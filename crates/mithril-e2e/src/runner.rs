@@ -142,6 +142,8 @@ impl KernelQualificationRunner {
         "580becbcd8f2872f954fb4e3857e27ec0f5528e55d8561096f3a16d10cf26d4e";
     const GRPC_ARCHITECTURE_SHA256: &'static str =
         "51807f12113391872ee90ce2469869db18bc4d25e9b4b1f39eb01fcaefb4fe1e";
+    const KUBERNETES_CONVERGENCE_ARCHITECTURE_SHA256: &'static str =
+        "0c87aaf6c2d0347e06b53ce0ccb9f69577a9b248a4a90463082335d7865d77ae";
     const ABI_HEADER_PATH: &'static str = "bpf/erebor-interceptor/include/erebor_interceptor_abi.h";
     const BPF_SOURCE_PATH: &'static str = "bpf/erebor-interceptor/qualification/feasibility.bpf.c";
 
@@ -216,10 +218,13 @@ impl KernelQualificationRunner {
         let architecture_sha256 = DigestV1::of(architecture).to_hex();
         let qualification_architecture_is_current =
             qualification.architecture_revision_sha256 == architecture_sha256;
-        // The gRPC amendment does not change the qualified BPF surfaces. Keep
-        // the physical result bound to the architecture that the probe used.
-        let qualification_architecture_is_preserved = architecture_sha256
-            == Self::GRPC_ARCHITECTURE_SHA256
+        // These amendments do not change the qualified BPF surfaces. Keep the
+        // physical result bound to the architecture that the probe used.
+        let qualification_architecture_is_preserved = [
+            Self::GRPC_ARCHITECTURE_SHA256,
+            Self::KUBERNETES_CONVERGENCE_ARCHITECTURE_SHA256,
+        ]
+        .contains(&architecture_sha256.as_str())
             && qualification.architecture_revision_sha256 == Self::PRE_GRPC_ARCHITECTURE_SHA256;
         let supported = qualification
             .supported_capability_ids
