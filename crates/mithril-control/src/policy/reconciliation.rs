@@ -556,6 +556,37 @@ impl PolicyRolloutOwner {
                 reason: "the acknowledgement source, snapshot, or tenant is stale",
             }
         );
+        let bundle = self
+            .store
+            .bundle_for_candidate(
+                &acknowledgement.node_id,
+                &acknowledgement.candidate_content_id,
+            )?
+            .ok_or_else(|| {
+                PolicyValidationSnafu {
+                    policy_id: &acknowledgement.policy_source_revision_id,
+                    code: "CFG_STALE_POLICY_ACKNOWLEDGEMENT",
+                    reason: "the acknowledgement candidate has no immutable bundle".to_owned(),
+                }
+                .build()
+            })?;
+        let document = &bundle.profile_artifact.policy_document;
+        let latest = self.store.latest_bundle_for_profile_node(
+            &acknowledgement.node_id,
+            &acknowledgement.tenant_id,
+            &document.metadata.trust_domain_id,
+            &document.metadata.profile_id,
+        )?;
+        ensure!(
+            latest.as_ref().is_some_and(|latest| {
+                latest.candidate.candidate_content_id == acknowledgement.candidate_content_id
+            }),
+            PolicyValidationSnafu {
+                policy_id: &acknowledgement.policy_source_revision_id,
+                code: "CFG_STALE_POLICY_ACKNOWLEDGEMENT",
+                reason: "a later candidate already owns this profile and node target",
+            }
+        );
         let state = match acknowledgement.state {
             PolicyActivationStateV1::Received => PolicyRolloutStatusV1::Delivered,
             PolicyActivationStateV1::Staged => PolicyRolloutStatusV1::Staged,
