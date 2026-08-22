@@ -20,5 +20,5 @@ pub use policy::*;
 pub use protocol::*;
 pub use server::{serve, ControlServerTls};
 pub use service::{AllowedNodeIdentity, ControlPlane, PolicySignerTrustV1, TrustGenerationV1};
-pub use store::ControlStore;
+pub use store::{ControlStore, ControlStoreHealthV1};
 pub use trust::*;

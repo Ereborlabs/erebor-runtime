@@ -3,10 +3,11 @@ use std::path::{Path, PathBuf};
 
 use ed25519_dalek::SigningKey;
 use mithril_control::{
-    canonical_policy_spec_digest, ContainerKindV1, ControlStore, PolicyActivationAcknowledgementV1,
-    PolicyActivationStateV1, PolicyBundleV1, PolicyConditionKindV1, PolicyDeliveryOperationV1,
-    PolicyDesiredStateConfigV1, PolicyDesiredStateOwner, PolicyDocumentV1, PolicySignerConfigV1,
-    ProfileSealRequestV1, RegistryDigestsV1, WorkloadProtectionProfile, WorkloadTargetFactV1,
+    canonical_policy_spec_digest, ContainerKindV1, ControlPlane, ControlStore,
+    PolicyActivationAcknowledgementV1, PolicyActivationStateV1, PolicyBundleV1,
+    PolicyConditionKindV1, PolicyDeliveryOperationV1, PolicyDesiredStateConfigV1,
+    PolicyDesiredStateOwner, PolicyDocumentV1, PolicySignerConfigV1, ProfileSealRequestV1,
+    RegistryDigestsV1, TrustGenerationV1, WorkloadProtectionProfile, WorkloadTargetFactV1,
     POLICY_API_VERSION, POLICY_KIND, SUBMITTED_SPEC_DIGEST_ANNOTATION,
 };
 use serde_json::json;
@@ -218,6 +219,44 @@ fn create_update_duplicate_and_restart_preserve_one_monotonic_rollout() -> TestR
     )?;
     assert_eq!(restarted.bundles, second.bundles);
     assert_eq!(reopened.commit_index(), 6);
+    Ok(())
+}
+
+#[test]
+fn health_snapshot_exposes_bounded_operational_counts_without_payloads() -> TestResult {
+    let directory = TempDir::new()?;
+    let store = ControlStore::open(directory.path())?;
+    let owner = make_owner(store);
+    let before = owner.health()?;
+    assert_eq!(before.configured_namespaces, 1);
+    assert_eq!(before.watched_namespaces, 0);
+    assert_eq!(before.reconcile_in_flight, 0);
+
+    owner.reconcile(
+        &resource(&policy()?, "profile", OBJECT_UID, 1, false)?,
+        &inventory(&"1".repeat(64)),
+        NOW,
+    )?;
+    let control = ControlPlane::new(
+        Vec::new(),
+        TrustGenerationV1 {
+            generation: 1,
+            bundle_digest: "0".repeat(64),
+            policy_issuer_sequence_epoch: 0,
+            policy_signers: Vec::new(),
+        },
+    )
+    .with_policy_desired_state(owner);
+    let health = control.convergence_health()?;
+    assert!(health.queue_healthy);
+    assert!(health.storage_healthy);
+    assert!(!health.watch_healthy);
+    assert_eq!(health.successful_reconciles, 1);
+    assert_eq!(health.successful_compiles, 1);
+    assert_eq!(health.target_snapshots, 1);
+    assert_eq!(health.rollout_targets, 1);
+    assert_eq!(health.unsettled_rollout_targets, 1);
+    assert_eq!(health.pending_evidence_records, 0);
     Ok(())
 }
 

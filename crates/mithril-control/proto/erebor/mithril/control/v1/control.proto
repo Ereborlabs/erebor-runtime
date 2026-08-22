@@ -26,6 +26,10 @@ service NodePolicy {
   rpc Acknowledge(PolicyAcknowledgementRequest) returns (PolicyAcknowledgementAccepted);
 }
 
+service ControlHealth {
+  rpc Get(NodeSessionContext) returns (ControlConvergenceHealth);
+}
+
 service NodeAdministrativeResolution {
   rpc Open(stream AdministrativeExecResolutionStreamRequest) returns (stream ResolveAdministrativeExec);
 }
@@ -234,6 +238,34 @@ message PolicyActivationAcknowledgement {
 message PolicyAcknowledgementAccepted {
   uint64 control_commit_index = 1;
   string rollout_state = 2;
+}
+
+message ControlConvergenceHealth {
+  bool queue_healthy = 1;
+  uint64 reconcile_in_flight = 2;
+  uint64 reconcile_queue_limit = 3;
+  bool storage_healthy = 4;
+  uint64 control_commit_index = 5;
+  bool watch_healthy = 6;
+  uint64 configured_namespaces = 7;
+  uint64 watched_namespaces = 8;
+  uint64 successful_relists = 9;
+  uint64 failed_relists = 10;
+  uint64 watch_failures = 11;
+  uint64 successful_reconciles = 12;
+  uint64 rejected_reconciles = 13;
+  uint64 successful_compiles = 14;
+  uint64 failed_compiles = 15;
+  uint64 target_snapshots = 16;
+  uint64 rollout_targets = 17;
+  uint64 unsettled_rollout_targets = 18;
+  uint64 allowed_nodes = 19;
+  uint64 connected_nodes = 20;
+  uint64 ready_nodes = 21;
+  uint64 evidence_cursors = 22;
+  uint64 pending_evidence_batches = 23;
+  uint64 pending_evidence_records = 24;
+  uint64 coverage_cursors = 25;
 }
 
 message ResolveAdministrativeExec {

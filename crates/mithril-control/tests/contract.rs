@@ -101,6 +101,14 @@ fn descriptor_has_the_approved_grpc_inventory() -> Result<(), Box<dyn std::error
             false,
         ),
         method(
+            "ControlHealth",
+            "Get",
+            "NodeSessionContext",
+            "ControlConvergenceHealth",
+            false,
+            false,
+        ),
+        method(
             "NodeAdministrativeResolution",
             "Open",
             "AdministrativeExecResolutionStreamRequest",

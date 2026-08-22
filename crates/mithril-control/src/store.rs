@@ -26,6 +26,20 @@ pub struct ControlStore {
     inner: Arc<Mutex<ControlStoreInner>>,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct ControlStoreHealthV1 {
+    pub commit_index: u64,
+    pub source_revisions: u64,
+    pub compiled_artifacts: u64,
+    pub target_snapshots: u64,
+    pub rollout_targets: u64,
+    pub unsettled_rollout_targets: u64,
+    pub evidence_cursors: u64,
+    pub pending_evidence_batches: u64,
+    pub pending_evidence_records: u64,
+    pub coverage_cursors: u64,
+}
+
 struct ControlStoreInner {
     root: PathBuf,
     state: ControlStoreState,
@@ -217,6 +231,43 @@ impl ControlStore {
         }
         Ok(Self {
             inner: Arc::new(Mutex::new(ControlStoreInner { root, state })),
+        })
+    }
+
+    pub fn health(&self) -> Result<ControlStoreHealthV1> {
+        let inner = self.lock()?;
+        Ok(ControlStoreHealthV1 {
+            commit_index: inner.state.commit_index,
+            source_revisions: count(inner.state.source_revisions.len()),
+            compiled_artifacts: count(inner.state.compiled_artifacts.len()),
+            target_snapshots: count(inner.state.target_snapshots.len()),
+            rollout_targets: count(inner.state.rollout_states.len()),
+            unsettled_rollout_targets: count(
+                inner
+                    .state
+                    .rollout_states
+                    .values()
+                    .filter(|state| {
+                        matches!(
+                            state.state,
+                            crate::PolicyRolloutStatusV1::Pending
+                                | crate::PolicyRolloutStatusV1::Delivered
+                                | crate::PolicyRolloutStatusV1::Staged
+                                | crate::PolicyRolloutStatusV1::Unknown
+                        )
+                    })
+                    .count(),
+            ),
+            evidence_cursors: count(inner.state.evidence_cursors.len()),
+            pending_evidence_batches: count(inner.state.pending_evidence_batches.len()),
+            pending_evidence_records: inner
+                .state
+                .pending_evidence_batches
+                .values()
+                .fold(0_u64, |total, batch| {
+                    total.saturating_add(count(batch.records.len()))
+                }),
+            coverage_cursors: count(inner.state.coverage_cursors.len()),
         })
     }
 
@@ -1798,6 +1849,10 @@ fn valid_sha256(value: &str) -> bool {
         && value
             .bytes()
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+fn count(value: usize) -> u64 {
+    u64::try_from(value).unwrap_or(u64::MAX)
 }
 
 fn commit_digest(commit: &ControlCommitV1) -> Result<String> {
