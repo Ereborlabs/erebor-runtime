@@ -1,10 +1,9 @@
 # Phase 6.2 Implementation Review Guide
 
-Status: Source implementation is done through commit
-`f26d622c13d4a25970df44d1bd3481eaaaff3a9f`. Focused automated acceptance
-passed on 2026-08-22. The final repository gate and the
-[manual runbook](./manual-testing/phase-6-2-manual-acceptance.md) have not been
-run at this source state.
+Status: Source implementation is done. Automated acceptance passed on
+2026-08-22 at commit `1e1e89053a494f6b070738acc0e2d9bf27b74ce4`.
+The [manual runbook](./manual-testing/phase-6-2-manual-acceptance.md) has not
+been run.
 
 Plan: [Control Policy And Evidence Convergence](./phase-6-2-control-policy-and-evidence-convergence.md)
 
@@ -234,8 +233,13 @@ No issues found
 ```
 
 Earlier implementation commits also passed the focused `mithril-control` and
-`mithril-node` library, integration, and strict clippy suites. The final
-repository gate must run after the last Rust edit.
+`mithril-node` library, integration, and strict clippy suites. The final gate
+passed at source commit `1e1e890`:
+
+```text
+rtk bash .github/scripts/verify-rust-ci.sh
+exit 0
+```
 
 ## Verification Limits
 

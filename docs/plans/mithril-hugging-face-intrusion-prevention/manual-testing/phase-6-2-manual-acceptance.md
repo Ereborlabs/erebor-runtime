@@ -1,8 +1,8 @@
 # How To Manually Accept Phase 6.2
 
 Status: Implementation available. Focused automated acceptance passed on
-2026-08-22. The final repository gate is pending. This manual runbook has not
-been run.
+2026-08-22. The final repository gate passed at commit `1e1e890`. This manual
+runbook has not been run.
 
 Phase: [Control Policy And Evidence Convergence](../phase-6-2-control-policy-and-evidence-convergence.md)
 

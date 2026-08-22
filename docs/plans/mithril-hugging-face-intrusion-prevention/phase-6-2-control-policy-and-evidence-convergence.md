@@ -1,6 +1,7 @@
 # Phase 6.2: Control Policy And Evidence Convergence
 
-Status: Proposed; depends on Phase 6.1 `Done`.
+Status: Done. Automated acceptance passed on 2026-08-22. The manual runbook
+has not been run.
 
 Master: [Mithril Hugging Face Intrusion Prevention](./README.md)
 
@@ -304,16 +305,16 @@ and runtime facts for distributed causality.
 ## Phase Result
 
 ```text
-State: Not done.
-Validated architecture revision/digest: not recorded.
-Completed deliverable IDs: none.
-Files and durable owners changed: none.
+State: Done.
+Validated architecture revision/digest: 51807f12113391872ee90ce2469869db18bc4d25e9b4b1f39eb01fcaefb4fe1e.
+Completed deliverable IDs: D6.2.1-D6.2.8.
+Files and durable owners changed: WorkloadProtectionProfile CRD and Helm RBAC; PolicyDesiredStateOwner; PolicyRolloutOwner; TrustBundleOwner; one append-only ControlStore for policy, trust, rollout, acknowledgement, evidence, coverage, and cursor transactions; generated NodePolicy and ControlHealth services; NodePolicyDeliveryOwner and the existing node activation path. The BPF ABI and BPF programs did not change.
 Upstream-adoption dossier IDs used: none.
-Fixture cases and exact physical results: not run.
-Commands and exact source state covered: none; this is a plan-only addition.
-Platform/kernel/runtime manifests: none.
-Performance/capacity results: none.
-Unsupported/degraded paths: not yet measured.
-Remaining work in this phase: all deliverables.
+Fixture cases and exact physical results: no new Appendix C fixture or physical result. The deterministic two-node Control test passed, but the physical two-node manual run was not run.
+Commands and exact source state covered: `rtk bash .github/scripts/verify-rust-ci.sh` passed at commit 1e1e89053a494f6b070738acc0e2d9bf27b74ce4. The focused Control contract, reconciliation, and Kubernetes API command passed 14 tests at commit f26d622. The final gate passed 42 mithril-control unit tests, 8 reconciliation tests, 5 Kubernetes API tests, 119 mithril-node unit tests, and 5 mTLS integration tests.
+Platform/kernel/runtime manifests: the Helm package contains the generated closed CRD, least-privilege Control RBAC, Control Deployment, and Service. No platform or kernel manifest changed.
+Performance/capacity results: no new benchmark. Evidence gRPC messages are limited to 4 MiB. Policy gRPC messages are limited to 128 KiB. The pending evidence window is limited to 4,096 records. Health reports fixed counts and booleans only.
+Unsupported/degraded paths: no live Kubernetes API-server, RBAC denial, watch-compaction, network-partition, storage-outage, or physical two-node result was recorded. Phase 7 graph and finding behavior is not present.
+Remaining work in this phase: the optional physical manual runbook has not been run. No source deliverable remains.
 Next phase not authorized: yes.
 ```
