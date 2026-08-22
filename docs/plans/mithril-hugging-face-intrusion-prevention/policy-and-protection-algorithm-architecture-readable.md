@@ -370,6 +370,7 @@ allowed additions:
   one mithril-node DaemonSet Pod or equivalent host package per node
   Mithril's control service
   one WorkloadProtectionProfile CRD and least-privilege Control RBAC
+  one Control-owned Kubernetes mutating and validating admission endpoint
   configuration of documented OCI, NRI, runtime, Kubernetes audit/API,
     CI provider, and verification extension points
   small stateless hook adapters that forward to mithril-node when the
@@ -381,11 +382,17 @@ allowed additions:
 not allowed in the no-change baseline:
   patches, forks, or rebuilt kubelet, containerd, runc, CRI, CNI, or CI runner
   replacement of those components with a Mithril-specific build
-  changes to applications, PodSpecs, images, process layout, probes,
-    lifecycle hooks, workload credentials, or the agent harness
+  changes to applications, developer-authored Pod intent, images, process
+    layout, probes, lifecycle hooks, workload credentials, or the agent harness
   traffic redirection, DNS replacement, TLS interception, or a mandatory
   provider proxy
 ```
+
+The Kubernetes API server can add Mithril-owned scheduling requirements to a
+matching Pod through the registered admission endpoint. These requirements
+restrict the scheduler to ready nodes derived from the live `mithril-node`
+DaemonSet. They do not select the exact node or change application behavior.
+The admitted object records the mutation.
 
 The CRD is a Control input. It is not a node policy artifact, node activation
 record, evidence store, or graph store. Only `mithril-control` watches the CRD.
@@ -408,7 +415,7 @@ The same rule applies outside Kubernetes:
 
 | Existing system | Allowed Mithril integration | Forbidden dependency |
 | --- | --- | --- |
-| Kubernetes/container runtime | Configure existing audit, validating-admission, OCI, NRI, or runtime interfaces; read stock APIs; verify their fields, order, timeout, and failure result | Patched kubelet/containerd/runc, new CRI methods, changed Pod manifests/images/commands, or a ticket added to probes/hooks |
+| Kubernetes/container runtime | Configure existing audit, mutating-admission, validating-admission, OCI, NRI, or runtime interfaces; read stock APIs; verify their fields, order, timeout, and failure result | Patched kubelet/containerd/runc, new CRI methods, changed application images or commands, or a ticket added to probes/hooks |
 | Kafka or another message system | Read existing broker audit/authorization records and stable topic/partition/offset/message IDs; call an existing response API when authorized | Changed producers/consumers, a required new message header, a Mithril broker, or a patched Kafka build |
 | CI/CD | Read existing provider job/audit APIs and configure an official plugin/hook when available | Patched runner, changed workflow/job code, wrapper command, replaced credential, or trusted callback invoked by job code |
 | Database | Read existing database audit/session records and use existing authorization/kill-session APIs | Database proxy, TLS termination, client instrumentation, query rewriting, schema change, extension, or patched server |
@@ -501,8 +508,22 @@ derivation performed by Mithril.
 #### Boot order and installation choices
 
 A DaemonSet alone cannot promise protection before the first workload on a new
-node. Kubelet must already run to start the DaemonSet. Other workloads may run
-before every required BPF link and map is loaded and checked.
+node. Kubelet must already run to start the DaemonSet. Mithril therefore uses
+Kubernetes Node admission to add a `NoSchedule` quarantine taint to a new Node
+that matches the live DaemonSet constraints. The DaemonSet tolerates that
+taint. Control removes the taint only after the authenticated node session for
+the current boot reports complete BPF and identity readiness.
+
+The live DaemonSet Pod template is the only Mithril node-pool definition. The
+operator does not copy its selector into Control policy. Pod admission combines
+the DaemonSet selector and required affinity with the Pod's existing
+constraints and requires the Control-owned ready label. The Kubernetes
+scheduler still selects the exact node. Scheduler-binding admission rejects a
+selected node whose authenticated ready session is absent or stale.
+
+This quarantine controls new protected scheduling. Restoring a `NoSchedule`
+taint does not evict an existing workload. The last valid local policy remains
+active while Control reports the readiness loss.
 
 A simple DaemonSet installation records a measured `START_GAP` from node boot
 until every required program, map, binding, and readback is healthy. It makes
@@ -1147,9 +1168,12 @@ OUTSIDE                 proved outside Mithril's protected scope
 
 The implementation performs these steps:
 
-1. `mithril-node` watches Kubernetes and the container runtime's supported
-   read-only APIs. It builds a binding from full container ID and cgroup
-   lifetime to Pod UID, container name, image digest, and policy generation.
+1. `mithril-control` watches Kubernetes and records the persisted Pod UID and
+   scheduler-selected node. It delivers signed exact workload material only to
+   that node. `mithril-node` verifies the material against the container
+   runtime's supported read-only API and builds a binding from full container
+   ID and cgroup lifetime to Pod UID, container name, image digest, and policy
+   generation.
 2. If a configured stock OCI, NRI, or runtime hook reports an earlier or more
    precise lifecycle fact, the node verifies that fact against kernel and
    runtime state and adds it to the same binding. The hook is not a second
