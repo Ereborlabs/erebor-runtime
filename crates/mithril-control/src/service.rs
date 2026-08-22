@@ -7,7 +7,7 @@ use std::{
 };
 
 use prost::Message as _;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 use tokio::sync::{mpsc, oneshot};
 use tokio_stream::{wrappers::ReceiverStream, Stream, StreamExt as _};
@@ -35,7 +35,7 @@ pub struct AllowedNodeIdentity {
     pub tenant_id: String,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct TrustGenerationV1 {
     pub generation: u64,
@@ -46,7 +46,7 @@ pub struct TrustGenerationV1 {
     pub policy_signers: Vec<PolicySignerTrustV1>,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct PolicySignerTrustV1 {
     pub signing_key_id: String,
@@ -58,7 +58,6 @@ pub struct PolicySignerTrustV1 {
 #[derive(Default)]
 struct ControlState {
     registrations: BTreeSet<StreamIdentity>,
-    trust_acks: BTreeMap<String, TrustGenerationV1>,
     sessions: BTreeMap<String, NodeSession>,
     pending: BTreeMap<Vec<u8>, PendingAdministrativeResponse>,
 }
@@ -88,7 +87,7 @@ const ADMINISTRATIVE_NODE_TIMEOUT: std::time::Duration = std::time::Duration::fr
 #[derive(Clone)]
 pub struct ControlPlane {
     allowed_nodes: Arc<BTreeMap<String, AllowedNodeIdentity>>,
-    trust: TrustGenerationV1,
+    trust: crate::TrustBundleOwner,
     state: Arc<Mutex<ControlState>>,
     evidence: Option<crate::EvidenceIntakeOwner>,
     policy_store: Option<crate::ControlStore>,
@@ -106,7 +105,7 @@ impl ControlPlane {
                     .map(|identity| (identity.node_id.clone(), identity))
                     .collect(),
             ),
-            trust,
+            trust: crate::TrustBundleOwner::static_generation(trust),
             state: Arc::new(Mutex::new(ControlState::default())),
             evidence: None,
             policy_store: None,
@@ -120,22 +119,29 @@ impl ControlPlane {
         trust: TrustGenerationV1,
         directory: impl Into<std::path::PathBuf>,
     ) -> crate::Result<Self> {
-        Ok(Self::with_control_store(
-            allowed,
-            trust,
-            crate::ControlStore::open(directory)?,
-        ))
+        Self::with_control_store(allowed, trust, crate::ControlStore::open(directory)?)
     }
 
-    #[must_use]
     pub fn with_control_store(
         allowed: Vec<AllowedNodeIdentity>,
         trust: TrustGenerationV1,
         store: crate::ControlStore,
-    ) -> Self {
-        let mut control = Self::new(allowed, trust);
-        control.evidence = Some(crate::EvidenceIntakeOwner::from_store(store));
-        control
+    ) -> crate::Result<Self> {
+        let trust = crate::TrustBundleOwner::open(store.clone(), trust)?;
+        Ok(Self {
+            allowed_nodes: Arc::new(
+                allowed
+                    .into_iter()
+                    .map(|identity| (identity.node_id.clone(), identity))
+                    .collect(),
+            ),
+            trust,
+            state: Arc::new(Mutex::new(ControlState::default())),
+            evidence: Some(crate::EvidenceIntakeOwner::from_store(store)),
+            policy_store: None,
+            policy_rollout: None,
+            policy_desired_state: None,
+        })
     }
 
     #[must_use]
@@ -158,10 +164,12 @@ impl ControlPlane {
 
     #[must_use]
     pub fn acknowledged_trust(&self, node_id: &str) -> Option<TrustGenerationV1> {
-        self.state
-            .lock()
-            .ok()
-            .and_then(|state| state.trust_acks.get(node_id).cloned())
+        self.trust.acknowledged(node_id).ok().flatten()
+    }
+
+    #[must_use]
+    pub fn trust_bundle_owner(&self) -> crate::TrustBundleOwner {
+        self.trust.clone()
     }
 
     #[must_use]
@@ -295,6 +303,26 @@ impl ControlPlane {
             label_epoch: self
                 .session_label_epoch(&StreamIdentity::new(node_id.to_owned(), context)?)?,
         })
+    }
+
+    fn require_current_trust(
+        &self,
+        node_id: &str,
+        context: &NodeSessionContext,
+    ) -> Result<(), Status> {
+        let node_boot_id: [u8; 16] = context
+            .node_boot_id
+            .as_slice()
+            .try_into()
+            .map_err(|_| Status::invalid_argument("node boot identity is not Id128"))?;
+        let identity = StreamIdentity::new(node_id.to_owned(), context)?;
+        self.trust
+            .require_session_acknowledged(
+                node_id,
+                node_boot_id,
+                self.session_label_epoch(&identity)?,
+            )
+            .map_err(invalid_policy_status)
     }
 
     fn register(
@@ -541,23 +569,10 @@ impl NodeTrust for ControlPlane {
     ) -> Result<Response<Self::WatchStream>, Status> {
         let node_id = self.authenticated_node(&request)?;
         self.require_session(&node_id, request.get_ref())?;
-        let trust = TrustGeneration {
-            generation: self.trust.generation,
-            bundle_digest: self.trust.bundle_digest.clone(),
-            policy_issuer_sequence_epoch: self.trust.policy_issuer_sequence_epoch,
-            policy_signers: self
-                .trust
-                .policy_signers
-                .iter()
-                .map(|signer| crate::PolicySignerTrust {
-                    signing_key_id: signer.signing_key_id.clone(),
-                    ed25519_public_key: hex::decode(&signer.ed25519_public_key_hex)
-                        .unwrap_or_default(),
-                    revoked: signer.revoked,
-                })
-                .collect(),
-        };
-        Ok(Response::new(Box::pin(tokio_stream::iter([Ok(trust)]))))
+        let receiver = self.trust.subscribe().map_err(internal_status)?;
+        let stream =
+            ReceiverStream::new(receiver).map(|trust| Ok(trust_generation_message(&trust)));
+        Ok(Response::new(Box::pin(stream)))
     }
 
     async fn acknowledge(
@@ -570,26 +585,23 @@ impl NodeTrust for ControlPlane {
             .session
             .as_ref()
             .ok_or_else(|| Status::invalid_argument("node session context is required"))?;
-        self.require_session(&node_id, context)?;
+        let identity = self.require_session(&node_id, context)?;
         let acknowledgement = request
             .acknowledgement
             .ok_or_else(|| Status::invalid_argument("trust acknowledgement is required"))?;
-        if acknowledgement.generation != self.trust.generation
-            || acknowledgement.bundle_digest != self.trust.bundle_digest
-        {
-            return Err(Status::failed_precondition(
-                "trust acknowledgement does not match the delivered generation",
-            ));
-        }
-        self.lock_state()?.trust_acks.insert(
-            node_id,
-            TrustGenerationV1 {
-                generation: acknowledgement.generation,
-                bundle_digest: acknowledgement.bundle_digest,
-                policy_issuer_sequence_epoch: self.trust.policy_issuer_sequence_epoch,
-                policy_signers: self.trust.policy_signers.clone(),
-            },
-        );
+        self.trust
+            .acknowledge(
+                &node_id,
+                context
+                    .node_boot_id
+                    .as_slice()
+                    .try_into()
+                    .map_err(|_| Status::invalid_argument("node boot identity is not Id128"))?,
+                self.session_label_epoch(&identity)?,
+                acknowledgement.generation,
+                &acknowledgement.bundle_digest,
+            )
+            .map_err(invalid_policy_status)?;
         Ok(Response::new(RegistrationAccepted {}))
     }
 }
@@ -607,6 +619,7 @@ impl NodeEvidence for ControlPlane {
             .as_ref()
             .ok_or_else(|| Status::invalid_argument("node session context is required"))?;
         self.require_ready_session(&node_id, context)?;
+        self.require_current_trust(&node_id, context)?;
         let authenticated = self.authenticated_evidence_node(&node_id, context)?;
         let batch = request
             .batch
@@ -659,6 +672,7 @@ impl NodePolicy for ControlPlane {
             .as_ref()
             .ok_or_else(|| Status::invalid_argument("node session context is required"))?;
         self.require_ready_session(&node_id, context)?;
+        self.require_current_trust(&node_id, context)?;
         if request.durable_bundle_digests.len() > 256
             || request
                 .durable_bundle_digests
@@ -703,6 +717,7 @@ impl NodePolicy for ControlPlane {
             .as_ref()
             .ok_or_else(|| Status::invalid_argument("node session context is required"))?;
         self.require_ready_session(&node_id, context)?;
+        self.require_current_trust(&node_id, context)?;
         let store = self.policy_store.as_ref().ok_or_else(|| {
             Status::failed_precondition("Control has no durable policy rollout store")
         })?;
@@ -745,6 +760,7 @@ impl NodePolicy for ControlPlane {
             .as_ref()
             .ok_or_else(|| Status::invalid_argument("node session context is required"))?;
         let identity = self.require_ready_session(&node_id, context)?;
+        self.require_current_trust(&node_id, context)?;
         let label_epoch = self.session_label_epoch(&identity)?;
         let acknowledgement = request
             .acknowledgement
@@ -907,6 +923,23 @@ fn policy_channel_receipt_digest(
     digest.update(certificate.as_ref());
     digest.update(request.get_ref().encode_to_vec());
     Ok(format!("{:x}", digest.finalize()))
+}
+
+fn trust_generation_message(trust: &TrustGenerationV1) -> TrustGeneration {
+    TrustGeneration {
+        generation: trust.generation,
+        bundle_digest: trust.bundle_digest.clone(),
+        policy_issuer_sequence_epoch: trust.policy_issuer_sequence_epoch,
+        policy_signers: trust
+            .policy_signers
+            .iter()
+            .map(|signer| crate::PolicySignerTrust {
+                signing_key_id: signer.signing_key_id.clone(),
+                ed25519_public_key: hex::decode(&signer.ed25519_public_key_hex).unwrap_or_default(),
+                revoked: signer.revoked,
+            })
+            .collect(),
+    }
 }
 
 fn parse_policy_activation_state(value: &str) -> Result<crate::PolicyActivationStateV1, Status> {

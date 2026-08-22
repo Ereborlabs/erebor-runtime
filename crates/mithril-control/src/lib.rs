@@ -9,6 +9,7 @@ mod protocol;
 mod server;
 mod service;
 mod store;
+mod trust;
 
 pub use administrative_exec::*;
 pub use administrative_http::*;
@@ -18,5 +19,6 @@ pub use evidence::*;
 pub use policy::*;
 pub use protocol::*;
 pub use server::{serve, ControlServerTls};
-pub use service::{AllowedNodeIdentity, ControlPlane, TrustGenerationV1};
+pub use service::{AllowedNodeIdentity, ControlPlane, PolicySignerTrustV1, TrustGenerationV1};
 pub use store::ControlStore;
+pub use trust::*;

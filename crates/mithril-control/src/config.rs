@@ -49,8 +49,11 @@ impl ControlConfig {
             .control_store_directory
             .unwrap_or_else(|| self.evidence_directory.clone());
         let store = ControlStore::open(store_directory)?;
-        let mut control =
-            ControlPlane::with_control_store(self.allowed_nodes, self.trust.clone(), store.clone());
+        let mut control = ControlPlane::with_control_store(
+            self.allowed_nodes,
+            self.trust.clone(),
+            store.clone(),
+        )?;
         if let Some(policy) = self.kubernetes_policy {
             let owner = PolicyDesiredStateOwner::open(policy, store)?;
             let (key_id, public_key, issuer_epoch) = owner.signer_identity();
