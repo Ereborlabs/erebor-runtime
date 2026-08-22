@@ -1,7 +1,8 @@
 # How To Manually Accept Phase 6.2
 
-Status: The Kubernetes scheduling and runtime-gate procedure is available.
-This amended manual runbook has not been run.
+Status: Automated acceptance passed at code commit
+`bc7ccde8b435cb0eecf5787a013670021635b28d`. The Kubernetes scheduling and
+runtime-gate manual procedure is available. This procedure has not been run.
 
 Phase: [Control Policy And Evidence Convergence](../phase-6-2-control-policy-and-evidence-convergence.md)
 
@@ -141,9 +142,9 @@ runtime-gate tests are not substitutes for this physical run.
 16. Reconnect the node. Deliver stale, replayed, wrong-target, invalid-signature,
    and current candidates. Prove that only the current valid candidate can
    advance rollout state.
-17. Submit an invalid update, stop Control, stop the Kubernetes API, and remove
-   the CRD finalizer. Prove that none of these actions remove the last valid
-   node generation.
+17. Submit an invalid update, stop Control, stop the Kubernetes API, and force
+   object deletion without a retirement acknowledgement. Prove that none of
+   these actions remove the last valid node generation.
 18. Restore Control and the API, force watch compaction and relist, then delete
    and recreate the CRD. Verify UID, generation, retirement, and replacement
    behavior without stale-state reuse.

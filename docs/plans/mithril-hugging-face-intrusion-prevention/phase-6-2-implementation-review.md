@@ -1,9 +1,9 @@
 # Phase 6.2 Implementation Review Guide
 
-Status: Source implementation is done. Automated acceptance passed on
-2026-08-22 at commit `1e1e89053a494f6b070738acc0e2d9bf27b74ce4`.
-The [manual runbook](./manual-testing/phase-6-2-manual-acceptance.md) has not
-been run.
+Status: Source implementation and automated acceptance are complete at code
+commit `bc7ccde8b435cb0eecf5787a013670021635b28d`. The final repository gate
+passed on 2026-08-22. The
+[manual runbook](./manual-testing/phase-6-2-manual-acceptance.md) has not run.
 
 Plan: [Control Policy And Evidence Convergence](./phase-6-2-control-policy-and-evidence-convergence.md)
 
@@ -11,10 +11,14 @@ Design: [Validated readable architecture](./policy-and-protection-algorithm-arch
 
 ## Review Goal
 
-Verify that Kubernetes desired state has one Control owner. Verify that one
+Verify that Kubernetes desired state has one Control owner. Verify that the
+live `mithril-node` DaemonSet defines the eligible node set. Verify that the
+Kubernetes scheduler selects the exact node. Verify that Control sends signed
+workload material only to that node. Verify that the node holds the initial
+container process until policy and cgroup-binding activation. Verify that one
 durable Control transaction owns policy provenance, rollout state, trust state,
 accepted evidence, and intake cursors. Verify that each node still owns its
-physical generation and BPF state.
+physical generation and Berkeley Packet Filter (BPF) state.
 
 Do not treat the deterministic two-node Control test as a physical two-node
 kernel result. Do not claim that this work creates a Phase 7 graph or finding.
@@ -22,30 +26,41 @@ The BPF ABI and BPF programs did not change.
 
 ## Recommended Reading Order
 
-1. Read the [Kubernetes policy API](../../../crates/mithril-control/src/policy/kubernetes.rs),
+1. Read the [Helm package contract](../../../packaging/mithril/helm/README.md),
+   [DaemonSet](../../../packaging/mithril/helm/templates/daemonset.yaml),
+   [webhook registrations](../../../packaging/mithril/helm/templates/admission-webhooks.yaml),
+   and [Control RBAC](../../../packaging/mithril/helm/templates/control-rbac.yaml).
+2. Read the [Kubernetes policy API](../../../crates/mithril-control/src/policy/kubernetes.rs),
    the [committed CRD](../../../packaging/mithril/helm/crds/mithril.erebor.dev_workloadprotectionprofiles.yaml),
-   and the [Control RBAC](../../../packaging/mithril/helm/templates/control-rbac.yaml).
-2. Read the [Control configuration](../../../crates/mithril-control/src/config.rs)
+   and the [desired-state owner](../../../crates/mithril-control/src/policy/reconciliation.rs).
+3. Read the [Control configuration](../../../crates/mithril-control/src/config.rs)
    and [Control startup](../../../crates/mithril-control/src/main.rs).
-3. Read the [desired-state and rollout owners](../../../crates/mithril-control/src/policy/reconciliation.rs).
-4. Read the [policy compiler](../../../crates/mithril-control/src/policy/compiler.rs),
+4. Read the [DaemonSet node owner](../../../crates/mithril-control/src/policy/kubernetes_nodes.rs)
+   and [Kubernetes workload admission](../../../crates/mithril-control/src/policy/kubernetes_workloads.rs).
+5. Read the [desired-state and rollout owners](../../../crates/mithril-control/src/policy/reconciliation.rs).
+6. Read the [policy compiler](../../../crates/mithril-control/src/policy/compiler.rs),
    [signature types](../../../crates/mithril-control/src/policy/signature.rs), and
    [closed source types](../../../crates/mithril-control/src/policy/source.rs).
-5. Read the [durable Control store](../../../crates/mithril-control/src/store.rs)
+7. Read the [durable Control store](../../../crates/mithril-control/src/store.rs)
    and the [trust owner](../../../crates/mithril-control/src/trust.rs).
-6. Read the [generated Control contract](../../../crates/mithril-control/proto/erebor/mithril/control/v1/control.proto),
+8. Read the [generated Control contract](../../../crates/mithril-control/proto/erebor/mithril/control/v1/control.proto),
    [service adapters](../../../crates/mithril-control/src/service.rs), and
    [server assembly](../../../crates/mithril-control/src/server.rs).
-7. Read the [node Control client](../../../crates/mithril-node/src/control.rs),
+9. Read the [node configuration binding](../../../crates/mithril-node/src/config.rs),
+   [node Control client](../../../crates/mithril-node/src/control.rs),
    [node policy delivery owner](../../../crates/mithril-node/src/policy_delivery.rs),
    [node event loop](../../../crates/mithril-node/src/node.rs), and
    [node generation owner](../../../crates/mithril-node/src/policy.rs).
-8. Read the [Control evidence intake](../../../crates/mithril-control/src/evidence.rs)
+10. Read the [OCI adapter](../../../crates/mithril-node/src/bin/mithril_oci_hook.rs),
+    [runtime admission socket](../../../crates/mithril-node/src/runtime_admission.rs),
+    [CRI identity verification](../../../crates/mithril-node/src/identity/runtime.rs),
+    and [cgroup binding owner](../../../crates/mithril-node/src/identity/binding.rs).
+11. Read the [Control evidence intake](../../../crates/mithril-control/src/evidence.rs)
    and [node observation WAL](../../../crates/mithril-node/src/observation/wal.rs).
-9. Finish with the [Kubernetes API tests](../../../crates/mithril-control/tests/kubernetes_policy_api.rs),
+12. Finish with the [Kubernetes API tests](../../../crates/mithril-control/tests/kubernetes_policy_api.rs),
    [reconciliation tests](../../../crates/mithril-control/tests/control_policy_reconciliation.rs),
    [contract test](../../../crates/mithril-control/tests/contract.rs), and
-   [mTLS tests](../../../crates/mithril-node/tests/control_tls.rs).
+   [mutual Transport Layer Security tests](../../../crates/mithril-node/tests/control_tls.rs).
 
 ## Ownership Map
 
@@ -53,54 +68,132 @@ The BPF ABI and BPF programs did not change.
 | --- | --- | --- | --- | --- |
 | Accepted policy source revision | `PolicyDesiredStateOwner` | `ControlStore` transaction | Append-only Control commit | Canonical CRD and offline source equality; stale UID and generation tests |
 | Compiled and signed artifact | `PolicyDesiredStateOwner` | `ControlStore` transaction | Source-revision keyed artifact | Deterministic compile, signature, and issuer anti-rollback tests |
-| Target snapshot and node candidate | `PolicyRolloutOwner` | `ControlStore` transaction | Immutable snapshot, bundle, and rollout records | Target conflict, mixed rollout, restart, stale acknowledgement, and two-node tests |
+| Eligible node constraints | Kubernetes operator | Live `mithril-node` DaemonSet Pod template | Kubernetes DaemonSet | Empty, selector, affinity, and selector-change tests |
+| Node readiness projection | `KubernetesNodeReadinessOwner` | `KubernetesNodeReadinessOwner` | Mithril Node label, annotations, and quarantine taint | No-session, ready-session, and selector-change tests |
+| Protected Pod mutation | `KubernetesAdmissionOwner` | Kubernetes admission transaction | Persisted Pod affinity and Mithril annotations | Profile match, composition, bypass, and admission-patch tests |
+| Exact scheduler binding | Kubernetes scheduler | Kubernetes API server | Pod UID and `spec.nodeName` | Binding validation code and physical manual oracle |
+| Bound workload inventory | Bound-workload reconciler | `ControlPlane` in-memory inventory | Exact Pod, container, image, Node, and node-session facts | Same-policy inventory drift test |
+| Target snapshot and node candidate | `PolicyRolloutOwner` | `ControlStore` transaction | Immutable snapshot, bundle, and rollout records | Target conflict, exact-node, mixed rollout, restart, and stale acknowledgement tests |
 | Trust generation and acknowledgement | `TrustBundleOwner` | `ControlStore` transaction | Trust generation and boot-bound acknowledgement records | Rotation, revocation, restart, and current-trust gating tests |
 | Node policy cache and pending activation | `NodePolicyDeliveryOwner` | `NodePolicyDeliveryOwner` | Node state directory | Partial transfer, digest readback, restart, and acknowledgement replay tests |
 | Active node generation and BPF maps | `NodePolicyGenerationOwner` and existing activation path | `mithril-node` | Node-local inactive generation and active-pointer compare-and-swap | Readback, probe, pointer, and retained-generation tests |
+| Runtime admission request | `mithril-oci-hook` | Stateless socket transaction | Root-owned mode-0600 Unix socket | Stock-state parser, unavailable endpoint, convergence hold, and timeout tests |
+| Runtime container binding | Node binding owner | Node binding owner | BPF cgroup and task maps plus node delivery state | Exact signed target, CRI match, distinct lifetime, and reuse-rejection tests |
 | Accepted evidence and coverage | `EvidenceIntakeOwner` | `ControlStore` transaction | Immutable records, coverage reports, and contiguous cursors | Duplicate, gap, reorder, backpressure, storage-failure, and restart tests |
 | Node WAL truncation | Node WAL owner | Node WAL owner after durable Control acknowledgement | Node WAL | Durable contiguous acknowledgement and replay tests |
 | Operational health | `ControlPlane` projection | Existing owners supply counts | Authenticated `ControlHealth.Get` response | Generated contract and bounded health snapshot tests |
 
-The CRD stores desired state. It does not store a signed node candidate or an
-activation acknowledgement. Control does not write node BPF maps. A node does
-not watch the CRD.
+The custom resource definition (CRD) stores desired state. It does not store a
+signed node candidate or an activation acknowledgement. Control does not write
+node BPF maps. A node does not watch the CRD. The scheduler selects the exact
+node. Mithril admission only restricts the eligible set.
 
 ## Policy Convergence Flow
 
 ```mermaid
 sequenceDiagram
     participant API as Kubernetes API
-    participant Desired as PolicyDesiredStateOwner
-    participant Store as ControlStore
-    participant Rollout as PolicyRolloutOwner
-    participant RPC as mTLS NodePolicy
-    participant Delivery as NodePolicyDeliveryOwner
-    participant Activation as Node generation owner
-    participant Kernel as BPF maps and active pointer
-    API->>Desired: Closed WorkloadProtectionProfile event
-    Desired->>Desired: Check tenant, UID, generation, digest, and conflicts
-    Desired->>Desired: Compile and sign exact policy
-    Desired->>Store: Commit source and compiled artifact
-    Desired->>Rollout: Create immutable target snapshot
-    Rollout->>Store: Commit bundles and per-node rollout state
-    RPC->>Store: Read exact candidate and bounded chunk
-    RPC-->>Delivery: Typed signed bundle chunk
-    Delivery->>Delivery: Verify trust, identity, sequence, digests, and predecessor
-    Delivery->>Activation: Prepare inactive generation
-    Activation->>Kernel: Stage, read back, probe, and compare-and-swap pointer
-    Activation-->>Delivery: Node-local activation proof
-    Delivery-->>RPC: Boot-bound typed acknowledgement
-    RPC->>Store: Compare-and-swap rollout transition
+    participant Admission as Control admission
+    participant Scheduler as Scheduler
+    participant Desired as Policy owner
+    participant Rollout as Rollout owner
+    participant Node as Selected node
+    participant Runtime as OCI runtime
+    participant Kernel as BPF state
+    API->>Desired: WorkloadProtectionProfile revision
+    Desired->>Desired: Validate, compile, approve, and sign
+    API->>Admission: Protected Pod create
+    Admission->>API: DaemonSet constraints and ready label
+    API->>Scheduler: Persist admitted Pod
+    Scheduler->>Admission: Proposed Pod binding
+    Admission->>Scheduler: Current selected-node validation
+    Scheduler->>API: Pod UID and spec.nodeName
+    Desired->>Rollout: Exact persisted workload facts
+    Rollout->>Node: Target-bound signed candidate
+    Node->>Kernel: Stage, read back, probe, and activate
+    Runtime->>Node: Held initial PID and OCI state
+    Node->>Node: Verify CRI and signed target identity
+    Node->>Kernel: Publish exact cgroup and task binding
+    Node-->>Runtime: Allow after active readback
+    Node-->>Rollout: Boot-bound acknowledgement
 ```
+
+The admission owner reads the live DaemonSet for each Node, Pod, and binding
+decision. The Pod mutation combines the DaemonSet selector and required
+affinity with the Pod's existing requirements. It adds the Control-owned ready
+label. It rejects `spec.nodeName`, the quarantine toleration, and conflicting
+selectors. It does not choose one node.
+
+The bound-workload reconciler lists all Pods, Nodes, Namespaces, and Service
+Accounts. It accepts only persisted protected Pods with `spec.nodeName`. It
+creates exact target facts for each matching container. The facts bind the Pod
+UID, controller UID, ServiceAccount UID, digest-pinned image, Node name, Node
+UID, node ID, boot ID, and label epoch. An inventory change creates a new
+target snapshot without a policy source change.
 
 `NodePolicy` uses resumable content-addressed chunks. A complete bundle is at
 most the declared protocol bound. A partial transfer is not stageable. The node
-reads each durable object by its exact digest before reuse.
+reads each durable object by its exact digest before reuse. A node rejects
+signed workload material for another node, boot, label epoch, profile, source
+revision, or candidate.
 
 The node checks the tenant, trust generation, signature, source digest,
 candidate digest, artifact digests, issuer sequence, distribution sequence,
 target, expiry, capabilities, and predecessor. A delayed acknowledgement
 cannot change a newer candidate or a different boot session.
+
+## Node Eligibility Flow
+
+Control reads `spec.template.spec.nodeSelector` and required node affinity from
+the live `mithril-node` DaemonSet. Control rejects a DaemonSet that sets
+`spec.nodeName` or uses an unsupported required-affinity operator. An empty
+selector includes all nodes. There is no Control node-pool selector.
+
+Node admission removes forged Mithril readiness and adds
+`mithril.erebor.dev/not-ready:NoSchedule` to an eligible Node without a current
+session. The DaemonSet tolerates this taint. The node supplies its Kubernetes
+Node name through the downward API and authenticates with its unique mutual
+Transport Layer Security identity. Control binds the node name and Node UID to
+that session. Control adds readiness and removes quarantine only after the
+current session reports kernel, identity, Control, and admission readiness.
+
+A session expiry or boot change removes readiness and restores quarantine. A
+DaemonSet selector change removes the Mithril projection from nodes that are no
+longer eligible. A `NoSchedule` taint stops new scheduling. It does not evict a
+running Pod or remove its last active local policy.
+
+## Runtime Admission Flow
+
+The chart installs a stateless Open Container Initiative (OCI) prestart adapter
+and a protected-Pod annotation filter. The adapter reads one bounded stock OCI
+state object from standard input. It derives the live cgroup from
+`/proc/<pid>/cgroup`. It sends the container ID, initial PID, cgroup, and OCI
+annotations to the node socket. The adapter has a client deadline. The OCI
+hook entry has a larger runtime deadline.
+
+The node socket accepts only root peers. The socket parent is root-owned and
+not group-writable or world-writable. The socket has mode `0600`. The server
+bounds the request size, queue, response size, and request time.
+
+One early valid hook call stays pending while Control observes the binding and
+the node polls for the candidate. The node event loop continues policy delivery
+during this hold. The node returns `POLICY_CONVERGENCE_PENDING` only to its
+local socket owner. The socket owner retries the same immutable request until
+the candidate becomes active or the request deadline expires.
+
+After convergence, the node verifies the stock Container Runtime Interface
+(CRI) record. It requires the `Created` state, full container ID, sandbox ID,
+namespace, Pod UID, container name, image digest, and cgroup. It then publishes
+the held PID as the sole initial root for the exact cgroup. It records the
+runtime binding in durable policy-delivery state before it allows the runtime.
+A container restart derives a new binding ID from the signed scheduling
+authority and the new runtime container ID. It retires the previous binding.
+
+The runtime gate rejects malformed input and an already-used runtime identity
+without a convergence retry. A missing candidate can wait only until the
+bounded deadline. An unavailable socket, silent owner, identity mismatch, CRI
+mismatch, publication failure, or persistence failure returns a nonzero hook
+result. No source test replaces the physical stock-runtime ordering oracle.
 
 ## Evidence Transaction Flow
 
@@ -156,9 +249,16 @@ digest. Control rejects a stored spec that differs from that submitted digest.
 
 Control derives tenant, cluster, and namespace identity from configuration and
 API records. A policy field, annotation, label, or status cannot select its own
-tenant. The Helm role can read policy resources and can update only status and
-finalizers. It can read the namespaced workload facts and cluster node facts
-needed for target resolution. It cannot create, update, or delete policy spec.
+tenant. A matching profile in the Pod namespace selects protection. There is
+no separate protected-tenant or protected-namespace configuration.
+
+The Helm ClusterRole can read profiles, Namespaces, Pods, ServiceAccounts, and
+Nodes across the cluster. It can update profile status. It cannot create,
+update, patch, or delete policy desired state. The namespaced Role restricts
+DaemonSet access to `mithril-node`. Control has Node patch permission because
+built-in RBAC cannot grant field-level patch permission. The readiness owner
+patches only the Mithril label, four identity annotations, and the quarantine
+taint. The node service account has no token and no Kubernetes permissions.
 
 Status is a bounded projection. It has the observed generation, source and
 candidate digests, aggregate rollout counts, and six fixed conditions. It has
@@ -172,10 +272,30 @@ contains only fixed counters and booleans. It reports reconciliation work,
 Control commit state, watch and relist state, compile results, target and
 rollout counts, node session counts, and evidence cursor and pending counts.
 
-The reconciler processes one watch stream for each configured namespace. It
-does not add a second work queue. `reconcile_in_flight` is therefore bounded by
-the configured namespace count. `watch_healthy` is true only when every
-configured namespace has an active watch after a successful relist.
+The desired-state owner processes one cluster-wide CRD watch. It relists after
+a watch closure or compaction. The bound-workload reconciler uses one bounded
+cluster inventory loop. `watch_healthy` is true only when the cluster watch is
+active after a successful relist.
+
+## Packaging Boundary
+
+The chart mounts one host-provisioned node configuration and mTLS identity on
+each selected host. The downward API overrides the Kubernetes Node name. In
+Kubernetes mode, the node reads `/proc/self/cgroup` and binds the
+effect-controller cgroup to its actual DaemonSet Pod lifetime. One static Pod
+cgroup path is not accepted as scheduling authority.
+
+The Control Deployment mounts its configuration, durable volume, and separate
+admission TLS Secret. The admission certificate authenticates
+`mithril-control.<namespace>.svc`. The chart requires the CA bundle and registers
+fail-closed Node, Pod, and Pod-binding webhooks. Kubernetes and server request
+timeouts are bounded. The HTTPS `/healthz` route contains no policy payload.
+
+The node image contains `mithril-node` and `mithril-oci-hook`. An init container
+installs the hook binary and protected-Pod hook definition on the host. CRI-O
+can consume the standard hook directory. Containerd needs the stock Node
+Resource Interface hook-injector. The chart does not patch the container
+runtime and does not install a custom runtime binary.
 
 ## ABI And Protocol Boundary
 
@@ -192,17 +312,24 @@ and coverage messages remain the Phase 6 types.
 
 | Input or failure | Required behavior |
 | --- | --- |
+| Missing or invalid live DaemonSet constraints | Node, Pod, or binding admission rejects; stale readiness cannot authorize a new protected Pod |
+| Node without a current ready session | Control removes readiness and adds the quarantine taint |
+| Protected Pod with `spec.nodeName` or quarantine toleration | Pod admission rejects before persistence |
+| Scheduler selects an ineligible or stale Node | Binding admission rejects before the binding persists |
 | Unknown or silently pruned CRD field | Strict decode or submitted-spec digest rejects before compilation |
 | Stale UID, generation, or watch event | Durable source ordering rejects; the prior valid rollout remains |
 | Duplicate profile ID or exact workload claim | Conflict rejects; no precedence rule selects a winner |
 | Compile or signature failure | No candidate or rollout is created for that source revision |
 | Partial or corrupt bundle | Node does not create a stageable pending activation |
 | Wrong tenant, target, boot, label, trust, or sequence | Service or node rejects before rollout advancement |
+| Early valid OCI prestart request | The socket holds the request while the exact candidate converges, within the configured deadline |
+| Missing candidate or silent node owner | The bounded socket or OCI deadline returns denial; the runtime does not receive an allow result |
+| Malformed, mismatched, or reused runtime identity | The node rejects without publishing or reusing a binding |
 | Mixed rollout | Status reports exact per-state counts; it does not claim global activation |
 | Node disconnect or Control outage | The last valid node generation stays active |
 | Watch closure or compaction | Control relists durable desired state and starts a new watch |
 | Control restart | The store replays the commit chain; in-memory watch state is rebuilt |
-| CRD deletion or finalizer removal | No direct BPF removal occurs; only a valid signed retirement can change node policy |
+| CRD deletion or forced object removal | No direct BPF removal occurs; only a valid signed retirement can change node policy |
 | Evidence gap within the bound | Batch stays pending; the contiguous acknowledgement does not advance |
 | Evidence storage failure | No acknowledgement returns; the node keeps its WAL records |
 | Conflicting evidence duplicate | Intake rejects and preserves the first immutable record |
@@ -212,8 +339,10 @@ and coverage messages remain the Phase 6 types.
 
 | Proof | Source |
 | --- | --- |
-| Closed CRD, generated manifest equality, canonical source equality, silent-prune rejection, status bound, and RBAC | [Kubernetes policy API tests](../../../crates/mithril-control/tests/kubernetes_policy_api.rs) |
-| Create, update, conflict, stale state, mixed rollout, restart, retirement, recreation, stale acknowledgement, and two-node provenance | [Control reconciliation tests](../../../crates/mithril-control/tests/control_policy_reconciliation.rs) |
+| Closed CRD, generated manifest equality, canonical source equality, silent-prune rejection, and status bound | [Kubernetes policy API tests](../../../crates/mithril-control/tests/kubernetes_policy_api.rs) |
+| DaemonSet derivation, scheduler choice, quarantine, readiness, empty constraints, and selector change | [Kubernetes node tests](../../../crates/mithril-control/src/policy/kubernetes_nodes.rs) |
+| Profile match, additive Pod constraints, bypass rejection, forged readiness removal, admission patch, and health | [Kubernetes workload tests](../../../crates/mithril-control/src/policy/kubernetes_workloads.rs) |
+| Create, update, conflict, stale state, bound inventory drift, exact node, mixed rollout, restart, retirement, recreation, stale acknowledgement, and two-node provenance | [Control reconciliation tests](../../../crates/mithril-control/tests/control_policy_reconciliation.rs) |
 | Exact generated gRPC inventory, including `ControlHealth.Get` | [Control contract test](../../../crates/mithril-control/tests/contract.rs) |
 | Commit chain, compare-and-swap transitions, evidence atomicity, pending bounds, restart replay, and trust persistence | [Control store tests](../../../crates/mithril-control/src/store.rs) |
 | Evidence identity, duplicate, reorder, cursor, coverage, and stable Phase 7 query | [Evidence intake tests](../../../crates/mithril-control/src/evidence.rs) |
@@ -221,24 +350,34 @@ and coverage messages remain the Phase 6 types.
 | mTLS identity, boot session, trust gate, policy chunk, acknowledgement, evidence, and service isolation | [Control TLS tests](../../../crates/mithril-node/tests/control_tls.rs) |
 | Durable chunk assembly, signature and digest checks, pending activation, recovery, and acknowledgement replay | [Node policy delivery tests](../../../crates/mithril-node/src/policy_delivery.rs) |
 | Existing inactive generation, readback, probes, and pointer activation | [Node policy tests](../../../crates/mithril-node/src/policy.rs) |
+| Signed scheduling authority, exact runtime identity, distinct container lifetime, convergence hold, unavailable endpoint, and timeout denial | [Runtime admission tests](../../../crates/mithril-node/src/runtime_admission.rs) |
+| OCI state parsing and cgroup-v2 path parsing | [OCI adapter tests](../../../crates/mithril-node/src/bin/mithril_oci_hook.rs) |
+| Webhook TLS, rules, deadlines, health probes, DaemonSet identity and hook inputs, and least-privilege RBAC | [Helm render test](../../../packaging/mithril/helm/tests/verify.sh) |
 
-Focused closure checks passed at source commit `f26d622`:
+Focused closure checks passed for code commit `bc7ccde`:
 
 ```text
-rtk cargo test -p mithril-control --test contract --test control_policy_reconciliation --test kubernetes_policy_api
-14 passed
+rtk cargo test -p mithril-control --lib
+57 passed
 
-rtk cargo clippy -p mithril-control --all-targets -- -D warnings
+rtk cargo test -p mithril-node --lib
+128 passed
+
+rtk cargo test -p mithril-node --bin mithril-oci-hook
+2 passed
+
+rtk bash packaging/mithril/helm/tests/verify.sh
+1 chart linted; render contract passed
+
+rtk cargo clippy -p mithril-control -p mithril-node --all-targets -- -D warnings
 No issues found
 ```
 
-Earlier implementation commits also passed the focused `mithril-control` and
-`mithril-node` library, integration, and strict clippy suites. The final gate
-passed at source commit `1e1e890`:
+The final repository gate passed for code commit `bc7ccde`:
 
 ```text
-rtk bash .github/scripts/verify-rust-ci.sh
-exit 0
+bash .github/scripts/verify-rust-ci.sh
+Passed the repository format, check, clippy, and full workspace test gate
 ```
 
 ## Verification Limits
@@ -249,19 +388,26 @@ performance, or capacity result. The deterministic two-node test exercises two
 Control targets and their provenance. It does not exercise two physical BPF
 instances.
 
-The architecture fixture registry digest is
-`51807f12113391872ee90ce2469869db18bc4d25e9b4b1f39eb01fcaefb4fe1e`.
+The readable architecture file digest is
+`0c87aaf6c2d0347e06b53ce0ccb9f69577a9b248a4a90463082335d7865d77ae`.
 This work adds no Appendix C fixture ID. Phase 7 graph and finding behavior is
 not present.
 
 ## Reviewer Checklist
 
 - [ ] Compare the generated CRD with the committed Helm CRD.
+- [ ] Change the DaemonSet selector and trace the readiness projection change.
+- [ ] Verify that Pod admission composes constraints and does not set `spec.nodeName`.
+- [ ] Trace the scheduler-selected Pod binding through current-session validation.
 - [ ] Trace one CRD generation into one immutable source revision.
-- [ ] Trace one source revision through compilation, signature, and target snapshot.
+- [ ] Trace one persisted Pod UID and selected Node into one target snapshot.
+- [ ] Trace one source revision through compilation, signature, and exact-node delivery.
 - [ ] Verify that a duplicate profile or workload claim creates no candidate.
 - [ ] Trace one candidate through bounded chunks and exact node digest readback.
 - [ ] Trace node activation through inactive state, probes, and one pointer compare-and-swap.
+- [ ] Trace one held OCI PID through CRI verification and exact cgroup publication.
+- [ ] Verify that a missing candidate stays pending only until the runtime deadline.
+- [ ] Verify that container restart retires the old runtime binding.
 - [ ] Verify that Control changes rollout state only after the exact authenticated acknowledgement.
 - [ ] Trace one evidence retry from the node WAL to a durable contiguous acknowledgement.
 - [ ] Verify that an out-of-order evidence batch does not advance the acknowledgement.
@@ -269,6 +415,7 @@ not present.
 - [ ] Verify that deletion and recreation preserve the candidate predecessor chain.
 - [ ] Inspect the health reply and confirm that it contains no policy, evidence, or secret payload.
 - [ ] Confirm that no Control path writes BPF maps or the node active pointer.
+- [ ] Confirm that the node service account has no token or Kubernetes RBAC.
 - [ ] Run the final repository gate after any Rust change.
 
 Completion of this work does not authorize the next phase.

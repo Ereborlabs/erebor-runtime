@@ -7,10 +7,10 @@
 
 ## Closure Decision
 
-Phase 6.2 is **In progress**. Deliverables D6.2.1-D6.2.8 keep their recorded
-automated result. Deliverables D6.2.9-D6.2.12 reopen the phase for Kubernetes
-node eligibility, workload admission, scheduler binding, exact-node policy
-delivery, and runtime-start ordering.
+Phase 6.2 is **Not done**. Source implementation and automated acceptance for
+D6.2.1-D6.2.12 passed at code commit
+`bc7ccde8b435cb0eecf5787a013670021635b28d`. The required physical Kubernetes
+and stock-runtime acceptance has not run.
 
 The amendment is not closed by CRD reconciliation alone. A result is complete
 only when a matching Pod can be scheduled by the Kubernetes scheduler onto a
@@ -33,18 +33,18 @@ policy and cgroup binding.
 
 | Deliverable | Current result | Evidence required to close |
 | --- | --- | --- |
-| `D6.2.1` | Closed by the prior source result. | Keep the CRD schema, canonical source, and strict validation tests green. |
-| `D6.2.2` | Closed by the prior source result. | Keep desired-state, compilation, signer, restart, and invalid-update tests green. The namespace configuration must no longer select protected Pods. |
-| `D6.2.3` | Closed for static registered inventory. Reopened for scheduler-bound inventory. | Prove that a new or removed bound Pod changes the immutable target snapshot without a policy-source change. Prove exact-node selection and stale-target rejection. |
-| `D6.2.4` | Closed for signed node transfer and activation. Reopened for dynamic Kubernetes binding material. | Prove that the candidate carries exact scheduled workload material and that another node, boot, Pod, or container cannot consume it. |
-| `D6.2.5` | Closed by the prior source result. | Keep durable evidence transaction and acknowledgement tests green. |
-| `D6.2.6` | Closed for prior rollout and intake recovery. Reopened for node and workload lifecycle recovery. | Prove Control restart, node reconnect, boot change, Pod deletion, container restart, and profile retirement without authority reuse. |
-| `D6.2.7` | Closed for prior status and limits. Reopened for admission, node readiness, and cluster-wide profile discovery. | Prove bounded admission requests, least-privilege RBAC, session expiry, secret filtering, and status-is-not-authority. |
-| `D6.2.8` | Closed for the deterministic prior Control proof. Reopened for the complete scheduling-to-runtime transaction. | Prove the two-node scheduler choice, exact-node delivery, held initial process, active binding readback, and fail-closed timeout. |
-| `D6.2.9` | Not done. | Implement DaemonSet-derived eligibility, Node quarantine admission, authenticated node-name binding, readiness projection, loss handling, and tests. |
-| `D6.2.10` | Not done. | Implement matching-profile Pod admission, additive scheduling constraints, bypass rejection, scheduler-binding validation, persisted Pod observation, and tests. |
-| `D6.2.11` | Not done. | Implement immutable bound-workload targets, signed binding material, exact-node node configuration, OCI prestart admission, cgroup publication, runtime release, and tests. |
-| `D6.2.12` | Not done. | Package webhooks, TLS, RBAC, taint toleration, node identity, hook adapter, health, automated acceptance, and the physical runbook result. |
+| `D6.2.1` | Source and automated proof: **Done**. | No new physical result is required for the closed API schema. |
+| `D6.2.2` | Source and automated proof: **Done**. | No new physical result is required for deterministic desired-state reconciliation. |
+| `D6.2.3` | Scheduler-bound source inventory and automated proof: **Done**. | Run the physical bound-Pod inventory and exact-node cases. |
+| `D6.2.4` | Dynamic signed binding material and automated proof: **Done**. | Run the physical selected-node delivery and rejection cases. |
+| `D6.2.5` | Source and automated proof: **Done**. | Run the existing physical evidence transaction case with this Kubernetes flow. |
+| `D6.2.6` | Node and workload lifecycle recovery source and automated proof: **Done**. | Run the physical restart, reconnect, boot-change, deletion, and retirement cases. |
+| `D6.2.7` | Admission, readiness, cluster-wide discovery, and RBAC source proof: **Done**. | Run the live API-server, session-expiry, RBAC-denial, and secret-filtering cases. |
+| `D6.2.8` | Deterministic scheduling-to-runtime transaction: **Done**. | Run the physical two-node and stock-runtime transaction. |
+| `D6.2.9` | Source and automated proof: **Done**. | Run new-node quarantine, readiness, loss, and DaemonSet-selector physical cases. |
+| `D6.2.10` | Source and automated proof: **Done**. | Run protected-Pod admission and scheduler-binding physical cases. |
+| `D6.2.11` | Source and automated proof: **Done**. | Run exact-node delivery, held start, cgroup publication, restart, and timeout physical cases. |
+| `D6.2.12` | Packaging and automated proof: **Done**. Physical proof: **Not run**. | Install the chart on the target Kubernetes and runtime versions. Run and record the manual acceptance procedure. |
 
 ## Automated Proof Matrix
 
@@ -79,14 +79,31 @@ No physical result is recorded yet.
 
 ## Verification State
 
-The planning amendment and this matrix have passed `git diff --check`. No code,
-automated test, cluster test, or physical runtime-gate result is claimed by
-this matrix. Each implementation commit must record its focused command. The
-final source state must pass:
+The following checks passed for code commit
+`bc7ccde8b435cb0eecf5787a013670021635b28d`:
 
 ```sh
-rtk bash .github/scripts/verify-rust-ci.sh
+bash .github/scripts/verify-rust-ci.sh
+# Passed the repository format, check, clippy, and full workspace test gate.
+
+rtk bash packaging/mithril/helm/tests/verify.sh
+# Passed chart lint and the rendered packaging contract.
+
+rtk cargo test -p mithril-control --test kubernetes_policy_api
+# 5 passed.
+
+rtk cargo test -p mithril-e2e --lib
+# 70 passed in the final repository gate.
+
+rtk cargo test -p mithril-node --lib
+# 128 passed in the final repository gate.
+
+rtk cargo test -p mithril-node --bin mithril-oci-hook
+# 2 passed in the final repository gate.
 ```
+
+The live cluster and physical stock-runtime cases have not run. Automated
+tests do not change those cases from `Not run` to `Pass`.
 
 ## Unadvertised Work
 
