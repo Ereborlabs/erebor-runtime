@@ -1,6 +1,7 @@
 # How To Manually Accept Phase 6.1
 
-Status: Proposed runbook; no Phase 6.1 implementation or test has been run.
+Status: Ready. Automated acceptance passed on 2026-08-21. This manual
+procedure has not been run.
 
 Phase: [gRPC Service And IPC Convergence](../phase-6-1-grpc-service-and-ipc-convergence.md)
 
@@ -17,9 +18,10 @@ acknowledgements remain correct without the custom envelope protocol.
 ## Automated Companion
 
 ```text
-IMPLEMENTATION COMMAND REQUIRED: run the Phase 6.1 generated-service closure,
-Runtime daemon/client, hook, local observation, node-control, transport fault,
-restart, and repository verification suites.
+PASS: rtk bash .github/scripts/verify-rust-ci.sh
+PASS: rtk cargo test -p erebor-runtime-e2e --test session_review (2 tests)
+PASS: rtk cargo test -p erebor-runtime-terminal --lib (3 tests)
+PASS: rtk cargo test -p mithril-e2e --lib (70 tests)
 ```
 
 ## Procedure
@@ -28,10 +30,11 @@ restart, and repository verification suites.
    list, binaries, socket paths, socket owners and modes, local peer UIDs, node
    certificate identity, node boot epoch, and Control address.
 2. Start the Runtime daemon. Use generated clients to run one unary lifecycle
-   request, one server stream, and one attach or input bidirectional stream.
-3. Submit one valid hook event. Repeat with a wrong ticket, a replayed ticket,
-   a wrong peer, and an oversized event. Verify that only the valid event
-   reaches the existing session owner.
+   request and one server stream. Run the bidirectional hook and Mithril
+   administrative streams in the later steps.
+3. Submit one valid hook event. Repeat with a wrong session, a replayed peer,
+   an unregistered copied executable, a wrong peer, and an oversized event.
+   Verify that only the valid event reaches the existing session owner.
 4. Request one Mithril observation snapshot from the allowed UID and cgroup.
    Repeat from a wrong UID and a process outside the allowed cgroup.
 5. Connect `mithril-node` to Control. Exercise registration, readiness, trust,
@@ -44,7 +47,7 @@ restart, and repository verification suites.
    transport boundary. Verify stable gRPC status, bounded memory, and no
    authorization or durable-acknowledgement change.
 8. Attempt the old frame protocol, a wrong gRPC service method, an unavailable
-   package version, and a stale client. Verify a bounded rejection without
+   package, and a stale client. Verify a bounded rejection without
    cross-service dispatch or fallback.
 9. Inspect the built binaries, generated descriptors, source references, and
    packaging. Verify that no supported path contains the custom envelope,
@@ -63,7 +66,7 @@ restart, and repository verification suites.
 | Typed stream | Cancellation, backpressure, reconnect, and completion remain bounded |
 | Wrong local peer | The RPC rejects before domain state changes |
 | Wrong TLS peer | The RPC rejects before registration or durable state changes |
-| Wrong service or version | gRPC rejects the method; no generic dispatcher handles it |
+| Wrong service or package | gRPC rejects the method; no generic dispatcher handles it |
 | Oversized message | `RESOURCE_EXHAUSTED` or the documented bounded equivalent; no partial state |
 | Deadline or cancellation | Work stops at the owning cancellation boundary; no false success |
 | Evidence retry | Only a durable contiguous Control commit advances the node cursor |

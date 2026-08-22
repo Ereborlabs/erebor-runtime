@@ -1,6 +1,6 @@
 # Removed Code Replacement Map
 
-Status: Active implementation control for Phase 6.1.
+Status: Done. The implementation used this map as its deletion control.
 
 Parent: [Phase 6.1](./phase-6-1-grpc-service-and-ipc-convergence.md)
 
@@ -20,8 +20,10 @@ fallback.
 | Linux ptrace socket-connect interception | Unsupported | No replacement is approved in this phase. | Reject enabled session interception. Remove the socket decision claim. |
 | Adoption of an existing Linux process | Unsupported | `erebor-runtime-session` rejects Linux-host adoption before launch. | Test the `InvalidAdoptTarget` result. |
 | Terminal launch interposition for managed browser replacement | Unsupported | `erebor-runtime-cdp` can still own and launch a configured browser. It does not intercept an arbitrary terminal child process. | Keep owned-browser tests. Remove raw terminal-launch interception claims and examples. |
+| Portable terminal policy and decision types | Preserved for Erebor | The logical policy compiler and portable request and decision types remain. They do not have an active physical interception backend. A later Runtime integration can connect them to the shared Interceptor only through an approved owner. | Keep policy compilation and rule serialization tests. Reject the removed session interception configuration. |
 | Process-guard resource and identity setup | Preserved without ptrace | The Linux session controller applies no-new-privileges, resource limits, umask, supplementary groups, GID, and UID before it starts the admitted workload. | Add controller tests for each privilege input and a real Linux launch test. |
 | Runtime interception socket and guard lifecycle protocol | Removed | No supported Runtime guard remains. | Delete the broker, guard messages, build artifact, packaging path, and standalone codec. A static closure test rejects their return. |
+| Historical Runtime audit records | Preserved for Erebor | The audit reader keeps the legacy fields that are required to read existing JSONL evidence. New no-interception sessions do not fabricate a ptrace decision or audit record. | The legacy-record audit test and the no-interception session-review tests pass. The static source scan excludes stored evidence files. |
 
 ## IPC Replacement
 
@@ -35,14 +37,14 @@ fallback.
 
 ## Required Work Before `Done`
 
-- [ ] Remove all dead daemon dispatcher code after the typed daemon tests pass.
-- [ ] Remove guard-only lease and physical-effect code that has no hook or app-server caller.
-- [ ] Keep hook and app-server lease behavior that still has an authenticated caller.
-- [ ] Replace internal idempotency response tags with typed response storage.
-- [ ] Delete `guard.proto`, `envelope.proto`, the frame codecs, and their exports.
-- [ ] Complete the Runtime and Mithril descriptor inventories.
-- [ ] Complete the static closure test over supported source, packaging, and examples.
-- [ ] Record every unsupported capability in the phase result and review guide.
+- [x] Remove all dead daemon dispatcher code after the typed daemon tests pass.
+- [x] Remove guard-only lease and physical-effect code that has no hook or app-server caller.
+- [x] Keep hook and app-server lease behavior that still has an authenticated caller.
+- [x] Replace internal idempotency response tags with typed response storage.
+- [x] Delete `guard.proto`, `envelope.proto`, the frame codecs, and their exports.
+- [x] Complete the Runtime and Mithril descriptor inventories.
+- [x] Complete the static closure test over supported source, packaging, and examples.
+- [x] Record every unsupported capability in the phase result and review guide.
 
 ## Review Stop Conditions
 

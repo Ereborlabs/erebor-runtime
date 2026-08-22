@@ -1,12 +1,15 @@
 # Phase 6.1: gRPC Service And IPC Convergence
 
-Status: Proposed; depends on Phase 6 `Done`.
+Status: Done. Automated acceptance passed on 2026-08-21. The manual runbook has
+not been run.
 
 Master: [Mithril Hugging Face Intrusion Prevention](./README.md)
 
 Design: [Validated readable architecture](./policy-and-protection-algorithm-architecture-readable.md)
 
 Manual acceptance: [Phase 6.1 runbook](./manual-testing/phase-6-1-manual-acceptance.md)
+
+Implementation review: [Phase 6.1 review guide](./phase-6-1-implementation-review.md)
 
 Environment setup: [shared setup guide](./manual-testing/environment-setup.md)
 
@@ -26,7 +29,7 @@ Erebor Runtime IPC migration is a cross-product prerequisite. It changes
 transport and service routing only. It does not move Runtime or Mithril domain
 ownership.
 
-## Current Source Baseline
+## Pre-implementation Source Baseline
 
 - `erebor-runtime-ipc` generates messages with `prost-build`. It owns a custom
   frame header, `Envelope`, message-kind strings, correlation fields, generic
@@ -48,6 +51,31 @@ The source baseline does not prove that the ptrace process guard is absent.
 Implementation must remove its supported launch and configuration path, or
 stop as `Blocked`. It must not keep the custom protocol as an undocumented
 exception.
+
+## Implemented Outcome
+
+The Runtime package now has 12 typed services and 60 methods. The Mithril
+Control package has six typed services and eight methods. Generated descriptor
+tests freeze the exact service, method, request, response, and streaming
+inventory.
+
+Runtime local services use the common tonic Unix transport. The transport
+adds the kernel-reported PID, UID, and GID to request extensions and applies a
+4 MiB message limit. The daemon applies its existing five-second request
+timeout and 32-request per-connection limit. Hook and administrative streams
+use bounded channels with eight entries.
+
+The daemon dispatcher, generic envelopes, frame codecs, message-kind strings,
+transport-version switches, standalone guard codec, and ptrace process-guard
+launch path are absent. Stale ptrace configuration fails closed. The hook
+service uses the kernel peer identity, `/proc` executable and ancestry checks,
+session registration, and one-use peer replay state. It does not accept a
+client ticket as authority.
+
+Mithril observation keeps UID, PID, and cgroup authorization. Mithril node
+control keeps mTLS node binding, boot epochs, trust generations, evidence WAL
+cursors, coverage revisions, replay checks, and durable acknowledgements.
+No durable owner moved because of the transport migration.
 
 ## Fixed Transport And Ownership Rules
 
@@ -155,8 +183,10 @@ authorization owners unchanged. If no supported guard remains, remove its
 service and messages instead of shipping an unused API.
 
 Replace the Codex hook envelope with a `HookService` whose RPCs use the
-existing ticket, peer-evidence, event, result, and rejection types. Keep hook
-authorization with the existing session broker.
+existing peer-evidence, event, result, and rejection types. Keep hook
+authorization with the existing session broker. Use the kernel peer identity
+and registered process ancestry. Do not keep a client ticket that duplicates
+that authority.
 
 Replace the Mithril observation envelope with one unary
 `RuntimeObservationService.GetSnapshot` RPC. Preserve socket mode, allowed
@@ -246,12 +276,13 @@ without expanding a shared message union.
   `AsyncFrameCodec`, `SyncFrameCodec`, message-kind constants, transport
   protocol constants, the standalone codec, or the ptrace process-guard
   launch path.
-- Daemon unary, server-streaming, bidirectional-streaming, cancellation,
-  deadline, idempotency, restart, stale-client, and graceful-shutdown tests.
+- Daemon unary, server-streaming, cancellation, deadline, idempotency, restart,
+  stale-client, and graceful-shutdown tests. Hook and administrative tests
+  cover bidirectional streaming.
 - Unix peer UID, PID, cgroup, socket owner, socket mode, wrong-service,
   oversized request, oversized response, concurrency, and backpressure tests.
-- Hook ticket mismatch, replay, wrong peer, oversized event, unavailable
-  broker, and result-routing tests.
+- Hook session mismatch, peer replay, unregistered executable, wrong peer,
+  oversized event, unavailable broker, cancellation, and result-routing tests.
 - Node wrong-CA, wrong-node, expired identity, boot reuse, reconnect, trust
   replay, evidence replay, durable acknowledgement, coverage revision, slow
   consumer, cancellation, and service-isolation tests.
@@ -287,16 +318,16 @@ policy and evidence convergence.
 ## Phase Result
 
 ```text
-State: Not done.
-Validated architecture revision/digest: not recorded.
-Completed deliverable IDs: none.
-Files and durable owners changed: none.
+State: Done.
+Validated architecture revision/digest: 51807f12113391872ee90ce2469869db18bc4d25e9b4b1f39eb01fcaefb4fe1e.
+Completed deliverable IDs: D6.1.1-D6.1.8.
+Files and durable owners changed: Runtime Protobuf and tonic transport; daemon gRPC adapters and generated-client wrapper; Codex hook transport and peer replay registry; Mithril observation service; Mithril Control service adapters; mithril-node typed clients. No durable owner changed.
 Upstream-adoption dossier IDs used: none.
-Fixture cases and exact physical results: not run.
-Commands and exact source state covered: none; this is a plan-only addition.
-Platform/kernel/runtime manifests: none.
-Performance/capacity results: none.
-Unsupported/degraded paths: not yet measured.
-Remaining work in this phase: all deliverables.
+Fixture cases and exact physical results: no new Appendix C fixture or physical result. The historical kernel qualification remains bound to its recorded pre-gRPC architecture digest.
+Commands and exact source state covered: `rtk bash .github/scripts/verify-rust-ci.sh` passed at code commit f59fd04; `rtk cargo test -p erebor-runtime-e2e --test session_review` passed 2 tests; `rtk cargo test -p erebor-runtime-terminal --lib` passed 3 tests; `rtk cargo test -p mithril-e2e --lib` passed 70 tests.
+Platform/kernel/runtime manifests: no new platform or kernel manifest. Existing packaging passed the repository closure scan.
+Performance/capacity results: no new benchmark. Runtime and Mithril gRPC messages are limited to 4 MiB. The daemon limit is 32 requests per connection. Hook and administrative stream queues have eight entries.
+Unsupported/degraded paths: Linux ptrace process-exec, file, and socket interception; existing-process adoption; and arbitrary terminal-child interposition remain unsupported. Filesystem overlay and owned-browser behavior remain, but they do not claim syscall interception.
+Remaining work in this phase: the optional manual runbook has not been run. No source deliverable remains.
 Next phase not authorized: yes.
 ```
