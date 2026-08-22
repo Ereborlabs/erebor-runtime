@@ -84,6 +84,13 @@ pub enum Error {
         #[snafu(implicit)]
         location: Location,
     },
+    #[snafu(display("Mithril Control store `{}` is invalid: {reason}", path.display()))]
+    ControlStore {
+        path: PathBuf,
+        reason: String,
+        #[snafu(implicit)]
+        location: Location,
+    },
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -98,6 +105,7 @@ impl ErrorExt for Error {
             | Self::PolicySignature { .. }
             | Self::PolicyState { .. }
             | Self::EvidenceState { .. }
+            | Self::ControlStore { .. }
             | Self::AdministrativeApproval { .. } => StatusCode::InvalidArguments,
             Self::Io { .. } | Self::Tls { .. } | Self::Serve { .. } => StatusCode::External,
         }
@@ -115,6 +123,7 @@ impl ErrorExt for Error {
             | Self::PolicySignature { .. }
             | Self::PolicyState { .. }
             | Self::EvidenceState { .. }
+            | Self::ControlStore { .. }
             | Self::AdministrativeApproval { .. } => RetryHint::NonRetryable,
         }
     }

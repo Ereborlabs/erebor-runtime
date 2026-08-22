@@ -1,0 +1,869 @@
+use std::collections::{BTreeMap, BTreeSet};
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, MutexGuard};
+
+use ed25519_dalek::SigningKey;
+use kube::api::{ListParams, Patch, PatchParams, WatchEvent, WatchParams};
+use kube::{Api, Client};
+use serde::{Deserialize, Serialize};
+use sha2::{Digest as _, Sha256};
+use snafu::{ensure, ResultExt as _};
+use tokio_stream::StreamExt as _;
+
+use super::{
+    CohortSelectionV1, ContainerKindV1, LabelOperatorV1, PolicyActivationAcknowledgementV1,
+    PolicyActivationStateV1, PolicyBundleV1, PolicyConditionKindV1, PolicyConditionV1,
+    PolicyDeliveryCandidateV1, PolicyDeliveryOperationV1, PolicyDocumentV1, PolicyRolloutCountsV1,
+    PolicyRolloutStateV1, PolicyRolloutStatusV1, PolicySourceRevisionV1, PolicySourceStateV1,
+    PolicyTargetSnapshotV1, PolicyTargetV1, ProfileCandidateArtifactV1, ProfileSealRequestV1,
+    WorkloadProtectionProfile, WorkloadProtectionProfileStatusV1,
+};
+use crate::error::{IoSnafu, PolicySignatureSnafu, PolicyValidationSnafu};
+use crate::{ControlStore, PolicyCompiler, Result};
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkloadTargetFactV1 {
+    pub node_id: String,
+    pub workload_binding_generation_digest: String,
+    pub execution_set_id: String,
+    pub cluster_uid: String,
+    pub namespace_uid: String,
+    pub controller_uid: String,
+    pub service_account_uid: String,
+    pub pod_uid: String,
+    pub container_id: String,
+    pub container_name: String,
+    pub container_kind: ContainerKindV1,
+    pub image_digest: String,
+    pub pod_labels: BTreeMap<String, String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct PolicySignerConfigV1 {
+    pub signing_key_id: String,
+    pub signing_key_path: PathBuf,
+    pub seal_request_path: PathBuf,
+    pub distribution_sequence_epoch: u64,
+    pub candidate_validity_ns: i64,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct PolicyDesiredStateConfigV1 {
+    pub tenant_id: String,
+    pub cluster_uid: String,
+    pub namespace_uids: BTreeMap<String, String>,
+    pub signer: PolicySignerConfigV1,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PolicyReconcileResultV1 {
+    pub source_revision: PolicySourceRevisionV1,
+    pub target_snapshot: PolicyTargetSnapshotV1,
+    pub bundles: Vec<PolicyBundleV1>,
+    pub rollout_states: Vec<PolicyRolloutStateV1>,
+    pub status: WorkloadProtectionProfileStatusV1,
+}
+
+#[derive(Clone)]
+pub struct PolicyDesiredStateOwner {
+    config: Arc<PolicyDesiredStateConfigV1>,
+    store: ControlStore,
+    compiler: Arc<PolicyCompiler>,
+    signing_key: Arc<SigningKey>,
+    seal_request: Arc<ProfileSealRequestV1>,
+    state: Arc<Mutex<DesiredStateMemory>>,
+    rollout: PolicyRolloutOwner,
+}
+
+#[derive(Default)]
+struct DesiredStateMemory {
+    reconciled: BTreeMap<String, PolicyReconcileResultV1>,
+}
+
+#[derive(Clone)]
+pub struct PolicyRolloutOwner {
+    store: ControlStore,
+    signing_key: Arc<SigningKey>,
+    signing_key_id: Arc<str>,
+    distribution_sequence_epoch: u64,
+    candidate_validity_ns: i64,
+}
+
+impl PolicyDesiredStateConfigV1 {
+    pub fn validate(&self) -> Result<()> {
+        ensure!(
+            canonical_uuid(&self.tenant_id)
+                && canonical_uuid(&self.cluster_uid)
+                && !self.namespace_uids.is_empty()
+                && self.namespace_uids.iter().all(|(name, uid)| {
+                    !name.is_empty()
+                        && name.len() <= 253
+                        && !name.chars().any(char::is_whitespace)
+                        && canonical_uuid(uid)
+                })
+                && !self.signer.signing_key_id.is_empty()
+                && self.signer.signing_key_path.is_absolute()
+                && self.signer.seal_request_path.is_absolute()
+                && self.signer.distribution_sequence_epoch > 0
+                && self.signer.candidate_validity_ns > 0,
+            PolicyValidationSnafu {
+                policy_id: "<kubernetes-control>",
+                code: "CFG_KUBERNETES_CONTROL",
+                reason: "Kubernetes policy control needs trusted identities, namespaces, signer paths, and nonzero sequence bounds",
+            }
+        );
+        Ok(())
+    }
+}
+
+impl PolicyDesiredStateOwner {
+    pub fn open(config: PolicyDesiredStateConfigV1, store: ControlStore) -> Result<Self> {
+        config.validate()?;
+        let signing_key = read_signing_key(&config.signer.signing_key_path)?;
+        let seal_request: ProfileSealRequestV1 = read_json(&config.signer.seal_request_path)?;
+        ensure!(
+            seal_request.signing_key_id == config.signer.signing_key_id
+                && seal_request.sequence_epoch > 0,
+            PolicyValidationSnafu {
+                policy_id: "<kubernetes-control>",
+                code: "CFG_POLICY_SIGNER",
+                reason: "the seal request does not match the configured policy signer",
+            }
+        );
+        Ok(Self::new(config, store, signing_key, seal_request))
+    }
+
+    #[must_use]
+    pub fn new(
+        config: PolicyDesiredStateConfigV1,
+        store: ControlStore,
+        signing_key: SigningKey,
+        seal_request: ProfileSealRequestV1,
+    ) -> Self {
+        let signing_key = Arc::new(signing_key);
+        let rollout = PolicyRolloutOwner {
+            store: store.clone(),
+            signing_key: signing_key.clone(),
+            signing_key_id: Arc::from(config.signer.signing_key_id.as_str()),
+            distribution_sequence_epoch: config.signer.distribution_sequence_epoch,
+            candidate_validity_ns: config.signer.candidate_validity_ns,
+        };
+        Self {
+            config: Arc::new(config),
+            store,
+            compiler: Arc::new(PolicyCompiler),
+            signing_key,
+            seal_request: Arc::new(seal_request),
+            state: Arc::new(Mutex::new(DesiredStateMemory::default())),
+            rollout,
+        }
+    }
+
+    pub fn reconcile(
+        &self,
+        resource: &WorkloadProtectionProfile,
+        inventory: &[WorkloadTargetFactV1],
+        now_utc_ns: i64,
+    ) -> Result<PolicyReconcileResultV1> {
+        let namespace = resource.metadata.namespace.as_deref().ok_or_else(|| {
+            PolicyValidationSnafu {
+                policy_id: resource.spec.policy.profile_id(),
+                code: "CFG_CRD_METADATA",
+                reason: "the policy object has no namespace".to_owned(),
+            }
+            .build()
+        })?;
+        let namespace_uid = self.config.namespace_uids.get(namespace).ok_or_else(|| {
+            PolicyValidationSnafu {
+                policy_id: resource.spec.policy.profile_id(),
+                code: "CFG_TENANT_NAMESPACE",
+                reason: "the policy object namespace is outside the configured tenant scope"
+                    .to_owned(),
+            }
+            .build()
+        })?;
+        ensure!(
+            resource
+                .spec
+                .policy
+                .workload_selectors
+                .iter()
+                .all(|selector| {
+                    selector.cluster_uids.iter().all(|uid| uid == &self.config.cluster_uid)
+                        && selector
+                            .namespace_uids
+                            .iter()
+                            .all(|uid| uid == namespace_uid)
+                }),
+            PolicyValidationSnafu {
+                policy_id: resource.spec.policy.profile_id(),
+                code: "CFG_CROSS_TENANT_SELECTOR",
+                reason: "the policy has a cluster or namespace selector outside its authenticated tenant scope",
+            }
+        );
+        let source = PolicySourceRevisionV1::from_resource(
+            resource,
+            &self.config.tenant_id,
+            &self.config.cluster_uid,
+            namespace_uid,
+            if resource.metadata.deletion_timestamp.is_some() {
+                PolicySourceStateV1::DeletionRequested
+            } else {
+                PolicySourceStateV1::Accepted
+            },
+        )?;
+        if let Some(existing) = self
+            .state()?
+            .reconciled
+            .get(&source.policy_source_revision_id)
+            .cloned()
+        {
+            return Ok(existing);
+        }
+        self.store
+            .accept_source_revision(source.clone(), resource.spec.policy.clone())?;
+        let mut targets = resolve_targets(
+            &resource.spec.policy,
+            inventory,
+            &self.config.tenant_id,
+            &self.config.cluster_uid,
+        )?;
+        self.claim(&source, &resource.spec.policy, &targets)?;
+
+        if source.state == PolicySourceStateV1::DeletionRequested {
+            targets = self
+                .store
+                .latest_bundles_for_object(&source.object_uid)?
+                .into_iter()
+                .map(|bundle| bundle.candidate.exact_target)
+                .collect();
+            targets.sort();
+            targets.dedup();
+        }
+
+        let artifact = if let Some(artifact) = self
+            .store
+            .compiled_artifact(&source.policy_source_revision_id)?
+        {
+            artifact
+        } else {
+            let compiled = self.compiler.compile(&resource.spec.policy)?;
+            let mut seal_request = (*self.seal_request).clone();
+            seal_request.issuer_sequence = self.store.next_policy_issuer_sequence(
+                &seal_request.signing_key_id,
+                seal_request.sequence_epoch,
+                seal_request.issuer_sequence,
+            )?;
+            let artifact = ProfileCandidateArtifactV1::sign(
+                &resource.spec.policy,
+                compiled,
+                seal_request,
+                &self.signing_key,
+            )?;
+            self.store
+                .record_compiled_artifact(&source.policy_source_revision_id, artifact.clone())?;
+            artifact
+        };
+        let artifact_bytes = serde_json::to_vec(&artifact).map_err(|error| {
+            PolicyValidationSnafu {
+                policy_id: resource.spec.policy.profile_id(),
+                code: "CFG_POLICY_ARTIFACT",
+                reason: format!("the signed profile artifact cannot be encoded: {error}"),
+            }
+            .build()
+        })?;
+        let signed_profile_digest = sha256(&artifact_bytes);
+        let snapshot = PolicyTargetSnapshotV1::new(
+            source.policy_source_revision_id.clone(),
+            signed_profile_digest,
+            resource.spec.policy.rollout.rollout_generation,
+            targets,
+        )?;
+        let (bundles, rollout_states) = if self
+            .store
+            .latest_snapshot_for_source(&source.policy_source_revision_id)?
+            .as_ref()
+            == Some(&snapshot)
+        {
+            (
+                self.store
+                    .bundles_for_snapshot(&snapshot.target_snapshot_digest)?,
+                self.store
+                    .rollout_states_for_snapshot(&snapshot.target_snapshot_digest)?,
+            )
+        } else {
+            self.rollout.create(
+                &source,
+                snapshot.clone(),
+                artifact,
+                self.signing_key.verifying_key().to_bytes().to_vec(),
+                now_utc_ns,
+            )?
+        };
+        let status = status_for(
+            &source,
+            bundles
+                .first()
+                .map(|bundle| bundle.candidate.candidate_content_id.clone()),
+            &rollout_states,
+            None,
+        );
+        let result = PolicyReconcileResultV1 {
+            source_revision: source,
+            target_snapshot: snapshot,
+            bundles,
+            rollout_states,
+            status,
+        };
+        self.state()?.reconciled.insert(
+            result.source_revision.policy_source_revision_id.clone(),
+            result.clone(),
+        );
+        Ok(result)
+    }
+
+    #[must_use]
+    pub fn store(&self) -> ControlStore {
+        self.store.clone()
+    }
+
+    #[must_use]
+    pub fn rollout_owner(&self) -> PolicyRolloutOwner {
+        self.rollout.clone()
+    }
+
+    pub async fn run_kubernetes(self, control: crate::ControlPlane) {
+        loop {
+            let Ok(client) = Client::try_default().await else {
+                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                continue;
+            };
+            let mut tasks = tokio::task::JoinSet::new();
+            for namespace in self.config.namespace_uids.keys() {
+                tasks.spawn(reconcile_namespace(
+                    client.clone(),
+                    namespace.clone(),
+                    self.clone(),
+                    control.clone(),
+                ));
+            }
+            if tasks.join_next().await.is_none() {
+                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+            }
+            tasks.abort_all();
+        }
+    }
+
+    fn claim(
+        &self,
+        source: &PolicySourceRevisionV1,
+        policy: &PolicyDocumentV1,
+        targets: &[PolicyTargetV1],
+    ) -> Result<()> {
+        let profile_key = (
+            source.tenant_id.clone(),
+            policy.metadata.trust_domain_id.clone(),
+            policy.metadata.profile_id.clone(),
+        );
+        let target_bindings = targets
+            .iter()
+            .flat_map(|target| target.workload_binding_generation_digests.iter())
+            .collect::<BTreeSet<_>>();
+        for (owner, owner_policy) in self.store.latest_live_sources()? {
+            if owner.object_uid == source.object_uid {
+                continue;
+            }
+            ensure!(
+                (
+                    owner.tenant_id.clone(),
+                    owner_policy.metadata.trust_domain_id.clone(),
+                    owner_policy.metadata.profile_id.clone(),
+                ) != profile_key,
+                PolicyValidationSnafu {
+                    policy_id: policy.profile_id(),
+                    code: "CFG_DUPLICATE_PROFILE_OWNER",
+                    reason: "another live CRD owns this tenant, trust-domain, and profile ID",
+                }
+            );
+            if let Some(snapshot) = self
+                .store
+                .latest_snapshot_for_source(&owner.policy_source_revision_id)?
+            {
+                ensure!(
+                    snapshot
+                        .targets
+                        .iter()
+                        .flat_map(|target| { target.workload_binding_generation_digests.iter() })
+                        .all(|binding| !target_bindings.contains(binding)),
+                    PolicyValidationSnafu {
+                        policy_id: policy.profile_id(),
+                        code: "CFG_OVERLAPPING_WORKLOAD_OWNER",
+                        reason: "another live CRD selects this exact workload binding",
+                    }
+                );
+            }
+        }
+        ensure!(
+            !source.policy_source_revision_id.is_empty(),
+            PolicyValidationSnafu {
+                policy_id: policy.profile_id(),
+                code: "CFG_POLICY_SOURCE_REVISION",
+                reason: "the source revision has no content identity",
+            }
+        );
+        Ok(())
+    }
+
+    fn state(&self) -> Result<MutexGuard<'_, DesiredStateMemory>> {
+        self.state.lock().map_err(|_| {
+            PolicyValidationSnafu {
+                policy_id: "<kubernetes-control>",
+                code: "CFG_POLICY_STATE",
+                reason: "the desired-state owner lock is poisoned".to_owned(),
+            }
+            .build()
+        })
+    }
+}
+
+impl PolicyRolloutOwner {
+    fn create(
+        &self,
+        source: &PolicySourceRevisionV1,
+        snapshot: PolicyTargetSnapshotV1,
+        artifact: ProfileCandidateArtifactV1,
+        public_key: Vec<u8>,
+        now_utc_ns: i64,
+    ) -> Result<(Vec<PolicyBundleV1>, Vec<PolicyRolloutStateV1>)> {
+        let mut bundles = Vec::with_capacity(snapshot.targets.len());
+        let mut rollout_states = Vec::with_capacity(snapshot.targets.len());
+        for target in &snapshot.targets {
+            let sequence = self.store.next_distribution_sequence(
+                &target.node_id,
+                &source.object_uid,
+                self.distribution_sequence_epoch,
+            )?;
+            let predecessor = self
+                .store
+                .latest_bundle_for_object_node(&source.object_uid, &target.node_id)?
+                .map(|bundle| bundle.candidate.candidate_content_id);
+            let operation = if source.state == PolicySourceStateV1::DeletionRequested {
+                PolicyDeliveryOperationV1::RetireToRestrictiveTerminal
+            } else if predecessor.is_some() {
+                PolicyDeliveryOperationV1::Replace
+            } else {
+                PolicyDeliveryOperationV1::Activate
+            };
+            let candidate = PolicyDeliveryCandidateV1::sign(
+                source.tenant_id.clone(),
+                source.policy_source_revision_id.clone(),
+                snapshot.signed_profile_digest.clone(),
+                &snapshot,
+                target.clone(),
+                operation,
+                predecessor,
+                self.distribution_sequence_epoch,
+                sequence,
+                now_utc_ns,
+                now_utc_ns.saturating_add(self.candidate_validity_ns),
+                self.signing_key_id.to_string(),
+                &self.signing_key,
+            )?;
+            let candidate_id = candidate.candidate_content_id.clone();
+            bundles.push(PolicyBundleV1::new(
+                candidate,
+                artifact.clone(),
+                public_key.clone(),
+            )?);
+            rollout_states.push(PolicyRolloutStateV1 {
+                policy_source_revision_id: source.policy_source_revision_id.clone(),
+                target_snapshot_digest: snapshot.target_snapshot_digest.clone(),
+                target: target.clone(),
+                desired_candidate_content_id: candidate_id,
+                state: PolicyRolloutStatusV1::Pending,
+                latest_acknowledgement_content_id: None,
+                transition_version: 0,
+                updated_utc_ns: now_utc_ns,
+            });
+        }
+        self.store
+            .create_rollout(snapshot, bundles.clone(), rollout_states.clone())?;
+        Ok((bundles, rollout_states))
+    }
+
+    pub fn acknowledge(
+        &self,
+        acknowledgement: PolicyActivationAcknowledgementV1,
+    ) -> Result<PolicyRolloutStateV1> {
+        let current = self
+            .store
+            .rollout_state(
+                &acknowledgement.candidate_content_id,
+                &acknowledgement.node_id,
+            )?
+            .ok_or_else(|| {
+                PolicyValidationSnafu {
+                    policy_id: &acknowledgement.policy_source_revision_id,
+                    code: "CFG_STALE_POLICY_ACKNOWLEDGEMENT",
+                    reason: "the node acknowledgement does not name a current rollout target"
+                        .to_owned(),
+                }
+                .build()
+            })?;
+        ensure!(
+            acknowledgement.policy_source_revision_id == current.policy_source_revision_id
+                && acknowledgement.target_snapshot_digest == current.target_snapshot_digest
+                && acknowledgement.tenant_id == current.target.tenant_id,
+            PolicyValidationSnafu {
+                policy_id: &acknowledgement.policy_source_revision_id,
+                code: "CFG_STALE_POLICY_ACKNOWLEDGEMENT",
+                reason: "the acknowledgement source, snapshot, or tenant is stale",
+            }
+        );
+        let state = match acknowledgement.state {
+            PolicyActivationStateV1::Received => PolicyRolloutStatusV1::Delivered,
+            PolicyActivationStateV1::Staged => PolicyRolloutStatusV1::Staged,
+            PolicyActivationStateV1::Active => PolicyRolloutStatusV1::Active,
+            PolicyActivationStateV1::Rejected => PolicyRolloutStatusV1::Rejected,
+            PolicyActivationStateV1::Stale => PolicyRolloutStatusV1::Stale,
+            PolicyActivationStateV1::Unknown => PolicyRolloutStatusV1::Unknown,
+        };
+        let next = PolicyRolloutStateV1 {
+            state,
+            latest_acknowledgement_content_id: Some(
+                acknowledgement.acknowledgement_content_id.clone(),
+            ),
+            transition_version: current.transition_version.saturating_add(1),
+            updated_utc_ns: acknowledgement.observed_utc_ns,
+            ..current
+        };
+        self.store
+            .acknowledge_policy(acknowledgement, next.clone())?;
+        Ok(next)
+    }
+}
+
+async fn reconcile_namespace(
+    client: Client,
+    namespace: String,
+    owner: PolicyDesiredStateOwner,
+    control: crate::ControlPlane,
+) {
+    let api = Api::<WorkloadProtectionProfile>::namespaced(client, &namespace);
+    loop {
+        let Some(resource_version) = relist_namespace(&api, &owner, &control).await else {
+            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+            continue;
+        };
+        let watch = api
+            .watch(&WatchParams::default().timeout(240), &resource_version)
+            .await;
+        let Ok(stream) = watch else {
+            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+            continue;
+        };
+        tokio::pin!(stream);
+        while let Some(event) = stream.next().await {
+            match event {
+                Ok(
+                    WatchEvent::Added(resource)
+                    | WatchEvent::Modified(resource)
+                    | WatchEvent::Deleted(resource),
+                ) => {
+                    reconcile_resource(&api, &owner, &control, resource).await;
+                }
+                Ok(WatchEvent::Bookmark(_)) => {}
+                Ok(WatchEvent::Error(_)) | Err(_) => break,
+            }
+        }
+    }
+}
+
+async fn relist_namespace(
+    api: &Api<WorkloadProtectionProfile>,
+    owner: &PolicyDesiredStateOwner,
+    control: &crate::ControlPlane,
+) -> Option<String> {
+    let mut continuation = None::<String>;
+    let mut resource_version = None::<String>;
+    loop {
+        let mut params = ListParams::default().limit(500);
+        if let Some(token) = &continuation {
+            params = params.continue_token(token);
+        }
+        let page = api.list(&params).await.ok()?;
+        for resource in page.items {
+            reconcile_resource(api, owner, control, resource).await;
+        }
+        resource_version = page.metadata.resource_version.or(resource_version);
+        continuation = page.metadata.continue_;
+        if continuation.as_ref().is_none_or(String::is_empty) {
+            break;
+        }
+    }
+    resource_version.filter(|value| !value.is_empty())
+}
+
+async fn reconcile_resource(
+    api: &Api<WorkloadProtectionProfile>,
+    owner: &PolicyDesiredStateOwner,
+    control: &crate::ControlPlane,
+    resource: WorkloadProtectionProfile,
+) {
+    let Some(name) = resource.metadata.name.clone() else {
+        return;
+    };
+    let generation = resource
+        .metadata
+        .generation
+        .and_then(|value| u64::try_from(value).ok())
+        .unwrap_or_default();
+    let status = owner
+        .reconcile(&resource, &control.workload_inventory(), utc_now_ns())
+        .map_or_else(|_| rejected_status(generation), |result| result.status);
+    let patch = Patch::Merge(serde_json::json!({"status": status}));
+    let _result = api
+        .patch_status(&name, &PatchParams::default(), &patch)
+        .await;
+}
+
+fn rejected_status(generation: u64) -> WorkloadProtectionProfileStatusV1 {
+    let condition = |condition| PolicyConditionV1 {
+        condition,
+        status: false,
+        reason_code: "RECONCILE_REJECTED".to_owned(),
+        observed_generation: generation,
+    };
+    WorkloadProtectionProfileStatusV1 {
+        observed_generation: generation,
+        source_revision_id: None,
+        canonical_spec_digest: None,
+        candidate_content_id: None,
+        rollout_counts: PolicyRolloutCountsV1::default(),
+        conditions: [
+            PolicyConditionKindV1::Accepted,
+            PolicyConditionKindV1::Compiled,
+            PolicyConditionKindV1::Progressing,
+            PolicyConditionKindV1::Available,
+            PolicyConditionKindV1::Degraded,
+            PolicyConditionKindV1::Retiring,
+        ]
+        .map(condition)
+        .to_vec(),
+    }
+}
+
+fn utc_now_ns() -> i64 {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0_u128, |duration| duration.as_nanos());
+    i64::try_from(nanos).unwrap_or(i64::MAX)
+}
+
+fn resolve_targets(
+    policy: &PolicyDocumentV1,
+    inventory: &[WorkloadTargetFactV1],
+    tenant_id: &str,
+    cluster_uid: &str,
+) -> Result<Vec<PolicyTargetV1>> {
+    let selector_ids = policy
+        .workload_selectors
+        .iter()
+        .map(|selector| selector.workload_selector_id.as_str())
+        .collect::<BTreeSet<_>>();
+    let mut selected = BTreeMap::<String, BTreeSet<String>>::new();
+    for fact in inventory {
+        let matches_selector = policy.workload_selectors.iter().any(|selector| {
+            selector_ids.contains(selector.workload_selector_id.as_str())
+                && selector.cluster_uids.contains(&fact.cluster_uid)
+                && selector.namespace_uids.contains(&fact.namespace_uid)
+                && matches_optional(&selector.controller_uids, &fact.controller_uid)
+                && matches_optional(&selector.service_account_uids, &fact.service_account_uid)
+                && matches_optional(&selector.container_names, &fact.container_name)
+                && (selector.container_kinds.is_empty()
+                    || selector.container_kinds.contains(&fact.container_kind))
+                && matches_optional(&selector.image_digests, &fact.image_digest)
+                && selector.pod_label_requirements.iter().all(|requirement| {
+                    let value = fact.pod_labels.get(&requirement.key);
+                    match requirement.operator {
+                        LabelOperatorV1::In => {
+                            value.is_some_and(|value| requirement.values.contains(value))
+                        }
+                        LabelOperatorV1::NotIn => {
+                            value.is_some_and(|value| !requirement.values.contains(value))
+                        }
+                        LabelOperatorV1::Exists => value.is_some(),
+                        LabelOperatorV1::DoesNotExist => value.is_none(),
+                    }
+                })
+        });
+        if matches_selector && selected_by_rollout(policy, fact) {
+            ensure!(
+                fact.cluster_uid == cluster_uid
+                    && crate::node_id_is_valid(&fact.node_id)
+                    && valid_sha256(&fact.workload_binding_generation_digest),
+                PolicyValidationSnafu {
+                    policy_id: policy.profile_id(),
+                    code: "CFG_POLICY_TARGET_FACT",
+                    reason: "a selected workload target has an invalid cluster, node, or digest",
+                }
+            );
+            selected
+                .entry(fact.node_id.clone())
+                .or_default()
+                .insert(fact.workload_binding_generation_digest.clone());
+        }
+    }
+    let targets = selected
+        .into_iter()
+        .map(|(node_id, bindings)| PolicyTargetV1 {
+            tenant_id: tenant_id.to_owned(),
+            cluster_uid: cluster_uid.to_owned(),
+            node_id,
+            workload_binding_generation_digests: bindings.into_iter().collect(),
+        })
+        .collect::<Vec<_>>();
+    ensure!(
+        targets
+            .iter()
+            .map(|target| target.workload_binding_generation_digests.len())
+            .sum::<usize>()
+            <= 65_536,
+        PolicyValidationSnafu {
+            policy_id: policy.profile_id(),
+            code: "CFG_POLICY_TARGETS",
+            reason: "the policy target snapshot exceeds the aggregate target bound",
+        }
+    );
+    Ok(targets)
+}
+
+fn selected_by_rollout(policy: &PolicyDocumentV1, fact: &WorkloadTargetFactV1) -> bool {
+    match policy.rollout.cohort_selection {
+        CohortSelectionV1::AllBoundExecutionSets => true,
+        CohortSelectionV1::ExplicitExecutionSets => policy
+            .rollout
+            .explicit_execution_set_ids
+            .contains(&fact.execution_set_id),
+        CohortSelectionV1::HashedExecutionSetBinding => {
+            let mut digest = Sha256::new();
+            digest.update(policy.metadata.profile_id.as_bytes());
+            digest.update(policy.metadata.profile_version.to_be_bytes());
+            digest.update(policy.rollout.rollout_generation.to_be_bytes());
+            digest.update(fact.execution_set_id.as_bytes());
+            digest.update(fact.workload_binding_generation_digest.as_bytes());
+            let value = u32::from_be_bytes(digest.finalize()[..4].try_into().unwrap_or_default());
+            let bucket = value % policy.rollout.selector_hash_modulus;
+            policy
+                .rollout
+                .selected_bucket_ids
+                .binary_search(&bucket)
+                .is_ok()
+        }
+    }
+}
+
+fn status_for(
+    source: &PolicySourceRevisionV1,
+    candidate_content_id: Option<String>,
+    states: &[PolicyRolloutStateV1],
+    degraded_reason: Option<&str>,
+) -> WorkloadProtectionProfileStatusV1 {
+    let counts = PolicyRolloutCountsV1::from_states(states);
+    let retiring = source.state == PolicySourceStateV1::DeletionRequested;
+    let available = counts.total() > 0 && counts.active == counts.total();
+    let degraded =
+        degraded_reason.is_some() || counts.rejected > 0 || counts.stale > 0 || counts.unknown > 0;
+    let progressing = !available && !retiring;
+    let condition = |condition, status, reason_code: &str| PolicyConditionV1 {
+        condition,
+        status,
+        reason_code: reason_code.to_owned(),
+        observed_generation: source.object_generation,
+    };
+    WorkloadProtectionProfileStatusV1 {
+        observed_generation: source.object_generation,
+        source_revision_id: Some(source.policy_source_revision_id.clone()),
+        canonical_spec_digest: Some(source.canonical_spec_digest.clone()),
+        candidate_content_id,
+        rollout_counts: counts,
+        conditions: vec![
+            condition(PolicyConditionKindV1::Accepted, true, "SOURCE_ACCEPTED"),
+            condition(PolicyConditionKindV1::Compiled, true, "POLICY_COMPILED"),
+            condition(
+                PolicyConditionKindV1::Progressing,
+                progressing,
+                "ROLLOUT_PENDING",
+            ),
+            condition(
+                PolicyConditionKindV1::Available,
+                available,
+                "ALL_TARGETS_ACTIVE",
+            ),
+            condition(
+                PolicyConditionKindV1::Degraded,
+                degraded,
+                degraded_reason.unwrap_or("NO_DEGRADED_TARGET"),
+            ),
+            condition(
+                PolicyConditionKindV1::Retiring,
+                retiring,
+                "DELETION_REQUESTED",
+            ),
+        ],
+    }
+}
+
+fn matches_optional(values: &[String], fact: &str) -> bool {
+    values.is_empty() || values.iter().any(|value| value == fact)
+}
+
+fn canonical_uuid(value: &str) -> bool {
+    uuid::Uuid::parse_str(value).is_ok_and(|uuid| uuid.hyphenated().to_string() == value)
+}
+
+fn valid_sha256(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+fn sha256(bytes: &[u8]) -> String {
+    format!("{:x}", Sha256::digest(bytes))
+}
+
+fn read_signing_key(path: &Path) -> Result<SigningKey> {
+    let bytes = fs::read(path).context(IoSnafu { path })?;
+    let text = std::str::from_utf8(&bytes).map_err(|error| {
+        PolicySignatureSnafu {
+            key_id: path.display().to_string(),
+            reason: error.to_string(),
+        }
+        .build()
+    })?;
+    let decoded = hex::decode(text.trim()).map_err(|error| {
+        PolicySignatureSnafu {
+            key_id: path.display().to_string(),
+            reason: error.to_string(),
+        }
+        .build()
+    })?;
+    let key: [u8; 32] = decoded.try_into().map_err(|_: Vec<u8>| {
+        PolicySignatureSnafu {
+            key_id: path.display().to_string(),
+            reason: "the signing key must contain 32 lowercase-hex bytes".to_owned(),
+        }
+        .build()
+    })?;
+    Ok(SigningKey::from_bytes(&key))
+}
+
+fn read_json<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T> {
+    let bytes = fs::read(path).context(IoSnafu { path })?;
+    serde_json::from_slice(&bytes).context(crate::error::JsonSnafu { path })
+}

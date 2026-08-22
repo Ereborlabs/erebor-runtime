@@ -45,7 +45,7 @@ pub struct WorkloadProtectionProfileSpec {
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct WorkloadProtectionProfileStatusV1 {
     pub observed_generation: u64,
     pub source_revision_id: Option<String>,
@@ -421,7 +421,6 @@ impl PolicyTargetSnapshotV1 {
         targets.sort();
         ensure!(
             rollout_generation > 0
-                && !targets.is_empty()
                 && targets.len() <= MAX_POLICY_STATUS_TARGETS as usize
                 && targets.windows(2).all(|pair| pair[0] < pair[1])
                 && targets.iter().all(PolicyTargetV1::is_valid),

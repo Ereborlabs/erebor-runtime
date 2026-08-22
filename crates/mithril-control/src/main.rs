@@ -21,6 +21,16 @@ async fn main() {
 async fn run() -> mithril_control::Result<()> {
     let config = ControlConfig::load(&Cli::parse().config)?;
     let (address, tls, control, administrative_exec) = config.into_parts()?;
+    let policy_owner = control.policy_desired_state();
+    let policy_control = control.clone();
+    let policy_reconciler = async move {
+        if let Some(owner) = policy_owner {
+            owner.run_kubernetes(policy_control).await;
+        } else {
+            std::future::pending::<()>().await;
+        }
+    };
+    tokio::pin!(policy_reconciler);
     if let Some(administrative_exec) = administrative_exec {
         let shutdown = std::sync::Arc::new(tokio::sync::Notify::new());
         let control_shutdown = shutdown.clone();
@@ -45,11 +55,17 @@ async fn run() -> mithril_control::Result<()> {
                 shutdown.notify_waiters();
                 Ok(())
             },
+            _ = &mut policy_reconciler => {
+                shutdown.notify_waiters();
+                Ok(())
+            },
         }
     } else {
-        serve(address, &tls, control, async {
-            let _result = tokio::signal::ctrl_c().await;
-        })
-        .await
+        tokio::select! {
+            result = serve(address, &tls, control, async {
+                let _result = tokio::signal::ctrl_c().await;
+            }) => result,
+            _ = &mut policy_reconciler => Ok(()),
+        }
     }
 }

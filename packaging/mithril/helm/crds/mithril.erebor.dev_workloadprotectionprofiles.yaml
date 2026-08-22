@@ -4179,12 +4179,12 @@
                 "maxProperties": 4096,
                 "nullable": true,
                 "properties": {
-                  "candidate_content_id": {
+                  "candidateContentId": {
                     "maxLength": 4096,
                     "nullable": true,
                     "type": "string"
                   },
-                  "canonical_spec_digest": {
+                  "canonicalSpecDigest": {
                     "maxLength": 4096,
                     "nullable": true,
                     "type": "string"
@@ -4230,12 +4230,12 @@
                     "maxItems": 6,
                     "type": "array"
                   },
-                  "observed_generation": {
+                  "observedGeneration": {
                     "format": "uint64",
                     "minimum": 0.0,
                     "type": "integer"
                   },
-                  "rollout_counts": {
+                  "rolloutCounts": {
                     "additionalProperties": false,
                     "maxProperties": 4096,
                     "properties": {
@@ -4286,7 +4286,7 @@
                     ],
                     "type": "object"
                   },
-                  "source_revision_id": {
+                  "sourceRevisionId": {
                     "maxLength": 4096,
                     "nullable": true,
                     "type": "string"
@@ -4294,8 +4294,8 @@
                 },
                 "required": [
                   "conditions",
-                  "observed_generation",
-                  "rollout_counts"
+                  "observedGeneration",
+                  "rolloutCounts"
                 ],
                 "type": "object"
               }

@@ -3,6 +3,7 @@ mod canonical;
 mod compiler;
 mod kubernetes;
 mod path;
+mod reconciliation;
 mod rollback;
 mod signature;
 mod simulation;
@@ -18,6 +19,7 @@ pub use compiler::{
 };
 pub use kubernetes::*;
 pub use path::*;
+pub use reconciliation::*;
 pub use rollback::{
     AntiRollbackStore, PendingProfileActivationV1, ProfileActivationMetadataV1,
     RollbackAuthorizationArtifactV1, RollbackAuthorizationPayloadV1, SignedRollbackAuthorizationV1,

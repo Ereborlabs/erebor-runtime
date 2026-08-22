@@ -1,7 +1,7 @@
 use erebor_interceptor::{EffectObservationReader, KernelHost, KernelHostConfig, KernelHostOwner};
 use mithril_control::{
     AdministrativeExecArmResult, AdministrativeExecResolution, AdministrativeFileObject,
-    CapabilityRecord, NodeRegistration, ResolvedAdministrativeExecutable,
+    CapabilityRecord, NodeRegistration, RegisteredWorkloadTarget, ResolvedAdministrativeExecutable,
 };
 use serde::Serialize;
 use sha2::{Digest as _, Sha256};
@@ -310,6 +310,7 @@ impl NodeChassis {
             label_epoch,
             prevention_enabled && evidence_healthy,
             capabilities.clone(),
+            &config.workload_bindings,
         )?;
         let connector =
             NodeControlConnector::new(config.control.clone(), config.node_id.clone(), boot_id);
@@ -1097,6 +1098,7 @@ fn registration(
     label_epoch: u64,
     effect_prevention_claims_enabled: bool,
     capabilities: Vec<CapabilityRecord>,
+    workload_bindings: &[crate::WorkloadBindingConfig],
 ) -> Result<NodeRegistration> {
     let manifest_bytes = serde_json::to_vec(manifest).context(JsonSnafu {
         path: "in-memory kernel manifest",
@@ -1108,6 +1110,62 @@ fn registration(
         kernel_ready: manifest.ready,
         effect_prevention_claims_enabled,
         capabilities,
+        workload_targets: workload_bindings
+            .iter()
+            .filter(|binding| {
+                !binding.cluster_uid.is_empty()
+                    && !binding.namespace_uid.is_empty()
+                    && !binding.controller_uid.is_empty()
+                    && !binding.service_account_uid.is_empty()
+            })
+            .map(registered_workload_target)
+            .collect::<Result<Vec<_>>>()?,
+    })
+}
+
+fn registered_workload_target(
+    binding: &crate::WorkloadBindingConfig,
+) -> Result<RegisteredWorkloadTarget> {
+    let identity = serde_json::to_vec(&(
+        binding.binding_id.as_str(),
+        binding.lifecycle_generation,
+        binding.execution_set_id.as_str(),
+        binding.cluster_uid.as_str(),
+        binding.namespace_uid.as_str(),
+        binding.controller_uid.as_str(),
+        binding.service_account_uid.as_str(),
+        binding.pod_uid.as_str(),
+        binding.container_id.as_str(),
+        binding.container_name.as_str(),
+        binding.image_digest.as_str(),
+        &binding.pod_labels,
+    ))
+    .context(JsonSnafu {
+        path: "in-memory workload target",
+    })?;
+    Ok(RegisteredWorkloadTarget {
+        workload_binding_generation_digest: format!("{:x}", Sha256::digest(identity)),
+        execution_set_id: binding.execution_set_id.clone(),
+        cluster_uid: binding.cluster_uid.clone(),
+        namespace_uid: binding.namespace_uid.clone(),
+        controller_uid: binding.controller_uid.clone(),
+        service_account_uid: binding.service_account_uid.clone(),
+        pod_uid: binding.pod_uid.clone(),
+        container_id: binding.container_id.clone(),
+        container_name: binding.container_name.clone(),
+        container_kind: match binding.container_kind {
+            crate::ContainerKindV1::Init => "INIT",
+            crate::ContainerKindV1::Sidecar => "SIDECAR",
+            crate::ContainerKindV1::Application => "APPLICATION",
+            crate::ContainerKindV1::Ephemeral => "EPHEMERAL",
+        }
+        .to_owned(),
+        image_digest: binding.image_digest.clone(),
+        pod_labels: binding
+            .pod_labels
+            .iter()
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect(),
     })
 }
 
@@ -1179,6 +1237,7 @@ mod tests {
                 reason_code: "INITIAL_STATE".to_owned(),
             })
             .collect(),
+            workload_targets: Vec::new(),
         };
 
         close_identity_claims(&mut registration);
@@ -1218,6 +1277,7 @@ mod tests {
             kernel_ready: true,
             effect_prevention_claims_enabled: true,
             capabilities: healthy_capabilities.clone(),
+            workload_targets: Vec::new(),
         };
 
         close_identity_claims(&mut registration);
@@ -1269,6 +1329,7 @@ mod tests {
                     reason_code: "NO_QUALIFIED_TARGET_CONTEXT_INSTALL".to_owned(),
                 },
             ],
+            workload_targets: Vec::new(),
         };
 
         close_kernel_claims(&mut registration, &readiness);

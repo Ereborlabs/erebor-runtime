@@ -9,8 +9,8 @@ use snafu::{ensure, ResultExt as _};
 
 use crate::error::{InvalidConfigurationSnafu, IoSnafu, JsonSnafu};
 use crate::{
-    AdministrativeHttpConfigV1, AllowedNodeIdentity, ControlPlane, ControlServerTls, Result,
-    TrustGenerationV1,
+    AdministrativeHttpConfigV1, AllowedNodeIdentity, ControlPlane, ControlServerTls, ControlStore,
+    PolicyDesiredStateConfigV1, PolicyDesiredStateOwner, Result, TrustGenerationV1,
 };
 
 #[derive(Clone, Debug, Deserialize)]
@@ -22,6 +22,10 @@ pub struct ControlConfig {
     pub trust: TrustGenerationV1,
     pub administrative_exec: Option<AdministrativeHttpConfigV1>,
     pub evidence_directory: PathBuf,
+    #[serde(default)]
+    pub control_store_directory: Option<PathBuf>,
+    #[serde(default)]
+    pub kubernetes_policy: Option<PolicyDesiredStateConfigV1>,
 }
 
 impl ControlConfig {
@@ -40,11 +44,19 @@ impl ControlConfig {
         ControlPlane,
         Option<AdministrativeHttpConfigV1>,
     )> {
-        let control = ControlPlane::with_evidence_directory(
+        let mut control = ControlPlane::with_evidence_directory(
             self.allowed_nodes,
             self.trust,
-            self.evidence_directory,
+            self.evidence_directory.clone(),
         )?;
+        if let Some(policy) = self.kubernetes_policy {
+            let store_directory = self
+                .control_store_directory
+                .unwrap_or_else(|| self.evidence_directory.join("control-store"));
+            let owner =
+                PolicyDesiredStateOwner::open(policy, ControlStore::open(store_directory)?)?;
+            control = control.with_policy_desired_state(owner);
+        }
         Ok((self.listen, self.tls, control, self.administrative_exec))
     }
 
@@ -61,6 +73,17 @@ impl ControlConfig {
                 reason: "evidence_directory must be absolute",
             }
         );
+        ensure!(
+            self.control_store_directory
+                .as_ref()
+                .is_none_or(|path| path.is_absolute()),
+            InvalidConfigurationSnafu {
+                reason: "control_store_directory must be absolute when it is set",
+            }
+        );
+        if let Some(policy) = &self.kubernetes_policy {
+            policy.validate()?;
+        }
         ensure!(
             self.trust.generation > 0 && is_sha256_hex(&self.trust.bundle_digest),
             InvalidConfigurationSnafu {

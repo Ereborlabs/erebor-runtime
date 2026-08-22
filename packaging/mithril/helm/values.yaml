@@ -9,4 +9,5 @@ control:
   enabled: true
   image: ereborlabs/mithril-control:dev
   configSecretName: mithril-control-config
+  statePersistentVolumeClaim: mithril-control-state
   port: 8443

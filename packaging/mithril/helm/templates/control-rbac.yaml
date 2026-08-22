@@ -1,0 +1,67 @@
+{{- if .Values.control.enabled }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: mithril-control
+automountServiceAccountToken: true
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: mithril-control-policy-reader
+rules:
+  - apiGroups: ["mithril.erebor.dev"]
+    resources: ["workloadprotectionprofiles"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["mithril.erebor.dev"]
+    resources: ["workloadprotectionprofiles/status", "workloadprotectionprofiles/finalizers"]
+    verbs: ["get", "patch", "update"]
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    resourceNames: [{{ .Release.Namespace | quote }}]
+    verbs: ["get"]
+  - apiGroups: [""]
+    resources: ["pods", "serviceaccounts"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["apps"]
+    resources: ["daemonsets", "deployments", "replicasets", "statefulsets"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["batch"]
+    resources: ["cronjobs", "jobs"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: mithril-control-policy-reader
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: mithril-control-policy-reader
+subjects:
+  - kind: ServiceAccount
+    name: mithril-control
+    namespace: {{ .Release.Namespace | quote }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: mithril-control-node-reader
+rules:
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: mithril-control-node-reader
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: mithril-control-node-reader
+subjects:
+  - kind: ServiceAccount
+    name: mithril-control
+    namespace: {{ .Release.Namespace | quote }}
+{{- end }}
