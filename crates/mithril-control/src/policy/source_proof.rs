@@ -1,6 +1,9 @@
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[derive(
+    Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize, JsonSchema,
+)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum ProviderV1 {
     Kubernetes,
@@ -14,7 +17,9 @@ pub enum ProviderV1 {
     Other,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[derive(
+    Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize, JsonSchema,
+)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum SourceAuthorityV1 {
     KernelDecision,
@@ -24,7 +29,9 @@ pub enum SourceAuthorityV1 {
     Unauthenticated,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[derive(
+    Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize, JsonSchema,
+)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum LocalSubjectBindingV1 {
     ExactTask,
@@ -34,7 +41,9 @@ pub enum LocalSubjectBindingV1 {
     None,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[derive(
+    Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize, JsonSchema,
+)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum RemoteSubjectBindingV1 {
     ExactRequest,
@@ -45,7 +54,9 @@ pub enum RemoteSubjectBindingV1 {
     None,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[derive(
+    Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize, JsonSchema,
+)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum OperationResultAuthorityV1 {
     PreEffectDecision,
@@ -56,7 +67,9 @@ pub enum OperationResultAuthorityV1 {
     Unknown,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[derive(
+    Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize, JsonSchema,
+)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum TemporalCoverageV1 {
     Complete,
@@ -64,7 +77,9 @@ pub enum TemporalCoverageV1 {
     Unknown,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[derive(
+    Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize, JsonSchema,
+)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum ProofIntegrityV1 {
     Signed,
@@ -73,7 +88,7 @@ pub enum ProofIntegrityV1 {
     Unverified,
 }
 
-#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ProofQualityPredicateV1 {
     pub source_authority: Vec<SourceAuthorityV1>,
@@ -84,7 +99,9 @@ pub struct ProofQualityPredicateV1 {
     pub integrity: Vec<ProofIntegrityV1>,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[derive(
+    Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize, JsonSchema,
+)]
 #[serde(deny_unknown_fields)]
 pub struct ProofQualityV1 {
     pub source_authority: SourceAuthorityV1,
@@ -109,7 +126,7 @@ impl ProofQualityV1 {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ResourceSelectorV1 {
     pub resource_kind_id: u16,
@@ -117,7 +134,9 @@ pub struct ResourceSelectorV1 {
     pub immutable_revision_digest: Option<String>,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[derive(
+    Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize, JsonSchema,
+)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum RuntimeOperationV1 {
     ContainerStart,
@@ -128,7 +147,9 @@ pub enum RuntimeOperationV1 {
     CheckpointRestore,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[derive(
+    Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize, JsonSchema,
+)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum AuthoritativeResultV1 {
     Admitted,
@@ -140,7 +161,9 @@ pub enum AuthoritativeResultV1 {
     Unknown,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[derive(
+    Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize, JsonSchema,
+)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum FindingStateV1 {
     Provisional,

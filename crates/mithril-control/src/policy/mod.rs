@@ -1,6 +1,7 @@
 mod artifact;
 mod canonical;
 mod compiler;
+mod kubernetes;
 mod path;
 mod rollback;
 mod signature;
@@ -15,6 +16,7 @@ pub use compiler::{
     CompiledDecisionCellV1, CompiledOperationV1, CompiledPhysicalResultV1, PolicyCompiler,
     StaticDecisionKeyV1, StaticExpandedProfileV1,
 };
+pub use kubernetes::*;
 pub use path::*;
 pub use rollback::{
     AntiRollbackStore, PendingProfileActivationV1, ProfileActivationMetadataV1,

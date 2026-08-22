@@ -1,10 +1,13 @@
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use super::source::SeverityV1;
 use super::source_proof::{ProofQualityPredicateV1, ProviderV1};
 use crate::{EvidenceFieldKeyV1, EvidenceSensitivityV1};
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[derive(
+    Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize, JsonSchema,
+)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum NotificationSinkV1 {
     Pager,
@@ -15,7 +18,9 @@ pub enum NotificationSinkV1 {
     Ticket,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[derive(
+    Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize, JsonSchema,
+)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum FindingGroupingFieldV1 {
     FindingId,
@@ -28,14 +33,14 @@ pub enum FindingGroupingFieldV1 {
     ProviderResourceId,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, JsonSchema)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum DeliveryFailureActionV1 {
     RecordRouteFailure,
     AlertLocalOnly,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct NotificationRouteV1 {
     pub route_id: String,
@@ -49,7 +54,8 @@ pub struct NotificationRouteV1 {
     pub delivery_failure_action: DeliveryFailureActionV1,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, JsonSchema)]
+#[schemars(transform = super::source::tagged_union_schema)]
 #[serde(tag = "kind", rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum ResponseActionSpecV1 {
     RestrictLineage,
@@ -87,7 +93,7 @@ pub enum ResponseActionSpecV1 {
     },
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, JsonSchema)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum ResponseApprovalV1 {
     Automatic,
@@ -95,7 +101,8 @@ pub enum ResponseApprovalV1 {
     Human,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, JsonSchema)]
+#[schemars(transform = super::source::tagged_union_schema)]
 #[serde(tag = "kind", rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum BlastRadiusLimitV1 {
     Local {
@@ -143,7 +150,7 @@ pub enum BlastRadiusLimitV1 {
     },
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, JsonSchema)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum TargetRevalidationV1 {
     ProcessPidfdTaskCookieStarttimeCgroupBinding,
@@ -155,7 +162,7 @@ pub enum TargetRevalidationV1 {
     ArtifactImmutableDigestAndStoreRevision,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, JsonSchema)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum PhysicalPostconditionV1 {
     ResponseSetInstalledAndDescendantsReconciled,
@@ -169,7 +176,7 @@ pub enum PhysicalPostconditionV1 {
     ProviderOperationSpecificPostcondition,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ResponseBindingV1 {
     pub binding_id: String,

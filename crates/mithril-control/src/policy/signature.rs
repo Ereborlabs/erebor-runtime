@@ -55,7 +55,7 @@ pub enum SignatureAlgorithmV1 {
     Ed25519,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ProfileSealRequestV1 {
     pub signing_key_id: String,
     pub issuer_id: String,
@@ -65,7 +65,7 @@ pub struct ProfileSealRequestV1 {
     pub registry_digests: RegistryDigestsV1,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct RegistryDigestsV1 {
     pub provider_numeric_registry_bundle_digest: String,
     pub required_capability_schema_digest: String,

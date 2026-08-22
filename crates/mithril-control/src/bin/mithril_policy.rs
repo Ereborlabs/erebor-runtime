@@ -12,6 +12,10 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    PrintCrd {
+        #[arg(long)]
+        output: Option<PathBuf>,
+    },
     Compile {
         #[arg(long)]
         source: PathBuf,
@@ -72,9 +76,18 @@ fn main() {
     }
 }
 
-fn run() -> mithril_control::Result<()> {
+fn run() -> Result<(), Box<dyn std::error::Error>> {
     let owner = PolicyArtifactOwner::default();
     match Cli::parse().command {
+        Command::PrintCrd { output } => {
+            let crd = mithril_control::policy_custom_resource_definition()?;
+            let document = format!("{}\n", serde_json::to_string_pretty(&crd)?);
+            if let Some(output) = output {
+                std::fs::write(output, document)?;
+            } else {
+                print!("{document}");
+            }
+        }
         Command::Compile {
             source,
             seal_request,
