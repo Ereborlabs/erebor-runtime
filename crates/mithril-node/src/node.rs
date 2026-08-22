@@ -896,15 +896,39 @@ impl NodeChassis {
         &mut self,
         envelope: crate::runtime_admission::RuntimeAdmissionEnvelope,
     ) {
-        let response = match self.admit_runtime_start(&envelope.request).await {
-            Ok(()) => crate::RuntimeAdmissionResponseV1 {
-                allowed: true,
-                reason_code: "ACTIVE_POLICY_AND_BINDING_VERIFIED".to_owned(),
-            },
-            Err(_error) => crate::RuntimeAdmissionResponseV1 {
+        let malformed = envelope.request.kubernetes_identity().is_err();
+        let reused = self.config.workload_bindings.iter().any(|binding| {
+            binding.scheduled_binding_authority_id.is_some()
+                && binding.container_id == envelope.request.container_id
+        });
+        let ready = {
+            let readiness = *self.readiness.borrow();
+            readiness.kernel_ready
+                && readiness.identity_ready
+                && readiness.effect_prevention_claims_enabled
+                && self.policy.is_some()
+                && crate::runtime_admission::resolve_scheduled_runtime_binding(
+                    &self.config.workload_bindings,
+                    &envelope.request,
+                )
+                .is_ok()
+        };
+        let response = if !malformed && !reused && !ready {
+            crate::RuntimeAdmissionResponseV1 {
                 allowed: false,
-                reason_code: "RUNTIME_ADMISSION_REJECTED".to_owned(),
-            },
+                reason_code: crate::runtime_admission::POLICY_CONVERGENCE_PENDING.to_owned(),
+            }
+        } else {
+            match self.admit_runtime_start(&envelope.request).await {
+                Ok(()) => crate::RuntimeAdmissionResponseV1 {
+                    allowed: true,
+                    reason_code: "ACTIVE_POLICY_AND_BINDING_VERIFIED".to_owned(),
+                },
+                Err(_error) => crate::RuntimeAdmissionResponseV1 {
+                    allowed: false,
+                    reason_code: "RUNTIME_ADMISSION_REJECTED".to_owned(),
+                },
+            }
         };
         let _result = envelope.response.send(response);
     }

@@ -19,6 +19,7 @@ pub const POD_NAMESPACE_ANNOTATION: &str = "io.kubernetes.cri.sandbox-namespace"
 pub const CONTAINER_NAME_ANNOTATION: &str = "io.kubernetes.cri.container-name";
 pub const IMAGE_NAME_ANNOTATION: &str = "io.kubernetes.cri.image-name";
 pub const SANDBOX_ID_ANNOTATION: &str = "io.kubernetes.cri.sandbox-id";
+pub(crate) const POLICY_CONVERGENCE_PENDING: &str = "POLICY_CONVERGENCE_PENDING";
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -454,22 +455,7 @@ async fn handle_connection(
         let request = serde_json::from_slice(&bytes).context(JsonSnafu {
             path: "runtime-admission-request",
         })?;
-        let (response, receiver) = oneshot::channel();
-        requests
-            .send(RuntimeAdmissionEnvelope { request, response })
-            .await
-            .map_err(|_closed| {
-                IdentityStateSnafu {
-                    reason: "runtime admission owner is unavailable".to_owned(),
-                }
-                .build()
-            })?;
-        receiver.await.map_err(|_closed| {
-            IdentityStateSnafu {
-                reason: "runtime admission owner closed the request".to_owned(),
-            }
-            .build()
-        })
+        dispatch_runtime_admission(request, requests).await
     })
     .await
     .unwrap_or_else(|_elapsed| {
@@ -491,6 +477,37 @@ async fn handle_connection(
         .context(IoSnafu { path: socket_path })
 }
 
+async fn dispatch_runtime_admission(
+    request: RuntimeAdmissionRequestV1,
+    requests: mpsc::Sender<RuntimeAdmissionEnvelope>,
+) -> Result<RuntimeAdmissionResponseV1> {
+    loop {
+        let (response, receiver) = oneshot::channel();
+        requests
+            .send(RuntimeAdmissionEnvelope {
+                request: request.clone(),
+                response,
+            })
+            .await
+            .map_err(|_closed| {
+                IdentityStateSnafu {
+                    reason: "runtime admission owner is unavailable".to_owned(),
+                }
+                .build()
+            })?;
+        let response = receiver.await.map_err(|_closed| {
+            IdentityStateSnafu {
+                reason: "runtime admission owner closed the request".to_owned(),
+            }
+            .build()
+        })?;
+        if response.reason_code != POLICY_CONVERGENCE_PENDING {
+            return Ok(response);
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
@@ -498,9 +515,11 @@ mod tests {
     use std::time::Duration;
 
     use super::{
-        resolve_scheduled_runtime_binding, runtime_binding_id, scheduled_authority_binding_id,
-        submit_runtime_admission, RuntimeAdmissionRequestV1, CONTAINER_NAME_ANNOTATION,
-        IMAGE_NAME_ANNOTATION, POD_NAMESPACE_ANNOTATION, POD_UID_ANNOTATION, SANDBOX_ID_ANNOTATION,
+        dispatch_runtime_admission, resolve_scheduled_runtime_binding, runtime_binding_id,
+        scheduled_authority_binding_id, submit_runtime_admission, RuntimeAdmissionRequestV1,
+        RuntimeAdmissionResponseV1, CONTAINER_NAME_ANNOTATION, IMAGE_NAME_ANNOTATION,
+        POD_NAMESPACE_ANNOTATION, POD_UID_ANNOTATION, POLICY_CONVERGENCE_PENDING,
+        SANDBOX_ID_ANNOTATION,
     };
     use crate::{ContainerKindV1, WorkloadBindingConfig};
 
@@ -634,6 +653,55 @@ mod tests {
             tokio::time::timeout(Duration::from_millis(20), std::future::pending::<()>(),)
                 .await
                 .is_err()
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn one_hook_call_waits_for_policy_convergence() -> crate::Result<()> {
+        let (sender, mut receiver) = tokio::sync::mpsc::channel(2);
+        let task = tokio::spawn(dispatch_runtime_admission(request(), sender));
+        let first = receiver
+            .recv()
+            .await
+            .ok_or_else(|| crate::Error::IdentityState {
+                reason: "runtime admission test lost its first request".to_owned(),
+                location: snafu::Location::default(),
+            })?;
+        first
+            .response
+            .send(RuntimeAdmissionResponseV1 {
+                allowed: false,
+                reason_code: POLICY_CONVERGENCE_PENDING.to_owned(),
+            })
+            .map_err(|_| crate::Error::IdentityState {
+                reason: "runtime admission test lost its pending response".to_owned(),
+                location: snafu::Location::default(),
+            })?;
+        let second = receiver
+            .recv()
+            .await
+            .ok_or_else(|| crate::Error::IdentityState {
+                reason: "runtime admission test did not retry after pending policy".to_owned(),
+                location: snafu::Location::default(),
+            })?;
+        second
+            .response
+            .send(RuntimeAdmissionResponseV1 {
+                allowed: true,
+                reason_code: "ACTIVE_POLICY_AND_BINDING_VERIFIED".to_owned(),
+            })
+            .map_err(|_| crate::Error::IdentityState {
+                reason: "runtime admission test lost its allowed response".to_owned(),
+                location: snafu::Location::default(),
+            })?;
+        assert!(
+            task.await
+                .map_err(|error| crate::Error::IdentityState {
+                    reason: format!("runtime admission test task failed: {error}"),
+                    location: snafu::Location::default(),
+                })??
+                .allowed
         );
         Ok(())
     }
