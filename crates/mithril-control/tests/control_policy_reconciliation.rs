@@ -11,6 +11,8 @@ use mithril_control::{
 use serde_json::json;
 use tempfile::TempDir;
 
+type TestResult<T = ()> = Result<T, Box<dyn std::error::Error>>;
+
 const POLICY: &str = include_str!("fixtures/policy-v1.yaml");
 const TENANT_ID: &str = "10000000-0000-4000-8000-000000000001";
 const CLUSTER_UID: &str = "55555555-5555-4555-8555-555555555555";
@@ -18,9 +20,11 @@ const NAMESPACE_UID: &str = "66666666-6666-4666-8666-666666666666";
 const OBJECT_UID: &str = "30000000-0000-4000-8000-000000000001";
 const NOW: i64 = 1_800_000_000_000_000_000;
 
-fn policy() -> PolicyDocumentV1 {
-    PolicyDocumentV1::parse(Path::new("policy-v1.yaml"), POLICY.as_bytes())
-        .expect("the policy fixture must parse")
+fn policy() -> TestResult<PolicyDocumentV1> {
+    Ok(PolicyDocumentV1::parse(
+        Path::new("policy-v1.yaml"),
+        POLICY.as_bytes(),
+    )?)
 }
 
 fn resource(
@@ -29,8 +33,8 @@ fn resource(
     uid: &str,
     generation: u64,
     deleting: bool,
-) -> WorkloadProtectionProfile {
-    let digest = canonical_policy_spec_digest(document).expect("the policy must canonicalize");
+) -> TestResult<WorkloadProtectionProfile> {
+    let digest = canonical_policy_spec_digest(document)?;
     let mut metadata = json!({
         "name": name,
         "namespace": "tenant-a",
@@ -42,13 +46,12 @@ fn resource(
     if deleting {
         metadata["deletionTimestamp"] = json!("2027-01-15T00:00:00Z");
     }
-    serde_json::from_value(json!({
+    Ok(serde_json::from_value(json!({
         "apiVersion": POLICY_API_VERSION,
         "kind": POLICY_KIND,
         "metadata": metadata,
         "spec": document,
-    }))
-    .expect("the policy resource must decode")
+    }))?)
 }
 
 fn make_owner(store: ControlStore) -> PolicyDesiredStateOwner {
@@ -110,18 +113,16 @@ fn inventory(binding_digest: &str) -> Vec<WorkloadTargetFactV1> {
 }
 
 #[test]
-fn create_update_duplicate_and_restart_preserve_one_monotonic_rollout() {
-    let directory = TempDir::new().expect("a temporary directory is required");
-    let store = ControlStore::open(directory.path()).expect("the store must open");
+fn create_update_duplicate_and_restart_preserve_one_monotonic_rollout() -> TestResult {
+    let directory = TempDir::new()?;
+    let store = ControlStore::open(directory.path())?;
     let owner = make_owner(store.clone());
-    let first_policy = policy();
-    let first = owner
-        .reconcile(
-            &resource(&first_policy, "profile", OBJECT_UID, 1, false),
-            &inventory(&"1".repeat(64)),
-            NOW,
-        )
-        .expect("the first revision must reconcile");
+    let first_policy = policy()?;
+    let first = owner.reconcile(
+        &resource(&first_policy, "profile", OBJECT_UID, 1, false)?,
+        &inventory(&"1".repeat(64)),
+        NOW,
+    )?;
     assert_eq!(first.bundles.len(), 1);
     assert_eq!(
         first.bundles[0].candidate.operation,
@@ -131,26 +132,22 @@ fn create_update_duplicate_and_restart_preserve_one_monotonic_rollout() {
     assert_eq!(first.bundles[0].profile_artifact.header.issuer_sequence, 1);
 
     let first_commit = store.commit_index();
-    let duplicate = owner
-        .reconcile(
-            &resource(&first_policy, "profile", OBJECT_UID, 1, false),
-            &inventory(&"1".repeat(64)),
-            NOW,
-        )
-        .expect("a duplicate watch event must be idempotent");
+    let duplicate = owner.reconcile(
+        &resource(&first_policy, "profile", OBJECT_UID, 1, false)?,
+        &inventory(&"1".repeat(64)),
+        NOW,
+    )?;
     assert_eq!(duplicate, first);
     assert_eq!(store.commit_index(), first_commit);
 
     let mut second_policy = first_policy;
     second_policy.metadata.profile_version = 2;
     second_policy.rollout.rollout_generation = 2;
-    let second = owner
-        .reconcile(
-            &resource(&second_policy, "profile", OBJECT_UID, 2, false),
-            &inventory(&"1".repeat(64)),
-            NOW + 1,
-        )
-        .expect("the update must reconcile");
+    let second = owner.reconcile(
+        &resource(&second_policy, "profile", OBJECT_UID, 2, false)?,
+        &inventory(&"1".repeat(64)),
+        NOW + 1,
+    )?;
     assert_eq!(
         second.bundles[0].candidate.operation,
         PolicyDeliveryOperationV1::Replace
@@ -166,7 +163,7 @@ fn create_update_duplicate_and_restart_preserve_one_monotonic_rollout() {
     );
 
     let stale = owner.reconcile(
-        &resource(&second_policy, "profile", OBJECT_UID, 1, false),
+        &resource(&second_policy, "profile", OBJECT_UID, 1, false)?,
         &inventory(&"1".repeat(64)),
         NOW + 2,
     );
@@ -174,31 +171,28 @@ fn create_update_duplicate_and_restart_preserve_one_monotonic_rollout() {
 
     drop(owner);
     drop(store);
-    let reopened = ControlStore::open(directory.path()).expect("the store must replay");
-    let restarted = make_owner(reopened.clone())
-        .reconcile(
-            &resource(&second_policy, "profile", OBJECT_UID, 2, false),
-            &inventory(&"1".repeat(64)),
-            NOW + 3,
-        )
-        .expect("restart reconciliation must be idempotent");
+    let reopened = ControlStore::open(directory.path())?;
+    let restarted = make_owner(reopened.clone()).reconcile(
+        &resource(&second_policy, "profile", OBJECT_UID, 2, false)?,
+        &inventory(&"1".repeat(64)),
+        NOW + 3,
+    )?;
     assert_eq!(restarted.bundles, second.bundles);
     assert_eq!(reopened.commit_index(), 6);
+    Ok(())
 }
 
 #[test]
-fn duplicate_profile_and_exact_workload_claims_do_not_replace_valid_rollout() {
-    let directory = TempDir::new().expect("a temporary directory is required");
-    let store = ControlStore::open(directory.path()).expect("the store must open");
+fn duplicate_profile_and_exact_workload_claims_do_not_replace_valid_rollout() -> TestResult {
+    let directory = TempDir::new()?;
+    let store = ControlStore::open(directory.path())?;
     let owner = make_owner(store.clone());
-    let first_policy = policy();
-    let first = owner
-        .reconcile(
-            &resource(&first_policy, "one", OBJECT_UID, 1, false),
-            &inventory(&"1".repeat(64)),
-            NOW,
-        )
-        .expect("the first profile must reconcile");
+    let first_policy = policy()?;
+    let first = owner.reconcile(
+        &resource(&first_policy, "one", OBJECT_UID, 1, false)?,
+        &inventory(&"1".repeat(64)),
+        NOW,
+    )?;
 
     let duplicate_profile = owner.reconcile(
         &resource(
@@ -207,12 +201,14 @@ fn duplicate_profile_and_exact_workload_claims_do_not_replace_valid_rollout() {
             "30000000-0000-4000-8000-000000000002",
             1,
             false,
-        ),
+        )?,
         &inventory(&"2".repeat(64)),
         NOW + 1,
     );
+    let Err(duplicate_profile) = duplicate_profile else {
+        return Err("a duplicate profile owner must fail".into());
+    };
     assert!(duplicate_profile
-        .expect_err("a duplicate profile owner must fail")
         .to_string()
         .contains("CFG_DUPLICATE_PROFILE_OWNER"));
 
@@ -225,42 +221,39 @@ fn duplicate_profile_and_exact_workload_claims_do_not_replace_valid_rollout() {
             "30000000-0000-4000-8000-000000000003",
             1,
             false,
-        ),
+        )?,
         &inventory(&"1".repeat(64)),
         NOW + 2,
     );
+    let Err(overlap) = overlap else {
+        return Err("an exact workload overlap must fail".into());
+    };
     assert!(overlap
-        .expect_err("an exact workload overlap must fail")
         .to_string()
         .contains("CFG_OVERLAPPING_WORKLOAD_OWNER"));
     assert_eq!(
-        store
-            .bundle_for_node("node-a")
-            .expect("the bundle query must succeed"),
+        store.bundle_for_node("node-a")?,
         Some(first.bundles[0].clone())
     );
+    Ok(())
 }
 
 #[test]
-fn deletion_names_exact_predecessor_and_recreate_gets_a_new_source_identity() {
-    let directory = TempDir::new().expect("a temporary directory is required");
-    let store = ControlStore::open(directory.path()).expect("the store must open");
+fn deletion_names_exact_predecessor_and_recreate_gets_a_new_source_identity() -> TestResult {
+    let directory = TempDir::new()?;
+    let store = ControlStore::open(directory.path())?;
     let owner = make_owner(store);
-    let policy = policy();
-    let first = owner
-        .reconcile(
-            &resource(&policy, "profile", OBJECT_UID, 1, false),
-            &inventory(&"1".repeat(64)),
-            NOW,
-        )
-        .expect("the first profile must reconcile");
-    let retiring = owner
-        .reconcile(
-            &resource(&policy, "profile", OBJECT_UID, 2, true),
-            &[],
-            NOW + 1,
-        )
-        .expect("deletion must create a retirement candidate");
+    let policy = policy()?;
+    let first = owner.reconcile(
+        &resource(&policy, "profile", OBJECT_UID, 1, false)?,
+        &inventory(&"1".repeat(64)),
+        NOW,
+    )?;
+    let retiring = owner.reconcile(
+        &resource(&policy, "profile", OBJECT_UID, 2, true)?,
+        &[],
+        NOW + 1,
+    )?;
     assert_eq!(retiring.bundles.len(), 1);
     assert_eq!(
         retiring.bundles[0].candidate.operation,
@@ -274,19 +267,17 @@ fn deletion_names_exact_predecessor_and_recreate_gets_a_new_source_identity() {
         Some(first.bundles[0].candidate.candidate_content_id.as_str())
     );
 
-    let recreated = owner
-        .reconcile(
-            &resource(
-                &policy,
-                "profile",
-                "30000000-0000-4000-8000-000000000004",
-                1,
-                false,
-            ),
-            &inventory(&"1".repeat(64)),
-            NOW + 2,
-        )
-        .expect("a recreate after retirement input must reconcile");
+    let recreated = owner.reconcile(
+        &resource(
+            &policy,
+            "profile",
+            "30000000-0000-4000-8000-000000000004",
+            1,
+            false,
+        )?,
+        &inventory(&"1".repeat(64)),
+        NOW + 2,
+    )?;
     assert_ne!(
         recreated.source_revision.policy_source_revision_id,
         first.source_revision.policy_source_revision_id
@@ -295,24 +286,24 @@ fn deletion_names_exact_predecessor_and_recreate_gets_a_new_source_identity() {
         recreated.bundles[0].candidate.operation,
         PolicyDeliveryOperationV1::Activate
     );
+    Ok(())
 }
 
 #[test]
-fn corrupt_or_incompatible_commit_chain_blocks_store_recovery() {
-    let directory = TempDir::new().expect("a temporary directory is required");
-    let store = ControlStore::open(directory.path()).expect("the store must open");
-    make_owner(store.clone())
-        .reconcile(
-            &resource(&policy(), "profile", OBJECT_UID, 1, false),
-            &inventory(&"1".repeat(64)),
-            NOW,
-        )
-        .expect("the policy must reconcile");
+fn corrupt_or_incompatible_commit_chain_blocks_store_recovery() -> TestResult {
+    let directory = TempDir::new()?;
+    let store = ControlStore::open(directory.path())?;
+    make_owner(store.clone()).reconcile(
+        &resource(&policy()?, "profile", OBJECT_UID, 1, false)?,
+        &inventory(&"1".repeat(64)),
+        NOW,
+    )?;
     drop(store);
 
     let first_commit = directory.path().join("commits/00000000000000000001.json");
-    let bytes = std::fs::read_to_string(&first_commit).expect("the commit must be readable");
+    let bytes = std::fs::read_to_string(&first_commit)?;
     let incompatible = bytes.replacen("\"schema_version\":1", "\"schema_version\":2", 1);
-    std::fs::write(&first_commit, incompatible).expect("the temporary commit must be writable");
+    std::fs::write(&first_commit, incompatible)?;
     assert!(ControlStore::open(directory.path()).is_err());
+    Ok(())
 }
