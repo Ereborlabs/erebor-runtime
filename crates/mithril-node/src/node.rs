@@ -73,6 +73,8 @@ pub struct NodeChassis {
     connector: NodeControlConnector,
     registration: NodeRegistration,
     local_server: Option<crate::RuntimeObservationServer>,
+    runtime_admission_server: Option<crate::runtime_admission::RuntimeAdmissionServer>,
+    runtime_admission_requests: Option<crate::runtime_admission::RuntimeAdmissionReceiver>,
     trust: TrustCache,
     bindings: WorkloadBindingOwner,
     identity: NativeSecurityStateOwner,
@@ -98,8 +100,6 @@ impl NodeChassis {
         let trust = TrustCache::load(&config.state_directory)?;
         let policy_delivery =
             crate::policy_delivery::NodePolicyDeliveryOwner::load(&config.state_directory)?;
-        policy_delivery.restore_config(&mut config, &trust, crate::policy::current_utc_ns()?)?;
-        config.validate()?;
         if !held_initial_pids.is_empty() {
             snafu::ensure!(
                 config.container_runtime.is_none()
@@ -129,6 +129,14 @@ impl NodeChassis {
             }
         );
         let label_epoch = NodeEpochs::label_epoch(&config.state_directory, recover_identity)?;
+        policy_delivery.restore_config_for_session(
+            &mut config,
+            &trust,
+            crate::policy::current_utc_ns()?,
+            &boot_id,
+            label_epoch,
+        )?;
+        config.validate()?;
         let identity = match config.container_runtime.as_ref() {
             Some(runtime) => NativeSecurityStateOwner::for_effect_controller(
                 node_boot_id,
@@ -185,12 +193,13 @@ impl NodeChassis {
             policy_delivery.recover_pending_activation(&host, &config)?;
         }
         let dynamic_policy_capable = config.evidence.is_some()
-            && config.workload_bindings.iter().any(|binding| {
-                !binding.cluster_uid.is_empty()
-                    && !binding.namespace_uid.is_empty()
-                    && !binding.controller_uid.is_empty()
-                    && !binding.service_account_uid.is_empty()
-            });
+            && (config.runtime_admission.is_some()
+                || config.workload_bindings.iter().any(|binding| {
+                    !binding.cluster_uid.is_empty()
+                        && !binding.namespace_uid.is_empty()
+                        && !binding.controller_uid.is_empty()
+                        && !binding.service_account_uid.is_empty()
+                }));
         let administrative_required = policy
             .as_ref()
             .is_some_and(crate::NodePolicyGenerationOwner::administrative_enabled);
@@ -368,6 +377,14 @@ impl NodeChassis {
                 )
             })
             .transpose()?;
+        let (runtime_admission_server, runtime_admission_requests) = config
+            .runtime_admission
+            .as_ref()
+            .map(crate::runtime_admission::RuntimeAdmissionServer::bind)
+            .transpose()?
+            .map_or((None, None), |(server, requests)| {
+                (Some(server), Some(requests))
+            });
         Ok(Self {
             config,
             effect_reader,
@@ -375,6 +392,8 @@ impl NodeChassis {
             connector,
             registration,
             local_server,
+            runtime_admission_server,
+            runtime_admission_requests,
             trust,
             bindings,
             identity,
@@ -411,6 +430,10 @@ impl NodeChassis {
         let mut local_task = self.local_server.take().map(|server| {
             let local_shutdown = shutdown.clone();
             tokio::spawn(server.serve(local_shutdown))
+        });
+        let mut runtime_admission_task = self.runtime_admission_server.take().map(|server| {
+            let runtime_shutdown = shutdown.clone();
+            tokio::spawn(server.serve(runtime_shutdown))
         });
         let mut backoff = self.config.control.reconnect_minimum();
         let mut kernel_healthy = true;
@@ -454,6 +477,10 @@ impl NodeChassis {
                 changed = shutdown.changed() => {
                     let _result = changed;
                     break;
+                }
+                request = next_runtime_admission(&mut self.runtime_admission_requests) => {
+                    self.answer_runtime_admission(request).await;
+                    continue 'running;
                 }
                 result = effect_reader_finished(&mut effect_task) => {
                     let _result = self.observations.mark_coverage_gapped(
@@ -643,6 +670,9 @@ impl NodeChassis {
                                 let _result = changed;
                                 break 'running;
                             }
+                            request = next_runtime_admission(&mut self.runtime_admission_requests) => {
+                                self.answer_runtime_admission(request).await;
+                            }
                             result = effect_reader_finished(&mut effect_task) => {
                                 let _result = self.observations.mark_coverage_gapped(
                                     CoverageGapReasonV1::ReaderStopped,
@@ -763,6 +793,9 @@ impl NodeChassis {
                         let _result = changed;
                         break 'running;
                     }
+                    request = next_runtime_admission(&mut self.runtime_admission_requests) => {
+                        self.answer_runtime_admission(request).await;
+                    }
                     result = effect_reader_finished(&mut effect_task) => {
                         let _result = self.observations.mark_coverage_gapped(
                             CoverageGapReasonV1::ReaderStopped,
@@ -845,9 +878,90 @@ impl NodeChassis {
         } else if let Some(task) = local_task {
             task.await.context(LocalTaskSnafu)??;
         }
+        if run_error.is_some() {
+            if let Some(task) = runtime_admission_task.take() {
+                task.abort();
+                let _result = task.await;
+            }
+        } else if let Some(task) = runtime_admission_task {
+            task.await.context(LocalTaskSnafu)??;
+        }
         if let Some(error) = run_error {
             return Err(error);
         }
+        Ok(())
+    }
+
+    async fn answer_runtime_admission(
+        &mut self,
+        envelope: crate::runtime_admission::RuntimeAdmissionEnvelope,
+    ) {
+        let response = match self.admit_runtime_start(&envelope.request).await {
+            Ok(()) => crate::RuntimeAdmissionResponseV1 {
+                allowed: true,
+                reason_code: "ACTIVE_POLICY_AND_BINDING_VERIFIED".to_owned(),
+            },
+            Err(_error) => crate::RuntimeAdmissionResponseV1 {
+                allowed: false,
+                reason_code: "RUNTIME_ADMISSION_REJECTED".to_owned(),
+            },
+        };
+        let _result = envelope.response.send(response);
+    }
+
+    async fn admit_runtime_start(
+        &mut self,
+        request: &crate::RuntimeAdmissionRequestV1,
+    ) -> Result<()> {
+        let readiness = *self.readiness.borrow();
+        snafu::ensure!(
+            readiness.kernel_ready
+                && readiness.identity_ready
+                && readiness.effect_prevention_claims_enabled
+                && self.policy.is_some(),
+            IdentityStateSnafu {
+                reason: "runtime admission has no healthy active prevention generation",
+            }
+        );
+        let mut scheduled = crate::runtime_admission::resolve_scheduled_runtime_binding(
+            &self.config.workload_bindings,
+            request,
+        )?;
+        let mut dynamic = self.config.clone();
+        dynamic.workload_bindings[scheduled.binding_index] = scheduled.resolved.clone();
+        dynamic.validate()?;
+        self.bindings
+            .verify_runtime_admission(&mut scheduled.resolved)
+            .await?;
+        dynamic.workload_bindings[scheduled.binding_index] = scheduled.resolved.clone();
+        let Some(host) = self.host.as_ref() else {
+            self.bindings.cancel_runtime_admission();
+            return IdentityStateSnafu {
+                reason: "runtime admission has no live kernel host".to_owned(),
+            }
+            .fail();
+        };
+        if let Some(previous) = scheduled.previous_binding_id.as_deref() {
+            if let Err(error) = self.bindings.retire_binding_id(host, previous) {
+                self.bindings.cancel_runtime_admission();
+                return Err(error);
+            }
+        }
+        self.bindings.publish_held_activated_root(
+            host,
+            &scheduled.resolved,
+            request.initial_pid,
+        )?;
+        if let Err(error) = self
+            .policy_delivery
+            .record_runtime_binding(&scheduled.resolved)
+        {
+            let _result = self
+                .bindings
+                .retire_binding_id(host, &scheduled.resolved.binding_id);
+            return Err(error);
+        }
+        self.config = dynamic;
         Ok(())
     }
 
@@ -924,13 +1038,16 @@ impl NodeChassis {
             self.node_boot_id,
             self.label_epoch,
         )?;
-        self.policy_delivery.prepare_activation(
+        let node_boot_id = self.node_boot_id.to_be_bytes();
+        self.policy_delivery.prepare_activation_for_session(
             bundle,
             &self.trust,
             &self.config,
             &self.registration.capabilities,
             generation,
             crate::policy::current_utc_ns()?,
+            &node_boot_id,
+            self.label_epoch,
         )
     }
 
@@ -1245,6 +1362,17 @@ async fn effect_reader_finished(
         reason: "effect observation reader stopped before node shutdown",
     }
     .fail()
+}
+
+async fn next_runtime_admission(
+    receiver: &mut Option<crate::runtime_admission::RuntimeAdmissionReceiver>,
+) -> crate::runtime_admission::RuntimeAdmissionEnvelope {
+    if let Some(receiver) = receiver {
+        if let Some(request) = receiver.receive().await {
+            return request;
+        }
+    }
+    std::future::pending().await
 }
 
 fn ensure_request_id(request_id: &[u8]) -> std::result::Result<(), ()> {

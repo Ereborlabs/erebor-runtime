@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -14,7 +15,7 @@ use tower::service_fn;
 
 use crate::error::{
     ContainerRuntimeProcessSnafu, ContainerRuntimeRpcSnafu, ContainerRuntimeTransportSnafu,
-    IdentityStateSnafu,
+    IdentityStateSnafu, IoSnafu,
 };
 use crate::{ContainerRuntimeConfig, Result, WorkloadBindingConfig};
 
@@ -198,6 +199,132 @@ impl ContainerRuntimeInventory {
         Ok(identities)
     }
 
+    pub(super) async fn inspect_created_for_admission(
+        &mut self,
+        expected: &WorkloadBindingConfig,
+    ) -> Result<RuntimeContainerIdentity> {
+        let listed = self
+            .client
+            .list_containers(ListContainersRequest { filter: None })
+            .await
+            .context(ContainerRuntimeRpcSnafu)?
+            .into_inner()
+            .containers
+            .into_iter()
+            .filter(|container| container.id == expected.container_id)
+            .collect::<Vec<_>>();
+        ensure!(
+            listed.len() == 1
+                && listed[0].state == ContainerState::ContainerCreated as i32
+                && listed[0].pod_sandbox_id == expected.sandbox_id,
+            IdentityStateSnafu {
+                reason: "runtime admission container is not one exact Created CRI record",
+            }
+        );
+        let container = listed.into_iter().next().ok_or_else(|| {
+            IdentityStateSnafu {
+                reason: "runtime admission lost its CRI container".to_owned(),
+            }
+            .build()
+        })?;
+        let response = self
+            .client
+            .container_status(ContainerStatusRequest {
+                container_id: expected.container_id.clone(),
+                verbose: true,
+            })
+            .await
+            .context(ContainerRuntimeRpcSnafu)?
+            .into_inner();
+        let status = response.status.ok_or_else(|| {
+            IdentityStateSnafu {
+                reason: "runtime admission CRI response has no status".to_owned(),
+            }
+            .build()
+        })?;
+        let metadata = status.metadata.as_ref().ok_or_else(|| {
+            IdentityStateSnafu {
+                reason: "runtime admission CRI status has no metadata".to_owned(),
+            }
+            .build()
+        })?;
+        let generation = u64::try_from(status.created_at)
+            .ok()
+            .filter(|generation| *generation > 0)
+            .ok_or_else(|| {
+                IdentityStateSnafu {
+                    reason: "runtime admission CRI creation time is invalid".to_owned(),
+                }
+                .build()
+            })?;
+        let pod_uid = status.labels.get(POD_UID_LABEL).ok_or_else(|| {
+            IdentityStateSnafu {
+                reason: "runtime admission CRI status has no Pod UID".to_owned(),
+            }
+            .build()
+        })?;
+        let namespace = status.labels.get(POD_NAMESPACE_LABEL).ok_or_else(|| {
+            IdentityStateSnafu {
+                reason: "runtime admission CRI status has no namespace".to_owned(),
+            }
+            .build()
+        })?;
+        let container_name = status.labels.get(CONTAINER_NAME_LABEL).ok_or_else(|| {
+            IdentityStateSnafu {
+                reason: "runtime admission CRI status has no container name".to_owned(),
+            }
+            .build()
+        })?;
+        ensure!(
+            status.id == expected.container_id
+                && status.state == ContainerState::ContainerCreated as i32
+                && namespace == &expected.namespace
+                && pod_uid == &expected.pod_uid
+                && container_name == &expected.container_name
+                && metadata.name == expected.container_name
+                && status.image_ref.ends_with(&expected.image_digest),
+            IdentityStateSnafu {
+                reason: "runtime admission CRI identity differs from signed workload material",
+            }
+        );
+        let process = runtime_process_from_info(
+            &response.info,
+            &self.cgroup_root,
+            RuntimeContainerState::Created,
+        )?;
+        let expected_cgroup = expected.root_cgroup_path.as_ref().ok_or_else(|| {
+            IdentityStateSnafu {
+                reason: "runtime admission has no expected cgroup".to_owned(),
+            }
+            .build()
+        })?;
+        ensure!(
+            process.init_pid == 0
+                && fs::canonicalize(&process.cgroup_path).context(IoSnafu {
+                    path: &process.cgroup_path,
+                })? == fs::canonicalize(expected_cgroup).context(IoSnafu {
+                    path: expected_cgroup,
+                })?,
+            IdentityStateSnafu {
+                reason: "runtime admission CRI cgroup differs from the held initial process",
+            }
+        );
+        Ok(RuntimeContainerIdentity {
+            full_container_id: status.id,
+            namespace: namespace.clone(),
+            pod_uid: pod_uid.clone(),
+            sandbox_id: container.pod_sandbox_id,
+            container_name: container_name.clone(),
+            image_digest: expected.image_digest.clone(),
+            generation,
+            cgroup_path: process.cgroup_path,
+            init_pid: process.init_pid,
+            working_directory: process.working_directory,
+            path_entries: process.path_entries,
+            state: RuntimeContainerState::Created,
+        })
+    }
+
     async fn inspect(
         &mut self,
         container: k8s_cri::v1::Container,
@@ -268,7 +395,7 @@ impl ContainerRuntimeInventory {
                 && container.pod_sandbox_id == expected.sandbox_id
                 && container_name == &expected.container_name
                 && metadata.name == expected.container_name
-                && status.image_ref == expected.image_digest,
+                && status.image_ref.ends_with(&expected.image_digest),
             IdentityStateSnafu {
                 reason: format!(
                     "CRI identity for `{}` differs from its workload binding",
@@ -283,7 +410,7 @@ impl ContainerRuntimeInventory {
             pod_uid: pod_uid.clone(),
             sandbox_id: container.pod_sandbox_id,
             container_name: container_name.clone(),
-            image_digest: status.image_ref,
+            image_digest: expected.image_digest.clone(),
             generation,
             cgroup_path: runtime.cgroup_path,
             init_pid: runtime.init_pid,
@@ -581,6 +708,8 @@ mod tests {
     fn cri_running_container_resolves_local_cgroup_conservatively() {
         let configured = WorkloadBindingConfig {
             binding_id: "11111111-1111-4111-8111-111111111111".to_owned(),
+            scheduled_binding_authority_id: None,
+            scheduled_target_digest: None,
             execution_set_id: "22222222-2222-4222-8222-222222222222".to_owned(),
             protected_scope_id: "44444444-4444-4444-8444-444444444444".to_owned(),
             workload_selector_id: "worker".to_owned(),

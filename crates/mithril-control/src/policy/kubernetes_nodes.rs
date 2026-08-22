@@ -263,24 +263,33 @@ pub fn node_projection_patch(
             value: Some("true".to_owned()),
         });
     }
-    let (ready_label, node_id, node_uid, boot_id, label_epoch) = session.filter(|_| ready).map_or(
-        (
-            Value::Null,
-            Value::Null,
-            Value::Null,
-            Value::Null,
-            Value::Null,
-        ),
-        |session| {
-            (
-                json!("true"),
-                json!(session.node_id),
-                json!(session.kubernetes_node_uid),
-                json!(hex::encode(&session.node_boot_id)),
-                json!(session.label_epoch.to_string()),
-            )
-        },
-    );
+    let retained_identity = eligible
+        .then_some(node.metadata.annotations.as_ref())
+        .flatten()
+        .filter(|annotations| {
+            annotations.get(KUBERNETES_NODE_UID_ANNOTATION) == node.metadata.uid.as_ref()
+        });
+    let (ready_label, node_id, node_uid, boot_id, label_epoch) =
+        session.filter(|_| ready).map_or_else(
+            || {
+                (
+                    Value::Null,
+                    retained_annotation(retained_identity, KUBERNETES_NODE_ID_ANNOTATION),
+                    retained_annotation(retained_identity, KUBERNETES_NODE_UID_ANNOTATION),
+                    retained_annotation(retained_identity, KUBERNETES_NODE_BOOT_ANNOTATION),
+                    retained_annotation(retained_identity, KUBERNETES_LABEL_EPOCH_ANNOTATION),
+                )
+            },
+            |session| {
+                (
+                    json!("true"),
+                    json!(session.node_id),
+                    json!(session.kubernetes_node_uid),
+                    json!(hex::encode(&session.node_boot_id)),
+                    json!(session.label_epoch.to_string()),
+                )
+            },
+        );
     json!({
         "metadata": {
             "labels": { KUBERNETES_READY_LABEL: ready_label },
@@ -293,6 +302,12 @@ pub fn node_projection_patch(
         },
         "spec": { "taints": taints }
     })
+}
+
+fn retained_annotation(annotations: Option<&BTreeMap<String, String>>, key: &str) -> Value {
+    annotations
+        .and_then(|values| values.get(key))
+        .map_or(Value::Null, |value| json!(value))
 }
 
 fn validate_node_selector(selector: &NodeSelector) -> Result<()> {

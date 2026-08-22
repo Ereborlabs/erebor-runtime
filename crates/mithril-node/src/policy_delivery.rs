@@ -4,15 +4,18 @@ use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
 use mithril_control::{
-    CapabilityRecord, PolicyActivationAcknowledgement, PolicyBundleV1, PolicyDeliveryOperationV1,
-    PolicyInventory, MAX_POLICY_BUNDLE_BYTES, MAX_POLICY_BUNDLE_CHUNK_BYTES,
+    CapabilityRecord, EntryKindV1, PolicyActivationAcknowledgement, PolicyBundleV1,
+    PolicyDeliveryOperationV1, PolicyInventory, MAX_POLICY_BUNDLE_BYTES,
+    MAX_POLICY_BUNDLE_CHUNK_BYTES,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
-use snafu::{ensure, ResultExt as _};
+use snafu::{ensure, OptionExt as _, ResultExt as _};
 
 use crate::error::{ControlProtocolSnafu, IdentityStateSnafu, IoSnafu, JsonSnafu, PolicySnafu};
-use crate::{ControlConnection, NodeConfig, PolicyCandidateConfig, Result, TrustCache};
+use crate::{
+    ControlConnection, NodeConfig, PolicyCandidateConfig, Result, TrustCache, WorkloadBindingConfig,
+};
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -45,6 +48,8 @@ struct ActivePolicyRecordV1 {
     public_key_file: String,
     profile_generation_ref_id: u64,
     binding_ids: Vec<String>,
+    #[serde(default)]
+    scheduled_bindings: Vec<WorkloadBindingConfig>,
     node_bound_generation_digest: String,
     readback_digest: String,
     probe_result_digest: String,
@@ -62,6 +67,8 @@ struct PendingPolicyRecordV1 {
     bundle_file: String,
     profile_generation_ref_id: u64,
     binding_ids: Vec<String>,
+    #[serde(default)]
+    scheduled_bindings: Vec<WorkloadBindingConfig>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -125,11 +132,33 @@ impl NodePolicyDeliveryOwner {
         Ok(owner)
     }
 
+    #[cfg(test)]
     pub(crate) fn restore_config(
         &self,
         config: &mut NodeConfig,
         trust: &TrustCache,
         now_utc_ns: i64,
+    ) -> Result<()> {
+        self.restore_config_inner(config, trust, now_utc_ns, None)
+    }
+
+    pub(crate) fn restore_config_for_session(
+        &self,
+        config: &mut NodeConfig,
+        trust: &TrustCache,
+        now_utc_ns: i64,
+        node_boot_id: &[u8],
+        label_epoch: u64,
+    ) -> Result<()> {
+        self.restore_config_inner(config, trust, now_utc_ns, Some((node_boot_id, label_epoch)))
+    }
+
+    fn restore_config_inner(
+        &self,
+        config: &mut NodeConfig,
+        trust: &TrustCache,
+        now_utc_ns: i64,
+        session: Option<(&[u8], u64)>,
     ) -> Result<()> {
         for (profile_id, record) in &self.state.active_profiles {
             let artifact_path = self.checked_bundle_file(&record.artifact_file)?;
@@ -150,6 +179,30 @@ impl NodePolicyDeliveryOwner {
                 rollback_authorization_path: None,
                 rollback_public_key_path: None,
             });
+            let bundle_path = self
+                .root
+                .join("bundles")
+                .join(&record.bundle_digest)
+                .join("bundle.json");
+            let bundle = self.read_bundle(&bundle_path)?;
+            let trusted_key = trust.policy_signing_key(
+                &bundle.candidate.signing_key_id,
+                bundle.profile_artifact.header.sequence_epoch,
+            )?;
+            bundle
+                .verify(&trusted_key, &config.node_id, record.observed_utc_ns)
+                .context(PolicySnafu)?;
+            if scheduled_session_matches(&bundle, config, session) {
+                config
+                    .workload_bindings
+                    .extend(record.scheduled_bindings.clone());
+                materialize_scheduled_bindings(
+                    &bundle,
+                    config,
+                    record.profile_generation_ref_id,
+                    session,
+                )?;
+            }
             let binding_ids = record.binding_ids.iter().collect::<BTreeSet<_>>();
             for binding in &mut config.workload_bindings {
                 if binding.profile_id == *profile_id && binding_ids.contains(&binding.binding_id) {
@@ -179,6 +232,17 @@ impl NodePolicyDeliveryOwner {
                 rollback_authorization_path: None,
                 rollback_public_key_path: None,
             });
+            if scheduled_session_matches(&bundle, config, session) {
+                config
+                    .workload_bindings
+                    .extend(pending.scheduled_bindings.clone());
+                materialize_scheduled_bindings(
+                    &bundle,
+                    config,
+                    pending.profile_generation_ref_id,
+                    session,
+                )?;
+            }
             let binding_ids = pending.binding_ids.iter().collect::<BTreeSet<_>>();
             for binding in &mut config.workload_bindings {
                 if binding.profile_id == pending.profile_id
@@ -281,6 +345,7 @@ impl NodePolicyDeliveryOwner {
         Ok(Some(bundle))
     }
 
+    #[cfg(test)]
     pub(crate) fn prepare_activation(
         &self,
         bundle: &PolicyBundleV1,
@@ -289,6 +354,51 @@ impl NodePolicyDeliveryOwner {
         capabilities: &[CapabilityRecord],
         profile_generation_ref_id: u64,
         now_utc_ns: i64,
+    ) -> Result<PreparedPolicyActivationV1> {
+        self.prepare_activation_inner(
+            bundle,
+            trust,
+            config,
+            capabilities,
+            profile_generation_ref_id,
+            now_utc_ns,
+            None,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn prepare_activation_for_session(
+        &self,
+        bundle: &PolicyBundleV1,
+        trust: &TrustCache,
+        config: &NodeConfig,
+        capabilities: &[CapabilityRecord],
+        profile_generation_ref_id: u64,
+        now_utc_ns: i64,
+        node_boot_id: &[u8],
+        label_epoch: u64,
+    ) -> Result<PreparedPolicyActivationV1> {
+        self.prepare_activation_inner(
+            bundle,
+            trust,
+            config,
+            capabilities,
+            profile_generation_ref_id,
+            now_utc_ns,
+            Some((node_boot_id, label_epoch)),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn prepare_activation_inner(
+        &self,
+        bundle: &PolicyBundleV1,
+        trust: &TrustCache,
+        config: &NodeConfig,
+        capabilities: &[CapabilityRecord],
+        profile_generation_ref_id: u64,
+        now_utc_ns: i64,
+        session: Option<(&[u8], u64)>,
     ) -> Result<PreparedPolicyActivationV1> {
         let candidate = &bundle.candidate;
         let profile = &bundle.profile_artifact;
@@ -364,9 +474,17 @@ impl NodePolicyDeliveryOwner {
                     "the policy candidate failed issuer, distribution, or predecessor anti-replay",
             }
         );
-        let local_targets = config
+        let mut dynamic = config.clone();
+        let scheduled_targets = materialize_scheduled_bindings(
+            bundle,
+            &mut dynamic,
+            profile_generation_ref_id,
+            session,
+        )?;
+        let mut local_targets = dynamic
             .workload_bindings
             .iter()
+            .filter(|binding| binding.scheduled_binding_authority_id.is_none())
             .filter(|binding| binding.profile_id == profile_id)
             .map(|binding| {
                 Ok((
@@ -375,6 +493,7 @@ impl NodePolicyDeliveryOwner {
                 ))
             })
             .collect::<Result<BTreeMap<_, _>>>()?;
+        local_targets.extend(scheduled_targets);
         let target_digests = candidate
             .exact_target
             .workload_binding_generation_digests
@@ -399,7 +518,7 @@ impl NodePolicyDeliveryOwner {
             .filter_map(|digest| local_targets.get(digest).cloned())
             .collect::<Vec<_>>();
         binding_ids.sort();
-        let selected_bindings = config
+        let selected_bindings = dynamic
             .workload_bindings
             .iter()
             .filter(|binding| binding_ids.contains(&binding.binding_id))
@@ -444,7 +563,6 @@ impl NodePolicyDeliveryOwner {
             &bundle_path,
             &serde_json::to_vec(bundle).context(JsonSnafu { path: &bundle_path })?,
         )?;
-        let mut dynamic = config.clone();
         dynamic.policy_candidates.retain(|candidate| {
             self.state.active_profiles.values().any(|active| {
                 self.checked_bundle_file(&active.artifact_file)
@@ -495,6 +613,7 @@ impl NodePolicyDeliveryOwner {
             public_key_file: self.relative_bundle_file(&public_key_path)?,
             profile_generation_ref_id: prepared.profile_generation_ref_id,
             binding_ids: prepared.binding_ids.clone(),
+            scheduled_bindings: prepared_scheduled_bindings(prepared),
             node_bound_generation_digest: proof.node_bound_generation_digest,
             readback_digest: proof.readback_digest,
             probe_result_digest: proof.probe_result_digest,
@@ -545,6 +664,7 @@ impl NodePolicyDeliveryOwner {
             bundle_file,
             profile_generation_ref_id: prepared.profile_generation_ref_id,
             binding_ids: prepared.binding_ids.clone(),
+            scheduled_bindings: prepared_scheduled_bindings(prepared),
         });
         self.persist_state()
     }
@@ -621,6 +741,58 @@ impl NodePolicyDeliveryOwner {
         self.state.control_acknowledged_candidate_content_id =
             Some(candidate_content_id.to_owned());
         self.persist_state()
+    }
+
+    pub(crate) fn record_runtime_binding(&mut self, binding: &WorkloadBindingConfig) -> Result<()> {
+        let authority = binding
+            .scheduled_binding_authority_id
+            .as_deref()
+            .ok_or_else(|| {
+                IdentityStateSnafu {
+                    reason: "runtime binding has no signed scheduled authority".to_owned(),
+                }
+                .build()
+            })?;
+        let previous = self.state.clone();
+        let record = self
+            .state
+            .active_profiles
+            .get_mut(&binding.profile_id)
+            .context(IdentityStateSnafu {
+                reason: "runtime binding has no active delivered profile",
+            })?;
+        let stored = record
+            .scheduled_bindings
+            .iter_mut()
+            .find(|stored| stored.scheduled_binding_authority_id.as_deref() == Some(authority))
+            .context(IdentityStateSnafu {
+                reason: "runtime binding has no durable signed scheduled target",
+            })?;
+        ensure!(
+            stored.scheduled_target_digest == binding.scheduled_target_digest
+                && stored.namespace == binding.namespace
+                && stored.pod_uid == binding.pod_uid
+                && stored.container_name == binding.container_name
+                && stored.image_digest == binding.image_digest,
+            IdentityStateSnafu {
+                reason: "runtime binding differs from its durable scheduled target",
+            }
+        );
+        let old_binding_id = stored.binding_id.clone();
+        stored.clone_from(binding);
+        if let Some(recorded) = record
+            .binding_ids
+            .iter_mut()
+            .find(|recorded| **recorded == old_binding_id)
+        {
+            recorded.clone_from(&binding.binding_id);
+        }
+        record.binding_ids.sort();
+        if let Err(error) = self.persist_state() {
+            self.state = previous;
+            return Err(error);
+        }
+        Ok(())
     }
 
     fn validate_inventory(&self, inventory: &PolicyInventory) -> Result<()> {
@@ -828,6 +1000,269 @@ impl NodePolicyDeliveryOwner {
     }
 }
 
+fn materialize_scheduled_bindings(
+    bundle: &PolicyBundleV1,
+    config: &mut NodeConfig,
+    profile_generation_ref_id: u64,
+    session: Option<(&[u8], u64)>,
+) -> Result<BTreeMap<String, String>> {
+    let targets = &bundle.candidate.exact_target.workload_targets;
+    if targets.is_empty() {
+        return Ok(BTreeMap::new());
+    }
+    let (node_boot_id, label_epoch) = session.ok_or_else(|| {
+        ControlProtocolSnafu {
+            reason: "scheduled Kubernetes policy needs the current node session".to_owned(),
+        }
+        .build()
+    })?;
+    let expected_boot_id = hex::encode(node_boot_id);
+    let expected_node_name = config.kubernetes_node_name.as_deref().ok_or_else(|| {
+        ControlProtocolSnafu {
+            reason: "scheduled Kubernetes policy needs the registered Kubernetes Node name"
+                .to_owned(),
+        }
+        .build()
+    })?;
+    let document = &bundle.profile_artifact.policy_document;
+    let previous = config
+        .workload_bindings
+        .iter()
+        .filter(|binding| {
+            binding.profile_id == document.metadata.profile_id
+                && binding.scheduled_binding_authority_id.is_some()
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    config.workload_bindings.retain(|binding| {
+        binding.profile_id != document.metadata.profile_id
+            || binding.scheduled_binding_authority_id.is_none()
+    });
+    let mut materialized = BTreeMap::new();
+    for target in targets {
+        let identity = target.kubernetes.as_ref().ok_or_else(|| {
+            ControlProtocolSnafu {
+                reason: "scheduled policy target has no Kubernetes identity".to_owned(),
+            }
+            .build()
+        })?;
+        ensure!(
+            mithril_control::workload_target_fact_digest(target)
+                .is_ok_and(|digest| digest == target.workload_binding_generation_digest)
+                && target.node_id == config.node_id
+                && identity.profile_id == document.metadata.profile_id
+                && identity.kubernetes_node_name == expected_node_name
+                && identity.node_boot_id == expected_boot_id
+                && identity.label_epoch == label_epoch
+                && (identity.policy_source_revision_id
+                    == bundle.candidate.policy_source_revision_id
+                    || bundle.candidate.operation
+                        == PolicyDeliveryOperationV1::RetireToRestrictiveTerminal),
+            ControlProtocolSnafu {
+                reason: "scheduled policy target does not match this node session and candidate",
+            }
+        );
+        let initial_role_id = entry_role_handle(
+            document,
+            &identity.workload_selector_id,
+            target.container_kind,
+            EntryKindV1::ContainerStart,
+        )?;
+        let external_role_id = entry_role_handle(
+            document,
+            &identity.workload_selector_id,
+            target.container_kind,
+            EntryKindV1::ExternalRuntimeUnknown,
+        )?;
+        let prior = previous.iter().find(|existing| {
+            existing.scheduled_binding_authority_id.as_deref() == Some(identity.binding_id.as_str())
+                && existing.profile_id == identity.profile_id
+                && existing.namespace == identity.namespace_name
+                && existing.pod_uid == target.pod_uid
+                && existing.container_name == target.container_name
+                && existing.image_digest == target.image_digest
+        });
+        let mut binding = crate::WorkloadBindingConfig {
+            binding_id: identity.binding_id.clone(),
+            scheduled_binding_authority_id: Some(identity.binding_id.clone()),
+            scheduled_target_digest: Some(target.workload_binding_generation_digest.clone()),
+            execution_set_id: target.execution_set_id.clone(),
+            protected_scope_id: identity.protected_scope_id.clone(),
+            workload_selector_id: identity.workload_selector_id.clone(),
+            profile_id: identity.profile_id.clone(),
+            container_id: target.container_id.clone(),
+            namespace: identity.namespace_name.clone(),
+            cluster_uid: target.cluster_uid.clone(),
+            namespace_uid: target.namespace_uid.clone(),
+            controller_uid: target.controller_uid.clone(),
+            service_account_uid: target.service_account_uid.clone(),
+            pod_labels: target.pod_labels.clone(),
+            pod_uid: target.pod_uid.clone(),
+            sandbox_id: format!("scheduled:{}", target.workload_binding_generation_digest),
+            container_name: target.container_name.clone(),
+            image_digest: target.image_digest.clone(),
+            container_kind: node_container_kind(target.container_kind),
+            container_generation: 1,
+            root_cgroup_path: None,
+            lifecycle_generation: 1,
+            active_profile_generation_ref_id: profile_generation_ref_id,
+            initial_role_id,
+            external_role_id,
+            arm_initial_root: true,
+        };
+        if let Some(existing) = prior {
+            ensure!(
+                existing.profile_id == binding.profile_id
+                    && existing.execution_set_id == binding.execution_set_id
+                    && existing.protected_scope_id == binding.protected_scope_id
+                    && existing.workload_selector_id == binding.workload_selector_id
+                    && existing.namespace == binding.namespace
+                    && existing.pod_uid == binding.pod_uid
+                    && existing.container_name == binding.container_name
+                    && existing.image_digest == binding.image_digest,
+                ControlProtocolSnafu {
+                    reason: "scheduled policy target conflicts with its existing local binding",
+                }
+            );
+            if !existing.container_id.starts_with("scheduled:") {
+                ensure!(
+                    existing.binding_id
+                        == crate::runtime_admission::runtime_binding_id(
+                            &identity.binding_id,
+                            &existing.container_id,
+                        ),
+                    ControlProtocolSnafu {
+                        reason: "scheduled runtime binding is not derived from signed authority",
+                    }
+                );
+                binding.binding_id = existing.binding_id.clone();
+            }
+            binding.container_id = existing.container_id.clone();
+            binding.sandbox_id = existing.sandbox_id.clone();
+            binding.container_generation = existing.container_generation;
+            binding.root_cgroup_path = existing.root_cgroup_path.clone();
+            binding.lifecycle_generation = existing.lifecycle_generation;
+        }
+        binding.active_profile_generation_ref_id = profile_generation_ref_id;
+        config.workload_bindings.push(binding.clone());
+        ensure!(
+            materialized
+                .insert(
+                    target.workload_binding_generation_digest.clone(),
+                    binding.binding_id,
+                )
+                .is_none(),
+            ControlProtocolSnafu {
+                reason: "scheduled policy target digest occurs more than once",
+            }
+        );
+    }
+    config.validate()?;
+    Ok(materialized)
+}
+
+fn prepared_scheduled_bindings(
+    prepared: &PreparedPolicyActivationV1,
+) -> Vec<WorkloadBindingConfig> {
+    let selected = prepared.binding_ids.iter().collect::<BTreeSet<_>>();
+    let mut bindings = prepared
+        .config
+        .workload_bindings
+        .iter()
+        .filter(|binding| {
+            binding.scheduled_binding_authority_id.is_some()
+                && selected.contains(&binding.binding_id)
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    bindings.sort_by(|left, right| left.binding_id.cmp(&right.binding_id));
+    bindings
+}
+
+fn scheduled_session_matches(
+    bundle: &PolicyBundleV1,
+    config: &NodeConfig,
+    session: Option<(&[u8], u64)>,
+) -> bool {
+    let targets = &bundle.candidate.exact_target.workload_targets;
+    if targets.is_empty() {
+        return false;
+    }
+    let Some((node_boot_id, label_epoch)) = session else {
+        return false;
+    };
+    let Some(node_name) = config.kubernetes_node_name.as_deref() else {
+        return false;
+    };
+    let boot_id = hex::encode(node_boot_id);
+    targets.iter().all(|target| {
+        target.kubernetes.as_ref().is_some_and(|identity| {
+            target.node_id == config.node_id
+                && identity.kubernetes_node_name == node_name
+                && identity.node_boot_id == boot_id
+                && identity.label_epoch == label_epoch
+        })
+    })
+}
+
+fn entry_role_handle(
+    document: &mithril_control::PolicyDocumentV1,
+    workload_selector_id: &str,
+    container_kind: mithril_control::ContainerKindV1,
+    entry_kind: EntryKindV1,
+) -> Result<u32> {
+    let role_ids = document
+        .entry_role_assignments
+        .iter()
+        .filter(|assignment| {
+            assignment
+                .workload_selector_ids
+                .iter()
+                .any(|selector| selector == workload_selector_id)
+                && assignment.entry_kinds.contains(&entry_kind)
+                && assignment.container_kinds.contains(&container_kind)
+        })
+        .map(|assignment| assignment.resulting_role_id.as_str())
+        .collect::<BTreeSet<_>>();
+    ensure!(
+        role_ids.len() == 1,
+        ControlProtocolSnafu {
+            reason: format!(
+                "scheduled binding needs one exact signed {entry_kind:?} role assignment"
+            ),
+        }
+    );
+    let role_id = role_ids.iter().next().copied().ok_or_else(|| {
+        ControlProtocolSnafu {
+            reason: "scheduled binding lost its signed role assignment".to_owned(),
+        }
+        .build()
+    })?;
+    document
+        .roles
+        .iter()
+        .map(|role| role.role_id.as_str())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .position(|candidate| candidate == role_id)
+        .and_then(|index| u32::try_from(index + 1).ok())
+        .ok_or_else(|| {
+            ControlProtocolSnafu {
+                reason: "scheduled binding role has no numeric handle".to_owned(),
+            }
+            .build()
+        })
+}
+
+const fn node_container_kind(kind: mithril_control::ContainerKindV1) -> crate::ContainerKindV1 {
+    match kind {
+        mithril_control::ContainerKindV1::Init => crate::ContainerKindV1::Init,
+        mithril_control::ContainerKindV1::Sidecar => crate::ContainerKindV1::Sidecar,
+        mithril_control::ContainerKindV1::Application => crate::ContainerKindV1::Application,
+        mithril_control::ContainerKindV1::Ephemeral => crate::ContainerKindV1::Ephemeral,
+    }
+}
+
 fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
     let parent = path.parent().ok_or_else(|| {
         IdentityStateSnafu {
@@ -874,9 +1309,9 @@ mod tests {
 
     use ed25519_dalek::SigningKey;
     use mithril_control::{
-        CapabilityRecord, PolicyCompiler, PolicyDeliveryCandidateV1, PolicyDocumentV1,
-        PolicySignerTrust, PolicyTargetSnapshotV1, PolicyTargetV1, ProfileCandidateArtifactV1,
-        ProfileSealRequestV1, RegistryDigestsV1,
+        CapabilityRecord, KubernetesWorkloadIdentityV1, PolicyCompiler, PolicyDeliveryCandidateV1,
+        PolicyDocumentV1, PolicySignerTrust, PolicyTargetSnapshotV1, PolicyTargetV1,
+        ProfileCandidateArtifactV1, ProfileSealRequestV1, RegistryDigestsV1, WorkloadTargetFactV1,
     };
     use sha2::{Digest as _, Sha256};
     use snafu::ResultExt as _;
@@ -888,8 +1323,8 @@ mod tests {
     use crate::error::{IoSnafu, PolicySnafu};
     use crate::trust::InstalledPolicySignerV1;
     use crate::{
-        ContainerKindV1, EvidenceConfig, InterceptorConfig, NodeConfig, NodeControlConfig,
-        TrustCache, WorkloadBindingConfig,
+        ContainerKindV1, ContainerRuntimeConfig, EvidenceConfig, InterceptorConfig, NodeConfig,
+        NodeControlConfig, RuntimeAdmissionConfig, TrustCache, WorkloadBindingConfig,
     };
 
     #[test]
@@ -1158,6 +1593,143 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn signed_scheduled_material_is_bound_to_one_node_session() -> crate::Result<()> {
+        let directory = tempfile::tempdir().context(IoSnafu {
+            path: "temporary scheduled policy directory",
+        })?;
+        let static_config = config(directory.path());
+        let key = SigningKey::from_bytes(&[9; 32]);
+        let base = bundle(
+            &static_config,
+            &key,
+            1,
+            1,
+            PolicyDeliveryOperationV1::Activate,
+            None,
+            10,
+            100,
+            "node-a",
+        )?;
+        let scheduled = scheduled_bundle(base, &key, "worker-a", &[1; 16])?;
+        let mut config = static_config;
+        config.kubernetes_node_name = Some("worker-a".to_owned());
+        config.runtime_admission = Some(RuntimeAdmissionConfig {
+            socket_path: directory.path().join("runtime-admission.sock"),
+            maximum_request_bytes: 64 * 1_024,
+            timeout_ms: 10_000,
+        });
+        config.container_runtime = Some(ContainerRuntimeConfig {
+            socket_path: directory.path().join("containerd.sock"),
+            effect_controller_cgroup_path: directory.path().join("mithril-node-cgroup"),
+            containerd_event_socket_path: None,
+            reconciliation_interval_ms: 2_000,
+        });
+        config.workload_bindings.clear();
+        config.validate()?;
+        let trust = trust(directory.path(), &key)?;
+        let mut owner = NodePolicyDeliveryOwner::load(directory.path())?;
+
+        let prepared = owner.prepare_activation_for_session(
+            &scheduled,
+            &trust,
+            &config,
+            &capabilities(),
+            2,
+            20,
+            &[1; 16],
+            7,
+        )?;
+        assert_eq!(prepared.config.workload_bindings.len(), 1);
+        let binding = &prepared.config.workload_bindings[0];
+        assert!(binding.container_id.starts_with("scheduled:"));
+        assert!(binding.root_cgroup_path.is_none());
+        assert_eq!(binding.active_profile_generation_ref_id, 2);
+
+        assert!(owner
+            .prepare_activation_for_session(
+                &scheduled,
+                &trust,
+                &config,
+                &capabilities(),
+                2,
+                20,
+                &[2; 16],
+                7,
+            )
+            .is_err());
+        let mut wrong_node = config.clone();
+        wrong_node.kubernetes_node_name = Some("worker-b".to_owned());
+        assert!(owner
+            .prepare_activation_for_session(
+                &scheduled,
+                &trust,
+                &wrong_node,
+                &capabilities(),
+                2,
+                20,
+                &[1; 16],
+                7,
+            )
+            .is_err());
+        owner.begin_activation(&scheduled, &prepared)?;
+        owner.commit_activation(
+            &scheduled,
+            &prepared,
+            PolicyActivationProofV1 {
+                node_bound_generation_digest: "1".repeat(64),
+                readback_digest: "2".repeat(64),
+                probe_result_digest: "3".repeat(64),
+                observed_utc_ns: 21,
+            },
+        )?;
+        let mut runtime_binding = prepared.config.workload_bindings[0].clone();
+        let authority = runtime_binding
+            .scheduled_binding_authority_id
+            .clone()
+            .ok_or_else(|| {
+                super::IdentityStateSnafu {
+                    reason: "scheduled test binding has no authority".to_owned(),
+                }
+                .build()
+            })?;
+        runtime_binding.container_id = "d".repeat(64);
+        runtime_binding.binding_id =
+            crate::runtime_admission::runtime_binding_id(&authority, &runtime_binding.container_id);
+        runtime_binding.sandbox_id = "e".repeat(64);
+        runtime_binding.root_cgroup_path = Some(directory.path().join("pod-cgroup"));
+        runtime_binding.container_generation = 42;
+        owner.record_runtime_binding(&runtime_binding)?;
+        let mut restored = config.clone();
+        restored.workload_bindings.clear();
+        restored.policy_candidates.clear();
+        NodePolicyDeliveryOwner::load(directory.path())?.restore_config_for_session(
+            &mut restored,
+            &trust,
+            22,
+            &[1; 16],
+            7,
+        )?;
+        assert_eq!(restored.workload_bindings.len(), 1);
+        assert_eq!(
+            restored.workload_bindings[0].binding_id,
+            runtime_binding.binding_id
+        );
+
+        let mut new_boot = config;
+        new_boot.workload_bindings.clear();
+        new_boot.policy_candidates.clear();
+        NodePolicyDeliveryOwner::load(directory.path())?.restore_config_for_session(
+            &mut new_boot,
+            &trust,
+            22,
+            &[2; 16],
+            7,
+        )?;
+        assert!(new_boot.workload_bindings.is_empty());
+        Ok(())
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn bundle(
         config: &NodeConfig,
@@ -1211,6 +1783,7 @@ mod tests {
             workload_binding_generation_digests: vec![
                 crate::node::workload_binding_generation_digest(&config.workload_bindings[0])?,
             ],
+            workload_targets: Vec::new(),
         };
         let source_revision_id = "a".repeat(64);
         let snapshot = PolicyTargetSnapshotV1::new(
@@ -1239,6 +1812,87 @@ mod tests {
         mithril_control::PolicyBundleV1::new(
             candidate,
             artifact,
+            key.verifying_key().to_bytes().to_vec(),
+        )
+        .context(PolicySnafu)
+    }
+
+    fn scheduled_bundle(
+        base: mithril_control::PolicyBundleV1,
+        key: &SigningKey,
+        kubernetes_node_name: &str,
+        node_boot_id: &[u8],
+    ) -> crate::Result<mithril_control::PolicyBundleV1> {
+        let source_revision_id = "a".repeat(64);
+        let binding_id = crate::runtime_admission::scheduled_authority_binding_id(
+            "aaaaaaaa-1111-4111-8111-111111111111",
+            "converter",
+        );
+        let mut workload = WorkloadTargetFactV1 {
+            node_id: "node-a".to_owned(),
+            workload_binding_generation_digest: String::new(),
+            execution_set_id: "44444444-4444-4444-8444-444444444444".to_owned(),
+            cluster_uid: "55555555-5555-4555-8555-555555555555".to_owned(),
+            namespace_uid: "66666666-6666-4666-8666-666666666666".to_owned(),
+            controller_uid: "88888888-8888-4888-8888-888888888888".to_owned(),
+            service_account_uid: "77777777-7777-4777-8777-777777777777".to_owned(),
+            pod_uid: "aaaaaaaa-1111-4111-8111-111111111111".to_owned(),
+            container_id: format!("scheduled:{}", "b".repeat(64)),
+            container_name: "converter".to_owned(),
+            container_kind: mithril_control::ContainerKindV1::Application,
+            image_digest: format!("sha256:{}", "c".repeat(64)),
+            pod_labels: BTreeMap::new(),
+            kubernetes: Some(KubernetesWorkloadIdentityV1 {
+                namespace_name: "default".to_owned(),
+                profile_id: "11111111-1111-4111-8111-111111111111".to_owned(),
+                policy_source_revision_id: source_revision_id.clone(),
+                binding_id,
+                protected_scope_id: "33333333-3333-4333-8333-333333333333".to_owned(),
+                workload_selector_id: "worker".to_owned(),
+                kubernetes_node_name: kubernetes_node_name.to_owned(),
+                kubernetes_node_uid: "node-uid-a".to_owned(),
+                node_boot_id: hex::encode(node_boot_id),
+                label_epoch: 7,
+            }),
+        };
+        workload.workload_binding_generation_digest =
+            mithril_control::workload_target_fact_digest(&workload).context(PolicySnafu)?;
+        let signed_profile_digest = base.candidate.signed_profile_digest.clone();
+        let target = PolicyTargetV1 {
+            tenant_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa".to_owned(),
+            cluster_uid: "55555555-5555-4555-8555-555555555555".to_owned(),
+            node_id: "node-a".to_owned(),
+            workload_binding_generation_digests: vec![workload
+                .workload_binding_generation_digest
+                .clone()],
+            workload_targets: vec![workload],
+        };
+        let snapshot = PolicyTargetSnapshotV1::new(
+            source_revision_id.clone(),
+            signed_profile_digest.clone(),
+            1,
+            vec![target.clone()],
+        )
+        .context(PolicySnafu)?;
+        let candidate = PolicyDeliveryCandidateV1::sign(
+            target.tenant_id.clone(),
+            source_revision_id,
+            signed_profile_digest,
+            &snapshot,
+            target,
+            PolicyDeliveryOperationV1::Activate,
+            None,
+            1,
+            1,
+            10,
+            100,
+            "test-key".to_owned(),
+            key,
+        )
+        .context(PolicySnafu)?;
+        mithril_control::PolicyBundleV1::new(
+            candidate,
+            base.profile_artifact,
             key.verifying_key().to_bytes().to_vec(),
         )
         .context(PolicySnafu)
@@ -1303,9 +1957,12 @@ mod tests {
                 maximum_control_delay_ms: 30_000,
             }),
             runtime_observation: None,
+            runtime_admission: None,
             container_runtime: None,
             workload_bindings: vec![WorkloadBindingConfig {
                 binding_id: "99999999-9999-4999-8999-999999999999".to_owned(),
+                scheduled_binding_authority_id: None,
+                scheduled_target_digest: None,
                 execution_set_id: "44444444-4444-4444-8444-444444444444".to_owned(),
                 protected_scope_id: "33333333-3333-4333-8333-333333333333".to_owned(),
                 workload_selector_id: "worker".to_owned(),

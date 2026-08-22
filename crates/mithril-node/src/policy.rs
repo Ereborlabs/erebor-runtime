@@ -110,6 +110,7 @@ struct BindingActivationTarget {
     generation: u64,
     initial_role_id: u32,
     external_role_id: u32,
+    requires_live_cgroup: bool,
 }
 
 struct ProfileActivation {
@@ -2755,6 +2756,7 @@ fn add_binding_activation(
                     generation: binding.active_profile_generation_ref_id,
                     initial_role_id: binding.initial_role_id,
                     external_role_id: binding.external_role_id,
+                    requires_live_cgroup: binding.root_cgroup_path.is_some(),
                 },
             )
             .is_none(),
@@ -2876,9 +2878,11 @@ fn activate_profile(
         );
     }
     ensure!(
-        live_bindings.len() == activation.bindings.len(),
+        activation.bindings.iter().all(|(binding_id, target)| {
+            !target.requires_live_cgroup || live_bindings.contains_key(binding_id)
+        }),
         IdentityStateSnafu {
-            reason: "not every configured activation binding is live",
+            reason: "not every cgroup-backed activation binding is live",
         }
     );
     let mut staged = Vec::with_capacity(live_bindings.len());
@@ -5133,6 +5137,8 @@ mod tests {
         })?;
         let binding = WorkloadBindingConfig {
             binding_id: "99999999-9999-4999-8999-999999999999".to_owned(),
+            scheduled_binding_authority_id: None,
+            scheduled_target_digest: None,
             execution_set_id: "44444444-4444-4444-8444-444444444444".to_owned(),
             protected_scope_id: "33333333-3333-4333-8333-333333333333".to_owned(),
             workload_selector_id: "worker".to_owned(),

@@ -110,6 +110,7 @@ fn inventory(binding_digest: &str) -> Vec<WorkloadTargetFactV1> {
         container_kind: ContainerKindV1::Application,
         image_digest: "sha256:converter".to_owned(),
         pod_labels: BTreeMap::new(),
+        kubernetes: None,
     }]
 }
 
@@ -223,6 +224,46 @@ fn create_update_duplicate_and_restart_preserve_one_monotonic_rollout() -> TestR
     )?;
     assert_eq!(restarted.bundles, second.bundles);
     assert_eq!(reopened.commit_index(), 6);
+    Ok(())
+}
+
+#[test]
+fn bound_inventory_change_reconciles_without_a_policy_source_change() -> TestResult {
+    let directory = TempDir::new()?;
+    let store = ControlStore::open(directory.path())?;
+    let owner = make_owner(store);
+    let policy = policy()?;
+    let resource = resource(&policy, "profile", OBJECT_UID, 1, false)?;
+    let first = owner.reconcile(&resource, NAMESPACE_UID, &inventory(&"1".repeat(64)), NOW)?;
+    let second = owner.reconcile(&resource, NAMESPACE_UID, &two_node_inventory(), NOW + 1)?;
+
+    assert_eq!(
+        first.source_revision.policy_source_revision_id,
+        second.source_revision.policy_source_revision_id
+    );
+    assert_ne!(
+        first.target_snapshot.target_snapshot_digest,
+        second.target_snapshot.target_snapshot_digest
+    );
+    assert_eq!(second.bundles.len(), 2);
+    let node_a = second
+        .bundles
+        .iter()
+        .find(|bundle| bundle.candidate.exact_target.node_id == "node-a")
+        .ok_or("updated snapshot has no node-a bundle")?;
+    let node_b = second
+        .bundles
+        .iter()
+        .find(|bundle| bundle.candidate.exact_target.node_id == "node-b")
+        .ok_or("updated snapshot has no node-b bundle")?;
+    assert_eq!(
+        node_a.candidate.operation,
+        PolicyDeliveryOperationV1::Replace
+    );
+    assert_eq!(
+        node_b.candidate.operation,
+        PolicyDeliveryOperationV1::Activate
+    );
     Ok(())
 }
 

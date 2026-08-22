@@ -41,6 +41,16 @@ pub struct RuntimeObservationConfig {
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct RuntimeAdmissionConfig {
+    pub socket_path: PathBuf,
+    #[serde(default = "default_runtime_admission_request_bytes")]
+    pub maximum_request_bytes: usize,
+    #[serde(default = "default_runtime_admission_timeout_ms")]
+    pub timeout_ms: u64,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct EvidenceConfig {
     pub tenant_id: String,
     pub source_id: String,
@@ -165,7 +175,7 @@ pub struct ExactFileObjectConfig {
     pub mount_view_root_pid: u32,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ContainerKindV1 {
     Init,
@@ -174,10 +184,14 @@ pub enum ContainerKindV1 {
     Ephemeral,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct WorkloadBindingConfig {
     pub binding_id: String,
+    #[serde(default)]
+    pub scheduled_binding_authority_id: Option<String>,
+    #[serde(default)]
+    pub scheduled_target_digest: Option<String>,
     pub execution_set_id: String,
     pub protected_scope_id: String,
     pub workload_selector_id: String,
@@ -223,6 +237,8 @@ pub struct NodeConfig {
     pub evidence: Option<EvidenceConfig>,
     #[serde(default)]
     pub runtime_observation: Option<RuntimeObservationConfig>,
+    #[serde(default)]
+    pub runtime_admission: Option<RuntimeAdmissionConfig>,
     #[serde(default)]
     pub container_runtime: Option<ContainerRuntimeConfig>,
     #[serde(default)]
@@ -306,10 +322,47 @@ impl NodeConfig {
                 }
             );
         }
+        if let Some(admission) = &self.runtime_admission {
+            ensure!(
+                admission.socket_path.is_absolute()
+                    && (1_024..=1_048_576).contains(&admission.maximum_request_bytes)
+                    && (100..=30_000).contains(&admission.timeout_ms)
+                    && self.kubernetes_node_name.is_some()
+                    && self.container_runtime.is_some(),
+                InvalidConfigurationSnafu {
+                    reason: "runtime admission requires CRI, a Kubernetes Node name, an absolute socket path, and bounded request and timeout limits",
+                }
+            );
+        }
         let mut binding_ids = BTreeSet::new();
         let mut execution_set_ids = BTreeSet::new();
         let mut container_ids = BTreeSet::new();
         for binding in &self.workload_bindings {
+            ensure!(
+                match (
+                    binding.scheduled_binding_authority_id.as_deref(),
+                    binding.scheduled_target_digest.as_deref(),
+                ) {
+                    (None, None) => true,
+                    (Some(authority), Some(digest)) => {
+                        self.runtime_admission.is_some()
+                            && canonical_uuid(authority)
+                            && is_sha256(digest)
+                            && (binding.container_id.starts_with("scheduled:")
+                                && binding.binding_id == authority
+                                || !binding.container_id.starts_with("scheduled:")
+                                    && binding.binding_id
+                                        == crate::runtime_admission::runtime_binding_id(
+                                            authority,
+                                            &binding.container_id,
+                                        ))
+                    }
+                    (Some(_), None) | (None, Some(_)) => false,
+                },
+                InvalidConfigurationSnafu {
+                    reason: "scheduled workload bindings require complete signed authority and deterministic runtime identity",
+                }
+            );
             let kubernetes_identity_is_set = !binding.cluster_uid.is_empty()
                 || !binding.namespace_uid.is_empty()
                 || !binding.controller_uid.is_empty()
@@ -350,7 +403,10 @@ impl NodeConfig {
                 }
             );
             ensure!(
-                self.container_runtime.is_some() || binding.root_cgroup_path.is_some(),
+                self.container_runtime.is_some()
+                    || (self.runtime_admission.is_some()
+                        && binding.scheduled_binding_authority_id.is_some())
+                    || binding.root_cgroup_path.is_some(),
                 InvalidConfigurationSnafu {
                     reason: "non-CRI workload bindings require root_cgroup_path",
                 }
@@ -443,6 +499,13 @@ fn kubernetes_node_name_is_valid(value: &str) -> bool {
         })
 }
 
+fn is_sha256(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
 impl NodeControlConfig {
     #[must_use]
     pub const fn reconnect_minimum(&self) -> Duration {
@@ -465,6 +528,14 @@ const fn default_reconnect_maximum_ms() -> u64 {
 
 const fn default_runtime_reconciliation_ms() -> u64 {
     2_000
+}
+
+const fn default_runtime_admission_request_bytes() -> usize {
+    64 * 1_024
+}
+
+const fn default_runtime_admission_timeout_ms() -> u64 {
+    10_000
 }
 
 const fn default_authorization_clock_skew_ns() -> i64 {
@@ -535,9 +606,12 @@ mod tests {
                 maximum_control_delay_ms: 30_000,
             }),
             runtime_observation: None,
+            runtime_admission: None,
             container_runtime: None,
             workload_bindings: vec![WorkloadBindingConfig {
                 binding_id: "11111111-1111-4111-8111-111111111111".to_owned(),
+                scheduled_binding_authority_id: None,
+                scheduled_target_digest: None,
                 execution_set_id: "22222222-2222-4222-8222-222222222222".to_owned(),
                 protected_scope_id: "44444444-4444-4444-8444-444444444444".to_owned(),
                 workload_selector_id: "worker".to_owned(),

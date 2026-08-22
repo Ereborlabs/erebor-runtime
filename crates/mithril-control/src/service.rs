@@ -60,6 +60,7 @@ struct ControlState {
     registrations: BTreeSet<StreamIdentity>,
     sessions: BTreeMap<String, NodeSession>,
     pending: BTreeMap<Vec<u8>, PendingAdministrativeResponse>,
+    kubernetes_workload_targets: BTreeMap<String, crate::WorkloadTargetFactV1>,
 }
 
 struct NodeSession {
@@ -200,9 +201,31 @@ impl ControlPlane {
                     .sessions
                     .values()
                     .flat_map(|session| session.workload_targets.iter().cloned())
+                    .chain(state.kubernetes_workload_targets.values().cloned())
                     .collect()
             },
         )
+    }
+
+    pub fn replace_kubernetes_workload_inventory(
+        &self,
+        targets: Vec<crate::WorkloadTargetFactV1>,
+    ) -> Result<bool, Status> {
+        if targets.len() > 65_536 {
+            return Err(Status::resource_exhausted(
+                "Kubernetes workload inventory exceeds 65,536 targets",
+            ));
+        }
+        let targets = targets
+            .into_iter()
+            .map(|target| (target.workload_binding_generation_digest.clone(), target))
+            .collect::<BTreeMap<_, _>>();
+        let mut state = self.lock_state()?;
+        if state.kubernetes_workload_targets == targets {
+            return Ok(false);
+        }
+        state.kubernetes_workload_targets = targets;
+        Ok(true)
     }
 
     #[must_use]
@@ -1256,6 +1279,7 @@ fn registered_workload_target(
             .iter()
             .map(|(key, value)| (key.clone(), value.clone()))
             .collect(),
+        kubernetes: None,
     })
 }
 
