@@ -1171,7 +1171,8 @@ EOF
       --arg kubernetes_node "$kubernetes_node" \
       '{listen:"127.0.0.1:7443",
         tls:{certificate_path:$server_certificate,private_key_path:$server_key,node_ca_path:$ca},
-        allowed_nodes:[{node_id:$node_id,certificate_sha256:$node_certificate_sha256}],
+        allowed_nodes:[{node_id:$node_id,certificate_sha256:$node_certificate_sha256,
+          tenant_id:"00000000-0000-0001-0000-000000000002"}],
         trust:{generation:1,bundle_digest:("d" * 64)},
         evidence_directory:($state + "/evidence"),
         administrative_exec:{listen:"127.0.0.1:9443",

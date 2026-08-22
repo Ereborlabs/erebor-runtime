@@ -6,8 +6,9 @@ use std::time::Duration;
 
 use mithril_control::{
     serve, AdministrativeExecArmResult, AdministrativeExecResolution, AllowedNodeIdentity,
-    ArmAdministrativeExec, CapabilityRecord, ControlPlane, ControlServerTls, EvidenceIntakeOwner,
-    NodeRegistration, ResolveAdministrativeExec, TrustGenerationV1,
+    ArmAdministrativeExec, CapabilityRecord, ControlPlane, ControlServerTls,
+    EvidenceIntakeIdentityV1, EvidenceIntakeOwner, NodeRegistration, ResolveAdministrativeExec,
+    TrustGenerationV1,
 };
 use mithril_node::{
     AdministrativeControlRequest, EffectObservationStore, EvidenceIdV1, EvidenceWalLimits,
@@ -33,6 +34,7 @@ async fn mtls_registration_acknowledges_trust_and_reconnects_with_a_fresh_nonce(
         vec![AllowedNodeIdentity {
             node_id: "node-a".to_owned(),
             certificate_sha256: certificates.node_digest(),
+            tenant_id: "00000000-0000-0001-0000-000000000002".to_owned(),
         }],
         TrustGenerationV1 {
             generation: 4,
@@ -95,6 +97,7 @@ async fn mtls_evidence_upload_replays_after_disconnect_and_advances_only_on_ack(
         vec![AllowedNodeIdentity {
             node_id: "node-a".to_owned(),
             certificate_sha256: certificates.node_digest(),
+            tenant_id: "00000000-0000-0001-0000-000000000002".to_owned(),
         }],
         TrustGenerationV1 {
             generation: 1,
@@ -118,7 +121,7 @@ async fn mtls_evidence_upload_replays_after_disconnect_and_advances_only_on_ack(
             EvidenceIdV1::new(1, 2),
             EvidenceIdV1::new(3, 4),
             1,
-            EvidenceIdV1::new(5, 6),
+            EvidenceIdV1::from([7; 16]),
         )?,
     )?;
     observations.record_bytes(
@@ -181,6 +184,7 @@ async fn mtls_coverage_upload_preserves_gap_truth_at_control() -> Result<(), Box
         vec![AllowedNodeIdentity {
             node_id: "node-a".to_owned(),
             certificate_sha256: certificates.node_digest(),
+            tenant_id: "00000000-0000-0001-0000-000000000002".to_owned(),
         }],
         TrustGenerationV1 {
             generation: 1,
@@ -200,7 +204,7 @@ async fn mtls_coverage_upload_preserves_gap_truth_at_control() -> Result<(), Box
             EvidenceIdV1::new(1, 2),
             EvidenceIdV1::new(3, 4),
             1,
-            EvidenceIdV1::new(5, 6),
+            EvidenceIdV1::from([7; 16]),
         )?,
     )?;
     observations.record_bytes(
@@ -219,19 +223,30 @@ async fn mtls_coverage_upload_preserves_gap_truth_at_control() -> Result<(), Box
     let mut trust = TrustCache::load(directory.path())?;
     let mut connection = connector.connect(registration(), false, &mut trust).await?;
     tokio::time::sleep(Duration::from_millis(20)).await;
-    let expected = connection
-        .send_coverage_report(
-            observations
-                .coverage_snapshot()
-                .ok_or("missing coverage snapshot")?,
-        )
-        .await?;
+    let snapshot = observations
+        .coverage_snapshot()
+        .ok_or("missing coverage snapshot")?;
+    let source_id = snapshot
+        .current_intervals()
+        .first()
+        .ok_or("missing current coverage interval")?
+        .source_id
+        .to_be_bytes();
+    let coverage_identity = EvidenceIntakeIdentityV1 {
+        tenant_id: EvidenceIdV1::new(1, 2).to_be_bytes(),
+        node_id: "node-a".to_owned(),
+        node_boot_id: [7; 16],
+        label_epoch: 1,
+        source_id,
+        source_epoch: snapshot.source_epoch,
+    };
+    let expected = connection.send_coverage_report(snapshot).await?;
     let NodeControlMessage::CoverageAck(actual) = connection.next_message().await? else {
         return Err("Control did not acknowledge coverage".into());
     };
     assert_eq!(actual, expected);
     let persisted = EvidenceIntakeOwner::open(&intake_path)?
-        .latest_coverage_report("node-a")?
+        .latest_coverage_report(&coverage_identity)?
         .ok_or("Control did not persist coverage")?;
     assert!(!persisted.negative_claim_eligible);
     assert!(persisted
@@ -256,6 +271,7 @@ async fn mtls_administrative_services_route_matching_results_and_cancel_waiters(
         vec![AllowedNodeIdentity {
             node_id: "node-a".to_owned(),
             certificate_sha256: certificates.node_digest(),
+            tenant_id: "00000000-0000-0001-0000-000000000002".to_owned(),
         }],
         TrustGenerationV1 {
             generation: 1,
@@ -374,6 +390,7 @@ async fn assert_wrong_ca_rejected() -> Result<(), Box<dyn StdError>> {
         vec![AllowedNodeIdentity {
             node_id: "node-a".to_owned(),
             certificate_sha256: server_certificates.node_digest(),
+            tenant_id: "00000000-0000-0001-0000-000000000002".to_owned(),
         }],
         TrustGenerationV1 {
             generation: 1,
@@ -409,6 +426,7 @@ async fn assert_rejected_identity(
         vec![AllowedNodeIdentity {
             node_id: "node-a".to_owned(),
             certificate_sha256: certificates.node_digest(),
+            tenant_id: "00000000-0000-0001-0000-000000000002".to_owned(),
         }],
         TrustGenerationV1 {
             generation: 1,

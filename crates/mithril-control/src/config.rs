@@ -45,17 +45,14 @@ impl ControlConfig {
         ControlPlane,
         Option<AdministrativeHttpConfigV1>,
     )> {
-        let mut control = ControlPlane::with_evidence_directory(
-            self.allowed_nodes,
-            self.trust.clone(),
-            self.evidence_directory.clone(),
-        )?;
+        let store_directory = self
+            .control_store_directory
+            .unwrap_or_else(|| self.evidence_directory.clone());
+        let store = ControlStore::open(store_directory)?;
+        let mut control =
+            ControlPlane::with_control_store(self.allowed_nodes, self.trust.clone(), store.clone());
         if let Some(policy) = self.kubernetes_policy {
-            let store_directory = self
-                .control_store_directory
-                .unwrap_or_else(|| self.evidence_directory.join("control-store"));
-            let owner =
-                PolicyDesiredStateOwner::open(policy, ControlStore::open(store_directory)?)?;
+            let owner = PolicyDesiredStateOwner::open(policy, store)?;
             let (key_id, public_key, issuer_epoch) = owner.signer_identity();
             ensure!(
                 self.trust.policy_issuer_sequence_epoch == issuer_epoch
@@ -119,12 +116,14 @@ impl ControlConfig {
         );
         let mut node_ids = BTreeSet::new();
         for identity in &self.allowed_nodes {
+            let tenant_id = uuid::Uuid::parse_str(&identity.tenant_id).ok();
             ensure!(
                 crate::node_id_is_valid(&identity.node_id)
                     && is_sha256_hex(&identity.certificate_sha256)
+                    && tenant_id.is_some_and(|tenant| tenant.hyphenated().to_string() == identity.tenant_id)
                     && node_ids.insert(identity.node_id.as_str()),
                 InvalidConfigurationSnafu {
-                    reason: "every node needs a unique clean ID and lowercase certificate SHA-256 digest",
+                    reason: "every node needs a canonical tenant UUID, unique clean ID, and lowercase certificate SHA-256 digest",
                 }
             );
         }
