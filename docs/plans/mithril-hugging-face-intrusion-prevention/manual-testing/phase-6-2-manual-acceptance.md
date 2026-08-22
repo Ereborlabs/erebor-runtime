@@ -1,6 +1,8 @@
 # How To Manually Accept Phase 6.2
 
-Status: Proposed runbook; no Phase 6.2 implementation or test has been run.
+Status: Implementation available. Focused automated acceptance passed on
+2026-08-22. The final repository gate is pending. This manual runbook has not
+been run.
 
 Phase: [Control Policy And Evidence Convergence](../phase-6-2-control-policy-and-evidence-convergence.md)
 
@@ -17,10 +19,48 @@ its WAL.
 ## Automated Companion
 
 ```text
-IMPLEMENTATION COMMAND REQUIRED: run Phase 6.2 CRD schema/reconciliation,
-policy compile/sign/distribution, node activation acknowledgement, durable
-evidence intake, restart, outage, tenancy, and status-authority suites.
+rtk cargo test -p mithril-control --test kubernetes_policy_api
+rtk cargo test -p mithril-control --test contract
+rtk cargo test -p mithril-control --test control_policy_reconciliation
+rtk cargo test -p mithril-control --lib --tests
+rtk cargo test -p mithril-node --lib --tests
+rtk cargo test -p mithril-node --test control_tls
+rtk bash .github/scripts/verify-rust-ci.sh
 ```
+
+The focused contract, reconciliation, and Kubernetes API command passed 14
+tests at source commit `f26d622`. The deterministic two-node reconciliation
+test is not a substitute for this physical run.
+
+## Preflight
+
+1. Run the automated companion from the exact source commit under test.
+2. Compare the generated CRD with the installed CRD:
+
+   ```text
+   rtk cargo run -p mithril-control --bin mithril-policy -- print-crd --output /tmp/mithril-workload-protection-profile.json
+   kubectl diff -f /tmp/mithril-workload-protection-profile.json
+   ```
+
+3. Verify that the Control service account can read policy and target facts,
+   and that it cannot write policy spec:
+
+   ```text
+   kubectl auth can-i list workloadprotectionprofiles.mithril.erebor.dev --as=system:serviceaccount:<namespace>:mithril-control -n <namespace>
+   kubectl auth can-i patch workloadprotectionprofiles.mithril.erebor.dev/status --as=system:serviceaccount:<namespace>:mithril-control -n <namespace>
+   kubectl auth can-i update workloadprotectionprofiles.mithril.erebor.dev --as=system:serviceaccount:<namespace>:mithril-control -n <namespace>
+   ```
+
+   The first two commands must return `yes`. The last command must return
+   `no`.
+4. Apply each test manifest with strict server validation:
+
+   ```text
+   kubectl apply --server-side --field-validation=Strict -f <profile-manifest>
+   ```
+
+   The manifest must include the canonical submitted-spec digest annotation.
+   A client or API server that silently prunes unknown input is unsupported.
 
 ## Procedure
 
@@ -52,6 +92,10 @@ evidence intake, restart, outage, tenancy, and status-authority suites.
 10. Verify the node truncates only the durable contiguous range. Record the
    immutable accepted observations, source cursor, coverage state, and policy
    provenance that Phase 7 will consume.
+11. Call the authenticated `ControlHealth.Get` method. Record the queue,
+    storage, watch, compile, rollout, target, node, evidence-cursor, and pending
+    evidence counts. Verify that the reply has no policy, evidence, or secret
+    payload.
 
 ## Required Oracles
 
@@ -69,6 +113,7 @@ evidence intake, restart, outage, tenancy, and status-authority suites.
 | Storage failure | No durable acknowledgement and no node WAL truncation |
 | Tenant/RBAC violation | Cross-tenant policy, evidence, acknowledgement, and status access reject |
 | CRD status mutation | Status cannot select, sign, deliver, or activate policy |
+| Health query | Only an enrolled current-trust session succeeds; the reply contains bounded counts and booleans only |
 
 ## Required Artifacts And Pass Rule
 
@@ -79,6 +124,9 @@ contiguous acknowledgements, WAL before/after state, RBAC denials, and health
 metrics. Pass requires the same canonical state after replay and restart, no
 stale authority, no premature WAL truncation, and no Control write to node BPF
 state.
+
+Record a `Not run`, `Pass`, or `Fail` result for each procedure step. A passed
+automated suite cannot change an unrun physical step to `Pass`.
 
 ## Troubleshooting
 
