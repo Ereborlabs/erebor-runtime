@@ -10,6 +10,7 @@ use tonic::transport::{Certificate, Identity, Server, ServerTlsConfig};
 
 use crate::error::{InvalidConfigurationSnafu, IoSnafu, ServeSnafu, TlsSnafu};
 use crate::{
+    control_health_server::ControlHealthServer,
     node_administrative_arm_server::NodeAdministrativeArmServer,
     node_administrative_resolution_server::NodeAdministrativeResolutionServer,
     node_coverage_server::NodeCoverageServer, node_evidence_server::NodeEvidenceServer,
@@ -67,6 +68,7 @@ pub async fn serve(
                 .max_decoding_message_size(MAX_POLICY_GRPC_MESSAGE_BYTES)
                 .max_encoding_message_size(MAX_POLICY_GRPC_MESSAGE_BYTES),
         )
+        .add_service(ControlHealthServer::new(control.clone()))
         .add_service(NodeAdministrativeResolutionServer::new(control.clone()))
         .add_service(NodeAdministrativeArmServer::new(control))
         .serve_with_shutdown(address, shutdown)

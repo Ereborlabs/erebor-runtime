@@ -68,6 +68,20 @@ pub struct PolicyReconcileResultV1 {
     pub status: WorkloadProtectionProfileStatusV1,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct PolicyReconcileHealthV1 {
+    pub configured_namespaces: u64,
+    pub watched_namespaces: u64,
+    pub reconcile_in_flight: u64,
+    pub successful_reconciles: u64,
+    pub rejected_reconciles: u64,
+    pub successful_compiles: u64,
+    pub failed_compiles: u64,
+    pub successful_relists: u64,
+    pub failed_relists: u64,
+    pub watch_failures: u64,
+}
+
 #[derive(Clone)]
 pub struct PolicyDesiredStateOwner {
     config: Arc<PolicyDesiredStateConfigV1>,
@@ -82,6 +96,15 @@ pub struct PolicyDesiredStateOwner {
 #[derive(Default)]
 struct DesiredStateMemory {
     reconciled: BTreeMap<String, PolicyReconcileResultV1>,
+    watched_namespaces: BTreeSet<String>,
+    reconcile_in_flight: u64,
+    successful_reconciles: u64,
+    rejected_reconciles: u64,
+    successful_compiles: u64,
+    failed_compiles: u64,
+    successful_relists: u64,
+    failed_relists: u64,
+    watch_failures: u64,
 }
 
 #[derive(Clone)]
@@ -164,6 +187,29 @@ impl PolicyDesiredStateOwner {
     }
 
     pub fn reconcile(
+        &self,
+        resource: &WorkloadProtectionProfile,
+        inventory: &[WorkloadTargetFactV1],
+        now_utc_ns: i64,
+    ) -> Result<PolicyReconcileResultV1> {
+        {
+            let mut state = self.state()?;
+            state.reconcile_in_flight = state.reconcile_in_flight.saturating_add(1);
+        }
+        let result = self.reconcile_inner(resource, inventory, now_utc_ns);
+        {
+            let mut state = self.state()?;
+            state.reconcile_in_flight = state.reconcile_in_flight.saturating_sub(1);
+            if result.is_ok() {
+                state.successful_reconciles = state.successful_reconciles.saturating_add(1);
+            } else {
+                state.rejected_reconciles = state.rejected_reconciles.saturating_add(1);
+            }
+        }
+        result
+    }
+
+    fn reconcile_inner(
         &self,
         resource: &WorkloadProtectionProfile,
         inventory: &[WorkloadTargetFactV1],
@@ -267,7 +313,18 @@ impl PolicyDesiredStateOwner {
         {
             artifact
         } else {
-            let compiled = self.compiler.compile(&resource.spec.policy)?;
+            let compiled = match self.compiler.compile(&resource.spec.policy) {
+                Ok(compiled) => {
+                    let mut state = self.state()?;
+                    state.successful_compiles = state.successful_compiles.saturating_add(1);
+                    compiled
+                }
+                Err(error) => {
+                    let mut state = self.state()?;
+                    state.failed_compiles = state.failed_compiles.saturating_add(1);
+                    return Err(error);
+                }
+            };
             let mut seal_request = (*self.seal_request).clone();
             seal_request.issuer_sequence = self.store.next_policy_issuer_sequence(
                 &seal_request.signing_key_id,
@@ -361,9 +418,52 @@ impl PolicyDesiredStateOwner {
         )
     }
 
+    pub fn health(&self) -> Result<PolicyReconcileHealthV1> {
+        let state = self.state()?;
+        Ok(PolicyReconcileHealthV1 {
+            configured_namespaces: count(self.config.namespace_uids.len()),
+            watched_namespaces: count(state.watched_namespaces.len()),
+            reconcile_in_flight: state.reconcile_in_flight,
+            successful_reconciles: state.successful_reconciles,
+            rejected_reconciles: state.rejected_reconciles,
+            successful_compiles: state.successful_compiles,
+            failed_compiles: state.failed_compiles,
+            successful_relists: state.successful_relists,
+            failed_relists: state.failed_relists,
+            watch_failures: state.watch_failures,
+        })
+    }
+
+    fn record_relist(&self, succeeded: bool) {
+        if let Ok(mut state) = self.state.lock() {
+            if succeeded {
+                state.successful_relists = state.successful_relists.saturating_add(1);
+            } else {
+                state.failed_relists = state.failed_relists.saturating_add(1);
+            }
+        }
+    }
+
+    fn record_watch_state(&self, namespace: &str, connected: bool) {
+        if let Ok(mut state) = self.state.lock() {
+            if connected {
+                state.watched_namespaces.insert(namespace.to_owned());
+            } else {
+                state.watched_namespaces.remove(namespace);
+            }
+        }
+    }
+
+    fn record_watch_failure(&self) {
+        if let Ok(mut state) = self.state.lock() {
+            state.watch_failures = state.watch_failures.saturating_add(1);
+        }
+    }
+
     pub async fn run_kubernetes(self, control: crate::ControlPlane) {
         loop {
             let Ok(client) = Client::try_default().await else {
+                self.record_watch_failure();
                 tokio::time::sleep(std::time::Duration::from_secs(5)).await;
                 continue;
             };
@@ -618,6 +718,7 @@ async fn reconcile_namespace(
 ) {
     let api = Api::<WorkloadProtectionProfile>::namespaced(client, &namespace);
     loop {
+        owner.record_watch_state(&namespace, false);
         let Some(resource_version) = relist_namespace(&api, &owner, &control).await else {
             tokio::time::sleep(std::time::Duration::from_secs(2)).await;
             continue;
@@ -626,9 +727,11 @@ async fn reconcile_namespace(
             .watch(&WatchParams::default().timeout(240), &resource_version)
             .await;
         let Ok(stream) = watch else {
+            owner.record_watch_failure();
             tokio::time::sleep(std::time::Duration::from_secs(2)).await;
             continue;
         };
+        owner.record_watch_state(&namespace, true);
         tokio::pin!(stream);
         while let Some(event) = stream.next().await {
             match event {
@@ -640,7 +743,10 @@ async fn reconcile_namespace(
                     reconcile_resource(&api, &owner, &control, resource).await;
                 }
                 Ok(WatchEvent::Bookmark(_)) => {}
-                Ok(WatchEvent::Error(_)) | Err(_) => break,
+                Ok(WatchEvent::Error(_)) | Err(_) => {
+                    owner.record_watch_failure();
+                    break;
+                }
             }
         }
     }
@@ -658,7 +764,13 @@ async fn relist_namespace(
         if let Some(token) = &continuation {
             params = params.continue_token(token);
         }
-        let page = api.list(&params).await.ok()?;
+        let page = match api.list(&params).await {
+            Ok(page) => page,
+            Err(_) => {
+                owner.record_relist(false);
+                return None;
+            }
+        };
         for resource in page.items {
             reconcile_resource(api, owner, control, resource).await;
         }
@@ -668,7 +780,9 @@ async fn relist_namespace(
             break;
         }
     }
-    resource_version.filter(|value| !value.is_empty())
+    let resource_version = resource_version.filter(|value| !value.is_empty());
+    owner.record_relist(resource_version.is_some());
+    resource_version
 }
 
 async fn reconcile_resource(
@@ -894,6 +1008,10 @@ fn valid_sha256(value: &str) -> bool {
         && value
             .bytes()
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+fn count(value: usize) -> u64 {
+    u64::try_from(value).unwrap_or(u64::MAX)
 }
 
 fn sha256(bytes: &[u8]) -> String {

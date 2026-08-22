@@ -14,17 +14,17 @@ use tokio_stream::{wrappers::ReceiverStream, Stream, StreamExt as _};
 use tonic::{Request, Response, Status, Streaming};
 
 use crate::{
-    node_administrative_arm_server::NodeAdministrativeArm,
+    control_health_server::ControlHealth, node_administrative_arm_server::NodeAdministrativeArm,
     node_administrative_resolution_server::NodeAdministrativeResolution,
     node_coverage_server::NodeCoverage, node_evidence_server::NodeEvidence,
     node_policy_server::NodePolicy, node_registry_server::NodeRegistry,
     node_trust_server::NodeTrust, AdministrativeExecArmResult, AdministrativeExecArmStreamRequest,
     AdministrativeExecResolution, AdministrativeExecResolutionStreamRequest, ArmAdministrativeExec,
-    CoverageAck, CoverageReportRequest, EvidenceAck, EvidenceBatchRequest, NodeReadinessRequest,
-    NodeRegistrationRequest, NodeSessionContext, PolicyAcknowledgementAccepted,
-    PolicyAcknowledgementRequest, PolicyChunk, PolicyChunkRequest, PolicyInventory,
-    PolicyInventoryRequest, RegistrationAccepted, ResolveAdministrativeExec, TrustGeneration,
-    TrustGenerationAckRequest, IDENTITY_BYTES,
+    ControlConvergenceHealth, CoverageAck, CoverageReportRequest, EvidenceAck,
+    EvidenceBatchRequest, NodeReadinessRequest, NodeRegistrationRequest, NodeSessionContext,
+    PolicyAcknowledgementAccepted, PolicyAcknowledgementRequest, PolicyChunk, PolicyChunkRequest,
+    PolicyInventory, PolicyInventoryRequest, RegistrationAccepted, ResolveAdministrativeExec,
+    TrustGeneration, TrustGenerationAckRequest, IDENTITY_BYTES,
 };
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
@@ -191,6 +191,56 @@ impl ControlPlane {
                     .collect()
             },
         )
+    }
+
+    pub fn convergence_health(&self) -> Result<ControlConvergenceHealth, Status> {
+        let owner = self
+            .policy_desired_state
+            .as_ref()
+            .ok_or_else(|| Status::failed_precondition("Control has no Kubernetes policy owner"))?;
+        let policy = owner.health().map_err(internal_status)?;
+        let store = self
+            .policy_store
+            .as_ref()
+            .ok_or_else(|| Status::failed_precondition("Control has no durable policy store"))?
+            .health()
+            .map_err(internal_status)?;
+        let state = self.lock_state()?;
+        let connected_nodes = count(state.sessions.len());
+        let ready_nodes = count(
+            state
+                .sessions
+                .values()
+                .filter(|session| session.admission_ready)
+                .count(),
+        );
+        Ok(ControlConvergenceHealth {
+            queue_healthy: policy.reconcile_in_flight <= policy.configured_namespaces,
+            reconcile_in_flight: policy.reconcile_in_flight,
+            reconcile_queue_limit: policy.configured_namespaces,
+            storage_healthy: true,
+            control_commit_index: store.commit_index,
+            watch_healthy: policy.watched_namespaces == policy.configured_namespaces,
+            configured_namespaces: policy.configured_namespaces,
+            watched_namespaces: policy.watched_namespaces,
+            successful_relists: policy.successful_relists,
+            failed_relists: policy.failed_relists,
+            watch_failures: policy.watch_failures,
+            successful_reconciles: policy.successful_reconciles,
+            rejected_reconciles: policy.rejected_reconciles,
+            successful_compiles: policy.successful_compiles,
+            failed_compiles: policy.failed_compiles,
+            target_snapshots: store.target_snapshots,
+            rollout_targets: store.rollout_targets,
+            unsettled_rollout_targets: store.unsettled_rollout_targets,
+            allowed_nodes: count(self.allowed_nodes.len()),
+            connected_nodes,
+            ready_nodes,
+            evidence_cursors: store.evidence_cursors,
+            pending_evidence_batches: store.pending_evidence_batches,
+            pending_evidence_records: store.pending_evidence_records,
+            coverage_cursors: store.coverage_cursors,
+        })
     }
 
     pub async fn resolve_administrative_exec(
@@ -504,6 +554,19 @@ impl ControlPlane {
         self.state
             .lock()
             .map_err(|_| Status::internal("control session state is poisoned"))
+    }
+}
+
+#[tonic::async_trait]
+impl ControlHealth for ControlPlane {
+    async fn get(
+        &self,
+        request: Request<NodeSessionContext>,
+    ) -> Result<Response<ControlConvergenceHealth>, Status> {
+        let node_id = self.authenticated_node(&request)?;
+        self.require_session(&node_id, request.get_ref())?;
+        self.require_current_trust(&node_id, request.get_ref())?;
+        Ok(Response::new(self.convergence_health()?))
     }
 }
 
@@ -987,6 +1050,10 @@ const fn rollout_state_name(value: crate::PolicyRolloutStatusV1) -> &'static str
 
 fn nonempty(value: String) -> Option<String> {
     (!value.is_empty()).then_some(value)
+}
+
+fn count(value: usize) -> u64 {
+    u64::try_from(value).unwrap_or(u64::MAX)
 }
 
 fn internal_status(error: crate::Error) -> Status {
