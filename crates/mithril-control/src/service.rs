@@ -65,6 +65,7 @@ struct ControlState {
 struct NodeSession {
     identity: StreamIdentity,
     kubernetes_node_name: Option<String>,
+    kubernetes_node_uid: Option<String>,
     resolution_output: Option<mpsc::Sender<Result<ResolveAdministrativeExec, Status>>>,
     arm_output: Option<mpsc::Sender<Result<ArmAdministrativeExec, Status>>>,
     admission_ready: bool,
@@ -77,6 +78,7 @@ struct NodeSession {
 pub struct KubernetesNodeSessionV1 {
     pub node_id: String,
     pub kubernetes_node_name: String,
+    pub kubernetes_node_uid: String,
     pub node_boot_id: Vec<u8>,
     pub label_epoch: u64,
 }
@@ -223,6 +225,7 @@ impl ControlPlane {
                         Some(KubernetesNodeSessionV1 {
                             node_id: session.identity.node_id.clone(),
                             kubernetes_node_name: session.kubernetes_node_name.clone()?,
+                            kubernetes_node_uid: session.kubernetes_node_uid.clone()?,
                             node_boot_id: session.identity.node_boot_id.clone(),
                             label_epoch: session.label_epoch,
                         })
@@ -230,6 +233,31 @@ impl ControlPlane {
                     .collect()
             },
         )
+    }
+
+    pub fn bind_kubernetes_node_session(
+        &self,
+        kubernetes_node_name: &str,
+        kubernetes_node_uid: &str,
+    ) -> Result<(), Status> {
+        let mut state = self.lock_state()?;
+        let session = state
+            .sessions
+            .values_mut()
+            .find(|session| session.kubernetes_node_name.as_deref() == Some(kubernetes_node_name))
+            .ok_or_else(|| Status::unavailable("Kubernetes Node has no registered session"))?;
+        if session
+            .kubernetes_node_uid
+            .as_deref()
+            .is_some_and(|uid| uid != kubernetes_node_uid)
+        {
+            session.admission_ready = false;
+            return Err(Status::failed_precondition(
+                "Kubernetes Node UID changed during the registered session",
+            ));
+        }
+        session.kubernetes_node_uid = Some(kubernetes_node_uid.to_owned());
+        Ok(())
     }
 
     pub fn convergence_health(&self) -> Result<ControlConvergenceHealth, Status> {
@@ -465,6 +493,7 @@ impl ControlPlane {
             NodeSession {
                 identity,
                 kubernetes_node_name,
+                kubernetes_node_uid: None,
                 resolution_output: None,
                 arm_output: None,
                 admission_ready: false,
@@ -1414,9 +1443,17 @@ mod tests {
             .get_mut("node-a")
             .ok_or_else(|| tonic::Status::internal("test session disappeared"))?
             .admission_ready = true;
+        control.bind_kubernetes_node_session(
+            "worker-a.example",
+            "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        )?;
         let sessions = control.ready_kubernetes_node_sessions(std::time::Duration::from_secs(1));
         assert_eq!(sessions.len(), 1);
         assert_eq!(sessions[0].kubernetes_node_name, "worker-a.example");
+        assert_eq!(
+            sessions[0].kubernetes_node_uid,
+            "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+        );
         assert_eq!(sessions[0].node_boot_id, vec![1; 16]);
         Ok(())
     }

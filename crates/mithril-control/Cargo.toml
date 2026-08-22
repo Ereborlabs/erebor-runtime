@@ -20,6 +20,7 @@ erebor-runtime-error = { path = "../erebor-runtime-error" }
 hex.workspace = true
 k8s-openapi.workspace = true
 kube = { workspace = true, features = ["derive"] }
+json-patch.workspace = true
 minicbor.workspace = true
 openidconnect.workspace = true
 prost.workspace = true

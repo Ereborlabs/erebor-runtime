@@ -61,7 +61,6 @@ fn make_owner(store: ControlStore) -> PolicyDesiredStateOwner {
         PolicyDesiredStateConfigV1 {
             tenant_id: TENANT_ID.to_owned(),
             cluster_uid: CLUSTER_UID.to_owned(),
-            namespace_uids: BTreeMap::from([("tenant-a".to_owned(), NAMESPACE_UID.to_owned())]),
             signer: PolicySignerConfigV1 {
                 signing_key_id: "policy-key-a".to_owned(),
                 signing_key_path: PathBuf::from("/unused/policy-key"),
@@ -160,6 +159,7 @@ fn create_update_duplicate_and_restart_preserve_one_monotonic_rollout() -> TestR
     let first_policy = policy()?;
     let first = owner.reconcile(
         &resource(&first_policy, "profile", OBJECT_UID, 1, false)?,
+        NAMESPACE_UID,
         &inventory(&"1".repeat(64)),
         NOW,
     )?;
@@ -174,6 +174,7 @@ fn create_update_duplicate_and_restart_preserve_one_monotonic_rollout() -> TestR
     let first_commit = store.commit_index();
     let duplicate = owner.reconcile(
         &resource(&first_policy, "profile", OBJECT_UID, 1, false)?,
+        NAMESPACE_UID,
         &inventory(&"1".repeat(64)),
         NOW,
     )?;
@@ -185,6 +186,7 @@ fn create_update_duplicate_and_restart_preserve_one_monotonic_rollout() -> TestR
     second_policy.rollout.rollout_generation = 2;
     let second = owner.reconcile(
         &resource(&second_policy, "profile", OBJECT_UID, 2, false)?,
+        NAMESPACE_UID,
         &inventory(&"1".repeat(64)),
         NOW + 1,
     )?;
@@ -204,6 +206,7 @@ fn create_update_duplicate_and_restart_preserve_one_monotonic_rollout() -> TestR
 
     let stale = owner.reconcile(
         &resource(&second_policy, "profile", OBJECT_UID, 1, false)?,
+        NAMESPACE_UID,
         &inventory(&"1".repeat(64)),
         NOW + 2,
     );
@@ -214,6 +217,7 @@ fn create_update_duplicate_and_restart_preserve_one_monotonic_rollout() -> TestR
     let reopened = ControlStore::open(directory.path())?;
     let restarted = make_owner(reopened.clone()).reconcile(
         &resource(&second_policy, "profile", OBJECT_UID, 2, false)?,
+        NAMESPACE_UID,
         &inventory(&"1".repeat(64)),
         NOW + 3,
     )?;
@@ -234,6 +238,7 @@ fn health_snapshot_exposes_bounded_operational_counts_without_payloads() -> Test
 
     owner.reconcile(
         &resource(&policy()?, "profile", OBJECT_UID, 1, false)?,
+        NAMESPACE_UID,
         &inventory(&"1".repeat(64)),
         NOW,
     )?;
@@ -268,6 +273,7 @@ fn duplicate_profile_and_exact_workload_claims_do_not_replace_valid_rollout() ->
     let first_policy = policy()?;
     let first = owner.reconcile(
         &resource(&first_policy, "one", OBJECT_UID, 1, false)?,
+        NAMESPACE_UID,
         &inventory(&"1".repeat(64)),
         NOW,
     )?;
@@ -280,6 +286,7 @@ fn duplicate_profile_and_exact_workload_claims_do_not_replace_valid_rollout() ->
             1,
             false,
         )?,
+        NAMESPACE_UID,
         &inventory(&"2".repeat(64)),
         NOW + 1,
     );
@@ -300,6 +307,7 @@ fn duplicate_profile_and_exact_workload_claims_do_not_replace_valid_rollout() ->
             1,
             false,
         )?,
+        NAMESPACE_UID,
         &inventory(&"1".repeat(64)),
         NOW + 2,
     );
@@ -323,7 +331,7 @@ fn status_refreshes_from_durable_node_rollout_state() -> TestResult {
     let owner = make_owner(store.clone());
     let policy = policy()?;
     let resource = resource(&policy, "profile", OBJECT_UID, 1, false)?;
-    let first = owner.reconcile(&resource, &inventory(&"1".repeat(64)), NOW)?;
+    let first = owner.reconcile(&resource, NAMESPACE_UID, &inventory(&"1".repeat(64)), NOW)?;
     let bundle = &first.bundles[0];
     owner.rollout_owner().acknowledge(
         PolicyActivationAcknowledgementV1 {
@@ -347,7 +355,12 @@ fn status_refreshes_from_durable_node_rollout_state() -> TestResult {
         .finalize()?,
     )?;
 
-    let refreshed = owner.reconcile(&resource, &inventory(&"1".repeat(64)), NOW + 2)?;
+    let refreshed = owner.reconcile(
+        &resource,
+        NAMESPACE_UID,
+        &inventory(&"1".repeat(64)),
+        NOW + 2,
+    )?;
     assert_eq!(refreshed.status.rollout_counts.active, 1);
     assert_eq!(refreshed.status.rollout_counts.total(), 1);
     assert_eq!(refreshed.status.conditions.len(), 6);
@@ -372,7 +385,7 @@ fn rejected_candidate_stops_redelivery_and_projects_degraded_status() -> TestRes
     let owner = make_owner(store.clone());
     let policy = policy()?;
     let resource = resource(&policy, "profile", OBJECT_UID, 1, false)?;
-    let first = owner.reconcile(&resource, &inventory(&"1".repeat(64)), NOW)?;
+    let first = owner.reconcile(&resource, NAMESPACE_UID, &inventory(&"1".repeat(64)), NOW)?;
     let bundle = &first.bundles[0];
     assert_eq!(
         store.next_bundle_for_node("node-a", "", &[])?,
@@ -401,7 +414,12 @@ fn rejected_candidate_stops_redelivery_and_projects_degraded_status() -> TestRes
     )?;
 
     assert!(store.next_bundle_for_node("node-a", "", &[])?.is_none());
-    let refreshed = owner.reconcile(&resource, &inventory(&"1".repeat(64)), NOW + 2)?;
+    let refreshed = owner.reconcile(
+        &resource,
+        NAMESPACE_UID,
+        &inventory(&"1".repeat(64)),
+        NOW + 2,
+    )?;
     assert_eq!(refreshed.status.rollout_counts.rejected, 1);
     assert!(refreshed.status.conditions.iter().any(|condition| {
         condition.condition == PolicyConditionKindV1::Degraded && condition.status
@@ -417,11 +435,13 @@ fn deletion_names_exact_predecessor_and_recreate_gets_a_new_source_identity() ->
     let policy = policy()?;
     let first = owner.reconcile(
         &resource(&policy, "profile", OBJECT_UID, 1, false)?,
+        NAMESPACE_UID,
         &inventory(&"1".repeat(64)),
         NOW,
     )?;
     let retiring = owner.reconcile(
         &resource(&policy, "profile", OBJECT_UID, 2, true)?,
+        NAMESPACE_UID,
         &[],
         NOW + 1,
     )?;
@@ -446,6 +466,7 @@ fn deletion_names_exact_predecessor_and_recreate_gets_a_new_source_identity() ->
             1,
             false,
         )?,
+        NAMESPACE_UID,
         &inventory(&"1".repeat(64)),
         NOW + 2,
     )?;
@@ -479,7 +500,7 @@ fn two_node_create_update_restart_delete_and_recreate_preserve_provenance() -> T
     let inventory = two_node_inventory();
     let mut first_policy = policy()?;
     let first_resource = resource(&first_policy, "profile", OBJECT_UID, 1, false)?;
-    let first = owner.reconcile(&first_resource, &inventory, NOW)?;
+    let first = owner.reconcile(&first_resource, NAMESPACE_UID, &inventory, NOW)?;
     assert_eq!(first.bundles.len(), 2);
     assert_eq!(
         first.source_revision.canonical_spec_digest,
@@ -507,7 +528,7 @@ fn two_node_create_update_restart_delete_and_recreate_preserve_provenance() -> T
         NOW + 1,
     )?)?;
     let first_status = owner
-        .reconcile(&first_resource, &inventory, NOW + 2)?
+        .reconcile(&first_resource, NAMESPACE_UID, &inventory, NOW + 2)?
         .status;
     assert_eq!(first_status.rollout_counts.active, 1);
     assert_eq!(first_status.rollout_counts.rejected, 1);
@@ -515,7 +536,7 @@ fn two_node_create_update_restart_delete_and_recreate_preserve_provenance() -> T
     first_policy.metadata.profile_version = 2;
     first_policy.rollout.rollout_generation = 2;
     let second_resource = resource(&first_policy, "profile", OBJECT_UID, 2, false)?;
-    let second = owner.reconcile(&second_resource, &inventory, NOW + 3)?;
+    let second = owner.reconcile(&second_resource, NAMESPACE_UID, &inventory, NOW + 3)?;
     let second_by_node = second
         .bundles
         .iter()
@@ -556,7 +577,7 @@ fn two_node_create_update_restart_delete_and_recreate_preserve_provenance() -> T
         PolicyActivationStateV1::Active,
         NOW + 4,
     )?)?;
-    let mixed = owner.reconcile(&second_resource, &inventory, NOW + 5)?;
+    let mixed = owner.reconcile(&second_resource, NAMESPACE_UID, &inventory, NOW + 5)?;
     assert_eq!(mixed.status.rollout_counts.active, 1);
     assert_eq!(mixed.status.rollout_counts.pending, 1);
     assert!(mixed.status.conditions.iter().any(|condition| {
@@ -567,13 +588,14 @@ fn two_node_create_update_restart_delete_and_recreate_preserve_provenance() -> T
     drop(store);
     let reopened = ControlStore::open(directory.path())?;
     let restarted_owner = make_owner(reopened.clone());
-    let restarted = restarted_owner.reconcile(&second_resource, &inventory, NOW + 6)?;
+    let restarted =
+        restarted_owner.reconcile(&second_resource, NAMESPACE_UID, &inventory, NOW + 6)?;
     assert_eq!(restarted.bundles, second.bundles);
     assert_eq!(restarted.status.rollout_counts.active, 1);
     assert_eq!(restarted.status.rollout_counts.pending, 1);
 
     let deleting_resource = resource(&first_policy, "profile", OBJECT_UID, 3, true)?;
-    let retiring = restarted_owner.reconcile(&deleting_resource, &[], NOW + 7)?;
+    let retiring = restarted_owner.reconcile(&deleting_resource, NAMESPACE_UID, &[], NOW + 7)?;
     assert_eq!(retiring.bundles.len(), 2);
     assert!(retiring.bundles.iter().all(|bundle| {
         bundle.candidate.operation == PolicyDeliveryOperationV1::RetireToRestrictiveTerminal
@@ -601,7 +623,8 @@ fn two_node_create_update_restart_delete_and_recreate_preserve_provenance() -> T
         1,
         false,
     )?;
-    let recreated = restarted_owner.reconcile(&recreated_resource, &inventory, NOW + 8)?;
+    let recreated =
+        restarted_owner.reconcile(&recreated_resource, NAMESPACE_UID, &inventory, NOW + 8)?;
     assert_eq!(recreated.bundles.len(), 2);
     for bundle in &recreated.bundles {
         let terminal = retiring_by_node
@@ -630,6 +653,7 @@ fn corrupt_or_incompatible_commit_chain_blocks_store_recovery() -> TestResult {
     let store = ControlStore::open(directory.path())?;
     make_owner(store.clone()).reconcile(
         &resource(&policy()?, "profile", OBJECT_UID, 1, false)?,
+        NAMESPACE_UID,
         &inventory(&"1".repeat(64)),
         NOW,
     )?;

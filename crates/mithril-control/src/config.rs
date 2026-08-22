@@ -11,8 +11,8 @@ use snafu::{ensure, ResultExt as _};
 use crate::error::{InvalidConfigurationSnafu, IoSnafu, JsonSnafu};
 use crate::{
     AdministrativeHttpConfigV1, AllowedNodeIdentity, ControlPlane, ControlServerTls, ControlStore,
-    KubernetesNodeControlConfigV1, KubernetesNodeReadinessOwner, PolicyDesiredStateConfigV1,
-    PolicyDesiredStateOwner, Result, TrustGenerationV1,
+    KubernetesAdmissionHttpConfigV1, KubernetesNodeControlConfigV1, KubernetesNodeReadinessOwner,
+    PolicyDesiredStateConfigV1, PolicyDesiredStateOwner, Result, TrustGenerationV1,
 };
 
 #[derive(Clone, Debug, Deserialize)]
@@ -30,6 +30,8 @@ pub struct ControlConfig {
     pub kubernetes_policy: Option<PolicyDesiredStateConfigV1>,
     #[serde(default)]
     pub kubernetes_nodes: Option<KubernetesNodeControlConfigV1>,
+    #[serde(default)]
+    pub kubernetes_admission: Option<KubernetesAdmissionHttpConfigV1>,
 }
 
 pub struct ControlRuntimeParts {
@@ -38,6 +40,7 @@ pub struct ControlRuntimeParts {
     pub control: ControlPlane,
     pub administrative_exec: Option<AdministrativeHttpConfigV1>,
     pub kubernetes_nodes: Option<KubernetesNodeReadinessOwner>,
+    pub kubernetes_admission: Option<KubernetesAdmissionHttpConfigV1>,
 }
 
 impl ControlConfig {
@@ -84,6 +87,7 @@ impl ControlConfig {
             control,
             administrative_exec: self.administrative_exec,
             kubernetes_nodes,
+            kubernetes_admission: self.kubernetes_admission,
         })
     }
 
@@ -113,6 +117,15 @@ impl ControlConfig {
         }
         if let Some(nodes) = &self.kubernetes_nodes {
             nodes.validate()?;
+        }
+        if let Some(admission) = &self.kubernetes_admission {
+            admission.validate()?;
+            ensure!(
+                self.kubernetes_policy.is_some() && self.kubernetes_nodes.is_some(),
+                InvalidConfigurationSnafu {
+                    reason: "Kubernetes admission requires policy and DaemonSet node control",
+                }
+            );
         }
         ensure!(
             self.trust.generation > 0

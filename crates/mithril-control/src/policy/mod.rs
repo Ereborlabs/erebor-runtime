@@ -3,6 +3,7 @@ mod canonical;
 mod compiler;
 mod kubernetes;
 mod kubernetes_nodes;
+mod kubernetes_workloads;
 mod path;
 mod reconciliation;
 mod rollback;
@@ -20,6 +21,7 @@ pub use compiler::{
 };
 pub use kubernetes::*;
 pub use kubernetes_nodes::*;
+pub use kubernetes_workloads::*;
 pub use path::*;
 pub use reconciliation::*;
 pub use rollback::{
