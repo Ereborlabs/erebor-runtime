@@ -1,8 +1,9 @@
 # Phase 6.2: Control Policy And Evidence Convergence
 
-Status: In progress. Deliverables D6.2.1-D6.2.8 passed automated acceptance on
-2026-08-22. The Kubernetes scheduling and runtime-admission amendment in
-D6.2.9-D6.2.12 is not complete. The manual runbook has not been run.
+Status: Not done. Source implementation and automated acceptance for
+D6.2.1-D6.2.12 passed on 2026-08-22 at code commit
+`bc7ccde8b435cb0eecf5787a013670021635b28d`. The required physical Kubernetes
+and stock-runtime acceptance has not run.
 
 Master: [Mithril Hugging Face Intrusion Prevention](./README.md)
 
@@ -281,9 +282,9 @@ terminal state. A node applies retirement through the normal stage, readback,
 probe, and activation path. If no valid successor is available, the last valid
 local generation stays active.
 
-A finalizer may report Control-owned retirement progress. It is not node
-authority. Removing the finalizer, deleting the namespace, losing the API
-server, or losing Control cannot remove a node's active protection.
+Control does not require or update a CRD finalizer. Forced object deletion,
+namespace deletion, API-server loss, or Control loss cannot remove a node's
+active protection.
 
 After a Control restart, relist, watch compaction, node reconnect, or network
 partition, reconcile from the durable source, rollout, intake, and node
@@ -307,14 +308,16 @@ projection of Control-owned durable state. A status value cannot authorize a
 candidate or activation. Keep per-node inventory in the Control store instead
 of expanding CRD status without a bound.
 
-Use least-privilege RBAC for CRD list/watch, status and finalizer updates, and
-read-only access to the namespace, workload, Pod, controller, and node fields
-needed for target resolution. Limit the Control watch to configured tenant
-namespaces. Separate the Control service account from operator write identities
-and from node identities that receive policy. Reject cross-tenant selectors,
-acknowledgements, evidence, and status updates. Expose queue, storage, watch,
-compile, rollout, target, node, and evidence-cursor health without policy
-source, evidence, or secret payloads in logs or metrics.
+Use least-privilege RBAC for cluster-wide CRD list/watch, status updates, the
+exact `mithril-node` DaemonSet, and read-only namespace, Pod, ServiceAccount,
+and Node facts. Grant Node patch because built-in RBAC cannot restrict a patch
+to individual fields. The readiness owner changes only the Mithril readiness
+projection and quarantine taint. Control has no policy-spec or finalizer write
+authority. There is no configured protected-namespace list. Separate the
+Control service account from operator write identities and from node identities
+that receive policy. Reject cross-tenant acknowledgements and evidence. Expose
+queue, storage, watch, compile, rollout, target, node, and evidence-cursor
+health without policy source, evidence, or secret payloads in logs or metrics.
 
 ### D6.2.8 — End-to-end convergence proof
 
@@ -429,7 +432,7 @@ evidence. No graph or finding is created in this phase.
   tests.
 - CRD-to-`PolicyDocumentV1` golden equality and deterministic compile/sign
   tests.
-- Create, update, duplicate event, stale UID, delete/recreate, finalizer
+- Create, update, duplicate event, stale UID, delete/recreate, forced object
   removal, duplicate profile ID, overlapping selector, watch close,
   compaction/relist, and Control restart tests.
 - Compile, simulation, approval, signature, rollback, trust rotation, and
@@ -491,17 +494,16 @@ audit history and the privileged/unmatched workload floor.
 ## Phase Result
 
 ```text
-State: In progress. The prior D6.2.1-D6.2.8 result remains valid. The
-D6.2.9-D6.2.12 amendment is not done.
-Validated architecture revision/digest: 51807f12113391872ee90ce2469869db18bc4d25e9b4b1f39eb01fcaefb4fe1e.
-Completed deliverable IDs: D6.2.1-D6.2.8.
-Files and durable owners changed: WorkloadProtectionProfile CRD and Helm RBAC; PolicyDesiredStateOwner; PolicyRolloutOwner; TrustBundleOwner; one append-only ControlStore for policy, trust, rollout, acknowledgement, evidence, coverage, and cursor transactions; generated NodePolicy and ControlHealth services; NodePolicyDeliveryOwner and the existing node activation path. The BPF ABI and BPF programs did not change.
+State: Not done. Source implementation and automated acceptance passed. The required physical Kubernetes and stock-runtime acceptance has not run.
+Validated architecture revision/digest: 0c87aaf6c2d0347e06b53ce0ccb9f69577a9b248a4a90463082335d7865d77ae.
+Completed deliverable IDs: D6.2.1-D6.2.12 are source-complete. D6.2.9-D6.2.12 do not have the required physical result.
+Files and durable owners changed: WorkloadProtectionProfile CRD and Helm package; PolicyDesiredStateOwner; PolicyRolloutOwner; TrustBundleOwner; KubernetesNodeReadinessOwner; KubernetesAdmissionOwner; bound-workload reconciler; one append-only ControlStore for policy, trust, rollout, acknowledgement, evidence, coverage, and cursor transactions; generated NodePolicy and ControlHealth services; NodePolicyDeliveryOwner; the existing node activation and cgroup-binding paths; and the stateless OCI adapter. The BPF ABI and BPF programs did not change.
 Upstream-adoption dossier IDs used: none.
-Fixture cases and exact physical results: no new Appendix C fixture or physical result. The deterministic two-node Control test passed, but the physical two-node manual run was not run.
-Commands and exact source state covered: `rtk bash .github/scripts/verify-rust-ci.sh` passed at commit 1e1e89053a494f6b070738acc0e2d9bf27b74ce4. The focused Control contract, reconciliation, and Kubernetes API command passed 14 tests at commit f26d622. The final gate passed 42 mithril-control unit tests, 8 reconciliation tests, 5 Kubernetes API tests, 119 mithril-node unit tests, and 5 mTLS integration tests.
-Platform/kernel/runtime manifests: the Helm package contains the generated closed CRD, least-privilege Control RBAC, Control Deployment, and Service. No platform or kernel manifest changed.
+Fixture cases and exact physical results: no new Appendix C fixture or physical result. The deterministic two-node Control tests passed. The physical two-node manual run was not run.
+Commands and exact source state covered: `bash .github/scripts/verify-rust-ci.sh` passed the repository format, check, clippy, and full workspace test gate at code commit bc7ccde8b435cb0eecf5787a013670021635b28d. The final gate included 57 mithril-control unit tests, 5 Kubernetes API tests, 70 mithril-e2e unit tests, 128 mithril-node unit tests, 2 OCI adapter tests, and 5 mTLS integration tests. `rtk bash packaging/mithril/helm/tests/verify.sh` passed chart lint and the rendered packaging contract for the same source state.
+Platform/kernel/runtime manifests: the Helm package contains the generated closed CRD, Control RBAC, the exact DaemonSet reader Role, the Control Deployment and Service, fail-closed admission webhooks, the node DaemonSet, and the OCI hook installation. No BPF program or kernel ABI changed. No live platform manifest was recorded.
 Performance/capacity results: no new benchmark. Evidence gRPC messages are limited to 4 MiB. Policy gRPC messages are limited to 128 KiB. The pending evidence window is limited to 4,096 records. Health reports fixed counts and booleans only.
-Unsupported/degraded paths: no live Kubernetes API-server, RBAC denial, watch-compaction, network-partition, storage-outage, or physical two-node result was recorded. Phase 7 graph and finding behavior is not present.
-Remaining work in this phase: implement and verify D6.2.9-D6.2.12, update the manual runbook, and record the physical result. The prior optional physical D6.2.1-D6.2.8 run was not completed.
+Unsupported/degraded paths: no live Kubernetes API-server, RBAC denial, watch-compaction, network-partition, storage-outage, stock-runtime ordering, or physical two-node result was recorded. Phase 7 graph and finding behavior is not present.
+Remaining work in this phase: run the documented physical acceptance on the target Kubernetes and stock OCI runtime versions, retain its evidence, and record a `Pass` or `Fail` result. The prior optional physical D6.2.1-D6.2.8 run was not completed.
 Next phase not authorized: yes.
 ```
