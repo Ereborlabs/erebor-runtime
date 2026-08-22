@@ -8,6 +8,8 @@ Design: [Validated readable architecture](./policy-and-protection-algorithm-arch
 
 Manual acceptance: [Phase 6.2 runbook](./manual-testing/phase-6-2-manual-acceptance.md)
 
+Implementation review: [Phase 6.2 review guide](./phase-6-2-implementation-review.md)
+
 Environment setup: [shared setup guide](./manual-testing/environment-setup.md)
 
 ## Purpose
