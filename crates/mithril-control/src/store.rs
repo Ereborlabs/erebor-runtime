@@ -68,23 +68,35 @@ struct ControlCommitV1 {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "SCREAMING_SNAKE_CASE")]
 enum ControlTransactionV1 {
-    PolicySourceAccepted {
-        source_revision: PolicySourceRevisionV1,
-        policy_document: PolicyDocumentV1,
+    SourceAccepted {
+        source_revision: Box<PolicySourceRevisionV1>,
+        policy_document: Box<PolicyDocumentV1>,
     },
-    PolicyCompiled {
+    Compiled {
         policy_source_revision_id: String,
-        artifact: ProfileCandidateArtifactV1,
+        artifact: Box<ProfileCandidateArtifactV1>,
     },
-    PolicyRolloutCreated {
-        target_snapshot: PolicyTargetSnapshotV1,
-        bundles: Vec<PolicyBundleV1>,
-        rollout_states: Vec<PolicyRolloutStateV1>,
+    RolloutCreated {
+        rollout: Box<PolicyRolloutTransactionV1>,
     },
-    PolicyAcknowledged {
-        acknowledgement: PolicyActivationAcknowledgementV1,
-        rollout_state: PolicyRolloutStateV1,
+    Acknowledged {
+        result: Box<PolicyAcknowledgementTransactionV1>,
     },
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct PolicyRolloutTransactionV1 {
+    target_snapshot: PolicyTargetSnapshotV1,
+    bundles: Vec<PolicyBundleV1>,
+    rollout_states: Vec<PolicyRolloutStateV1>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct PolicyAcknowledgementTransactionV1 {
+    acknowledgement: PolicyActivationAcknowledgementV1,
+    rollout_state: PolicyRolloutStateV1,
 }
 
 impl ControlStore {
@@ -209,9 +221,9 @@ impl ControlStore {
         }
         commit(
             &mut inner,
-            ControlTransactionV1::PolicySourceAccepted {
-                source_revision: revision,
-                policy_document,
+            ControlTransactionV1::SourceAccepted {
+                source_revision: Box::new(revision),
+                policy_document: Box::new(policy_document),
             },
         )
     }
@@ -271,9 +283,9 @@ impl ControlStore {
         }
         commit(
             &mut inner,
-            ControlTransactionV1::PolicyCompiled {
+            ControlTransactionV1::Compiled {
                 policy_source_revision_id: policy_source_revision_id.to_owned(),
-                artifact,
+                artifact: Box::new(artifact),
             },
         )
     }
@@ -339,10 +351,12 @@ impl ControlStore {
         validate_rollout_ordering(&inner.state, &bundles, &inner.root)?;
         commit(
             &mut inner,
-            ControlTransactionV1::PolicyRolloutCreated {
-                target_snapshot,
-                bundles,
-                rollout_states,
+            ControlTransactionV1::RolloutCreated {
+                rollout: Box::new(PolicyRolloutTransactionV1 {
+                    target_snapshot,
+                    bundles,
+                    rollout_states,
+                }),
             },
         )
     }
@@ -390,9 +404,11 @@ impl ControlStore {
         }
         commit(
             &mut inner,
-            ControlTransactionV1::PolicyAcknowledged {
-                acknowledgement,
-                rollout_state,
+            ControlTransactionV1::Acknowledged {
+                result: Box::new(PolicyAcknowledgementTransactionV1 {
+                    acknowledgement,
+                    rollout_state,
+                }),
             },
         )
     }
@@ -705,7 +721,7 @@ fn apply_transaction(
     path: &Path,
 ) -> Result<()> {
     match transaction {
-        ControlTransactionV1::PolicySourceAccepted {
+        ControlTransactionV1::SourceAccepted {
             source_revision,
             policy_document,
         } => {
@@ -719,14 +735,14 @@ fn apply_transaction(
                 }
                 .fail();
             }
-            let key = PolicyObjectKeyV1::from(source_revision);
+            let key = PolicyObjectKeyV1::from(source_revision.as_ref());
             if let Some(existing) = state
                 .source_revisions
                 .insert(
                     source_revision.policy_source_revision_id.clone(),
-                    source_revision.clone(),
+                    source_revision.as_ref().clone(),
                 )
-                .filter(|existing| existing != source_revision)
+                .filter(|existing| existing != source_revision.as_ref())
             {
                 return ControlStoreSnafu {
                     path: path.to_owned(),
@@ -742,10 +758,10 @@ fn apply_transaction(
                 .insert(key, source_revision.policy_source_revision_id.clone());
             state.policy_documents.insert(
                 source_revision.policy_source_revision_id.clone(),
-                policy_document.clone(),
+                policy_document.as_ref().clone(),
             );
         }
-        ControlTransactionV1::PolicyCompiled {
+        ControlTransactionV1::Compiled {
             policy_source_revision_id,
             artifact,
         } => {
@@ -780,8 +796,8 @@ fn apply_transaction(
             }
             if let Some(existing) = state
                 .compiled_artifacts
-                .insert(policy_source_revision_id.clone(), artifact.clone())
-                .filter(|existing| existing != artifact)
+                .insert(policy_source_revision_id.clone(), artifact.as_ref().clone())
+                .filter(|existing| existing != artifact.as_ref())
             {
                 return ControlStoreSnafu {
                     path: path.to_owned(),
@@ -793,24 +809,25 @@ fn apply_transaction(
                 .fail();
             }
         }
-        ControlTransactionV1::PolicyRolloutCreated {
-            target_snapshot,
-            bundles,
-            rollout_states,
-        } => {
+        ControlTransactionV1::RolloutCreated { rollout } => {
+            let PolicyRolloutTransactionV1 {
+                target_snapshot,
+                bundles,
+                rollout_states,
+            } = rollout.as_ref();
             validate_rollout_transaction(target_snapshot, bundles, rollout_states, path)?;
             validate_rollout_ordering(state, bundles, path)?;
             state.target_snapshots.insert(
                 target_snapshot.target_snapshot_digest.clone(),
                 target_snapshot.clone(),
             );
-            for bundle in bundles {
+            for bundle in bundles.iter() {
                 state.bundles.insert(
                     bundle.candidate.candidate_content_id.clone(),
                     bundle.clone(),
                 );
             }
-            for rollout in rollout_states {
+            for rollout in rollout_states.iter() {
                 state.rollout_states.insert(
                     PolicyRolloutKeyV1 {
                         candidate_content_id: rollout.desired_candidate_content_id.clone(),
@@ -820,10 +837,11 @@ fn apply_transaction(
                 );
             }
         }
-        ControlTransactionV1::PolicyAcknowledged {
-            acknowledgement,
-            rollout_state,
-        } => {
+        ControlTransactionV1::Acknowledged { result } => {
+            let PolicyAcknowledgementTransactionV1 {
+                acknowledgement,
+                rollout_state,
+            } = result.as_ref();
             state.acknowledgements.insert(
                 acknowledgement.acknowledgement_content_id.clone(),
                 acknowledgement.clone(),
