@@ -1,7 +1,8 @@
 # Phase 6.2: Control Policy And Evidence Convergence
 
-Status: Done. Automated acceptance passed on 2026-08-22. The manual runbook
-has not been run.
+Status: In progress. Deliverables D6.2.1-D6.2.8 passed automated acceptance on
+2026-08-22. The Kubernetes scheduling and runtime-admission amendment in
+D6.2.9-D6.2.12 is not complete. The manual runbook has not been run.
 
 Master: [Mithril Hugging Face Intrusion Prevention](./README.md)
 
@@ -50,6 +51,84 @@ The CRD stores desired state. It is not a signed node artifact, evidence
 database, graph database, or activation acknowledgement store. A node does not
 watch or parse the CRD. Control does not write BPF maps or change a node's
 active-generation pointer.
+
+## Intended Kubernetes Flow
+
+```text
+Operator configures where the mithril-node DaemonSet runs
+  -> Control reads the live DaemonSet Pod template
+  -> Control derives its node selector and required node affinity
+  -> Control does not accept a separate Mithril node-pool selector
+
+New or existing Node matches the derived DaemonSet constraints
+  -> Node admission adds mithril.erebor.dev/not-ready:NoSchedule
+  -> the mithril-node DaemonSet tolerates that quarantine taint
+  -> mithril-node loads and verifies BPF state
+  -> mithril-node registers its Kubernetes Node name over authenticated mTLS
+  -> Control verifies the live Node, node session, boot, and readiness report
+  -> Control adds the Mithril-ready label and removes the quarantine taint
+
+Ready node loses its session, boot identity, BPF health, or DaemonSet eligibility
+  -> Control removes the Mithril-ready label
+  -> Control restores the quarantine taint
+  -> the scheduler cannot place another protected Pod on that Node
+  -> the last valid local generation continues to protect existing workloads
+
+WorkloadProtectionProfile CREATE or UPDATE
+  -> PolicyDesiredStateOwner reads the namespaced CRD
+  -> Control validates, compiles, approves, and signs the policy revision
+  -> Control records the immutable source revision
+  -> no node receives a candidate until an exact scheduled workload selects it
+
+Pod CREATE
+  -> admission checks WorkloadProtectionProfiles in the Pod's namespace
+  -> zero matching profiles leaves the Pod outside this protected scheduling flow
+  -> more than one matching profile rejects the Pod as ambiguous
+  -> one matching profile makes the Pod protected
+  -> admission reads the current mithril-node DaemonSet constraints
+  -> admission adds those constraints and the Mithril-ready label as required affinity
+  -> admission does not select an exact Node
+  -> admission rejects nodeName and quarantine-taint toleration bypasses
+  -> the Kubernetes scheduler chooses one ready Node from the constrained set
+
+Scheduler submits the Pod binding
+  -> binding admission verifies the selected Node against the same live constraints
+  -> binding admission verifies the current Mithril-ready node session and boot
+  -> Kubernetes persists Pod UID plus spec.nodeName
+  -> Control observes the persisted binding and immutable Pod identity facts
+  -> PolicyRolloutOwner creates an exact target for that Pod and Node
+  -> Control delivers the exact signed policy and binding material only to that Node
+  -> the stock OCI prestart hook holds the exact initial container process
+  -> mithril-node verifies the hook request against the scheduled Pod and runtime state
+  -> mithril-node stages, reads back, probes, and activates the exact policy generation
+  -> mithril-node publishes the exact cgroup binding while the initial process is held
+  -> the runtime gate releases that process only after policy and binding activation
+
+Pod changes Node, UID, container identity, or profile match
+  -> the old target cannot authorize the changed workload
+  -> Control creates a new immutable target and candidate when the new state is valid
+  -> the runtime gate remains closed until the selected Node activates that target
+
+Pod or container terminates
+  -> mithril-node retires the exact cgroup binding after the runtime lifetime ends
+  -> Control removes the exact target from the next rollout snapshot
+  -> another Pod, container, Node, or boot cannot reuse the retired authority
+
+WorkloadProtectionProfile deletion
+  -> Control enters RETIRING for every exact current target
+  -> each selected Node receives a signed restrictive replacement
+  -> removal completes through normal stage, readback, probe, and activation
+  -> deletion or Control loss cannot erase the last valid local protection
+```
+
+The operator selects nodes only through the `mithril-node` DaemonSet Pod
+template. The scheduler still selects the exact Node. Mithril adds requirements
+that restrict the scheduler to the live, ready part of that derived set.
+
+A `WorkloadProtectionProfile` match defines whether a Pod enters this protected
+flow. Control does not use a separate protected-tenant or protected-namespace
+scope setting. The configured tenant and cluster identities bind provenance;
+they do not select Pods.
 
 ## Deliverables
 
@@ -249,6 +328,90 @@ backpressure, and storage-failure variants. Prove that a node deletes no WAL
 record before a durable contiguous Control acknowledgement and that the
 accepted record set is stable input for Phase 7 replay.
 
+### D6.2.9 — DaemonSet-derived node eligibility and readiness
+
+Extend the existing Control Kubernetes client. Read one configured
+`mithril-node` DaemonSet identity and derive eligible-node constraints only
+from its live Pod template. Copy no operator-owned selector into another
+Mithril configuration field. Reject an unsupported DaemonSet constraint
+instead of interpreting it approximately.
+
+Add Node admission and reconciliation for the
+`mithril.erebor.dev/not-ready:NoSchedule` quarantine taint. Only Nodes that
+match the live DaemonSet constraints enter this flow. The DaemonSet tolerates
+the taint. A matching node is not ready for protected scheduling until the
+authenticated `mithril-node` session names that Kubernetes Node and proves the
+current boot, BPF state, identity state, and policy-admission readiness.
+
+Project this Control decision through a bounded Mithril-ready Node label and
+taint removal. Remove the label and restore the taint after session expiry,
+boot change, readiness loss, or DaemonSet constraint change. The label is a
+scheduler projection. The authenticated Control session remains the
+authority. Do not evict an existing protected Pod merely because a
+`NoSchedule` taint is restored.
+
+### D6.2.10 — Protected Pod and scheduler-binding admission
+
+Serve Kubernetes admission from the existing `mithril-control` process. Do
+not create another policy watcher or policy owner. On Pod create, resolve the
+current namespaced `WorkloadProtectionProfile` selectors against the admitted
+Pod. No match leaves the Pod outside this flow. More than one match is an
+ambiguous authority error. Remove the configured namespace list as a
+protection selector; watch the cluster for namespaced profiles, namespace
+identity, and protected Pod lifecycle facts.
+
+For one match, add the live DaemonSet node selector, its required node
+affinity, and the Mithril-ready label as scheduling requirements. Combine the
+requirements with the Pod's existing constraints. Never write `spec.nodeName`
+or choose a node. Reject direct `nodeName`, quarantine-taint toleration, and
+selector or affinity forms that can bypass the derived requirements.
+
+Validate the scheduler's `pods/binding` request against the current derived
+node set, ready label, authenticated session, Node UID, and boot identity.
+After Kubernetes persists `Pod.spec.nodeName`, watch the exact Pod UID and
+container facts. Admission is not policy delivery and must not report a Pod as
+protected before the node-local runtime gate completes.
+
+### D6.2.11 — Binding-driven policy delivery and runtime-start gate
+
+Replace registration-time static workload inventory as the Kubernetes
+targeting authority. Store each persisted Pod binding as immutable desired
+workload material. Bind cluster, namespace, controller, ServiceAccount, Pod,
+container, image, selected Node, and current node-session identity. Reconcile
+again when the bound workload inventory changes even if the policy source
+revision did not change.
+
+Include the exact desired workload material in the signed node candidate. The
+node verifies it before it creates dynamic local binding configuration. A node
+must reject material for another Node, boot, Pod, profile, or candidate. Keep
+non-Kubernetes static workload bindings available for the existing host mode;
+they cannot authorize a Kubernetes Pod that Control did not observe as bound.
+
+Use the supported stock OCI prestart adapter as a stateless forwarding hook.
+The adapter sends the exact container ID, held initial PID, OCI annotations,
+and cgroup path to `mithril-node`. The node validates the root-owned endpoint,
+live PID, cgroup membership, Pod UID, container name, image digest, selected
+Node, candidate, and active generation. It then publishes the cgroup binding
+and releases the runtime only after activation readback and probes succeed.
+Timeout, mismatch, stale state, unavailable node service, or unavailable exact
+candidate rejects the hook and keeps the runtime start fail-closed.
+
+### D6.2.12 — Packaging and convergence proof
+
+Package the admission Service, webhook configurations, TLS inputs, DaemonSet
+taint toleration, Node identity input, Control permissions, health, and bounded
+timeouts. RBAC can read the one DaemonSet and workload facts and can patch only
+the Mithril-owned Node readiness projection. Node identities cannot modify
+Kubernetes policy or Node readiness.
+
+Prove DaemonSet selector and affinity derivation, selector change, new-node
+quarantine, stale-session quarantine, Pod mutation, scheduler choice among two
+eligible nodes, binding rejection, exact-node delivery, held prestart release,
+timeout denial, restart recovery, Pod deletion, container restart, and policy
+retirement. Use API-server admission review objects and deterministic runtime
+gate tests in automated acceptance. Use the current stock Kubernetes and OCI
+runtime path for the physical manual result.
+
 ## Checkpoint
 
 An operator changes one `WorkloadProtectionProfile`. Control deterministically
@@ -279,6 +442,21 @@ evidence. No graph or finding is created in this phase.
   restart, and WAL truncation tests.
 - CRD status projection, bounded inventory, tenant isolation, secret
   filtering, and status-is-not-authority tests.
+- DaemonSet-derived selector and required-affinity tests, including an empty
+  selector, unsupported affinity, selector change, node label change, and
+  DaemonSet replacement.
+- Node create mutation, quarantine reconciliation, readiness projection,
+  authenticated node-name binding, boot change, stale session, and Control
+  restart tests.
+- Pod no-match, one-match, ambiguous-match, mutation composition, `nodeName`,
+  toleration bypass, scheduler binding, stale ready label, wrong Node UID, and
+  wrong boot tests.
+- Bound Pod inventory drift, same-policy new target, exact-node candidate,
+  wrong-node rejection, Pod deletion, container restart, and name/UID reuse
+  tests.
+- OCI prestart valid release, missing candidate, invalid annotation, PID and
+  cgroup mismatch, stale candidate, timeout, node restart, and fail-closed
+  endpoint tests.
 - Phase 6.2 owns no new Appendix C fixture ID. These named phase tests remain
   mandatory and Phase 11 must run them for each advertised Kubernetes mode.
 
@@ -294,18 +472,25 @@ evidence. No graph or finding is created in this phase.
   truncation.
 - Phase 7 receives immutable evidence and exact policy provenance without
   creating a second Kubernetes policy watcher or evidence writer.
+- The live `mithril-node` DaemonSet is the sole node-pool definition. Mithril
+  does not choose the scheduler's exact Node.
+- A matching protected Pod cannot start its initial process until the selected
+  node has activated its exact candidate and cgroup binding.
 
 ## Excluded
 
 Graph edges, findings, detection packages, notification routing, provider
-leases, response actuation, and provider-specific evidence. Phase 7 owns the
-graph and finding extension. Phase 8 adds Kubernetes audit, object, scheduler,
-and runtime facts for distributed causality.
+leases, response actuation, provider-specific evidence, privileged/unmatched
+workload floors, and cross-node causal joins. Phase 7 owns the graph and
+finding extension. Phase 8 consumes the Kubernetes object, scheduler, and
+runtime facts established here for distributed causality and adds authenticated
+audit history and the privileged/unmatched workload floor.
 
 ## Phase Result
 
 ```text
-State: Done.
+State: In progress. The prior D6.2.1-D6.2.8 result remains valid. The
+D6.2.9-D6.2.12 amendment is not done.
 Validated architecture revision/digest: 51807f12113391872ee90ce2469869db18bc4d25e9b4b1f39eb01fcaefb4fe1e.
 Completed deliverable IDs: D6.2.1-D6.2.8.
 Files and durable owners changed: WorkloadProtectionProfile CRD and Helm RBAC; PolicyDesiredStateOwner; PolicyRolloutOwner; TrustBundleOwner; one append-only ControlStore for policy, trust, rollout, acknowledgement, evidence, coverage, and cursor transactions; generated NodePolicy and ControlHealth services; NodePolicyDeliveryOwner and the existing node activation path. The BPF ABI and BPF programs did not change.
@@ -315,6 +500,6 @@ Commands and exact source state covered: `rtk bash .github/scripts/verify-rust-c
 Platform/kernel/runtime manifests: the Helm package contains the generated closed CRD, least-privilege Control RBAC, Control Deployment, and Service. No platform or kernel manifest changed.
 Performance/capacity results: no new benchmark. Evidence gRPC messages are limited to 4 MiB. Policy gRPC messages are limited to 128 KiB. The pending evidence window is limited to 4,096 records. Health reports fixed counts and booleans only.
 Unsupported/degraded paths: no live Kubernetes API-server, RBAC denial, watch-compaction, network-partition, storage-outage, or physical two-node result was recorded. Phase 7 graph and finding behavior is not present.
-Remaining work in this phase: the optional physical manual runbook has not been run. No source deliverable remains.
+Remaining work in this phase: implement and verify D6.2.9-D6.2.12, update the manual runbook, and record the physical result. The prior optional physical D6.2.1-D6.2.8 run was not completed.
 Next phase not authorized: yes.
 ```
