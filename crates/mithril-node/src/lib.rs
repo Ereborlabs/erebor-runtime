@@ -9,6 +9,7 @@ mod local;
 mod node;
 mod observation;
 mod policy;
+mod policy_delivery;
 mod trust;
 
 pub use config::{

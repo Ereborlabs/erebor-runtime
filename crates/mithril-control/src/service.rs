@@ -39,6 +39,19 @@ pub struct AllowedNodeIdentity {
 pub struct TrustGenerationV1 {
     pub generation: u64,
     pub bundle_digest: String,
+    #[serde(default)]
+    pub policy_issuer_sequence_epoch: u64,
+    #[serde(default)]
+    pub policy_signers: Vec<PolicySignerTrustV1>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct PolicySignerTrustV1 {
+    pub signing_key_id: String,
+    pub ed25519_public_key_hex: String,
+    #[serde(default)]
+    pub revoked: bool,
 }
 
 #[derive(Default)]
@@ -493,6 +506,18 @@ impl NodeTrust for ControlPlane {
         let trust = TrustGeneration {
             generation: self.trust.generation,
             bundle_digest: self.trust.bundle_digest.clone(),
+            policy_issuer_sequence_epoch: self.trust.policy_issuer_sequence_epoch,
+            policy_signers: self
+                .trust
+                .policy_signers
+                .iter()
+                .map(|signer| crate::PolicySignerTrust {
+                    signing_key_id: signer.signing_key_id.clone(),
+                    ed25519_public_key: hex::decode(&signer.ed25519_public_key_hex)
+                        .unwrap_or_default(),
+                    revoked: signer.revoked,
+                })
+                .collect(),
         };
         Ok(Response::new(Box::pin(tokio_stream::iter([Ok(trust)]))))
     }
@@ -523,6 +548,8 @@ impl NodeTrust for ControlPlane {
             TrustGenerationV1 {
                 generation: acknowledgement.generation,
                 bundle_digest: acknowledgement.bundle_digest,
+                policy_issuer_sequence_epoch: self.trust.policy_issuer_sequence_epoch,
+                policy_signers: self.trust.policy_signers.clone(),
             },
         );
         Ok(Response::new(RegistrationAccepted {}))
@@ -1084,6 +1111,8 @@ mod tests {
             TrustGenerationV1 {
                 generation: 7,
                 bundle_digest: "b".repeat(64),
+                policy_issuer_sequence_epoch: 0,
+                policy_signers: Vec::new(),
             },
         )
     }

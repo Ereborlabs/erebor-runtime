@@ -336,6 +336,15 @@ impl PolicyDesiredStateOwner {
         self.rollout.clone()
     }
 
+    #[must_use]
+    pub fn signer_identity(&self) -> (&str, String, u64) {
+        (
+            &self.config.signer.signing_key_id,
+            hex::encode(self.signing_key.verifying_key().to_bytes()),
+            self.seal_request.sequence_epoch,
+        )
+    }
+
     pub async fn run_kubernetes(self, control: crate::ControlPlane) {
         loop {
             let Ok(client) = Client::try_default().await else {

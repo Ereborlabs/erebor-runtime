@@ -71,6 +71,13 @@ pub struct NodePolicyGenerationOwner {
     exception_authority: Mutex<ExceptionAuthorityOwner>,
 }
 
+pub(crate) struct PolicyActivationReceiptV1 {
+    pub node_bound_generation_digest: String,
+    pub profile_generation_ref_id: u64,
+    pub readback_digest: String,
+    pub probe_result_digest: String,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct MeasuredExactObjectV1 {
     binding_id: String,
@@ -121,6 +128,77 @@ type PlannedGenerationRow<'a> = (&'static str, &'a GenerationRows);
 type ActivationDecisionRow<'a> = (PolicyActivationProbeMapKindV1, &'a GenerationRows);
 
 impl NodePolicyGenerationOwner {
+    pub(crate) fn next_generation_ref_id(
+        config: &NodeConfig,
+        host: &KernelHost,
+        node_boot_id: Id128V1,
+        label_epoch: u64,
+    ) -> Result<u64> {
+        GenerationHandleAllocator::load(
+            config.state_directory.join("generation-handles-v1.json"),
+            host,
+            node_boot_id,
+            label_epoch,
+        )?
+        .next_handle()
+    }
+
+    pub(crate) fn activation_receipt(
+        host: &KernelHost,
+        profile_id: &str,
+        profile_generation_ref_id: u64,
+    ) -> Result<PolicyActivationReceiptV1> {
+        let profile_id = parse_id("profile_id", profile_id)?;
+        let active = host
+            .lookup_map("active_profile_generations", profile_id.as_bytes())
+            .context(InterceptorSnafu)?
+            .context(IdentityStateSnafu {
+                reason: "the activated profile has no active pointer",
+            })?;
+        ensure!(
+            u64::read_from_bytes(&active)
+                .is_ok_and(|active| { active == profile_generation_ref_id }),
+            IdentityStateSnafu {
+                reason: "the activated profile pointer failed exact readback",
+            }
+        );
+        let descriptor = host
+            .lookup_map(
+                "profile_generation_descriptors",
+                &profile_generation_ref_id.to_ne_bytes(),
+            )
+            .context(InterceptorSnafu)?
+            .context(IdentityStateSnafu {
+                reason: "the activated profile has no generation descriptor",
+            })?;
+        let parsed =
+            ProfileGenerationDescriptorV1::try_read_from_bytes(&descriptor).map_err(|error| {
+                IdentityStateSnafu {
+                    reason: format!("the activated generation descriptor is invalid: {error}"),
+                }
+                .build()
+            })?;
+        ensure!(
+            parsed.profile_id == profile_id
+                && parsed.profile_generation_ref_id == profile_generation_ref_id
+                && parsed.state == PolicyGenerationStateV1::Active,
+            IdentityStateSnafu {
+                reason: "the activated generation descriptor is not current",
+            }
+        );
+        let readback_digest = format!("{:x}", Sha256::digest(&descriptor));
+        let mut probe = Sha256::new();
+        probe.update(b"MITHRIL-POLICY-CONTROLLED-PROBE-V1\0");
+        probe.update(parsed.table_digest);
+        probe.update(profile_generation_ref_id.to_be_bytes());
+        Ok(PolicyActivationReceiptV1 {
+            node_bound_generation_digest: hex::encode(parsed.table_digest),
+            profile_generation_ref_id,
+            readback_digest,
+            probe_result_digest: format!("{:x}", probe.finalize()),
+        })
+    }
+
     pub fn fence_network_socket(
         &self,
         host: &KernelHost,

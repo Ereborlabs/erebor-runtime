@@ -4,13 +4,16 @@ use mithril_control::{
     node_administrative_arm_client::NodeAdministrativeArmClient,
     node_administrative_resolution_client::NodeAdministrativeResolutionClient,
     node_coverage_client::NodeCoverageClient, node_evidence_client::NodeEvidenceClient,
-    node_registry_client::NodeRegistryClient, node_trust_client::NodeTrustClient,
-    AdministrativeExecArmResult, AdministrativeExecArmStreamRequest, AdministrativeExecResolution,
+    node_policy_client::NodePolicyClient, node_registry_client::NodeRegistryClient,
+    node_trust_client::NodeTrustClient, AdministrativeExecArmResult,
+    AdministrativeExecArmStreamRequest, AdministrativeExecResolution,
     AdministrativeExecResolutionStreamRequest, ArmAdministrativeExec, CoverageAck,
     CoverageCounters, CoverageInterval, CoverageReport, CoverageReportRequest, EvidenceAck,
     EvidenceBatchRequest, NodeReadinessReport, NodeReadinessRequest, NodeRegistration,
-    NodeRegistrationRequest, NodeSessionContext, ResolveAdministrativeExec, TrustGenerationAck,
-    TrustGenerationAckRequest, MAX_EVIDENCE_GRPC_MESSAGE_BYTES,
+    NodeRegistrationRequest, NodeSessionContext, PolicyAcknowledgementAccepted,
+    PolicyAcknowledgementRequest, PolicyActivationAcknowledgement, PolicyChunkRequest,
+    PolicyInventory, PolicyInventoryRequest, ResolveAdministrativeExec, TrustGenerationAck,
+    TrustGenerationAckRequest, MAX_EVIDENCE_GRPC_MESSAGE_BYTES, MAX_POLICY_GRPC_MESSAGE_BYTES,
 };
 use prost::Message as _;
 use sha2::{Digest as _, Sha256};
@@ -42,6 +45,7 @@ pub struct ControlConnection {
     arm_input: Streaming<ArmAdministrativeExec>,
     evidence: NodeEvidenceClient<Channel>,
     coverage: NodeCoverageClient<Channel>,
+    policy: NodePolicyClient<Channel>,
     queued: std::collections::VecDeque<NodeControlMessage>,
     resolution_closed: bool,
     arm_closed: bool,
@@ -105,9 +109,11 @@ impl NodeControlConnector {
                 }
                 .build()
             })?;
-        trust_cache.install(
+        trust_cache.install_with_policy(
             trust.generation,
             trust.bundle_digest.clone(),
+            trust.policy_issuer_sequence_epoch,
+            &trust.policy_signers,
             &identity.connection_nonce,
         )?;
         NodeTrustClient::new(channel.clone())
@@ -179,9 +185,12 @@ impl NodeControlConnector {
             evidence: NodeEvidenceClient::new(channel.clone())
                 .max_decoding_message_size(MAX_EVIDENCE_GRPC_MESSAGE_BYTES)
                 .max_encoding_message_size(MAX_EVIDENCE_GRPC_MESSAGE_BYTES),
-            coverage: NodeCoverageClient::new(channel)
+            coverage: NodeCoverageClient::new(channel.clone())
                 .max_decoding_message_size(MAX_EVIDENCE_GRPC_MESSAGE_BYTES)
                 .max_encoding_message_size(MAX_EVIDENCE_GRPC_MESSAGE_BYTES),
+            policy: NodePolicyClient::new(channel)
+                .max_decoding_message_size(MAX_POLICY_GRPC_MESSAGE_BYTES)
+                .max_encoding_message_size(MAX_POLICY_GRPC_MESSAGE_BYTES),
             queued: std::collections::VecDeque::new(),
             resolution_closed: false,
             arm_closed: false,
@@ -211,6 +220,56 @@ impl NodeControlConnector {
 }
 
 impl ControlConnection {
+    pub async fn policy_inventory(
+        &mut self,
+        active_candidate_content_id: Option<&str>,
+        durable_bundle_digests: Vec<String>,
+    ) -> Result<PolicyInventory> {
+        self.policy
+            .inventory(Request::new(PolicyInventoryRequest {
+                session: Some(self.identity.clone()),
+                active_candidate_content_id: active_candidate_content_id
+                    .unwrap_or_default()
+                    .to_owned(),
+                durable_bundle_digests,
+            }))
+            .await
+            .context(ControlRpcSnafu)
+            .map(tonic::Response::into_inner)
+    }
+
+    pub async fn fetch_policy_chunk(
+        &mut self,
+        candidate_content_id: String,
+        bundle_digest: String,
+        chunk_index: u32,
+    ) -> Result<mithril_control::PolicyChunk> {
+        self.policy
+            .fetch(Request::new(PolicyChunkRequest {
+                session: Some(self.identity.clone()),
+                candidate_content_id,
+                bundle_digest,
+                chunk_index,
+            }))
+            .await
+            .context(ControlRpcSnafu)
+            .map(tonic::Response::into_inner)
+    }
+
+    pub async fn acknowledge_policy(
+        &mut self,
+        acknowledgement: PolicyActivationAcknowledgement,
+    ) -> Result<PolicyAcknowledgementAccepted> {
+        self.policy
+            .acknowledge(Request::new(PolicyAcknowledgementRequest {
+                session: Some(self.identity.clone()),
+                acknowledgement: Some(acknowledgement),
+            }))
+            .await
+            .context(ControlRpcSnafu)
+            .map(tonic::Response::into_inner)
+    }
+
     pub async fn next_message(&mut self) -> Result<NodeControlMessage> {
         if let Some(message) = self.queued.pop_front() {
             return Ok(message);
