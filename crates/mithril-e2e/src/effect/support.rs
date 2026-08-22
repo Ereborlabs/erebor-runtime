@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs::File;
 use std::os::fd::AsRawFd as _;
 use std::path::{Path, PathBuf};
@@ -114,6 +114,11 @@ pub(super) fn effect_binding_with_identity(
         profile_id: "11111111-1111-4111-8111-111111111111".to_owned(),
         container_id: container_id_byte.to_string().repeat(64),
         namespace: "default".to_owned(),
+        cluster_uid: String::new(),
+        namespace_uid: String::new(),
+        controller_uid: String::new(),
+        service_account_uid: String::new(),
+        pod_labels: BTreeMap::new(),
         pod_uid: "observation-pod".to_owned(),
         sandbox_id: "observation-sandbox".to_owned(),
         container_name: container_name.to_owned(),

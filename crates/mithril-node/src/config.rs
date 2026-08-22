@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -184,6 +184,16 @@ pub struct WorkloadBindingConfig {
     pub profile_id: String,
     pub container_id: String,
     pub namespace: String,
+    #[serde(default)]
+    pub cluster_uid: String,
+    #[serde(default)]
+    pub namespace_uid: String,
+    #[serde(default)]
+    pub controller_uid: String,
+    #[serde(default)]
+    pub service_account_uid: String,
+    #[serde(default)]
+    pub pod_labels: BTreeMap<String, String>,
     pub pod_uid: String,
     pub sandbox_id: String,
     pub container_name: String,
@@ -290,6 +300,11 @@ impl NodeConfig {
         let mut execution_set_ids = BTreeSet::new();
         let mut container_ids = BTreeSet::new();
         for binding in &self.workload_bindings {
+            let kubernetes_identity_is_set = !binding.cluster_uid.is_empty()
+                || !binding.namespace_uid.is_empty()
+                || !binding.controller_uid.is_empty()
+                || !binding.service_account_uid.is_empty()
+                || !binding.pod_labels.is_empty();
             ensure!(
                 (32..=128).contains(&binding.container_id.len())
                     && (1..=253).contains(&binding.namespace.len())
@@ -305,6 +320,23 @@ impl NodeConfig {
                     && !binding.workload_selector_id.is_empty(),
                 InvalidConfigurationSnafu {
                     reason: "Workload bindings require nonempty container identity and nonzero generations and roles",
+                }
+            );
+            ensure!(
+                !kubernetes_identity_is_set
+                    || (canonical_uuid(&binding.cluster_uid)
+                        && canonical_uuid(&binding.namespace_uid)
+                        && canonical_uuid(&binding.controller_uid)
+                        && canonical_uuid(&binding.service_account_uid)
+                        && canonical_uuid(&binding.pod_uid)
+                        && binding.pod_labels.len() <= 256
+                        && binding.pod_labels.iter().all(|(key, value)| {
+                            !key.is_empty()
+                                && key.len() <= 253
+                                && value.len() <= 4_096
+                        })),
+                InvalidConfigurationSnafu {
+                    reason: "Kubernetes workload targets require complete canonical identities and bounded Pod labels",
                 }
             );
             ensure!(
@@ -435,6 +467,7 @@ fn canonical_uuid(value: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
     use std::path::PathBuf;
     use std::time::Duration;
 
@@ -480,6 +513,11 @@ mod tests {
                 profile_id: "33333333-3333-4333-8333-333333333333".to_owned(),
                 container_id: "a".repeat(64),
                 namespace: "default".to_owned(),
+                cluster_uid: String::new(),
+                namespace_uid: String::new(),
+                controller_uid: String::new(),
+                service_account_uid: String::new(),
+                pod_labels: BTreeMap::new(),
                 pod_uid: "configured-scope".to_owned(),
                 sandbox_id: "configured-scope".to_owned(),
                 container_name: "worker".to_owned(),

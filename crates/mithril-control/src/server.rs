@@ -13,8 +13,9 @@ use crate::{
     node_administrative_arm_server::NodeAdministrativeArmServer,
     node_administrative_resolution_server::NodeAdministrativeResolutionServer,
     node_coverage_server::NodeCoverageServer, node_evidence_server::NodeEvidenceServer,
-    node_registry_server::NodeRegistryServer, node_trust_server::NodeTrustServer, ControlPlane,
-    Result, MAX_EVIDENCE_GRPC_MESSAGE_BYTES,
+    node_policy_server::NodePolicyServer, node_registry_server::NodeRegistryServer,
+    node_trust_server::NodeTrustServer, ControlPlane, Result, MAX_EVIDENCE_GRPC_MESSAGE_BYTES,
+    MAX_POLICY_GRPC_MESSAGE_BYTES,
 };
 
 #[derive(Clone, Debug, Deserialize)]
@@ -60,6 +61,11 @@ pub async fn serve(
             NodeCoverageServer::new(control.clone())
                 .max_decoding_message_size(MAX_EVIDENCE_GRPC_MESSAGE_BYTES)
                 .max_encoding_message_size(MAX_EVIDENCE_GRPC_MESSAGE_BYTES),
+        )
+        .add_service(
+            NodePolicyServer::new(control.clone())
+                .max_decoding_message_size(MAX_POLICY_GRPC_MESSAGE_BYTES)
+                .max_encoding_message_size(MAX_POLICY_GRPC_MESSAGE_BYTES),
         )
         .add_service(NodeAdministrativeResolutionServer::new(control.clone()))
         .add_service(NodeAdministrativeArmServer::new(control))

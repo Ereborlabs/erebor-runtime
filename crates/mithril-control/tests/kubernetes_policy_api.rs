@@ -13,6 +13,8 @@ const POLICY: &str = include_str!("fixtures/policy-v1.yaml");
 const CRD: &str = include_str!(
     "../../../packaging/mithril/helm/crds/mithril.erebor.dev_workloadprotectionprofiles.yaml"
 );
+const CONTROL_RBAC: &str =
+    include_str!("../../../packaging/mithril/helm/templates/control-rbac.yaml");
 
 fn policy() -> PolicyDocumentV1 {
     PolicyDocumentV1::parse(Path::new("policy-v1.yaml"), POLICY.as_bytes())
@@ -110,6 +112,22 @@ fn strict_resource_decode_and_submitted_digest_reject_unknown_or_pruned_input() 
     )
     .expect_err("a stored spec that differs from the submitted digest must fail");
     assert!(error.to_string().contains("CFG_CRD_SILENT_PRUNE"));
+}
+
+#[test]
+fn status_uses_bounded_informational_fields_and_rbac_cannot_write_policy_spec() {
+    let status = mithril_control::WorkloadProtectionProfileStatusV1::default();
+    let value = serde_json::to_value(status).expect("status must encode");
+    assert!(value.get("observedGeneration").is_some());
+    assert!(value.get("rolloutCounts").is_some());
+    assert!(value.get("observed_generation").is_none());
+
+    assert!(CONTROL_RBAC.contains("workloadprotectionprofiles/status"));
+    assert!(CONTROL_RBAC.contains("workloadprotectionprofiles/finalizers"));
+    assert!(CONTROL_RBAC.contains("verbs: [\"get\", \"list\", \"watch\"]"));
+    assert!(!CONTROL_RBAC.contains("\"create\""));
+    assert!(!CONTROL_RBAC.contains("\"delete\""));
+    assert!(!CONTROL_RBAC.contains("resources: [\"secrets\"]"));
 }
 
 fn assert_closed_and_bounded(value: &Value) {

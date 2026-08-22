@@ -428,6 +428,7 @@ fn registration() -> NodeRegistration {
         kernel_ready: true,
         effect_prevention_claims_enabled: false,
         capabilities: capabilities(),
+        workload_targets: Vec::new(),
     }
 }
 

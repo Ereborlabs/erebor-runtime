@@ -6,6 +6,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+use prost::Message as _;
 use serde::Deserialize;
 use sha2::{Digest as _, Sha256};
 use tokio::sync::{mpsc, oneshot};
@@ -16,12 +17,14 @@ use crate::{
     node_administrative_arm_server::NodeAdministrativeArm,
     node_administrative_resolution_server::NodeAdministrativeResolution,
     node_coverage_server::NodeCoverage, node_evidence_server::NodeEvidence,
-    node_registry_server::NodeRegistry, node_trust_server::NodeTrust, AdministrativeExecArmResult,
-    AdministrativeExecArmStreamRequest, AdministrativeExecResolution,
-    AdministrativeExecResolutionStreamRequest, ArmAdministrativeExec, CoverageAck,
-    CoverageReportRequest, EvidenceAck, EvidenceBatchRequest, NodeReadinessRequest,
-    NodeRegistrationRequest, NodeSessionContext, RegistrationAccepted, ResolveAdministrativeExec,
-    TrustGeneration, TrustGenerationAckRequest, IDENTITY_BYTES,
+    node_policy_server::NodePolicy, node_registry_server::NodeRegistry,
+    node_trust_server::NodeTrust, AdministrativeExecArmResult, AdministrativeExecArmStreamRequest,
+    AdministrativeExecResolution, AdministrativeExecResolutionStreamRequest, ArmAdministrativeExec,
+    CoverageAck, CoverageReportRequest, EvidenceAck, EvidenceBatchRequest, NodeReadinessRequest,
+    NodeRegistrationRequest, NodeSessionContext, PolicyAcknowledgementAccepted,
+    PolicyAcknowledgementRequest, PolicyChunk, PolicyChunkRequest, PolicyInventory,
+    PolicyInventoryRequest, RegistrationAccepted, ResolveAdministrativeExec, TrustGeneration,
+    TrustGenerationAckRequest, IDENTITY_BYTES,
 };
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
@@ -51,6 +54,8 @@ struct NodeSession {
     resolution_output: Option<mpsc::Sender<Result<ResolveAdministrativeExec, Status>>>,
     arm_output: Option<mpsc::Sender<Result<ArmAdministrativeExec, Status>>>,
     admission_ready: bool,
+    label_epoch: u64,
+    workload_targets: Vec<crate::WorkloadTargetFactV1>,
 }
 
 enum PendingAdministrativeResponse {
@@ -72,6 +77,9 @@ pub struct ControlPlane {
     trust: TrustGenerationV1,
     state: Arc<Mutex<ControlState>>,
     evidence: Option<crate::EvidenceIntakeOwner>,
+    policy_store: Option<crate::ControlStore>,
+    policy_rollout: Option<crate::PolicyRolloutOwner>,
+    policy_desired_state: Option<crate::PolicyDesiredStateOwner>,
 }
 
 impl ControlPlane {
@@ -87,6 +95,9 @@ impl ControlPlane {
             trust,
             state: Arc::new(Mutex::new(ControlState::default())),
             evidence: None,
+            policy_store: None,
+            policy_rollout: None,
+            policy_desired_state: None,
         }
     }
 
@@ -98,6 +109,19 @@ impl ControlPlane {
         let mut control = Self::new(allowed, trust);
         control.evidence = Some(crate::EvidenceIntakeOwner::open(directory)?);
         Ok(control)
+    }
+
+    #[must_use]
+    pub fn with_policy_desired_state(mut self, owner: crate::PolicyDesiredStateOwner) -> Self {
+        self.policy_store = Some(owner.store());
+        self.policy_rollout = Some(owner.rollout_owner());
+        self.policy_desired_state = Some(owner);
+        self
+    }
+
+    #[must_use]
+    pub fn policy_desired_state(&self) -> Option<crate::PolicyDesiredStateOwner> {
+        self.policy_desired_state.clone()
     }
 
     #[must_use]
@@ -118,6 +142,20 @@ impl ControlPlane {
         self.state
             .lock()
             .map_or(0, |state| state.registrations.len())
+    }
+
+    #[must_use]
+    pub fn workload_inventory(&self) -> Vec<crate::WorkloadTargetFactV1> {
+        self.state.lock().map_or_else(
+            |_| Vec::new(),
+            |state| {
+                state
+                    .sessions
+                    .values()
+                    .flat_map(|session| session.workload_targets.iter().cloned())
+                    .collect()
+            },
+        )
     }
 
     pub async fn resolve_administrative_exec(
@@ -230,6 +268,11 @@ impl ControlPlane {
                 "node registration contains an invalid digest, epoch, or capability set",
             ));
         }
+        let workload_targets = registration
+            .workload_targets
+            .iter()
+            .map(|target| registered_workload_target(&node_id, target))
+            .collect::<Result<Vec<_>, _>>()?;
         let mut state = self.lock_state()?;
         if !state.registrations.insert(identity.clone()) {
             return Err(Status::already_exists("registration nonce was replayed"));
@@ -244,6 +287,8 @@ impl ControlPlane {
                 resolution_output: None,
                 arm_output: None,
                 admission_ready: false,
+                label_epoch: registration.label_epoch,
+                workload_targets,
             },
         );
         Ok(())
@@ -288,6 +333,20 @@ impl ControlPlane {
             return Err(Status::failed_precondition("node admission is not ready"));
         }
         Ok(identity)
+    }
+
+    fn session_label_epoch(&self, identity: &StreamIdentity) -> Result<u64, Status> {
+        let state = self.lock_state()?;
+        let session = state
+            .sessions
+            .get(&identity.node_id)
+            .ok_or_else(|| Status::unauthenticated("node session is not registered"))?;
+        if session.identity != *identity || session.label_epoch == 0 {
+            return Err(Status::unauthenticated(
+                "node boot identity, label epoch, or connection nonce is stale",
+            ));
+        }
+        Ok(session.label_epoch)
     }
 
     fn remove_pending(&self, request_id: &[u8]) {
@@ -519,6 +578,148 @@ impl NodeCoverage for ControlPlane {
 }
 
 #[tonic::async_trait]
+impl NodePolicy for ControlPlane {
+    async fn inventory(
+        &self,
+        request: Request<PolicyInventoryRequest>,
+    ) -> Result<Response<PolicyInventory>, Status> {
+        let node_id = self.authenticated_node(&request)?;
+        let request = request.into_inner();
+        let context = request
+            .session
+            .as_ref()
+            .ok_or_else(|| Status::invalid_argument("node session context is required"))?;
+        self.require_ready_session(&node_id, context)?;
+        if request.durable_bundle_digests.len() > 256
+            || request
+                .durable_bundle_digests
+                .iter()
+                .any(|digest| !is_sha256_hex(digest))
+            || (!request.active_candidate_content_id.is_empty()
+                && !is_sha256_hex(&request.active_candidate_content_id))
+        {
+            return Err(Status::invalid_argument(
+                "policy inventory identities or bounds are invalid",
+            ));
+        }
+        let store = self.policy_store.as_ref().ok_or_else(|| {
+            Status::failed_precondition("Control has no durable policy rollout store")
+        })?;
+        let Some(bundle) = store.bundle_for_node(&node_id).map_err(internal_status)? else {
+            return Ok(Response::new(PolicyInventory::default()));
+        };
+        let chunks = bundle.chunks().map_err(internal_status)?;
+        let bundle_bytes = serde_json::to_vec(&bundle)
+            .map_err(|error| Status::internal(format!("policy bundle encoding failed: {error}")))?;
+        Ok(Response::new(PolicyInventory {
+            candidate_available: true,
+            candidate_content_id: bundle.candidate.candidate_content_id,
+            policy_source_revision_id: bundle.candidate.policy_source_revision_id,
+            target_snapshot_digest: bundle.candidate.target_snapshot_digest,
+            bundle_digest: bundle.bundle_digest,
+            bundle_bytes: u64::try_from(bundle_bytes.len()).unwrap_or(u64::MAX),
+            chunk_count: u32::try_from(chunks.len()).unwrap_or(u32::MAX),
+            operation: policy_operation_name(bundle.candidate.operation).to_owned(),
+        }))
+    }
+
+    async fn fetch(
+        &self,
+        request: Request<PolicyChunkRequest>,
+    ) -> Result<Response<PolicyChunk>, Status> {
+        let node_id = self.authenticated_node(&request)?;
+        let request = request.into_inner();
+        let context = request
+            .session
+            .as_ref()
+            .ok_or_else(|| Status::invalid_argument("node session context is required"))?;
+        self.require_ready_session(&node_id, context)?;
+        let store = self.policy_store.as_ref().ok_or_else(|| {
+            Status::failed_precondition("Control has no durable policy rollout store")
+        })?;
+        let bundle = store
+            .bundle_for_node(&node_id)
+            .map_err(internal_status)?
+            .ok_or_else(|| Status::not_found("the node has no desired policy candidate"))?;
+        if request.candidate_content_id != bundle.candidate.candidate_content_id
+            || request.bundle_digest != bundle.bundle_digest
+        {
+            return Err(Status::failed_precondition(
+                "the requested policy candidate or bundle is stale",
+            ));
+        }
+        let chunk = bundle
+            .chunks()
+            .map_err(internal_status)?
+            .into_iter()
+            .nth(request.chunk_index as usize)
+            .ok_or_else(|| Status::out_of_range("the policy chunk index is out of range"))?;
+        Ok(Response::new(PolicyChunk {
+            candidate_content_id: request.candidate_content_id,
+            bundle_digest: chunk.bundle_digest,
+            chunk_index: chunk.chunk_index,
+            chunk_count: chunk.chunk_count,
+            chunk_sha256: chunk.chunk_sha256,
+            payload: chunk.payload,
+        }))
+    }
+
+    async fn acknowledge(
+        &self,
+        request: Request<PolicyAcknowledgementRequest>,
+    ) -> Result<Response<PolicyAcknowledgementAccepted>, Status> {
+        let node_id = self.authenticated_node(&request)?;
+        let channel_receipt_digest = policy_channel_receipt_digest(&request)?;
+        let request = request.into_inner();
+        let context = request
+            .session
+            .as_ref()
+            .ok_or_else(|| Status::invalid_argument("node session context is required"))?;
+        let identity = self.require_ready_session(&node_id, context)?;
+        let label_epoch = self.session_label_epoch(&identity)?;
+        let acknowledgement = request
+            .acknowledgement
+            .ok_or_else(|| Status::invalid_argument("policy acknowledgement is required"))?;
+        let state = parse_policy_activation_state(&acknowledgement.state)?;
+        let acknowledgement = crate::PolicyActivationAcknowledgementV1 {
+            acknowledgement_content_id: String::new(),
+            tenant_id: acknowledgement.tenant_id,
+            node_id,
+            node_boot_id: context.node_boot_id.clone(),
+            label_epoch,
+            candidate_content_id: acknowledgement.candidate_content_id,
+            policy_source_revision_id: acknowledgement.policy_source_revision_id,
+            target_snapshot_digest: acknowledgement.target_snapshot_digest,
+            state,
+            node_bound_generation_digest: nonempty(acknowledgement.node_bound_generation_digest),
+            profile_generation_ref_id: (acknowledgement.profile_generation_ref_id > 0)
+                .then_some(acknowledgement.profile_generation_ref_id),
+            readback_digest: nonempty(acknowledgement.readback_digest),
+            probe_result_digest: nonempty(acknowledgement.probe_result_digest),
+            reason_code: nonempty(acknowledgement.reason_code),
+            observed_utc_ns: acknowledgement.observed_utc_ns,
+            authenticated_channel_receipt_digest: channel_receipt_digest,
+        }
+        .finalize()
+        .map_err(invalid_policy_status)?;
+        let rollout = self
+            .policy_rollout
+            .as_ref()
+            .ok_or_else(|| Status::failed_precondition("Control has no policy rollout owner"))?;
+        let state = rollout
+            .acknowledge(acknowledgement)
+            .map_err(invalid_policy_status)?;
+        let store = self.policy_store.as_ref().ok_or_else(|| {
+            Status::failed_precondition("Control has no durable policy rollout store")
+        })?;
+        Ok(Response::new(PolicyAcknowledgementAccepted {
+            control_commit_index: store.commit_index(),
+            rollout_state: rollout_state_name(state.state).to_owned(),
+        }))
+    }
+}
+
+#[tonic::async_trait]
 impl NodeAdministrativeResolution for ControlPlane {
     type OpenStream = Pin<Box<dyn Stream<Item = Result<ResolveAdministrativeExec, Status>> + Send>>;
 
@@ -626,6 +827,67 @@ impl NodeAdministrativeArm for ControlPlane {
     }
 }
 
+fn policy_channel_receipt_digest(
+    request: &Request<PolicyAcknowledgementRequest>,
+) -> Result<String, Status> {
+    let certificate = request
+        .peer_certs()
+        .and_then(|certificates| certificates.first().cloned())
+        .ok_or_else(|| Status::unauthenticated("mTLS client certificate is required"))?;
+    let mut digest = Sha256::new();
+    digest.update(certificate.as_ref());
+    digest.update(request.get_ref().encode_to_vec());
+    Ok(format!("{:x}", digest.finalize()))
+}
+
+fn parse_policy_activation_state(value: &str) -> Result<crate::PolicyActivationStateV1, Status> {
+    match value {
+        "RECEIVED" => Ok(crate::PolicyActivationStateV1::Received),
+        "STAGED" => Ok(crate::PolicyActivationStateV1::Staged),
+        "ACTIVE" => Ok(crate::PolicyActivationStateV1::Active),
+        "REJECTED" => Ok(crate::PolicyActivationStateV1::Rejected),
+        "STALE" => Ok(crate::PolicyActivationStateV1::Stale),
+        "UNKNOWN" => Ok(crate::PolicyActivationStateV1::Unknown),
+        _ => Err(Status::invalid_argument(
+            "policy acknowledgement has an unsupported state",
+        )),
+    }
+}
+
+const fn policy_operation_name(value: crate::PolicyDeliveryOperationV1) -> &'static str {
+    match value {
+        crate::PolicyDeliveryOperationV1::Activate => "ACTIVATE",
+        crate::PolicyDeliveryOperationV1::Replace => "REPLACE",
+        crate::PolicyDeliveryOperationV1::RetireToRestrictiveTerminal => {
+            "RETIRE_TO_RESTRICTIVE_TERMINAL"
+        }
+    }
+}
+
+const fn rollout_state_name(value: crate::PolicyRolloutStatusV1) -> &'static str {
+    match value {
+        crate::PolicyRolloutStatusV1::Pending => "PENDING",
+        crate::PolicyRolloutStatusV1::Delivered => "DELIVERED",
+        crate::PolicyRolloutStatusV1::Staged => "STAGED",
+        crate::PolicyRolloutStatusV1::Active => "ACTIVE",
+        crate::PolicyRolloutStatusV1::Rejected => "REJECTED",
+        crate::PolicyRolloutStatusV1::Stale => "STALE",
+        crate::PolicyRolloutStatusV1::Unknown => "UNKNOWN",
+    }
+}
+
+fn nonempty(value: String) -> Option<String> {
+    (!value.is_empty()).then_some(value)
+}
+
+fn internal_status(error: crate::Error) -> Status {
+    Status::internal(error.to_string())
+}
+
+fn invalid_policy_status(error: crate::Error) -> Status {
+    Status::failed_precondition(error.to_string())
+}
+
 fn valid_registration(registration: &crate::NodeRegistration) -> bool {
     registration.label_epoch > 0
         && is_sha256_hex(&registration.platform_digest)
@@ -646,6 +908,74 @@ fn valid_registration(registration: &crate::NodeRegistration) -> bool {
             .collect::<BTreeSet<_>>()
             .len()
             == registration.capabilities.len()
+        && registration.workload_targets.len() <= 65_536
+        && registration
+            .workload_targets
+            .iter()
+            .map(|target| target.workload_binding_generation_digest.as_str())
+            .collect::<BTreeSet<_>>()
+            .len()
+            == registration.workload_targets.len()
+}
+
+fn registered_workload_target(
+    node_id: &str,
+    target: &crate::RegisteredWorkloadTarget,
+) -> Result<crate::WorkloadTargetFactV1, Status> {
+    let container_kind = match target.container_kind.as_str() {
+        "INIT" => crate::ContainerKindV1::Init,
+        "SIDECAR" => crate::ContainerKindV1::Sidecar,
+        "APPLICATION" => crate::ContainerKindV1::Application,
+        "EPHEMERAL" => crate::ContainerKindV1::Ephemeral,
+        _ => {
+            return Err(Status::invalid_argument(
+                "workload target has an unsupported container kind",
+            ));
+        }
+    };
+    let canonical_uuid = |value: &str| {
+        uuid::Uuid::parse_str(value).is_ok_and(|parsed| parsed.hyphenated().to_string() == value)
+    };
+    let bounded_identity = |value: &str| !value.is_empty() && value.len() <= 512;
+    if !is_sha256_hex(&target.workload_binding_generation_digest)
+        || !bounded_identity(&target.execution_set_id)
+        || !canonical_uuid(&target.cluster_uid)
+        || !canonical_uuid(&target.namespace_uid)
+        || !canonical_uuid(&target.controller_uid)
+        || !canonical_uuid(&target.service_account_uid)
+        || !canonical_uuid(&target.pod_uid)
+        || !bounded_identity(&target.container_id)
+        || !bounded_identity(&target.container_name)
+        || !bounded_identity(&target.image_digest)
+        || target.pod_labels.len() > 256
+        || target
+            .pod_labels
+            .iter()
+            .any(|(key, value)| key.is_empty() || key.len() > 253 || value.len() > 4_096)
+    {
+        return Err(Status::invalid_argument(
+            "workload target identities or bounds are invalid",
+        ));
+    }
+    Ok(crate::WorkloadTargetFactV1 {
+        node_id: node_id.to_owned(),
+        workload_binding_generation_digest: target.workload_binding_generation_digest.clone(),
+        execution_set_id: target.execution_set_id.clone(),
+        cluster_uid: target.cluster_uid.clone(),
+        namespace_uid: target.namespace_uid.clone(),
+        controller_uid: target.controller_uid.clone(),
+        service_account_uid: target.service_account_uid.clone(),
+        pod_uid: target.pod_uid.clone(),
+        container_id: target.container_id.clone(),
+        container_name: target.container_name.clone(),
+        container_kind,
+        image_digest: target.image_digest.clone(),
+        pod_labels: target
+            .pod_labels
+            .iter()
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect(),
+    })
 }
 
 fn is_sha256_hex(value: &str) -> bool {
@@ -770,6 +1100,7 @@ mod tests {
                 state: "SUPPORTED".to_owned(),
                 reason_code: "MEASURED_STATE".to_owned(),
             }],
+            workload_targets: Vec::new(),
         }
     }
 

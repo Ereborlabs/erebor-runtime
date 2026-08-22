@@ -517,6 +517,7 @@ fn systemd_slice_path(slice: &str) -> Result<PathBuf> {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
     use std::path::PathBuf;
 
     use k8s_cri::v1::ContainerState;
@@ -586,6 +587,11 @@ mod tests {
             profile_id: "33333333-3333-4333-8333-333333333333".to_owned(),
             container_id: "a".repeat(64),
             namespace: "default".to_owned(),
+            cluster_uid: String::new(),
+            namespace_uid: String::new(),
+            controller_uid: String::new(),
+            service_account_uid: String::new(),
+            pod_labels: BTreeMap::new(),
             pod_uid: "pod-a".to_owned(),
             sandbox_id: "sandbox-a".to_owned(),
             container_name: "worker".to_owned(),

@@ -13,6 +13,8 @@ spec:
       labels:
         app.kubernetes.io/name: mithril-control
     spec:
+      serviceAccountName: mithril-control
+      automountServiceAccountToken: true
       containers:
         - name: mithril-control
           image: {{ .Values.control.image | quote }}
@@ -32,11 +34,16 @@ spec:
             - name: config
               mountPath: /etc/mithril
               readOnly: true
+            - name: state
+              mountPath: /var/lib/mithril-control
       volumes:
         - name: config
           secret:
             secretName: {{ .Values.control.configSecretName | quote }}
             defaultMode: 0400
+        - name: state
+          persistentVolumeClaim:
+            claimName: {{ .Values.control.statePersistentVolumeClaim | quote }}
 ---
 apiVersion: v1
 kind: Service
