@@ -32,6 +32,7 @@ use crate::{
 pub struct AllowedNodeIdentity {
     pub node_id: String,
     pub certificate_sha256: String,
+    pub tenant_id: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
@@ -86,7 +87,7 @@ const ADMINISTRATIVE_NODE_TIMEOUT: std::time::Duration = std::time::Duration::fr
 
 #[derive(Clone)]
 pub struct ControlPlane {
-    allowed_nodes: Arc<BTreeMap<String, String>>,
+    allowed_nodes: Arc<BTreeMap<String, AllowedNodeIdentity>>,
     trust: TrustGenerationV1,
     state: Arc<Mutex<ControlState>>,
     evidence: Option<crate::EvidenceIntakeOwner>,
@@ -102,7 +103,7 @@ impl ControlPlane {
             allowed_nodes: Arc::new(
                 allowed
                     .into_iter()
-                    .map(|identity| (identity.node_id, identity.certificate_sha256))
+                    .map(|identity| (identity.node_id.clone(), identity))
                     .collect(),
             ),
             trust,
@@ -119,9 +120,22 @@ impl ControlPlane {
         trust: TrustGenerationV1,
         directory: impl Into<std::path::PathBuf>,
     ) -> crate::Result<Self> {
+        Ok(Self::with_control_store(
+            allowed,
+            trust,
+            crate::ControlStore::open(directory)?,
+        ))
+    }
+
+    #[must_use]
+    pub fn with_control_store(
+        allowed: Vec<AllowedNodeIdentity>,
+        trust: TrustGenerationV1,
+        store: crate::ControlStore,
+    ) -> Self {
         let mut control = Self::new(allowed, trust);
-        control.evidence = Some(crate::EvidenceIntakeOwner::open(directory)?);
-        Ok(control)
+        control.evidence = Some(crate::EvidenceIntakeOwner::from_store(store));
+        control
     }
 
     #[must_use]
@@ -138,7 +152,7 @@ impl ControlPlane {
     }
 
     #[must_use]
-    pub fn allowed_nodes(&self) -> &BTreeMap<String, String> {
+    pub fn allowed_nodes(&self) -> &BTreeMap<String, AllowedNodeIdentity> {
         &self.allowed_nodes
     }
 
@@ -246,7 +260,7 @@ impl ControlPlane {
         let mut matching = self
             .allowed_nodes
             .iter()
-            .filter(|(_node_id, expected)| *expected == &digest)
+            .filter(|(_node_id, expected)| expected.certificate_sha256 == digest)
             .map(|(node_id, _expected)| node_id.clone());
         let node_id = matching
             .next()
@@ -257,6 +271,30 @@ impl ControlPlane {
             ));
         }
         Ok(node_id)
+    }
+
+    fn authenticated_evidence_node(
+        &self,
+        node_id: &str,
+        context: &NodeSessionContext,
+    ) -> Result<crate::AuthenticatedEvidenceNodeV1, Status> {
+        let enrolled = self.allowed_nodes.get(node_id).ok_or_else(|| {
+            Status::permission_denied("node identity is not enrolled for evidence")
+        })?;
+        let tenant = uuid::Uuid::parse_str(&enrolled.tenant_id)
+            .map_err(|_| Status::failed_precondition("node tenant enrollment is invalid"))?;
+        let node_boot_id: [u8; 16] = context
+            .node_boot_id
+            .as_slice()
+            .try_into()
+            .map_err(|_| Status::invalid_argument("node boot identity is not Id128"))?;
+        Ok(crate::AuthenticatedEvidenceNodeV1 {
+            tenant_id: *tenant.as_bytes(),
+            node_id: node_id.to_owned(),
+            node_boot_id,
+            label_epoch: self
+                .session_label_epoch(&StreamIdentity::new(node_id.to_owned(), context)?)?,
+        })
     }
 
     fn register(
@@ -569,6 +607,7 @@ impl NodeEvidence for ControlPlane {
             .as_ref()
             .ok_or_else(|| Status::invalid_argument("node session context is required"))?;
         self.require_ready_session(&node_id, context)?;
+        let authenticated = self.authenticated_evidence_node(&node_id, context)?;
         let batch = request
             .batch
             .as_ref()
@@ -576,7 +615,7 @@ impl NodeEvidence for ControlPlane {
         let evidence = self.evidence.as_ref().ok_or_else(|| {
             Status::failed_precondition("Control has no durable evidence intake owner")
         })?;
-        Ok(Response::new(evidence.receive(&node_id, batch)?))
+        Ok(Response::new(evidence.receive(&authenticated, batch)?))
     }
 }
 
@@ -593,6 +632,7 @@ impl NodeCoverage for ControlPlane {
             .as_ref()
             .ok_or_else(|| Status::invalid_argument("node session context is required"))?;
         self.require_session(&node_id, context)?;
+        let authenticated = self.authenticated_evidence_node(&node_id, context)?;
         let report = request
             .report
             .as_ref()
@@ -600,7 +640,9 @@ impl NodeCoverage for ControlPlane {
         let evidence = self.evidence.as_ref().ok_or_else(|| {
             Status::failed_precondition("Control has no durable evidence intake owner")
         })?;
-        Ok(Response::new(evidence.receive_coverage(&node_id, report)?))
+        Ok(Response::new(
+            evidence.receive_coverage(&authenticated, report)?,
+        ))
     }
 }
 
@@ -1107,6 +1149,7 @@ mod tests {
             vec![AllowedNodeIdentity {
                 node_id: "node-a".to_owned(),
                 certificate_sha256: "a".repeat(64),
+                tenant_id: "00000000-0000-0001-0000-000000000002".to_owned(),
             }],
             TrustGenerationV1 {
                 generation: 7,

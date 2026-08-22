@@ -10,9 +10,11 @@ use snafu::ResultExt as _;
 
 use crate::error::{ControlStoreSnafu, IoSnafu, JsonSnafu};
 use crate::{
-    canonical_policy_spec_digest, PolicyActivationAcknowledgementV1, PolicyBundleV1,
+    canonical_policy_spec_digest, CoverageIntakeStateV1, EvidenceIntakeIdentityV1,
+    EvidenceStoreOutcomeV1, IntakeStateV1, PolicyActivationAcknowledgementV1, PolicyBundleV1,
     PolicyDocumentV1, PolicyRolloutStateV1, PolicySourceRevisionV1, PolicySourceStateV1,
-    PolicyTargetSnapshotV1, ProfileCandidateArtifactV1, Result,
+    PolicyTargetSnapshotV1, ProfileCandidateArtifactV1, Result, StoredCoverageReportV1,
+    StoredEvidenceBatchV1, StoredRecordV1, MAX_PENDING_EVIDENCE_RECORDS,
 };
 
 const STORE_SCHEMA_VERSION: u32 = 1;
@@ -40,6 +42,13 @@ struct ControlStoreState {
     bundles: BTreeMap<String, PolicyBundleV1>,
     rollout_states: BTreeMap<PolicyRolloutKeyV1, PolicyRolloutStateV1>,
     acknowledgements: BTreeMap<String, PolicyActivationAcknowledgementV1>,
+    evidence_cursors: BTreeMap<EvidenceIntakeIdentityV1, IntakeStateV1>,
+    evidence_records: BTreeMap<EvidenceRecordKeyV1, StoredRecordV1>,
+    evidence_batch_receipts: BTreeMap<EvidenceBatchKeyV1, [u8; 32]>,
+    pending_evidence_batches: BTreeMap<EvidencePendingKeyV1, StoredEvidenceBatchV1>,
+    coverage_cursors: BTreeMap<EvidenceIntakeIdentityV1, CoverageIntakeStateV1>,
+    coverage_reports: BTreeMap<CoverageReportKeyV1, StoredCoverageReportV1>,
+    evidence_source_labels: BTreeMap<EvidenceSourceEpochKeyV1, u64>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
@@ -53,6 +62,39 @@ struct PolicyObjectKeyV1 {
 struct PolicyRolloutKeyV1 {
     candidate_content_id: String,
     node_id: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+struct EvidenceRecordKeyV1 {
+    identity: EvidenceIntakeIdentityV1,
+    cursor: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+struct EvidenceBatchKeyV1 {
+    identity: EvidenceIntakeIdentityV1,
+    first_cursor: u64,
+    last_cursor: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+struct EvidencePendingKeyV1 {
+    identity: EvidenceIntakeIdentityV1,
+    first_cursor: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+struct CoverageReportKeyV1 {
+    identity: EvidenceIntakeIdentityV1,
+    revision: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+struct EvidenceSourceEpochKeyV1 {
+    tenant_id: [u8; 16],
+    node_id: String,
+    source_id: [u8; 16],
+    source_epoch: u64,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -82,6 +124,15 @@ enum ControlTransactionV1 {
     Acknowledged {
         result: Box<PolicyAcknowledgementTransactionV1>,
     },
+    EvidencePending {
+        pending: Box<EvidenceBatchTransactionV1>,
+    },
+    EvidenceAccepted {
+        accepted: Box<EvidenceAcceptedTransactionV1>,
+    },
+    CoverageAccepted {
+        report: Box<StoredCoverageReportV1>,
+    },
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -97,6 +148,20 @@ struct PolicyRolloutTransactionV1 {
 struct PolicyAcknowledgementTransactionV1 {
     acknowledgement: PolicyActivationAcknowledgementV1,
     rollout_state: PolicyRolloutStateV1,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct EvidenceBatchTransactionV1 {
+    identity: EvidenceIntakeIdentityV1,
+    batch: StoredEvidenceBatchV1,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct EvidenceAcceptedTransactionV1 {
+    identity: EvidenceIntakeIdentityV1,
+    batches: Vec<StoredEvidenceBatchV1>,
 }
 
 impl ControlStore {
@@ -413,6 +478,197 @@ impl ControlStore {
         )
     }
 
+    pub(crate) fn accept_evidence_batch(
+        &self,
+        identity: EvidenceIntakeIdentityV1,
+        batch: StoredEvidenceBatchV1,
+    ) -> Result<EvidenceStoreOutcomeV1> {
+        let mut inner = self.lock()?;
+        validate_evidence_identity(&identity, &inner.root)?;
+        validate_stored_batch(&batch, &inner.root)?;
+        validate_source_label(&inner.state, &identity, &inner.root)?;
+        let receipt_key = EvidenceBatchKeyV1 {
+            identity: identity.clone(),
+            first_cursor: batch.first_cursor,
+            last_cursor: batch.last_cursor,
+        };
+        if let Some(digest) = inner.state.evidence_batch_receipts.get(&receipt_key) {
+            if digest == &batch.batch_sha256 {
+                return Ok(EvidenceStoreOutcomeV1::Accepted);
+            }
+            return ControlStoreSnafu {
+                path: inner.root.clone(),
+                reason: "an accepted evidence range has conflicting batch content".to_owned(),
+            }
+            .fail();
+        }
+        let cursor = inner
+            .state
+            .evidence_cursors
+            .get(&identity)
+            .copied()
+            .unwrap_or_default();
+        if batch.first_cursor <= cursor.contiguous_cursor {
+            return ControlStoreSnafu {
+                path: inner.root.clone(),
+                reason: "an evidence range overlaps the accepted contiguous cursor".to_owned(),
+            }
+            .fail();
+        }
+        for (key, existing) in inner
+            .state
+            .pending_evidence_batches
+            .iter()
+            .filter(|(key, _batch)| key.identity == identity)
+        {
+            let overlaps =
+                batch.first_cursor <= existing.last_cursor && key.first_cursor <= batch.last_cursor;
+            if overlaps {
+                if key.first_cursor == batch.first_cursor && existing == &batch {
+                    return Ok(EvidenceStoreOutcomeV1::Pending);
+                }
+                return ControlStoreSnafu {
+                    path: inner.root.clone(),
+                    reason: "pending evidence ranges overlap or conflict".to_owned(),
+                }
+                .fail();
+            }
+        }
+        let next = cursor.contiguous_cursor.saturating_add(1);
+        if batch.first_cursor != next {
+            if batch.last_cursor
+                > cursor
+                    .contiguous_cursor
+                    .saturating_add(MAX_PENDING_EVIDENCE_RECORDS)
+            {
+                return ControlStoreSnafu {
+                    path: inner.root.clone(),
+                    reason: "out-of-order evidence exceeds the bounded pending window".to_owned(),
+                }
+                .fail();
+            }
+            commit(
+                &mut inner,
+                ControlTransactionV1::EvidencePending {
+                    pending: Box::new(EvidenceBatchTransactionV1 { identity, batch }),
+                },
+            )?;
+            return Ok(EvidenceStoreOutcomeV1::Pending);
+        }
+
+        let mut batches = vec![batch];
+        let mut next = batches[0].last_cursor.saturating_add(1);
+        while let Some(pending) = inner
+            .state
+            .pending_evidence_batches
+            .get(&EvidencePendingKeyV1 {
+                identity: identity.clone(),
+                first_cursor: next,
+            })
+            .cloned()
+        {
+            next = pending.last_cursor.saturating_add(1);
+            batches.push(pending);
+        }
+        commit(
+            &mut inner,
+            ControlTransactionV1::EvidenceAccepted {
+                accepted: Box::new(EvidenceAcceptedTransactionV1 { identity, batches }),
+            },
+        )?;
+        Ok(EvidenceStoreOutcomeV1::Accepted)
+    }
+
+    pub(crate) fn accept_coverage_report(&self, report: StoredCoverageReportV1) -> Result<u64> {
+        let mut inner = self.lock()?;
+        validate_evidence_identity(&report.identity, &inner.root)?;
+        validate_source_label(&inner.state, &report.identity, &inner.root)?;
+        let current = inner
+            .state
+            .coverage_cursors
+            .get(&report.identity)
+            .copied()
+            .unwrap_or_default();
+        if current == report.state {
+            let key = CoverageReportKeyV1 {
+                identity: report.identity.clone(),
+                revision: report.state.revision,
+            };
+            if inner.state.coverage_reports.get(&key) == Some(&report) {
+                return Ok(inner.state.commit_index);
+            }
+            return ControlStoreSnafu {
+                path: inner.root.clone(),
+                reason: "one coverage revision has conflicting immutable content".to_owned(),
+            }
+            .fail();
+        }
+        if report.state.source_epoch < current.source_epoch
+            || (report.state.source_epoch == current.source_epoch
+                && report.state.revision <= current.revision)
+            || report.state.source_epoch != report.identity.source_epoch
+            || report.state.revision == 0
+            || report.state.report_sha256 == [0; 32]
+            || report.encoded_report.is_empty()
+        {
+            return ControlStoreSnafu {
+                path: inner.root.clone(),
+                reason: "coverage evidence is stale or has invalid identity".to_owned(),
+            }
+            .fail();
+        }
+        commit(
+            &mut inner,
+            ControlTransactionV1::CoverageAccepted {
+                report: Box::new(report),
+            },
+        )
+    }
+
+    pub fn evidence_cursor(&self, identity: &EvidenceIntakeIdentityV1) -> Result<u64> {
+        Ok(self
+            .lock()?
+            .state
+            .evidence_cursors
+            .get(identity)
+            .map_or(0, |cursor| cursor.contiguous_cursor))
+    }
+
+    pub fn accepted_evidence_records(
+        &self,
+        identity: &EvidenceIntakeIdentityV1,
+    ) -> Result<Vec<Vec<u8>>> {
+        Ok(self
+            .lock()?
+            .state
+            .evidence_records
+            .iter()
+            .filter(|(key, _record)| &key.identity == identity)
+            .map(|(_key, record)| record.payload.clone())
+            .collect())
+    }
+
+    pub(crate) fn latest_coverage_report(
+        &self,
+        identity: &EvidenceIntakeIdentityV1,
+    ) -> Result<Option<StoredCoverageReportV1>> {
+        let inner = self.lock()?;
+        Ok(inner
+            .state
+            .coverage_cursors
+            .get(identity)
+            .and_then(|cursor| {
+                inner
+                    .state
+                    .coverage_reports
+                    .get(&CoverageReportKeyV1 {
+                        identity: identity.clone(),
+                        revision: cursor.revision,
+                    })
+                    .cloned()
+            }))
+    }
+
     pub fn source_revision(&self, id: &str) -> Result<Option<PolicySourceRevisionV1>> {
         Ok(self.lock()?.state.source_revisions.get(id).cloned())
     }
@@ -692,10 +948,12 @@ fn commit(inner: &mut ControlStoreInner, transaction: ControlTransactionV1) -> R
     };
     record.commit_digest = commit_digest(&record)?;
     let path = commit_path(&inner.root, commit_index);
+    let mut next_state = inner.state.clone();
+    apply_transaction(&mut next_state, &record.transaction, &path)?;
     write_commit(&path, &record)?;
-    apply_transaction(&mut inner.state, &record.transaction, &path)?;
-    inner.state.commit_index = commit_index;
-    inner.state.last_commit_digest = record.commit_digest;
+    next_state.commit_index = commit_index;
+    next_state.last_commit_digest = record.commit_digest;
+    inner.state = next_state;
     Ok(commit_index)
 }
 
@@ -854,7 +1112,256 @@ fn apply_transaction(
                 rollout_state.clone(),
             );
         }
+        ControlTransactionV1::EvidencePending { pending } => {
+            validate_evidence_identity(&pending.identity, path)?;
+            validate_stored_batch(&pending.batch, path)?;
+            bind_source_label(state, &pending.identity, path)?;
+            let key = EvidencePendingKeyV1 {
+                identity: pending.identity.clone(),
+                first_cursor: pending.batch.first_cursor,
+            };
+            if state
+                .pending_evidence_batches
+                .insert(key, pending.batch.clone())
+                .is_some()
+            {
+                return ControlStoreSnafu {
+                    path: path.to_owned(),
+                    reason: "a pending evidence range was committed more than once".to_owned(),
+                }
+                .fail();
+            }
+        }
+        ControlTransactionV1::EvidenceAccepted { accepted } => {
+            apply_accepted_evidence(state, accepted, path)?;
+        }
+        ControlTransactionV1::CoverageAccepted { report } => {
+            validate_evidence_identity(&report.identity, path)?;
+            bind_source_label(state, &report.identity, path)?;
+            let current = state
+                .coverage_cursors
+                .get(&report.identity)
+                .copied()
+                .unwrap_or_default();
+            if report.state.source_epoch != report.identity.source_epoch
+                || report.state.revision == 0
+                || report.state.report_sha256 == [0; 32]
+                || report.encoded_report.is_empty()
+                || report.state.source_epoch < current.source_epoch
+                || (report.state.source_epoch == current.source_epoch
+                    && report.state.revision <= current.revision)
+            {
+                return ControlStoreSnafu {
+                    path: path.to_owned(),
+                    reason: "committed coverage evidence is stale or invalid".to_owned(),
+                }
+                .fail();
+            }
+            let key = CoverageReportKeyV1 {
+                identity: report.identity.clone(),
+                revision: report.state.revision,
+            };
+            if state
+                .coverage_reports
+                .insert(key, report.as_ref().clone())
+                .is_some()
+            {
+                return ControlStoreSnafu {
+                    path: path.to_owned(),
+                    reason: "a coverage revision was committed more than once".to_owned(),
+                }
+                .fail();
+            }
+            state
+                .coverage_cursors
+                .insert(report.identity.clone(), report.state);
+        }
     }
+    Ok(())
+}
+
+fn validate_evidence_identity(identity: &EvidenceIntakeIdentityV1, path: &Path) -> Result<()> {
+    if identity.tenant_id == [0; 16]
+        || !crate::node_id_is_valid(&identity.node_id)
+        || identity.node_boot_id == [0; 16]
+        || identity.label_epoch == 0
+        || identity.source_id == [0; 16]
+        || identity.source_epoch == 0
+    {
+        return ControlStoreSnafu {
+            path: path.to_owned(),
+            reason: "evidence stream identity is invalid".to_owned(),
+        }
+        .fail();
+    }
+    Ok(())
+}
+
+fn validate_stored_batch(batch: &StoredEvidenceBatchV1, path: &Path) -> Result<()> {
+    let valid = batch.first_cursor > 0
+        && batch.last_cursor >= batch.first_cursor
+        && batch.batch_sha256 != [0; 32]
+        && batch.last_cursor - batch.first_cursor + 1
+            == u64::try_from(batch.records.len()).unwrap_or(u64::MAX)
+        && !batch.records.is_empty()
+        && batch.records.iter().enumerate().all(|(index, record)| {
+            record.cursor
+                == batch
+                    .first_cursor
+                    .saturating_add(u64::try_from(index).unwrap_or(u64::MAX))
+                && record.observation_id.len() == 32
+                && !record.payload.is_empty()
+                && record.payload_sha256.len() == 32
+                && record.previous_record_sha256.len() == 32
+                && record.record_sha256.len() == 32
+        });
+    if !valid {
+        return ControlStoreSnafu {
+            path: path.to_owned(),
+            reason: "stored evidence batch identity or bounds are invalid".to_owned(),
+        }
+        .fail();
+    }
+    Ok(())
+}
+
+fn source_epoch_key(identity: &EvidenceIntakeIdentityV1) -> EvidenceSourceEpochKeyV1 {
+    EvidenceSourceEpochKeyV1 {
+        tenant_id: identity.tenant_id,
+        node_id: identity.node_id.clone(),
+        source_id: identity.source_id,
+        source_epoch: identity.source_epoch,
+    }
+}
+
+fn validate_source_label(
+    state: &ControlStoreState,
+    identity: &EvidenceIntakeIdentityV1,
+    path: &Path,
+) -> Result<()> {
+    if state
+        .evidence_source_labels
+        .get(&source_epoch_key(identity))
+        .is_some_and(|label_epoch| *label_epoch != identity.label_epoch)
+    {
+        return ControlStoreSnafu {
+            path: path.to_owned(),
+            reason: "one evidence source epoch crossed a node label epoch".to_owned(),
+        }
+        .fail();
+    }
+    Ok(())
+}
+
+fn bind_source_label(
+    state: &mut ControlStoreState,
+    identity: &EvidenceIntakeIdentityV1,
+    path: &Path,
+) -> Result<()> {
+    validate_source_label(state, identity, path)?;
+    state
+        .evidence_source_labels
+        .insert(source_epoch_key(identity), identity.label_epoch);
+    Ok(())
+}
+
+fn apply_accepted_evidence(
+    state: &mut ControlStoreState,
+    accepted: &EvidenceAcceptedTransactionV1,
+    path: &Path,
+) -> Result<()> {
+    validate_evidence_identity(&accepted.identity, path)?;
+    bind_source_label(state, &accepted.identity, path)?;
+    if accepted.batches.is_empty() {
+        return ControlStoreSnafu {
+            path: path.to_owned(),
+            reason: "an accepted evidence transaction has no batches".to_owned(),
+        }
+        .fail();
+    }
+    let mut cursor = state
+        .evidence_cursors
+        .get(&accepted.identity)
+        .copied()
+        .unwrap_or_default();
+    for batch in &accepted.batches {
+        validate_stored_batch(batch, path)?;
+        let supplied_previous = batch
+            .records
+            .first()
+            .and_then(|record| record.previous_record_sha256.as_slice().try_into().ok());
+        if batch.first_cursor != cursor.contiguous_cursor.saturating_add(1)
+            || supplied_previous != Some(cursor.last_record_sha256)
+        {
+            return ControlStoreSnafu {
+                path: path.to_owned(),
+                reason: "accepted evidence is not contiguous with its durable cursor".to_owned(),
+            }
+            .fail();
+        }
+        for record in &batch.records {
+            let key = EvidenceRecordKeyV1 {
+                identity: accepted.identity.clone(),
+                cursor: record.cursor,
+            };
+            if state.evidence_records.insert(key, record.clone()).is_some() {
+                return ControlStoreSnafu {
+                    path: path.to_owned(),
+                    reason: "an immutable evidence cursor was committed more than once".to_owned(),
+                }
+                .fail();
+            }
+        }
+        let last_record_sha256 = batch
+            .records
+            .last()
+            .and_then(|record| record.record_sha256.as_slice().try_into().ok())
+            .ok_or_else(|| {
+                ControlStoreSnafu {
+                    path: path.to_owned(),
+                    reason: "an accepted evidence batch has no final record digest".to_owned(),
+                }
+                .build()
+            })?;
+        cursor = IntakeStateV1 {
+            contiguous_cursor: batch.last_cursor,
+            last_first_cursor: batch.first_cursor,
+            last_batch_sha256: batch.batch_sha256,
+            last_record_sha256,
+        };
+        let receipt_key = EvidenceBatchKeyV1 {
+            identity: accepted.identity.clone(),
+            first_cursor: batch.first_cursor,
+            last_cursor: batch.last_cursor,
+        };
+        if state
+            .evidence_batch_receipts
+            .insert(receipt_key, batch.batch_sha256)
+            .is_some()
+        {
+            return ControlStoreSnafu {
+                path: path.to_owned(),
+                reason: "an accepted evidence receipt was committed more than once".to_owned(),
+            }
+            .fail();
+        }
+        let pending_key = EvidencePendingKeyV1 {
+            identity: accepted.identity.clone(),
+            first_cursor: batch.first_cursor,
+        };
+        if let Some(pending) = state.pending_evidence_batches.remove(&pending_key) {
+            if pending != *batch {
+                return ControlStoreSnafu {
+                    path: path.to_owned(),
+                    reason: "promoted pending evidence differs from its durable content".to_owned(),
+                }
+                .fail();
+            }
+        }
+    }
+    state
+        .evidence_cursors
+        .insert(accepted.identity.clone(), cursor);
     Ok(())
 }
 
