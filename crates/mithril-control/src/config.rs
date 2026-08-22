@@ -11,7 +11,8 @@ use snafu::{ensure, ResultExt as _};
 use crate::error::{InvalidConfigurationSnafu, IoSnafu, JsonSnafu};
 use crate::{
     AdministrativeHttpConfigV1, AllowedNodeIdentity, ControlPlane, ControlServerTls, ControlStore,
-    PolicyDesiredStateConfigV1, PolicyDesiredStateOwner, Result, TrustGenerationV1,
+    KubernetesNodeControlConfigV1, KubernetesNodeReadinessOwner, PolicyDesiredStateConfigV1,
+    PolicyDesiredStateOwner, Result, TrustGenerationV1,
 };
 
 #[derive(Clone, Debug, Deserialize)]
@@ -27,6 +28,16 @@ pub struct ControlConfig {
     pub control_store_directory: Option<PathBuf>,
     #[serde(default)]
     pub kubernetes_policy: Option<PolicyDesiredStateConfigV1>,
+    #[serde(default)]
+    pub kubernetes_nodes: Option<KubernetesNodeControlConfigV1>,
+}
+
+pub struct ControlRuntimeParts {
+    pub listen: SocketAddr,
+    pub tls: ControlServerTls,
+    pub control: ControlPlane,
+    pub administrative_exec: Option<AdministrativeHttpConfigV1>,
+    pub kubernetes_nodes: Option<KubernetesNodeReadinessOwner>,
 }
 
 impl ControlConfig {
@@ -37,14 +48,7 @@ impl ControlConfig {
         Ok(config)
     }
 
-    pub fn into_parts(
-        self,
-    ) -> Result<(
-        SocketAddr,
-        ControlServerTls,
-        ControlPlane,
-        Option<AdministrativeHttpConfigV1>,
-    )> {
+    pub fn into_parts(self) -> Result<ControlRuntimeParts> {
         let store_directory = self
             .control_store_directory
             .unwrap_or_else(|| self.evidence_directory.clone());
@@ -70,7 +74,17 @@ impl ControlConfig {
             );
             control = control.with_policy_desired_state(owner);
         }
-        Ok((self.listen, self.tls, control, self.administrative_exec))
+        let kubernetes_nodes = self
+            .kubernetes_nodes
+            .map(KubernetesNodeReadinessOwner::new)
+            .transpose()?;
+        Ok(ControlRuntimeParts {
+            listen: self.listen,
+            tls: self.tls,
+            control,
+            administrative_exec: self.administrative_exec,
+            kubernetes_nodes,
+        })
     }
 
     fn validate(&self) -> Result<()> {
@@ -96,6 +110,9 @@ impl ControlConfig {
         );
         if let Some(policy) = &self.kubernetes_policy {
             policy.validate()?;
+        }
+        if let Some(nodes) = &self.kubernetes_nodes {
+            nodes.validate()?;
         }
         ensure!(
             self.trust.generation > 0

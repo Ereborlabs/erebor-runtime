@@ -1,0 +1,501 @@
+use std::collections::BTreeMap;
+use std::time::Duration;
+
+use k8s_openapi::api::apps::v1::DaemonSet;
+use k8s_openapi::api::core::v1::{
+    Node, NodeSelector, NodeSelectorRequirement, NodeSelectorTerm, Taint,
+};
+use kube::api::{ListParams, Patch, PatchParams, WatchEvent, WatchParams};
+use kube::{Api, Client, ResourceExt as _};
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
+use snafu::ensure;
+use tokio_stream::StreamExt as _;
+
+use crate::error::InvalidConfigurationSnafu;
+use crate::{ControlPlane, KubernetesNodeSessionV1, Result};
+
+pub const KUBERNETES_READY_LABEL: &str = "mithril.erebor.dev/ready";
+pub const KUBERNETES_NODE_ID_ANNOTATION: &str = "mithril.erebor.dev/node-id";
+pub const KUBERNETES_NODE_BOOT_ANNOTATION: &str = "mithril.erebor.dev/node-boot-id";
+pub const KUBERNETES_LABEL_EPOCH_ANNOTATION: &str = "mithril.erebor.dev/label-epoch";
+pub const KUBERNETES_NOT_READY_TAINT: &str = "mithril.erebor.dev/not-ready";
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct KubernetesNodeControlConfigV1 {
+    pub daemon_set_namespace: String,
+    pub daemon_set_name: String,
+    pub session_ttl_seconds: u64,
+    pub reconcile_interval_ms: u64,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct DaemonSetNodeConstraintsV1 {
+    pub node_selector: BTreeMap<String, String>,
+    pub required_node_affinity: Option<NodeSelector>,
+}
+
+#[derive(Clone)]
+pub struct KubernetesNodeReadinessOwner {
+    config: KubernetesNodeControlConfigV1,
+}
+
+impl KubernetesNodeControlConfigV1 {
+    pub fn validate(&self) -> Result<()> {
+        ensure!(
+            kubernetes_dns_name_is_valid(&self.daemon_set_namespace)
+                && kubernetes_dns_name_is_valid(&self.daemon_set_name)
+                && self.session_ttl_seconds > 0
+                && self.reconcile_interval_ms > 0,
+            InvalidConfigurationSnafu {
+                reason:
+                    "Kubernetes node control requires DaemonSet names and nonzero timing bounds",
+            }
+        );
+        Ok(())
+    }
+}
+
+impl KubernetesNodeReadinessOwner {
+    pub fn new(config: KubernetesNodeControlConfigV1) -> Result<Self> {
+        config.validate()?;
+        Ok(Self { config })
+    }
+
+    #[must_use]
+    pub const fn config(&self) -> &KubernetesNodeControlConfigV1 {
+        &self.config
+    }
+
+    pub async fn run_kubernetes(self, control: ControlPlane) {
+        loop {
+            let Ok(client) = Client::try_default().await else {
+                tokio::time::sleep(Duration::from_secs(5)).await;
+                continue;
+            };
+            self.run_client(client, control.clone()).await;
+            tokio::time::sleep(Duration::from_secs(2)).await;
+        }
+    }
+
+    async fn run_client(&self, client: Client, control: ControlPlane) {
+        let daemon_sets =
+            Api::<DaemonSet>::namespaced(client.clone(), &self.config.daemon_set_namespace);
+        let nodes = Api::<Node>::all(client);
+        loop {
+            let Ok(daemon_set) = daemon_sets.get(&self.config.daemon_set_name).await else {
+                tokio::time::sleep(Duration::from_secs(2)).await;
+                continue;
+            };
+            let Ok(constraints) = DaemonSetNodeConstraintsV1::from_daemon_set(&daemon_set) else {
+                tokio::time::sleep(Duration::from_secs(2)).await;
+                continue;
+            };
+            let Ok(node_list) = nodes.list(&ListParams::default().limit(500)).await else {
+                tokio::time::sleep(Duration::from_secs(2)).await;
+                continue;
+            };
+            let node_resource_version = node_list
+                .metadata
+                .resource_version
+                .unwrap_or_else(|| "0".to_owned());
+            for node in node_list.items {
+                self.reconcile_node(&nodes, &constraints, &control, &node)
+                    .await;
+            }
+
+            let daemon_set_resource_version = daemon_set.resource_version().unwrap_or_default();
+            let daemon_set_watch = daemon_sets
+                .watch(
+                    &WatchParams::default()
+                        .fields(&format!("metadata.name={}", self.config.daemon_set_name))
+                        .timeout(240),
+                    &daemon_set_resource_version,
+                )
+                .await;
+            let node_watch = nodes
+                .watch(&WatchParams::default().timeout(240), &node_resource_version)
+                .await;
+            let (Ok(daemon_set_watch), Ok(node_watch)) = (daemon_set_watch, node_watch) else {
+                continue;
+            };
+            tokio::pin!(daemon_set_watch);
+            tokio::pin!(node_watch);
+            let interval =
+                tokio::time::sleep(Duration::from_millis(self.config.reconcile_interval_ms));
+            tokio::pin!(interval);
+            loop {
+                tokio::select! {
+                    _ = &mut interval => break,
+                    event = daemon_set_watch.next() => {
+                        match event {
+                            Some(Ok(WatchEvent::Bookmark(_))) => {}
+                            Some(Ok(_)) | Some(Err(_)) | None => break,
+                        }
+                    }
+                    event = node_watch.next() => {
+                        match event {
+                            Some(Ok(WatchEvent::Added(node) | WatchEvent::Modified(node))) => {
+                                self.reconcile_node(&nodes, &constraints, &control, &node).await;
+                            }
+                            Some(Ok(WatchEvent::Deleted(_))) | Some(Ok(WatchEvent::Bookmark(_))) => {}
+                            Some(Ok(WatchEvent::Error(_))) | Some(Err(_)) | None => break,
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    async fn reconcile_node(
+        &self,
+        nodes: &Api<Node>,
+        constraints: &DaemonSetNodeConstraintsV1,
+        control: &ControlPlane,
+        node: &Node,
+    ) {
+        let name = node.name_any();
+        let sessions = control
+            .ready_kubernetes_node_sessions(Duration::from_secs(self.config.session_ttl_seconds));
+        let session = sessions
+            .iter()
+            .find(|session| session.kubernetes_node_name == name);
+        let patch = node_projection_patch(node, constraints, session);
+        let _result = nodes
+            .patch(&name, &PatchParams::default(), &Patch::Merge(&patch))
+            .await;
+    }
+}
+
+impl DaemonSetNodeConstraintsV1 {
+    pub fn from_daemon_set(daemon_set: &DaemonSet) -> Result<Self> {
+        let pod_spec = daemon_set
+            .spec
+            .as_ref()
+            .and_then(|spec| spec.template.spec.as_ref())
+            .ok_or_else(|| {
+                InvalidConfigurationSnafu {
+                    reason: "the mithril-node DaemonSet has no Pod template specification"
+                        .to_owned(),
+                }
+                .build()
+            })?;
+        ensure!(
+            pod_spec.node_name.as_deref().is_none_or(str::is_empty),
+            InvalidConfigurationSnafu {
+                reason: "the mithril-node DaemonSet cannot select one node with spec.nodeName",
+            }
+        );
+        let required_node_affinity = pod_spec
+            .affinity
+            .as_ref()
+            .and_then(|affinity| affinity.node_affinity.as_ref())
+            .and_then(|affinity| {
+                affinity
+                    .required_during_scheduling_ignored_during_execution
+                    .clone()
+            });
+        if let Some(selector) = &required_node_affinity {
+            validate_node_selector(selector)?;
+        }
+        Ok(Self {
+            node_selector: pod_spec.node_selector.clone().unwrap_or_default(),
+            required_node_affinity,
+        })
+    }
+
+    #[must_use]
+    pub fn matches_node(&self, node: &Node) -> bool {
+        let labels = node.metadata.labels.as_ref();
+        let selector_matches = self
+            .node_selector
+            .iter()
+            .all(|(key, expected)| labels.and_then(|labels| labels.get(key)) == Some(expected));
+        selector_matches
+            && self.required_node_affinity.as_ref().is_none_or(|selector| {
+                selector
+                    .node_selector_terms
+                    .iter()
+                    .any(|term| node_selector_term_matches(term, node))
+            })
+    }
+}
+
+#[must_use]
+pub fn node_projection_patch(
+    node: &Node,
+    constraints: &DaemonSetNodeConstraintsV1,
+    session: Option<&KubernetesNodeSessionV1>,
+) -> Value {
+    let eligible = constraints.matches_node(node);
+    let ready = eligible && session.is_some();
+    let mut taints = node
+        .spec
+        .as_ref()
+        .and_then(|spec| spec.taints.clone())
+        .unwrap_or_default();
+    taints.retain(|taint| taint.key != KUBERNETES_NOT_READY_TAINT);
+    if eligible && !ready {
+        taints.push(Taint {
+            effect: "NoSchedule".to_owned(),
+            key: KUBERNETES_NOT_READY_TAINT.to_owned(),
+            time_added: None,
+            value: Some("true".to_owned()),
+        });
+    }
+    let (ready_label, node_id, boot_id, label_epoch) = session.filter(|_| ready).map_or(
+        (Value::Null, Value::Null, Value::Null, Value::Null),
+        |session| {
+            (
+                json!("true"),
+                json!(session.node_id),
+                json!(hex::encode(&session.node_boot_id)),
+                json!(session.label_epoch.to_string()),
+            )
+        },
+    );
+    json!({
+        "metadata": {
+            "labels": { KUBERNETES_READY_LABEL: ready_label },
+            "annotations": {
+                KUBERNETES_NODE_ID_ANNOTATION: node_id,
+                KUBERNETES_NODE_BOOT_ANNOTATION: boot_id,
+                KUBERNETES_LABEL_EPOCH_ANNOTATION: label_epoch,
+            }
+        },
+        "spec": { "taints": taints }
+    })
+}
+
+fn validate_node_selector(selector: &NodeSelector) -> Result<()> {
+    ensure!(
+        !selector.node_selector_terms.is_empty()
+            && selector.node_selector_terms.iter().all(|term| {
+                term.match_fields.as_ref().is_none_or(Vec::is_empty)
+                    && term.match_expressions.as_ref().is_none_or(|requirements| {
+                        requirements.iter().all(requirement_is_supported)
+                    })
+            }),
+        InvalidConfigurationSnafu {
+            reason: "the mithril-node DaemonSet uses unsupported required node affinity",
+        }
+    );
+    Ok(())
+}
+
+fn requirement_is_supported(requirement: &NodeSelectorRequirement) -> bool {
+    match requirement.operator.as_str() {
+        "In" | "NotIn" => requirement
+            .values
+            .as_ref()
+            .is_some_and(|values| !values.is_empty()),
+        "Exists" | "DoesNotExist" => requirement.values.as_ref().is_none_or(Vec::is_empty),
+        _ => false,
+    }
+}
+
+fn node_selector_term_matches(term: &NodeSelectorTerm, node: &Node) -> bool {
+    term.match_fields.as_ref().is_none_or(Vec::is_empty)
+        && term.match_expressions.as_ref().is_none_or(|requirements| {
+            requirements.iter().all(|requirement| {
+                let value = node
+                    .metadata
+                    .labels
+                    .as_ref()
+                    .and_then(|labels| labels.get(&requirement.key));
+                let values = requirement.values.as_deref().unwrap_or_default();
+                match requirement.operator.as_str() {
+                    "In" => value.is_some_and(|value| values.contains(value)),
+                    "NotIn" => value.is_some_and(|value| !values.contains(value)),
+                    "Exists" => value.is_some(),
+                    "DoesNotExist" => value.is_none(),
+                    _ => false,
+                }
+            })
+        })
+}
+
+fn kubernetes_dns_name_is_valid(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 253
+        && value.split('.').all(|label| {
+            !label.is_empty()
+                && label.len() <= 63
+                && label
+                    .bytes()
+                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+                && label
+                    .as_bytes()
+                    .first()
+                    .is_some_and(u8::is_ascii_alphanumeric)
+                && label
+                    .as_bytes()
+                    .last()
+                    .is_some_and(u8::is_ascii_alphanumeric)
+        })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use k8s_openapi::api::apps::v1::{DaemonSet, DaemonSetSpec};
+    use k8s_openapi::api::core::v1::{
+        Affinity, Node, NodeAffinity, NodeSelector, NodeSelectorRequirement, NodeSelectorTerm,
+        NodeSpec, PodSpec, PodTemplateSpec,
+    };
+    use k8s_openapi::apimachinery::pkg::apis::meta::v1::{LabelSelector, ObjectMeta};
+
+    use super::{
+        node_projection_patch, DaemonSetNodeConstraintsV1, KubernetesNodeSessionV1,
+        KUBERNETES_NOT_READY_TAINT, KUBERNETES_READY_LABEL,
+    };
+
+    fn daemon_set() -> DaemonSet {
+        DaemonSet {
+            metadata: ObjectMeta {
+                name: Some("mithril-node".to_owned()),
+                namespace: Some("mithril-system".to_owned()),
+                ..ObjectMeta::default()
+            },
+            spec: Some(DaemonSetSpec {
+                selector: LabelSelector::default(),
+                template: PodTemplateSpec {
+                    spec: Some(PodSpec {
+                        containers: Vec::new(),
+                        node_selector: Some(BTreeMap::from([(
+                            "pool".to_owned(),
+                            "protected".to_owned(),
+                        )])),
+                        affinity: Some(Affinity {
+                            node_affinity: Some(NodeAffinity {
+                                required_during_scheduling_ignored_during_execution: Some(
+                                    NodeSelector {
+                                        node_selector_terms: vec![NodeSelectorTerm {
+                                            match_expressions: Some(vec![
+                                                NodeSelectorRequirement {
+                                                    key: "zone".to_owned(),
+                                                    operator: "In".to_owned(),
+                                                    values: Some(vec![
+                                                        "a".to_owned(),
+                                                        "b".to_owned(),
+                                                    ]),
+                                                },
+                                            ]),
+                                            ..NodeSelectorTerm::default()
+                                        }],
+                                    },
+                                ),
+                                ..NodeAffinity::default()
+                            }),
+                            ..Affinity::default()
+                        }),
+                        ..PodSpec::default()
+                    }),
+                    ..PodTemplateSpec::default()
+                },
+                ..DaemonSetSpec::default()
+            }),
+            ..DaemonSet::default()
+        }
+    }
+
+    fn node(name: &str, pool: &str, zone: &str) -> Node {
+        Node {
+            metadata: ObjectMeta {
+                name: Some(name.to_owned()),
+                labels: Some(BTreeMap::from([
+                    ("pool".to_owned(), pool.to_owned()),
+                    ("zone".to_owned(), zone.to_owned()),
+                ])),
+                ..ObjectMeta::default()
+            },
+            spec: Some(NodeSpec::default()),
+            ..Node::default()
+        }
+    }
+
+    #[test]
+    fn daemon_set_constraints_select_nodes_without_selecting_one_node() -> crate::Result<()> {
+        let constraints = DaemonSetNodeConstraintsV1::from_daemon_set(&daemon_set())?;
+        assert!(constraints.matches_node(&node("node-a", "protected", "a")));
+        assert!(constraints.matches_node(&node("node-b", "protected", "b")));
+        assert!(!constraints.matches_node(&node("node-c", "general", "a")));
+        assert!(!constraints.matches_node(&node("node-d", "protected", "c")));
+        Ok(())
+    }
+
+    #[test]
+    fn eligible_node_stays_quarantined_without_current_ready_session() -> crate::Result<()> {
+        let constraints = DaemonSetNodeConstraintsV1::from_daemon_set(&daemon_set())?;
+        let patch = node_projection_patch(&node("node-a", "protected", "a"), &constraints, None);
+        assert_eq!(
+            patch.pointer("/metadata/labels/mithril.erebor.dev~1ready"),
+            Some(&serde_json::Value::Null)
+        );
+        assert_eq!(
+            patch
+                .pointer("/spec/taints/0/key")
+                .and_then(serde_json::Value::as_str),
+            Some(KUBERNETES_NOT_READY_TAINT)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn ready_session_removes_quarantine_and_projects_identity() -> crate::Result<()> {
+        let constraints = DaemonSetNodeConstraintsV1::from_daemon_set(&daemon_set())?;
+        let session = KubernetesNodeSessionV1 {
+            node_id: "enrolled-node-a".to_owned(),
+            kubernetes_node_name: "node-a".to_owned(),
+            node_boot_id: vec![7; 16],
+            label_epoch: 9,
+        };
+        let patch = node_projection_patch(
+            &node("node-a", "protected", "a"),
+            &constraints,
+            Some(&session),
+        );
+        assert_eq!(
+            patch
+                .pointer("/metadata/labels/mithril.erebor.dev~1ready")
+                .and_then(serde_json::Value::as_str),
+            Some("true")
+        );
+        assert!(patch
+            .pointer("/spec/taints")
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(Vec::is_empty));
+        assert_eq!(KUBERNETES_READY_LABEL, "mithril.erebor.dev/ready");
+        Ok(())
+    }
+
+    #[test]
+    fn unsupported_required_affinity_is_rejected() -> crate::Result<()> {
+        let mut daemon_set = daemon_set();
+        let requirement = daemon_set
+            .spec
+            .as_mut()
+            .and_then(|spec| spec.template.spec.as_mut())
+            .and_then(|spec| spec.affinity.as_mut())
+            .and_then(|affinity| affinity.node_affinity.as_mut())
+            .and_then(|affinity| {
+                affinity
+                    .required_during_scheduling_ignored_during_execution
+                    .as_mut()
+            })
+            .and_then(|selector| selector.node_selector_terms.first_mut())
+            .and_then(|term| term.match_expressions.as_mut())
+            .and_then(|requirements| requirements.first_mut());
+        let Some(requirement) = requirement else {
+            return Err(crate::Error::InvalidConfiguration {
+                reason: "the test affinity requirement is absent".to_owned(),
+                location: snafu::Location::default(),
+            });
+        };
+        requirement.operator = "Gt".to_owned();
+        assert!(DaemonSetNodeConstraintsV1::from_daemon_set(&daemon_set).is_err());
+        Ok(())
+    }
+}

@@ -23,7 +23,11 @@ async fn main() {
 
 async fn run() -> mithril_node::Result<()> {
     let cli = Cli::parse();
-    let config = NodeConfig::load(&cli.config)?;
+    let mut config = NodeConfig::load(&cli.config)?;
+    if let Ok(node_name) = std::env::var("MITHRIL_KUBERNETES_NODE_NAME") {
+        config.kubernetes_node_name = Some(node_name);
+        config.validate()?;
+    }
     let node = NodeChassis::start_with_held_initial_pids(config, &cli.held_initial_pid).await?;
     let (shutdown, receiver) = watch::channel(false);
     tokio::spawn(async move {

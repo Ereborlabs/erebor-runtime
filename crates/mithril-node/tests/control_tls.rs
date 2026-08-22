@@ -459,6 +459,7 @@ fn registration() -> NodeRegistration {
         label_epoch: 1,
         kernel_ready: true,
         effect_prevention_claims_enabled: false,
+        kubernetes_node_name: String::new(),
         capabilities: capabilities(),
         workload_targets: Vec::new(),
     }

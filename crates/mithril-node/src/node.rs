@@ -342,6 +342,7 @@ impl NodeChassis {
             label_epoch,
             prevention_enabled && evidence_healthy,
             capabilities.clone(),
+            config.kubernetes_node_name.as_deref(),
             &config.workload_bindings,
         )?;
         let connector =
@@ -1330,6 +1331,7 @@ fn registration(
     label_epoch: u64,
     effect_prevention_claims_enabled: bool,
     capabilities: Vec<CapabilityRecord>,
+    kubernetes_node_name: Option<&str>,
     workload_bindings: &[crate::WorkloadBindingConfig],
 ) -> Result<NodeRegistration> {
     let manifest_bytes = serde_json::to_vec(manifest).context(JsonSnafu {
@@ -1342,6 +1344,7 @@ fn registration(
         kernel_ready: manifest.ready,
         effect_prevention_claims_enabled,
         capabilities,
+        kubernetes_node_name: kubernetes_node_name.unwrap_or_default().to_owned(),
         workload_targets: workload_bindings
             .iter()
             .filter(|binding| {
@@ -1464,6 +1467,7 @@ mod tests {
             label_epoch: 1,
             kernel_ready: true,
             effect_prevention_claims_enabled: true,
+            kubernetes_node_name: String::new(),
             capabilities: [
                 "EXACT_NATIVE_IDENTITY",
                 "LOCAL_EFFECT_OBSERVATION",
@@ -1515,6 +1519,7 @@ mod tests {
             label_epoch: 1,
             kernel_ready: true,
             effect_prevention_claims_enabled: true,
+            kubernetes_node_name: String::new(),
             capabilities: healthy_capabilities.clone(),
             workload_targets: Vec::new(),
         };
@@ -1541,6 +1546,7 @@ mod tests {
             label_epoch: 1,
             kernel_ready: true,
             effect_prevention_claims_enabled: true,
+            kubernetes_node_name: String::new(),
             capabilities: vec![
                 CapabilityRecord {
                     capability_id: "EXACT_NATIVE_IDENTITY".to_owned(),

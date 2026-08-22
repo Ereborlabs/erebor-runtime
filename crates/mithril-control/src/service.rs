@@ -64,11 +64,21 @@ struct ControlState {
 
 struct NodeSession {
     identity: StreamIdentity,
+    kubernetes_node_name: Option<String>,
     resolution_output: Option<mpsc::Sender<Result<ResolveAdministrativeExec, Status>>>,
     arm_output: Option<mpsc::Sender<Result<ArmAdministrativeExec, Status>>>,
     admission_ready: bool,
     label_epoch: u64,
+    last_seen: std::time::Instant,
     workload_targets: Vec<crate::WorkloadTargetFactV1>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct KubernetesNodeSessionV1 {
+    pub node_id: String,
+    pub kubernetes_node_name: String,
+    pub node_boot_id: Vec<u8>,
+    pub label_epoch: u64,
 }
 
 enum PendingAdministrativeResponse {
@@ -188,6 +198,35 @@ impl ControlPlane {
                     .sessions
                     .values()
                     .flat_map(|session| session.workload_targets.iter().cloned())
+                    .collect()
+            },
+        )
+    }
+
+    #[must_use]
+    pub fn ready_kubernetes_node_sessions(
+        &self,
+        maximum_age: std::time::Duration,
+    ) -> Vec<KubernetesNodeSessionV1> {
+        let now = std::time::Instant::now();
+        self.state.lock().map_or_else(
+            |_| Vec::new(),
+            |state| {
+                state
+                    .sessions
+                    .values()
+                    .filter(|session| {
+                        session.admission_ready
+                            && now.saturating_duration_since(session.last_seen) <= maximum_age
+                    })
+                    .filter_map(|session| {
+                        Some(KubernetesNodeSessionV1 {
+                            node_id: session.identity.node_id.clone(),
+                            kubernetes_node_name: session.kubernetes_node_name.clone()?,
+                            node_boot_id: session.identity.node_boot_id.clone(),
+                            label_epoch: session.label_epoch,
+                        })
+                    })
                     .collect()
             },
         )
@@ -402,7 +441,19 @@ impl ControlPlane {
             .iter()
             .map(|target| registered_workload_target(&node_id, target))
             .collect::<Result<Vec<_>, _>>()?;
+        let kubernetes_node_name = (!registration.kubernetes_node_name.is_empty())
+            .then(|| registration.kubernetes_node_name.clone());
         let mut state = self.lock_state()?;
+        if kubernetes_node_name.as_ref().is_some_and(|name| {
+            state.sessions.values().any(|session| {
+                session.identity.node_id != node_id
+                    && session.kubernetes_node_name.as_ref() == Some(name)
+            })
+        }) {
+            return Err(Status::already_exists(
+                "Kubernetes Node name is registered by another node identity",
+            ));
+        }
         if !state.registrations.insert(identity.clone()) {
             return Err(Status::already_exists("registration nonce was replayed"));
         }
@@ -413,10 +464,12 @@ impl ControlPlane {
             node_id,
             NodeSession {
                 identity,
+                kubernetes_node_name,
                 resolution_output: None,
                 arm_output: None,
                 admission_ready: false,
                 label_epoch: registration.label_epoch,
+                last_seen: std::time::Instant::now(),
                 workload_targets,
             },
         );
@@ -434,16 +487,17 @@ impl ControlPlane {
             ));
         }
         let identity = StreamIdentity::new(node_id.to_owned(), context)?;
-        let state = self.lock_state()?;
+        let mut state = self.lock_state()?;
         let active = state
             .sessions
-            .get(node_id)
+            .get_mut(node_id)
             .ok_or_else(|| Status::unauthenticated("node session is not registered"))?;
         if active.identity != identity {
             return Err(Status::unauthenticated(
                 "node boot identity or connection nonce is stale",
             ));
         }
+        active.last_seen = std::time::Instant::now();
         Ok(identity)
     }
 
@@ -1084,6 +1138,8 @@ fn valid_registration(registration: &crate::NodeRegistration) -> bool {
             .collect::<BTreeSet<_>>()
             .len()
             == registration.capabilities.len()
+        && (registration.kubernetes_node_name.is_empty()
+            || kubernetes_node_name_is_valid(&registration.kubernetes_node_name))
         && registration.workload_targets.len() <= 65_536
         && registration
             .workload_targets
@@ -1092,6 +1148,26 @@ fn valid_registration(registration: &crate::NodeRegistration) -> bool {
             .collect::<BTreeSet<_>>()
             .len()
             == registration.workload_targets.len()
+}
+
+fn kubernetes_node_name_is_valid(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 253
+        && value.split('.').all(|label| {
+            !label.is_empty()
+                && label.len() <= 63
+                && label
+                    .bytes()
+                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+                && label
+                    .as_bytes()
+                    .first()
+                    .is_some_and(u8::is_ascii_alphanumeric)
+                && label
+                    .as_bytes()
+                    .last()
+                    .is_some_and(u8::is_ascii_alphanumeric)
+        })
 }
 
 fn registered_workload_target(
@@ -1274,6 +1350,7 @@ mod tests {
             label_epoch: 1,
             kernel_ready: true,
             effect_prevention_claims_enabled: true,
+            kubernetes_node_name: String::new(),
             capabilities: vec![CapabilityRecord {
                 capability_id: "capability".to_owned(),
                 state: "SUPPORTED".to_owned(),
@@ -1315,6 +1392,40 @@ mod tests {
         };
         assert!(control.require_session("node-a", &stale).is_err());
         Ok::<(), tonic::Status>(())
+    }
+
+    #[test]
+    fn only_ready_named_session_is_projected_to_kubernetes() -> Result<(), tonic::Status> {
+        let control = control();
+        let context = NodeSessionContext {
+            node_id: "node-a".to_owned(),
+            node_boot_id: vec![1; 16],
+            connection_nonce: vec![2; 16],
+        };
+        let mut registration = registration();
+        registration.kubernetes_node_name = "worker-a.example".to_owned();
+        control.register("node-a".to_owned(), &context, &registration)?;
+        assert!(control
+            .ready_kubernetes_node_sessions(std::time::Duration::from_secs(1))
+            .is_empty());
+        control
+            .lock_state()?
+            .sessions
+            .get_mut("node-a")
+            .ok_or_else(|| tonic::Status::internal("test session disappeared"))?
+            .admission_ready = true;
+        let sessions = control.ready_kubernetes_node_sessions(std::time::Duration::from_secs(1));
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].kubernetes_node_name, "worker-a.example");
+        assert_eq!(sessions[0].node_boot_id, vec![1; 16]);
+        Ok(())
+    }
+
+    #[test]
+    fn registration_rejects_invalid_kubernetes_node_name() {
+        let mut registration = registration();
+        registration.kubernetes_node_name = "Worker A".to_owned();
+        assert!(!valid_registration(&registration));
     }
 
     #[test]

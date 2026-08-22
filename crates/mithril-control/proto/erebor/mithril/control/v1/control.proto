@@ -111,6 +111,7 @@ message NodeRegistration {
   bool effect_prevention_claims_enabled = 7;
   repeated CapabilityRecord capabilities = 8;
   repeated RegisteredWorkloadTarget workload_targets = 9;
+  string kubernetes_node_name = 10;
 }
 
 message RegisteredWorkloadTarget {

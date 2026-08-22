@@ -2,6 +2,7 @@ mod artifact;
 mod canonical;
 mod compiler;
 mod kubernetes;
+mod kubernetes_nodes;
 mod path;
 mod reconciliation;
 mod rollback;
@@ -18,6 +19,7 @@ pub use compiler::{
     StaticDecisionKeyV1, StaticExpandedProfileV1,
 };
 pub use kubernetes::*;
+pub use kubernetes_nodes::*;
 pub use path::*;
 pub use reconciliation::*;
 pub use rollback::{
