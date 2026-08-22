@@ -830,18 +830,16 @@ impl ControlStore {
     pub fn next_distribution_sequence(
         &self,
         node_id: &str,
-        object_uid: &str,
+        tenant_id: &str,
+        trust_domain_id: &str,
+        profile_id: &str,
         sequence_epoch: u64,
     ) -> Result<u64> {
         let inner = self.lock()?;
         let mut current = 0_u64;
         for bundle in inner.state.bundles.values().filter(|bundle| {
             bundle.candidate.exact_target.node_id == node_id
-                && inner
-                    .state
-                    .source_revisions
-                    .get(&bundle.candidate.policy_source_revision_id)
-                    .is_some_and(|source| source.object_uid == object_uid)
+                && bundle_matches_profile(bundle, tenant_id, trust_domain_id, profile_id)
         }) {
             let candidate = &bundle.candidate;
             if candidate.distribution_sequence_epoch > sequence_epoch {
@@ -864,10 +862,12 @@ impl ControlStore {
         })
     }
 
-    pub fn latest_bundle_for_object_node(
+    pub fn latest_bundle_for_profile_node(
         &self,
-        object_uid: &str,
         node_id: &str,
+        tenant_id: &str,
+        trust_domain_id: &str,
+        profile_id: &str,
     ) -> Result<Option<PolicyBundleV1>> {
         let inner = self.lock()?;
         Ok(inner
@@ -876,11 +876,7 @@ impl ControlStore {
             .values()
             .filter(|bundle| {
                 bundle.candidate.exact_target.node_id == node_id
-                    && inner
-                        .state
-                        .source_revisions
-                        .get(&bundle.candidate.policy_source_revision_id)
-                        .is_some_and(|source| source.object_uid == object_uid)
+                    && bundle_matches_profile(bundle, tenant_id, trust_domain_id, profile_id)
             })
             .max_by_key(|bundle| {
                 (
@@ -951,6 +947,63 @@ impl ControlStore {
                     bundle.candidate.distribution_sequence,
                 )
             })
+            .cloned())
+    }
+
+    pub fn next_bundle_for_node(
+        &self,
+        node_id: &str,
+        active_candidate_content_id: &str,
+        durable_bundle_digests: &[String],
+    ) -> Result<Option<PolicyBundleV1>> {
+        let inner = self.lock()?;
+        Ok(inner
+            .state
+            .bundles
+            .values()
+            .filter_map(|bundle| {
+                if bundle.candidate.exact_target.node_id != node_id {
+                    return None;
+                }
+                let rollout = inner.state.rollout_states.get(&PolicyRolloutKeyV1 {
+                    candidate_content_id: bundle.candidate.candidate_content_id.clone(),
+                    node_id: node_id.to_owned(),
+                })?;
+                let eligible = match rollout.state {
+                    crate::PolicyRolloutStatusV1::Rejected
+                    | crate::PolicyRolloutStatusV1::Stale => false,
+                    crate::PolicyRolloutStatusV1::Active => {
+                        bundle.candidate.candidate_content_id != active_candidate_content_id
+                            && !durable_bundle_digests.contains(&bundle.bundle_digest)
+                    }
+                    crate::PolicyRolloutStatusV1::Pending
+                    | crate::PolicyRolloutStatusV1::Delivered
+                    | crate::PolicyRolloutStatusV1::Staged
+                    | crate::PolicyRolloutStatusV1::Unknown => true,
+                };
+                eligible.then_some((bundle, rollout))
+            })
+            .max_by_key(|(bundle, rollout)| {
+                (
+                    u8::from(rollout.state != crate::PolicyRolloutStatusV1::Active),
+                    rollout.updated_utc_ns,
+                    bundle.candidate.candidate_content_id.as_str(),
+                )
+            })
+            .map(|(bundle, _rollout)| bundle.clone()))
+    }
+
+    pub fn bundle_for_candidate(
+        &self,
+        node_id: &str,
+        candidate_content_id: &str,
+    ) -> Result<Option<PolicyBundleV1>> {
+        Ok(self
+            .lock()?
+            .state
+            .bundles
+            .get(candidate_content_id)
+            .filter(|bundle| bundle.candidate.exact_target.node_id == node_id)
             .cloned())
     }
 
@@ -1659,17 +1712,27 @@ fn validate_rollout_ordering(
                 }
                 .build()
             })?;
+        let document = state
+            .policy_documents
+            .get(&source.policy_source_revision_id)
+            .ok_or_else(|| {
+                ControlStoreSnafu {
+                    path: path.to_owned(),
+                    reason: "a rollout source has no policy document".to_owned(),
+                }
+                .build()
+            })?;
         let previous = state
             .bundles
             .values()
             .filter(|existing| {
                 existing.candidate.exact_target.node_id == candidate.exact_target.node_id
-                    && state
-                        .source_revisions
-                        .get(&existing.candidate.policy_source_revision_id)
-                        .is_some_and(|existing_source| {
-                            existing_source.object_uid == source.object_uid
-                        })
+                    && bundle_matches_profile(
+                        existing,
+                        &source.tenant_id,
+                        &document.metadata.trust_domain_id,
+                        &document.metadata.profile_id,
+                    )
             })
             .max_by_key(|existing| {
                 (
@@ -1712,6 +1775,22 @@ fn validate_rollout_ordering(
         }
     }
     Ok(())
+}
+
+fn bundle_matches_profile(
+    bundle: &PolicyBundleV1,
+    tenant_id: &str,
+    trust_domain_id: &str,
+    profile_id: &str,
+) -> bool {
+    bundle.candidate.tenant_id == tenant_id
+        && bundle
+            .profile_artifact
+            .policy_document
+            .metadata
+            .trust_domain_id
+            == trust_domain_id
+        && bundle.profile_artifact.policy_document.metadata.profile_id == profile_id
 }
 
 fn valid_sha256(value: &str) -> bool {

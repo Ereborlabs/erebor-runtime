@@ -688,7 +688,14 @@ impl NodePolicy for ControlPlane {
         let store = self.policy_store.as_ref().ok_or_else(|| {
             Status::failed_precondition("Control has no durable policy rollout store")
         })?;
-        let Some(bundle) = store.bundle_for_node(&node_id).map_err(internal_status)? else {
+        let Some(bundle) = store
+            .next_bundle_for_node(
+                &node_id,
+                &request.active_candidate_content_id,
+                &request.durable_bundle_digests,
+            )
+            .map_err(internal_status)?
+        else {
             return Ok(Response::new(PolicyInventory::default()));
         };
         let chunks = bundle.chunks().map_err(internal_status)?;
@@ -722,7 +729,7 @@ impl NodePolicy for ControlPlane {
             Status::failed_precondition("Control has no durable policy rollout store")
         })?;
         let bundle = store
-            .bundle_for_node(&node_id)
+            .bundle_for_candidate(&node_id, &request.candidate_content_id)
             .map_err(internal_status)?
             .ok_or_else(|| Status::not_found("the node has no desired policy candidate"))?;
         if request.candidate_content_id != bundle.candidate.candidate_content_id

@@ -216,12 +216,28 @@ impl PolicyDesiredStateOwner {
                 PolicySourceStateV1::Accepted
             },
         )?;
-        if let Some(existing) = self
+        let existing = self
             .state()?
             .reconciled
             .get(&source.policy_source_revision_id)
-            .cloned()
-        {
+            .cloned();
+        if let Some(mut existing) = existing {
+            existing.rollout_states = self
+                .store
+                .rollout_states_for_snapshot(&existing.target_snapshot.target_snapshot_digest)?;
+            existing.status = status_for(
+                &existing.source_revision,
+                existing
+                    .bundles
+                    .first()
+                    .map(|bundle| bundle.candidate.candidate_content_id.clone()),
+                &existing.rollout_states,
+                None,
+            );
+            self.state()?.reconciled.insert(
+                existing.source_revision.policy_source_revision_id.clone(),
+                existing.clone(),
+            );
             return Ok(existing);
         }
         self.store
@@ -453,12 +469,19 @@ impl PolicyRolloutOwner {
         for target in &snapshot.targets {
             let sequence = self.store.next_distribution_sequence(
                 &target.node_id,
-                &source.object_uid,
+                &source.tenant_id,
+                &artifact.policy_document.metadata.trust_domain_id,
+                &artifact.policy_document.metadata.profile_id,
                 self.distribution_sequence_epoch,
             )?;
             let predecessor = self
                 .store
-                .latest_bundle_for_object_node(&source.object_uid, &target.node_id)?
+                .latest_bundle_for_profile_node(
+                    &target.node_id,
+                    &source.tenant_id,
+                    &artifact.policy_document.metadata.trust_domain_id,
+                    &artifact.policy_document.metadata.profile_id,
+                )?
                 .map(|bundle| bundle.candidate.candidate_content_id);
             let operation = if source.state == PolicySourceStateV1::DeletionRequested {
                 PolicyDeliveryOperationV1::RetireToRestrictiveTerminal
