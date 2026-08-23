@@ -35,6 +35,7 @@ use crate::{ControlPlane, Result};
 
 pub const KUBERNETES_PROFILE_ANNOTATION: &str = "mithril.erebor.dev/profile-id";
 pub const KUBERNETES_SOURCE_ANNOTATION: &str = "mithril.erebor.dev/policy-source-revision";
+const MAXIMUM_COMBINED_NODE_SELECTOR_TERMS: usize = 256;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -90,9 +91,9 @@ impl KubernetesAdmissionHttpConfigV1 {
 impl KubernetesAdmissionOwner {
     async fn admit(&self, request: &AdmissionRequest<DynamicObject>) -> Result<AdmissionResponse> {
         ensure!(
-            !request.uid.is_empty() && !request.dry_run,
+            !request.uid.is_empty(),
             InvalidConfigurationSnafu {
-                reason: "Kubernetes admission requires a persisted request with a UID",
+                reason: "Kubernetes admission requires a request UID",
             }
         );
         let response = AdmissionResponse::from(request);
@@ -103,20 +104,17 @@ impl KubernetesAdmissionOwner {
         {
             let mut node: Node = request_object(request)?;
             let constraints = self.nodes.live_constraints(self.kube.clone()).await?;
+            let node_name = node.name_any();
             let ready = node.metadata.uid.as_deref().is_some_and(|uid| {
                 self.control
-                    .bind_kubernetes_node_session(&node.name_any(), uid)
-                    .is_ok()
-                    && self
-                        .control
-                        .ready_kubernetes_node_sessions(Duration::from_secs(
-                            self.nodes.config().session_ttl_seconds,
-                        ))
-                        .iter()
-                        .any(|session| {
-                            session.kubernetes_node_name == node.name_any()
-                                && session.kubernetes_node_uid == uid
-                        })
+                    .ready_kubernetes_node_sessions(Duration::from_secs(
+                        self.nodes.config().session_ttl_seconds,
+                    ))
+                    .iter()
+                    .any(|session| {
+                        session.kubernetes_node_name == node_name
+                            && session.kubernetes_node_uid == uid
+                    })
             });
             if !ready {
                 node = mutate_node_quarantine(node, &constraints);
@@ -128,9 +126,10 @@ impl KubernetesAdmissionOwner {
             && request.kind.kind == "Pod"
             && request.resource.resource == "pods"
             && request.sub_resource.is_none()
-            && matches!(request.operation, Operation::Create | Operation::Update)
+            && request.operation == Operation::Create
         {
             let pod: Pod = request_object(request)?;
+            ensure_pod_annotations_are_unclaimed(&pod)?;
             let namespace = request
                 .namespace
                 .as_deref()
@@ -690,6 +689,7 @@ pub fn mutate_protected_pod(
     profile_id: &str,
     source_revision_id: &str,
 ) -> Result<Pod> {
+    ensure_pod_annotations_are_unclaimed(&pod)?;
     let spec = pod
         .spec
         .as_mut()
@@ -718,7 +718,7 @@ pub fn mutate_protected_pod(
     combine_required_affinity(
         &mut spec.affinity,
         constraints.required_node_affinity.as_ref(),
-    );
+    )?;
     let annotations = pod.metadata.annotations.get_or_insert_default();
     annotations.insert(
         KUBERNETES_PROFILE_ANNOTATION.to_owned(),
@@ -975,9 +975,9 @@ fn add_required_node_label(
 fn combine_required_affinity(
     affinity: &mut Option<k8s_openapi::api::core::v1::Affinity>,
     daemon_set_required: Option<&NodeSelector>,
-) {
+) -> Result<()> {
     let Some(daemon_set_required) = daemon_set_required else {
-        return;
+        return Ok(());
     };
     let affinity = affinity.get_or_insert_default();
     let node_affinity = affinity.node_affinity.get_or_insert_default();
@@ -985,25 +985,32 @@ fn combine_required_affinity(
         .required_during_scheduling_ignored_during_execution
         .take();
     node_affinity.required_during_scheduling_ignored_during_execution = Some(NodeSelector {
-        node_selector_terms: cross_product_terms(pod_required.as_ref(), Some(daemon_set_required)),
+        node_selector_terms: cross_product_terms(pod_required.as_ref(), daemon_set_required)?,
     });
+    Ok(())
 }
 
 fn cross_product_terms(
     left: Option<&NodeSelector>,
-    right: Option<&NodeSelector>,
-) -> Vec<NodeSelectorTerm> {
+    right: &NodeSelector,
+) -> Result<Vec<NodeSelectorTerm>> {
     let left = left.map_or_else(
         || vec![NodeSelectorTerm::default()],
         |selector| selector.node_selector_terms.clone(),
     );
-    let right = right.map_or_else(
-        || vec![NodeSelectorTerm::default()],
-        |selector| selector.node_selector_terms.clone(),
-    );
-    left.iter()
-        .flat_map(|left| {
-            right.iter().map(|right| NodeSelectorTerm {
+    let term_count = left
+        .len()
+        .checked_mul(right.node_selector_terms.len())
+        .filter(|count| *count <= MAXIMUM_COMBINED_NODE_SELECTOR_TERMS)
+        .ok_or_else(|| {
+            admission_error("combined Pod and DaemonSet node affinity exceeds its term bound")
+        })?;
+    let mut terms = Vec::with_capacity(term_count);
+    terms.extend(left.iter().flat_map(|left| {
+        right
+            .node_selector_terms
+            .iter()
+            .map(|right| NodeSelectorTerm {
                 match_expressions: merge_optional_vec(
                     left.match_expressions.as_ref(),
                     right.match_expressions.as_ref(),
@@ -1013,8 +1020,22 @@ fn cross_product_terms(
                     right.match_fields.as_ref(),
                 ),
             })
-        })
-        .collect()
+    }));
+    Ok(terms)
+}
+
+fn ensure_pod_annotations_are_unclaimed(pod: &Pod) -> Result<()> {
+    let annotations = pod.metadata.annotations.as_ref();
+    ensure!(
+        annotations.is_none_or(|annotations| {
+            !annotations.contains_key(KUBERNETES_PROFILE_ANNOTATION)
+                && !annotations.contains_key(KUBERNETES_SOURCE_ANNOTATION)
+        }),
+        InvalidConfigurationSnafu {
+            reason: "Pod cannot set Mithril-owned policy annotations",
+        }
+    );
+    Ok(())
 }
 
 fn merge_optional_vec<T: Clone>(left: Option<&Vec<T>>, right: Option<&Vec<T>>) -> Option<Vec<T>> {
@@ -1074,7 +1095,8 @@ mod tests {
 
     use super::{
         mutate_node_quarantine, mutate_protected_pod, pod_admission_facts, policy_matches_pod,
-        DaemonSetNodeConstraintsV1, KUBERNETES_NOT_READY_TAINT, KUBERNETES_READY_LABEL,
+        DaemonSetNodeConstraintsV1, KUBERNETES_NOT_READY_TAINT, KUBERNETES_PROFILE_ANNOTATION,
+        KUBERNETES_READY_LABEL,
     };
     use crate::{ContainerKindV1, PolicyDocumentV1};
 
@@ -1210,6 +1232,37 @@ mod tests {
             spec.node_selector = Some(BTreeMap::from([("pool".to_owned(), "general".to_owned())]));
         }
         assert!(mutate_protected_pod(pod, &constraints(), "profile-a", "source-a").is_err());
+    }
+
+    #[test]
+    fn protected_pod_rejects_claimed_mithril_annotations() {
+        let mut pod = pod();
+        pod.metadata.annotations = Some(BTreeMap::from([(
+            KUBERNETES_PROFILE_ANNOTATION.to_owned(),
+            "forged-profile".to_owned(),
+        )]));
+        assert!(mutate_protected_pod(pod, &constraints(), "profile-a", "source-a").is_err());
+    }
+
+    #[test]
+    fn protected_pod_rejects_unbounded_affinity_cross_product() {
+        let mut pod = pod();
+        if let Some(spec) = pod.spec.as_mut() {
+            spec.affinity = Some(Affinity {
+                node_affinity: Some(NodeAffinity {
+                    required_during_scheduling_ignored_during_execution: Some(NodeSelector {
+                        node_selector_terms: vec![NodeSelectorTerm::default(); 17],
+                    }),
+                    ..NodeAffinity::default()
+                }),
+                ..Affinity::default()
+            });
+        }
+        let mut constraints = constraints();
+        constraints.required_node_affinity = Some(NodeSelector {
+            node_selector_terms: vec![NodeSelectorTerm::default(); 16],
+        });
+        assert!(mutate_protected_pod(pod, &constraints, "profile-a", "source-a").is_err());
     }
 
     #[test]
