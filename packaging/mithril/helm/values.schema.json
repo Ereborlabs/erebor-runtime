@@ -44,7 +44,7 @@
             "install": {"type": "boolean"},
             "hostBinaryDirectory": {"type": "string", "pattern": "^/"},
             "hostConfigDirectory": {"type": "string", "pattern": "^/"},
-            "socketPath": {"type": "string", "pattern": "^/"},
+            "socketPath": {"type": "string", "pattern": "^/run/mithril/[^/]+$"},
             "timeoutMs": {"type": "integer", "minimum": 100, "maximum": 30000},
             "runtimeTimeoutSeconds": {"type": "integer", "minimum": 1, "maximum": 30}
           }

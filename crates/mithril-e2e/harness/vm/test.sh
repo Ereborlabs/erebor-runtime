@@ -9,6 +9,7 @@ trap 'rm -rf -- "$test_root"' EXIT
 
 for script in "$directory/run.sh" "$directory/two-node-network.sh" \
   "$directory/two-node-convergence.sh" \
+  "$directory/convergence-cleanup.sh" \
   "$directory/../kubernetes-oracles.sh" \
   "$directory/manual.sh" "$directory/guest.sh" \
   "$directory/providers/libvirt.sh" "$directory/test.sh" "$manual_case"; do
@@ -126,6 +127,34 @@ skip_without_k3s=$("$directory/run.sh" --skip-administrative-exec 2>&1)
 status=$?
 set -e
 [[ $status -eq 2 && $skip_without_k3s == "--skip-administrative-exec requires --with-k3s" ]]
+
+cleanup_bin=$test_root/cleanup-bin
+mkdir "$cleanup_bin"
+cat >"$cleanup_bin/helm" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"${TEST_HELM_LOG:?}"
+EOF
+chmod +x "$cleanup_bin/helm"
+source "$directory/convergence-cleanup.sh"
+retained_helm_log=$test_root/retained-helm.log
+touch "$test_root/kubeconfig"
+PATH="$cleanup_bin:$PATH" TEST_HELM_LOG="$retained_helm_log" \
+  remove_mithril_release true true false "$test_root/kubeconfig" mithril-system
+[[ ! -e $retained_helm_log ]]
+removed_helm_log=$test_root/removed-helm.log
+PATH="$cleanup_bin:$PATH" TEST_HELM_LOG="$removed_helm_log" \
+  remove_mithril_release true false false "$test_root/kubeconfig" mithril-system
+grep -q '^--kubeconfig .* uninstall mithril -n mithril-system$' "$removed_helm_log"
+
+diagnostic_kubectl() {
+  printf '%s\n' "$*" >>"$test_root/diagnostic-kubectl.log"
+  echo "bounded diagnostic output"
+}
+collect_mithril_diagnostics "$test_root" mithril-system
+[[ -s $test_root/diagnostics/resources.txt ]]
+[[ -s $test_root/diagnostics/control.log ]]
+[[ -s $test_root/diagnostics/nodes.log ]]
+grep -q -- '--tail=200 --limit-bytes=131072' "$test_root/diagnostic-kubectl.log"
 
 oracle_bin=$test_root/oracle-bin
 mkdir "$oracle_bin"

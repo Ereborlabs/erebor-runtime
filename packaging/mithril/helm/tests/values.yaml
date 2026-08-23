@@ -1,4 +1,6 @@
 node:
+  runtimeHook:
+    socketPath: /run/mithril/test-runtime-admission.sock
   nodeSelector:
     mithril.example/pool: protected
   affinity:

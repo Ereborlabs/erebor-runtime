@@ -1,3 +1,8 @@
+{{- $runtimeAdmissionSocket := required "node.runtimeHook.socketPath is required" .Values.node.runtimeHook.socketPath }}
+{{- $cleanRuntimeAdmissionSocket := clean $runtimeAdmissionSocket }}
+{{- if or (ne $runtimeAdmissionSocket $cleanRuntimeAdmissionSocket) (ne (dir $runtimeAdmissionSocket) "/run/mithril") }}
+{{- fail "node.runtimeHook.socketPath must name a normalized socket directly within /run/mithril" }}
+{{- end }}
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -79,13 +84,14 @@ spec:
                   fieldPath: spec.nodeName
           startupProbe:
             exec:
-              command: ["/bin/sh", "-ec", "test -S /run/mithril/runtime-admission.sock"]
+              # Direct argv keeps the configured socket path out of shell interpretation.
+              command: ["/usr/bin/test", "-S", {{ $runtimeAdmissionSocket | quote }}]
             failureThreshold: 30
             periodSeconds: 2
             timeoutSeconds: 1
           readinessProbe:
             exec:
-              command: ["/bin/sh", "-ec", "test -S /run/mithril/runtime-admission.sock"]
+              command: ["/usr/bin/test", "-S", {{ $runtimeAdmissionSocket | quote }}]
             failureThreshold: 2
             periodSeconds: 5
             timeoutSeconds: 1

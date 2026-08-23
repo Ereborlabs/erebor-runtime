@@ -29,3 +29,35 @@ if helm template mithril "$chart_directory" \
   echo 'chart accepted an OCI client timeout without outer runtime margin' >&2
   exit 1
 fi
+
+helm template mithril "$chart_directory" \
+  --namespace mithril-system \
+  --values "$chart_directory/tests/values.yaml" \
+  --set node.runtimeHook.socketPath=/run/mithril/custom-runtime-admission.sock \
+  >/dev/null
+
+if helm template mithril "$chart_directory" \
+  --namespace mithril-system \
+  --values "$chart_directory/tests/values.yaml" \
+  --set node.runtimeHook.socketPath=/tmp/runtime-admission.sock >/dev/null 2>&1; then
+  echo 'chart accepted a runtime-admission socket outside /run/mithril' >&2
+  exit 1
+fi
+
+if helm template mithril "$chart_directory" \
+  --namespace mithril-system \
+  --values "$chart_directory/tests/values.yaml" \
+  --set node.runtimeHook.socketPath=/run/mithril/nested/runtime-admission.sock \
+  >/dev/null 2>&1; then
+  echo 'chart accepted a socket parent that the chart does not create' >&2
+  exit 1
+fi
+
+if helm template mithril "$chart_directory" \
+  --namespace mithril-system \
+  --values "$chart_directory/tests/values.yaml" \
+  --set node.runtimeHook.socketPath=/run/mithril/../runtime-admission.sock \
+  >/dev/null 2>&1; then
+  echo 'chart accepted a non-normalized runtime-admission socket path' >&2
+  exit 1
+fi

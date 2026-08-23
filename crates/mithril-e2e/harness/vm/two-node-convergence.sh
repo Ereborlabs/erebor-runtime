@@ -5,6 +5,7 @@ set -Eeuo pipefail
 trap 'echo "two-node convergence failed at line $LINENO: $BASH_COMMAND" >&2' ERR
 
 directory=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+source "$directory/convergence-cleanup.sh"
 source "$directory/../kubernetes-oracles.sh"
 repo_root=$(cd -- "$directory/../../../.." && pwd)
 provider=$directory/providers/libvirt.sh
@@ -52,7 +53,7 @@ while (($#)); do
   esac
 done
 
-for command in base64 cargo docker helm jq openssl sed sha256sum; do
+for command in base64 cargo docker helm jq openssl sed sha256sum timeout; do
   command -v "$command" >/dev/null || {
     echo "required command is not installed: $command" >&2
     exit 2
@@ -106,14 +107,20 @@ created_b=false
 cluster_created=false
 kubeconfig=$work_a/kubeconfig.yaml
 
+diagnostic_kubectl() {
+  timeout 20s "$provider" run "$vm_a" sudo /usr/local/bin/k3s kubectl \
+    --request-timeout=10s "$@"
+}
+
 cleanup() {
   local status=$?
   trap - EXIT
   set +e
-  if [[ $cluster_created == true && -r $kubeconfig && $manual_environment == false ]]; then
-    helm --kubeconfig "$kubeconfig" uninstall mithril -n "$system_namespace" \
-      >/dev/null 2>&1
+  if ((status != 0)) && [[ $cluster_created == true ]]; then
+    collect_mithril_diagnostics "$output_directory" "$system_namespace"
   fi
+  remove_mithril_release "$cluster_created" "$keep_vms" \
+    "$manual_environment" "$kubeconfig" "$system_namespace" || status=1
   if [[ $created_b == true && $keep_vms == false ]]; then
     "$provider" destroy "$vm_b" "$work_b" || status=1
   fi
@@ -967,26 +974,59 @@ remote_kubectl -n "$workload_namespace" wait --for=condition=Ready pod/protected
 jq -e '.runtime_binding_count == 1 and .scheduled_binding_count == 0' \
   <<<"$(node_status "$selected_node")" >/dev/null
 
-# Hold one matching node without a node process and prove that it stays quarantined.
-"$provider" run "$vm_b" sudo mv /etc/mithril/node.json /etc/mithril/node.json.held
-node_b_pod=$(remote_kubectl -n "$system_namespace" get pods \
-  -l app.kubernetes.io/name=mithril-node --field-selector "spec.nodeName=$node_b_name" \
+candidate_before_node_restart=$(jq -er '.active_candidate_content_id' \
+  <<<"$(node_status "$selected_node")")
+selected_node_pod=$(remote_kubectl -n "$system_namespace" get pods \
+  -l app.kubernetes.io/name=mithril-node \
+  --field-selector "spec.nodeName=$selected_node" \
   -o jsonpath='{.items[0].metadata.name}')
-remote_kubectl -n "$system_namespace" delete pod "$node_b_pod" \
+remote_kubectl -n "$system_namespace" delete pod "$selected_node_pod" \
   --wait=true --timeout=120s >/dev/null
-wait_node_projection "$node_b_name" "" true
+remote_kubectl -n "$system_namespace" rollout status daemonset/mithril-node \
+  --timeout=300s >/dev/null
+wait_node_projection "$selected_node" true false
+# Ready projection is necessary but not sufficient. Recovery must restore the
+# exact active policy and live runtime binding that existed before restart.
+for _attempt in {1..180}; do
+  recovered_status=$(node_status "$selected_node" 2>/dev/null || true)
+  if [[ -n $recovered_status ]] && jq -e \
+      --arg candidate "$candidate_before_node_restart" --arg profile_id "$profile_id" '
+        .active_candidate_content_id == $candidate and
+        .active_profile_ids == [$profile_id] and
+        .scheduled_binding_count == 0 and
+        .runtime_binding_count == 1 and
+        .activation_pending == false and
+        .control_acknowledged == true
+      ' <<<"$recovered_status" >/dev/null; then
+    break
+  fi
+  [[ $_attempt -lt 180 ]] || {
+    echo "the scheduler-selected node did not recover its active policy" >&2
+    exit 1
+  }
+  sleep 1
+done
+
+# Hold one matching node without a node process and prove that it stays quarantined.
+"$provider" run "$other_vm" sudo mv /etc/mithril/node.json /etc/mithril/node.json.held
+other_node_pod=$(remote_kubectl -n "$system_namespace" get pods \
+  -l app.kubernetes.io/name=mithril-node --field-selector "spec.nodeName=$other_node" \
+  -o jsonpath='{.items[0].metadata.name}')
+remote_kubectl -n "$system_namespace" delete pod "$other_node_pod" \
+  --wait=true --timeout=120s >/dev/null
+wait_node_projection "$other_node" "" true
 render_pod ready-node-only mithril
 remote_kubectl create -f "$remote_a/ready-node-only.yaml" >/dev/null
 remote_kubectl -n "$workload_namespace" wait --for=condition=Ready pod/ready-node-only \
   --timeout=300s >/dev/null
 [[ $(remote_kubectl -n "$workload_namespace" get pod ready-node-only \
-  -o jsonpath='{.spec.nodeName}') == "$node_a_name" ]]
+  -o jsonpath='{.spec.nodeName}') == "$selected_node" ]]
 remote_kubectl -n "$workload_namespace" delete pod ready-node-only \
   --wait=true --timeout=120s >/dev/null
-"$provider" run "$vm_b" sudo mv /etc/mithril/node.json.held /etc/mithril/node.json
+"$provider" run "$other_vm" sudo mv /etc/mithril/node.json.held /etc/mithril/node.json
 remote_kubectl -n "$system_namespace" rollout status daemonset/mithril-node \
   --timeout=300s >/dev/null
-wait_node_projection "$node_b_name" true false
+wait_node_projection "$other_node" true false
 
 # Change only the live DaemonSet. Admission must derive the new selector.
 remote_kubectl label node "$node_a_name" mithril.erebor.dev/fixture=selected --overwrite >/dev/null
@@ -1121,6 +1161,7 @@ jq -n \
     unavailable_endpoint_denied: true,
     unready_node_quarantined: true,
     daemonset_selector_derived: true,
+    node_restart_recovered: true,
     runtime_lifetime_replaced: true,
     pod_uid_replaced: true,
     policy_update_and_recreate: true,
