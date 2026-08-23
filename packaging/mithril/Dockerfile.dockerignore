@@ -1,3 +1,8 @@
 .git
 target
 worktrees
+crates/mithril-e2e/fixtures
+crates/mithril-e2e/harness
+docs
+examples
+packaging/mithril/helm
