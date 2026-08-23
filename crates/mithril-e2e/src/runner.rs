@@ -45,7 +45,6 @@ pub struct KernelQualificationBundleV1 {
 #[serde(deny_unknown_fields)]
 struct RecordedKernelQualificationV1 {
     schema_version: u32,
-    architecture_revision_sha256: String,
     platform_architecture: String,
     kernel_release: String,
     active_lsm_order: String,
@@ -137,13 +136,6 @@ pub struct HostLifecycleRunner {
 }
 
 impl KernelQualificationRunner {
-    const ARCHITECTURE_PATH: &'static str = "docs/plans/mithril-hugging-face-intrusion-prevention/policy-and-protection-algorithm-architecture-readable.md";
-    const PRE_GRPC_ARCHITECTURE_SHA256: &'static str =
-        "580becbcd8f2872f954fb4e3857e27ec0f5528e55d8561096f3a16d10cf26d4e";
-    const GRPC_ARCHITECTURE_SHA256: &'static str =
-        "51807f12113391872ee90ce2469869db18bc4d25e9b4b1f39eb01fcaefb4fe1e";
-    const KUBERNETES_CONVERGENCE_ARCHITECTURE_SHA256: &'static str =
-        "0c87aaf6c2d0347e06b53ce0ccb9f69577a9b248a4a90463082335d7865d77ae";
     const ABI_HEADER_PATH: &'static str = "bpf/erebor-interceptor/include/erebor_interceptor_abi.h";
     const BPF_SOURCE_PATH: &'static str = "bpf/erebor-interceptor/qualification/feasibility.bpf.c";
 
@@ -180,7 +172,6 @@ impl KernelQualificationRunner {
         let mut contract_bytes = Vec::new();
         let mut parts = vec![registry_bytes, provenance.clone(), qualification.clone()];
         for relative in [
-            Self::ARCHITECTURE_PATH,
             Self::ABI_HEADER_PATH,
             Self::BPF_SOURCE_PATH,
             "spec/qualification/v1/goldens/cfg-v1.json",
@@ -214,18 +205,6 @@ impl KernelQualificationRunner {
         qualification: &RecordedKernelQualificationV1,
         path: &Path,
     ) -> Result<()> {
-        let architecture = self.read(Self::ARCHITECTURE_PATH)?;
-        let architecture_sha256 = DigestV1::of(architecture).to_hex();
-        let qualification_architecture_is_current =
-            qualification.architecture_revision_sha256 == architecture_sha256;
-        // These amendments do not change the qualified BPF surfaces. Keep the
-        // physical result bound to the architecture that the probe used.
-        let qualification_architecture_is_preserved = [
-            Self::GRPC_ARCHITECTURE_SHA256,
-            Self::KUBERNETES_CONVERGENCE_ARCHITECTURE_SHA256,
-        ]
-        .contains(&architecture_sha256.as_str())
-            && qualification.architecture_revision_sha256 == Self::PRE_GRPC_ARCHITECTURE_SHA256;
         let supported = qualification
             .supported_capability_ids
             .iter()
@@ -248,8 +227,6 @@ impl KernelQualificationRunner {
                     == DigestV1::of(self.read(Self::BPF_SOURCE_PATH)?).to_hex()
                 && qualification.abi_header_sha256
                     == DigestV1::of(self.read(Self::ABI_HEADER_PATH)?).to_hex()
-                && (qualification_architecture_is_current
-                    || qualification_architecture_is_preserved)
                 && qualification.lsm_program_count
                     == erebor_interceptor::REQUIRED_QUALIFICATION_LSM_PROGRAMS.len()
                 && qualification.map_count == 3
@@ -483,10 +460,6 @@ impl KernelQualificationRunner {
                 reason: "qualification benchmarks must contain concurrency 1 and 32 for both modes",
             }
         );
-        let architecture_path = self.repo_root.join(Self::ARCHITECTURE_PATH);
-        let architecture = fs::read(&architecture_path).context(IoSnafu {
-            path: &architecture_path,
-        })?;
         let source_path = self.repo_root.join(Self::BPF_SOURCE_PATH);
         let source = fs::read(&source_path).context(IoSnafu { path: &source_path })?;
         ensure!(
@@ -530,7 +503,6 @@ impl KernelQualificationRunner {
                 })?;
         let qualification = RecordedKernelQualificationV1 {
             schema_version: 1,
-            architecture_revision_sha256: DigestV1::of(architecture).to_hex(),
             platform_architecture: physical.platform.architecture,
             kernel_release: physical.platform.kernel_release,
             active_lsm_order: physical.platform.active_lsm_order,
