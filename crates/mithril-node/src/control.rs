@@ -1,4 +1,4 @@
-use std::{fs, time::Duration};
+use std::{fs, future::Future, time::Duration};
 
 use mithril_control::{
     node_administrative_arm_client::NodeAdministrativeArmClient,
@@ -31,6 +31,7 @@ use crate::error::{ControlProtocolSnafu, ControlRpcSnafu, ControlTransportSnafu,
 use crate::{NodeControlConfig, Result, TrustCache};
 
 const CONTROL_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+const CONTROL_UNARY_TIMEOUT: Duration = Duration::from_secs(1);
 
 pub struct NodeControlConnector {
     config: NodeControlConfig,
@@ -87,13 +88,15 @@ impl NodeControlConnector {
             connection_nonce: Uuid::new_v4().as_bytes().to_vec(),
         };
 
-        NodeRegistryClient::new(channel.clone())
-            .register(Request::new(NodeRegistrationRequest {
-                session: Some(identity.clone()),
-                registration: Some(registration),
-            }))
-            .await
-            .context(ControlRpcSnafu)?;
+        bounded_response(
+            NodeRegistryClient::new(channel.clone()).register(bounded_request(
+                NodeRegistrationRequest {
+                    session: Some(identity.clone()),
+                    registration: Some(registration),
+                },
+            )),
+        )
+        .await?;
 
         // Install and acknowledge trust before this session reports admission readiness.
         let mut trust_stream = NodeTrustClient::new(channel.clone())
@@ -118,27 +121,29 @@ impl NodeControlConnector {
             &trust.policy_signers,
             &identity.connection_nonce,
         )?;
-        NodeTrustClient::new(channel.clone())
-            .acknowledge(Request::new(TrustGenerationAckRequest {
-                session: Some(identity.clone()),
-                acknowledgement: Some(TrustGenerationAck {
-                    generation: trust.generation,
-                    bundle_digest: trust.bundle_digest,
-                }),
-            }))
-            .await
-            .context(ControlRpcSnafu)?;
-        NodeRegistryClient::new(channel.clone())
-            .report_readiness(Request::new(NodeReadinessRequest {
+        bounded_response(
+            NodeTrustClient::new(channel.clone()).acknowledge(bounded_request(
+                TrustGenerationAckRequest {
+                    session: Some(identity.clone()),
+                    acknowledgement: Some(TrustGenerationAck {
+                        generation: trust.generation,
+                        bundle_digest: trust.bundle_digest,
+                    }),
+                },
+            )),
+        )
+        .await?;
+        bounded_response(NodeRegistryClient::new(channel.clone()).report_readiness(
+            bounded_request(NodeReadinessRequest {
                 session: Some(identity.clone()),
                 report: Some(NodeReadinessReport {
                     kernel_ready,
                     control_ready: true,
                     admission_ready,
                 }),
-            }))
-            .await
-            .context(ControlRpcSnafu)?;
+            }),
+        ))
+        .await?;
 
         let (resolution_output, resolution_receiver) = mpsc::channel(8);
         resolution_output
@@ -154,7 +159,7 @@ impl NodeControlConnector {
                 .build()
             })?;
         let resolution_input = NodeAdministrativeResolutionClient::new(channel.clone())
-            .open(ReceiverStream::new(resolution_receiver))
+            .open(Request::new(ReceiverStream::new(resolution_receiver)))
             .await
             .context(ControlRpcSnafu)?
             .into_inner();
@@ -173,7 +178,7 @@ impl NodeControlConnector {
                 .build()
             })?;
         let arm_input = NodeAdministrativeArmClient::new(channel.clone())
-            .open(ReceiverStream::new(arm_receiver))
+            .open(Request::new(ReceiverStream::new(arm_receiver)))
             .await
             .context(ControlRpcSnafu)?
             .into_inner();
@@ -228,17 +233,18 @@ impl ControlConnection {
         durable_bundle_digests: Vec<String>,
     ) -> Result<PolicyInventory> {
         // The active candidate and durable bundle set let Control avoid unnecessary transfer.
-        self.policy
-            .inventory(Request::new(PolicyInventoryRequest {
-                session: Some(self.identity.clone()),
-                active_candidate_content_id: active_candidate_content_id
-                    .unwrap_or_default()
-                    .to_owned(),
-                durable_bundle_digests,
-            }))
-            .await
-            .context(ControlRpcSnafu)
-            .map(tonic::Response::into_inner)
+        bounded_response(
+            self.policy
+                .inventory(bounded_request(PolicyInventoryRequest {
+                    session: Some(self.identity.clone()),
+                    active_candidate_content_id: active_candidate_content_id
+                        .unwrap_or_default()
+                        .to_owned(),
+                    durable_bundle_digests,
+                })),
+        )
+        .await
+        .map(tonic::Response::into_inner)
     }
 
     pub async fn fetch_policy_chunk(
@@ -247,58 +253,57 @@ impl ControlConnection {
         bundle_digest: String,
         chunk_index: u32,
     ) -> Result<mithril_control::PolicyChunk> {
-        self.policy
-            .fetch(Request::new(PolicyChunkRequest {
-                session: Some(self.identity.clone()),
-                candidate_content_id,
-                bundle_digest,
-                chunk_index,
-            }))
-            .await
-            .context(ControlRpcSnafu)
-            .map(tonic::Response::into_inner)
+        bounded_response(self.policy.fetch(bounded_request(PolicyChunkRequest {
+            session: Some(self.identity.clone()),
+            candidate_content_id,
+            bundle_digest,
+            chunk_index,
+        })))
+        .await
+        .map(tonic::Response::into_inner)
     }
 
     pub async fn acknowledge_policy(
         &mut self,
         acknowledgement: PolicyActivationAcknowledgement,
     ) -> Result<PolicyAcknowledgementAccepted> {
-        self.policy
-            .acknowledge(Request::new(PolicyAcknowledgementRequest {
-                session: Some(self.identity.clone()),
-                acknowledgement: Some(acknowledgement),
-            }))
-            .await
-            .context(ControlRpcSnafu)
-            .map(tonic::Response::into_inner)
+        bounded_response(
+            self.policy
+                .acknowledge(bounded_request(PolicyAcknowledgementRequest {
+                    session: Some(self.identity.clone()),
+                    acknowledgement: Some(acknowledgement),
+                })),
+        )
+        .await
+        .map(tonic::Response::into_inner)
     }
 
     pub async fn exception_inventory(
         &mut self,
         durable_candidate_content_ids: Vec<String>,
     ) -> Result<ExceptionInventory> {
-        self.policy
-            .inventory_exceptions(Request::new(ExceptionInventoryRequest {
+        bounded_response(self.policy.inventory_exceptions(bounded_request(
+            ExceptionInventoryRequest {
                 session: Some(self.identity.clone()),
                 durable_candidate_content_ids,
-            }))
-            .await
-            .context(ControlRpcSnafu)
-            .map(tonic::Response::into_inner)
+            },
+        )))
+        .await
+        .map(tonic::Response::into_inner)
     }
 
     pub async fn acknowledge_exception(
         &mut self,
         acknowledgement: ExceptionActivationAcknowledgement,
     ) -> Result<PolicyAcknowledgementAccepted> {
-        self.policy
-            .acknowledge_exception(Request::new(ExceptionAcknowledgementRequest {
+        bounded_response(self.policy.acknowledge_exception(bounded_request(
+            ExceptionAcknowledgementRequest {
                 session: Some(self.identity.clone()),
                 acknowledgement: Some(acknowledgement),
-            }))
-            .await
-            .context(ControlRpcSnafu)
-            .map(tonic::Response::into_inner)
+            },
+        )))
+        .await
+        .map(tonic::Response::into_inner)
     }
 
     pub async fn next_message(&mut self) -> Result<NodeControlMessage> {
@@ -352,85 +357,70 @@ impl ControlConnection {
     }
 
     pub async fn send_evidence_batch(&mut self, batch: crate::EvidenceBatchV1) -> Result<()> {
-        let response = self
-            .evidence
-            .upload(Request::new(EvidenceBatchRequest {
+        let response =
+            bounded_response(self.evidence.upload(bounded_request(EvidenceBatchRequest {
                 session: Some(self.identity.clone()),
                 batch: Some(batch.into()),
-            }))
-            .await
-            .context(ControlRpcSnafu)?
+            })))
+            .await?
             .into_inner();
         self.queued
             .push_back(NodeControlMessage::EvidenceAck(response));
         Ok(())
     }
 
-    pub async fn send_coverage_reports(
+    pub async fn send_coverage_report(
         &mut self,
-        snapshot: crate::CoverageSnapshotV1,
-    ) -> Result<Vec<CoverageAck>> {
-        let current = snapshot.current_intervals();
-        if current.is_empty() {
-            return ControlProtocolSnafu {
-                reason: String::from("coverage snapshot has no current source"),
-            }
-            .fail();
-        }
+        snapshot: &crate::CoverageSnapshotV1,
+        current_interval: &crate::CoverageIntervalV1,
+    ) -> Result<CoverageAck> {
         let all_intervals = snapshot.all_intervals();
-        let mut expected_acks = Vec::with_capacity(current.len());
         // Control persists one cursor per source, so each report has one current identity.
-        for current_interval in current {
-            let intervals = all_intervals
-                .iter()
-                .filter(|interval| interval.source_id == current_interval.source_id)
-                .cloned()
-                .map(|interval| CoverageInterval {
-                    current: interval.interval_id == current_interval.interval_id,
-                    interval_id: interval.interval_id.to_be_bytes().to_vec(),
-                    source_id: interval.source_id.to_be_bytes().to_vec(),
-                    source_epoch: interval.source_epoch,
-                    cpu_id: interval.cpu_id,
-                    revision: interval.revision,
-                    state: interval.state.as_str().to_owned(),
-                    first_sequence: interval.first_sequence,
-                    last_sequence: interval.last_sequence,
-                    opening_counters: Some(coverage_counters(interval.opening_counters)),
-                    closing_counters: interval.closing_counters.map(coverage_counters),
-                    gap_reasons: interval
-                        .gap_reasons
-                        .into_iter()
-                        .map(|reason| reason.as_str().to_owned())
-                        .collect(),
-                })
-                .collect();
-            let mut report = CoverageReport {
-                source_epoch: snapshot.source_epoch,
-                revision: snapshot.revision,
-                intervals,
-                negative_claim_eligible: current_interval.supports_negative_claim(),
-                report_sha256: Vec::new(),
-            };
-            report.report_sha256 = Sha256::digest(report.encode_to_vec()).to_vec();
-            let expected = CoverageAck {
-                source_epoch: report.source_epoch,
-                revision: report.revision,
-                report_sha256: report.report_sha256.clone(),
-            };
-            let response = self
-                .coverage
-                .report(Request::new(CoverageReportRequest {
-                    session: Some(self.identity.clone()),
-                    report: Some(report),
-                }))
-                .await
-                .context(ControlRpcSnafu)?
-                .into_inner();
-            self.queued
-                .push_back(NodeControlMessage::CoverageAck(response));
-            expected_acks.push(expected);
-        }
-        Ok(expected_acks)
+        let intervals = all_intervals
+            .into_iter()
+            .filter(|interval| interval.source_id == current_interval.source_id)
+            .map(|interval| CoverageInterval {
+                current: interval.interval_id == current_interval.interval_id,
+                interval_id: interval.interval_id.to_be_bytes().to_vec(),
+                source_id: interval.source_id.to_be_bytes().to_vec(),
+                source_epoch: interval.source_epoch,
+                cpu_id: interval.cpu_id,
+                revision: interval.revision,
+                state: interval.state.as_str().to_owned(),
+                first_sequence: interval.first_sequence,
+                last_sequence: interval.last_sequence,
+                opening_counters: Some(coverage_counters(interval.opening_counters)),
+                closing_counters: interval.closing_counters.map(coverage_counters),
+                gap_reasons: interval
+                    .gap_reasons
+                    .into_iter()
+                    .map(|reason| reason.as_str().to_owned())
+                    .collect(),
+            })
+            .collect();
+        let mut report = CoverageReport {
+            source_epoch: snapshot.source_epoch,
+            revision: snapshot.revision,
+            intervals,
+            negative_claim_eligible: current_interval.supports_negative_claim(),
+            report_sha256: Vec::new(),
+        };
+        report.report_sha256 = Sha256::digest(report.encode_to_vec()).to_vec();
+        let expected = CoverageAck {
+            source_epoch: report.source_epoch,
+            revision: report.revision,
+            report_sha256: report.report_sha256.clone(),
+        };
+        let response =
+            bounded_response(self.coverage.report(bounded_request(CoverageReportRequest {
+                session: Some(self.identity.clone()),
+                report: Some(report),
+            })))
+            .await?
+            .into_inner();
+        self.queued
+            .push_back(NodeControlMessage::CoverageAck(response));
+        Ok(expected)
     }
 
     pub async fn send_resolution(&mut self, response: AdministrativeExecResolution) -> Result<()> {
@@ -501,6 +491,52 @@ impl AdministrativeControlRequest {
     }
 }
 
+fn bounded_request<T>(message: T) -> Request<T> {
+    let mut request = Request::new(message);
+    // Propagate the deadline so Control can stop work after the node stops waiting.
+    request.set_timeout(CONTROL_UNARY_TIMEOUT);
+    request
+}
+
+async fn bounded_response<T>(
+    response: impl Future<Output = std::result::Result<tonic::Response<T>, tonic::Status>>,
+) -> Result<tonic::Response<T>> {
+    bounded_response_with_timeout(response, CONTROL_UNARY_TIMEOUT).await
+}
+
+async fn bounded_response_with_timeout<T>(
+    response: impl Future<Output = std::result::Result<tonic::Response<T>, tonic::Status>>,
+    timeout: Duration,
+) -> Result<tonic::Response<T>> {
+    // Enforce the same deadline locally because a remote peer can ignore metadata.
+    let response = tokio::time::timeout(timeout, response)
+        .await
+        .map_err(|_elapsed| tonic::Status::deadline_exceeded("Control unary RPC timed out"))
+        .context(ControlRpcSnafu)?;
+    response.context(ControlRpcSnafu)
+}
+
 fn read(path: &std::path::Path) -> Result<Vec<u8>> {
     fs::read(path).context(IoSnafu { path })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use super::{bounded_request, bounded_response_with_timeout};
+
+    #[tokio::test]
+    async fn unary_requests_propagate_and_enforce_a_deadline() {
+        let request = bounded_request(());
+        assert!(request.metadata().contains_key("grpc-timeout"));
+
+        let response =
+            std::future::pending::<std::result::Result<tonic::Response<()>, tonic::Status>>();
+        assert!(matches!(
+            bounded_response_with_timeout(response, Duration::from_millis(10)).await,
+            Err(crate::Error::ControlRpc { source, .. })
+                if source.code() == tonic::Code::DeadlineExceeded
+        ));
+    }
 }

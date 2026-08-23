@@ -296,7 +296,10 @@ async fn mtls_coverage_upload_preserves_gap_truth_at_control() -> Result<(), Box
         .ok_or("missing coverage snapshot")?;
     let source_epoch = snapshot.source_epoch;
     let current = snapshot.current_intervals();
-    let expected = connection.send_coverage_reports(snapshot).await?;
+    let mut expected = Vec::new();
+    for interval in &current {
+        expected.push(connection.send_coverage_report(&snapshot, interval).await?);
+    }
     assert_eq!(expected.len(), 2);
     for expected_ack in expected {
         let NodeControlMessage::CoverageAck(actual) = connection.next_message().await? else {

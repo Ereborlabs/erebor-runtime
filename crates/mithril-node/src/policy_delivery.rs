@@ -10,9 +10,10 @@ use erebor_interceptor_abi::{
 };
 use mithril_control::{
     CapabilityRecord, EntryKindV1, ExceptionActivationAcknowledgement, ExceptionActivationStateV1,
-    ExceptionDeliveryCandidateV1, ExceptionDeliveryOperationV1, PolicyActivationAcknowledgement,
-    PolicyBundleV1, PolicyDeliveryOperationV1, PolicyInventory, MAX_EXCEPTION_CANDIDATE_BYTES,
-    MAX_POLICY_BUNDLE_BYTES, MAX_POLICY_BUNDLE_CHUNK_BYTES,
+    ExceptionDeliveryCandidateV1, ExceptionDeliveryOperationV1, ExceptionInventory,
+    PolicyActivationAcknowledgement, PolicyBundleV1, PolicyChunk, PolicyDeliveryOperationV1,
+    PolicyInventory, MAX_EXCEPTION_CANDIDATE_BYTES, MAX_POLICY_BUNDLE_BYTES,
+    MAX_POLICY_BUNDLE_CHUNK_BYTES,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
@@ -22,9 +23,7 @@ use zerocopy::{IntoBytes as _, TryFromBytes as _};
 use crate::error::{
     ControlProtocolSnafu, IdentityStateSnafu, InterceptorSnafu, IoSnafu, JsonSnafu, PolicySnafu,
 };
-use crate::{
-    ControlConnection, NodeConfig, PolicyCandidateConfig, Result, TrustCache, WorkloadBindingConfig,
-};
+use crate::{NodeConfig, PolicyCandidateConfig, Result, TrustCache, WorkloadBindingConfig};
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -199,11 +198,25 @@ pub(crate) struct PreparedExceptionDeliveryV1 {
     pub grant_handle: u32,
 }
 
+pub(crate) enum PolicyTransferActionV1 {
+    Inventory {
+        active_candidate_content_id: Option<String>,
+        durable_bundle_digests: Vec<String>,
+    },
+    Fetch {
+        candidate_content_id: String,
+        bundle_digest: String,
+        chunk_index: u32,
+    },
+    Ready(Box<PolicyBundleV1>),
+}
+
 pub(crate) struct NodePolicyDeliveryOwner {
     root: PathBuf,
     state_path: PathBuf,
     transfer_path: PathBuf,
     state: PolicyDeliveryStateV1,
+    session_inventory: Option<PolicyInventory>,
 }
 
 impl NodePolicyDeliveryOwner {
@@ -232,6 +245,7 @@ impl NodePolicyDeliveryOwner {
             state_path,
             transfer_path,
             state,
+            session_inventory: None,
         };
         owner.hydrate_exception_ack_identities()?;
         // Invalid recovery state blocks policy delivery instead of dropping replay history.
@@ -539,9 +553,8 @@ impl NodePolicyDeliveryOwner {
             .collect()
     }
 
-    pub(crate) async fn fetch_exception_candidate(
+    pub(crate) fn reconcile_exception_candidate(
         &mut self,
-        connection: &mut ControlConnection,
         host: &erebor_interceptor::KernelHost,
         trust: &TrustCache,
         config: &NodeConfig,
@@ -563,9 +576,22 @@ impl NodePolicyDeliveryOwner {
         if self.pending_exception_acknowledgement()?.is_some() {
             return Ok(None);
         }
-        let inventory = connection
-            .exception_inventory(self.unacknowledged_exception_candidate_ids())
-            .await?;
+        Ok(None)
+    }
+
+    pub(crate) fn exception_inventory_candidate_ids(&self) -> Vec<String> {
+        self.unacknowledged_exception_candidate_ids()
+    }
+
+    pub(crate) fn accept_exception_inventory(
+        &mut self,
+        inventory: ExceptionInventory,
+        trust: &TrustCache,
+        config: &NodeConfig,
+        node_boot_id: &[u8],
+        label_epoch: u64,
+    ) -> Result<Option<PreparedExceptionDeliveryV1>> {
+        let now_utc_ns = crate::policy::current_utc_ns()?;
         if !inventory.candidate_available {
             return Ok(None);
         }
@@ -1309,24 +1335,53 @@ impl NodePolicyDeliveryOwner {
         self.persist_state()
     }
 
-    pub(crate) async fn fetch_candidate(
-        &mut self,
-        connection: &mut ControlConnection,
-    ) -> Result<Option<PolicyBundleV1>> {
-        let inventory = connection
-            .policy_inventory(
-                self.active_candidate_content_id(),
-                self.durable_bundle_digests(),
-            )
-            .await?;
+    pub(crate) fn begin_control_session(&mut self) {
+        self.session_inventory = None;
+    }
+
+    pub(crate) fn next_transfer_action(&mut self) -> Result<PolicyTransferActionV1> {
+        let Some(inventory) = self.session_inventory.as_ref() else {
+            return Ok(PolicyTransferActionV1::Inventory {
+                active_candidate_content_id: self.active_candidate_content_id().map(str::to_owned),
+                durable_bundle_digests: self.durable_bundle_digests(),
+            });
+        };
+        let transfer = self.load_transfer()?;
+        if let Some(index) = (0..inventory.chunk_count)
+            .find(|index| !self.transferred_chunk_is_valid(&transfer, *index))
+        {
+            return Ok(PolicyTransferActionV1::Fetch {
+                candidate_content_id: inventory.candidate_content_id.clone(),
+                bundle_digest: inventory.bundle_digest.clone(),
+                chunk_index: index,
+            });
+        }
+        let bytes = self.assemble_transfer(&transfer)?;
+        let directory = self.transfer_directory(&inventory.bundle_digest);
+        let bundle: PolicyBundleV1 =
+            serde_json::from_slice(&bytes).context(JsonSnafu { path: &directory })?;
+        ensure!(
+            bundle.bundle_digest == inventory.bundle_digest
+                && bundle.candidate.candidate_content_id == inventory.candidate_content_id,
+            ControlProtocolSnafu {
+                reason: "the assembled policy bundle differs from inventory",
+            }
+        );
+        self.session_inventory = None;
+        Ok(PolicyTransferActionV1::Ready(Box::new(bundle)))
+    }
+
+    pub(crate) fn accept_inventory(&mut self, inventory: PolicyInventory) -> Result<bool> {
         if !inventory.candidate_available {
-            return Ok(None);
+            self.session_inventory = None;
+            return Ok(false);
         }
         self.validate_inventory(&inventory)?;
         if self.state.active_candidate_content_id.as_deref()
             == Some(inventory.candidate_content_id.as_str())
         {
-            return Ok(None);
+            self.session_inventory = None;
+            return Ok(false);
         }
         // Reuse a partial transfer only when all inventory identity and size fields match.
         let mut transfer = self.load_transfer()?;
@@ -1346,45 +1401,38 @@ impl NodePolicyDeliveryOwner {
         }
         let directory = self.transfer_directory(&inventory.bundle_digest);
         fs::create_dir_all(&directory).context(IoSnafu { path: &directory })?;
-        for index in 0..inventory.chunk_count {
-            let path = directory.join(format!("{index:08}.chunk"));
-            // Digest readback makes a persisted chunk safe to reuse after restart.
-            if self.transferred_chunk_is_valid(&transfer, index) {
-                continue;
+        self.session_inventory = Some(inventory);
+        Ok(true)
+    }
+
+    pub(crate) fn accept_chunk(&mut self, chunk: PolicyChunk) -> Result<()> {
+        let inventory = self.session_inventory.as_ref().ok_or_else(|| {
+            IdentityStateSnafu {
+                reason: "a policy chunk has no validated session inventory".to_owned(),
             }
-            let chunk = connection
-                .fetch_policy_chunk(
-                    inventory.candidate_content_id.clone(),
-                    inventory.bundle_digest.clone(),
-                    index,
-                )
-                .await?;
-            ensure!(
-                chunk.candidate_content_id == inventory.candidate_content_id
-                    && chunk.bundle_digest == inventory.bundle_digest
-                    && chunk.chunk_index == index
-                    && chunk.chunk_count == inventory.chunk_count
-                    && chunk.payload.len() <= MAX_POLICY_BUNDLE_CHUNK_BYTES
-                    && sha256(&chunk.payload) == chunk.chunk_sha256,
-                ControlProtocolSnafu {
-                    reason: "Control delivered an invalid policy chunk",
-                }
-            );
-            write_atomic(&path, &chunk.payload)?;
-            transfer.chunk_digests.insert(index, chunk.chunk_sha256);
-            self.persist_transfer(&transfer)?;
-        }
-        let bytes = self.assemble_transfer(&transfer)?;
-        let bundle: PolicyBundleV1 =
-            serde_json::from_slice(&bytes).context(JsonSnafu { path: &directory })?;
+            .build()
+        })?;
         ensure!(
-            bundle.bundle_digest == inventory.bundle_digest
-                && bundle.candidate.candidate_content_id == inventory.candidate_content_id,
+            chunk.candidate_content_id == inventory.candidate_content_id
+                && chunk.bundle_digest == inventory.bundle_digest
+                && chunk.chunk_index < inventory.chunk_count
+                && chunk.chunk_count == inventory.chunk_count
+                && chunk.payload.len() <= MAX_POLICY_BUNDLE_CHUNK_BYTES
+                && sha256(&chunk.payload) == chunk.chunk_sha256,
             ControlProtocolSnafu {
-                reason: "the assembled policy bundle differs from inventory",
+                reason: "Control delivered an invalid policy chunk",
             }
         );
-        Ok(Some(bundle))
+        let mut transfer = self.load_transfer()?;
+        let path = self
+            .transfer_directory(&inventory.bundle_digest)
+            .join(format!("{:08}.chunk", chunk.chunk_index));
+        // Persist one verified chunk before the next action can advance the cursor.
+        write_atomic(&path, &chunk.payload)?;
+        transfer
+            .chunk_digests
+            .insert(chunk.chunk_index, chunk.chunk_sha256);
+        self.persist_transfer(&transfer)
     }
 
     #[cfg(test)]
@@ -3079,10 +3127,10 @@ mod tests {
     use mithril_control::{
         CapabilityRecord, ExceptionActivationStateV1, ExceptionDeliveryCandidateV1,
         ExceptionDeliveryOperationV1, ExceptionSourceRevisionV1, ExceptionSourceStateV1,
-        FileExceptionGrantTemplateV1, KubernetesWorkloadIdentityV1, PolicyCompiler,
-        PolicyDeliveryCandidateV1, PolicyDocumentV1, PolicySignerTrust, PolicyTargetSnapshotV1,
-        PolicyTargetV1, ProfileCandidateArtifactV1, ProfileModeV1, ProfileSealRequestV1,
-        RegistryDigestsV1, WorkloadProtectionException, WorkloadTargetFactV1,
+        FileExceptionGrantTemplateV1, KubernetesWorkloadIdentityV1, PolicyChunk, PolicyCompiler,
+        PolicyDeliveryCandidateV1, PolicyDocumentV1, PolicyInventory, PolicySignerTrust,
+        PolicyTargetSnapshotV1, PolicyTargetV1, ProfileCandidateArtifactV1, ProfileModeV1,
+        ProfileSealRequestV1, RegistryDigestsV1, WorkloadProtectionException, WorkloadTargetFactV1,
     };
     use sha2::{Digest as _, Sha256};
     use snafu::ResultExt as _;
@@ -3090,7 +3138,7 @@ mod tests {
 
     use super::{
         write_atomic, NodePolicyDeliveryOwner, PolicyActivationProofV1, PolicyDeliveryOperationV1,
-        TransferStateV1,
+        PolicyTransferActionV1, TransferStateV1,
     };
     use crate::error::{IoSnafu, PolicySnafu};
     use crate::trust::InstalledPolicySignerV1;
@@ -3484,7 +3532,7 @@ mod tests {
     }
 
     #[test]
-    fn interrupted_chunk_transfer_resumes_only_from_exact_durable_readback() -> crate::Result<()> {
+    fn incremental_chunk_transfer_resumes_only_from_exact_durable_readback() -> crate::Result<()> {
         let directory = tempfile::tempdir().context(IoSnafu {
             path: "temporary interrupted transfer directory",
         })?;
@@ -3506,35 +3554,130 @@ mod tests {
         })?;
         let split = bundle_bytes.len() / 2;
         let chunks = [&bundle_bytes[..split], &bundle_bytes[split..]];
-        let owner = NodePolicyDeliveryOwner::load(directory.path())?;
-        let mut transfer = TransferStateV1 {
+        let inventory = PolicyInventory {
+            candidate_available: true,
+            candidate_content_id: bundle.candidate.candidate_content_id.clone(),
+            policy_source_revision_id: bundle.candidate.policy_source_revision_id.clone(),
+            target_snapshot_digest: bundle.candidate.target_snapshot_digest.clone(),
+            bundle_digest: bundle.bundle_digest.clone(),
+            bundle_bytes: u64::try_from(bundle_bytes.len()).unwrap_or(u64::MAX),
+            chunk_count: 2,
+            operation: "ACTIVATE".to_owned(),
+        };
+        let mut owner = NodePolicyDeliveryOwner::load(directory.path())?;
+        assert!(matches!(
+            owner.next_transfer_action()?,
+            PolicyTransferActionV1::Inventory { .. }
+        ));
+        assert!(owner.accept_inventory(inventory.clone())?);
+        let PolicyTransferActionV1::Fetch { chunk_index, .. } = owner.next_transfer_action()?
+        else {
+            return super::IdentityStateSnafu {
+                reason: "incremental transfer did not request its first chunk".to_owned(),
+            }
+            .fail();
+        };
+        assert_eq!(chunk_index, 0);
+        owner.accept_chunk(PolicyChunk {
+            candidate_content_id: inventory.candidate_content_id.clone(),
+            bundle_digest: inventory.bundle_digest.clone(),
+            chunk_index,
+            chunk_count: inventory.chunk_count,
+            chunk_sha256: super::sha256(chunks[0]),
+            payload: chunks[0].to_vec(),
+        })?;
+
+        let mut resumed = NodePolicyDeliveryOwner::load(directory.path())?;
+        assert!(matches!(
+            resumed.next_transfer_action()?,
+            PolicyTransferActionV1::Inventory { .. }
+        ));
+        assert!(resumed.accept_inventory(inventory.clone())?);
+        let PolicyTransferActionV1::Fetch { chunk_index, .. } = resumed.next_transfer_action()?
+        else {
+            return super::IdentityStateSnafu {
+                reason: "resumed transfer did not request its missing chunk".to_owned(),
+            }
+            .fail();
+        };
+        assert_eq!(chunk_index, 1);
+        resumed.accept_chunk(PolicyChunk {
+            candidate_content_id: inventory.candidate_content_id.clone(),
+            bundle_digest: inventory.bundle_digest.clone(),
+            chunk_index,
+            chunk_count: inventory.chunk_count,
+            chunk_sha256: super::sha256(chunks[1]),
+            payload: chunks[1].to_vec(),
+        })?;
+        let PolicyTransferActionV1::Ready(assembled) = resumed.next_transfer_action()? else {
+            return super::IdentityStateSnafu {
+                reason: "complete incremental transfer did not produce its bundle".to_owned(),
+            }
+            .fail();
+        };
+        assert_eq!(*assembled, bundle);
+
+        let transfer = TransferStateV1 {
             candidate_content_id: bundle.candidate.candidate_content_id.clone(),
             bundle_digest: bundle.bundle_digest.clone(),
             bundle_bytes: u64::try_from(bundle_bytes.len()).unwrap_or(u64::MAX),
             chunk_count: 2,
-            chunk_digests: BTreeMap::new(),
+            chunk_digests: BTreeMap::from([
+                (0, super::sha256(chunks[0])),
+                (1, super::sha256(chunks[1])),
+            ]),
         };
-        let transfer_directory = owner.transfer_directory(&bundle.bundle_digest);
-        std::fs::create_dir_all(&transfer_directory).context(IoSnafu {
-            path: &transfer_directory,
-        })?;
-        write_atomic(&transfer_directory.join("00000000.chunk"), chunks[0])?;
-        transfer.chunk_digests.insert(0, super::sha256(chunks[0]));
-        owner.persist_transfer(&transfer)?;
-
-        let resumed = NodePolicyDeliveryOwner::load(directory.path())?;
-        let mut transfer = resumed.load_transfer()?;
-        assert!(resumed.transferred_chunk_is_valid(&transfer, 0));
-        for (index, chunk) in chunks.iter().enumerate().skip(1) {
-            let index = u32::try_from(index).unwrap_or(u32::MAX);
-            write_atomic(&transfer_directory.join(format!("{index:08}.chunk")), chunk)?;
-            transfer.chunk_digests.insert(index, super::sha256(chunk));
-        }
-        assert_eq!(resumed.assemble_transfer(&transfer)?, bundle_bytes);
-
+        let transfer_directory = resumed.transfer_directory(&bundle.bundle_digest);
         write_atomic(&transfer_directory.join("00000000.chunk"), b"tampered")?;
         assert!(!resumed.transferred_chunk_is_valid(&transfer, 0));
         assert!(resumed.assemble_transfer(&transfer).is_err());
+
+        resumed.begin_control_session();
+        assert!(resumed.accept_inventory(inventory)?);
+        assert!(matches!(
+            resumed.next_transfer_action()?,
+            PolicyTransferActionV1::Fetch { chunk_index: 0, .. }
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn maximum_policy_transfer_advances_one_chunk_per_action() -> crate::Result<()> {
+        let directory = tempfile::tempdir().context(IoSnafu {
+            path: "temporary maximum transfer directory",
+        })?;
+        let mut owner = NodePolicyDeliveryOwner::load(directory.path())?;
+        let inventory = PolicyInventory {
+            candidate_available: true,
+            candidate_content_id: "a".repeat(64),
+            policy_source_revision_id: "b".repeat(64),
+            target_snapshot_digest: "c".repeat(64),
+            bundle_digest: "d".repeat(64),
+            bundle_bytes: mithril_control::MAX_POLICY_BUNDLE_BYTES as u64,
+            chunk_count: 256,
+            operation: "ACTIVATE".to_owned(),
+        };
+        assert!(owner.accept_inventory(inventory.clone())?);
+        for expected_index in 0..inventory.chunk_count {
+            let PolicyTransferActionV1::Fetch { chunk_index, .. } = owner.next_transfer_action()?
+            else {
+                return super::IdentityStateSnafu {
+                    reason: "maximum transfer emitted more than one chunk action".to_owned(),
+                }
+                .fail();
+            };
+            assert_eq!(chunk_index, expected_index);
+            let payload = vec![u8::try_from(expected_index % 251).unwrap_or_default()];
+            owner.accept_chunk(PolicyChunk {
+                candidate_content_id: inventory.candidate_content_id.clone(),
+                bundle_digest: inventory.bundle_digest.clone(),
+                chunk_index,
+                chunk_count: inventory.chunk_count,
+                chunk_sha256: super::sha256(&payload),
+                payload,
+            })?;
+        }
+        assert_eq!(owner.load_transfer()?.chunk_digests.len(), 256);
         Ok(())
     }
 

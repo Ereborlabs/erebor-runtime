@@ -287,6 +287,50 @@ impl RuntimeAdmissionReceiver {
     pub(crate) async fn receive(&mut self) -> Option<RuntimeAdmissionEnvelope> {
         self.requests.recv().await
     }
+
+    #[cfg(test)]
+    pub(crate) fn test_request(
+        request: RuntimeAdmissionRequestV1,
+        timeout: Duration,
+    ) -> (
+        Self,
+        tokio::task::JoinHandle<Result<RuntimeAdmissionResponseV1>>,
+    ) {
+        let (requests, receiver) = mpsc::channel(1);
+        let deadline = Instant::now() + timeout;
+        let response = tokio::spawn(async move {
+            let (response, received) = oneshot::channel();
+            let (delivered, delivery) = oneshot::channel();
+            requests
+                .send(RuntimeAdmissionEnvelope {
+                    request,
+                    deadline,
+                    response,
+                    delivered: delivery,
+                })
+                .await
+                .map_err(|_closed| {
+                    IdentityStateSnafu {
+                        reason: "runtime admission test receiver closed".to_owned(),
+                    }
+                    .build()
+                })?;
+            let response = received.await.map_err(|_closed| {
+                IdentityStateSnafu {
+                    reason: "runtime admission test received no answer".to_owned(),
+                }
+                .build()
+            })?;
+            delivered.send(()).map_err(|()| {
+                IdentityStateSnafu {
+                    reason: "runtime admission test answer was not delivered".to_owned(),
+                }
+                .build()
+            })?;
+            Ok(response)
+        });
+        (Self { requests: receiver }, response)
+    }
 }
 
 impl RuntimeAdmissionClient {

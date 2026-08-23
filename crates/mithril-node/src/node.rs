@@ -9,6 +9,8 @@ use serde::Serialize;
 use sha2::{Digest as _, Sha256};
 use snafu::ResultExt as _;
 use std::cmp;
+use std::collections::VecDeque;
+use std::future::Future;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -69,6 +71,31 @@ enum ReconciliationOutcome {
     EvidenceUnhealthy,
     IdentityUnhealthy,
     KernelUnhealthy,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+enum PolicyControlPhaseV1 {
+    #[default]
+    Transfer,
+    Exception,
+}
+
+#[derive(Default)]
+struct PolicyControlWorkV1 {
+    pending: bool,
+    phase: PolicyControlPhaseV1,
+    rejected_acknowledgement: Option<PolicyActivationAcknowledgement>,
+    reconnect_after_acknowledgement: bool,
+    exception_observed: bool,
+    rejected_candidate: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PolicyControlStepV1 {
+    Continue,
+    Idle,
+    Activated,
+    Reconnect,
 }
 
 struct CommittedRuntimeAdmissionV1 {
@@ -580,6 +607,7 @@ impl NodeChassis {
             };
             match connection {
                 Ok(mut connection) => {
+                    self.policy_delivery.begin_control_session();
                     self.readiness.send_replace(NodeReadinessV1 {
                         kernel_ready: kernel_healthy,
                         identity_ready: identity_healthy,
@@ -595,13 +623,15 @@ impl NodeChassis {
                     backoff = self.config.control.reconnect_minimum();
                     let mut evidence_in_flight = false;
                     let mut coverage_in_flight = Vec::new();
+                    let mut coverage_snapshot = None;
+                    let mut coverage_pending = VecDeque::new();
                     let mut acknowledged_coverage = None;
                     let mut evidence_upload = tokio::time::interval(Duration::from_millis(100));
                     evidence_upload
                         .set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
                     let mut policy_poll = tokio::time::interval(Duration::from_millis(250));
                     policy_poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-                    let mut rejected_candidate = None;
+                    let mut policy_work = PolicyControlWorkV1::default();
                     loop {
                         tokio::select! {
                             result = connection.next_message() => {
@@ -642,9 +672,12 @@ impl NodeChassis {
                                             break;
                                         };
                                         coverage_in_flight.swap_remove(position);
-                                        if coverage_in_flight.is_empty() {
+                                        if coverage_in_flight.is_empty()
+                                            && coverage_pending.is_empty()
+                                        {
                                             acknowledged_coverage =
                                                 Some((ack.source_epoch, ack.revision));
+                                            coverage_snapshot = None;
                                         }
                                     }
                                 }
@@ -670,127 +703,96 @@ impl NodeChassis {
                                 }
                                 if !evidence_in_flight {
                                     if let Some(batch) = self.observations.next_evidence_batch() {
-                                        match connection.send_evidence_batch(batch).await {
+                                        match self
+                                            .await_control_rpc(
+                                                connection.send_evidence_batch(batch),
+                                            )
+                                            .await
+                                        {
                                             Ok(()) => evidence_in_flight = true,
                                             Err(error) => {
                                                 eprintln!("Mithril node evidence upload failed: {error}");
                                                 break;
                                             }
                                         }
+                                        continue;
                                     }
                                 }
-                                if coverage_in_flight.is_empty() {
+                                if coverage_snapshot.is_none()
+                                    && coverage_in_flight.is_empty()
+                                    && coverage_pending.is_empty()
+                                {
                                     if let Some(snapshot) = self.observations.coverage_snapshot() {
                                         let key = (snapshot.source_epoch, snapshot.revision);
                                         if acknowledged_coverage != Some(key) {
-                                            match connection.send_coverage_reports(snapshot).await {
-                                                Ok(expected) => coverage_in_flight = expected,
-                                                Err(error) => {
-                                                    eprintln!("Mithril node coverage report failed: {error}");
-                                                    break;
-                                                }
+                                            coverage_pending = snapshot.current_intervals().into();
+                                            if coverage_pending.is_empty() {
+                                                eprintln!(
+                                                    "Mithril node coverage snapshot has no current source"
+                                                );
+                                                break;
+                                            }
+                                            coverage_snapshot = Some(snapshot);
+                                        }
+                                    }
+                                }
+                                if coverage_in_flight.is_empty() {
+                                    if let (Some(snapshot), Some(current)) =
+                                        (coverage_snapshot.as_ref(), coverage_pending.front())
+                                    {
+                                        match self
+                                            .await_control_rpc(connection.send_coverage_report(
+                                                snapshot,
+                                                current,
+                                            ))
+                                            .await
+                                        {
+                                            Ok(expected) => {
+                                                coverage_in_flight.push(expected);
+                                                coverage_pending.pop_front();
+                                            }
+                                            Err(error) => {
+                                                eprintln!("Mithril node coverage report failed: {error}");
+                                                break;
                                             }
                                         }
                                     }
                                 }
                             }
-                            _instant = policy_poll.tick() => {
+                            () = async {
+                                if policy_work.pending {
+                                    tokio::task::yield_now().await;
+                                } else {
+                                    let _instant = policy_poll.tick().await;
+                                }
+                            } => {
                                 // Ready-only policy RPCs must wait for local evidence recovery.
                                 if !evidence_healthy {
+                                    policy_work.pending = false;
                                     continue;
                                 }
-                                // Poll, stage, activate, and acknowledge one candidate at a time.
-                                let bundle = match self
-                                    .policy_delivery
-                                    .fetch_candidate(&mut connection)
-                                    .await
+                                policy_work.pending = true;
+                                match self
+                                    .advance_policy_control_step(
+                                        &mut connection,
+                                        &mut policy_work,
+                                        evidence_healthy,
+                                    )
+                                    .await?
                                 {
-                                    Ok(Some(bundle)) => bundle,
-                                    Ok(None) => {
-                                        if let Some(acknowledgement) =
-                                            self.policy_delivery.pending_acknowledgement()
-                                        {
-                                            let candidate_content_id =
-                                                acknowledgement.candidate_content_id.clone();
-                                            if connection
-                                                .acknowledge_policy(acknowledgement)
-                                                .await
-                                                .is_err()
-                                            {
-                                                break;
-                                            }
-                                            self.policy_delivery
-                                                .acknowledge_control(&candidate_content_id)?;
-                                        }
-                                        if self
-                                            .poll_control_exception(&mut connection)
-                                            .await?
-                                        {
-                                            break;
-                                        }
-                                        continue;
-                                    }
-                                    Err(error) => {
-                                        eprintln!("Mithril node policy inventory failed: {error}");
-                                        break;
-                                    }
-                                };
-                                // Do not retry one rejected candidate until Control selects another.
-                                if rejected_candidate.as_deref()
-                                    == Some(bundle.candidate.candidate_content_id.as_str())
-                                {
-                                    continue;
-                                }
-                                let prepared = match self.prepare_control_policy(&bundle) {
-                                    Ok(prepared) => prepared,
-                                    Err(_error) => {
-                                        rejected_candidate = Some(
-                                            bundle.candidate.candidate_content_id.clone(),
+                                    PolicyControlStepV1::Continue => {}
+                                    PolicyControlStepV1::Idle => policy_work.pending = false,
+                                    PolicyControlStepV1::Reconnect => break,
+                                    PolicyControlStepV1::Activated => {
+                                        prevention_enabled = self.policy.as_ref().is_some_and(
+                                            crate::NodePolicyGenerationOwner::prevention_enabled,
                                         );
-                                        if connection
-                                            .acknowledge_policy(rejected_policy_acknowledgement(
-                                                &bundle,
-                                            )?)
-                                            .await
-                                            .is_err()
-                                        {
-                                            break;
-                                        }
-                                        continue;
+                                        healthy_identity_capabilities =
+                                            self.registration.capabilities.clone();
+                                        healthy_effect_prevention_claims =
+                                            self.registration.effect_prevention_claims_enabled;
                                     }
-                                };
-                                // This call completes local readback before any ACTIVE acknowledgement.
-                                self.activate_control_policy(
-                                    &bundle,
-                                    prepared,
-                                    evidence_healthy,
-                                )?;
-                                prevention_enabled = self
-                                    .policy
-                                    .as_ref()
-                                    .is_some_and(
-                                        crate::NodePolicyGenerationOwner::prevention_enabled,
-                                    );
-                                healthy_identity_capabilities =
-                                    self.registration.capabilities.clone();
-                                healthy_effect_prevention_claims =
-                                    self.registration.effect_prevention_claims_enabled;
-                                if let Some(acknowledgement) =
-                                    self.policy_delivery.pending_acknowledgement()
-                                {
-                                    let candidate_content_id =
-                                        acknowledgement.candidate_content_id.clone();
-                                    if connection
-                                        .acknowledge_policy(acknowledgement)
-                                        .await
-                                        .is_err()
-                                    {
-                                        break;
-                                    }
-                                    self.policy_delivery
-                                        .acknowledge_control(&candidate_content_id)?;
                                 }
-                                break;
                             }
                             changed = shutdown.changed() => {
                                 let _result = changed;
@@ -1339,31 +1341,155 @@ impl NodeChassis {
         )
     }
 
-    async fn poll_control_exception(
-        &mut self,
-        connection: &mut crate::ControlConnection,
-    ) -> Result<bool> {
-        // Observe live counters before delivery so Control sees use and expiry transitions.
-        if let (Some(policy), Some(host)) = (self.policy.as_ref(), self.host.as_ref()) {
-            for candidate in self
-                .policy_delivery
-                .acknowledged_active_exception_candidates()?
-            {
-                let observation = policy.observe_exception_candidate(host, &candidate)?;
-                self.policy_delivery.observe_exception_result(
-                    &candidate,
-                    observation,
-                    crate::policy::current_utc_ns()?,
-                )?;
+    async fn await_control_rpc<T>(&mut self, rpc: impl Future<Output = Result<T>>) -> Result<T> {
+        tokio::pin!(rpc);
+        loop {
+            tokio::select! {
+                result = &mut rpc => return result,
+                request = next_runtime_admission(&mut self.runtime_admission_requests) => {
+                    self.answer_runtime_admission(request).await?;
+                }
             }
         }
-        // Replay a durable result before this node can accept another candidate.
+    }
+
+    async fn await_policy_rpc<T>(
+        &mut self,
+        rpc: impl Future<Output = Result<T>>,
+    ) -> Result<Option<T>> {
+        match self.await_control_rpc(rpc).await {
+            Ok(response) => Ok(Some(response)),
+            Err(
+                error @ (crate::Error::ControlRpc { .. } | crate::Error::ControlTransport { .. }),
+            ) => {
+                eprintln!("Mithril node policy Control RPC failed: {error}");
+                Ok(None)
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    async fn advance_policy_control_step(
+        &mut self,
+        connection: &mut crate::ControlConnection,
+        work: &mut PolicyControlWorkV1,
+        evidence_healthy: bool,
+    ) -> Result<PolicyControlStepV1> {
+        if let Some(acknowledgement) = work.rejected_acknowledgement.take() {
+            let Some(_accepted) = self
+                .await_policy_rpc(connection.acknowledge_policy(acknowledgement))
+                .await?
+            else {
+                return Ok(PolicyControlStepV1::Reconnect);
+            };
+            return Ok(PolicyControlStepV1::Idle);
+        }
+        if work.phase == PolicyControlPhaseV1::Transfer {
+            if let Some(acknowledgement) = self.policy_delivery.pending_acknowledgement() {
+                let candidate_content_id = acknowledgement.candidate_content_id.clone();
+                let Some(_accepted) = self
+                    .await_policy_rpc(connection.acknowledge_policy(acknowledgement))
+                    .await?
+                else {
+                    return Ok(PolicyControlStepV1::Reconnect);
+                };
+                self.policy_delivery
+                    .acknowledge_control(&candidate_content_id)?;
+                if work.reconnect_after_acknowledgement {
+                    return Ok(PolicyControlStepV1::Reconnect);
+                }
+                work.phase = PolicyControlPhaseV1::Exception;
+                return Ok(PolicyControlStepV1::Continue);
+            }
+            match self.policy_delivery.next_transfer_action()? {
+                crate::policy_delivery::PolicyTransferActionV1::Inventory {
+                    active_candidate_content_id,
+                    durable_bundle_digests,
+                } => {
+                    let Some(inventory) = self
+                        .await_policy_rpc(connection.policy_inventory(
+                            active_candidate_content_id.as_deref(),
+                            durable_bundle_digests,
+                        ))
+                        .await?
+                    else {
+                        return Ok(PolicyControlStepV1::Reconnect);
+                    };
+                    if !self.policy_delivery.accept_inventory(inventory)? {
+                        work.phase = PolicyControlPhaseV1::Exception;
+                    }
+                    return Ok(PolicyControlStepV1::Continue);
+                }
+                crate::policy_delivery::PolicyTransferActionV1::Fetch {
+                    candidate_content_id,
+                    bundle_digest,
+                    chunk_index,
+                } => {
+                    let Some(chunk) = self
+                        .await_policy_rpc(connection.fetch_policy_chunk(
+                            candidate_content_id,
+                            bundle_digest,
+                            chunk_index,
+                        ))
+                        .await?
+                    else {
+                        return Ok(PolicyControlStepV1::Reconnect);
+                    };
+                    self.policy_delivery.accept_chunk(chunk)?;
+                    return Ok(PolicyControlStepV1::Continue);
+                }
+                crate::policy_delivery::PolicyTransferActionV1::Ready(bundle) => {
+                    if work.rejected_candidate.as_deref()
+                        == Some(bundle.candidate.candidate_content_id.as_str())
+                    {
+                        return Ok(PolicyControlStepV1::Idle);
+                    }
+                    let prepared = match self.prepare_control_policy(&bundle) {
+                        Ok(prepared) => prepared,
+                        Err(_error) => {
+                            work.rejected_candidate =
+                                Some(bundle.candidate.candidate_content_id.clone());
+                            work.rejected_acknowledgement =
+                                Some(rejected_policy_acknowledgement(&bundle)?);
+                            return Ok(PolicyControlStepV1::Continue);
+                        }
+                    };
+                    // Local readback completes before a later step sends the ACTIVE ACK.
+                    self.activate_control_policy(&bundle, prepared, evidence_healthy)?;
+                    work.reconnect_after_acknowledgement = true;
+                    return Ok(PolicyControlStepV1::Activated);
+                }
+            }
+        }
+
+        if !work.exception_observed {
+            // Observe live counters once before this exception delivery cycle.
+            if let (Some(policy), Some(host)) = (self.policy.as_ref(), self.host.as_ref()) {
+                for candidate in self
+                    .policy_delivery
+                    .acknowledged_active_exception_candidates()?
+                {
+                    let observation = policy.observe_exception_candidate(host, &candidate)?;
+                    self.policy_delivery.observe_exception_result(
+                        &candidate,
+                        observation,
+                        crate::policy::current_utc_ns()?,
+                    )?;
+                }
+            }
+            work.exception_observed = true;
+        }
         if let Some(acknowledgement) = self.policy_delivery.pending_exception_acknowledgement()? {
             let candidate_content_id = acknowledgement.candidate_content_id.clone();
-            connection.acknowledge_exception(acknowledgement).await?;
+            let Some(_accepted) = self
+                .await_policy_rpc(connection.acknowledge_exception(acknowledgement))
+                .await?
+            else {
+                return Ok(PolicyControlStepV1::Reconnect);
+            };
             self.policy_delivery
                 .acknowledge_exception_control(&candidate_content_id)?;
-            return Ok(true);
+            return Ok(PolicyControlStepV1::Reconnect);
         }
         let node_boot_id = self.node_boot_id.to_be_bytes();
         let host = self.host.as_ref().ok_or_else(|| {
@@ -1372,20 +1498,48 @@ impl NodeChassis {
             }
             .build()
         })?;
-        let Some(prepared) = self
-            .policy_delivery
-            .fetch_exception_candidate(
-                connection,
-                host,
-                &self.trust,
-                &self.config,
-                &node_boot_id,
-                self.label_epoch,
-            )
+        if let Some(prepared) = self.policy_delivery.reconcile_exception_candidate(
+            host,
+            &self.trust,
+            &self.config,
+            &node_boot_id,
+            self.label_epoch,
+        )? {
+            self.apply_control_exception(prepared)?;
+            return Ok(PolicyControlStepV1::Continue);
+        }
+        let candidate_ids = self.policy_delivery.exception_inventory_candidate_ids();
+        let Some(inventory) = self
+            .await_policy_rpc(connection.exception_inventory(candidate_ids))
             .await?
         else {
-            return Ok(false);
+            return Ok(PolicyControlStepV1::Reconnect);
         };
+        if let Some(prepared) = self.policy_delivery.accept_exception_inventory(
+            inventory,
+            &self.trust,
+            &self.config,
+            &node_boot_id,
+            self.label_epoch,
+        )? {
+            self.apply_control_exception(prepared)?;
+            return Ok(PolicyControlStepV1::Continue);
+        }
+        work.phase = PolicyControlPhaseV1::Transfer;
+        work.exception_observed = false;
+        Ok(PolicyControlStepV1::Idle)
+    }
+
+    fn apply_control_exception(
+        &mut self,
+        prepared: crate::policy_delivery::PreparedExceptionDeliveryV1,
+    ) -> Result<()> {
+        let host = self.host.as_ref().ok_or_else(|| {
+            IdentityStateSnafu {
+                reason: "exception delivery has no live kernel host".to_owned(),
+            }
+            .build()
+        })?;
         let policy = self.policy.as_ref().ok_or_else(|| {
             IdentityStateSnafu {
                 reason: "exception delivery has no active policy owner".to_owned(),
@@ -1399,21 +1553,7 @@ impl NodeChassis {
             observation.state,
             observation.consumed_uses,
             crate::policy::current_utc_ns()?,
-        )?;
-        let acknowledgement = self
-            .policy_delivery
-            .pending_exception_acknowledgement()?
-            .ok_or_else(|| {
-                IdentityStateSnafu {
-                    reason: "exception activation produced no durable acknowledgement".to_owned(),
-                }
-                .build()
-            })?;
-        let candidate_content_id = acknowledgement.candidate_content_id.clone();
-        connection.acknowledge_exception(acknowledgement).await?;
-        self.policy_delivery
-            .acknowledge_exception_control(&candidate_content_id)?;
-        Ok(true)
+        )
     }
 
     fn activate_control_policy(
@@ -1936,13 +2076,26 @@ pub(crate) fn workload_binding_generation_digest(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+    use std::path::{Path, PathBuf};
+    use std::time::Duration;
+
     use super::{
         close_identity_claims, close_kernel_claims, effect_reader_finished,
-        restore_identity_claims, runtime_admission_exit, runtime_admission_finished,
+        restore_identity_claims, runtime_admission_exit, runtime_admission_finished, NodeChassis,
         NodeReadinessV1,
     };
+    use erebor_interceptor_abi::Id128V1;
     use mithril_control::{CapabilityRecord, NodeRegistration};
     use tokio::sync::watch;
+
+    use crate::{
+        EffectObservationStore, InterceptorConfig, NativeSecurityStateOwner, NodeConfig,
+        NodeControlConfig, NodeControlConnector, RuntimeAdmissionRequestV1, TrustCache,
+        WorkloadBindingOwner, CONTAINER_NAME_ANNOTATION, IMAGE_NAME_ANNOTATION,
+        POD_NAMESPACE_ANNOTATION, POD_UID_ANNOTATION, POLICY_SOURCE_REVISION_ANNOTATION,
+        PROFILE_ID_ANNOTATION, SANDBOX_ID_ANNOTATION,
+    };
 
     #[test]
     fn boot_admission_requires_complete_chassis_readiness_in_both_policy_modes() {
@@ -2166,5 +2319,147 @@ mod tests {
         );
         assert!(!receiver.borrow().admission_ready);
         assert!(!receiver.borrow().admits_new_work());
+    }
+
+    #[tokio::test]
+    async fn pending_control_unary_still_answers_runtime_admission() -> crate::Result<()> {
+        let state = tempfile::tempdir().map_err(|source| crate::Error::Io {
+            path: PathBuf::from("temporary node admission state"),
+            source,
+            location: snafu::Location::default(),
+        })?;
+        let config = admission_test_config(state.path());
+        let node_boot_id = Id128V1::new(1, 2);
+        let connector = NodeControlConnector::new(
+            config.control.clone(),
+            config.node_id.clone(),
+            node_boot_id.to_be_bytes(),
+        );
+        let (runtime_admission_requests, mut response) =
+            crate::runtime_admission::RuntimeAdmissionReceiver::test_request(
+                admission_test_request(),
+                Duration::from_secs(1),
+            );
+        let (readiness, _readiness_receiver) = watch::channel(NodeReadinessV1 {
+            kernel_ready: true,
+            identity_ready: true,
+            control_ready: true,
+            admission_ready: true,
+            effect_prevention_claims_enabled: true,
+        });
+        let mut chassis = NodeChassis {
+            config,
+            effect_reader: None,
+            host: None,
+            connector,
+            registration: NodeRegistration {
+                platform_digest: "a".repeat(64),
+                program_digest: "b".repeat(64),
+                label_epoch: 1,
+                kernel_ready: true,
+                effect_prevention_claims_enabled: true,
+                kubernetes_node_name: String::new(),
+                capabilities: Vec::new(),
+                workload_targets: Vec::new(),
+            },
+            local_server: None,
+            runtime_admission_server: None,
+            runtime_admission_requests: Some(runtime_admission_requests),
+            trust: TrustCache::load(state.path())?,
+            bindings: WorkloadBindingOwner::system(node_boot_id, 1)?,
+            identity: NativeSecurityStateOwner::new(node_boot_id, 1),
+            policy: None,
+            policy_delivery: crate::policy_delivery::NodePolicyDeliveryOwner::load(state.path())?,
+            administrative: None,
+            readiness,
+            observations: EffectObservationStore::new(8),
+            node_boot_id,
+            label_epoch: 1,
+        };
+        let waiting = chassis.await_control_rpc(std::future::pending::<crate::Result<()>>());
+        tokio::pin!(waiting);
+
+        let admission = tokio::select! {
+            result = &mut response => result
+                .map_err(|source| crate::Error::LocalTask {
+                    source,
+                    location: snafu::Location::default(),
+                })??,
+            result = &mut waiting => return result.and_then(|()| {
+                crate::error::IdentityStateSnafu {
+                    reason: "the pending Control RPC completed during admission".to_owned(),
+                }
+                .fail()
+            }),
+            () = tokio::time::sleep(Duration::from_millis(200)) => {
+                return crate::error::IdentityStateSnafu {
+                    reason: "runtime admission waited behind a pending Control RPC".to_owned(),
+                }
+                .fail();
+            }
+        };
+        assert!(!admission.allowed);
+        assert_eq!(
+            admission.reason_code,
+            crate::runtime_admission::POLICY_CONVERGENCE_PENDING
+        );
+        assert!(
+            tokio::time::timeout(Duration::from_millis(10), &mut waiting)
+                .await
+                .is_err()
+        );
+        Ok(())
+    }
+
+    fn admission_test_config(state_directory: &Path) -> NodeConfig {
+        NodeConfig {
+            node_id: "node-a".to_owned(),
+            kubernetes_node_name: None,
+            state_directory: state_directory.to_owned(),
+            interceptor: InterceptorConfig {
+                runtime_btf_path: state_directory.join("vmlinux"),
+                lease_path: state_directory.join("owner.lock"),
+                pin_root: state_directory.join("pins"),
+            },
+            control: NodeControlConfig {
+                endpoint: "https://127.0.0.1:7443".to_owned(),
+                server_name: "mithril-control".to_owned(),
+                ca_path: state_directory.join("ca.pem"),
+                certificate_path: state_directory.join("node.pem"),
+                private_key_path: state_directory.join("node-key.pem"),
+                reconnect_minimum_ms: 100,
+                reconnect_maximum_ms: 5_000,
+            },
+            evidence: None,
+            runtime_observation: None,
+            runtime_admission: None,
+            container_runtime: None,
+            workload_bindings: Vec::new(),
+            policy_candidates: Vec::new(),
+            administrative_authorization: None,
+        }
+    }
+
+    fn admission_test_request() -> RuntimeAdmissionRequestV1 {
+        RuntimeAdmissionRequestV1 {
+            container_id: "a".repeat(64),
+            initial_pid: 1,
+            cgroup_path: PathBuf::from("/sys/fs/cgroup/kubepods/pod-a/container-a"),
+            annotations: BTreeMap::from([
+                (POD_NAMESPACE_ANNOTATION.to_owned(), "default".to_owned()),
+                (POD_UID_ANNOTATION.to_owned(), "pod-a".to_owned()),
+                (CONTAINER_NAME_ANNOTATION.to_owned(), "worker".to_owned()),
+                (
+                    IMAGE_NAME_ANNOTATION.to_owned(),
+                    format!("worker@sha256:{}", "c".repeat(64)),
+                ),
+                (SANDBOX_ID_ANNOTATION.to_owned(), "sandbox-a".to_owned()),
+                (
+                    PROFILE_ID_ANNOTATION.to_owned(),
+                    "33333333-3333-4333-8333-333333333333".to_owned(),
+                ),
+                (POLICY_SOURCE_REVISION_ANNOTATION.to_owned(), "d".repeat(64)),
+            ]),
+        }
     }
 }
