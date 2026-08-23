@@ -211,9 +211,9 @@ impl KubernetesNodeReadinessOwner {
         let _result = control.bind_kubernetes_node_session(&name, node_uid);
         let sessions = control
             .ready_kubernetes_node_sessions(Duration::from_secs(self.config.session_ttl_seconds));
-        let session = sessions
-            .iter()
-            .find(|session| session.kubernetes_node_name == name);
+        let session = sessions.iter().find(|session| {
+            session.kubernetes_node_name == name && session.kubernetes_node_uid == node_uid
+        });
         let patch = node_projection_patch(node, constraints, session);
         let _result = nodes
             .patch(&name, &PatchParams::default(), &Patch::Merge(&patch))
@@ -282,6 +282,10 @@ pub fn node_projection_patch(
     session: Option<&KubernetesNodeSessionV1>,
 ) -> Value {
     let eligible = constraints.matches_node(node);
+    let session = session.filter(|session| {
+        node.metadata.name.as_ref() == Some(&session.kubernetes_node_name)
+            && node.metadata.uid.as_ref() == Some(&session.kubernetes_node_uid)
+    });
     let ready = eligible && session.is_some();
     let mut taints = node
         .spec
@@ -481,6 +485,7 @@ mod tests {
         Node {
             metadata: ObjectMeta {
                 name: Some(name.to_owned()),
+                uid: Some("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa".to_owned()),
                 labels: Some(BTreeMap::from([
                     ("pool".to_owned(), pool.to_owned()),
                     ("zone".to_owned(), zone.to_owned()),
@@ -545,6 +550,32 @@ mod tests {
             .and_then(serde_json::Value::as_array)
             .is_some_and(Vec::is_empty));
         assert_eq!(KUBERNETES_READY_LABEL, "mithril.erebor.dev/ready");
+        Ok(())
+    }
+
+    #[test]
+    fn replaced_node_cannot_inherit_a_ready_session_by_name() -> crate::Result<()> {
+        let constraints = DaemonSetNodeConstraintsV1::from_daemon_set(&daemon_set())?;
+        let session = KubernetesNodeSessionV1 {
+            node_id: "enrolled-node-a".to_owned(),
+            kubernetes_node_name: "node-a".to_owned(),
+            kubernetes_node_uid: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb".to_owned(),
+            node_boot_id: vec![7; 16],
+            label_epoch: 9,
+        };
+        let patch = node_projection_patch(
+            &node("node-a", "protected", "a"),
+            &constraints,
+            Some(&session),
+        );
+        assert_eq!(
+            patch.pointer("/metadata/labels/mithril.erebor.dev~1ready"),
+            Some(&serde_json::Value::Null)
+        );
+        assert!(patch
+            .pointer("/spec/taints")
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(|taints| !taints.is_empty()));
         Ok(())
     }
 

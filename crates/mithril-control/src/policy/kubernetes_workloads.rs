@@ -869,7 +869,10 @@ pub fn validate_selected_node(
     let session = control
         .ready_kubernetes_node_sessions(session_ttl)
         .into_iter()
-        .find(|session| session.kubernetes_node_name == name)
+        .find(|session| {
+            session.kubernetes_node_name == name
+                && node.metadata.uid.as_ref() == Some(&session.kubernetes_node_uid)
+        })
         .ok_or_else(|| admission_error("scheduler-selected Node has no current ready session"))?;
     ensure!(
         annotations.and_then(|values| values.get(KUBERNETES_NODE_ID_ANNOTATION))
