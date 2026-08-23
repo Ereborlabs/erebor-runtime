@@ -34,6 +34,8 @@
           "additionalProperties": false,
           "required": [
             "install",
+            "cleanupImage",
+            "cleanupImagePullPolicy",
             "hostBinaryDirectory",
             "hostConfigDirectory",
             "socketPath",
@@ -42,6 +44,8 @@
           ],
           "properties": {
             "install": {"type": "boolean"},
+            "cleanupImage": {"type": "string", "minLength": 1},
+            "cleanupImagePullPolicy": {"enum": ["Always", "IfNotPresent", "Never"]},
             "hostBinaryDirectory": {"type": "string", "pattern": "^/"},
             "hostConfigDirectory": {"type": "string", "pattern": "^/"},
             "socketPath": {"type": "string", "pattern": "^/run/mithril/[^/]+$"},

@@ -10,6 +10,8 @@ node:
   affinity: {}
   runtimeHook:
     install: true
+    cleanupImage: registry.k8s.io/kubectl:v1.35.5
+    cleanupImagePullPolicy: IfNotPresent
     hostBinaryDirectory: /opt/mithril/bin
     hostConfigDirectory: /usr/share/containers/oci/hooks.d
     socketPath: /run/mithril/runtime-admission.sock

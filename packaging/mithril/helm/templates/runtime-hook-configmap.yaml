@@ -1,13 +1,17 @@
-{{- if .Values.node.runtimeHook.install }}
 {{/* Keep the OCI runtime deadline outside the node client deadline. */}}
+{{- if .Values.node.runtimeHook.install }}
 {{- if le (mul (int .Values.node.runtimeHook.runtimeTimeoutSeconds) 1000) (int .Values.node.runtimeHook.timeoutMs) }}
 {{- fail "node.runtimeHook.runtimeTimeoutSeconds must exceed node.runtimeHook.timeoutMs" }}
+{{- end }}
 {{- end }}
 apiVersion: v1
 kind: ConfigMap
 metadata:
   name: mithril-runtime-hook
 data:
+  runtime-hook-owner.sh: |-
+{{ .Files.Get "files/runtime-hook-owner.sh" | indent 4 }}
+{{- if .Values.node.runtimeHook.install }}
   99-mithril.json: |-
     {
       "version": "1.0.0",

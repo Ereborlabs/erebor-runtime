@@ -4,6 +4,8 @@ set -euo pipefail
 
 chart_directory=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 
+bash "$chart_directory/tests/runtime-hook-owner-test.sh"
+
 helm lint "$chart_directory" --values "$chart_directory/tests/values.yaml"
 helm template mithril "$chart_directory" \
   --namespace mithril-system \
@@ -21,6 +23,11 @@ if helm template mithril "$chart_directory" \
   echo 'chart accepted an unbounded admission timeout' >&2
   exit 1
 fi
+
+helm template mithril "$chart_directory" \
+  --namespace mithril-system \
+  --values "$chart_directory/tests/values.yaml" \
+  --set node.runtimeHook.install=false >/dev/null
 
 if helm template mithril "$chart_directory" \
   --namespace mithril-system \

@@ -1,5 +1,6 @@
 {{- $runtimeAdmissionSocket := required "node.runtimeHook.socketPath is required" .Values.node.runtimeHook.socketPath }}
 {{- $cleanRuntimeAdmissionSocket := clean $runtimeAdmissionSocket }}
+{{- $runtimeHookOwner := printf "%s/%s" .Release.Namespace .Release.Name }}
 {{- if or (ne $runtimeAdmissionSocket $cleanRuntimeAdmissionSocket) (ne (dir $runtimeAdmissionSocket) "/run/mithril") }}
 {{- fail "node.runtimeHook.socketPath must name a normalized socket directly within /run/mithril" }}
 {{- end }}
@@ -24,6 +25,9 @@ spec:
     metadata:
       labels:
         app.kubernetes.io/name: mithril-node
+      annotations:
+        # Each chart upgrade reruns the exact-path hook owner before node startup.
+        mithril.erebor.dev/release-revision: {{ .Release.Revision | quote }}
     spec:
       serviceAccountName: mithril-node
       automountServiceAccountToken: false
@@ -42,19 +46,24 @@ spec:
       affinity:
 {{ toYaml . | indent 8 }}
 {{- end }}
-{{- if .Values.node.runtimeHook.install }}
-      # The init container installs the host runtime hook before the node reports readiness.
+      # The init container completes hook installation or cleanup before node startup.
       initContainers:
-        - name: install-runtime-hook
+        - name: manage-runtime-hook
           image: {{ .Values.node.image | quote }}
           imagePullPolicy: {{ .Values.node.imagePullPolicy }}
-          command: ["/bin/sh", "-ec"]
+          command: ["/bin/sh", "/hook-source/runtime-hook-owner.sh"]
           args:
-            - >-
-              install -m 0755 /usr/local/bin/mithril-oci-hook
-              /host-hook-bin/mithril-oci-hook &&
-              install -m 0644 /hook-source/99-mithril.json
-              /host-hook-config/99-mithril.json
+{{- if .Values.node.runtimeHook.install }}
+            - install
+            - {{ $runtimeHookOwner | quote }}
+            - /usr/local/bin/mithril-oci-hook
+            - /hook-source/99-mithril.json
+{{- else }}
+            - cleanup
+            - {{ $runtimeHookOwner | quote }}
+{{- end }}
+            - /host-hook-bin
+            - /host-hook-config
           securityContext:
             runAsUser: 0
             runAsGroup: 0
@@ -70,7 +79,6 @@ spec:
               mountPath: /host-hook-bin
             - name: runtime-hook-config
               mountPath: /host-hook-config
-{{- end }}
       containers:
         - name: mithril-node
           image: {{ .Values.node.image | quote }}
@@ -169,7 +177,6 @@ spec:
           hostPath:
             path: {{ .Values.node.containerRuntimeSocket | quote }}
             type: Socket
-{{- if .Values.node.runtimeHook.install }}
         - name: runtime-hook-source
           configMap:
             name: mithril-runtime-hook
@@ -181,4 +188,3 @@ spec:
           hostPath:
             path: {{ .Values.node.runtimeHook.hostConfigDirectory | quote }}
             type: DirectoryOrCreate
-{{- end }}
