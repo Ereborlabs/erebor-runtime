@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 use erebor_runtime_client::MithrilObservationClient;
-use mithril_node::{ExactFileObjectResolver, NativeIdentityInspector};
+use mithril_node::{policy_delivery_status, ExactFileObjectResolver, NativeIdentityInspector};
 
 #[derive(Parser)]
 #[command(about = "Inspect live Mithril node identity without taking ownership")]
@@ -40,6 +40,10 @@ enum Command {
         inode_generation: u32,
         #[arg(long)]
         device_class: Option<String>,
+    },
+    PolicyDelivery {
+        #[arg(long)]
+        state_directory: PathBuf,
     },
 }
 
@@ -124,6 +128,10 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 inode_generation,
                 device_class,
             )?)?
+        ),
+        Command::PolicyDelivery { state_directory } => println!(
+            "{}",
+            serde_json::to_string_pretty(&policy_delivery_status(&state_directory)?)?
         ),
     }
     Ok(())
