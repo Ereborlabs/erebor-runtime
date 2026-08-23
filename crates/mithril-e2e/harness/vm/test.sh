@@ -9,6 +9,7 @@ trap 'rm -rf -- "$test_root"' EXIT
 
 for script in "$directory/run.sh" "$directory/two-node-network.sh" \
   "$directory/two-node-convergence.sh" \
+  "$directory/../kubernetes-oracles.sh" \
   "$directory/manual.sh" "$directory/guest.sh" \
   "$directory/providers/libvirt.sh" "$directory/test.sh" "$manual_case"; do
   bash -n "$script"
@@ -125,6 +126,58 @@ skip_without_k3s=$("$directory/run.sh" --skip-administrative-exec 2>&1)
 status=$?
 set -e
 [[ $status -eq 2 && $skip_without_k3s == "--skip-administrative-exec requires --with-k3s" ]]
+
+oracle_bin=$test_root/oracle-bin
+mkdir "$oracle_bin"
+cat >"$oracle_bin/kubectl" <<'EOF'
+#!/usr/bin/env bash
+case ${FAKE_KUBECTL_RESULT:?} in
+  node-name)
+    echo 'Error from server: admission webhook "pods.mithril.erebor.dev" denied the request: Mithril Control configuration is invalid: protected Pod cannot set spec.nodeName' >&2
+    exit 1
+    ;;
+  strict-field)
+    echo 'Error from server (BadRequest): strict decoding error: unknown field "spec.unexpectedField"' >&2
+    exit 1
+    ;;
+  unrelated)
+    echo 'Unable to connect to the server' >&2
+    exit 1
+    ;;
+  success)
+    exit 0
+    ;;
+esac
+EOF
+chmod +x "$oracle_bin/kubectl"
+# These checks execute the command path. They do not inspect either fixture script.
+source "$directory/../kubernetes-oracles.sh"
+PATH="$oracle_bin:$PATH" FAKE_KUBECTL_RESULT=node-name \
+  assert_mithril_node_name_denial kubectl create -f bypass.json
+PATH="$oracle_bin:$PATH" FAKE_KUBECTL_RESULT=strict-field \
+  assert_kubernetes_strict_field_denial kubectl replace -f invalid-policy.json
+if PATH="$oracle_bin:$PATH" FAKE_KUBECTL_RESULT=unrelated \
+    assert_mithril_node_name_denial kubectl create -f bypass.json >/dev/null 2>&1; then
+  echo "an unrelated API failure satisfied the nodeName denial oracle" >&2
+  exit 1
+fi
+if PATH="$oracle_bin:$PATH" FAKE_KUBECTL_RESULT=success \
+    assert_mithril_node_name_denial kubectl create -f bypass.json >/dev/null 2>&1; then
+  echo "a successful Pod create satisfied the nodeName denial oracle" >&2
+  exit 1
+fi
+if PATH="$oracle_bin:$PATH" FAKE_KUBECTL_RESULT=unrelated \
+    assert_kubernetes_strict_field_denial kubectl replace \
+      -f invalid-policy.json >/dev/null 2>&1; then
+  echo "an unrelated API failure satisfied the strict-field denial oracle" >&2
+  exit 1
+fi
+if PATH="$oracle_bin:$PATH" FAKE_KUBECTL_RESULT=success \
+    assert_kubernetes_strict_field_denial kubectl replace \
+      -f invalid-policy.json >/dev/null 2>&1; then
+  echo "a successful policy replace satisfied the strict-field denial oracle" >&2
+  exit 1
+fi
 
 fake_provider=$test_root/provider
 printf '#!/usr/bin/env bash\nexit 0\n' >"$fake_provider"

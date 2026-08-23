@@ -3,6 +3,7 @@
 set -Eeuo pipefail
 
 directory=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+source "$directory/../../crates/mithril-e2e/harness/kubernetes-oracles.sh"
 system_namespace=${MITHRIL_SYSTEM_NAMESPACE:-mithril-system}
 scenario_namespace=mithril-convergence-manual
 profile_name=converter-policy
@@ -367,10 +368,8 @@ jq -e --arg profile_id "$profile_id" '
 
 jq --arg node "${eligible_nodes[0]}" '.spec.nodeName = $node' \
   <<<"$protected_dry_run" >"$work_directory/bypass.json"
-if kubectl create -f "$work_directory/bypass.json" >/dev/null 2>&1; then
-  echo "admission accepted a protected Pod with direct nodeName" >&2
-  exit 1
-fi
+assert_mithril_node_name_denial kubectl create \
+  -f "$work_directory/bypass.json"
 
 kubectl create -f "$work_directory/protected.yaml" >/dev/null
 kubectl -n "$scenario_namespace" wait --for=condition=Ready \

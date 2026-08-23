@@ -5,6 +5,7 @@ set -Eeuo pipefail
 trap 'echo "two-node convergence failed at line $LINENO: $BASH_COMMAND" >&2' ERR
 
 directory=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+source "$directory/../kubernetes-oracles.sh"
 repo_root=$(cd -- "$directory/../../../.." && pwd)
 provider=$directory/providers/libvirt.sh
 output_directory=
@@ -711,10 +712,8 @@ jq -e --arg profile_id "$profile_id" '
 bypass=$work_a/bypass.json
 jq --arg node "$node_a_name" '.spec.nodeName = $node' <<<"$protected_dry_run" >"$bypass"
 "$provider" put "$vm_a" "$bypass" "$remote_a/bypass.json"
-if remote_kubectl create -f "$remote_a/bypass.json" >/dev/null 2>&1; then
-  echo "admission accepted a protected Pod with direct nodeName" >&2
-  exit 1
-fi
+assert_mithril_node_name_denial remote_kubectl create \
+  -f "$remote_a/bypass.json"
 
 # Both possible scheduler targets receive the same inert test file, not policy authority.
 for node in "$vm_a" "$vm_b"; do
@@ -1040,15 +1039,13 @@ invalid_policy=$work_a/invalid-policy.json
 remote_kubectl -n "$workload_namespace" get workloadprotectionpolicy converter-policy \
   -o json | jq '
     del(.metadata.creationTimestamp, .metadata.generation, .metadata.managedFields,
-        .metadata.resourceVersion, .metadata.uid, .status) |
+        .metadata.uid, .status) |
     .spec.unexpectedField = true
   ' >"$invalid_policy"
 "$provider" put "$vm_a" "$invalid_policy" "$remote_a/invalid-policy.json"
-if remote_kubectl --as="$policy_subject" replace --validate=strict \
-    -f "$remote_a/invalid-policy.json" >/dev/null 2>&1; then
-  echo "the API server accepted an unknown policy field" >&2
-  exit 1
-fi
+assert_kubernetes_strict_field_denial remote_kubectl \
+  --as="$policy_subject" replace --validate=strict \
+  -f "$remote_a/invalid-policy.json"
 [[ $(jq -er '.active_candidate_content_id' <<<"$(node_status "$selected_node")") \
   == "$candidate_after" ]]
 
