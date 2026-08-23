@@ -290,8 +290,8 @@ message ControlConvergenceHealth {
   bool storage_healthy = 4;
   uint64 control_commit_index = 5;
   bool watch_healthy = 6;
-  uint64 configured_namespaces = 7;
-  uint64 watched_namespaces = 8;
+  uint64 configured_watches = 7;
+  uint64 connected_watches = 8;
   uint64 successful_relists = 9;
   uint64 failed_relists = 10;
   uint64 watch_failures = 11;
@@ -309,6 +309,8 @@ message ControlConvergenceHealth {
   uint64 pending_evidence_batches = 23;
   uint64 pending_evidence_records = 24;
   uint64 coverage_cursors = 25;
+  uint64 exception_candidates = 26;
+  uint64 unsettled_exception_candidates = 27;
 }
 
 message ResolveAdministrativeExec {

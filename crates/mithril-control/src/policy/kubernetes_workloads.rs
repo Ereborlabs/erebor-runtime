@@ -26,8 +26,9 @@ use uuid::Uuid;
 use super::{
     ContainerKindV1, DaemonSetNodeConstraintsV1, KubernetesNodeReadinessOwner,
     KubernetesWorkloadIdentityV1, LabelOperatorV1, PolicyDesiredStateOwner, PolicyDocumentV1,
-    PolicySourceRevisionV1, PolicySourceStateV1, WorkloadProtectionPolicy, WorkloadSelectorV1,
-    WorkloadTargetFactV1, KUBERNETES_LABEL_EPOCH_ANNOTATION, KUBERNETES_NODE_BOOT_ANNOTATION,
+    PolicySourceRevisionV1, PolicySourceStateV1, WorkloadProtectionException,
+    WorkloadProtectionPolicy, WorkloadSelectorV1, WorkloadTargetFactV1,
+    KUBERNETES_LABEL_EPOCH_ANNOTATION, KUBERNETES_NODE_BOOT_ANNOTATION,
     KUBERNETES_NODE_ID_ANNOTATION, KUBERNETES_NODE_UID_ANNOTATION, KUBERNETES_NOT_READY_TAINT,
     KUBERNETES_READY_LABEL,
 };
@@ -83,7 +84,7 @@ pub(super) struct KubernetesWorkloadInventoryOwner {
     kube: Client,
     policies: PolicyDesiredStateOwner,
     control: ControlPlane,
-    // Track the durable commit whose policy statuses reached the Kubernetes API.
+    // Track the durable commit whose policy and exception statuses reached the API.
     projected_control_commit_index: Option<u64>,
 }
 
@@ -585,8 +586,61 @@ impl KubernetesWorkloadInventoryOwner {
             };
             let api =
                 Api::<WorkloadProtectionPolicy>::namespaced(self.kube.clone(), &namespace_name);
-            let patch = Patch::Merge(serde_json::json!({"status": result.status}));
+            let mut status = result.status;
+            if let Some(previous) = resource.status.as_ref() {
+                super::preserve_transition_times(&mut status.conditions, &previous.conditions);
+                if previous == &status {
+                    continue;
+                }
+            }
+            let patch = Patch::Merge(serde_json::json!({"status": status}));
             // Projection errors retry. The durable store remains authoritative.
+            if api
+                .patch_status(name, &PatchParams::default(), &patch)
+                .await
+                .is_err()
+            {
+                projection_complete = false;
+            }
+        }
+        let exceptions = list_inventory(
+            &Api::<WorkloadProtectionException>::all(self.kube.clone()),
+            "exceptions for status projection",
+        )
+        .await?;
+        for resource in exceptions {
+            let Some(namespace_name) = resource.namespace() else {
+                projection_complete = false;
+                continue;
+            };
+            let Some(namespace_uid) = namespaces.get(&namespace_name) else {
+                projection_complete = false;
+                continue;
+            };
+            let Ok(result) = self.policies.reconcile_exception(
+                &resource,
+                namespace_uid,
+                &self.control.workload_inventory(),
+                utc_now_ns(),
+            ) else {
+                projection_complete = false;
+                continue;
+            };
+            let Some(name) = resource.metadata.name.as_deref() else {
+                projection_complete = false;
+                continue;
+            };
+            let mut status = result.status;
+            if let Some(previous) = resource.status.as_ref() {
+                super::preserve_transition_times(&mut status.conditions, &previous.conditions);
+                if previous == &status {
+                    continue;
+                }
+            }
+            let api =
+                Api::<WorkloadProtectionException>::namespaced(self.kube.clone(), &namespace_name);
+            let patch = Patch::Merge(serde_json::json!({"status": status}));
+            // A failed status write retries from the same durable commit.
             if api
                 .patch_status(name, &PatchParams::default(), &patch)
                 .await

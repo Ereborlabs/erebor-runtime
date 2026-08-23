@@ -23,6 +23,9 @@ use super::{
 use crate::error::{IoSnafu, PolicySignatureSnafu, PolicyValidationSnafu};
 use crate::{ControlStore, PolicyCompiler, Result};
 
+const RECONCILE_WRITER_LIMIT: u64 = 1;
+const DESIRED_STATE_WATCH_COUNT: u64 = 2;
+
 #[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(deny_unknown_fields)]
 /// Captures the exact workload and scheduler facts that can enter a target snapshot.
@@ -109,8 +112,9 @@ pub struct PolicyReconcileResultV1 {
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct PolicyReconcileHealthV1 {
-    pub configured_namespaces: u64,
-    pub watched_namespaces: u64,
+    pub reconcile_queue_limit: u64,
+    pub configured_watches: u64,
+    pub connected_watches: u64,
     pub reconcile_in_flight: u64,
     pub successful_reconciles: u64,
     pub rejected_reconciles: u64,
@@ -138,7 +142,7 @@ pub struct PolicyDesiredStateOwner {
 #[derive(Default)]
 struct DesiredStateMemory {
     reconciled: BTreeMap<String, PolicyReconcileResultV1>,
-    watched_namespaces: BTreeSet<String>,
+    connected_watches: BTreeSet<String>,
     reconcile_in_flight: u64,
     successful_reconciles: u64,
     rejected_reconciles: u64,
@@ -506,8 +510,10 @@ impl PolicyDesiredStateOwner {
     pub fn health(&self) -> Result<PolicyReconcileHealthV1> {
         let state = self.state()?;
         Ok(PolicyReconcileHealthV1 {
-            configured_namespaces: 1,
-            watched_namespaces: count(state.watched_namespaces.len()),
+            // One writer serializes policy and exception store transitions.
+            reconcile_queue_limit: RECONCILE_WRITER_LIMIT,
+            configured_watches: DESIRED_STATE_WATCH_COUNT,
+            connected_watches: count(state.connected_watches.len()),
             reconcile_in_flight: state.reconcile_in_flight,
             successful_reconciles: state.successful_reconciles,
             rejected_reconciles: state.rejected_reconciles,
@@ -529,12 +535,12 @@ impl PolicyDesiredStateOwner {
         }
     }
 
-    pub(super) fn record_watch_state(&self, namespace: &str, connected: bool) {
+    pub(super) fn record_watch_state(&self, watch: &str, connected: bool) {
         if let Ok(mut state) = self.state.lock() {
             if connected {
-                state.watched_namespaces.insert(namespace.to_owned());
+                state.connected_watches.insert(watch.to_owned());
             } else {
-                state.watched_namespaces.remove(namespace);
+                state.connected_watches.remove(watch);
             }
         }
     }
