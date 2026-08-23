@@ -71,6 +71,35 @@ enum ReconciliationOutcome {
     KernelUnhealthy,
 }
 
+struct CommittedRuntimeAdmissionV1 {
+    runtime_binding_id: String,
+    previous_config: NodeConfig,
+    durable_rollback: crate::policy_delivery::RuntimeBindingRollbackV1,
+}
+
+struct RuntimeAdmissionFailureV1 {
+    source: crate::Error,
+    fatal: bool,
+}
+
+impl RuntimeAdmissionFailureV1 {
+    const fn fatal(source: crate::Error) -> Self {
+        Self {
+            source,
+            fatal: true,
+        }
+    }
+}
+
+impl From<crate::Error> for RuntimeAdmissionFailureV1 {
+    fn from(source: crate::Error) -> Self {
+        Self {
+            source,
+            fatal: false,
+        }
+    }
+}
+
 pub struct NodeChassis {
     config: NodeConfig,
     effect_reader: Option<EffectObservationReader>,
@@ -493,7 +522,7 @@ impl NodeChassis {
                     break;
                 }
                 request = next_runtime_admission(&mut self.runtime_admission_requests) => {
-                    self.answer_runtime_admission(request).await;
+                    self.answer_runtime_admission(request).await?;
                     continue 'running;
                 }
                 result = effect_reader_finished(&mut effect_task) => {
@@ -724,7 +753,7 @@ impl NodeChassis {
                                 break 'running;
                             }
                             request = next_runtime_admission(&mut self.runtime_admission_requests) => {
-                                self.answer_runtime_admission(request).await;
+                                self.answer_runtime_admission(request).await?;
                             }
                             result = effect_reader_finished(&mut effect_task) => {
                                 let _result = self.observations.mark_coverage_gapped(
@@ -851,7 +880,7 @@ impl NodeChassis {
                         break 'running;
                     }
                     request = next_runtime_admission(&mut self.runtime_admission_requests) => {
-                        self.answer_runtime_admission(request).await;
+                        self.answer_runtime_admission(request).await?;
                     }
                     result = effect_reader_finished(&mut effect_task) => {
                         let _result = self.observations.mark_coverage_gapped(
@@ -952,7 +981,10 @@ impl NodeChassis {
     async fn answer_runtime_admission(
         &mut self,
         envelope: crate::runtime_admission::RuntimeAdmissionEnvelope,
-    ) {
+    ) -> Result<()> {
+        if envelope.ensure_active().is_err() {
+            return Ok(());
+        }
         // Only a valid first-use request can wait; malformed and replayed requests fail immediately.
         let malformed = envelope.request.kubernetes_identity().is_err();
         let reused = self.config.workload_bindings.iter().any(|binding| {
@@ -969,30 +1001,46 @@ impl NodeChassis {
                 .is_ok()
         };
         // Only a canonical, unused identity can wait for policy convergence.
-        let response = if !malformed && !reused && !ready {
-            crate::RuntimeAdmissionResponseV1 {
-                allowed: false,
-                reason_code: crate::runtime_admission::POLICY_CONVERGENCE_PENDING.to_owned(),
-            }
-        } else {
-            match self.admit_runtime_start(&envelope.request).await {
-                Ok(()) => crate::RuntimeAdmissionResponseV1 {
-                    allowed: true,
-                    reason_code: "ACTIVE_POLICY_AND_BINDING_VERIFIED".to_owned(),
-                },
-                Err(_error) => crate::RuntimeAdmissionResponseV1 {
+        if !malformed && !reused && !ready {
+            let _result = envelope
+                .deliver(crate::RuntimeAdmissionResponseV1 {
                     allowed: false,
-                    reason_code: "RUNTIME_ADMISSION_REJECTED".to_owned(),
-                },
+                    reason_code: crate::runtime_admission::POLICY_CONVERGENCE_PENDING.to_owned(),
+                })
+                .await;
+            return Ok(());
+        }
+        match self.admit_runtime_start(&envelope).await {
+            Ok(commit) => {
+                let delivered = envelope
+                    .deliver(crate::RuntimeAdmissionResponseV1 {
+                        allowed: true,
+                        reason_code: "ACTIVE_POLICY_AND_BINDING_VERIFIED".to_owned(),
+                    })
+                    .await;
+                if delivered.is_err() {
+                    self.rollback_runtime_admission(commit)?;
+                }
             }
-        };
-        let _result = envelope.response.send(response);
+            Err(error) if error.fatal => return Err(error.source),
+            Err(_error) => {
+                let _result = envelope
+                    .deliver(crate::RuntimeAdmissionResponseV1 {
+                        allowed: false,
+                        reason_code: "RUNTIME_ADMISSION_REJECTED".to_owned(),
+                    })
+                    .await;
+            }
+        }
+        Ok(())
     }
 
     async fn admit_runtime_start(
         &mut self,
-        request: &crate::RuntimeAdmissionRequestV1,
-    ) -> Result<()> {
+        envelope: &crate::runtime_admission::RuntimeAdmissionEnvelope,
+    ) -> std::result::Result<CommittedRuntimeAdmissionV1, RuntimeAdmissionFailureV1> {
+        envelope.ensure_active()?;
+        let request = &envelope.request;
         let readiness = *self.readiness.borrow();
         snafu::ensure!(
             readiness.admits_protected_runtime_start(self.policy.is_some()),
@@ -1011,39 +1059,135 @@ impl NodeChassis {
         self.bindings
             .verify_runtime_admission(&mut scheduled.resolved)
             .await?;
+        if let Err(error) = envelope.ensure_active() {
+            self.bindings.cancel_runtime_admission();
+            return Err(error.into());
+        }
         dynamic.workload_bindings[scheduled.binding_index] = scheduled.resolved.clone();
         let Some(host) = self.host.as_ref() else {
             self.bindings.cancel_runtime_admission();
-            return IdentityStateSnafu {
+            return Err(IdentityStateSnafu {
                 reason: "runtime admission has no live kernel host".to_owned(),
             }
-            .fail();
+            .build()
+            .into());
         };
+        // Cancellation must be visible before any existing or new kernel authority changes.
+        if let Err(error) = envelope.ensure_active() {
+            self.bindings.cancel_runtime_admission();
+            return Err(error.into());
+        }
         if let Some(previous) = scheduled.previous_binding_id.as_deref() {
             // Retire a prior container lifetime before this replacement gains authority.
             if let Err(error) = self.bindings.retire_binding_id(host, previous) {
                 self.bindings.cancel_runtime_admission();
-                return Err(error);
+                return Err(RuntimeAdmissionFailureV1::fatal(error));
             }
         }
-        self.bindings.publish_held_activated_root(
+        if let Err(error) = envelope.ensure_active() {
+            self.bindings.cancel_runtime_admission();
+            return Err(error.into());
+        }
+        if let Err(error) = self.bindings.publish_held_activated_root(
             host,
             &scheduled.resolved,
             request.initial_pid,
-        )?;
+        ) {
+            self.bindings.cancel_runtime_admission();
+            return Err(RuntimeAdmissionFailureV1::fatal(error));
+        }
+        if let Err(error) = envelope.ensure_active() {
+            let rollback = self
+                .bindings
+                .retire_binding_id(host, &scheduled.resolved.binding_id);
+            return match rollback {
+                Ok(()) => Err(error.into()),
+                Err(rollback) => Err(RuntimeAdmissionFailureV1::fatal(
+                    IdentityStateSnafu {
+                        reason: format!(
+                            "runtime admission was cancelled after publication: {error}; kernel rollback failed: {rollback}"
+                        ),
+                    }
+                    .build(),
+                )),
+            };
+        }
         // Do not return allow until the runtime binding is durable. Remove the
         // new kernel binding if the durable write fails.
-        if let Err(error) = self
+        let durable_rollback = match self
             .policy_delivery
             .record_runtime_binding(&scheduled.resolved)
         {
-            let _result = self
-                .bindings
-                .retire_binding_id(host, &scheduled.resolved.binding_id);
-            return Err(error);
+            Ok(rollback) => rollback,
+            Err(error) => {
+                let rollback = self
+                    .bindings
+                    .retire_binding_id(host, &scheduled.resolved.binding_id);
+                return match rollback {
+                    Ok(()) => Err(error.into()),
+                    Err(rollback) => Err(RuntimeAdmissionFailureV1::fatal(
+                        IdentityStateSnafu {
+                            reason: format!(
+                                "runtime binding persistence failed: {error}; kernel rollback failed: {rollback}"
+                            ),
+                        }
+                        .build(),
+                    )),
+                };
+            }
+        };
+        let previous_config = std::mem::replace(&mut self.config, dynamic);
+        let commit = CommittedRuntimeAdmissionV1 {
+            runtime_binding_id: scheduled.resolved.binding_id,
+            previous_config,
+            durable_rollback,
+        };
+        if let Err(error) = envelope.ensure_active() {
+            return match self.rollback_runtime_admission(commit) {
+                Ok(()) => Err(error.into()),
+                Err(rollback) => Err(RuntimeAdmissionFailureV1::fatal(
+                    IdentityStateSnafu {
+                        reason: format!(
+                            "runtime admission was cancelled after durable publication: {error}; rollback failed: {rollback}"
+                        ),
+                    }
+                    .build(),
+                )),
+            };
         }
-        self.config = dynamic;
-        Ok(())
+        Ok(commit)
+    }
+
+    fn rollback_runtime_admission(&mut self, commit: CommittedRuntimeAdmissionV1) -> Result<()> {
+        let kernel = self.host.as_ref().map_or_else(
+            || {
+                IdentityStateSnafu {
+                    reason: "runtime admission rollback has no live kernel host".to_owned(),
+                }
+                .fail()
+            },
+            |host| {
+                self.bindings
+                    .retire_binding_id(host, &commit.runtime_binding_id)
+            },
+        );
+        let durable = self
+            .policy_delivery
+            .rollback_runtime_binding(commit.durable_rollback);
+        if durable.is_ok() {
+            self.config = commit.previous_config;
+        }
+        match (kernel, durable) {
+            (Ok(()), Ok(())) => Ok(()),
+            (Err(kernel), Ok(())) => Err(kernel),
+            (Ok(()), Err(durable)) => Err(durable),
+            (Err(kernel), Err(durable)) => IdentityStateSnafu {
+                reason: format!(
+                    "runtime admission kernel rollback failed: {kernel}; durable rollback failed: {durable}"
+                ),
+            }
+            .fail(),
+        }
     }
 
     async fn reconcile_bindings(&mut self, recover_evidence: bool) -> ReconciliationOutcome {

@@ -11,6 +11,7 @@ use snafu::{ensure, ResultExt as _};
 use tokio::io::{AsyncBufReadExt as _, AsyncReadExt as _, AsyncWriteExt as _, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::{mpsc, oneshot, watch};
+use tokio::time::Instant;
 
 use crate::error::{IdentityStateSnafu, IoSnafu, JsonSnafu};
 use crate::{Result, RuntimeAdmissionConfig, WorkloadBindingConfig};
@@ -58,8 +59,15 @@ pub(crate) struct ScheduledRuntimeBindingV1 {
 }
 
 pub(crate) struct RuntimeAdmissionEnvelope {
-    pub request: RuntimeAdmissionRequestV1,
-    pub response: oneshot::Sender<RuntimeAdmissionResponseV1>,
+    pub(crate) request: RuntimeAdmissionRequestV1,
+    deadline: Instant,
+    response: oneshot::Sender<RuntimeAdmissionResponseV1>,
+    delivered: oneshot::Receiver<()>,
+}
+
+struct RuntimeAdmissionDispatch {
+    response: RuntimeAdmissionResponseV1,
+    delivered: oneshot::Sender<()>,
 }
 
 /// This owner controls the socket path, listener, and concurrent request dispatch.
@@ -141,6 +149,42 @@ impl RuntimeAdmissionRequestV1 {
             sandbox_id: required(SANDBOX_ID_ANNOTATION)?,
             profile_id,
         })
+    }
+}
+
+impl RuntimeAdmissionEnvelope {
+    pub(crate) fn ensure_active(&self) -> Result<()> {
+        ensure!(
+            Instant::now() < self.deadline && !self.response.is_closed(),
+            IdentityStateSnafu {
+                reason: "runtime admission caller is no longer waiting".to_owned(),
+            }
+        );
+        Ok(())
+    }
+
+    pub(crate) async fn deliver(self, response: RuntimeAdmissionResponseV1) -> Result<()> {
+        self.ensure_active()?;
+        self.response.send(response).map_err(|_response| {
+            IdentityStateSnafu {
+                reason: "runtime admission caller closed before its response".to_owned(),
+            }
+            .build()
+        })?;
+        tokio::time::timeout_at(self.deadline, self.delivered)
+            .await
+            .map_err(|_elapsed| {
+                IdentityStateSnafu {
+                    reason: "runtime admission response exceeded its delivery deadline".to_owned(),
+                }
+                .build()
+            })?
+            .map_err(|_closed| {
+                IdentityStateSnafu {
+                    reason: "runtime admission response did not reach its caller".to_owned(),
+                }
+                .build()
+            })
     }
 }
 
@@ -492,7 +536,8 @@ impl RuntimeAdmissionServer {
         timeout: Duration,
         requests: mpsc::Sender<RuntimeAdmissionEnvelope>,
     ) -> Result<()> {
-        let response = tokio::time::timeout(timeout, async {
+        let deadline = Instant::now() + timeout;
+        let result = tokio::time::timeout_at(deadline, async {
             // SO_PEERCRED prevents an unprivileged local process from invoking the gate.
             ensure!(
                 stream
@@ -526,20 +571,46 @@ impl RuntimeAdmissionServer {
             let request = serde_json::from_slice(&bytes).context(JsonSnafu {
                 path: "runtime-admission-request",
             })?;
-            Self::dispatch(request, requests).await
+            let mut trailing = [0_u8; 1];
+            let dispatched = tokio::select! {
+                result = Self::dispatch(request, requests, deadline) => result?,
+                read = stream.read(&mut trailing) => {
+                    let count = read.context(IoSnafu { path: socket_path })?;
+                    let reason = if count == 0 {
+                        "runtime admission caller closed before its response"
+                    } else {
+                        "runtime admission caller sent data after its request"
+                    };
+                    return IdentityStateSnafu {
+                        reason: reason.to_owned(),
+                    }
+                    .fail();
+                }
+            };
+            let bytes = serde_json::to_vec(&dispatched.response).context(JsonSnafu {
+                path: "runtime-admission-response",
+            })?;
+            stream
+                .write_all(&bytes)
+                .await
+                .context(IoSnafu { path: socket_path })?;
+            // The node retains authority only after the response reaches the socket transport.
+            let _result = dispatched.delivered.send(());
+            Ok::<(), crate::Error>(())
         })
-        .await
-        // Convert every timeout and internal error into an explicit denial response.
-        .unwrap_or_else(|_elapsed| {
-            Ok(RuntimeAdmissionResponseV1 {
+        .await;
+        let response = match result {
+            Ok(Ok(())) => return Ok(()),
+            Err(_elapsed) => RuntimeAdmissionResponseV1 {
                 allowed: false,
                 reason_code: "ADMISSION_TIMEOUT".to_owned(),
-            })
-        })
-        .unwrap_or_else(|_error| RuntimeAdmissionResponseV1 {
-            allowed: false,
-            reason_code: "ADMISSION_REJECTED".to_owned(),
-        });
+            },
+            Ok(Err(_error)) => RuntimeAdmissionResponseV1 {
+                allowed: false,
+                reason_code: "ADMISSION_REJECTED".to_owned(),
+            },
+        };
+        // Convert every timeout and internal error into an explicit denial response.
         let bytes = serde_json::to_vec(&response).context(JsonSnafu {
             path: "runtime-admission-response",
         })?;
@@ -552,13 +623,17 @@ impl RuntimeAdmissionServer {
     async fn dispatch(
         request: RuntimeAdmissionRequestV1,
         requests: mpsc::Sender<RuntimeAdmissionEnvelope>,
-    ) -> Result<RuntimeAdmissionResponseV1> {
+        deadline: Instant,
+    ) -> Result<RuntimeAdmissionDispatch> {
         loop {
             let (response, receiver) = oneshot::channel();
+            let (delivered, delivery) = oneshot::channel();
             requests
                 .send(RuntimeAdmissionEnvelope {
                     request: request.clone(),
+                    deadline,
                     response,
+                    delivered: delivery,
                 })
                 .await
                 .map_err(|_closed| {
@@ -574,9 +649,13 @@ impl RuntimeAdmissionServer {
                 .build()
             })?;
             if response.reason_code != POLICY_CONVERGENCE_PENDING {
-                return Ok(response);
+                return Ok(RuntimeAdmissionDispatch {
+                    response,
+                    delivered,
+                });
             }
-            // Re-submit so that the node event loop can advance policy between attempts.
+            // A pending response stays inside the node protocol and can start the next attempt.
+            let _result = delivered.send(());
             tokio::time::sleep(Duration::from_millis(25)).await;
         }
     }
@@ -772,7 +851,12 @@ mod tests {
     #[tokio::test]
     async fn one_hook_call_waits_for_policy_convergence() -> crate::Result<()> {
         let (sender, mut receiver) = tokio::sync::mpsc::channel(2);
-        let task = tokio::spawn(RuntimeAdmissionServer::dispatch(request(), sender));
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(1);
+        let task = tokio::spawn(RuntimeAdmissionServer::dispatch(
+            request(),
+            sender,
+            deadline,
+        ));
         let first = receiver
             .recv()
             .await
@@ -813,8 +897,40 @@ mod tests {
                     reason: format!("runtime admission test task failed: {error}"),
                     location: snafu::Location::default(),
                 })??
+                .response
                 .allowed
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn expired_envelope_rejects_a_late_allow_delivery() -> crate::Result<()> {
+        let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
+        let deadline = tokio::time::Instant::now() + Duration::from_millis(20);
+        let task = tokio::spawn(RuntimeAdmissionServer::dispatch(
+            request(),
+            sender,
+            deadline,
+        ));
+        let admission = receiver
+            .recv()
+            .await
+            .ok_or_else(|| crate::Error::IdentityState {
+                reason: "runtime admission test lost its delayed request".to_owned(),
+                location: snafu::Location::default(),
+            })?;
+
+        // The owner can finish CRI work after the hook deadline, but it cannot publish an allow.
+        tokio::time::sleep(Duration::from_millis(40)).await;
+        assert!(admission.ensure_active().is_err());
+        assert!(admission
+            .deliver(RuntimeAdmissionResponseV1 {
+                allowed: true,
+                reason_code: "ACTIVE_POLICY_AND_BINDING_VERIFIED".to_owned(),
+            })
+            .await
+            .is_err());
+        assert!(task.await.is_ok_and(|result| result.is_err()));
         Ok(())
     }
 }

@@ -40,6 +40,13 @@ struct PolicyDeliveryStateV1 {
     exception_distribution_high_water: BTreeMap<String, SequenceV1>,
 }
 
+pub(crate) struct RuntimeBindingRollbackV1 {
+    previous: PolicyDeliveryStateV1,
+    profile_id: String,
+    authority_binding_id: String,
+    runtime_binding_id: String,
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(deny_unknown_fields)]
 struct SequenceV1 {
@@ -1357,7 +1364,10 @@ impl NodePolicyDeliveryOwner {
         self.persist_state()
     }
 
-    pub(crate) fn record_runtime_binding(&mut self, binding: &WorkloadBindingConfig) -> Result<()> {
+    pub(crate) fn record_runtime_binding(
+        &mut self,
+        binding: &WorkloadBindingConfig,
+    ) -> Result<RuntimeBindingRollbackV1> {
         let authority = binding
             .scheduled_binding_authority_id
             .as_deref()
@@ -1405,6 +1415,40 @@ impl NodePolicyDeliveryOwner {
         record.binding_ids.sort();
         if let Err(error) = self.persist_state() {
             self.state = previous;
+            return Err(error);
+        }
+        Ok(RuntimeBindingRollbackV1 {
+            previous,
+            profile_id: binding.profile_id.clone(),
+            authority_binding_id: authority.to_owned(),
+            runtime_binding_id: binding.binding_id.clone(),
+        })
+    }
+
+    pub(crate) fn rollback_runtime_binding(
+        &mut self,
+        rollback: RuntimeBindingRollbackV1,
+    ) -> Result<()> {
+        let current = self
+            .state
+            .active_profiles
+            .get(&rollback.profile_id)
+            .and_then(|profile| {
+                profile.scheduled_bindings.iter().find(|binding| {
+                    binding.scheduled_binding_authority_id.as_deref()
+                        == Some(rollback.authority_binding_id.as_str())
+                })
+            });
+        ensure!(
+            current.is_some_and(|binding| binding.binding_id == rollback.runtime_binding_id),
+            IdentityStateSnafu {
+                reason: "runtime binding rollback does not name the current durable lifetime",
+            }
+        );
+        // Restore only the state snapshot that immediately preceded this serialized admission.
+        let committed = std::mem::replace(&mut self.state, rollback.previous);
+        if let Err(error) = self.persist_state() {
+            self.state = committed;
             return Err(error);
         }
         Ok(())
@@ -2485,7 +2529,7 @@ mod tests {
         runtime_binding.sandbox_id = "e".repeat(64);
         runtime_binding.root_cgroup_path = Some(directory.path().join("pod-cgroup"));
         runtime_binding.container_generation = 42;
-        owner.record_runtime_binding(&runtime_binding)?;
+        let rollback = owner.record_runtime_binding(&runtime_binding)?;
         let admitted = super::policy_delivery_status(directory.path())?;
         assert_eq!(
             admitted.active_profile_ids,
@@ -2520,6 +2564,10 @@ mod tests {
             7,
         )?;
         assert!(new_boot.workload_bindings.is_empty());
+        owner.rollback_runtime_binding(rollback)?;
+        let rolled_back = super::policy_delivery_status(directory.path())?;
+        assert_eq!(rolled_back.scheduled_binding_count, 1);
+        assert_eq!(rolled_back.runtime_binding_count, 0);
         Ok(())
     }
 
