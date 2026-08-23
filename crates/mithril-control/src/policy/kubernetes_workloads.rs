@@ -257,6 +257,7 @@ impl KubernetesAdmissionOwner {
             {
                 continue;
             }
+            validate_kubernetes_policy_shape(&resource.spec.policy)?;
             let result = self.policies.reconcile_observation(
                 &resource,
                 &facts.namespace_uid,
@@ -684,6 +685,7 @@ impl KubernetesWorkloadInventoryOwner {
                 admission_error("protected Pod profile has no current compiled policy")
             })?;
         let source_revision_id = &source_revision.policy_source_revision_id;
+        validate_kubernetes_policy_shape(&policy)?;
         let facts = pod_admission_facts(
             pod,
             self.policies.cluster_uid(),
@@ -707,12 +709,6 @@ impl KubernetesWorkloadInventoryOwner {
             let container_id = format!(
                 "scheduled:{}",
                 sha256_parts(&[pod_uid.as_bytes(), container.name.as_bytes()])
-            );
-            ensure!(
-                policy.protected_universe.protected_scope_ids.len() == 1,
-                InvalidConfigurationSnafu {
-                    reason: "Kubernetes Version 1 needs one protected scope per profile",
-                }
             );
             let binding_id = derived_uuid(&[
                 b"MITHRIL-KUBERNETES-BINDING-V1\0",
@@ -753,6 +749,22 @@ impl KubernetesWorkloadInventoryOwner {
         }
         Ok(targets)
     }
+}
+
+fn validate_kubernetes_policy_shape(policy: &PolicyDocumentV1) -> Result<()> {
+    ensure!(
+        policy.protected_universe.protected_scope_ids.len() == 1,
+        InvalidConfigurationSnafu {
+            reason: "Kubernetes Version 1 needs one protected scope per profile",
+        }
+    );
+    ensure!(
+        policy.protected_universe.execution_set_ids.len() == 1,
+        InvalidConfigurationSnafu {
+            reason: "Kubernetes Version 1 needs one policy execution set per profile",
+        }
+    );
+    Ok(())
 }
 
 fn status_projection_is_current(projected: Option<u64>, observed: u64) -> bool {

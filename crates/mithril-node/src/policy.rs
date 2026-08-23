@@ -28,7 +28,7 @@ use mithril_control::{
     canonical_path_components, AntiRollbackStore, CanonicalPathGraphV1, CompiledOperationV1,
     CompiledPhysicalResultV1, ContainerKindV1 as PolicyContainerKindV1, EntryKindV1,
     ObjectClassifierSelectorV1, PathPatternV1, PathSelectorTargetV1, PathTreeDenyPatternV1,
-    PendingProfileActivationV1, PolicyArtifactOwner, ProfileActivationMetadataV1,
+    PendingProfileActivationV1, PolicyArtifactOwner, PolicyDocumentV1, ProfileActivationMetadataV1,
     ProfileCandidateArtifactV1, ProfileModeV1, StaticDecisionKeyV1, ValidatedProfileCandidateV1,
 };
 use sha2::{Digest as _, Sha256};
@@ -1759,7 +1759,7 @@ impl LoweredGeneration {
             binding.active_profile_generation_ref_id,
         )?;
         for cell in &artifact.compiled_profile.compiled_cells {
-            if !cell_matches_binding(&cell.key, binding) {
+            if !cell_matches_binding(&cell.key, binding, &artifact.policy_document) {
                 continue;
             }
             let role = *role_handles.get(&cell.key.role_id).ok_or_else(|| {
@@ -1978,7 +1978,7 @@ impl LoweredGeneration {
         for exception in &artifact.policy_document.exceptions {
             let handle = exception_handles[&exception.exception_id];
             if !artifact.compiled_profile.compiled_cells.iter().any(|cell| {
-                cell_matches_binding(&cell.key, binding)
+                cell_matches_binding(&cell.key, binding, &artifact.policy_document)
                     && cell.consuming_exception_id.as_deref()
                         == Some(exception.exception_id.as_str())
             }) {
@@ -3740,10 +3740,23 @@ fn read_abi_value<T: KnownLayout + TryFromBytes>(bytes: &[u8], name: &str) -> Re
     })
 }
 
-fn cell_matches_binding(key: &StaticDecisionKeyV1, binding: &WorkloadBindingConfig) -> bool {
+fn cell_matches_binding(
+    key: &StaticDecisionKeyV1,
+    binding: &WorkloadBindingConfig,
+    document: &PolicyDocumentV1,
+) -> bool {
+    // A scheduled binding gives the signed policy slot a unique runtime execution-set identity.
+    let execution_set_id = if binding.scheduled_binding_authority_id.is_some() {
+        let [execution_set_id] = document.protected_universe.execution_set_ids.as_slice() else {
+            return false;
+        };
+        execution_set_id
+    } else {
+        &binding.execution_set_id
+    };
     key.workload_selector_id == binding.workload_selector_id
         && key.protected_scope_id == binding.protected_scope_id
-        && key.execution_set_id == binding.execution_set_id
+        && key.execution_set_id == *execution_set_id
 }
 
 fn validate_binding_roles(
@@ -3921,7 +3934,7 @@ fn lower_administrative_plans(
             .compiled_cells
             .iter()
             .filter(|cell| {
-                cell_matches_binding(&cell.key, binding)
+                cell_matches_binding(&cell.key, binding, &artifact.policy_document)
                     && cell.key.entry_kind == EntryKindV1::ExternalRuntimeUnknown
                     && cell.key.role_id == *external_role_id
                     && cell.key.effect_family == mithril_control::EffectFamilyV1::Exec
@@ -4716,6 +4729,27 @@ mod tests {
             generation.decisions.values().next().map(|value| value[0]),
             Some(PhysicalDecisionKindV1::Deny as u8)
         );
+        Ok(())
+    }
+
+    #[test]
+    fn scheduled_binding_lowers_one_policy_slot_for_its_exact_execution_set() -> crate::Result<()> {
+        let (artifact, mut binding, object) = exact_artifact(ProfileModeV1::Protect)?;
+        binding.scheduled_binding_authority_id = Some(binding.binding_id.clone());
+        binding.execution_set_id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa".to_owned();
+
+        let generation = LoweredGeneration::for_binding(
+            &artifact,
+            &binding,
+            std::slice::from_ref(&object),
+            Id128V1::new(1, 2),
+            Id128V1::new(3, 4),
+            3,
+            1_800_000_000_000_000_000,
+            100,
+        )?;
+
+        assert_eq!(generation.decisions.len(), 1);
         Ok(())
     }
 
