@@ -675,21 +675,15 @@ static __noinline int network_apply_destination(
     return result;
 }
 
-static __always_inline int network_socket_create_result(
-    int family, int type, int protocol, int ret)
+static __noinline int network_socket_create_result(int family, int type,
+                                                   int protocol)
 {
     identity_runtime_config_v1 *config;
     struct identity_scratch_v1 *scratch;
     execution_set_binding_state_v1 *binding;
     profile_generation_descriptor_v1 *generation;
     physical_decision_v1 *decision;
-    int status = network_current_actor(
-        kernel_effect_operation_v1_socket_create, ret);
 
-    if (status == NETWORK_ACTOR_OUTSIDE_PROTECTED_SCOPE)
-        return ret;
-    if (status)
-        return status;
     config = identity_runtime_config();
     scratch = identity_scratch_record();
     binding = ipc_current_binding();
@@ -963,13 +957,19 @@ SEC("lsm/socket_create")
 int BPF_PROG(erebor_identity_socket_create, int family, int type, int protocol,
              int kern, int ret)
 {
+    int status;
+
     if (family == AF_UNIX)
         return ret;
+    status = network_current_actor(
+        kernel_effect_operation_v1_socket_create, ret);
     if (family != AF_INET && family != AF_INET6)
-        return network_unsupported(
-            ret, network_current_actor(
-                     kernel_effect_operation_v1_socket_create, ret));
-    return network_socket_create_result(family, type, protocol, ret);
+        return network_unsupported(ret, status);
+    if (status == NETWORK_ACTOR_OUTSIDE_PROTECTED_SCOPE)
+        return ret;
+    if (status)
+        return status;
+    return network_socket_create_result(family, type, protocol);
 }
 
 SEC("lsm/socket_bind")
