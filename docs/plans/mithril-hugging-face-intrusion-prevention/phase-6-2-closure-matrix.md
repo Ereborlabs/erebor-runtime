@@ -9,7 +9,7 @@
 
 Phase 6.2 is **Not done**. Source implementation and automated acceptance for
 D6.2.1-D6.2.12 passed at code commit
-`781ee425320ce75cd6b7bf786e06cb23f36b6b91`. The required physical Kubernetes
+`23b9db450114e18d1113665cc265398002de555d`. The required physical Kubernetes
 and stock-runtime acceptance has not run.
 
 The amendment is not closed by CRD reconciliation alone. A result is complete
@@ -81,7 +81,7 @@ No physical result is recorded yet.
 ## Verification State
 
 The following checks passed for code commit
-`781ee425320ce75cd6b7bf786e06cb23f36b6b91`:
+`23b9db450114e18d1113665cc265398002de555d`:
 
 ```sh
 bash .github/scripts/verify-rust-ci.sh
