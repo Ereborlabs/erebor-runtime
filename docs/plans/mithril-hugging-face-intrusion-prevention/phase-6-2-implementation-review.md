@@ -1,8 +1,7 @@
 # Phase 6.2 Implementation Review Guide
 
-Status: Source implementation and automated acceptance are complete at code
-commit `23b9db450114e18d1113665cc265398002de555d`. The final repository gate
-passed on 2026-08-22. The
+Status: Source implementation and automated acceptance are complete. The final
+repository gate passed. The
 [manual runbook](./manual-testing/phase-6-2-manual-acceptance.md) has not run.
 
 Plan: [Control Policy And Evidence Convergence](./phase-6-2-control-policy-and-evidence-convergence.md)
@@ -404,7 +403,7 @@ and coverage messages remain the Phase 6 types.
 | OCI state parsing and cgroup-v2 path parsing | [OCI adapter tests](../../../crates/mithril-node/src/bin/mithril_oci_hook.rs) |
 | Webhook TLS, rules, deadlines, health probes, DaemonSet identity and hook inputs, and least-privilege RBAC | [Helm render test](../../../packaging/mithril/helm/tests/verify.sh) |
 
-Focused closure checks passed for code commit `23b9db4`:
+Focused closure checks passed:
 
 ```text
 cargo test -p mithril-control --lib
@@ -436,8 +435,6 @@ performance, or capacity result. The deterministic two-node test exercises two
 Control targets and their provenance. It does not exercise two physical BPF
 instances.
 
-The readable architecture file digest is
-`0c87aaf6c2d0347e06b53ce0ccb9f69577a9b248a4a90463082335d7865d77ae`.
 This work adds no Appendix C fixture ID. Phase 7 graph and finding behavior is
 not present.
 

@@ -8,9 +8,8 @@
 ## Closure Decision
 
 Phase 6.2 is **Not done**. Source implementation and automated acceptance for
-D6.2.1-D6.2.12 passed at code commit
-`23b9db450114e18d1113665cc265398002de555d`. The required physical Kubernetes
-and stock-runtime acceptance has not run.
+D6.2.1-D6.2.12 passed. The required physical Kubernetes and stock-runtime
+acceptance has not run.
 
 The amendment is not closed by CRD reconciliation alone. A result is complete
 only when a matching Pod can be scheduled by the Kubernetes scheduler onto a
@@ -80,8 +79,7 @@ No physical result is recorded yet.
 
 ## Verification State
 
-The following checks passed for code commit
-`23b9db450114e18d1113665cc265398002de555d`:
+The following checks passed:
 
 ```sh
 bash .github/scripts/verify-rust-ci.sh
