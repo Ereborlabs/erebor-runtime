@@ -9,6 +9,7 @@ mod idempotency;
 mod local_store;
 mod path_broker;
 mod paths;
+mod runtime_interception;
 mod session_api;
 
 pub use control::DaemonControlService;
