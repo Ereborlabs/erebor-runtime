@@ -1,10 +1,9 @@
 use std::path::Path;
 
 use mithril_control::{
-    canonical_policy_document_bytes, canonical_policy_spec_digest,
+    canonical_policy_document_bytes, canonical_policy_spec_digest, policy_custom_resource,
     policy_custom_resource_definition, PolicyDocumentV1, PolicySourceRevisionV1,
-    PolicySourceStateV1, WorkloadProtectionProfile, POLICY_API_VERSION, POLICY_KIND,
-    SUBMITTED_SPEC_DIGEST_ANNOTATION,
+    PolicySourceStateV1, WorkloadProtectionProfile, POLICY_KIND,
 };
 use serde_json::{json, Value};
 
@@ -20,22 +19,12 @@ fn policy() -> TestResult<PolicyDocumentV1> {
 }
 
 fn resource(document: &PolicyDocumentV1) -> TestResult<WorkloadProtectionProfile> {
-    let digest = canonical_policy_spec_digest(document)?;
-    Ok(serde_json::from_value(json!({
-        "apiVersion": POLICY_API_VERSION,
-        "kind": POLICY_KIND,
-        "metadata": {
-            "name": "hugging-face-runtime",
-            "namespace": "tenant-a",
-            "uid": "30000000-0000-4000-8000-000000000001",
-            "generation": 7,
-            "resourceVersion": "opaque/watch/97",
-            "annotations": {
-                SUBMITTED_SPEC_DIGEST_ANNOTATION: digest,
-            },
-        },
-        "spec": serde_json::to_value(document)?,
-    }))?)
+    let mut resource =
+        policy_custom_resource("hugging-face-runtime", "tenant-a", document.clone())?;
+    resource.metadata.uid = Some("30000000-0000-4000-8000-000000000001".to_owned());
+    resource.metadata.generation = Some(7);
+    resource.metadata.resource_version = Some("opaque/watch/97".to_owned());
+    Ok(resource)
 }
 
 #[test]

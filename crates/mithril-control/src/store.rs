@@ -1526,7 +1526,7 @@ fn validate_trust_transition(
         })
         && (generation.policy_signers.is_empty()
             || (generation.policy_issuer_sequence_epoch > 0
-                && trust_bundle_digest(generation) == generation.bundle_digest));
+                && generation.computed_bundle_digest() == generation.bundle_digest));
     if !valid {
         return ControlStoreSnafu {
             path: path.to_owned(),
@@ -1566,24 +1566,6 @@ fn validate_trust_transition(
         }
     }
     Ok(())
-}
-
-fn trust_bundle_digest(trust: &TrustGenerationV1) -> String {
-    let mut digest = Sha256::new();
-    digest.update(b"MITHRIL-CONTROL-TRUST-BUNDLE-V1\0");
-    digest.update(trust.generation.to_be_bytes());
-    digest.update(trust.policy_issuer_sequence_epoch.to_be_bytes());
-    for signer in &trust.policy_signers {
-        digest.update(
-            u64::try_from(signer.signing_key_id.len())
-                .unwrap_or(u64::MAX)
-                .to_be_bytes(),
-        );
-        digest.update(signer.signing_key_id.as_bytes());
-        digest.update(signer.ed25519_public_key_hex.as_bytes());
-        digest.update([u8::from(signer.revoked)]);
-    }
-    format!("{:x}", digest.finalize())
 }
 
 fn validate_evidence_identity(identity: &EvidenceIntakeIdentityV1, path: &Path) -> Result<()> {

@@ -294,6 +294,30 @@ pub fn canonical_policy_spec_digest(document: &PolicyDocumentV1) -> Result<Strin
     Ok(sha256(&canonical_policy_document_bytes(document)?))
 }
 
+pub fn policy_custom_resource(
+    name: &str,
+    namespace: &str,
+    document: PolicyDocumentV1,
+) -> Result<WorkloadProtectionProfile> {
+    ensure!(
+        !name.is_empty() && !namespace.is_empty(),
+        PolicyValidationSnafu {
+            policy_id: document.profile_id(),
+            code: "CFG_CRD_METADATA",
+            reason: "the policy resource needs a name and namespace",
+        }
+    );
+    let digest = canonical_policy_spec_digest(&document)?;
+    let mut resource =
+        WorkloadProtectionProfile::new(name, WorkloadProtectionProfileSpec { policy: document });
+    resource.metadata.namespace = Some(namespace.to_owned());
+    resource.metadata.annotations = Some(BTreeMap::from([(
+        SUBMITTED_SPEC_DIGEST_ANNOTATION.to_owned(),
+        digest,
+    )]));
+    Ok(resource)
+}
+
 impl PolicySourceRevisionV1 {
     pub fn from_resource(
         resource: &WorkloadProtectionProfile,

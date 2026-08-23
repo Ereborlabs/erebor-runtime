@@ -1,7 +1,10 @@
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand, ValueEnum};
-use mithril_control::{HardSafetyConditionV1, PolicyArtifactOwner};
+use mithril_control::{
+    policy_custom_resource, HardSafetyConditionV1, PolicyArtifactOwner, PolicyDocumentV1,
+    PolicySignerTrustV1, TrustGenerationV1,
+};
 
 #[derive(Parser)]
 #[command(about = "Compile, verify, and simulate Mithril observe policy candidates")]
@@ -13,6 +16,28 @@ struct Cli {
 #[derive(Subcommand)]
 enum Command {
     PrintCrd {
+        #[arg(long)]
+        output: Option<PathBuf>,
+    },
+    PrintPolicyManifest {
+        #[arg(long)]
+        source: PathBuf,
+        #[arg(long)]
+        name: String,
+        #[arg(long)]
+        namespace: String,
+        #[arg(long)]
+        output: Option<PathBuf>,
+    },
+    PrintTrustGeneration {
+        #[arg(long)]
+        signing_key_id: String,
+        #[arg(long)]
+        public_key: PathBuf,
+        #[arg(long)]
+        issuer_epoch: u64,
+        #[arg(long, default_value_t = 1)]
+        generation: u64,
         #[arg(long)]
         output: Option<PathBuf>,
     },
@@ -82,12 +107,51 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         Command::PrintCrd { output } => {
             // The checked-in Helm CRD is generated from this Rust schema to keep one schema owner.
             let crd = mithril_control::policy_custom_resource_definition()?;
-            let document = format!("{}\n", serde_json::to_string_pretty(&crd)?);
-            if let Some(output) = output {
-                std::fs::write(output, document)?;
-            } else {
-                print!("{document}");
+            write_json(output, &crd)?;
+        }
+        Command::PrintPolicyManifest {
+            source,
+            name,
+            namespace,
+            output,
+        } => {
+            let bytes = std::fs::read(&source)?;
+            let document = PolicyDocumentV1::parse(&source, &bytes)?;
+            write_json(
+                output,
+                &policy_custom_resource(&name, &namespace, document)?,
+            )?;
+        }
+        Command::PrintTrustGeneration {
+            signing_key_id,
+            public_key,
+            issuer_epoch,
+            generation,
+            output,
+        } => {
+            let public_key = std::fs::read_to_string(public_key)?.trim().to_owned();
+            if signing_key_id.is_empty()
+                || generation == 0
+                || issuer_epoch == 0
+                || public_key.len() != 64
+                || !public_key
+                    .bytes()
+                    .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+            {
+                return Err("the trust generation inputs are invalid".into());
             }
+            let trust = TrustGenerationV1 {
+                generation,
+                bundle_digest: String::new(),
+                policy_issuer_sequence_epoch: issuer_epoch,
+                policy_signers: vec![PolicySignerTrustV1 {
+                    signing_key_id,
+                    ed25519_public_key_hex: public_key,
+                    revoked: false,
+                }],
+            }
+            .with_computed_bundle_digest();
+            write_json(output, &trust)?;
         }
         Command::Compile {
             source,
@@ -131,6 +195,19 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 )?
             );
         }
+    }
+    Ok(())
+}
+
+fn write_json(
+    output: Option<PathBuf>,
+    value: &impl serde::Serialize,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let document = format!("{}\n", serde_json::to_string_pretty(value)?);
+    if let Some(output) = output {
+        std::fs::write(output, document)?;
+    } else {
+        print!("{document}");
     }
     Ok(())
 }
