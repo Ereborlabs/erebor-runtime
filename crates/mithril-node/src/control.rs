@@ -9,8 +9,9 @@ use mithril_control::{
     AdministrativeExecArmStreamRequest, AdministrativeExecResolution,
     AdministrativeExecResolutionStreamRequest, ArmAdministrativeExec, CoverageAck,
     CoverageCounters, CoverageInterval, CoverageReport, CoverageReportRequest, EvidenceAck,
-    EvidenceBatchRequest, NodeReadinessReport, NodeReadinessRequest, NodeRegistration,
-    NodeRegistrationRequest, NodeSessionContext, PolicyAcknowledgementAccepted,
+    EvidenceBatchRequest, ExceptionAcknowledgementRequest, ExceptionActivationAcknowledgement,
+    ExceptionInventory, ExceptionInventoryRequest, NodeReadinessReport, NodeReadinessRequest,
+    NodeRegistration, NodeRegistrationRequest, NodeSessionContext, PolicyAcknowledgementAccepted,
     PolicyAcknowledgementRequest, PolicyActivationAcknowledgement, PolicyChunkRequest,
     PolicyInventory, PolicyInventoryRequest, ResolveAdministrativeExec, TrustGenerationAck,
     TrustGenerationAckRequest, MAX_EVIDENCE_GRPC_MESSAGE_BYTES, MAX_POLICY_GRPC_MESSAGE_BYTES,
@@ -264,6 +265,34 @@ impl ControlConnection {
     ) -> Result<PolicyAcknowledgementAccepted> {
         self.policy
             .acknowledge(Request::new(PolicyAcknowledgementRequest {
+                session: Some(self.identity.clone()),
+                acknowledgement: Some(acknowledgement),
+            }))
+            .await
+            .context(ControlRpcSnafu)
+            .map(tonic::Response::into_inner)
+    }
+
+    pub async fn exception_inventory(
+        &mut self,
+        durable_candidate_content_ids: Vec<String>,
+    ) -> Result<ExceptionInventory> {
+        self.policy
+            .inventory_exceptions(Request::new(ExceptionInventoryRequest {
+                session: Some(self.identity.clone()),
+                durable_candidate_content_ids,
+            }))
+            .await
+            .context(ControlRpcSnafu)
+            .map(tonic::Response::into_inner)
+    }
+
+    pub async fn acknowledge_exception(
+        &mut self,
+        acknowledgement: ExceptionActivationAcknowledgement,
+    ) -> Result<PolicyAcknowledgementAccepted> {
+        self.policy
+            .acknowledge_exception(Request::new(ExceptionAcknowledgementRequest {
                 session: Some(self.identity.clone()),
                 acknowledgement: Some(acknowledgement),
             }))

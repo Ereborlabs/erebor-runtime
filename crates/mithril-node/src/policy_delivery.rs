@@ -3,10 +3,12 @@ use std::fs::{self, File, OpenOptions};
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
+use erebor_interceptor::EXCEPTION_USE_RECEIPT_CAPACITY;
 use mithril_control::{
-    CapabilityRecord, EntryKindV1, PolicyActivationAcknowledgement, PolicyBundleV1,
-    PolicyDeliveryOperationV1, PolicyInventory, MAX_POLICY_BUNDLE_BYTES,
-    MAX_POLICY_BUNDLE_CHUNK_BYTES,
+    CapabilityRecord, EntryKindV1, ExceptionActivationAcknowledgement, ExceptionActivationStateV1,
+    ExceptionDeliveryCandidateV1, ExceptionDeliveryOperationV1, PolicyActivationAcknowledgement,
+    PolicyBundleV1, PolicyDeliveryOperationV1, PolicyInventory, MAX_EXCEPTION_CANDIDATE_BYTES,
+    MAX_POLICY_BUNDLE_BYTES, MAX_POLICY_BUNDLE_CHUNK_BYTES,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
@@ -24,10 +26,18 @@ struct PolicyDeliveryStateV1 {
     active_candidate_content_id: Option<String>,
     active_bundle_digest: Option<String>,
     active_profiles: BTreeMap<String, ActivePolicyRecordV1>,
+    #[serde(default)]
+    // This index keeps a retired base bundle available for later exception revocation.
+    policy_candidate_bundles: BTreeMap<String, String>,
     pending_activation: Option<PendingPolicyRecordV1>,
     issuer_high_water: BTreeMap<String, SequenceV1>,
     distribution_high_water: BTreeMap<String, SequenceV1>,
     control_acknowledged_candidate_content_id: Option<String>,
+    #[serde(default)]
+    // One durable record per Kubernetes exception UID owns replay and ACK progress.
+    exception_records: BTreeMap<String, ExceptionDeliveryRecordV1>,
+    #[serde(default)]
+    exception_distribution_high_water: BTreeMap<String, SequenceV1>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
@@ -73,6 +83,31 @@ struct PendingPolicyRecordV1 {
     scheduled_bindings: Vec<WorkloadBindingConfig>,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+enum LocalExceptionStateV1 {
+    Pending,
+    Active,
+    Consumed,
+    Expired,
+    Revoked,
+    Rejected,
+    Stale,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct ExceptionDeliveryRecordV1 {
+    candidate_content_id: String,
+    candidate_file: String,
+    operation: ExceptionDeliveryOperationV1,
+    state: LocalExceptionStateV1,
+    consumed_uses: u32,
+    transition_version: u64,
+    observed_utc_ns: i64,
+    control_acknowledged: bool,
+}
+
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 struct TransferStateV1 {
@@ -107,6 +142,11 @@ pub(crate) struct PolicyActivationProofV1 {
     pub observed_utc_ns: i64,
 }
 
+pub(crate) struct PreparedExceptionDeliveryV1 {
+    pub candidate: ExceptionDeliveryCandidateV1,
+    pub grant_handle: u32,
+}
+
 pub(crate) struct NodePolicyDeliveryOwner {
     root: PathBuf,
     state_path: PathBuf,
@@ -121,6 +161,7 @@ impl NodePolicyDeliveryOwner {
         let transfer_path = root.join("transfer.json");
         fs::create_dir_all(root.join("bundles")).context(IoSnafu { path: &root })?;
         fs::create_dir_all(root.join("transfers")).context(IoSnafu { path: &root })?;
+        fs::create_dir_all(root.join("exceptions")).context(IoSnafu { path: &root })?;
         let state = match fs::read(&state_path) {
             Ok(bytes) => serde_json::from_slice(&bytes).context(JsonSnafu { path: &state_path })?,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
@@ -309,6 +350,462 @@ impl NodePolicyDeliveryOwner {
             .collect::<BTreeSet<_>>()
             .into_iter()
             .collect()
+    }
+
+    fn unacknowledged_exception_candidate_ids(&self) -> Vec<String> {
+        self.state
+            .exception_records
+            .values()
+            .filter(|record| !record.control_acknowledged)
+            .map(|record| record.candidate_content_id.clone())
+            .collect()
+    }
+
+    pub(crate) async fn fetch_exception_candidate(
+        &mut self,
+        connection: &mut ControlConnection,
+        trust: &TrustCache,
+        config: &NodeConfig,
+        node_boot_id: &[u8],
+        label_epoch: u64,
+        now_utc_ns: i64,
+    ) -> Result<Option<PreparedExceptionDeliveryV1>> {
+        if let Some(pending) =
+            self.pending_exception_delivery(trust, config, node_boot_id, label_epoch, now_utc_ns)?
+        {
+            // Recovery completes local work before the node asks Control for newer authority.
+            return Ok(Some(pending));
+        }
+        let inventory = connection
+            .exception_inventory(self.unacknowledged_exception_candidate_ids())
+            .await?;
+        if !inventory.candidate_available {
+            return Ok(None);
+        }
+        ensure!(
+            is_sha256(&inventory.candidate_content_id)
+                && matches!(inventory.operation.as_str(), "ACTIVATE" | "REVOKE")
+                && !inventory.candidate_json.is_empty()
+                && inventory.candidate_json.len() <= MAX_EXCEPTION_CANDIDATE_BYTES,
+            ControlProtocolSnafu {
+                reason: "Control delivered invalid exception inventory",
+            }
+        );
+        let candidate: ExceptionDeliveryCandidateV1 =
+            serde_json::from_slice(&inventory.candidate_json).context(JsonSnafu {
+                path: self.root.join("exceptions/inventory.json"),
+            })?;
+        ensure!(
+            candidate.candidate_content_id == inventory.candidate_content_id
+                && exception_operation_name(candidate.operation) == inventory.operation,
+            ControlProtocolSnafu {
+                reason: "the exception candidate differs from its inventory identity",
+            }
+        );
+        let prepared = self.prepare_exception_delivery(
+            candidate,
+            trust,
+            config,
+            node_boot_id,
+            label_epoch,
+            now_utc_ns,
+        )?;
+        self.stage_exception_delivery(&prepared, &inventory.candidate_json, now_utc_ns)?;
+        Ok(Some(prepared))
+    }
+
+    fn stage_exception_delivery(
+        &mut self,
+        prepared: &PreparedExceptionDeliveryV1,
+        candidate_json: &[u8],
+        now_utc_ns: i64,
+    ) -> Result<()> {
+        ensure!(
+            self.state
+                .exception_records
+                .contains_key(&prepared.candidate.exception_instance_id)
+                || self.state.exception_records.len()
+                    < usize::try_from(EXCEPTION_USE_RECEIPT_CAPACITY).unwrap_or(usize::MAX),
+            IdentityStateSnafu {
+                reason: "the durable exception record capacity is exhausted",
+            }
+        );
+        let path = self
+            .root
+            .join("exceptions")
+            .join(format!("{}.json", prepared.candidate.candidate_content_id));
+        ensure!(
+            candidate_json.len() <= MAX_EXCEPTION_CANDIDATE_BYTES
+                && serde_json::from_slice::<ExceptionDeliveryCandidateV1>(candidate_json)
+                    .is_ok_and(|candidate| candidate == prepared.candidate),
+            ControlProtocolSnafu {
+                reason: "the staged exception bytes differ from the verified candidate",
+            }
+        );
+        write_atomic(&path, candidate_json)?;
+        let instance_id = prepared.candidate.exception_instance_id.clone();
+        let consumed_uses = self
+            .state
+            .exception_records
+            .get(&instance_id)
+            .filter(|_| prepared.candidate.operation == ExceptionDeliveryOperationV1::Revoke)
+            .map_or(0, |record| record.consumed_uses);
+        self.state.exception_records.insert(
+            instance_id.clone(),
+            ExceptionDeliveryRecordV1 {
+                candidate_content_id: prepared.candidate.candidate_content_id.clone(),
+                candidate_file: self.relative_bundle_file(&path)?,
+                operation: prepared.candidate.operation,
+                state: LocalExceptionStateV1::Pending,
+                consumed_uses,
+                transition_version: 0,
+                observed_utc_ns: now_utc_ns,
+                control_acknowledged: false,
+            },
+        );
+        self.state.exception_distribution_high_water.insert(
+            instance_id,
+            SequenceV1 {
+                epoch: prepared.candidate.distribution_sequence_epoch,
+                sequence: prepared.candidate.distribution_sequence,
+            },
+        );
+        // Persist receipt before kernel activation so restart resumes this exact candidate.
+        self.persist_state()
+    }
+
+    fn pending_exception_delivery(
+        &self,
+        trust: &TrustCache,
+        config: &NodeConfig,
+        node_boot_id: &[u8],
+        label_epoch: u64,
+        now_utc_ns: i64,
+    ) -> Result<Option<PreparedExceptionDeliveryV1>> {
+        let Some(record) = self
+            .state
+            .exception_records
+            .values()
+            .find(|record| record.state == LocalExceptionStateV1::Pending)
+        else {
+            return Ok(None);
+        };
+        let path = self.checked_bundle_file(&record.candidate_file)?;
+        let candidate: ExceptionDeliveryCandidateV1 =
+            serde_json::from_slice(&fs::read(&path).context(IoSnafu { path: &path })?)
+                .context(JsonSnafu { path: &path })?;
+        ensure!(
+            candidate.candidate_content_id == record.candidate_content_id
+                && candidate.operation == record.operation,
+            IdentityStateSnafu {
+                reason: "the pending exception record differs from its durable candidate",
+            }
+        );
+        self.prepare_exception_delivery(
+            candidate,
+            trust,
+            config,
+            node_boot_id,
+            label_epoch,
+            now_utc_ns,
+        )
+        .map(Some)
+    }
+
+    fn prepare_exception_delivery(
+        &self,
+        candidate: ExceptionDeliveryCandidateV1,
+        trust: &TrustCache,
+        config: &NodeConfig,
+        node_boot_id: &[u8],
+        label_epoch: u64,
+        now_utc_ns: i64,
+    ) -> Result<PreparedExceptionDeliveryV1> {
+        let base_bundle = self.policy_bundle_for_candidate(&candidate.base_candidate_content_id)?;
+        let trusted_key = trust.policy_signing_key(
+            &candidate.signing_key_id,
+            base_bundle.profile_artifact.header.sequence_epoch,
+        )?;
+        candidate
+            .verify(&trusted_key, &config.node_id, now_utc_ns)
+            .context(PolicySnafu)?;
+        let identity = candidate.exact_target.kubernetes.as_ref().ok_or_else(|| {
+            ControlProtocolSnafu {
+                reason: "the exception candidate has no Kubernetes identity".to_owned(),
+            }
+            .build()
+        })?;
+        let expected_node_name = config.kubernetes_node_name.as_deref().ok_or_else(|| {
+            ControlProtocolSnafu {
+                reason: "exception delivery needs the registered Kubernetes Node name".to_owned(),
+            }
+            .build()
+        })?;
+        let tenant_id = config
+            .evidence
+            .as_ref()
+            .map(|evidence| evidence.tenant_id.as_str())
+            .unwrap_or_default();
+        let base_contains_target = base_bundle
+            .candidate
+            .exact_target
+            .workload_targets
+            .contains(&candidate.exact_target);
+        // The signed exception must repeat one exact workload from its signed base candidate.
+        let current = self
+            .state
+            .exception_records
+            .get(&candidate.exception_instance_id);
+        let operation_is_valid = current.map_or_else(
+            || {
+                candidate.operation == ExceptionDeliveryOperationV1::Activate
+                    && candidate.predecessor_candidate_content_id.is_none()
+                    && self.state.active_profiles.values().any(|record| {
+                        record.candidate_content_id == candidate.base_candidate_content_id
+                            && record.policy_source_revision_id
+                                == candidate.base_policy_source_revision_id
+                            && record.profile_generation_ref_id
+                                == candidate.profile_generation_ref_id
+                    })
+            },
+            |record| {
+                if record.candidate_content_id == candidate.candidate_content_id {
+                    return record.state == LocalExceptionStateV1::Pending;
+                }
+                candidate.operation == ExceptionDeliveryOperationV1::Revoke
+                    && candidate.predecessor_candidate_content_id.as_deref()
+                        == Some(record.candidate_content_id.as_str())
+                    && record.operation == ExceptionDeliveryOperationV1::Activate
+            },
+        );
+        let distribution = SequenceV1 {
+            epoch: candidate.distribution_sequence_epoch,
+            sequence: candidate.distribution_sequence,
+        };
+        let sequence_is_valid = current
+            .is_some_and(|record| record.candidate_content_id == candidate.candidate_content_id)
+            || self
+                .state
+                .exception_distribution_high_water
+                .get(&candidate.exception_instance_id)
+                .is_none_or(|high_water| distribution > *high_water);
+        let grant = base_bundle
+            .profile_artifact
+            .policy_document
+            .file_exception_grants
+            .iter()
+            .find(|grant| grant.grant_id == candidate.grant_id)
+            .ok_or_else(|| {
+                ControlProtocolSnafu {
+                    reason: "the base policy does not define the exception grant".to_owned(),
+                }
+                .build()
+            })?;
+        let requested_duration = candidate
+            .valid_until_utc_ns
+            .saturating_sub(candidate.issued_utc_ns);
+        ensure!(
+            candidate.tenant_id == tenant_id
+                && candidate.base_policy_source_revision_id
+                    == base_bundle.candidate.policy_source_revision_id
+                && candidate.profile_id
+                    == base_bundle
+                        .profile_artifact
+                        .policy_document
+                        .metadata
+                        .profile_id
+                && base_contains_target
+                && candidate.exact_target.node_id == config.node_id
+                && identity.kubernetes_node_name == expected_node_name
+                && identity.node_boot_id == hex::encode(node_boot_id)
+                && identity.label_epoch == label_epoch
+                && identity.policy_source_revision_id == candidate.base_policy_source_revision_id
+                && candidate.maximum_uses <= grant.maximum_uses
+                && (candidate.operation == ExceptionDeliveryOperationV1::Revoke
+                    || (now_utc_ns < candidate.valid_until_utc_ns
+                        && u64::try_from(requested_duration)
+                            .is_ok_and(|duration| duration <= grant.maximum_duration_ns)))
+                && operation_is_valid
+                && sequence_is_valid,
+            ControlProtocolSnafu {
+                reason: "the exception candidate is stale or differs from its exact base binding",
+            }
+        );
+        Ok(PreparedExceptionDeliveryV1 {
+            grant_handle: exception_grant_handle(
+                &base_bundle.profile_artifact.policy_document,
+                &candidate.grant_id,
+            )?,
+            candidate,
+        })
+    }
+
+    pub(crate) fn commit_exception_result(
+        &mut self,
+        candidate: &ExceptionDeliveryCandidateV1,
+        state: ExceptionActivationStateV1,
+        consumed_uses: u32,
+        observed_utc_ns: i64,
+    ) -> Result<()> {
+        let record = self
+            .state
+            .exception_records
+            .get_mut(&candidate.exception_instance_id)
+            .ok_or_else(|| {
+                IdentityStateSnafu {
+                    reason: "the exception result has no durable delivery record".to_owned(),
+                }
+                .build()
+            })?;
+        ensure!(
+            record.candidate_content_id == candidate.candidate_content_id
+                && record.state == LocalExceptionStateV1::Pending
+                && consumed_uses >= record.consumed_uses
+                && consumed_uses <= candidate.maximum_uses
+                && observed_utc_ns > 0,
+            IdentityStateSnafu {
+                reason: "the exception result does not match its pending candidate",
+            }
+        );
+        let operation_state_is_valid = match candidate.operation {
+            ExceptionDeliveryOperationV1::Activate => {
+                !matches!(state, ExceptionActivationStateV1::Revoked)
+            }
+            ExceptionDeliveryOperationV1::Revoke => matches!(
+                state,
+                ExceptionActivationStateV1::Revoked
+                    | ExceptionActivationStateV1::Rejected
+                    | ExceptionActivationStateV1::Stale
+            ),
+        };
+        ensure!(
+            operation_state_is_valid,
+            IdentityStateSnafu {
+                reason: "the local exception state is invalid for its delivery operation",
+            }
+        );
+        record.state = local_exception_state(state);
+        record.consumed_uses = consumed_uses;
+        record.transition_version = 1;
+        record.observed_utc_ns = observed_utc_ns;
+        record.control_acknowledged = false;
+        // Persist the physical result before the network acknowledgement can leave this node.
+        self.persist_state()
+    }
+
+    pub(crate) fn pending_exception_acknowledgement(
+        &self,
+    ) -> Result<Option<ExceptionActivationAcknowledgement>> {
+        let Some(record) = self.state.exception_records.values().find(|record| {
+            record.state != LocalExceptionStateV1::Pending && !record.control_acknowledged
+        }) else {
+            return Ok(None);
+        };
+        let candidate = self.read_exception_candidate(record)?;
+        Ok(Some(ExceptionActivationAcknowledgement {
+            tenant_id: candidate.tenant_id,
+            candidate_content_id: record.candidate_content_id.clone(),
+            exception_source_revision_id: candidate.exception_source_revision_id,
+            state: local_exception_state_name(record.state).to_owned(),
+            consumed_uses: record.consumed_uses,
+            transition_version: record.transition_version,
+            reason_code: matches!(
+                record.state,
+                LocalExceptionStateV1::Rejected | LocalExceptionStateV1::Stale
+            )
+            .then(|| "EXCEPTION_CANDIDATE_REJECTED".to_owned())
+            .unwrap_or_default(),
+            observed_utc_ns: record.observed_utc_ns,
+        }))
+    }
+
+    pub(crate) fn acknowledged_active_exception_candidates(
+        &self,
+    ) -> Result<Vec<ExceptionDeliveryCandidateV1>> {
+        self.state
+            .exception_records
+            .values()
+            .filter(|record| {
+                record.state == LocalExceptionStateV1::Active && record.control_acknowledged
+            })
+            .map(|record| self.read_exception_candidate(record))
+            .collect()
+    }
+
+    pub(crate) fn observe_exception_result(
+        &mut self,
+        candidate: &ExceptionDeliveryCandidateV1,
+        observation: crate::policy::ExceptionRuntimeObservationV1,
+        observed_utc_ns: i64,
+    ) -> Result<()> {
+        let record = self
+            .state
+            .exception_records
+            .get_mut(&candidate.exception_instance_id)
+            .ok_or_else(|| {
+                IdentityStateSnafu {
+                    reason: "the observed exception has no durable delivery record".to_owned(),
+                }
+                .build()
+            })?;
+        ensure!(
+            record.candidate_content_id == candidate.candidate_content_id
+                && record.state == LocalExceptionStateV1::Active
+                && record.control_acknowledged
+                && matches!(
+                    observation.state,
+                    ExceptionActivationStateV1::Active
+                        | ExceptionActivationStateV1::Consumed
+                        | ExceptionActivationStateV1::Expired
+                        | ExceptionActivationStateV1::Stale
+                )
+                && observation.consumed_uses >= record.consumed_uses
+                && observation.consumed_uses <= candidate.maximum_uses,
+            IdentityStateSnafu {
+                reason: "the observed exception state is stale or non-monotonic",
+            }
+        );
+        let next_state = local_exception_state(observation.state);
+        if next_state == record.state && observation.consumed_uses == record.consumed_uses {
+            return Ok(());
+        }
+        // Runtime transitions are monotonic and each new state requires a new Control ACK.
+        record.state = next_state;
+        record.consumed_uses = observation.consumed_uses;
+        record.transition_version = record.transition_version.checked_add(1).ok_or_else(|| {
+            IdentityStateSnafu {
+                reason: "the exception acknowledgement transition version is exhausted".to_owned(),
+            }
+            .build()
+        })?;
+        record.observed_utc_ns = observed_utc_ns;
+        record.control_acknowledged = false;
+        self.persist_state()
+    }
+
+    pub(crate) fn acknowledge_exception_control(
+        &mut self,
+        candidate_content_id: &str,
+    ) -> Result<()> {
+        let record = self
+            .state
+            .exception_records
+            .values_mut()
+            .find(|record| record.candidate_content_id == candidate_content_id)
+            .ok_or_else(|| {
+                IdentityStateSnafu {
+                    reason: "Control accepted an unknown exception candidate".to_owned(),
+                }
+                .build()
+            })?;
+        ensure!(
+            record.state != LocalExceptionStateV1::Pending,
+            IdentityStateSnafu {
+                reason: "Control accepted an exception before its local result",
+            }
+        );
+        record.control_acknowledged = true;
+        self.persist_state()
     }
 
     pub(crate) async fn fetch_candidate(
@@ -676,6 +1173,10 @@ impl NodePolicyDeliveryOwner {
         self.state
             .active_profiles
             .insert(prepared.profile_id.clone(), record);
+        self.state.policy_candidate_bundles.insert(
+            bundle.candidate.candidate_content_id.clone(),
+            bundle.bundle_digest.clone(),
+        );
         self.state.issuer_high_water.insert(
             bundle.candidate.signing_key_id.clone(),
             SequenceV1 {
@@ -987,11 +1488,50 @@ impl NodePolicyDeliveryOwner {
                             && !pending.binding_ids.is_empty()
                             && pending.binding_ids.windows(2).all(|pair| pair[0] < pair[1])
                             && !pending.bundle_file.is_empty()
-                    }),
+                    })
+                && self.state.policy_candidate_bundles.iter().all(
+                    |(candidate_content_id, bundle_digest)| {
+                        is_sha256(candidate_content_id) && is_sha256(bundle_digest)
+                    }
+                )
+                && self
+                    .state
+                    .exception_records
+                    .iter()
+                    .all(|(instance_id, record)| {
+                        uuid::Uuid::parse_str(instance_id)
+                            .is_ok_and(|id| id.hyphenated().to_string() == *instance_id)
+                            && is_sha256(&record.candidate_content_id)
+                            && !record.candidate_file.is_empty()
+                            && record.observed_utc_ns > 0
+                            && match record.state {
+                                LocalExceptionStateV1::Pending => record.transition_version == 0,
+                                _ => record.transition_version > 0,
+                            }
+                    })
+                && self.state.exception_distribution_high_water.iter().all(
+                    |(instance_id, sequence)| {
+                        uuid::Uuid::parse_str(instance_id)
+                            .is_ok_and(|id| id.hyphenated().to_string() == *instance_id)
+                            && sequence.epoch > 0
+                            && sequence.sequence > 0
+                    }
+                ),
             IdentityStateSnafu {
                 reason: "the durable policy delivery state is invalid",
             }
         );
+        ensure!(
+            self.state.exception_records.len()
+                <= usize::try_from(EXCEPTION_USE_RECEIPT_CAPACITY).unwrap_or(usize::MAX),
+            IdentityStateSnafu {
+                reason: "the durable exception record capacity is invalid",
+            }
+        );
+        // Recovery reads each signed candidate now so corrupt state cannot suppress an ACK later.
+        for record in self.state.exception_records.values() {
+            self.read_exception_candidate(record)?;
+        }
         Ok(())
     }
 
@@ -1024,6 +1564,59 @@ impl NodePolicyDeliveryOwner {
     fn read_bundle(&self, path: &Path) -> Result<PolicyBundleV1> {
         serde_json::from_slice(&fs::read(path).context(IoSnafu { path })?)
             .context(JsonSnafu { path })
+    }
+
+    fn policy_bundle_for_candidate(&self, candidate_content_id: &str) -> Result<PolicyBundleV1> {
+        let bundle_digest = self
+            .state
+            .policy_candidate_bundles
+            .get(candidate_content_id)
+            .cloned()
+            .or_else(|| {
+                self.state
+                    .active_profiles
+                    .values()
+                    .find(|record| record.candidate_content_id == candidate_content_id)
+                    .map(|record| record.bundle_digest.clone())
+            })
+            .ok_or_else(|| {
+                IdentityStateSnafu {
+                    reason: "the exception candidate has no durable base-policy bundle".to_owned(),
+                }
+                .build()
+            })?;
+        let bundle = self.read_bundle(
+            &self
+                .root
+                .join("bundles")
+                .join(bundle_digest)
+                .join("bundle.json"),
+        )?;
+        ensure!(
+            bundle.candidate.candidate_content_id == candidate_content_id,
+            IdentityStateSnafu {
+                reason: "the durable base-policy index names a different candidate",
+            }
+        );
+        Ok(bundle)
+    }
+
+    fn read_exception_candidate(
+        &self,
+        record: &ExceptionDeliveryRecordV1,
+    ) -> Result<ExceptionDeliveryCandidateV1> {
+        let path = self.checked_bundle_file(&record.candidate_file)?;
+        let candidate: ExceptionDeliveryCandidateV1 =
+            serde_json::from_slice(&fs::read(&path).context(IoSnafu { path: &path })?)
+                .context(JsonSnafu { path: &path })?;
+        ensure!(
+            candidate.candidate_content_id == record.candidate_content_id
+                && candidate.operation == record.operation,
+            IdentityStateSnafu {
+                reason: "the durable exception record differs from its signed candidate",
+            }
+        );
+        Ok(candidate)
     }
 
     fn verify_pending_bundle(
@@ -1356,6 +1949,63 @@ fn file_sha256(path: &Path) -> Option<String> {
     fs::read(path).ok().map(|bytes| sha256(&bytes))
 }
 
+fn exception_grant_handle(
+    document: &mithril_control::PolicyDocumentV1,
+    grant_id: &str,
+) -> Result<u32> {
+    let identifiers = document
+        .exceptions
+        .iter()
+        .map(|exception| exception.exception_id.as_str())
+        .chain(
+            document
+                .file_exception_grants
+                .iter()
+                .map(|grant| grant.grant_id.as_str()),
+        )
+        .collect::<BTreeSet<_>>();
+    identifiers
+        .into_iter()
+        .position(|identifier| identifier == grant_id)
+        .and_then(|index| u32::try_from(index + 1).ok())
+        .ok_or_else(|| {
+            ControlProtocolSnafu {
+                reason: "the exception grant has no deterministic numeric handle".to_owned(),
+            }
+            .build()
+        })
+}
+
+const fn exception_operation_name(operation: ExceptionDeliveryOperationV1) -> &'static str {
+    match operation {
+        ExceptionDeliveryOperationV1::Activate => "ACTIVATE",
+        ExceptionDeliveryOperationV1::Revoke => "REVOKE",
+    }
+}
+
+const fn local_exception_state(state: ExceptionActivationStateV1) -> LocalExceptionStateV1 {
+    match state {
+        ExceptionActivationStateV1::Active => LocalExceptionStateV1::Active,
+        ExceptionActivationStateV1::Consumed => LocalExceptionStateV1::Consumed,
+        ExceptionActivationStateV1::Expired => LocalExceptionStateV1::Expired,
+        ExceptionActivationStateV1::Revoked => LocalExceptionStateV1::Revoked,
+        ExceptionActivationStateV1::Rejected => LocalExceptionStateV1::Rejected,
+        ExceptionActivationStateV1::Stale => LocalExceptionStateV1::Stale,
+    }
+}
+
+const fn local_exception_state_name(state: LocalExceptionStateV1) -> &'static str {
+    match state {
+        LocalExceptionStateV1::Pending => "PENDING",
+        LocalExceptionStateV1::Active => "ACTIVE",
+        LocalExceptionStateV1::Consumed => "CONSUMED",
+        LocalExceptionStateV1::Expired => "EXPIRED",
+        LocalExceptionStateV1::Revoked => "REVOKED",
+        LocalExceptionStateV1::Rejected => "REJECTED",
+        LocalExceptionStateV1::Stale => "STALE",
+    }
+}
+
 fn sha256(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
 }
@@ -1373,9 +2023,12 @@ mod tests {
 
     use ed25519_dalek::SigningKey;
     use mithril_control::{
-        CapabilityRecord, KubernetesWorkloadIdentityV1, PolicyCompiler, PolicyDeliveryCandidateV1,
-        PolicyDocumentV1, PolicySignerTrust, PolicyTargetSnapshotV1, PolicyTargetV1,
-        ProfileCandidateArtifactV1, ProfileSealRequestV1, RegistryDigestsV1, WorkloadTargetFactV1,
+        CapabilityRecord, ExceptionActivationStateV1, ExceptionDeliveryCandidateV1,
+        ExceptionDeliveryOperationV1, ExceptionSourceRevisionV1, ExceptionSourceStateV1,
+        FileExceptionGrantTemplateV1, KubernetesWorkloadIdentityV1, PolicyCompiler,
+        PolicyDeliveryCandidateV1, PolicyDocumentV1, PolicySignerTrust, PolicyTargetSnapshotV1,
+        PolicyTargetV1, ProfileCandidateArtifactV1, ProfileModeV1, ProfileSealRequestV1,
+        RegistryDigestsV1, WorkloadProtectionException, WorkloadTargetFactV1,
     };
     use sha2::{Digest as _, Sha256};
     use snafu::ResultExt as _;
@@ -1809,6 +2462,244 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn exception_delivery_survives_restart_and_keeps_revocation_monotonic() -> crate::Result<()> {
+        let directory = tempfile::tempdir().context(IoSnafu {
+            path: "temporary exception delivery directory",
+        })?;
+        let static_config = config(directory.path());
+        let key = SigningKey::from_bytes(&[9; 32]);
+        let trust = trust(directory.path(), &key)?;
+        let mut document = PolicyDocumentV1::parse(
+            std::path::Path::new("policy-v1.yaml"),
+            include_bytes!("../../mithril-control/tests/fixtures/policy-v1.yaml"),
+        )
+        .context(PolicySnafu)?;
+        document.rollout.desired_profile_mode = ProfileModeV1::Protect;
+        document.file_exception_grants = vec![FileExceptionGrantTemplateV1 {
+            grant_id: "temporary-file-access".to_owned(),
+            denied_file_rule_ids: vec!["deny-projected-token-open".to_owned()],
+            maximum_duration_ns: 300_000_000_000,
+            maximum_uses: 1,
+        }];
+        let base = bundle_from_document(
+            &static_config,
+            &key,
+            1,
+            1,
+            PolicyDeliveryOperationV1::Activate,
+            None,
+            10,
+            100,
+            "node-a",
+            document,
+        )?;
+        let scheduled = scheduled_bundle(base, &key, "worker-a", &[1; 16])?;
+        let mut config = static_config;
+        config.kubernetes_node_name = Some("worker-a".to_owned());
+        config.runtime_admission = Some(RuntimeAdmissionConfig {
+            socket_path: directory.path().join("runtime-admission.sock"),
+            maximum_request_bytes: 64 * 1_024,
+            timeout_ms: 10_000,
+        });
+        config.container_runtime = Some(ContainerRuntimeConfig {
+            socket_path: directory.path().join("containerd.sock"),
+            effect_controller_cgroup_path: directory.path().join("mithril-node-cgroup"),
+            containerd_event_socket_path: None,
+            reconciliation_interval_ms: 2_000,
+        });
+        config.workload_bindings.clear();
+        config.validate()?;
+        let mut owner = NodePolicyDeliveryOwner::load(directory.path())?;
+        let prepared = owner.prepare_activation_for_session(
+            &scheduled,
+            &trust,
+            &config,
+            &capabilities(),
+            2,
+            20,
+            &[1; 16],
+            7,
+        )?;
+        owner.begin_activation(&scheduled, &prepared)?;
+        owner.commit_activation(
+            &scheduled,
+            &prepared,
+            PolicyActivationProofV1 {
+                node_bound_generation_digest: "1".repeat(64),
+                readback_digest: "2".repeat(64),
+                probe_result_digest: "3".repeat(64),
+                observed_utc_ns: 21,
+            },
+        )?;
+        let resource: WorkloadProtectionException = serde_json::from_value(serde_json::json!({
+            "apiVersion": "mithril.erebor.dev/v1alpha1",
+            "kind": "WorkloadProtectionException",
+            "metadata": {
+                "name": "temporary-file-access",
+                "namespace": "default",
+                "uid": "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
+                "generation": 1,
+                "resourceVersion": "exception-1"
+            },
+            "spec": {
+                "policyRef": {"name": "profile"},
+                "grant": "temporary-file-access",
+                "target": {
+                    "pod": {
+                        "name": "converter-0",
+                        "uid": "aaaaaaaa-1111-4111-8111-111111111111"
+                    },
+                    "containerName": "converter"
+                },
+                "requestedDuration": "30s",
+                "requestedUses": 1
+            }
+        }))
+        .context(super::JsonSnafu {
+            path: "in-memory exception",
+        })?;
+        let source = ExceptionSourceRevisionV1::from_resource(
+            &resource,
+            "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+            "55555555-5555-4555-8555-555555555555",
+            "66666666-6666-4666-8666-666666666666",
+            &scheduled.candidate.policy_source_revision_id,
+            ExceptionSourceStateV1::Accepted,
+        )
+        .context(PolicySnafu)?;
+        let target = scheduled.candidate.exact_target.workload_targets[0].clone();
+        let activation = ExceptionDeliveryCandidateV1::sign(
+            &source,
+            scheduled.candidate.candidate_content_id.clone(),
+            scheduled
+                .profile_artifact
+                .policy_document
+                .profile_id()
+                .to_owned(),
+            2,
+            target.clone(),
+            ExceptionDeliveryOperationV1::Activate,
+            1,
+            50,
+            None,
+            1,
+            1,
+            22,
+            100,
+            "test-key".to_owned(),
+            &key,
+        )
+        .context(PolicySnafu)?;
+        let prepared_exception = owner.prepare_exception_delivery(
+            activation.clone(),
+            &trust,
+            &config,
+            &[1; 16],
+            7,
+            23,
+        )?;
+        let activation_json = serde_json::to_vec(&activation).context(super::JsonSnafu {
+            path: "in-memory exception candidate",
+        })?;
+        owner.stage_exception_delivery(&prepared_exception, &activation_json, 23)?;
+
+        let mut restarted = NodePolicyDeliveryOwner::load(directory.path())?;
+        assert!(restarted
+            .pending_exception_delivery(&trust, &config, &[1; 16], 7, 24)?
+            .is_some());
+        restarted.commit_exception_result(
+            &activation,
+            ExceptionActivationStateV1::Active,
+            0,
+            25,
+        )?;
+        let activation_ack = restarted
+            .pending_exception_acknowledgement()?
+            .ok_or_else(|| {
+                super::IdentityStateSnafu {
+                    reason: "the active exception has no acknowledgement".to_owned(),
+                }
+                .build()
+            })?;
+        assert_eq!(activation_ack.state, "ACTIVE");
+        restarted.acknowledge_exception_control(&activation.candidate_content_id)?;
+        restarted.observe_exception_result(
+            &activation,
+            crate::policy::ExceptionRuntimeObservationV1 {
+                state: ExceptionActivationStateV1::Consumed,
+                consumed_uses: 1,
+            },
+            26,
+        )?;
+        let consumed_ack = restarted
+            .pending_exception_acknowledgement()?
+            .ok_or_else(|| {
+                super::IdentityStateSnafu {
+                    reason: "the consumed exception has no acknowledgement".to_owned(),
+                }
+                .build()
+            })?;
+        assert_eq!(consumed_ack.state, "CONSUMED");
+        assert_eq!(consumed_ack.transition_version, 2);
+        restarted.acknowledge_exception_control(&activation.candidate_content_id)?;
+
+        let deletion = source.deletion_requested().context(PolicySnafu)?;
+        let revocation = ExceptionDeliveryCandidateV1::sign(
+            &deletion,
+            scheduled.candidate.candidate_content_id.clone(),
+            scheduled
+                .profile_artifact
+                .policy_document
+                .profile_id()
+                .to_owned(),
+            2,
+            target,
+            ExceptionDeliveryOperationV1::Revoke,
+            1,
+            50,
+            Some(activation.candidate_content_id.clone()),
+            1,
+            2,
+            60,
+            100,
+            "test-key".to_owned(),
+            &key,
+        )
+        .context(PolicySnafu)?;
+        let prepared_revocation = restarted.prepare_exception_delivery(
+            revocation.clone(),
+            &trust,
+            &config,
+            &[1; 16],
+            7,
+            61,
+        )?;
+        restarted.stage_exception_delivery(
+            &prepared_revocation,
+            &serde_json::to_vec(&revocation).context(super::JsonSnafu {
+                path: "in-memory exception revocation",
+            })?,
+            61,
+        )?;
+        restarted.commit_exception_result(
+            &revocation,
+            ExceptionActivationStateV1::Revoked,
+            1,
+            62,
+        )?;
+        assert_eq!(
+            restarted
+                .pending_exception_acknowledgement()?
+                .map(|acknowledgement| acknowledgement.state),
+            Some("REVOKED".to_owned())
+        );
+        assert!(restarted
+            .prepare_exception_delivery(activation, &trust, &config, &[1; 16], 7, 63)
+            .is_err());
+        Ok(())
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn bundle(
         config: &NodeConfig,
@@ -1826,6 +2717,33 @@ mod tests {
             include_bytes!("../../mithril-control/tests/fixtures/policy-v1.yaml"),
         )
         .context(PolicySnafu)?;
+        bundle_from_document(
+            config,
+            key,
+            issuer_sequence,
+            distribution_sequence,
+            operation,
+            predecessor,
+            issued_utc_ns,
+            expires_utc_ns,
+            node_id,
+            document,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn bundle_from_document(
+        config: &NodeConfig,
+        key: &SigningKey,
+        issuer_sequence: u64,
+        distribution_sequence: u64,
+        operation: PolicyDeliveryOperationV1,
+        predecessor: Option<String>,
+        issued_utc_ns: i64,
+        expires_utc_ns: i64,
+        node_id: &str,
+        document: PolicyDocumentV1,
+    ) -> crate::Result<mithril_control::PolicyBundleV1> {
         let compiled = PolicyCompiler.compile(&document).context(PolicySnafu)?;
         let artifact = ProfileCandidateArtifactV1::sign(
             &document,

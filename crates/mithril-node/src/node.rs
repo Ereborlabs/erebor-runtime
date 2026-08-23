@@ -644,6 +644,12 @@ impl NodeChassis {
                                             self.policy_delivery
                                                 .acknowledge_control(&candidate_content_id)?;
                                         }
+                                        if self
+                                            .poll_control_exception(&mut connection)
+                                            .await?
+                                        {
+                                            break;
+                                        }
                                         continue;
                                     }
                                     Err(error) => {
@@ -1126,6 +1132,84 @@ impl NodeChassis {
             &node_boot_id,
             self.label_epoch,
         )
+    }
+
+    async fn poll_control_exception(
+        &mut self,
+        connection: &mut crate::ControlConnection,
+    ) -> Result<bool> {
+        // Observe live counters before delivery so Control sees use and expiry transitions.
+        if let (Some(policy), Some(host)) = (self.policy.as_ref(), self.host.as_ref()) {
+            for candidate in self
+                .policy_delivery
+                .acknowledged_active_exception_candidates()?
+            {
+                let observation = policy.observe_exception_candidate(host, &candidate)?;
+                self.policy_delivery.observe_exception_result(
+                    &candidate,
+                    observation,
+                    crate::policy::current_utc_ns()?,
+                )?;
+            }
+        }
+        // Replay a durable result before this node can accept another candidate.
+        if let Some(acknowledgement) = self.policy_delivery.pending_exception_acknowledgement()? {
+            let candidate_content_id = acknowledgement.candidate_content_id.clone();
+            connection.acknowledge_exception(acknowledgement).await?;
+            self.policy_delivery
+                .acknowledge_exception_control(&candidate_content_id)?;
+            return Ok(true);
+        }
+        let now_utc_ns = crate::policy::current_utc_ns()?;
+        let node_boot_id = self.node_boot_id.to_be_bytes();
+        let Some(prepared) = self
+            .policy_delivery
+            .fetch_exception_candidate(
+                connection,
+                &self.trust,
+                &self.config,
+                &node_boot_id,
+                self.label_epoch,
+                now_utc_ns,
+            )
+            .await?
+        else {
+            return Ok(false);
+        };
+        let policy = self.policy.as_ref().ok_or_else(|| {
+            IdentityStateSnafu {
+                reason: "exception delivery has no active policy owner".to_owned(),
+            }
+            .build()
+        })?;
+        let host = self.host.as_ref().ok_or_else(|| {
+            IdentityStateSnafu {
+                reason: "exception delivery has no live kernel host".to_owned(),
+            }
+            .build()
+        })?;
+        let observation =
+            policy.apply_exception_candidate(host, &prepared.candidate, prepared.grant_handle)?;
+        self.policy_delivery.commit_exception_result(
+            &prepared.candidate,
+            observation.state,
+            observation.consumed_uses,
+            crate::policy::current_utc_ns()?,
+        )?;
+        let acknowledgement = self
+            .policy_delivery
+            .pending_exception_acknowledgement()?
+            .ok_or_else(|| {
+                IdentityStateSnafu {
+                    reason: "exception activation produced no durable acknowledgement".to_owned(),
+                }
+                .build()
+            })?;
+        let candidate_content_id = acknowledgement.candidate_content_id.clone();
+        connection.acknowledge_exception(acknowledgement).await?;
+        self.policy_delivery
+            .acknowledge_exception_control(&candidate_content_id)?;
+        Ok(true)
     }
 
     fn activate_control_policy(

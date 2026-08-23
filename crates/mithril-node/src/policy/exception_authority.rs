@@ -93,6 +93,10 @@ pub(super) struct ExceptionAuthorityOwner {
 }
 
 impl ExceptionAuthorityOwner {
+    pub(super) const fn node_id(&self) -> Id128V1 {
+        self.node_id
+    }
+
     pub(super) fn load(
         state_directory: &Path,
         node_id: Id128V1,

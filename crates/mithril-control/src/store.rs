@@ -1169,13 +1169,8 @@ impl ControlStore {
                             node_id: node_id.to_owned(),
                         })
                         .is_some_and(|rollout| {
-                            !matches!(
-                                rollout.state,
-                                crate::WorkloadProtectionExceptionStateV1::Failed
-                                    | crate::WorkloadProtectionExceptionStateV1::Consumed
-                                    | crate::WorkloadProtectionExceptionStateV1::Expired
-                                    | crate::WorkloadProtectionExceptionStateV1::Revoked
-                            )
+                            // A node receives each candidate until its first durable state ACK.
+                            rollout.state == crate::WorkloadProtectionExceptionStateV1::Pending
                         })
             })
             .max_by_key(|candidate| {

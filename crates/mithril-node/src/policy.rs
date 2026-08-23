@@ -27,6 +27,7 @@ use erebor_interceptor_abi::{
 use mithril_control::{
     canonical_path_components, AntiRollbackStore, CanonicalPathGraphV1, CompiledOperationV1,
     CompiledPhysicalResultV1, ContainerKindV1 as PolicyContainerKindV1, EntryKindV1,
+    ExceptionActivationStateV1, ExceptionDeliveryCandidateV1, ExceptionDeliveryOperationV1,
     ObjectClassifierSelectorV1, PathPatternV1, PathSelectorTargetV1, PathTreeDenyPatternV1,
     PendingProfileActivationV1, PolicyArtifactOwner, PolicyDocumentV1, ProfileActivationMetadataV1,
     ProfileCandidateArtifactV1, ProfileModeV1, StaticDecisionKeyV1, ValidatedProfileCandidateV1,
@@ -76,6 +77,11 @@ pub(crate) struct PolicyActivationReceiptV1 {
     pub profile_generation_ref_id: u64,
     pub readback_digest: String,
     pub probe_result_digest: String,
+}
+
+pub(crate) struct ExceptionRuntimeObservationV1 {
+    pub state: ExceptionActivationStateV1,
+    pub consumed_uses: u32,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -200,6 +206,298 @@ impl NodePolicyGenerationOwner {
             profile_generation_ref_id,
             readback_digest,
             probe_result_digest: format!("{:x}", probe.finalize()),
+        })
+    }
+
+    pub(crate) fn apply_exception_candidate(
+        &self,
+        host: &KernelHost,
+        candidate: &ExceptionDeliveryCandidateV1,
+        grant_handle: u32,
+    ) -> Result<ExceptionRuntimeObservationV1> {
+        let profile_id = parse_id("profile_id", &candidate.profile_id)?;
+        let exception_instance_id =
+            parse_id("exception_instance_id", &candidate.exception_instance_id)?;
+        let descriptor_key = candidate.profile_generation_ref_id.to_ne_bytes();
+        let descriptor = host
+            .lookup_map("profile_generation_descriptors", &descriptor_key)
+            .context(InterceptorSnafu)?
+            .map(|descriptor| {
+                ProfileGenerationDescriptorV1::try_read_from_bytes(&descriptor).map_err(|error| {
+                    IdentityStateSnafu {
+                        reason: format!("the exception base-policy descriptor is invalid: {error}"),
+                    }
+                    .build()
+                })
+            })
+            .transpose()?;
+        ensure!(
+            descriptor.as_ref().is_none_or(|descriptor| {
+                descriptor.profile_id == profile_id
+                    && descriptor.profile_generation_ref_id == candidate.profile_generation_ref_id
+                    && descriptor.node_boot_id == self.node_boot_id
+                    && descriptor.label_epoch == self.label_epoch
+                    && matches!(
+                        descriptor.state,
+                        PolicyGenerationStateV1::Active | PolicyGenerationStateV1::Retiring
+                    )
+            }),
+            IdentityStateSnafu {
+                reason: "the exception target differs from its local policy generation",
+            }
+        );
+        ensure!(
+            candidate.operation == ExceptionDeliveryOperationV1::Revoke || descriptor.is_some(),
+            IdentityStateSnafu {
+                reason: "the exception base-policy generation is not installed",
+            }
+        );
+        let mut authority = self.exception_authority.lock().map_err(|_| {
+            IdentityStateSnafu {
+                reason: "exception authority owner lock is poisoned".to_owned(),
+            }
+            .build()
+        })?;
+        let runtime_key = ExceptionRuntimeStateKeyV1 {
+            node_id: authority.node_id(),
+            exception_instance_id,
+        };
+        let binding_key = ExceptionHandleBindingKeyV1 {
+            profile_generation_ref_id: candidate.profile_generation_ref_id,
+            exception_numeric_handle: grant_handle,
+            reserved: 0,
+        };
+        match candidate.operation {
+            ExceptionDeliveryOperationV1::Activate => {
+                let now_utc_ns = current_utc_ns()?;
+                let remaining_ns = u64::try_from(candidate.valid_until_utc_ns - now_utc_ns)
+                    .map_err(|error| {
+                        IdentityStateSnafu {
+                            reason: format!(
+                                "the exception activation deadline is invalid: {error}"
+                            ),
+                        }
+                        .build()
+                    })?;
+                let now_boottime_ns = current_boottime_ns()?;
+                let deadline_boottime_ns =
+                    now_boottime_ns.checked_add(remaining_ns).ok_or_else(|| {
+                        IdentityStateSnafu {
+                            reason: "the exception boottime deadline overflows".to_owned(),
+                        }
+                        .build()
+                    })?;
+                let definition_bytes =
+                    hex::decode(&candidate.candidate_content_id).map_err(|error| {
+                        IdentityStateSnafu {
+                            reason: format!(
+                                "the exception candidate content identity is invalid: {error}"
+                            ),
+                        }
+                        .build()
+                    })?;
+                let definition: [u8; 32] = definition_bytes.try_into().map_err(|_| {
+                    IdentityStateSnafu {
+                        reason: "the exception candidate content identity has an invalid size"
+                            .to_owned(),
+                    }
+                    .build()
+                })?;
+                let desired = ExceptionRuntimeStateV1 {
+                    lock: 0,
+                    maximum_uses: candidate.maximum_uses,
+                    consumed_uses: 0,
+                    bound_profile_generation_refs: 1,
+                    deadline_boottime_ns,
+                    transition_version: 1,
+                    exception_definition_sha256: definition,
+                    state: ExceptionRuntimeStateKindV1::Active,
+                    reserved: [0; 7],
+                };
+                let existing = host
+                    .lookup_map_locked("exception_runtime_states", runtime_key.as_bytes())
+                    .context(InterceptorSnafu)?;
+                let installed = authority.prepare_runtime(
+                    runtime_key.as_bytes(),
+                    desired,
+                    candidate.valid_until_utc_ns,
+                    existing.as_deref(),
+                    now_utc_ns,
+                    now_boottime_ns,
+                )?;
+                // Durable runtime authority must exist before a grant handle can reach it.
+                if existing.is_none() {
+                    host.update_map(
+                        "exception_runtime_states",
+                        runtime_key.as_bytes(),
+                        installed.as_bytes(),
+                    )
+                    .context(InterceptorSnafu)?;
+                }
+                ensure!(
+                    host.lookup_map_locked("exception_runtime_states", runtime_key.as_bytes())
+                        .context(InterceptorSnafu)?
+                        .is_some_and(|live| live == installed.as_bytes()),
+                    IdentityStateSnafu {
+                        reason: "the exception runtime state failed exact readback",
+                    }
+                );
+                let mut binding = ExceptionHandleBindingV1 {
+                    runtime_state_key: runtime_key,
+                    state: ExceptionBindingStateV1::Preparing,
+                    reserved: [0; 7],
+                };
+                // Preparing readback makes a partial binding fail closed during recovery.
+                host.update_map(
+                    "exception_handle_bindings",
+                    binding_key.as_bytes(),
+                    binding.as_bytes(),
+                )
+                .context(InterceptorSnafu)?;
+                ensure!(
+                    host.lookup_map("exception_handle_bindings", binding_key.as_bytes())
+                        .context(InterceptorSnafu)?
+                        .as_deref()
+                        == Some(binding.as_bytes()),
+                    IdentityStateSnafu {
+                        reason: "the preparing exception binding failed exact readback",
+                    }
+                );
+                binding.state = ExceptionBindingStateV1::Active;
+                host.update_map(
+                    "exception_handle_bindings",
+                    binding_key.as_bytes(),
+                    binding.as_bytes(),
+                )
+                .context(InterceptorSnafu)?;
+                ensure!(
+                    host.lookup_map("exception_handle_bindings", binding_key.as_bytes())
+                        .context(InterceptorSnafu)?
+                        .as_deref()
+                        == Some(binding.as_bytes()),
+                    IdentityStateSnafu {
+                        reason: "the active exception binding failed exact readback",
+                    }
+                );
+                Ok(ExceptionRuntimeObservationV1 {
+                    state: ExceptionActivationStateV1::Active,
+                    consumed_uses: installed.consumed_uses,
+                })
+            }
+            ExceptionDeliveryOperationV1::Revoke => {
+                let binding = host
+                    .lookup_map("exception_handle_bindings", binding_key.as_bytes())
+                    .context(InterceptorSnafu)?;
+                // A retired base generation may remove its binding before Control sends revoke.
+                ensure!(
+                    descriptor.is_some() || binding.is_none(),
+                    IdentityStateSnafu {
+                        reason: "an exception binding outlived its base-policy generation",
+                    }
+                );
+                if let Some(binding) = binding {
+                    let mut binding = ExceptionHandleBindingV1::try_read_from_bytes(&binding)
+                        .map_err(|error| {
+                            IdentityStateSnafu {
+                                reason: format!("the exception binding is invalid: {error}"),
+                            }
+                            .build()
+                        })?;
+                    ensure!(
+                        binding.runtime_state_key == runtime_key,
+                        IdentityStateSnafu {
+                            reason: "the exception grant is bound to another runtime instance",
+                        }
+                    );
+                    // Retiring blocks new BPF claims before authority reconciliation runs.
+                    binding.state = ExceptionBindingStateV1::Retiring;
+                    host.update_map(
+                        "exception_handle_bindings",
+                        binding_key.as_bytes(),
+                        binding.as_bytes(),
+                    )
+                    .context(InterceptorSnafu)?;
+                    ensure!(
+                        host.lookup_map("exception_handle_bindings", binding_key.as_bytes())
+                            .context(InterceptorSnafu)?
+                            .as_deref()
+                            == Some(binding.as_bytes()),
+                        IdentityStateSnafu {
+                            reason: "the retiring exception binding failed exact readback",
+                        }
+                    );
+                }
+                authority.reconcile(host, current_utc_ns()?)?;
+                // Keep the final use count after revocation for the durable Control receipt.
+                let consumed_uses = host
+                    .lookup_map_locked("exception_runtime_states", runtime_key.as_bytes())
+                    .context(InterceptorSnafu)?
+                    .map_or(Ok(0), |state| {
+                        ExceptionRuntimeStateV1::try_read_from_bytes(&state)
+                            .map(|state| state.consumed_uses)
+                            .map_err(|error| {
+                                IdentityStateSnafu {
+                                    reason: format!(
+                                        "the revoked exception runtime state is invalid: {error}"
+                                    ),
+                                }
+                                .build()
+                            })
+                    })?;
+                Ok(ExceptionRuntimeObservationV1 {
+                    state: ExceptionActivationStateV1::Revoked,
+                    consumed_uses,
+                })
+            }
+        }
+    }
+
+    pub(crate) fn observe_exception_candidate(
+        &self,
+        host: &KernelHost,
+        candidate: &ExceptionDeliveryCandidateV1,
+    ) -> Result<ExceptionRuntimeObservationV1> {
+        let exception_instance_id =
+            parse_id("exception_instance_id", &candidate.exception_instance_id)?;
+        let mut authority = self.exception_authority.lock().map_err(|_| {
+            IdentityStateSnafu {
+                reason: "exception authority owner lock is poisoned".to_owned(),
+            }
+            .build()
+        })?;
+        authority.reconcile(host, current_utc_ns()?)?;
+        let runtime_key = ExceptionRuntimeStateKeyV1 {
+            node_id: authority.node_id(),
+            exception_instance_id,
+        };
+        let state = host
+            .lookup_map_locked("exception_runtime_states", runtime_key.as_bytes())
+            .context(InterceptorSnafu)?
+            .context(IdentityStateSnafu {
+                reason: "the active exception has no runtime state",
+            })?;
+        let state = ExceptionRuntimeStateV1::try_read_from_bytes(&state).map_err(|error| {
+            IdentityStateSnafu {
+                reason: format!("the active exception runtime state is invalid: {error}"),
+            }
+            .build()
+        })?;
+        let observed = match state.state {
+            // The deadline is authoritative even if no later BPF operation updates the map state.
+            ExceptionRuntimeStateKindV1::Active
+                if current_boottime_ns()? >= state.deadline_boottime_ns =>
+            {
+                ExceptionActivationStateV1::Expired
+            }
+            ExceptionRuntimeStateKindV1::Active => ExceptionActivationStateV1::Active,
+            ExceptionRuntimeStateKindV1::Exhausted => ExceptionActivationStateV1::Consumed,
+            ExceptionRuntimeStateKindV1::Expired => ExceptionActivationStateV1::Expired,
+            ExceptionRuntimeStateKindV1::ReconciliationRequired
+            | ExceptionRuntimeStateKindV1::Unknown => ExceptionActivationStateV1::Stale,
+        };
+        Ok(ExceptionRuntimeObservationV1 {
+            state: observed,
+            consumed_uses: state.consumed_uses,
         })
     }
 

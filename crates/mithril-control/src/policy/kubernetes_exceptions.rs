@@ -22,6 +22,7 @@ use crate::Result;
 const EXCEPTION_SOURCE_DOMAIN: &[u8] = b"MITHRIL-EXCEPTION-SOURCE-REVISION-V1\0";
 const EXCEPTION_CANDIDATE_DOMAIN: &[u8] = b"MITHRIL-EXCEPTION-CANDIDATE-V1\0";
 const EXCEPTION_ACKNOWLEDGEMENT_DOMAIN: &[u8] = b"MITHRIL-EXCEPTION-ACKNOWLEDGEMENT-V1\0";
+pub const MAX_EXCEPTION_CANDIDATE_BYTES: usize = 64 * 1_024;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
@@ -340,6 +341,7 @@ impl ExceptionDeliveryCandidateV1 {
             .sign(&candidate.signature_input(&unsigned))
             .to_bytes()
             .to_vec();
+        candidate.validate_content()?;
         Ok(candidate)
     }
 
@@ -382,7 +384,9 @@ impl ExceptionDeliveryCandidateV1 {
                 && self.signing_key_id.len() <= 128
                 && self.signature.len() == 64
                 && self.candidate_content_id
-                    == domain_digest(EXCEPTION_CANDIDATE_DOMAIN, &unsigned),
+                    == domain_digest(EXCEPTION_CANDIDATE_DOMAIN, &unsigned)
+                && serde_json::to_vec(self)
+                    .is_ok_and(|encoded| encoded.len() <= MAX_EXCEPTION_CANDIDATE_BYTES),
             PolicyValidationSnafu {
                 policy_id: &self.exception_source_revision_id,
                 code: "CFG_EXCEPTION_CANDIDATE",
@@ -774,7 +778,7 @@ impl PolicyRolloutOwner {
             },
             |previous| Ok((previous.maximum_uses, previous.valid_until_utc_ns)),
         )?;
-        let expires_utc_ns = now_utc_ns
+        let delivery_expires_utc_ns = now_utc_ns
             .checked_add(self.candidate_validity_ns)
             .ok_or_else(|| {
                 invalid(
@@ -782,6 +786,12 @@ impl PolicyRolloutOwner {
                     "the exception delivery validity exceeds the signed time range",
                 )
             })?;
+        // An activation remains deliverable for its complete bounded authority window.
+        let expires_utc_ns = if operation == ExceptionDeliveryOperationV1::Activate {
+            delivery_expires_utc_ns.max(valid_until_utc_ns)
+        } else {
+            delivery_expires_utc_ns
+        };
         let sequence = self.store.next_exception_distribution_sequence(
             &target.node_id,
             &source.object_uid,

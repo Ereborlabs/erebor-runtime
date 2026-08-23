@@ -6,7 +6,6 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use prost::Message as _;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 use tokio::sync::{mpsc, oneshot};
@@ -21,7 +20,8 @@ use crate::{
     node_trust_server::NodeTrust, AdministrativeExecArmResult, AdministrativeExecArmStreamRequest,
     AdministrativeExecResolution, AdministrativeExecResolutionStreamRequest, ArmAdministrativeExec,
     ControlConvergenceHealth, CoverageAck, CoverageReportRequest, EvidenceAck,
-    EvidenceBatchRequest, NodeReadinessRequest, NodeRegistrationRequest, NodeSessionContext,
+    EvidenceBatchRequest, ExceptionAcknowledgementRequest, ExceptionInventory,
+    ExceptionInventoryRequest, NodeReadinessRequest, NodeRegistrationRequest, NodeSessionContext,
     PolicyAcknowledgementAccepted, PolicyAcknowledgementRequest, PolicyChunk, PolicyChunkRequest,
     PolicyInventory, PolicyInventoryRequest, RegistrationAccepted, ResolveAdministrativeExec,
     TrustGeneration, TrustGenerationAckRequest, IDENTITY_BYTES,
@@ -982,7 +982,7 @@ impl NodePolicy for ControlPlane {
     ) -> Result<Response<PolicyAcknowledgementAccepted>, Status> {
         let node_id = self.authenticated_node(&request)?;
         // Bind the acknowledgement bytes to the certificate on this authenticated channel.
-        let channel_receipt_digest = policy_channel_receipt_digest(&request)?;
+        let channel_receipt_digest = authenticated_channel_receipt_digest(&request)?;
         let request = request.into_inner();
         let context = request
             .session
@@ -1030,6 +1030,111 @@ impl NodePolicy for ControlPlane {
         Ok(Response::new(PolicyAcknowledgementAccepted {
             control_commit_index: store.commit_index(),
             rollout_state: rollout_state_name(state.state).to_owned(),
+        }))
+    }
+
+    async fn inventory_exceptions(
+        &self,
+        request: Request<ExceptionInventoryRequest>,
+    ) -> Result<Response<ExceptionInventory>, Status> {
+        let node_id = self.authenticated_node(&request)?;
+        let request = request.into_inner();
+        let context = request
+            .session
+            .as_ref()
+            .ok_or_else(|| Status::invalid_argument("node session context is required"))?;
+        self.require_ready_session(&node_id, context)?;
+        self.require_current_trust(&node_id, context)?;
+        // Inventory never accepts a node name from the payload. mTLS owns the target identity.
+        if request.durable_candidate_content_ids.len() > 256
+            || request
+                .durable_candidate_content_ids
+                .iter()
+                .any(|digest| !is_sha256_hex(digest))
+        {
+            return Err(Status::invalid_argument(
+                "exception inventory identities or bounds are invalid",
+            ));
+        }
+        let store = self.policy_store.as_ref().ok_or_else(|| {
+            Status::failed_precondition("Control has no durable policy rollout store")
+        })?;
+        let Some(candidate) = store
+            .next_exception_candidate_for_node(&node_id, &request.durable_candidate_content_ids)
+            .map_err(internal_status)?
+        else {
+            return Ok(Response::new(ExceptionInventory::default()));
+        };
+        // The signed target is checked again after the authenticated-node store lookup.
+        if candidate.exact_target.node_id != node_id {
+            return Err(Status::internal(
+                "the exception store returned a candidate for another node",
+            ));
+        }
+        let candidate_json = serde_json::to_vec(&candidate).map_err(|error| {
+            Status::internal(format!("exception candidate encoding failed: {error}"))
+        })?;
+        if candidate_json.len() > crate::MAX_EXCEPTION_CANDIDATE_BYTES {
+            return Err(Status::resource_exhausted(
+                "the exception candidate exceeds the delivery bound",
+            ));
+        }
+        Ok(Response::new(ExceptionInventory {
+            candidate_available: true,
+            candidate_content_id: candidate.candidate_content_id,
+            operation: exception_operation_name(candidate.operation).to_owned(),
+            candidate_json,
+        }))
+    }
+
+    async fn acknowledge_exception(
+        &self,
+        request: Request<ExceptionAcknowledgementRequest>,
+    ) -> Result<Response<PolicyAcknowledgementAccepted>, Status> {
+        let node_id = self.authenticated_node(&request)?;
+        // The receipt binds the reported runtime state to this authenticated request.
+        let channel_receipt_digest = authenticated_channel_receipt_digest(&request)?;
+        let request = request.into_inner();
+        let context = request
+            .session
+            .as_ref()
+            .ok_or_else(|| Status::invalid_argument("node session context is required"))?;
+        let identity = self.require_ready_session(&node_id, context)?;
+        self.require_current_trust(&node_id, context)?;
+        let label_epoch = self.session_label_epoch(&identity)?;
+        let acknowledgement = request
+            .acknowledgement
+            .ok_or_else(|| Status::invalid_argument("exception acknowledgement is required"))?;
+        let acknowledgement = crate::ExceptionActivationAcknowledgementV1 {
+            acknowledgement_content_id: String::new(),
+            tenant_id: acknowledgement.tenant_id,
+            node_id,
+            node_boot_id: context.node_boot_id.clone(),
+            label_epoch,
+            candidate_content_id: acknowledgement.candidate_content_id,
+            exception_source_revision_id: acknowledgement.exception_source_revision_id,
+            state: parse_exception_activation_state(&acknowledgement.state)?,
+            consumed_uses: acknowledgement.consumed_uses,
+            transition_version: acknowledgement.transition_version,
+            observed_utc_ns: acknowledgement.observed_utc_ns,
+            reason_code: nonempty(acknowledgement.reason_code),
+            authenticated_channel_receipt_digest: channel_receipt_digest,
+        }
+        .finalize()
+        .map_err(invalid_policy_status)?;
+        let rollout = self
+            .policy_rollout
+            .as_ref()
+            .ok_or_else(|| Status::failed_precondition("Control has no policy rollout owner"))?;
+        let state = rollout
+            .acknowledge_exception(acknowledgement)
+            .map_err(invalid_policy_status)?;
+        let store = self.policy_store.as_ref().ok_or_else(|| {
+            Status::failed_precondition("Control has no durable policy rollout store")
+        })?;
+        Ok(Response::new(PolicyAcknowledgementAccepted {
+            control_commit_index: store.commit_index(),
+            rollout_state: exception_rollout_state_name(state.state).to_owned(),
         }))
     }
 }
@@ -1142,8 +1247,8 @@ impl NodeAdministrativeArm for ControlPlane {
     }
 }
 
-fn policy_channel_receipt_digest(
-    request: &Request<PolicyAcknowledgementRequest>,
+fn authenticated_channel_receipt_digest<M: prost::Message>(
+    request: &Request<M>,
 ) -> Result<String, Status> {
     let certificate = request
         .peer_certs()
@@ -1186,6 +1291,22 @@ fn parse_policy_activation_state(value: &str) -> Result<crate::PolicyActivationS
     }
 }
 
+fn parse_exception_activation_state(
+    value: &str,
+) -> Result<crate::ExceptionActivationStateV1, Status> {
+    match value {
+        "ACTIVE" => Ok(crate::ExceptionActivationStateV1::Active),
+        "CONSUMED" => Ok(crate::ExceptionActivationStateV1::Consumed),
+        "EXPIRED" => Ok(crate::ExceptionActivationStateV1::Expired),
+        "REVOKED" => Ok(crate::ExceptionActivationStateV1::Revoked),
+        "REJECTED" => Ok(crate::ExceptionActivationStateV1::Rejected),
+        "STALE" => Ok(crate::ExceptionActivationStateV1::Stale),
+        _ => Err(Status::invalid_argument(
+            "exception acknowledgement has an unsupported state",
+        )),
+    }
+}
+
 const fn policy_operation_name(value: crate::PolicyDeliveryOperationV1) -> &'static str {
     match value {
         crate::PolicyDeliveryOperationV1::Activate => "ACTIVATE",
@@ -1193,6 +1314,13 @@ const fn policy_operation_name(value: crate::PolicyDeliveryOperationV1) -> &'sta
         crate::PolicyDeliveryOperationV1::RetireToRestrictiveTerminal => {
             "RETIRE_TO_RESTRICTIVE_TERMINAL"
         }
+    }
+}
+
+const fn exception_operation_name(value: crate::ExceptionDeliveryOperationV1) -> &'static str {
+    match value {
+        crate::ExceptionDeliveryOperationV1::Activate => "ACTIVATE",
+        crate::ExceptionDeliveryOperationV1::Revoke => "REVOKE",
     }
 }
 
@@ -1205,6 +1333,19 @@ const fn rollout_state_name(value: crate::PolicyRolloutStatusV1) -> &'static str
         crate::PolicyRolloutStatusV1::Rejected => "REJECTED",
         crate::PolicyRolloutStatusV1::Stale => "STALE",
         crate::PolicyRolloutStatusV1::Unknown => "UNKNOWN",
+    }
+}
+
+const fn exception_rollout_state_name(
+    value: crate::WorkloadProtectionExceptionStateV1,
+) -> &'static str {
+    match value {
+        crate::WorkloadProtectionExceptionStateV1::Pending => "PENDING",
+        crate::WorkloadProtectionExceptionStateV1::Active => "ACTIVE",
+        crate::WorkloadProtectionExceptionStateV1::Consumed => "CONSUMED",
+        crate::WorkloadProtectionExceptionStateV1::Expired => "EXPIRED",
+        crate::WorkloadProtectionExceptionStateV1::Revoked => "REVOKED",
+        crate::WorkloadProtectionExceptionStateV1::Failed => "FAILED",
     }
 }
 

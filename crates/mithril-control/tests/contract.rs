@@ -101,6 +101,22 @@ fn descriptor_has_the_approved_grpc_inventory() -> Result<(), Box<dyn std::error
             false,
         ),
         method(
+            "NodePolicy",
+            "InventoryExceptions",
+            "ExceptionInventoryRequest",
+            "ExceptionInventory",
+            false,
+            false,
+        ),
+        method(
+            "NodePolicy",
+            "AcknowledgeException",
+            "ExceptionAcknowledgementRequest",
+            "PolicyAcknowledgementAccepted",
+            false,
+            false,
+        ),
+        method(
             "ControlHealth",
             "Get",
             "NodeSessionContext",
