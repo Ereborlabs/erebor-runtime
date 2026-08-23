@@ -453,6 +453,7 @@ impl NodeChassis {
             .is_none_or(|capability| capability.state != "UNHEALTHY");
         let mut control_disconnected_since = tokio::time::Instant::now();
         let mut run_error = None;
+        let mut evidence_error_reported = false;
         let mut healthy_identity_capabilities = self.registration.capabilities.clone();
         let mut healthy_effect_prevention_claims =
             self.registration.effect_prevention_claims_enabled;
@@ -572,6 +573,15 @@ impl NodeChassis {
                             }
                             _instant = evidence_upload.tick() => {
                                 if self.observations.evidence_errors() > 0 {
+                                    if !evidence_error_reported {
+                                        eprintln!(
+                                            "Mithril node durable evidence failed: {}",
+                                            self.observations
+                                                .first_evidence_error()
+                                                .unwrap_or_else(|| "the exact error is unavailable".to_owned())
+                                        );
+                                        evidence_error_reported = true;
+                                    }
                                     evidence_healthy = false;
                                     close_evidence_claims(&mut self.registration);
                                     self.readiness.send_modify(|readiness| {
@@ -607,6 +617,10 @@ impl NodeChassis {
                                 }
                             }
                             _instant = policy_poll.tick() => {
+                                // Ready-only policy RPCs must wait for local evidence recovery.
+                                if !evidence_healthy {
+                                    continue;
+                                }
                                 // Poll, stage, activate, and acknowledge one candidate at a time.
                                 let bundle = match self
                                     .policy_delivery

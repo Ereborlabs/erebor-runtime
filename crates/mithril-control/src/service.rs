@@ -836,7 +836,8 @@ impl NodeEvidence for ControlPlane {
             .session
             .as_ref()
             .ok_or_else(|| Status::invalid_argument("node session context is required"))?;
-        self.require_ready_session(&node_id, context)?;
+        // A degraded node must upload retained evidence before it can recover readiness.
+        self.require_session(&node_id, context)?;
         self.require_current_trust(&node_id, context)?;
         let authenticated = self.authenticated_evidence_node(&node_id, context)?;
         let batch = request
