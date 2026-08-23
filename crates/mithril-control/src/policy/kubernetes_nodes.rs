@@ -107,18 +107,13 @@ impl KubernetesNodeReadinessOwner {
                 tokio::time::sleep(Duration::from_secs(2)).await;
                 continue;
             };
-            let Ok(node_list) = nodes.list(&ListParams::default().limit(500)).await else {
+            let Ok(node_resource_version) = self
+                .reconcile_node_snapshot(&nodes, &constraints, &control)
+                .await
+            else {
                 tokio::time::sleep(Duration::from_secs(2)).await;
                 continue;
             };
-            let node_resource_version = node_list
-                .metadata
-                .resource_version
-                .unwrap_or_else(|| "0".to_owned());
-            for node in node_list.items {
-                self.reconcile_node(&nodes, &constraints, &control, &node)
-                    .await;
-            }
 
             let daemon_set_resource_version = daemon_set.resource_version().unwrap_or_default();
             let daemon_set_watch = daemon_sets
@@ -161,6 +156,45 @@ impl KubernetesNodeReadinessOwner {
                 }
             }
         }
+    }
+
+    async fn reconcile_node_snapshot(
+        &self,
+        nodes: &Api<Node>,
+        constraints: &DaemonSetNodeConstraintsV1,
+        control: &ControlPlane,
+    ) -> Result<String> {
+        let mut continuation = None::<String>;
+        let mut resource_version = None::<String>;
+        loop {
+            let mut params = ListParams::default().limit(500);
+            if let Some(token) = &continuation {
+                params = params.continue_token(token);
+            }
+            let page = nodes.list(&params).await.map_err(|error| {
+                InvalidConfigurationSnafu {
+                    reason: format!("list Kubernetes Nodes: {error}"),
+                }
+                .build()
+            })?;
+            for node in page.items {
+                self.reconcile_node(nodes, constraints, control, &node)
+                    .await;
+            }
+            resource_version = page.metadata.resource_version.or(resource_version);
+            continuation = page.metadata.continue_;
+            if continuation.as_ref().is_none_or(String::is_empty) {
+                break;
+            }
+        }
+        resource_version
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                InvalidConfigurationSnafu {
+                    reason: "the Kubernetes Node snapshot has no resource version".to_owned(),
+                }
+                .build()
+            })
     }
 
     async fn reconcile_node(
