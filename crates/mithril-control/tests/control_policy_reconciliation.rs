@@ -301,6 +301,9 @@ fn exception_is_bounded_to_one_active_container_and_replays_revocation() -> Test
             std::slice::from_ref(&activated.candidate.candidate_content_id),
         )?
         .is_none());
+    let pending_health = store.health()?;
+    assert_eq!(pending_health.exception_candidates, 1);
+    assert_eq!(pending_health.unsettled_exception_candidates, 1);
     let commit_index = store.commit_index();
     let duplicate = owner.reconcile_exception(&resource, NAMESPACE_UID, &inventory, NOW + 4)?;
     assert_eq!(duplicate.source_revision, activated.source_revision);
@@ -316,6 +319,7 @@ fn exception_is_bounded_to_one_active_container_and_replays_revocation() -> Test
             1,
             NOW + 5,
         )?)?;
+    assert_eq!(store.health()?.unsettled_exception_candidates, 0);
     let mut overlapping = exception_resource("30000000-0000-4000-8000-000000000003", false)?;
     overlapping.metadata.name = Some("temporary-file-access-overlap".to_owned());
     assert!(owner
@@ -337,6 +341,8 @@ fn exception_is_bounded_to_one_active_container_and_replays_revocation() -> Test
     let deleting = exception_resource(EXCEPTION_UID, true)?;
     let revoked =
         restarted.reconcile_exception(&deleting, NAMESPACE_UID, &[], NOW + 120_000_000_000)?;
+    assert_eq!(reopened.health()?.exception_candidates, 2);
+    assert_eq!(reopened.health()?.unsettled_exception_candidates, 1);
     assert_eq!(
         revoked.candidate.operation,
         ExceptionDeliveryOperationV1::Revoke
@@ -361,6 +367,7 @@ fn exception_is_bounded_to_one_active_container_and_replays_revocation() -> Test
             1,
             NOW + 120_000_000_002,
         )?)?;
+    assert_eq!(reopened.health()?.unsettled_exception_candidates, 0);
     let recreated_resource = exception_resource("30000000-0000-4000-8000-000000000009", false)?;
     let recreated = restarted.reconcile_exception(
         &recreated_resource,
@@ -549,8 +556,9 @@ fn health_snapshot_exposes_bounded_operational_counts_without_payloads() -> Test
     let store = ControlStore::open(directory.path())?;
     let owner = make_owner(store);
     let before = owner.health()?;
-    assert_eq!(before.configured_namespaces, 1);
-    assert_eq!(before.watched_namespaces, 0);
+    assert_eq!(before.reconcile_queue_limit, 1);
+    assert_eq!(before.configured_watches, 2);
+    assert_eq!(before.connected_watches, 0);
     assert_eq!(before.reconcile_in_flight, 0);
 
     owner.reconcile(
@@ -578,6 +586,8 @@ fn health_snapshot_exposes_bounded_operational_counts_without_payloads() -> Test
     assert_eq!(health.target_snapshots, 1);
     assert_eq!(health.rollout_targets, 1);
     assert_eq!(health.unsettled_rollout_targets, 1);
+    assert_eq!(health.exception_candidates, 0);
+    assert_eq!(health.unsettled_exception_candidates, 0);
     assert_eq!(health.pending_evidence_records, 0);
     Ok(())
 }

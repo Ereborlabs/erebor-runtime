@@ -126,6 +126,10 @@ pub struct PolicyDeliveryStatusV1 {
     pub runtime_binding_count: usize,
     pub activation_pending: bool,
     pub control_acknowledged: bool,
+    pub pending_exception_count: usize,
+    pub active_exception_count: usize,
+    pub terminal_exception_count: usize,
+    pub exception_ack_pending_count: usize,
 }
 
 pub(crate) struct PreparedPolicyActivationV1 {
@@ -210,6 +214,42 @@ impl NodePolicyDeliveryOwner {
             control_acknowledged: self.state.active_candidate_content_id.is_some()
                 && self.state.active_candidate_content_id
                     == self.state.control_acknowledged_candidate_content_id,
+            pending_exception_count: self
+                .state
+                .exception_records
+                .values()
+                .filter(|record| record.state == LocalExceptionStateV1::Pending)
+                .count(),
+            active_exception_count: self
+                .state
+                .exception_records
+                .values()
+                .filter(|record| record.state == LocalExceptionStateV1::Active)
+                .count(),
+            // Terminal records stay durable so deletion and recreation cannot refund uses.
+            terminal_exception_count: self
+                .state
+                .exception_records
+                .values()
+                .filter(|record| {
+                    matches!(
+                        record.state,
+                        LocalExceptionStateV1::Consumed
+                            | LocalExceptionStateV1::Expired
+                            | LocalExceptionStateV1::Revoked
+                            | LocalExceptionStateV1::Rejected
+                            | LocalExceptionStateV1::Stale
+                    )
+                })
+                .count(),
+            exception_ack_pending_count: self
+                .state
+                .exception_records
+                .values()
+                .filter(|record| {
+                    record.state != LocalExceptionStateV1::Pending && !record.control_acknowledged
+                })
+                .count(),
         }
     }
 
@@ -2603,6 +2643,9 @@ mod tests {
             path: "in-memory exception candidate",
         })?;
         owner.stage_exception_delivery(&prepared_exception, &activation_json, 23)?;
+        let pending_status = owner.status();
+        assert_eq!(pending_status.pending_exception_count, 1);
+        assert_eq!(pending_status.active_exception_count, 0);
 
         let mut restarted = NodePolicyDeliveryOwner::load(directory.path())?;
         assert!(restarted
@@ -2623,7 +2666,10 @@ mod tests {
                 .build()
             })?;
         assert_eq!(activation_ack.state, "ACTIVE");
+        assert_eq!(restarted.status().exception_ack_pending_count, 1);
         restarted.acknowledge_exception_control(&activation.candidate_content_id)?;
+        assert_eq!(restarted.status().active_exception_count, 1);
+        assert_eq!(restarted.status().exception_ack_pending_count, 0);
         restarted.observe_exception_result(
             &activation,
             crate::policy::ExceptionRuntimeObservationV1 {
@@ -2642,6 +2688,7 @@ mod tests {
             })?;
         assert_eq!(consumed_ack.state, "CONSUMED");
         assert_eq!(consumed_ack.transition_version, 2);
+        assert_eq!(restarted.status().terminal_exception_count, 1);
         restarted.acknowledge_exception_control(&activation.candidate_content_id)?;
 
         let deletion = source.deletion_requested().context(PolicySnafu)?;

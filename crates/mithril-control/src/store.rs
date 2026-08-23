@@ -38,6 +38,8 @@ pub struct ControlStoreHealthV1 {
     pub target_snapshots: u64,
     pub rollout_targets: u64,
     pub unsettled_rollout_targets: u64,
+    pub exception_candidates: u64,
+    pub unsettled_exception_candidates: u64,
     pub evidence_cursors: u64,
     pub pending_evidence_batches: u64,
     pub pending_evidence_records: u64,
@@ -288,6 +290,18 @@ impl ControlStore {
                                 | crate::PolicyRolloutStatusV1::Staged
                                 | crate::PolicyRolloutStatusV1::Unknown
                         )
+                    })
+                    .count(),
+            ),
+            exception_candidates: count(inner.state.exception_candidates.len()),
+            // The first authenticated node result settles delivery for one candidate.
+            unsettled_exception_candidates: count(
+                inner
+                    .state
+                    .exception_rollout_states
+                    .values()
+                    .filter(|state| {
+                        state.state == crate::WorkloadProtectionExceptionStateV1::Pending
                     })
                     .count(),
             ),
