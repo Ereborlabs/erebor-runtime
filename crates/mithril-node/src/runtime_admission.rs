@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 use std::fs;
 use std::os::unix::fs::{FileTypeExt as _, MetadataExt as _, PermissionsExt as _};
+use std::os::unix::net::UnixStream as StandardUnixStream;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -19,6 +20,8 @@ pub const POD_NAMESPACE_ANNOTATION: &str = "io.kubernetes.cri.sandbox-namespace"
 pub const CONTAINER_NAME_ANNOTATION: &str = "io.kubernetes.cri.container-name";
 pub const IMAGE_NAME_ANNOTATION: &str = "io.kubernetes.cri.image-name";
 pub const SANDBOX_ID_ANNOTATION: &str = "io.kubernetes.cri.sandbox-id";
+pub const PROFILE_ID_ANNOTATION: &str = "mithril.erebor.dev/profile-id";
+pub const POLICY_SOURCE_REVISION_ANNOTATION: &str = "mithril.erebor.dev/policy-source-revision";
 pub(crate) const POLICY_CONVERGENCE_PENDING: &str = "POLICY_CONVERGENCE_PENDING";
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -44,6 +47,7 @@ pub(crate) struct KubernetesRuntimeIdentityV1 {
     pub container_name: String,
     pub image_digest: String,
     pub sandbox_id: String,
+    pub profile_id: String,
 }
 
 pub(crate) struct ScheduledRuntimeBindingV1 {
@@ -110,12 +114,21 @@ impl RuntimeAdmissionRequestV1 {
                 reason: "runtime admission image is not digest-pinned",
             }
         );
+        let profile_id = required(PROFILE_ID_ANNOTATION)?;
+        let policy_source_revision_id = required(POLICY_SOURCE_REVISION_ANNOTATION)?;
+        ensure!(
+            canonical_uuid(&profile_id) && valid_sha256(&policy_source_revision_id),
+            IdentityStateSnafu {
+                reason: "runtime admission policy annotations are not canonical",
+            }
+        );
         Ok(KubernetesRuntimeIdentityV1 {
             namespace: required(POD_NAMESPACE_ANNOTATION)?,
             pod_uid: required(POD_UID_ANNOTATION)?,
             container_name: required(CONTAINER_NAME_ANNOTATION)?,
             image_digest: image_digest.to_owned(),
             sandbox_id: required(SANDBOX_ID_ANNOTATION)?,
+            profile_id,
         })
     }
 }
@@ -146,9 +159,7 @@ impl RuntimeAdmissionServer {
                     reason: "runtime admission socket path is occupied by an unsafe object",
                 }
             );
-            fs::remove_file(&config.socket_path).context(IoSnafu {
-                path: &config.socket_path,
-            })?;
+            remove_stale_socket(&config.socket_path)?;
         }
         let listener = UnixListener::bind(&config.socket_path).context(IoSnafu {
             path: &config.socket_path,
@@ -316,6 +327,7 @@ pub(crate) fn resolve_scheduled_runtime_binding(
         .enumerate()
         .filter(|(_index, binding)| {
             binding.scheduled_binding_authority_id.is_some()
+                && binding.profile_id == identity.profile_id
                 && binding.namespace == identity.namespace
                 && binding.pod_uid == identity.pod_uid
                 && binding.container_name == identity.container_name
@@ -401,6 +413,34 @@ fn derived_uuid(parts: &[&[u8]]) -> String {
     bytes[6] = (bytes[6] & 0x0f) | 0x80;
     bytes[8] = (bytes[8] & 0x3f) | 0x80;
     uuid::Uuid::from_bytes(bytes).hyphenated().to_string()
+}
+
+fn canonical_uuid(value: &str) -> bool {
+    uuid::Uuid::parse_str(value).is_ok_and(|parsed| parsed.hyphenated().to_string() == value)
+}
+
+fn valid_sha256(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+}
+
+fn remove_stale_socket(socket_path: &Path) -> Result<()> {
+    match StandardUnixStream::connect(socket_path) {
+        Ok(_stream) => IdentityStateSnafu {
+            reason: "another runtime admission owner is active".to_owned(),
+        }
+        .fail(),
+        Err(error) if error.kind() == std::io::ErrorKind::ConnectionRefused => {
+            fs::remove_file(socket_path).context(IoSnafu { path: socket_path })
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => IdentityStateSnafu {
+            reason: format!("runtime admission socket ownership is not provable: {error}"),
+        }
+        .fail(),
+    }
 }
 
 fn clean_cgroup_path(path: &Path) -> bool {
@@ -515,10 +555,11 @@ mod tests {
     use std::time::Duration;
 
     use super::{
-        dispatch_runtime_admission, resolve_scheduled_runtime_binding, runtime_binding_id,
-        scheduled_authority_binding_id, submit_runtime_admission, RuntimeAdmissionRequestV1,
-        RuntimeAdmissionResponseV1, CONTAINER_NAME_ANNOTATION, IMAGE_NAME_ANNOTATION,
-        POD_NAMESPACE_ANNOTATION, POD_UID_ANNOTATION, POLICY_CONVERGENCE_PENDING,
+        dispatch_runtime_admission, remove_stale_socket, resolve_scheduled_runtime_binding,
+        runtime_binding_id, scheduled_authority_binding_id, submit_runtime_admission,
+        RuntimeAdmissionRequestV1, RuntimeAdmissionResponseV1, CONTAINER_NAME_ANNOTATION,
+        IMAGE_NAME_ANNOTATION, POD_NAMESPACE_ANNOTATION, POD_UID_ANNOTATION,
+        POLICY_CONVERGENCE_PENDING, POLICY_SOURCE_REVISION_ANNOTATION, PROFILE_ID_ANNOTATION,
         SANDBOX_ID_ANNOTATION,
     };
     use crate::{ContainerKindV1, WorkloadBindingConfig};
@@ -537,6 +578,11 @@ mod tests {
                     format!("repo/worker@sha256:{}", "b".repeat(64)),
                 ),
                 (SANDBOX_ID_ANNOTATION.to_owned(), "c".repeat(64)),
+                (
+                    PROFILE_ID_ANNOTATION.to_owned(),
+                    "33333333-3333-4333-8333-333333333333".to_owned(),
+                ),
+                (POLICY_SOURCE_REVISION_ANNOTATION.to_owned(), "f".repeat(64)),
             ]),
         }
     }
@@ -592,6 +638,23 @@ mod tests {
             "repo/worker:latest".to_owned(),
         );
         assert!(unpinned.kubernetes_identity().is_err());
+
+        let mut forged_profile = request();
+        forged_profile
+            .annotations
+            .insert(PROFILE_ID_ANNOTATION.to_owned(), "profile-a".to_owned());
+        assert!(forged_profile.kubernetes_identity().is_err());
+    }
+
+    #[test]
+    fn an_active_runtime_admission_owner_cannot_be_replaced(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let socket = directory.path().join("runtime-admission.sock");
+        let _listener = std::os::unix::net::UnixListener::bind(&socket)?;
+        assert!(remove_stale_socket(&socket).is_err());
+        assert!(socket.exists());
+        Ok(())
     }
 
     #[test]
@@ -628,6 +691,17 @@ mod tests {
             resolve_scheduled_runtime_binding(std::slice::from_ref(&scheduled), &wrong_pod)
                 .is_err()
         );
+
+        let mut wrong_profile = request();
+        wrong_profile.annotations.insert(
+            PROFILE_ID_ANNOTATION.to_owned(),
+            "44444444-4444-4444-8444-444444444444".to_owned(),
+        );
+        assert!(resolve_scheduled_runtime_binding(
+            std::slice::from_ref(&scheduled),
+            &wrong_profile
+        )
+        .is_err());
 
         let request = request();
         let active = resolve_scheduled_runtime_binding(&[scheduled], &request)?.resolved;
