@@ -338,6 +338,31 @@ fn exception_is_bounded_to_one_active_container_and_replays_revocation() -> Test
         "node-a",
         NOW + 120_000_000_001,
     )?;
+    restarted
+        .rollout_owner()
+        .acknowledge_exception(exception_acknowledgement(
+            &revoked.candidate,
+            ExceptionActivationStateV1::Revoked,
+            1,
+            NOW + 120_000_000_002,
+        )?)?;
+    let recreated_resource = exception_resource("30000000-0000-4000-8000-000000000009", false)?;
+    let recreated = restarted.reconcile_exception(
+        &recreated_resource,
+        NAMESPACE_UID,
+        &inventory,
+        NOW + 120_000_000_003,
+    )?;
+    let relist_revocations =
+        restarted.retire_missing_exceptions(&BTreeSet::new(), NOW + 120_000_000_004)?;
+    assert_eq!(relist_revocations.len(), 1);
+    assert_eq!(
+        relist_revocations[0]
+            .candidate
+            .predecessor_candidate_content_id
+            .as_deref(),
+        Some(recreated.candidate.candidate_content_id.as_str())
+    );
     drop(restarted);
     drop(reopened);
     assert!(ControlStore::open(directory.path()).is_ok());

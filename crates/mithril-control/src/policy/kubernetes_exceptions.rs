@@ -1,14 +1,20 @@
+use std::collections::BTreeSet;
+
 use ed25519_dalek::{Signature, Signer as _, SigningKey, Verifier as _, VerifyingKey};
+use k8s_openapi::api::core::v1::Namespace;
+use kube::api::{ListParams, Patch, PatchParams, WatchEvent, WatchParams};
+use kube::{Api, Client};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 use snafu::ensure;
+use tokio_stream::StreamExt as _;
 
 use super::canonical::canonical_cbor;
 use super::{
-    kubernetes_condition, PolicyActivationAcknowledgementV1, PolicyBundleV1,
-    PolicyDesiredStateOwner, PolicyRolloutOwner, PolicySourceStateV1, WorkloadProtectionException,
-    WorkloadProtectionExceptionStateV1, WorkloadProtectionExceptionStatusV1, WorkloadTargetFactV1,
-    EXCEPTION_KIND, POLICY_API_VERSION,
+    kubernetes_condition, preserve_transition_times, utc_now_ns, PolicyActivationAcknowledgementV1,
+    PolicyBundleV1, PolicyDesiredStateOwner, PolicyRolloutOwner, PolicySourceStateV1,
+    WorkloadProtectionException, WorkloadProtectionExceptionStateV1,
+    WorkloadProtectionExceptionStatusV1, WorkloadTargetFactV1, EXCEPTION_KIND, POLICY_API_VERSION,
 };
 use crate::error::{PolicySignatureSnafu, PolicyValidationSnafu};
 use crate::Result;
@@ -238,6 +244,13 @@ impl ExceptionSourceRevisionV1 {
             }
         );
         Ok(())
+    }
+
+    pub fn deletion_requested(&self) -> Result<Self> {
+        let mut revision = self.clone();
+        revision.state = ExceptionSourceStateV1::DeletionRequested;
+        revision.exception_source_revision_id = revision.content_id()?;
+        Ok(revision)
     }
 
     fn content_id(&self) -> Result<String> {
@@ -480,6 +493,22 @@ impl PolicyDesiredStateOwner {
         inventory: &[WorkloadTargetFactV1],
         now_utc_ns: i64,
     ) -> Result<ExceptionReconcileResultV1> {
+        let state = if resource.metadata.deletion_timestamp.is_some() {
+            ExceptionSourceStateV1::DeletionRequested
+        } else {
+            ExceptionSourceStateV1::Accepted
+        };
+        self.reconcile_exception_observation(resource, namespace_uid, inventory, now_utc_ns, state)
+    }
+
+    pub(super) fn reconcile_exception_observation(
+        &self,
+        resource: &WorkloadProtectionException,
+        namespace_uid: &str,
+        inventory: &[WorkloadTargetFactV1],
+        now_utc_ns: i64,
+        state: ExceptionSourceStateV1,
+    ) -> Result<ExceptionReconcileResultV1> {
         let _reconcile_guard = self.reconcile_lock.lock().map_err(|_| {
             invalid(
                 resource.metadata.uid.as_deref().unwrap_or("<exception>"),
@@ -488,11 +517,6 @@ impl PolicyDesiredStateOwner {
         })?;
         let object_uid = required(resource.metadata.uid.as_deref(), "object UID")?;
         let object_name = required(resource.metadata.name.as_deref(), "object name")?;
-        let state = if resource.metadata.deletion_timestamp.is_some() {
-            ExceptionSourceStateV1::DeletionRequested
-        } else {
-            ExceptionSourceStateV1::Accepted
-        };
         let current = self.store.latest_exception_source(
             &self.config.tenant_id,
             namespace_uid,
@@ -540,80 +564,121 @@ impl PolicyDesiredStateOwner {
         if current.as_ref().is_some_and(|current| current == &source) {
             return self.stored_exception_result(&source, now_utc_ns);
         }
-
-        let (base_bundle, base_acknowledgement, target, predecessor) = match state {
-            ExceptionSourceStateV1::Accepted => {
-                let mut targets = inventory.iter().filter(|target| {
-                    target.cluster_uid == self.config.cluster_uid
-                        && target.namespace_uid == namespace_uid
-                        && target.pod_uid == resource.spec.target.pod.uid
-                        && target.container_name == resource.spec.target.container_name
-                        && target.kubernetes.as_ref().is_some_and(|identity| {
-                            identity.namespace_name == source.namespace_name
-                                && identity.pod_name == resource.spec.target.pod.name
-                                && identity.policy_source_revision_id
-                                    == base_source.policy_source_revision_id
-                        })
-                });
-                let target = targets.next().cloned().ok_or_else(|| {
-                    invalid(
-                        object_uid,
-                        "the exception target is not one exact protected container",
-                    )
-                })?;
-                ensure!(
-                    targets.next().is_none(),
-                    PolicyValidationSnafu {
-                        policy_id: object_uid,
-                        code: "CFG_EXCEPTION_TARGET",
-                        reason: "the exception target resolves to more than one container",
-                    }
-                );
-                let (bundle, acknowledgement) = self
-                    .store
-                    .active_policy_for_workload(
-                        &base_source.policy_source_revision_id,
-                        &target.workload_binding_generation_digest,
-                    )?
-                    .ok_or_else(|| {
-                        invalid(
-                            object_uid,
-                            "the exception target has no active acknowledged base policy",
-                        )
-                    })?;
-                (bundle, Some(acknowledgement), target, None)
+        if state == ExceptionSourceStateV1::DeletionRequested {
+            return self.reconcile_exception_revocation(source, now_utc_ns);
+        }
+        let mut targets = inventory.iter().filter(|target| {
+            target.cluster_uid == self.config.cluster_uid
+                && target.namespace_uid == namespace_uid
+                && target.pod_uid == resource.spec.target.pod.uid
+                && target.container_name == resource.spec.target.container_name
+                && target.kubernetes.as_ref().is_some_and(|identity| {
+                    identity.namespace_name == source.namespace_name
+                        && identity.pod_name == resource.spec.target.pod.name
+                        && identity.policy_source_revision_id
+                            == base_source.policy_source_revision_id
+                })
+        });
+        let target = targets.next().cloned().ok_or_else(|| {
+            invalid(
+                object_uid,
+                "the exception target is not one exact protected container",
+            )
+        })?;
+        ensure!(
+            targets.next().is_none(),
+            PolicyValidationSnafu {
+                policy_id: object_uid,
+                code: "CFG_EXCEPTION_TARGET",
+                reason: "the exception target resolves to more than one container",
             }
-            ExceptionSourceStateV1::DeletionRequested => {
-                let previous = self
-                    .store
-                    .latest_exception_candidate_for_object(object_uid)?
-                    .ok_or_else(|| {
-                        invalid(
-                            object_uid,
-                            "the deleted exception has no activation candidate to revoke",
-                        )
-                    })?;
-                let bundle = self
-                    .store
-                    .bundle_for_candidate(
-                        &previous.exact_target.node_id,
-                        &previous.base_candidate_content_id,
-                    )?
-                    .ok_or_else(|| {
-                        invalid(
-                            object_uid,
-                            "the exception base-policy bundle is unavailable",
-                        )
-                    })?;
-                (bundle, None, previous.exact_target.clone(), Some(previous))
-            }
-        };
+        );
+        let (base_bundle, base_acknowledgement) = self
+            .store
+            .active_policy_for_workload(
+                &base_source.policy_source_revision_id,
+                &target.workload_binding_generation_digest,
+            )?
+            .ok_or_else(|| {
+                invalid(
+                    object_uid,
+                    "the exception target has no active acknowledged base policy",
+                )
+            })?;
         let (candidate, rollout_state) = self.rollout.create_exception(
             &source,
             &base_bundle,
-            base_acknowledgement.as_ref(),
+            Some(&base_acknowledgement),
             target,
-            predecessor.as_ref(),
+            None,
+            now_utc_ns,
+        )?;
+        self.store.record_exception_desired(
+            source.clone(),
+            candidate.clone(),
+            rollout_state.clone(),
+        )?;
+        Ok(ExceptionReconcileResultV1 {
+            source_revision: source.clone(),
+            candidate,
+            rollout_state: rollout_state.clone(),
+            status: exception_status(&source, &rollout_state, now_utc_ns),
+        })
+    }
+
+    pub fn retire_missing_exceptions(
+        &self,
+        seen_object_uids: &std::collections::BTreeSet<String>,
+        now_utc_ns: i64,
+    ) -> Result<Vec<ExceptionReconcileResultV1>> {
+        let _reconcile_guard = self.reconcile_lock.lock().map_err(|_| {
+            invalid(
+                "<exception-relist>",
+                "the policy reconcile owner lock is poisoned",
+            )
+        })?;
+        self.store
+            .latest_live_exception_sources()?
+            .into_iter()
+            .filter(|source| !seen_object_uids.contains(&source.object_uid))
+            .map(|source| {
+                self.reconcile_exception_revocation(source.deletion_requested()?, now_utc_ns)
+            })
+            .collect()
+    }
+
+    fn reconcile_exception_revocation(
+        &self,
+        source: ExceptionSourceRevisionV1,
+        now_utc_ns: i64,
+    ) -> Result<ExceptionReconcileResultV1> {
+        let previous = self
+            .store
+            .latest_exception_candidate_for_object(&source.object_uid)?
+            .ok_or_else(|| {
+                invalid(
+                    &source.object_uid,
+                    "the deleted exception has no activation candidate to revoke",
+                )
+            })?;
+        let bundle = self
+            .store
+            .bundle_for_candidate(
+                &previous.exact_target.node_id,
+                &previous.base_candidate_content_id,
+            )?
+            .ok_or_else(|| {
+                invalid(
+                    &source.object_uid,
+                    "the exception base-policy bundle is unavailable",
+                )
+            })?;
+        let (candidate, rollout_state) = self.rollout.create_exception(
+            &source,
+            &bundle,
+            None,
+            previous.exact_target.clone(),
+            Some(&previous),
             now_utc_ns,
         )?;
         self.store.record_exception_desired(
@@ -836,6 +901,189 @@ fn exception_status(
                 now_utc_ns,
             ),
         ],
+    }
+}
+
+pub(super) async fn reconcile_exception_cluster(
+    client: Client,
+    owner: PolicyDesiredStateOwner,
+    control: crate::ControlPlane,
+) {
+    let api = Api::<WorkloadProtectionException>::all(client.clone());
+    let namespaces = Api::<Namespace>::all(client);
+    loop {
+        owner.record_watch_state("exceptions/*", false);
+        let Some(resource_version) =
+            relist_exception_cluster(&api, &namespaces, &owner, &control).await
+        else {
+            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+            continue;
+        };
+        let Ok(stream) = api
+            .watch(&WatchParams::default().timeout(240), &resource_version)
+            .await
+        else {
+            owner.record_watch_failure();
+            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+            continue;
+        };
+        owner.record_watch_state("exceptions/*", true);
+        tokio::pin!(stream);
+        while let Some(event) = stream.next().await {
+            match event {
+                Ok(WatchEvent::Added(resource) | WatchEvent::Modified(resource)) => {
+                    reconcile_exception_resource(
+                        &api,
+                        &namespaces,
+                        &owner,
+                        &control,
+                        resource,
+                        false,
+                    )
+                    .await;
+                }
+                Ok(WatchEvent::Deleted(resource)) => {
+                    reconcile_exception_resource(
+                        &api,
+                        &namespaces,
+                        &owner,
+                        &control,
+                        resource,
+                        true,
+                    )
+                    .await;
+                }
+                Ok(WatchEvent::Bookmark(_)) => {}
+                Ok(WatchEvent::Error(_)) | Err(_) => {
+                    owner.record_watch_failure();
+                    break;
+                }
+            }
+        }
+    }
+}
+
+async fn relist_exception_cluster(
+    api: &Api<WorkloadProtectionException>,
+    namespaces: &Api<Namespace>,
+    owner: &PolicyDesiredStateOwner,
+    control: &crate::ControlPlane,
+) -> Option<String> {
+    let mut continuation = None::<String>;
+    let mut resource_version = None::<String>;
+    let mut seen_object_uids = BTreeSet::new();
+    loop {
+        let mut params = ListParams::default().limit(500);
+        if let Some(token) = &continuation {
+            params = params.continue_token(token);
+        }
+        let page = match api.list(&params).await {
+            Ok(page) => page,
+            Err(_) => {
+                owner.record_relist(false);
+                return None;
+            }
+        };
+        for resource in page.items {
+            if let Some(object_uid) = &resource.metadata.uid {
+                seen_object_uids.insert(object_uid.clone());
+            }
+            reconcile_exception_resource(api, namespaces, owner, control, resource, false).await;
+        }
+        resource_version = page.metadata.resource_version.or(resource_version);
+        continuation = match super::kubernetes::next_continuation_token(
+            continuation.as_deref(),
+            page.metadata.continue_,
+            "WorkloadProtectionException",
+        ) {
+            Ok(continuation) => continuation,
+            Err(_) => {
+                owner.record_relist(false);
+                return None;
+            }
+        };
+        if continuation.is_none() {
+            break;
+        }
+    }
+    let resource_version = resource_version.filter(|value| !value.is_empty());
+    // Absence is authoritative only after every list page completed under one API cursor.
+    let complete = resource_version.is_some()
+        && owner
+            .retire_missing_exceptions(&seen_object_uids, utc_now_ns())
+            .is_ok();
+    owner.record_relist(complete);
+    complete.then_some(resource_version).flatten()
+}
+
+async fn reconcile_exception_resource(
+    api: &Api<WorkloadProtectionException>,
+    namespaces: &Api<Namespace>,
+    owner: &PolicyDesiredStateOwner,
+    control: &crate::ControlPlane,
+    resource: WorkloadProtectionException,
+    deleted: bool,
+) {
+    let Some(name) = resource.metadata.name.clone() else {
+        return;
+    };
+    let generation = resource
+        .metadata
+        .generation
+        .and_then(|value| u64::try_from(value).ok())
+        .unwrap_or_default();
+    let Some(namespace_name) = resource.metadata.namespace.as_deref() else {
+        return;
+    };
+    let namespace_uid = match namespaces.get(namespace_name).await {
+        Ok(namespace) => namespace.metadata.uid,
+        Err(_) => None,
+    };
+    let source_state = if deleted || resource.metadata.deletion_timestamp.is_some() {
+        ExceptionSourceStateV1::DeletionRequested
+    } else {
+        ExceptionSourceStateV1::Accepted
+    };
+    let mut status = owner
+        .reconcile_exception_observation(
+            &resource,
+            namespace_uid.as_deref().unwrap_or_default(),
+            &control.workload_inventory(),
+            utc_now_ns(),
+            source_state,
+        )
+        .map_or_else(
+            |_| rejected_exception_status(generation),
+            |result| result.status,
+        );
+    if let Some(previous) = resource.status.as_ref() {
+        preserve_transition_times(&mut status.conditions, &previous.conditions);
+        if previous == &status {
+            return;
+        }
+    }
+    let patch = Patch::Merge(serde_json::json!({"status": status}));
+    if api
+        .patch_status(&name, &PatchParams::default(), &patch)
+        .await
+        .is_err()
+    {
+        owner.record_watch_failure();
+    }
+}
+
+fn rejected_exception_status(generation: u64) -> WorkloadProtectionExceptionStatusV1 {
+    WorkloadProtectionExceptionStatusV1 {
+        observed_generation: generation,
+        state: WorkloadProtectionExceptionStateV1::Failed,
+        conditions: vec![kubernetes_condition(
+            "Accepted",
+            false,
+            generation,
+            "ReconcileRejected",
+            "Control rejected the stored exception request.",
+            utc_now_ns(),
+        )],
     }
 }
 

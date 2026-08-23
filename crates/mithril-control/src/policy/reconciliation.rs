@@ -519,7 +519,7 @@ impl PolicyDesiredStateOwner {
         })
     }
 
-    fn record_relist(&self, succeeded: bool) {
+    pub(super) fn record_relist(&self, succeeded: bool) {
         if let Ok(mut state) = self.state.lock() {
             if succeeded {
                 state.successful_relists = state.successful_relists.saturating_add(1);
@@ -529,7 +529,7 @@ impl PolicyDesiredStateOwner {
         }
     }
 
-    fn record_watch_state(&self, namespace: &str, connected: bool) {
+    pub(super) fn record_watch_state(&self, namespace: &str, connected: bool) {
         if let Ok(mut state) = self.state.lock() {
             if connected {
                 state.watched_namespaces.insert(namespace.to_owned());
@@ -539,7 +539,7 @@ impl PolicyDesiredStateOwner {
         }
     }
 
-    fn record_watch_failure(&self) {
+    pub(super) fn record_watch_failure(&self) {
         if let Ok(mut state) = self.state.lock() {
             state.watch_failures = state.watch_failures.saturating_add(1);
         }
@@ -555,6 +555,11 @@ impl PolicyDesiredStateOwner {
             };
             tokio::join!(
                 reconcile_cluster(client.clone(), self.clone(), control.clone()),
+                super::reconcile_exception_cluster(
+                    client.clone(),
+                    self.clone(),
+                    control.clone(),
+                ),
                 super::KubernetesWorkloadInventoryOwner::new(
                     client,
                     self.clone(),
@@ -824,7 +829,7 @@ async fn reconcile_cluster(
     let namespaces = Api::<Namespace>::all(client);
     // Each watch starts from a complete relist cursor and restarts after any stream error.
     loop {
-        owner.record_watch_state("*", false);
+        owner.record_watch_state("policies/*", false);
         let Some(resource_version) = relist_cluster(&api, &namespaces, &owner, &control).await
         else {
             tokio::time::sleep(std::time::Duration::from_secs(2)).await;
@@ -838,7 +843,7 @@ async fn reconcile_cluster(
             tokio::time::sleep(std::time::Duration::from_secs(2)).await;
             continue;
         };
-        owner.record_watch_state("*", true);
+        owner.record_watch_state("policies/*", true);
         tokio::pin!(stream);
         while let Some(event) = stream.next().await {
             match event {
@@ -949,7 +954,7 @@ async fn reconcile_resource(
         PolicySourceStateV1::Accepted
     };
     // Reconciliation failure changes only status; it does not replace the last valid rollout.
-    let status = owner
+    let mut status = owner
         .reconcile_observation(
             &resource,
             namespace_uid.as_deref().unwrap_or_default(),
@@ -958,10 +963,20 @@ async fn reconcile_resource(
             source_state,
         )
         .map_or_else(|_| rejected_status(generation), |result| result.status);
+    if let Some(previous) = resource.status.as_ref() {
+        preserve_transition_times(&mut status.conditions, &previous.conditions);
+        if previous == &status {
+            return;
+        }
+    }
     let patch = Patch::Merge(serde_json::json!({"status": status}));
-    let _result = api
+    if api
         .patch_status(&name, &PatchParams::default(), &patch)
-        .await;
+        .await
+        .is_err()
+    {
+        owner.record_watch_failure();
+    }
 }
 
 fn rejected_status(generation: u64) -> WorkloadProtectionPolicyStatusV1 {
@@ -979,11 +994,28 @@ fn rejected_status(generation: u64) -> WorkloadProtectionPolicyStatusV1 {
     }
 }
 
-fn utc_now_ns() -> i64 {
+pub(super) fn utc_now_ns() -> i64 {
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0_u128, |duration| duration.as_nanos());
     i64::try_from(nanos).unwrap_or(i64::MAX)
+}
+
+pub(super) fn preserve_transition_times(
+    next: &mut [super::KubernetesConditionV1],
+    previous: &[super::KubernetesConditionV1],
+) {
+    for condition in next {
+        if let Some(prior) = previous.iter().find(|prior| {
+            prior.condition_type == condition.condition_type
+                && prior.status == condition.status
+                && prior.observed_generation == condition.observed_generation
+                && prior.reason == condition.reason
+                && prior.message == condition.message
+        }) {
+            condition.last_transition_time = prior.last_transition_time.clone();
+        }
+    }
 }
 
 fn resolve_targets(
@@ -1250,4 +1282,33 @@ fn read_signing_key(path: &Path) -> Result<SigningKey> {
 fn read_json<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T> {
     let bytes = fs::read(path).context(IoSnafu { path })?;
     serde_json::from_slice(&bytes).context(crate::error::JsonSnafu { path })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{kubernetes_condition, preserve_transition_times};
+
+    #[test]
+    fn unchanged_condition_keeps_its_transition_time() {
+        let previous = vec![kubernetes_condition(
+            "Accepted",
+            true,
+            4,
+            "SourceAccepted",
+            "Control accepted the stored policy source.",
+            1_800_000_000_000_000_000,
+        )];
+        let mut next = vec![kubernetes_condition(
+            "Accepted",
+            true,
+            4,
+            "SourceAccepted",
+            "Control accepted the stored policy source.",
+            1_800_000_001_000_000_000,
+        )];
+
+        preserve_transition_times(&mut next, &previous);
+
+        assert_eq!(next, previous);
+    }
 }
