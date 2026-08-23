@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::fmt::Debug;
 use std::future::Future;
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -36,6 +37,8 @@ use crate::{ControlPlane, Result};
 pub const KUBERNETES_PROFILE_ANNOTATION: &str = "mithril.erebor.dev/profile-id";
 pub const KUBERNETES_SOURCE_ANNOTATION: &str = "mithril.erebor.dev/policy-source-revision";
 const MAXIMUM_COMBINED_NODE_SELECTOR_TERMS: usize = 256;
+const MAXIMUM_INVENTORY_OBJECTS: usize = 65_536;
+const INVENTORY_PAGE_SIZE: u32 = 500;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -476,45 +479,28 @@ impl KubernetesWorkloadInventoryOwner {
 
     async fn reconcile_once(&self) -> Result<()> {
         // Build one cross-resource snapshot before replacing the Control target inventory.
-        let pods = Api::<Pod>::all(self.kube.clone())
-            .list(&ListParams::default())
-            .await
-            .map_err(|error| admission_error(format!("list bound Pods: {error}")))?;
-        let nodes = Api::<Node>::all(self.kube.clone())
-            .list(&ListParams::default())
-            .await
-            .map_err(|error| admission_error(format!("list Kubernetes Nodes: {error}")))?;
-        let namespaces = Api::<Namespace>::all(self.kube.clone())
-            .list(&ListParams::default())
-            .await
-            .map_err(|error| admission_error(format!("list Kubernetes Namespaces: {error}")))?;
-        let service_accounts = Api::<ServiceAccount>::all(self.kube.clone())
-            .list(&ListParams::default())
-            .await
-            .map_err(|error| {
-                admission_error(format!("list Kubernetes ServiceAccounts: {error}"))
-            })?;
-        ensure!(
-            pods.items.len() <= 65_536
-                && nodes.items.len() <= 65_536
-                && namespaces.items.len() <= 65_536
-                && service_accounts.items.len() <= 65_536,
-            InvalidConfigurationSnafu {
-                reason: "Kubernetes workload inventory exceeds its object bound",
-            }
-        );
+        let pods = list_inventory(&Api::<Pod>::all(self.kube.clone()), "bound Pods").await?;
+        let nodes =
+            list_inventory(&Api::<Node>::all(self.kube.clone()), "Kubernetes Nodes").await?;
+        let namespaces = list_inventory(
+            &Api::<Namespace>::all(self.kube.clone()),
+            "Kubernetes Namespaces",
+        )
+        .await?;
+        let service_accounts = list_inventory(
+            &Api::<ServiceAccount>::all(self.kube.clone()),
+            "Kubernetes ServiceAccounts",
+        )
+        .await?;
         let nodes = nodes
-            .items
             .into_iter()
             .map(|node| (node.name_any(), node))
             .collect::<BTreeMap<_, _>>();
         let namespaces = namespaces
-            .items
             .into_iter()
             .filter_map(|namespace| Some((namespace.name_any(), namespace.metadata.uid?)))
             .collect::<BTreeMap<_, _>>();
         let service_accounts = service_accounts
-            .items
             .into_iter()
             .filter_map(|account| {
                 Some((
@@ -525,7 +511,7 @@ impl KubernetesWorkloadInventoryOwner {
             .collect::<BTreeMap<_, _>>();
         // Only persisted Pod bindings select the exact node that receives a candidate.
         let mut targets = Vec::new();
-        for pod in pods.items {
+        for pod in pods {
             targets.extend(self.bound_pod_targets(&pod, &nodes, &namespaces, &service_accounts)?);
         }
         if !self
@@ -536,13 +522,12 @@ impl KubernetesWorkloadInventoryOwner {
             // An unchanged inventory cannot create a new target snapshot by itself.
             return Ok(());
         }
-        let resources = Api::<WorkloadProtectionProfile>::all(self.kube.clone())
-            .list(&ListParams::default())
-            .await
-            .map_err(|error| {
-                admission_error(format!("list policies after binding change: {error}"))
-            })?;
-        for resource in resources.items {
+        let resources = list_inventory(
+            &Api::<WorkloadProtectionProfile>::all(self.kube.clone()),
+            "policies after binding change",
+        )
+        .await?;
+        for resource in resources {
             let Some(namespace_name) = resource.namespace() else {
                 continue;
             };
@@ -729,6 +714,46 @@ impl KubernetesWorkloadInventoryOwner {
             targets.push(target);
         }
         Ok(targets)
+    }
+}
+
+async fn list_inventory<K>(api: &Api<K>, description: &str) -> Result<Vec<K>>
+where
+    K: Clone + Debug + DeserializeOwned,
+{
+    let mut items = Vec::new();
+    let mut continuation = None::<String>;
+    // Complete one server-consistent resource snapshot before Control publishes inventory.
+    loop {
+        let mut params = ListParams::default().limit(INVENTORY_PAGE_SIZE);
+        if let Some(token) = &continuation {
+            params = params.continue_token(token);
+        }
+        let page = api
+            .list(&params)
+            .await
+            .map_err(|error| admission_error(format!("list {description}: {error}")))?;
+        ensure!(
+            items
+                .len()
+                .checked_add(page.items.len())
+                .is_some_and(|total| total <= MAXIMUM_INVENTORY_OBJECTS),
+            InvalidConfigurationSnafu {
+                reason: format!("Kubernetes {description} inventory exceeds its object bound"),
+            }
+        );
+        items.extend(page.items);
+        let next = page.metadata.continue_.filter(|token| !token.is_empty());
+        ensure!(
+            next.is_none() || next != continuation,
+            InvalidConfigurationSnafu {
+                reason: format!("Kubernetes {description} inventory repeated a continuation token"),
+            }
+        );
+        continuation = next;
+        if continuation.is_none() {
+            return Ok(items);
+        }
     }
 }
 
@@ -1217,20 +1242,29 @@ fn admission_error(reason: impl Into<String>) -> crate::Error {
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
+    use std::convert::Infallible;
+    use std::sync::Arc;
 
+    use axum::body::Body;
+    use axum::http::{header, HeaderValue, Request, Response};
     use k8s_openapi::api::core::v1::{
         Affinity, Container, Node, NodeAffinity, NodeSelector, NodeSelectorRequirement,
         NodeSelectorTerm, NodeSpec, Pod, PodSpec, Toleration,
     };
     use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
+    use kube::client::Body as KubeBody;
     use kube::core::admission::{AdmissionResponse, AdmissionReview};
     use kube::core::DynamicObject;
+    use kube::{Api, Client, ResourceExt as _};
+    use serde_json::json;
+    use tokio::sync::Mutex;
+    use tower::service_fn;
 
     use super::{
-        mutate_node_quarantine, mutate_protected_pod, pod_admission_facts, pod_policy_identity,
-        policy_matches_pod, policy_matching_containers_are_pinned, DaemonSetNodeConstraintsV1,
-        KUBERNETES_NOT_READY_TAINT, KUBERNETES_PROFILE_ANNOTATION, KUBERNETES_READY_LABEL,
-        KUBERNETES_SOURCE_ANNOTATION,
+        list_inventory, mutate_node_quarantine, mutate_protected_pod, pod_admission_facts,
+        pod_policy_identity, policy_matches_pod, policy_matching_containers_are_pinned,
+        DaemonSetNodeConstraintsV1, KUBERNETES_NOT_READY_TAINT, KUBERNETES_PROFILE_ANNOTATION,
+        KUBERNETES_READY_LABEL, KUBERNETES_SOURCE_ANNOTATION,
     };
     use crate::{ContainerKindV1, PolicyDocumentV1};
 
@@ -1515,5 +1549,71 @@ mod tests {
             super::KubernetesAdmissionOwner::health().await,
             axum::http::StatusCode::OK
         );
+    }
+
+    #[tokio::test]
+    async fn inventory_list_reads_every_kubernetes_page() -> crate::Result<()> {
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let service_requests = requests.clone();
+        let service = service_fn(move |request: Request<KubeBody>| {
+            let service_requests = service_requests.clone();
+            async move {
+                let uri = request.uri().to_string();
+                service_requests.lock().await.push(uri.clone());
+                let second_page = uri.contains("continue=next");
+                let value = json!({
+                    "apiVersion": "v1",
+                    "kind": "PodList",
+                    "metadata": {
+                        "resourceVersion": "snapshot-42",
+                        "continue": if second_page { "" } else { "next" }
+                    },
+                    "items": [{
+                        "apiVersion": "v1",
+                        "kind": "Pod",
+                        "metadata": {"name": if second_page { "pod-b" } else { "pod-a" }}
+                    }]
+                });
+                let mut response = Response::new(Body::from(value.to_string()));
+                response.headers_mut().insert(
+                    header::CONTENT_TYPE,
+                    HeaderValue::from_static("application/json"),
+                );
+                Ok::<_, Infallible>(response)
+            }
+        });
+        let pods = Api::<Pod>::all(Client::new(service, "default"));
+
+        let items = list_inventory(&pods, "test Pods").await?;
+
+        assert_eq!(
+            items.iter().map(|item| item.name_any()).collect::<Vec<_>>(),
+            ["pod-a", "pod-b"]
+        );
+        let requests = requests.lock().await;
+        assert_eq!(requests.len(), 2);
+        assert!(requests[1].contains("continue=next"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn inventory_list_rejects_a_repeated_continuation_token() {
+        let service = service_fn(|_request: Request<KubeBody>| async move {
+            let value = json!({
+                "apiVersion": "v1",
+                "kind": "PodList",
+                "metadata": {"resourceVersion": "snapshot-42", "continue": "next"},
+                "items": []
+            });
+            let mut response = Response::new(Body::from(value.to_string()));
+            response.headers_mut().insert(
+                header::CONTENT_TYPE,
+                HeaderValue::from_static("application/json"),
+            );
+            Ok::<_, Infallible>(response)
+        });
+        let pods = Api::<Pod>::all(Client::new(service, "default"));
+
+        assert!(list_inventory(&pods, "test Pods").await.is_err());
     }
 }
