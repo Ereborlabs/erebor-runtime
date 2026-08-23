@@ -1,7 +1,9 @@
 # How To Manually Accept Phase 6.2
 
-Status: Automated acceptance passed. The Kubernetes scheduling and runtime-gate
-manual procedure is available. This procedure has not been run.
+Status: Blocked. Automated acceptance passed. The physical procedure passed
+through scheduler binding, selected-node delivery, policy activation, runtime
+binding, and durable evidence intake. Stock `runc` container start failed on
+bootstrap operations that have no typed authority.
 
 Phase: [Control Policy And Evidence Convergence](../phase-6-2-control-policy-and-evidence-convergence.md)
 
@@ -17,6 +19,23 @@ not run before local policy and cgroup-binding activation. Prove that one CRD
 revision converges without giving Control ownership of node activation. Prove
 that Phase 6 evidence reaches the production Control transaction before the
 node truncates its WAL.
+
+## Current Physical Result
+
+The provisioned two-node Kubernetes fixture passed readiness, typed RBAC
+review, CRD reconciliation, Pod mutation and bypass rejection, scheduler
+selection, exact selected-node delivery, policy activation, runtime binding,
+Control acknowledgement, and durable evidence intake. The procedure then
+failed protected container start. Stock `runc` used an anonymous file write
+and IPC access after binding. The BPF enforcement path denied both operations
+because they have no typed authority. The application process did not start.
+
+This result is a product blocker, not test noise. The validated architecture
+forbids a broad `runc`, pipe, or socket exception. Completion requires approval
+for a signed, typed, bounded runtime-bootstrap authority. The gate-failure,
+restart, Pod UID reuse, selector-change, watch-compaction, network-partition,
+and storage-outage cases remain `Not run`. Scenario cleanup removed the test
+namespace and runtime classes.
 
 ## Automated Companion
 

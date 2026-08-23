@@ -7,9 +7,13 @@
 
 ## Closure Decision
 
-Phase 6.2 is **Not done**. Source implementation and automated acceptance for
-D6.2.1-D6.2.12 passed. The required physical Kubernetes and stock-runtime
-acceptance has not run.
+Phase 6.2 is **Blocked**. Source implementation and automated acceptance for
+D6.2.1-D6.2.12 passed. Physical Kubernetes acceptance reached scheduler
+binding, selected-node delivery, policy activation, runtime binding, and
+durable evidence intake. Stock `runc` container start failed because its
+bootstrap uses an anonymous file write and IPC access that have no typed
+authority. The validated architecture requires an approved runtime-bootstrap
+authority and forbids a broad runtime exception.
 
 The amendment is not closed by CRD reconciliation alone. A result is complete
 only when a matching Pod can be scheduled by the Kubernetes scheduler onto a
@@ -34,16 +38,16 @@ policy and cgroup binding.
 | --- | --- | --- |
 | `D6.2.1` | Source and automated proof: **Done**. | No new physical result is required for the closed API schema. |
 | `D6.2.2` | Source and automated proof: **Done**. | No new physical result is required for deterministic desired-state reconciliation. |
-| `D6.2.3` | Scheduler-bound source inventory and automated proof: **Done**. | Run the physical bound-Pod inventory and exact-node cases. |
-| `D6.2.4` | Dynamic signed binding material and automated proof: **Done**. | Run the physical selected-node delivery and rejection cases. |
-| `D6.2.5` | Source and automated proof: **Done**. | Run the existing physical evidence transaction case with this Kubernetes flow. |
+| `D6.2.3` | Scheduler-bound source inventory and physical exact-node proof: **Done**. | No additional proof is required for scheduler-bound inventory. |
+| `D6.2.4` | Dynamic signed binding material and physical selected-node delivery: **Done**. | No additional proof is required for exact-node delivery. |
+| `D6.2.5` | Source, automated proof, and physical durable evidence intake: **Done**. | Run the failure and replay variants after the runtime-bootstrap decision. |
 | `D6.2.6` | Node and workload lifecycle recovery source and automated proof: **Done**. | Run the physical restart, reconnect, boot-change, deletion, and retirement cases. |
 | `D6.2.7` | Admission, readiness, cluster-wide discovery, and RBAC source proof: **Done**. | Run the live API-server, session-expiry, RBAC-denial, and secret-filtering cases. |
-| `D6.2.8` | Deterministic scheduling-to-runtime transaction: **Done**. | Run the physical two-node and stock-runtime transaction. |
-| `D6.2.9` | Source and automated proof: **Done**. | Run new-node quarantine, readiness, loss, and DaemonSet-selector physical cases. |
-| `D6.2.10` | Source and automated proof: **Done**. | Run protected-Pod admission and scheduler-binding physical cases. |
-| `D6.2.11` | Source and automated proof: **Done**. | Run exact-node delivery, held start, cgroup publication, restart, and timeout physical cases. |
-| `D6.2.12` | Packaging and automated proof: **Done**. Physical proof: **Not run**. | Install the chart on the target Kubernetes and runtime versions. Run and record the manual acceptance procedure. |
+| `D6.2.8` | Automated transaction and physical convergence through runtime binding: **Blocked**. | Approve runtime-bootstrap authority, then prove protected process start and lifecycle with stock `runc`. |
+| `D6.2.9` | Source, automated proof, and physical node readiness: **Done**. | Run readiness-loss and DaemonSet-selector variants after the runtime-bootstrap decision. |
+| `D6.2.10` | Source, automated proof, and physical Pod admission and scheduler binding: **Done**. | No additional proof is required for admission and initial scheduler binding. |
+| `D6.2.11` | Source proof, exact-node delivery, activation, and runtime binding: **Blocked**. | Approve runtime-bootstrap authority, then prove process release, restart, and timeout behavior. |
+| `D6.2.12` | Packaging, automated proof, and physical chart installation: **Blocked**. | Complete protected start and the remaining manual cases after the runtime-bootstrap decision. |
 
 ## Automated Proof Matrix
 
@@ -65,17 +69,18 @@ policy and cgroup binding.
 The physical result must use the current stock Kubernetes and OCI runtime
 extension points. It must record their versions and exact configuration.
 
-| Scenario | Required observation |
-| --- | --- |
-| New eligible node | The Node receives the quarantine taint before protected scheduling. The DaemonSet starts, registers, proves readiness, and Control removes the taint. |
-| Two eligible nodes | The scheduler, not Mithril, selects either ready node. Only that node inventories and activates the candidate. |
-| Unready node | A matching node without a ready `mithril-node` session remains quarantined and receives no protected Pod. |
-| Protected start | The OCI prestart hook holds the initial PID. No application instruction runs before exact policy and binding activation. |
-| Gate failure | A stopped node service or unavailable candidate causes the stock runtime to report start failure after the bounded timeout. |
-| Lifecycle | Container restart creates a new exact binding. Pod deletion and UID reuse cannot reuse the old binding. |
-| Selector change | A DaemonSet constraint change updates node eligibility without a second selector configuration. |
+| Scenario | Result | Observation |
+| --- | --- | --- |
+| New eligible node | **Pass** | Each matching Node started quarantined. Its DaemonSet Pod registered and proved readiness before Control removed the taint. |
+| Two eligible nodes | **Pass** | Kubernetes selected the worker. Only that node received and activated the exact candidate. |
+| Unready node | **Not run** | The run did not remove one node session after initial readiness. |
+| Protected start | **Fail** | Policy activation and runtime binding completed. Stock `runc` then used an anonymous file write and IPC access with no typed authority. The runtime reported start failure, and the application did not run. |
+| Gate failure | **Not run** | The protected-start failure stopped the procedure before this case. |
+| Lifecycle | **Not run** | The protected-start failure stopped the procedure before restart and UID-reuse cases. |
+| Selector change | **Not run** | The protected-start failure stopped the procedure before this case. |
 
-No physical result is recorded yet.
+The procedure cleanup removed the test namespace and runtime classes. Control
+accepted the denial evidence before the node truncated the related WAL data.
 
 ## Verification State
 
@@ -106,8 +111,9 @@ corrected, and the complete gate passed. The final Control unit-test count was
 63. An earlier complete gate had one transient browser discovery failure with
 `WouldBlock`; the isolated test and the next complete gate passed.
 
-The live cluster and physical stock-runtime cases have not run. Automated
-tests do not change those cases from `Not run` to `Pass`.
+The live cluster case passed through runtime binding and durable evidence
+intake. The stock-runtime protected-start case failed. Automated tests do not
+change the remaining physical cases from `Not run` to `Pass`.
 
 ## Unadvertised Work
 
