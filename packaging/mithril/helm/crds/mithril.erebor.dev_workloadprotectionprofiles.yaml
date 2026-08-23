@@ -20,12 +20,9 @@
         "name": "v1alpha1",
         "schema": {
           "openAPIV3Schema": {
-            "additionalProperties": false,
             "description": "Auto-generated derived type for WorkloadProtectionProfileSpec via `CustomResource`",
-            "maxProperties": 4096,
             "properties": {
               "spec": {
-                "additionalProperties": false,
                 "description": "Defines the CRD desired state. Control creates signed node artifacts from this value.",
                 "maxProperties": 4096,
                 "properties": {
@@ -35,7 +32,6 @@
                   },
                   "authority_behavior_rules": {
                     "items": {
-                      "additionalProperties": false,
                       "maxProperties": 4096,
                       "properties": {
                         "authoritative_results": {
@@ -60,31 +56,40 @@
                           "type": "string"
                         },
                         "budgets": {
-                          "additionalProperties": false,
                           "maxProperties": 4096,
                           "properties": {
                             "automatic_response_limit": {
-                              "enum": [
-                                null
-                              ],
-                              "nullable": true
+                              "description": "Keeps deferred budget fields structural. Control rejects every nonempty budget set.",
+                              "maxLength": 4096,
+                              "nullable": true,
+                              "type": "string"
                             },
                             "concurrency_limits": {
                               "items": {
-                                "not": {}
+                                "description": "Keeps deferred budget fields structural. Control rejects every nonempty budget set.",
+                                "enum": [
+                                  "UNSUPPORTED"
+                                ],
+                                "maxLength": 4096,
+                                "type": "string"
                               },
                               "maxItems": 32768,
                               "type": "array"
                             },
                             "maximum_lifetime": {
-                              "enum": [
-                                null
-                              ],
-                              "nullable": true
+                              "description": "Keeps deferred budget fields structural. Control rejects every nonempty budget set.",
+                              "maxLength": 4096,
+                              "nullable": true,
+                              "type": "string"
                             },
                             "rate_limits": {
                               "items": {
-                                "not": {}
+                                "description": "Keeps deferred budget fields structural. Control rejects every nonempty budget set.",
+                                "enum": [
+                                  "UNSUPPORTED"
+                                ],
+                                "maxLength": 4096,
+                                "type": "string"
                               },
                               "maxItems": 32768,
                               "type": "array"
@@ -97,7 +102,6 @@
                           "type": "object"
                         },
                         "finding": {
-                          "additionalProperties": false,
                           "maxProperties": 4096,
                           "nullable": true,
                           "properties": {
@@ -206,7 +210,6 @@
                           "type": "string"
                         },
                         "required_proof": {
-                          "additionalProperties": false,
                           "maxProperties": 4096,
                           "properties": {
                             "integrity": {
@@ -311,7 +314,6 @@
                         },
                         "resources": {
                           "items": {
-                            "additionalProperties": false,
                             "maxProperties": 4096,
                             "properties": {
                               "immutable_revision_digest": {
@@ -372,7 +374,6 @@
                   },
                   "classifier_bindings": {
                     "items": {
-                      "additionalProperties": false,
                       "maxProperties": 4096,
                       "properties": {
                         "classifier_binding_id": {
@@ -392,7 +393,6 @@
                           "type": "array"
                         },
                         "selector": {
-                          "additionalProperties": false,
                           "maxProperties": 4096,
                           "properties": {
                             "artifact_digests": {
@@ -552,7 +552,6 @@
                   },
                   "correlation_package_bindings": {
                     "items": {
-                      "additionalProperties": false,
                       "maxProperties": 4096,
                       "properties": {
                         "binding_id": {
@@ -560,7 +559,6 @@
                           "type": "string"
                         },
                         "finding": {
-                          "additionalProperties": false,
                           "maxProperties": 4096,
                           "properties": {
                             "evidence_level": {
@@ -645,15 +643,12 @@
                     "type": "array"
                   },
                   "default_postures": {
-                    "additionalProperties": false,
                     "maxProperties": 4096,
                     "properties": {
                       "missing_task_identity": {
-                        "additionalProperties": false,
                         "maxProperties": 4096,
                         "properties": {
                           "finding": {
-                            "additionalProperties": false,
                             "maxProperties": 4096,
                             "properties": {
                               "evidence_level": {
@@ -725,11 +720,9 @@
                         "type": "object"
                       },
                       "required_classifier_unknown": {
-                        "additionalProperties": false,
                         "maxProperties": 4096,
                         "properties": {
                           "finding": {
-                            "additionalProperties": false,
                             "maxProperties": 4096,
                             "properties": {
                               "evidence_level": {
@@ -801,11 +794,9 @@
                         "type": "object"
                       },
                       "unresolved_or_external_root": {
-                        "additionalProperties": false,
                         "maxProperties": 4096,
                         "properties": {
                           "finding": {
-                            "additionalProperties": false,
                             "maxProperties": 4096,
                             "properties": {
                               "evidence_level": {
@@ -886,7 +877,6 @@
                   },
                   "effect_family_defaults": {
                     "items": {
-                      "additionalProperties": false,
                       "maxProperties": 4096,
                       "properties": {
                         "effect_family": {
@@ -903,19 +893,11 @@
                           "type": "string"
                         },
                         "errno": {
-                          "enum": [
-                            "EACCES",
-                            "EPERM",
-                            "EAGAIN",
-                            "ECONNREFUSED",
-                            null
-                          ],
                           "maxLength": 4096,
                           "nullable": true,
                           "type": "string"
                         },
                         "finding": {
-                          "additionalProperties": false,
                           "maxProperties": 4096,
                           "nullable": true,
                           "properties": {
@@ -1005,7 +987,6 @@
                   },
                   "entry_role_assignments": {
                     "items": {
-                      "additionalProperties": false,
                       "maxProperties": 4096,
                       "properties": {
                         "accepted_classifications": {
@@ -1117,7 +1098,6 @@
                   },
                   "exceptions": {
                     "items": {
-                      "additionalProperties": false,
                       "maxProperties": 4096,
                       "properties": {
                         "approval_proof_digest": {
@@ -1129,7 +1109,6 @@
                           "type": "string"
                         },
                         "authority_delta": {
-                          "additionalProperties": false,
                           "maxProperties": 4096,
                           "properties": {
                             "added_or_removed_operation_cells": {
@@ -1153,7 +1132,6 @@
                               "type": "string"
                             },
                             "maximum_blast_radius": {
-                              "additionalProperties": false,
                               "maxProperties": 4096,
                               "properties": {
                                 "account_count": {
@@ -1390,7 +1368,6 @@
                           "type": "string"
                         },
                         "exact_subject": {
-                          "additionalProperties": false,
                           "maxProperties": 4096,
                           "properties": {
                             "entry_kind_ids": {
@@ -1508,7 +1485,6 @@
                   },
                   "ipc_relationship_rules": {
                     "items": {
-                      "additionalProperties": false,
                       "maxProperties": 4096,
                       "properties": {
                         "channel_class_ids": {
@@ -1520,13 +1496,6 @@
                           "type": "array"
                         },
                         "errno": {
-                          "enum": [
-                            "EACCES",
-                            "EPERM",
-                            "EAGAIN",
-                            "ECONNREFUSED",
-                            null
-                          ],
                           "maxLength": 4096,
                           "nullable": true,
                           "type": "string"
@@ -1588,7 +1557,6 @@
                     "type": "string"
                   },
                   "metadata": {
-                    "additionalProperties": false,
                     "maxProperties": 4096,
                     "properties": {
                       "profile_id": {
@@ -1624,7 +1592,6 @@
                   },
                   "native_authority_state_rules": {
                     "items": {
-                      "additionalProperties": false,
                       "maxProperties": 4096,
                       "properties": {
                         "monotonic": {
@@ -1684,17 +1651,9 @@
                   },
                   "native_transition_rules": {
                     "items": {
-                      "additionalProperties": false,
                       "maxProperties": 4096,
                       "properties": {
                         "errno": {
-                          "enum": [
-                            "EACCES",
-                            "EPERM",
-                            "EAGAIN",
-                            "ECONNREFUSED",
-                            null
-                          ],
                           "maxLength": 4096,
                           "nullable": true,
                           "type": "string"
@@ -1772,13 +1731,11 @@
                     "type": "array"
                   },
                   "network_policy": {
-                    "additionalProperties": false,
                     "maxProperties": 4096,
                     "nullable": true,
                     "properties": {
                       "destination_policies": {
                         "items": {
-                          "additionalProperties": false,
                           "maxProperties": 4096,
                           "properties": {
                             "destination_policy_id": {
@@ -1806,7 +1763,6 @@
                             },
                             "port_ranges": {
                               "items": {
-                                "additionalProperties": false,
                                 "maxProperties": 4096,
                                 "properties": {
                                   "first": {
@@ -1853,7 +1809,6 @@
                             },
                             "service_identities": {
                               "items": {
-                                "additionalProperties": false,
                                 "maxProperties": 4096,
                                 "properties": {
                                   "endpoint_registry_generation": {
@@ -1913,7 +1868,6 @@
                   },
                   "notification_routes": {
                     "items": {
-                      "additionalProperties": false,
                       "maxProperties": 4096,
                       "properties": {
                         "allowed_evidence_fields": {
@@ -2047,7 +2001,6 @@
                   "path_selectors": {
                     "default": [],
                     "items": {
-                      "additionalProperties": false,
                       "maxProperties": 4096,
                       "properties": {
                         "canonical_path": {
@@ -2109,7 +2062,6 @@
                   "path_tree_deny_floors": {
                     "default": [],
                     "items": {
-                      "additionalProperties": false,
                       "maxProperties": 4096,
                       "properties": {
                         "canonical_path": {
@@ -2189,7 +2141,6 @@
                   },
                   "process_state_definitions": {
                     "items": {
-                      "additionalProperties": false,
                       "maxProperties": 4096,
                       "properties": {
                         "process_state_id": {
@@ -2217,7 +2168,6 @@
                     "type": "array"
                   },
                   "protected_universe": {
-                    "additionalProperties": false,
                     "maxProperties": 4096,
                     "properties": {
                       "entry_kind_ids": {
@@ -2305,11 +2255,9 @@
                   },
                   "response_bindings": {
                     "items": {
-                      "additionalProperties": false,
                       "maxProperties": 4096,
                       "properties": {
                         "action_spec": {
-                          "additionalProperties": false,
                           "maxProperties": 4096,
                           "properties": {
                             "actuator_capability_id": {
@@ -2429,7 +2377,6 @@
                           "type": "string"
                         },
                         "maximum_blast_radius": {
-                          "additionalProperties": false,
                           "maxProperties": 4096,
                           "properties": {
                             "account_count": {
@@ -2648,7 +2595,6 @@
                           "type": "string"
                         },
                         "required_proof": {
-                          "additionalProperties": false,
                           "maxProperties": 4096,
                           "properties": {
                             "integrity": {
@@ -2786,7 +2732,6 @@
                   },
                   "roles": {
                     "items": {
-                      "additionalProperties": false,
                       "maxProperties": 4096,
                       "properties": {
                         "default_process_state_id": {
@@ -2836,7 +2781,6 @@
                     "type": "array"
                   },
                   "rollout": {
-                    "additionalProperties": false,
                     "maxProperties": 4096,
                     "properties": {
                       "cohort_selection": {
@@ -2896,35 +2840,43 @@
                   },
                   "rules": {
                     "items": {
-                      "additionalProperties": false,
                       "maxProperties": 4096,
                       "properties": {
                         "budgets": {
-                          "additionalProperties": false,
                           "maxProperties": 4096,
                           "properties": {
                             "automatic_response_limit": {
-                              "enum": [
-                                null
-                              ],
-                              "nullable": true
+                              "description": "Keeps deferred budget fields structural. Control rejects every nonempty budget set.",
+                              "maxLength": 4096,
+                              "nullable": true,
+                              "type": "string"
                             },
                             "concurrency_limits": {
                               "items": {
-                                "not": {}
+                                "description": "Keeps deferred budget fields structural. Control rejects every nonempty budget set.",
+                                "enum": [
+                                  "UNSUPPORTED"
+                                ],
+                                "maxLength": 4096,
+                                "type": "string"
                               },
                               "maxItems": 32768,
                               "type": "array"
                             },
                             "maximum_lifetime": {
-                              "enum": [
-                                null
-                              ],
-                              "nullable": true
+                              "description": "Keeps deferred budget fields structural. Control rejects every nonempty budget set.",
+                              "maxLength": 4096,
+                              "nullable": true,
+                              "type": "string"
                             },
                             "rate_limits": {
                               "items": {
-                                "not": {}
+                                "description": "Keeps deferred budget fields structural. Control rejects every nonempty budget set.",
+                                "enum": [
+                                  "UNSUPPORTED"
+                                ],
+                                "maxLength": 4096,
+                                "type": "string"
                               },
                               "maxItems": 32768,
                               "type": "array"
@@ -2940,13 +2892,6 @@
                           "type": "boolean"
                         },
                         "errno": {
-                          "enum": [
-                            "EACCES",
-                            "EPERM",
-                            "EAGAIN",
-                            "ECONNREFUSED",
-                            null
-                          ],
                           "maxLength": 4096,
                           "nullable": true,
                           "type": "string"
@@ -2972,7 +2917,6 @@
                         },
                         "fallback_by_condition": {
                           "items": {
-                            "additionalProperties": false,
                             "maxProperties": 4096,
                             "properties": {
                               "condition": {
@@ -2990,19 +2934,11 @@
                                 "type": "string"
                               },
                               "errno": {
-                                "enum": [
-                                  "EACCES",
-                                  "EPERM",
-                                  "EAGAIN",
-                                  "ECONNREFUSED",
-                                  null
-                                ],
                                 "maxLength": 4096,
                                 "nullable": true,
                                 "type": "string"
                               },
                               "finding": {
-                                "additionalProperties": false,
                                 "maxProperties": 4096,
                                 "properties": {
                                   "evidence_level": {
@@ -3078,7 +3014,6 @@
                           "type": "array"
                         },
                         "finding": {
-                          "additionalProperties": false,
                           "maxProperties": 4096,
                           "nullable": true,
                           "properties": {
@@ -3129,7 +3064,6 @@
                           "type": "object"
                         },
                         "match": {
-                          "additionalProperties": false,
                           "maxProperties": 4096,
                           "properties": {
                             "authoritative_results": {
@@ -3232,7 +3166,6 @@
                               "type": "string"
                             },
                             "object": {
-                              "additionalProperties": false,
                               "maxProperties": 4096,
                               "properties": {
                                 "destination_policy_ids": {
@@ -3406,7 +3339,6 @@
                               "type": "array"
                             },
                             "required_proof": {
-                              "additionalProperties": false,
                               "maxProperties": 4096,
                               "properties": {
                                 "integrity": {
@@ -3519,7 +3451,6 @@
                             },
                             "resources": {
                               "items": {
-                                "additionalProperties": false,
                                 "maxProperties": 4096,
                                 "properties": {
                                   "immutable_revision_digest": {
@@ -3580,7 +3511,6 @@
                             },
                             "source_proof_qualities": {
                               "items": {
-                                "additionalProperties": false,
                                 "maxProperties": 4096,
                                 "properties": {
                                   "integrity": {
@@ -3671,7 +3601,6 @@
                               "type": "array"
                             },
                             "subject": {
-                              "additionalProperties": false,
                               "maxProperties": 4096,
                               "properties": {
                                 "entry_kind_ids": {
@@ -3856,11 +3785,9 @@
                   },
                   "source_coverage_health_rules": {
                     "items": {
-                      "additionalProperties": false,
                       "maxProperties": 4096,
                       "properties": {
                         "finding": {
-                          "additionalProperties": false,
                           "maxProperties": 4096,
                           "properties": {
                             "evidence_level": {
@@ -3973,7 +3900,6 @@
                   },
                   "state_bit_definitions": {
                     "items": {
-                      "additionalProperties": false,
                       "maxProperties": 4096,
                       "properties": {
                         "bit_index": {
@@ -4021,7 +3947,6 @@
                   },
                   "workload_selectors": {
                     "items": {
-                      "additionalProperties": false,
                       "maxProperties": 4096,
                       "properties": {
                         "cluster_uids": {
@@ -4080,7 +4005,6 @@
                         },
                         "pod_label_requirements": {
                           "items": {
-                            "additionalProperties": false,
                             "maxProperties": 4096,
                             "properties": {
                               "key": {
@@ -4176,7 +4100,6 @@
                 "type": "object"
               },
               "status": {
-                "additionalProperties": false,
                 "description": "Projects Control state for operators. This status does not authorize node activation.",
                 "maxProperties": 4096,
                 "nullable": true,
@@ -4193,7 +4116,6 @@
                   },
                   "conditions": {
                     "items": {
-                      "additionalProperties": false,
                       "maxProperties": 4096,
                       "properties": {
                         "condition": {
@@ -4238,7 +4160,6 @@
                     "type": "integer"
                   },
                   "rolloutCounts": {
-                    "additionalProperties": false,
                     "maxProperties": 4096,
                     "properties": {
                       "active": {

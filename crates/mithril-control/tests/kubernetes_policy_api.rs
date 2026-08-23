@@ -28,7 +28,7 @@ fn resource(document: &PolicyDocumentV1) -> TestResult<WorkloadProtectionProfile
 }
 
 #[test]
-fn generated_crd_has_one_closed_bounded_namespaced_storage_version() -> TestResult {
+fn generated_crd_has_one_structural_bounded_namespaced_storage_version() -> TestResult {
     let generated = policy_custom_resource_definition()?;
     assert_eq!(generated.spec.group, "mithril.erebor.dev");
     assert_eq!(generated.spec.scope, "Namespaced");
@@ -40,8 +40,14 @@ fn generated_crd_has_one_closed_bounded_namespaced_storage_version() -> TestResu
     assert!(version.served);
     assert!(version.storage);
 
-    let value = serde_json::to_value(version.schema.as_ref().ok_or("schema is required")?)?;
-    assert_closed_and_bounded(&value);
+    let value = serde_json::to_value(
+        version
+            .schema
+            .as_ref()
+            .and_then(|validation| validation.open_api_v3_schema.as_ref())
+            .ok_or("schema is required")?,
+    )?;
+    assert_structural_and_bounded(&value, true);
     Ok(())
 }
 
@@ -100,30 +106,33 @@ fn status_serializes_with_the_kubernetes_api_contract() -> TestResult {
     Ok(())
 }
 
-fn assert_closed_and_bounded(value: &Value) {
+fn assert_structural_and_bounded(value: &Value, resource_root: bool) {
     match value {
         Value::Array(values) => {
             for value in values {
-                assert_closed_and_bounded(value);
+                assert_structural_and_bounded(value, false);
             }
         }
         Value::Object(object) => {
+            if object.get("nullable") == Some(&Value::Bool(true)) {
+                assert!(object.get("enum").is_none());
+            }
             match object.get("type").and_then(Value::as_str) {
                 Some("string") => assert!(object.get("maxLength").is_some()),
                 Some("array") => assert!(object.get("maxItems").is_some()),
                 Some("object") => {
-                    assert!(object.get("maxProperties").is_some());
+                    if !resource_root {
+                        assert!(object.get("maxProperties").is_some());
+                    }
                     if object.contains_key("properties") {
-                        assert_eq!(
-                            object.get("additionalProperties"),
-                            Some(&Value::Bool(false))
-                        );
+                        // Kubernetes rejects schemas that combine named and additional properties.
+                        assert!(object.get("additionalProperties").is_none());
                     }
                 }
                 _ => {}
             }
             for nested in object.values() {
-                assert_closed_and_bounded(nested);
+                assert_structural_and_bounded(nested, false);
             }
         }
         _ => {}
