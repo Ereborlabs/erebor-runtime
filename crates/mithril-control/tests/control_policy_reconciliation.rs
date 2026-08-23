@@ -114,8 +114,9 @@ fn inventory(binding_digest: &str) -> Vec<WorkloadTargetFactV1> {
         container_id: "containerd://converter".to_owned(),
         container_name: "converter".to_owned(),
         container_kind: ContainerKindV1::Application,
+        // Kubernetes inventory passes the immutable digest that runtime admission verifies.
         image_digest: concat!(
-            "registry.example/converter@sha256:",
+            "sha256:",
             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         )
         .to_owned(),

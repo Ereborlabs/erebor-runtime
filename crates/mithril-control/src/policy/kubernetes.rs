@@ -787,7 +787,14 @@ pub fn lower_kubernetes_policy(
                     .map(ContainerKindV1::from)
                     .collect(),
             ),
-            image_digests: sorted_unique(container.images.clone()),
+            // Rollout and OCI admission bind the same digest without trusting a registry name.
+            image_digests: sorted_unique(
+                container
+                    .images
+                    .iter()
+                    .filter_map(|image| pinned_image_digest(image).map(str::to_owned))
+                    .collect(),
+            ),
         });
         for (suffix, role, entry_kind, classification, ambiguity, restricted) in [
             (
@@ -1710,13 +1717,18 @@ fn parse_duration_ns(value: &str, policy_id: &str) -> Result<u64> {
 }
 
 fn pinned_image(value: &str) -> bool {
-    value.rsplit_once("@sha256:").is_some_and(|(name, digest)| {
-        !name.is_empty()
-            && digest.len() == 64
-            && digest
-                .bytes()
-                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-    })
+    pinned_image_digest(value).is_some()
+}
+
+fn pinned_image_digest(value: &str) -> Option<&str> {
+    let (name, digest) = value.rsplit_once('@')?;
+    let encoded = digest.strip_prefix("sha256:")?;
+    (!name.is_empty()
+        && encoded.len() == 64
+        && encoded
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)))
+    .then_some(digest)
 }
 
 fn all_distinct<T: Ord + Clone>(values: &[T]) -> bool {
