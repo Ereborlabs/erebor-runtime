@@ -64,6 +64,7 @@ pub struct ContainerAdmissionFactV1 {
     pub image: String,
 }
 
+/// This owner controls the admission HTTPS lifecycle and all admission decisions.
 #[derive(Clone)]
 pub struct KubernetesAdmissionOwner {
     kube: Client,
@@ -73,6 +74,7 @@ pub struct KubernetesAdmissionOwner {
     request_timeout_ms: u64,
 }
 
+/// This owner controls cluster inventory and the exact workload facts for rollout.
 #[derive(Clone)]
 pub(super) struct KubernetesWorkloadInventoryOwner {
     kube: Client,
@@ -103,6 +105,7 @@ impl KubernetesAdmissionOwner {
                 reason: "Kubernetes admission requires a request UID",
             }
         );
+        // Dry-run uses this read-only decision path. Kubernetes discards the patch.
         let response = AdmissionResponse::from(request);
         if request.kind.group.is_empty()
             && request.kind.version == "v1"
@@ -112,6 +115,7 @@ impl KubernetesAdmissionOwner {
             let mut node: Node = request_object(request)?;
             let constraints = self.nodes.live_constraints(self.kube.clone()).await?;
             let node_name = node.name_any();
+            // Admission reads session state. Readiness reconciliation owns session binding.
             let ready = node.metadata.uid.as_deref().is_some_and(|uid| {
                 self.control
                     .ready_kubernetes_node_sessions(Duration::from_secs(
@@ -128,6 +132,7 @@ impl KubernetesAdmissionOwner {
             }
             return response_with_diff(response, request, &node);
         }
+        // Mutate only Pod CREATE requests. UPDATE requests keep persisted scheduler state.
         if request.kind.group.is_empty()
             && request.kind.version == "v1"
             && request.kind.kind == "Pod"
@@ -247,6 +252,7 @@ impl KubernetesAdmissionOwner {
         let facts = self.pod_facts(namespace, &pod).await?;
         let identity = pod_policy_identity(&pod)?;
         let old_identity = pod_policy_identity(&old_pod)?;
+        // The runtime gate consumes this admitted identity, so updates cannot rewrite it.
         ensure!(
             identity == old_identity,
             InvalidConfigurationSnafu {
@@ -331,6 +337,7 @@ impl KubernetesAdmissionOwner {
             .get(node_name)
             .await
             .map_err(|error| admission_error(format!("read scheduler-selected Node: {error}")))?;
+        // Validate the scheduler result. Control must not replace it with another Node.
         ensure!(
             binding
                 .target
@@ -564,6 +571,8 @@ impl KubernetesWorkloadInventoryOwner {
         else {
             return Ok(Vec::new());
         };
+        // Keep the admission revision as provenance. The current live revision
+        // drives rollout updates for the same profile.
         let Some(_admitted_source_revision_id) =
             annotations.and_then(|values| values.get(KUBERNETES_SOURCE_ANNOTATION))
         else {
@@ -966,6 +975,7 @@ fn policy_matching_containers_are_pinned(
     policy: &PolicyDocumentV1,
     facts: &PodAdmissionFactsV1,
 ) -> Result<bool> {
+    // Require a digest only when the complete workload and container scope matches.
     for container in &facts.containers {
         if matching_selector_id(policy, facts, container)?.is_some()
             && pinned_image_digest(&container.image).is_none()
@@ -1056,6 +1066,8 @@ fn combine_required_affinity(
     let pod_required = node_affinity
         .required_during_scheduling_ignored_during_execution
         .take();
+    // Kubernetes ORs terms and ANDs requirements in one term. The product
+    // preserves the Pod alternatives while it adds the Mithril constraints.
     node_affinity.required_during_scheduling_ignored_during_execution = Some(NodeSelector {
         node_selector_terms: cross_product_terms(pod_required.as_ref(), daemon_set_required)?,
     });

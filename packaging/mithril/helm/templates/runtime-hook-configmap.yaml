@@ -1,4 +1,5 @@
 {{- if .Values.node.runtimeHook.install }}
+{{/* Keep the OCI runtime deadline outside the node client deadline. */}}
 {{- if le (mul (int .Values.node.runtimeHook.runtimeTimeoutSeconds) 1000) (int .Values.node.runtimeHook.timeoutMs) }}
 {{- fail "node.runtimeHook.runtimeTimeoutSeconds must exceed node.runtimeHook.timeoutMs" }}
 {{- end }}

@@ -913,6 +913,7 @@ impl NodeChassis {
                 )
                 .is_ok()
         };
+        // Only a canonical, unused identity can wait for policy convergence.
         let response = if !malformed && !reused && !ready {
             crate::RuntimeAdmissionResponseV1 {
                 allowed: false,
@@ -976,6 +977,8 @@ impl NodeChassis {
             &scheduled.resolved,
             request.initial_pid,
         )?;
+        // Do not return allow until the runtime binding is durable. Remove the
+        // new kernel binding if the durable write fails.
         if let Err(error) = self
             .policy_delivery
             .record_runtime_binding(&scheduled.resolved)
