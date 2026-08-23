@@ -251,6 +251,25 @@ remote_kubectl() {
   "$provider" run "$vm_a" sudo /usr/local/bin/k3s kubectl "$@"
 }
 
+assert_can_i() {
+  local expected=$1
+  shift
+  local answer
+  local status
+
+  # kubectl uses status 1 for an authorized query whose answer is "no".
+  if answer=$(remote_kubectl auth can-i "$@"); then
+    status=0
+  else
+    status=$?
+  fi
+  if [[ $answer != "$expected" ]] ||
+      { [[ $status -ne 0 ]] && [[ ! ($status -eq 1 && $answer == no) ]]; }; then
+    echo "RBAC query returned answer=$answer status=$status; expected $expected: $*" >&2
+    return 1
+  fi
+}
+
 remote_kubectl label node "$node_a_name" "$node_b_name" \
   mithril.erebor.dev/pool=protected --overwrite >/dev/null
 
@@ -487,17 +506,17 @@ remote_kubectl -n "$system_namespace" rollout status daemonset/mithril-node \
 wait_node_projection "$node_a_name" true false
 wait_node_projection "$node_b_name" true false
 
-[[ $(remote_kubectl auth can-i list workloadprotectionprofiles.mithril.erebor.dev \
-  --all-namespaces --as=system:serviceaccount:$system_namespace:mithril-control) == yes ]]
-[[ $(remote_kubectl auth can-i patch workloadprotectionprofiles.mithril.erebor.dev \
+assert_can_i yes list workloadprotectionprofiles.mithril.erebor.dev \
+  --all-namespaces --as=system:serviceaccount:$system_namespace:mithril-control
+assert_can_i yes patch workloadprotectionprofiles.mithril.erebor.dev \
   --subresource=status --all-namespaces \
-  --as=system:serviceaccount:$system_namespace:mithril-control) == yes ]]
-[[ $(remote_kubectl auth can-i patch nodes \
-  --as=system:serviceaccount:$system_namespace:mithril-control) == yes ]]
-[[ $(remote_kubectl auth can-i update workloadprotectionprofiles.mithril.erebor.dev \
-  --all-namespaces --as=system:serviceaccount:$system_namespace:mithril-control) == no ]]
-[[ $(remote_kubectl auth can-i get nodes \
-  --as=system:serviceaccount:$system_namespace:mithril-node) == no ]]
+  --as=system:serviceaccount:$system_namespace:mithril-control
+assert_can_i yes patch nodes \
+  --as=system:serviceaccount:$system_namespace:mithril-control
+assert_can_i no update workloadprotectionprofiles.mithril.erebor.dev \
+  --all-namespaces --as=system:serviceaccount:$system_namespace:mithril-control
+assert_can_i no get nodes \
+  --as=system:serviceaccount:$system_namespace:mithril-node
 
 "$provider" put "$vm_a" \
   "$repo_root/crates/mithril-e2e/fixtures/convergence/runtime-classes-v1.yaml" \
