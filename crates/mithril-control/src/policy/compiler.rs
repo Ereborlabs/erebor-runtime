@@ -103,11 +103,21 @@ impl PolicyCompiler {
 
     fn expand_rules(&self, document: &PolicyDocumentV1) -> Result<Vec<CompiledDecisionCellV1>> {
         let mut contributions = BTreeMap::<StaticDecisionKeyV1, Vec<RuleDecision<'_>>>::new();
+        let grant_by_rule = document
+            .file_exception_grants
+            .iter()
+            .flat_map(|grant| {
+                grant
+                    .denied_file_rule_ids
+                    .iter()
+                    .map(move |rule_id| (rule_id.as_str(), grant.grant_id.as_str()))
+            })
+            .collect::<BTreeMap<_, _>>();
         for rule in document.rules.iter().filter(|rule| rule.enabled) {
             let RuleMatchV1::LocalPreEffect(effect) = &rule.rule_match else {
                 continue;
             };
-            let physical_result = CompiledPhysicalResultV1::try_from((
+            let mut physical_result = CompiledPhysicalResultV1::try_from((
                 rule.requested_disposition,
                 document.rollout.desired_profile_mode,
             ))
@@ -119,15 +129,35 @@ impl PolicyCompiler {
                 }
                 .build()
             })?;
-            let action_plan_digest =
+            let mut action_plan_digest =
                 LocalActionPlan::from((rule, effect)).digest(document.profile_id())?;
+            let consuming_exception_id = grant_by_rule
+                .get(rule.rule_id.as_str())
+                .copied()
+                .or_else(|| rule.exception_ids.first().map(String::as_str));
+            let mut errno = rule.errno.map(super::source::ErrnoV1::negative);
+            if let Some(grant_id) = grant_by_rule.get(rule.rule_id.as_str()).copied() {
+                // A missing runtime binding keeps this conditional ALLOW cell fail-closed.
+                physical_result = CompiledPhysicalResultV1::AllowEffect;
+                errno = None;
+                action_plan_digest = canonical_cbor(
+                    document.profile_id(),
+                    &(
+                        "MITHRIL-FILE-EXCEPTION-GRANT-V1",
+                        &action_plan_digest,
+                        grant_id,
+                    ),
+                )
+                .map(|bytes| digest(&bytes))?;
+            }
             let dimensions = RuleDimensions::for_effect(document, effect);
             for key in dimensions.keys(document.profile_id())? {
                 contributions.entry(key).or_default().push(RuleDecision {
                     rule,
                     physical_result,
-                    errno: rule.errno.map(super::source::ErrnoV1::negative),
+                    errno,
                     action_plan_digest: action_plan_digest.clone(),
+                    consuming_exception_id,
                 });
                 ensure!(
                     contributions.len() <= MAX_COMPILED_CELLS,

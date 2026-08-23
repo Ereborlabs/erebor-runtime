@@ -19,6 +19,7 @@ pub(super) struct RuleDecision<'a> {
     pub(super) physical_result: CompiledPhysicalResultV1,
     pub(super) errno: Option<i16>,
     pub(super) action_plan_digest: String,
+    pub(super) consuming_exception_id: Option<&'a str>,
 }
 
 impl CompiledDecisionCellV1 {
@@ -32,6 +33,7 @@ impl CompiledDecisionCellV1 {
             candidate.physical_result == first.physical_result
                 && candidate.errno == first.errno
                 && candidate.action_plan_digest == first.action_plan_digest
+                && candidate.consuming_exception_id == first.consuming_exception_id
         }) {
             let mut source_rule_ids = candidates
                 .iter()
@@ -42,7 +44,7 @@ impl CompiledDecisionCellV1 {
                 key,
                 physical_result: first.physical_result,
                 errno: first.errno,
-                consuming_exception_id: first.rule.exception_ids.first().cloned(),
+                consuming_exception_id: first.consuming_exception_id.map(str::to_owned),
                 action_plan_digest: first.action_plan_digest.clone(),
                 source_rule_ids,
             });
@@ -72,7 +74,7 @@ impl CompiledDecisionCellV1 {
             key,
             physical_result: winner.physical_result,
             errno: winner.errno,
-            consuming_exception_id: winner.rule.exception_ids.first().cloned(),
+            consuming_exception_id: winner.consuming_exception_id.map(str::to_owned),
             action_plan_digest: winner.action_plan_digest.clone(),
             source_rule_ids: vec![winner.rule.rule_id.clone()],
         })

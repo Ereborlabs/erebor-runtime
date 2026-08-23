@@ -883,7 +883,7 @@ pub fn lower_kubernetes_policy(
                 },
                 file.action,
             ));
-            file_rule_actions.insert(file.name.clone(), file.action);
+            file_rule_actions.insert(file.name.clone(), (file.action, file.operations.clone()));
         }
         for execution in &role.execution {
             let selector_id = path_selector_id(
@@ -1058,13 +1058,24 @@ pub fn lower_kubernetes_policy(
         .map(|grant| {
             ensure!(
                 grant.file_rules.iter().all(|rule| {
-                    file_rule_actions.get(rule) == Some(&KubernetesRuleActionV1::Deny)
+                    file_rule_actions
+                        .get(rule)
+                        .is_some_and(|(action, operations)| {
+                            *action == KubernetesRuleActionV1::Deny
+                                && operations.iter().all(|operation| {
+                                    matches!(
+                                        operation,
+                                        KubernetesFileOperationV1::OpenRead
+                                            | KubernetesFileOperationV1::OpenWrite
+                                    )
+                                })
+                        })
                 }),
                 PolicyValidationSnafu {
                     policy_id: object_uid,
                     code: "CFG_EXCEPTION_GRANT",
                     reason: format!(
-                        "exception grant `{}` must reference denied file rules",
+                        "exception grant `{}` must reference denied file-open rules",
                         grant.name
                     ),
                 }

@@ -1644,7 +1644,14 @@ impl LoweredGeneration {
                 .policy_document
                 .exceptions
                 .iter()
-                .map(|exception| exception.exception_id.as_str()),
+                .map(|exception| exception.exception_id.as_str())
+                .chain(
+                    artifact
+                        .policy_document
+                        .file_exception_grants
+                        .iter()
+                        .map(|grant| grant.grant_id.as_str()),
+                ),
         );
         let generation_objects = measured_objects
             .iter()
@@ -4536,15 +4543,15 @@ mod tests {
         EntryKindV1 as AbiEntryKindV1, ExactFileObjectKeyV1, ExactObjectBindingStateV1,
         ExactObjectBindingV1, Id128V1, KernelEffectFamilyV1, KernelEffectOperationV1,
         PathGraphStateKeyV1, PathGraphTerminalV1, PathGraphTransitionKeyV1, PhysicalDecisionKindV1,
-        PolicyGenerationModeV1,
+        PhysicalDecisionV1, PolicyGenerationModeV1,
     };
     use mithril_control::{
-        EffectFamilyV1, LocalObjectSelectorV1, ObjectClassifierSelectorV1, PathSelectorTargetV1,
-        PathSelectorV1, PathTreeDenyFloorV1, PolicyCompiler, PolicyDispositionV1, PolicyDocumentV1,
-        ProfileCandidateArtifactV1, ProfileModeV1, ProfileSealRequestV1, RegistryDigestsV1,
-        RuleMatchV1,
+        EffectFamilyV1, FileExceptionGrantTemplateV1, LocalObjectSelectorV1,
+        ObjectClassifierSelectorV1, PathSelectorTargetV1, PathSelectorV1, PathTreeDenyFloorV1,
+        PolicyCompiler, PolicyDispositionV1, PolicyDocumentV1, ProfileCandidateArtifactV1,
+        ProfileModeV1, ProfileSealRequestV1, RegistryDigestsV1, RuleMatchV1,
     };
-    use zerocopy::{FromBytes as _, IntoBytes as _};
+    use zerocopy::{FromBytes as _, IntoBytes as _, TryFromBytes as _};
 
     use super::{
         add_binding_activation, ensure_active_generation_unchanged, ensure_committed_generation,
@@ -4693,6 +4700,52 @@ mod tests {
             100,
         )
         .is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn inactive_file_grant_lowers_to_a_fail_closed_exception_handle() -> crate::Result<()> {
+        let (mut artifact, binding, object) = exact_artifact(ProfileModeV1::Protect)?;
+        artifact
+            .policy_document
+            .file_exception_grants
+            .push(FileExceptionGrantTemplateV1 {
+                grant_id: "temporary-token-read".to_owned(),
+                denied_file_rule_ids: vec!["deny-projected-token-open".to_owned()],
+                maximum_duration_ns: 1_000_000_000,
+                maximum_uses: 1,
+            });
+        artifact.compiled_profile =
+            PolicyCompiler
+                .compile(&artifact.policy_document)
+                .map_err(|source| crate::Error::Policy {
+                    source,
+                    location: snafu::Location::default(),
+                })?;
+        let generation = LoweredGeneration::for_binding(
+            &artifact,
+            &binding,
+            &[object],
+            Id128V1::new(1, 2),
+            Id128V1::new(3, 4),
+            3,
+            1_800_000_000_000_000_000,
+            100,
+        )?;
+        let decision = generation
+            .decisions
+            .values()
+            .find_map(|value| PhysicalDecisionV1::try_read_from_bytes(value).ok())
+            .ok_or_else(|| {
+                IdentityStateSnafu {
+                    reason: "grant test generation has no effect decision".to_owned(),
+                }
+                .build()
+            })?;
+        assert_eq!(decision.decision, PhysicalDecisionKindV1::Allow);
+        assert_eq!(decision.exception_numeric_handle, 1);
+        assert!(generation.exception_bindings.is_empty());
+        assert!(generation.exceptions.is_empty());
         Ok(())
     }
 
