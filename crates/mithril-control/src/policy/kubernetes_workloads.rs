@@ -48,6 +48,7 @@ pub struct KubernetesAdmissionHttpConfigV1 {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+/// Contains API-server identities and Pod fields that policy selectors can use.
 pub struct PodAdmissionFactsV1 {
     pub cluster_uid: String,
     pub namespace_uid: String,
@@ -107,6 +108,7 @@ impl KubernetesAdmissionOwner {
         );
         // Dry-run uses this read-only decision path. Kubernetes discards the patch.
         let response = AdmissionResponse::from(request);
+        // Quarantine new eligible Nodes before a ready node session can remove the taint.
         if request.kind.group.is_empty()
             && request.kind.version == "v1"
             && request.kind.kind == "Node"
@@ -147,6 +149,7 @@ impl KubernetesAdmissionOwner {
                 .as_deref()
                 .ok_or_else(|| admission_error("Pod admission request has no namespace"))?;
             let facts = self.pod_facts(namespace, &pod).await?;
+            // Version 1 rejects ambiguity. It does not apply priority or compose profiles.
             let matches = self
                 .policies
                 .live_policies_in_namespace(namespace)?
@@ -183,6 +186,7 @@ impl KubernetesAdmissionOwner {
             )?;
             return response_with_diff(response, request, &mutated);
         }
+        // Validation covers both ordinary Pod updates and ephemeral-container updates.
         if request.kind.group.is_empty()
             && request.kind.version == "v1"
             && request.kind.kind == "Pod"
@@ -213,6 +217,7 @@ impl KubernetesAdmissionOwner {
     }
 
     async fn pod_facts(&self, namespace: &str, pod: &Pod) -> Result<PodAdmissionFactsV1> {
+        // Resolve UIDs from API objects. User-controlled names do not establish selector identity.
         let namespaces = Api::<k8s_openapi::api::core::v1::Namespace>::all(self.kube.clone());
         let namespace_uid = namespaces
             .get(namespace)
@@ -260,6 +265,7 @@ impl KubernetesAdmissionOwner {
             }
         );
         let Some((profile_id, source_revision_id)) = identity else {
+            // An update cannot move an already scheduled, unprotected Pod into protected scope.
             ensure!(
                 self.policies
                     .live_policies_in_namespace(namespace)?
@@ -272,6 +278,7 @@ impl KubernetesAdmissionOwner {
             return Ok(());
         };
         let store = self.policies.store();
+        // Validate updates against the immutable revision admitted on Pod CREATE.
         let source = store
             .source_revision(source_revision_id)?
             .ok_or_else(|| admission_error("protected Pod source revision is unknown"))?;
@@ -330,6 +337,7 @@ impl KubernetesAdmissionOwner {
             .and_then(|annotations| annotations.get(KUBERNETES_PROFILE_ANNOTATION))
             .is_none()
         {
+            // Binding admission has no work for Pods outside the protected scheduling flow.
             return Ok(());
         }
         let nodes = Api::<Node>::all(self.kube.clone());
@@ -375,6 +383,7 @@ impl KubernetesAdmissionOwner {
             Ok(request) => request,
             Err(error) => return Json(AdmissionResponse::invalid(error).into_review()),
         };
+        // A timeout becomes an admission denial. Kubernetes also applies its outer deadline.
         let response = match tokio::time::timeout(
             Duration::from_millis(owner.request_timeout_ms),
             owner.admit(&request),
@@ -466,6 +475,7 @@ impl KubernetesWorkloadInventoryOwner {
     }
 
     async fn reconcile_once(&self) -> Result<()> {
+        // Build one cross-resource snapshot before replacing the Control target inventory.
         let pods = Api::<Pod>::all(self.kube.clone())
             .list(&ListParams::default())
             .await
@@ -513,6 +523,7 @@ impl KubernetesWorkloadInventoryOwner {
                 ))
             })
             .collect::<BTreeMap<_, _>>();
+        // Only persisted Pod bindings select the exact node that receives a candidate.
         let mut targets = Vec::new();
         for pod in pods.items {
             targets.extend(self.bound_pod_targets(&pod, &nodes, &namespaces, &service_accounts)?);
@@ -522,6 +533,7 @@ impl KubernetesWorkloadInventoryOwner {
             .replace_kubernetes_workload_inventory(targets)
             .map_err(|error| admission_error(error.to_string()))?
         {
+            // An unchanged inventory cannot create a new target snapshot by itself.
             return Ok(());
         }
         let resources = Api::<WorkloadProtectionProfile>::all(self.kube.clone())
@@ -551,6 +563,7 @@ impl KubernetesWorkloadInventoryOwner {
             let api =
                 Api::<WorkloadProtectionProfile>::namespaced(self.kube.clone(), &namespace_name);
             let patch = Patch::Merge(serde_json::json!({"status": result.status}));
+            // Status is a best-effort projection. The durable store remains authoritative.
             let _result = api
                 .patch_status(name, &PatchParams::default(), &patch)
                 .await;
@@ -598,6 +611,7 @@ impl KubernetesWorkloadInventoryOwner {
             .get(kubernetes_node_name)
             .ok_or_else(|| admission_error("protected Pod Node is absent"))?;
         let node_annotations = node.metadata.annotations.as_ref();
+        // Use only the readiness owner's current Node projection for node identity facts.
         let node_id = node_annotations
             .and_then(|values| values.get(KUBERNETES_NODE_ID_ANNOTATION))
             .ok_or_else(|| admission_error("protected Pod Node has no Mithril node identity"))?;
@@ -637,6 +651,7 @@ impl KubernetesWorkloadInventoryOwner {
             .flatten()
             .find(|owner| owner.controller == Some(true))
             .map_or(pod_uid, |owner| owner.uid.as_str());
+        // The current live revision updates existing Pods without changing their admitted profile.
         let (source_revision, policy, _compiled) = self
             .policies
             .live_policies_in_namespace(&namespace_name)?
@@ -660,6 +675,7 @@ impl KubernetesWorkloadInventoryOwner {
             let image_digest = pinned_image_digest(&container.image).ok_or_else(|| {
                 admission_error("protected bound container image is not digest-pinned")
             })?;
+            // Pod UID and container name keep stable names from reusing a prior authority.
             let execution_set_id = derived_uuid(&[
                 b"MITHRIL-KUBERNETES-EXECUTION-SET-V1\0",
                 pod_uid.as_bytes(),
@@ -801,6 +817,7 @@ pub fn mutate_protected_pod(
             reason: "protected Pod cannot tolerate the Mithril quarantine taint",
         }
     );
+    // Add requirements only. The Kubernetes scheduler still chooses the exact Node.
     let node_selector = spec.node_selector.get_or_insert_default();
     add_required_node_label(node_selector, KUBERNETES_READY_LABEL, "true")?;
     for (key, value) in &constraints.node_selector {
@@ -827,6 +844,7 @@ pub fn mutate_node_quarantine(mut node: Node, constraints: &DaemonSetNodeConstra
     if !constraints.matches_node(&node) {
         return node;
     }
+    // Admission can only remove the Mithril projection from an unready eligible Node.
     if let Some(labels) = node.metadata.labels.as_mut() {
         labels.remove(KUBERNETES_READY_LABEL);
     }
@@ -873,6 +891,7 @@ pub fn validate_selected_node(
             reason: "scheduler selected a Node outside the live ready Mithril set",
         }
     );
+    // Recheck the live session after scheduler choice to reject a stale ready label.
     let name = node.name_any();
     let annotations = node.metadata.annotations.as_ref();
     let session = control
@@ -962,6 +981,7 @@ fn matching_selector_id(
         })
         .map(|selector| selector.workload_selector_id.clone())
         .collect::<Vec<_>>();
+    // A container gets one signed role path. Multiple matching selectors are ambiguous.
     ensure!(
         selectors.len() <= 1,
         InvalidConfigurationSnafu {
@@ -1082,6 +1102,7 @@ fn cross_product_terms(
         || vec![NodeSelectorTerm::default()],
         |selector| selector.node_selector_terms.clone(),
     );
+    // Bound the cross-product before allocation to stop affinity amplification.
     let term_count = left
         .len()
         .checked_mul(right.node_selector_terms.len())

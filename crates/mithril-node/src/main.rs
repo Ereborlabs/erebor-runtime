@@ -25,6 +25,7 @@ async fn run() -> mithril_node::Result<()> {
     let cli = Cli::parse();
     let mut config = NodeConfig::load(&cli.config)?;
     if let Ok(node_name) = std::env::var("MITHRIL_KUBERNETES_NODE_NAME") {
+        // The downward API binds this process to the Node that scheduled its DaemonSet Pod.
         config.bind_kubernetes_runtime_identity(node_name)?;
     }
     let node = NodeChassis::start_with_held_initial_pids(config, &cli.held_initial_pid).await?;

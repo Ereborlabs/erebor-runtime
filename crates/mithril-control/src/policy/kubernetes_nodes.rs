@@ -32,12 +32,14 @@ pub struct KubernetesNodeControlConfigV1 {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+/// Contains the scheduling constraints that Control derives from the live DaemonSet.
 pub struct DaemonSetNodeConstraintsV1 {
     pub node_selector: BTreeMap<String, String>,
     pub required_node_affinity: Option<NodeSelector>,
 }
 
 #[derive(Clone)]
+/// Owns the Mithril readiness label, identity annotations, and quarantine taint.
 pub struct KubernetesNodeReadinessOwner {
     config: KubernetesNodeControlConfigV1,
 }
@@ -70,6 +72,7 @@ impl KubernetesNodeReadinessOwner {
     }
 
     pub async fn live_constraints(&self, client: Client) -> Result<DaemonSetNodeConstraintsV1> {
+        // The DaemonSet Pod template is the only node-pool authority for this flow.
         let daemon_sets = Api::<DaemonSet>::namespaced(client, &self.config.daemon_set_namespace);
         let daemon_set = daemon_sets
             .get(&self.config.daemon_set_name)
@@ -115,6 +118,7 @@ impl KubernetesNodeReadinessOwner {
                 continue;
             };
 
+            // Any DaemonSet change invalidates the derived node set and starts a complete relist.
             let daemon_set_resource_version = daemon_set.resource_version().unwrap_or_default();
             let daemon_set_watch = daemon_sets
                 .watch(
@@ -210,6 +214,7 @@ impl KubernetesNodeReadinessOwner {
         let Some(node_uid) = node.metadata.uid.as_deref() else {
             return;
         };
+        // Bind the session to the API object UID before the session can project readiness.
         let _result = control.bind_kubernetes_node_session(&name, node_uid);
         let sessions = control
             .ready_kubernetes_node_sessions(Duration::from_secs(self.config.session_ttl_seconds));
@@ -236,6 +241,7 @@ impl DaemonSetNodeConstraintsV1 {
                 }
                 .build()
             })?;
+        // A fixed nodeName would bypass scheduler choice and cannot define a node pool.
         ensure!(
             pod_spec.node_name.as_deref().is_none_or(str::is_empty),
             InvalidConfigurationSnafu {
@@ -288,12 +294,14 @@ pub fn node_projection_patch(
         node.metadata.name.as_ref() == Some(&session.kubernetes_node_name)
             && node.metadata.uid.as_ref() == Some(&session.kubernetes_node_uid)
     });
+    // Eligibility and an exact live session are both necessary to remove quarantine.
     let ready = eligible && session.is_some();
     let mut taints = node
         .spec
         .as_ref()
         .and_then(|spec| spec.taints.clone())
         .unwrap_or_default();
+    // Preserve every non-Mithril taint because this owner has no authority over it.
     taints.retain(|taint| taint.key != KUBERNETES_NOT_READY_TAINT);
     if eligible && !ready {
         taints.push(Taint {
@@ -352,6 +360,7 @@ fn retained_annotation(annotations: Option<&BTreeMap<String, String>>, key: &str
 }
 
 fn validate_node_selector(selector: &NodeSelector) -> Result<()> {
+    // Reject field selectors and operators that the local matcher cannot reproduce exactly.
     ensure!(
         !selector.node_selector_terms.is_empty()
             && selector.node_selector_terms.iter().all(|term| {

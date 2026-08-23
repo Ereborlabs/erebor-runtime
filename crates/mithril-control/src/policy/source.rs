@@ -23,6 +23,7 @@ const MAX_POLICY_NODES: usize = 32_768;
 const MAX_POLICY_DEPTH: usize = 32;
 
 pub(crate) fn tagged_union_schema(schema: &mut Schema) {
+    // Convert serde tagged unions into a structural Kubernetes schema with CEL field guards.
     let Some(root) = schema.as_object_mut() else {
         return;
     };
@@ -85,6 +86,7 @@ pub(crate) fn tagged_union_schema(schema: &mut Schema) {
         discriminator.clone(),
         serde_json::json!({"type": "string", "enum": discriminator_values}),
     );
+    // Each discriminator permits only its fields and requires its variant-specific fields.
     for (value, required, fields) in variant_details {
         let mut terms = required
             .iter()

@@ -79,6 +79,7 @@ pub struct NodeChassis {
     bindings: WorkloadBindingOwner,
     identity: NativeSecurityStateOwner,
     policy: Option<crate::NodePolicyGenerationOwner>,
+    // Policy delivery owns durable transfer and activation state; policy owns kernel generations.
     policy_delivery: crate::policy_delivery::NodePolicyDeliveryOwner,
     administrative: Option<AdministrativeExecOwner>,
     readiness: watch::Sender<NodeReadinessV1>,
@@ -97,6 +98,7 @@ impl NodeChassis {
         held_initial_pids: &[u32],
     ) -> Result<Self> {
         config.validate()?;
+        // Load trust and delivery state before BPF recovery can accept dynamic policy material.
         let trust = TrustCache::load(&config.state_directory)?;
         let policy_delivery =
             crate::policy_delivery::NodePolicyDeliveryOwner::load(&config.state_directory)?;
@@ -129,6 +131,7 @@ impl NodeChassis {
             }
         );
         let label_epoch = NodeEpochs::label_epoch(&config.state_directory, recover_identity)?;
+        // Restore signed policy, but restore scheduled targets only for this boot and label epoch.
         policy_delivery.restore_config_for_session(
             &mut config,
             &trust,
@@ -189,9 +192,11 @@ impl NodeChassis {
             bindings.adopt_activated_profiles(&host, &config.workload_bindings)?;
         }
         let mut policy_delivery = policy_delivery;
+        // A pending record becomes active only when live BPF readback proves the prior CAS won.
         if policy.is_some() {
             policy_delivery.recover_pending_activation(&host, &config)?;
         }
+        // Dynamic policy needs evidence and either runtime admission or exact local target facts.
         let dynamic_policy_capable = config.evidence.is_some()
             && (config.runtime_admission.is_some()
                 || config.workload_bindings.iter().any(|binding| {
@@ -241,6 +246,7 @@ impl NodeChassis {
             administrative.reconcile(&host)?;
         }
         let policy_loaded = policy.is_some();
+        // Start loss-aware evidence before the first dynamically delivered policy can activate.
         let policy_observation_enabled = policy_loaded || dynamic_policy_capable;
         let prevention_enabled = policy
             .as_ref()
@@ -377,6 +383,7 @@ impl NodeChassis {
                 )
             })
             .transpose()?;
+        // The server owns socket I/O; this chassis remains the only policy and binding decision owner.
         let (runtime_admission_server, runtime_admission_requests) = config
             .runtime_admission
             .as_ref()
@@ -459,6 +466,7 @@ impl NodeChassis {
                 control_disconnected_since + self.evidence_control_delay();
             let evidence_configured =
                 self.effect_reader.is_some() || self.config.evidence.is_some();
+            // Continue runtime admission while Control reconnects so held starts fail closed.
             let connection = tokio::select! {
                 result = self.connector.connect(
                     self.registration.clone(),
@@ -585,6 +593,7 @@ impl NodeChassis {
                                 }
                             }
                             _instant = policy_poll.tick() => {
+                                // Poll, stage, activate, and acknowledge one candidate at a time.
                                 let bundle = match self
                                     .policy_delivery
                                     .fetch_candidate(&mut connection)
@@ -611,6 +620,7 @@ impl NodeChassis {
                                     }
                                     Err(_error) => break,
                                 };
+                                // Do not retry one rejected candidate until Control selects another.
                                 if rejected_candidate.as_deref()
                                     == Some(bundle.candidate.candidate_content_id.as_str())
                                 {
@@ -634,6 +644,7 @@ impl NodeChassis {
                                         continue;
                                     }
                                 };
+                                // This call completes local readback before any ACTIVE acknowledgement.
                                 self.activate_control_policy(
                                     &bundle,
                                     prepared,
@@ -772,6 +783,7 @@ impl NodeChassis {
                     close_identity_claims(&mut self.registration);
                 }
             }
+            // Control loss closes new admission but keeps the last valid local generation active.
             self.readiness.send_replace(NodeReadinessV1 {
                 kernel_ready: kernel_healthy,
                 identity_ready: identity_healthy,
@@ -896,6 +908,7 @@ impl NodeChassis {
         &mut self,
         envelope: crate::runtime_admission::RuntimeAdmissionEnvelope,
     ) {
+        // Only a valid first-use request can wait; malformed and replayed requests fail immediately.
         let malformed = envelope.request.kubernetes_identity().is_err();
         let reused = self.config.workload_bindings.iter().any(|binding| {
             binding.scheduled_binding_authority_id.is_some()
@@ -955,6 +968,7 @@ impl NodeChassis {
         let mut dynamic = self.config.clone();
         dynamic.workload_bindings[scheduled.binding_index] = scheduled.resolved.clone();
         dynamic.validate()?;
+        // Confirm CRI Created state while the hook holds this exact initial process.
         self.bindings
             .verify_runtime_admission(&mut scheduled.resolved)
             .await?;
@@ -967,6 +981,7 @@ impl NodeChassis {
             .fail();
         };
         if let Some(previous) = scheduled.previous_binding_id.as_deref() {
+            // Retire a prior container lifetime before this replacement gains authority.
             if let Err(error) = self.bindings.retire_binding_id(host, previous) {
                 self.bindings.cancel_runtime_admission();
                 return Err(error);
@@ -1059,6 +1074,7 @@ impl NodeChassis {
             }
             .build()
         })?;
+        // Reserve a node-local handle only after durable and live-map reconciliation.
         let generation = crate::NodePolicyGenerationOwner::next_generation_ref_id(
             &self.config,
             host,
@@ -1084,6 +1100,7 @@ impl NodeChassis {
         prepared: crate::policy_delivery::PreparedPolicyActivationV1,
         evidence_healthy: bool,
     ) -> Result<()> {
+        // Durable pending intent precedes all kernel writes for restart recovery.
         self.policy_delivery.begin_activation(bundle, &prepared)?;
         let host = self.host.as_mut().ok_or_else(|| {
             IdentityStateSnafu {
@@ -1101,6 +1118,7 @@ impl NodeChassis {
         self.identity.activate_with_effect_policy(host, true)?;
         self.bindings
             .adopt_activated_profiles(host, &prepared.config.workload_bindings)?;
+        // Exact active-pointer readback separates activation from staging success.
         let receipt = crate::NodePolicyGenerationOwner::activation_receipt(
             host,
             &prepared.profile_id,
@@ -1500,6 +1518,7 @@ fn registration(
         effect_prevention_claims_enabled,
         capabilities,
         kubernetes_node_name: kubernetes_node_name.unwrap_or_default().to_owned(),
+        // Report only bindings with complete exact workload identity to Control.
         workload_targets: workload_bindings
             .iter()
             .filter(|binding| {
@@ -1546,6 +1565,7 @@ fn registered_workload_target(
 pub(crate) fn workload_binding_generation_digest(
     binding: &crate::WorkloadBindingConfig,
 ) -> Result<String> {
+    // Include lifecycle and runtime identity so restart or replacement creates new authority.
     let identity = serde_json::to_vec(&(
         binding.binding_id.as_str(),
         binding.lifecycle_generation,

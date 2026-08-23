@@ -23,12 +23,14 @@ const MAX_COVERAGE_INTERVALS: usize = 8_192;
 pub(crate) const MAX_PENDING_EVIDENCE_RECORDS: u64 = 4_096;
 
 #[derive(Clone)]
+/// Owns evidence validation and delegates atomic persistence to the Control store.
 pub struct EvidenceIntakeOwner {
     store: crate::ControlStore,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(deny_unknown_fields)]
+/// Separates evidence streams by authenticated tenant, node session, source, and source epoch.
 pub struct EvidenceIntakeIdentityV1 {
     pub tenant_id: [u8; 16],
     pub node_id: String,
@@ -173,6 +175,7 @@ impl EvidenceIntakeOwner {
             .ok_or_else(|| {
                 Status::invalid_argument("evidence batch has no valid previous record digest")
             })?;
+        // Every record in a batch must resolve to the same authenticated evidence stream.
         let mut stream_identity = None;
         for (index, record) in batch.records.iter().enumerate() {
             let cursor = batch.first_cursor
@@ -224,6 +227,7 @@ impl EvidenceIntakeOwner {
             batch_sha256: batch_digest,
             records: batch.records.iter().map(StoredRecordV1::from).collect(),
         };
+        // Pending batches are durable but receive no acknowledgement before the gap closes.
         if self
             .store
             .accept_evidence_batch(identity, stored)
@@ -266,6 +270,7 @@ impl EvidenceIntakeOwner {
             ));
         }
         validate_coverage_report(report)?;
+        // Current intervals must describe one source so the report has one durable cursor.
         let source_ids = report
             .intervals
             .iter()
@@ -352,6 +357,7 @@ fn validate_coverage_report(report: &CoverageReport) -> std::result::Result<(), 
     }
     let mut interval_ids = std::collections::BTreeSet::new();
     let mut current_cpus = std::collections::BTreeSet::new();
+    // Negative claims require a current healthy interval for every reported CPU.
     let mut current_healthy = true;
     let mut current_count = 0_usize;
     for interval in &report.intervals {
@@ -382,6 +388,7 @@ fn validate_coverage_report(report: &CoverageReport) -> std::result::Result<(), 
             && closing.is_none_or(|closing| {
                 opening.is_some_and(|opening| coverage_counters_do_not_regress(opening, closing))
             });
+        // Counter regression is valid only when both counter snapshots preserve the proof.
         let exact_regression_record = state == Some(CoverageStateV1::Gapped)
             && counter_regression
             && opening.is_some()
@@ -474,6 +481,7 @@ fn validate_record(
     let supplied_record: [u8; 32] = record.record_sha256.as_slice().try_into().map_err(|_| {
         Status::invalid_argument("evidence record digest must be one SHA-256 digest")
     })?;
+    // Verify both the payload identity and the hash-chain link before persistence.
     if payload_digest != supplied_payload
         || record_digest(record, previous) != supplied_record
         || !payload_has_identity(&record.payload, &record.observation_id)

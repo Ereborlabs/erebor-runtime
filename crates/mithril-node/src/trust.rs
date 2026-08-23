@@ -41,6 +41,7 @@ impl TrustCache {
             Ok(bytes) => {
                 let installed: InstalledTrustGenerationV1 =
                     serde_json::from_slice(&bytes).context(JsonSnafu { path: &path })?;
+                // Corrupt or partial trust state blocks reconnect and policy verification.
                 ensure!(
                     installed.is_valid(),
                     IdentityStateSnafu {
@@ -97,6 +98,7 @@ impl TrustCache {
                 )
             })
             .collect::<BTreeMap<_, _>>();
+        // Verify the complete signer set digest before it becomes a candidate trust root.
         ensure!(
             generation > 0
                 && is_sha256_hex(&bundle_digest)
@@ -118,6 +120,7 @@ impl TrustCache {
                 reason: "Control attempted a trust-generation rollback",
             }
         );
+        // A generation can repeat only with byte-identical immutable trust content.
         ensure!(
             generation != self.installed.generation
                 || self.installed.bundle_digest.is_empty()
@@ -146,6 +149,7 @@ impl TrustCache {
         file.write_all(&bytes)
             .context(IoSnafu { path: &temporary })?;
         file.sync_all().context(IoSnafu { path: &temporary })?;
+        // Persist trust before the node acknowledges this generation to Control.
         fs::rename(&temporary, &self.path).context(IoSnafu { path: &self.path })?;
         if let Some(parent) = self.path.parent() {
             File::open(parent)
@@ -172,6 +176,7 @@ impl TrustCache {
                 }
                 .build()
             })?;
+        // Issuer epoch and revocation are checked at every candidate verification.
         ensure!(
             !signer.revoked && self.installed.policy_issuer_sequence_epoch == issuer_sequence_epoch,
             ControlProtocolSnafu {

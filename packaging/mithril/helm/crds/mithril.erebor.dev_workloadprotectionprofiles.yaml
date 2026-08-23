@@ -26,6 +26,7 @@
             "properties": {
               "spec": {
                 "additionalProperties": false,
+                "description": "Defines the CRD desired state. Control creates signed node artifacts from this value.",
                 "maxProperties": 4096,
                 "properties": {
                   "api_version": {
@@ -4176,6 +4177,7 @@
               },
               "status": {
                 "additionalProperties": false,
+                "description": "Projects Control state for operators. This status does not authorize node activation.",
                 "maxProperties": 4096,
                 "nullable": true,
                 "properties": {

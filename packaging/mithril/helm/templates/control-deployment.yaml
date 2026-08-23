@@ -15,6 +15,7 @@ spec:
       labels:
         app.kubernetes.io/name: mithril-control
     spec:
+      # Control needs the API token for watches, admission reads, status, and Node projection.
       serviceAccountName: mithril-control
       automountServiceAccountToken: true
       terminationGracePeriodSeconds: 10
@@ -82,6 +83,7 @@ spec:
             secretName: {{ .Values.control.configSecretName | quote }}
             defaultMode: 0440
         - name: state
+          # Policy, trust, evidence, and acknowledgements share this durable commit store.
           persistentVolumeClaim:
             claimName: {{ .Values.control.statePersistentVolumeClaim | quote }}
 {{- if .Values.control.admission.enabled }}
@@ -98,6 +100,7 @@ metadata:
   labels:
     app.kubernetes.io/name: mithril-control
 spec:
+  # Both node mTLS and API-server admission connect to this one Control owner.
   selector:
     app.kubernetes.io/name: mithril-control
   ports:

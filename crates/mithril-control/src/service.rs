@@ -57,6 +57,7 @@ pub struct PolicySignerTrustV1 {
 
 #[derive(Default)]
 struct ControlState {
+    // Sessions and stream senders are connection state. Durable policy and evidence live in store.
     registrations: BTreeSet<StreamIdentity>,
     sessions: BTreeMap<String, NodeSession>,
     pending: BTreeMap<Vec<u8>, PendingAdministrativeResponse>,
@@ -64,6 +65,7 @@ struct ControlState {
 }
 
 struct NodeSession {
+    // The boot identity and connection nonce prevent a reconnect from inheriting this session.
     identity: StreamIdentity,
     kubernetes_node_name: Option<String>,
     kubernetes_node_uid: Option<String>,
@@ -98,6 +100,7 @@ enum PendingAdministrativeResponse {
 const ADMINISTRATIVE_NODE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
 #[derive(Clone)]
+/// Terminates authenticated node RPCs and delegates durable changes to domain owners.
 pub struct ControlPlane {
     allowed_nodes: Arc<BTreeMap<String, AllowedNodeIdentity>>,
     trust: crate::TrustBundleOwner,
@@ -194,6 +197,7 @@ impl ControlPlane {
 
     #[must_use]
     pub fn workload_inventory(&self) -> Vec<crate::WorkloadTargetFactV1> {
+        // Combine node-reported static facts with the complete Kubernetes inventory projection.
         self.state.lock().map_or_else(
             |_| Vec::new(),
             |state| {
@@ -216,6 +220,7 @@ impl ControlPlane {
                 "Kubernetes workload inventory exceeds 65,536 targets",
             ));
         }
+        // Key by the complete fact digest so replacement removes targets absent from the snapshot.
         let targets = targets
             .into_iter()
             .map(|target| (target.workload_binding_generation_digest.clone(), target))
@@ -240,6 +245,7 @@ impl ControlPlane {
                 state
                     .sessions
                     .values()
+                    // Readiness expires even when a dead connection has not been removed yet.
                     .filter(|session| {
                         session.admission_ready
                             && now.saturating_duration_since(session.last_seen) <= maximum_age
@@ -269,6 +275,7 @@ impl ControlPlane {
             .values_mut()
             .find(|session| session.kubernetes_node_name.as_deref() == Some(kubernetes_node_name))
             .ok_or_else(|| Status::unavailable("Kubernetes Node has no registered session"))?;
+        // A session can bind one API object UID. Node recreation requires a new session.
         if session
             .kubernetes_node_uid
             .as_deref()
@@ -400,6 +407,7 @@ impl ControlPlane {
     }
 
     fn authenticated_node<T>(&self, request: &Request<T>) -> Result<String, Status> {
+        // The certificate digest, not a request field, selects the enrolled node identity.
         let digest = request
             .peer_certs()
             .and_then(|certificates| certificates.first().cloned())
@@ -456,6 +464,7 @@ impl ControlPlane {
             .try_into()
             .map_err(|_| Status::invalid_argument("node boot identity is not Id128"))?;
         let identity = StreamIdentity::new(node_id.to_owned(), context)?;
+        // Policy and evidence RPCs require trust acknowledgement from this boot and label epoch.
         self.trust
             .require_session_acknowledged(
                 node_id,
@@ -508,6 +517,7 @@ impl ControlPlane {
         if !state.registrations.insert(identity.clone()) {
             return Err(Status::already_exists("registration nonce was replayed"));
         }
+        // A valid reconnect replaces prior streams and pending requests for this node identity.
         state
             .pending
             .retain(|_, pending| pending.node_id() != node_id);
@@ -857,6 +867,7 @@ impl NodePolicy for ControlPlane {
         let store = self.policy_store.as_ref().ok_or_else(|| {
             Status::failed_precondition("Control has no durable policy rollout store")
         })?;
+        // The store selects only a candidate whose immutable target names this mTLS node.
         let Some(bundle) = store
             .next_bundle_for_node(
                 &node_id,
@@ -897,6 +908,7 @@ impl NodePolicy for ControlPlane {
         let store = self.policy_store.as_ref().ok_or_else(|| {
             Status::failed_precondition("Control has no durable policy rollout store")
         })?;
+        // Re-resolve every chunk request against the immutable node-specific candidate.
         let bundle = store
             .bundle_for_candidate(&node_id, &request.candidate_content_id)
             .map_err(internal_status)?
@@ -929,6 +941,7 @@ impl NodePolicy for ControlPlane {
         request: Request<PolicyAcknowledgementRequest>,
     ) -> Result<Response<PolicyAcknowledgementAccepted>, Status> {
         let node_id = self.authenticated_node(&request)?;
+        // Bind the acknowledgement bytes to the certificate on this authenticated channel.
         let channel_receipt_digest = policy_channel_receipt_digest(&request)?;
         let request = request.into_inner();
         let context = request
@@ -973,6 +986,7 @@ impl NodePolicy for ControlPlane {
         let store = self.policy_store.as_ref().ok_or_else(|| {
             Status::failed_precondition("Control has no durable policy rollout store")
         })?;
+        // Return only after the acknowledgement and rollout transition share one durable commit.
         Ok(Response::new(PolicyAcknowledgementAccepted {
             control_commit_index: store.commit_index(),
             rollout_state: rollout_state_name(state.state).to_owned(),

@@ -22,6 +22,7 @@ const STORE_SCHEMA_VERSION: u32 = 1;
 const ZERO_DIGEST: &str = "0000000000000000000000000000000000000000000000000000000000000000";
 
 #[derive(Clone)]
+/// Owns the append-only Control commit chain and its replayed in-memory index.
 pub struct ControlStore {
     inner: Arc<Mutex<ControlStoreInner>>,
 }
@@ -47,6 +48,7 @@ struct ControlStoreInner {
 
 #[derive(Clone, Default)]
 struct ControlStoreState {
+    // This state is a cache. Startup rebuilds every field from verified commits.
     commit_index: u64,
     last_commit_digest: String,
     source_revisions: BTreeMap<String, PolicySourceRevisionV1>,
@@ -127,6 +129,7 @@ struct ControlCommitV1 {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "SCREAMING_SNAKE_CASE")]
+// Each variant contains all state that must become durable in one transaction.
 enum ControlTransactionV1 {
     SourceAccepted {
         source_revision: Box<PolicySourceRevisionV1>,
@@ -209,6 +212,7 @@ impl ControlStore {
             })
             .collect::<Result<Vec<_>>>()?;
         paths.sort();
+        // Replay in lexical index order and reject any gap, digest break, or unknown file.
         for path in paths {
             if path.extension().and_then(|value| value.to_str()) == Some("tmp") {
                 fs::remove_file(&path).context(IoSnafu { path: &path })?;
@@ -316,6 +320,7 @@ impl ControlStore {
             }
             .fail();
         }
+        // Object UID, generation, and lifecycle state form the monotonic source history.
         if let Some(current_id) = inner.state.latest_sources.get(&key) {
             let current = inner
                 .state
@@ -410,6 +415,7 @@ impl ControlStore {
             }
             .fail();
         }
+        // Issuer sequence is global to one signing key and cannot repeat after restart.
         let header = &artifact.header;
         for existing in inner.state.compiled_artifacts.values() {
             if existing.signed_profile.signing_key_id == artifact.signed_profile.signing_key_id
@@ -490,6 +496,7 @@ impl ControlStore {
                 return Ok(inner.state.commit_index);
             }
         }
+        // Commit the snapshot, signed bundles, and initial target states as one unit.
         validate_rollout_transaction(&target_snapshot, &bundles, &rollout_states, &inner.root)?;
         validate_rollout_ordering(&inner.state, &bundles, &inner.root)?;
         commit(
@@ -530,6 +537,7 @@ impl ControlStore {
             }
             .build()
         })?;
+        // The transition version is the compare-and-swap guard for concurrent or stale replies.
         if rollout_state.transition_version != current.transition_version.saturating_add(1)
             || rollout_state.target != current.target
             || rollout_state.desired_candidate_content_id != current.desired_candidate_content_id
@@ -570,6 +578,7 @@ impl ControlStore {
             first_cursor: batch.first_cursor,
             last_cursor: batch.last_cursor,
         };
+        // An accepted range is idempotent only when its complete digest is unchanged.
         if let Some(digest) = inner.state.evidence_batch_receipts.get(&receipt_key) {
             if digest == &batch.batch_sha256 {
                 return Ok(EvidenceStoreOutcomeV1::Accepted);
@@ -614,6 +623,7 @@ impl ControlStore {
         }
         let next = cursor.contiguous_cursor.saturating_add(1);
         if batch.first_cursor != next {
+            // Persist bounded reordering without advancing the contiguous acknowledgement.
             if batch.last_cursor
                 > cursor
                     .contiguous_cursor
@@ -634,6 +644,7 @@ impl ControlStore {
             return Ok(EvidenceStoreOutcomeV1::Pending);
         }
 
+        // Promote the new batch and every now-contiguous pending batch in one commit.
         let mut batches = vec![batch];
         let mut next = batches[0].last_cursor.saturating_add(1);
         while let Some(pending) = inner
@@ -659,6 +670,7 @@ impl ControlStore {
 
     pub fn install_trust_generation(&self, generation: TrustGenerationV1) -> Result<u64> {
         let mut inner = self.lock()?;
+        // Durable trust monotonicity survives process restart and in-memory subscriber loss.
         if let Some((_number, current)) = inner.state.trust_generations.last_key_value() {
             if generation.generation < current.generation {
                 return ControlStoreSnafu {
@@ -700,6 +712,7 @@ impl ControlStore {
         acknowledgement: TrustGenerationAcknowledgementV1,
     ) -> Result<u64> {
         let mut inner = self.lock()?;
+        // Trust is acknowledged for one node boot and label epoch, not only one node name.
         let key = (
             acknowledgement.node_id.clone(),
             acknowledgement.generation,
@@ -904,6 +917,7 @@ impl ControlStore {
         sequence_epoch: u64,
     ) -> Result<u64> {
         let inner = self.lock()?;
+        // Candidate distribution has a replay domain independent of policy issuer sequence.
         let mut current = 0_u64;
         for bundle in inner.state.bundles.values().filter(|bundle| {
             bundle.candidate.exact_target.node_id == node_id
@@ -1025,6 +1039,7 @@ impl ControlStore {
         durable_bundle_digests: &[String],
     ) -> Result<Option<PolicyBundleV1>> {
         let inner = self.lock()?;
+        // Prefer unsettled work. Redeliver an active bundle only when the node lost it.
         Ok(inner
             .state
             .bundles
@@ -1178,6 +1193,7 @@ fn commit(inner: &mut ControlStoreInner, transaction: ControlTransactionV1) -> R
     };
     record.commit_digest = commit_digest(&record)?;
     let path = commit_path(&inner.root, commit_index);
+    // Validate on a clone, make the record durable, then publish the new in-memory state.
     let mut next_state = inner.state.clone();
     apply_transaction(&mut next_state, &record.transaction, &path)?;
     write_commit(&path, &record)?;
@@ -1208,6 +1224,7 @@ fn apply_transaction(
     transaction: &ControlTransactionV1,
     path: &Path,
 ) -> Result<()> {
+    // Use the same transition code before a write and during startup replay.
     match transaction {
         ControlTransactionV1::SourceAccepted {
             source_revision,
@@ -1506,6 +1523,7 @@ fn validate_trust_transition(
             .fail();
         }
     }
+    // A key ID keeps the same key bytes, and revocation never reverses.
     for signer in &generation.policy_signers {
         for prior in state
             .trust_generations
@@ -1604,6 +1622,7 @@ fn validate_source_label(
     identity: &EvidenceIntakeIdentityV1,
     path: &Path,
 ) -> Result<()> {
+    // One source epoch cannot cross a label epoch and inherit a different node identity.
     if state
         .evidence_source_labels
         .get(&source_epoch_key(identity))
@@ -1649,6 +1668,7 @@ fn apply_accepted_evidence(
         .get(&accepted.identity)
         .copied()
         .unwrap_or_default();
+    // Records, receipts, and the contiguous cursor advance in this one transaction.
     for batch in &accepted.batches {
         validate_stored_batch(batch, path)?;
         let supplied_previous = batch
@@ -1808,6 +1828,7 @@ fn validate_rollout_ordering(
                     existing.candidate.distribution_sequence,
                 )
             });
+        // Require both numeric ordering and the exact predecessor content identity.
         let ordering_is_valid = previous.is_none_or(|previous| {
             (
                 candidate.distribution_sequence_epoch,
@@ -1903,6 +1924,7 @@ fn write_commit(path: &Path, commit: &ControlCommitV1) -> Result<()> {
     file.write_all(&bytes)
         .context(IoSnafu { path: &temporary })?;
     file.sync_all().context(IoSnafu { path: &temporary })?;
+    // Rename publishes the complete file; parent fsync makes the directory entry durable.
     fs::rename(&temporary, path).context(IoSnafu { path })?;
     File::open(parent)
         .context(IoSnafu { path: parent })?
