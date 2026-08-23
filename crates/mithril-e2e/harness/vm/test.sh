@@ -7,6 +7,7 @@ test_root=$(mktemp -d /tmp/mithril-vm-harness-test.XXXXXX)
 trap 'rm -rf -- "$test_root"' EXIT
 
 for script in "$directory/run.sh" "$directory/two-node-network.sh" \
+  "$directory/two-node-convergence.sh" \
   "$directory/manual.sh" "$directory/guest.sh" \
   "$directory/providers/libvirt.sh" "$directory/test.sh"; do
   bash -n "$script"
@@ -20,6 +21,8 @@ help=$("$directory/run.sh" --help 2>&1)
 "$directory/guest.sh" --help >/dev/null 2>&1
 two_node_help=$("$directory/two-node-network.sh" --help 2>&1)
 [[ $two_node_help == *--keep-vms* ]]
+convergence_help=$("$directory/two-node-convergence.sh" --help 2>&1)
+[[ $convergence_help == *--keep-vms* ]]
 
 set +e
 manual_without_mount=$("$directory/run.sh" --manual 2>&1)
@@ -83,6 +86,15 @@ two_node_nonempty=$(
 status=$?
 set -e
 [[ $status -eq 2 && $two_node_nonempty == *"evidence output directory is not empty"* ]]
+
+set +e
+convergence_nonempty=$(
+  "$directory/two-node-convergence.sh" --provider "$fake_provider" \
+    --output-directory "$test_root/evidence" 2>&1
+)
+status=$?
+set -e
+[[ $status -eq 2 && $convergence_nonempty == *"evidence output directory is not empty"* ]]
 
 fake_bin=$test_root/bin
 mkdir "$fake_bin"
