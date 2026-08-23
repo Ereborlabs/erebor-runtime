@@ -1048,7 +1048,7 @@ impl NodePolicy for ControlPlane {
             .policy_rollout
             .as_ref()
             .ok_or_else(|| Status::failed_precondition("Control has no policy rollout owner"))?;
-        let state = rollout
+        let result = rollout
             .acknowledge(acknowledgement)
             .map_err(invalid_policy_status)?;
         let store = self.policy_store.as_ref().ok_or_else(|| {
@@ -1057,7 +1057,8 @@ impl NodePolicy for ControlPlane {
         // Return only after the acknowledgement and rollout transition share one durable commit.
         Ok(Response::new(PolicyAcknowledgementAccepted {
             control_commit_index: store.commit_index(),
-            rollout_state: rollout_state_name(state.state).to_owned(),
+            rollout_state: rollout_state_name(result.rollout_state.state).to_owned(),
+            terminal_chain_closure_authorized: result.terminal_chain_closure_authorized,
         }))
     }
 
@@ -1163,6 +1164,7 @@ impl NodePolicy for ControlPlane {
         Ok(Response::new(PolicyAcknowledgementAccepted {
             control_commit_index: store.commit_index(),
             rollout_state: exception_rollout_state_name(state.state).to_owned(),
+            terminal_chain_closure_authorized: false,
         }))
     }
 }

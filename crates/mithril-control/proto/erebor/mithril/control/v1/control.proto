@@ -261,6 +261,8 @@ message PolicyActivationAcknowledgement {
 message PolicyAcknowledgementAccepted {
   uint64 control_commit_index = 1;
   string rollout_state = 2;
+  // True only when the node can retire this restrictive terminal chain.
+  bool terminal_chain_closure_authorized = 3;
 }
 
 // Carries one signed candidate whose exact target names the authenticated node.

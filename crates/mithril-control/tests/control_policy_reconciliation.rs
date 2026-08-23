@@ -946,11 +946,24 @@ fn empty_target_retirement_replays_idempotently_and_readd_advances_issuer() -> T
         Some(retirement.clone())
     );
 
-    restarted.rollout_owner().acknowledge(acknowledgement(
-        &retirement,
-        PolicyActivationStateV1::Active,
-        NOW + 3,
-    )?)?;
+    let retirement_acknowledgement =
+        acknowledgement(&retirement, PolicyActivationStateV1::Active, NOW + 3)?;
+    let accepted = restarted
+        .rollout_owner()
+        .acknowledge(retirement_acknowledgement.clone())?;
+    assert!(accepted.terminal_chain_closure_authorized);
+    let acknowledged_commit = reopened.commit_index();
+    drop(restarted);
+    drop(reopened);
+    let reopened = ControlStore::open(directory.path())?;
+    let restarted = make_owner(reopened.clone());
+    let duplicate = restarted
+        .rollout_owner()
+        .acknowledge(retirement_acknowledgement)?;
+    assert_eq!(duplicate, accepted);
+    assert_eq!(reopened.commit_index(), acknowledged_commit);
+    // Empty node inventory after cleanup must not reopen any member of the closed chain.
+    assert!(reopened.next_bundle_for_node("node-a", &[])?.is_none());
     let settled = restarted.reconcile(&resource, NAMESPACE_UID, &[], NOW + 4)?;
     assert!(settled.retirement_bundles.is_empty());
     assert_eq!(settled.status.rollout.total(), 0);
@@ -965,12 +978,10 @@ fn empty_target_retirement_replays_idempotently_and_readd_advances_issuer() -> T
     let active = &readded.bundles[0];
     assert_eq!(
         active.candidate.operation,
-        PolicyDeliveryOperationV1::Replace
+        PolicyDeliveryOperationV1::Activate
     );
-    assert_eq!(
-        active.candidate.predecessor_candidate_content_id.as_deref(),
-        Some(retirement.candidate.candidate_content_id.as_str())
-    );
+    assert!(active.candidate.predecessor_candidate_content_id.is_none());
+    assert!(active.candidate.distribution_sequence > retirement.candidate.distribution_sequence);
     assert!(
         active.profile_artifact.header.issuer_sequence
             > retirement.profile_artifact.header.issuer_sequence
@@ -979,9 +990,242 @@ fn empty_target_retirement_replays_idempotently_and_readd_advances_issuer() -> T
         active.profile_artifact.policy_document,
         lower_kubernetes_policy(&resource, TENANT_ID, CLUSTER_UID, NAMESPACE_UID,)?
     );
+    assert!(reopened
+        .next_bundle_for_node("node-a", std::slice::from_ref(&retirement.bundle_digest))?
+        .is_none());
     assert_eq!(
-        reopened.next_bundle_for_node("node-a", std::slice::from_ref(&retirement.bundle_digest),)?,
+        reopened.next_bundle_for_node("node-a", &[])?,
         Some(active.clone())
+    );
+    Ok(())
+}
+
+#[test]
+fn terminal_acknowledgement_with_a_prebuilt_successor_cannot_close_the_chain() -> TestResult {
+    let directory = TempDir::new()?;
+    let store = ControlStore::open(directory.path())?;
+    let owner = make_owner(store);
+    let policy = policy()?;
+    let resource = resource(&policy, "profile", OBJECT_UID, 1, false)?;
+    let inventory = inventory_for_resource(&resource, &"1".repeat(64))?;
+    let initial = owner.reconcile(&resource, NAMESPACE_UID, &inventory, NOW)?;
+    owner.rollout_owner().acknowledge(acknowledgement(
+        &initial.bundles[0],
+        PolicyActivationStateV1::Active,
+        NOW + 1,
+    )?)?;
+
+    let emptied = owner.reconcile(&resource, NAMESPACE_UID, &[], NOW + 2)?;
+    let terminal = &emptied.retirement_bundles[0];
+    let readded = owner.reconcile(&resource, NAMESPACE_UID, &inventory, NOW + 3)?;
+    let successor = &readded.bundles[0];
+    assert_eq!(
+        successor.candidate.operation,
+        PolicyDeliveryOperationV1::Replace
+    );
+    assert_eq!(
+        successor
+            .candidate
+            .predecessor_candidate_content_id
+            .as_deref(),
+        Some(terminal.candidate.candidate_content_id.as_str())
+    );
+
+    let accepted = owner.rollout_owner().acknowledge(acknowledgement(
+        terminal,
+        PolicyActivationStateV1::Active,
+        NOW + 4,
+    )?)?;
+    assert!(!accepted.terminal_chain_closure_authorized);
+    Ok(())
+}
+
+fn abandoned_successor_branch_recovers_after_restart(
+    abandoned_state: PolicyActivationStateV1,
+) -> TestResult {
+    let directory = TempDir::new()?;
+    let store = ControlStore::open(directory.path())?;
+    let owner = make_owner(store.clone());
+    let first_policy = policy()?;
+    let first_resource = resource(&first_policy, "profile", OBJECT_UID, 1, false)?;
+    let first_inventory = inventory_for_resource(&first_resource, &"1".repeat(64))?;
+    let first = owner.reconcile(&first_resource, NAMESPACE_UID, &first_inventory, NOW)?;
+    owner.rollout_owner().acknowledge(acknowledgement(
+        &first.bundles[0],
+        PolicyActivationStateV1::Active,
+        NOW + 1,
+    )?)?;
+
+    let emptied = owner.reconcile(&first_resource, NAMESPACE_UID, &[], NOW + 2)?;
+    let terminal = emptied.retirement_bundles[0].clone();
+    let readded = owner.reconcile(&first_resource, NAMESPACE_UID, &first_inventory, NOW + 3)?;
+    let abandoned = readded.bundles[0].clone();
+
+    let mut second_policy = first_policy;
+    second_policy.roles[0].files[0].operations.reverse();
+    let second_resource = resource(&second_policy, "profile", OBJECT_UID, 2, false)?;
+    let second_inventory = inventory_for_resource(&second_resource, &"1".repeat(64))?;
+    let dependent = owner.reconcile(&second_resource, NAMESPACE_UID, &second_inventory, NOW + 4)?;
+    assert_eq!(
+        dependent.bundles[0]
+            .candidate
+            .predecessor_candidate_content_id
+            .as_deref(),
+        Some(abandoned.candidate.candidate_content_id.as_str())
+    );
+
+    let terminal_acknowledgement =
+        acknowledgement(&terminal, PolicyActivationStateV1::Active, NOW + 5)?;
+    let first_terminal_result = owner
+        .rollout_owner()
+        .acknowledge(terminal_acknowledgement)?;
+    assert!(!first_terminal_result.terminal_chain_closure_authorized);
+    owner
+        .rollout_owner()
+        .acknowledge(acknowledgement(&abandoned, abandoned_state, NOW + 6)?)?;
+
+    second_policy.roles[0].files[0].operations.rotate_left(1);
+    let recovered_resource = resource(&second_policy, "profile", OBJECT_UID, 3, false)?;
+    let recovered_inventory = inventory_for_resource(&recovered_resource, &"1".repeat(64))?;
+    let recovered = owner.reconcile(
+        &recovered_resource,
+        NAMESPACE_UID,
+        &recovered_inventory,
+        NOW + 7,
+    )?;
+    let recovered_bundle = recovered.bundles[0].clone();
+    assert_eq!(
+        recovered_bundle
+            .candidate
+            .predecessor_candidate_content_id
+            .as_deref(),
+        Some(terminal.candidate.candidate_content_id.as_str())
+    );
+    assert!(
+        recovered_bundle.candidate.distribution_sequence
+            > dependent.bundles[0].candidate.distribution_sequence
+    );
+    assert_eq!(
+        store.next_bundle_for_node("node-a", std::slice::from_ref(&terminal.bundle_digest),)?,
+        Some(recovered_bundle.clone())
+    );
+
+    drop(owner);
+    drop(store);
+    let reopened = ControlStore::open(directory.path())?;
+    assert_eq!(
+        reopened.next_bundle_for_node("node-a", std::slice::from_ref(&terminal.bundle_digest),)?,
+        Some(recovered_bundle)
+    );
+    Ok(())
+}
+
+#[test]
+fn rejected_successor_invalidates_its_branch_and_recovers_after_restart() -> TestResult {
+    abandoned_successor_branch_recovers_after_restart(PolicyActivationStateV1::Rejected)
+}
+
+#[test]
+fn stale_successor_invalidates_its_branch_and_recovers_after_restart() -> TestResult {
+    abandoned_successor_branch_recovers_after_restart(PolicyActivationStateV1::Stale)
+}
+
+#[test]
+fn removal_after_rejected_successor_mints_a_fresh_closable_terminal() -> TestResult {
+    let directory = TempDir::new()?;
+    let store = ControlStore::open(directory.path())?;
+    let owner = make_owner(store);
+    let policy = policy()?;
+    let resource = resource(&policy, "profile", OBJECT_UID, 1, false)?;
+    let inventory = inventory_for_resource(&resource, &"1".repeat(64))?;
+    let initial = owner.reconcile(&resource, NAMESPACE_UID, &inventory, NOW)?;
+    owner.rollout_owner().acknowledge(acknowledgement(
+        &initial.bundles[0],
+        PolicyActivationStateV1::Active,
+        NOW + 1,
+    )?)?;
+
+    let emptied = owner.reconcile(&resource, NAMESPACE_UID, &[], NOW + 2)?;
+    let terminal = emptied.retirement_bundles[0].clone();
+    let readded = owner.reconcile(&resource, NAMESPACE_UID, &inventory, NOW + 3)?;
+    let rejected = readded.bundles[0].clone();
+    let terminal_acknowledgement =
+        acknowledgement(&terminal, PolicyActivationStateV1::Active, NOW + 4)?;
+    let denied_closure = owner
+        .rollout_owner()
+        .acknowledge(terminal_acknowledgement.clone())?;
+    assert!(!denied_closure.terminal_chain_closure_authorized);
+    owner.rollout_owner().acknowledge(acknowledgement(
+        &rejected,
+        PolicyActivationStateV1::Rejected,
+        NOW + 5,
+    )?)?;
+
+    let removed = owner.reconcile(&resource, NAMESPACE_UID, &[], NOW + 6)?;
+    let fresh_terminal = &removed.retirement_bundles[0];
+    assert_eq!(
+        fresh_terminal
+            .candidate
+            .predecessor_candidate_content_id
+            .as_deref(),
+        Some(terminal.candidate.candidate_content_id.as_str())
+    );
+    assert!(
+        fresh_terminal.candidate.distribution_sequence > rejected.candidate.distribution_sequence
+    );
+    let duplicate = owner
+        .rollout_owner()
+        .acknowledge(terminal_acknowledgement)?;
+    assert_eq!(duplicate, denied_closure);
+    let authorized = owner.rollout_owner().acknowledge(acknowledgement(
+        fresh_terminal,
+        PolicyActivationStateV1::Active,
+        NOW + 7,
+    )?)?;
+    assert!(authorized.terminal_chain_closure_authorized);
+    Ok(())
+}
+
+#[test]
+fn deletion_after_rejected_successor_retires_the_viable_active_head() -> TestResult {
+    let directory = TempDir::new()?;
+    let store = ControlStore::open(directory.path())?;
+    let owner = make_owner(store);
+    let first_policy = policy()?;
+    let first_resource = resource(&first_policy, "profile", OBJECT_UID, 1, false)?;
+    let first_inventory = inventory_for_resource(&first_resource, &"1".repeat(64))?;
+    let first = owner.reconcile(&first_resource, NAMESPACE_UID, &first_inventory, NOW)?;
+    let active = first.bundles[0].clone();
+    owner.rollout_owner().acknowledge(acknowledgement(
+        &active,
+        PolicyActivationStateV1::Active,
+        NOW + 1,
+    )?)?;
+
+    let mut second_policy = first_policy;
+    second_policy.roles[0].files[0].operations.reverse();
+    let second_resource = resource(&second_policy, "profile", OBJECT_UID, 2, false)?;
+    let second_inventory = inventory_for_resource(&second_resource, &"1".repeat(64))?;
+    let second = owner.reconcile(&second_resource, NAMESPACE_UID, &second_inventory, NOW + 2)?;
+    let rejected = second.bundles[0].clone();
+    owner.rollout_owner().acknowledge(acknowledgement(
+        &rejected,
+        PolicyActivationStateV1::Rejected,
+        NOW + 3,
+    )?)?;
+
+    let deleting = resource(&second_policy, "profile", OBJECT_UID, 2, true)?;
+    let retired = owner.reconcile(&deleting, NAMESPACE_UID, &[], NOW + 4)?;
+    assert_eq!(
+        retired.bundles[0]
+            .candidate
+            .predecessor_candidate_content_id
+            .as_deref(),
+        Some(active.candidate.candidate_content_id.as_str())
+    );
+    assert!(
+        retired.bundles[0].candidate.distribution_sequence
+            > rejected.candidate.distribution_sequence
     );
     Ok(())
 }
@@ -1381,17 +1625,26 @@ fn two_node_create_update_restart_delete_and_recreate_preserve_provenance() -> T
         let current = second_by_node
             .get(node_id)
             .ok_or("node has no updated bundle")?;
-        assert_eq!(
-            current.candidate.operation,
-            PolicyDeliveryOperationV1::Replace
-        );
-        assert_eq!(
-            current
-                .candidate
-                .predecessor_candidate_content_id
-                .as_deref(),
-            Some(prior.candidate.candidate_content_id.as_str())
-        );
+        if node_id == "node-a" {
+            assert_eq!(
+                current.candidate.operation,
+                PolicyDeliveryOperationV1::Replace
+            );
+            assert_eq!(
+                current
+                    .candidate
+                    .predecessor_candidate_content_id
+                    .as_deref(),
+                Some(prior.candidate.candidate_content_id.as_str())
+            );
+        } else {
+            // The rejected root cannot become a physical predecessor for later authority.
+            assert_eq!(
+                current.candidate.operation,
+                PolicyDeliveryOperationV1::Activate
+            );
+            assert!(current.candidate.predecessor_candidate_content_id.is_none());
+        }
         assert!(current.candidate.distribution_sequence > prior.candidate.distribution_sequence);
     }
     // A late predecessor ACK remains valid until its successor becomes active.

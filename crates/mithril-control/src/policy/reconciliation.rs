@@ -112,6 +112,12 @@ pub struct PolicyReconcileResultV1 {
     pub status: WorkloadProtectionPolicyStatusV1,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PolicyAcknowledgementResultV1 {
+    pub rollout_state: PolicyRolloutStateV1,
+    pub terminal_chain_closure_authorized: bool,
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct PolicyReconcileHealthV1 {
     pub reconcile_queue_limit: u64,
@@ -547,15 +553,14 @@ impl PolicyDesiredStateOwner {
             .map(|target| target.node_id.as_str())
             .collect::<BTreeSet<_>>();
         let previous_heads = self.store.latest_bundles_for_object(&source.object_uid)?;
-        let mut retirement_targets = previous_heads
-            .iter()
-            .filter(|bundle| {
-                !desired_nodes.contains(bundle.candidate.exact_target.node_id.as_str())
-                    && bundle.candidate.operation
-                        != PolicyDeliveryOperationV1::RetireToRestrictiveTerminal
-            })
-            .map(|bundle| bundle.candidate.exact_target.clone())
-            .collect::<Vec<_>>();
+        let mut retirement_targets = Vec::new();
+        for bundle in &previous_heads {
+            if !desired_nodes.contains(bundle.candidate.exact_target.node_id.as_str())
+                && self.store.bundle_requires_retirement(bundle)?
+            {
+                retirement_targets.push(bundle.candidate.exact_target.clone());
+            }
+        }
         retirement_targets.sort();
         retirement_targets.dedup();
 
@@ -929,7 +934,7 @@ impl PolicyRolloutOwner {
             // The predecessor forms one explicit node-local replacement chain.
             let predecessor = self
                 .store
-                .latest_bundle_for_profile_node(
+                .latest_open_bundle_for_profile_node(
                     &target.node_id,
                     &source.tenant_id,
                     &artifact.policy_document.metadata.trust_domain_id,
@@ -981,7 +986,16 @@ impl PolicyRolloutOwner {
     pub fn acknowledge(
         &self,
         acknowledgement: PolicyActivationAcknowledgementV1,
-    ) -> Result<PolicyRolloutStateV1> {
+    ) -> Result<PolicyAcknowledgementResultV1> {
+        if let Some((rollout_state, terminal_chain_closure_authorized)) =
+            self.store.policy_acknowledgement_result(&acknowledgement)?
+        {
+            // A retry after response loss returns the exact durable closure decision.
+            return Ok(PolicyAcknowledgementResultV1 {
+                rollout_state,
+                terminal_chain_closure_authorized,
+            });
+        }
         let current = self
             .store
             .rollout_state(
@@ -1059,9 +1073,12 @@ impl PolicyRolloutOwner {
             updated_utc_ns: acknowledgement.observed_utc_ns,
             ..current
         };
-        self.store
-            .acknowledge_policy(acknowledgement, next.clone())?;
-        Ok(next)
+        let (rollout_state, terminal_chain_closure_authorized) =
+            self.store.acknowledge_policy(acknowledgement, next)?;
+        Ok(PolicyAcknowledgementResultV1 {
+            rollout_state,
+            terminal_chain_closure_authorized,
+        })
     }
 }
 

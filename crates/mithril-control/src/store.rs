@@ -64,7 +64,8 @@ struct ControlStoreState {
     latest_desired_snapshots: BTreeMap<String, String>,
     bundles: BTreeMap<String, PolicyBundleV1>,
     rollout_states: BTreeMap<PolicyRolloutKeyV1, PolicyRolloutStateV1>,
-    acknowledgements: BTreeMap<String, PolicyActivationAcknowledgementV1>,
+    // Keep the complete result so a retry can reproduce the durable response.
+    policy_acknowledgement_results: BTreeMap<String, PolicyAcknowledgementTransactionV1>,
     exception_source_revisions: BTreeMap<String, ExceptionSourceRevisionV1>,
     latest_exception_sources: BTreeMap<PolicyObjectKeyV1, String>,
     exception_candidates: BTreeMap<String, ExceptionDeliveryCandidateV1>,
@@ -206,6 +207,9 @@ struct PolicyTargetSetTransactionV1 {
 struct PolicyAcknowledgementTransactionV1 {
     acknowledgement: PolicyActivationAcknowledgementV1,
     rollout_state: PolicyRolloutStateV1,
+    // Omit false so old WAL records keep their original commit digest during replay.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    terminal_chain_closure_authorized: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -519,27 +523,57 @@ impl ControlStore {
         &self,
         acknowledgement: PolicyActivationAcknowledgementV1,
         rollout_state: PolicyRolloutStateV1,
-    ) -> Result<u64> {
+    ) -> Result<(PolicyRolloutStateV1, bool)> {
         let mut inner = self.lock()?;
-        if inner
+        if let Some(existing) = inner
             .state
-            .acknowledgements
+            .policy_acknowledgement_results
             .get(&acknowledgement.acknowledgement_content_id)
-            == Some(&acknowledgement)
         {
-            return Ok(inner.state.commit_index);
+            if existing.acknowledgement == acknowledgement {
+                return Ok((
+                    existing.rollout_state.clone(),
+                    existing.terminal_chain_closure_authorized,
+                ));
+            }
         }
+        let terminal_chain_closure_authorized =
+            terminal_chain_closure_can_be_authorized(&inner.state, &acknowledgement);
         let result = PolicyAcknowledgementTransactionV1 {
             acknowledgement,
             rollout_state,
+            terminal_chain_closure_authorized,
         };
         validate_policy_acknowledgement(&inner.state, &result, &inner.root)?;
+        let accepted = (
+            result.rollout_state.clone(),
+            result.terminal_chain_closure_authorized,
+        );
         commit(
             &mut inner,
             ControlTransactionV1::Acknowledged {
                 result: Box::new(result),
             },
-        )
+        )?;
+        Ok(accepted)
+    }
+
+    pub(crate) fn policy_acknowledgement_result(
+        &self,
+        acknowledgement: &PolicyActivationAcknowledgementV1,
+    ) -> Result<Option<(PolicyRolloutStateV1, bool)>> {
+        Ok(self
+            .lock()?
+            .state
+            .policy_acknowledgement_results
+            .get(&acknowledgement.acknowledgement_content_id)
+            .filter(|result| result.acknowledgement == *acknowledgement)
+            .map(|result| {
+                (
+                    result.rollout_state.clone(),
+                    result.terminal_chain_closure_authorized,
+                )
+            }))
     }
 
     pub fn record_exception_desired(
@@ -991,8 +1025,10 @@ impl ControlStore {
                 let acknowledgement = rollout
                     .latest_acknowledgement_content_id
                     .as_ref()
-                    .and_then(|id| inner.state.acknowledgements.get(id))?;
-                Some((bundle.clone(), acknowledgement.clone()))
+                    .and_then(|id| inner.state.policy_acknowledgement_results.get(id))?
+                    .acknowledgement
+                    .clone();
+                Some((bundle.clone(), acknowledgement))
             })
             .collect::<Vec<_>>();
         if matches.len() > 1 {
@@ -1234,7 +1270,7 @@ impl ControlStore {
         })
     }
 
-    pub fn latest_bundle_for_profile_node(
+    pub(crate) fn latest_open_bundle_for_profile_node(
         &self,
         node_id: &str,
         tenant_id: &str,
@@ -1242,21 +1278,14 @@ impl ControlStore {
         profile_id: &str,
     ) -> Result<Option<PolicyBundleV1>> {
         let inner = self.lock()?;
-        Ok(inner
-            .state
-            .bundles
-            .values()
-            .filter(|bundle| {
+        Ok(latest_viable_bundle(
+            &inner.state,
+            inner.state.bundles.values().filter(|bundle| {
                 bundle.candidate.exact_target.node_id == node_id
                     && bundle_matches_profile(bundle, tenant_id, trust_domain_id, profile_id)
-            })
-            .max_by_key(|bundle| {
-                (
-                    bundle.candidate.distribution_sequence_epoch,
-                    bundle.candidate.distribution_sequence,
-                )
-            })
-            .cloned())
+            }),
+        )
+        .cloned())
     }
 
     pub fn latest_bundles_for_object(&self, object_uid: &str) -> Result<Vec<PolicyBundleV1>> {
@@ -1265,6 +1294,11 @@ impl ControlStore {
             .into_iter()
             .cloned()
             .collect())
+    }
+
+    pub(crate) fn bundle_requires_retirement(&self, bundle: &PolicyBundleV1) -> Result<bool> {
+        let inner = self.lock()?;
+        Ok(bundle_requires_retirement(&inner.state, bundle))
     }
 
     pub fn latest_source(
@@ -1331,6 +1365,9 @@ impl ControlStore {
                 if bundle.candidate.exact_target.node_id != node_id {
                     return None;
                 }
+                if bundle_is_in_closed_terminal_chain(&inner.state, bundle) {
+                    return None;
+                }
                 let rollout = inner.state.rollout_states.get(&PolicyRolloutKeyV1 {
                     candidate_content_id: bundle.candidate.candidate_content_id.clone(),
                     node_id: node_id.to_owned(),
@@ -1378,62 +1415,11 @@ impl ControlStore {
         candidate_content_id: &str,
     ) -> Result<bool> {
         let inner = self.lock()?;
-        let Some(candidate) = inner
-            .state
-            .bundles
-            .get(candidate_content_id)
-            .filter(|bundle| bundle.candidate.exact_target.node_id == node_id)
-        else {
-            return Ok(false);
-        };
-        let profile = bundle_profile_key(candidate);
-        let Some(mut current) = inner
-            .state
-            .bundles
-            .values()
-            .filter(|bundle| {
-                bundle.candidate.exact_target.node_id == node_id
-                    && bundle_profile_key(bundle) == profile
-            })
-            .max_by_key(|bundle| bundle_sequence(bundle))
-        else {
-            return Ok(false);
-        };
-        if current.candidate.candidate_content_id == candidate_content_id {
-            return Ok(true);
-        }
-
-        let mut visited = BTreeSet::new();
-        while visited.insert(current.candidate.candidate_content_id.as_str()) {
-            let Some(rollout) = inner.state.rollout_states.get(&PolicyRolloutKeyV1 {
-                candidate_content_id: current.candidate.candidate_content_id.clone(),
-                node_id: node_id.to_owned(),
-            }) else {
-                return Ok(false);
-            };
-            // An active successor closes delayed acknowledgements for every older candidate.
-            if rollout.state == crate::PolicyRolloutStatusV1::Active {
-                return Ok(false);
-            }
-            let Some(predecessor_id) = current
-                .candidate
-                .predecessor_candidate_content_id
-                .as_deref()
-            else {
-                return Ok(false);
-            };
-            if predecessor_id == candidate_content_id {
-                return Ok(true);
-            }
-            let Some(predecessor) = inner.state.bundles.get(predecessor_id).filter(|bundle| {
-                bundle.candidate.exact_target.node_id == node_id
-                    && bundle_profile_key(bundle) == profile
-            }) else {
-                return Ok(false);
-            };
-            current = predecessor;
-        }
-        Ok(false)
+        Ok(candidate_is_current_or_unsettled_predecessor(
+            &inner.state,
+            node_id,
+            candidate_content_id,
+        ))
     }
 
     pub fn bundle_for_candidate(
@@ -1899,11 +1885,12 @@ fn apply_transaction(
             let PolicyAcknowledgementTransactionV1 {
                 acknowledgement,
                 rollout_state,
+                ..
             } = result.as_ref();
             validate_policy_acknowledgement(state, result, path)?;
-            state.acknowledgements.insert(
+            state.policy_acknowledgement_results.insert(
                 acknowledgement.acknowledgement_content_id.clone(),
-                acknowledgement.clone(),
+                result.as_ref().clone(),
             );
             state.rollout_states.insert(
                 PolicyRolloutKeyV1 {
@@ -2418,7 +2405,8 @@ fn validate_exception_desired(
         entry
             .latest_acknowledgement_content_id
             .as_ref()
-            .and_then(|id| state.acknowledgements.get(id))
+            .and_then(|id| state.policy_acknowledgement_results.get(id))
+            .map(|result| &result.acknowledgement)
     });
     let grant_is_valid = base_document.is_some_and(|document| {
         document.file_exception_grants.iter().any(|grant| {
@@ -2591,10 +2579,22 @@ fn validate_policy_acknowledgement(
                         })
                     })
         });
-    if !transition_is_valid || !rollout_is_valid || !acknowledgement_is_bound {
+    let terminal_closure_is_valid = !result.terminal_chain_closure_authorized
+        || terminal_chain_closure_can_be_authorized(state, acknowledgement);
+    let candidate_is_current = candidate_is_current_or_unsettled_predecessor(
+        state,
+        &acknowledgement.node_id,
+        &acknowledgement.candidate_content_id,
+    );
+    if !transition_is_valid
+        || !rollout_is_valid
+        || !acknowledgement_is_bound
+        || !terminal_closure_is_valid
+        || !candidate_is_current
+    {
         return ControlStoreSnafu {
             path: path.to_owned(),
-            reason: "the policy acknowledgement does not match its candidate or current rollout"
+            reason: "the policy acknowledgement, rollout, or terminal closure is inconsistent"
                 .to_owned(),
         }
         .fail();
@@ -2814,8 +2814,7 @@ fn validate_target_set_reconciliation(
         .into_iter()
         .filter(|bundle| {
             !desired_nodes.contains(bundle.candidate.exact_target.node_id.as_str())
-                && bundle.candidate.operation
-                    != crate::PolicyDeliveryOperationV1::RetireToRestrictiveTerminal
+                && bundle_requires_retirement(state, bundle)
         })
         .map(|bundle| bundle.candidate.exact_target.clone())
         .collect::<Vec<_>>();
@@ -2937,14 +2936,13 @@ fn latest_profile_bundle<'a>(
     state: &'a ControlStoreState,
     candidate: &PolicyBundleV1,
 ) -> Option<&'a PolicyBundleV1> {
-    state
-        .bundles
-        .values()
-        .filter(|existing| {
+    latest_viable_bundle(
+        state,
+        state.bundles.values().filter(|existing| {
             existing.candidate.exact_target.node_id == candidate.candidate.exact_target.node_id
                 && bundle_profile_key(existing) == bundle_profile_key(candidate)
-        })
-        .max_by_key(|bundle| bundle_sequence(bundle))
+        }),
+    )
 }
 
 fn latest_object_bundles<'a>(
@@ -2957,6 +2955,7 @@ fn latest_object_bundles<'a>(
             .source_revisions
             .get(&bundle.candidate.policy_source_revision_id)
             .is_some_and(|source| source.object_uid == object_uid)
+            && bundle_chain_is_viable(state, bundle)
     }) {
         let node_id = bundle.candidate.exact_target.node_id.as_str();
         if latest
@@ -3033,10 +3032,8 @@ fn validate_rollout_ordering(
                 }
                 .build()
             })?;
-        let previous = state
-            .bundles
-            .values()
-            .filter(|existing| {
+        let profile_bundles = || {
+            state.bundles.values().filter(|existing| {
                 existing.candidate.exact_target.node_id == candidate.exact_target.node_id
                     && bundle_matches_profile(
                         existing,
@@ -3045,21 +3042,15 @@ fn validate_rollout_ordering(
                         &document.metadata.profile_id,
                     )
             })
-            .max_by_key(|existing| {
-                (
-                    existing.candidate.distribution_sequence_epoch,
-                    existing.candidate.distribution_sequence,
-                )
-            });
-        // Require both numeric ordering and the exact predecessor content identity.
-        let ordering_is_valid = previous.is_none_or(|previous| {
+        };
+        let latest_sequence = profile_bundles().map(bundle_sequence).max();
+        let previous = latest_viable_bundle(state, profile_bundles());
+        // Abandoned branches still reserve their distribution sequence numbers.
+        let ordering_is_valid = latest_sequence.is_none_or(|previous| {
             (
                 candidate.distribution_sequence_epoch,
                 candidate.distribution_sequence,
-            ) > (
-                previous.candidate.distribution_sequence_epoch,
-                previous.candidate.distribution_sequence,
-            )
+            ) > previous
         });
         let predecessor_is_valid = previous.map_or_else(
             || {
@@ -3130,6 +3121,195 @@ fn bundle_sequence(bundle: &PolicyBundleV1) -> (u64, u64) {
     )
 }
 
+fn latest_viable_bundle<'a>(
+    state: &ControlStoreState,
+    bundles: impl Iterator<Item = &'a PolicyBundleV1>,
+) -> Option<&'a PolicyBundleV1> {
+    bundles
+        .filter(|bundle| bundle_chain_is_viable(state, bundle))
+        .max_by_key(|bundle| bundle_sequence(bundle))
+}
+
+fn bundle_chain_is_viable(state: &ControlStoreState, bundle: &PolicyBundleV1) -> bool {
+    // A rejected, stale, or closed ancestor abandons its complete dependent branch.
+    let mut current = bundle;
+    let mut visited = BTreeSet::new();
+    loop {
+        if !visited.insert(current.candidate.candidate_content_id.as_str())
+            || bundle_is_in_closed_terminal_chain(state, current)
+        {
+            return false;
+        }
+        let rollout = state.rollout_states.get(&PolicyRolloutKeyV1 {
+            candidate_content_id: current.candidate.candidate_content_id.clone(),
+            node_id: current.candidate.exact_target.node_id.clone(),
+        });
+        if rollout.is_none_or(|rollout| {
+            matches!(
+                rollout.state,
+                crate::PolicyRolloutStatusV1::Rejected | crate::PolicyRolloutStatusV1::Stale
+            )
+        }) {
+            return false;
+        }
+        let Some(predecessor_id) = current
+            .candidate
+            .predecessor_candidate_content_id
+            .as_deref()
+        else {
+            return true;
+        };
+        let Some(predecessor) = state.bundles.get(predecessor_id) else {
+            return false;
+        };
+        if predecessor.candidate.exact_target.node_id != current.candidate.exact_target.node_id
+            || bundle_profile_key(predecessor) != bundle_profile_key(current)
+        {
+            return false;
+        }
+        current = predecessor;
+    }
+}
+
+fn bundle_requires_retirement(state: &ControlStoreState, bundle: &PolicyBundleV1) -> bool {
+    if bundle.candidate.operation != crate::PolicyDeliveryOperationV1::RetireToRestrictiveTerminal {
+        return true;
+    }
+    state
+        .rollout_states
+        .get(&PolicyRolloutKeyV1 {
+            candidate_content_id: bundle.candidate.candidate_content_id.clone(),
+            node_id: bundle.candidate.exact_target.node_id.clone(),
+        })
+        .is_some_and(|rollout| {
+            rollout.state == crate::PolicyRolloutStatusV1::Active
+                && !terminal_chain_is_closed(state, bundle)
+        })
+}
+
+fn terminal_chain_closure_can_be_authorized(
+    state: &ControlStoreState,
+    acknowledgement: &PolicyActivationAcknowledgementV1,
+) -> bool {
+    acknowledgement.state == PolicyActivationStateV1::Active
+        && state
+            .bundles
+            .get(&acknowledgement.candidate_content_id)
+            .is_some_and(|terminal| {
+                terminal.candidate.operation
+                    == crate::PolicyDeliveryOperationV1::RetireToRestrictiveTerminal
+                    && !has_later_dependent_successor(state, terminal)
+            })
+}
+
+fn has_later_dependent_successor(state: &ControlStoreState, terminal: &PolicyBundleV1) -> bool {
+    state.bundles.values().any(|successor| {
+        successor.candidate.exact_target.node_id == terminal.candidate.exact_target.node_id
+            && bundle_profile_key(successor) == bundle_profile_key(terminal)
+            && bundle_sequence(successor) > bundle_sequence(terminal)
+            && successor
+                .candidate
+                .predecessor_candidate_content_id
+                .as_deref()
+                == Some(terminal.candidate.candidate_content_id.as_str())
+    })
+}
+
+fn terminal_chain_is_closed(state: &ControlStoreState, terminal: &PolicyBundleV1) -> bool {
+    state.policy_acknowledgement_results.values().any(|result| {
+        result.terminal_chain_closure_authorized
+            && result.acknowledgement.candidate_content_id
+                == terminal.candidate.candidate_content_id
+    })
+}
+
+fn bundle_is_in_closed_terminal_chain(state: &ControlStoreState, bundle: &PolicyBundleV1) -> bool {
+    state
+        .policy_acknowledgement_results
+        .values()
+        .filter(|result| result.terminal_chain_closure_authorized)
+        .any(|result| {
+            let mut candidate_id = Some(result.acknowledgement.candidate_content_id.as_str());
+            let mut visited = BTreeSet::new();
+            while let Some(current_id) = candidate_id {
+                if current_id == bundle.candidate.candidate_content_id {
+                    return true;
+                }
+                if !visited.insert(current_id) {
+                    return false;
+                }
+                candidate_id = state.bundles.get(current_id).and_then(|current| {
+                    current
+                        .candidate
+                        .predecessor_candidate_content_id
+                        .as_deref()
+                });
+            }
+            false
+        })
+}
+
+fn candidate_is_current_or_unsettled_predecessor(
+    state: &ControlStoreState,
+    node_id: &str,
+    candidate_content_id: &str,
+) -> bool {
+    let Some(candidate) = state
+        .bundles
+        .get(candidate_content_id)
+        .filter(|bundle| bundle.candidate.exact_target.node_id == node_id)
+    else {
+        return false;
+    };
+    let profile = bundle_profile_key(candidate);
+    let Some(mut current) = state
+        .bundles
+        .values()
+        .filter(|bundle| {
+            bundle.candidate.exact_target.node_id == node_id
+                && bundle_profile_key(bundle) == profile
+        })
+        .max_by_key(|bundle| bundle_sequence(bundle))
+    else {
+        return false;
+    };
+    if current.candidate.candidate_content_id == candidate_content_id {
+        return true;
+    }
+
+    let mut visited = BTreeSet::new();
+    while visited.insert(current.candidate.candidate_content_id.as_str()) {
+        let Some(rollout) = state.rollout_states.get(&PolicyRolloutKeyV1 {
+            candidate_content_id: current.candidate.candidate_content_id.clone(),
+            node_id: node_id.to_owned(),
+        }) else {
+            return false;
+        };
+        // An active successor closes delayed acknowledgements for every older candidate.
+        if rollout.state == crate::PolicyRolloutStatusV1::Active {
+            return false;
+        }
+        let Some(predecessor_id) = current
+            .candidate
+            .predecessor_candidate_content_id
+            .as_deref()
+        else {
+            return false;
+        };
+        if predecessor_id == candidate_content_id {
+            return true;
+        }
+        let Some(predecessor) = state.bundles.get(predecessor_id).filter(|bundle| {
+            bundle.candidate.exact_target.node_id == node_id
+                && bundle_profile_key(bundle) == profile
+        }) else {
+            return false;
+        };
+        current = predecessor;
+    }
+    false
+}
+
 fn valid_sha256(value: &str) -> bool {
     value.len() == 64
         && value
@@ -3188,10 +3368,11 @@ mod tests {
     use snafu::ResultExt as _;
 
     use crate::{
-        canonical_policy_spec_digest, PolicyBundleV1, PolicyCompiler, PolicyDeliveryCandidateV1,
-        PolicyDeliveryOperationV1, PolicyDocumentV1, PolicyRolloutStateV1, PolicyRolloutStatusV1,
-        PolicySourceRevisionV1, PolicySourceStateV1, PolicyTargetSnapshotV1, PolicyTargetV1,
-        ProfileCandidateArtifactV1, ProfileSealRequestV1, RegistryDigestsV1,
+        canonical_policy_spec_digest, PolicyActivationAcknowledgementV1, PolicyActivationStateV1,
+        PolicyBundleV1, PolicyCompiler, PolicyDeliveryCandidateV1, PolicyDeliveryOperationV1,
+        PolicyDocumentV1, PolicyRolloutStateV1, PolicyRolloutStatusV1, PolicySourceRevisionV1,
+        PolicySourceStateV1, PolicyTargetSnapshotV1, PolicyTargetV1, ProfileCandidateArtifactV1,
+        ProfileSealRequestV1, RegistryDigestsV1,
     };
 
     fn signed_artifact(
@@ -3314,6 +3495,83 @@ mod tests {
             target_snapshot: snapshot,
             bundles,
             rollout_states,
+        })
+    }
+
+    fn active_acknowledgement_transaction(
+        bundle: &PolicyBundleV1,
+        rollout: &PolicyRolloutStateV1,
+        terminal_chain_closure_authorized: bool,
+    ) -> crate::Result<super::PolicyAcknowledgementTransactionV1> {
+        let acknowledgement = PolicyActivationAcknowledgementV1 {
+            acknowledgement_content_id: String::new(),
+            tenant_id: bundle.candidate.tenant_id.clone(),
+            node_id: bundle.candidate.exact_target.node_id.clone(),
+            node_boot_id: vec![1; 16],
+            label_epoch: 1,
+            candidate_content_id: bundle.candidate.candidate_content_id.clone(),
+            policy_source_revision_id: bundle.candidate.policy_source_revision_id.clone(),
+            target_snapshot_digest: bundle.candidate.target_snapshot_digest.clone(),
+            state: PolicyActivationStateV1::Active,
+            node_bound_generation_digest: Some("1".repeat(64)),
+            profile_generation_ref_id: Some(1),
+            readback_digest: Some("2".repeat(64)),
+            probe_result_digest: Some("3".repeat(64)),
+            reason_code: None,
+            observed_utc_ns: 2,
+            authenticated_channel_receipt_digest: "4".repeat(64),
+        }
+        .finalize()?;
+        Ok(super::PolicyAcknowledgementTransactionV1 {
+            rollout_state: PolicyRolloutStateV1 {
+                state: PolicyRolloutStatusV1::Active,
+                latest_acknowledgement_content_id: Some(
+                    acknowledgement.acknowledgement_content_id.clone(),
+                ),
+                transition_version: rollout.transition_version + 1,
+                updated_utc_ns: acknowledgement.observed_utc_ns,
+                ..rollout.clone()
+            },
+            acknowledgement,
+            terminal_chain_closure_authorized,
+        })
+    }
+
+    fn rejected_acknowledgement_transaction(
+        bundle: &PolicyBundleV1,
+        rollout: &PolicyRolloutStateV1,
+    ) -> crate::Result<super::PolicyAcknowledgementTransactionV1> {
+        let acknowledgement = PolicyActivationAcknowledgementV1 {
+            acknowledgement_content_id: String::new(),
+            tenant_id: bundle.candidate.tenant_id.clone(),
+            node_id: bundle.candidate.exact_target.node_id.clone(),
+            node_boot_id: vec![1; 16],
+            label_epoch: 1,
+            candidate_content_id: bundle.candidate.candidate_content_id.clone(),
+            policy_source_revision_id: bundle.candidate.policy_source_revision_id.clone(),
+            target_snapshot_digest: bundle.candidate.target_snapshot_digest.clone(),
+            state: PolicyActivationStateV1::Rejected,
+            node_bound_generation_digest: None,
+            profile_generation_ref_id: None,
+            readback_digest: None,
+            probe_result_digest: None,
+            reason_code: Some("CANDIDATE_REJECTED".to_owned()),
+            observed_utc_ns: 3,
+            authenticated_channel_receipt_digest: "4".repeat(64),
+        }
+        .finalize()?;
+        Ok(super::PolicyAcknowledgementTransactionV1 {
+            rollout_state: PolicyRolloutStateV1 {
+                state: PolicyRolloutStatusV1::Rejected,
+                latest_acknowledgement_content_id: Some(
+                    acknowledgement.acknowledgement_content_id.clone(),
+                ),
+                transition_version: rollout.transition_version + 1,
+                updated_utc_ns: acknowledgement.observed_utc_ns,
+                ..rollout.clone()
+            },
+            acknowledgement,
+            terminal_chain_closure_authorized: false,
         })
     }
 
@@ -3455,6 +3713,294 @@ mod tests {
             Exception::Revoked,
             Exception::Active
         ));
+    }
+
+    #[test]
+    fn closed_terminal_rejects_a_dependent_replace_and_accepts_a_root() -> crate::Result<()> {
+        let (mut state, reconciliation) = target_set_validation_fixture()?;
+        let source = state
+            .source_revisions
+            .values()
+            .next()
+            .cloned()
+            .ok_or_else(|| {
+                crate::error::ControlStoreSnafu {
+                    path: Path::new("terminal-closure").to_owned(),
+                    reason: "the test state has no source revision".to_owned(),
+                }
+                .build()
+            })?;
+        let artifact = reconciliation
+            .refreshed_active_artifact
+            .clone()
+            .ok_or_else(|| {
+                crate::error::ControlStoreSnafu {
+                    path: Path::new("terminal-closure").to_owned(),
+                    reason: "the test reconciliation has no active artifact".to_owned(),
+                }
+                .build()
+            })?;
+        let terminal_transaction = reconciliation.retirement.as_ref().ok_or_else(|| {
+            crate::error::ControlStoreSnafu {
+                path: Path::new("terminal-closure").to_owned(),
+                reason: "the test reconciliation has no retirement".to_owned(),
+            }
+            .build()
+        })?;
+        let terminal = terminal_transaction.bundles[0].clone();
+        let terminal_rollout = terminal_transaction.rollout_states[0].clone();
+        super::apply_transaction(
+            &mut state,
+            &super::ControlTransactionV1::TargetSetReconciled {
+                reconciliation: Box::new(reconciliation),
+            },
+            Path::new("terminal-rollout"),
+        )?;
+        super::apply_transaction(
+            &mut state,
+            &super::ControlTransactionV1::Acknowledged {
+                result: Box::new(active_acknowledgement_transaction(
+                    &terminal,
+                    &terminal_rollout,
+                    true,
+                )?),
+            },
+            Path::new("terminal-acknowledgement"),
+        )?;
+
+        let signing_key = SigningKey::from_bytes(&[7; 32]);
+        let dependent = rollout_transaction(
+            &source,
+            &artifact,
+            vec![(
+                terminal.candidate.exact_target.clone(),
+                Some(terminal.candidate.candidate_content_id.clone()),
+            )],
+            PolicyDeliveryOperationV1::Replace,
+            artifact.policy_document.rollout.rollout_generation,
+            terminal.candidate.distribution_sequence + 1,
+            &signing_key,
+        )?;
+        assert!(super::apply_transaction(
+            &mut state.clone(),
+            &super::ControlTransactionV1::RolloutCreated {
+                rollout: Box::new(dependent),
+            },
+            Path::new("dependent-replace"),
+        )
+        .is_err());
+
+        let root = rollout_transaction(
+            &source,
+            &artifact,
+            vec![(terminal.candidate.exact_target.clone(), None)],
+            PolicyDeliveryOperationV1::Activate,
+            artifact.policy_document.rollout.rollout_generation,
+            terminal.candidate.distribution_sequence + 1,
+            &signing_key,
+        )?;
+        super::apply_transaction(
+            &mut state,
+            &super::ControlTransactionV1::RolloutCreated {
+                rollout: Box::new(root),
+            },
+            Path::new("root-activation"),
+        )?;
+        Ok(())
+    }
+
+    #[test]
+    fn rejected_branch_rejects_tampered_predecessor_and_accepts_active_head() -> crate::Result<()> {
+        let (mut state, reconciliation) = target_set_validation_fixture()?;
+        let source = state
+            .source_revisions
+            .values()
+            .next()
+            .cloned()
+            .ok_or_else(|| {
+                crate::error::ControlStoreSnafu {
+                    path: Path::new("rejected-branch").to_owned(),
+                    reason: "the test state has no source revision".to_owned(),
+                }
+                .build()
+            })?;
+        let artifact = reconciliation
+            .refreshed_active_artifact
+            .clone()
+            .ok_or_else(|| {
+                crate::error::ControlStoreSnafu {
+                    path: Path::new("rejected-branch").to_owned(),
+                    reason: "the test reconciliation has no active artifact".to_owned(),
+                }
+                .build()
+            })?;
+        let rejected = reconciliation.desired.bundles[0].clone();
+        let rejected_rollout = reconciliation.desired.rollout_states[0].clone();
+        let active_id = rejected
+            .candidate
+            .predecessor_candidate_content_id
+            .clone()
+            .ok_or_else(|| {
+                crate::error::ControlStoreSnafu {
+                    path: Path::new("rejected-branch").to_owned(),
+                    reason: "the desired candidate has no predecessor".to_owned(),
+                }
+                .build()
+            })?;
+        let active = state.bundles.get(&active_id).cloned().ok_or_else(|| {
+            crate::error::ControlStoreSnafu {
+                path: Path::new("rejected-branch").to_owned(),
+                reason: "the predecessor bundle is absent".to_owned(),
+            }
+            .build()
+        })?;
+        let active_rollout = state
+            .rollout_states
+            .get(&super::PolicyRolloutKeyV1 {
+                candidate_content_id: active_id.clone(),
+                node_id: active.candidate.exact_target.node_id.clone(),
+            })
+            .cloned()
+            .ok_or_else(|| {
+                crate::error::ControlStoreSnafu {
+                    path: Path::new("rejected-branch").to_owned(),
+                    reason: "the predecessor rollout is absent".to_owned(),
+                }
+                .build()
+            })?;
+        super::apply_transaction(
+            &mut state,
+            &super::ControlTransactionV1::TargetSetReconciled {
+                reconciliation: Box::new(reconciliation),
+            },
+            Path::new("rejected-branch-rollout"),
+        )?;
+
+        let signing_key = SigningKey::from_bytes(&[7; 32]);
+        let dependent = rollout_transaction(
+            &source,
+            &artifact,
+            vec![(
+                rejected.candidate.exact_target.clone(),
+                Some(rejected.candidate.candidate_content_id.clone()),
+            )],
+            PolicyDeliveryOperationV1::Replace,
+            artifact.policy_document.rollout.rollout_generation,
+            rejected.candidate.distribution_sequence + 1,
+            &signing_key,
+        )?;
+        let dependent_bundle = dependent.bundles[0].clone();
+        super::apply_transaction(
+            &mut state,
+            &super::ControlTransactionV1::RolloutCreated {
+                rollout: Box::new(dependent),
+            },
+            Path::new("dependent-branch"),
+        )?;
+        super::apply_transaction(
+            &mut state,
+            &super::ControlTransactionV1::Acknowledged {
+                result: Box::new(active_acknowledgement_transaction(
+                    &active,
+                    &active_rollout,
+                    false,
+                )?),
+            },
+            Path::new("active-predecessor"),
+        )?;
+        super::apply_transaction(
+            &mut state,
+            &super::ControlTransactionV1::Acknowledged {
+                result: Box::new(rejected_acknowledgement_transaction(
+                    &rejected,
+                    &rejected_rollout,
+                )?),
+            },
+            Path::new("rejected-successor"),
+        )?;
+
+        let tampered = rollout_transaction(
+            &source,
+            &artifact,
+            vec![(
+                rejected.candidate.exact_target.clone(),
+                Some(dependent_bundle.candidate.candidate_content_id.clone()),
+            )],
+            PolicyDeliveryOperationV1::Replace,
+            artifact.policy_document.rollout.rollout_generation,
+            dependent_bundle.candidate.distribution_sequence + 1,
+            &signing_key,
+        )?;
+        assert!(super::apply_transaction(
+            &mut state.clone(),
+            &super::ControlTransactionV1::RolloutCreated {
+                rollout: Box::new(tampered),
+            },
+            Path::new("tampered-dependent-head"),
+        )
+        .is_err());
+
+        let recovered = rollout_transaction(
+            &source,
+            &artifact,
+            vec![(rejected.candidate.exact_target, Some(active_id))],
+            PolicyDeliveryOperationV1::Replace,
+            artifact.policy_document.rollout.rollout_generation,
+            dependent_bundle.candidate.distribution_sequence + 1,
+            &signing_key,
+        )?;
+        super::apply_transaction(
+            &mut state,
+            &super::ControlTransactionV1::RolloutCreated {
+                rollout: Box::new(recovered),
+            },
+            Path::new("recovered-active-head"),
+        )?;
+        Ok(())
+    }
+
+    #[test]
+    fn legacy_acknowledgement_replay_defaults_terminal_closure_to_denied() -> crate::Result<()> {
+        let (mut state, reconciliation) = target_set_validation_fixture()?;
+        let terminal_transaction = reconciliation.retirement.as_ref().ok_or_else(|| {
+            crate::error::ControlStoreSnafu {
+                path: Path::new("legacy-terminal-acknowledgement").to_owned(),
+                reason: "the test reconciliation has no retirement".to_owned(),
+            }
+            .build()
+        })?;
+        let terminal = terminal_transaction.bundles[0].clone();
+        let terminal_rollout = terminal_transaction.rollout_states[0].clone();
+        super::apply_transaction(
+            &mut state,
+            &super::ControlTransactionV1::TargetSetReconciled {
+                reconciliation: Box::new(reconciliation),
+            },
+            Path::new("legacy-terminal-rollout"),
+        )?;
+        let transaction = super::ControlTransactionV1::Acknowledged {
+            result: Box::new(active_acknowledgement_transaction(
+                &terminal,
+                &terminal_rollout,
+                false,
+            )?),
+        };
+        let encoded = serde_json::to_value(&transaction).context(crate::error::JsonSnafu {
+            path: Path::new("legacy-terminal-acknowledgement"),
+        })?;
+        assert!(encoded
+            .pointer("/result/terminal_chain_closure_authorized")
+            .is_none());
+        let decoded = serde_json::from_value(encoded).context(crate::error::JsonSnafu {
+            path: Path::new("legacy-terminal-acknowledgement"),
+        })?;
+        super::apply_transaction(
+            &mut state,
+            &decoded,
+            Path::new("legacy-terminal-acknowledgement"),
+        )?;
+        assert!(!super::terminal_chain_is_closed(&state, &terminal));
+        Ok(())
     }
 
     #[test]
