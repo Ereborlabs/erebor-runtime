@@ -1,7 +1,7 @@
 # How To Manually Accept Phase 6.2
 
 Status: Automated acceptance passed at code commit
-`781ee425320ce75cd6b7bf786e06cb23f36b6b91`. The Kubernetes scheduling and
+`23b9db450114e18d1113665cc265398002de555d`. The Kubernetes scheduling and
 runtime-gate manual procedure is available. This procedure has not been run.
 
 Phase: [Control Policy And Evidence Convergence](../phase-6-2-control-policy-and-evidence-convergence.md)

@@ -1,7 +1,7 @@
 # Phase 6.2 Implementation Review Guide
 
 Status: Source implementation and automated acceptance are complete at code
-commit `781ee425320ce75cd6b7bf786e06cb23f36b6b91`. The final repository gate
+commit `23b9db450114e18d1113665cc265398002de555d`. The final repository gate
 passed on 2026-08-22. The
 [manual runbook](./manual-testing/phase-6-2-manual-acceptance.md) has not run.
 
@@ -114,8 +114,9 @@ types. The remaining private helpers implement bounded Kubernetes, cgroup, or
 canonical-identity rules. A general-purpose replacement would not preserve
 those fail-closed contracts. The review added no new abstraction package.
 
-Comments remain limited to behavior that is not clear from the type or
-operation, such as Kubernetes deletion retaining the last generation.
+Comments identify non-obvious ownership, ordering, scheduler, replay, and
+fail-closed decisions. Direct matches, validation expressions, and wiring do
+not have comments that repeat the code.
 
 ## Policy Convergence Flow
 
@@ -403,7 +404,7 @@ and coverage messages remain the Phase 6 types.
 | OCI state parsing and cgroup-v2 path parsing | [OCI adapter tests](../../../crates/mithril-node/src/bin/mithril_oci_hook.rs) |
 | Webhook TLS, rules, deadlines, health probes, DaemonSet identity and hook inputs, and least-privilege RBAC | [Helm render test](../../../packaging/mithril/helm/tests/verify.sh) |
 
-Focused closure checks passed for code commit `781ee42`:
+Focused closure checks passed for code commit `23b9db4`:
 
 ```text
 cargo test -p mithril-control --lib
