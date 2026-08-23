@@ -1112,6 +1112,23 @@ impl ControlStore {
             .cloned())
     }
 
+    pub fn latest_live_exception_sources(&self) -> Result<Vec<ExceptionSourceRevisionV1>> {
+        let inner = self.lock()?;
+        Ok(inner
+            .state
+            .latest_exception_sources
+            .values()
+            .filter_map(|source_id| {
+                inner
+                    .state
+                    .exception_source_revisions
+                    .get(source_id)
+                    .filter(|source| source.state == ExceptionSourceStateV1::Accepted)
+                    .cloned()
+            })
+            .collect())
+    }
+
     pub fn latest_exception_candidate_for_object(
         &self,
         object_uid: &str,
