@@ -337,12 +337,20 @@ impl ControlStore {
                 }
                 .fail();
             } else if revision.object_generation == current.object_generation {
-                return ControlStoreSnafu {
-                    path: inner.root.clone(),
-                    reason: "one policy generation has conflicting source bytes or deletion state"
-                        .to_owned(),
+                // Kubernetes deletion does not increment metadata.generation.
+                let deletion_transition = current.state == crate::PolicySourceStateV1::Accepted
+                    && revision.state == crate::PolicySourceStateV1::DeletionRequested
+                    && revision.canonical_spec_digest == current.canonical_spec_digest
+                    && revision.policy_document_digest == current.policy_document_digest;
+                if !deletion_transition {
+                    return ControlStoreSnafu {
+                        path: inner.root.clone(),
+                        reason:
+                            "one policy generation has conflicting source bytes or lifecycle state"
+                                .to_owned(),
+                    }
+                    .fail();
                 }
-                .fail();
             }
         }
         commit(

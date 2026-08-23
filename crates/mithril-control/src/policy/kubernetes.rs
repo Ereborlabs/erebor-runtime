@@ -382,6 +382,13 @@ impl PolicySourceRevisionV1 {
         Ok(revision)
     }
 
+    pub fn deletion_requested(&self) -> Result<Self> {
+        let mut revision = self.clone();
+        revision.state = PolicySourceStateV1::DeletionRequested;
+        revision.policy_source_revision_id = revision.content_id()?;
+        Ok(revision)
+    }
+
     fn content_id(&self) -> Result<String> {
         #[derive(Serialize)]
         struct SourceIdentity<'a> {

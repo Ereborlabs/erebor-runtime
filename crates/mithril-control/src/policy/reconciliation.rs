@@ -221,11 +221,44 @@ impl PolicyDesiredStateOwner {
         inventory: &[WorkloadTargetFactV1],
         now_utc_ns: i64,
     ) -> Result<PolicyReconcileResultV1> {
+        let state = if resource.metadata.deletion_timestamp.is_some() {
+            PolicySourceStateV1::DeletionRequested
+        } else {
+            PolicySourceStateV1::Accepted
+        };
+        self.reconcile_observation(resource, namespace_uid, inventory, now_utc_ns, state)
+    }
+
+    fn reconcile_observation(
+        &self,
+        resource: &WorkloadProtectionProfile,
+        namespace_uid: &str,
+        inventory: &[WorkloadTargetFactV1],
+        now_utc_ns: i64,
+        state: PolicySourceStateV1,
+    ) -> Result<PolicyReconcileResultV1> {
+        let source = PolicySourceRevisionV1::from_resource(
+            resource,
+            &self.config.tenant_id,
+            &self.config.cluster_uid,
+            namespace_uid,
+            state,
+        )?;
+        self.reconcile_source(source, &resource.spec.policy, inventory, now_utc_ns)
+    }
+
+    fn reconcile_source(
+        &self,
+        source: PolicySourceRevisionV1,
+        policy: &PolicyDocumentV1,
+        inventory: &[WorkloadTargetFactV1],
+        now_utc_ns: i64,
+    ) -> Result<PolicyReconcileResultV1> {
         {
             let mut state = self.state()?;
             state.reconcile_in_flight = state.reconcile_in_flight.saturating_add(1);
         }
-        let result = self.reconcile_inner(resource, namespace_uid, inventory, now_utc_ns);
+        let result = self.reconcile_inner(source, policy, inventory, now_utc_ns);
         {
             let mut state = self.state()?;
             state.reconcile_in_flight = state.reconcile_in_flight.saturating_sub(1);
@@ -240,51 +273,38 @@ impl PolicyDesiredStateOwner {
 
     fn reconcile_inner(
         &self,
-        resource: &WorkloadProtectionProfile,
-        namespace_uid: &str,
+        source: PolicySourceRevisionV1,
+        policy: &PolicyDocumentV1,
         inventory: &[WorkloadTargetFactV1],
         now_utc_ns: i64,
     ) -> Result<PolicyReconcileResultV1> {
         ensure!(
-            canonical_uuid(namespace_uid)
-                && resource
-                .spec
-                .policy
-                .workload_selectors
-                .iter()
-                .all(|selector| {
-                    selector.cluster_uids.iter().all(|uid| uid == &self.config.cluster_uid)
-                        && selector
-                            .namespace_uids
-                            .iter()
-                            .all(|uid| uid == namespace_uid)
-                }),
+            canonical_uuid(&source.namespace_uid)
+                && policy
+                    .workload_selectors
+                    .iter()
+                    .all(|selector| {
+                        selector.cluster_uids.iter().all(|uid| uid == &self.config.cluster_uid)
+                            && selector
+                                .namespace_uids
+                                .iter()
+                                .all(|uid| uid == &source.namespace_uid)
+                    }),
             PolicyValidationSnafu {
-                policy_id: resource.spec.policy.profile_id(),
+                policy_id: policy.profile_id(),
                 code: "CFG_CROSS_TENANT_SELECTOR",
                 reason: "the policy has a cluster or namespace selector outside its authenticated tenant scope",
             }
         );
-        let source = PolicySourceRevisionV1::from_resource(
-            resource,
-            &self.config.tenant_id,
-            &self.config.cluster_uid,
-            namespace_uid,
-            if resource.metadata.deletion_timestamp.is_some() {
-                PolicySourceStateV1::DeletionRequested
-            } else {
-                PolicySourceStateV1::Accepted
-            },
-        )?;
         self.store
-            .accept_source_revision(source.clone(), resource.spec.policy.clone())?;
+            .accept_source_revision(source.clone(), policy.clone())?;
         let mut targets = resolve_targets(
-            &resource.spec.policy,
+            policy,
             inventory,
             &self.config.tenant_id,
             &self.config.cluster_uid,
         )?;
-        self.claim(&source, &resource.spec.policy, &targets)?;
+        self.claim(&source, policy, &targets)?;
 
         if source.state == PolicySourceStateV1::DeletionRequested {
             targets = self
@@ -303,7 +323,7 @@ impl PolicyDesiredStateOwner {
         {
             artifact
         } else {
-            let compiled = match self.compiler.compile(&resource.spec.policy) {
+            let compiled = match self.compiler.compile(policy) {
                 Ok(compiled) => {
                     let mut state = self.state()?;
                     state.successful_compiles = state.successful_compiles.saturating_add(1);
@@ -322,7 +342,7 @@ impl PolicyDesiredStateOwner {
                 seal_request.issuer_sequence,
             )?;
             let artifact = ProfileCandidateArtifactV1::sign(
-                &resource.spec.policy,
+                policy,
                 compiled,
                 seal_request,
                 &self.signing_key,
@@ -333,7 +353,7 @@ impl PolicyDesiredStateOwner {
         };
         let artifact_bytes = serde_json::to_vec(&artifact).map_err(|error| {
             PolicyValidationSnafu {
-                policy_id: resource.spec.policy.profile_id(),
+                policy_id: policy.profile_id(),
                 code: "CFG_POLICY_ARTIFACT",
                 reason: format!("the signed profile artifact cannot be encoded: {error}"),
             }
@@ -343,7 +363,7 @@ impl PolicyDesiredStateOwner {
         let snapshot = PolicyTargetSnapshotV1::new(
             source.policy_source_revision_id.clone(),
             signed_profile_digest,
-            resource.spec.policy.rollout.rollout_generation,
+            policy.rollout.rollout_generation,
             targets,
         )?;
         let (bundles, rollout_states) = if self
@@ -387,6 +407,22 @@ impl PolicyDesiredStateOwner {
             result.clone(),
         );
         Ok(result)
+    }
+
+    pub fn retire_missing_sources(
+        &self,
+        seen_object_uids: &BTreeSet<String>,
+        inventory: &[WorkloadTargetFactV1],
+        now_utc_ns: i64,
+    ) -> Result<Vec<PolicyReconcileResultV1>> {
+        self.store
+            .latest_live_sources()?
+            .into_iter()
+            .filter(|(source, _)| !seen_object_uids.contains(&source.object_uid))
+            .map(|(source, policy)| {
+                self.reconcile_source(source.deletion_requested()?, &policy, inventory, now_utc_ns)
+            })
+            .collect()
     }
 
     #[must_use]
@@ -742,12 +778,11 @@ async fn reconcile_cluster(
         tokio::pin!(stream);
         while let Some(event) = stream.next().await {
             match event {
-                Ok(
-                    WatchEvent::Added(resource)
-                    | WatchEvent::Modified(resource)
-                    | WatchEvent::Deleted(resource),
-                ) => {
-                    reconcile_resource(&api, &namespaces, &owner, &control, resource).await;
+                Ok(WatchEvent::Added(resource) | WatchEvent::Modified(resource)) => {
+                    reconcile_resource(&api, &namespaces, &owner, &control, resource, false).await;
+                }
+                Ok(WatchEvent::Deleted(resource)) => {
+                    reconcile_resource(&api, &namespaces, &owner, &control, resource, true).await;
                 }
                 Ok(WatchEvent::Bookmark(_)) => {}
                 Ok(WatchEvent::Error(_)) | Err(_) => {
@@ -767,6 +802,7 @@ async fn relist_cluster(
 ) -> Option<String> {
     let mut continuation = None::<String>;
     let mut resource_version = None::<String>;
+    let mut seen_object_uids = BTreeSet::new();
     loop {
         let mut params = ListParams::default().limit(500);
         if let Some(token) = &continuation {
@@ -780,7 +816,10 @@ async fn relist_cluster(
             }
         };
         for resource in page.items {
-            reconcile_resource(api, namespaces, owner, control, resource).await;
+            if let Some(object_uid) = &resource.metadata.uid {
+                seen_object_uids.insert(object_uid.clone());
+            }
+            reconcile_resource(api, namespaces, owner, control, resource, false).await;
         }
         resource_version = page.metadata.resource_version.or(resource_version);
         continuation = page.metadata.continue_;
@@ -789,8 +828,20 @@ async fn relist_cluster(
         }
     }
     let resource_version = resource_version.filter(|value| !value.is_empty());
-    owner.record_relist(resource_version.is_some());
-    resource_version
+    let complete = resource_version.is_some()
+        && owner
+            .retire_missing_sources(
+                &seen_object_uids,
+                &control.workload_inventory(),
+                utc_now_ns(),
+            )
+            .is_ok();
+    owner.record_relist(complete);
+    if complete {
+        resource_version
+    } else {
+        None
+    }
 }
 
 async fn reconcile_resource(
@@ -799,6 +850,7 @@ async fn reconcile_resource(
     owner: &PolicyDesiredStateOwner,
     control: &crate::ControlPlane,
     resource: WorkloadProtectionProfile,
+    deleted: bool,
 ) {
     let Some(name) = resource.metadata.name.clone() else {
         return;
@@ -815,12 +867,18 @@ async fn reconcile_resource(
         Ok(namespace) => namespace.metadata.uid,
         Err(_) => None,
     };
+    let source_state = if deleted || resource.metadata.deletion_timestamp.is_some() {
+        PolicySourceStateV1::DeletionRequested
+    } else {
+        PolicySourceStateV1::Accepted
+    };
     let status = owner
-        .reconcile(
+        .reconcile_observation(
             &resource,
             namespace_uid.as_deref().unwrap_or_default(),
             &control.workload_inventory(),
             utc_now_ns(),
+            source_state,
         )
         .map_or_else(|_| rejected_status(generation), |result| result.status);
     let patch = Patch::Merge(serde_json::json!({"status": status}));
