@@ -6,7 +6,7 @@ use std::process::Command;
 use serde::Deserialize;
 use snafu::{ensure, ResultExt as _};
 
-use crate::closure::ArchitectureClosure;
+use crate::closure::QualificationRegistry;
 use crate::error::{CommandSnafu, InvalidInputSnafu, IoSnafu, JsonSnafu};
 use crate::{DigestV1, Result};
 
@@ -111,11 +111,10 @@ impl ProvenanceVerifier {
                 reason: "unexpected provenance schema or dossier ID"
             }
         );
-        let fixture_ids = ArchitectureClosure::new(&self.spec_root)
+        let fixture_ids = QualificationRegistry::new(&self.spec_root)
             .verify()?
-            .fixtures
+            .fixture_ids
             .into_iter()
-            .map(|fixture| fixture.fixture_id)
             .collect::<BTreeSet<_>>();
         let record_ids = dossier
             .records
