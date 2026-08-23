@@ -1,8 +1,10 @@
 # Phase 6.2 Implementation Review Guide
 
-Status: Source implementation and automated acceptance are complete. The final
-repository gate passed. The
-[manual runbook](./manual-testing/phase-6-2-manual-acceptance.md) has not run.
+Status: Blocked. Source implementation and automated acceptance are complete.
+The physical run passed through policy activation, runtime binding, and
+durable evidence intake. Stock `runc` container start failed because its
+bootstrap used an anonymous file write and IPC access that have no typed
+authority.
 
 Plan: [Control Policy And Evidence Convergence](./phase-6-2-control-policy-and-evidence-convergence.md)
 
@@ -429,11 +431,20 @@ the next complete gate passed.
 
 ## Verification Limits
 
-The physical two-node manual run has not run. There is no new live Kubernetes
-API-server, RBAC denial, watch-compaction, network-partition, kernel, platform,
-performance, or capacity result. The deterministic two-node test exercises two
-Control targets and their provenance. It does not exercise two physical BPF
-instances.
+The physical two-node Kubernetes run passed readiness, typed RBAC review, CRD
+reconciliation, admission mutation and bypass rejection, scheduler selection,
+exact selected-node delivery, policy activation, runtime binding, Control
+acknowledgement, and durable evidence intake. Stock `runc` then used an
+anonymous file write and IPC access that have no typed authority. BPF denied
+the operations, the runtime reported start failure, and the application did
+not run.
+
+The run did not complete the gate-failure, restart, Pod UID reuse,
+DaemonSet-selector change, watch-compaction, network-partition, or
+storage-outage cases. There is no new performance or capacity result. Do not
+add a broad runtime exception. Completion requires an approved signed, typed,
+bounded runtime-bootstrap authority with an exact helper identity and bounded
+helper-to-target handoff.
 
 This work adds no Appendix C fixture ID. Phase 7 graph and finding behavior is
 not present.

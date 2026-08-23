@@ -1,8 +1,12 @@
 # Phase 6.2: Control Policy And Evidence Convergence
 
-Status: Not done. Source implementation and automated acceptance for
-D6.2.1-D6.2.12 passed. The required physical Kubernetes and stock-runtime
-acceptance has not run.
+Status: Blocked. Source implementation and automated acceptance for
+D6.2.1-D6.2.12 passed. Physical Kubernetes acceptance reached scheduler
+binding, selected-node delivery, policy activation, runtime binding, and
+durable evidence intake. Stock `runc` container start failed because its
+bootstrap uses an anonymous file write and IPC access that have no typed
+authority. The validated architecture forbids a broad runtime exception and
+requires an approved runtime-bootstrap authority.
 
 Master: [Mithril Hugging Face Intrusion Prevention](./README.md)
 
@@ -510,15 +514,15 @@ audit history and the privileged/unmatched workload floor.
 ## Phase Result
 
 ```text
-State: Not done. Source implementation and automated acceptance passed. The required physical Kubernetes and stock-runtime acceptance has not run.
-Completed deliverable IDs: D6.2.1-D6.2.12 are source-complete. D6.2.9-D6.2.12 do not have the required physical result.
+State: Blocked. Source implementation and automated acceptance passed. Physical Kubernetes acceptance failed when stock runc used bootstrap operations that have no typed authority.
+Completed deliverable IDs: D6.2.1-D6.2.12 are source-complete. D6.2.9 and D6.2.10 have physical proof for node readiness, admission, scheduler binding, and selected-node targeting. D6.2.11 and D6.2.12 remain blocked on stock-runtime bootstrap authority.
 Files and durable owners changed: WorkloadProtectionProfile CRD and Helm package; PolicyDesiredStateOwner; PolicyRolloutOwner; TrustBundleOwner; KubernetesNodeReadinessOwner; KubernetesAdmissionOwner; KubernetesWorkloadInventoryOwner; one append-only ControlStore for policy, trust, rollout, acknowledgement, evidence, coverage, and cursor transactions; generated NodePolicy and ControlHealth services; NodePolicyDeliveryOwner; RuntimeAdmissionClient; RuntimeAdmissionServer; ScheduledRuntimeBindingV1; the existing node activation and cgroup-binding paths; and the stateless OCI adapter. The BPF ABI and BPF programs did not change.
 Upstream-adoption dossier IDs used: none.
-Fixture cases and exact physical results: no new Appendix C fixture or physical result. The deterministic two-node Control tests passed. The physical two-node manual run was not run.
+Fixture cases and exact physical results: the deterministic two-node Control tests passed. The physical two-node Kubernetes run passed node readiness, typed RBAC review, CRD reconciliation, Pod mutation and bypass rejection, scheduler selection, exact selected-node delivery, policy activation, runtime binding, Control acknowledgement, and durable evidence intake. Protected container start failed when stock runc used an anonymous file write and IPC access. The application process did not start. Scenario cleanup passed.
 Automated verification: `bash .github/scripts/verify-rust-ci.sh` passed the repository format, check, clippy, and full workspace test gate. The first review gate exposed test-only strict-Clippy failures. The test was corrected, and the complete gate passed. The final gate included the Mithril Control, end-to-end, node, OCI adapter, and mTLS tests. An earlier complete gate had one transient browser discovery test failure with `WouldBlock`; the isolated test and the next complete gate passed. `bash packaging/mithril/helm/tests/verify.sh` passed chart lint and the rendered packaging contract.
 Platform/kernel/runtime manifests: the Helm package contains the generated closed CRD, Control RBAC, the exact DaemonSet reader Role, the Control Deployment and Service, fail-closed admission webhooks, the node DaemonSet, and the OCI hook installation. No BPF program or kernel ABI changed. No live platform manifest was recorded.
 Performance/capacity results: no new benchmark. Evidence gRPC messages are limited to 4 MiB. Policy gRPC messages are limited to 128 KiB. The pending evidence window is limited to 4,096 records. Health reports fixed counts and booleans only.
-Unsupported/degraded paths: no live Kubernetes API-server, RBAC denial, watch-compaction, network-partition, storage-outage, stock-runtime ordering, or physical two-node result was recorded. Phase 7 graph and finding behavior is not present.
-Remaining work in this phase: run the documented physical acceptance on the target Kubernetes and stock OCI runtime versions, retain its evidence, and record a `Pass` or `Fail` result. The prior optional physical D6.2.1-D6.2.8 run was not completed.
+Unsupported/degraded paths: the run did not complete the gate-failure, restart, Pod UID reuse, DaemonSet-selector change, watch-compaction, network-partition, or storage-outage cases. Stock-runc bootstrap is unsupported while its anonymous file write and IPC access have no typed authority. Phase 7 graph and finding behavior is not present.
+Remaining work in this phase: approve and implement a signed, typed, bounded runtime-bootstrap authority, or retain stock-runc protected start as unsupported. After that decision, rerun the physical procedure from protected start through lifecycle and recovery.
 Next phase not authorized: yes.
 ```
