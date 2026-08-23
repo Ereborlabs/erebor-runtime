@@ -45,6 +45,7 @@ pub use observation::{
     SourceAuthorityV1, TemporalCoverageV1, MAX_EVIDENCE_FIELDS_V1, MAX_PROVENANCE_OBSERVATIONS_V1,
 };
 pub use policy::NodePolicyGenerationOwner;
+pub use policy_delivery::{policy_delivery_status, PolicyDeliveryStatusV1};
 pub use runtime_admission::{
     RuntimeAdmissionClient, RuntimeAdmissionRequestV1, RuntimeAdmissionResponseV1,
     CONTAINER_NAME_ANNOTATION, IMAGE_NAME_ANNOTATION, POD_NAMESPACE_ANNOTATION, POD_UID_ANNOTATION,

@@ -83,6 +83,16 @@ struct TransferStateV1 {
     chunk_digests: BTreeMap<u32, String>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct PolicyDeliveryStatusV1 {
+    pub active_candidate_content_id: Option<String>,
+    pub active_profile_ids: Vec<String>,
+    pub scheduled_binding_count: usize,
+    pub runtime_binding_count: usize,
+    pub activation_pending: bool,
+    pub control_acknowledged: bool,
+}
+
 pub(crate) struct PreparedPolicyActivationV1 {
     pub config: NodeConfig,
     pub profile_id: String,
@@ -133,6 +143,33 @@ impl NodePolicyDeliveryOwner {
         // Invalid recovery state blocks policy delivery instead of dropping replay history.
         owner.validate_state()?;
         Ok(owner)
+    }
+
+    fn status(&self) -> PolicyDeliveryStatusV1 {
+        let bindings = self
+            .state
+            .active_profiles
+            .values()
+            .flat_map(|profile| &profile.scheduled_bindings)
+            .collect::<Vec<_>>();
+        // A scheduled identity is a signed placeholder. Runtime admission
+        // replaces it with the physical container identity before start.
+        PolicyDeliveryStatusV1 {
+            active_candidate_content_id: self.state.active_candidate_content_id.clone(),
+            active_profile_ids: self.state.active_profiles.keys().cloned().collect(),
+            scheduled_binding_count: bindings
+                .iter()
+                .filter(|binding| binding.container_id.starts_with("scheduled:"))
+                .count(),
+            runtime_binding_count: bindings
+                .iter()
+                .filter(|binding| !binding.container_id.starts_with("scheduled:"))
+                .count(),
+            activation_pending: self.state.pending_activation.is_some(),
+            control_acknowledged: self.state.active_candidate_content_id.is_some()
+                && self.state.active_candidate_content_id
+                    == self.state.control_acknowledged_candidate_content_id,
+        }
     }
 
     #[cfg(test)]
@@ -1017,6 +1054,10 @@ impl NodePolicyDeliveryOwner {
     }
 }
 
+pub fn policy_delivery_status(state_directory: &Path) -> Result<PolicyDeliveryStatusV1> {
+    Ok(NodePolicyDeliveryOwner::load(state_directory)?.status())
+}
+
 fn materialize_scheduled_bindings(
     bundle: &PolicyBundleV1,
     config: &mut NodeConfig,
@@ -1706,6 +1747,11 @@ mod tests {
                 observed_utc_ns: 21,
             },
         )?;
+        let delivered = owner.status();
+        assert_eq!(delivered.scheduled_binding_count, 1);
+        assert_eq!(delivered.runtime_binding_count, 0);
+        assert!(!delivered.activation_pending);
+        assert!(!delivered.control_acknowledged);
         let mut runtime_binding = prepared.config.workload_bindings[0].clone();
         let authority = runtime_binding
             .scheduled_binding_authority_id
@@ -1726,6 +1772,13 @@ mod tests {
         runtime_binding.root_cgroup_path = Some(directory.path().join("pod-cgroup"));
         runtime_binding.container_generation = 42;
         owner.record_runtime_binding(&runtime_binding)?;
+        let admitted = super::policy_delivery_status(directory.path())?;
+        assert_eq!(
+            admitted.active_profile_ids,
+            vec![scheduled.profile_artifact.policy_document.profile_id()]
+        );
+        assert_eq!(admitted.scheduled_binding_count, 0);
+        assert_eq!(admitted.runtime_binding_count, 1);
         let mut restored = config.clone();
         restored.workload_bindings.clear();
         restored.policy_candidates.clear();
