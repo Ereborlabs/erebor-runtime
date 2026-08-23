@@ -15,6 +15,8 @@ use tokio_stream::StreamExt as _;
 use crate::error::InvalidConfigurationSnafu;
 use crate::{ControlPlane, KubernetesNodeSessionV1, Result};
 
+use super::kubernetes::next_continuation_token;
+
 pub const KUBERNETES_READY_LABEL: &str = "mithril.erebor.dev/ready";
 pub const KUBERNETES_NODE_ID_ANNOTATION: &str = "mithril.erebor.dev/node-id";
 pub const KUBERNETES_NODE_UID_ANNOTATION: &str = "mithril.erebor.dev/node-uid";
@@ -188,8 +190,9 @@ impl KubernetesNodeReadinessOwner {
                     .await;
             }
             resource_version = page.metadata.resource_version.or(resource_version);
-            continuation = page.metadata.continue_;
-            if continuation.as_ref().is_none_or(String::is_empty) {
+            continuation =
+                next_continuation_token(continuation.as_deref(), page.metadata.continue_, "Node")?;
+            if continuation.is_none() {
                 break;
             }
         }

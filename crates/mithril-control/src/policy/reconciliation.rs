@@ -880,8 +880,18 @@ async fn relist_cluster(
             reconcile_resource(api, namespaces, owner, control, resource, false).await;
         }
         resource_version = page.metadata.resource_version.or(resource_version);
-        continuation = page.metadata.continue_;
-        if continuation.as_ref().is_none_or(String::is_empty) {
+        continuation = match super::kubernetes::next_continuation_token(
+            continuation.as_deref(),
+            page.metadata.continue_,
+            "WorkloadProtectionProfile",
+        ) {
+            Ok(continuation) => continuation,
+            Err(_) => {
+                owner.record_relist(false);
+                return None;
+            }
+        };
+        if continuation.is_none() {
             break;
         }
     }
