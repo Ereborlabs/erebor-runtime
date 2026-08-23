@@ -4,4 +4,5 @@ pub(crate) mod fixtures;
 mod payload;
 mod policy_set;
 mod rule_matching;
+mod static_evaluation;
 mod validation;

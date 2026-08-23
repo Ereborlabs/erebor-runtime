@@ -6,6 +6,7 @@ use snafu::{ensure, ResultExt};
 
 use crate::error::{
     DuplicateRuleSnafu, EmptyPolicySnafu, InvalidPolicySyntaxSnafu, InvalidRuleSnafu,
+    StaticEvaluationUnsupportedSnafu,
 };
 use crate::layered::{LayerEvaluation, PolicyLayerEvaluator};
 use crate::{Decision, Result};
@@ -28,6 +29,10 @@ impl PolicyLayerEvaluator for AllowAllPolicy {
         Ok(LayerEvaluation::Decision(Decision::Allow {
             rule_id: Some(String::from("allow-all")),
         }))
+    }
+
+    fn evaluate_static_layer(&self, event: &RuntimeEvent) -> Result<LayerEvaluation> {
+        self.evaluate_layer(event)
     }
 }
 
@@ -65,6 +70,16 @@ impl PolicyLayerEvaluator for PolicySet {
     fn evaluate_layer(&self, event: &RuntimeEvent) -> Result<LayerEvaluation> {
         for policy in &self.policies {
             let decision = policy.evaluate_layer(event)?;
+            if !matches!(decision, LayerEvaluation::NotApplicable) {
+                return Ok(decision);
+            }
+        }
+        Ok(LayerEvaluation::NotApplicable)
+    }
+
+    fn evaluate_static_layer(&self, event: &RuntimeEvent) -> Result<LayerEvaluation> {
+        for policy in &self.policies {
+            let decision = policy.evaluate_static_layer(event)?;
             if !matches!(decision, LayerEvaluation::NotApplicable) {
                 return Ok(decision);
             }
@@ -156,6 +171,24 @@ impl PolicyLayerEvaluator for LocalPolicy {
                 LayerEvaluation::Decision(rule.to_decision())
             }))
     }
+
+    fn evaluate_static_layer(&self, event: &RuntimeEvent) -> Result<LayerEvaluation> {
+        for rule in &self.rules {
+            if !rule.matcher.matches_fixed_facts(event) {
+                continue;
+            }
+            if let Some(reason) = rule.matcher.static_evaluation_error() {
+                return StaticEvaluationUnsupportedSnafu {
+                    rule_id: rule.id.clone(),
+                    reason,
+                }
+                .fail();
+            }
+            return Ok(LayerEvaluation::Decision(rule.to_decision()));
+        }
+
+        Ok(LayerEvaluation::NotApplicable)
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
@@ -219,13 +252,7 @@ impl EventMatcher {
     }
 
     fn matches(&self, event: &RuntimeEvent) -> bool {
-        self.surface
-            .as_ref()
-            .is_none_or(|surface| surface == &event.surface)
-            && self
-                .action
-                .as_ref()
-                .is_none_or(|action| action == &event.action)
+        self.matches_fixed_facts(event)
             && self
                 .target_contains
                 .as_ref()
@@ -238,10 +265,33 @@ impl EventMatcher {
                 .command_contains
                 .as_ref()
                 .is_none_or(|needle| command_contains(event, needle))
+    }
+
+    fn matches_fixed_facts(&self, event: &RuntimeEvent) -> bool {
+        self.surface
+            .as_ref()
+            .is_none_or(|surface| surface == &event.surface)
+            && self
+                .action
+                .as_ref()
+                .is_none_or(|action| action == &event.action)
             && self
                 .risk_at_least
                 .as_ref()
                 .is_none_or(|minimum| event.risk.level.is_at_least(minimum))
+    }
+
+    fn static_evaluation_error(&self) -> Option<String> {
+        let fields = [
+            self.target_contains.as_ref().map(|_| "target_contains"),
+            self.payload_contains.as_ref().map(|_| "payload_contains"),
+            self.command_contains.as_ref().map(|_| "command_contains"),
+        ]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
+
+        (!fields.is_empty()).then(|| format!("matcher depends on {}", fields.join(", ")))
     }
 }
 

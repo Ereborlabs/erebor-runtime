@@ -30,6 +30,13 @@ pub enum PolicyError {
         #[snafu(implicit)]
         location: Location,
     },
+    #[snafu(display("policy rule `{rule_id}` cannot be evaluated statically: {reason}"))]
+    StaticEvaluationUnsupported {
+        rule_id: String,
+        reason: String,
+        #[snafu(implicit)]
+        location: Location,
+    },
     #[snafu(display("mandatory policy layer `{layer}` did not cover this effect"))]
     MissingMandatoryCoverage {
         layer: String,
@@ -54,6 +61,7 @@ impl ErrorExt for PolicyError {
         match self {
             Self::EmptyPolicy { .. }
             | Self::InvalidRule { .. }
+            | Self::StaticEvaluationUnsupported { .. }
             | Self::MissingMandatoryCoverage { .. }
             | Self::IncompatibleMediation { .. } => StatusCode::InvalidArguments,
             Self::InvalidPolicySyntax { .. } => StatusCode::InvalidSyntax,

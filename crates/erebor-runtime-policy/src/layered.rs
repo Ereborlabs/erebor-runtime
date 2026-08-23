@@ -14,6 +14,9 @@ pub enum LayerEvaluation {
 /// An evaluator that can distinguish a deliberate allow from no matching rule.
 pub trait PolicyLayerEvaluator {
     fn evaluate_layer(&self, event: &RuntimeEvent) -> Result<LayerEvaluation>;
+
+    /// Evaluates only rules whose result is independent of event payload data.
+    fn evaluate_static_layer(&self, event: &RuntimeEvent) -> Result<LayerEvaluation>;
 }
 
 /// One named immutable policy revision in a composed policy set.
@@ -87,12 +90,27 @@ impl LayeredPolicySet {
     }
 
     pub fn evaluate(&self, event: &RuntimeEvent) -> Result<LayeredDecision> {
+        self.evaluate_with(event, |evaluator, event| evaluator.evaluate_layer(event))
+    }
+
+    /// Evaluates rules that depend only on the event surface, action, and risk.
+    pub fn evaluate_static(&self, event: &RuntimeEvent) -> Result<LayeredDecision> {
+        self.evaluate_with(event, |evaluator, event| {
+            evaluator.evaluate_static_layer(event)
+        })
+    }
+
+    fn evaluate_with(
+        &self,
+        event: &RuntimeEvent,
+        evaluate: impl Fn(&dyn PolicyLayerEvaluator, &RuntimeEvent) -> Result<LayerEvaluation>,
+    ) -> Result<LayeredDecision> {
         let mut approvals = Vec::new();
         let mut mediation: Option<(String, serde_json::Value)> = None;
         let mut mediation_rule_ids = Vec::new();
 
         for layer in &self.layers {
-            match layer.evaluator.evaluate_layer(event)? {
+            match evaluate(layer.evaluator.as_ref(), event)? {
                 LayerEvaluation::NotApplicable if layer.mandatory => {
                     return MissingMandatoryCoverageSnafu {
                         layer: layer.name.clone(),
