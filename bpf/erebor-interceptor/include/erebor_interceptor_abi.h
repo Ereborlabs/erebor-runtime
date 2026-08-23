@@ -21,6 +21,20 @@ typedef __s32 int32_t;
 
 #define MAX_POLICY_ACTIVATION_PROBE_KEY_BYTES_V1 72
 
+#define CONTROLLER_SIGNAL_INT_NUMBER_V1 2
+
+#define CONTROLLER_SIGNAL_KILL_NUMBER_V1 9
+
+#define CONTROLLER_SIGNAL_TERM_NUMBER_V1 15
+
+#define CONTROLLER_SIGNAL_INT_MASK_V1 (1 << CONTROLLER_SIGNAL_INT_NUMBER_V1)
+
+#define CONTROLLER_SIGNAL_KILL_MASK_V1 (1 << CONTROLLER_SIGNAL_KILL_NUMBER_V1)
+
+#define CONTROLLER_SIGNAL_TERM_MASK_V1 (1 << CONTROLLER_SIGNAL_TERM_NUMBER_V1)
+
+#define CONTROLLER_SIGNAL_ALLOWED_MASK_V1 ((CONTROLLER_SIGNAL_INT_MASK_V1 | CONTROLLER_SIGNAL_KILL_MASK_V1) | CONTROLLER_SIGNAL_TERM_MASK_V1)
+
 #define MAX_ANCESTOR_PROCESS_LINEAGES_V1 8
 
 #define MAX_EXEC_CANDIDATES_V1 8
@@ -42,6 +56,8 @@ typedef __s32 int32_t;
 #define CONSERVATIVE_PROCESS_STATE_VECTOR_V1 1
 
 #define MAX_NETWORK_PORT_RANGES_V1 8
+
+#define NETWORK_OPERATION_SCOPED_DESTINATION_HANDLE_V1 UINT64_MAX
 
 #define MAX_CANONICAL_PATH_COMPONENTS_V1 255
 
@@ -256,6 +272,20 @@ enum installed_role_class_v1
 typedef enum installed_role_class_v1 installed_role_class_v1;
 #else
 typedef uint8_t installed_role_class_v1;
+#endif // __STDC_VERSION__ >= 202311L
+
+enum effect_default_scope_v1
+#if __STDC_VERSION__ >= 202311L
+  : uint16_t
+#endif // __STDC_VERSION__ >= 202311L
+ {
+  effect_default_scope_v1_classified_object = 0,
+  effect_default_scope_v1_operation = 1,
+};
+#if __STDC_VERSION__ >= 202311L
+typedef enum effect_default_scope_v1 effect_default_scope_v1;
+#else
+typedef uint16_t effect_default_scope_v1;
 #endif // __STDC_VERSION__ >= 202311L
 
 enum exact_device_type_v1
@@ -614,6 +644,7 @@ enum kernel_effect_operation_v1
   kernel_effect_operation_v1_receive = 36,
   kernel_effect_operation_v1_shutdown = 37,
   kernel_effect_operation_v1_setsockopt = 38,
+  kernel_effect_operation_v1_open_path = 39,
 };
 #if __STDC_VERSION__ >= 202311L
 typedef enum kernel_effect_operation_v1 kernel_effect_operation_v1;
@@ -1167,6 +1198,16 @@ typedef struct device_effect_key_v1 {
   uint8_t command_wildcard;
   uint8_t reserved;
 } device_effect_key_v1;
+
+typedef struct controller_signal_authority_key_v1 {
+  uint64_t controller_cgroup_id;
+  struct id128_v1 target_binding_id;
+  struct id128_v1 target_binding_nonce;
+} controller_signal_authority_key_v1;
+
+typedef struct controller_signal_authority_v1 {
+  uint64_t allowed_signal_mask;
+} controller_signal_authority_v1;
 
 typedef struct effect_observation_health_v1 {
   uint64_t attempted;

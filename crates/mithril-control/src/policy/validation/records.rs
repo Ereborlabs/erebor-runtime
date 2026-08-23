@@ -108,7 +108,8 @@ impl EffectFamilyV1 {
             Self::Exec => matches!(operation, "EXECUTE" | "MMAP_EXEC" | "MPROTECT"),
             Self::File => matches!(
                 operation,
-                "OPEN_READ"
+                "OPEN_PATH"
+                    | "OPEN_READ"
                     | "OPEN_WRITE"
                     | "READ"
                     | "WRITE"

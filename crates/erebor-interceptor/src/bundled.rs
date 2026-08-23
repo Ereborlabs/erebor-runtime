@@ -51,7 +51,8 @@ mod tests {
         use std::mem::size_of;
 
         use erebor_interceptor_abi::{
-            BindingActivationTargetKeyV1, EffectObservationHealthV1, ExceptionRuntimeStateKeyV1,
+            BindingActivationTargetKeyV1, ControllerSignalAuthorityKeyV1,
+            ControllerSignalAuthorityV1, EffectObservationHealthV1, ExceptionRuntimeStateKeyV1,
             ExceptionRuntimeStateV1, ExecutionSetBindingStateV1, TaskEffectAttemptStateV1,
         };
 
@@ -128,6 +129,25 @@ mod tests {
             size_of::<ExecutionSetBindingStateV1>()
         );
         assert_eq!(activation_map.max_entries(), 65_536);
+        let signal_authority_map = object
+            .maps()
+            .find(|map| map.name().to_string_lossy() == "controller_signal_authorities")
+            .ok_or_else(|| {
+                crate::error::InvalidConfigurationSnafu {
+                    path: std::path::Path::new("embedded erebor-interceptor.bpf.o"),
+                    reason: "controller signal authority map is missing".to_owned(),
+                }
+                .build()
+            })?;
+        assert_eq!(
+            signal_authority_map.key_size() as usize,
+            size_of::<ControllerSignalAuthorityKeyV1>()
+        );
+        assert_eq!(
+            signal_authority_map.value_size() as usize,
+            size_of::<ControllerSignalAuthorityV1>()
+        );
+        assert_eq!(signal_authority_map.max_entries(), 65_536);
         let health = object
             .maps()
             .find(|map| map.name().to_string_lossy() == "effect_observation_health")

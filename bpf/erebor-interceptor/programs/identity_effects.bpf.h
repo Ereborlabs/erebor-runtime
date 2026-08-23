@@ -198,12 +198,35 @@ static __always_inline physical_decision_v1 *effect_base_decision(
     scratch->effect_default.entry_kind = scratch->effect_key.entry_kind;
     scratch->effect_default.effect_family = scratch->effect_key.effect_family;
     scratch->effect_default.operation = scratch->effect_key.operation;
+    scratch->effect_default.reserved =
+        effect_default_scope_v1_classified_object;
     scratch->effect_default.composite_atom_id =
         scratch->effect_key.composite_atom_id;
     scratch->effect_default.process_state_vector_id =
         scratch->effect_key.process_state_vector_id;
     scratch->effect_default.binding_lifecycle_state =
         scratch->effect_key.binding_lifecycle_state;
+    return bpf_map_lookup_elem(&effect_defaults, &scratch->effect_default);
+}
+
+static __always_inline physical_decision_v1 *operation_effect_decision(
+    struct identity_scratch_v1 *scratch, __u64 profile_generation_ref_id,
+    __u32 active_role_id, __u32 process_state_vector_id, __u16 entry_kind,
+    binding_lifecycle_state_v1 binding_lifecycle_state, __u16 effect_family,
+    __u16 operation)
+{
+    __builtin_memset(&scratch->effect_default, 0,
+                     sizeof(scratch->effect_default));
+    scratch->effect_default.profile_generation_ref_id =
+        profile_generation_ref_id;
+    scratch->effect_default.active_role_id = active_role_id;
+    scratch->effect_default.entry_kind = entry_kind;
+    scratch->effect_default.effect_family = effect_family;
+    scratch->effect_default.operation = operation;
+    scratch->effect_default.reserved = effect_default_scope_v1_operation;
+    scratch->effect_default.process_state_vector_id = process_state_vector_id;
+    scratch->effect_default.binding_lifecycle_state =
+        binding_lifecycle_state;
     return bpf_map_lookup_elem(&effect_defaults, &scratch->effect_default);
 }
 
@@ -474,6 +497,25 @@ static __noinline int resolved_identity_effect_gate(struct file *file,
         return hard_effect_result(
             config, scratch,
             effect_observation_reason_v1_corrupt_identity_or_generation);
+    if (!(scratch->effect_gate_flags & EFFECT_GATE_DEFER_DECISION_V1)) {
+        decision = operation_effect_decision(
+            scratch, scratch->process.active_profile_generation_ref_id,
+            scratch->process.active_role_id,
+            scratch->process.process_state_vector_id, entry->entry_kind,
+            binding->lifecycle_state, scratch->observation.effect_family,
+            scratch->observation.operation);
+        if (decision)
+            return apply_effect_decision(
+                config, scratch, generation, decision,
+                !(scratch->effect_gate_flags &
+                  EFFECT_GATE_DENY_EXCEPTION_V1),
+                scratch->effect_gate_flags &
+                    EFFECT_GATE_FILE_OPEN_ATTEMPT_V1);
+        if (scratch->effect_gate_flags & EFFECT_GATE_OPERATION_ONLY_V1)
+            return hard_effect_result(
+                config, scratch,
+                effect_observation_reason_v1_unsupported_object);
+    }
     if (!(scratch->effect_gate_flags & EFFECT_GATE_PATH_SUPPLIED_V1) &&
         file) {
         if (BPF_CORE_READ_INTO(&scratch->effect_path, file, f_path))
@@ -718,6 +760,22 @@ static __noinline int identity_path_effect_gate(const struct path *path,
 #include "identity_device_process.bpf.h"
 #include "identity_ipc.bpf.h"
 
+static __noinline int identity_operation_only_effect_gate(
+    __u16 effect_family, __u16 operation, int ret)
+{
+    struct identity_scratch_v1 *scratch = identity_scratch_record();
+
+    if (scratch) {
+        scratch->effect_gate_flags = EFFECT_GATE_OPERATION_ONLY_V1;
+        scratch->effect_gate_operation_argument = 0;
+        scratch->path_mount_namespace_inode = 0;
+    }
+    if (!ret)
+        prepare_effect_identity();
+    return dispatch_identity_effect_gate(NULL, NULL, effect_family, operation,
+                                         ret);
+}
+
 static __noinline int identity_unqualified_effect_gate(
     __u16 effect_family, __u16 operation, int ret)
 {
@@ -827,6 +885,14 @@ static __always_inline int file_mode_effects(struct file *file,
                    : identity_effect_gate_without_exception(
                          file, kernel_effect_family_v1_file,
                          kernel_effect_operation_v1_unknown, ret);
+    if (mode & FMODE_PATH)
+        return allow_exception
+                   ? identity_file_open_effect_gate(
+                         file, kernel_effect_family_v1_file,
+                         kernel_effect_operation_v1_open_path, ret)
+                   : identity_effect_gate_without_exception(
+                         file, kernel_effect_family_v1_file,
+                         kernel_effect_operation_v1_open_path, ret);
     if (mode & FMODE_READ)
         ret = allow_exception
                   ? identity_file_open_effect_gate(
@@ -845,6 +911,14 @@ static __always_inline int file_mode_effects(struct file *file,
                   : identity_effect_gate_without_exception(
                         file, kernel_effect_family_v1_file,
                         kernel_effect_operation_v1_open_write, ret);
+    if (!(mode & (FMODE_READ | FMODE_WRITE)))
+        ret = allow_exception
+                  ? identity_file_open_effect_gate(
+                        file, kernel_effect_family_v1_file,
+                        kernel_effect_operation_v1_unknown, ret)
+                  : identity_effect_gate_without_exception(
+                        file, kernel_effect_family_v1_file,
+                        kernel_effect_operation_v1_unknown, ret);
     return ret;
 }
 
@@ -930,7 +1004,7 @@ int BPF_PROG(erebor_identity_mmap_file, struct file *file,
     if (!file || (flags & MAP_ANONYMOUS)) {
         if (!(prot & PROT_EXEC))
             return ret;
-        return identity_unqualified_effect_gate(
+        return identity_operation_only_effect_gate(
             kernel_effect_family_v1_exec,
             kernel_effect_operation_v1_mmap_exec, ret);
     }

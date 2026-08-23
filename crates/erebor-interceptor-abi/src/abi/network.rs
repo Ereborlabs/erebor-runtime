@@ -3,6 +3,13 @@ use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout, TryFromBytes};
 use super::{BindingLifecycleStateV1, Id128V1};
 
 pub const MAX_NETWORK_PORT_RANGES_V1: usize = 8;
+/// This reserved handle marks a flow that an operation-scoped decision authorized.
+pub const NETWORK_OPERATION_SCOPED_DESTINATION_HANDLE_V1: u64 = u64::MAX;
+
+#[must_use]
+pub const fn is_classified_destination_handle_v1(handle: u64) -> bool {
+    handle != 0 && handle != NETWORK_OPERATION_SCOPED_DESTINATION_HANDLE_V1
+}
 
 #[repr(u8)]
 #[derive(
@@ -102,6 +109,7 @@ pub struct NetworkIpv6LpmKeyV1 {
     Clone, Copy, Debug, Default, Eq, FromBytes, Immutable, IntoBytes, KnownLayout, PartialEq,
 )]
 pub struct NetworkDestinationClassV1 {
+    /// Must not use `NETWORK_OPERATION_SCOPED_DESTINATION_HANDLE_V1`.
     pub destination_policy_handle: u64,
     pub port_ranges: [NetworkPortRangeV1; MAX_NETWORK_PORT_RANGES_V1],
     pub port_range_count: u8,
@@ -175,9 +183,10 @@ mod tests {
     use std::mem::{align_of, offset_of, size_of};
 
     use super::{
-        NetworkDestinationClassV1, NetworkDestinationDecisionKeyV1, NetworkIpv4LpmKeyV1,
-        NetworkIpv6LpmKeyV1, NetworkResponseFloorKeyV1, NetworkResponseFloorV1,
-        NetworkSocketStateV1,
+        is_classified_destination_handle_v1, NetworkDestinationClassV1,
+        NetworkDestinationDecisionKeyV1, NetworkIpv4LpmKeyV1, NetworkIpv6LpmKeyV1,
+        NetworkResponseFloorKeyV1, NetworkResponseFloorV1, NetworkSocketStateV1,
+        NETWORK_OPERATION_SCOPED_DESTINATION_HANDLE_V1,
     };
 
     #[test]
@@ -192,5 +201,11 @@ mod tests {
         assert_eq!(align_of::<NetworkSocketStateV1>(), 8);
         assert_eq!(offset_of!(NetworkSocketStateV1, socket_key_id), 24);
         assert_eq!(offset_of!(NetworkSocketStateV1, peer_address), 118);
+        assert_eq!(NETWORK_OPERATION_SCOPED_DESTINATION_HANDLE_V1, u64::MAX);
+        assert!(!is_classified_destination_handle_v1(0));
+        assert!(is_classified_destination_handle_v1(1));
+        assert!(!is_classified_destination_handle_v1(
+            NETWORK_OPERATION_SCOPED_DESTINATION_HANDLE_V1
+        ));
     }
 }

@@ -131,6 +131,29 @@ pub enum KernelEffectOperationV1 {
     Receive = 36,
     Shutdown = 37,
     Setsockopt = 38,
+    OpenPath = 39,
+}
+
+/// The discriminator stored in `EffectDefaultKeyV1::reserved`.
+#[repr(u16)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    Eq,
+    PartialEq,
+    zerocopy::Immutable,
+    zerocopy::IntoBytes,
+    zerocopy::KnownLayout,
+    zerocopy::TryFromBytes,
+)]
+pub enum EffectDefaultScopeV1 {
+    /// Preserve the original object-classified default-key behavior.
+    #[default]
+    ClassifiedObject = 0,
+    /// Match the attributed actor and operation before object classification.
+    Operation = 1,
 }
 
 #[repr(u8)]
@@ -882,6 +905,7 @@ pub struct EffectDefaultKeyV1 {
     pub entry_kind: u16,
     pub effect_family: u16,
     pub operation: u16,
+    /// An `EffectDefaultScopeV1` value. Zero preserves the original scope.
     pub reserved: u16,
     pub reserved_alignment: [u8; 4],
     pub composite_atom_id: u64,
@@ -950,6 +974,50 @@ pub struct ProcessControlRuleKeyV1 {
     pub binding_lifecycle_state: BindingLifecycleStateV1,
     pub argument_wildcard: u8,
     pub reserved: [u8; 6],
+}
+
+pub const CONTROLLER_SIGNAL_INT_NUMBER_V1: u32 = 2;
+pub const CONTROLLER_SIGNAL_KILL_NUMBER_V1: u32 = 9;
+pub const CONTROLLER_SIGNAL_TERM_NUMBER_V1: u32 = 15;
+pub const CONTROLLER_SIGNAL_INT_MASK_V1: u64 = 1 << CONTROLLER_SIGNAL_INT_NUMBER_V1;
+pub const CONTROLLER_SIGNAL_KILL_MASK_V1: u64 = 1 << CONTROLLER_SIGNAL_KILL_NUMBER_V1;
+pub const CONTROLLER_SIGNAL_TERM_MASK_V1: u64 = 1 << CONTROLLER_SIGNAL_TERM_NUMBER_V1;
+pub const CONTROLLER_SIGNAL_ALLOWED_MASK_V1: u64 =
+    CONTROLLER_SIGNAL_INT_MASK_V1 | CONTROLLER_SIGNAL_KILL_MASK_V1 | CONTROLLER_SIGNAL_TERM_MASK_V1;
+
+/// One controller's signal authority over one exact workload binding.
+#[repr(C)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    PartialEq,
+    zerocopy::Immutable,
+    zerocopy::IntoBytes,
+    zerocopy::KnownLayout,
+    zerocopy::TryFromBytes,
+)]
+pub struct ControllerSignalAuthorityKeyV1 {
+    pub controller_cgroup_id: u64,
+    pub target_binding_id: Id128V1,
+    pub target_binding_nonce: Id128V1,
+}
+
+#[repr(C)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    PartialEq,
+    zerocopy::Immutable,
+    zerocopy::IntoBytes,
+    zerocopy::KnownLayout,
+    zerocopy::TryFromBytes,
+)]
+pub struct ControllerSignalAuthorityV1 {
+    pub allowed_signal_mask: u64,
 }
 
 #[repr(u8)]
@@ -1281,21 +1349,25 @@ mod tests {
     use std::mem::{align_of, offset_of, size_of};
 
     use super::{
-        BindingActivationTargetKeyV1, BindingLifecycleStateV1, DeviceEffectKeyV1,
-        EffectAttemptHookV1, EffectDecisionKeyV1, EffectDefaultKeyV1, EffectObservationHealthV1,
-        EffectObservationV1, ExactDeviceTypeV1, ExactFileObjectKeyV1, ExactObjectBindingV1,
-        ExceptionBindingStateV1, ExceptionHandleBindingKeyV1, ExceptionHandleBindingV1,
-        ExceptionReceiptStateV1, ExceptionRuntimeStateKeyV1, ExceptionRuntimeStateKindV1,
-        ExceptionRuntimeStateV1, ExceptionUseIdentityKindV1, ExceptionUseIdentityV1,
-        ExceptionUseReceiptKeyV1, ExceptionUseReceiptV1, FileOpenEventV1, FileOpenTargetV1,
-        Id128V1, IoUringActorSnapshotV1, IoUringExecutionStateKindV1, IoUringExecutionStateV1,
-        IoUringRequestStateKindV1, IoUringRequestStateV1, IoUringRestrictionStateV1,
-        IoUringRingStateKindV1, IoUringRingStateV1, IoUringSetupStateKindV1, IoUringSetupStateV1,
-        KernelEffectFamilyV1, KernelEffectOperationV1, PhysicalDecisionKindV1, PhysicalDecisionV1,
+        BindingActivationTargetKeyV1, BindingLifecycleStateV1, ControllerSignalAuthorityKeyV1,
+        ControllerSignalAuthorityV1, DeviceEffectKeyV1, EffectAttemptHookV1, EffectDecisionKeyV1,
+        EffectDefaultKeyV1, EffectDefaultScopeV1, EffectObservationHealthV1, EffectObservationV1,
+        ExactDeviceTypeV1, ExactFileObjectKeyV1, ExactObjectBindingV1, ExceptionBindingStateV1,
+        ExceptionHandleBindingKeyV1, ExceptionHandleBindingV1, ExceptionReceiptStateV1,
+        ExceptionRuntimeStateKeyV1, ExceptionRuntimeStateKindV1, ExceptionRuntimeStateV1,
+        ExceptionUseIdentityKindV1, ExceptionUseIdentityV1, ExceptionUseReceiptKeyV1,
+        ExceptionUseReceiptV1, FileOpenEventV1, FileOpenTargetV1, Id128V1, IoUringActorSnapshotV1,
+        IoUringExecutionStateKindV1, IoUringExecutionStateV1, IoUringRequestStateKindV1,
+        IoUringRequestStateV1, IoUringRestrictionStateV1, IoUringRingStateKindV1,
+        IoUringRingStateV1, IoUringSetupStateKindV1, IoUringSetupStateV1, KernelEffectFamilyV1,
+        KernelEffectOperationV1, PhysicalDecisionKindV1, PhysicalDecisionV1,
         PolicyActivationProbeMapKindV1, PolicyActivationProbeV1, PolicyGenerationModeV1,
         ProcessControlRuleKeyV1, ProfileGenerationDescriptorV1, TaskEffectAttemptFrameStateV1,
         TaskEffectAttemptFrameV1, TaskEffectAttemptStateKindV1, TaskEffectAttemptStateV1,
-        TaskLabelCandidateV1,
+        TaskLabelCandidateV1, CONTROLLER_SIGNAL_ALLOWED_MASK_V1, CONTROLLER_SIGNAL_INT_MASK_V1,
+        CONTROLLER_SIGNAL_INT_NUMBER_V1, CONTROLLER_SIGNAL_KILL_MASK_V1,
+        CONTROLLER_SIGNAL_KILL_NUMBER_V1, CONTROLLER_SIGNAL_TERM_MASK_V1,
+        CONTROLLER_SIGNAL_TERM_NUMBER_V1,
     };
 
     #[test]
@@ -1314,8 +1386,35 @@ mod tests {
         assert_eq!(PolicyActivationProbeMapKindV1::EffectDecision as u8, 1);
         assert_eq!(PolicyActivationProbeMapKindV1::MountReconciliation as u8, 7);
         assert_eq!(size_of::<EffectDefaultKeyV1>(), 40);
+        assert_eq!(align_of::<EffectDefaultScopeV1>(), 2);
+        assert_eq!(size_of::<EffectDefaultScopeV1>(), 2);
+        assert_eq!(EffectDefaultScopeV1::ClassifiedObject as u16, 0);
+        assert_eq!(EffectDefaultScopeV1::Operation as u16, 1);
+        assert_eq!(KernelEffectOperationV1::OpenPath as u16, 39);
+        assert_eq!(offset_of!(EffectDefaultKeyV1, reserved), 18);
         assert_eq!(size_of::<DeviceEffectKeyV1>(), 72);
         assert_eq!(size_of::<ProcessControlRuleKeyV1>(), 40);
+        assert_eq!(size_of::<ControllerSignalAuthorityKeyV1>(), 40);
+        assert_eq!(align_of::<ControllerSignalAuthorityKeyV1>(), 8);
+        assert_eq!(
+            offset_of!(ControllerSignalAuthorityKeyV1, target_binding_id),
+            8
+        );
+        assert_eq!(
+            offset_of!(ControllerSignalAuthorityKeyV1, target_binding_nonce),
+            24
+        );
+        assert_eq!(size_of::<ControllerSignalAuthorityV1>(), 8);
+        assert_eq!(CONTROLLER_SIGNAL_INT_NUMBER_V1, 2);
+        assert_eq!(CONTROLLER_SIGNAL_KILL_NUMBER_V1, 9);
+        assert_eq!(CONTROLLER_SIGNAL_TERM_NUMBER_V1, 15);
+        assert_eq!(CONTROLLER_SIGNAL_INT_MASK_V1, 1 << 2);
+        assert_eq!(CONTROLLER_SIGNAL_KILL_MASK_V1, 1 << 9);
+        assert_eq!(CONTROLLER_SIGNAL_TERM_MASK_V1, 1 << 15);
+        assert_eq!(
+            CONTROLLER_SIGNAL_ALLOWED_MASK_V1,
+            (1 << 2) | (1 << 9) | (1 << 15)
+        );
         assert_eq!(size_of::<BindingActivationTargetKeyV1>(), 24);
         assert_eq!(align_of::<BindingActivationTargetKeyV1>(), 8);
         assert_eq!(offset_of!(ProcessControlRuleKeyV1, operation_argument), 24);

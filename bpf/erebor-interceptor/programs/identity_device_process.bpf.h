@@ -39,6 +39,7 @@ static __noinline int identity_device_ioctl_effect(struct file *file,
     execution_set_binding_state_v1 *binding;
     profile_generation_descriptor_v1 *generation;
     physical_decision_v1 *decision;
+    physical_decision_v1 *operation_decision;
     exact_device_type_v1 device_type;
     __u32 device_major;
     __u32 device_minor;
@@ -80,6 +81,27 @@ static __noinline int identity_device_ioctl_effect(struct file *file,
         return hard_effect_result(
             config, scratch,
             effect_observation_reason_v1_unresolved_object);
+    generation = bpf_map_lookup_elem(
+        &profile_generation_descriptors,
+        &scratch->process.active_profile_generation_ref_id);
+    if (!generation_allows_existing_holder(generation) ||
+        generation->profile_generation_ref_id !=
+            scratch->process.active_profile_generation_ref_id ||
+        generation->label_epoch != config->label_epoch ||
+        !id128_equal(&generation->node_boot_id, &config->node_boot_id) ||
+        !id128_equal(&generation->profile_id, &binding->profile_id))
+        return hard_effect_result(
+            config, scratch,
+            effect_observation_reason_v1_corrupt_identity_or_generation);
+    operation_decision = operation_effect_decision(
+        scratch, scratch->process.active_profile_generation_ref_id,
+        scratch->process.active_role_id,
+        scratch->process.process_state_vector_id,
+        scratch->observation.entry_kind, binding->lifecycle_state,
+        kernel_effect_family_v1_device, kernel_effect_operation_v1_ioctl);
+    if (operation_decision)
+        return apply_effect_decision(config, scratch, generation,
+                                     operation_decision, true, false);
 
     __builtin_memset(&scratch->device_effect_key, 0,
                      sizeof(scratch->device_effect_key));
@@ -117,13 +139,6 @@ static __noinline int identity_device_ioctl_effect(struct file *file,
         decision = bpf_map_lookup_elem(&device_effect_decisions,
                                        &scratch->device_effect_key);
     }
-    generation = bpf_map_lookup_elem(
-        &profile_generation_descriptors,
-        &scratch->process.active_profile_generation_ref_id);
-    if (!generation)
-        return hard_effect_result(
-            config, scratch,
-            effect_observation_reason_v1_corrupt_identity_or_generation);
     return apply_effect_decision(config, scratch, generation, decision, true,
                                  false);
 }
@@ -277,6 +292,92 @@ static __always_inline bool effect_controller_may_read_target(
            id128_equal(&binding->node_boot_id, &config->node_boot_id);
 }
 
+static __always_inline __u64 controller_signal_mask(__u32 signal)
+{
+    if (signal == CONTROLLER_SIGNAL_INT_NUMBER_V1)
+        return CONTROLLER_SIGNAL_INT_MASK_V1;
+    if (signal == CONTROLLER_SIGNAL_KILL_NUMBER_V1)
+        return CONTROLLER_SIGNAL_KILL_MASK_V1;
+    if (signal == CONTROLLER_SIGNAL_TERM_NUMBER_V1)
+        return CONTROLLER_SIGNAL_TERM_MASK_V1;
+    return 0;
+}
+
+static __always_inline bool controller_signal_target_valid(
+    const identity_runtime_config_v1 *config,
+    const execution_set_binding_state_v1 *binding,
+    const task_label_v1 *target_label)
+{
+    if (!binding || id128_is_zero(&binding->binding_id) ||
+        id128_is_zero(&binding->binding_nonce) || !binding->root_cgroup_id ||
+        id128_is_zero(&binding->execution_set_id) ||
+        id128_is_zero(&binding->profile_id) ||
+        !binding->active_profile_generation_ref_id ||
+        (binding->lifecycle_state != binding_lifecycle_state_v1_active &&
+         binding->lifecycle_state !=
+             binding_lifecycle_state_v1_terminating) ||
+        binding->label_epoch != config->label_epoch ||
+        !id128_equal(&binding->node_boot_id, &config->node_boot_id))
+        return false;
+    if (!target_label)
+        return true;
+    if (!label_matches_runtime(target_label, config))
+        return false;
+    return id128_equal(
+               &binding->binding_id,
+               &target_label->placement.protected_root_binding_id) &&
+           id128_equal(
+               &binding->binding_nonce,
+               &target_label->placement.protected_root_binding_nonce) &&
+           id128_equal(&binding->execution_set_id,
+                       &target_label->execution_set_id);
+}
+
+static __always_inline bool controller_signal_authorized(
+    const identity_runtime_config_v1 *config,
+    struct identity_scratch_v1 *scratch, struct task_struct *target,
+    const execution_set_binding_state_v1 *target_binding, __u32 signal)
+{
+    controller_signal_authority_v1 *authority;
+    execution_set_binding_state_v1 *live_binding;
+    task_label_v1 *live_label;
+    struct cgroup *target_cgroup = NULL;
+    __u64 signal_mask = controller_signal_mask(signal);
+    __u64 controller_cgroup_id = bpf_get_current_cgroup_id();
+    int binding_lookup;
+
+    if (!signal_mask || !controller_cgroup_id)
+        return false;
+    __builtin_memset(&scratch->controller_signal_authority_key, 0,
+                     sizeof(scratch->controller_signal_authority_key));
+    scratch->controller_signal_authority_key.controller_cgroup_id =
+        controller_cgroup_id;
+    scratch->controller_signal_authority_key.target_binding_id =
+        target_binding->binding_id;
+    scratch->controller_signal_authority_key.target_binding_nonce =
+        target_binding->binding_nonce;
+    authority = bpf_map_lookup_elem(
+        &controller_signal_authorities,
+        &scratch->controller_signal_authority_key);
+    if (!authority ||
+        authority->allowed_signal_mask &
+            ~CONTROLLER_SIGNAL_ALLOWED_MASK_V1 ||
+        !(authority->allowed_signal_mask & signal_mask) ||
+        bpf_get_current_cgroup_id() != controller_cgroup_id ||
+        task_cgroup(target, &target_cgroup))
+        return false;
+    live_binding = binding_for_cgroup(target_cgroup, &binding_lookup);
+    live_label = bpf_task_storage_get(&task_labels, target, 0, 0);
+    return !binding_lookup &&
+           controller_signal_target_valid(config, live_binding, live_label) &&
+           id128_equal(
+               &live_binding->binding_id,
+               &scratch->controller_signal_authority_key.target_binding_id) &&
+           id128_equal(
+               &live_binding->binding_nonce,
+               &scratch->controller_signal_authority_key.target_binding_nonce);
+}
+
 static __noinline int identity_process_control_effect(
     struct task_struct *target, __u16 operation, __u32 operation_argument)
 {
@@ -293,6 +394,7 @@ static __noinline int identity_process_control_effect(
     execution_set_binding_state_v1 *unlabeled_target_binding;
     profile_generation_descriptor_v1 *generation;
     physical_decision_v1 *rule;
+    physical_decision_v1 *operation_decision;
     struct cgroup *cgroup = NULL;
     struct cgroup *target_cgroup = NULL;
     int binding_lookup;
@@ -309,10 +411,6 @@ static __noinline int identity_process_control_effect(
                 config, target, operation, operation_argument))
             return 0;
         target_live_label = bpf_task_storage_get(&task_labels, target, 0, 0);
-        if (target_live_label && label_matches_runtime(target_live_label, config))
-            return hard_effect_result(
-                config, scratch,
-                effect_observation_reason_v1_missing_identity);
         if (task_cgroup(target, &target_cgroup))
             return hard_effect_result(
                 config, scratch,
@@ -323,11 +421,26 @@ static __noinline int identity_process_control_effect(
             return hard_effect_result(
                 config, scratch,
                 effect_observation_reason_v1_corrupt_identity_or_generation);
-        if (unlabeled_target_binding)
+        if (!unlabeled_target_binding) {
+            if (target_live_label &&
+                label_matches_runtime(target_live_label, config))
+                return hard_effect_result(
+                    config, scratch,
+                    effect_observation_reason_v1_missing_identity);
+            return 0;
+        }
+        if (!controller_signal_target_valid(
+                config, unlabeled_target_binding, target_live_label))
             return hard_effect_result(
                 config, scratch,
-                effect_observation_reason_v1_missing_identity);
-        return 0;
+                effect_observation_reason_v1_corrupt_identity_or_generation);
+        if (operation == kernel_effect_operation_v1_signal &&
+            controller_signal_authorized(
+                config, scratch, target, unlabeled_target_binding,
+                operation_argument))
+            return 0;
+        return hard_effect_result(
+            config, scratch, effect_observation_reason_v1_missing_identity);
     }
     scratch = identity_scratch_record();
     if (!current_typed_effect_context(config, scratch, controller_label) ||
@@ -373,12 +486,6 @@ static __noinline int identity_process_control_effect(
         rule = bpf_map_lookup_elem(&process_control_rules,
                                    &scratch->process_control_rule_key);
     }
-    if (!rule || (scratch->process_control_rule_key.argument_wildcard &&
-                  rule->decision != physical_decision_kind_v1_deny))
-        return hard_effect_result(
-            config, scratch,
-            effect_observation_reason_v1_unsupported_object);
-
     scratch->observation.controller_process_state_id =
         controller_label->process_state_id;
     scratch->observation.controller_transition_version =
@@ -431,6 +538,20 @@ static __noinline int identity_process_control_effect(
         return hard_effect_result(
             config, scratch,
             effect_observation_reason_v1_corrupt_identity_or_generation);
+    operation_decision = operation_effect_decision(
+        scratch, scratch->process.active_profile_generation_ref_id,
+        scratch->process.active_role_id,
+        scratch->process.process_state_vector_id,
+        scratch->observation.entry_kind, binding->lifecycle_state,
+        kernel_effect_family_v1_privilege, operation);
+    if (operation_decision)
+        return apply_effect_decision(config, scratch, generation,
+                                     operation_decision, true, false);
+    if (!rule || (scratch->process_control_rule_key.argument_wildcard &&
+                  rule->decision != physical_decision_kind_v1_deny))
+        return hard_effect_result(
+            config, scratch,
+            effect_observation_reason_v1_unsupported_object);
     return apply_effect_decision(config, scratch, generation, rule, true,
                                  false);
 }

@@ -44,6 +44,7 @@ fn generated_crds_are_namespaced_structural_and_keep_authority_out_of_status() -
     assert!(policy.spec.versions[0].served);
     assert!(policy.spec.versions[0].storage);
     let policy_json = serde_json::to_value(policy)?;
+    assert!(serde_json::to_string(&policy_json)?.contains("\"OpenPath\""));
     assert_bounded_schema(
         policy_json
             .pointer("/spec/versions/0/schema/openAPIV3Schema/properties/spec")
@@ -235,6 +236,19 @@ fn policy_lowering_rejects_unqualified_or_ambiguous_authority() -> TestResult {
     allow_exception.spec.exception_grants[0].file_rules = vec!["allow-python-read".to_owned()];
     assert!(
         lower_kubernetes_policy(&allow_exception, TENANT_ID, CLUSTER_UID, NAMESPACE_UID).is_err()
+    );
+
+    let mut path_only_exception = resource()?;
+    path_only_exception.spec.roles[0].files[1].operations =
+        vec![mithril_control::KubernetesFileOperationV1::OpenPath];
+    assert!(
+        lower_kubernetes_policy(
+            &path_only_exception,
+            TENANT_ID,
+            CLUSTER_UID,
+            NAMESPACE_UID,
+        )
+        .is_err()
     );
     Ok(())
 }

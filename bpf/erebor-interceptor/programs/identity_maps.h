@@ -48,6 +48,7 @@ struct exception_runtime_state_bpf_v1 {
 #define EFFECT_GATE_DENY_EXCEPTION_V1 2
 #define EFFECT_GATE_FILE_OPEN_ATTEMPT_V1 4
 #define EFFECT_GATE_PATH_SUPPLIED_V1 8
+#define EFFECT_GATE_OPERATION_ONLY_V1 16
 #define MAX_CANONICAL_MOUNTS_V1 4096
 #define CANONICAL_MOUNT_CACHE_READY_V1 1
 #define CANONICAL_MOUNT_CACHE_MISS_V1 1
@@ -171,6 +172,7 @@ struct identity_scratch_v1 {
     network_socket_state_v1 network_socket_state;
     device_effect_key_v1 device_effect_key;
     process_control_rule_key_v1 process_control_rule_key;
+    controller_signal_authority_key_v1 controller_signal_authority_key;
     exception_use_receipt_key_v1 exception_receipt_key;
     exception_use_receipt_v1 exception_receipt_draft;
     io_uring_actor_snapshot_v1 io_uring_actor;
@@ -463,6 +465,13 @@ struct {
     __type(key, process_control_rule_key_v1);
     __type(value, physical_decision_v1);
 } process_control_rules SEC(".maps");
+
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, 65536);
+    __type(key, controller_signal_authority_key_v1);
+    __type(value, controller_signal_authority_v1);
+} controller_signal_authorities SEC(".maps");
 
 struct {
     __uint(type, BPF_MAP_TYPE_HASH);

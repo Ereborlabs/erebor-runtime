@@ -228,12 +228,35 @@ static __always_inline int ipc_validate_endpoint_b(
 
 static __always_inline int ipc_apply_relationship(
     identity_runtime_config_v1 *config, struct identity_scratch_v1 *scratch,
-    __u32 peer_role_id, ipc_operation_v1 operation)
+    const execution_set_binding_state_v1 *binding, __u32 peer_role_id,
+    ipc_operation_v1 operation)
 {
     physical_decision_v1 *decision;
+    physical_decision_v1 *operation_decision;
     profile_generation_descriptor_v1 *generation;
 
     scratch->observation.operation_argument = operation;
+    generation = bpf_map_lookup_elem(
+        &profile_generation_descriptors,
+        &scratch->process.active_profile_generation_ref_id);
+    if (!generation_allows_existing_holder(generation) ||
+        generation->profile_generation_ref_id !=
+            scratch->process.active_profile_generation_ref_id ||
+        generation->label_epoch != config->label_epoch ||
+        !id128_equal(&generation->node_boot_id, &config->node_boot_id) ||
+        !id128_equal(&generation->profile_id, &binding->profile_id))
+        return hard_effect_result(
+            config, scratch,
+            effect_observation_reason_v1_corrupt_identity_or_generation);
+    operation_decision = operation_effect_decision(
+        scratch, scratch->process.active_profile_generation_ref_id,
+        scratch->process.active_role_id,
+        scratch->process.process_state_vector_id,
+        scratch->observation.entry_kind, binding->lifecycle_state,
+        kernel_effect_family_v1_ipc, kernel_effect_operation_v1_ipc_access);
+    if (operation_decision)
+        return apply_effect_decision(config, scratch, generation,
+                                     operation_decision, true, false);
     __builtin_memset(&scratch->ipc_relationship_key, 0,
                      sizeof(scratch->ipc_relationship_key));
     scratch->ipc_relationship_key.actor_profile_generation_ref_id =
@@ -251,13 +274,6 @@ static __always_inline int ipc_apply_relationship(
         decision = bpf_map_lookup_elem(&ipc_relationship_decisions,
                                        &scratch->ipc_relationship_key);
     }
-    generation = bpf_map_lookup_elem(
-        &profile_generation_descriptors,
-        &scratch->process.active_profile_generation_ref_id);
-    if (!generation)
-        return hard_effect_result(
-            config, scratch,
-            effect_observation_reason_v1_corrupt_identity_or_generation);
     return apply_effect_decision(config, scratch, generation, decision, true,
                                  false);
 }
@@ -329,7 +345,8 @@ static __noinline int ipc_connected_effect(struct socket *socket,
             config, scratch,
             effect_observation_reason_v1_corrupt_identity_or_generation);
     }
-    return ipc_apply_relationship(config, scratch, peer_role_id, operation);
+    return ipc_apply_relationship(config, scratch, binding, peer_role_id,
+                                  operation);
 }
 
 static __noinline int ipc_socket_post_create_effect(struct socket *socket,
@@ -420,7 +437,7 @@ static __noinline int ipc_unix_stream_connect_effect(
     if (!accepted)
         return hard_effect_result(
             config, scratch, effect_observation_reason_v1_unsupported_object);
-    status = ipc_apply_relationship(config, scratch,
+    status = ipc_apply_relationship(config, scratch, binding,
                                     scratch->ipc_socket_state.endpoint_b_role_id,
                                     ipc_operation_v1_connect);
     if (status)

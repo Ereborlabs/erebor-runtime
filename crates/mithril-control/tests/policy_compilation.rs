@@ -517,12 +517,20 @@ fn file_namespace_operations_compile_to_closed_kernel_ids() -> mithril_control::
     else {
         unreachable!("fixture has a local effect rule")
     };
-    effect.operation_ids = ["CREATE", "LINK", "MMAP_READ", "RENAME", "SETATTR", "UNLINK"]
-        .map(str::to_owned)
-        .to_vec();
+    effect.operation_ids = [
+        "CREATE",
+        "LINK",
+        "MMAP_READ",
+        "OPEN_PATH",
+        "RENAME",
+        "SETATTR",
+        "UNLINK",
+    ]
+    .map(str::to_owned)
+    .to_vec();
 
     let compiled = PolicyCompiler.compile(&document)?;
-    assert_eq!(compiled.compiled_cells.len(), 6);
+    assert_eq!(compiled.compiled_cells.len(), 7);
     assert_eq!(
         compiled
             .compiled_cells
@@ -537,6 +545,7 @@ fn file_namespace_operations_compile_to_closed_kernel_ids() -> mithril_control::
             KernelEffectOperationV1::Create,
             KernelEffectOperationV1::Link,
             KernelEffectOperationV1::MmapRead,
+            KernelEffectOperationV1::OpenPath,
             KernelEffectOperationV1::Rename,
             KernelEffectOperationV1::Setattr,
             KernelEffectOperationV1::Unlink,

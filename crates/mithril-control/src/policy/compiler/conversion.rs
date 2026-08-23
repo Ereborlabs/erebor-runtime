@@ -55,6 +55,7 @@ impl TryFrom<&str> for CompiledOperationV1 {
 
         let kernel_id = match operation {
             "EXECUTE" => KernelEffectOperationV1::Execute,
+            "OPEN_PATH" => KernelEffectOperationV1::OpenPath,
             "OPEN_READ" => KernelEffectOperationV1::OpenRead,
             "OPEN_WRITE" => KernelEffectOperationV1::OpenWrite,
             "READ" => KernelEffectOperationV1::Read,

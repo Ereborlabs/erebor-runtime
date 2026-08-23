@@ -20,6 +20,15 @@ _Static_assert(sizeof(effect_decision_key_v1) == 48,
                "effect decision key ABI size");
 _Static_assert(sizeof(effect_default_key_v1) == 40,
                "effect default key ABI size");
+_Static_assert(effect_default_scope_v1_classified_object == 0,
+               "classified default scope ABI value");
+_Static_assert(effect_default_scope_v1_operation == 1,
+               "operation default scope ABI value");
+_Static_assert(kernel_effect_operation_v1_open_path == 39,
+               "open-path operation ABI value");
+_Static_assert(NETWORK_OPERATION_SCOPED_DESTINATION_HANDLE_V1 == UINT64_MAX,
+               "operation-scoped network handle ABI value");
+_Static_assert(FMODE_PATH == 0x00004000, "FMODE_PATH UAPI value");
 _Static_assert(sizeof(ipc_relationship_decision_key_v1) == 24,
                "IPC relationship key ABI size");
 _Static_assert(sizeof(ipc_socket_state_v1) == 216,
@@ -42,6 +51,10 @@ _Static_assert(sizeof(device_effect_key_v1) == 72,
                "device effect key ABI size");
 _Static_assert(sizeof(process_control_rule_key_v1) == 40,
                "process-control rule key ABI size");
+_Static_assert(sizeof(controller_signal_authority_key_v1) == 40,
+               "controller signal authority key ABI size");
+_Static_assert(sizeof(controller_signal_authority_v1) == 8,
+               "controller signal authority ABI size");
 _Static_assert(sizeof(physical_decision_v1) == 16,
                "physical decision ABI size");
 _Static_assert(sizeof(policy_activation_probe_v1) == 104,

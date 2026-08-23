@@ -54,7 +54,10 @@ include = [
   "ExternalRootClassV1",
   "EffectDecisionKeyV1",
   "EffectDefaultKeyV1",
+  "EffectDefaultScopeV1",
   "DeviceEffectKeyV1",
+  "ControllerSignalAuthorityKeyV1",
+  "ControllerSignalAuthorityV1",
   "ExactDeviceTypeV1",
   "EffectObservationHealthV1",
   "EffectObservationReasonV1",
@@ -183,7 +186,10 @@ include = [
 "ExternalRootClassV1" = "external_root_class_v1"
 "EffectDecisionKeyV1" = "effect_decision_key_v1"
 "EffectDefaultKeyV1" = "effect_default_key_v1"
+"EffectDefaultScopeV1" = "effect_default_scope_v1"
 "DeviceEffectKeyV1" = "device_effect_key_v1"
+"ControllerSignalAuthorityKeyV1" = "controller_signal_authority_key_v1"
+"ControllerSignalAuthorityV1" = "controller_signal_authority_v1"
 "ExactDeviceTypeV1" = "exact_device_type_v1"
 "EffectObservationHealthV1" = "effect_observation_health_v1"
 "EffectObservationReasonV1" = "effect_observation_reason_v1"

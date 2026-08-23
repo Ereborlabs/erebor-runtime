@@ -2,8 +2,9 @@ use std::collections::BTreeMap;
 use std::net::{Ipv4Addr, Ipv6Addr};
 
 use erebor_interceptor_abi::{
-    NetworkDestinationClassV1, NetworkDestinationDecisionKeyV1, NetworkIpv4LpmKeyV1,
-    NetworkIpv6LpmKeyV1, NetworkPortRangeV1, PhysicalDecisionV1, MAX_NETWORK_PORT_RANGES_V1,
+    is_classified_destination_handle_v1, NetworkDestinationClassV1,
+    NetworkDestinationDecisionKeyV1, NetworkIpv4LpmKeyV1, NetworkIpv6LpmKeyV1, NetworkPortRangeV1,
+    PhysicalDecisionV1, MAX_NETWORK_PORT_RANGES_V1,
 };
 use mithril_control::{DestinationPolicyRecordV1, NetworkProtocolV1, PolicyDocumentV1};
 use snafu::ensure;
@@ -100,6 +101,12 @@ fn destination_class(
     destination_policy_handle: u64,
 ) -> Result<NetworkDestinationClassV1> {
     ensure!(
+        is_classified_destination_handle_v1(destination_policy_handle),
+        IdentityStateSnafu {
+            reason: "network destination handle is zero or reserved".to_owned(),
+        }
+    );
+    ensure!(
         policy.port_ranges.len() <= MAX_NETWORK_PORT_RANGES_V1,
         IdentityStateSnafu {
             reason: "network port ranges exceed the kernel ABI bound".to_owned(),
@@ -173,6 +180,7 @@ mod tests {
     use erebor_interceptor_abi::{
         BindingLifecycleStateV1, NetworkDestinationClassV1, NetworkDestinationDecisionKeyV1,
         NetworkIpv4LpmKeyV1, PhysicalDecisionKindV1, PhysicalDecisionV1,
+        NETWORK_OPERATION_SCOPED_DESTINATION_HANDLE_V1,
     };
     use mithril_control::{
         DestinationPolicyRecordV1, DnsPolicyModeV1, NetworkPolicyV1, NetworkPortRangeV1,
@@ -180,7 +188,7 @@ mod tests {
     };
     use zerocopy::{FromBytes as _, TryFromBytes as _};
 
-    use super::LoweredNetworkPolicy;
+    use super::{destination_class, LoweredNetworkPolicy};
 
     fn network_document() -> crate::Result<PolicyDocumentV1> {
         let mut document = PolicyDocumentV1::parse(
@@ -238,6 +246,24 @@ mod tests {
         assert_eq!(value.destination_policy_handle, 1);
         assert_eq!(value.port_ranges[0].first, 8_443);
         assert_eq!(lowered.ipv6_classes.len(), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn destination_classes_reject_the_operation_marker() -> crate::Result<()> {
+        let document = network_document()?;
+        let policy = document
+            .network_policy
+            .as_ref()
+            .and_then(|network| network.destination_policies.first())
+            .ok_or_else(|| {
+                crate::error::IdentityStateSnafu {
+                    reason: "network test has no destination policy".to_owned(),
+                }
+                .build()
+            })?;
+
+        assert!(destination_class(policy, NETWORK_OPERATION_SCOPED_DESTINATION_HANDLE_V1).is_err());
         Ok(())
     }
 

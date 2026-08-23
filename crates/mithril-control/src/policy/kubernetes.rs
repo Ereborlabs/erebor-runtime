@@ -206,6 +206,7 @@ pub struct FileRuleV1 {
     Clone, Copy, Debug, Deserialize, Eq, JsonSchema, Ord, PartialEq, PartialOrd, Serialize,
 )]
 pub enum KubernetesFileOperationV1 {
+    OpenPath,
     OpenRead,
     OpenWrite,
     Read,
@@ -1593,6 +1594,7 @@ fn conservative_defaults(
             role_id,
             EffectFamilyV1::File,
             &[
+                "OPEN_PATH",
                 "OPEN_READ",
                 "OPEN_WRITE",
                 "READ",
@@ -1814,6 +1816,7 @@ impl From<KubernetesNetworkPortRangeV1> for NetworkPortRangeV1 {
 impl KubernetesFileOperationV1 {
     const fn internal_name(self) -> &'static str {
         match self {
+            Self::OpenPath => "OPEN_PATH",
             Self::OpenRead => "OPEN_READ",
             Self::OpenWrite => "OPEN_WRITE",
             Self::Read => "READ",

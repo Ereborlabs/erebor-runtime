@@ -359,6 +359,14 @@ static __noinline int resolved_io_uring_effect_gate(
         return hard_effect_result(
             config, scratch,
             effect_observation_reason_v1_corrupt_identity_or_generation);
+    decision = operation_effect_decision(
+        scratch, request->actor.profile_generation_ref_id,
+        request->actor.active_role_id,
+        request->actor.process_state_vector_id, request->actor.entry_kind,
+        request->actor.binding_lifecycle_state, effect_family, operation);
+    if (decision)
+        return apply_effect_decision(config, scratch, generation, decision,
+                                     false, false);
     if (BPF_CORE_READ_INTO(&file_path, file, f_path))
         return hard_effect_result(
             config, scratch, effect_observation_reason_v1_unresolved_object);
@@ -392,6 +400,8 @@ static __noinline int resolved_io_uring_effect_gate(
         scratch->effect_default.entry_kind = request->actor.entry_kind;
         scratch->effect_default.effect_family = effect_family;
         scratch->effect_default.operation = operation;
+        scratch->effect_default.reserved =
+            effect_default_scope_v1_classified_object;
         scratch->effect_default.composite_atom_id =
             scratch->observation.composite_atom_id;
         scratch->effect_default.process_state_vector_id =
@@ -442,6 +452,8 @@ static __noinline int resolved_io_uring_effect_gate(
         scratch->effect_default.effect_family =
             scratch->effect_key.effect_family;
         scratch->effect_default.operation = scratch->effect_key.operation;
+        scratch->effect_default.reserved =
+            effect_default_scope_v1_classified_object;
         scratch->effect_default.composite_atom_id =
             scratch->effect_key.composite_atom_id;
         scratch->effect_default.process_state_vector_id =
