@@ -76,26 +76,48 @@ assert_absent() {
   fi
 }
 
-assert_can_i() {
+assert_cluster_access() {
   local expected=$1
-  shift
-  local allowed
-  local status
+  local user=$2
+  local verb=$3
+  local group=$4
+  local resource=$5
+  local subresource=${6:-}
+  local request
+  local response
 
-  # Quiet mode defines the exit status as the authorization decision.
-  if kubectl auth can-i --quiet "$@"; then
-    allowed=yes
-  else
-    status=$?
-    if [[ $status -eq 1 ]]; then
-      allowed=no
-    else
-      echo "RBAC query failed with status $status: $*" >&2
-      return "$status"
-    fi
-  fi
-  [[ $allowed == "$expected" ]] || {
-    echo "RBAC query returned $allowed; expected $expected: $*" >&2
+  request=$(jq -n \
+    --arg user "$user" \
+    --arg verb "$verb" \
+    --arg group "$group" \
+    --arg resource "$resource" \
+    --arg subresource "$subresource" '
+      {
+        apiVersion: "authorization.k8s.io/v1",
+        kind: "SubjectAccessReview",
+        spec: {
+          user: $user,
+          resourceAttributes: ({
+            verb: $verb,
+            group: $group,
+            resource: $resource
+          } + if $subresource == "" then {} else {
+            subresource: $subresource
+          } end)
+        }
+      }
+    ')
+  response=$(kubectl create --raw \
+    /apis/authorization.k8s.io/v1/subjectaccessreviews -f - <<<"$request")
+
+  # A completed review distinguishes an RBAC denial from a failed API call.
+  jq -e --argjson expected "$expected" '
+    .apiVersion == "authorization.k8s.io/v1" and
+    .kind == "SubjectAccessReview" and
+    .status.allowed == $expected and
+    ((.status.evaluationError // "") == "")
+  ' <<<"$response" >/dev/null || {
+    echo "RBAC review returned an unexpected decision: $user $verb $resource" >&2
     return 1
   }
 }
@@ -172,19 +194,16 @@ for node_name in "${eligible_nodes[@]}"; do
   remove_marker "$node_name" "$failed_pod.started"
 done
 
-assert_can_i yes list workloadprotectionprofiles.mithril.erebor.dev \
-  --all-namespaces \
-  --as=system:serviceaccount:$system_namespace:mithril-control
-assert_can_i yes patch workloadprotectionprofiles.mithril.erebor.dev \
-  --subresource=status --all-namespaces \
-  --as=system:serviceaccount:$system_namespace:mithril-control
-assert_can_i yes patch nodes \
-  --as=system:serviceaccount:$system_namespace:mithril-control
-assert_can_i no update workloadprotectionprofiles.mithril.erebor.dev \
-  --all-namespaces \
-  --as=system:serviceaccount:$system_namespace:mithril-control
-assert_can_i no get nodes \
-  --as=system:serviceaccount:$system_namespace:mithril-node
+control_subject=system:serviceaccount:$system_namespace:mithril-control
+node_subject=system:serviceaccount:$system_namespace:mithril-node
+assert_cluster_access true "$control_subject" list mithril.erebor.dev \
+  workloadprotectionprofiles
+assert_cluster_access true "$control_subject" patch mithril.erebor.dev \
+  workloadprotectionprofiles status
+assert_cluster_access true "$control_subject" patch "" nodes
+assert_cluster_access false "$control_subject" update mithril.erebor.dev \
+  workloadprotectionprofiles
+assert_cluster_access false "$node_subject" get "" nodes
 
 assert_absent namespace "$scenario_namespace"
 assert_absent runtimeclass "$runtime_class"
