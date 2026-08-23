@@ -25,6 +25,8 @@ service NodePolicy {
   rpc Inventory(PolicyInventoryRequest) returns (PolicyInventory);
   rpc Fetch(PolicyChunkRequest) returns (PolicyChunk);
   rpc Acknowledge(PolicyAcknowledgementRequest) returns (PolicyAcknowledgementAccepted);
+  rpc InventoryExceptions(ExceptionInventoryRequest) returns (ExceptionInventory);
+  rpc AcknowledgeException(ExceptionAcknowledgementRequest) returns (PolicyAcknowledgementAccepted);
 }
 
 // Exposes bounded counters and booleans without policy or evidence payloads.
@@ -88,6 +90,16 @@ message PolicyChunkRequest {
 message PolicyAcknowledgementRequest {
   NodeSessionContext session = 1;
   PolicyActivationAcknowledgement acknowledgement = 2;
+}
+
+message ExceptionInventoryRequest {
+  NodeSessionContext session = 1;
+  repeated string durable_candidate_content_ids = 2;
+}
+
+message ExceptionAcknowledgementRequest {
+  NodeSessionContext session = 1;
+  ExceptionActivationAcknowledgement acknowledgement = 2;
 }
 
 message AdministrativeExecResolutionStreamRequest {
@@ -249,6 +261,26 @@ message PolicyActivationAcknowledgement {
 message PolicyAcknowledgementAccepted {
   uint64 control_commit_index = 1;
   string rollout_state = 2;
+}
+
+// Carries one signed candidate whose exact target names the authenticated node.
+message ExceptionInventory {
+  bool candidate_available = 1;
+  string candidate_content_id = 2;
+  string operation = 3;
+  bytes candidate_json = 4;
+}
+
+// Reports runtime state without allowing the node to redefine the signed bounds.
+message ExceptionActivationAcknowledgement {
+  string tenant_id = 1;
+  string candidate_content_id = 2;
+  string exception_source_revision_id = 3;
+  string state = 4;
+  uint32 consumed_uses = 5;
+  uint64 transition_version = 6;
+  string reason_code = 7;
+  int64 observed_utc_ns = 8;
 }
 
 message ControlConvergenceHealth {

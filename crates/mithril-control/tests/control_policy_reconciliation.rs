@@ -286,6 +286,21 @@ fn exception_is_bounded_to_one_active_container_and_replays_revocation() -> Test
             .workload_binding_generation_digest,
         inventory[0].workload_binding_generation_digest
     );
+    assert!(store
+        .next_exception_candidate_for_node("node-b", &[])?
+        .is_none());
+    assert_eq!(
+        store
+            .next_exception_candidate_for_node("node-a", &[])?
+            .map(|candidate| candidate.candidate_content_id),
+        Some(activated.candidate.candidate_content_id.clone())
+    );
+    assert!(store
+        .next_exception_candidate_for_node(
+            "node-a",
+            std::slice::from_ref(&activated.candidate.candidate_content_id),
+        )?
+        .is_none());
     let commit_index = store.commit_index();
     let duplicate = owner.reconcile_exception(&resource, NAMESPACE_UID, &inventory, NOW + 4)?;
     assert_eq!(duplicate.source_revision, activated.source_revision);
@@ -366,6 +381,51 @@ fn exception_is_bounded_to_one_active_container_and_replays_revocation() -> Test
     drop(restarted);
     drop(reopened);
     assert!(ControlStore::open(directory.path()).is_ok());
+    Ok(())
+}
+
+#[test]
+fn activation_delivery_covers_the_complete_bounded_authority_window() -> TestResult {
+    let directory = TempDir::new()?;
+    let store = ControlStore::open(directory.path())?;
+    let owner = make_owner(store);
+    let policy = policy()?;
+    let policy_resource = resource(&policy, "profile", OBJECT_UID, 1, false)?;
+    let initial = owner.reconcile(
+        &policy_resource,
+        NAMESPACE_UID,
+        &inventory(&"1".repeat(64)),
+        NOW,
+    )?;
+    let profile_id = initial.bundles[0]
+        .profile_artifact
+        .policy_document
+        .metadata
+        .profile_id
+        .clone();
+    let inventory = kubernetes_inventory(
+        &initial.source_revision.policy_source_revision_id,
+        &profile_id,
+    )?;
+    let bound = owner.reconcile(&policy_resource, NAMESPACE_UID, &inventory, NOW + 1)?;
+    owner.rollout_owner().acknowledge(acknowledgement(
+        &bound.bundles[0],
+        PolicyActivationStateV1::Active,
+        NOW + 2,
+    )?)?;
+    let mut exception = exception_resource(EXCEPTION_UID, false)?;
+    exception.spec.requested_duration = "2m".to_owned();
+    let activated = owner.reconcile_exception(&exception, NAMESPACE_UID, &inventory, NOW + 3)?;
+
+    assert_eq!(
+        activated.candidate.expires_utc_ns,
+        activated.candidate.valid_until_utc_ns
+    );
+    activated.candidate.verify(
+        &SigningKey::from_bytes(&[7; 32]).verifying_key(),
+        "node-a",
+        NOW + 90_000_000_000,
+    )?;
     Ok(())
 }
 
