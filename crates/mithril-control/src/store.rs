@@ -538,7 +538,12 @@ impl ControlStore {
             .build()
         })?;
         // The transition version is the compare-and-swap guard for concurrent or stale replies.
-        if rollout_state.transition_version != current.transition_version.saturating_add(1)
+        let expected_transition_version = checked_store_increment(
+            current.transition_version,
+            &inner.root,
+            "the rollout transition version is exhausted",
+        )?;
+        if rollout_state.transition_version != expected_transition_version
             || rollout_state.target != current.target
             || rollout_state.desired_candidate_content_id != current.desired_candidate_content_id
             || rollout_state.policy_source_revision_id != current.policy_source_revision_id
@@ -621,7 +626,11 @@ impl ControlStore {
                 .fail();
             }
         }
-        let next = cursor.contiguous_cursor.saturating_add(1);
+        let next = checked_store_increment(
+            cursor.contiguous_cursor,
+            &inner.root,
+            "the evidence cursor is exhausted",
+        )?;
         if batch.first_cursor != next {
             // Persist bounded reordering without advancing the contiguous acknowledgement.
             if batch.last_cursor
@@ -646,17 +655,20 @@ impl ControlStore {
 
         // Promote the new batch and every now-contiguous pending batch in one commit.
         let mut batches = vec![batch];
-        let mut next = batches[0].last_cursor.saturating_add(1);
-        while let Some(pending) = inner
-            .state
-            .pending_evidence_batches
-            .get(&EvidencePendingKeyV1 {
-                identity: identity.clone(),
-                first_cursor: next,
-            })
-            .cloned()
-        {
-            next = pending.last_cursor.saturating_add(1);
+        let mut next = batches[0].last_cursor.checked_add(1);
+        while let Some(first_cursor) = next {
+            let Some(pending) = inner
+                .state
+                .pending_evidence_batches
+                .get(&EvidencePendingKeyV1 {
+                    identity: identity.clone(),
+                    first_cursor,
+                })
+                .cloned()
+            else {
+                break;
+            };
+            next = pending.last_cursor.checked_add(1);
             batches.push(pending);
         }
         commit(
@@ -1176,14 +1188,11 @@ impl From<&PolicySourceRevisionV1> for PolicyObjectKeyV1 {
 }
 
 fn commit(inner: &mut ControlStoreInner, transaction: ControlTransactionV1) -> Result<u64> {
-    let commit_index = inner.state.commit_index.saturating_add(1);
-    if commit_index == 0 {
-        return ControlStoreSnafu {
-            path: inner.root.clone(),
-            reason: "the Control commit index is exhausted".to_owned(),
-        }
-        .fail();
-    }
+    let commit_index = checked_store_increment(
+        inner.state.commit_index,
+        &inner.root,
+        "the Control commit index is exhausted",
+    )?;
     let mut record = ControlCommitV1 {
         schema_version: STORE_SCHEMA_VERSION,
         commit_index,
@@ -1204,7 +1213,11 @@ fn commit(inner: &mut ControlStoreInner, transaction: ControlTransactionV1) -> R
 }
 
 fn verify_commit(commit: &ControlCommitV1, state: &ControlStoreState, path: &Path) -> Result<()> {
-    let expected_index = state.commit_index.saturating_add(1);
+    let expected_index = checked_store_increment(
+        state.commit_index,
+        path,
+        "the Control commit index is exhausted",
+    )?;
     if commit.schema_version != STORE_SCHEMA_VERSION
         || commit.commit_index != expected_index
         || commit.previous_commit_digest != state.last_commit_digest
@@ -1217,6 +1230,16 @@ fn verify_commit(commit: &ControlCommitV1, state: &ControlStoreState, path: &Pat
         .fail();
     }
     Ok(())
+}
+
+fn checked_store_increment(value: u64, path: &Path, reason: &str) -> Result<u64> {
+    value.checked_add(1).ok_or_else(|| {
+        ControlStoreSnafu {
+            path: path.to_owned(),
+            reason: reason.to_owned(),
+        }
+        .build()
+    })
 }
 
 fn apply_transaction(
@@ -1675,7 +1698,12 @@ fn apply_accepted_evidence(
             .records
             .first()
             .and_then(|record| record.previous_record_sha256.as_slice().try_into().ok());
-        if batch.first_cursor != cursor.contiguous_cursor.saturating_add(1)
+        if batch.first_cursor
+            != checked_store_increment(
+                cursor.contiguous_cursor,
+                path,
+                "the evidence cursor is exhausted",
+            )?
             || supplied_previous != Some(cursor.last_record_sha256)
         {
             return ControlStoreSnafu {
@@ -1930,4 +1958,18 @@ fn write_commit(path: &Path, commit: &ControlCommitV1) -> Result<()> {
         .context(IoSnafu { path: parent })?
         .sync_all()
         .context(IoSnafu { path: parent })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    #[test]
+    fn durable_sequence_increment_rejects_exhaustion() {
+        assert_eq!(
+            super::checked_store_increment(41, Path::new("store"), "exhausted").ok(),
+            Some(42)
+        );
+        assert!(super::checked_store_increment(u64::MAX, Path::new("store"), "exhausted").is_err());
+    }
 }

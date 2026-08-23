@@ -631,6 +631,17 @@ impl PolicyRolloutOwner {
     ) -> Result<(Vec<PolicyBundleV1>, Vec<PolicyRolloutStateV1>)> {
         let mut bundles = Vec::with_capacity(snapshot.targets.len());
         let mut rollout_states = Vec::with_capacity(snapshot.targets.len());
+        let valid_until_utc_ns = now_utc_ns
+            .checked_add(self.candidate_validity_ns)
+            .ok_or_else(|| {
+                PolicyValidationSnafu {
+                    policy_id: &source.policy_source_revision_id,
+                    code: "CFG_POLICY_CANDIDATE_VALIDITY",
+                    reason: "the candidate validity interval exceeds the signed time range"
+                        .to_owned(),
+                }
+                .build()
+            })?;
         for target in &snapshot.targets {
             // Distribution ordering is per node and profile, separate from issuer ordering.
             let sequence = self.store.next_distribution_sequence(
@@ -668,7 +679,7 @@ impl PolicyRolloutOwner {
                 self.distribution_sequence_epoch,
                 sequence,
                 now_utc_ns,
-                now_utc_ns.saturating_add(self.candidate_validity_ns),
+                valid_until_utc_ns,
                 self.signing_key_id.to_string(),
                 &self.signing_key,
             )?;
@@ -763,12 +774,20 @@ impl PolicyRolloutOwner {
             PolicyActivationStateV1::Stale => PolicyRolloutStatusV1::Stale,
             PolicyActivationStateV1::Unknown => PolicyRolloutStatusV1::Unknown,
         };
+        let transition_version = current.transition_version.checked_add(1).ok_or_else(|| {
+            PolicyValidationSnafu {
+                policy_id: &acknowledgement.policy_source_revision_id,
+                code: "CFG_POLICY_TRANSITION_EXHAUSTED",
+                reason: "the rollout transition version is exhausted".to_owned(),
+            }
+            .build()
+        })?;
         let next = PolicyRolloutStateV1 {
             state,
             latest_acknowledgement_content_id: Some(
                 acknowledgement.acknowledgement_content_id.clone(),
             ),
-            transition_version: current.transition_version.saturating_add(1),
+            transition_version,
             updated_utc_ns: acknowledgement.observed_utc_ns,
             ..current
         };
