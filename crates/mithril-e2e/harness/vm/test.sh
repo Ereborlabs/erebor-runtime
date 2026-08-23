@@ -23,6 +23,15 @@ two_node_help=$("$directory/two-node-network.sh" --help 2>&1)
 [[ $two_node_help == *--keep-vms* ]]
 convergence_help=$("$directory/two-node-convergence.sh" --help 2>&1)
 [[ $convergence_help == *--keep-vms* ]]
+[[ $convergence_help == *--manual-environment* ]]
+
+set +e
+convergence_without_mount=$("$directory/two-node-convergence.sh" \
+  --manual-environment 2>&1)
+status=$?
+set -e
+[[ $status -eq 2 && $convergence_without_mount == \
+  "the manual environment requires MITHRIL_VM_SOURCE_MOUNT="* ]]
 
 set +e
 manual_without_mount=$("$directory/run.sh" --manual 2>&1)
@@ -34,7 +43,8 @@ set +e
 manual_usage=$("$directory/manual.sh" 2>&1)
 status=$?
 set -e
-[[ $status -eq 2 && $manual_usage == "usage: $directory/manual.sh {start|ssh|destroy}" ]]
+[[ $status -eq 2 && $manual_usage == \
+  "usage: $directory/manual.sh {start|ssh|destroy|start-convergence|ssh-convergence|destroy-convergence}" ]]
 
 manual_state=$test_root/manual-state
 mkdir -p "$manual_state/mithril-manual-vm"
@@ -44,6 +54,16 @@ manual_existing=$(XDG_STATE_HOME=$manual_state "$directory/manual.sh" start 2>&1
 status=$?
 set -e
 [[ $status -eq 2 && $manual_existing == *"manual VM already exists"* ]]
+
+mkdir -p "$manual_state/mithril-convergence-manual-vm"
+touch "$manual_state/mithril-convergence-manual-vm/retained-vms.txt"
+set +e
+convergence_existing=$(XDG_STATE_HOME=$manual_state \
+  "$directory/manual.sh" start-convergence 2>&1)
+status=$?
+set -e
+[[ $status -eq 2 && $convergence_existing == \
+  *"convergence environment already exists"* ]]
 
 set +e
 invalid_effect_mode=$(MITHRIL_VM_CRI_EFFECT_MODE=invalid \

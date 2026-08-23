@@ -9,13 +9,14 @@ repo_root=$(cd -- "$directory/../../../.." && pwd)
 provider=$directory/providers/libvirt.sh
 output_directory=
 keep_vms=false
+manual_environment=false
 k3s_version=${MITHRIL_VM_K3S_VERSION:-v1.35.5+k3s1}
 reuse_images=${MITHRIL_VM_REUSE_IMAGES:-false}
 system_namespace=mithril-system
 workload_namespace=mithril-convergence
 
 usage() {
-  echo "usage: $0 [--provider PATH] [--output-directory PATH] [--keep-vms]" >&2
+  echo "usage: $0 [--provider PATH] [--output-directory PATH] [--keep-vms] [--manual-environment]" >&2
 }
 
 while (($#)); do
@@ -31,6 +32,11 @@ while (($#)); do
       shift 2
       ;;
     --keep-vms)
+      keep_vms=true
+      shift
+      ;;
+    --manual-environment)
+      manual_environment=true
       keep_vms=true
       shift
       ;;
@@ -67,6 +73,11 @@ done
   echo "the two-node convergence fixture requires an x86_64 host" >&2
   exit 2
 }
+if [[ $manual_environment == true &&
+      ${MITHRIL_VM_SOURCE_MOUNT:-} != "$repo_root" ]]; then
+  echo "the manual environment requires MITHRIL_VM_SOURCE_MOUNT=$repo_root" >&2
+  exit 2
+fi
 
 if [[ -z $output_directory ]]; then
   output_directory=$repo_root/target/mithril-two-node-convergence/$(date -u +%Y%m%dT%H%M%SZ)-$$
@@ -98,7 +109,7 @@ cleanup() {
   local status=$?
   trap - EXIT
   set +e
-  if [[ $cluster_created == true && -r $kubeconfig ]]; then
+  if [[ $cluster_created == true && -r $kubeconfig && $manual_environment == false ]]; then
     helm --kubeconfig "$kubeconfig" uninstall mithril -n "$system_namespace" \
       >/dev/null 2>&1
   fi
@@ -114,6 +125,7 @@ cleanup() {
       printf 'node_b=%q\nnode_b_work_directory=%q\n' "$vm_b" "$work_b"
       printf 'provider=%q\n' "$provider"
       printf 'export MITHRIL_VM_KNOWN_HOSTS=%q\n' "$MITHRIL_VM_KNOWN_HOSTS"
+      printf 'manual_environment=%q\n' "$manual_environment"
     } >"$output_directory/retained-vms.txt"
   else
     [[ $work_a == /tmp/mithril-vm-test.* ]] && rm -rf -- "$work_a"
@@ -510,6 +522,21 @@ remote_kubectl -n "$system_namespace" rollout status daemonset/mithril-node \
   --timeout=300s >/dev/null
 wait_node_projection "$node_a_name" true false
 wait_node_projection "$node_b_name" true false
+
+if [[ $manual_environment == true ]]; then
+  manual_env=$work_a/mithril-convergence-manual.env
+  {
+    printf 'MITHRIL_MANUAL_SOURCE=%q\n' /mnt/mithril-source
+    printf 'MITHRIL_BIN_DIRECTORY=%q\n' /mnt/mithril-source/target/debug
+    printf 'MITHRIL_SYSTEM_NAMESPACE=%q\n' "$system_namespace"
+  } >"$manual_env"
+  "$provider" put "$vm_a" "$manual_env" "$remote_a/mithril-convergence-manual.env"
+  "$provider" run "$vm_a" sudo install -m 0444 \
+    "$remote_a/mithril-convergence-manual.env" \
+    /var/tmp/mithril-convergence-manual.env
+  echo "Two-node manual environment ready."
+  exit 0
+fi
 
 assert_can_i yes list workloadprotectionprofiles.mithril.erebor.dev \
   --all-namespaces --as=system:serviceaccount:$system_namespace:mithril-control
