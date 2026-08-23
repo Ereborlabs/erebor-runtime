@@ -520,7 +520,12 @@ impl PolicyDesiredStateOwner {
             };
             tokio::join!(
                 reconcile_cluster(client.clone(), self.clone(), control.clone()),
-                super::reconcile_bound_kubernetes_workloads(client, self.clone(), control.clone()),
+                super::KubernetesWorkloadInventoryOwner::new(
+                    client,
+                    self.clone(),
+                    control.clone(),
+                )
+                .run(),
             );
         }
     }
