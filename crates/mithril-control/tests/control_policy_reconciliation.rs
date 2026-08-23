@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use ed25519_dalek::SigningKey;
@@ -37,12 +37,17 @@ fn resource(
     deleting: bool,
 ) -> TestResult<WorkloadProtectionProfile> {
     let digest = canonical_policy_spec_digest(document)?;
+    let resource_version = if deleting {
+        format!("opaque-{generation}-deleting")
+    } else {
+        format!("opaque-{generation}")
+    };
     let mut metadata = json!({
         "name": name,
         "namespace": "tenant-a",
         "uid": uid,
         "generation": generation,
-        "resourceVersion": format!("opaque-{generation}"),
+        "resourceVersion": resource_version,
         "annotations": {SUBMITTED_SPEC_DIGEST_ANNOTATION: digest},
     });
     if deleting {
@@ -481,7 +486,7 @@ fn deletion_names_exact_predecessor_and_recreate_gets_a_new_source_identity() ->
         NOW,
     )?;
     let retiring = owner.reconcile(
-        &resource(&policy, "profile", OBJECT_UID, 2, true)?,
+        &resource(&policy, "profile", OBJECT_UID, 1, true)?,
         NAMESPACE_UID,
         &[],
         NOW + 1,
@@ -530,6 +535,37 @@ fn deletion_names_exact_predecessor_and_recreate_gets_a_new_source_identity() ->
         recreated.bundles[0].candidate.distribution_sequence
             > retiring.bundles[0].candidate.distribution_sequence
     );
+    Ok(())
+}
+
+#[test]
+fn completed_relist_retires_a_source_that_is_absent_from_the_snapshot() -> TestResult {
+    let directory = TempDir::new()?;
+    let store = ControlStore::open(directory.path())?;
+    let owner = make_owner(store);
+    let accepted = owner.reconcile(
+        &resource(&policy()?, "profile", OBJECT_UID, 1, false)?,
+        NAMESPACE_UID,
+        &inventory(&"1".repeat(64)),
+        NOW,
+    )?;
+
+    let retired = owner.retire_missing_sources(&BTreeSet::new(), &[], NOW + 1)?;
+    assert_eq!(retired.len(), 1);
+    assert_eq!(
+        retired[0].bundles[0].candidate.operation,
+        PolicyDeliveryOperationV1::RetireToRestrictiveTerminal
+    );
+    assert_eq!(
+        retired[0].bundles[0]
+            .candidate
+            .predecessor_candidate_content_id
+            .as_deref(),
+        Some(accepted.bundles[0].candidate.candidate_content_id.as_str())
+    );
+    assert!(owner
+        .retire_missing_sources(&BTreeSet::new(), &[], NOW + 2)?
+        .is_empty());
     Ok(())
 }
 
@@ -635,7 +671,7 @@ fn two_node_create_update_restart_delete_and_recreate_preserve_provenance() -> T
     assert_eq!(restarted.status.rollout_counts.active, 1);
     assert_eq!(restarted.status.rollout_counts.pending, 1);
 
-    let deleting_resource = resource(&first_policy, "profile", OBJECT_UID, 3, true)?;
+    let deleting_resource = resource(&first_policy, "profile", OBJECT_UID, 2, true)?;
     let retiring = restarted_owner.reconcile(&deleting_resource, NAMESPACE_UID, &[], NOW + 7)?;
     assert_eq!(retiring.bundles.len(), 2);
     assert!(retiring.bundles.iter().all(|bundle| {
