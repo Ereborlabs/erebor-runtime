@@ -2,6 +2,7 @@ apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: mithril-node
+# Nodes have no Kubernetes API authority. Control performs all API operations.
 automountServiceAccountToken: false
 ---
 apiVersion: apps/v1
@@ -24,6 +25,7 @@ spec:
       hostPID: true
       terminationGracePeriodSeconds: 10
       tolerations:
+        # Only mithril-node can start while its eligible Node remains quarantined.
         - key: mithril.erebor.dev/not-ready
           operator: Exists
           effect: NoSchedule
@@ -36,6 +38,7 @@ spec:
 {{ toYaml . | indent 8 }}
 {{- end }}
 {{- if .Values.node.runtimeHook.install }}
+      # The init container installs the host runtime hook before the node reports readiness.
       initContainers:
         - name: install-runtime-hook
           image: {{ .Values.node.image | quote }}
@@ -69,6 +72,7 @@ spec:
           imagePullPolicy: {{ .Values.node.imagePullPolicy }}
           args: ["--config", "/etc/mithril/node.json"]
           env:
+            # The downward API binds the node session to the scheduler-visible Node name.
             - name: MITHRIL_KUBERNETES_NODE_NAME
               valueFrom:
                 fieldRef:

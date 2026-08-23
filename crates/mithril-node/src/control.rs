@@ -94,6 +94,7 @@ impl NodeControlConnector {
             .await
             .context(ControlRpcSnafu)?;
 
+        // Install and acknowledge trust before this session reports admission readiness.
         let mut trust_stream = NodeTrustClient::new(channel.clone())
             .watch(Request::new(identity.clone()))
             .await
@@ -225,6 +226,7 @@ impl ControlConnection {
         active_candidate_content_id: Option<&str>,
         durable_bundle_digests: Vec<String>,
     ) -> Result<PolicyInventory> {
+        // The active candidate and durable bundle set let Control avoid unnecessary transfer.
         self.policy
             .inventory(Request::new(PolicyInventoryRequest {
                 session: Some(self.identity.clone()),

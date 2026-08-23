@@ -20,6 +20,7 @@ pub struct TrustGenerationAcknowledgementV1 {
 }
 
 #[derive(Clone)]
+/// Owns the current trust generation, durable acknowledgements, and node subscribers.
 pub struct TrustBundleOwner {
     store: Option<ControlStore>,
     state: Arc<Mutex<TrustBundleState>>,
@@ -33,6 +34,7 @@ struct TrustBundleState {
 
 impl TrustBundleOwner {
     pub fn open(store: ControlStore, configured: TrustGenerationV1) -> Result<Self> {
+        // Durable state can accept the configured generation or reject it as a rollback.
         store.install_trust_generation(configured)?;
         let current = store.current_trust_generation()?.ok_or_else(|| {
             ControlStoreSnafu {
@@ -71,12 +73,14 @@ impl TrustBundleOwner {
             }
             .build()
         })?;
+        // Persist the generation before any connected node can observe it.
         store.install_trust_generation(generation.clone())?;
         let mut state = self.lock()?;
         if generation == state.current {
             return Ok(());
         }
         state.current = generation.clone();
+        // A new generation invalidates all acknowledgements from the prior generation.
         state
             .acknowledgements
             .retain(|_, acknowledged| acknowledged == &generation);
@@ -93,6 +97,7 @@ impl TrustBundleOwner {
     pub fn subscribe(&self) -> Result<mpsc::Receiver<TrustGenerationV1>> {
         let (sender, receiver) = mpsc::channel(TRUST_SUBSCRIBER_CAPACITY);
         let mut state = self.lock()?;
+        // Send current trust first so a new session cannot miss an earlier rotation event.
         sender.try_send(state.current.clone()).map_err(|error| {
             ControlStoreSnafu {
                 path: std::path::PathBuf::from("<trust-subscriber>"),
@@ -125,6 +130,7 @@ impl TrustBundleOwner {
             .fail();
         }
         if let Some(store) = &self.store {
+            // Persist the exact boot and label epoch before the session gains policy access.
             store.acknowledge_trust_generation(TrustGenerationAcknowledgementV1 {
                 node_id: node_id.to_owned(),
                 node_boot_id,

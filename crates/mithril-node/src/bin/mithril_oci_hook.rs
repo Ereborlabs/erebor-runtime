@@ -55,6 +55,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     if state.pid == 0 || !(32..=128).contains(&state.id.len()) {
         return Err(invalid_data("OCI state has no valid container identity").into());
     }
+    // OCI prestart keeps the initial process held while the node verifies and publishes binding.
     let cgroup_path = process_cgroup_path(state.pid, &cli.cgroup_root)?;
     let client = RuntimeAdmissionClient::new(cli.socket, Duration::from_millis(cli.timeout_ms))?;
     let response = client
@@ -91,6 +92,7 @@ fn process_cgroup_path(pid: u32, root: &Path) -> io::Result<PathBuf> {
     }) {
         return Err(invalid_data("OCI initial process cgroup is not clean"));
     }
+    // Canonicalize against the fixed cgroup2 root before sending the path to the node.
     std::fs::canonicalize(root.join(relative))
 }
 

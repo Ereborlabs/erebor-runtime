@@ -135,6 +135,7 @@ impl NodePolicyGenerationOwner {
         node_boot_id: Id128V1,
         label_epoch: u64,
     ) -> Result<u64> {
+        // The allocator reconciles durable handles with live maps before it returns a new handle.
         GenerationHandleAllocator::load(
             config.state_directory.join("generation-handles-v1.json"),
             host,
@@ -150,6 +151,7 @@ impl NodePolicyGenerationOwner {
         profile_generation_ref_id: u64,
     ) -> Result<PolicyActivationReceiptV1> {
         let profile_id = parse_id("profile_id", profile_id)?;
+        // Read the published pointer and descriptor; staged bytes do not prove activation.
         let active = host
             .lookup_map("active_profile_generations", profile_id.as_bytes())
             .context(InterceptorSnafu)?
@@ -187,6 +189,7 @@ impl NodePolicyGenerationOwner {
                 reason: "the activated generation descriptor is not current",
             }
         );
+        // Bind the acknowledgement to exact descriptor bytes and the controlled probe domain.
         let readback_digest = format!("{:x}", Sha256::digest(&descriptor));
         let mut probe = Sha256::new();
         probe.update(b"MITHRIL-POLICY-CONTROLLED-PROBE-V1\0");
@@ -2877,6 +2880,7 @@ fn activate_profile(
             }
         );
     }
+    // Scheduled placeholders can activate before a live cgroup exists; static bindings cannot.
     ensure!(
         activation.bindings.iter().all(|(binding_id, target)| {
             !target.requires_live_cgroup || live_bindings.contains_key(binding_id)

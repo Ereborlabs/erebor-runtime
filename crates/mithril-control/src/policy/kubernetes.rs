@@ -23,6 +23,7 @@ pub const MAX_POLICY_SCHEMA_ITEMS: u64 = 32_768;
 pub const MAX_POLICY_SCHEMA_STRING_BYTES: u64 = 4_096;
 pub const MAX_POLICY_SCHEMA_MAP_ENTRIES: u64 = 4_096;
 
+// Separate digest domains prevent one valid artifact digest from naming another artifact type.
 const SOURCE_REVISION_DOMAIN: &[u8] = b"MITHRIL-POLICY-SOURCE-REVISION-V1\0";
 const TARGET_SNAPSHOT_DOMAIN: &[u8] = b"MITHRIL-POLICY-TARGET-SNAPSHOT-V1\0";
 const CANDIDATE_DOMAIN: &[u8] = b"MITHRIL-POLICY-CANDIDATE-V1\0";
@@ -39,6 +40,7 @@ const ACKNOWLEDGEMENT_DOMAIN: &[u8] = b"MITHRIL-POLICY-ACTIVATION-ACK-V1\0";
     shortname = "wpp"
 )]
 #[serde(deny_unknown_fields)]
+/// Defines the CRD desired state. Control creates signed node artifacts from this value.
 pub struct WorkloadProtectionProfileSpec {
     #[serde(flatten)]
     pub policy: PolicyDocumentV1,
@@ -46,6 +48,7 @@ pub struct WorkloadProtectionProfileSpec {
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
+/// Projects Control state for operators. This status does not authorize node activation.
 pub struct WorkloadProtectionProfileStatusV1 {
     pub observed_generation: u64,
     pub source_revision_id: Option<String>,
@@ -112,6 +115,7 @@ pub enum PolicySourceStateV1 {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
+/// Binds one accepted Kubernetes object generation to canonical policy bytes.
 pub struct PolicySourceRevisionV1 {
     pub schema_version: u32,
     pub tenant_id: String,
@@ -132,6 +136,7 @@ pub struct PolicySourceRevisionV1 {
 
 #[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(deny_unknown_fields)]
+/// Names all exact workload bindings for one node in an immutable snapshot.
 pub struct PolicyTargetV1 {
     pub tenant_id: String,
     pub cluster_uid: String,
@@ -143,6 +148,7 @@ pub struct PolicyTargetV1 {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
+/// Commits the complete sorted target set before Control creates node candidates.
 pub struct PolicyTargetSnapshotV1 {
     pub policy_source_revision_id: String,
     pub signed_profile_digest: String,
@@ -161,6 +167,7 @@ pub enum PolicyDeliveryOperationV1 {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
+/// Carries one signed, monotonic operation for one exact node target.
 pub struct PolicyDeliveryCandidateV1 {
     pub schema_version: u32,
     pub tenant_id: String,
@@ -192,6 +199,7 @@ pub enum PolicyActivationStateV1 {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
+/// Records a node result after mTLS session identity is added by Control.
 pub struct PolicyActivationAcknowledgementV1 {
     pub acknowledgement_content_id: String,
     pub tenant_id: String,
@@ -238,6 +246,7 @@ pub struct PolicyRolloutStateV1 {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
+/// Keeps the signed profile and its node-specific delivery candidate in one digest domain.
 pub struct PolicyBundleV1 {
     pub schema_version: u32,
     pub candidate: PolicyDeliveryCandidateV1,
@@ -265,6 +274,7 @@ pub fn policy_custom_resource_definition() -> Result<CustomResourceDefinition> {
         }
         .build()
     })?;
+    // Schemars supplies the type shape. This pass adds the Kubernetes bounds and closed objects.
     close_openapi_schema(&mut value);
     serde_json::from_value(value).map_err(|error| {
         PolicyValidationSnafu {
@@ -320,6 +330,7 @@ impl PolicySourceRevisionV1 {
                 reason: "the CRD object generation must be nonzero",
             }
         );
+        // Keep resourceVersion as an opaque replay cursor. It does not enter policy authority.
         let resource_version = required_metadata(
             metadata.resource_version.as_deref(),
             "opaque resource version",
@@ -348,6 +359,7 @@ impl PolicySourceRevisionV1 {
             );
         }
         let canonical_spec_digest = canonical_policy_spec_digest(&resource.spec.policy)?;
+        // The submitted digest detects API servers or clients that prune unknown source fields.
         let submitted_digest = metadata
             .annotations
             .as_ref()
@@ -401,6 +413,7 @@ impl PolicySourceRevisionV1 {
             policy_document_digest: &'a str,
             state: PolicySourceStateV1,
         }
+        // Names and resourceVersion can change without changing the accepted policy identity.
         Ok(domain_digest(
             SOURCE_REVISION_DOMAIN,
             &canonical_cbor(
@@ -427,6 +440,7 @@ impl PolicyTargetSnapshotV1 {
         rollout_generation: u64,
         mut targets: Vec<PolicyTargetV1>,
     ) -> Result<Self> {
+        // Canonical ordering makes the same scheduler facts produce the same snapshot digest.
         targets.sort();
         ensure!(
             rollout_generation > 0
@@ -604,6 +618,7 @@ impl PolicyActivationAcknowledgementV1 {
     }
 
     pub fn validate(&self) -> Result<()> {
+        // ACTIVE carries positive readback proof. REJECTED carries only a bounded reason.
         let active = self.state == PolicyActivationStateV1::Active;
         let rejected = self.state == PolicyActivationStateV1::Rejected;
         ensure!(
@@ -757,6 +772,7 @@ impl PolicyBundleV1 {
             }
             .build()
         })?;
+        // Chunk hashes support resumable transfer. The complete bundle digest remains authoritative.
         Ok(bytes
             .chunks(MAX_POLICY_BUNDLE_CHUNK_BYTES)
             .enumerate()

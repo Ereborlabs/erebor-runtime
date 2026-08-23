@@ -80,6 +80,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let owner = PolicyArtifactOwner::default();
     match Cli::parse().command {
         Command::PrintCrd { output } => {
+            // The checked-in Helm CRD is generated from this Rust schema to keep one schema owner.
             let crd = mithril_control::policy_custom_resource_definition()?;
             let document = format!("{}\n", serde_json::to_string_pretty(&crd)?);
             if let Some(output) = output {

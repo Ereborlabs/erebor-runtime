@@ -114,6 +114,7 @@ pub struct WorkloadBindingOwner {
     bindings: BTreeMap<u64, PublishedBinding>,
     profile_handles: BTreeMap<u64, Id128V1>,
     runtime: Option<ContainerRuntimeInventory>,
+    // Keep one verified CRI identity between inspection and held-root publication.
     pending_runtime_admission: Option<RuntimeContainerIdentity>,
 }
 
@@ -185,6 +186,7 @@ impl WorkloadBindingOwner {
         if self.runtime.is_some() {
             return self.reconcile_runtime(host, configured).await;
         }
+        // Scheduled placeholders have no cgroup until OCI prestart supplies the held process.
         self.publish(
             host,
             configured
@@ -318,6 +320,7 @@ impl WorkloadBindingOwner {
                 reason: "one binding identity names more than one local cgroup",
             }
         );
+        // Remove kernel authority before the local owner forgets the cgroup binding.
         if let Some(root) = roots.first().copied() {
             self.terminate(host, root)?;
             self.bindings.remove(&root);
@@ -343,6 +346,7 @@ impl WorkloadBindingOwner {
             .context(IdentityStateSnafu {
                 reason: "held runtime binding disappeared after publication",
             })?;
+        // Adopt only the CRI identity that was verified for this exact container ID.
         if let Some(runtime) = self.pending_runtime_admission.take() {
             ensure!(
                 runtime.full_container_id == spec.container_id,
@@ -355,6 +359,7 @@ impl WorkloadBindingOwner {
             })?;
             binding.runtime_identity = Some(runtime);
         }
+        // Roll back the new binding if it cannot join the already active generation.
         if let Err(error) = self.install_late_activation_target(host, root, spec) {
             let rollback = self.terminate(host, root);
             self.bindings.remove(&root);
@@ -384,6 +389,7 @@ impl WorkloadBindingOwner {
         let runtime = self.runtime.as_mut().context(IdentityStateSnafu {
             reason: "runtime admission has no CRI inventory owner",
         })?;
+        // CRI must still report Created while the OCI hook holds the initial process.
         let identity = runtime.inspect_created_for_admission(spec).await?;
         spec.container_generation = identity.generation;
         self.pending_runtime_admission = Some(identity);
@@ -405,6 +411,7 @@ impl WorkloadBindingOwner {
         })?;
         binding.validate_live_cgroup()?;
         binding.require_initial_root_admission()?;
+        // Read the active pointer and descriptor before adding a late cgroup target.
         let active = host
             .lookup_map(
                 "active_profile_generations",
@@ -465,6 +472,7 @@ impl WorkloadBindingOwner {
                 reason: "held runtime binding activation target is not immutable",
             }
         );
+        // Existing identical state is idempotent; different state is never overwritten.
         if previous.is_none() {
             ensure!(
                 host.insert_map(

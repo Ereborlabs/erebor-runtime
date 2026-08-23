@@ -5,6 +5,7 @@ kind: MutatingWebhookConfiguration
 metadata:
   name: mithril-control-{{ .Release.Namespace }}
 webhooks:
+  # Node mutation establishes quarantine before the readiness reconciler can remove it.
   - name: nodes.mithril.erebor.dev
     admissionReviewVersions: ["v1"]
     sideEffects: None
@@ -72,6 +73,7 @@ webhooks:
         resources: ["pods", "pods/ephemeralcontainers"]
         scope: Namespaced
   - name: bindings.mithril.erebor.dev
+    # Binding validation checks the scheduler's choice; it never chooses a Node.
     admissionReviewVersions: ["v1"]
     sideEffects: None
     failurePolicy: Fail

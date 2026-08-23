@@ -19,6 +19,7 @@ use crate::{
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
+// This file is the durable recovery and anti-replay state for node policy delivery.
 struct PolicyDeliveryStateV1 {
     active_candidate_content_id: Option<String>,
     active_bundle_digest: Option<String>,
@@ -58,6 +59,7 @@ struct ActivePolicyRecordV1 {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
+// Pending state is durable before kernel activation and becomes active after readback proof.
 struct PendingPolicyRecordV1 {
     candidate_content_id: String,
     bundle_digest: String,
@@ -128,6 +130,7 @@ impl NodePolicyDeliveryOwner {
             transfer_path,
             state,
         };
+        // Invalid recovery state blocks policy delivery instead of dropping replay history.
         owner.validate_state()?;
         Ok(owner)
     }
@@ -160,6 +163,7 @@ impl NodePolicyDeliveryOwner {
         now_utc_ns: i64,
         session: Option<(&[u8], u64)>,
     ) -> Result<()> {
+        // Rebuild dynamic config only from durable bundles that still pass current trust checks.
         for (profile_id, record) in &self.state.active_profiles {
             let artifact_path = self.checked_bundle_file(&record.artifact_file)?;
             let public_key_path = self.checked_bundle_file(&record.public_key_file)?;
@@ -192,6 +196,7 @@ impl NodePolicyDeliveryOwner {
             bundle
                 .verify(&trusted_key, &config.node_id, record.observed_utc_ns)
                 .context(PolicySnafu)?;
+            // Scheduled authority does not survive a node boot or label-epoch change.
             if scheduled_session_matches(&bundle, config, session) {
                 config
                     .workload_bindings
@@ -288,6 +293,7 @@ impl NodePolicyDeliveryOwner {
         {
             return Ok(None);
         }
+        // Reuse a partial transfer only when all inventory identity and size fields match.
         let mut transfer = self.load_transfer()?;
         if transfer.candidate_content_id != inventory.candidate_content_id
             || transfer.bundle_digest != inventory.bundle_digest
@@ -307,6 +313,7 @@ impl NodePolicyDeliveryOwner {
         fs::create_dir_all(&directory).context(IoSnafu { path: &directory })?;
         for index in 0..inventory.chunk_count {
             let path = directory.join(format!("{index:08}.chunk"));
+            // Digest readback makes a persisted chunk safe to reuse after restart.
             if self.transferred_chunk_is_valid(&transfer, index) {
                 continue;
             }
@@ -403,6 +410,7 @@ impl NodePolicyDeliveryOwner {
         let candidate = &bundle.candidate;
         let profile = &bundle.profile_artifact;
         let profile_id = profile.header.profile_id.clone();
+        // Trust, tenant, capability, target, and replay checks all precede kernel staging.
         let trusted_key =
             trust.policy_signing_key(&candidate.signing_key_id, profile.header.sequence_epoch)?;
         ensure!(
@@ -436,6 +444,7 @@ impl NodePolicyDeliveryOwner {
                 reason: "the node does not support every required policy capability",
             }
         );
+        // Issuer and node-distribution sequences are independent replay domains.
         let issuer = SequenceV1 {
             epoch: profile.header.sequence_epoch,
             sequence: profile.header.issuer_sequence,
@@ -474,6 +483,7 @@ impl NodePolicyDeliveryOwner {
                     "the policy candidate failed issuer, distribution, or predecessor anti-replay",
             }
         );
+        // Build and validate a complete next configuration without mutating the live owner.
         let mut dynamic = config.clone();
         let scheduled_targets = materialize_scheduled_bindings(
             bundle,
@@ -549,6 +559,7 @@ impl NodePolicyDeliveryOwner {
         let artifact_path = bundle_directory.join("profile-artifact.json");
         let public_key_path = bundle_directory.join("profile-public-key.hex");
         let bundle_path = bundle_directory.join("bundle.json");
+        // Persist signed inputs before the node can record a pending kernel activation.
         write_atomic(
             &artifact_path,
             &serde_json::to_vec_pretty(&bundle.profile_artifact).context(JsonSnafu {
@@ -619,6 +630,7 @@ impl NodePolicyDeliveryOwner {
             probe_result_digest: proof.probe_result_digest,
             observed_utc_ns: proof.observed_utc_ns,
         };
+        // Publish durable active state only after NodePolicyGenerationOwner returns readback proof.
         self.state.active_candidate_content_id =
             Some(bundle.candidate.candidate_content_id.clone());
         self.state.active_bundle_digest = Some(bundle.bundle_digest.clone());
@@ -655,6 +667,7 @@ impl NodePolicyDeliveryOwner {
         let public_key_file =
             self.relative_bundle_file(&bundle_directory.join("profile-public-key.hex"))?;
         let bundle_file = self.relative_bundle_file(&bundle_directory.join("bundle.json"))?;
+        // This record lets restart recovery distinguish staged intent from committed activation.
         self.state.pending_activation = Some(PendingPolicyRecordV1 {
             candidate_content_id: bundle.candidate.candidate_content_id.clone(),
             bundle_digest: bundle.bundle_digest.clone(),
@@ -679,6 +692,7 @@ impl NodePolicyDeliveryOwner {
         };
         let bundle_path = self.checked_bundle_file(&pending.bundle_file)?;
         let bundle = self.read_bundle(&bundle_path)?;
+        // Recover only when the kernel active pointer proves that the pending generation won.
         let receipt = crate::NodePolicyGenerationOwner::activation_receipt(
             host,
             &pending.profile_id,
@@ -716,6 +730,7 @@ impl NodePolicyDeliveryOwner {
             .active_profiles
             .values()
             .find(|record| record.candidate_content_id == candidate_id)?;
+        // Replay this proof until Control returns its durable commit index.
         Some(PolicyActivationAcknowledgement {
             tenant_id: record.tenant_id.clone(),
             candidate_content_id: record.candidate_content_id.clone(),
@@ -753,6 +768,7 @@ impl NodePolicyDeliveryOwner {
                 }
                 .build()
             })?;
+        // Keep the prior in-memory state so a failed durable write cannot authorize the runtime.
         let previous = self.state.clone();
         let record = self
             .state
@@ -866,6 +882,7 @@ impl NodePolicyDeliveryOwner {
                 reason: "the policy transfer is incomplete",
             }
         );
+        // Read every chunk again before assembly; transfer metadata alone is not proof.
         let mut bytes = Vec::with_capacity(
             usize::try_from(transfer.bundle_bytes).unwrap_or(MAX_POLICY_BUNDLE_BYTES),
         );
@@ -1025,6 +1042,7 @@ fn materialize_scheduled_bindings(
         .build()
     })?;
     let document = &bundle.profile_artifact.policy_document;
+    // Preserve an admitted container lifetime across policy refresh for the same signed target.
     let previous = config
         .workload_bindings
         .iter()
@@ -1046,6 +1064,7 @@ fn materialize_scheduled_bindings(
             }
             .build()
         })?;
+        // Retirement can name the previous source; all other operations name the current source.
         ensure!(
             mithril_control::workload_target_fact_digest(target)
                 .is_ok_and(|digest| digest == target.workload_binding_generation_digest)
@@ -1226,6 +1245,7 @@ fn entry_role_handle(
         })
         .map(|assignment| assignment.resulting_role_id.as_str())
         .collect::<BTreeSet<_>>();
+    // One exact role is required because runtime admission cannot resolve role ambiguity.
     ensure!(
         role_ids.len() == 1,
         ControlProtocolSnafu {
@@ -1283,6 +1303,7 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
     file.write_all(bytes)
         .context(IoSnafu { path: &temporary })?;
     file.sync_all().context(IoSnafu { path: &temporary })?;
+    // Rename publishes complete bytes; parent fsync makes the new directory entry durable.
     fs::rename(&temporary, path).context(IoSnafu { path })?;
     File::open(parent)
         .context(IoSnafu { path: parent })?

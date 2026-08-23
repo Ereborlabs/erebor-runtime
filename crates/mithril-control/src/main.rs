@@ -30,6 +30,7 @@ async fn run() -> mithril_control::Result<()> {
         kubernetes_nodes,
         kubernetes_admission,
     } = config.into_parts()?;
+    // All optional Kubernetes tasks share the owners created from one validated configuration.
     let policy_owner = control.policy_desired_state();
     let admission_policy_owner = policy_owner.clone();
     let policy_control = control.clone();
@@ -67,6 +68,7 @@ async fn run() -> mithril_control::Result<()> {
         }
     };
     tokio::pin!(admission_server);
+    // Any owner exit stops the process because a partial Control process cannot keep its guarantees.
     if let Some(administrative_exec) = administrative_exec {
         let shutdown = std::sync::Arc::new(tokio::sync::Notify::new());
         let control_shutdown = shutdown.clone();

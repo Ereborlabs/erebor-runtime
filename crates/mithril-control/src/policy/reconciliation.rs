@@ -25,6 +25,7 @@ use crate::{ControlStore, PolicyCompiler, Result};
 
 #[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(deny_unknown_fields)]
+/// Captures the exact workload and scheduler facts that can enter a target snapshot.
 pub struct WorkloadTargetFactV1 {
     pub node_id: String,
     pub workload_binding_generation_digest: String,
@@ -59,6 +60,7 @@ pub struct KubernetesWorkloadIdentityV1 {
 }
 
 pub fn workload_target_fact_digest(target: &WorkloadTargetFactV1) -> Result<String> {
+    // Exclude the digest field so that the remaining immutable facts define its value.
     let mut identity = target.clone();
     identity.workload_binding_generation_digest.clear();
     serde_json::to_vec(&identity)
@@ -118,6 +120,7 @@ pub struct PolicyReconcileHealthV1 {
 }
 
 #[derive(Clone)]
+/// Owns accepted desired state, compilation, conflict checks, and reconciliation status.
 pub struct PolicyDesiredStateOwner {
     config: Arc<PolicyDesiredStateConfigV1>,
     store: ControlStore,
@@ -143,6 +146,7 @@ struct DesiredStateMemory {
 }
 
 #[derive(Clone)]
+/// Owns immutable target snapshots, node candidates, and acknowledgement transitions.
 pub struct PolicyRolloutOwner {
     store: ControlStore,
     signing_key: Arc<SigningKey>,
@@ -302,6 +306,7 @@ impl PolicyDesiredStateOwner {
                 reason: "the policy has a cluster or namespace selector outside its authenticated tenant scope",
             }
         );
+        // Persist desired state before compilation so restart recovery sees every accepted input.
         self.store
             .accept_source_revision(source.clone(), policy.clone())?;
         let mut targets = resolve_targets(
@@ -313,6 +318,7 @@ impl PolicyDesiredStateOwner {
         self.claim(&source, policy, &targets)?;
 
         if source.state == PolicySourceStateV1::DeletionRequested {
+            // Retirement follows the last delivered targets, not the now-empty live inventory.
             targets = self
                 .store
                 .latest_bundles_for_object(&source.object_uid)?
@@ -323,6 +329,7 @@ impl PolicyDesiredStateOwner {
             targets.dedup();
         }
 
+        // Reuse the immutable artifact on restart. A source revision gets one issuer sequence.
         let artifact = if let Some(artifact) = self
             .store
             .compiled_artifact(&source.policy_source_revision_id)?
@@ -372,6 +379,7 @@ impl PolicyDesiredStateOwner {
             policy.rollout.rollout_generation,
             targets,
         )?;
+        // An identical snapshot reuses its candidates and does not consume new replay sequence.
         let (bundles, rollout_states) = if self
             .store
             .latest_snapshot_for_source(&source.policy_source_revision_id)?
@@ -520,6 +528,7 @@ impl PolicyDesiredStateOwner {
     }
 
     pub async fn run_kubernetes(self, control: crate::ControlPlane) {
+        // Source watch and bound-workload inventory share this desired-state owner.
         loop {
             let Ok(client) = Client::try_default().await else {
                 self.record_watch_failure();
@@ -553,6 +562,7 @@ impl PolicyDesiredStateOwner {
             .iter()
             .flat_map(|target| target.workload_binding_generation_digests.iter())
             .collect::<BTreeSet<_>>();
+        // Reject competing owners. Version 1 has no priority or deny-wins rule.
         for (owner, owner_policy) in self.store.latest_live_sources()? {
             if owner.object_uid == source.object_uid {
                 continue;
@@ -622,6 +632,7 @@ impl PolicyRolloutOwner {
         let mut bundles = Vec::with_capacity(snapshot.targets.len());
         let mut rollout_states = Vec::with_capacity(snapshot.targets.len());
         for target in &snapshot.targets {
+            // Distribution ordering is per node and profile, separate from issuer ordering.
             let sequence = self.store.next_distribution_sequence(
                 &target.node_id,
                 &source.tenant_id,
@@ -629,6 +640,7 @@ impl PolicyRolloutOwner {
                 &artifact.policy_document.metadata.profile_id,
                 self.distribution_sequence_epoch,
             )?;
+            // The predecessor forms one explicit node-local replacement chain.
             let predecessor = self
                 .store
                 .latest_bundle_for_profile_node(
@@ -701,6 +713,7 @@ impl PolicyRolloutOwner {
                 }
                 .build()
             })?;
+        // A delayed acknowledgement cannot advance a candidate after a later rollout wins.
         ensure!(
             acknowledgement.policy_source_revision_id == current.policy_source_revision_id
                 && acknowledgement.target_snapshot_digest == current.target_snapshot_digest
@@ -772,6 +785,7 @@ async fn reconcile_cluster(
 ) {
     let api = Api::<WorkloadProtectionProfile>::all(client.clone());
     let namespaces = Api::<Namespace>::all(client);
+    // Each watch starts from a complete relist cursor and restarts after any stream error.
     loop {
         owner.record_watch_state("*", false);
         let Some(resource_version) = relist_cluster(&api, &namespaces, &owner, &control).await
@@ -815,6 +829,7 @@ async fn relist_cluster(
 ) -> Option<String> {
     let mut continuation = None::<String>;
     let mut resource_version = None::<String>;
+    // Collect UIDs across every page. Only a complete set can prove deletion by absence.
     let mut seen_object_uids = BTreeSet::new();
     loop {
         let mut params = ListParams::default().limit(500);
@@ -841,6 +856,7 @@ async fn relist_cluster(
         }
     }
     let resource_version = resource_version.filter(|value| !value.is_empty());
+    // Retire missing sources before the watch begins, or discard the snapshot as incomplete.
     let complete = resource_version.is_some()
         && owner
             .retire_missing_sources(
@@ -885,6 +901,7 @@ async fn reconcile_resource(
     } else {
         PolicySourceStateV1::Accepted
     };
+    // Reconciliation failure changes only status; it does not replace the last valid rollout.
     let status = owner
         .reconcile_observation(
             &resource,
@@ -944,6 +961,7 @@ fn resolve_targets(
         .iter()
         .map(|selector| selector.workload_selector_id.as_str())
         .collect::<BTreeSet<_>>();
+    // Group exact bindings by node so each signed candidate has one delivery destination.
     let mut selected = BTreeMap::<String, BTreeMap<String, WorkloadTargetFactV1>>::new();
     for fact in inventory {
         let matches_selector = policy.workload_selectors.iter().any(|selector| {
@@ -1031,6 +1049,7 @@ fn selected_by_rollout(policy: &PolicyDocumentV1, fact: &WorkloadTargetFactV1) -
             .explicit_execution_set_ids
             .contains(&fact.execution_set_id),
         CohortSelectionV1::HashedExecutionSetBinding => {
+            // Stable policy and workload identities make cohort selection deterministic.
             let mut digest = Sha256::new();
             digest.update(policy.metadata.profile_id.as_bytes());
             digest.update(policy.metadata.profile_version.to_be_bytes());
@@ -1054,6 +1073,7 @@ fn status_for(
     states: &[PolicyRolloutStateV1],
     degraded_reason: Option<&str>,
 ) -> WorkloadProtectionProfileStatusV1 {
+    // Status summarizes durable per-target state. It never grants rollout authority.
     let counts = PolicyRolloutCountsV1::from_states(states);
     let retiring = source.state == PolicySourceStateV1::DeletionRequested;
     let available = counts.total() > 0 && counts.active == counts.total();

@@ -628,6 +628,7 @@ fn two_node_create_update_restart_delete_and_recreate_preserve_provenance() -> T
         PolicyActivationStateV1::Rejected,
         NOW + 1,
     )?)?;
+    // Preserve mixed per-node results before a new source revision supersedes both candidates.
     let first_status = owner
         .reconcile(&first_resource, NAMESPACE_UID, &inventory, NOW + 2)?
         .status;
@@ -663,6 +664,7 @@ fn two_node_create_update_restart_delete_and_recreate_preserve_provenance() -> T
         );
         assert!(current.candidate.distribution_sequence > prior.candidate.distribution_sequence);
     }
+    // A late result from the first rollout must not mutate the second rollout.
     assert!(owner
         .rollout_owner()
         .acknowledge(acknowledgement(
@@ -685,6 +687,7 @@ fn two_node_create_update_restart_delete_and_recreate_preserve_provenance() -> T
         condition.condition == PolicyConditionKindV1::Progressing && condition.status
     }));
 
+    // Restart recovery must reproduce the exact candidates and mixed rollout state.
     drop(owner);
     drop(store);
     let reopened = ControlStore::open(directory.path())?;
@@ -717,6 +720,7 @@ fn two_node_create_update_restart_delete_and_recreate_preserve_provenance() -> T
         );
     }
 
+    // A new Kubernetes object UID starts a new source identity but follows the terminal chain.
     let recreated_resource = resource(
         &first_policy,
         "profile",
@@ -762,6 +766,7 @@ fn corrupt_or_incompatible_commit_chain_blocks_store_recovery() -> TestResult {
 
     let first_commit = directory.path().join("commits/00000000000000000001.json");
     let bytes = std::fs::read_to_string(&first_commit)?;
+    // Change the first record without rebuilding the chain to exercise startup validation.
     let incompatible = bytes.replacen("\"schema_version\":1", "\"schema_version\":2", 1);
     std::fs::write(&first_commit, incompatible)?;
     assert!(ControlStore::open(directory.path()).is_err());

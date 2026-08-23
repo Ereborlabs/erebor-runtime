@@ -5,6 +5,7 @@ pub const FILE_DESCRIPTOR_SET: &[u8] =
 
 pub const IDENTITY_BYTES: usize = 16;
 pub const MAX_NODE_ID_BYTES: usize = 128;
+// The limit bounds one complete policy bundle while chunk fields keep each transfer request bounded.
 pub const MAX_POLICY_GRPC_MESSAGE_BYTES: usize = 128 * 1_024;
 
 #[must_use]

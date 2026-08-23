@@ -52,6 +52,7 @@ impl ControlConfig {
     }
 
     pub fn into_parts(self) -> Result<ControlRuntimeParts> {
+        // Policy and evidence use one commit chain so acknowledgements share one durability model.
         let store_directory = self
             .control_store_directory
             .unwrap_or_else(|| self.evidence_directory.clone());
@@ -64,6 +65,7 @@ impl ControlConfig {
         if let Some(policy) = self.kubernetes_policy {
             let owner = PolicyDesiredStateOwner::open(policy, store)?;
             let (key_id, public_key, issuer_epoch) = owner.signer_identity();
+            // Control must trust its configured candidate signer before it starts reconciliation.
             ensure!(
                 self.trust.policy_issuer_sequence_epoch == issuer_epoch
                     && self.trust.policy_signers.iter().any(|signer| {
@@ -120,6 +122,7 @@ impl ControlConfig {
         }
         if let Some(admission) = &self.kubernetes_admission {
             admission.validate()?;
+            // Admission cannot run without both policy state and DaemonSet-derived node state.
             ensure!(
                 self.kubernetes_policy.is_some() && self.kubernetes_nodes.is_some(),
                 InvalidConfigurationSnafu {

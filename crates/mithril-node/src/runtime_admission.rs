@@ -154,6 +154,7 @@ impl RuntimeAdmissionServer {
             }
             .build()
         })?;
+        // The root-owned parent and socket mode make this local endpoint a privileged boundary.
         let parent_metadata = fs::metadata(parent).context(IoSnafu { path: parent })?;
         ensure!(
             parent_metadata.is_dir()
@@ -263,6 +264,7 @@ impl RuntimeAdmissionClient {
         &self,
         request: &RuntimeAdmissionRequestV1,
     ) -> Result<RuntimeAdmissionResponseV1> {
+        // Timeout is denial because the OCI prestart process stays held during this exchange.
         tokio::time::timeout(self.timeout, async {
             let stream = UnixStream::connect(&self.socket_path)
                 .await
@@ -344,6 +346,7 @@ impl ScheduledRuntimeBindingV1 {
                 reason: "runtime admission sandbox identity is invalid",
             }
         );
+        // Runtime facts must resolve to one signed scheduled authority before identity changes.
         let matches = configured
             .iter()
             .enumerate()
@@ -380,6 +383,7 @@ impl ScheduledRuntimeBindingV1 {
                 reason: "scheduled binding authority does not match its Pod and container",
             }
         );
+        // A placeholder authorizes the first lifetime; a concrete binding authorizes no replay.
         let current_is_placeholder = current.container_id.starts_with("scheduled:");
         ensure!(
             (current_is_placeholder && current.binding_id == authority_binding_id)
@@ -391,6 +395,7 @@ impl ScheduledRuntimeBindingV1 {
             }
         );
         let mut resolved = current.clone();
+        // Derive a distinct binding from signed authority and the runtime container identity.
         resolved.binding_id = Self::runtime_binding_id(authority_binding_id, &request.container_id);
         ensure!(
             current_is_placeholder || resolved.binding_id != current.binding_id,
@@ -488,6 +493,7 @@ impl RuntimeAdmissionServer {
         requests: mpsc::Sender<RuntimeAdmissionEnvelope>,
     ) -> Result<()> {
         let response = tokio::time::timeout(timeout, async {
+            // SO_PEERCRED prevents an unprivileged local process from invoking the gate.
             ensure!(
                 stream
                     .peer_cred()
@@ -523,6 +529,7 @@ impl RuntimeAdmissionServer {
             Self::dispatch(request, requests).await
         })
         .await
+        // Convert every timeout and internal error into an explicit denial response.
         .unwrap_or_else(|_elapsed| {
             Ok(RuntimeAdmissionResponseV1 {
                 allowed: false,

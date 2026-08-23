@@ -20,12 +20,14 @@ service NodeCoverage {
   rpc Report(CoverageReportRequest) returns (CoverageAck);
 }
 
+// Delivers immutable node candidates only after current trust acknowledgement.
 service NodePolicy {
   rpc Inventory(PolicyInventoryRequest) returns (PolicyInventory);
   rpc Fetch(PolicyChunkRequest) returns (PolicyChunk);
   rpc Acknowledge(PolicyAcknowledgementRequest) returns (PolicyAcknowledgementAccepted);
 }
 
+// Exposes bounded counters and booleans without policy or evidence payloads.
 service ControlHealth {
   rpc Get(NodeSessionContext) returns (ControlConvergenceHealth);
 }
@@ -38,6 +40,7 @@ service NodeAdministrativeArm {
   rpc Open(stream AdministrativeExecArmStreamRequest) returns (stream ArmAdministrativeExec);
 }
 
+// Binds every RPC to one node boot and one connection nonce.
 message NodeSessionContext {
   string node_id = 1;
   bytes node_boot_id = 2;
@@ -103,6 +106,7 @@ message CapabilityRecord {
   string reason_code = 3;
 }
 
+// Reports node-local facts. Kubernetes scheduling facts come from Control inventory.
 message NodeRegistration {
   string platform_digest = 1;
   string program_digest = 2;
@@ -114,6 +118,7 @@ message NodeRegistration {
   string kubernetes_node_name = 10;
 }
 
+// Reports static non-Kubernetes workload facts from a registered node.
 message RegisteredWorkloadTarget {
   string workload_binding_generation_digest = 1;
   string execution_set_id = 2;
@@ -156,6 +161,7 @@ message EvidenceBatch {
   bytes batch_sha256 = 4;
 }
 
+// Acknowledges only a complete range that Control committed contiguously.
 message EvidenceAck {
   uint64 first_cursor = 1;
   uint64 last_cursor = 2;
@@ -202,6 +208,7 @@ message CoverageAck {
   bytes report_sha256 = 3;
 }
 
+// Describes a candidate before the node requests bounded chunks.
 message PolicyInventory {
   bool candidate_available = 1;
   string candidate_content_id = 2;
@@ -213,6 +220,7 @@ message PolicyInventory {
   string operation = 8;
 }
 
+// Carries one content-addressed part of the complete policy bundle.
 message PolicyChunk {
   string candidate_content_id = 1;
   string bundle_digest = 2;
@@ -222,6 +230,7 @@ message PolicyChunk {
   bytes payload = 6;
 }
 
+// Reports node-local activation proof. Control adds authenticated session identity.
 message PolicyActivationAcknowledgement {
   string tenant_id = 1;
   string candidate_content_id = 2;
@@ -236,6 +245,7 @@ message PolicyActivationAcknowledgement {
   int64 observed_utc_ns = 11;
 }
 
+// Confirms the durable Control transition that accepted the node result.
 message PolicyAcknowledgementAccepted {
   uint64 control_commit_index = 1;
   string rollout_state = 2;

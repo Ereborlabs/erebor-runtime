@@ -45,6 +45,7 @@ pub async fn serve(
     let tls = ServerTlsConfig::new()
         .identity(Identity::from_pem(certificate, private_key))
         .client_ca_root(Certificate::from_pem(node_ca));
+    // Policy transfer has a separate message limit because one bundle can be larger than evidence batches.
     Server::builder()
         .tcp_keepalive(Some(Duration::from_secs(30)))
         .http2_keepalive_interval(Some(Duration::from_secs(15)))

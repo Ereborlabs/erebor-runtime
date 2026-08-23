@@ -203,6 +203,7 @@ impl ContainerRuntimeInventory {
         &mut self,
         expected: &WorkloadBindingConfig,
     ) -> Result<RuntimeContainerIdentity> {
+        // Query CRI directly; hook annotations alone are not runtime identity proof.
         let listed = self
             .client
             .list_containers(ListContainersRequest { filter: None })
@@ -287,6 +288,7 @@ impl ContainerRuntimeInventory {
                 reason: "runtime admission CRI identity differs from signed workload material",
             }
         );
+        // A Created container has no running init PID; its cgroup must match the held process path.
         let process = runtime_process_from_info(
             &response.info,
             &self.cgroup_root,

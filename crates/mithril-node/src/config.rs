@@ -258,6 +258,7 @@ impl NodeConfig {
     }
 
     pub fn bind_kubernetes_runtime_identity(&mut self, node_name: String) -> Result<()> {
+        // Downward API supplies the scheduler-selected node name; configuration cannot override it.
         self.kubernetes_node_name = Some(node_name);
         if let Some(runtime) = self.container_runtime.as_mut() {
             let source_path = Path::new("/proc/self/cgroup");
@@ -270,6 +271,7 @@ impl NodeConfig {
                 .build()
             })?;
             let path = Path::new("/sys/fs/cgroup").join(relative.trim_start_matches('/'));
+            // Scope CRI inspection to this DaemonSet Pod instead of the host cgroup root.
             runtime.effect_controller_cgroup_path =
                 fs::canonicalize(&path).context(IoSnafu { path: &path })?;
         }
@@ -357,6 +359,7 @@ impl NodeConfig {
         let mut execution_set_ids = BTreeSet::new();
         let mut container_ids = BTreeSet::new();
         for binding in &self.workload_bindings {
+            // Scheduled authority is complete or absent; partial authority cannot reach runtime gate.
             ensure!(
                 match (
                     binding.scheduled_binding_authority_id.as_deref(),
@@ -382,6 +385,7 @@ impl NodeConfig {
                     reason: "scheduled workload bindings require complete signed authority and deterministic runtime identity",
                 }
             );
+            // Any Kubernetes field opts the binding into validation of the complete identity set.
             let kubernetes_identity_is_set = !binding.cluster_uid.is_empty()
                 || !binding.namespace_uid.is_empty()
                 || !binding.controller_uid.is_empty()
@@ -526,6 +530,7 @@ fn is_sha256(value: &str) -> bool {
 }
 
 fn unified_cgroup_path(cgroups: &str) -> Option<&str> {
+    // Accept one non-root cgroup2 path so the node cannot silently broaden CRI scope.
     let mut paths = cgroups.lines().filter_map(|line| line.strip_prefix("0::"));
     let path = paths.next()?;
     (paths.next().is_none()
