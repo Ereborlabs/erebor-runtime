@@ -1,7 +1,14 @@
 # Mithril Kubernetes Package
 
 This chart installs the `mithril-node` DaemonSet, `mithril-control`, the
-`WorkloadProtectionProfile` CRD, and the fail-closed admission webhooks.
+`WorkloadProtectionPolicy` and `WorkloadProtectionException` CRDs, and the
+fail-closed admission webhooks.
+
+Control can list both resources and patch only their status subresources. The
+chart also creates unbound `mithril-policy-writer` and
+`mithril-exception-writer` ClusterRoles. Bind each role only in the namespaces
+where that operator acts. Neither writer receives the other resource by
+default.
 
 ## Node Selection
 

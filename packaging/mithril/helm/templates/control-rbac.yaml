@@ -34,10 +34,10 @@ metadata:
   name: mithril-control-{{ .Release.Namespace }}
 rules:
   - apiGroups: ["mithril.erebor.dev"]
-    resources: ["workloadprotectionprofiles"]
+    resources: ["workloadprotectionpolicies", "workloadprotectionexceptions"]
     verbs: ["get", "list", "watch"]
   - apiGroups: ["mithril.erebor.dev"]
-    resources: ["workloadprotectionprofiles/status"]
+    resources: ["workloadprotectionpolicies/status", "workloadprotectionexceptions/status"]
     verbs: ["patch"]
   - apiGroups: [""]
     resources: ["namespaces", "pods", "serviceaccounts"]
@@ -59,4 +59,23 @@ subjects:
   - kind: ServiceAccount
     name: mithril-control
     namespace: {{ .Release.Namespace | quote }}
+---
+# Bind these roles only in namespaces where the corresponding operator acts.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: mithril-policy-writer
+rules:
+  - apiGroups: ["mithril.erebor.dev"]
+    resources: ["workloadprotectionpolicies"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: mithril-exception-writer
+rules:
+  - apiGroups: ["mithril.erebor.dev"]
+    resources: ["workloadprotectionexceptions"]
+    verbs: ["get", "list", "watch", "create", "delete"]
 {{- end }}

@@ -9,13 +9,27 @@ use sha2::{Digest as _, Sha256};
 use snafu::ensure;
 
 use super::canonical::canonical_cbor;
-use super::{PolicyDocumentV1, ProfileCandidateArtifactV1};
+use super::{
+    AmbiguityDispositionV1, BindingLifecycleV1, BudgetSetV1, CohortSelectionV1,
+    CommonSubjectMatchV1, ContainerKindV1, DefaultPostureActionV1, DefaultPosturesV1,
+    DestinationPolicyRecordV1, DetectionDispositionRuleV1, DnsPolicyModeV1, EffectFamilyDefaultV1,
+    EffectFamilyV1, EntryKindV1, EntryRoleAssignmentV1, ErrnoV1, EvaluationStageV1,
+    EvidenceLevelV1, FileExceptionGrantTemplateV1, FilesystemObjectTypeV1, FindingSpecV1,
+    IpcRelationshipRuleV1, LabelOperatorV1, LabelRequirementV1, LocalEffectMatchV1,
+    LocalObjectSelectorV1, LocalSubjectBindingV1, NetworkPolicyV1, NetworkPortRangeV1,
+    NetworkProtocolV1, ObjectClassifierBindingV1, ObjectClassifierSelectorV1,
+    OperationResultAuthorityV1, PathSelectorV1, PolicyDispositionV1, PolicyDocumentV1,
+    PolicyMetadataV1, ProcessStateDefinitionV1, ProfileCandidateArtifactV1, ProfileModeV1,
+    ProofIntegrityV1, ProofQualityPredicateV1, ProtectedUniverseV1, RemoteSubjectBindingV1,
+    RoleDefinitionV1, RolloutV1, RootClassificationV1, RuleMatchV1, SeverityV1, SourceAuthorityV1,
+    TemporalCoverageV1, UnknownClassifierResultV1, WorkloadSelectorV1,
+};
 use crate::error::{InvalidConfigurationSnafu, PolicySignatureSnafu, PolicyValidationSnafu};
 use crate::Result;
 
 pub const POLICY_API_VERSION: &str = "mithril.erebor.dev/v1alpha1";
-pub const POLICY_KIND: &str = "WorkloadProtectionProfile";
-pub const SUBMITTED_SPEC_DIGEST_ANNOTATION: &str = "mithril.erebor.dev/submitted-spec-sha256";
+pub const POLICY_KIND: &str = "WorkloadProtectionPolicy";
+pub const EXCEPTION_KIND: &str = "WorkloadProtectionException";
 pub const MAX_POLICY_STATUS_TARGETS: u32 = 65_536;
 pub const MAX_POLICY_BUNDLE_CHUNK_BYTES: usize = 64 * 1_024;
 pub const MAX_POLICY_BUNDLE_BYTES: usize = 16 * 1_024 * 1_024;
@@ -33,77 +47,407 @@ const ACKNOWLEDGEMENT_DOMAIN: &[u8] = b"MITHRIL-POLICY-ACTIVATION-ACK-V1\0";
 #[kube(
     group = "mithril.erebor.dev",
     version = "v1alpha1",
-    kind = "WorkloadProtectionProfile",
-    plural = "workloadprotectionprofiles",
+    kind = "WorkloadProtectionPolicy",
+    plural = "workloadprotectionpolicies",
     namespaced,
-    status = "WorkloadProtectionProfileStatusV1",
+    status = "WorkloadProtectionPolicyStatusV1",
     shortname = "wpp"
 )]
-#[serde(deny_unknown_fields)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
 /// Defines the CRD desired state. Control creates signed node artifacts from this value.
-pub struct WorkloadProtectionProfileSpec {
-    #[serde(flatten)]
-    pub policy: PolicyDocumentV1,
+pub struct WorkloadProtectionPolicySpec {
+    pub pod_selector: KubernetesLabelSelectorV1,
+    pub mode: KubernetesPolicyModeV1,
+    #[schemars(length(min = 1, max = 256))]
+    pub containers: Vec<ContainerPolicyMatchV1>,
+    #[schemars(length(min = 1, max = 256))]
+    pub roles: Vec<KubernetesRolePolicyV1>,
+    #[serde(default)]
+    #[schemars(length(max = 256))]
+    pub exception_grants: Vec<FileExceptionGrantV1>,
+}
+
+impl WorkloadProtectionPolicySpec {
+    pub fn parse(path: &std::path::Path, source: &[u8]) -> Result<Self> {
+        super::source::parse_restricted_yaml(path, source)
+    }
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 /// Projects Control state for operators. This status does not authorize node activation.
-pub struct WorkloadProtectionProfileStatusV1 {
+pub struct WorkloadProtectionPolicyStatusV1 {
     pub observed_generation: u64,
-    pub source_revision_id: Option<String>,
-    pub canonical_spec_digest: Option<String>,
-    pub candidate_content_id: Option<String>,
-    pub rollout_counts: PolicyRolloutCountsV1,
-    #[schemars(length(max = 6))]
-    pub conditions: Vec<PolicyConditionV1>,
+    pub rollout: PolicyRolloutCountsV1,
+    #[schemars(length(max = 8))]
+    pub conditions: Vec<KubernetesConditionV1>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct KubernetesLabelSelectorV1 {
+    #[serde(default)]
+    #[schemars(length(max = 256))]
+    pub match_labels: BTreeMap<String, String>,
+    #[serde(default)]
+    #[schemars(length(max = 256))]
+    pub match_expressions: Vec<KubernetesLabelSelectorRequirementV1>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
+pub struct KubernetesLabelSelectorRequirementV1 {
+    pub key: String,
+    pub operator: KubernetesLabelSelectorOperatorV1,
+    #[serde(default)]
+    #[schemars(length(max = 256))]
+    pub values: Vec<String>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+pub enum KubernetesLabelSelectorOperatorV1 {
+    In,
+    NotIn,
+    Exists,
+    DoesNotExist,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct KubernetesConditionV1 {
+    #[serde(rename = "type")]
+    pub condition_type: String,
+    pub status: KubernetesConditionStatusV1,
+    pub observed_generation: u64,
+    pub last_transition_time: String,
+    pub reason: String,
+    pub message: String,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+pub enum KubernetesConditionStatusV1 {
+    True,
+    False,
+    Unknown,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct PolicyRolloutCountsV1 {
-    pub pending: u32,
-    pub delivered: u32,
-    pub staged: u32,
+    pub desired: u32,
     pub active: u32,
-    pub rejected: u32,
-    pub stale: u32,
-    pub unknown: u32,
+    pub updating: u32,
+    pub failed: u32,
 }
 
 impl PolicyRolloutCountsV1 {
     #[must_use]
     pub const fn total(&self) -> u32 {
-        self.pending
-            .saturating_add(self.delivered)
-            .saturating_add(self.staged)
-            .saturating_add(self.active)
-            .saturating_add(self.rejected)
-            .saturating_add(self.stale)
-            .saturating_add(self.unknown)
+        self.desired
     }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+pub enum KubernetesPolicyModeV1 {
+    Observe,
+    Protect,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct ContainerPolicyMatchV1 {
+    #[schemars(length(min = 1, max = 64))]
+    pub names: Vec<String>,
+    #[schemars(length(min = 1, max = 4))]
+    pub kinds: Vec<KubernetesContainerKindV1>,
+    #[schemars(length(min = 1, max = 256))]
+    pub images: Vec<String>,
+    pub initial_role: String,
+    pub external_role: String,
 }
 
 #[derive(
     Clone, Copy, Debug, Deserialize, Eq, JsonSchema, Ord, PartialEq, PartialOrd, Serialize,
 )]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-pub enum PolicyConditionKindV1 {
-    Accepted,
-    Compiled,
-    Progressing,
-    Available,
-    Degraded,
-    Retiring,
+pub enum KubernetesContainerKindV1 {
+    Init,
+    Sidecar,
+    Application,
+    Ephemeral,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct KubernetesRolePolicyV1 {
+    pub name: String,
+    #[schemars(length(max = 1024))]
+    pub files: Vec<FileRuleV1>,
+    #[schemars(length(max = 1024))]
+    pub execution: Vec<ExecutionRuleV1>,
+    pub network: KubernetesNetworkRulesV1,
+    #[schemars(length(max = 1024))]
+    pub process_control: Vec<ProcessControlRuleV1>,
+    #[schemars(length(max = 1024))]
+    pub unix_streams: Vec<UnixStreamRelationshipV1>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct FileRuleV1 {
+    pub name: String,
+    pub path: String,
+    pub recursive: bool,
+    #[schemars(length(min = 1, max = 16))]
+    pub operations: Vec<KubernetesFileOperationV1>,
+    pub action: KubernetesRuleActionV1,
+}
+
+#[derive(
+    Clone, Copy, Debug, Deserialize, Eq, JsonSchema, Ord, PartialEq, PartialOrd, Serialize,
+)]
+pub enum KubernetesFileOperationV1 {
+    OpenRead,
+    OpenWrite,
+    Read,
+    Write,
+    MmapRead,
+    MmapWrite,
+    Create,
+    SetAttributes,
+    Unlink,
+    Link,
+    Rename,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct ExecutionRuleV1 {
+    pub name: String,
+    pub path: String,
+    pub recursive: bool,
+    #[schemars(length(min = 1, max = 3))]
+    pub operations: Vec<KubernetesExecutionOperationV1>,
+    pub action: KubernetesRuleActionV1,
+}
+
+#[derive(
+    Clone, Copy, Debug, Deserialize, Eq, JsonSchema, Ord, PartialEq, PartialOrd, Serialize,
+)]
+pub enum KubernetesExecutionOperationV1 {
+    Execute,
+    MmapExecute,
+    Mprotect,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+pub enum KubernetesRuleActionV1 {
+    Allow,
+    Deny,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct KubernetesNetworkRulesV1 {
+    #[schemars(length(max = 256))]
+    pub socket_controls: Vec<SocketControlRuleV1>,
+    #[schemars(length(max = 1024))]
+    pub destinations: Vec<AddressDestinationRuleV1>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct SocketControlRuleV1 {
+    #[schemars(length(min = 1, max = 5))]
+    pub operations: Vec<KubernetesSocketControlOperationV1>,
+    pub action: KubernetesRuleActionV1,
+}
+
+#[derive(
+    Clone, Copy, Debug, Deserialize, Eq, JsonSchema, Ord, PartialEq, PartialOrd, Serialize,
+)]
+pub enum KubernetesSocketControlOperationV1 {
+    Create,
+    Listen,
+    Accept,
+    Shutdown,
+    SetSocketOption,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct AddressDestinationRuleV1 {
+    pub name: String,
+    #[schemars(length(min = 1, max = 4))]
+    pub operations: Vec<KubernetesNetworkOperationV1>,
+    #[schemars(length(min = 1, max = 2))]
+    pub protocols: Vec<KubernetesNetworkProtocolV1>,
+    #[schemars(length(min = 1, max = 256))]
+    pub cidrs: Vec<String>,
+    #[schemars(length(min = 1, max = 256))]
+    pub ports: Vec<KubernetesNetworkPortRangeV1>,
+    pub action: KubernetesRuleActionV1,
+}
+
+#[derive(
+    Clone, Copy, Debug, Deserialize, Eq, JsonSchema, Ord, PartialEq, PartialOrd, Serialize,
+)]
+pub enum KubernetesNetworkOperationV1 {
+    Connect,
+    Send,
+    Receive,
+    Bind,
+}
+
+#[derive(
+    Clone, Copy, Debug, Deserialize, Eq, JsonSchema, Ord, PartialEq, PartialOrd, Serialize,
+)]
+pub enum KubernetesNetworkProtocolV1 {
+    #[serde(rename = "TCP")]
+    Tcp,
+    #[serde(rename = "UDP")]
+    Udp,
+}
+
+#[derive(
+    Clone, Copy, Debug, Deserialize, Eq, JsonSchema, Ord, PartialEq, PartialOrd, Serialize,
+)]
+#[serde(deny_unknown_fields)]
+pub struct KubernetesNetworkPortRangeV1 {
+    #[schemars(range(min = 1))]
+    pub first: u16,
+    #[schemars(range(min = 1))]
+    pub last: u16,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[schemars(transform = super::source::tagged_union_schema)]
+#[serde(tag = "operation")]
+pub enum ProcessControlRuleV1 {
+    Signal {
+        name: String,
+        #[serde(rename = "targetRole")]
+        target_role: String,
+        #[schemars(length(min = 1, max = 64))]
+        signals: Vec<u32>,
+        action: KubernetesRuleActionV1,
+    },
+    Ptrace {
+        name: String,
+        #[serde(rename = "targetRole")]
+        target_role: String,
+        #[schemars(length(min = 1, max = 64))]
+        requests: Vec<u32>,
+        action: KubernetesRuleActionV1,
+    },
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct UnixStreamRelationshipV1 {
+    pub name: String,
+    #[schemars(length(min = 1, max = 256))]
+    pub peer_roles: Vec<String>,
+    pub action: KubernetesRuleActionV1,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct FileExceptionGrantV1 {
+    pub name: String,
+    #[schemars(length(min = 1, max = 256))]
+    pub file_rules: Vec<String>,
+    pub maximum_duration: String,
+    #[schemars(range(min = 1))]
+    pub maximum_uses: u32,
+}
+
+#[derive(CustomResource, Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[kube(
+    group = "mithril.erebor.dev",
+    version = "v1alpha1",
+    kind = "WorkloadProtectionException",
+    plural = "workloadprotectionexceptions",
+    namespaced,
+    status = "WorkloadProtectionExceptionStatusV1",
+    shortname = "wpe"
+)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct WorkloadProtectionExceptionSpec {
+    pub policy_ref: LocalPolicyReferenceV1,
+    pub grant: String,
+    pub target: ExceptionTargetV1,
+    pub requested_duration: String,
+    #[schemars(range(min = 1))]
+    pub requested_uses: u32,
+}
+
+impl WorkloadProtectionExceptionSpec {
+    pub fn validate_request(&self, exception_id: &str) -> Result<()> {
+        ensure!(
+            !self.policy_ref.name.is_empty()
+                && !self.grant.is_empty()
+                && !self.target.pod.name.is_empty()
+                && canonical_uuid(&self.target.pod.uid)
+                && !self.target.container_name.is_empty()
+                && self.requested_uses > 0,
+            PolicyValidationSnafu {
+                policy_id: exception_id,
+                code: "CFG_KUBERNETES_EXCEPTION",
+                reason: "the exception needs one policy, grant, exact Pod UID, container, and nonzero use count",
+            }
+        );
+        parse_duration_ns(&self.requested_duration, exception_id)?;
+        Ok(())
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
-pub struct PolicyConditionV1 {
-    pub condition: PolicyConditionKindV1,
-    pub status: bool,
-    pub reason_code: String,
+pub struct LocalPolicyReferenceV1 {
+    pub name: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct ExceptionTargetV1 {
+    pub pod: ExceptionPodTargetV1,
+    pub container_name: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExceptionPodTargetV1 {
+    pub name: String,
+    pub uid: String,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+pub enum WorkloadProtectionExceptionStateV1 {
+    Pending,
+    Active,
+    Consumed,
+    Expired,
+    Revoked,
+    Failed,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct WorkloadProtectionExceptionStatusV1 {
     pub observed_generation: u64,
+    pub state: WorkloadProtectionExceptionStateV1,
+    #[schemars(length(max = 8))]
+    pub conditions: Vec<KubernetesConditionV1>,
+}
+
+impl Default for WorkloadProtectionExceptionStatusV1 {
+    fn default() -> Self {
+        Self {
+            observed_generation: 0,
+            state: WorkloadProtectionExceptionStateV1::Pending,
+            conditions: Vec::new(),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -266,7 +610,17 @@ pub struct PolicyBundleChunkV1 {
 }
 
 pub fn policy_custom_resource_definition() -> Result<CustomResourceDefinition> {
-    let mut crd = WorkloadProtectionProfile::crd();
+    bounded_custom_resource_definition(WorkloadProtectionPolicy::crd(), false)
+}
+
+pub fn exception_custom_resource_definition() -> Result<CustomResourceDefinition> {
+    bounded_custom_resource_definition(WorkloadProtectionException::crd(), true)
+}
+
+fn bounded_custom_resource_definition(
+    mut crd: CustomResourceDefinition,
+    immutable_spec: bool,
+) -> Result<CustomResourceDefinition> {
     for version in &mut crd.spec.versions {
         let schema = version
             .schema
@@ -290,6 +644,26 @@ pub fn policy_custom_resource_definition() -> Result<CustomResourceDefinition> {
         })?;
         // Kubernetes limits the allowed keywords at a resource root when status is enabled.
         bound_openapi_schema(&mut value, true);
+        if immutable_spec {
+            value
+                .pointer_mut("/properties/spec")
+                .and_then(serde_json::Value::as_object_mut)
+                .ok_or_else(|| {
+                    PolicyValidationSnafu {
+                        policy_id: "<kubernetes-crd>",
+                        code: "CFG_CRD_SCHEMA",
+                        reason: "the exception CRD has no spec schema".to_owned(),
+                    }
+                    .build()
+                })?
+                .insert(
+                    "x-kubernetes-validations".to_owned(),
+                    serde_json::json!([{
+                        "rule": "self == oldSelf",
+                        "message": "WorkloadProtectionException spec is immutable"
+                    }]),
+                );
+        }
         *schema = serde_json::from_value(value).map_err(|error| {
             PolicyValidationSnafu {
                 policy_id: "<kubernetes-crd>",
@@ -310,33 +684,1161 @@ pub fn canonical_policy_spec_digest(document: &PolicyDocumentV1) -> Result<Strin
     Ok(sha256(&canonical_policy_document_bytes(document)?))
 }
 
+pub fn canonical_kubernetes_policy_spec_bytes(
+    spec: &WorkloadProtectionPolicySpec,
+) -> Result<Vec<u8>> {
+    canonical_cbor("<kubernetes-policy>", spec)
+}
+
+pub fn canonical_kubernetes_policy_spec_digest(
+    spec: &WorkloadProtectionPolicySpec,
+) -> Result<String> {
+    Ok(sha256(&canonical_kubernetes_policy_spec_bytes(spec)?))
+}
+
 pub fn policy_custom_resource(
     name: &str,
     namespace: &str,
-    document: PolicyDocumentV1,
-) -> Result<WorkloadProtectionProfile> {
+    spec: WorkloadProtectionPolicySpec,
+) -> Result<WorkloadProtectionPolicy> {
     ensure!(
         !name.is_empty() && !namespace.is_empty(),
         PolicyValidationSnafu {
-            policy_id: document.profile_id(),
+            policy_id: name,
             code: "CFG_CRD_METADATA",
             reason: "the policy resource needs a name and namespace",
         }
     );
-    let digest = canonical_policy_spec_digest(&document)?;
-    let mut resource =
-        WorkloadProtectionProfile::new(name, WorkloadProtectionProfileSpec { policy: document });
+    let mut resource = WorkloadProtectionPolicy::new(name, spec);
     resource.metadata.namespace = Some(namespace.to_owned());
-    resource.metadata.annotations = Some(BTreeMap::from([(
-        SUBMITTED_SPEC_DIGEST_ANNOTATION.to_owned(),
-        digest,
-    )]));
     Ok(resource)
+}
+
+pub fn lower_kubernetes_policy(
+    resource: &WorkloadProtectionPolicy,
+    tenant_id: &str,
+    cluster_uid: &str,
+    namespace_uid: &str,
+) -> Result<PolicyDocumentV1> {
+    let object_uid = required_metadata(resource.metadata.uid.as_deref(), "object UID")?;
+    let generation = resource.metadata.generation.ok_or_else(|| {
+        PolicyValidationSnafu {
+            policy_id: object_uid,
+            code: "CFG_CRD_METADATA",
+            reason: "the CRD has no object generation".to_owned(),
+        }
+        .build()
+    })?;
+    let generation = u64::try_from(generation).map_err(|_| {
+        PolicyValidationSnafu {
+            policy_id: object_uid,
+            code: "CFG_CRD_METADATA",
+            reason: "the CRD object generation must be positive".to_owned(),
+        }
+        .build()
+    })?;
+    validate_public_policy(&resource.spec, object_uid)?;
+    ensure!(
+        generation > 0
+            && canonical_uuid(object_uid)
+            && canonical_uuid(tenant_id)
+            && canonical_uuid(cluster_uid)
+            && canonical_uuid(namespace_uid),
+        PolicyValidationSnafu {
+            policy_id: object_uid,
+            code: "CFG_CRD_IDENTITY",
+            reason:
+                "policy lowering needs canonical authenticated identities and a nonzero generation",
+        }
+    );
+
+    let protected_scope_id = derived_uuid(&[
+        b"MITHRIL-KUBERNETES-PROTECTED-SCOPE-V1\0",
+        object_uid.as_bytes(),
+    ]);
+    let execution_set_id = derived_uuid(&[
+        b"MITHRIL-KUBERNETES-POLICY-EXECUTION-SET-V1\0",
+        object_uid.as_bytes(),
+    ]);
+    let label_requirements = lower_label_selector(&resource.spec.pod_selector);
+    let mut workload_selectors = Vec::with_capacity(resource.spec.containers.len());
+    let mut entry_role_assignments = Vec::with_capacity(resource.spec.containers.len() * 2);
+    let mut role_selectors = BTreeMap::<String, BTreeSet<String>>::new();
+    let mut role_entry_kinds = BTreeMap::<String, BTreeSet<EntryKindV1>>::new();
+    for (index, container) in resource.spec.containers.iter().enumerate() {
+        let selector_id = format!("container-{index}");
+        workload_selectors.push(WorkloadSelectorV1 {
+            workload_selector_id: selector_id.clone(),
+            cluster_uids: vec![cluster_uid.to_owned()],
+            namespace_uids: vec![namespace_uid.to_owned()],
+            controller_uids: Vec::new(),
+            service_account_uids: Vec::new(),
+            pod_label_requirements: label_requirements.clone(),
+            container_names: sorted_unique(container.names.clone()),
+            container_kinds: sorted_unique(
+                container
+                    .kinds
+                    .iter()
+                    .copied()
+                    .map(ContainerKindV1::from)
+                    .collect(),
+            ),
+            image_digests: sorted_unique(container.images.clone()),
+        });
+        for (suffix, role, entry_kind, classification, ambiguity, restricted) in [
+            (
+                "initial",
+                &container.initial_role,
+                EntryKindV1::ContainerStart,
+                RootClassificationV1::ExactInitial,
+                AmbiguityDispositionV1::DenyProtectedEffects,
+                None,
+            ),
+            (
+                "external",
+                &container.external_role,
+                EntryKindV1::ExternalRuntimeUnknown,
+                RootClassificationV1::ConservativeExternalUnknown,
+                AmbiguityDispositionV1::RestrictExternal,
+                Some(container.external_role.clone()),
+            ),
+        ] {
+            role_selectors
+                .entry(role.clone())
+                .or_default()
+                .insert(selector_id.clone());
+            role_entry_kinds
+                .entry(role.clone())
+                .or_default()
+                .insert(entry_kind);
+            entry_role_assignments.push(EntryRoleAssignmentV1 {
+                assignment_id: format!("container-{index}-{suffix}"),
+                workload_selector_ids: vec![selector_id.clone()],
+                entry_kinds: vec![entry_kind],
+                container_kinds: workload_selectors[index].container_kinds.clone(),
+                immutable_definition_digests: Vec::new(),
+                accepted_classifications: vec![classification],
+                required_purpose_source_capability_id: None,
+                required_administrative_exec_approval: false,
+                resulting_role_id: role.clone(),
+                on_missing_or_unequal_ambiguity: ambiguity,
+                unknown_restricted_role_id: restricted,
+            });
+        }
+    }
+    entry_role_assignments.sort_by(|left, right| left.assignment_id.cmp(&right.assignment_id));
+
+    let all_selector_ids = workload_selectors
+        .iter()
+        .map(|selector| selector.workload_selector_id.clone())
+        .collect::<Vec<_>>();
+    let mut path_selectors = Vec::new();
+    let mut path_selector_ids = BTreeMap::<(String, bool), String>::new();
+    let mut rules = Vec::new();
+    let mut effect_family_defaults = Vec::new();
+    let mut destination_policies = Vec::new();
+    let mut ipc_relationship_rules = Vec::new();
+    let mut file_rule_actions = BTreeMap::new();
+
+    let mut roles = resource.spec.roles.clone();
+    roles.sort_by(|left, right| left.name.cmp(&right.name));
+    for role in &roles {
+        let selectors = role_selectors
+            .get(&role.name)
+            .map(|values| values.iter().cloned().collect::<Vec<_>>())
+            .unwrap_or_default();
+        let entry_kinds = role_entry_kinds
+            .get(&role.name)
+            .map(|values| values.iter().copied().collect::<Vec<_>>())
+            .unwrap_or_default();
+        let subject = rule_subject(
+            selectors,
+            protected_scope_id.clone(),
+            execution_set_id.clone(),
+            entry_kinds,
+            role.name.clone(),
+        );
+        for file in &role.files {
+            let selector_id = path_selector_id(
+                &mut path_selectors,
+                &mut path_selector_ids,
+                &file.path,
+                file.recursive,
+            );
+            let operations = sorted_unique(
+                file.operations
+                    .iter()
+                    .copied()
+                    .map(KubernetesFileOperationV1::internal_name)
+                    .map(str::to_owned)
+                    .collect(),
+            );
+            rules.push(local_rule(
+                file.name.clone(),
+                subject.clone(),
+                EffectFamilyV1::File,
+                operations,
+                LocalObjectSelectorV1::PathSelectors {
+                    path_selector_ids: vec![selector_id],
+                },
+                file.action,
+            ));
+            file_rule_actions.insert(file.name.clone(), file.action);
+        }
+        for execution in &role.execution {
+            let selector_id = path_selector_id(
+                &mut path_selectors,
+                &mut path_selector_ids,
+                &execution.path,
+                execution.recursive,
+            );
+            rules.push(local_rule(
+                execution.name.clone(),
+                subject.clone(),
+                EffectFamilyV1::Exec,
+                sorted_unique(
+                    execution
+                        .operations
+                        .iter()
+                        .copied()
+                        .map(KubernetesExecutionOperationV1::internal_name)
+                        .map(str::to_owned)
+                        .collect(),
+                ),
+                LocalObjectSelectorV1::PathSelectors {
+                    path_selector_ids: vec![selector_id],
+                },
+                execution.action,
+            ));
+        }
+        let socket_actions = role
+            .network
+            .socket_controls
+            .iter()
+            .flat_map(|rule| {
+                rule.operations
+                    .iter()
+                    .copied()
+                    .map(move |operation| (operation, rule.action))
+            })
+            .collect::<BTreeMap<_, _>>();
+        effect_family_defaults.extend(conservative_defaults(&role.name, &socket_actions));
+        for destination in &role.network.destinations {
+            let mut ipv4_prefixes = destination
+                .cidrs
+                .iter()
+                .filter(|cidr| !cidr.contains(':'))
+                .cloned()
+                .collect::<Vec<_>>();
+            let mut ipv6_prefixes = destination
+                .cidrs
+                .iter()
+                .filter(|cidr| cidr.contains(':'))
+                .cloned()
+                .collect::<Vec<_>>();
+            ipv4_prefixes.sort();
+            ipv6_prefixes.sort();
+            destination_policies.push(DestinationPolicyRecordV1 {
+                destination_policy_id: destination.name.clone(),
+                protocols: sorted_unique(
+                    destination
+                        .protocols
+                        .iter()
+                        .copied()
+                        .map(NetworkProtocolV1::from)
+                        .collect(),
+                ),
+                ipv4_prefixes,
+                ipv6_prefixes,
+                port_ranges: sorted_unique(
+                    destination
+                        .ports
+                        .iter()
+                        .copied()
+                        .map(NetworkPortRangeV1::from)
+                        .collect(),
+                ),
+                required_network_namespace_ids: Vec::new(),
+                service_identities: Vec::new(),
+                final_address_required: true,
+            });
+            rules.push(local_rule(
+                destination.name.clone(),
+                subject.clone(),
+                EffectFamilyV1::Network,
+                sorted_unique(
+                    destination
+                        .operations
+                        .iter()
+                        .copied()
+                        .map(KubernetesNetworkOperationV1::internal_name)
+                        .map(str::to_owned)
+                        .collect(),
+                ),
+                LocalObjectSelectorV1::Destinations {
+                    destination_policy_ids: vec![destination.name.clone()],
+                },
+                destination.action,
+            ));
+        }
+        for process_control in &role.process_control {
+            let (name, target_role, operations, action) = match process_control {
+                ProcessControlRuleV1::Signal {
+                    name,
+                    target_role,
+                    signals,
+                    action,
+                } => (
+                    name,
+                    target_role,
+                    signals
+                        .iter()
+                        .map(|signal| format!("SIGNAL_{signal}"))
+                        .collect(),
+                    *action,
+                ),
+                ProcessControlRuleV1::Ptrace {
+                    name,
+                    target_role,
+                    requests,
+                    action,
+                } => (
+                    name,
+                    target_role,
+                    requests
+                        .iter()
+                        .map(|request| format!("PTRACE_ACCESS_{request}"))
+                        .collect(),
+                    *action,
+                ),
+            };
+            rules.push(local_rule(
+                name.clone(),
+                subject.clone(),
+                EffectFamilyV1::Privilege,
+                sorted_unique(operations),
+                LocalObjectSelectorV1::SecurityObjects {
+                    security_object_ids: vec!["PROCESS".to_owned()],
+                    target_selector_ids: vec![target_role.clone()],
+                },
+                action,
+            ));
+        }
+        for relationship in &role.unix_streams {
+            ipc_relationship_rules.push(IpcRelationshipRuleV1 {
+                relationship_rule_id: relationship.name.clone(),
+                source_role_ids: vec![role.name.clone()],
+                peer_role_ids: sorted_unique(relationship.peer_roles.clone()),
+                channel_class_ids: vec!["UNIX_STREAM".to_owned()],
+                operations: vec!["IPC_ACCESS".to_owned()],
+                requested_disposition: relationship.action.into(),
+                errno: (relationship.action == KubernetesRuleActionV1::Deny)
+                    .then_some(ErrnoV1::Eacces),
+            });
+        }
+    }
+    rules.sort_by(|left, right| left.rule_id.cmp(&right.rule_id));
+    path_selectors.sort_by(|left, right| left.path_selector_id.cmp(&right.path_selector_id));
+    destination_policies
+        .sort_by(|left, right| left.destination_policy_id.cmp(&right.destination_policy_id));
+    effect_family_defaults.sort_by(|left, right| {
+        (&left.role_ids, left.effect_family, &left.operations).cmp(&(
+            &right.role_ids,
+            right.effect_family,
+            &right.operations,
+        ))
+    });
+    ipc_relationship_rules
+        .sort_by(|left, right| left.relationship_rule_id.cmp(&right.relationship_rule_id));
+
+    let file_exception_grants = resource
+        .spec
+        .exception_grants
+        .iter()
+        .map(|grant| {
+            ensure!(
+                grant.file_rules.iter().all(|rule| {
+                    file_rule_actions.get(rule) == Some(&KubernetesRuleActionV1::Deny)
+                }),
+                PolicyValidationSnafu {
+                    policy_id: object_uid,
+                    code: "CFG_EXCEPTION_GRANT",
+                    reason: format!(
+                        "exception grant `{}` must reference denied file rules",
+                        grant.name
+                    ),
+                }
+            );
+            Ok(FileExceptionGrantTemplateV1 {
+                grant_id: grant.name.clone(),
+                denied_file_rule_ids: sorted_unique(grant.file_rules.clone()),
+                maximum_duration_ns: parse_duration_ns(&grant.maximum_duration, object_uid)?,
+                maximum_uses: grant.maximum_uses,
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    let role_definitions = roles
+        .iter()
+        .map(|role| RoleDefinitionV1 {
+            role_id: role.name.clone(),
+            maximum_native_depth: 1,
+            default_process_state_id: "base".to_owned(),
+            permitted_entry_kinds: role_entry_kinds
+                .get(&role.name)
+                .map(|values| values.iter().copied().collect())
+                .unwrap_or_default(),
+            description_artifact_digest: None,
+        })
+        .collect::<Vec<_>>();
+    let role_ids = role_definitions
+        .iter()
+        .map(|role| role.role_id.clone())
+        .collect::<Vec<_>>();
+    let entry_kind_ids = role_entry_kinds
+        .values()
+        .flatten()
+        .copied()
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    let finding = fixed_default_finding();
+    let network_policy = (!destination_policies.is_empty()).then_some(NetworkPolicyV1 {
+        dns_mode: DnsPolicyModeV1::DenyDnsAndUsePolicyResolvedAddresses,
+        destination_policies,
+    });
+
+    let document = PolicyDocumentV1 {
+        api_version: "mithril.erebor.dev/v1".to_owned(),
+        kind: "ProtectionPolicy".to_owned(),
+        metadata: PolicyMetadataV1 {
+            profile_id: object_uid.to_owned(),
+            profile_version: generation,
+            trust_domain_id: tenant_id.to_owned(),
+            valid_from_utc: "1970-01-01T00:00:00Z".to_owned(),
+            valid_until_utc: None,
+        },
+        required_capability_ids: vec![
+            "EXACT_NATIVE_IDENTITY".to_owned(),
+            "LOCAL_EFFECT_OBSERVATION".to_owned(),
+        ],
+        protected_universe: ProtectedUniverseV1 {
+            workload_selector_ids: all_selector_ids.clone(),
+            protected_scope_ids: vec![protected_scope_id],
+            execution_set_ids: vec![execution_set_id],
+            role_ids,
+            entry_kind_ids,
+            object_class_ids: if path_selectors.is_empty() {
+                Vec::new()
+            } else {
+                vec!["KUBERNETES_PATH".to_owned()]
+            },
+            provider_account_ids: Vec::new(),
+        },
+        workload_selectors,
+        classifier_bindings: if path_selectors.is_empty() {
+            Vec::new()
+        } else {
+            vec![ObjectClassifierBindingV1 {
+                classifier_binding_id: "kubernetes-path".to_owned(),
+                object_class_id: "KUBERNETES_PATH".to_owned(),
+                // Path selectors carry the authority. This classifier only anchors the
+                // internal object registry and does not add volume or content identity.
+                selector: ObjectClassifierSelectorV1::FilesystemObject {
+                    workload_selector_ids: all_selector_ids,
+                    mount_source_class_ids: Vec::new(),
+                    relative_component_bytes: Vec::new(),
+                    filesystem_type_ids: Vec::new(),
+                    required_object_type: FilesystemObjectTypeV1::RegularFile,
+                },
+                required_capability_ids: vec!["EXACT_FILE_OBJECT".to_owned()],
+                unknown_result: UnknownClassifierResultV1::Deny,
+            }]
+        },
+        path_selectors,
+        network_policy,
+        path_tree_deny_floors: Vec::new(),
+        path_pattern_precedence: Default::default(),
+        roles: role_definitions,
+        entry_role_assignments,
+        native_transition_rules: Vec::new(),
+        state_bit_definitions: Vec::new(),
+        process_state_definitions: vec![ProcessStateDefinitionV1 {
+            process_state_id: "base".to_owned(),
+            state_bits: Vec::new(),
+        }],
+        native_authority_state_rules: Vec::new(),
+        ipc_relationship_rules,
+        unmatched_ipc_disposition: PolicyDispositionV1::Deny,
+        effect_family_defaults,
+        authority_behavior_rules: Vec::new(),
+        correlation_package_bindings: Vec::new(),
+        default_postures: DefaultPosturesV1 {
+            missing_task_identity: DefaultPostureActionV1 {
+                requested_disposition: PolicyDispositionV1::Deny,
+                finding: finding.clone(),
+                unknown_restricted_role_id: None,
+            },
+            required_classifier_unknown: DefaultPostureActionV1 {
+                requested_disposition: PolicyDispositionV1::Deny,
+                finding: finding.clone(),
+                unknown_restricted_role_id: None,
+            },
+            unresolved_or_external_root: DefaultPostureActionV1 {
+                requested_disposition: PolicyDispositionV1::Deny,
+                finding,
+                unknown_restricted_role_id: resource
+                    .spec
+                    .containers
+                    .first()
+                    .map(|container| container.external_role.clone()),
+            },
+        },
+        notification_routes: Vec::new(),
+        response_bindings: Vec::new(),
+        file_exception_grants,
+        exceptions: Vec::new(),
+        rules,
+        source_coverage_health_rules: Vec::new(),
+        rollout: RolloutV1 {
+            rollout_generation: generation,
+            desired_profile_mode: resource.spec.mode.into(),
+            cohort_selection: CohortSelectionV1::AllBoundExecutionSets,
+            explicit_execution_set_ids: Vec::new(),
+            selector_hash_modulus: 1,
+            selected_bucket_ids: vec![0],
+        },
+    };
+    // Lowering validates the closed document before reconciliation can persist the source.
+    document.validate_closed()?;
+    Ok(document)
+}
+
+fn validate_public_policy(spec: &WorkloadProtectionPolicySpec, policy_id: &str) -> Result<()> {
+    let role_names = spec
+        .roles
+        .iter()
+        .map(|role| role.name.as_str())
+        .collect::<BTreeSet<_>>();
+    let container_roles = spec.containers.iter().flat_map(|container| {
+        [
+            container.initial_role.as_str(),
+            container.external_role.as_str(),
+        ]
+    });
+    ensure!(
+        !spec.containers.is_empty()
+            && spec.containers.len() <= 256
+            && !spec.roles.is_empty()
+            && spec.roles.len() <= 256
+            && role_names.len() == spec.roles.len()
+            && container_roles
+                .clone()
+                .all(|role| role_names.contains(role))
+            && role_names
+                .iter()
+                .all(|role| container_roles.clone().any(|used| used == *role)),
+        PolicyValidationSnafu {
+            policy_id,
+            code: "CFG_KUBERNETES_POLICY_ROLES",
+            reason: "containers and roles must be nonempty, unique, bounded, and fully referenced",
+        }
+    );
+    for container in &spec.containers {
+        ensure!(
+            !container.names.is_empty()
+                && !container.kinds.is_empty()
+                && !container.images.is_empty()
+                && all_distinct(&container.names)
+                && all_distinct(&container.kinds)
+                && all_distinct(&container.images)
+                && container.images.iter().all(|image| pinned_image(image)),
+            PolicyValidationSnafu {
+                policy_id,
+                code: "CFG_KUBERNETES_CONTAINER_MATCH",
+                reason:
+                    "each container match needs distinct names, kinds, and digest-pinned images",
+            }
+        );
+    }
+    let mut names = BTreeSet::new();
+    let mut socket_actions = BTreeMap::new();
+    for role in &spec.roles {
+        for rule in &role.files {
+            validate_path_rule(
+                policy_id,
+                &rule.name,
+                &rule.path,
+                rule.recursive,
+                rule.action,
+                &mut names,
+            )?;
+            ensure!(
+                !rule.operations.is_empty() && all_distinct(&rule.operations),
+                PolicyValidationSnafu {
+                    policy_id,
+                    code: "CFG_KUBERNETES_FILE_RULE",
+                    reason: format!(
+                        "file rule `{}` has duplicate or empty operations",
+                        rule.name
+                    ),
+                }
+            );
+        }
+        for rule in &role.execution {
+            validate_path_rule(
+                policy_id,
+                &rule.name,
+                &rule.path,
+                rule.recursive,
+                rule.action,
+                &mut names,
+            )?;
+            ensure!(
+                !rule.operations.is_empty() && all_distinct(&rule.operations),
+                PolicyValidationSnafu {
+                    policy_id,
+                    code: "CFG_KUBERNETES_EXECUTION_RULE",
+                    reason: format!(
+                        "execution rule `{}` has duplicate or empty operations",
+                        rule.name
+                    ),
+                }
+            );
+        }
+        socket_actions.clear();
+        for rule in &role.network.socket_controls {
+            ensure!(
+                !rule.operations.is_empty()
+                    && all_distinct(&rule.operations)
+                    && rule.operations.iter().all(|operation| {
+                        socket_actions
+                            .insert(*operation, rule.action)
+                            .is_none_or(|old| old == rule.action)
+                    }),
+                PolicyValidationSnafu {
+                    policy_id,
+                    code: "CFG_KUBERNETES_SOCKET_CONTROL",
+                    reason: format!(
+                        "role `{}` has empty, duplicate, or conflicting socket controls",
+                        role.name
+                    ),
+                }
+            );
+        }
+        for rule in &role.network.destinations {
+            ensure!(
+                names.insert(rule.name.as_str())
+                    && !rule.operations.is_empty()
+                    && !rule.protocols.is_empty()
+                    && !rule.cidrs.is_empty()
+                    && !rule.ports.is_empty()
+                    && all_distinct(&rule.operations)
+                    && all_distinct(&rule.protocols)
+                    && all_distinct(&rule.cidrs)
+                    && all_distinct(&rule.ports),
+                PolicyValidationSnafu {
+                    policy_id,
+                    code: "CFG_KUBERNETES_NETWORK_RULE",
+                    reason: format!(
+                        "network rule `{}` is duplicate, empty, or has duplicate values",
+                        rule.name
+                    ),
+                }
+            );
+        }
+        for rule in &role.process_control {
+            let (name, target_role, values, action, ptrace) = match rule {
+                ProcessControlRuleV1::Signal {
+                    name,
+                    target_role,
+                    signals,
+                    action,
+                } => (name, target_role, signals, action, false),
+                ProcessControlRuleV1::Ptrace {
+                    name,
+                    target_role,
+                    requests,
+                    action,
+                } => (name, target_role, requests, action, true),
+            };
+            ensure!(
+                names.insert(name.as_str())
+                    && role_names.contains(target_role.as_str())
+                    && !values.is_empty()
+                    && all_distinct(values)
+                    && (!ptrace || *action == KubernetesRuleActionV1::Deny),
+                PolicyValidationSnafu {
+                    policy_id,
+                    code: "CFG_KUBERNETES_PROCESS_CONTROL",
+                    reason: format!("process-control rule `{name}` is invalid"),
+                }
+            );
+        }
+        for rule in &role.unix_streams {
+            ensure!(
+                names.insert(rule.name.as_str())
+                    && !rule.peer_roles.is_empty()
+                    && all_distinct(&rule.peer_roles)
+                    && rule
+                        .peer_roles
+                        .iter()
+                        .all(|peer| role_names.contains(peer.as_str())),
+                PolicyValidationSnafu {
+                    policy_id,
+                    code: "CFG_KUBERNETES_UNIX_STREAM",
+                    reason: format!("Unix-stream rule `{}` is invalid", rule.name),
+                }
+            );
+        }
+    }
+    let grant_names = spec
+        .exception_grants
+        .iter()
+        .map(|grant| grant.name.as_str())
+        .collect::<BTreeSet<_>>();
+    ensure!(
+        grant_names.len() == spec.exception_grants.len()
+            && spec.exception_grants.iter().all(|grant| {
+                !grant.file_rules.is_empty()
+                    && all_distinct(&grant.file_rules)
+                    && grant.maximum_uses > 0
+                    && parse_duration_ns(&grant.maximum_duration, policy_id).is_ok()
+            }),
+        PolicyValidationSnafu {
+            policy_id,
+            code: "CFG_EXCEPTION_GRANT",
+            reason: "exception grants must be unique, nonempty, and bounded",
+        }
+    );
+    validate_label_selector(&spec.pod_selector, policy_id)
+}
+
+fn validate_path_rule<'a>(
+    policy_id: &str,
+    name: &'a str,
+    path: &str,
+    recursive: bool,
+    action: KubernetesRuleActionV1,
+    names: &mut BTreeSet<&'a str>,
+) -> Result<()> {
+    ensure!(
+        names.insert(name)
+            && super::canonical_path_components(policy_id, path).is_ok()
+            && (!recursive || action == KubernetesRuleActionV1::Deny),
+        PolicyValidationSnafu {
+            policy_id,
+            code: "CFG_KUBERNETES_PATH_RULE",
+            reason: format!(
+                "path rule `{name}` is duplicate, noncanonical, or uses unqualified recursive allow"
+            ),
+        }
+    );
+    Ok(())
+}
+
+fn validate_label_selector(selector: &KubernetesLabelSelectorV1, policy_id: &str) -> Result<()> {
+    ensure!(
+        selector.match_labels.len() <= 256
+            && selector.match_expressions.len() <= 256
+            && selector.match_expressions.iter().all(|requirement| {
+                !requirement.key.is_empty()
+                    && match requirement.operator {
+                        KubernetesLabelSelectorOperatorV1::In
+                        | KubernetesLabelSelectorOperatorV1::NotIn => {
+                            !requirement.values.is_empty() && all_distinct(&requirement.values)
+                        }
+                        KubernetesLabelSelectorOperatorV1::Exists
+                        | KubernetesLabelSelectorOperatorV1::DoesNotExist => {
+                            requirement.values.is_empty()
+                        }
+                    }
+            }),
+        PolicyValidationSnafu {
+            policy_id,
+            code: "CFG_KUBERNETES_LABEL_SELECTOR",
+            reason: "podSelector is not a valid bounded Kubernetes label selector",
+        }
+    );
+    Ok(())
+}
+
+fn lower_label_selector(selector: &KubernetesLabelSelectorV1) -> Vec<LabelRequirementV1> {
+    let mut requirements = selector
+        .match_labels
+        .iter()
+        .map(|(key, value)| LabelRequirementV1 {
+            key: key.clone(),
+            operator: LabelOperatorV1::In,
+            values: vec![value.clone()],
+        })
+        .chain(
+            selector
+                .match_expressions
+                .iter()
+                .map(|requirement| LabelRequirementV1 {
+                    key: requirement.key.clone(),
+                    operator: requirement.operator.into(),
+                    values: sorted_unique(requirement.values.clone()),
+                }),
+        )
+        .collect::<Vec<_>>();
+    requirements.sort_by(|left, right| {
+        (&left.key, left.operator, &left.values).cmp(&(&right.key, right.operator, &right.values))
+    });
+    requirements
+}
+
+fn rule_subject(
+    workload_selector_ids: Vec<String>,
+    protected_scope_id: String,
+    execution_set_id: String,
+    entry_kind_ids: Vec<EntryKindV1>,
+    role_id: String,
+) -> CommonSubjectMatchV1 {
+    CommonSubjectMatchV1 {
+        workload_selector_ids,
+        protected_scope_ids: vec![protected_scope_id],
+        execution_set_ids: vec![execution_set_id],
+        entry_kind_ids,
+        role_ids: vec![role_id],
+        required_process_state_ids: vec!["base".to_owned()],
+        forbidden_process_state_ids: Vec::new(),
+    }
+}
+
+fn path_selector_id(
+    selectors: &mut Vec<PathSelectorV1>,
+    ids: &mut BTreeMap<(String, bool), String>,
+    path: &str,
+    recursive: bool,
+) -> String {
+    let key = (path.to_owned(), recursive);
+    if let Some(id) = ids.get(&key) {
+        return id.clone();
+    }
+    let id = format!("path-{}", ids.len());
+    selectors.push(if recursive {
+        PathSelectorV1::recursive(&id, path, "KUBERNETES_PATH")
+    } else {
+        PathSelectorV1::exact(&id, path, "KUBERNETES_PATH")
+    });
+    ids.insert(key, id.clone());
+    id
+}
+
+fn local_rule(
+    rule_id: String,
+    subject: CommonSubjectMatchV1,
+    family: EffectFamilyV1,
+    operations: Vec<String>,
+    object: LocalObjectSelectorV1,
+    action: KubernetesRuleActionV1,
+) -> DetectionDispositionRuleV1 {
+    DetectionDispositionRuleV1 {
+        schema_version: 1,
+        rule_id,
+        enabled: true,
+        priority: 0,
+        evaluation_stage: EvaluationStageV1::LocalPreEffect,
+        rule_match: RuleMatchV1::LocalPreEffect(LocalEffectMatchV1 {
+            subject,
+            effect_families: vec![family],
+            operation_ids: operations,
+            object,
+            binding_lifecycle_states: vec![BindingLifecycleV1::Active],
+            required_proof: kernel_decision_proof(),
+        }),
+        requested_disposition: action.into(),
+        errno: (action == KubernetesRuleActionV1::Deny).then_some(ErrnoV1::Eacces),
+        finding: None,
+        response_binding_ids: Vec::new(),
+        fallback_by_condition: Vec::new(),
+        budgets: BudgetSetV1::default(),
+        overrides_rule_ids: Vec::new(),
+        exception_ids: Vec::new(),
+        valid_from_utc_ns: None,
+        valid_until_utc_ns: None,
+    }
+}
+
+fn conservative_defaults(
+    role_id: &str,
+    socket_actions: &BTreeMap<KubernetesSocketControlOperationV1, KubernetesRuleActionV1>,
+) -> Vec<EffectFamilyDefaultV1> {
+    let mut defaults = vec![
+        default_rule(
+            role_id,
+            EffectFamilyV1::File,
+            &[
+                "OPEN_READ",
+                "OPEN_WRITE",
+                "READ",
+                "WRITE",
+                "MMAP_READ",
+                "MMAP_WRITE",
+                "MPROTECT",
+                "CREATE",
+                "SETATTR",
+                "UNLINK",
+                "LINK",
+                "RENAME",
+            ],
+            KubernetesRuleActionV1::Deny,
+        ),
+        default_rule(
+            role_id,
+            EffectFamilyV1::Exec,
+            &["EXECUTE", "MMAP_EXEC", "MPROTECT"],
+            KubernetesRuleActionV1::Deny,
+        ),
+        default_rule(
+            role_id,
+            EffectFamilyV1::Network,
+            &["BIND", "CONNECT", "SEND", "RECEIVE"],
+            KubernetesRuleActionV1::Deny,
+        ),
+        default_rule(
+            role_id,
+            EffectFamilyV1::Privilege,
+            &["PTRACE", "SIGNAL"],
+            KubernetesRuleActionV1::Deny,
+        ),
+    ];
+    for operation in [
+        KubernetesSocketControlOperationV1::Create,
+        KubernetesSocketControlOperationV1::Listen,
+        KubernetesSocketControlOperationV1::Accept,
+        KubernetesSocketControlOperationV1::Shutdown,
+        KubernetesSocketControlOperationV1::SetSocketOption,
+    ] {
+        defaults.push(default_rule(
+            role_id,
+            EffectFamilyV1::Network,
+            &[operation.internal_name()],
+            socket_actions
+                .get(&operation)
+                .copied()
+                .unwrap_or(KubernetesRuleActionV1::Deny),
+        ));
+    }
+    defaults
+}
+
+fn default_rule(
+    role_id: &str,
+    family: EffectFamilyV1,
+    operations: &[&str],
+    action: KubernetesRuleActionV1,
+) -> EffectFamilyDefaultV1 {
+    EffectFamilyDefaultV1 {
+        role_ids: vec![role_id.to_owned()],
+        effect_family: family,
+        operations: sorted_unique(operations.iter().map(|value| (*value).to_owned()).collect()),
+        requested_disposition: action.into(),
+        errno: (action == KubernetesRuleActionV1::Deny).then_some(ErrnoV1::Eacces),
+        finding: None,
+    }
+}
+
+fn kernel_decision_proof() -> ProofQualityPredicateV1 {
+    ProofQualityPredicateV1 {
+        source_authority: vec![SourceAuthorityV1::KernelDecision],
+        local_subject_binding: vec![LocalSubjectBindingV1::ExactTask],
+        remote_subject_binding: vec![RemoteSubjectBindingV1::None],
+        operation_result_authority: vec![OperationResultAuthorityV1::PreEffectDecision],
+        temporal_coverage: vec![TemporalCoverageV1::Complete],
+        integrity: vec![ProofIntegrityV1::LocalAttested],
+    }
+}
+
+fn fixed_default_finding() -> FindingSpecV1 {
+    FindingSpecV1 {
+        reason_code: "KUBERNETES_POLICY_FAIL_CLOSED".to_owned(),
+        severity: SeverityV1::High,
+        route_ids: Vec::new(),
+        evidence_level: EvidenceLevelV1::Standard,
+        title_template_id: None,
+    }
+}
+
+fn parse_duration_ns(value: &str, policy_id: &str) -> Result<u64> {
+    let (digits, multiplier) = if let Some(digits) = value.strip_suffix("ns") {
+        (digits, 1_u64)
+    } else if let Some(digits) = value.strip_suffix("us") {
+        (digits, 1_000)
+    } else if let Some(digits) = value.strip_suffix("ms") {
+        (digits, 1_000_000)
+    } else if let Some(digits) = value.strip_suffix('s') {
+        (digits, 1_000_000_000)
+    } else if let Some(digits) = value.strip_suffix('m') {
+        (digits, 60 * 1_000_000_000)
+    } else if let Some(digits) = value.strip_suffix('h') {
+        (digits, 60 * 60 * 1_000_000_000)
+    } else {
+        ("", 0)
+    };
+    let duration = digits
+        .parse::<u64>()
+        .ok()
+        .and_then(|duration| duration.checked_mul(multiplier))
+        .filter(|duration| *duration > 0)
+        .ok_or_else(|| {
+            PolicyValidationSnafu {
+                policy_id,
+                code: "CFG_DURATION",
+                reason: format!("`{value}` is not a bounded nonzero duration"),
+            }
+            .build()
+        })?;
+    Ok(duration)
+}
+
+fn pinned_image(value: &str) -> bool {
+    value.rsplit_once("@sha256:").is_some_and(|(name, digest)| {
+        !name.is_empty()
+            && digest.len() == 64
+            && digest
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    })
+}
+
+fn all_distinct<T: Ord + Clone>(values: &[T]) -> bool {
+    values.iter().cloned().collect::<BTreeSet<_>>().len() == values.len()
+}
+
+fn sorted_unique<T: Ord>(mut values: Vec<T>) -> Vec<T> {
+    values.sort();
+    values.dedup();
+    values
+}
+
+fn derived_uuid(parts: &[&[u8]]) -> String {
+    let mut digest = Sha256::new();
+    for part in parts {
+        digest.update(part);
+    }
+    let mut bytes = [0_u8; 16];
+    bytes.copy_from_slice(&digest.finalize()[..16]);
+    bytes[6] = (bytes[6] & 0x0f) | 0x80;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    uuid::Uuid::from_bytes(bytes).hyphenated().to_string()
+}
+
+impl From<KubernetesContainerKindV1> for ContainerKindV1 {
+    fn from(value: KubernetesContainerKindV1) -> Self {
+        match value {
+            KubernetesContainerKindV1::Init => Self::Init,
+            KubernetesContainerKindV1::Sidecar => Self::Sidecar,
+            KubernetesContainerKindV1::Application => Self::Application,
+            KubernetesContainerKindV1::Ephemeral => Self::Ephemeral,
+        }
+    }
+}
+
+impl From<KubernetesPolicyModeV1> for ProfileModeV1 {
+    fn from(value: KubernetesPolicyModeV1) -> Self {
+        match value {
+            KubernetesPolicyModeV1::Observe => Self::Observe,
+            KubernetesPolicyModeV1::Protect => Self::Protect,
+        }
+    }
+}
+
+impl From<KubernetesRuleActionV1> for PolicyDispositionV1 {
+    fn from(value: KubernetesRuleActionV1) -> Self {
+        match value {
+            KubernetesRuleActionV1::Allow => Self::Allow,
+            KubernetesRuleActionV1::Deny => Self::Deny,
+        }
+    }
+}
+
+impl From<KubernetesLabelSelectorOperatorV1> for LabelOperatorV1 {
+    fn from(value: KubernetesLabelSelectorOperatorV1) -> Self {
+        match value {
+            KubernetesLabelSelectorOperatorV1::In => Self::In,
+            KubernetesLabelSelectorOperatorV1::NotIn => Self::NotIn,
+            KubernetesLabelSelectorOperatorV1::Exists => Self::Exists,
+            KubernetesLabelSelectorOperatorV1::DoesNotExist => Self::DoesNotExist,
+        }
+    }
+}
+
+impl From<KubernetesNetworkProtocolV1> for NetworkProtocolV1 {
+    fn from(value: KubernetesNetworkProtocolV1) -> Self {
+        match value {
+            KubernetesNetworkProtocolV1::Tcp => Self::Tcp,
+            KubernetesNetworkProtocolV1::Udp => Self::Udp,
+        }
+    }
+}
+
+impl From<KubernetesNetworkPortRangeV1> for NetworkPortRangeV1 {
+    fn from(value: KubernetesNetworkPortRangeV1) -> Self {
+        Self {
+            first: value.first,
+            last: value.last,
+        }
+    }
+}
+
+impl KubernetesFileOperationV1 {
+    const fn internal_name(self) -> &'static str {
+        match self {
+            Self::OpenRead => "OPEN_READ",
+            Self::OpenWrite => "OPEN_WRITE",
+            Self::Read => "READ",
+            Self::Write => "WRITE",
+            Self::MmapRead => "MMAP_READ",
+            Self::MmapWrite => "MMAP_WRITE",
+            Self::Create => "CREATE",
+            Self::SetAttributes => "SETATTR",
+            Self::Unlink => "UNLINK",
+            Self::Link => "LINK",
+            Self::Rename => "RENAME",
+        }
+    }
+}
+
+impl KubernetesExecutionOperationV1 {
+    const fn internal_name(self) -> &'static str {
+        match self {
+            Self::Execute => "EXECUTE",
+            Self::MmapExecute => "MMAP_EXEC",
+            Self::Mprotect => "MPROTECT",
+        }
+    }
+}
+
+impl KubernetesNetworkOperationV1 {
+    const fn internal_name(self) -> &'static str {
+        match self {
+            Self::Connect => "CONNECT",
+            Self::Send => "SEND",
+            Self::Receive => "RECEIVE",
+            Self::Bind => "BIND",
+        }
+    }
+}
+
+impl KubernetesSocketControlOperationV1 {
+    const fn internal_name(self) -> &'static str {
+        match self {
+            Self::Create => "SOCKET_CREATE",
+            Self::Listen => "LISTEN",
+            Self::Accept => "ACCEPT",
+            Self::Shutdown => "SHUTDOWN",
+            Self::SetSocketOption => "SETSOCKOPT",
+        }
+    }
 }
 
 impl PolicySourceRevisionV1 {
     pub fn from_resource(
-        resource: &WorkloadProtectionProfile,
+        resource: &WorkloadProtectionPolicy,
+        policy: &PolicyDocumentV1,
         tenant_id: &str,
         cluster_uid: &str,
         namespace_uid: &str,
@@ -348,7 +1850,7 @@ impl PolicySourceRevisionV1 {
         let object_name = required_metadata(metadata.name.as_deref(), "object name")?;
         let generation = metadata.generation.ok_or_else(|| {
             PolicyValidationSnafu {
-                policy_id: resource.spec.policy.profile_id(),
+                policy_id: policy.profile_id(),
                 code: "CFG_CRD_METADATA",
                 reason: "the CRD has no object generation".to_owned(),
             }
@@ -356,7 +1858,7 @@ impl PolicySourceRevisionV1 {
         })?;
         let object_generation = u64::try_from(generation).map_err(|_| {
             PolicyValidationSnafu {
-                policy_id: resource.spec.policy.profile_id(),
+                policy_id: policy.profile_id(),
                 code: "CFG_CRD_METADATA",
                 reason: "the CRD object generation must be positive".to_owned(),
             }
@@ -365,7 +1867,7 @@ impl PolicySourceRevisionV1 {
         ensure!(
             object_generation > 0,
             PolicyValidationSnafu {
-                policy_id: resource.spec.policy.profile_id(),
+                policy_id: policy.profile_id(),
                 code: "CFG_CRD_METADATA",
                 reason: "the CRD object generation must be nonzero",
             }
@@ -378,7 +1880,7 @@ impl PolicySourceRevisionV1 {
         ensure!(
             resource_version.len() <= 1024,
             PolicyValidationSnafu {
-                policy_id: resource.spec.policy.profile_id(),
+                policy_id: policy.profile_id(),
                 code: "CFG_CRD_RESOURCE_VERSION",
                 reason: "the opaque resource version exceeds 1024 bytes",
             }
@@ -392,27 +1894,14 @@ impl PolicySourceRevisionV1 {
             ensure!(
                 canonical_uuid(value),
                 PolicyValidationSnafu {
-                    policy_id: resource.spec.policy.profile_id(),
+                    policy_id: policy.profile_id(),
                     code: "CFG_CRD_IDENTITY",
                     reason: format!("{name} must be a canonical UUID"),
                 }
             );
         }
-        let canonical_spec_digest = canonical_policy_spec_digest(&resource.spec.policy)?;
-        // The submitted digest detects API servers or clients that prune unknown source fields.
-        let submitted_digest = metadata
-            .annotations
-            .as_ref()
-            .and_then(|annotations| annotations.get(SUBMITTED_SPEC_DIGEST_ANNOTATION));
-        ensure!(
-            submitted_digest == Some(&canonical_spec_digest),
-            PolicyValidationSnafu {
-                policy_id: resource.spec.policy.profile_id(),
-                code: "CFG_CRD_SILENT_PRUNE",
-                reason:
-                    "the strict-write canonical spec digest is absent or does not match stored spec",
-            }
-        );
+        let canonical_spec_digest = canonical_kubernetes_policy_spec_digest(&resource.spec)?;
+        let policy_document_digest = canonical_policy_spec_digest(policy)?;
         let mut revision = Self {
             schema_version: 1,
             tenant_id: tenant_id.to_owned(),
@@ -425,7 +1914,7 @@ impl PolicySourceRevisionV1 {
             kind: POLICY_KIND.to_owned(),
             object_generation,
             opaque_resource_version: resource_version.as_bytes().to_vec(),
-            policy_document_digest: canonical_spec_digest.clone(),
+            policy_document_digest,
             canonical_spec_digest,
             state,
             policy_source_revision_id: String::new(),
@@ -838,14 +2327,21 @@ impl PolicyRolloutCountsV1 {
     pub fn from_states<'a>(states: impl IntoIterator<Item = &'a PolicyRolloutStateV1>) -> Self {
         let mut counts = Self::default();
         for state in states {
+            counts.desired = counts.desired.saturating_add(1);
             match state.state {
-                PolicyRolloutStatusV1::Pending => counts.pending += 1,
-                PolicyRolloutStatusV1::Delivered => counts.delivered += 1,
-                PolicyRolloutStatusV1::Staged => counts.staged += 1,
-                PolicyRolloutStatusV1::Active => counts.active += 1,
-                PolicyRolloutStatusV1::Rejected => counts.rejected += 1,
-                PolicyRolloutStatusV1::Stale => counts.stale += 1,
-                PolicyRolloutStatusV1::Unknown => counts.unknown += 1,
+                PolicyRolloutStatusV1::Pending
+                | PolicyRolloutStatusV1::Delivered
+                | PolicyRolloutStatusV1::Staged => {
+                    counts.updating = counts.updating.saturating_add(1);
+                }
+                PolicyRolloutStatusV1::Active => {
+                    counts.active = counts.active.saturating_add(1);
+                }
+                PolicyRolloutStatusV1::Rejected
+                | PolicyRolloutStatusV1::Stale
+                | PolicyRolloutStatusV1::Unknown => {
+                    counts.failed = counts.failed.saturating_add(1);
+                }
             }
         }
         counts

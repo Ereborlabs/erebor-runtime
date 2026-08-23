@@ -220,6 +220,21 @@ impl Validate for PathTreeDenyFloorV1 {
     }
 }
 
+impl Validate for FileExceptionGrantTemplateV1 {
+    fn validate(&self) -> ValidationResult {
+        PolicyValue::LocalId(&self.grant_id).validate()?;
+        require!(
+            !self.denied_file_rule_ids.is_empty()
+                && ordered_unique(&self.denied_file_rule_ids)
+                && self.maximum_duration_ns > 0
+                && self.maximum_uses > 0,
+            "CFG_EXCEPTION_GRANT",
+            format!("exception grant `{}` is invalid", self.grant_id)
+        );
+        Ok(())
+    }
+}
+
 impl Validate for PathSelectorV1 {
     fn validate(&self) -> ValidationResult {
         PolicyValue::LocalId(&self.path_selector_id).validate()?;

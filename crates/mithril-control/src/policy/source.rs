@@ -2,6 +2,7 @@ use std::path::{Path, PathBuf};
 
 use schemars::JsonSchema;
 use schemars::Schema;
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_saphyr::granit_parser::{Event, Parser};
 use serde_saphyr::{Budget, DuplicateKeyPolicy, MergeKeyPolicy, Options};
@@ -196,6 +197,8 @@ pub struct PolicyDocumentV1 {
     pub default_postures: DefaultPosturesV1,
     pub notification_routes: Vec<NotificationRouteV1>,
     pub response_bindings: Vec<ResponseBindingV1>,
+    #[serde(default)]
+    pub file_exception_grants: Vec<FileExceptionGrantTemplateV1>,
     pub exceptions: Vec<ExceptionV1>,
     pub rules: Vec<DetectionDispositionRuleV1>,
     pub source_coverage_health_rules: Vec<SourceCoverageHealthRuleV1>,
@@ -204,58 +207,67 @@ pub struct PolicyDocumentV1 {
 
 impl PolicyDocumentV1 {
     pub fn parse(path: &Path, source: &[u8]) -> Result<Self> {
-        if source.len() > MAX_POLICY_SOURCE_BYTES {
-            return PolicyValidationSnafu {
-                policy_id: "<unparsed>",
-                code: "CFG_SOURCE_SIZE",
-                reason: format!(
-                    "source is {} bytes; the Version 1 limit is {MAX_POLICY_SOURCE_BYTES}",
-                    source.len()
-                ),
-            }
-            .fail();
-        }
-        let text = std::str::from_utf8(source).map_err(|error| {
-            PolicyValidationSnafu {
-                policy_id: "<unparsed>",
-                code: "CFG_SOURCE_UTF8",
-                reason: error.to_string(),
-            }
-            .build()
-        })?;
-        reject_yaml_extensions(text)?;
-        let mut budget = Budget::default();
-        budget.max_reader_input_bytes = Some(MAX_POLICY_SOURCE_BYTES);
-        budget.max_events = MAX_POLICY_NODES.saturating_mul(3);
-        budget.max_aliases = 0;
-        budget.max_anchors = 0;
-        budget.max_depth = MAX_POLICY_DEPTH;
-        budget.max_inclusion_depth = 0;
-        budget.max_documents = 1;
-        budget.max_nodes = MAX_POLICY_NODES;
-        budget.max_total_scalar_bytes = MAX_POLICY_SOURCE_BYTES;
-        budget.max_total_comment_bytes = MAX_POLICY_SOURCE_BYTES;
-        budget.max_merge_keys = 0;
-        let mut options = Options::default();
-        options.budget = Some(budget);
-        options.duplicate_keys = DuplicateKeyPolicy::Error;
-        options.merge_keys = MergeKeyPolicy::Error;
-        options.alias_limits = serde_saphyr::alias_limits! {
-            max_total_replayed_events: 0,
-            max_replay_stack_depth: 0,
-            max_alias_expansions_per_anchor: 0,
-        };
-        options.strict_booleans = true;
-        options.reject_non_finite_typeless_float = true;
-        serde_saphyr::from_slice_with_options(source, options).context(PolicySourceSnafu {
-            path: PathBuf::from(path),
-        })
+        parse_restricted_yaml(path, source)
     }
 
     #[must_use]
     pub fn profile_id(&self) -> &str {
         &self.metadata.profile_id
     }
+
+    pub(crate) fn validate_closed(&self) -> Result<()> {
+        super::validation::Validate::validate(self)
+            .map_err(|error| error.for_policy(self.profile_id()))
+    }
+}
+
+pub(crate) fn parse_restricted_yaml<T: DeserializeOwned>(path: &Path, source: &[u8]) -> Result<T> {
+    if source.len() > MAX_POLICY_SOURCE_BYTES {
+        return PolicyValidationSnafu {
+            policy_id: "<unparsed>",
+            code: "CFG_SOURCE_SIZE",
+            reason: format!(
+                "source is {} bytes; the Version 1 limit is {MAX_POLICY_SOURCE_BYTES}",
+                source.len()
+            ),
+        }
+        .fail();
+    }
+    let text = std::str::from_utf8(source).map_err(|error| {
+        PolicyValidationSnafu {
+            policy_id: "<unparsed>",
+            code: "CFG_SOURCE_UTF8",
+            reason: error.to_string(),
+        }
+        .build()
+    })?;
+    reject_yaml_extensions(text)?;
+    let mut budget = Budget::default();
+    budget.max_reader_input_bytes = Some(MAX_POLICY_SOURCE_BYTES);
+    budget.max_events = MAX_POLICY_NODES.saturating_mul(3);
+    budget.max_aliases = 0;
+    budget.max_anchors = 0;
+    budget.max_depth = MAX_POLICY_DEPTH;
+    budget.max_inclusion_depth = 0;
+    budget.max_documents = 1;
+    budget.max_nodes = MAX_POLICY_NODES;
+    budget.max_total_scalar_bytes = MAX_POLICY_SOURCE_BYTES;
+    budget.max_total_comment_bytes = MAX_POLICY_SOURCE_BYTES;
+    budget.max_merge_keys = 0;
+    let mut options = Options::default();
+    options.budget = Some(budget);
+    options.duplicate_keys = DuplicateKeyPolicy::Error;
+    options.merge_keys = MergeKeyPolicy::Error;
+    options.alias_limits = serde_saphyr::alias_limits! {
+        max_total_replayed_events: 0,
+        max_replay_stack_depth: 0,
+        max_alias_expansions_per_anchor: 0,
+    };
+    options.strict_booleans = true;
+    options.reject_non_finite_typeless_float = true;
+    serde_saphyr::from_slice_with_options(source, options).context(PolicySourceSnafu {
+        path: PathBuf::from(path),
+    })
 }
 
 fn reject_yaml_extensions(source: &str) -> Result<()> {
@@ -488,7 +500,9 @@ impl From<NetworkProtocolV1> for erebor_interceptor_abi::NetworkProtocolV1 {
     }
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, JsonSchema)]
+#[derive(
+    Clone, Copy, Debug, Deserialize, Eq, JsonSchema, Ord, PartialEq, PartialOrd, Serialize,
+)]
 #[serde(deny_unknown_fields)]
 pub struct NetworkPortRangeV1 {
     pub first: u16,
@@ -1104,6 +1118,15 @@ pub struct ExceptionV1 {
     pub consumption_scope: ExceptionConsumptionScopeV1,
     pub maximum_uses: u32,
     pub maximum_lifetime_ns: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct FileExceptionGrantTemplateV1 {
+    pub grant_id: String,
+    pub denied_file_rule_ids: Vec<String>,
+    pub maximum_duration_ns: u64,
+    pub maximum_uses: u32,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, JsonSchema)]

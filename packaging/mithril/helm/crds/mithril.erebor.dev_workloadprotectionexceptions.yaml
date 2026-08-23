@@ -1,0 +1,195 @@
+{
+  "apiVersion": "apiextensions.k8s.io/v1",
+  "kind": "CustomResourceDefinition",
+  "metadata": {
+    "name": "workloadprotectionexceptions.mithril.erebor.dev"
+  },
+  "spec": {
+    "group": "mithril.erebor.dev",
+    "names": {
+      "kind": "WorkloadProtectionException",
+      "plural": "workloadprotectionexceptions",
+      "shortNames": [
+        "wpe"
+      ],
+      "singular": "workloadprotectionexception"
+    },
+    "scope": "Namespaced",
+    "versions": [
+      {
+        "name": "v1alpha1",
+        "schema": {
+          "openAPIV3Schema": {
+            "description": "Auto-generated derived type for WorkloadProtectionExceptionSpec via `CustomResource`",
+            "properties": {
+              "spec": {
+                "maxProperties": 4096,
+                "properties": {
+                  "grant": {
+                    "maxLength": 4096,
+                    "type": "string"
+                  },
+                  "policyRef": {
+                    "maxProperties": 4096,
+                    "properties": {
+                      "name": {
+                        "maxLength": 4096,
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "name"
+                    ],
+                    "type": "object"
+                  },
+                  "requestedDuration": {
+                    "maxLength": 4096,
+                    "type": "string"
+                  },
+                  "requestedUses": {
+                    "format": "uint32",
+                    "minimum": 1.0,
+                    "type": "integer"
+                  },
+                  "target": {
+                    "maxProperties": 4096,
+                    "properties": {
+                      "containerName": {
+                        "maxLength": 4096,
+                        "type": "string"
+                      },
+                      "pod": {
+                        "maxProperties": 4096,
+                        "properties": {
+                          "name": {
+                            "maxLength": 4096,
+                            "type": "string"
+                          },
+                          "uid": {
+                            "maxLength": 4096,
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "name",
+                          "uid"
+                        ],
+                        "type": "object"
+                      }
+                    },
+                    "required": [
+                      "containerName",
+                      "pod"
+                    ],
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "grant",
+                  "policyRef",
+                  "requestedDuration",
+                  "requestedUses",
+                  "target"
+                ],
+                "type": "object",
+                "x-kubernetes-validations": [
+                  {
+                    "message": "WorkloadProtectionException spec is immutable",
+                    "rule": "self == oldSelf"
+                  }
+                ]
+              },
+              "status": {
+                "maxProperties": 4096,
+                "nullable": true,
+                "properties": {
+                  "conditions": {
+                    "items": {
+                      "maxProperties": 4096,
+                      "properties": {
+                        "lastTransitionTime": {
+                          "maxLength": 4096,
+                          "type": "string"
+                        },
+                        "message": {
+                          "maxLength": 4096,
+                          "type": "string"
+                        },
+                        "observedGeneration": {
+                          "format": "uint64",
+                          "minimum": 0.0,
+                          "type": "integer"
+                        },
+                        "reason": {
+                          "maxLength": 4096,
+                          "type": "string"
+                        },
+                        "status": {
+                          "enum": [
+                            "True",
+                            "False",
+                            "Unknown"
+                          ],
+                          "maxLength": 4096,
+                          "type": "string"
+                        },
+                        "type": {
+                          "maxLength": 4096,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "lastTransitionTime",
+                        "message",
+                        "observedGeneration",
+                        "reason",
+                        "status",
+                        "type"
+                      ],
+                      "type": "object"
+                    },
+                    "maxItems": 8,
+                    "type": "array"
+                  },
+                  "observedGeneration": {
+                    "format": "uint64",
+                    "minimum": 0.0,
+                    "type": "integer"
+                  },
+                  "state": {
+                    "enum": [
+                      "Pending",
+                      "Active",
+                      "Consumed",
+                      "Expired",
+                      "Revoked",
+                      "Failed"
+                    ],
+                    "maxLength": 4096,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "conditions",
+                  "observedGeneration",
+                  "state"
+                ],
+                "type": "object"
+              }
+            },
+            "required": [
+              "spec"
+            ],
+            "title": "WorkloadProtectionException",
+            "type": "object"
+          }
+        },
+        "served": true,
+        "storage": true,
+        "subresources": {
+          "status": {}
+        }
+      }
+    ]
+  }
+}

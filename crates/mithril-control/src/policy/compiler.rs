@@ -8,7 +8,6 @@ use super::canonical::canonical_cbor;
 use super::source::{
     BindingLifecycleV1, EffectFamilyV1, EntryKindV1, PolicyDocumentV1, ProfileModeV1, RuleMatchV1,
 };
-use super::validation::Validate as _;
 use crate::error::PolicyValidationSnafu;
 use crate::Result;
 
@@ -80,9 +79,7 @@ pub struct PolicyCompiler;
 
 impl PolicyCompiler {
     pub fn compile(&self, document: &PolicyDocumentV1) -> Result<StaticExpandedProfileV1> {
-        document
-            .validate()
-            .map_err(|error| error.for_policy(document.profile_id()))?;
+        document.validate_closed()?;
         let canonical_policy = canonical_cbor(document.profile_id(), document)?;
         let source_policy_digest = digest(&canonical_policy);
         let cells = self.expand_rules(document)?;
