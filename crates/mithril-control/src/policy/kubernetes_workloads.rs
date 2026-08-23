@@ -79,11 +79,12 @@ pub struct KubernetesAdmissionOwner {
 }
 
 /// This owner controls cluster inventory and the exact workload facts for rollout.
-#[derive(Clone)]
 pub(super) struct KubernetesWorkloadInventoryOwner {
     kube: Client,
     policies: PolicyDesiredStateOwner,
     control: ControlPlane,
+    // Track the durable commit whose policy statuses reached the Kubernetes API.
+    projected_control_commit_index: Option<u64>,
 }
 
 impl KubernetesAdmissionHttpConfigV1 {
@@ -467,17 +468,18 @@ impl KubernetesWorkloadInventoryOwner {
             kube,
             policies,
             control,
+            projected_control_commit_index: None,
         }
     }
 
-    pub(super) async fn run(self) {
+    pub(super) async fn run(mut self) {
         loop {
             let _result = self.reconcile_once().await;
             tokio::time::sleep(Duration::from_secs(1)).await;
         }
     }
 
-    async fn reconcile_once(&self) -> Result<()> {
+    async fn reconcile_once(&mut self) -> Result<()> {
         // Build one cross-resource snapshot before replacing the Control target inventory.
         let pods = list_inventory(&Api::<Pod>::all(self.kube.clone()), "bound Pods").await?;
         let nodes =
@@ -514,24 +516,33 @@ impl KubernetesWorkloadInventoryOwner {
         for pod in pods {
             targets.extend(self.bound_pod_targets(&pod, &nodes, &namespaces, &service_accounts)?);
         }
-        if !self
+        let inventory_changed = self
             .control
             .replace_kubernetes_workload_inventory(targets)
-            .map_err(|error| admission_error(error.to_string()))?
+            .map_err(|error| admission_error(error.to_string()))?;
+        let observed_commit_index = self.policies.store().commit_index();
+        if !inventory_changed
+            && status_projection_is_current(
+                self.projected_control_commit_index,
+                observed_commit_index,
+            )
         {
-            // An unchanged inventory cannot create a new target snapshot by itself.
+            // Neither scheduler facts nor durable rollout state can change projected status.
             return Ok(());
         }
         let resources = list_inventory(
             &Api::<WorkloadProtectionProfile>::all(self.kube.clone()),
-            "policies after binding change",
+            "policies for status projection",
         )
         .await?;
+        let mut projection_complete = true;
         for resource in resources {
             let Some(namespace_name) = resource.namespace() else {
+                projection_complete = false;
                 continue;
             };
             let Some(namespace_uid) = namespaces.get(&namespace_name) else {
+                projection_complete = false;
                 continue;
             };
             let Ok(result) = self.policies.reconcile(
@@ -540,18 +551,28 @@ impl KubernetesWorkloadInventoryOwner {
                 &self.control.workload_inventory(),
                 utc_now_ns(),
             ) else {
+                projection_complete = false;
                 continue;
             };
             let Some(name) = resource.metadata.name.as_deref() else {
+                projection_complete = false;
                 continue;
             };
             let api =
                 Api::<WorkloadProtectionProfile>::namespaced(self.kube.clone(), &namespace_name);
             let patch = Patch::Merge(serde_json::json!({"status": result.status}));
-            // Status is a best-effort projection. The durable store remains authoritative.
-            let _result = api
+            // Projection errors retry. The durable store remains authoritative.
+            if api
                 .patch_status(name, &PatchParams::default(), &patch)
-                .await;
+                .await
+                .is_err()
+            {
+                projection_complete = false;
+            }
+        }
+        if projection_complete {
+            // A concurrent later commit remains greater and triggers the next projection cycle.
+            self.projected_control_commit_index = Some(observed_commit_index);
         }
         Ok(())
     }
@@ -715,6 +736,10 @@ impl KubernetesWorkloadInventoryOwner {
         }
         Ok(targets)
     }
+}
+
+fn status_projection_is_current(projected: Option<u64>, observed: u64) -> bool {
+    projected == Some(observed)
 }
 
 async fn list_inventory<K>(api: &Api<K>, description: &str) -> Result<Vec<K>>
@@ -1263,8 +1288,8 @@ mod tests {
     use super::{
         list_inventory, mutate_node_quarantine, mutate_protected_pod, pod_admission_facts,
         pod_policy_identity, policy_matches_pod, policy_matching_containers_are_pinned,
-        DaemonSetNodeConstraintsV1, KUBERNETES_NOT_READY_TAINT, KUBERNETES_PROFILE_ANNOTATION,
-        KUBERNETES_READY_LABEL, KUBERNETES_SOURCE_ANNOTATION,
+        status_projection_is_current, DaemonSetNodeConstraintsV1, KUBERNETES_NOT_READY_TAINT,
+        KUBERNETES_PROFILE_ANNOTATION, KUBERNETES_READY_LABEL, KUBERNETES_SOURCE_ANNOTATION,
     };
     use crate::{ContainerKindV1, PolicyDocumentV1};
 
@@ -1615,5 +1640,12 @@ mod tests {
         let pods = Api::<Pod>::all(Client::new(service, "default"));
 
         assert!(list_inventory(&pods, "test Pods").await.is_err());
+    }
+
+    #[test]
+    fn durable_policy_commit_invalidates_status_projection() {
+        assert!(!status_projection_is_current(None, 0));
+        assert!(status_projection_is_current(Some(8), 8));
+        assert!(!status_projection_is_current(Some(8), 9));
     }
 }
