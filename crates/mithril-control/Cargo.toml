@@ -45,6 +45,7 @@ tonic-build.workspace = true
 prost-types.workspace = true
 rcgen = "0.13.2"
 tempfile = "3.23.0"
+tower.workspace = true
 
 [[bin]]
 name = "mithril-control"
