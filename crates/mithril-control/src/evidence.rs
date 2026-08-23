@@ -160,10 +160,11 @@ impl EvidenceIntakeOwner {
         let batch_digest: [u8; 32] = batch.batch_sha256.as_slice().try_into().map_err(|_| {
             Status::invalid_argument("evidence batch digest must be one SHA-256 digest")
         })?;
-        if batch.last_cursor < batch.first_cursor
-            || batch.last_cursor - batch.first_cursor + 1
-                != u64::try_from(batch.records.len()).unwrap_or(u64::MAX)
-        {
+        let cursor_count = batch
+            .last_cursor
+            .checked_sub(batch.first_cursor)
+            .and_then(|span| span.checked_add(1));
+        if batch.first_cursor == 0 || cursor_count != u64::try_from(batch.records.len()).ok() {
             return Err(Status::invalid_argument(
                 "evidence batch cursor range does not match its record count",
             ));
@@ -763,6 +764,12 @@ mod tests {
         let mut corrupted = batch(1, 2, [0; 32])?;
         corrupted.records[1].payload[0] ^= 1;
         assert!(intake.receive(&authenticated(), &corrupted).is_err());
+        assert_eq!(intake.contiguous_cursor(&evidence_identity())?, 0);
+
+        let mut overflowing = batch(1, 1, [0; 32])?;
+        overflowing.first_cursor = 0;
+        overflowing.last_cursor = u64::MAX;
+        assert!(intake.receive(&authenticated(), &overflowing).is_err());
         assert_eq!(intake.contiguous_cursor(&evidence_identity())?, 0);
 
         let accepted = batch(1, 1, [0; 32])?;
