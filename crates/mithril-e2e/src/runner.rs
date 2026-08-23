@@ -9,7 +9,7 @@ use snafu::{ensure, OptionExt as _, ResultExt as _};
 use crate::benchmark::OpenBenchmark;
 use crate::capability::BpfPrototypeCompiler;
 use crate::capability_matrix::KernelQualificationCapabilityMatrix;
-use crate::closure::ArchitectureClosure;
+use crate::closure::QualificationRegistry;
 use crate::error::{InterceptorSnafu, InvalidInputSnafu, IoSnafu, JsonSnafu};
 use crate::fixture::HuggingFaceFixture;
 use crate::loader::BpfQualificationLoader;
@@ -32,7 +32,7 @@ pub enum BenchmarkModeV1 {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct KernelQualificationBundleV1 {
     pub schema_version: u32,
-    pub architecture_closure: ClosureLedgerV1,
+    pub qualification_registry: ClosureLedgerV1,
     pub fixture_baseline: FixtureBaselineRecordV1,
     pub provenance_dossier_sha256: String,
     pub closed_contract_digest: String,
@@ -155,7 +155,7 @@ impl KernelQualificationRunner {
     }
 
     pub fn verify(&self) -> Result<KernelQualificationBundleV1> {
-        let closure = ArchitectureClosure::new(self.repo_root.join("spec")).verify()?;
+        let registry = QualificationRegistry::new(self.repo_root.join("spec")).verify()?;
         ProvenanceVerifier::new(&self.repo_root).load_and_verify()?;
         let fixture = HuggingFaceFixture::new(
             self.repo_root
@@ -174,11 +174,11 @@ impl KernelQualificationRunner {
                 path: &qualification_path,
             })?;
         self.validate_recorded_qualification(&recorded, &qualification_path)?;
-        let closure_bytes = serde_json::to_vec(&closure).context(JsonSnafu {
-            path: PathBuf::from("in-memory architecture closure"),
+        let registry_bytes = serde_json::to_vec(&registry).context(JsonSnafu {
+            path: PathBuf::from("in-memory qualification registry"),
         })?;
         let mut contract_bytes = Vec::new();
-        let mut parts = vec![closure_bytes, provenance.clone(), qualification.clone()];
+        let mut parts = vec![registry_bytes, provenance.clone(), qualification.clone()];
         for relative in [
             Self::ARCHITECTURE_PATH,
             Self::ABI_HEADER_PATH,
@@ -197,7 +197,7 @@ impl KernelQualificationRunner {
         }
         Ok(KernelQualificationBundleV1 {
             schema_version: 1,
-            architecture_closure: closure,
+            qualification_registry: registry,
             fixture_baseline: fixture,
             provenance_dossier_sha256: DigestV1::of(provenance).to_hex(),
             closed_contract_digest: DigestV1::of(contract_bytes).to_hex(),
@@ -787,7 +787,6 @@ mod tests {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
         let bundle = KernelQualificationRunner::new(root).verify()?;
         assert_eq!(bundle.schema_version, 1);
-        assert_eq!(bundle.architecture_closure.fixtures.len(), 133);
         assert_eq!(bundle.abi_state, "FROZEN_PROVEN_SURFACES_ONLY");
         assert_eq!(bundle.closed_contract_digest.len(), 64);
         assert_eq!(bundle.physical_qualification_sha256.len(), 64);

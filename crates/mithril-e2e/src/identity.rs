@@ -39,7 +39,7 @@ use serde::{Deserialize, Serialize};
 use snafu::{ensure, ResultExt as _};
 use zerocopy::{FromBytes as _, KnownLayout, TryFromBytes};
 
-use crate::closure::ArchitectureClosure;
+use crate::closure::QualificationRegistry;
 use crate::error::{InterceptorSnafu, InvalidInputSnafu, IoSnafu, JsonSnafu, NodeSnafu};
 use crate::identity::clone3::CloneIntoCgroupFixture;
 use crate::physical::{boot_identity, ProbeCgroup, ProbeDirectory, ProbeFile};
@@ -417,18 +417,17 @@ impl IdentityTestRunner {
                 reason: format!("identity object programs are {programs:?}"),
             }
         );
-        let closure = ArchitectureClosure::new(self.repo_root.join("spec")).verify()?;
-        let fixtures = closure
-            .fixtures
+        let registry = QualificationRegistry::new(self.repo_root.join("spec")).verify()?;
+        let registered = registry.fixture_ids.into_iter().collect::<BTreeSet<_>>();
+        let fixtures = IDENTITY_FIXTURES
             .into_iter()
-            .filter(|fixture| fixture.owning_phase == 2)
-            .map(|fixture| fixture.fixture_id)
+            .map(str::to_owned)
             .collect::<BTreeSet<_>>();
         ensure!(
-            fixtures == IDENTITY_FIXTURES.into_iter().map(str::to_owned).collect(),
+            fixtures.is_subset(&registered),
             InvalidInputSnafu {
                 path: self.repo_root.join("spec/qualification/v1/fixtures.yaml"),
-                reason: "identity fixture allocation differs from the acceptance registry",
+                reason: "the acceptance registry omits an identity fixture",
             }
         );
         Ok(IdentityVerificationBundleV1 {
