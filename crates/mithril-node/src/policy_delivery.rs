@@ -1923,6 +1923,7 @@ mod tests {
             pod_labels: BTreeMap::new(),
             kubernetes: Some(KubernetesWorkloadIdentityV1 {
                 namespace_name: "default".to_owned(),
+                pod_name: "converter-0".to_owned(),
                 profile_id: "11111111-1111-4111-8111-111111111111".to_owned(),
                 policy_source_revision_id: source_revision_id.clone(),
                 binding_id,

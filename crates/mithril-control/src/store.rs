@@ -11,10 +11,13 @@ use snafu::ResultExt as _;
 use crate::error::{ControlStoreSnafu, IoSnafu, JsonSnafu};
 use crate::{
     canonical_policy_spec_digest, CoverageIntakeStateV1, EvidenceIntakeIdentityV1,
-    EvidenceStoreOutcomeV1, IntakeStateV1, PolicyActivationAcknowledgementV1, PolicyBundleV1,
-    PolicyDocumentV1, PolicyRolloutStateV1, PolicySourceRevisionV1, PolicySourceStateV1,
-    PolicyTargetSnapshotV1, ProfileCandidateArtifactV1, Result, StoredCoverageReportV1,
-    StoredEvidenceBatchV1, StoredRecordV1, TrustGenerationAcknowledgementV1, TrustGenerationV1,
+    EvidenceStoreOutcomeV1, ExceptionActivationAcknowledgementV1, ExceptionActivationStateV1,
+    ExceptionDeliveryCandidateV1, ExceptionDeliveryOperationV1, ExceptionRolloutStateV1,
+    ExceptionSourceRevisionV1, ExceptionSourceStateV1, IntakeStateV1,
+    PolicyActivationAcknowledgementV1, PolicyBundleV1, PolicyDocumentV1, PolicyRolloutStateV1,
+    PolicySourceRevisionV1, PolicySourceStateV1, PolicyTargetSnapshotV1,
+    ProfileCandidateArtifactV1, Result, StoredCoverageReportV1, StoredEvidenceBatchV1,
+    StoredRecordV1, TrustGenerationAcknowledgementV1, TrustGenerationV1,
     MAX_PENDING_EVIDENCE_RECORDS,
 };
 
@@ -59,6 +62,11 @@ struct ControlStoreState {
     bundles: BTreeMap<String, PolicyBundleV1>,
     rollout_states: BTreeMap<PolicyRolloutKeyV1, PolicyRolloutStateV1>,
     acknowledgements: BTreeMap<String, PolicyActivationAcknowledgementV1>,
+    exception_source_revisions: BTreeMap<String, ExceptionSourceRevisionV1>,
+    latest_exception_sources: BTreeMap<PolicyObjectKeyV1, String>,
+    exception_candidates: BTreeMap<String, ExceptionDeliveryCandidateV1>,
+    exception_rollout_states: BTreeMap<PolicyRolloutKeyV1, ExceptionRolloutStateV1>,
+    exception_acknowledgements: BTreeMap<String, ExceptionActivationAcknowledgementV1>,
     trust_generations: BTreeMap<u64, TrustGenerationV1>,
     trust_acknowledgements:
         BTreeMap<(String, u64, [u8; 16], u64), TrustGenerationAcknowledgementV1>,
@@ -145,6 +153,12 @@ enum ControlTransactionV1 {
     Acknowledged {
         result: Box<PolicyAcknowledgementTransactionV1>,
     },
+    ExceptionDesired {
+        desired: Box<ExceptionDesiredTransactionV1>,
+    },
+    ExceptionAcknowledged {
+        result: Box<ExceptionAcknowledgementTransactionV1>,
+    },
     EvidencePending {
         pending: Box<EvidenceBatchTransactionV1>,
     },
@@ -175,6 +189,21 @@ struct PolicyRolloutTransactionV1 {
 struct PolicyAcknowledgementTransactionV1 {
     acknowledgement: PolicyActivationAcknowledgementV1,
     rollout_state: PolicyRolloutStateV1,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct ExceptionDesiredTransactionV1 {
+    source_revision: ExceptionSourceRevisionV1,
+    candidate: ExceptionDeliveryCandidateV1,
+    rollout_state: ExceptionRolloutStateV1,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct ExceptionAcknowledgementTransactionV1 {
+    acknowledgement: ExceptionActivationAcknowledgementV1,
+    rollout_state: ExceptionRolloutStateV1,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -567,6 +596,155 @@ impl ControlStore {
         )
     }
 
+    pub fn record_exception_desired(
+        &self,
+        source: ExceptionSourceRevisionV1,
+        candidate: ExceptionDeliveryCandidateV1,
+        rollout_state: ExceptionRolloutStateV1,
+    ) -> Result<u64> {
+        let mut inner = self.lock()?;
+        if let Some(existing) = inner
+            .state
+            .exception_candidates
+            .get(&candidate.candidate_content_id)
+        {
+            let rollout_key = PolicyRolloutKeyV1 {
+                candidate_content_id: candidate.candidate_content_id.clone(),
+                node_id: candidate.exact_target.node_id.clone(),
+            };
+            if existing == &candidate
+                && inner
+                    .state
+                    .exception_source_revisions
+                    .get(&source.exception_source_revision_id)
+                    == Some(&source)
+                && inner.state.exception_rollout_states.get(&rollout_key) == Some(&rollout_state)
+            {
+                return Ok(inner.state.commit_index);
+            }
+            return ControlStoreSnafu {
+                path: inner.root.clone(),
+                reason: "one exception candidate has conflicting immutable content".to_owned(),
+            }
+            .fail();
+        }
+        validate_exception_desired(
+            &inner.state,
+            &source,
+            &candidate,
+            &rollout_state,
+            &inner.root,
+        )?;
+        commit(
+            &mut inner,
+            ControlTransactionV1::ExceptionDesired {
+                desired: Box::new(ExceptionDesiredTransactionV1 {
+                    source_revision: source,
+                    candidate,
+                    rollout_state,
+                }),
+            },
+        )
+    }
+
+    pub fn acknowledge_exception(
+        &self,
+        acknowledgement: ExceptionActivationAcknowledgementV1,
+        rollout_state: ExceptionRolloutStateV1,
+    ) -> Result<u64> {
+        let mut inner = self.lock()?;
+        acknowledgement.validate()?;
+        if inner
+            .state
+            .exception_acknowledgements
+            .get(&acknowledgement.acknowledgement_content_id)
+            == Some(&acknowledgement)
+        {
+            return Ok(inner.state.commit_index);
+        }
+        let key = PolicyRolloutKeyV1 {
+            candidate_content_id: acknowledgement.candidate_content_id.clone(),
+            node_id: acknowledgement.node_id.clone(),
+        };
+        let current = inner
+            .state
+            .exception_rollout_states
+            .get(&key)
+            .ok_or_else(|| {
+                ControlStoreSnafu {
+                    path: inner.root.clone(),
+                    reason: "the exception acknowledgement has no current rollout target"
+                        .to_owned(),
+                }
+                .build()
+            })?;
+        if rollout_state.transition_version
+            != checked_store_increment(
+                current.transition_version,
+                &inner.root,
+                "the exception transition version is exhausted",
+            )?
+            || rollout_state.candidate_content_id != current.candidate_content_id
+            || rollout_state.exception_source_revision_id != current.exception_source_revision_id
+            || rollout_state.node_id != current.node_id
+            || rollout_state.latest_acknowledgement_content_id.as_deref()
+                != Some(&acknowledgement.acknowledgement_content_id)
+        {
+            return ControlStoreSnafu {
+                path: inner.root.clone(),
+                reason: "the exception acknowledgement failed its compare-and-swap transition"
+                    .to_owned(),
+            }
+            .fail();
+        }
+        commit(
+            &mut inner,
+            ControlTransactionV1::ExceptionAcknowledged {
+                result: Box::new(ExceptionAcknowledgementTransactionV1 {
+                    acknowledgement,
+                    rollout_state,
+                }),
+            },
+        )
+    }
+
+    pub fn next_exception_distribution_sequence(
+        &self,
+        node_id: &str,
+        exception_instance_id: &str,
+        sequence_epoch: u64,
+    ) -> Result<u64> {
+        let inner = self.lock()?;
+        let mut current = 0_u64;
+        for candidate in inner
+            .state
+            .exception_candidates
+            .values()
+            .filter(|candidate| {
+                candidate.exact_target.node_id == node_id
+                    && candidate.exception_instance_id == exception_instance_id
+            })
+        {
+            if candidate.distribution_sequence_epoch > sequence_epoch {
+                return ControlStoreSnafu {
+                    path: inner.root.clone(),
+                    reason: "the configured exception-distribution epoch is stale".to_owned(),
+                }
+                .fail();
+            }
+            if candidate.distribution_sequence_epoch == sequence_epoch {
+                current = current.max(candidate.distribution_sequence);
+            }
+        }
+        current.checked_add(1).ok_or_else(|| {
+            ControlStoreSnafu {
+                path: inner.root.clone(),
+                reason: "the exception-distribution sequence is exhausted".to_owned(),
+            }
+            .build()
+        })
+    }
+
     pub(crate) fn accept_evidence_batch(
         &self,
         identity: EvidenceIntakeIdentityV1,
@@ -871,6 +1049,155 @@ impl ControlStore {
 
     pub fn source_revision(&self, id: &str) -> Result<Option<PolicySourceRevisionV1>> {
         Ok(self.lock()?.state.source_revisions.get(id).cloned())
+    }
+
+    pub fn active_policy_for_workload(
+        &self,
+        policy_source_revision_id: &str,
+        workload_binding_generation_digest: &str,
+    ) -> Result<Option<(PolicyBundleV1, PolicyActivationAcknowledgementV1)>> {
+        let inner = self.lock()?;
+        let matches = inner
+            .state
+            .rollout_states
+            .values()
+            .filter(|rollout| {
+                rollout.policy_source_revision_id == policy_source_revision_id
+                    && rollout.state == crate::PolicyRolloutStatusV1::Active
+                    && rollout
+                        .target
+                        .workload_binding_generation_digests
+                        .iter()
+                        .any(|digest| digest == workload_binding_generation_digest)
+            })
+            .filter_map(|rollout| {
+                let bundle = inner
+                    .state
+                    .bundles
+                    .get(&rollout.desired_candidate_content_id)?;
+                let acknowledgement = rollout
+                    .latest_acknowledgement_content_id
+                    .as_ref()
+                    .and_then(|id| inner.state.acknowledgements.get(id))?;
+                Some((bundle.clone(), acknowledgement.clone()))
+            })
+            .collect::<Vec<_>>();
+        if matches.len() > 1 {
+            return ControlStoreSnafu {
+                path: inner.root.clone(),
+                reason: "one workload has multiple active base-policy targets".to_owned(),
+            }
+            .fail();
+        }
+        Ok(matches.into_iter().next())
+    }
+
+    pub fn latest_exception_source(
+        &self,
+        tenant_id: &str,
+        namespace_uid: &str,
+        object_name: &str,
+    ) -> Result<Option<ExceptionSourceRevisionV1>> {
+        let inner = self.lock()?;
+        let key = PolicyObjectKeyV1 {
+            tenant_id: tenant_id.to_owned(),
+            namespace_uid: namespace_uid.to_owned(),
+            object_name: object_name.to_owned(),
+        };
+        Ok(inner
+            .state
+            .latest_exception_sources
+            .get(&key)
+            .and_then(|id| inner.state.exception_source_revisions.get(id))
+            .cloned())
+    }
+
+    pub fn latest_exception_candidate_for_object(
+        &self,
+        object_uid: &str,
+    ) -> Result<Option<ExceptionDeliveryCandidateV1>> {
+        let inner = self.lock()?;
+        Ok(inner
+            .state
+            .exception_candidates
+            .values()
+            .filter(|candidate| candidate.exception_instance_id == object_uid)
+            .max_by_key(|candidate| {
+                (
+                    candidate.distribution_sequence_epoch,
+                    candidate.distribution_sequence,
+                )
+            })
+            .cloned())
+    }
+
+    pub fn next_exception_candidate_for_node(
+        &self,
+        node_id: &str,
+        known_candidate_ids: &[String],
+    ) -> Result<Option<ExceptionDeliveryCandidateV1>> {
+        let inner = self.lock()?;
+        Ok(inner
+            .state
+            .exception_candidates
+            .values()
+            .filter(|candidate| {
+                candidate.exact_target.node_id == node_id
+                    && !known_candidate_ids.contains(&candidate.candidate_content_id)
+                    && inner
+                        .state
+                        .exception_rollout_states
+                        .get(&PolicyRolloutKeyV1 {
+                            candidate_content_id: candidate.candidate_content_id.clone(),
+                            node_id: node_id.to_owned(),
+                        })
+                        .is_some_and(|rollout| {
+                            !matches!(
+                                rollout.state,
+                                crate::WorkloadProtectionExceptionStateV1::Failed
+                                    | crate::WorkloadProtectionExceptionStateV1::Consumed
+                                    | crate::WorkloadProtectionExceptionStateV1::Expired
+                                    | crate::WorkloadProtectionExceptionStateV1::Revoked
+                            )
+                        })
+            })
+            .max_by_key(|candidate| {
+                (
+                    candidate.distribution_sequence_epoch,
+                    candidate.distribution_sequence,
+                )
+            })
+            .cloned())
+    }
+
+    pub fn exception_candidate(
+        &self,
+        node_id: &str,
+        candidate_content_id: &str,
+    ) -> Result<Option<ExceptionDeliveryCandidateV1>> {
+        Ok(self
+            .lock()?
+            .state
+            .exception_candidates
+            .get(candidate_content_id)
+            .filter(|candidate| candidate.exact_target.node_id == node_id)
+            .cloned())
+    }
+
+    pub fn exception_rollout_state(
+        &self,
+        candidate_content_id: &str,
+        node_id: &str,
+    ) -> Result<Option<ExceptionRolloutStateV1>> {
+        Ok(self
+            .lock()?
+            .state
+            .exception_rollout_states
+            .get(&PolicyRolloutKeyV1 {
+                candidate_content_id: candidate_content_id.to_owned(),
+                node_id: node_id.to_owned(),
+            })
+            .cloned())
     }
 
     pub fn policy_document(&self, id: &str) -> Result<Option<PolicyDocumentV1>> {
@@ -1185,6 +1512,16 @@ impl From<&PolicySourceRevisionV1> for PolicyObjectKeyV1 {
     }
 }
 
+impl From<&ExceptionSourceRevisionV1> for PolicyObjectKeyV1 {
+    fn from(revision: &ExceptionSourceRevisionV1) -> Self {
+        Self {
+            tenant_id: revision.tenant_id.clone(),
+            namespace_uid: revision.namespace_uid.clone(),
+            object_name: revision.object_name.clone(),
+        }
+    }
+}
+
 fn commit(inner: &mut ControlStoreInner, transaction: ControlTransactionV1) -> Result<u64> {
     let commit_index = checked_store_increment(
         inner.state.commit_index,
@@ -1376,6 +1713,49 @@ fn apply_transaction(
                     node_id: rollout_state.target.node_id.clone(),
                 },
                 rollout_state.clone(),
+            );
+        }
+        ControlTransactionV1::ExceptionDesired { desired } => {
+            validate_exception_desired(
+                state,
+                &desired.source_revision,
+                &desired.candidate,
+                &desired.rollout_state,
+                path,
+            )?;
+            let key = PolicyObjectKeyV1::from(&desired.source_revision);
+            state.exception_source_revisions.insert(
+                desired.source_revision.exception_source_revision_id.clone(),
+                desired.source_revision.clone(),
+            );
+            state.latest_exception_sources.insert(
+                key,
+                desired.source_revision.exception_source_revision_id.clone(),
+            );
+            state.exception_candidates.insert(
+                desired.candidate.candidate_content_id.clone(),
+                desired.candidate.clone(),
+            );
+            state.exception_rollout_states.insert(
+                PolicyRolloutKeyV1 {
+                    candidate_content_id: desired.candidate.candidate_content_id.clone(),
+                    node_id: desired.candidate.exact_target.node_id.clone(),
+                },
+                desired.rollout_state.clone(),
+            );
+        }
+        ControlTransactionV1::ExceptionAcknowledged { result } => {
+            validate_exception_acknowledgement(state, result, path)?;
+            state.exception_acknowledgements.insert(
+                result.acknowledgement.acknowledgement_content_id.clone(),
+                result.acknowledgement.clone(),
+            );
+            state.exception_rollout_states.insert(
+                PolicyRolloutKeyV1 {
+                    candidate_content_id: result.rollout_state.candidate_content_id.clone(),
+                    node_id: result.rollout_state.node_id.clone(),
+                },
+                result.rollout_state.clone(),
             );
         }
         ControlTransactionV1::EvidencePending { pending } => {
@@ -1753,6 +2133,273 @@ fn apply_accepted_evidence(
     state
         .evidence_cursors
         .insert(accepted.identity.clone(), cursor);
+    Ok(())
+}
+
+fn validate_exception_desired(
+    state: &ControlStoreState,
+    source: &ExceptionSourceRevisionV1,
+    candidate: &ExceptionDeliveryCandidateV1,
+    rollout: &ExceptionRolloutStateV1,
+    path: &Path,
+) -> Result<()> {
+    source.validate()?;
+    candidate.validate_content()?;
+    let object_key = PolicyObjectKeyV1::from(source);
+    let previous_source = state
+        .latest_exception_sources
+        .get(&object_key)
+        .and_then(|id| state.exception_source_revisions.get(id));
+    let previous_candidate = state
+        .exception_candidates
+        .values()
+        .filter(|existing| existing.exception_instance_id == source.object_uid)
+        .max_by_key(|existing| {
+            (
+                existing.distribution_sequence_epoch,
+                existing.distribution_sequence,
+            )
+        });
+
+    let source_transition_is_valid = match (source.state, previous_source) {
+        (ExceptionSourceStateV1::Accepted, None) => true,
+        (ExceptionSourceStateV1::Accepted, Some(previous)) => {
+            let prior_revoke_finished = state.exception_rollout_states.values().any(|entry| {
+                entry.exception_source_revision_id == previous.exception_source_revision_id
+                    && entry.state == crate::WorkloadProtectionExceptionStateV1::Revoked
+            });
+            previous.object_uid != source.object_uid
+                && previous.state == ExceptionSourceStateV1::DeletionRequested
+                && prior_revoke_finished
+        }
+        (ExceptionSourceStateV1::DeletionRequested, Some(previous)) => {
+            previous.object_uid == source.object_uid
+                && previous.object_generation == source.object_generation
+                && previous.state == ExceptionSourceStateV1::Accepted
+                && previous.canonical_spec_digest == source.canonical_spec_digest
+                && previous.base_policy_source_revision_id == source.base_policy_source_revision_id
+                && previous.grant_id == source.grant_id
+                && previous.requested_duration_ns == source.requested_duration_ns
+                && previous.requested_uses == source.requested_uses
+        }
+        (ExceptionSourceStateV1::DeletionRequested, None) => false,
+    };
+    let operation_is_valid = match (source.state, previous_candidate) {
+        (ExceptionSourceStateV1::Accepted, None) => {
+            candidate.operation == ExceptionDeliveryOperationV1::Activate
+                && candidate.predecessor_candidate_content_id.is_none()
+        }
+        (ExceptionSourceStateV1::DeletionRequested, Some(previous)) => {
+            candidate.operation == ExceptionDeliveryOperationV1::Revoke
+                && candidate.predecessor_candidate_content_id.as_deref()
+                    == Some(previous.candidate_content_id.as_str())
+                && candidate.exact_target == previous.exact_target
+                && candidate.base_candidate_content_id == previous.base_candidate_content_id
+                && candidate.profile_generation_ref_id == previous.profile_generation_ref_id
+                && candidate.maximum_uses == previous.maximum_uses
+                && candidate.valid_until_utc_ns == previous.valid_until_utc_ns
+                && (
+                    candidate.distribution_sequence_epoch,
+                    candidate.distribution_sequence,
+                ) > (
+                    previous.distribution_sequence_epoch,
+                    previous.distribution_sequence,
+                )
+        }
+        _ => false,
+    };
+    let base_source = state
+        .source_revisions
+        .get(&source.base_policy_source_revision_id);
+    let base_document = state
+        .policy_documents
+        .get(&source.base_policy_source_revision_id);
+    let base_bundle = state.bundles.get(&candidate.base_candidate_content_id);
+    let base_rollout = state.exception_base_rollout(candidate);
+    let base_acknowledgement = base_rollout.and_then(|entry| {
+        entry
+            .latest_acknowledgement_content_id
+            .as_ref()
+            .and_then(|id| state.acknowledgements.get(id))
+    });
+    let grant_is_valid = base_document.is_some_and(|document| {
+        document.file_exception_grants.iter().any(|grant| {
+            grant.grant_id == source.grant_id
+                && source.requested_duration_ns <= grant.maximum_duration_ns
+                && source.requested_uses <= grant.maximum_uses
+        })
+    });
+    let base_binding_is_valid = base_source.is_some_and(|base| {
+        base.state == PolicySourceStateV1::Accepted && base.tenant_id == source.tenant_id
+    }) && base_document.is_some_and(|document| {
+        document.metadata.profile_id == candidate.profile_id && grant_is_valid
+    }) && base_bundle.is_some_and(|bundle| {
+        bundle.candidate.policy_source_revision_id == source.base_policy_source_revision_id
+            && bundle
+                .candidate
+                .exact_target
+                .workload_targets
+                .contains(&candidate.exact_target)
+    });
+    let active_base_is_valid = base_binding_is_valid
+        && (candidate.operation == ExceptionDeliveryOperationV1::Revoke
+            || (base_rollout
+                .is_some_and(|entry| entry.state == crate::PolicyRolloutStatusV1::Active)
+                && base_acknowledgement.is_some_and(|acknowledgement| {
+                    acknowledgement.state == crate::PolicyActivationStateV1::Active
+                        && acknowledgement.profile_generation_ref_id
+                            == Some(candidate.profile_generation_ref_id)
+                        && acknowledgement.node_id == candidate.exact_target.node_id
+                        && candidate
+                            .exact_target
+                            .kubernetes
+                            .as_ref()
+                            .is_some_and(|identity| {
+                                hex::encode(&acknowledgement.node_boot_id) == identity.node_boot_id
+                                    && acknowledgement.label_epoch == identity.label_epoch
+                            })
+                })));
+    let expected_valid_until = i64::try_from(source.requested_duration_ns)
+        .ok()
+        .and_then(|duration| candidate.issued_utc_ns.checked_add(duration));
+    let candidate_binding_is_valid = candidate.tenant_id == source.tenant_id
+        && candidate.exception_source_revision_id == source.exception_source_revision_id
+        && candidate.base_policy_source_revision_id == source.base_policy_source_revision_id
+        && candidate.grant_id == source.grant_id
+        && candidate.exception_instance_id == source.object_uid
+        && candidate.maximum_uses == source.requested_uses
+        && (candidate.operation == ExceptionDeliveryOperationV1::Revoke
+            || expected_valid_until == Some(candidate.valid_until_utc_ns));
+    let rollout_is_valid = rollout.exception_source_revision_id
+        == source.exception_source_revision_id
+        && rollout.candidate_content_id == candidate.candidate_content_id
+        && rollout.node_id == candidate.exact_target.node_id
+        && rollout.state == crate::WorkloadProtectionExceptionStateV1::Pending
+        && rollout.latest_acknowledgement_content_id.is_none()
+        && rollout.transition_version == 0
+        && rollout.updated_utc_ns == candidate.issued_utc_ns;
+    let overlaps_live_grant = source.state == ExceptionSourceStateV1::Accepted
+        && state.latest_exception_sources.values().any(|source_id| {
+            state
+                .exception_source_revisions
+                .get(source_id)
+                .filter(|existing| {
+                    existing.state == ExceptionSourceStateV1::Accepted
+                        && existing.object_uid != source.object_uid
+                        && existing.base_policy_source_revision_id
+                            == source.base_policy_source_revision_id
+                        && existing.grant_id == source.grant_id
+                })
+                .is_some_and(|existing| {
+                    state.exception_candidates.values().any(|prior| {
+                        prior.exception_source_revision_id == existing.exception_source_revision_id
+                            && prior.exact_target.workload_binding_generation_digest
+                                == candidate.exact_target.workload_binding_generation_digest
+                    })
+                })
+        });
+    if !source_transition_is_valid
+        || !operation_is_valid
+        || !active_base_is_valid
+        || !candidate_binding_is_valid
+        || !rollout_is_valid
+        || overlaps_live_grant
+    {
+        return ControlStoreSnafu {
+            path: path.to_owned(),
+            reason: "the exception source, active base policy, grant, target, or rollout is inconsistent"
+                .to_owned(),
+        }
+        .fail();
+    }
+    Ok(())
+}
+
+impl ControlStoreState {
+    fn exception_base_rollout(
+        &self,
+        candidate: &ExceptionDeliveryCandidateV1,
+    ) -> Option<&PolicyRolloutStateV1> {
+        self.rollout_states.get(&PolicyRolloutKeyV1 {
+            candidate_content_id: candidate.base_candidate_content_id.clone(),
+            node_id: candidate.exact_target.node_id.clone(),
+        })
+    }
+}
+
+fn validate_exception_acknowledgement(
+    state: &ControlStoreState,
+    result: &ExceptionAcknowledgementTransactionV1,
+    path: &Path,
+) -> Result<()> {
+    let acknowledgement = &result.acknowledgement;
+    let rollout = &result.rollout_state;
+    acknowledgement.validate()?;
+    let candidate = state
+        .exception_candidates
+        .get(&acknowledgement.candidate_content_id);
+    let current = candidate.and_then(|candidate| {
+        state.exception_rollout_states.get(&PolicyRolloutKeyV1 {
+            candidate_content_id: candidate.candidate_content_id.clone(),
+            node_id: candidate.exact_target.node_id.clone(),
+        })
+    });
+    let expected_transition = current.and_then(|entry| entry.transition_version.checked_add(1));
+    let candidate_is_valid = candidate.is_some_and(|candidate| {
+        let operation_state_is_valid = match candidate.operation {
+            ExceptionDeliveryOperationV1::Activate => {
+                !matches!(acknowledgement.state, ExceptionActivationStateV1::Revoked)
+            }
+            ExceptionDeliveryOperationV1::Revoke => matches!(
+                acknowledgement.state,
+                ExceptionActivationStateV1::Revoked
+                    | ExceptionActivationStateV1::Rejected
+                    | ExceptionActivationStateV1::Stale
+            ),
+        };
+        let use_count_is_valid = match acknowledgement.state {
+            ExceptionActivationStateV1::Consumed => {
+                acknowledgement.consumed_uses == candidate.maximum_uses
+            }
+            ExceptionActivationStateV1::Rejected | ExceptionActivationStateV1::Stale => {
+                acknowledgement.consumed_uses == 0
+            }
+            _ => acknowledgement.consumed_uses <= candidate.maximum_uses,
+        };
+        candidate.tenant_id == acknowledgement.tenant_id
+            && candidate.exception_source_revision_id
+                == acknowledgement.exception_source_revision_id
+            && candidate.exact_target.node_id == acknowledgement.node_id
+            && candidate
+                .exact_target
+                .kubernetes
+                .as_ref()
+                .is_some_and(|identity| {
+                    hex::encode(&acknowledgement.node_boot_id) == identity.node_boot_id
+                        && acknowledgement.label_epoch == identity.label_epoch
+                })
+            && operation_state_is_valid
+            && use_count_is_valid
+    });
+    let rollout_is_valid = current.is_some()
+        && expected_transition == Some(acknowledgement.transition_version)
+        && rollout.exception_source_revision_id == acknowledgement.exception_source_revision_id
+        && rollout.candidate_content_id == acknowledgement.candidate_content_id
+        && rollout.node_id == acknowledgement.node_id
+        && rollout.state == crate::WorkloadProtectionExceptionStateV1::from(acknowledgement.state)
+        && rollout.latest_acknowledgement_content_id.as_deref()
+            == Some(acknowledgement.acknowledgement_content_id.as_str())
+        && rollout.transition_version == acknowledgement.transition_version
+        && rollout.updated_utc_ns == acknowledgement.observed_utc_ns;
+    if !candidate_is_valid || !rollout_is_valid {
+        return ControlStoreSnafu {
+            path: path.to_owned(),
+            reason:
+                "the exception acknowledgement does not match its candidate and current rollout"
+                    .to_owned(),
+        }
+        .fail();
+    }
     Ok(())
 }
 

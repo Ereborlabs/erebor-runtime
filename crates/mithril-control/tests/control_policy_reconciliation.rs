@@ -3,12 +3,14 @@ use std::path::{Path, PathBuf};
 
 use ed25519_dalek::SigningKey;
 use mithril_control::{
-    canonical_kubernetes_policy_spec_digest, ContainerKindV1, ControlPlane, ControlStore,
-    KubernetesConditionStatusV1, PolicyActivationAcknowledgementV1, PolicyActivationStateV1,
-    PolicyBundleV1, PolicyDeliveryOperationV1, PolicyDesiredStateConfigV1, PolicyDesiredStateOwner,
+    canonical_kubernetes_policy_spec_digest, workload_target_fact_digest, ContainerKindV1,
+    ControlPlane, ControlStore, ExceptionActivationAcknowledgementV1, ExceptionActivationStateV1,
+    ExceptionDeliveryOperationV1, KubernetesConditionStatusV1, KubernetesWorkloadIdentityV1,
+    PolicyActivationAcknowledgementV1, PolicyActivationStateV1, PolicyBundleV1,
+    PolicyDeliveryOperationV1, PolicyDesiredStateConfigV1, PolicyDesiredStateOwner,
     PolicySignerConfigV1, ProfileSealRequestV1, RegistryDigestsV1, TrustGenerationV1,
-    WorkloadProtectionPolicy, WorkloadProtectionPolicySpec, WorkloadTargetFactV1,
-    POLICY_API_VERSION, POLICY_KIND,
+    WorkloadProtectionException, WorkloadProtectionPolicy, WorkloadProtectionPolicySpec,
+    WorkloadTargetFactV1, EXCEPTION_KIND, POLICY_API_VERSION, POLICY_KIND,
 };
 use serde_json::json;
 use tempfile::TempDir;
@@ -20,6 +22,7 @@ const TENANT_ID: &str = "10000000-0000-4000-8000-000000000001";
 const CLUSTER_UID: &str = "55555555-5555-4555-8555-555555555555";
 const NAMESPACE_UID: &str = "66666666-6666-4666-8666-666666666666";
 const OBJECT_UID: &str = "30000000-0000-4000-8000-000000000001";
+const EXCEPTION_UID: &str = "30000000-0000-4000-8000-000000000002";
 const NOW: i64 = 1_800_000_000_000_000_000;
 
 fn policy() -> TestResult<WorkloadProtectionPolicySpec> {
@@ -157,6 +160,188 @@ fn acknowledgement(
         authenticated_channel_receipt_digest: "4".repeat(64),
     }
     .finalize()?)
+}
+
+fn kubernetes_inventory(
+    policy_source_revision_id: &str,
+    profile_id: &str,
+) -> TestResult<Vec<WorkloadTargetFactV1>> {
+    let mut target = inventory("").remove(0);
+    target.kubernetes = Some(KubernetesWorkloadIdentityV1 {
+        namespace_name: "tenant-a".to_owned(),
+        pod_name: "converter-pod".to_owned(),
+        profile_id: profile_id.to_owned(),
+        policy_source_revision_id: policy_source_revision_id.to_owned(),
+        binding_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa".to_owned(),
+        protected_scope_id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb".to_owned(),
+        workload_selector_id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc".to_owned(),
+        kubernetes_node_name: "worker-a".to_owned(),
+        kubernetes_node_uid: "dddddddd-dddd-4ddd-8ddd-dddddddddddd".to_owned(),
+        node_boot_id: "01".repeat(16),
+        label_epoch: 1,
+    });
+    target.workload_binding_generation_digest = workload_target_fact_digest(&target)?;
+    Ok(vec![target])
+}
+
+fn exception_resource(uid: &str, deleting: bool) -> TestResult<WorkloadProtectionException> {
+    let mut metadata = json!({
+        "name": "temporary-file-access",
+        "namespace": "tenant-a",
+        "uid": uid,
+        "generation": 1,
+        "resourceVersion": if deleting { "exception-deleting" } else { "exception-active" },
+    });
+    if deleting {
+        metadata["deletionTimestamp"] = json!("2027-01-15T00:00:00Z");
+    }
+    Ok(serde_json::from_value(json!({
+        "apiVersion": POLICY_API_VERSION,
+        "kind": EXCEPTION_KIND,
+        "metadata": metadata,
+        "spec": {
+            "policyRef": { "name": "profile" },
+            "grant": "temporary-file-access",
+            "target": {
+                "pod": {
+                    "name": "converter-pod",
+                    "uid": "99999999-9999-4999-8999-999999999999"
+                },
+                "containerName": "converter"
+            },
+            "requestedDuration": "30s",
+            "requestedUses": 1
+        }
+    }))?)
+}
+
+fn exception_acknowledgement(
+    candidate: &mithril_control::ExceptionDeliveryCandidateV1,
+    state: ExceptionActivationStateV1,
+    transition_version: u64,
+    observed_utc_ns: i64,
+) -> TestResult<ExceptionActivationAcknowledgementV1> {
+    let rejected = matches!(
+        state,
+        ExceptionActivationStateV1::Rejected | ExceptionActivationStateV1::Stale
+    );
+    Ok(ExceptionActivationAcknowledgementV1 {
+        acknowledgement_content_id: String::new(),
+        tenant_id: TENANT_ID.to_owned(),
+        node_id: candidate.exact_target.node_id.clone(),
+        node_boot_id: vec![1; 16],
+        label_epoch: 1,
+        candidate_content_id: candidate.candidate_content_id.clone(),
+        exception_source_revision_id: candidate.exception_source_revision_id.clone(),
+        state,
+        consumed_uses: 0,
+        transition_version,
+        observed_utc_ns,
+        reason_code: rejected.then(|| "EXCEPTION_REJECTED".to_owned()),
+        authenticated_channel_receipt_digest: "5".repeat(64),
+    }
+    .finalize()?)
+}
+
+#[test]
+fn exception_is_bounded_to_one_active_container_and_replays_revocation() -> TestResult {
+    let directory = TempDir::new()?;
+    let store = ControlStore::open(directory.path())?;
+    let owner = make_owner(store.clone());
+    let policy = policy()?;
+    let policy_resource = resource(&policy, "profile", OBJECT_UID, 1, false)?;
+    let initial = owner.reconcile(
+        &policy_resource,
+        NAMESPACE_UID,
+        &inventory(&"1".repeat(64)),
+        NOW,
+    )?;
+    let profile_id = &initial.bundles[0]
+        .profile_artifact
+        .policy_document
+        .metadata
+        .profile_id;
+    let inventory = kubernetes_inventory(
+        &initial.source_revision.policy_source_revision_id,
+        profile_id,
+    )?;
+    let bound = owner.reconcile(&policy_resource, NAMESPACE_UID, &inventory, NOW + 1)?;
+    owner.rollout_owner().acknowledge(acknowledgement(
+        &bound.bundles[0],
+        PolicyActivationStateV1::Active,
+        NOW + 2,
+    )?)?;
+
+    let resource = exception_resource(EXCEPTION_UID, false)?;
+    let activated = owner.reconcile_exception(&resource, NAMESPACE_UID, &inventory, NOW + 3)?;
+    assert_eq!(
+        activated.candidate.operation,
+        ExceptionDeliveryOperationV1::Activate
+    );
+    assert_eq!(activated.candidate.maximum_uses, 1);
+    assert_eq!(
+        activated
+            .candidate
+            .exact_target
+            .workload_binding_generation_digest,
+        inventory[0].workload_binding_generation_digest
+    );
+    let commit_index = store.commit_index();
+    let duplicate = owner.reconcile_exception(&resource, NAMESPACE_UID, &inventory, NOW + 4)?;
+    assert_eq!(duplicate.source_revision, activated.source_revision);
+    assert_eq!(duplicate.candidate, activated.candidate);
+    assert_eq!(duplicate.rollout_state, activated.rollout_state);
+    assert_eq!(store.commit_index(), commit_index);
+
+    owner
+        .rollout_owner()
+        .acknowledge_exception(exception_acknowledgement(
+            &activated.candidate,
+            ExceptionActivationStateV1::Active,
+            1,
+            NOW + 5,
+        )?)?;
+    let mut overlapping = exception_resource("30000000-0000-4000-8000-000000000003", false)?;
+    overlapping.metadata.name = Some("temporary-file-access-overlap".to_owned());
+    assert!(owner
+        .reconcile_exception(&overlapping, NAMESPACE_UID, &inventory, NOW + 6)
+        .is_err());
+
+    drop(owner);
+    drop(store);
+    let reopened = ControlStore::open(directory.path())?;
+    let restarted = make_owner(reopened.clone());
+    let restored = restarted.reconcile_exception(&resource, NAMESPACE_UID, &inventory, NOW + 7)?;
+    assert_eq!(restored.candidate, activated.candidate);
+    assert_eq!(
+        restored.status.state,
+        mithril_control::WorkloadProtectionExceptionStateV1::Active
+    );
+
+    // Revocation remains deliverable after the short-lived exception authority expires.
+    let deleting = exception_resource(EXCEPTION_UID, true)?;
+    let revoked =
+        restarted.reconcile_exception(&deleting, NAMESPACE_UID, &[], NOW + 120_000_000_000)?;
+    assert_eq!(
+        revoked.candidate.operation,
+        ExceptionDeliveryOperationV1::Revoke
+    );
+    assert_eq!(
+        revoked
+            .candidate
+            .predecessor_candidate_content_id
+            .as_deref(),
+        Some(activated.candidate.candidate_content_id.as_str())
+    );
+    revoked.candidate.verify(
+        &SigningKey::from_bytes(&[7; 32]).verifying_key(),
+        "node-a",
+        NOW + 120_000_000_001,
+    )?;
+    drop(restarted);
+    drop(reopened);
+    assert!(ControlStore::open(directory.path()).is_ok());
+    Ok(())
 }
 
 #[test]
