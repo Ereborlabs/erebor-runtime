@@ -1127,7 +1127,7 @@ fn materialize_scheduled_bindings(
             if !existing.container_id.starts_with("scheduled:") {
                 ensure!(
                     existing.binding_id
-                        == crate::runtime_admission::runtime_binding_id(
+                        == crate::runtime_admission::ScheduledRuntimeBindingV1::runtime_binding_id(
                             &identity.binding_id,
                             &existing.container_id,
                         ),
@@ -1695,7 +1695,10 @@ mod tests {
             })?;
         runtime_binding.container_id = "d".repeat(64);
         runtime_binding.binding_id =
-            crate::runtime_admission::runtime_binding_id(&authority, &runtime_binding.container_id);
+            crate::runtime_admission::ScheduledRuntimeBindingV1::runtime_binding_id(
+                &authority,
+                &runtime_binding.container_id,
+            );
         runtime_binding.sandbox_id = "e".repeat(64);
         runtime_binding.root_cgroup_path = Some(directory.path().join("pod-cgroup"));
         runtime_binding.container_generation = 42;
@@ -1824,7 +1827,7 @@ mod tests {
         node_boot_id: &[u8],
     ) -> crate::Result<mithril_control::PolicyBundleV1> {
         let source_revision_id = "a".repeat(64);
-        let binding_id = crate::runtime_admission::scheduled_authority_binding_id(
+        let binding_id = crate::runtime_admission::ScheduledRuntimeBindingV1::authority_binding_id(
             "aaaaaaaa-1111-4111-8111-111111111111",
             "converter",
         );

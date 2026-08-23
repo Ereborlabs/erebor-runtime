@@ -907,7 +907,7 @@ impl NodeChassis {
                 && readiness.identity_ready
                 && readiness.effect_prevention_claims_enabled
                 && self.policy.is_some()
-                && crate::runtime_admission::resolve_scheduled_runtime_binding(
+                && crate::runtime_admission::ScheduledRuntimeBindingV1::resolve(
                     &self.config.workload_bindings,
                     &envelope.request,
                 )
@@ -947,7 +947,7 @@ impl NodeChassis {
                 reason: "runtime admission has no healthy active prevention generation",
             }
         );
-        let mut scheduled = crate::runtime_admission::resolve_scheduled_runtime_binding(
+        let mut scheduled = crate::runtime_admission::ScheduledRuntimeBindingV1::resolve(
             &self.config.workload_bindings,
             request,
         )?;
