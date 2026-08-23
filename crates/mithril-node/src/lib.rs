@@ -46,8 +46,8 @@ pub use observation::{
 };
 pub use policy::NodePolicyGenerationOwner;
 pub use runtime_admission::{
-    submit_runtime_admission, RuntimeAdmissionRequestV1, RuntimeAdmissionResponseV1,
+    RuntimeAdmissionClient, RuntimeAdmissionRequestV1, RuntimeAdmissionResponseV1,
     CONTAINER_NAME_ANNOTATION, IMAGE_NAME_ANNOTATION, POD_NAMESPACE_ANNOTATION, POD_UID_ANNOTATION,
-    SANDBOX_ID_ANNOTATION,
+    POLICY_SOURCE_REVISION_ANNOTATION, PROFILE_ID_ANNOTATION, SANDBOX_ID_ANNOTATION,
 };
 pub use trust::{InstalledTrustGenerationV1, TrustCache};

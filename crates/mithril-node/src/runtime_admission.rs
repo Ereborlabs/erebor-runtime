@@ -73,6 +73,11 @@ pub(crate) struct RuntimeAdmissionReceiver {
     requests: mpsc::Receiver<RuntimeAdmissionEnvelope>,
 }
 
+pub struct RuntimeAdmissionClient {
+    socket_path: PathBuf,
+    timeout: Duration,
+}
+
 impl RuntimeAdmissionRequestV1 {
     pub(crate) fn kubernetes_identity(&self) -> Result<KubernetesRuntimeIdentityV1> {
         ensure!(
@@ -205,7 +210,7 @@ impl RuntimeAdmissionServer {
                     let maximum_request_bytes = self.maximum_request_bytes;
                     let timeout = self.timeout;
                     tokio::spawn(async move {
-                        let _result = handle_connection(
+                        let _result = Self::handle_connection(
                             stream,
                             &path,
                             maximum_request_bytes,
@@ -233,186 +238,198 @@ impl RuntimeAdmissionReceiver {
     }
 }
 
-pub async fn submit_runtime_admission(
-    socket_path: &Path,
-    request: &RuntimeAdmissionRequestV1,
-    timeout: Duration,
-) -> Result<RuntimeAdmissionResponseV1> {
-    tokio::time::timeout(timeout, async {
-        let stream = UnixStream::connect(socket_path)
+impl RuntimeAdmissionClient {
+    pub fn new(socket_path: PathBuf, timeout: Duration) -> Result<Self> {
+        ensure!(
+            socket_path.is_absolute() && (100..=30_000).contains(&timeout.as_millis()),
+            IdentityStateSnafu {
+                reason:
+                    "runtime admission client requires an absolute socket and a bounded timeout",
+            }
+        );
+        Ok(Self {
+            socket_path,
+            timeout,
+        })
+    }
+
+    pub async fn submit(
+        &self,
+        request: &RuntimeAdmissionRequestV1,
+    ) -> Result<RuntimeAdmissionResponseV1> {
+        tokio::time::timeout(self.timeout, async {
+            let stream = UnixStream::connect(&self.socket_path)
+                .await
+                .context(IoSnafu {
+                    path: &self.socket_path,
+                })?;
+            self.exchange(stream, request).await
+        })
+        .await
+        .map_err(|_elapsed| {
+            IdentityStateSnafu {
+                reason: "runtime admission endpoint exceeded its fail-closed timeout".to_owned(),
+            }
+            .build()
+        })?
+    }
+
+    async fn exchange(
+        &self,
+        mut stream: UnixStream,
+        request: &RuntimeAdmissionRequestV1,
+    ) -> Result<RuntimeAdmissionResponseV1> {
+        let mut bytes = serde_json::to_vec(request).context(JsonSnafu {
+            path: "runtime-admission-request",
+        })?;
+        bytes.push(b'\n');
+        stream.write_all(&bytes).await.context(IoSnafu {
+            path: &self.socket_path,
+        })?;
+        let mut response = Vec::new();
+        (&mut stream)
+            .take(4_097)
+            .read_to_end(&mut response)
             .await
-            .context(IoSnafu { path: socket_path })?;
-        exchange_runtime_admission(stream, socket_path, request).await
-    })
-    .await
-    .map_err(|_elapsed| {
-        IdentityStateSnafu {
-            reason: "runtime admission endpoint exceeded its fail-closed timeout".to_owned(),
-        }
-        .build()
-    })?
+            .context(IoSnafu {
+                path: &self.socket_path,
+            })?;
+        ensure!(
+            !response.is_empty() && response.len() <= 4_096,
+            IdentityStateSnafu {
+                reason: "runtime admission response exceeds its byte limit",
+            }
+        );
+        serde_json::from_slice(&response).context(JsonSnafu {
+            path: "runtime-admission-response",
+        })
+    }
 }
 
-async fn exchange_runtime_admission(
-    mut stream: UnixStream,
-    socket_path: &Path,
-    request: &RuntimeAdmissionRequestV1,
-) -> Result<RuntimeAdmissionResponseV1> {
-    let mut bytes = serde_json::to_vec(request).context(JsonSnafu {
-        path: "runtime-admission-request",
-    })?;
-    bytes.push(b'\n');
-    stream
-        .write_all(&bytes)
-        .await
-        .context(IoSnafu { path: socket_path })?;
-    let mut response = Vec::new();
-    (&mut stream)
-        .take(4_097)
-        .read_to_end(&mut response)
-        .await
-        .context(IoSnafu { path: socket_path })?;
-    ensure!(
-        !response.is_empty() && response.len() <= 4_096,
-        IdentityStateSnafu {
-            reason: "runtime admission response exceeds its byte limit",
-        }
-    );
-    serde_json::from_slice(&response).context(JsonSnafu {
-        path: "runtime-admission-response",
-    })
-}
-
-pub(crate) fn runtime_binding_id(authority_binding_id: &str, container_id: &str) -> String {
-    let digest = Sha256::digest(
-        [
-            b"MITHRIL-KUBERNETES-RUNTIME-BINDING-V1\0".as_slice(),
+impl ScheduledRuntimeBindingV1 {
+    pub(crate) fn runtime_binding_id(authority_binding_id: &str, container_id: &str) -> String {
+        Self::derived_uuid(&[
+            b"MITHRIL-KUBERNETES-RUNTIME-BINDING-V1\0",
             authority_binding_id.as_bytes(),
             container_id.as_bytes(),
-        ]
-        .concat(),
-    );
-    let mut bytes = [0_u8; 16];
-    bytes.copy_from_slice(&digest[..16]);
-    bytes[6] = (bytes[6] & 0x0f) | 0x80;
-    bytes[8] = (bytes[8] & 0x3f) | 0x80;
-    uuid::Uuid::from_bytes(bytes).hyphenated().to_string()
-}
+        ])
+    }
 
-pub(crate) fn scheduled_authority_binding_id(pod_uid: &str, container_name: &str) -> String {
-    derived_uuid(&[
-        b"MITHRIL-KUBERNETES-BINDING-V1\0",
-        pod_uid.as_bytes(),
-        container_name.as_bytes(),
-    ])
-}
+    pub(crate) fn authority_binding_id(pod_uid: &str, container_name: &str) -> String {
+        Self::derived_uuid(&[
+            b"MITHRIL-KUBERNETES-BINDING-V1\0",
+            pod_uid.as_bytes(),
+            container_name.as_bytes(),
+        ])
+    }
 
-pub(crate) fn resolve_scheduled_runtime_binding(
-    configured: &[WorkloadBindingConfig],
-    request: &RuntimeAdmissionRequestV1,
-) -> Result<ScheduledRuntimeBindingV1> {
-    let identity = request.kubernetes_identity()?;
-    ensure!(
-        (32..=128).contains(&identity.sandbox_id.len())
-            && identity
-                .sandbox_id
-                .bytes()
-                .all(|byte| byte.is_ascii_alphanumeric() || b"-_.:".contains(&byte)),
-        IdentityStateSnafu {
-            reason: "runtime admission sandbox identity is invalid",
-        }
-    );
-    let matches = configured
-        .iter()
-        .enumerate()
-        .filter(|(_index, binding)| {
-            binding.scheduled_binding_authority_id.is_some()
-                && binding.profile_id == identity.profile_id
-                && binding.namespace == identity.namespace
-                && binding.pod_uid == identity.pod_uid
-                && binding.container_name == identity.container_name
-                && binding.image_digest == identity.image_digest
+    pub(crate) fn resolve(
+        configured: &[WorkloadBindingConfig],
+        request: &RuntimeAdmissionRequestV1,
+    ) -> Result<Self> {
+        let identity = request.kubernetes_identity()?;
+        ensure!(
+            (32..=128).contains(&identity.sandbox_id.len())
+                && identity
+                    .sandbox_id
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || b"-_.:".contains(&byte)),
+            IdentityStateSnafu {
+                reason: "runtime admission sandbox identity is invalid",
+            }
+        );
+        let matches = configured
+            .iter()
+            .enumerate()
+            .filter(|(_index, binding)| {
+                binding.scheduled_binding_authority_id.is_some()
+                    && binding.profile_id == identity.profile_id
+                    && binding.namespace == identity.namespace
+                    && binding.pod_uid == identity.pod_uid
+                    && binding.container_name == identity.container_name
+                    && binding.image_digest == identity.image_digest
+            })
+            .collect::<Vec<_>>();
+        ensure!(
+            matches.len() == 1,
+            IdentityStateSnafu {
+                reason: "runtime admission does not resolve to one signed scheduled target",
+            }
+        );
+        let binding_index = matches[0].0;
+        let current = matches[0].1;
+        let authority_binding_id = current
+            .scheduled_binding_authority_id
+            .as_deref()
+            .ok_or_else(|| {
+                IdentityStateSnafu {
+                    reason: "scheduled binding lost its signed authority".to_owned(),
+                }
+                .build()
+            })?;
+        ensure!(
+            authority_binding_id
+                == Self::authority_binding_id(&identity.pod_uid, &identity.container_name),
+            IdentityStateSnafu {
+                reason: "scheduled binding authority does not match its Pod and container",
+            }
+        );
+        let current_is_placeholder = current.container_id.starts_with("scheduled:");
+        ensure!(
+            (current_is_placeholder && current.binding_id == authority_binding_id)
+                || (!current_is_placeholder
+                    && current.binding_id
+                        == Self::runtime_binding_id(authority_binding_id, &current.container_id)),
+            IdentityStateSnafu {
+                reason: "runtime binding is not derived from its signed scheduled authority",
+            }
+        );
+        let mut resolved = current.clone();
+        resolved.binding_id = Self::runtime_binding_id(authority_binding_id, &request.container_id);
+        ensure!(
+            current_is_placeholder || resolved.binding_id != current.binding_id,
+            IdentityStateSnafu {
+                reason: "runtime admission attempted to reuse one container lifetime",
+            }
+        );
+        resolved.container_id = request.container_id.clone();
+        resolved.sandbox_id = identity.sandbox_id;
+        resolved.root_cgroup_path = Some(request.cgroup_path.clone());
+        resolved.container_generation = if current_is_placeholder {
+            1
+        } else {
+            current.container_generation.checked_add(1).ok_or_else(|| {
+                IdentityStateSnafu {
+                    reason: "runtime container generation overflowed".to_owned(),
+                }
+                .build()
+            })?
+        };
+        resolved.lifecycle_generation = if current_is_placeholder {
+            current.lifecycle_generation
+        } else {
+            current.lifecycle_generation.checked_add(1).ok_or_else(|| {
+                IdentityStateSnafu {
+                    reason: "runtime binding lifecycle generation overflowed".to_owned(),
+                }
+                .build()
+            })?
+        };
+        Ok(Self {
+            binding_index,
+            previous_binding_id: (!current_is_placeholder).then(|| current.binding_id.clone()),
+            resolved,
         })
-        .collect::<Vec<_>>();
-    ensure!(
-        matches.len() == 1,
-        IdentityStateSnafu {
-            reason: "runtime admission does not resolve to one signed scheduled target",
-        }
-    );
-    let binding_index = matches[0].0;
-    let current = matches[0].1;
-    let authority_binding_id = current
-        .scheduled_binding_authority_id
-        .as_deref()
-        .ok_or_else(|| {
-            IdentityStateSnafu {
-                reason: "scheduled binding lost its signed authority".to_owned(),
-            }
-            .build()
-        })?;
-    ensure!(
-        authority_binding_id
-            == scheduled_authority_binding_id(&identity.pod_uid, &identity.container_name),
-        IdentityStateSnafu {
-            reason: "scheduled binding authority does not match its Pod and container",
-        }
-    );
-    let current_is_placeholder = current.container_id.starts_with("scheduled:");
-    ensure!(
-        (current_is_placeholder && current.binding_id == authority_binding_id)
-            || (!current_is_placeholder
-                && current.binding_id
-                    == runtime_binding_id(authority_binding_id, &current.container_id)),
-        IdentityStateSnafu {
-            reason: "runtime binding is not derived from its signed scheduled authority",
-        }
-    );
-    let mut resolved = current.clone();
-    resolved.binding_id = runtime_binding_id(authority_binding_id, &request.container_id);
-    ensure!(
-        current_is_placeholder || resolved.binding_id != current.binding_id,
-        IdentityStateSnafu {
-            reason: "runtime admission attempted to reuse one container lifetime",
-        }
-    );
-    resolved.container_id = request.container_id.clone();
-    resolved.sandbox_id = identity.sandbox_id;
-    resolved.root_cgroup_path = Some(request.cgroup_path.clone());
-    resolved.container_generation = if current_is_placeholder {
-        1
-    } else {
-        current.container_generation.checked_add(1).ok_or_else(|| {
-            IdentityStateSnafu {
-                reason: "runtime container generation overflowed".to_owned(),
-            }
-            .build()
-        })?
-    };
-    resolved.lifecycle_generation = if current_is_placeholder {
-        current.lifecycle_generation
-    } else {
-        current.lifecycle_generation.checked_add(1).ok_or_else(|| {
-            IdentityStateSnafu {
-                reason: "runtime binding lifecycle generation overflowed".to_owned(),
-            }
-            .build()
-        })?
-    };
-    Ok(ScheduledRuntimeBindingV1 {
-        binding_index,
-        previous_binding_id: (!current_is_placeholder).then(|| current.binding_id.clone()),
-        resolved,
-    })
-}
+    }
 
-fn derived_uuid(parts: &[&[u8]]) -> String {
-    let digest = Sha256::digest(parts.concat());
-    let mut bytes = [0_u8; 16];
-    bytes.copy_from_slice(&digest[..16]);
-    bytes[6] = (bytes[6] & 0x0f) | 0x80;
-    bytes[8] = (bytes[8] & 0x3f) | 0x80;
-    uuid::Uuid::from_bytes(bytes).hyphenated().to_string()
+    fn derived_uuid(parts: &[&[u8]]) -> String {
+        let digest = Sha256::digest(parts.concat());
+        let mut bytes = [0_u8; 16];
+        bytes.copy_from_slice(&digest[..16]);
+        bytes[6] = (bytes[6] & 0x0f) | 0x80;
+        bytes[8] = (bytes[8] & 0x3f) | 0x80;
+        uuid::Uuid::from_bytes(bytes).hyphenated().to_string()
+    }
 }
 
 fn canonical_uuid(value: &str) -> bool {
@@ -455,96 +472,98 @@ fn clean_cgroup_path(path: &Path) -> bool {
         })
 }
 
-async fn handle_connection(
-    mut stream: UnixStream,
-    socket_path: &Path,
-    maximum_request_bytes: usize,
-    timeout: Duration,
-    requests: mpsc::Sender<RuntimeAdmissionEnvelope>,
-) -> Result<()> {
-    let response = tokio::time::timeout(timeout, async {
-        ensure!(
-            stream
-                .peer_cred()
-                .context(IoSnafu { path: socket_path })?
-                .uid()
-                == 0,
-            IdentityStateSnafu {
-                reason: "runtime admission peer is not root",
-            }
-        );
-        let maximum = u64::try_from(maximum_request_bytes).map_err(|_| {
-            IdentityStateSnafu {
-                reason: "runtime admission request limit is invalid".to_owned(),
-            }
-            .build()
-        })?;
-        let mut bytes = Vec::new();
-        BufReader::new(&mut stream)
-            .take(maximum.saturating_add(1))
-            .read_until(b'\n', &mut bytes)
-            .await
-            .context(IoSnafu { path: socket_path })?;
-        ensure!(
-            bytes.last() == Some(&b'\n') && bytes.len() <= maximum_request_bytes,
-            IdentityStateSnafu {
-                reason: "runtime admission request exceeds its byte limit",
-            }
-        );
-        bytes.pop();
-        let request = serde_json::from_slice(&bytes).context(JsonSnafu {
-            path: "runtime-admission-request",
-        })?;
-        dispatch_runtime_admission(request, requests).await
-    })
-    .await
-    .unwrap_or_else(|_elapsed| {
-        Ok(RuntimeAdmissionResponseV1 {
-            allowed: false,
-            reason_code: "ADMISSION_TIMEOUT".to_owned(),
-        })
-    })
-    .unwrap_or_else(|_error| RuntimeAdmissionResponseV1 {
-        allowed: false,
-        reason_code: "ADMISSION_REJECTED".to_owned(),
-    });
-    let bytes = serde_json::to_vec(&response).context(JsonSnafu {
-        path: "runtime-admission-response",
-    })?;
-    stream
-        .write_all(&bytes)
-        .await
-        .context(IoSnafu { path: socket_path })
-}
-
-async fn dispatch_runtime_admission(
-    request: RuntimeAdmissionRequestV1,
-    requests: mpsc::Sender<RuntimeAdmissionEnvelope>,
-) -> Result<RuntimeAdmissionResponseV1> {
-    loop {
-        let (response, receiver) = oneshot::channel();
-        requests
-            .send(RuntimeAdmissionEnvelope {
-                request: request.clone(),
-                response,
-            })
-            .await
-            .map_err(|_closed| {
+impl RuntimeAdmissionServer {
+    async fn handle_connection(
+        mut stream: UnixStream,
+        socket_path: &Path,
+        maximum_request_bytes: usize,
+        timeout: Duration,
+        requests: mpsc::Sender<RuntimeAdmissionEnvelope>,
+    ) -> Result<()> {
+        let response = tokio::time::timeout(timeout, async {
+            ensure!(
+                stream
+                    .peer_cred()
+                    .context(IoSnafu { path: socket_path })?
+                    .uid()
+                    == 0,
                 IdentityStateSnafu {
-                    reason: "runtime admission owner is unavailable".to_owned(),
+                    reason: "runtime admission peer is not root",
+                }
+            );
+            let maximum = u64::try_from(maximum_request_bytes).map_err(|_| {
+                IdentityStateSnafu {
+                    reason: "runtime admission request limit is invalid".to_owned(),
                 }
                 .build()
             })?;
-        let response = receiver.await.map_err(|_closed| {
-            IdentityStateSnafu {
-                reason: "runtime admission owner closed the request".to_owned(),
-            }
-            .build()
+            let mut bytes = Vec::new();
+            BufReader::new(&mut stream)
+                .take(maximum.saturating_add(1))
+                .read_until(b'\n', &mut bytes)
+                .await
+                .context(IoSnafu { path: socket_path })?;
+            ensure!(
+                bytes.last() == Some(&b'\n') && bytes.len() <= maximum_request_bytes,
+                IdentityStateSnafu {
+                    reason: "runtime admission request exceeds its byte limit",
+                }
+            );
+            bytes.pop();
+            let request = serde_json::from_slice(&bytes).context(JsonSnafu {
+                path: "runtime-admission-request",
+            })?;
+            Self::dispatch(request, requests).await
+        })
+        .await
+        .unwrap_or_else(|_elapsed| {
+            Ok(RuntimeAdmissionResponseV1 {
+                allowed: false,
+                reason_code: "ADMISSION_TIMEOUT".to_owned(),
+            })
+        })
+        .unwrap_or_else(|_error| RuntimeAdmissionResponseV1 {
+            allowed: false,
+            reason_code: "ADMISSION_REJECTED".to_owned(),
+        });
+        let bytes = serde_json::to_vec(&response).context(JsonSnafu {
+            path: "runtime-admission-response",
         })?;
-        if response.reason_code != POLICY_CONVERGENCE_PENDING {
-            return Ok(response);
+        stream
+            .write_all(&bytes)
+            .await
+            .context(IoSnafu { path: socket_path })
+    }
+
+    async fn dispatch(
+        request: RuntimeAdmissionRequestV1,
+        requests: mpsc::Sender<RuntimeAdmissionEnvelope>,
+    ) -> Result<RuntimeAdmissionResponseV1> {
+        loop {
+            let (response, receiver) = oneshot::channel();
+            requests
+                .send(RuntimeAdmissionEnvelope {
+                    request: request.clone(),
+                    response,
+                })
+                .await
+                .map_err(|_closed| {
+                    IdentityStateSnafu {
+                        reason: "runtime admission owner is unavailable".to_owned(),
+                    }
+                    .build()
+                })?;
+            let response = receiver.await.map_err(|_closed| {
+                IdentityStateSnafu {
+                    reason: "runtime admission owner closed the request".to_owned(),
+                }
+                .build()
+            })?;
+            if response.reason_code != POLICY_CONVERGENCE_PENDING {
+                return Ok(response);
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
         }
-        tokio::time::sleep(Duration::from_millis(25)).await;
     }
 }
 
@@ -555,12 +574,11 @@ mod tests {
     use std::time::Duration;
 
     use super::{
-        dispatch_runtime_admission, remove_stale_socket, resolve_scheduled_runtime_binding,
-        runtime_binding_id, scheduled_authority_binding_id, submit_runtime_admission,
-        RuntimeAdmissionRequestV1, RuntimeAdmissionResponseV1, CONTAINER_NAME_ANNOTATION,
-        IMAGE_NAME_ANNOTATION, POD_NAMESPACE_ANNOTATION, POD_UID_ANNOTATION,
-        POLICY_CONVERGENCE_PENDING, POLICY_SOURCE_REVISION_ANNOTATION, PROFILE_ID_ANNOTATION,
-        SANDBOX_ID_ANNOTATION,
+        remove_stale_socket, RuntimeAdmissionClient, RuntimeAdmissionRequestV1,
+        RuntimeAdmissionResponseV1, RuntimeAdmissionServer, ScheduledRuntimeBindingV1,
+        CONTAINER_NAME_ANNOTATION, IMAGE_NAME_ANNOTATION, POD_NAMESPACE_ANNOTATION,
+        POD_UID_ANNOTATION, POLICY_CONVERGENCE_PENDING, POLICY_SOURCE_REVISION_ANNOTATION,
+        PROFILE_ID_ANNOTATION, SANDBOX_ID_ANNOTATION,
     };
     use crate::{ContainerKindV1, WorkloadBindingConfig};
 
@@ -589,8 +607,10 @@ mod tests {
 
     fn scheduled_binding() -> WorkloadBindingConfig {
         WorkloadBindingConfig {
-            binding_id: scheduled_authority_binding_id("pod-a", "worker"),
-            scheduled_binding_authority_id: Some(scheduled_authority_binding_id("pod-a", "worker")),
+            binding_id: ScheduledRuntimeBindingV1::authority_binding_id("pod-a", "worker"),
+            scheduled_binding_authority_id: Some(ScheduledRuntimeBindingV1::authority_binding_id(
+                "pod-a", "worker",
+            )),
             scheduled_target_digest: Some("e".repeat(64)),
             execution_set_id: "22222222-2222-4222-8222-222222222222".to_owned(),
             protected_scope_id: "44444444-4444-4444-8444-444444444444".to_owned(),
@@ -659,8 +679,14 @@ mod tests {
 
     #[test]
     fn each_runtime_container_gets_a_distinct_binding() {
-        let first = runtime_binding_id("11111111-1111-4111-8111-111111111111", &"a".repeat(64));
-        let second = runtime_binding_id("11111111-1111-4111-8111-111111111111", &"b".repeat(64));
+        let first = ScheduledRuntimeBindingV1::runtime_binding_id(
+            "11111111-1111-4111-8111-111111111111",
+            &"a".repeat(64),
+        );
+        let second = ScheduledRuntimeBindingV1::runtime_binding_id(
+            "11111111-1111-4111-8111-111111111111",
+            &"b".repeat(64),
+        );
         assert_ne!(first, second);
         assert_eq!(first.len(), 36);
     }
@@ -669,7 +695,7 @@ mod tests {
     fn signed_scheduled_target_resolves_one_runtime_lifetime() -> crate::Result<()> {
         let scheduled = scheduled_binding();
         let request = request();
-        let resolved = resolve_scheduled_runtime_binding(&[scheduled], &request)?;
+        let resolved = ScheduledRuntimeBindingV1::resolve(&[scheduled], &request)?;
         assert_eq!(resolved.binding_index, 0);
         assert_eq!(resolved.resolved.container_id, request.container_id);
         assert_eq!(
@@ -688,7 +714,7 @@ mod tests {
             .annotations
             .insert(POD_UID_ANNOTATION.to_owned(), "pod-b".to_owned());
         assert!(
-            resolve_scheduled_runtime_binding(std::slice::from_ref(&scheduled), &wrong_pod)
+            ScheduledRuntimeBindingV1::resolve(std::slice::from_ref(&scheduled), &wrong_pod)
                 .is_err()
         );
 
@@ -697,15 +723,15 @@ mod tests {
             PROFILE_ID_ANNOTATION.to_owned(),
             "44444444-4444-4444-8444-444444444444".to_owned(),
         );
-        assert!(resolve_scheduled_runtime_binding(
+        assert!(ScheduledRuntimeBindingV1::resolve(
             std::slice::from_ref(&scheduled),
             &wrong_profile
         )
         .is_err());
 
         let request = request();
-        let active = resolve_scheduled_runtime_binding(&[scheduled], &request)?.resolved;
-        assert!(resolve_scheduled_runtime_binding(&[active], &request).is_err());
+        let active = ScheduledRuntimeBindingV1::resolve(&[scheduled], &request)?.resolved;
+        assert!(ScheduledRuntimeBindingV1::resolve(&[active], &request).is_err());
         Ok(())
     }
 
@@ -717,11 +743,8 @@ mod tests {
             location: snafu::Location::default(),
         })?;
         let missing = directory.path().join("missing.sock");
-        assert!(
-            submit_runtime_admission(&missing, &request(), Duration::from_millis(20))
-                .await
-                .is_err()
-        );
+        let client = RuntimeAdmissionClient::new(missing, Duration::from_millis(100))?;
+        assert!(client.submit(&request()).await.is_err());
 
         assert!(
             tokio::time::timeout(Duration::from_millis(20), std::future::pending::<()>(),)
@@ -734,7 +757,7 @@ mod tests {
     #[tokio::test]
     async fn one_hook_call_waits_for_policy_convergence() -> crate::Result<()> {
         let (sender, mut receiver) = tokio::sync::mpsc::channel(2);
-        let task = tokio::spawn(dispatch_runtime_admission(request(), sender));
+        let task = tokio::spawn(RuntimeAdmissionServer::dispatch(request(), sender));
         let first = receiver
             .recv()
             .await

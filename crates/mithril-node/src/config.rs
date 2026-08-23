@@ -371,7 +371,7 @@ impl NodeConfig {
                                 && binding.binding_id == authority
                                 || !binding.container_id.starts_with("scheduled:")
                                     && binding.binding_id
-                                        == crate::runtime_admission::runtime_binding_id(
+                                        == crate::runtime_admission::ScheduledRuntimeBindingV1::runtime_binding_id(
                                             authority,
                                             &binding.container_id,
                                         ))

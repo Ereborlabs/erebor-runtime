@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use clap::Parser;
-use mithril_node::{submit_runtime_admission, RuntimeAdmissionRequestV1};
+use mithril_node::{RuntimeAdmissionClient, RuntimeAdmissionRequestV1};
 use serde::Deserialize;
 
 const MAXIMUM_OCI_STATE_BYTES: u64 = 1_048_576;
@@ -56,17 +56,15 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         return Err(invalid_data("OCI state has no valid container identity").into());
     }
     let cgroup_path = process_cgroup_path(state.pid, &cli.cgroup_root)?;
-    let response = submit_runtime_admission(
-        &cli.socket,
-        &RuntimeAdmissionRequestV1 {
+    let client = RuntimeAdmissionClient::new(cli.socket, Duration::from_millis(cli.timeout_ms))?;
+    let response = client
+        .submit(&RuntimeAdmissionRequestV1 {
             container_id: state.id,
             initial_pid: state.pid,
             cgroup_path,
             annotations: state.annotations,
-        },
-        Duration::from_millis(cli.timeout_ms),
-    )
-    .await?;
+        })
+        .await?;
     if !response.allowed {
         return Err(invalid_data(&format!(
             "Mithril runtime admission denied the container: {}",
