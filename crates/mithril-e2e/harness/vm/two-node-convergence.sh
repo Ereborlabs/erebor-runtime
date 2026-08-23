@@ -254,18 +254,23 @@ remote_kubectl() {
 assert_can_i() {
   local expected=$1
   shift
-  local answer
+  local allowed
   local status
 
-  # kubectl uses status 1 for an authorized query whose answer is "no".
-  if answer=$(remote_kubectl auth can-i "$@"); then
-    status=0
+  # Quiet mode defines the exit status as the authorization decision.
+  if remote_kubectl auth can-i --quiet "$@"; then
+    allowed=yes
   else
     status=$?
+    if [[ $status -eq 1 ]]; then
+      allowed=no
+    else
+      echo "RBAC query failed with status $status: $*" >&2
+      return "$status"
+    fi
   fi
-  if [[ $answer != "$expected" ]] ||
-      { [[ $status -ne 0 ]] && [[ ! ($status -eq 1 && $answer == no) ]]; }; then
-    echo "RBAC query returned answer=$answer status=$status; expected $expected: $*" >&2
+  if [[ $allowed != "$expected" ]]; then
+    echo "RBAC query returned $allowed; expected $expected: $*" >&2
     return 1
   fi
 }
