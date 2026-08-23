@@ -384,7 +384,7 @@ spec:
       storage: 1Gi
 EOF
 "$provider" put "$vm_a" "$pvc" "$remote_a/control-pvc.yaml"
-remote_kubectl apply --server-side --field-validation=Strict \
+remote_kubectl apply --server-side --validate=strict \
   -f "$remote_a/control-pvc.yaml" >/dev/null
 
 "$provider" run "$vm_a" sudo cp /etc/rancher/k3s/k3s.yaml "$remote_a/kubeconfig.yaml"
@@ -488,7 +488,7 @@ wait_node_projection "$node_b_name" true false
 "$provider" put "$vm_a" \
   "$repo_root/crates/mithril-e2e/fixtures/convergence/runtime-classes-v1.yaml" \
   "$remote_a/runtime-classes-v1.yaml"
-remote_kubectl apply --server-side --field-validation=Strict \
+remote_kubectl apply --server-side --validate=strict \
   -f "$remote_a/runtime-classes-v1.yaml" >/dev/null
 remote_kubectl create namespace "$workload_namespace" >/dev/null
 remote_kubectl -n "$workload_namespace" create serviceaccount converter >/dev/null
@@ -530,7 +530,7 @@ wait_policy_compiled() {
 }
 
 make_policy_manifest 1
-remote_kubectl apply --server-side --field-validation=Strict \
+remote_kubectl apply --server-side --validate=strict \
   -f "$remote_a/policy-v1.json" >/dev/null
 wait_policy_compiled
 
@@ -727,7 +727,7 @@ wait_node_projection "$node_b_name" true false
 
 candidate_before=$(jq -er '.active_candidate_content_id' <<<"$(node_status "$selected_node")")
 make_policy_manifest 2
-remote_kubectl apply --server-side --field-validation=Strict \
+remote_kubectl apply --server-side --validate=strict \
   -f "$remote_a/policy-v2.json" >/dev/null
 wait_policy_compiled
 for _attempt in {1..180}; do
@@ -740,9 +740,16 @@ for _attempt in {1..180}; do
   }
   sleep 1
 done
-if remote_kubectl -n "$workload_namespace" patch workloadprotectionprofile converter-policy \
-    --type=merge --field-manager=invalid-fixture --field-validation=Strict \
-    -p '{"spec":{"policy":{"unexpectedField":true}}}' >/dev/null 2>&1; then
+invalid_policy=$work_a/invalid-policy.json
+remote_kubectl -n "$workload_namespace" get workloadprotectionprofile converter-policy \
+  -o json | jq '
+    del(.metadata.creationTimestamp, .metadata.generation, .metadata.managedFields,
+        .metadata.resourceVersion, .metadata.uid, .status) |
+    .spec.unexpectedField = true
+  ' >"$invalid_policy"
+"$provider" put "$vm_a" "$invalid_policy" "$remote_a/invalid-policy.json"
+if remote_kubectl replace --validate=strict \
+    -f "$remote_a/invalid-policy.json" >/dev/null 2>&1; then
   echo "the API server accepted an unknown policy field" >&2
   exit 1
 fi
@@ -777,7 +784,7 @@ new_pod_uid=$(remote_kubectl -n "$workload_namespace" get pod protected \
 remote_kubectl -n "$workload_namespace" delete workloadprotectionprofile converter-policy \
   --wait=true --timeout=120s >/dev/null
 make_policy_manifest 3
-remote_kubectl apply --server-side --field-validation=Strict \
+remote_kubectl apply --server-side --validate=strict \
   -f "$remote_a/policy-v3.json" >/dev/null
 wait_policy_compiled
 
