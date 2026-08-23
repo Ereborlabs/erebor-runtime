@@ -266,24 +266,40 @@ pub struct PolicyBundleChunkV1 {
 }
 
 pub fn policy_custom_resource_definition() -> Result<CustomResourceDefinition> {
-    let mut value = serde_json::to_value(WorkloadProtectionProfile::crd()).map_err(|error| {
-        PolicyValidationSnafu {
-            policy_id: "<kubernetes-crd>",
-            code: "CFG_CRD_SCHEMA",
-            reason: format!("the generated CRD cannot be encoded: {error}"),
-        }
-        .build()
-    })?;
-    // Schemars supplies the type shape. This pass adds the Kubernetes bounds and closed objects.
-    close_openapi_schema(&mut value);
-    serde_json::from_value(value).map_err(|error| {
-        PolicyValidationSnafu {
-            policy_id: "<kubernetes-crd>",
-            code: "CFG_CRD_SCHEMA",
-            reason: format!("the bounded CRD schema cannot be decoded: {error}"),
-        }
-        .build()
-    })
+    let mut crd = WorkloadProtectionProfile::crd();
+    for version in &mut crd.spec.versions {
+        let schema = version
+            .schema
+            .as_mut()
+            .and_then(|validation| validation.open_api_v3_schema.as_mut())
+            .ok_or_else(|| {
+                PolicyValidationSnafu {
+                    policy_id: "<kubernetes-crd>",
+                    code: "CFG_CRD_SCHEMA",
+                    reason: "the generated CRD version has no OpenAPI schema".to_owned(),
+                }
+                .build()
+            })?;
+        let mut value = serde_json::to_value(&*schema).map_err(|error| {
+            PolicyValidationSnafu {
+                policy_id: "<kubernetes-crd>",
+                code: "CFG_CRD_SCHEMA",
+                reason: format!("the generated CRD schema cannot be encoded: {error}"),
+            }
+            .build()
+        })?;
+        // Kubernetes limits the allowed keywords at a resource root when status is enabled.
+        bound_openapi_schema(&mut value, true);
+        *schema = serde_json::from_value(value).map_err(|error| {
+            PolicyValidationSnafu {
+                policy_id: "<kubernetes-crd>",
+                code: "CFG_CRD_SCHEMA",
+                reason: format!("the bounded CRD schema cannot be decoded: {error}"),
+            }
+            .build()
+        })?;
+    }
+    Ok(crd)
 }
 
 pub fn canonical_policy_document_bytes(document: &PolicyDocumentV1) -> Result<Vec<u8>> {
@@ -901,14 +917,19 @@ fn domain_digest(domain: &[u8], bytes: &[u8]) -> String {
     format!("{:x}", digest.finalize())
 }
 
-fn close_openapi_schema(value: &mut serde_json::Value) {
+fn bound_openapi_schema(value: &mut serde_json::Value, resource_root: bool) {
     match value {
         serde_json::Value::Array(values) => {
             for value in values {
-                close_openapi_schema(value);
+                bound_openapi_schema(value, false);
             }
         }
         serde_json::Value::Object(object) => {
+            if object.get("nullable") == Some(&serde_json::Value::Bool(true)) {
+                // Kubernetes applies enum constraints to null despite the nullable marker.
+                // Control validates non-null enum values after it reads the stored object.
+                object.remove("enum");
+            }
             let object_type = object.get("type").and_then(serde_json::Value::as_str);
             if object_type == Some("string") {
                 object
@@ -918,20 +939,13 @@ fn close_openapi_schema(value: &mut serde_json::Value) {
                 object
                     .entry("maxItems")
                     .or_insert(serde_json::Value::from(MAX_POLICY_SCHEMA_ITEMS));
-            } else if object_type == Some("object") {
+            } else if object_type == Some("object") && !resource_root {
                 object
                     .entry("maxProperties")
                     .or_insert(serde_json::Value::from(MAX_POLICY_SCHEMA_MAP_ENTRIES));
-                if object.contains_key("properties") && !object.contains_key("additionalProperties")
-                {
-                    object.insert(
-                        "additionalProperties".to_owned(),
-                        serde_json::Value::Bool(false),
-                    );
-                }
             }
             for nested in object.values_mut() {
-                close_openapi_schema(nested);
+                bound_openapi_schema(nested, false);
             }
         }
         _ => {}

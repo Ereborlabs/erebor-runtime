@@ -1057,7 +1057,11 @@ pub struct BudgetSetV1 {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, JsonSchema)]
-pub enum UnsupportedPolicyValueV1 {}
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+/// Keeps deferred budget fields structural. Control rejects every nonempty budget set.
+pub enum UnsupportedPolicyValueV1 {
+    Unsupported,
+}
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
