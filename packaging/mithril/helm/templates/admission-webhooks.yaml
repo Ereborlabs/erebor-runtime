@@ -51,6 +51,25 @@ kind: ValidatingWebhookConfiguration
 metadata:
   name: mithril-control-bindings-{{ .Release.Namespace }}
 webhooks:
+  - name: pod-updates.mithril.erebor.dev
+    admissionReviewVersions: ["v1"]
+    sideEffects: None
+    failurePolicy: Fail
+    matchPolicy: Equivalent
+    timeoutSeconds: {{ .Values.control.admission.webhookTimeoutSeconds }}
+    clientConfig:
+      caBundle: {{ $caBundle | quote }}
+      service:
+        namespace: {{ .Release.Namespace | quote }}
+        name: mithril-control
+        path: /admit
+        port: {{ .Values.control.admission.port }}
+    rules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["UPDATE"]
+        resources: ["pods", "pods/ephemeralcontainers"]
+        scope: Namespaced
   - name: bindings.mithril.erebor.dev
     admissionReviewVersions: ["v1"]
     sideEffects: None

@@ -180,6 +180,19 @@ impl KubernetesAdmissionOwner {
         }
         if request.kind.group.is_empty()
             && request.kind.version == "v1"
+            && request.kind.kind == "Pod"
+            && request.resource.resource == "pods"
+            && request.operation == Operation::Update
+            && request
+                .sub_resource
+                .as_deref()
+                .is_none_or(|subresource| subresource == "ephemeralcontainers")
+        {
+            self.validate_pod_update(request).await?;
+            return Ok(response);
+        }
+        if request.kind.group.is_empty()
+            && request.kind.version == "v1"
             && request.kind.kind == "Binding"
             && request.resource.resource == "pods"
             && request.sub_resource.as_deref() == Some("binding")
@@ -222,6 +235,54 @@ impl KubernetesAdmissionOwner {
             &namespace_uid,
             &service_account_uid,
         ))
+    }
+
+    async fn validate_pod_update(&self, request: &AdmissionRequest<DynamicObject>) -> Result<()> {
+        let pod: Pod = request_object(request)?;
+        let old_pod: Pod = request_old_object(request)?;
+        let namespace = request
+            .namespace
+            .as_deref()
+            .ok_or_else(|| admission_error("Pod update request has no namespace"))?;
+        let facts = self.pod_facts(namespace, &pod).await?;
+        let identity = pod_policy_identity(&pod)?;
+        let old_identity = pod_policy_identity(&old_pod)?;
+        ensure!(
+            identity == old_identity,
+            InvalidConfigurationSnafu {
+                reason: "Pod update cannot add, remove, or replace Mithril policy annotations",
+            }
+        );
+        let Some((profile_id, source_revision_id)) = identity else {
+            ensure!(
+                self.policies
+                    .live_policies_in_namespace(namespace)?
+                    .into_iter()
+                    .all(|(_, policy, _)| !policy_matches_pod(&policy, &facts)),
+                InvalidConfigurationSnafu {
+                    reason: "a scheduled Pod cannot enter a protected profile through an update",
+                }
+            );
+            return Ok(());
+        };
+        let store = self.policies.store();
+        let source = store
+            .source_revision(source_revision_id)?
+            .ok_or_else(|| admission_error("protected Pod source revision is unknown"))?;
+        let policy = store
+            .policy_document(source_revision_id)?
+            .ok_or_else(|| admission_error("protected Pod source policy is unknown"))?;
+        ensure!(
+            source.namespace_name == namespace
+                && policy.profile_id() == profile_id
+                && store.compiled_artifact(source_revision_id)?.is_some()
+                && policy_matches_pod(&policy, &facts)
+                && policy_matching_containers_are_pinned(&policy, &facts),
+            InvalidConfigurationSnafu {
+                reason: "Pod update does not preserve its admitted protected profile",
+            }
+        );
+        Ok(())
     }
 
     async fn validate_binding(
@@ -1077,6 +1138,34 @@ fn request_object<T: DeserializeOwned>(request: &AdmissionRequest<DynamicObject>
     .map_err(|error| admission_error(format!("decode admission object: {error}")))
 }
 
+fn request_old_object<T: DeserializeOwned>(request: &AdmissionRequest<DynamicObject>) -> Result<T> {
+    let object = request
+        .old_object
+        .as_ref()
+        .ok_or_else(|| admission_error("admission update request has no old object"))?;
+    serde_json::from_value(
+        serde_json::to_value(object)
+            .map_err(|error| admission_error(format!("encode old admission object: {error}")))?,
+    )
+    .map_err(|error| admission_error(format!("decode old admission object: {error}")))
+}
+
+fn pod_policy_identity(pod: &Pod) -> Result<Option<(&str, &str)>> {
+    let annotations = pod.metadata.annotations.as_ref();
+    let profile_id = annotations.and_then(|values| values.get(KUBERNETES_PROFILE_ANNOTATION));
+    let source_revision_id =
+        annotations.and_then(|values| values.get(KUBERNETES_SOURCE_ANNOTATION));
+    ensure!(
+        profile_id.is_some() == source_revision_id.is_some(),
+        InvalidConfigurationSnafu {
+            reason: "Pod has an incomplete Mithril policy annotation identity",
+        }
+    );
+    Ok(profile_id
+        .zip(source_revision_id)
+        .map(|(profile, source)| (profile.as_str(), source.as_str())))
+}
+
 fn response_with_diff<T: Serialize>(
     response: AdmissionResponse,
     request: &AdmissionRequest<DynamicObject>,
@@ -1115,9 +1204,9 @@ mod tests {
     use kube::core::DynamicObject;
 
     use super::{
-        mutate_node_quarantine, mutate_protected_pod, pod_admission_facts, policy_matches_pod,
-        DaemonSetNodeConstraintsV1, KUBERNETES_NOT_READY_TAINT, KUBERNETES_PROFILE_ANNOTATION,
-        KUBERNETES_READY_LABEL,
+        mutate_node_quarantine, mutate_protected_pod, pod_admission_facts, pod_policy_identity,
+        policy_matches_pod, DaemonSetNodeConstraintsV1, KUBERNETES_NOT_READY_TAINT,
+        KUBERNETES_PROFILE_ANNOTATION, KUBERNETES_READY_LABEL, KUBERNETES_SOURCE_ANNOTATION,
     };
     use crate::{ContainerKindV1, PolicyDocumentV1};
 
@@ -1263,6 +1352,27 @@ mod tests {
             "forged-profile".to_owned(),
         )]));
         assert!(mutate_protected_pod(pod, &constraints(), "profile-a", "source-a").is_err());
+    }
+
+    #[test]
+    fn pod_update_policy_identity_must_be_complete() -> crate::Result<()> {
+        let mut pod = pod();
+        pod.metadata.annotations = Some(BTreeMap::from([
+            (
+                KUBERNETES_PROFILE_ANNOTATION.to_owned(),
+                "profile-a".to_owned(),
+            ),
+            (
+                KUBERNETES_SOURCE_ANNOTATION.to_owned(),
+                "source-a".to_owned(),
+            ),
+        ]));
+        assert_eq!(pod_policy_identity(&pod)?, Some(("profile-a", "source-a")));
+        if let Some(annotations) = pod.metadata.annotations.as_mut() {
+            annotations.remove(KUBERNETES_SOURCE_ANNOTATION);
+        }
+        assert!(pod_policy_identity(&pod).is_err());
+        Ok(())
     }
 
     #[test]
