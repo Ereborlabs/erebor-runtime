@@ -55,6 +55,33 @@ pub struct PolicySignerTrustV1 {
     pub revoked: bool,
 }
 
+impl TrustGenerationV1 {
+    #[must_use]
+    pub fn computed_bundle_digest(&self) -> String {
+        let mut digest = Sha256::new();
+        digest.update(b"MITHRIL-CONTROL-TRUST-BUNDLE-V1\0");
+        digest.update(self.generation.to_be_bytes());
+        digest.update(self.policy_issuer_sequence_epoch.to_be_bytes());
+        for signer in &self.policy_signers {
+            digest.update(
+                u64::try_from(signer.signing_key_id.len())
+                    .unwrap_or(u64::MAX)
+                    .to_be_bytes(),
+            );
+            digest.update(signer.signing_key_id.as_bytes());
+            digest.update(signer.ed25519_public_key_hex.as_bytes());
+            digest.update([u8::from(signer.revoked)]);
+        }
+        format!("{:x}", digest.finalize())
+    }
+
+    #[must_use]
+    pub fn with_computed_bundle_digest(mut self) -> Self {
+        self.bundle_digest = self.computed_bundle_digest();
+        self
+    }
+}
+
 #[derive(Default)]
 struct ControlState {
     // Sessions and stream senders are connection state. Durable policy and evidence live in store.

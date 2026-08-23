@@ -5,7 +5,6 @@ use std::path::Path;
 use std::path::PathBuf;
 
 use serde::Deserialize;
-use sha2::{Digest as _, Sha256};
 use snafu::{ensure, ResultExt as _};
 
 use crate::error::{InvalidConfigurationSnafu, IoSnafu, JsonSnafu};
@@ -145,7 +144,7 @@ impl ControlConfig {
                 })
                 && (self.trust.policy_signers.is_empty()
                     || (self.trust.policy_issuer_sequence_epoch > 0
-                        && trust_bundle_digest(&self.trust) == self.trust.bundle_digest)),
+                        && self.trust.computed_bundle_digest() == self.trust.bundle_digest)),
             InvalidConfigurationSnafu {
                 reason: "trust generation must be nonzero and its digest must be SHA-256 hex",
             }
@@ -168,24 +167,6 @@ impl ControlConfig {
         }
         Ok(())
     }
-}
-
-fn trust_bundle_digest(trust: &TrustGenerationV1) -> String {
-    let mut digest = Sha256::new();
-    digest.update(b"MITHRIL-CONTROL-TRUST-BUNDLE-V1\0");
-    digest.update(trust.generation.to_be_bytes());
-    digest.update(trust.policy_issuer_sequence_epoch.to_be_bytes());
-    for signer in &trust.policy_signers {
-        digest.update(
-            u64::try_from(signer.signing_key_id.len())
-                .unwrap_or(u64::MAX)
-                .to_be_bytes(),
-        );
-        digest.update(signer.signing_key_id.as_bytes());
-        digest.update(signer.ed25519_public_key_hex.as_bytes());
-        digest.update([u8::from(signer.revoked)]);
-    }
-    format!("{:x}", digest.finalize())
 }
 
 fn is_sha256_hex(value: &str) -> bool {

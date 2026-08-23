@@ -218,8 +218,6 @@ impl TrustBundleOwner {
 
 #[cfg(test)]
 mod tests {
-    use sha2::{Digest as _, Sha256};
-
     use super::TrustBundleOwner;
     use crate::{ControlStore, PolicySignerTrustV1, TrustGenerationV1};
 
@@ -228,28 +226,13 @@ mod tests {
         issuer_epoch: u64,
         signers: Vec<PolicySignerTrustV1>,
     ) -> TrustGenerationV1 {
-        let mut trust = TrustGenerationV1 {
+        TrustGenerationV1 {
             generation: number,
             bundle_digest: String::new(),
             policy_issuer_sequence_epoch: issuer_epoch,
             policy_signers: signers,
-        };
-        let mut digest = Sha256::new();
-        digest.update(b"MITHRIL-CONTROL-TRUST-BUNDLE-V1\0");
-        digest.update(trust.generation.to_be_bytes());
-        digest.update(trust.policy_issuer_sequence_epoch.to_be_bytes());
-        for signer in &trust.policy_signers {
-            digest.update(
-                u64::try_from(signer.signing_key_id.len())
-                    .unwrap_or(u64::MAX)
-                    .to_be_bytes(),
-            );
-            digest.update(signer.signing_key_id.as_bytes());
-            digest.update(signer.ed25519_public_key_hex.as_bytes());
-            digest.update([u8::from(signer.revoked)]);
         }
-        trust.bundle_digest = format!("{:x}", digest.finalize());
-        trust
+        .with_computed_bundle_digest()
     }
 
     fn signer(key_id: &str, byte: char, revoked: bool) -> PolicySignerTrustV1 {
