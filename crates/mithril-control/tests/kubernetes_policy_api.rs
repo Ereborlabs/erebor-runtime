@@ -3,9 +3,10 @@ use std::path::Path;
 use mithril_control::{
     canonical_kubernetes_policy_spec_bytes, exception_custom_resource_definition,
     lower_kubernetes_policy, policy_custom_resource, policy_custom_resource_definition,
-    KubernetesRuleActionV1, PolicyCompiler, PolicySourceRevisionV1, PolicySourceStateV1,
-    ProfileModeV1, WorkloadProtectionException, WorkloadProtectionExceptionSpec,
-    WorkloadProtectionPolicy, WorkloadProtectionPolicySpec, EXCEPTION_KIND, POLICY_KIND,
+    CompiledPhysicalResultV1, KubernetesRuleActionV1, PolicyCompiler, PolicySourceRevisionV1,
+    PolicySourceStateV1, ProfileModeV1, WorkloadProtectionException,
+    WorkloadProtectionExceptionSpec, WorkloadProtectionPolicy, WorkloadProtectionPolicySpec,
+    EXCEPTION_KIND, POLICY_KIND,
 };
 use serde_json::{json, Value};
 
@@ -110,6 +111,17 @@ fn stored_and_offline_policy_specs_lower_to_the_same_compilable_policy() -> Test
     assert!(!compiled.compiled_cells.is_empty());
     assert!(lowered.exceptions.is_empty());
     assert_eq!(lowered.file_exception_grants.len(), 1);
+    let grant_cells = compiled
+        .compiled_cells
+        .iter()
+        .filter(|cell| cell.consuming_exception_id.as_deref() == Some("temporary-file-access"))
+        .collect::<Vec<_>>();
+    assert!(!grant_cells.is_empty());
+    assert!(grant_cells.iter().all(|cell| {
+        cell.key.operation_id == "OPEN_READ"
+            && cell.physical_result == CompiledPhysicalResultV1::AllowEffect
+            && cell.errno.is_none()
+    }));
     Ok(())
 }
 

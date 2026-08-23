@@ -28,10 +28,10 @@ impl Validate for PolicyDocumentV1 {
             "exception states exceed kernel map capacity"
         );
         require!(
-            self.exceptions.is_empty()
+            (self.exceptions.is_empty() && self.file_exception_grants.is_empty())
                 || self.rollout.desired_profile_mode == ProfileModeV1::Protect,
             "CFG_EXCEPTION_MODE",
-            "exceptions require PROTECT mode"
+            "exceptions and exception grants require PROTECT mode"
         );
         require!(
             self.path_tree_deny_floors.is_empty()
@@ -492,6 +492,16 @@ impl PolicyDocumentV1 {
                 )
             );
         }
+        let granted_rules = self
+            .file_exception_grants
+            .iter()
+            .flat_map(|grant| grant.denied_file_rule_ids.iter())
+            .collect::<Vec<_>>();
+        require!(
+            granted_rules.iter().collect::<BTreeSet<_>>().len() == granted_rules.len(),
+            "CFG_EXCEPTION_GRANT_OVERLAP",
+            "one denied file rule cannot belong to multiple exception grants"
+        );
         for exception in &self.exceptions {
             let subject = &exception.exact_subject;
             let known_rules = all_in!(&exception.changed_rule_ids, base_rule_ids);
@@ -583,6 +593,40 @@ impl PolicyDocumentV1 {
         &self,
         cells: &[CompiledDecisionCellV1],
     ) -> Result<()> {
+        for grant in &self.file_exception_grants {
+            let bound = cells
+                .iter()
+                .filter(|cell| cell.consuming_exception_id.as_deref() == Some(&grant.grant_id))
+                .collect::<Vec<_>>();
+            let source_rules = bound
+                .iter()
+                .flat_map(|cell| cell.source_rule_ids.iter().map(String::as_str))
+                .collect::<BTreeSet<_>>();
+            let valid = !bound.is_empty()
+                && bound.iter().all(|cell| {
+                    matches!(cell.key.operation_id.as_str(), "OPEN_READ" | "OPEN_WRITE")
+                        && cell.key.effect_family == EffectFamilyV1::File
+                        && cell.physical_result == CompiledPhysicalResultV1::AllowEffect
+                        && cell.errno.is_none()
+                })
+                && source_rules
+                    == grant
+                        .denied_file_rule_ids
+                        .iter()
+                        .map(String::as_str)
+                        .collect();
+            if !valid {
+                return PolicyValidationSnafu {
+                    policy_id: self.profile_id(),
+                    code: "CFG_EXCEPTION_GRANT_CELL",
+                    reason: format!(
+                        "exception grant `{}` does not bind only qualified file-open cells",
+                        grant.grant_id
+                    ),
+                }
+                .fail();
+            }
+        }
         for exception in &self.exceptions {
             let bound = cells
                 .iter()

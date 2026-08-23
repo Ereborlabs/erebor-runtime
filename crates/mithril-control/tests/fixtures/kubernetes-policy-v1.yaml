@@ -21,7 +21,7 @@ roles:
       - name: deny-service-account-files
         path: /var/run/secrets/kubernetes.io/serviceaccount
         recursive: true
-        operations: [OpenRead, Read, MmapRead]
+        operations: [OpenRead]
         action: Deny
     execution:
       - name: allow-python-execute
