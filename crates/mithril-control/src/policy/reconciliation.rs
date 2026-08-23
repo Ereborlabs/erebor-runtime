@@ -128,6 +128,8 @@ pub struct PolicyDesiredStateOwner {
     signing_key: Arc<SigningKey>,
     seal_request: Arc<ProfileSealRequestV1>,
     state: Arc<Mutex<DesiredStateMemory>>,
+    // One guard owns the multi-commit reconcile transaction across watch and admission callers.
+    reconcile_lock: Arc<Mutex<()>>,
     rollout: PolicyRolloutOwner,
 }
 
@@ -214,6 +216,7 @@ impl PolicyDesiredStateOwner {
             signing_key,
             seal_request: Arc::new(seal_request),
             state: Arc::new(Mutex::new(DesiredStateMemory::default())),
+            reconcile_lock: Arc::new(Mutex::new(())),
             rollout,
         }
     }
@@ -233,7 +236,7 @@ impl PolicyDesiredStateOwner {
         self.reconcile_observation(resource, namespace_uid, inventory, now_utc_ns, state)
     }
 
-    fn reconcile_observation(
+    pub(super) fn reconcile_observation(
         &self,
         resource: &WorkloadProtectionProfile,
         namespace_uid: &str,
@@ -288,6 +291,14 @@ impl PolicyDesiredStateOwner {
         inventory: &[WorkloadTargetFactV1],
         now_utc_ns: i64,
     ) -> Result<PolicyReconcileResultV1> {
+        let _reconcile_guard = self.reconcile_lock.lock().map_err(|_| {
+            PolicyValidationSnafu {
+                policy_id: policy.profile_id(),
+                code: "CFG_RECONCILE_LOCK",
+                reason: "the policy reconcile owner lock is poisoned".to_owned(),
+            }
+            .build()
+        })?;
         ensure!(
             canonical_uuid(&source.namespace_uid)
                 && policy

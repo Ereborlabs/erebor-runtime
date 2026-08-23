@@ -26,8 +26,8 @@ use uuid::Uuid;
 use super::{
     ContainerKindV1, DaemonSetNodeConstraintsV1, KubernetesNodeReadinessOwner,
     KubernetesWorkloadIdentityV1, LabelOperatorV1, PolicyDesiredStateOwner, PolicyDocumentV1,
-    WorkloadProtectionProfile, WorkloadSelectorV1, WorkloadTargetFactV1,
-    KUBERNETES_LABEL_EPOCH_ANNOTATION, KUBERNETES_NODE_BOOT_ANNOTATION,
+    PolicySourceRevisionV1, PolicySourceStateV1, WorkloadProtectionProfile, WorkloadSelectorV1,
+    WorkloadTargetFactV1, KUBERNETES_LABEL_EPOCH_ANNOTATION, KUBERNETES_NODE_BOOT_ANNOTATION,
     KUBERNETES_NODE_ID_ANNOTATION, KUBERNETES_NODE_UID_ANNOTATION, KUBERNETES_NOT_READY_TAINT,
     KUBERNETES_READY_LABEL,
 };
@@ -154,27 +154,16 @@ impl KubernetesAdmissionOwner {
                 .ok_or_else(|| admission_error("Pod admission request has no namespace"))?;
             let facts = self.pod_facts(namespace, &pod).await?;
             // Version 1 rejects ambiguity. It does not apply priority or compose profiles.
-            let matches = self
-                .policies
-                .live_policies_in_namespace(namespace)?
-                .into_iter()
-                .filter(|(_, policy, _)| policy_matches_pod(policy, &facts))
-                .collect::<Vec<_>>();
+            let matches = self.matching_live_policies(namespace, &facts).await?;
             ensure!(
                 matches.len() <= 1,
                 InvalidConfigurationSnafu {
                     reason: "more than one compiled WorkloadProtectionProfile matches the Pod",
                 }
             );
-            let Some((source, policy, compiled)) = matches.first() else {
+            let Some((source, policy)) = matches.first() else {
                 return Ok(response);
             };
-            ensure!(
-                *compiled,
-                InvalidConfigurationSnafu {
-                    reason: "the matching WorkloadProtectionProfile is not compiled",
-                }
-            );
             ensure!(
                 policy_matching_containers_are_pinned(policy, &facts)?,
                 InvalidConfigurationSnafu {
@@ -251,6 +240,35 @@ impl KubernetesAdmissionOwner {
         ))
     }
 
+    async fn matching_live_policies(
+        &self,
+        namespace: &str,
+        facts: &PodAdmissionFactsV1,
+    ) -> Result<Vec<(PolicySourceRevisionV1, PolicyDocumentV1)>> {
+        let api = Api::<WorkloadProtectionProfile>::namespaced(self.kube.clone(), namespace);
+        // Read the API source inside admission so watch lag cannot admit a matching Pod unprotected.
+        let resources =
+            list_inventory(&api, "WorkloadProtectionProfiles for Pod admission").await?;
+        let inventory = self.control.workload_inventory();
+        let mut matches = Vec::new();
+        for resource in resources {
+            if resource.metadata.deletion_timestamp.is_some()
+                || !policy_matches_pod(&resource.spec.policy, facts)
+            {
+                continue;
+            }
+            let result = self.policies.reconcile_observation(
+                &resource,
+                &facts.namespace_uid,
+                &inventory,
+                utc_now_ns(),
+                PolicySourceStateV1::Accepted,
+            )?;
+            matches.push((result.source_revision, resource.spec.policy));
+        }
+        Ok(matches)
+    }
+
     async fn validate_pod_update(&self, request: &AdmissionRequest<DynamicObject>) -> Result<()> {
         let pod: Pod = request_object(request)?;
         let old_pod: Pod = request_old_object(request)?;
@@ -271,10 +289,9 @@ impl KubernetesAdmissionOwner {
         let Some((profile_id, source_revision_id)) = identity else {
             // An update cannot move an already scheduled, unprotected Pod into protected scope.
             ensure!(
-                self.policies
-                    .live_policies_in_namespace(namespace)?
-                    .into_iter()
-                    .all(|(_, policy, _)| !policy_matches_pod(&policy, &facts)),
+                self.matching_live_policies(namespace, &facts)
+                    .await?
+                    .is_empty(),
                 InvalidConfigurationSnafu {
                     reason: "a scheduled Pod cannot enter a protected profile through an update",
                 }
@@ -1268,10 +1285,12 @@ fn admission_error(reason: impl Into<String>) -> crate::Error {
 mod tests {
     use std::collections::BTreeMap;
     use std::convert::Infallible;
+    use std::path::PathBuf;
     use std::sync::Arc;
 
     use axum::body::Body;
     use axum::http::{header, HeaderValue, Request, Response};
+    use ed25519_dalek::SigningKey;
     use k8s_openapi::api::core::v1::{
         Affinity, Container, Node, NodeAffinity, NodeSelector, NodeSelectorRequirement,
         NodeSelectorTerm, NodeSpec, Pod, PodSpec, Toleration,
@@ -1282,18 +1301,28 @@ mod tests {
     use kube::core::DynamicObject;
     use kube::{Api, Client, ResourceExt as _};
     use serde_json::json;
+    use tempfile::TempDir;
     use tokio::sync::Mutex;
     use tower::service_fn;
 
     use super::{
         list_inventory, mutate_node_quarantine, mutate_protected_pod, pod_admission_facts,
         pod_policy_identity, policy_matches_pod, policy_matching_containers_are_pinned,
-        status_projection_is_current, DaemonSetNodeConstraintsV1, KUBERNETES_NOT_READY_TAINT,
-        KUBERNETES_PROFILE_ANNOTATION, KUBERNETES_READY_LABEL, KUBERNETES_SOURCE_ANNOTATION,
+        status_projection_is_current, DaemonSetNodeConstraintsV1, KubernetesAdmissionOwner,
+        KubernetesNodeReadinessOwner, KUBERNETES_NOT_READY_TAINT, KUBERNETES_PROFILE_ANNOTATION,
+        KUBERNETES_READY_LABEL, KUBERNETES_SOURCE_ANNOTATION,
     };
-    use crate::{ContainerKindV1, PolicyDocumentV1};
+    use crate::{
+        canonical_policy_spec_digest, ContainerKindV1, ControlPlane, ControlStore,
+        KubernetesNodeControlConfigV1, PolicyDesiredStateConfigV1, PolicyDesiredStateOwner,
+        PolicyDocumentV1, PolicySignerConfigV1, ProfileSealRequestV1, RegistryDigestsV1,
+        TrustGenerationV1, WorkloadProtectionProfile, SUBMITTED_SPEC_DIGEST_ANNOTATION,
+    };
 
     const POLICY: &str = include_str!("../../tests/fixtures/policy-v1.yaml");
+    const TENANT_ID: &str = "10000000-0000-4000-8000-000000000001";
+    const CLUSTER_UID: &str = "55555555-5555-4555-8555-555555555555";
+    const NAMESPACE_UID: &str = "66666666-6666-4666-8666-666666666666";
 
     fn pod() -> Pod {
         Pod {
@@ -1640,6 +1669,111 @@ mod tests {
         let pods = Api::<Pod>::all(Client::new(service, "default"));
 
         assert!(list_inventory(&pods, "test Pods").await.is_err());
+    }
+
+    #[tokio::test]
+    async fn pod_admission_reads_a_matching_profile_before_watch_reconciliation(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let policy =
+            PolicyDocumentV1::parse(std::path::Path::new("policy-v1.yaml"), POLICY.as_bytes())?;
+        let resource: WorkloadProtectionProfile = serde_json::from_value(json!({
+            "apiVersion": "mithril.erebor.dev/v1alpha1",
+            "kind": "WorkloadProtectionProfile",
+            "metadata": {
+                "name": "profile-a",
+                "namespace": "tenant-a",
+                "uid": "30000000-0000-4000-8000-000000000001",
+                "generation": 1,
+                "resourceVersion": "source-1",
+                "annotations": {
+                    SUBMITTED_SPEC_DIGEST_ANNOTATION: canonical_policy_spec_digest(&policy)?,
+                }
+            },
+            "spec": policy,
+        }))?;
+        let list_item = serde_json::to_value(resource)?;
+        let service = service_fn(move |_request: Request<KubeBody>| {
+            let list_item = list_item.clone();
+            async move {
+                let value = json!({
+                    "apiVersion": "mithril.erebor.dev/v1alpha1",
+                    "kind": "WorkloadProtectionProfileList",
+                    "metadata": {"resourceVersion": "snapshot-1"},
+                    "items": [list_item]
+                });
+                let mut response = Response::new(Body::from(value.to_string()));
+                response.headers_mut().insert(
+                    header::CONTENT_TYPE,
+                    HeaderValue::from_static("application/json"),
+                );
+                Ok::<_, Infallible>(response)
+            }
+        });
+        let directory = TempDir::new()?;
+        let policies = PolicyDesiredStateOwner::new(
+            PolicyDesiredStateConfigV1 {
+                tenant_id: TENANT_ID.to_owned(),
+                cluster_uid: CLUSTER_UID.to_owned(),
+                signer: PolicySignerConfigV1 {
+                    signing_key_id: "policy-key-a".to_owned(),
+                    signing_key_path: PathBuf::from("/unused/policy-key"),
+                    seal_request_path: PathBuf::from("/unused/seal-request"),
+                    distribution_sequence_epoch: 9,
+                    candidate_validity_ns: 60_000_000_000,
+                },
+            },
+            ControlStore::open(directory.path())?,
+            SigningKey::from_bytes(&[7; 32]),
+            ProfileSealRequestV1 {
+                signing_key_id: "policy-key-a".to_owned(),
+                issuer_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa".to_owned(),
+                sequence_epoch: 4,
+                issuer_sequence: 0,
+                rollback_authorization_id: None,
+                registry_digests: RegistryDigestsV1 {
+                    provider_numeric_registry_bundle_digest: "0".repeat(64),
+                    required_capability_schema_digest: "0".repeat(64),
+                    source_selector_registry_digest: "0".repeat(64),
+                    object_classifier_registry_digest: "0".repeat(64),
+                    reason_code_registry_digest: "0".repeat(64),
+                    correlation_package_registry_digest: "0".repeat(64),
+                    provider_vocabulary_registry_digest: "0".repeat(64),
+                },
+            },
+        );
+        assert!(policies.live_policies_in_namespace("tenant-a")?.is_empty());
+        let owner = KubernetesAdmissionOwner {
+            kube: Client::new(service, "default"),
+            control: ControlPlane::new(
+                Vec::new(),
+                TrustGenerationV1 {
+                    generation: 1,
+                    bundle_digest: "0".repeat(64),
+                    policy_issuer_sequence_epoch: 0,
+                    policy_signers: Vec::new(),
+                },
+            ),
+            policies: policies.clone(),
+            nodes: KubernetesNodeReadinessOwner::new(KubernetesNodeControlConfigV1 {
+                daemon_set_namespace: "mithril-system".to_owned(),
+                daemon_set_name: "mithril-node".to_owned(),
+                session_ttl_seconds: 30,
+                reconcile_interval_ms: 100,
+            })?,
+            request_timeout_ms: 1_000,
+        };
+        let facts = pod_admission_facts(
+            &pod(),
+            CLUSTER_UID,
+            NAMESPACE_UID,
+            "77777777-7777-4777-8777-777777777777",
+        );
+
+        let matches = owner.matching_live_policies("tenant-a", &facts).await?;
+
+        assert_eq!(matches.len(), 1);
+        assert_eq!(policies.live_policies_in_namespace("tenant-a")?.len(), 1);
+        Ok(())
     }
 
     #[test]
