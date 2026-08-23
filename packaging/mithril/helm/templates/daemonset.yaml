@@ -112,6 +112,9 @@ spec:
               mountPath: /var/lib/mithril
             - name: run
               mountPath: /run/mithril
+            # The host lease prevents two privileged Interceptor owners on one Node.
+            - name: interceptor-run
+              mountPath: /run/erebor-interceptor
             - name: container-runtime
               mountPath: {{ .Values.node.containerRuntimeSocket | quote }}
               readOnly: true
@@ -143,6 +146,10 @@ spec:
         - name: run
           hostPath:
             path: {{ .Values.node.runHostPath | quote }}
+            type: DirectoryOrCreate
+        - name: interceptor-run
+          hostPath:
+            path: /run/erebor-interceptor
             type: DirectoryOrCreate
         - name: container-runtime
           hostPath:
