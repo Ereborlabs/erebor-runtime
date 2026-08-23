@@ -21,6 +21,29 @@ spec:
         - >-
           rm -f /var/lib/mithril-convergence/MITHRIL_MANUAL_POD.restart;
           touch /var/lib/mithril-convergence/MITHRIL_MANUAL_POD.started;
+          if [ MITHRIL_MANUAL_POD = protected ]; then
+          if cat /var/lib/mithril-convergence/MITHRIL_MANUAL_POD.exception-target
+          >/dev/null 2>&1;
+          then echo BASE_ALLOWED >
+          /var/lib/mithril-convergence/MITHRIL_MANUAL_POD.exception-result;
+          else echo BASE_DENIED >
+          /var/lib/mithril-convergence/MITHRIL_MANUAL_POD.exception-result;
+          fi;
+          while [ ! -e
+          /var/lib/mithril-convergence/MITHRIL_MANUAL_POD.exception-request ];
+          do sleep 1; done;
+          if cat /var/lib/mithril-convergence/MITHRIL_MANUAL_POD.exception-target
+          >/dev/null 2>&1;
+          then if cat /var/lib/mithril-convergence/MITHRIL_MANUAL_POD.exception-target
+          >/dev/null 2>&1;
+          then echo SECOND_ALLOWED >
+          /var/lib/mithril-convergence/MITHRIL_MANUAL_POD.exception-result;
+          else echo ONE_USE >
+          /var/lib/mithril-convergence/MITHRIL_MANUAL_POD.exception-result;
+          fi;
+          else echo EXCEPTION_DENIED >
+          /var/lib/mithril-convergence/MITHRIL_MANUAL_POD.exception-result;
+          fi; fi;
           while [ ! -e /var/lib/mithril-convergence/MITHRIL_MANUAL_POD.restart ];
           do sleep 1; done;
           exit 42
