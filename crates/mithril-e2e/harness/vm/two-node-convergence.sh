@@ -688,7 +688,7 @@ node_status() {
     -l app.kubernetes.io/name=mithril-node \
     --field-selector "spec.nodeName=$node_name" \
     -o jsonpath='{.items[0].metadata.name}')
-  remote_kubectl -n "$system_namespace" exec "$pod" -- \
+  remote_kubectl -n "$system_namespace" exec -c mithril-node "$pod" -- \
     mithril-inspect policy-delivery --state-directory /var/lib/mithril
 }
 
