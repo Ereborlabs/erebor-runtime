@@ -3,7 +3,6 @@
 set -Eeuo pipefail
 
 directory=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
-source_root=$(cd -- "$directory/../.." && pwd)
 system_namespace=${MITHRIL_SYSTEM_NAMESPACE:-mithril-system}
 scenario_namespace=mithril-convergence-manual
 profile_name=converter-policy
@@ -12,7 +11,6 @@ failed_runtime_class=mithril-convergence-manual-fail
 protected_pod=protected
 failed_pod=gate-failure
 work_directory=$(mktemp -d /tmp/mithril-convergence-manual.XXXXXX)
-policy_tool=${MITHRIL_BIN_DIRECTORY:-$source_root/target/debug}/mithril-policy
 eligible_nodes=()
 
 require_command() {
@@ -39,6 +37,38 @@ remove_marker() {
     rm -f "/var/lib/mithril/markers/$marker"
 }
 
+write_marker() {
+  local node_name=$1
+  local marker=$2
+  local pod
+  pod=$(node_pod "$node_name")
+  kubectl -n "$system_namespace" exec -c mithril-node "$pod" -- \
+    touch "/var/lib/mithril/markers/$marker"
+}
+
+read_marker() {
+  local node_name=$1
+  local marker=$2
+  local pod
+  pod=$(node_pod "$node_name")
+  kubectl -n "$system_namespace" exec -c mithril-node "$pod" -- \
+    cat "/var/lib/mithril/markers/$marker"
+}
+
+wait_marker_value() {
+  local node_name=$1
+  local marker=$2
+  local expected=$3
+  local actual
+  for _attempt in {1..120}; do
+    actual=$(read_marker "$node_name" "$marker" 2>/dev/null || true)
+    [[ $actual == "$expected" ]] && return 0
+    sleep 1
+  done
+  echo "marker $marker did not reach $expected on node $node_name" >&2
+  return 1
+}
+
 cleanup() {
   local status=$?
   trap - EXIT
@@ -49,6 +79,12 @@ cleanup() {
     remove_marker "$node_name" "$protected_pod.restart" >/dev/null 2>&1 ||
       status=1
     remove_marker "$node_name" "$failed_pod.started" >/dev/null 2>&1 ||
+      status=1
+    remove_marker "$node_name" "$protected_pod.exception-target" >/dev/null 2>&1 ||
+      status=1
+    remove_marker "$node_name" "$protected_pod.exception-request" >/dev/null 2>&1 ||
+      status=1
+    remove_marker "$node_name" "$protected_pod.exception-result" >/dev/null 2>&1 ||
       status=1
   done
   kubectl delete namespace "$scenario_namespace" --ignore-not-found=true \
@@ -83,6 +119,7 @@ assert_cluster_access() {
   local group=$4
   local resource=$5
   local subresource=${6:-}
+  local namespace=${7:-}
   local request
   local response
 
@@ -91,7 +128,8 @@ assert_cluster_access() {
     --arg verb "$verb" \
     --arg group "$group" \
     --arg resource "$resource" \
-    --arg subresource "$subresource" '
+    --arg subresource "$subresource" \
+    --arg namespace "$namespace" '
       {
         apiVersion: "authorization.k8s.io/v1",
         kind: "SubjectAccessReview",
@@ -103,6 +141,8 @@ assert_cluster_access() {
             resource: $resource
           } + if $subresource == "" then {} else {
             subresource: $subresource
+          } end + if $namespace == "" then {} else {
+            namespace: $namespace
           } end)
         }
       }
@@ -126,16 +166,35 @@ wait_policy_compiled() {
   local policy_json
   for _attempt in {1..300}; do
     policy_json=$(kubectl -n "$scenario_namespace" get \
-      workloadprotectionprofile "$profile_name" -o json 2>/dev/null || true)
+      workloadprotectionpolicy "$profile_name" -o json 2>/dev/null || true)
     if [[ -n $policy_json ]] && jq -e '
-      any(.status.conditions[]?; .condition == "ACCEPTED" and .status == true) and
-      any(.status.conditions[]?; .condition == "COMPILED" and .status == true)
+      .status.observedGeneration == .metadata.generation and
+      any(.status.conditions[]?; .type == "Accepted" and .status == "True") and
+      any(.status.conditions[]?; .type == "Compiled" and .status == "True")
     ' <<<"$policy_json" >/dev/null; then
       return 0
     fi
     sleep 1
   done
   echo "the manual policy did not reach accepted and compiled state" >&2
+  return 1
+}
+
+wait_exception_state() {
+  local expected=$1
+  local exception_json
+  for _attempt in {1..300}; do
+    exception_json=$(kubectl -n "$scenario_namespace" get \
+      workloadprotectionexception temporary-file-access -o json 2>/dev/null || true)
+    if [[ -n $exception_json ]] && jq -e --arg expected "$expected" '
+      .status.observedGeneration == .metadata.generation and
+      .status.state == $expected
+    ' <<<"$exception_json" >/dev/null; then
+      return 0
+    fi
+    sleep 1
+  done
+  echo "the manual exception did not reach $expected" >&2
   return 1
 }
 
@@ -152,10 +211,6 @@ for command in grep jq kubectl sed sort; do
 done
 [[ $(id -u) -eq 0 ]] || {
   echo "run this manual case from the documented root guest shell" >&2
-  exit 2
-}
-[[ -x $policy_tool ]] || {
-  echo "the production policy tool is not executable: $policy_tool" >&2
   exit 2
 }
 kubectl get --raw=/readyz >/dev/null
@@ -187,22 +242,36 @@ for node_name in "${eligible_nodes[@]}"; do
     .active_candidate_content_id == null and
     .active_profile_ids == [] and
     .scheduled_binding_count == 0 and
-    .runtime_binding_count == 0
+    .runtime_binding_count == 0 and
+    .pending_exception_count == 0 and
+    .active_exception_count == 0 and
+    .terminal_exception_count == 0
   ' <<<"$(node_status "$node_name")" >/dev/null
   remove_marker "$node_name" "$protected_pod.started"
   remove_marker "$node_name" "$protected_pod.restart"
   remove_marker "$node_name" "$failed_pod.started"
+  remove_marker "$node_name" "$protected_pod.exception-target"
+  remove_marker "$node_name" "$protected_pod.exception-request"
+  remove_marker "$node_name" "$protected_pod.exception-result"
+  # The host creates the denied object before a protected process can open it.
+  write_marker "$node_name" "$protected_pod.exception-target"
 done
 
 control_subject=system:serviceaccount:$system_namespace:mithril-control
 node_subject=system:serviceaccount:$system_namespace:mithril-node
 assert_cluster_access true "$control_subject" list mithril.erebor.dev \
-  workloadprotectionprofiles
+  workloadprotectionpolicies
 assert_cluster_access true "$control_subject" patch mithril.erebor.dev \
-  workloadprotectionprofiles status
+  workloadprotectionpolicies status
+assert_cluster_access true "$control_subject" list mithril.erebor.dev \
+  workloadprotectionexceptions
+assert_cluster_access true "$control_subject" patch mithril.erebor.dev \
+  workloadprotectionexceptions status
 assert_cluster_access true "$control_subject" patch "" nodes
 assert_cluster_access false "$control_subject" update mithril.erebor.dev \
-  workloadprotectionprofiles
+  workloadprotectionpolicies
+assert_cluster_access false "$control_subject" update mithril.erebor.dev \
+  workloadprotectionexceptions
 assert_cluster_access false "$node_subject" get "" nodes
 
 assert_absent namespace "$scenario_namespace"
@@ -226,22 +295,34 @@ kubectl apply --server-side --field-manager=mithril-convergence-manual \
   --validate=strict -f "$work_directory/runtime-classes.yaml" >/dev/null
 kubectl create namespace "$scenario_namespace" >/dev/null
 kubectl -n "$scenario_namespace" create serviceaccount converter >/dev/null
+kubectl -n "$scenario_namespace" create serviceaccount policy-writer >/dev/null
+kubectl -n "$scenario_namespace" create serviceaccount exception-writer >/dev/null
+kubectl -n "$scenario_namespace" create rolebinding policy-writer \
+  --clusterrole=mithril-policy-writer \
+  --serviceaccount="$scenario_namespace:policy-writer" >/dev/null
+kubectl -n "$scenario_namespace" create rolebinding exception-writer \
+  --clusterrole=mithril-exception-writer \
+  --serviceaccount="$scenario_namespace:exception-writer" >/dev/null
+policy_subject=system:serviceaccount:$scenario_namespace:policy-writer
+exception_subject=system:serviceaccount:$scenario_namespace:exception-writer
+assert_cluster_access true "$policy_subject" create mithril.erebor.dev \
+  workloadprotectionpolicies "" "$scenario_namespace"
+assert_cluster_access false "$policy_subject" create mithril.erebor.dev \
+  workloadprotectionexceptions "" "$scenario_namespace"
+assert_cluster_access true "$exception_subject" create mithril.erebor.dev \
+  workloadprotectionexceptions "" "$scenario_namespace"
+assert_cluster_access false "$exception_subject" create mithril.erebor.dev \
+  workloadprotectionpolicies "" "$scenario_namespace"
 
-namespace_uid=$(kubectl get namespace "$scenario_namespace" \
-  -o jsonpath='{.metadata.uid}')
-service_account_uid=$(kubectl -n "$scenario_namespace" get serviceaccount converter \
-  -o jsonpath='{.metadata.uid}')
 sed \
-  -e "s/66666666-6666-4666-8666-666666666666/$namespace_uid/g" \
-  -e "s/77777777-7777-4777-8777-777777777777/$service_account_uid/g" \
+  -e "s/MITHRIL_MANUAL_NAMESPACE/$scenario_namespace/g" \
   "$directory/policy-v1.yaml" >"$work_directory/policy-v1.yaml"
-"$policy_tool" print-policy-manifest \
-  --source "$work_directory/policy-v1.yaml" \
-  --name "$profile_name" --namespace "$scenario_namespace" \
-  --output "$work_directory/policy-v1.json"
-kubectl apply --server-side --field-manager=mithril-convergence-manual \
-  --validate=strict -f "$work_directory/policy-v1.json" >/dev/null
+kubectl --as="$policy_subject" apply --server-side \
+  --field-manager=mithril-convergence-manual --validate=strict \
+  -f "$work_directory/policy-v1.yaml" >/dev/null
 wait_policy_compiled
+profile_id=$(kubectl -n "$scenario_namespace" get \
+  workloadprotectionpolicy "$profile_name" -o jsonpath='{.metadata.uid}')
 
 sed \
   -e "s/MITHRIL_MANUAL_NAMESPACE/$scenario_namespace/g" \
@@ -252,9 +333,9 @@ protected_dry_run=$(kubectl create --dry-run=server \
   -f "$work_directory/protected.yaml" -o json)
 # The API-server result proves that admission constrains the scheduler.
 # Admission does not select a Node.
-jq -e '
+jq -e --arg profile_id "$profile_id" '
   .metadata.annotations["mithril.erebor.dev/profile-id"] ==
-    "11111111-1111-4111-8111-111111111111" and
+    $profile_id and
   (.metadata.annotations["mithril.erebor.dev/policy-source-revision"] | length) == 64 and
   (.spec.nodeName // "") == "" and
   .spec.nodeSelector["mithril.erebor.dev/pool"] == "protected" and
@@ -282,9 +363,9 @@ printf '%s\n' "${eligible_nodes[@]}" | grep -Fx "$selected_node" >/dev/null || {
   exit 1
 }
 
-jq -e '
+jq -e --arg profile_id "$profile_id" '
   .active_candidate_content_id != null and
-  .active_profile_ids == ["11111111-1111-4111-8111-111111111111"] and
+  .active_profile_ids == [$profile_id] and
   .scheduled_binding_count == 0 and
   .runtime_binding_count == 1 and
   .activation_pending == false and
@@ -305,6 +386,65 @@ for node_name in "${eligible_nodes[@]}"; do
     kubectl -n "$system_namespace" exec -c mithril-node "$(node_pod "$node_name")" -- \
       test ! -e "/var/lib/mithril/markers/$protected_pod.started"
   fi
+done
+
+wait_marker_value "$selected_node" "$protected_pod.exception-result" BASE_DENIED
+protected_uid=$(kubectl -n "$scenario_namespace" get pod "$protected_pod" \
+  -o jsonpath='{.metadata.uid}')
+sed \
+  -e "s/MITHRIL_MANUAL_NAMESPACE/$scenario_namespace/g" \
+  -e "s/MITHRIL_MANUAL_POD_UID/$protected_uid/g" \
+  "$directory/exception-v1.yaml" >"$work_directory/exception-v1.yaml"
+kubectl --as="$exception_subject" create \
+  -f "$work_directory/exception-v1.yaml" >/dev/null
+wait_exception_state Active
+for _attempt in {1..120}; do
+  exception_status=$(node_status "$selected_node")
+  if jq -e '
+      .active_exception_count == 1 and
+      .exception_ack_pending_count == 0
+    ' <<<"$exception_status" >/dev/null; then
+    break
+  fi
+  [[ $_attempt -lt 120 ]] || {
+    echo "the selected node did not activate the bounded exception" >&2
+    exit 1
+  }
+  sleep 1
+done
+for node_name in "${eligible_nodes[@]}"; do
+  [[ $node_name == "$selected_node" ]] && continue
+  jq -e '
+    .pending_exception_count == 0 and
+    .active_exception_count == 0 and
+    .terminal_exception_count == 0
+  ' <<<"$(node_status "$node_name")" >/dev/null
+done
+
+# The first open consumes the grant. The second open proves that the node
+# removed its temporary authority before the process reports success.
+write_marker "$selected_node" "$protected_pod.exception-request"
+wait_marker_value "$selected_node" "$protected_pod.exception-result" ONE_USE
+wait_exception_state Consumed
+jq -e '
+  .consumed_exception_count == 1 and
+  .active_exception_count == 0
+' <<<"$(node_status "$selected_node")" >/dev/null
+kubectl --as="$exception_subject" -n "$scenario_namespace" delete \
+  workloadprotectionexception temporary-file-access \
+  --wait=true --timeout=120s >/dev/null
+for _attempt in {1..120}; do
+  if jq -e '
+      .revoked_exception_count == 1 and
+      .exception_ack_pending_count == 0
+    ' <<<"$(node_status "$selected_node")" >/dev/null; then
+    break
+  fi
+  [[ $_attempt -lt 120 ]] || {
+    echo "exception deletion did not converge to node-local revocation" >&2
+    exit 1
+  }
+  sleep 1
 done
 
 sed \
@@ -363,6 +503,10 @@ jq -n --arg namespace "$scenario_namespace" --arg node "$selected_node" \
     first_container_lifetime: $previous,
     replacement_container_lifetime: $current,
     exact_node_delivery: true,
+    crd_desired_state: true,
+    writer_rbac_separated: true,
+    exception_one_use_consumed: true,
+    exception_revoked: true,
     runtime_gate_failure_closed: true,
     cleanup: "the EXIT trap removes all scenario resources"
   }'

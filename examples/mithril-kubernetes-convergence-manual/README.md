@@ -4,14 +4,17 @@ Status: The case is implemented. The current source has not passed this manual
 case.
 
 This case uses the production Kubernetes API, admission webhooks, scheduler,
-Control service, node DaemonSet, OCI prestart hook, policy compiler, and node
-policy inspector. It does not call an automated test.
+Control service, node DaemonSet, OCI prestart hook, policy compiler, exception
+authority, and node policy inspector. It does not call an automated test.
 
-The case creates one namespace, one policy, two RuntimeClasses, and two
-protected Pods. It verifies the Control and node RBAC boundaries, server-side
-Pod mutation, direct-node bypass rejection, scheduler-selected placement,
-selected-node-only policy delivery, a held protected start, fail-closed hook
-failure, and a new binding for a restarted container.
+The case creates one namespace, one `WorkloadProtectionPolicy`, one
+`WorkloadProtectionException`, two RuntimeClasses, and two protected Pods. It
+uses separate policy-writer and exception-writer identities. It verifies the
+Control and node RBAC boundaries, server-side Pod mutation, direct-node bypass
+rejection, scheduler-selected placement, selected-node-only policy delivery,
+base-policy denial, exact-node exception activation, one-use consumption,
+exception revocation, a held protected start, fail-closed hook failure, and a
+new binding for a restarted container.
 
 ## Start The Environment
 
@@ -36,7 +39,6 @@ sudo -i
 cd "$MITHRIL_MANUAL_SOURCE"
 
 command -v kubectl jq sed
-test -x "$MITHRIL_BIN_DIRECTORY/mithril-policy"
 kubectl get --raw=/readyz
 kubectl get nodes -o wide
 kubectl -n mithril-system get pods -o wide
@@ -54,15 +56,18 @@ examples/mithril-kubernetes-convergence-manual/run.sh
 ```
 
 The command must print one JSON object with `"result": "PASS"`. The object
-names the scheduler-selected Node and two different container lifetime IDs.
-The command returns nonzero if admission sets `spec.nodeName`, accepts the
-direct-node bypass, delivers policy to another Node, releases a container
-without its exact binding, permits start without the runtime gate, or reuses
-the first container lifetime.
+names the scheduler-selected Node and two different container lifetime IDs. It
+also records the CRD, writer separation, exception consumption, and revocation
+oracles. The command returns nonzero if admission sets `spec.nodeName`, accepts
+the direct-node bypass, delivers authority to another Node, fails to enforce
+the base denial, permits more than one exception use, fails to revoke the
+exception, releases a container without its exact binding, permits start
+without the runtime gate, or reuses the first container lifetime.
 
-The EXIT trap removes the namespace, both RuntimeClasses, Pod marker files, and
-the private temporary directory on success, failure, or interruption. After a
-pass, these commands must report no resources:
+The EXIT trap removes the namespace, both RuntimeClasses, all case marker
+files, and the private temporary directory on success, failure, or
+interruption. The namespace owns both CRDs, the service accounts, the role
+bindings, and the Pods. After a pass, these commands must report no resources:
 
 ```bash
 kubectl get namespace mithril-convergence-manual
