@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -16,6 +16,8 @@ use super::persistence::{atomic_write, sync_directory};
 const WAL_FORMAT_VERSION: u32 = 1;
 const ACK_FILE: &str = "acknowledged.json";
 const LEGACY_SOURCE_FILE: &str = "source-id";
+const LEGACY_MIGRATION_FORMAT_VERSION: u32 = 1;
+const LEGACY_MIGRATION_FILE: &str = ".legacy-migration-v1.json";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct EvidenceWalLimits {
@@ -203,6 +205,20 @@ struct AckStateV1 {
     last_record_sha256: EvidenceDigestV1,
 }
 
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct LegacyMigrationV1 {
+    format_version: u32,
+    streams: BTreeMap<String, LegacyMigrationStreamV1>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct LegacyMigrationStreamV1 {
+    pending_records: u64,
+    last_record_sha256: EvidenceDigestV1,
+}
+
 pub struct EvidenceWal {
     root: PathBuf,
     limits: EvidenceWalLimits,
@@ -239,6 +255,7 @@ impl EvidenceWalOwner {
         limits.validate()?;
         let root = root.into();
         fs::create_dir_all(&root).context(IoSnafu { path: &root })?;
+        Self::migrate_legacy_streams(&root, limits)?;
         let mut streams = BTreeMap::new();
         let legacy = EvidenceWal::open(&root, limits)?;
         let legacy_source = legacy_source_id(&legacy, &root)?;
@@ -301,6 +318,256 @@ impl EvidenceWalOwner {
         Ok(owner)
     }
 
+    fn migrate_legacy_streams(root: &Path, limits: EvidenceWalLimits) -> Result<()> {
+        if let Some(migration) = Self::read_legacy_migration(root)? {
+            return Self::complete_legacy_migration(root, limits, &migration);
+        }
+        let legacy = EvidenceWal::open(root, limits)?;
+        let mut observations = BTreeMap::<[u8; 16], Vec<ObservationEnvelopeV1>>::new();
+        let mut observation_ids = BTreeSet::new();
+        for record in &legacy.records {
+            let observation = ObservationEnvelopeV1::from_wire_bytes(&record.payload)?;
+            if !observation_ids.insert(observation.observation_id) {
+                return EvidenceStateSnafu {
+                    reason: "the flat evidence WAL repeats an observation identity".to_owned(),
+                }
+                .fail();
+            }
+            observations
+                .entry(observation.source_id.to_be_bytes())
+                .or_default()
+                .push(observation);
+        }
+        if observations.len() < 2 {
+            return Ok(());
+        }
+        if root
+            .join(LEGACY_SOURCE_FILE)
+            .try_exists()
+            .context(IoSnafu {
+                path: root.join(LEGACY_SOURCE_FILE),
+            })?
+        {
+            return EvidenceStateSnafu {
+                reason: "the multi-source flat evidence WAL has a single-source marker".to_owned(),
+            }
+            .fail();
+        }
+
+        let mut streams = BTreeMap::new();
+        for (source_id, source_observations) in observations {
+            let state = Self::publish_legacy_stream(root, limits, source_id, &source_observations)?;
+            streams.insert(hex::encode(source_id), state);
+        }
+        let migration = LegacyMigrationV1 {
+            format_version: LEGACY_MIGRATION_FORMAT_VERSION,
+            streams,
+        };
+        let bytes = serde_json::to_vec(&migration).map_err(|error| {
+            EvidenceStateSnafu {
+                reason: format!("legacy evidence WAL migration encoding failed: {error}"),
+            }
+            .build()
+        })?;
+        // The marker switches recovery to the complete per-source layout. The
+        // flat files stay authoritative until this durable write succeeds.
+        atomic_write(&root.join(LEGACY_MIGRATION_FILE), &bytes)?;
+        Self::complete_legacy_migration(root, limits, &migration)
+    }
+
+    fn publish_legacy_stream(
+        root: &Path,
+        limits: EvidenceWalLimits,
+        source_id: [u8; 16],
+        observations: &[ObservationEnvelopeV1],
+    ) -> Result<LegacyMigrationStreamV1> {
+        let source = hex::encode(source_id);
+        let final_path = root.join(&source);
+        let staging_path = root.join(format!(".legacy-migration-{source}"));
+        let final_exists = match fs::symlink_metadata(&final_path) {
+            Ok(_) => true,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+            Err(source) => {
+                return Err(crate::Error::Io {
+                    path: final_path,
+                    source,
+                    location: snafu::Location::default(),
+                });
+            }
+        };
+        let staging_exists = match fs::symlink_metadata(&staging_path) {
+            Ok(_) => true,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+            Err(source) => {
+                return Err(crate::Error::Io {
+                    path: staging_path,
+                    source,
+                    location: snafu::Location::default(),
+                });
+            }
+        };
+        if final_exists {
+            if staging_exists {
+                return EvidenceStateSnafu {
+                    reason: format!(
+                        "legacy evidence WAL migration has both staged and published stream `{source}`"
+                    ),
+                }
+                .fail();
+            }
+            let wal = EvidenceWal::open(&final_path, limits)?;
+            Self::validate_legacy_stream(&wal, observations, false)?;
+            return Self::legacy_migration_stream_state(&wal);
+        }
+
+        let mut wal = EvidenceWal::open(&staging_path, limits)?;
+        let retained = Self::validate_legacy_stream(&wal, observations, true)?;
+        for observation in &observations[retained..] {
+            wal.append(observation)?;
+        }
+        let state = Self::legacy_migration_stream_state(&wal)?;
+        drop(wal);
+        sync_directory(&staging_path)?;
+        sync_directory(root)?;
+        fs::rename(&staging_path, &final_path).context(IoSnafu { path: &final_path })?;
+        sync_directory(root)?;
+        Ok(state)
+    }
+
+    fn validate_legacy_stream(
+        wal: &EvidenceWal,
+        observations: &[ObservationEnvelopeV1],
+        allow_prefix: bool,
+    ) -> Result<usize> {
+        if wal.acknowledged != AckStateV1::default()
+            || wal.records.len() > observations.len()
+            || (!allow_prefix && wal.records.len() != observations.len())
+        {
+            return EvidenceStateSnafu {
+                reason: "legacy evidence WAL migration stream has inconsistent progress".to_owned(),
+            }
+            .fail();
+        }
+        for (record, observation) in wal.records.iter().zip(observations) {
+            if record.observation_id != observation.observation_id
+                || record.payload != observation.wire_bytes()?
+            {
+                return EvidenceStateSnafu {
+                    reason: "legacy evidence WAL migration stream changed observation identity or payload"
+                        .to_owned(),
+                }
+                .fail();
+            }
+        }
+        Ok(wal.records.len())
+    }
+
+    fn legacy_migration_stream_state(wal: &EvidenceWal) -> Result<LegacyMigrationStreamV1> {
+        let last_record_sha256 = wal
+            .records
+            .last()
+            .ok_or_else(|| {
+                EvidenceStateSnafu {
+                    reason: "legacy evidence WAL migration produced an empty stream".to_owned(),
+                }
+                .build()
+            })?
+            .record_sha256;
+        Ok(LegacyMigrationStreamV1 {
+            pending_records: u64::try_from(wal.records.len()).map_err(|_| {
+                EvidenceStateSnafu {
+                    reason: "legacy evidence WAL migration record count is not representable"
+                        .to_owned(),
+                }
+                .build()
+            })?,
+            last_record_sha256,
+        })
+    }
+
+    fn read_legacy_migration(root: &Path) -> Result<Option<LegacyMigrationV1>> {
+        let path = root.join(LEGACY_MIGRATION_FILE);
+        let bytes = match fs::read(&path) {
+            Ok(bytes) => bytes,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(source) => {
+                return Err(crate::Error::Io {
+                    path,
+                    source,
+                    location: snafu::Location::default(),
+                });
+            }
+        };
+        let migration = serde_json::from_slice(&bytes).map_err(|error| {
+            EvidenceStateSnafu {
+                reason: format!("legacy evidence WAL migration state is invalid: {error}"),
+            }
+            .build()
+        })?;
+        Ok(Some(migration))
+    }
+
+    fn complete_legacy_migration(
+        root: &Path,
+        limits: EvidenceWalLimits,
+        migration: &LegacyMigrationV1,
+    ) -> Result<()> {
+        if migration.format_version != LEGACY_MIGRATION_FORMAT_VERSION
+            || migration.streams.len() < 2
+        {
+            return EvidenceStateSnafu {
+                reason: "legacy evidence WAL migration state has an invalid format or stream count"
+                    .to_owned(),
+            }
+            .fail();
+        }
+        let mut observation_ids = BTreeSet::new();
+        for (source, expected) in &migration.streams {
+            let path = root.join(source);
+            let source_id = parse_source_id(source, &path)?;
+            let wal = EvidenceWal::open(&path, limits)?;
+            if wal.acknowledged != AckStateV1::default()
+                || Self::legacy_migration_stream_state(&wal)? != *expected
+                || wal
+                    .records
+                    .iter()
+                    .any(|record| record.source_id().ok() != Some(source_id))
+                || wal
+                    .records
+                    .iter()
+                    .any(|record| !observation_ids.insert(record.observation_id))
+            {
+                return EvidenceStateSnafu {
+                    reason: format!(
+                        "legacy evidence WAL migration stream `{source}` is incomplete or inconsistent"
+                    ),
+                }
+                .fail();
+            }
+        }
+
+        for entry in fs::read_dir(root)
+            .context(IoSnafu { path: root })?
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .context(IoSnafu { path: root })?
+        {
+            let path = entry.path();
+            let name = path.file_name().and_then(|name| name.to_str());
+            if name == Some(ACK_FILE) || name == Some(LEGACY_SOURCE_FILE) {
+                fs::remove_file(&path).context(IoSnafu { path: &path })?;
+            } else if path.extension().and_then(|extension| extension.to_str()) == Some("wal") {
+                segment_cursor(&path)?;
+                fs::remove_file(&path).context(IoSnafu { path: &path })?;
+            }
+        }
+        sync_directory(root)?;
+        let migration_path = root.join(LEGACY_MIGRATION_FILE);
+        fs::remove_file(&migration_path).context(IoSnafu {
+            path: &migration_path,
+        })?;
+        sync_directory(root)
+    }
+
     pub(super) fn append_classified(
         &mut self,
         observation: &ObservationEnvelopeV1,
@@ -314,7 +581,7 @@ impl EvidenceWalOwner {
             return Err(capacity_failure());
         }
         if !self.streams.contains_key(&source_id) && self.unbound_legacy.is_some() {
-            // A flat Phase 6 WAL can continue only after its first source is bound durably.
+            // A flat legacy WAL can continue only after its first source is bound durably.
             atomic_write(
                 &self.root.join(LEGACY_SOURCE_FILE),
                 hex::encode(source_id).as_bytes(),
@@ -441,7 +708,7 @@ fn legacy_source_id(wal: &EvidenceWal, root: &Path) -> Result<Option<[u8; 16]>> 
                 path: marker_path,
                 source,
                 location: snafu::Location::default(),
-            })
+            });
         }
     };
     let mut record_source = None;
@@ -769,7 +1036,7 @@ impl EvidenceWal {
                         path,
                         source,
                         location: snafu::Location::default(),
-                    })
+                    });
                 }
             }
             match fs::remove_file(&path) {
@@ -780,7 +1047,7 @@ impl EvidenceWal {
                         path,
                         source,
                         location: snafu::Location::default(),
-                    })
+                    });
                 }
             }
         }
@@ -1119,6 +1386,109 @@ mod tests {
             continued.records[0].source_id()?,
             expected.records[0].source_id()?
         );
+        Ok(())
+    }
+
+    #[test]
+    fn wal_owner_migrates_all_sources_from_a_flat_wal_before_acknowledgement(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let observations = [
+            kernel_observation_for_cpu(1, 0)?,
+            kernel_observation_for_cpu(1, 1)?,
+            kernel_observation_for_cpu(2, 0)?,
+            kernel_observation_for_cpu(2, 1)?,
+        ];
+        let expected_ids = observations
+            .iter()
+            .map(|observation| observation.observation_id)
+            .collect::<std::collections::BTreeSet<_>>();
+        let mut legacy = EvidenceWal::open(directory.path(), limits())?;
+        legacy.append(&kernel_observation_for_cpu(1, 2)?)?;
+        legacy.append(&kernel_observation_for_cpu(2, 2)?)?;
+        let acknowledged = legacy
+            .next_batch()
+            .ok_or("legacy acknowledged batch is missing")?;
+        legacy.acknowledge(EvidenceAckV1 {
+            first_cursor: acknowledged.first_cursor,
+            last_cursor: acknowledged.last_cursor,
+            batch_sha256: acknowledged.batch_sha256,
+        })?;
+        for observation in &observations {
+            legacy.append(observation)?;
+        }
+        drop(legacy);
+
+        // This is the durable state after one stream rename and before the marker write.
+        let published_source = observations[0].source_id;
+        let mut published = EvidenceWal::open(
+            directory
+                .path()
+                .join(hex::encode(published_source.to_be_bytes())),
+            limits(),
+        )?;
+        published.append(&observations[0])?;
+        published.append(&observations[2])?;
+        drop(published);
+
+        let mut owner = EvidenceWalOwner::open(directory.path(), limits())?;
+        let stream_entries =
+            std::fs::read_dir(directory.path())?.collect::<std::result::Result<Vec<_>, _>>()?;
+        assert_eq!(stream_entries.len(), 2);
+        assert!(stream_entries
+            .iter()
+            .all(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir())));
+        let first = owner
+            .next_batch()
+            .ok_or("first migrated batch is missing")?;
+        let first_source = first.records[0].source_id()?;
+        assert!(first
+            .records
+            .iter()
+            .all(|record| record.source_id().ok() == Some(first_source)));
+        drop(owner);
+
+        let mut owner = EvidenceWalOwner::open(directory.path(), limits())?;
+        assert_eq!(owner.next_batch(), Some(first.clone()));
+        owner.acknowledge(EvidenceAckV1 {
+            first_cursor: first.first_cursor,
+            last_cursor: first.last_cursor,
+            batch_sha256: first.batch_sha256,
+        })?;
+        drop(owner);
+
+        let mut owner = EvidenceWalOwner::open(directory.path(), limits())?;
+        let second = owner
+            .next_batch()
+            .ok_or("second migrated batch is missing")?;
+        let second_source = second.records[0].source_id()?;
+        assert_ne!(second_source, first_source);
+        assert!(second
+            .records
+            .iter()
+            .all(|record| record.source_id().ok() == Some(second_source)));
+        owner.acknowledge(EvidenceAckV1 {
+            first_cursor: second.first_cursor,
+            last_cursor: second.last_cursor,
+            batch_sha256: second.batch_sha256,
+        })?;
+        let migrated_ids = first
+            .records
+            .iter()
+            .chain(&second.records)
+            .map(|record| record.observation_id)
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(migrated_ids, expected_ids);
+        assert_eq!(
+            first.records.len() + second.records.len(),
+            expected_ids.len()
+        );
+        assert!(owner.next_batch().is_none());
+        drop(owner);
+
+        assert!(EvidenceWalOwner::open(directory.path(), limits())?
+            .next_batch()
+            .is_none());
         Ok(())
     }
 
