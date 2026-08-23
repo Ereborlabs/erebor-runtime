@@ -419,18 +419,28 @@ fn kubernetes_dns_name_is_valid(value: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
+    use std::convert::Infallible;
+    use std::sync::Arc;
 
+    use axum::body::Body;
+    use axum::http::{header, HeaderValue, Method, Request, Response};
     use k8s_openapi::api::apps::v1::{DaemonSet, DaemonSetSpec};
     use k8s_openapi::api::core::v1::{
         Affinity, Node, NodeAffinity, NodeSelector, NodeSelectorRequirement, NodeSelectorTerm,
         NodeSpec, PodSpec, PodTemplateSpec, Taint,
     };
     use k8s_openapi::apimachinery::pkg::apis::meta::v1::{LabelSelector, ObjectMeta};
+    use kube::{client::Body as KubeBody, Client};
+    use serde_json::json;
+    use tokio::sync::Mutex;
+    use tower::service_fn;
 
     use super::{
-        node_projection_patch, DaemonSetNodeConstraintsV1, KubernetesNodeSessionV1,
-        KUBERNETES_NOT_READY_TAINT, KUBERNETES_READY_LABEL,
+        node_projection_patch, DaemonSetNodeConstraintsV1, KubernetesNodeControlConfigV1,
+        KubernetesNodeReadinessOwner, KubernetesNodeSessionV1, KUBERNETES_NOT_READY_TAINT,
+        KUBERNETES_READY_LABEL,
     };
+    use crate::{ControlPlane, TrustGenerationV1};
 
     fn daemon_set() -> DaemonSet {
         DaemonSet {
@@ -669,6 +679,109 @@ mod tests {
             .pointer("/spec/taints")
             .and_then(serde_json::Value::as_array)
             .is_some_and(Vec::is_empty));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn node_snapshot_reconciles_every_page_before_returning_its_cursor() -> crate::Result<()>
+    {
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let service_requests = requests.clone();
+        let service = service_fn(move |request: Request<KubeBody>| {
+            let service_requests = service_requests.clone();
+            async move {
+                let method = request.method().clone();
+                let uri = request.uri().to_string();
+                service_requests
+                    .lock()
+                    .await
+                    .push((method.clone(), uri.clone()));
+                let value = if method == Method::GET {
+                    let second_page = uri.contains("continue=next");
+                    let count = if second_page { 1 } else { 500 };
+                    let offset = if second_page { 500 } else { 0 };
+                    let items = (offset..offset + count)
+                        .map(|index| {
+                            json!({
+                                "apiVersion": "v1",
+                                "kind": "Node",
+                                "metadata": {
+                                    "name": format!("node-{index}"),
+                                    "uid": format!("{index:08x}-0000-4000-8000-000000000000")
+                                }
+                            })
+                        })
+                        .collect::<Vec<_>>();
+                    json!({
+                        "apiVersion": "v1",
+                        "kind": "NodeList",
+                        "metadata": {
+                            "resourceVersion": "snapshot-42",
+                            "continue": if second_page { "" } else { "next" }
+                        },
+                        "items": items
+                    })
+                } else {
+                    json!({
+                        "apiVersion": "v1",
+                        "kind": "Node",
+                        "metadata": {"name": "patched-node"}
+                    })
+                };
+                let mut response = Response::new(Body::from(value.to_string()));
+                response.headers_mut().insert(
+                    header::CONTENT_TYPE,
+                    HeaderValue::from_static("application/json"),
+                );
+                Ok::<_, Infallible>(response)
+            }
+        });
+        let client = Client::new(service, "default");
+        let nodes = kube::Api::<Node>::all(client);
+        let owner = KubernetesNodeReadinessOwner::new(KubernetesNodeControlConfigV1 {
+            daemon_set_namespace: "mithril-system".to_owned(),
+            daemon_set_name: "mithril-node".to_owned(),
+            session_ttl_seconds: 30,
+            reconcile_interval_ms: 100,
+        })?;
+        let control = ControlPlane::new(
+            Vec::new(),
+            TrustGenerationV1 {
+                generation: 1,
+                bundle_digest: "0".repeat(64),
+                policy_issuer_sequence_epoch: 0,
+                policy_signers: Vec::new(),
+            },
+        );
+        let cursor = owner
+            .reconcile_node_snapshot(
+                &nodes,
+                &DaemonSetNodeConstraintsV1 {
+                    node_selector: BTreeMap::new(),
+                    required_node_affinity: None,
+                },
+                &control,
+            )
+            .await?;
+        let requests = requests.lock().await;
+        assert_eq!(cursor, "snapshot-42");
+        assert_eq!(
+            requests
+                .iter()
+                .filter(|(method, _)| method == Method::GET)
+                .count(),
+            2
+        );
+        assert_eq!(
+            requests
+                .iter()
+                .filter(|(method, _)| method == Method::PATCH)
+                .count(),
+            501
+        );
+        assert!(requests
+            .iter()
+            .any(|(_, uri)| uri.contains("continue=next")));
         Ok(())
     }
 }
