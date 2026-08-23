@@ -204,11 +204,14 @@ pub struct PolicyDeliveryStatusV1 {
     pub exception_ack_pending_count: usize,
 }
 
-#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 /// Projects one signed Kubernetes target and its current runtime lifetime.
 pub struct PolicyDeliveryTargetStatusV1 {
     pub profile_id: String,
     pub candidate_content_id: String,
+    // These fields distinguish a fresh root from a replayed predecessor chain.
+    pub operation: PolicyDeliveryOperationV1,
+    pub predecessor_candidate_content_id: Option<String>,
     pub policy_source_revision_id: String,
     pub workload_binding_generation_digest: String,
     pub node_id: String,
@@ -465,6 +468,11 @@ impl NodePolicyDeliveryOwner {
                 targets.push(PolicyDeliveryTargetStatusV1 {
                     profile_id: profile_id.clone(),
                     candidate_content_id: record.candidate_content_id.clone(),
+                    operation: bundle.candidate.operation,
+                    predecessor_candidate_content_id: bundle
+                        .candidate
+                        .predecessor_candidate_content_id
+                        .clone(),
                     policy_source_revision_id: record.policy_source_revision_id.clone(),
                     workload_binding_generation_digest: target
                         .workload_binding_generation_digest
@@ -485,7 +493,18 @@ impl NodePolicyDeliveryOwner {
                 });
             }
         }
-        targets.sort();
+        targets.sort_by(|left, right| {
+            (
+                &left.profile_id,
+                &left.candidate_content_id,
+                &left.workload_binding_generation_digest,
+            )
+                .cmp(&(
+                    &right.profile_id,
+                    &right.candidate_content_id,
+                    &right.workload_binding_generation_digest,
+                ))
+        });
         status.active_target_count = targets.len();
         status.active_targets_truncated = targets.len() > MAX_INSPECTED_POLICY_TARGETS;
         targets.truncate(MAX_INSPECTED_POLICY_TARGETS);
@@ -4780,6 +4799,11 @@ mod tests {
             .build()
         })?;
         assert_eq!(inspected_target.node_id, signed_target.node_id);
+        assert_eq!(
+            inspected_target.operation,
+            PolicyDeliveryOperationV1::Activate
+        );
+        assert!(inspected_target.predecessor_candidate_content_id.is_none());
         assert_eq!(inspected_target.pod_uid, signed_target.pod_uid);
         assert_eq!(
             inspected_target.kubernetes_node_uid,

@@ -47,6 +47,22 @@ if PATH="$test_root/oracle-bin:$PATH" FAKE_KUBECTL_RESULT=success \
   exit 1
 fi
 
+node_json='{"metadata":{"name":"node-a","uid":"node-uid-a","annotations":{"mithril.erebor.dev/node-id":"node-id-a","mithril.erebor.dev/node-uid":"node-uid-a","mithril.erebor.dev/node-boot-id":"boot-a","mithril.erebor.dev/label-epoch":"7"}}}'
+pod_json='{"metadata":{"name":"protected","namespace":"tenant-a","uid":"pod-uid-a","annotations":{"mithril.erebor.dev/policy-source-revision":"source-a"}},"spec":{"nodeName":"node-a","containers":[{"name":"app","image":"busybox@sha256:image-a"}]},"status":{"containerStatuses":[{"name":"app","containerID":"containerd://container-a"}]}}'
+status_json='{"active_candidate_content_id":"candidate-a","active_target_count":1,"active_targets_truncated":false,"active_targets":[{"profile_id":"profile-a","candidate_content_id":"candidate-a","operation":"ACTIVATE","predecessor_candidate_content_id":null,"policy_source_revision_id":"source-a","workload_binding_generation_digest":"binding-generation-a","node_id":"node-id-a","kubernetes_node_name":"node-a","kubernetes_node_uid":"node-uid-a","node_boot_id":"boot-a","label_epoch":7,"namespace_name":"tenant-a","pod_name":"protected","pod_uid":"pod-uid-a","container_name":"app","image_digest":"busybox@sha256:image-a","runtime_container_id":"container-a","runtime_binding_id":"runtime-binding-a","container_generation":1}]}'
+assert_exact_policy_target "$status_json" "$node_json" "$pod_json" \
+  profile-a app ACTIVATE
+if assert_exact_policy_target "$(jq -c '.active_targets[0].kubernetes_node_uid = "wrong"' \
+    <<<"$status_json")" "$node_json" "$pod_json" profile-a app ACTIVATE; then
+  echo "a target for a different Kubernetes Node UID satisfied the exact-target oracle" >&2
+  exit 1
+fi
+if assert_exact_policy_target "$status_json" "$node_json" "$pod_json" \
+    profile-a app REPLACE candidate-before; then
+  echo "a root activation satisfied a predecessor-bound replacement oracle" >&2
+  exit 1
+fi
+
 manual_bin=$test_root/manual-bin
 mkdir "$manual_bin"
 cat >"$manual_bin/id" <<'EOF'
@@ -108,7 +124,7 @@ if [[ ${1:-} == -n && ${3:-} == get && ${4:-} == pods &&
   exit 0
 fi
 if [[ $* == *"mithril-inspect policy-delivery"* ]]; then
-  printf '%s\n' '{"active_candidate_content_id":null,"active_profile_ids":[],"scheduled_binding_count":0,"runtime_binding_count":0,"pending_exception_count":0,"active_exception_count":0,"terminal_exception_count":0}'
+  printf '%s\n' '{"active_candidate_content_id":null,"active_profile_ids":[],"active_target_count":0,"active_targets_truncated":false,"active_targets":[],"scheduled_binding_count":0,"runtime_binding_count":0,"pending_exception_count":0,"active_exception_count":0,"terminal_exception_count":0}'
   exit 0
 fi
 if [[ ${1:-} == -n && $* == *" exec "* ]]; then

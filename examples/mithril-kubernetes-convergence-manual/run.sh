@@ -244,6 +244,62 @@ node_status() {
     mithril-inspect policy-delivery --state-directory /var/lib/mithril
 }
 
+assert_live_exact_target() {
+  local node_name=$1
+  local profile_id=$2
+  local operation=$3
+  local predecessor=${4:-}
+  local status_json
+  local node_json
+  local pod_json
+  status_json=$(node_status "$node_name")
+  node_json=$(kubectl get node "$node_name" -o json)
+  pod_json=$(kubectl -n "$scenario_namespace" get pod "$protected_pod" -o json)
+  assert_exact_policy_target "$status_json" "$node_json" "$pod_json" \
+    "$profile_id" converter "$operation" "$predecessor"
+}
+
+wait_policy_delivery_empty() {
+  local node_name=$1
+  local status_json
+  for _attempt in {1..300}; do
+    status_json=$(node_status "$node_name" 2>/dev/null || true)
+    if [[ -n $status_json ]] && jq -e '
+      .active_candidate_content_id == null and
+      .active_profile_ids == [] and
+      .active_target_count == 0 and
+      .active_targets_truncated == false and
+      .active_targets == [] and
+      .scheduled_binding_count == 0 and
+      .runtime_binding_count == 0 and
+      .activation_pending == false
+    ' <<<"$status_json" >/dev/null; then
+      return 0
+    fi
+    sleep 1
+  done
+  echo "policy delivery did not retire all authority on node $node_name" >&2
+  return 1
+}
+
+wait_node_ready() {
+  local node_name=$1
+  local node_json
+  for _attempt in {1..300}; do
+    node_json=$(kubectl get node "$node_name" -o json 2>/dev/null || true)
+    if [[ -n $node_json ]] && jq -e '
+      .metadata.labels["mithril.erebor.dev/ready"] == "true" and
+      all(.spec.taints[]?;
+        .key != "mithril.erebor.dev/not-ready" or .effect != "NoSchedule")
+    ' <<<"$node_json" >/dev/null; then
+      return 0
+    fi
+    sleep 1
+  done
+  echo "node $node_name did not recover Mithril readiness" >&2
+  return 1
+}
+
 for command in grep jq kubectl sed sort; do
   require_command "$command"
 done
@@ -284,6 +340,9 @@ for node_name in "${eligible_nodes[@]}"; do
   jq -e '
     .active_candidate_content_id == null and
     .active_profile_ids == [] and
+    .active_target_count == 0 and
+    .active_targets_truncated == false and
+    .active_targets == [] and
     .scheduled_binding_count == 0 and
     .runtime_binding_count == 0 and
     .pending_exception_count == 0 and
@@ -412,6 +471,10 @@ jq -e --arg profile_id "$profile_id" '
   .activation_pending == false and
   .control_acknowledged == true
 ' <<<"$(node_status "$selected_node")" >/dev/null
+assert_live_exact_target "$selected_node" "$profile_id" ACTIVATE
+initial_delivery_status=$(node_status "$selected_node")
+runtime_binding_before=$(jq -er '.active_targets[0].runtime_binding_id' \
+  <<<"$initial_delivery_status")
 for node_name in "${eligible_nodes[@]}"; do
   # The scheduler-selected node is the only node that can hold this Pod lifetime.
   if [[ $node_name == "$selected_node" ]]; then
@@ -534,20 +597,127 @@ kubectl -n "$scenario_namespace" wait --for=condition=Ready \
   pod/"$protected_pod" --timeout=180s >/dev/null
 jq -e '.runtime_binding_count == 1 and .scheduled_binding_count == 0' \
   <<<"$(node_status "$selected_node")" >/dev/null
+assert_live_exact_target "$selected_node" "$profile_id" ACTIVATE
+runtime_binding_after=$(jq -er '.active_targets[0].runtime_binding_id' \
+  <<<"$(node_status "$selected_node")")
+[[ $runtime_binding_after != "$runtime_binding_before" ]] || {
+  echo "the restarted container retained its old runtime binding" >&2
+  exit 1
+}
+
+# Keep a second grant unused. Pod removal must revoke it without a use refund.
+consumed_before_retirement=$(jq -er '.consumed_exception_count' \
+  <<<"$(node_status "$selected_node")")
+kubectl --as="$exception_subject" create \
+  -f "$work_directory/exception-v1.yaml" >/dev/null
+wait_exception_state Active
+for _attempt in {1..120}; do
+  if jq -e '
+      .active_exception_count == 1 and
+      .exception_ack_pending_count == 0
+    ' <<<"$(node_status "$selected_node")" >/dev/null; then
+    break
+  fi
+  [[ $_attempt -lt 120 ]] || {
+    echo "the replacement exception did not become active" >&2
+    exit 1
+  }
+  sleep 1
+done
+
+kubectl -n "$scenario_namespace" delete pod "$protected_pod" \
+  --wait=true --timeout=120s >/dev/null
+wait_exception_state Revoked
+for _attempt in {1..120}; do
+  exception_status=$(node_status "$selected_node")
+  if jq -e --argjson consumed "$consumed_before_retirement" '
+      .active_exception_count == 0 and
+      .consumed_exception_count == $consumed and
+      .exception_ack_pending_count == 0
+    ' <<<"$exception_status" >/dev/null; then
+    break
+  fi
+  [[ $_attempt -lt 120 ]] || {
+    echo "Pod removal did not retire its unused exception authority" >&2
+    exit 1
+  }
+  sleep 1
+done
+wait_policy_delivery_empty "$selected_node"
+kubectl --as="$exception_subject" -n "$scenario_namespace" delete \
+  workloadprotectionexception temporary-file-access \
+  --wait=true --timeout=120s >/dev/null
+kubectl --as="$policy_subject" -n "$scenario_namespace" delete \
+  workloadprotectionpolicy "$profile_name" \
+  --wait=true --timeout=120s >/dev/null
+
+# Restarts after terminal cleanup must not replay an old root candidate.
+old_node_pod=$(node_pod "$selected_node")
+kubectl -n "$system_namespace" rollout restart deployment/mithril-control >/dev/null
+kubectl -n "$system_namespace" rollout status deployment/mithril-control \
+  --timeout=300s >/dev/null
+kubectl -n "$system_namespace" delete pod "$old_node_pod" \
+  --wait=true --timeout=120s >/dev/null
+kubectl -n "$system_namespace" rollout status daemonset/mithril-node \
+  --timeout=300s >/dev/null
+wait_node_ready "$selected_node"
+wait_policy_delivery_empty "$selected_node"
+
+kubectl --as="$policy_subject" apply --server-side \
+  --field-manager=mithril-convergence-manual --validate=strict \
+  -f "$work_directory/policy-v1.yaml" >/dev/null
+wait_policy_compiled
+recreated_profile_id=$(kubectl -n "$scenario_namespace" get \
+  workloadprotectionpolicy "$profile_name" -o jsonpath='{.metadata.uid}')
+[[ $recreated_profile_id != "$profile_id" ]] || {
+  echo "the recreated policy retained its deleted Kubernetes UID" >&2
+  exit 1
+}
+for node_name in "${eligible_nodes[@]}"; do
+  remove_marker "$node_name" "$protected_pod.started"
+  remove_marker "$node_name" "$protected_pod.restart"
+  remove_marker "$node_name" "$protected_pod.exception-request"
+  remove_marker "$node_name" "$protected_pod.exception-result"
+done
+kubectl create -f "$work_directory/protected.yaml" >/dev/null
+kubectl -n "$scenario_namespace" wait --for=condition=Ready \
+  pod/"$protected_pod" --timeout=300s >/dev/null
+recreated_node=$(kubectl -n "$scenario_namespace" get pod "$protected_pod" \
+  -o jsonpath='{.spec.nodeName}')
+assert_live_exact_target "$recreated_node" "$recreated_profile_id" ACTIVATE
+recreated_status=$(node_status "$recreated_node")
+jq -e '
+  .active_targets[0].operation == "ACTIVATE" and
+  .active_targets[0].predecessor_candidate_content_id == null
+' <<<"$recreated_status" >/dev/null
+
+kubectl -n "$scenario_namespace" delete pod "$protected_pod" \
+  --wait=true --timeout=120s >/dev/null
+wait_policy_delivery_empty "$recreated_node"
+kubectl --as="$policy_subject" -n "$scenario_namespace" delete \
+  workloadprotectionpolicy "$profile_name" \
+  --wait=true --timeout=120s >/dev/null
 
 jq -n --arg namespace "$scenario_namespace" --arg node "$selected_node" \
+  --arg recreated_node "$recreated_node" \
   --arg previous "$container_before" --arg current "$container_after" \
   '{
     result: "PASS",
     namespace: $namespace,
     scheduler_selected_node: $node,
+    recreated_scheduler_selected_node: $recreated_node,
     first_container_lifetime: $previous,
     replacement_container_lifetime: $current,
     exact_node_delivery: true,
+    exact_target_proven: true,
     crd_desired_state: true,
     writer_rbac_separated: true,
     exception_one_use_consumed: true,
     exception_revoked: true,
+    exception_target_retired: true,
+    terminal_chain_cleaned: true,
+    old_root_replay_refused: true,
+    fresh_policy_uses_root_activation: true,
     runtime_gate_failure_closed: true,
     cleanup: "the EXIT trap removes all scenario resources"
   }'

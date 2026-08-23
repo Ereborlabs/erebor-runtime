@@ -820,6 +820,57 @@ node_status() {
     mithril-inspect policy-delivery --state-directory /var/lib/mithril
 }
 
+assert_live_exact_target() {
+  local node_name=$1
+  local profile=$2
+  local operation=$3
+  local predecessor=${4:-}
+  local status_json
+  local node_json
+  local pod_json
+  status_json=$(node_status "$node_name")
+  node_json=$(remote_kubectl get node "$node_name" -o json)
+  pod_json=$(remote_kubectl -n "$workload_namespace" get pod protected -o json)
+  assert_exact_policy_target "$status_json" "$node_json" "$pod_json" \
+    "$profile" converter "$operation" "$predecessor"
+}
+
+wait_policy_delivery_empty() {
+  local node_name=$1
+  local status_json
+  for _attempt in {1..300}; do
+    status_json=$(node_status "$node_name" 2>/dev/null || true)
+    if [[ -n $status_json ]] && jq -e '
+      .active_candidate_content_id == null and
+      .active_profile_ids == [] and
+      .active_target_count == 0 and
+      .active_targets_truncated == false and
+      .active_targets == [] and
+      .scheduled_binding_count == 0 and
+      .runtime_binding_count == 0 and
+      .activation_pending == false
+    ' <<<"$status_json" >/dev/null; then
+      return 0
+    fi
+    sleep 1
+  done
+  echo "policy delivery did not retire all authority on node $node_name" >&2
+  return 1
+}
+
+runtime_task_snapshot() {
+  local node_name=$1
+  local host_pid=$2
+  local pod
+  pod=$(remote_kubectl -n "$system_namespace" get pods \
+    -l app.kubernetes.io/name=mithril-node \
+    --field-selector "spec.nodeName=$node_name" \
+    -o jsonpath='{.items[0].metadata.name}')
+  remote_kubectl -n "$system_namespace" exec -c mithril-node "$pod" -- \
+    mithril-inspect --pin-root /sys/fs/bpf/mithril-convergence \
+      task --host-pid "$host_pid"
+}
+
 selected_status=$(node_status "$selected_node")
 other_status=$(node_status "$other_node")
 jq -e --arg profile_id "$profile_id" '
@@ -830,6 +881,9 @@ jq -e --arg profile_id "$profile_id" '
   .activation_pending == false and
   .control_acknowledged == true
 ' <<<"$selected_status" >/dev/null
+assert_live_exact_target "$selected_node" "$profile_id" ACTIVATE
+runtime_binding_before=$(jq -er '.active_targets[0].runtime_binding_id' \
+  <<<"$selected_status")
 jq -e '
   .active_candidate_content_id == null and
   .active_profile_ids == [] and
@@ -844,6 +898,14 @@ else
   selected_vm=$vm_b
   other_vm=$vm_a
 fi
+container_before=$(remote_kubectl -n "$workload_namespace" get pod protected \
+  -o jsonpath='{.status.containerStatuses[0].containerID}')
+container_before_id=${container_before#containerd://}
+container_before_json=$("$provider" run "$selected_vm" sudo \
+  /usr/local/bin/k3s crictl inspect "$container_before_id")
+host_pid_before=$(jq -er '.info.pid' <<<"$container_before_json")
+task_before=$(runtime_task_snapshot "$selected_node" "$host_pid_before")
+task_cookie_before=$(jq -er '.task_cookie' <<<"$task_before")
 "$provider" run "$selected_vm" sudo test -e \
   /var/lib/mithril-convergence/markers/protected.started
 "$provider" run "$other_vm" sudo test ! -e \
@@ -940,26 +1002,6 @@ for _attempt in {1..120}; do
   sleep 1
 done
 
-remote_kubectl --as="$exception_subject" create \
-  -f "$remote_a/exception-v1.yaml" >/dev/null
-wait_exception_state temporary-file-access Active
-second_exception_uid=$(remote_kubectl -n "$workload_namespace" get \
-  workloadprotectionexception temporary-file-access -o jsonpath='{.metadata.uid}')
-[[ $second_exception_uid != "$first_exception_uid" ]]
-remote_kubectl --as="$exception_subject" -n "$workload_namespace" delete \
-  workloadprotectionexception temporary-file-access --wait=true --timeout=120s >/dev/null
-for _attempt in {1..120}; do
-  if jq -e '.revoked_exception_count == 2 and .exception_ack_pending_count == 0' \
-      <<<"$(node_status "$selected_node")" >/dev/null; then
-    break
-  fi
-  [[ $_attempt -lt 120 ]] || {
-    echo "the recreated exception did not receive an independent revocation" >&2
-    exit 1
-  }
-  sleep 1
-done
-
 expired=$work_a/exception-expired.yaml
 sed \
   -e '0,/name: temporary-file-access/s//name: expiring-file-access/' \
@@ -975,7 +1017,7 @@ jq -e '.expired_exception_count == 1 and .active_exception_count == 0' \
 remote_kubectl --as="$exception_subject" -n "$workload_namespace" delete \
   workloadprotectionexception expiring-file-access --wait=true --timeout=120s >/dev/null
 for _attempt in {1..120}; do
-  if jq -e '.revoked_exception_count == 3 and .exception_ack_pending_count == 0' \
+  if jq -e '.revoked_exception_count == 2 and .exception_ack_pending_count == 0' \
       <<<"$(node_status "$selected_node")" >/dev/null; then
     break
   fi
@@ -1037,6 +1079,31 @@ remote_kubectl -n "$workload_namespace" wait --for=condition=Ready pod/protected
   --timeout=180s >/dev/null
 jq -e '.runtime_binding_count == 1 and .scheduled_binding_count == 0' \
   <<<"$(node_status "$selected_node")" >/dev/null
+assert_live_exact_target "$selected_node" "$profile_id" ACTIVATE
+restarted_status=$(node_status "$selected_node")
+runtime_binding_after=$(jq -er '.active_targets[0].runtime_binding_id' \
+  <<<"$restarted_status")
+[[ $runtime_binding_after != "$runtime_binding_before" ]] || {
+  echo "the restarted container retained its old runtime binding" >&2
+  exit 1
+}
+container_after_id=${container_after#containerd://}
+container_after_json=$("$provider" run "$selected_vm" sudo \
+  /usr/local/bin/k3s crictl inspect "$container_after_id")
+host_pid_after=$(jq -er '.info.pid' <<<"$container_after_json")
+task_after=$(runtime_task_snapshot "$selected_node" "$host_pid_after")
+task_cookie_after=$(jq -er '.task_cookie' <<<"$task_after")
+[[ $task_cookie_after != "$task_cookie_before" ]] || {
+  echo "the restarted container retained its old host task identity" >&2
+  exit 1
+}
+old_task_after=$(runtime_task_snapshot "$selected_node" "$host_pid_before" 2>/dev/null || true)
+if [[ -n $old_task_after ]] &&
+    jq -e --argjson old "$task_cookie_before" '.task_cookie == $old' \
+      <<<"$old_task_after" >/dev/null; then
+  echo "the retired host task identity remained active after container restart" >&2
+  exit 1
+fi
 
 candidate_before_node_restart=$(jq -er '.active_candidate_content_id' \
   <<<"$(node_status "$selected_node")")
@@ -1070,6 +1137,7 @@ for _attempt in {1..180}; do
   }
   sleep 1
 done
+assert_live_exact_target "$selected_node" "$profile_id" ACTIVATE
 
 # Hold one matching node without a node process and prove that it stays quarantined.
 "$provider" run "$other_vm" sudo mv /etc/mithril/node.json /etc/mithril/node.json.held
@@ -1097,14 +1165,7 @@ remote_kubectl label node "$node_a_name" mithril.erebor.dev/fixture=selected --o
 remote_kubectl -n "$system_namespace" patch daemonset mithril-node --type=merge \
   -p '{"spec":{"template":{"spec":{"nodeSelector":{"mithril.erebor.dev/fixture":"selected"}}}}}' \
   >/dev/null
-for _attempt in {1..180}; do
-  b_json=$(remote_kubectl get node "$node_b_name" -o json)
-  if jq -e '(.metadata.labels["mithril.erebor.dev/ready"] // "") == ""' \
-      <<<"$b_json" >/dev/null; then
-    break
-  fi
-  sleep 1
-done
+wait_node_projection "$node_b_name" "" false
 selector_dry_run=$(remote_kubectl create --dry-run=server \
   -f "$remote_a/protected.yaml" -o json)
 jq -e '.spec.nodeSelector["mithril.erebor.dev/fixture"] == "selected"' \
@@ -1117,9 +1178,12 @@ remote_kubectl -n "$workload_namespace" wait --for=condition=Ready pod/selector-
   -o jsonpath='{.spec.nodeName}') == "$node_a_name" ]]
 remote_kubectl -n "$workload_namespace" delete pod selector-derived \
   --wait=true --timeout=120s >/dev/null
+"$provider" run "$vm_b" sudo mv /etc/mithril/node.json /etc/mithril/node.json.held
 remote_kubectl -n "$system_namespace" patch daemonset mithril-node --type=merge \
   -p '{"spec":{"template":{"spec":{"nodeSelector":{"mithril.erebor.dev/fixture":null}}}}}' \
   >/dev/null
+wait_node_projection "$node_b_name" "" true
+"$provider" run "$vm_b" sudo mv /etc/mithril/node.json.held /etc/mithril/node.json
 remote_kubectl -n "$system_namespace" rollout status daemonset/mithril-node \
   --timeout=300s >/dev/null
 wait_node_projection "$node_b_name" true false
@@ -1160,29 +1224,82 @@ wait_node_projection "$node_a_name" true false
 wait_node_projection "$node_b_name" true false
 remote_kubectl -n "$workload_namespace" wait --for=condition=Ready pod/protected \
   --timeout=120s >/dev/null
+assert_live_exact_target "$selected_node" "$profile_id" REPLACE "$candidate_before"
 
 old_pod_uid=$(remote_kubectl -n "$workload_namespace" get pod protected \
   -o jsonpath='{.metadata.uid}')
+# Keep the recreated grant unused. Removing its exact Pod must retire it.
+consumed_before_retirement=$(jq -er '.consumed_exception_count' \
+  <<<"$(node_status "$selected_node")")
+remote_kubectl --as="$exception_subject" create \
+  -f "$remote_a/exception-v1.yaml" >/dev/null
+wait_exception_state temporary-file-access Active
+second_exception_uid=$(remote_kubectl -n "$workload_namespace" get \
+  workloadprotectionexception temporary-file-access -o jsonpath='{.metadata.uid}')
+[[ $second_exception_uid != "$first_exception_uid" ]]
+for _attempt in {1..120}; do
+  if jq -e '.active_exception_count == 1 and .exception_ack_pending_count == 0' \
+      <<<"$(node_status "$selected_node")" >/dev/null; then
+    break
+  fi
+  [[ $_attempt -lt 120 ]] || {
+    echo "the recreated exception did not become active" >&2
+    exit 1
+  }
+  sleep 1
+done
 remote_kubectl -n "$workload_namespace" delete pod protected \
   --wait=true --timeout=120s >/dev/null
-"$provider" run "$vm_a" sudo rm -f \
-  /var/lib/mithril-convergence/markers/protected.started \
-  /var/lib/mithril-convergence/markers/protected.restart
-"$provider" run "$vm_b" sudo rm -f \
-  /var/lib/mithril-convergence/markers/protected.started \
-  /var/lib/mithril-convergence/markers/protected.restart
-remote_kubectl create -f "$remote_a/protected.yaml" >/dev/null
-remote_kubectl -n "$workload_namespace" wait --for=condition=Ready pod/protected \
-  --timeout=300s >/dev/null
-new_pod_uid=$(remote_kubectl -n "$workload_namespace" get pod protected \
-  -o jsonpath='{.metadata.uid}')
-[[ -n $new_pod_uid && $new_pod_uid != "$old_pod_uid" ]]
-
-remote_kubectl -n "$workload_namespace" delete pod protected \
+wait_exception_state temporary-file-access Revoked
+for _attempt in {1..120}; do
+  exception_status=$(node_status "$selected_node")
+  if jq -e --argjson consumed "$consumed_before_retirement" '
+      .active_exception_count == 0 and
+      .consumed_exception_count == $consumed and
+      .revoked_exception_count == 3 and
+      .exception_ack_pending_count == 0
+    ' <<<"$exception_status" >/dev/null; then
+    break
+  fi
+  [[ $_attempt -lt 120 ]] || {
+    echo "Pod removal did not retire its unused exception authority" >&2
+    exit 1
+  }
+  sleep 1
+done
+wait_policy_delivery_empty "$selected_node"
+remote_kubectl --as="$exception_subject" -n "$workload_namespace" delete \
+  workloadprotectionexception temporary-file-access \
   --wait=true --timeout=120s >/dev/null
 remote_kubectl --as="$policy_subject" -n "$workload_namespace" delete \
   workloadprotectionpolicy converter-policy \
   --wait=true --timeout=120s >/dev/null
+
+# A Control and node restart must not replay the closed root chain.
+selected_node_pod=$(remote_kubectl -n "$system_namespace" get pods \
+  -l app.kubernetes.io/name=mithril-node \
+  --field-selector "spec.nodeName=$selected_node" \
+  -o jsonpath='{.items[0].metadata.name}')
+remote_kubectl -n "$system_namespace" rollout restart deployment/mithril-control >/dev/null
+remote_kubectl -n "$system_namespace" rollout status deployment/mithril-control \
+  --timeout=300s >/dev/null
+remote_kubectl -n "$system_namespace" delete pod "$selected_node_pod" \
+  --wait=true --timeout=120s >/dev/null
+remote_kubectl -n "$system_namespace" rollout status daemonset/mithril-node \
+  --timeout=300s >/dev/null
+wait_node_projection "$selected_node" true false
+wait_policy_delivery_empty "$selected_node"
+
+"$provider" run "$vm_a" sudo rm -f \
+  /var/lib/mithril-convergence/markers/protected.started \
+  /var/lib/mithril-convergence/markers/protected.restart \
+  /var/lib/mithril-convergence/markers/protected.exception-request \
+  /var/lib/mithril-convergence/markers/protected.exception-result
+"$provider" run "$vm_b" sudo rm -f \
+  /var/lib/mithril-convergence/markers/protected.started \
+  /var/lib/mithril-convergence/markers/protected.restart \
+  /var/lib/mithril-convergence/markers/protected.exception-request \
+  /var/lib/mithril-convergence/markers/protected.exception-result
 make_policy_manifest 3
 remote_kubectl --as="$policy_subject" apply --server-side --validate=strict \
   -f "$remote_a/policy-v3.yaml" >/dev/null
@@ -1200,11 +1317,25 @@ done
 remote_kubectl create -f "$remote_a/protected.yaml" >/dev/null
 remote_kubectl -n "$workload_namespace" wait --for=condition=Ready pod/protected \
   --timeout=300s >/dev/null
+new_pod_uid=$(remote_kubectl -n "$workload_namespace" get pod protected \
+  -o jsonpath='{.metadata.uid}')
+[[ -n $new_pod_uid && $new_pod_uid != "$old_pod_uid" ]]
 [[ $(remote_kubectl -n "$workload_namespace" get pod protected \
   -o jsonpath='{.metadata.annotations.mithril\.erebor\.dev/profile-id}') \
   == "$recreated_profile_id" ]]
+recreated_node=$(remote_kubectl -n "$workload_namespace" get pod protected \
+  -o jsonpath='{.spec.nodeName}')
+assert_live_exact_target "$recreated_node" "$recreated_profile_id" ACTIVATE
+jq -e '
+  .active_targets[0].operation == "ACTIVATE" and
+  .active_targets[0].predecessor_candidate_content_id == null
+' <<<"$(node_status "$recreated_node")" >/dev/null
 
 remote_kubectl -n "$workload_namespace" delete pod protected \
+  --wait=true --timeout=120s >/dev/null
+wait_policy_delivery_empty "$recreated_node"
+remote_kubectl --as="$policy_subject" -n "$workload_namespace" delete \
+  workloadprotectionpolicy converter-policy \
   --wait=true --timeout=120s >/dev/null
 remote_kubectl delete namespace "$workload_namespace" \
   --wait=true --timeout=120s >/dev/null
@@ -1221,20 +1352,26 @@ jq -n \
     eligible_nodes: [$node_a, $node_b],
     scheduler_selected_node: $scheduler_selected,
     exact_node_delivery: true,
+    exact_target_proven: true,
     stock_prestart_release: true,
     unavailable_endpoint_denied: true,
     unready_node_quarantined: true,
     daemonset_selector_derived: true,
     node_restart_recovered: true,
     runtime_lifetime_replaced: true,
+    runtime_task_identity_replaced: true,
     pod_uid_replaced: true,
     policy_update_and_recreate: true,
     exception_one_use_consumed: true,
     exception_expired: true,
     exception_revoked: true,
+    exception_target_retired: true,
     exception_recreated_with_new_uid: true,
     exception_overlap_rejected: true,
     exception_excess_bound_rejected: true,
+    terminal_chain_cleaned: true,
+    old_root_replay_refused: true,
+    fresh_policy_uses_root_activation: true,
     rbac_boundary: true
   }' >"$output_directory/two-node-convergence.json"
 
