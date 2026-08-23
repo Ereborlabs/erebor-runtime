@@ -270,6 +270,7 @@ assert_cluster_access() {
   local group=$4
   local resource=$5
   local subresource=${6:-}
+  local namespace=${7:-}
   local request
   local response
 
@@ -278,7 +279,8 @@ assert_cluster_access() {
     --arg verb "$verb" \
     --arg group "$group" \
     --arg resource "$resource" \
-    --arg subresource "$subresource" '
+    --arg subresource "$subresource" \
+    --arg namespace "$namespace" '
       {
         apiVersion: "authorization.k8s.io/v1",
         kind: "SubjectAccessReview",
@@ -290,6 +292,8 @@ assert_cluster_access() {
             resource: $resource
           } + if $subresource == "" then {} else {
             subresource: $subresource
+          } end + if $namespace == "" then {} else {
+            namespace: $namespace
           } end)
         }
       }
@@ -565,12 +569,18 @@ fi
 control_subject=system:serviceaccount:$system_namespace:mithril-control
 node_subject=system:serviceaccount:$system_namespace:mithril-node
 assert_cluster_access true "$control_subject" list mithril.erebor.dev \
-  workloadprotectionprofiles
+  workloadprotectionpolicies
 assert_cluster_access true "$control_subject" patch mithril.erebor.dev \
-  workloadprotectionprofiles status
+  workloadprotectionpolicies status
+assert_cluster_access true "$control_subject" list mithril.erebor.dev \
+  workloadprotectionexceptions
+assert_cluster_access true "$control_subject" patch mithril.erebor.dev \
+  workloadprotectionexceptions status
 assert_cluster_access true "$control_subject" patch "" nodes
 assert_cluster_access false "$control_subject" update mithril.erebor.dev \
-  workloadprotectionprofiles
+  workloadprotectionpolicies
+assert_cluster_access false "$control_subject" update mithril.erebor.dev \
+  workloadprotectionexceptions
 assert_cluster_access false "$node_subject" get "" nodes
 
 "$provider" put "$vm_a" \
@@ -580,34 +590,44 @@ remote_kubectl apply --server-side --validate=strict \
   -f "$remote_a/runtime-classes-v1.yaml" >/dev/null
 remote_kubectl create namespace "$workload_namespace" >/dev/null
 remote_kubectl -n "$workload_namespace" create serviceaccount converter >/dev/null
-namespace_uid=$(remote_kubectl get namespace "$workload_namespace" -o jsonpath='{.metadata.uid}')
-service_account_uid=$(remote_kubectl -n "$workload_namespace" get serviceaccount converter \
-  -o jsonpath='{.metadata.uid}')
+remote_kubectl -n "$workload_namespace" create serviceaccount policy-writer >/dev/null
+remote_kubectl -n "$workload_namespace" create serviceaccount exception-writer >/dev/null
+remote_kubectl -n "$workload_namespace" create rolebinding policy-writer \
+  --clusterrole=mithril-policy-writer \
+  --serviceaccount="$workload_namespace:policy-writer" >/dev/null
+remote_kubectl -n "$workload_namespace" create rolebinding exception-writer \
+  --clusterrole=mithril-exception-writer \
+  --serviceaccount="$workload_namespace:exception-writer" >/dev/null
+policy_subject=system:serviceaccount:$workload_namespace:policy-writer
+exception_subject=system:serviceaccount:$workload_namespace:exception-writer
+assert_cluster_access true "$policy_subject" create mithril.erebor.dev \
+  workloadprotectionpolicies "" "$workload_namespace"
+assert_cluster_access false "$policy_subject" create mithril.erebor.dev \
+  workloadprotectionexceptions "" "$workload_namespace"
+assert_cluster_access true "$exception_subject" create mithril.erebor.dev \
+  workloadprotectionexceptions "" "$workload_namespace"
+assert_cluster_access false "$exception_subject" create mithril.erebor.dev \
+  workloadprotectionpolicies "" "$workload_namespace"
 
 make_policy_manifest() {
   local version=$1
-  local source=$work_a/policy-v$version.yaml
-  local manifest=$work_a/policy-v$version.json
+  local duration=$((6 - version))m
+  local manifest=$work_a/policy-v$version.yaml
   sed \
-    -e "s/66666666-6666-4666-8666-666666666666/$namespace_uid/g" \
-    -e "s/77777777-7777-4777-8777-777777777777/$service_account_uid/g" \
-    -e "s/profile_version: 1/profile_version: $version/" \
-    -e "s/rollout_generation: 1/rollout_generation: $version/" \
-    -e 's/desired_profile_mode: OBSERVE/desired_profile_mode: PROTECT/' \
-    "$repo_root/crates/mithril-control/tests/fixtures/policy-v1.yaml" >"$source"
-  "$repo_root/target/debug/mithril-policy" print-policy-manifest \
-    --source "$source" --name converter-policy --namespace "$workload_namespace" \
-    --output "$manifest"
-  "$provider" put "$vm_a" "$manifest" "$remote_a/policy-v$version.json"
+    -e "s/MITHRIL_CONVERGENCE_NAMESPACE/$workload_namespace/g" \
+    -e "s/maximumDuration: 5m/maximumDuration: $duration/" \
+    "$repo_root/crates/mithril-e2e/fixtures/convergence/policy-v1.yaml" >"$manifest"
+  "$provider" put "$vm_a" "$manifest" "$remote_a/policy-v$version.yaml"
 }
 
 wait_policy_compiled() {
   for _attempt in {1..300}; do
     policy_json=$(remote_kubectl -n "$workload_namespace" get \
-      workloadprotectionprofile converter-policy -o json 2>/dev/null || true)
+      workloadprotectionpolicy converter-policy -o json 2>/dev/null || true)
     if [[ -n $policy_json ]] && jq -e '
-      any(.status.conditions[]?; .condition == "ACCEPTED" and .status == true) and
-      any(.status.conditions[]?; .condition == "COMPILED" and .status == true)
+      .status.observedGeneration == .metadata.generation and
+      any(.status.conditions[]?; .type == "Accepted" and .status == "True") and
+      any(.status.conditions[]?; .type == "Compiled" and .status == "True")
     ' <<<"$policy_json" >/dev/null; then
       return 0
     fi
@@ -617,10 +637,37 @@ wait_policy_compiled() {
   return 1
 }
 
+wait_exception_state() {
+  local name=$1
+  local expected=$2
+  local resource
+  for _attempt in {1..300}; do
+    resource=$(remote_kubectl -n "$workload_namespace" get \
+      workloadprotectionexception "$name" -o json 2>/dev/null || true)
+    if [[ -n $resource ]] && jq -e --arg expected "$expected" '
+      .status.observedGeneration == .metadata.generation and
+      .status.state == $expected
+    ' <<<"$resource" >/dev/null; then
+      return 0
+    fi
+    sleep 1
+  done
+  echo "exception $name did not reach $expected" >&2
+  return 1
+}
+
 make_policy_manifest 1
-remote_kubectl apply --server-side --validate=strict \
-  -f "$remote_a/policy-v1.json" >/dev/null
+remote_kubectl --as="$policy_subject" apply --server-side --validate=strict \
+  -f "$remote_a/policy-v1.yaml" >/dev/null
 wait_policy_compiled
+profile_id=$(remote_kubectl -n "$workload_namespace" get \
+  workloadprotectionpolicy converter-policy -o jsonpath='{.metadata.uid}')
+remote_kubectl -n "$workload_namespace" get workloadprotectionpolicy converter-policy \
+  -o json | jq -e '
+    (.status | keys) == ["conditions", "observedGeneration", "rollout"] and
+    all(.status.conditions[];
+      (keys) == ["lastTransitionTime", "message", "observedGeneration", "reason", "status", "type"])
+  ' >/dev/null
 
 render_pod() {
   local pod=$1
@@ -651,8 +698,8 @@ jq -e '
 
 protected_dry_run=$(remote_kubectl create --dry-run=server \
   -f "$remote_a/protected.yaml" -o json)
-jq -e '
-  .metadata.annotations["mithril.erebor.dev/profile-id"] == "11111111-1111-4111-8111-111111111111" and
+jq -e --arg profile_id "$profile_id" '
+  .metadata.annotations["mithril.erebor.dev/profile-id"] == $profile_id and
   (.metadata.annotations["mithril.erebor.dev/policy-source-revision"] | length) == 64 and
   (.spec.nodeName // "") == "" and
   .spec.nodeSelector["mithril.erebor.dev/pool"] == "protected" and
@@ -668,6 +715,17 @@ if remote_kubectl create -f "$remote_a/bypass.json" >/dev/null 2>&1; then
   echo "admission accepted a protected Pod with direct nodeName" >&2
   exit 1
 fi
+
+# Both possible scheduler targets receive the same inert test file, not policy authority.
+for node in "$vm_a" "$vm_b"; do
+  "$provider" run "$node" sudo rm -f \
+    /var/lib/mithril-convergence/markers/protected.started \
+    /var/lib/mithril-convergence/markers/protected.restart \
+    /var/lib/mithril-convergence/markers/protected.exception-request \
+    /var/lib/mithril-convergence/markers/protected.exception-result
+  "$provider" run "$node" sudo touch \
+    /var/lib/mithril-convergence/markers/protected.exception-target
+done
 
 remote_kubectl create -f "$remote_a/protected.yaml" >/dev/null
 remote_kubectl -n "$workload_namespace" wait --for=condition=Ready pod/protected \
@@ -694,9 +752,9 @@ node_status() {
 
 selected_status=$(node_status "$selected_node")
 other_status=$(node_status "$other_node")
-jq -e '
+jq -e --arg profile_id "$profile_id" '
   .active_candidate_content_id != null and
-  .active_profile_ids == ["11111111-1111-4111-8111-111111111111"] and
+  .active_profile_ids == [$profile_id] and
   .scheduled_binding_count == 0 and
   .runtime_binding_count == 1 and
   .activation_pending == false and
@@ -720,6 +778,155 @@ fi
   /var/lib/mithril-convergence/markers/protected.started
 "$provider" run "$other_vm" sudo test ! -e \
   /var/lib/mithril-convergence/markers/protected.started
+
+for _attempt in {1..120}; do
+  base_result=$("$provider" run "$selected_vm" sudo cat \
+    /var/lib/mithril-convergence/markers/protected.exception-result 2>/dev/null || true)
+  [[ $base_result == BASE_DENIED ]] && break
+  [[ $_attempt -lt 120 ]] || {
+    echo "the base policy did not deny the exception target" >&2
+    exit 1
+  }
+  sleep 1
+done
+
+protected_uid=$(remote_kubectl -n "$workload_namespace" get pod protected \
+  -o jsonpath='{.metadata.uid}')
+exception=$work_a/exception-v1.yaml
+sed \
+  -e "s/MITHRIL_CONVERGENCE_NAMESPACE/$workload_namespace/g" \
+  -e "s/MITHRIL_CONVERGENCE_POD_UID/$protected_uid/g" \
+  "$repo_root/crates/mithril-e2e/fixtures/convergence/exception-v1.yaml" \
+  >"$exception"
+"$provider" put "$vm_a" "$exception" "$remote_a/exception-v1.yaml"
+remote_kubectl --as="$exception_subject" create \
+  -f "$remote_a/exception-v1.yaml" >/dev/null
+wait_exception_state temporary-file-access Active
+remote_kubectl -n "$workload_namespace" get \
+  workloadprotectionexception temporary-file-access -o json | jq -e '
+    (.status | keys) == ["conditions", "observedGeneration", "state"] and
+    all(.status.conditions[];
+      (keys) == ["lastTransitionTime", "message", "observedGeneration", "reason", "status", "type"])
+  ' >/dev/null
+for _attempt in {1..120}; do
+  exception_status=$(node_status "$selected_node")
+  if jq -e '
+      .active_exception_count == 1 and
+      .exception_ack_pending_count == 0
+    ' <<<"$exception_status" >/dev/null; then
+    break
+  fi
+  [[ $_attempt -lt 120 ]] || {
+    echo "the selected node did not activate the bounded exception" >&2
+    exit 1
+  }
+  sleep 1
+done
+jq -e '
+  .pending_exception_count == 0 and
+  .active_exception_count == 0 and
+  .terminal_exception_count == 0
+' <<<"$(node_status "$other_node")" >/dev/null
+
+overlap=$work_a/exception-overlap.yaml
+sed '0,/name: temporary-file-access/s//name: overlapping-file-access/' \
+  "$exception" >"$overlap"
+"$provider" put "$vm_a" "$overlap" "$remote_a/exception-overlap.yaml"
+remote_kubectl --as="$exception_subject" create \
+  -f "$remote_a/exception-overlap.yaml" >/dev/null
+wait_exception_state overlapping-file-access Failed
+remote_kubectl --as="$exception_subject" -n "$workload_namespace" delete \
+  workloadprotectionexception overlapping-file-access --wait=true --timeout=120s >/dev/null
+
+"$provider" run "$selected_vm" sudo touch \
+  /var/lib/mithril-convergence/markers/protected.exception-request
+for _attempt in {1..120}; do
+  exception_result=$("$provider" run "$selected_vm" sudo cat \
+    /var/lib/mithril-convergence/markers/protected.exception-result 2>/dev/null || true)
+  [[ $exception_result == ONE_USE ]] && break
+  [[ $_attempt -lt 120 ]] || {
+    echo "the bounded exception did not allow exactly one target open" >&2
+    exit 1
+  }
+  sleep 1
+done
+wait_exception_state temporary-file-access Consumed
+jq -e '.consumed_exception_count == 1 and .active_exception_count == 0' \
+  <<<"$(node_status "$selected_node")" >/dev/null
+
+first_exception_uid=$(remote_kubectl -n "$workload_namespace" get \
+  workloadprotectionexception temporary-file-access -o jsonpath='{.metadata.uid}')
+remote_kubectl --as="$exception_subject" -n "$workload_namespace" delete \
+  workloadprotectionexception temporary-file-access --wait=true --timeout=120s >/dev/null
+for _attempt in {1..120}; do
+  if jq -e '.revoked_exception_count == 1 and .exception_ack_pending_count == 0' \
+      <<<"$(node_status "$selected_node")" >/dev/null; then
+    break
+  fi
+  [[ $_attempt -lt 120 ]] || {
+    echo "exception deletion did not converge to node-local revocation" >&2
+    exit 1
+  }
+  sleep 1
+done
+
+remote_kubectl --as="$exception_subject" create \
+  -f "$remote_a/exception-v1.yaml" >/dev/null
+wait_exception_state temporary-file-access Active
+second_exception_uid=$(remote_kubectl -n "$workload_namespace" get \
+  workloadprotectionexception temporary-file-access -o jsonpath='{.metadata.uid}')
+[[ $second_exception_uid != "$first_exception_uid" ]]
+remote_kubectl --as="$exception_subject" -n "$workload_namespace" delete \
+  workloadprotectionexception temporary-file-access --wait=true --timeout=120s >/dev/null
+for _attempt in {1..120}; do
+  if jq -e '.revoked_exception_count == 2 and .exception_ack_pending_count == 0' \
+      <<<"$(node_status "$selected_node")" >/dev/null; then
+    break
+  fi
+  [[ $_attempt -lt 120 ]] || {
+    echo "the recreated exception did not receive an independent revocation" >&2
+    exit 1
+  }
+  sleep 1
+done
+
+expired=$work_a/exception-expired.yaml
+sed \
+  -e '0,/name: temporary-file-access/s//name: expiring-file-access/' \
+  -e 's/requestedDuration: 2m/requestedDuration: 3s/' \
+  "$exception" >"$expired"
+"$provider" put "$vm_a" "$expired" "$remote_a/exception-expired.yaml"
+remote_kubectl --as="$exception_subject" create \
+  -f "$remote_a/exception-expired.yaml" >/dev/null
+wait_exception_state expiring-file-access Active
+wait_exception_state expiring-file-access Expired
+jq -e '.expired_exception_count == 1 and .active_exception_count == 0' \
+  <<<"$(node_status "$selected_node")" >/dev/null
+remote_kubectl --as="$exception_subject" -n "$workload_namespace" delete \
+  workloadprotectionexception expiring-file-access --wait=true --timeout=120s >/dev/null
+for _attempt in {1..120}; do
+  if jq -e '.revoked_exception_count == 3 and .exception_ack_pending_count == 0' \
+      <<<"$(node_status "$selected_node")" >/dev/null; then
+    break
+  fi
+  [[ $_attempt -lt 120 ]] || {
+    echo "the expired exception did not receive an exact revocation" >&2
+    exit 1
+  }
+  sleep 1
+done
+
+excess=$work_a/exception-excess.yaml
+sed \
+  -e '0,/name: temporary-file-access/s//name: excessive-file-access/' \
+  -e 's/requestedUses: 1/requestedUses: 2/' \
+  "$exception" >"$excess"
+"$provider" put "$vm_a" "$excess" "$remote_a/exception-excess.yaml"
+remote_kubectl --as="$exception_subject" create \
+  -f "$remote_a/exception-excess.yaml" >/dev/null
+wait_exception_state excessive-file-access Failed
+remote_kubectl --as="$exception_subject" -n "$workload_namespace" delete \
+  workloadprotectionexception excessive-file-access --wait=true --timeout=120s >/dev/null
 
 remote_kubectl create -f "$remote_a/gate-failure.yaml" >/dev/null
 for _attempt in {1..120}; do
@@ -816,8 +1023,8 @@ wait_node_projection "$node_b_name" true false
 
 candidate_before=$(jq -er '.active_candidate_content_id' <<<"$(node_status "$selected_node")")
 make_policy_manifest 2
-remote_kubectl apply --server-side --validate=strict \
-  -f "$remote_a/policy-v2.json" >/dev/null
+remote_kubectl --as="$policy_subject" apply --server-side --validate=strict \
+  -f "$remote_a/policy-v2.yaml" >/dev/null
 wait_policy_compiled
 for _attempt in {1..180}; do
   candidate_after=$(jq -er '.active_candidate_content_id // ""' \
@@ -830,14 +1037,14 @@ for _attempt in {1..180}; do
   sleep 1
 done
 invalid_policy=$work_a/invalid-policy.json
-remote_kubectl -n "$workload_namespace" get workloadprotectionprofile converter-policy \
+remote_kubectl -n "$workload_namespace" get workloadprotectionpolicy converter-policy \
   -o json | jq '
     del(.metadata.creationTimestamp, .metadata.generation, .metadata.managedFields,
         .metadata.resourceVersion, .metadata.uid, .status) |
     .spec.unexpectedField = true
   ' >"$invalid_policy"
 "$provider" put "$vm_a" "$invalid_policy" "$remote_a/invalid-policy.json"
-if remote_kubectl replace --validate=strict \
+if remote_kubectl --as="$policy_subject" replace --validate=strict \
     -f "$remote_a/invalid-policy.json" >/dev/null 2>&1; then
   echo "the API server accepted an unknown policy field" >&2
   exit 1
@@ -870,12 +1077,31 @@ new_pod_uid=$(remote_kubectl -n "$workload_namespace" get pod protected \
   -o jsonpath='{.metadata.uid}')
 [[ -n $new_pod_uid && $new_pod_uid != "$old_pod_uid" ]]
 
-remote_kubectl -n "$workload_namespace" delete workloadprotectionprofile converter-policy \
+remote_kubectl -n "$workload_namespace" delete pod protected \
+  --wait=true --timeout=120s >/dev/null
+remote_kubectl --as="$policy_subject" -n "$workload_namespace" delete \
+  workloadprotectionpolicy converter-policy \
   --wait=true --timeout=120s >/dev/null
 make_policy_manifest 3
-remote_kubectl apply --server-side --validate=strict \
-  -f "$remote_a/policy-v3.json" >/dev/null
+remote_kubectl --as="$policy_subject" apply --server-side --validate=strict \
+  -f "$remote_a/policy-v3.yaml" >/dev/null
 wait_policy_compiled
+recreated_profile_id=$(remote_kubectl -n "$workload_namespace" get \
+  workloadprotectionpolicy converter-policy -o jsonpath='{.metadata.uid}')
+[[ $recreated_profile_id != "$profile_id" ]]
+for node in "$vm_a" "$vm_b"; do
+  "$provider" run "$node" sudo rm -f \
+    /var/lib/mithril-convergence/markers/protected.started \
+    /var/lib/mithril-convergence/markers/protected.restart \
+    /var/lib/mithril-convergence/markers/protected.exception-request \
+    /var/lib/mithril-convergence/markers/protected.exception-result
+done
+remote_kubectl create -f "$remote_a/protected.yaml" >/dev/null
+remote_kubectl -n "$workload_namespace" wait --for=condition=Ready pod/protected \
+  --timeout=300s >/dev/null
+[[ $(remote_kubectl -n "$workload_namespace" get pod protected \
+  -o jsonpath='{.metadata.annotations.mithril\.erebor\.dev/profile-id}') \
+  == "$recreated_profile_id" ]]
 
 remote_kubectl -n "$workload_namespace" delete pod protected \
   --wait=true --timeout=120s >/dev/null
@@ -901,6 +1127,12 @@ jq -n \
     runtime_lifetime_replaced: true,
     pod_uid_replaced: true,
     policy_update_and_recreate: true,
+    exception_one_use_consumed: true,
+    exception_expired: true,
+    exception_revoked: true,
+    exception_recreated_with_new_uid: true,
+    exception_overlap_rejected: true,
+    exception_excess_bound_rejected: true,
     rbac_boundary: true
   }' >"$output_directory/two-node-convergence.json"
 

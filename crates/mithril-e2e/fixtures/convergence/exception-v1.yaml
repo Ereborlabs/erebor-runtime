@@ -1,0 +1,16 @@
+apiVersion: mithril.erebor.dev/v1alpha1
+kind: WorkloadProtectionException
+metadata:
+  name: temporary-file-access
+  namespace: MITHRIL_CONVERGENCE_NAMESPACE
+spec:
+  policyRef:
+    name: converter-policy
+  grant: temporary-file-access
+  target:
+    pod:
+      name: protected
+      uid: MITHRIL_CONVERGENCE_POD_UID
+    containerName: converter
+  requestedDuration: 2m
+  requestedUses: 1
