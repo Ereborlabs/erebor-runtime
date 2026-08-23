@@ -2,8 +2,9 @@
 
 Status: Rewritten from the validated architecture on 2026-08-08, amended for
 Control policy and evidence convergence on 2026-08-19, and amended for gRPC
-service and IPC convergence on 2026-08-21. Proposed; this document does not
-authorize implementation until the user approves one phase by name.
+service and IPC convergence on 2026-08-21. The capability-grounded Kubernetes
+policy API amendment was approved on 2026-08-23. Proposed; this document does
+not authorize implementation until the user approves one phase by name.
 
 Design authority:
 
@@ -30,6 +31,13 @@ the obsolete ptrace IPC constraint, replaces supported custom-framed IPC with
 typed gRPC services, and splits node-control operations by service family.
 It removes redundant transport versions and envelopes. It keeps domain
 generations, cursors, digests, and replay rules that gRPC does not replace.
+
+The 2026-08-23 amendment replaces the flattened public policy CRD with a
+capability-grounded `WorkloadProtectionPolicy` and a separate bounded
+`WorkloadProtectionException`. Control lowers the base policy into the wider
+internal signed policy. An exception activates one precompiled grant without
+migrating the base generation. The amendment does not expose unqualified
+internal fields or change the frozen BPF ABI.
 
 ## Goal And Release Boundary
 
@@ -131,10 +139,15 @@ findings, and response. This plan does not require a public API contract yet.
 The target policy and evidence data flow is:
 
 ```text
-WorkloadProtectionProfile CRD
-  -> mithril-control reconcile, compile, sign, target, and distribute
+WorkloadProtectionPolicy CRD
+  -> mithril-control validate, lower, compile, sign, target, and distribute
   -> mithril-node stage, read back, probe, and activate
   -> mithril-control exact per-node rollout inventory
+
+WorkloadProtectionException CRD
+  -> mithril-control resolve one precompiled base-policy file grant
+  -> signed exact-target activation or revocation on the selected node
+  -> ExceptionAuthorityOwner state and BPF atomic use consumption
 
 protected effect
   -> owned Interceptor hook/map decision
@@ -161,10 +174,11 @@ computable local deny into allow.
 | `AuthorizationProofOwner` | 2 foundations; 4, 7, and 10 owning authorization families |
 | `WorkloadBindingOwner` | 2 runtime roots; 6.2 protected Pod scheduling and runtime gate; 8 privileged/unmatched node floor |
 | `NativeSecurityStateOwner` | 2 identity; 4 enforcement; 9 response references |
-| `PolicyDesiredStateOwner` | 6.2 CRD source reconciliation |
+| `PolicyDesiredStateOwner` | 6.2 policy and bounded-exception CRD source reconciliation, base-policy lowering, and exception-grant resolution |
 | `PolicyCompiler` | 3 compile/sign; 6.2 Control operation |
-| `PolicyRolloutOwner` | 6.2 target snapshots, distribution, and rollout inventory |
+| `PolicyRolloutOwner` | 6.2 policy target snapshots, exact exception targets, distribution, and inventory |
 | `PolicyActivationOwner` | 3 candidate/readback; 4 activation; 6 recovery/retirement |
+| `ExceptionAuthorityOwner` | 4 bounded use/receipts/recovery; 6.2 Kubernetes exception instances |
 | `KernelHostOwner` | 1 load/link/map/pin lease; 6 integrity/recovery |
 | `ObjectAndSocketStateOwner` | 3 models; 4-5 physical decisions; 6 recovery |
 | `CoverageHealthOwner` | 6 local source; 7-10 merged source views |
@@ -244,7 +258,7 @@ the named phase file contains a matching deliverable and proof.
 | Ch. 8 authorization proof, intent, trust/time/replay | 0, 2, 6.1, 6.2, 7, 10 | typed-service peer binding; signed-envelope goldens; replay/mismatch/restart tests |
 | Ch. 9 exit, shutdown, reference retention | 2, 6 | exact cleanup/tombstone/reconciliation tests |
 | Ch. 10 invariants | 0 and every phase | invariant-to-test ledger cannot lose a row |
-| Ch. 11 readable policy, roles, effects, dispositions, exceptions | 0, 3, 4, 6.2 | CRD/offline-source canonical equality; parser/compiler goldens; bounded-use exception consumption |
+| Ch. 11 readable policy, roles, effects, dispositions, exceptions | 0, 3, 4, 6.2 | capability-grounded policy CRD/offline-source equality; separate exception CRD; parser/compiler goldens; bounded-use exception consumption |
 | Ch. 12 compiler, signatures, activation, rollback | 0, 3, 4, 6, 6.2 | deterministic bytes; source provenance; inactive readback; one CAS; retirement recovery |
 | Ch. 13 one local decision and atomic state | 0, 2-5 | Rust/BPF lookup golden; task-first and contention tests |
 | Ch. 14 mechanism boundaries and deferred Seccomp | 0, 1, 3-5, 12 | hook/capability matrix; Seccomp remains absent unless Phase 12 gate passes |
@@ -261,7 +275,7 @@ the named phase file contains a matching deliverable and proof.
 | Ch. 25 complete HF proof package | 0, 3-11 | standing incident fixture grows in every phase; complete Phase 11 matrix |
 | Ch. 26 CI/CD model and honest tiers | 10, 12 | provider/artifact foundations in 10; named CI adapters remain Phase 12 allocations |
 | Ch. 27-29 Jailer/Meta/KubeArmor/Tetragon lessons | 0, 1-6 | pinned source dossier plus adopted-code provenance/test IDs |
-| Ch. 30 combined pipeline | 1-10, including 6.1 and 6.2 | typed node services; CRD-to-node policy and node-to-Control evidence flow; end-to-end native and identical-probe examples |
+| Ch. 30 combined pipeline | 1-10, including 6.1 and 6.2 | typed node services; base-policy lowering; target-bound exception activation; node delivery and node-to-Control evidence flow; end-to-end native and identical-probe examples |
 | Ch. 31 acceptance | every phase, final 11 | exact fixture cases and physical oracles |
 | Ch. 32 failure/recovery | 1, 2, 6, 6.1, 6.2, 9, 11 | transport/daemon/reader/control/API-watch/intake/link/map/restart fault matrix |
 | Ch. 33 boundedness/performance | 0, 1-6, 6.1, 11 | per-hook distributions, gRPC flow-control bounds, N/N+1 maps, evidence-preserving benchmarks |
@@ -315,7 +329,7 @@ required local, provider, outside-authority, or honest-limit branches.
 | same TLS endpoint | 5 local result; 10 provider result |
 | several logical jobs in one process | 2 exact process limit; 7/9 finding and blast-radius disclosure |
 | learning is review-only | 3 candidate generation; 7 finding workflow |
-| production policy source and deletion | 6.2 CRD reconciliation, signed retirement, and last-valid-generation retention |
+| production policy sources and deletion | 6.2 policy and exception CRD reconciliation, signed retirement, and last-valid-generation retention |
 | partial policy rollout | 6.2 exact per-node inventory; 7 finding and claim limits; 11 scale/failover qualification |
 | upstream code reuse/license | 0 dossier; each consuming phase cites it |
 | real signed intent only | 0 schema; 2, 4, 7, and 10 owning issuers/consumers |

@@ -1,10 +1,11 @@
 # Phase 6.2 Implementation Review Guide
 
-Status: Blocked. Source implementation and automated acceptance are complete.
-The physical run passed through policy activation, runtime binding, and
-durable evidence intake. Stock `runc` container start failed because its
-bootstrap used an anonymous file write and IPC access that have no typed
-authority.
+Status: Superseded implementation guide. This file describes the current
+flattened CRD source and remains useful only for reviewing code that must be
+replaced. The approved plan now requires `WorkloadProtectionPolicy` and
+`WorkloadProtectionException`. Update this guide from the implemented source
+before closure. The earlier physical run also stopped when stock `runc` used
+an anonymous file write and IPC access that have no typed authority.
 
 Plan: [Control Policy And Evidence Convergence](./phase-6-2-control-policy-and-evidence-convergence.md)
 
