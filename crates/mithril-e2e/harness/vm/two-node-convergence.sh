@@ -604,6 +604,50 @@ wait_node_projection() {
   return 1
 }
 
+wait_replaced_node_uid() {
+  local node_name=$1
+  local old_uid=$2
+  local node_json
+  for _attempt in {1..300}; do
+    node_json=$(remote_kubectl get node "$node_name" -o json 2>/dev/null || true)
+    if [[ -n $node_json ]] && jq -e --arg old_uid "$old_uid" '
+      .metadata.uid != $old_uid and
+      (.metadata.labels["mithril.erebor.dev/ready"] // "") == "" and
+      any(.spec.taints[]?;
+        .key == "mithril.erebor.dev/not-ready" and .effect == "NoSchedule")
+    ' <<<"$node_json" >/dev/null; then
+      return 0
+    fi
+    sleep 1
+  done
+  echo "Node $node_name did not reappear with a new quarantined UID" >&2
+  return 1
+}
+
+wait_node_epoch_advance() {
+  local node_name=$1
+  local old_boot_id=$2
+  local old_label_epoch=$3
+  local node_json
+  for _attempt in {1..300}; do
+    node_json=$(remote_kubectl get node "$node_name" -o json 2>/dev/null || true)
+    if [[ -n $node_json ]] && jq -e \
+      --arg old_boot_id "$old_boot_id" --argjson old_label_epoch "$old_label_epoch" '
+        .metadata.annotations["mithril.erebor.dev/node-boot-id"] != $old_boot_id and
+        (.metadata.annotations["mithril.erebor.dev/label-epoch"] | tonumber) >
+          $old_label_epoch and
+        .metadata.labels["mithril.erebor.dev/ready"] == "true" and
+        all(.spec.taints[]?;
+          .key != "mithril.erebor.dev/not-ready" or .effect != "NoSchedule")
+      ' <<<"$node_json" >/dev/null; then
+      return 0
+    fi
+    sleep 1
+  done
+  echo "Node $node_name did not register a new ready physical epoch" >&2
+  return 1
+}
+
 # Config is withheld until Control proves that matching Nodes begin quarantined.
 wait_node_projection "$node_a_name" "" true
 wait_node_projection "$node_b_name" "" true
@@ -620,6 +664,23 @@ wait_node_projection "$node_a_name" true false
 wait_node_projection "$node_b_name" true false
 assert_runtime_hook installed "$vm_a" "$remote_a"
 assert_runtime_hook installed "$vm_b" "$remote_b"
+
+# A replacement API object cannot inherit readiness from the old Node UID.
+old_node_b_uid=$(remote_kubectl get node "$node_b_name" -o jsonpath='{.metadata.uid}')
+"$provider" run "$vm_b" sudo mv /etc/mithril/node.json /etc/mithril/node.json.held
+node_b_pod=$(remote_kubectl -n "$system_namespace" get pods \
+  -l app.kubernetes.io/name=mithril-node \
+  --field-selector "spec.nodeName=$node_b_name" \
+  -o jsonpath='{.items[0].metadata.name}')
+remote_kubectl -n "$system_namespace" delete pod "$node_b_pod" \
+  --wait=true --timeout=120s >/dev/null
+wait_node_projection "$node_b_name" "" true
+remote_kubectl delete node "$node_b_name" --wait=true --timeout=120s >/dev/null
+wait_replaced_node_uid "$node_b_name" "$old_node_b_uid"
+"$provider" run "$vm_b" sudo mv /etc/mithril/node.json.held /etc/mithril/node.json
+remote_kubectl -n "$system_namespace" rollout status daemonset/mithril-node \
+  --timeout=300s >/dev/null
+wait_node_projection "$node_b_name" true false
 
 if [[ $manual_environment == true ]]; then
   manual_env=$work_a/mithril-convergence-manual.env
@@ -1217,6 +1278,51 @@ assert_kubernetes_strict_field_denial remote_kubectl \
 [[ $(jq -er '.active_candidate_content_id' <<<"$(node_status "$selected_node")") \
   == "$candidate_after" ]]
 
+# Reboot removes the host BPF maps. The new boot and label epoch must start a
+# new policy chain only after the node proves that the old authority is absent.
+pre_reboot_node=$(remote_kubectl get node "$selected_node" -o json)
+pre_reboot_boot_id=$(jq -er \
+  '.metadata.annotations["mithril.erebor.dev/node-boot-id"]' <<<"$pre_reboot_node")
+pre_reboot_label_epoch=$(jq -er \
+  '.metadata.annotations["mithril.erebor.dev/label-epoch"] | tonumber' \
+  <<<"$pre_reboot_node")
+"$provider" run "$selected_vm" sudo systemctl reboot --no-block >/dev/null
+"$provider" wait "$selected_vm"
+for _attempt in {1..300}; do
+  if remote_kubectl get --raw=/readyz >/dev/null 2>&1; then
+    break
+  fi
+  [[ $_attempt -lt 300 ]] || {
+    echo "the Kubernetes API did not recover after the selected-node reboot" >&2
+    exit 1
+  }
+  sleep 1
+done
+remote_kubectl -n "$system_namespace" rollout status deployment/mithril-control \
+  --timeout=300s >/dev/null
+remote_kubectl -n "$system_namespace" rollout status daemonset/mithril-node \
+  --timeout=300s >/dev/null
+wait_node_epoch_advance \
+  "$selected_node" "$pre_reboot_boot_id" "$pre_reboot_label_epoch"
+wait_node_projection "$other_node" true false
+remote_kubectl -n "$workload_namespace" wait --for=condition=Ready pod/protected \
+  --timeout=300s >/dev/null
+for _attempt in {1..180}; do
+  post_reboot_status=$(node_status "$selected_node" 2>/dev/null || true)
+  post_reboot_candidate=
+  if [[ -n $post_reboot_status ]]; then
+    post_reboot_candidate=$(jq -er '.active_candidate_content_id // ""' \
+      <<<"$post_reboot_status")
+  fi
+  [[ -n $post_reboot_candidate && $post_reboot_candidate != "$candidate_after" ]] && break
+  [[ $_attempt -lt 180 ]] || {
+    echo "the new physical epoch did not receive a new root policy" >&2
+    exit 1
+  }
+  sleep 1
+done
+assert_live_exact_target "$selected_node" "$profile_id" ACTIVATE
+
 remote_kubectl -n "$system_namespace" rollout restart deployment/mithril-control >/dev/null
 remote_kubectl -n "$system_namespace" rollout status deployment/mithril-control \
   --timeout=300s >/dev/null
@@ -1224,7 +1330,7 @@ wait_node_projection "$node_a_name" true false
 wait_node_projection "$node_b_name" true false
 remote_kubectl -n "$workload_namespace" wait --for=condition=Ready pod/protected \
   --timeout=120s >/dev/null
-assert_live_exact_target "$selected_node" "$profile_id" REPLACE "$candidate_before"
+assert_live_exact_target "$selected_node" "$profile_id" ACTIVATE
 
 old_pod_uid=$(remote_kubectl -n "$workload_namespace" get pod protected \
   -o jsonpath='{.metadata.uid}')
@@ -1356,8 +1462,10 @@ jq -n \
     stock_prestart_release: true,
     unavailable_endpoint_denied: true,
     unready_node_quarantined: true,
+    replaced_node_uid_quarantined: true,
     daemonset_selector_derived: true,
     node_restart_recovered: true,
+    host_epoch_advanced: true,
     runtime_lifetime_replaced: true,
     runtime_task_identity_replaced: true,
     pod_uid_replaced: true,
