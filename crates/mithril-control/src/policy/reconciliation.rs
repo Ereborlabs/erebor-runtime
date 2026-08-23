@@ -237,14 +237,16 @@ impl PolicyDesiredStateOwner {
         now_utc_ns: i64,
         state: PolicySourceStateV1,
     ) -> Result<PolicyReconcileResultV1> {
-        let source = PolicySourceRevisionV1::from_resource(
-            resource,
-            &self.config.tenant_id,
-            &self.config.cluster_uid,
-            namespace_uid,
-            state,
-        )?;
-        self.reconcile_source(source, &resource.spec.policy, inventory, now_utc_ns)
+        self.track_reconcile(|| {
+            let source = PolicySourceRevisionV1::from_resource(
+                resource,
+                &self.config.tenant_id,
+                &self.config.cluster_uid,
+                namespace_uid,
+                state,
+            )?;
+            self.reconcile_inner(source, &resource.spec.policy, inventory, now_utc_ns)
+        })
     }
 
     fn reconcile_source(
@@ -254,11 +256,15 @@ impl PolicyDesiredStateOwner {
         inventory: &[WorkloadTargetFactV1],
         now_utc_ns: i64,
     ) -> Result<PolicyReconcileResultV1> {
+        self.track_reconcile(|| self.reconcile_inner(source, policy, inventory, now_utc_ns))
+    }
+
+    fn track_reconcile<T>(&self, reconcile: impl FnOnce() -> Result<T>) -> Result<T> {
         {
             let mut state = self.state()?;
             state.reconcile_in_flight = state.reconcile_in_flight.saturating_add(1);
         }
-        let result = self.reconcile_inner(source, policy, inventory, now_utc_ns);
+        let result = reconcile();
         {
             let mut state = self.state()?;
             state.reconcile_in_flight = state.reconcile_in_flight.saturating_sub(1);

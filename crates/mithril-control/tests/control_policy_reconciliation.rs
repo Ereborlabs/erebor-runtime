@@ -312,6 +312,22 @@ fn health_snapshot_exposes_bounded_operational_counts_without_payloads() -> Test
 }
 
 #[test]
+fn rejected_source_metadata_is_counted_as_a_reconcile_failure() -> TestResult {
+    let directory = TempDir::new()?;
+    let owner = make_owner(ControlStore::open(directory.path())?);
+    let mut invalid = resource(&policy()?, "profile", OBJECT_UID, 1, false)?;
+    invalid.metadata.uid = None;
+    assert!(owner
+        .reconcile(&invalid, NAMESPACE_UID, &inventory(&"1".repeat(64)), NOW,)
+        .is_err());
+    let health = owner.health()?;
+    assert_eq!(health.successful_reconciles, 0);
+    assert_eq!(health.rejected_reconciles, 1);
+    assert_eq!(health.reconcile_in_flight, 0);
+    Ok(())
+}
+
+#[test]
 fn duplicate_profile_and_exact_workload_claims_do_not_replace_valid_rollout() -> TestResult {
     let directory = TempDir::new()?;
     let store = ControlStore::open(directory.path())?;
