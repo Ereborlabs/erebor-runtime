@@ -1,7 +1,7 @@
 # How To Manually Accept Phase 6.2
 
 Status: Automated acceptance passed at code commit
-`bc7ccde8b435cb0eecf5787a013670021635b28d`. The Kubernetes scheduling and
+`781ee425320ce75cd6b7bf786e06cb23f36b6b91`. The Kubernetes scheduling and
 runtime-gate manual procedure is available. This procedure has not been run.
 
 Phase: [Control Policy And Evidence Convergence](../phase-6-2-control-policy-and-evidence-convergence.md)
@@ -91,11 +91,15 @@ runtime-gate tests are not substitutes for this physical run.
 3. Verify each `mithril-node` loads and reads back its BPF state, opens the
    root-only runtime-admission socket, registers its downward Node name over
    mTLS, and reports complete readiness. Verify Control then adds
-   `mithril.erebor.dev/ready=true` and removes only the quarantine taint.
+   `mithril.erebor.dev/ready=true` and removes only the quarantine taint. Start
+   a second socket owner. Verify that it cannot replace the live node owner.
 4. Stop one `mithril-node` or expire its Control session. Verify Control
    removes its ready label, restores its quarantine taint, and leaves the last
    active local generation intact. Restore the node and verify it must attest
-   the current boot before it becomes ready again.
+   the current boot before it becomes ready again. In the test cluster, replace
+   that Node with a Node that has the same name and a new UID. Verify that the
+   old session cannot make the replacement ready. Re-enroll the exact new Node
+   name and UID before continuing.
 5. Change the DaemonSet selector or required affinity. Verify Control derives
    the new live constraint. Verify nodes outside it lose the Mithril readiness
    projection and nodes newly inside it start quarantined. Restore the intended
@@ -111,10 +115,16 @@ runtime-gate tests are not substitutes for this physical run.
    admission adds the live DaemonSet selector, required affinity, ready label,
    profile ID, and source revision. Verify it does not add `spec.nodeName`.
    Record the scheduler binding event and prove the scheduler selected one of
-   the two ready Nodes.
+   the two ready Nodes. Submit separate CREATE requests with either reserved
+   Mithril annotation and with a required-affinity product above the bound.
+   Verify that admission rejects each request.
 9. Verify binding admission accepts the scheduler-selected current Node.
    Submit separate direct `nodeName`, quarantine-toleration, wrong-Node UID,
    stale-ready-label, and wrong-boot cases. Verify all bypass cases reject.
+   Try to add protection to an unprotected scheduled Pod. Try to remove or
+   replace the admitted profile or source annotation on the protected Pod.
+   Try to add a matching ephemeral container that violates the admitted image
+   pin. Verify that validating admission rejects each update.
 10. After Kubernetes persists Pod UID and `spec.nodeName`, verify Control
     records the Pod, controller, ServiceAccount, container, pinned image,
     selected Node, node UID, node ID, boot ID, and label epoch. Verify only the
@@ -146,8 +156,13 @@ runtime-gate tests are not substitutes for this physical run.
    object deletion without a retirement acknowledgement. Prove that none of
    these actions remove the last valid node generation.
 18. Restore Control and the API, force watch compaction and relist, then delete
-   and recreate the CRD. Verify UID, generation, retirement, and replacement
-   behavior without stale-state reuse.
+   and recreate the CRD. Verify that deletion retires the last accepted
+   generation even though Kubernetes does not increment it. Interrupt the
+   watch so that Control misses one deletion event. Verify that a complete
+   relist retires the missing durable source. Interrupt a paginated relist
+   before it completes and verify that it retires no source. Verify UID,
+   generation, retirement, and replacement behavior without historical-state
+   reuse.
 19. Upload a Phase 6 evidence window with duplicates, delay, reordering, a gap,
    and one conflicting duplicate. Stop storage before acknowledgement, restart
    Control, restore storage, and complete the upload.
@@ -168,17 +183,22 @@ runtime-gate tests are not substitutes for this physical run.
 | Duplicate or overlapping CRD | Conflict condition; no precedence or composed candidate; previous valid generation stays active |
 | Partial rollout | Per-node state and mixed generation are explicit; no global-active claim |
 | Stale node message | Old boot, target, source, or candidate cannot advance current state |
-| CRD deletion | Signed retirement or replacement uses normal activation; disappearance alone removes nothing |
+| CRD deletion | Disappearance creates signed retirement; it does not directly erase a local generation |
 | Control/API outage | Installed local policy continues; new Control-owned work is unavailable |
 | Watch relist | Same source revision and target state reconstruct without duplicate authority |
+| Complete relist deletion | A durable source that is absent from the complete snapshot enters signed retirement |
+| Partial relist | No source retires from an incomplete snapshot |
 | Evidence retry | Duplicate is idempotent; conflicting duplicate rejects |
 | Storage failure | No durable acknowledgement and no node WAL truncation |
 | Tenant/RBAC violation | Cross-tenant policy, evidence, acknowledgement, and status access reject |
 | CRD status mutation | Status cannot select, sign, deliver, or activate policy |
 | Health query | Only an enrolled current-trust session succeeds; the reply contains bounded counts and booleans only |
 | New eligible Node | It stays quarantined until its exact current-boot node session reports complete readiness |
+| Replaced Node UID | A replacement Node cannot inherit a ready session through the same name |
 | DaemonSet change | Control derives the changed selector and affinity; no second node-pool setting participates |
 | Scheduler choice | Kubernetes selects one of two ready nodes; Mithril admission does not set `spec.nodeName` |
+| Pod update | A scheduled Pod cannot add, remove, or replace its admitted Mithril protection identity |
+| Ephemeral-container update | A protected Pod cannot add a matching container outside the admitted image-pin contract |
 | Exact delivery | Only the persisted scheduler-selected node receives the Pod target and candidate |
 | Protected start | The initial process remains held until exact policy and cgroup-binding activation |
 | Gate failure | The runtime reports start failure at the bounded hook deadline and no application marker runs |
@@ -205,5 +225,5 @@ automated suite cannot change an unrun physical step to `Pass`.
   readback before accepting activation.
 - If one node is unreachable, expect a mixed rollout. Do not repair the report
   by marking the policy globally active.
-- If the CRD disappears without a valid retirement candidate, the last valid
-  node generation must remain active.
+- If Control cannot create and sign a valid retirement candidate, the last
+  valid node generation must remain active.
