@@ -40,3 +40,14 @@ remove_mithril_release() {
       >/dev/null 2>&1
   fi
 }
+
+cleanup_result() {
+  local original_status=$1
+  local cleanup_failed=$2
+
+  # Preserve the scenario failure. Cleanup changes only a successful result.
+  if ((original_status != 0)); then
+    return "$original_status"
+  fi
+  [[ $cleanup_failed == false ]]
+}

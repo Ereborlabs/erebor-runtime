@@ -3,59 +3,14 @@
 set -euo pipefail
 
 directory=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
-manual_case=$directory/../../../../examples/mithril-kubernetes-convergence-manual/run.sh
 test_root=$(mktemp -d /tmp/mithril-vm-harness-test.XXXXXX)
-trap 'rm -rf -- "$test_root"' EXIT
-
-for script in "$directory/run.sh" "$directory/two-node-network.sh" \
-  "$directory/two-node-convergence.sh" \
-  "$directory/convergence-cleanup.sh" \
-  "$directory/../kubernetes-oracles.sh" \
-  "$directory/manual.sh" "$directory/guest.sh" \
-  "$directory/providers/libvirt.sh" "$directory/test.sh" "$manual_case"; do
-  bash -n "$script"
-done
-
-fake_manual_bin=$test_root/manual-bin
-mkdir "$fake_manual_bin"
-cat >"$fake_manual_bin/kubectl" <<'EOF'
-#!/usr/bin/env bash
-printf '%s\n' "$*" >>"${TEST_KUBECTL_LOG:?}"
-[[ $* == "get --raw=/readyz" ]] && exit 0
-[[ ${1:-} == -n && ${3:-} == rollout && ${4:-} == status ]] && exit 0
-if [[ ${1:-} == get && ${2:-} == namespace ]]; then
-  [[ ${TEST_EXISTING_RESOURCE:?} == namespace ]]
-  exit
-fi
-if [[ ${1:-} == get && ${2:-} == runtimeclass ]]; then
-  [[ ${TEST_EXISTING_RESOURCE:?} == runtimeclass && ${3:-} == mithril-convergence-manual ]]
-  exit
-fi
-[[ " $* " == *" delete "* ]] && exit 97
-exit 98
-EOF
-chmod +x "$fake_manual_bin/kubectl"
-cat >"$fake_manual_bin/id" <<'EOF'
-#!/usr/bin/env bash
-if [[ ${1:-} == -u ]]; then
-  echo 0
-else
-  exec /usr/bin/id "$@"
-fi
-EOF
-chmod +x "$fake_manual_bin/id"
-for existing_resource in namespace runtimeclass; do
-  manual_log=$test_root/manual-$existing_resource.log
-  set +e
-  manual_refusal=$(PATH="$fake_manual_bin:$PATH" \
-    TEST_KUBECTL_LOG="$manual_log" TEST_EXISTING_RESOURCE="$existing_resource" \
-    "$manual_case" 2>&1)
-  status=$?
-  set -e
-  [[ $status -eq 2 && $manual_refusal == \
-    *"manual scenario refuses to replace an existing resource"* ]]
-  ! grep -q ' delete ' "$manual_log"
-done
+test_cleanup() {
+  local status=$?
+  trap - EXIT
+  rm -rf -- "$test_root"
+  exit "$status"
+}
+trap test_cleanup EXIT
 
 help=$("$directory/run.sh" --help 2>&1)
 [[ $help == *--with-k3s* ]]
@@ -136,6 +91,16 @@ printf '%s\n' "$*" >>"${TEST_HELM_LOG:?}"
 EOF
 chmod +x "$cleanup_bin/helm"
 source "$directory/convergence-cleanup.sh"
+cleanup_result 0 false
+if cleanup_result 0 true; then
+  echo "a cleanup failure returned success" >&2
+  exit 1
+fi
+set +e
+cleanup_result 42 true
+status=$?
+set -e
+[[ $status -eq 42 ]]
 retained_helm_log=$test_root/retained-helm.log
 touch "$test_root/kubeconfig"
 PATH="$cleanup_bin:$PATH" TEST_HELM_LOG="$retained_helm_log" \
@@ -145,6 +110,78 @@ removed_helm_log=$test_root/removed-helm.log
 PATH="$cleanup_bin:$PATH" TEST_HELM_LOG="$removed_helm_log" \
   remove_mithril_release true false false "$test_root/kubeconfig" mithril-system
 grep -q '^--kubeconfig .* uninstall mithril -n mithril-system$' "$removed_helm_log"
+
+hook_root=$test_root/hook-root
+hook_binary=$hook_root/opt/mithril/bin/mithril-oci-hook
+hook_binary_owner=$hook_root/opt/mithril/bin/.mithril-oci-hook.helm-owner
+hook_config=$hook_root/usr/share/containers/oci/hooks.d/99-mithril.json
+hook_config_owner=$hook_root/usr/share/containers/oci/hooks.d/.99-mithril.json.helm-owner
+hook_socket=$hook_root/run/mithril/runtime-admission.sock
+mkdir -p "$(dirname "$hook_binary")" "$(dirname "$hook_config")" \
+  "$(dirname "$hook_socket")" "$test_root/hook-bin"
+printf '#!/bin/sh\nexit 0\n' >"$hook_binary"
+chmod 755 "$hook_binary"
+printf 'mithril-system/mithril\n' >"$hook_binary_owner"
+printf 'mithril-system/mithril\n' >"$hook_config_owner"
+chmod 600 "$hook_binary_owner" "$hook_config_owner"
+cat >"$hook_config" <<'EOF'
+{
+  "version": "1.0.0",
+  "hook": {
+    "path": "/opt/mithril/bin/mithril-oci-hook",
+    "args": ["mithril-oci-hook", "--socket", "/run/mithril/runtime-admission.sock", "--timeout-ms", "4000"],
+    "timeout": 5
+  },
+  "when": {"annotations": {"^mithril\\.erebor\\.dev/profile-id$": ".+"}},
+  "stages": ["prestart"]
+}
+EOF
+chmod 644 "$hook_config"
+cat >"$test_root/hook-bin/stat" <<'EOF'
+#!/usr/bin/env bash
+path=${!#}
+# Preserve actual modes, but supply the root identity that the physical host provides.
+if [[ ${2:-} == %F ]]; then
+  printf '%s\n' "${TEST_SOCKET_TYPE:-socket}"
+  exit 0
+fi
+printf '%s:0:%s\n' "${TEST_STAT_UID:-0}" "$(/usr/bin/stat -c %a "$path")"
+EOF
+chmod +x "$test_root/hook-bin/stat"
+touch "$hook_socket"
+chmod 600 "$hook_socket"
+PATH="$test_root/hook-bin:$PATH" bash "$directory/runtime-hook-oracle.sh" \
+  installed "$hook_root" mithril-system/mithril \
+  /run/mithril/runtime-admission.sock 4000 5
+if PATH="$test_root/hook-bin:$PATH" TEST_STAT_UID=1000 \
+    bash "$directory/runtime-hook-oracle.sh" installed "$hook_root" \
+      mithril-system/mithril /run/mithril/runtime-admission.sock 4000 5 \
+      >/dev/null 2>&1; then
+  echo "a non-root runtime hook satisfied the installation oracle" >&2
+  exit 1
+fi
+if PATH="$test_root/hook-bin:$PATH" TEST_SOCKET_TYPE='regular file' \
+    bash "$directory/runtime-hook-oracle.sh" installed "$hook_root" \
+      mithril-system/mithril /run/mithril/runtime-admission.sock 4000 5 \
+      >/dev/null 2>&1; then
+  echo "a non-socket path satisfied the installation oracle" >&2
+  exit 1
+fi
+if PATH="$test_root/hook-bin:$PATH" bash "$directory/runtime-hook-oracle.sh" \
+    installed "$hook_root" mithril-system/mithril \
+      /run/mithril/runtime-admission.sock 5000 5 >/dev/null 2>&1; then
+  echo "incorrect runtime-hook arguments satisfied the installation oracle" >&2
+  exit 1
+fi
+if bash "$directory/runtime-hook-oracle.sh" removed "$hook_root" \
+    /run/mithril/runtime-admission.sock >/dev/null 2>&1; then
+  echo "installed runtime-hook paths satisfied the removal oracle" >&2
+  exit 1
+fi
+rm -f -- "$hook_binary" "$hook_binary_owner" "$hook_config" \
+  "$hook_config_owner" "$hook_socket"
+bash "$directory/runtime-hook-oracle.sh" removed "$hook_root" \
+  /run/mithril/runtime-admission.sock
 
 diagnostic_kubectl() {
   printf '%s\n' "$*" >>"$test_root/diagnostic-kubectl.log"

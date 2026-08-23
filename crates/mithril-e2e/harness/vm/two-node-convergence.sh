@@ -17,6 +17,8 @@ nri_release=${MITHRIL_VM_NRI_RELEASE:-v0.10.0}
 reuse_images=${MITHRIL_VM_REUSE_IMAGES:-false}
 system_namespace=mithril-system
 workload_namespace=mithril-convergence
+runtime_hook_owner=$system_namespace/mithril
+runtime_hook_socket=/run/mithril/runtime-admission.sock
 
 usage() {
   echo "usage: $0 [--provider PATH] [--output-directory PATH] [--keep-vms] [--manual-environment]" >&2
@@ -117,20 +119,54 @@ diagnostic_kubectl() {
     --request-timeout=10s "$@"
 }
 
+assert_runtime_hook() {
+  local state=$1
+  local node=$2
+  local remote=$3
+  local arguments=("$state" /)
+  if [[ $state == installed ]]; then
+    arguments+=("$runtime_hook_owner" "$runtime_hook_socket" 4000 5)
+  else
+    arguments+=("$runtime_hook_socket")
+  fi
+  if [[ $state == installed ]]; then
+    timeout 20s "$provider" run "$node" sudo bash \
+      "$remote/harness/runtime-hook-oracle.sh" "${arguments[@]}"
+    return
+  fi
+  # Runtime socket removal follows DaemonSet termination after the hook files leave.
+  for _attempt in {1..30}; do
+    if timeout 10s "$provider" run "$node" sudo bash \
+        "$remote/harness/runtime-hook-oracle.sh" "${arguments[@]}" \
+        >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 1
+  done
+  echo "Mithril runtime-hook paths remained on $node after uninstall" >&2
+  return 1
+}
+
 cleanup() {
-  local status=$?
+  local original_status=$?
+  local cleanup_failed=false
   trap - EXIT
   set +e
-  if ((status != 0)) && [[ $cluster_created == true ]]; then
-    collect_mithril_diagnostics "$output_directory" "$system_namespace"
+  if ((original_status != 0)) && [[ $cluster_created == true ]]; then
+    collect_mithril_diagnostics "$output_directory" "$system_namespace" || cleanup_failed=true
   fi
   remove_mithril_release "$cluster_created" "$keep_vms" \
-    "$manual_environment" "$kubeconfig" "$system_namespace" || status=1
+    "$manual_environment" "$kubeconfig" "$system_namespace" || cleanup_failed=true
+  if [[ $cluster_created == true && $keep_vms == false &&
+        $manual_environment == false ]]; then
+    assert_runtime_hook removed "$vm_a" "$remote_a" || cleanup_failed=true
+    assert_runtime_hook removed "$vm_b" "$remote_b" || cleanup_failed=true
+  fi
   if [[ $created_b == true && $keep_vms == false ]]; then
-    "$provider" destroy "$vm_b" "$work_b" || status=1
+    "$provider" destroy "$vm_b" "$work_b" || cleanup_failed=true
   fi
   if [[ $created_a == true && $keep_vms == false ]]; then
-    "$provider" destroy "$vm_a" "$work_a" || status=1
+    "$provider" destroy "$vm_a" "$work_a" || cleanup_failed=true
   fi
   if [[ $keep_vms == true ]]; then
     {
@@ -139,12 +175,24 @@ cleanup() {
       printf 'provider=%q\n' "$provider"
       printf 'export MITHRIL_VM_KNOWN_HOSTS=%q\n' "$MITHRIL_VM_KNOWN_HOSTS"
       printf 'manual_environment=%q\n' "$manual_environment"
-    } >"$output_directory/retained-vms.txt"
+    } >"$output_directory/retained-vms.txt" || cleanup_failed=true
   else
-    [[ $work_a == /tmp/mithril-vm-test.* ]] && rm -rf -- "$work_a"
-    [[ $work_b == /tmp/mithril-vm-test.* ]] && rm -rf -- "$work_b"
+    if [[ $work_a == /tmp/mithril-vm-test.* ]]; then
+      rm -rf -- "$work_a" || cleanup_failed=true
+    else
+      cleanup_failed=true
+    fi
+    if [[ $work_b == /tmp/mithril-vm-test.* ]]; then
+      rm -rf -- "$work_b" || cleanup_failed=true
+    else
+      cleanup_failed=true
+    fi
+    [[ ! -e $work_a ]] || cleanup_failed=true
+    [[ ! -e $work_b ]] || cleanup_failed=true
   fi
-  exit "$status"
+  cleanup_result "$original_status" "$cleanup_failed"
+  local final_status=$?
+  exit "$final_status"
 }
 trap cleanup EXIT
 
@@ -235,6 +283,8 @@ for node in "$vm_a" "$vm_b"; do
   [[ $node == "$vm_a" ]] || remote=$remote_b
   "$provider" run "$node" mkdir -p "$remote/harness" "$remote/materials"
   "$provider" put "$node" "$directory/guest.sh" "$remote/harness/guest.sh"
+  "$provider" put "$node" "$directory/runtime-hook-oracle.sh" \
+    "$remote/harness/runtime-hook-oracle.sh"
   "$provider" put "$node" "$directory/k3s-config-v1.yaml" \
     "$remote/harness/k3s-config-v1.yaml"
   "$provider" put "$node" "$image_archive" "$remote/mithril-images.tar"
@@ -568,6 +618,8 @@ remote_kubectl -n "$system_namespace" rollout status daemonset/mithril-node \
   --timeout=300s >/dev/null
 wait_node_projection "$node_a_name" true false
 wait_node_projection "$node_b_name" true false
+assert_runtime_hook installed "$vm_a" "$remote_a"
+assert_runtime_hook installed "$vm_b" "$remote_b"
 
 if [[ $manual_environment == true ]]; then
   manual_env=$work_a/mithril-convergence-manual.env

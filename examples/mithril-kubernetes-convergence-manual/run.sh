@@ -3,7 +3,7 @@
 set -Eeuo pipefail
 
 directory=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
-source "$directory/../../crates/mithril-e2e/harness/kubernetes-oracles.sh"
+source "$directory/kubernetes-oracles.sh"
 system_namespace=${MITHRIL_SYSTEM_NAMESPACE:-mithril-system}
 scenario_namespace=mithril-convergence-manual
 profile_name=converter-policy
@@ -73,58 +73,81 @@ wait_marker_value() {
   return 1
 }
 
-cleanup() {
+marker_is_absent() {
+  local node_name=$1
+  local marker=$2
+  local pod
+  pod=$(node_pod "$node_name")
+  kubectl -n "$system_namespace" exec -c mithril-node "$pod" -- \
+    test ! -e "/var/lib/mithril/markers/$marker"
+}
+
+kubernetes_resource_is_absent() {
+  local output
+  output=$(kubectl get "$@" 2>&1)
   local status=$?
+  ((status != 0)) && [[ $output == *'(NotFound)'* ]]
+}
+
+cleanup() {
+  local original_status=$?
+  local cleanup_failed=false
+  local marker
+  local node_name
   trap - EXIT
   set +e
   for node_name in "${eligible_nodes[@]}"; do
-    remove_marker "$node_name" "$protected_pod.started" >/dev/null 2>&1 ||
-      status=1
-    remove_marker "$node_name" "$protected_pod.restart" >/dev/null 2>&1 ||
-      status=1
-    remove_marker "$node_name" "$failed_pod.started" >/dev/null 2>&1 ||
-      status=1
-    remove_marker "$node_name" "$protected_pod.exception-target" >/dev/null 2>&1 ||
-      status=1
-    remove_marker "$node_name" "$protected_pod.exception-request" >/dev/null 2>&1 ||
-      status=1
-    remove_marker "$node_name" "$protected_pod.exception-result" >/dev/null 2>&1 ||
-      status=1
+    for marker in \
+      "$protected_pod.started" \
+      "$protected_pod.restart" \
+      "$failed_pod.started" \
+      "$protected_pod.exception-target" \
+      "$protected_pod.exception-request" \
+      "$protected_pod.exception-result"; do
+      remove_marker "$node_name" "$marker" >/dev/null 2>&1 || cleanup_failed=true
+      marker_is_absent "$node_name" "$marker" >/dev/null 2>&1 || cleanup_failed=true
+    done
   done
   if [[ $owns_namespace == true ]]; then
     kubectl delete namespace "$scenario_namespace" --ignore-not-found=true \
-      --wait=true --timeout=120s >/dev/null 2>&1 || status=1
+      --wait=true --timeout=120s >/dev/null 2>&1 || cleanup_failed=true
+    kubernetes_resource_is_absent namespace "$scenario_namespace" || cleanup_failed=true
   fi
   if [[ $owns_runtime_class == true ]]; then
     kubectl delete runtimeclass "$runtime_class" --ignore-not-found=true \
-      --wait=true --timeout=120s >/dev/null 2>&1 || status=1
+      --wait=true --timeout=120s >/dev/null 2>&1 || cleanup_failed=true
+    kubernetes_resource_is_absent runtimeclass "$runtime_class" || cleanup_failed=true
   fi
   if [[ $owns_failed_runtime_class == true ]]; then
     kubectl delete runtimeclass "$failed_runtime_class" --ignore-not-found=true \
-      --wait=true --timeout=120s >/dev/null 2>&1 || status=1
+      --wait=true --timeout=120s >/dev/null 2>&1 || cleanup_failed=true
+    kubernetes_resource_is_absent runtimeclass "$failed_runtime_class" || cleanup_failed=true
   fi
-  [[ $work_directory == /tmp/mithril-convergence-manual.* ]] &&
-    rm -rf -- "$work_directory"
-  if ((status == 0)); then
-    if [[ $owns_namespace == true ]]; then
-      kubectl get namespace "$scenario_namespace" >/dev/null 2>&1 && status=1
-    fi
-    if [[ $owns_runtime_class == true ]]; then
-      kubectl get runtimeclass "$runtime_class" >/dev/null 2>&1 && status=1
-    fi
-    if [[ $owns_failed_runtime_class == true ]]; then
-      kubectl get runtimeclass "$failed_runtime_class" >/dev/null 2>&1 && status=1
-    fi
+  if [[ $work_directory == /tmp/mithril-convergence-manual.* ]]; then
+    rm -rf -- "$work_directory" || cleanup_failed=true
+  else
+    cleanup_failed=true
   fi
-  exit "$status"
+  [[ ! -e $work_directory ]] || cleanup_failed=true
+  # Preserve the scenario failure after all independent cleanup checks run.
+  if ((original_status != 0)); then
+    exit "$original_status"
+  fi
+  [[ $cleanup_failed == false ]] || exit 1
+  exit 0
 }
 trap cleanup EXIT
 
 assert_absent() {
-  if kubectl get "$@" >/dev/null 2>&1; then
+  local output
+  if output=$(kubectl get "$@" 2>&1); then
     echo "manual scenario refuses to replace an existing resource: $*" >&2
     exit 2
   fi
+  [[ $output == *'(NotFound)'* ]] || {
+    echo "manual scenario could not verify that the resource is absent: $output" >&2
+    exit 1
+  }
 }
 
 assert_cluster_access() {
