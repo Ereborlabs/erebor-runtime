@@ -1,5 +1,6 @@
 {{- if and .Values.control.enabled .Values.control.admission.enabled }}
 {{- $caBundle := required "control.admission.caBundle is required when admission is enabled" .Values.control.admission.caBundle }}
+{{- $bootstrapNamespaces := list .Release.Namespace "kube-system" "kube-public" "kube-node-lease" }}
 apiVersion: admissionregistration.k8s.io/v1
 kind: MutatingWebhookConfiguration
 metadata:
@@ -33,12 +34,13 @@ webhooks:
     matchPolicy: Equivalent
     reinvocationPolicy: Never
     timeoutSeconds: {{ .Values.control.admission.webhookTimeoutSeconds }}
-    # Control must start before fail-closed admission can serve workload requests.
+    # Control and Kubernetes system Pods must start before fail-closed admission can serve workloads.
     namespaceSelector:
       matchExpressions:
         - key: kubernetes.io/metadata.name
           operator: NotIn
-          values: [{{ .Release.Namespace | quote }}]
+          values:
+{{ toYaml $bootstrapNamespaces | indent 12 }}
     clientConfig:
       caBundle: {{ $caBundle | quote }}
       service:
@@ -69,7 +71,8 @@ webhooks:
       matchExpressions:
         - key: kubernetes.io/metadata.name
           operator: NotIn
-          values: [{{ .Release.Namespace | quote }}]
+          values:
+{{ toYaml $bootstrapNamespaces | indent 12 }}
     clientConfig:
       caBundle: {{ $caBundle | quote }}
       service:
@@ -94,7 +97,8 @@ webhooks:
       matchExpressions:
         - key: kubernetes.io/metadata.name
           operator: NotIn
-          values: [{{ .Release.Namespace | quote }}]
+          values:
+{{ toYaml $bootstrapNamespaces | indent 12 }}
     clientConfig:
       caBundle: {{ $caBundle | quote }}
       service:
