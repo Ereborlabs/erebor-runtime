@@ -13,12 +13,12 @@ use snafu::{ensure, ResultExt as _};
 use tokio_stream::StreamExt as _;
 
 use super::{
-    CohortSelectionV1, ContainerKindV1, LabelOperatorV1, PolicyActivationAcknowledgementV1,
-    PolicyActivationStateV1, PolicyBundleV1, PolicyDeliveryCandidateV1, PolicyDeliveryOperationV1,
-    PolicyDocumentV1, PolicyRolloutCountsV1, PolicyRolloutStateV1, PolicyRolloutStatusV1,
-    PolicySourceRevisionV1, PolicySourceStateV1, PolicyTargetSnapshotV1, PolicyTargetV1,
-    ProfileCandidateArtifactV1, ProfileSealRequestV1, WorkloadProtectionPolicy,
-    WorkloadProtectionPolicyStatusV1,
+    CohortSelectionV1, ContainerKindV1, ErrnoV1, EvaluationStageV1, LabelOperatorV1,
+    PolicyActivationAcknowledgementV1, PolicyActivationStateV1, PolicyBundleV1,
+    PolicyDeliveryCandidateV1, PolicyDeliveryOperationV1, PolicyDispositionV1, PolicyDocumentV1,
+    PolicyRolloutCountsV1, PolicyRolloutStateV1, PolicyRolloutStatusV1, PolicySourceRevisionV1,
+    PolicySourceStateV1, PolicyTargetSnapshotV1, PolicyTargetV1, ProfileCandidateArtifactV1,
+    ProfileSealRequestV1, WorkloadProtectionPolicy, WorkloadProtectionPolicyStatusV1,
 };
 use crate::error::{IoSnafu, PolicySignatureSnafu, PolicyValidationSnafu};
 use crate::{ControlStore, PolicyCompiler, Result};
@@ -251,20 +251,53 @@ impl PolicyDesiredStateOwner {
         state: PolicySourceStateV1,
     ) -> Result<PolicyReconcileResultV1> {
         self.track_reconcile(|| {
-            let policy = super::lower_kubernetes_policy(
-                resource,
-                &self.config.tenant_id,
-                &self.config.cluster_uid,
-                namespace_uid,
-            )?;
-            let source = PolicySourceRevisionV1::from_resource(
-                resource,
-                &policy,
-                &self.config.tenant_id,
-                &self.config.cluster_uid,
-                namespace_uid,
-                state,
-            )?;
+            let retained = if state == PolicySourceStateV1::DeletionRequested {
+                match (
+                    resource.metadata.name.as_deref(),
+                    resource.metadata.uid.as_deref(),
+                ) {
+                    (Some(object_name), Some(object_uid)) => {
+                        if let Some(source) = self.store.latest_source(
+                            &self.config.tenant_id,
+                            namespace_uid,
+                            object_name,
+                        )? {
+                            if source.object_uid == object_uid {
+                                self.store
+                                    .policy_document(&source.policy_source_revision_id)?
+                                    .map(|policy| (source, policy))
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        }
+                    }
+                    _ => None,
+                }
+            } else {
+                None
+            };
+            // Deletion retires the last compiled revision, even if a later API update was invalid.
+            let (source, policy) = if let Some((source, policy)) = retained {
+                (source.deletion_requested()?, policy)
+            } else {
+                let policy = super::lower_kubernetes_policy(
+                    resource,
+                    &self.config.tenant_id,
+                    &self.config.cluster_uid,
+                    namespace_uid,
+                )?;
+                let source = PolicySourceRevisionV1::from_resource(
+                    resource,
+                    &policy,
+                    &self.config.tenant_id,
+                    &self.config.cluster_uid,
+                    namespace_uid,
+                    state,
+                )?;
+                (source, policy)
+            };
             self.reconcile_inner(source, &policy, inventory, now_utc_ns)
         })
     }
@@ -330,9 +363,6 @@ impl PolicyDesiredStateOwner {
                 reason: "the policy has a cluster or namespace selector outside its authenticated tenant scope",
             }
         );
-        // Persist desired state before compilation so restart recovery sees every accepted input.
-        self.store
-            .accept_source_revision(source.clone(), policy.clone())?;
         let mut targets = resolve_targets(
             &source,
             policy,
@@ -354,14 +384,20 @@ impl PolicyDesiredStateOwner {
             targets.dedup();
         }
 
-        // Reuse the immutable artifact on restart. A source revision gets one issuer sequence.
+        let artifact_document = if source.state == PolicySourceStateV1::DeletionRequested {
+            restrictive_terminal_document(policy)
+        } else {
+            policy.clone()
+        };
+        // Reuse the immutable artifact on restart. Upgrade only a legacy nonrestrictive retirement.
         let artifact = if let Some(artifact) = self
             .store
             .compiled_artifact(&source.policy_source_revision_id)?
+            .filter(|artifact| artifact.policy_document == artifact_document)
         {
             artifact
         } else {
-            let compiled = match self.compiler.compile(policy) {
+            let compiled = match self.compiler.compile(&artifact_document) {
                 Ok(compiled) => {
                     let mut state = self.state()?;
                     state.successful_compiles = state.successful_compiles.saturating_add(1);
@@ -379,16 +415,19 @@ impl PolicyDesiredStateOwner {
                 seal_request.sequence_epoch,
                 seal_request.issuer_sequence,
             )?;
-            let artifact = ProfileCandidateArtifactV1::sign(
-                policy,
+            ProfileCandidateArtifactV1::sign(
+                &artifact_document,
                 compiled,
                 seal_request,
                 &self.signing_key,
-            )?;
-            self.store
-                .record_compiled_artifact(&source.policy_source_revision_id, artifact.clone())?;
-            artifact
+            )?
         };
+        // Promote the source and its signed artifact in one durable transaction.
+        self.store.accept_compiled_source_revision(
+            source.clone(),
+            policy.clone(),
+            artifact.clone(),
+        )?;
         let artifact_bytes = serde_json::to_vec(&artifact).map_err(|error| {
             PolicyValidationSnafu {
                 policy_id: policy.profile_id(),
@@ -765,7 +804,7 @@ impl PolicyRolloutOwner {
                 reason: "the acknowledgement source, snapshot, or tenant is stale",
             }
         );
-        let bundle = self
+        let _bundle = self
             .store
             .bundle_for_candidate(
                 &acknowledgement.node_id,
@@ -779,21 +818,16 @@ impl PolicyRolloutOwner {
                 }
                 .build()
             })?;
-        let document = &bundle.profile_artifact.policy_document;
-        let latest = self.store.latest_bundle_for_profile_node(
-            &acknowledgement.node_id,
-            &acknowledgement.tenant_id,
-            &document.metadata.trust_domain_id,
-            &document.metadata.profile_id,
-        )?;
+        // A delayed ACK stays valid while this candidate is in the unsettled desired chain.
         ensure!(
-            latest.as_ref().is_some_and(|latest| {
-                latest.candidate.candidate_content_id == acknowledgement.candidate_content_id
-            }),
+            self.store.candidate_is_current_or_unsettled_predecessor(
+                &acknowledgement.node_id,
+                &acknowledgement.candidate_content_id,
+            )?,
             PolicyValidationSnafu {
                 policy_id: &acknowledgement.policy_source_revision_id,
                 code: "CFG_STALE_POLICY_ACKNOWLEDGEMENT",
-                reason: "a later candidate already owns this profile and node target",
+                reason: "an active successor already owns this profile and node target",
             }
         );
         let state = match acknowledgement.state {
@@ -1023,6 +1057,70 @@ pub(super) fn preserve_transition_times(
             condition.last_transition_time = prior.last_transition_time.clone();
         }
     }
+}
+
+pub(crate) fn restrictive_terminal_document(policy: &PolicyDocumentV1) -> PolicyDocumentV1 {
+    let mut terminal = policy.clone();
+    terminal.file_exception_grants.clear();
+    terminal.exceptions.clear();
+    for floor in &mut terminal.path_tree_deny_floors {
+        floor.requested_disposition = PolicyDispositionV1::Deny;
+        floor.exception_ids.clear();
+    }
+    for transition in &mut terminal.native_transition_rules {
+        transition.requested_disposition = PolicyDispositionV1::Deny;
+        transition.errno = Some(ErrnoV1::Eperm);
+    }
+    for relationship in &mut terminal.ipc_relationship_rules {
+        relationship.requested_disposition = PolicyDispositionV1::Deny;
+        relationship.errno = Some(ErrnoV1::Eperm);
+    }
+    terminal.unmatched_ipc_disposition = PolicyDispositionV1::Deny;
+    for default in &mut terminal.effect_family_defaults {
+        default.requested_disposition = PolicyDispositionV1::Deny;
+        default.errno = Some(ErrnoV1::Eperm);
+    }
+    for posture in [
+        &mut terminal.default_postures.missing_task_identity,
+        &mut terminal.default_postures.required_classifier_unknown,
+        &mut terminal.default_postures.unresolved_or_external_root,
+    ] {
+        posture.requested_disposition = PolicyDispositionV1::Deny;
+    }
+    for rule in &mut terminal.rules {
+        rule.exception_ids.clear();
+        rule.response_binding_ids.clear();
+        match rule.evaluation_stage {
+            EvaluationStageV1::EntryAdmission | EvaluationStageV1::RemotePreAdmission => {
+                rule.requested_disposition = PolicyDispositionV1::Reject;
+                rule.errno = None;
+            }
+            EvaluationStageV1::NativeTransition | EvaluationStageV1::LocalPreEffect => {
+                rule.requested_disposition = PolicyDispositionV1::Deny;
+                rule.errno = Some(ErrnoV1::Eperm);
+            }
+            EvaluationStageV1::PostEffect => {
+                // A terminal profile does not need post-effect audit cells after prevention closes.
+                rule.enabled = false;
+                rule.requested_disposition = PolicyDispositionV1::Alert;
+                rule.errno = None;
+            }
+        }
+        for fallback in &mut rule.fallback_by_condition {
+            match rule.evaluation_stage {
+                EvaluationStageV1::EntryAdmission | EvaluationStageV1::RemotePreAdmission => {
+                    fallback.requested_disposition = PolicyDispositionV1::Reject;
+                    fallback.errno = None;
+                }
+                EvaluationStageV1::NativeTransition | EvaluationStageV1::LocalPreEffect => {
+                    fallback.requested_disposition = PolicyDispositionV1::Deny;
+                    fallback.errno = Some(ErrnoV1::Eperm);
+                }
+                EvaluationStageV1::PostEffect => {}
+            }
+        }
+    }
+    terminal
 }
 
 fn resolve_targets(

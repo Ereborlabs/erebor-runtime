@@ -939,13 +939,9 @@ impl NodePolicy for ControlPlane {
         let store = self.policy_store.as_ref().ok_or_else(|| {
             Status::failed_precondition("Control has no durable policy rollout store")
         })?;
-        // The store selects only a candidate whose immutable target names this mTLS node.
+        // Durable bundle digests identify the active candidate for each profile on this mTLS node.
         let Some(bundle) = store
-            .next_bundle_for_node(
-                &node_id,
-                &request.active_candidate_content_id,
-                &request.durable_bundle_digests,
-            )
+            .next_bundle_for_node(&node_id, &request.durable_bundle_digests)
             .map_err(internal_status)?
         else {
             return Ok(Response::new(PolicyInventory::default()));

@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File, OpenOptions};
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
@@ -144,7 +144,10 @@ enum ControlTransactionV1 {
     SourceAccepted {
         source_revision: Box<PolicySourceRevisionV1>,
         policy_document: Box<PolicyDocumentV1>,
+        #[serde(default)]
+        artifact: Option<Box<ProfileCandidateArtifactV1>>,
     },
+    // Replay accepts the split transaction written before source promotion became atomic.
     Compiled {
         policy_source_revision_id: String,
         artifact: Box<ProfileCandidateArtifactV1>,
@@ -318,10 +321,11 @@ impl ControlStore {
         })
     }
 
-    pub fn accept_source_revision(
+    pub fn accept_compiled_source_revision(
         &self,
         revision: PolicySourceRevisionV1,
         policy_document: PolicyDocumentV1,
+        artifact: ProfileCandidateArtifactV1,
     ) -> Result<u64> {
         let mut inner = self.lock()?;
         let key = PolicyObjectKeyV1::from(&revision);
@@ -330,15 +334,23 @@ impl ControlStore {
             .source_revisions
             .contains_key(&revision.policy_source_revision_id)
         {
-            if inner
+            let document_matches = inner
                 .state
                 .policy_documents
                 .get(&revision.policy_source_revision_id)
-                != Some(&policy_document)
-            {
+                == Some(&policy_document);
+            let current_artifact = inner
+                .state
+                .compiled_artifacts
+                .get(&revision.policy_source_revision_id);
+            let legacy_upgrade = current_artifact.is_some_and(|current| {
+                legacy_deletion_artifact_upgrade(&revision, &policy_document, current, &artifact)
+            });
+            if !document_matches || (current_artifact != Some(&artifact) && !legacy_upgrade) {
                 return ControlStoreSnafu {
                     path: inner.root.clone(),
-                    reason: "one source revision has conflicting policy bytes".to_owned(),
+                    reason: "one source revision has conflicting policy or artifact bytes"
+                        .to_owned(),
                 }
                 .fail();
             }
@@ -351,77 +363,24 @@ impl ControlStore {
                 }
                 .fail();
             }
-            return Ok(inner.state.commit_index);
+            if !legacy_upgrade {
+                return Ok(inner.state.commit_index);
+            }
         }
         validate_source_acceptance(&inner.state, &revision, &policy_document, &inner.root)?;
+        validate_compiled_artifact(
+            &inner.state,
+            &revision,
+            &policy_document,
+            &artifact,
+            &inner.root,
+        )?;
         commit(
             &mut inner,
             ControlTransactionV1::SourceAccepted {
                 source_revision: Box::new(revision),
                 policy_document: Box::new(policy_document),
-            },
-        )
-    }
-
-    pub fn record_compiled_artifact(
-        &self,
-        policy_source_revision_id: &str,
-        artifact: ProfileCandidateArtifactV1,
-    ) -> Result<u64> {
-        let mut inner = self.lock()?;
-        if let Some(current) = inner
-            .state
-            .compiled_artifacts
-            .get(policy_source_revision_id)
-        {
-            if current == &artifact {
-                return Ok(inner.state.commit_index);
-            }
-            return ControlStoreSnafu {
-                path: inner.root.clone(),
-                reason: "one source revision has more than one compiled artifact".to_owned(),
-            }
-            .fail();
-        }
-        let document = inner
-            .state
-            .policy_documents
-            .get(policy_source_revision_id)
-            .ok_or_else(|| {
-                ControlStoreSnafu {
-                    path: inner.root.clone(),
-                    reason: "the compiled artifact has no accepted source revision".to_owned(),
-                }
-                .build()
-            })?;
-        if artifact.policy_document != *document {
-            return ControlStoreSnafu {
-                path: inner.root.clone(),
-                reason: "the compiled artifact does not contain the accepted policy document"
-                    .to_owned(),
-            }
-            .fail();
-        }
-        // Issuer sequence is global to one signing key and cannot repeat after restart.
-        let header = &artifact.header;
-        for existing in inner.state.compiled_artifacts.values() {
-            if existing.signed_profile.signing_key_id == artifact.signed_profile.signing_key_id
-                && (existing.header.sequence_epoch > header.sequence_epoch
-                    || (existing.header.sequence_epoch == header.sequence_epoch
-                        && existing.header.issuer_sequence >= header.issuer_sequence))
-            {
-                return ControlStoreSnafu {
-                    path: inner.root.clone(),
-                    reason: "the compiled artifact failed policy-issuer anti-rollback".to_owned(),
-                }
-                .fail();
-            }
-        }
-        commit(
-            &mut inner,
-            ControlTransactionV1::Compiled {
-                policy_source_revision_id: policy_source_revision_id.to_owned(),
-                artifact: Box::new(artifact),
+                artifact: Some(Box::new(artifact)),
             },
         )
     }
@@ -1055,8 +1014,24 @@ impl ControlStore {
             .exception_candidates
             .values()
             .filter(|candidate| {
+                let predecessor_ready = candidate.predecessor_candidate_content_id.as_ref().map_or(
+                    candidate.operation == ExceptionDeliveryOperationV1::Activate,
+                    |id| {
+                        inner
+                            .state
+                            .exception_rollout_states
+                            .get(&PolicyRolloutKeyV1 {
+                                candidate_content_id: id.clone(),
+                                node_id: node_id.to_owned(),
+                            })
+                            .is_some_and(|rollout| {
+                                rollout.state != crate::WorkloadProtectionExceptionStateV1::Pending
+                            })
+                    },
+                );
                 candidate.exact_target.node_id == node_id
                     && !known_candidate_ids.contains(&candidate.candidate_content_id)
+                    && predecessor_ready
                     && inner
                         .state
                         .exception_rollout_states
@@ -1069,10 +1044,13 @@ impl ControlStore {
                             rollout.state == crate::WorkloadProtectionExceptionStateV1::Pending
                         })
             })
-            .max_by_key(|candidate| {
+            // Deliver the oldest ready chain member before any later revocation.
+            .min_by_key(|candidate| {
                 (
+                    candidate.issued_utc_ns,
                     candidate.distribution_sequence_epoch,
                     candidate.distribution_sequence,
+                    candidate.candidate_content_id.as_str(),
                 )
             })
             .cloned())
@@ -1280,11 +1258,23 @@ impl ControlStore {
     pub fn next_bundle_for_node(
         &self,
         node_id: &str,
-        active_candidate_content_id: &str,
         durable_bundle_digests: &[String],
     ) -> Result<Option<PolicyBundleV1>> {
         let inner = self.lock()?;
-        // Prefer unsettled work. Redeliver an active bundle only when the node lost it.
+        let mut active_by_profile = BTreeMap::<(&str, &str, &str), &PolicyBundleV1>::new();
+        for bundle in inner.state.bundles.values().filter(|bundle| {
+            bundle.candidate.exact_target.node_id == node_id
+                && durable_bundle_digests.contains(&bundle.bundle_digest)
+        }) {
+            let key = bundle_profile_key(bundle);
+            let replace = active_by_profile
+                .get(&key)
+                .is_none_or(|current| bundle_sequence(bundle) > bundle_sequence(current));
+            if replace {
+                active_by_profile.insert(key, bundle);
+            }
+        }
+        // A node reports one durable active bundle for each profile. That report owns chain progress.
         Ok(inner
             .state
             .bundles
@@ -1301,24 +1291,101 @@ impl ControlStore {
                     crate::PolicyRolloutStatusV1::Rejected
                     | crate::PolicyRolloutStatusV1::Stale => false,
                     crate::PolicyRolloutStatusV1::Active => {
-                        bundle.candidate.candidate_content_id != active_candidate_content_id
-                            && !durable_bundle_digests.contains(&bundle.bundle_digest)
+                        !durable_bundle_digests.contains(&bundle.bundle_digest)
                     }
                     crate::PolicyRolloutStatusV1::Pending
                     | crate::PolicyRolloutStatusV1::Delivered
                     | crate::PolicyRolloutStatusV1::Staged
                     | crate::PolicyRolloutStatusV1::Unknown => true,
                 };
-                eligible.then_some((bundle, rollout))
+                let active_candidate = active_by_profile
+                    .get(&bundle_profile_key(bundle))
+                    .map(|active| active.candidate.candidate_content_id.as_str());
+                let predecessor_ready = match bundle.candidate.operation {
+                    crate::PolicyDeliveryOperationV1::Activate => {
+                        active_candidate.is_none()
+                            && bundle.candidate.predecessor_candidate_content_id.is_none()
+                    }
+                    crate::PolicyDeliveryOperationV1::Replace
+                    | crate::PolicyDeliveryOperationV1::RetireToRestrictiveTerminal => {
+                        bundle.candidate.predecessor_candidate_content_id.as_deref()
+                            == active_candidate
+                    }
+                };
+                (eligible && predecessor_ready).then_some(bundle)
             })
-            .max_by_key(|(bundle, rollout)| {
+            .min_by_key(|bundle| {
                 (
-                    u8::from(rollout.state != crate::PolicyRolloutStatusV1::Active),
-                    rollout.updated_utc_ns,
+                    bundle.candidate.distribution_sequence_epoch,
+                    bundle.candidate.distribution_sequence,
                     bundle.candidate.candidate_content_id.as_str(),
                 )
             })
-            .map(|(bundle, _rollout)| bundle.clone()))
+            .cloned())
+    }
+
+    pub fn candidate_is_current_or_unsettled_predecessor(
+        &self,
+        node_id: &str,
+        candidate_content_id: &str,
+    ) -> Result<bool> {
+        let inner = self.lock()?;
+        let Some(candidate) = inner
+            .state
+            .bundles
+            .get(candidate_content_id)
+            .filter(|bundle| bundle.candidate.exact_target.node_id == node_id)
+        else {
+            return Ok(false);
+        };
+        let profile = bundle_profile_key(candidate);
+        let Some(mut current) = inner
+            .state
+            .bundles
+            .values()
+            .filter(|bundle| {
+                bundle.candidate.exact_target.node_id == node_id
+                    && bundle_profile_key(bundle) == profile
+            })
+            .max_by_key(|bundle| bundle_sequence(bundle))
+        else {
+            return Ok(false);
+        };
+        if current.candidate.candidate_content_id == candidate_content_id {
+            return Ok(true);
+        }
+
+        let mut visited = BTreeSet::new();
+        while visited.insert(current.candidate.candidate_content_id.as_str()) {
+            let Some(rollout) = inner.state.rollout_states.get(&PolicyRolloutKeyV1 {
+                candidate_content_id: current.candidate.candidate_content_id.clone(),
+                node_id: node_id.to_owned(),
+            }) else {
+                return Ok(false);
+            };
+            // An active successor closes delayed acknowledgements for every older candidate.
+            if rollout.state == crate::PolicyRolloutStatusV1::Active {
+                return Ok(false);
+            }
+            let Some(predecessor_id) = current
+                .candidate
+                .predecessor_candidate_content_id
+                .as_deref()
+            else {
+                return Ok(false);
+            };
+            if predecessor_id == candidate_content_id {
+                return Ok(true);
+            }
+            let Some(predecessor) = inner.state.bundles.get(predecessor_id).filter(|bundle| {
+                bundle.candidate.exact_target.node_id == node_id
+                    && bundle_profile_key(bundle) == profile
+            }) else {
+                return Ok(false);
+            };
+            current = predecessor;
+        }
+        Ok(false)
     }
 
     pub fn bundle_for_candidate(
@@ -1543,6 +1610,77 @@ fn validate_source_acceptance(
     Ok(())
 }
 
+fn validate_compiled_artifact(
+    state: &ControlStoreState,
+    source: &PolicySourceRevisionV1,
+    policy_document: &PolicyDocumentV1,
+    artifact: &ProfileCandidateArtifactV1,
+    path: &Path,
+) -> Result<()> {
+    let expected_document = match source.state {
+        PolicySourceStateV1::Accepted => policy_document.clone(),
+        PolicySourceStateV1::DeletionRequested => {
+            crate::restrictive_terminal_document(policy_document)
+        }
+    };
+    let issuer_order_is_valid = state.compiled_artifacts.values().all(|existing| {
+        existing.signed_profile.signing_key_id != artifact.signed_profile.signing_key_id
+            || existing.header.sequence_epoch < artifact.header.sequence_epoch
+            || (existing.header.sequence_epoch == artifact.header.sequence_epoch
+                && existing.header.issuer_sequence < artifact.header.issuer_sequence)
+    });
+    if artifact.policy_document != expected_document || !issuer_order_is_valid {
+        return ControlStoreSnafu {
+            path: path.to_owned(),
+            reason: "the compiled artifact differs from its source or violates issuer ordering"
+                .to_owned(),
+        }
+        .fail();
+    }
+    Ok(())
+}
+
+fn validate_legacy_compiled_artifact(
+    state: &ControlStoreState,
+    policy_document: &PolicyDocumentV1,
+    artifact: &ProfileCandidateArtifactV1,
+    path: &Path,
+) -> Result<()> {
+    let issuer_order_is_valid = state.compiled_artifacts.values().all(|existing| {
+        existing.signed_profile.signing_key_id != artifact.signed_profile.signing_key_id
+            || existing.header.sequence_epoch < artifact.header.sequence_epoch
+            || (existing.header.sequence_epoch == artifact.header.sequence_epoch
+                && existing.header.issuer_sequence < artifact.header.issuer_sequence)
+    });
+    if artifact.policy_document != *policy_document || !issuer_order_is_valid {
+        return ControlStoreSnafu {
+            path: path.to_owned(),
+            reason: "the legacy artifact differs from its source or violates issuer ordering"
+                .to_owned(),
+        }
+        .fail();
+    }
+    Ok(())
+}
+
+fn legacy_deletion_artifact_upgrade(
+    source: &PolicySourceRevisionV1,
+    policy_document: &PolicyDocumentV1,
+    current: &ProfileCandidateArtifactV1,
+    replacement: &ProfileCandidateArtifactV1,
+) -> bool {
+    source.state == PolicySourceStateV1::DeletionRequested
+        && current.policy_document == *policy_document
+        && replacement.policy_document == crate::restrictive_terminal_document(policy_document)
+        && (
+            replacement.header.sequence_epoch,
+            replacement.header.issuer_sequence,
+        ) > (
+            current.header.sequence_epoch,
+            current.header.issuer_sequence,
+        )
+}
+
 fn apply_transaction(
     state: &mut ControlStoreState,
     transaction: &ControlTransactionV1,
@@ -1553,8 +1691,33 @@ fn apply_transaction(
         ControlTransactionV1::SourceAccepted {
             source_revision,
             policy_document,
+            artifact,
         } => {
-            validate_source_acceptance(state, source_revision, policy_document, path)?;
+            let existing_artifact = state
+                .compiled_artifacts
+                .get(&source_revision.policy_source_revision_id);
+            let legacy_upgrade = artifact.as_deref().is_some_and(|replacement| {
+                existing_artifact.is_some_and(|current| {
+                    legacy_deletion_artifact_upgrade(
+                        source_revision,
+                        policy_document,
+                        current,
+                        replacement,
+                    )
+                })
+            });
+            if !legacy_upgrade {
+                validate_source_acceptance(state, source_revision, policy_document, path)?;
+            }
+            if let Some(artifact) = artifact {
+                validate_compiled_artifact(
+                    state,
+                    source_revision,
+                    policy_document,
+                    artifact,
+                    path,
+                )?;
+            }
             let key = PolicyObjectKeyV1::from(source_revision.as_ref());
             if let Some(existing) = state
                 .source_revisions
@@ -1580,54 +1743,59 @@ fn apply_transaction(
                 source_revision.policy_source_revision_id.clone(),
                 policy_document.as_ref().clone(),
             );
+            if let Some(artifact) = artifact {
+                let existing = state.compiled_artifacts.insert(
+                    source_revision.policy_source_revision_id.clone(),
+                    artifact.as_ref().clone(),
+                );
+                if existing.is_some_and(|existing| {
+                    existing != *artifact.as_ref()
+                        && !legacy_deletion_artifact_upgrade(
+                            source_revision,
+                            policy_document,
+                            &existing,
+                            artifact,
+                        )
+                }) {
+                    return ControlStoreSnafu {
+                        path: path.to_owned(),
+                        reason: format!(
+                            "source revision {} conflicts with a durable artifact",
+                            source_revision.policy_source_revision_id
+                        ),
+                    }
+                    .fail();
+                }
+            }
         }
         ControlTransactionV1::Compiled {
             policy_source_revision_id,
             artifact,
         } => {
+            let _source = state
+                .source_revisions
+                .get(policy_source_revision_id)
+                .ok_or_else(|| {
+                    ControlStoreSnafu {
+                        path: path.to_owned(),
+                        reason: "the legacy artifact has no accepted source revision".to_owned(),
+                    }
+                    .build()
+                })?;
             let document = state
                 .policy_documents
                 .get(policy_source_revision_id)
                 .ok_or_else(|| {
                     ControlStoreSnafu {
                         path: path.to_owned(),
-                        reason: "the committed artifact has no source policy".to_owned(),
+                        reason: "the legacy artifact has no accepted policy document".to_owned(),
                     }
                     .build()
                 })?;
-            if &artifact.policy_document != document {
-                return ControlStoreSnafu {
-                    path: path.to_owned(),
-                    reason: "the committed artifact differs from its source policy".to_owned(),
-                }
-                .fail();
-            }
-            if state.compiled_artifacts.values().any(|existing| {
-                existing.signed_profile.signing_key_id == artifact.signed_profile.signing_key_id
-                    && (existing.header.sequence_epoch > artifact.header.sequence_epoch
-                        || (existing.header.sequence_epoch == artifact.header.sequence_epoch
-                            && existing.header.issuer_sequence >= artifact.header.issuer_sequence))
-            }) {
-                return ControlStoreSnafu {
-                    path: path.to_owned(),
-                    reason: "the committed artifact violates policy-issuer ordering".to_owned(),
-                }
-                .fail();
-            }
-            if let Some(existing) = state
+            validate_legacy_compiled_artifact(state, document, artifact, path)?;
+            state
                 .compiled_artifacts
-                .insert(policy_source_revision_id.clone(), artifact.as_ref().clone())
-                .filter(|existing| existing != artifact.as_ref())
-            {
-                return ControlStoreSnafu {
-                    path: path.to_owned(),
-                    reason: format!(
-                        "source revision {policy_source_revision_id} conflicts with artifact sequence {}",
-                        existing.header.issuer_sequence
-                    ),
-                }
-                .fail();
-            }
+                .insert(policy_source_revision_id.clone(), artifact.as_ref().clone());
         }
         ControlTransactionV1::RolloutCreated { rollout } => {
             let PolicyRolloutTransactionV1 {
@@ -2610,6 +2778,25 @@ fn bundle_matches_profile(
         && bundle.profile_artifact.policy_document.metadata.profile_id == profile_id
 }
 
+fn bundle_profile_key(bundle: &PolicyBundleV1) -> (&str, &str, &str) {
+    (
+        &bundle.candidate.tenant_id,
+        &bundle
+            .profile_artifact
+            .policy_document
+            .metadata
+            .trust_domain_id,
+        &bundle.profile_artifact.policy_document.metadata.profile_id,
+    )
+}
+
+fn bundle_sequence(bundle: &PolicyBundleV1) -> (u64, u64) {
+    (
+        bundle.candidate.distribution_sequence_epoch,
+        bundle.candidate.distribution_sequence,
+    )
+}
+
 fn valid_sha256(value: &str) -> bool {
     value.len() == 64
         && value
@@ -2664,9 +2851,65 @@ fn write_commit(path: &Path, commit: &ControlCommitV1) -> Result<()> {
 mod tests {
     use std::path::Path;
 
+    use ed25519_dalek::SigningKey;
+
     use crate::{
-        canonical_policy_spec_digest, PolicyDocumentV1, PolicySourceRevisionV1, PolicySourceStateV1,
+        canonical_policy_spec_digest, PolicyCompiler, PolicyDocumentV1, PolicySourceRevisionV1,
+        PolicySourceStateV1, ProfileCandidateArtifactV1, ProfileSealRequestV1, RegistryDigestsV1,
     };
+
+    fn signed_artifact(
+        document: &PolicyDocumentV1,
+        issuer_sequence: u64,
+    ) -> crate::Result<ProfileCandidateArtifactV1> {
+        let digest = "00".repeat(32);
+        ProfileCandidateArtifactV1::sign(
+            document,
+            PolicyCompiler.compile(document)?,
+            ProfileSealRequestV1 {
+                signing_key_id: "test-key".to_owned(),
+                issuer_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa".to_owned(),
+                sequence_epoch: 1,
+                issuer_sequence,
+                rollback_authorization_id: None,
+                registry_digests: RegistryDigestsV1 {
+                    provider_numeric_registry_bundle_digest: digest.clone(),
+                    required_capability_schema_digest: digest.clone(),
+                    source_selector_registry_digest: digest.clone(),
+                    object_classifier_registry_digest: digest.clone(),
+                    reason_code_registry_digest: digest.clone(),
+                    correlation_package_registry_digest: digest.clone(),
+                    provider_vocabulary_registry_digest: digest,
+                },
+            },
+            &SigningKey::from_bytes(&[7; 32]),
+        )
+    }
+
+    fn source_revision(
+        document: &PolicyDocumentV1,
+        state: PolicySourceStateV1,
+        generation: u64,
+        revision_id: char,
+    ) -> crate::Result<PolicySourceRevisionV1> {
+        Ok(PolicySourceRevisionV1 {
+            schema_version: 1,
+            tenant_id: "10000000-0000-4000-8000-000000000001".to_owned(),
+            cluster_uid: "20000000-0000-4000-8000-000000000001".to_owned(),
+            namespace_uid: "30000000-0000-4000-8000-000000000001".to_owned(),
+            object_uid: "40000000-0000-4000-8000-000000000001".to_owned(),
+            namespace_name: "tenant-a".to_owned(),
+            object_name: "profile".to_owned(),
+            api_version: crate::POLICY_API_VERSION.to_owned(),
+            kind: crate::POLICY_KIND.to_owned(),
+            object_generation: generation,
+            opaque_resource_version: generation.to_be_bytes().to_vec(),
+            canonical_spec_digest: "1".repeat(64),
+            policy_document_digest: canonical_policy_spec_digest(document)?,
+            state,
+            policy_source_revision_id: revision_id.to_string().repeat(64),
+        })
+    }
 
     #[test]
     fn durable_sequence_increment_rejects_exhaustion() {
@@ -2711,40 +2954,28 @@ mod tests {
             Path::new("policy-v1.yaml"),
             include_bytes!("../tests/fixtures/policy-v1.yaml"),
         )?;
-        let mut first = PolicySourceRevisionV1 {
-            schema_version: 1,
-            tenant_id: "10000000-0000-4000-8000-000000000001".to_owned(),
-            cluster_uid: "20000000-0000-4000-8000-000000000001".to_owned(),
-            namespace_uid: "30000000-0000-4000-8000-000000000001".to_owned(),
-            object_uid: "40000000-0000-4000-8000-000000000001".to_owned(),
-            namespace_name: "tenant-a".to_owned(),
-            object_name: "profile".to_owned(),
-            api_version: crate::POLICY_API_VERSION.to_owned(),
-            kind: crate::POLICY_KIND.to_owned(),
-            object_generation: 1,
-            opaque_resource_version: b"one".to_vec(),
-            canonical_spec_digest: "1".repeat(64),
-            policy_document_digest: canonical_policy_spec_digest(&document)?,
-            state: PolicySourceStateV1::Accepted,
-            policy_source_revision_id: "2".repeat(64),
-        };
+        let mut first = source_revision(&document, PolicySourceStateV1::Accepted, 1, '2')?;
         let mut state = super::ControlStoreState::default();
+        let first_artifact = signed_artifact(&document, 1)?;
         super::apply_transaction(
             &mut state,
             &super::ControlTransactionV1::SourceAccepted {
                 source_revision: Box::new(first.clone()),
                 policy_document: Box::new(document.clone()),
+                artifact: Some(Box::new(first_artifact)),
             },
             Path::new("first-commit"),
         )?;
         first.object_generation = 2;
         first.opaque_resource_version = b"two".to_vec();
         first.policy_source_revision_id = "3".repeat(64);
+        let second_artifact = signed_artifact(&document, 2)?;
         super::apply_transaction(
             &mut state,
             &super::ControlTransactionV1::SourceAccepted {
                 source_revision: Box::new(first.clone()),
                 policy_document: Box::new(document.clone()),
+                artifact: Some(Box::new(second_artifact)),
             },
             Path::new("second-commit"),
         )?;
@@ -2752,15 +2983,66 @@ mod tests {
         first.object_generation = 1;
         first.opaque_resource_version = b"stale".to_vec();
         first.policy_source_revision_id = "4".repeat(64);
+        let stale_artifact = signed_artifact(&document, 3)?;
         assert!(super::apply_transaction(
             &mut state,
             &super::ControlTransactionV1::SourceAccepted {
                 source_revision: Box::new(first),
                 policy_document: Box::new(document),
+                artifact: Some(Box::new(stale_artifact)),
             },
             Path::new("stale-commit"),
         )
         .is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn legacy_split_retirement_replays_and_upgrades_to_a_restrictive_artifact() -> crate::Result<()>
+    {
+        let document = PolicyDocumentV1::parse(
+            Path::new("policy-v1.yaml"),
+            include_bytes!("../tests/fixtures/policy-v1.yaml"),
+        )?;
+        let source = source_revision(&document, PolicySourceStateV1::DeletionRequested, 1, '5')?;
+        let legacy_artifact = signed_artifact(&document, 1)?;
+        let terminal_document = crate::restrictive_terminal_document(&document);
+        let terminal_artifact = signed_artifact(&terminal_document, 2)?;
+        let mut state = super::ControlStoreState::default();
+
+        super::apply_transaction(
+            &mut state,
+            &super::ControlTransactionV1::SourceAccepted {
+                source_revision: Box::new(source.clone()),
+                policy_document: Box::new(document.clone()),
+                artifact: None,
+            },
+            Path::new("legacy-source"),
+        )?;
+        super::apply_transaction(
+            &mut state,
+            &super::ControlTransactionV1::Compiled {
+                policy_source_revision_id: source.policy_source_revision_id.clone(),
+                artifact: Box::new(legacy_artifact),
+            },
+            Path::new("legacy-artifact"),
+        )?;
+        super::apply_transaction(
+            &mut state,
+            &super::ControlTransactionV1::SourceAccepted {
+                source_revision: Box::new(source.clone()),
+                policy_document: Box::new(document),
+                artifact: Some(Box::new(terminal_artifact.clone())),
+            },
+            Path::new("terminal-upgrade"),
+        )?;
+
+        assert_eq!(
+            state
+                .compiled_artifacts
+                .get(&source.policy_source_revision_id),
+            Some(&terminal_artifact)
+        );
         Ok(())
     }
 }

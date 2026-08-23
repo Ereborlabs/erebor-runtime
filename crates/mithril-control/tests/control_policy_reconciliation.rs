@@ -4,14 +4,14 @@ use std::path::{Path, PathBuf};
 use ed25519_dalek::SigningKey;
 use mithril_control::{
     canonical_kubernetes_policy_spec_digest, lower_kubernetes_policy, workload_target_fact_digest,
-    ContainerKindV1, ControlPlane, ControlStore, ExceptionActivationAcknowledgementV1,
-    ExceptionActivationStateV1, ExceptionDeliveryOperationV1, KubernetesConditionStatusV1,
-    KubernetesWorkloadIdentityV1, PolicyActivationAcknowledgementV1, PolicyActivationStateV1,
-    PolicyBundleV1, PolicyDeliveryOperationV1, PolicyDesiredStateConfigV1, PolicyDesiredStateOwner,
-    PolicySignerConfigV1, PolicySourceRevisionV1, PolicySourceStateV1, ProfileSealRequestV1,
-    RegistryDigestsV1, TrustGenerationV1, WorkloadProtectionException, WorkloadProtectionPolicy,
-    WorkloadProtectionPolicySpec, WorkloadTargetFactV1, EXCEPTION_KIND, POLICY_API_VERSION,
-    POLICY_KIND,
+    CompiledPhysicalResultV1, ContainerKindV1, ControlPlane, ControlStore,
+    ExceptionActivationAcknowledgementV1, ExceptionActivationStateV1, ExceptionDeliveryOperationV1,
+    KubernetesConditionStatusV1, KubernetesWorkloadIdentityV1, PolicyActivationAcknowledgementV1,
+    PolicyActivationStateV1, PolicyBundleV1, PolicyDeliveryOperationV1, PolicyDesiredStateConfigV1,
+    PolicyDesiredStateOwner, PolicySignerConfigV1, PolicySourceRevisionV1, PolicySourceStateV1,
+    ProfileSealRequestV1, RegistryDigestsV1, TrustGenerationV1, WorkloadProtectionException,
+    WorkloadProtectionPolicy, WorkloadProtectionPolicySpec, WorkloadTargetFactV1, EXCEPTION_KIND,
+    POLICY_API_VERSION, POLICY_KIND,
 };
 use serde_json::json;
 use tempfile::TempDir;
@@ -440,6 +440,75 @@ fn exception_is_bounded_to_one_active_container_and_replays_revocation() -> Test
 }
 
 #[test]
+fn exception_activation_precedes_revocation_when_delete_arrives_before_poll() -> TestResult {
+    let directory = TempDir::new()?;
+    let store = ControlStore::open(directory.path())?;
+    let owner = make_owner(store.clone());
+    let policy = policy()?;
+    let policy_resource = resource(&policy, "profile", OBJECT_UID, 1, false)?;
+    let initial = owner.reconcile(
+        &policy_resource,
+        NAMESPACE_UID,
+        &inventory(&"1".repeat(64))?,
+        NOW,
+    )?;
+    let profile_id = initial.bundles[0]
+        .profile_artifact
+        .policy_document
+        .metadata
+        .profile_id
+        .clone();
+    let inventory = kubernetes_inventory(
+        &initial.source_revision.policy_source_revision_id,
+        &profile_id,
+    )?;
+    let bound = owner.reconcile(&policy_resource, NAMESPACE_UID, &inventory, NOW + 1)?;
+    owner.rollout_owner().acknowledge(acknowledgement(
+        &bound.bundles[0],
+        PolicyActivationStateV1::Active,
+        NOW + 2,
+    )?)?;
+
+    let activated = owner.reconcile_exception(
+        &exception_resource(EXCEPTION_UID, false)?,
+        NAMESPACE_UID,
+        &inventory,
+        NOW + 3,
+    )?;
+    let revoked = owner.reconcile_exception(
+        &exception_resource(EXCEPTION_UID, true)?,
+        NAMESPACE_UID,
+        &[],
+        NOW + 4,
+    )?;
+
+    let first = store
+        .next_exception_candidate_for_node("node-a", &[])?
+        .ok_or("the exception activation is not deliverable")?;
+    assert_eq!(first, activated.candidate);
+    assert!(store
+        .next_exception_candidate_for_node(
+            "node-a",
+            std::slice::from_ref(&activated.candidate.candidate_content_id),
+        )?
+        .is_none());
+
+    owner
+        .rollout_owner()
+        .acknowledge_exception(exception_acknowledgement(
+            &activated.candidate,
+            ExceptionActivationStateV1::Active,
+            1,
+            NOW + 5,
+        )?)?;
+    let second = store
+        .next_exception_candidate_for_node("node-a", &[])?
+        .ok_or("the exception revocation is not deliverable")?;
+    assert_eq!(second, revoked.candidate);
+    Ok(())
+}
+
+#[test]
 fn terminal_exception_does_not_block_a_new_bounded_instance() -> TestResult {
     let directory = TempDir::new()?;
     let store = ControlStore::open(directory.path())?;
@@ -601,7 +670,83 @@ fn create_update_duplicate_and_restart_preserve_one_monotonic_rollout() -> TestR
         NOW + 3,
     )?;
     assert_eq!(restarted.bundles, second.bundles);
-    assert_eq!(reopened.commit_index(), 6);
+    assert_eq!(reopened.commit_index(), 4);
+    Ok(())
+}
+
+#[test]
+fn policy_delivery_walks_each_predecessor_created_before_node_poll() -> TestResult {
+    let directory = TempDir::new()?;
+    let store = ControlStore::open(directory.path())?;
+    let owner = make_owner(store.clone());
+
+    let first_policy = policy()?;
+    let first_resource = resource(&first_policy, "profile", OBJECT_UID, 1, false)?;
+    let first_inventory = inventory_for_resource(&first_resource, &"1".repeat(64))?;
+    let first = owner.reconcile(&first_resource, NAMESPACE_UID, &first_inventory, NOW)?;
+    owner.rollout_owner().acknowledge(acknowledgement(
+        &first.bundles[0],
+        PolicyActivationStateV1::Active,
+        NOW + 1,
+    )?)?;
+
+    let mut second_policy = first_policy;
+    second_policy.roles[0].files[0].operations.reverse();
+    let second_resource = resource(&second_policy, "profile", OBJECT_UID, 2, false)?;
+    let second_inventory = inventory_for_resource(&second_resource, &"1".repeat(64))?;
+    let second = owner.reconcile(&second_resource, NAMESPACE_UID, &second_inventory, NOW + 2)?;
+
+    second_policy.roles[0].files[0].operations.rotate_left(1);
+    let third_resource = resource(&second_policy, "profile", OBJECT_UID, 3, false)?;
+    let third_inventory = inventory_for_resource(&third_resource, &"1".repeat(64))?;
+    let third = owner.reconcile(&third_resource, NAMESPACE_UID, &third_inventory, NOW + 3)?;
+
+    let first_bundle = &first.bundles[0];
+    let second_bundle = &second.bundles[0];
+    let third_bundle = &third.bundles[0];
+    assert_eq!(
+        second_bundle
+            .candidate
+            .predecessor_candidate_content_id
+            .as_deref(),
+        Some(first_bundle.candidate.candidate_content_id.as_str())
+    );
+    assert_eq!(
+        third_bundle
+            .candidate
+            .predecessor_candidate_content_id
+            .as_deref(),
+        Some(second_bundle.candidate.candidate_content_id.as_str())
+    );
+
+    let recovered_root = store
+        .next_bundle_for_node("node-a", &[])?
+        .ok_or("the root activation is not recoverable")?;
+    assert_eq!(recovered_root, *first_bundle);
+    let next = store
+        .next_bundle_for_node("node-a", std::slice::from_ref(&first_bundle.bundle_digest))?
+        .ok_or("the first replacement is not deliverable")?;
+    assert_eq!(next, *second_bundle);
+
+    // The later desired candidate must not invalidate an in-flight predecessor ACK.
+    owner.rollout_owner().acknowledge(acknowledgement(
+        second_bundle,
+        PolicyActivationStateV1::Active,
+        NOW + 4,
+    )?)?;
+    // An active successor closes the bounded retry window for older acknowledgements.
+    assert!(owner
+        .rollout_owner()
+        .acknowledge(acknowledgement(
+            first_bundle,
+            PolicyActivationStateV1::Active,
+            NOW + 5,
+        )?)
+        .is_err());
+    let last = store
+        .next_bundle_for_node("node-a", std::slice::from_ref(&second_bundle.bundle_digest))?
+        .ok_or("the second replacement is not deliverable")?;
+    assert_eq!(last, *third_bundle);
     Ok(())
 }
 
@@ -766,13 +911,9 @@ fn status_refreshes_from_durable_node_rollout_state() -> TestResult {
             && condition.status == KubernetesConditionStatusV1::True
     }));
     assert!(store
-        .next_bundle_for_node(
-            "node-a",
-            &bundle.candidate.candidate_content_id,
-            std::slice::from_ref(&bundle.bundle_digest),
-        )?
+        .next_bundle_for_node("node-a", std::slice::from_ref(&bundle.bundle_digest),)?
         .is_none());
-    assert_eq!(store.commit_index(), 4);
+    assert_eq!(store.commit_index(), 3);
     Ok(())
 }
 
@@ -786,7 +927,7 @@ fn rejected_candidate_stops_redelivery_and_projects_degraded_status() -> TestRes
     let first = owner.reconcile(&resource, NAMESPACE_UID, &inventory(&"1".repeat(64))?, NOW)?;
     let bundle = &first.bundles[0];
     assert_eq!(
-        store.next_bundle_for_node("node-a", "", &[])?,
+        store.next_bundle_for_node("node-a", &[])?,
         Some(bundle.clone())
     );
     owner.rollout_owner().acknowledge(
@@ -811,7 +952,7 @@ fn rejected_candidate_stops_redelivery_and_projects_degraded_status() -> TestRes
         .finalize()?,
     )?;
 
-    assert!(store.next_bundle_for_node("node-a", "", &[])?.is_none());
+    assert!(store.next_bundle_for_node("node-a", &[])?.is_none());
     let refreshed = owner.reconcile(
         &resource,
         NAMESPACE_UID,
@@ -856,6 +997,17 @@ fn deletion_names_exact_predecessor_and_recreate_gets_a_new_source_identity() ->
             .as_deref(),
         Some(first.bundles[0].candidate.candidate_content_id.as_str())
     );
+    let terminal = &retiring.bundles[0].profile_artifact;
+    assert!(terminal.policy_document.file_exception_grants.is_empty());
+    assert!(terminal.policy_document.exceptions.is_empty());
+    assert!(terminal
+        .compiled_profile
+        .compiled_cells
+        .iter()
+        .all(|cell| matches!(
+            cell.physical_result,
+            CompiledPhysicalResultV1::DenyEffect | CompiledPhysicalResultV1::SimulatablePolicyDeny
+        ) && cell.consuming_exception_id.is_none()));
     assert!(owner
         .reconcile(
             &resource(&policy, "profile", OBJECT_UID, 1, false)?,
@@ -892,6 +1044,55 @@ fn deletion_names_exact_predecessor_and_recreate_gets_a_new_source_identity() ->
         .predecessor_candidate_content_id
         .is_none());
     assert_eq!(recreated.bundles[0].candidate.distribution_sequence, 1);
+    Ok(())
+}
+
+#[test]
+fn invalid_update_does_not_replace_or_block_retirement_of_the_last_compiled_source() -> TestResult {
+    let directory = TempDir::new()?;
+    let store = ControlStore::open(directory.path())?;
+    let owner = make_owner(store.clone());
+    let first_policy = policy()?;
+    let first_resource = resource(&first_policy, "profile", OBJECT_UID, 1, false)?;
+    let first_inventory = inventory_for_resource(&first_resource, &"1".repeat(64))?;
+    let first = owner.reconcile(&first_resource, NAMESPACE_UID, &first_inventory, NOW)?;
+
+    let mut invalid_policy = first_policy;
+    let mut conflicting_rule = invalid_policy.roles[0].files[0].clone();
+    conflicting_rule.name = "deny-python-read".to_owned();
+    conflicting_rule.action = mithril_control::KubernetesRuleActionV1::Deny;
+    invalid_policy.roles[0].files.push(conflicting_rule);
+    let invalid_resource = resource(&invalid_policy, "profile", OBJECT_UID, 2, false)?;
+    assert!(owner
+        .reconcile(&invalid_resource, NAMESPACE_UID, &first_inventory, NOW + 1,)
+        .is_err());
+    assert_eq!(
+        store
+            .latest_source(TENANT_ID, NAMESPACE_UID, "profile")?
+            .ok_or("the accepted source is missing")?
+            .policy_source_revision_id,
+        first.source_revision.policy_source_revision_id
+    );
+
+    let deleting_invalid = resource(&invalid_policy, "profile", OBJECT_UID, 2, true)?;
+    let retired = owner.reconcile(&deleting_invalid, NAMESPACE_UID, &[], NOW + 2)?;
+    assert_eq!(retired.source_revision.object_generation, 1);
+    assert_eq!(
+        retired.bundles[0]
+            .candidate
+            .predecessor_candidate_content_id
+            .as_deref(),
+        Some(first.bundles[0].candidate.candidate_content_id.as_str())
+    );
+    assert!(retired.bundles[0]
+        .profile_artifact
+        .compiled_profile
+        .compiled_cells
+        .iter()
+        .all(|cell| !matches!(
+            cell.physical_result,
+            CompiledPhysicalResultV1::AllowEffect | CompiledPhysicalResultV1::AuditAllowEffect
+        )));
     Ok(())
 }
 
@@ -997,15 +1198,12 @@ fn two_node_create_update_restart_delete_and_recreate_preserve_provenance() -> T
         );
         assert!(current.candidate.distribution_sequence > prior.candidate.distribution_sequence);
     }
-    // A late result from the first rollout must not mutate the second rollout.
-    assert!(owner
-        .rollout_owner()
-        .acknowledge(acknowledgement(
-            node_a_first,
-            PolicyActivationStateV1::Active,
-            NOW + 4,
-        )?)
-        .is_err());
+    // A late predecessor ACK remains valid until its successor becomes active.
+    owner.rollout_owner().acknowledge(acknowledgement(
+        node_a_first,
+        PolicyActivationStateV1::Active,
+        NOW + 4,
+    )?)?;
     owner.rollout_owner().acknowledge(acknowledgement(
         second_by_node
             .get("node-a")
