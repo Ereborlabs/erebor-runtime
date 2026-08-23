@@ -10,6 +10,7 @@ provider=$directory/providers/libvirt.sh
 output_directory=
 keep_vms=false
 k3s_version=${MITHRIL_VM_K3S_VERSION:-v1.35.5+k3s1}
+reuse_images=${MITHRIL_VM_REUSE_IMAGES:-false}
 system_namespace=mithril-system
 workload_namespace=mithril-convergence
 
@@ -56,6 +57,10 @@ done
 }
 [[ $k3s_version =~ ^v[0-9]+\.[0-9]+\.[0-9]+\+k3s[0-9]+$ ]] || {
   echo "invalid MITHRIL_VM_K3S_VERSION: $k3s_version" >&2
+  exit 2
+}
+[[ $reuse_images == true || $reuse_images == false ]] || {
+  echo "MITHRIL_VM_REUSE_IMAGES must be true or false" >&2
   exit 2
 }
 [[ $(uname -m) == x86_64 ]] || {
@@ -123,12 +128,18 @@ trap cleanup EXIT
   exit 2
 }
 
-echo "Building the packaged Mithril owners"
+echo "Building the policy fixture tool"
 (cd -- "$repo_root" && cargo build --locked -p mithril-control --bin mithril-policy)
-(cd -- "$repo_root" && docker build --file packaging/mithril/Dockerfile \
-  --target node --tag mithril-node:convergence .)
-(cd -- "$repo_root" && docker build --file packaging/mithril/Dockerfile \
-  --target control --tag mithril-control:convergence .)
+if [[ $reuse_images == true ]]; then
+  echo "Reusing the local Mithril owner images"
+  docker image inspect mithril-node:convergence mithril-control:convergence >/dev/null
+else
+  echo "Building the packaged Mithril owners"
+  (cd -- "$repo_root" && docker build --file packaging/mithril/Dockerfile \
+    --target node --tag mithril-node:convergence .)
+  (cd -- "$repo_root" && docker build --file packaging/mithril/Dockerfile \
+    --target control --tag mithril-control:convergence .)
+fi
 image_archive=$work_a/mithril-images.tar
 docker save --output "$image_archive" \
   mithril-node:convergence mithril-control:convergence
