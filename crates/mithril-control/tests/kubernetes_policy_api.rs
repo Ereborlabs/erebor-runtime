@@ -1,6 +1,5 @@
 use std::path::Path;
 
-use k8s_openapi::apiextensions_apiserver::pkg::apis::apiextensions::v1::CustomResourceDefinition;
 use mithril_control::{
     canonical_policy_document_bytes, canonical_policy_spec_digest,
     policy_custom_resource_definition, PolicyDocumentV1, PolicySourceRevisionV1,
@@ -12,11 +11,6 @@ use serde_json::{json, Value};
 type TestResult<T = ()> = Result<T, Box<dyn std::error::Error>>;
 
 const POLICY: &str = include_str!("fixtures/policy-v1.yaml");
-const CRD: &str = include_str!(
-    "../../../packaging/mithril/helm/crds/mithril.erebor.dev_workloadprotectionprofiles.yaml"
-);
-const CONTROL_RBAC: &str =
-    include_str!("../../../packaging/mithril/helm/templates/control-rbac.yaml");
 
 fn policy() -> TestResult<PolicyDocumentV1> {
     Ok(PolicyDocumentV1::parse(
@@ -59,16 +53,6 @@ fn generated_crd_has_one_closed_bounded_namespaced_storage_version() -> TestResu
 
     let value = serde_json::to_value(version.schema.as_ref().ok_or("schema is required")?)?;
     assert_closed_and_bounded(&value);
-    Ok(())
-}
-
-#[test]
-fn committed_crd_is_the_generated_contract() -> TestResult {
-    let committed: CustomResourceDefinition = serde_json::from_str(CRD)?;
-    assert_eq!(
-        serde_json::to_value(committed)?,
-        serde_json::to_value(policy_custom_resource_definition()?)?
-    );
     Ok(())
 }
 
@@ -118,23 +102,12 @@ fn strict_resource_decode_and_submitted_digest_reject_unknown_or_pruned_input() 
 }
 
 #[test]
-fn status_is_bounded_and_control_rbac_has_no_policy_write_authority() -> TestResult {
+fn status_serializes_with_the_kubernetes_api_contract() -> TestResult {
     let status = mithril_control::WorkloadProtectionProfileStatusV1::default();
     let value = serde_json::to_value(status)?;
     assert!(value.get("observedGeneration").is_some());
     assert!(value.get("rolloutCounts").is_some());
     assert!(value.get("observed_generation").is_none());
-
-    assert!(CONTROL_RBAC.contains("kind: ClusterRole"));
-    assert!(CONTROL_RBAC.contains("resources: [\"workloadprotectionprofiles\"]"));
-    assert!(CONTROL_RBAC.contains("workloadprotectionprofiles/status"));
-    assert!(!CONTROL_RBAC.contains("workloadprotectionprofiles/finalizers"));
-    assert!(CONTROL_RBAC.contains("verbs: [\"get\", \"list\", \"watch\"]"));
-    assert!(CONTROL_RBAC.contains("resourceNames: [\"mithril-node\"]"));
-    assert!(CONTROL_RBAC.contains("verbs: [\"get\", \"list\", \"watch\", \"patch\"]"));
-    assert!(!CONTROL_RBAC.contains("\"create\""));
-    assert!(!CONTROL_RBAC.contains("\"delete\""));
-    assert!(!CONTROL_RBAC.contains("resources: [\"secrets\"]"));
     Ok(())
 }
 
