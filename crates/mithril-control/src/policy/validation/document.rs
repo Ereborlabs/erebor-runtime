@@ -604,10 +604,8 @@ impl PolicyDocumentV1 {
                 .collect::<BTreeSet<_>>();
             let valid = !bound.is_empty()
                 && bound.iter().all(|cell| {
-                    matches!(
-                        cell.key.operation_id.as_str(),
-                        "OPEN_READ" | "OPEN_WRITE"
-                    ) && cell.key.effect_family == EffectFamilyV1::File
+                    matches!(cell.key.operation_id.as_str(), "OPEN_READ" | "OPEN_WRITE")
+                        && cell.key.effect_family == EffectFamilyV1::File
                         && cell.physical_result == CompiledPhysicalResultV1::AllowEffect
                         && cell.errno.is_none()
                 })

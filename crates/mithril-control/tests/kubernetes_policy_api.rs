@@ -242,13 +242,8 @@ fn policy_lowering_rejects_unqualified_or_ambiguous_authority() -> TestResult {
     path_only_exception.spec.roles[0].files[1].operations =
         vec![mithril_control::KubernetesFileOperationV1::OpenPath];
     assert!(
-        lower_kubernetes_policy(
-            &path_only_exception,
-            TENANT_ID,
-            CLUSTER_UID,
-            NAMESPACE_UID,
-        )
-        .is_err()
+        lower_kubernetes_policy(&path_only_exception, TENANT_ID, CLUSTER_UID, NAMESPACE_UID,)
+            .is_err()
     );
     Ok(())
 }
