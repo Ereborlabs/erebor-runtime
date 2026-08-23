@@ -528,7 +528,10 @@ impl NodeChassis {
                             result = connection.next_message() => {
                                 let message = match result {
                                     Ok(message) => message,
-                                    Err(_error) => break,
+                                    Err(error) => {
+                                        eprintln!("Mithril node Control stream failed: {error}");
+                                        break;
+                                    }
                                 };
                                 match message {
                                     NodeControlMessage::Administrative(AdministrativeControlRequest::Resolve(request)) => {
@@ -574,10 +577,13 @@ impl NodeChassis {
                                 }
                                 if !evidence_in_flight {
                                     if let Some(batch) = self.observations.next_evidence_batch() {
-                                    if connection.send_evidence_batch(batch).await.is_err() {
-                                        break;
-                                    }
-                                    evidence_in_flight = true;
+                                        match connection.send_evidence_batch(batch).await {
+                                            Ok(()) => evidence_in_flight = true,
+                                            Err(error) => {
+                                                eprintln!("Mithril node evidence upload failed: {error}");
+                                                break;
+                                            }
+                                        }
                                     }
                                 }
                                 if coverage_in_flight.is_none() {
@@ -586,7 +592,10 @@ impl NodeChassis {
                                         if acknowledged_coverage != Some(key) {
                                             match connection.send_coverage_report(snapshot).await {
                                                 Ok(expected) => coverage_in_flight = Some(expected),
-                                                Err(_error) => break,
+                                                Err(error) => {
+                                                    eprintln!("Mithril node coverage report failed: {error}");
+                                                    break;
+                                                }
                                             }
                                         }
                                     }
@@ -618,7 +627,10 @@ impl NodeChassis {
                                         }
                                         continue;
                                     }
-                                    Err(_error) => break,
+                                    Err(error) => {
+                                        eprintln!("Mithril node policy inventory failed: {error}");
+                                        break;
+                                    }
                                 };
                                 // Do not retry one rejected candidate until Control selects another.
                                 if rejected_candidate.as_deref()
@@ -742,6 +754,7 @@ impl NodeChassis {
                                         }
                                     }
                                     ReconciliationOutcome::EvidenceUnhealthy => {
+                                        eprintln!("Mithril node evidence reconciliation became unhealthy");
                                         evidence_healthy = false;
                                         close_evidence_claims(&mut self.registration);
                                         self.readiness.send_modify(|readiness| {
@@ -751,6 +764,7 @@ impl NodeChassis {
                                         break;
                                     }
                                     ReconciliationOutcome::IdentityUnhealthy => {
+                                        eprintln!("Mithril node identity reconciliation became unhealthy");
                                         identity_healthy = false;
                                         close_identity_claims(&mut self.registration);
                                         self.readiness.send_replace(NodeReadinessV1 {
@@ -763,6 +777,7 @@ impl NodeChassis {
                                         break;
                                     }
                                     ReconciliationOutcome::KernelUnhealthy => {
+                                        eprintln!("Mithril node kernel reconciliation became unhealthy");
                                         kernel_healthy = false;
                                         identity_healthy = false;
                                         self.close_kernel_claims();
