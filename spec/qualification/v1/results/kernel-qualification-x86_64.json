@@ -1,6 +1,5 @@
 {
   "schema_version": 1,
-  "architecture_revision_sha256": "580becbcd8f2872f954fb4e3857e27ec0f5528e55d8561096f3a16d10cf26d4e",
   "platform_architecture": "x86_64",
   "kernel_release": "6.8.0-137-generic",
   "active_lsm_order": "lockdown,capability,landlock,yama,apparmor,bpf",

@@ -646,8 +646,7 @@ mod tests {
     use std::path::PathBuf;
 
     use mithril_control::{
-        CompiledPhysicalResultV1, EffectFamilyV1, PolicyArtifactOwner, PolicyCompiler,
-        PolicyDocumentV1, ProfileModeV1,
+        CompiledPhysicalResultV1, EffectFamilyV1, PolicyArtifactOwner, ProfileModeV1,
     };
     use mithril_node::EffectObservationHealth;
 
