@@ -42,6 +42,11 @@ impl NodeReadinessV1 {
         self.kernel_ready && self.identity_ready && self.control_ready && self.admission_ready
     }
 
+    const fn admits_protected_runtime_start(self, policy_available: bool) -> bool {
+        // An existing Pod can restart without scheduling, so Control health remains part of the gate.
+        self.admits_new_work() && self.effect_prevention_claims_enabled && policy_available
+    }
+
     const fn prevention_claims_enabled(
         kernel_healthy: bool,
         identity_healthy: bool,
@@ -956,10 +961,7 @@ impl NodeChassis {
         });
         let ready = {
             let readiness = *self.readiness.borrow();
-            readiness.kernel_ready
-                && readiness.identity_ready
-                && readiness.effect_prevention_claims_enabled
-                && self.policy.is_some()
+            readiness.admits_protected_runtime_start(self.policy.is_some())
                 && crate::runtime_admission::ScheduledRuntimeBindingV1::resolve(
                     &self.config.workload_bindings,
                     &envelope.request,
@@ -993,10 +995,7 @@ impl NodeChassis {
     ) -> Result<()> {
         let readiness = *self.readiness.borrow();
         snafu::ensure!(
-            readiness.kernel_ready
-                && readiness.identity_ready
-                && readiness.effect_prevention_claims_enabled
-                && self.policy.is_some(),
+            readiness.admits_protected_runtime_start(self.policy.is_some()),
             IdentityStateSnafu {
                 reason: "runtime admission has no healthy active prevention generation",
             }
@@ -1750,6 +1749,25 @@ mod tests {
         assert!(!NodeReadinessV1::prevention_claims_enabled(
             true, true, false
         ));
+    }
+
+    #[test]
+    fn control_disconnect_refuses_protected_runtime_start() {
+        let ready = NodeReadinessV1 {
+            kernel_ready: true,
+            identity_ready: true,
+            control_ready: true,
+            admission_ready: true,
+            effect_prevention_claims_enabled: true,
+        };
+        assert!(ready.admits_protected_runtime_start(true));
+
+        let disconnected = NodeReadinessV1 {
+            control_ready: false,
+            admission_ready: false,
+            ..ready
+        };
+        assert!(!disconnected.admits_protected_runtime_start(true));
     }
 
     #[test]

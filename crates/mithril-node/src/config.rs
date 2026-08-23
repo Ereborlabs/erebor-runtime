@@ -251,29 +251,46 @@ pub struct NodeConfig {
 
 impl NodeConfig {
     pub fn load(path: &Path) -> Result<Self> {
-        let bytes = fs::read(path).context(IoSnafu { path })?;
-        let config: Self = serde_json::from_slice(&bytes).context(JsonSnafu { path })?;
+        let config = Self::read(path)?;
         config.validate()?;
         Ok(config)
     }
 
-    pub fn bind_kubernetes_runtime_identity(&mut self, node_name: String) -> Result<()> {
+    pub fn load_with_kubernetes_runtime_identity(path: &Path, node_name: String) -> Result<Self> {
+        Self::load_with_kubernetes_runtime_identity_using(
+            path,
+            node_name,
+            current_effect_controller_cgroup_path,
+        )
+    }
+
+    fn read(path: &Path) -> Result<Self> {
+        let bytes = fs::read(path).context(IoSnafu { path })?;
+        serde_json::from_slice(&bytes).context(JsonSnafu { path })
+    }
+
+    fn load_with_kubernetes_runtime_identity_using(
+        path: &Path,
+        node_name: String,
+        resolve_effect_controller_cgroup: impl FnOnce() -> Result<PathBuf>,
+    ) -> Result<Self> {
+        // The scheduler-derived Node name must exist before admission constraints are validated.
+        let mut config = Self::read(path)?;
+        config
+            .bind_kubernetes_runtime_identity_using(node_name, resolve_effect_controller_cgroup)?;
+        Ok(config)
+    }
+
+    fn bind_kubernetes_runtime_identity_using(
+        &mut self,
+        node_name: String,
+        resolve_effect_controller_cgroup: impl FnOnce() -> Result<PathBuf>,
+    ) -> Result<()> {
         // Downward API supplies the scheduler-selected node name; configuration cannot override it.
         self.kubernetes_node_name = Some(node_name);
         if let Some(runtime) = self.container_runtime.as_mut() {
-            let source_path = Path::new("/proc/self/cgroup");
-            let cgroups = fs::read_to_string(source_path).context(IoSnafu { path: source_path })?;
-            let relative = unified_cgroup_path(&cgroups).ok_or_else(|| {
-                InvalidConfigurationSnafu {
-                    reason: "Kubernetes node process has no unique non-root unified cgroup"
-                        .to_owned(),
-                }
-                .build()
-            })?;
-            let path = Path::new("/sys/fs/cgroup").join(relative.trim_start_matches('/'));
             // Scope CRI inspection to this DaemonSet Pod instead of the host cgroup root.
-            runtime.effect_controller_cgroup_path =
-                fs::canonicalize(&path).context(IoSnafu { path: &path })?;
+            runtime.effect_controller_cgroup_path = resolve_effect_controller_cgroup()?;
         }
         self.validate()
     }
@@ -545,6 +562,19 @@ fn unified_cgroup_path(cgroups: &str) -> Option<&str> {
     .then_some(path)
 }
 
+fn current_effect_controller_cgroup_path() -> Result<PathBuf> {
+    let source_path = Path::new("/proc/self/cgroup");
+    let cgroups = fs::read_to_string(source_path).context(IoSnafu { path: source_path })?;
+    let relative = unified_cgroup_path(&cgroups).ok_or_else(|| {
+        InvalidConfigurationSnafu {
+            reason: "Kubernetes node process has no unique non-root unified cgroup".to_owned(),
+        }
+        .build()
+    })?;
+    let path = Path::new("/sys/fs/cgroup").join(relative.trim_start_matches('/'));
+    fs::canonicalize(&path).context(IoSnafu { path: &path })
+}
+
 impl NodeControlConfig {
     #[must_use]
     pub const fn reconnect_minimum(&self) -> Duration {
@@ -608,6 +638,7 @@ fn canonical_uuid(value: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
+    use std::fs;
     use std::path::PathBuf;
     use std::time::Duration;
 
@@ -685,6 +716,59 @@ mod tests {
         let config = config();
         config.validate()?;
         assert_eq!(config.reconciliation_interval(), Duration::from_secs(2));
+        Ok(())
+    }
+
+    #[test]
+    fn scheduler_node_name_is_bound_before_runtime_admission_validation(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("node.json");
+        fs::write(
+            &path,
+            serde_json::to_vec(&serde_json::json!({
+                "node_id": "node-a",
+                "state_directory": "/var/lib/mithril",
+                "interceptor": {
+                    "runtime_btf_path": "/sys/kernel/btf/vmlinux",
+                    "lease_path": "/run/erebor-interceptor/owner.lock",
+                    "pin_root": "/sys/fs/bpf/mithril"
+                },
+                "control": {
+                    "endpoint": "https://mithril-control:8443",
+                    "server_name": "mithril-control",
+                    "ca_path": "/etc/mithril/identity/ca.pem",
+                    "certificate_path": "/etc/mithril/identity/node.pem",
+                    "private_key_path": "/etc/mithril/identity/node-key.pem"
+                },
+                "runtime_admission": {
+                    "socket_path": "/run/mithril/runtime-admission.sock"
+                },
+                "container_runtime": {
+                    "socket_path": "/run/containerd/containerd.sock",
+                    "effect_controller_cgroup_path": "/sys/fs/cgroup/config-placeholder"
+                }
+            }))?,
+        )?;
+
+        assert!(NodeConfig::load(&path).is_err());
+        let loaded = NodeConfig::load_with_kubernetes_runtime_identity_using(
+            &path,
+            "worker-a.example".to_owned(),
+            || Ok(PathBuf::from("/sys/fs/cgroup/kubepods/mithril-node")),
+        )?;
+
+        assert_eq!(
+            loaded.kubernetes_node_name.as_deref(),
+            Some("worker-a.example")
+        );
+        assert_eq!(
+            loaded
+                .container_runtime
+                .as_ref()
+                .map(|runtime| runtime.effect_controller_cgroup_path.as_path()),
+            Some(std::path::Path::new("/sys/fs/cgroup/kubepods/mithril-node"))
+        );
         Ok(())
     }
 
