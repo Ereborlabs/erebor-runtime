@@ -13,7 +13,7 @@ use mithril_control::{
 use mithril_node::{
     AdministrativeControlRequest, EffectObservationStore, EvidenceIdV1, EvidenceWalLimits,
     NodeControlConfig, NodeControlConnector, NodeControlMessage, ObservationCanonicalizer,
-    TrustCache,
+    ObservationEnvelopeV1, TrustCache,
 };
 use rcgen::{
     date_time_ymd, BasicConstraints, Certificate, CertificateParams, ExtendedKeyUsagePurpose, IsCa,
@@ -135,42 +135,99 @@ async fn mtls_evidence_upload_replays_after_disconnect_and_advances_only_on_ack(
         }
         .as_bytes(),
     );
+    observations.record_bytes(
+        erebor_interceptor_abi::EffectObservationV1 {
+            source_sequence: 1,
+            source_cpu_id: 1,
+            task_cookie: 8,
+            reason: 9,
+            physical_result: 1,
+            ..erebor_interceptor_abi::EffectObservationV1::default()
+        }
+        .as_bytes(),
+    );
+    observations.record_bytes(
+        erebor_interceptor_abi::EffectObservationV1 {
+            source_sequence: 2,
+            source_cpu_id: 0,
+            task_cookie: 9,
+            reason: 9,
+            physical_result: 1,
+            ..erebor_interceptor_abi::EffectObservationV1::default()
+        }
+        .as_bytes(),
+    );
     let connector =
         NodeControlConnector::new(files.node_config(address), "node-a".to_owned(), [7; 16]);
     let mut trust = TrustCache::load(directory.path())?;
     let mut first = connector.connect(registration(), true, &mut trust).await?;
     tokio::time::sleep(Duration::from_millis(20)).await;
-    first
-        .send_evidence_batch(
-            observations
-                .next_evidence_batch()
-                .ok_or("missing WAL batch")?,
-        )
-        .await?;
+    let first_batch = observations
+        .next_evidence_batch()
+        .ok_or("missing WAL batch")?;
+    let first_source = batch_source_id(&first_batch)?;
+    first.send_evidence_batch(first_batch.clone()).await?;
     drop(first);
     tokio::time::sleep(Duration::from_millis(20)).await;
     assert!(observations.next_evidence_batch().is_some());
 
     let mut second = connector.connect(registration(), true, &mut trust).await?;
     tokio::time::sleep(Duration::from_millis(20)).await;
-    second
-        .send_evidence_batch(
-            observations
-                .next_evidence_batch()
-                .ok_or("missing replay batch")?,
-        )
-        .await?;
+    let replay = observations
+        .next_evidence_batch()
+        .ok_or("missing replay batch")?;
+    assert_eq!(replay, first_batch);
+    second.send_evidence_batch(replay).await?;
     let NodeControlMessage::EvidenceAck(ack) = second.next_message().await? else {
         return Err("Control did not acknowledge evidence".into());
     };
     observations.acknowledge_evidence(ack.try_into()?)?;
+    let second_batch = observations
+        .next_evidence_batch()
+        .ok_or("missing second source batch")?;
+    let second_source = batch_source_id(&second_batch)?;
+    assert_ne!(second_source, first_source);
+    second.send_evidence_batch(second_batch.clone()).await?;
+    let NodeControlMessage::EvidenceAck(ack) = second.next_message().await? else {
+        return Err("Control did not acknowledge the second evidence source".into());
+    };
+    observations.acknowledge_evidence(ack.try_into()?)?;
     assert!(observations.next_evidence_batch().is_none());
-    assert_eq!(control.allowed_nodes().len(), 1);
+    let intake = EvidenceIntakeOwner::open(&intake_path)?;
+    for (source_id, batch) in [(first_source, first_batch), (second_source, second_batch)] {
+        let identity = EvidenceIntakeIdentityV1 {
+            tenant_id: EvidenceIdV1::new(1, 2).to_be_bytes(),
+            node_id: "node-a".to_owned(),
+            node_boot_id: [7; 16],
+            label_epoch: 1,
+            source_id,
+            source_epoch: 1,
+        };
+        assert_eq!(intake.contiguous_cursor(&identity)?, batch.last_cursor);
+        assert_eq!(
+            intake.store().accepted_evidence_records(&identity)?.len(),
+            batch.records.len()
+        );
+    }
 
     drop(second);
     let _result = shutdown.send(());
     server.await??;
     Ok(())
+}
+
+fn batch_source_id(batch: &mithril_node::EvidenceBatchV1) -> Result<[u8; 16], Box<dyn StdError>> {
+    let mut source_id = None;
+    for record in &batch.records {
+        let current = ObservationEnvelopeV1::from_wire_bytes(&record.payload)?
+            .source_id
+            .to_be_bytes();
+        if source_id.is_some_and(|source_id| source_id != current) {
+            return Err("one evidence batch crossed source identities".into());
+        }
+        source_id = Some(current);
+    }
+    source_id.ok_or_else(|| "evidence batch has no records".into())
 }
 
 #[tokio::test]

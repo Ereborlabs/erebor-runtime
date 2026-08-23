@@ -29,6 +29,7 @@ pub use model::{
     RemoteSubjectBindingV1, SensitivityV1, SourceAuthorityV1, TemporalCoverageV1,
     MAX_EVIDENCE_FIELDS_V1, MAX_PROVENANCE_OBSERVATIONS_V1,
 };
+use wal::EvidenceWalOwner;
 pub use wal::{EvidenceAckV1, EvidenceBatchV1, EvidenceRecordV1, EvidenceWal, EvidenceWalLimits};
 pub use window::{
     DeterministicLocalWindowOwner, LocalFindingWindowSpecV1, LocalFindingWindowStateV1,
@@ -52,7 +53,7 @@ struct Inner {
 
 struct DurableEvidence {
     canonicalizer: ObservationCanonicalizer,
-    wal: EvidenceWal,
+    wal: EvidenceWalOwner,
     coverage: CoverageHealthOwner,
 }
 
@@ -118,7 +119,7 @@ impl EffectObservationStore {
                 evidence_errors: AtomicU64::new(0),
                 durable: Some(Mutex::new(DurableEvidence {
                     canonicalizer,
-                    wal: EvidenceWal::open(&wal_root, limits)?,
+                    wal: EvidenceWalOwner::open(&wal_root, limits)?,
                     coverage: CoverageHealthOwner::open(coverage_path, canonicalizer)?,
                 })),
             }),

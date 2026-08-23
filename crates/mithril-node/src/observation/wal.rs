@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -14,6 +15,7 @@ use super::persistence::{atomic_write, sync_directory};
 
 const WAL_FORMAT_VERSION: u32 = 1;
 const ACK_FILE: &str = "acknowledged.json";
+const LEGACY_SOURCE_FILE: &str = "source-id";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct EvidenceWalLimits {
@@ -115,6 +117,12 @@ impl EvidenceRecordV1 {
         }
         Ok(())
     }
+
+    fn source_id(&self) -> Result<[u8; 16]> {
+        Ok(ObservationEnvelopeV1::from_wire_bytes(&self.payload)?
+            .source_id
+            .to_be_bytes())
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -214,6 +222,303 @@ impl From<crate::Error> for EvidenceWalAppendFailure {
             error,
             gap_reason: CoverageGapReasonV1::WalFailure,
         }
+    }
+}
+
+pub(super) struct EvidenceWalOwner {
+    root: PathBuf,
+    limits: EvidenceWalLimits,
+    streams: BTreeMap<[u8; 16], EvidenceWal>,
+    unbound_legacy: Option<EvidenceWal>,
+    in_flight_source: Option<[u8; 16]>,
+    last_acknowledged_source: Option<[u8; 16]>,
+}
+
+impl EvidenceWalOwner {
+    pub(super) fn open(root: impl Into<PathBuf>, limits: EvidenceWalLimits) -> Result<Self> {
+        limits.validate()?;
+        let root = root.into();
+        fs::create_dir_all(&root).context(IoSnafu { path: &root })?;
+        let mut streams = BTreeMap::new();
+        let legacy = EvidenceWal::open(&root, limits)?;
+        let legacy_source = legacy_source_id(&legacy, &root)?;
+        let legacy_is_populated = !legacy.records.is_empty()
+            || legacy.acknowledged != AckStateV1::default()
+            || legacy_source.is_some();
+        let mut unbound_legacy = None;
+        if let Some(source_id) = legacy_source {
+            streams.insert(source_id, legacy);
+        } else if legacy_is_populated {
+            unbound_legacy = Some(legacy);
+        }
+        for entry in fs::read_dir(&root)
+            .context(IoSnafu { path: &root })?
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .context(IoSnafu { path: &root })?
+        {
+            let path = entry.path();
+            if !path.is_dir()
+                && (path.file_name().and_then(|name| name.to_str()) == Some(ACK_FILE)
+                    || path.file_name().and_then(|name| name.to_str()) == Some(LEGACY_SOURCE_FILE)
+                    || path.extension().and_then(|extension| extension.to_str()) == Some("wal"))
+            {
+                continue;
+            }
+            let source_id = stream_source_id(&path)?;
+            let wal = EvidenceWal::open(&path, limits)?;
+            if wal
+                .records
+                .iter()
+                .any(|record| record.source_id().ok() != Some(source_id))
+            {
+                return EvidenceStateSnafu {
+                    reason: format!(
+                        "evidence WAL stream `{}` contains a different source identity",
+                        path.display()
+                    ),
+                }
+                .fail();
+            }
+            if streams.insert(source_id, wal).is_some() {
+                return EvidenceStateSnafu {
+                    reason: format!(
+                        "evidence WAL source `{}` has more than one stream directory",
+                        hex::encode(source_id)
+                    ),
+                }
+                .fail();
+            }
+        }
+        let owner = Self {
+            root,
+            limits,
+            streams,
+            unbound_legacy,
+            in_flight_source: None,
+            last_acknowledged_source: None,
+        };
+        owner.validate_retention()?;
+        Ok(owner)
+    }
+
+    pub(super) fn append_classified(
+        &mut self,
+        observation: &ObservationEnvelopeV1,
+    ) -> std::result::Result<u64, EvidenceWalAppendFailure> {
+        let source_id = observation.source_id.to_be_bytes();
+        let (retained_records, retained_bytes) =
+            self.retention().map_err(EvidenceWalAppendFailure::from)?;
+        if retained_records >= self.limits.maximum_retained_records
+            || retained_bytes >= self.limits.maximum_retained_bytes
+        {
+            return Err(capacity_failure());
+        }
+        if !self.streams.contains_key(&source_id) && self.unbound_legacy.is_some() {
+            // A flat Phase 6 WAL can continue only after its first source is bound durably.
+            atomic_write(
+                &self.root.join(LEGACY_SOURCE_FILE),
+                hex::encode(source_id).as_bytes(),
+            )
+            .map_err(EvidenceWalAppendFailure::from)?;
+            let Some(legacy) = self.unbound_legacy.take() else {
+                return Err(EvidenceStateSnafu {
+                    reason: "the flat evidence WAL disappeared before source binding".to_owned(),
+                }
+                .build()
+                .into());
+            };
+            self.streams.insert(source_id, legacy);
+        }
+        if !self.streams.contains_key(&source_id) {
+            let path = self.root.join(hex::encode(source_id));
+            let wal =
+                EvidenceWal::open(path, self.limits).map_err(EvidenceWalAppendFailure::from)?;
+            self.streams.insert(source_id, wal);
+        }
+        let Some(wal) = self.streams.get_mut(&source_id) else {
+            return Err(EvidenceStateSnafu {
+                reason: "the evidence source WAL is missing after source selection".to_owned(),
+            }
+            .build()
+            .into());
+        };
+        // The configured retention bounds apply to all source streams together.
+        wal.limits.maximum_retained_records =
+            wal.records.len() + (self.limits.maximum_retained_records - retained_records);
+        wal.limits.maximum_retained_bytes =
+            wal.retained_bytes + (self.limits.maximum_retained_bytes - retained_bytes);
+        let result = wal.append_classified(observation);
+        wal.limits = self.limits;
+        result
+    }
+
+    pub(super) fn next_batch(&mut self) -> Option<EvidenceBatchV1> {
+        if let Some(source_id) = self.in_flight_source {
+            return self.streams.get(&source_id)?.next_batch();
+        }
+        let source_id = self
+            .streams
+            .keys()
+            .copied()
+            .filter(|source_id| {
+                self.last_acknowledged_source
+                    .is_none_or(|last| source_id > &last)
+            })
+            .chain(self.streams.keys().copied())
+            .find(|source_id| {
+                self.streams
+                    .get(source_id)
+                    .is_some_and(|wal| wal.pending_records() > 0)
+            })?;
+        self.in_flight_source = Some(source_id);
+        self.streams.get(&source_id)?.next_batch()
+    }
+
+    pub(super) fn acknowledge(&mut self, ack: EvidenceAckV1) -> Result<()> {
+        let source_id = self.in_flight_source.ok_or_else(|| {
+            EvidenceStateSnafu {
+                reason: "evidence acknowledgement has no in-flight source batch".to_owned(),
+            }
+            .build()
+        })?;
+        self.streams
+            .get_mut(&source_id)
+            .ok_or_else(|| {
+                EvidenceStateSnafu {
+                    reason: "evidence acknowledgement source is not retained".to_owned(),
+                }
+                .build()
+            })?
+            .acknowledge(ack)?;
+        self.in_flight_source = None;
+        self.last_acknowledged_source = Some(source_id);
+        Ok(())
+    }
+
+    fn retention(&self) -> Result<(usize, u64)> {
+        self.streams
+            .values()
+            .chain(self.unbound_legacy.iter())
+            .try_fold((0_usize, 0_u64), |(records, bytes), wal| {
+                Ok((
+                    records.checked_add(wal.pending_records()).ok_or_else(|| {
+                        EvidenceStateSnafu {
+                            reason: "evidence WAL retained record count overflowed".to_owned(),
+                        }
+                        .build()
+                    })?,
+                    bytes.checked_add(wal.retained_bytes()).ok_or_else(|| {
+                        EvidenceStateSnafu {
+                            reason: "evidence WAL retained byte count overflowed".to_owned(),
+                        }
+                        .build()
+                    })?,
+                ))
+            })
+    }
+
+    fn validate_retention(&self) -> Result<()> {
+        let (retained_records, retained_bytes) = self.retention()?;
+        if retained_records > self.limits.maximum_retained_records
+            || retained_bytes > self.limits.maximum_retained_bytes
+        {
+            return EvidenceStateSnafu {
+                reason: "evidence WAL streams exceed their shared retention bounds".to_owned(),
+            }
+            .fail();
+        }
+        Ok(())
+    }
+}
+
+fn legacy_source_id(wal: &EvidenceWal, root: &Path) -> Result<Option<[u8; 16]>> {
+    let marker_path = root.join(LEGACY_SOURCE_FILE);
+    let marker = match fs::read_to_string(&marker_path) {
+        Ok(value) => Some(parse_source_id(value.trim(), &marker_path)?),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(source) => {
+            return Err(crate::Error::Io {
+                path: marker_path,
+                source,
+                location: snafu::Location::default(),
+            })
+        }
+    };
+    let mut record_source = None;
+    for record in &wal.records {
+        let source_id = record.source_id()?;
+        if record_source.is_some_and(|current| current != source_id) {
+            return EvidenceStateSnafu {
+                reason: "the flat evidence WAL contains more than one source identity".to_owned(),
+            }
+            .fail();
+        }
+        record_source = Some(source_id);
+    }
+    if marker.is_some() && record_source.is_some() && marker != record_source {
+        return EvidenceStateSnafu {
+            reason: "the flat evidence WAL source marker does not match its records".to_owned(),
+        }
+        .fail();
+    }
+    if marker.is_none() {
+        if let Some(record_source) = record_source {
+            atomic_write(&marker_path, hex::encode(record_source).as_bytes())?;
+        }
+    }
+    Ok(marker.or(record_source))
+}
+
+fn stream_source_id(path: &Path) -> Result<[u8; 16]> {
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default();
+    let source_id = parse_source_id(name, path);
+    if !path.is_dir() || source_id.is_err() {
+        return EvidenceStateSnafu {
+            reason: format!(
+                "evidence WAL entry `{}` is not a source stream directory",
+                path.display()
+            ),
+        }
+        .fail();
+    }
+    source_id
+}
+
+fn parse_source_id(value: &str, path: &Path) -> Result<[u8; 16]> {
+    let source_id: Option<[u8; 16]> = hex::decode(value)
+        .ok()
+        .and_then(|value| value.try_into().ok());
+    let Some(source_id) = source_id else {
+        return EvidenceStateSnafu {
+            reason: format!(
+                "evidence WAL source identity `{}` is invalid",
+                path.display()
+            ),
+        }
+        .fail();
+    };
+    if value.len() != 32 || hex::encode(source_id) != value {
+        return EvidenceStateSnafu {
+            reason: format!(
+                "evidence WAL source identity `{}` is invalid",
+                path.display()
+            ),
+        }
+        .fail();
+    }
+    Ok(source_id)
+}
+
+fn capacity_failure() -> EvidenceWalAppendFailure {
+    EvidenceWalAppendFailure {
+        error: EvidenceStateSnafu {
+            reason: "evidence WAL retention or record capacity is exhausted".to_owned(),
+        }
+        .build(),
+        gap_reason: CoverageGapReasonV1::WalCapacity,
     }
 }
 
@@ -604,11 +909,18 @@ mod tests {
 
     use super::{
         segment_path, AckStateV1, EvidenceAckV1, EvidenceRecordV1, EvidenceWal, EvidenceWalLimits,
-        ACK_FILE, WAL_FORMAT_VERSION,
+        EvidenceWalOwner, ACK_FILE, WAL_FORMAT_VERSION,
     };
     use crate::{EvidenceIdV1, ObservationCanonicalizer, TemporalCoverageV1};
 
     fn kernel_observation(sequence: u64) -> crate::Result<crate::ObservationEnvelopeV1> {
+        kernel_observation_for_cpu(sequence, 1)
+    }
+
+    fn kernel_observation_for_cpu(
+        sequence: u64,
+        cpu_id: u32,
+    ) -> crate::Result<crate::ObservationEnvelopeV1> {
         let canonicalizer = ObservationCanonicalizer::new(
             EvidenceIdV1::new(1, 2),
             EvidenceIdV1::new(3, 4),
@@ -618,7 +930,7 @@ mod tests {
         canonicalizer.normalize_kernel(
             erebor_interceptor_abi::EffectObservationV1 {
                 source_sequence: sequence,
-                source_cpu_id: 1,
+                source_cpu_id: cpu_id,
                 task_cookie: 10,
                 reason: 9,
                 physical_result: 1,
@@ -731,6 +1043,82 @@ mod tests {
         assert!(!segment_temporary.exists());
         assert!(!ack_temporary.exists());
         assert_eq!(wal.append(&kernel_observation(3)?)?, 3);
+        Ok(())
+    }
+
+    #[test]
+    fn wal_owner_recovers_and_acknowledges_each_source_independently(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let mut owner = EvidenceWalOwner::open(directory.path(), limits())?;
+        owner
+            .append_classified(&kernel_observation_for_cpu(1, 0)?)
+            .map_err(|failure| failure.error)?;
+        owner
+            .append_classified(&kernel_observation_for_cpu(1, 1)?)
+            .map_err(|failure| failure.error)?;
+        owner
+            .append_classified(&kernel_observation_for_cpu(2, 0)?)
+            .map_err(|failure| failure.error)?;
+
+        let first = owner.next_batch().ok_or("first source batch is missing")?;
+        let first_source = first.records[0].source_id()?;
+        assert!(first
+            .records
+            .iter()
+            .all(|record| record.source_id().ok() == Some(first_source)));
+        drop(owner);
+
+        let mut owner = EvidenceWalOwner::open(directory.path(), limits())?;
+        assert_eq!(owner.next_batch(), Some(first.clone()));
+        owner.acknowledge(EvidenceAckV1 {
+            first_cursor: first.first_cursor,
+            last_cursor: first.last_cursor,
+            batch_sha256: first.batch_sha256,
+        })?;
+        let second = owner.next_batch().ok_or("second source batch is missing")?;
+        let second_source = second.records[0].source_id()?;
+        assert_ne!(second_source, first_source);
+        assert!(second
+            .records
+            .iter()
+            .all(|record| record.source_id().ok() == Some(second_source)));
+        owner.acknowledge(EvidenceAckV1 {
+            first_cursor: second.first_cursor,
+            last_cursor: second.last_cursor,
+            batch_sha256: second.batch_sha256,
+        })?;
+        assert!(owner.next_batch().is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn wal_owner_preserves_a_flat_single_source_wal() -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let mut legacy = EvidenceWal::open(directory.path(), limits())?;
+        legacy.append(&kernel_observation_for_cpu(1, 0)?)?;
+        let expected = legacy.next_batch().ok_or("legacy batch is missing")?;
+        drop(legacy);
+
+        let mut owner = EvidenceWalOwner::open(directory.path(), limits())?;
+        assert_eq!(owner.next_batch(), Some(expected.clone()));
+        owner.acknowledge(EvidenceAckV1 {
+            first_cursor: expected.first_cursor,
+            last_cursor: expected.last_cursor,
+            batch_sha256: expected.batch_sha256,
+        })?;
+        drop(owner);
+
+        let mut owner = EvidenceWalOwner::open(directory.path(), limits())?;
+        owner
+            .append_classified(&kernel_observation_for_cpu(2, 0)?)
+            .map_err(|failure| failure.error)?;
+        let continued = owner.next_batch().ok_or("continued batch is missing")?;
+        assert_eq!((continued.first_cursor, continued.last_cursor), (2, 2));
+        assert_eq!(
+            continued.records[0].source_id()?,
+            expected.records[0].source_id()?
+        );
         Ok(())
     }
 
