@@ -1058,7 +1058,7 @@ async fn reconcile_exception_resource(
         .reconcile_exception_observation(
             &resource,
             namespace_uid.as_deref().unwrap_or_default(),
-            &control.workload_inventory(),
+            &control.kubernetes_workload_inventory(),
             utc_now_ns(),
             source_state,
         )

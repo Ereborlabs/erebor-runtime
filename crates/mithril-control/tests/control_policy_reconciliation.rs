@@ -3,14 +3,15 @@ use std::path::{Path, PathBuf};
 
 use ed25519_dalek::SigningKey;
 use mithril_control::{
-    canonical_kubernetes_policy_spec_digest, workload_target_fact_digest, ContainerKindV1,
-    ControlPlane, ControlStore, ExceptionActivationAcknowledgementV1, ExceptionActivationStateV1,
-    ExceptionDeliveryOperationV1, KubernetesConditionStatusV1, KubernetesWorkloadIdentityV1,
-    PolicyActivationAcknowledgementV1, PolicyActivationStateV1, PolicyBundleV1,
-    PolicyDeliveryOperationV1, PolicyDesiredStateConfigV1, PolicyDesiredStateOwner,
-    PolicySignerConfigV1, ProfileSealRequestV1, RegistryDigestsV1, TrustGenerationV1,
-    WorkloadProtectionException, WorkloadProtectionPolicy, WorkloadProtectionPolicySpec,
-    WorkloadTargetFactV1, EXCEPTION_KIND, POLICY_API_VERSION, POLICY_KIND,
+    canonical_kubernetes_policy_spec_digest, lower_kubernetes_policy, workload_target_fact_digest,
+    ContainerKindV1, ControlPlane, ControlStore, ExceptionActivationAcknowledgementV1,
+    ExceptionActivationStateV1, ExceptionDeliveryOperationV1, KubernetesConditionStatusV1,
+    KubernetesWorkloadIdentityV1, PolicyActivationAcknowledgementV1, PolicyActivationStateV1,
+    PolicyBundleV1, PolicyDeliveryOperationV1, PolicyDesiredStateConfigV1, PolicyDesiredStateOwner,
+    PolicySignerConfigV1, PolicySourceRevisionV1, PolicySourceStateV1, ProfileSealRequestV1,
+    RegistryDigestsV1, TrustGenerationV1, WorkloadProtectionException, WorkloadProtectionPolicy,
+    WorkloadProtectionPolicySpec, WorkloadTargetFactV1, EXCEPTION_KIND, POLICY_API_VERSION,
+    POLICY_KIND,
 };
 use serde_json::json;
 use tempfile::TempDir;
@@ -101,39 +102,88 @@ fn seal_request() -> ProfileSealRequestV1 {
     }
 }
 
-fn inventory(binding_digest: &str) -> Vec<WorkloadTargetFactV1> {
-    vec![WorkloadTargetFactV1 {
+fn inventory(seed: &str) -> TestResult<Vec<WorkloadTargetFactV1>> {
+    let spec = policy()?;
+    let resource = resource(&spec, "profile", OBJECT_UID, 1, false)?;
+    inventory_for_resource(&resource, seed)
+}
+
+fn inventory_for_resource(
+    resource: &WorkloadProtectionPolicy,
+    seed: &str,
+) -> TestResult<Vec<WorkloadTargetFactV1>> {
+    let policy = lower_kubernetes_policy(resource, TENANT_ID, CLUSTER_UID, NAMESPACE_UID)?;
+    let source = PolicySourceRevisionV1::from_resource(
+        resource,
+        &policy,
+        TENANT_ID,
+        CLUSTER_UID,
+        NAMESPACE_UID,
+        if resource.metadata.deletion_timestamp.is_some() {
+            PolicySourceStateV1::DeletionRequested
+        } else {
+            PolicySourceStateV1::Accepted
+        },
+    )?;
+    let mut target = WorkloadTargetFactV1 {
         node_id: "node-a".to_owned(),
-        workload_binding_generation_digest: binding_digest.to_owned(),
+        workload_binding_generation_digest: String::new(),
         execution_set_id: "44444444-4444-4444-8444-444444444444".to_owned(),
         cluster_uid: CLUSTER_UID.to_owned(),
         namespace_uid: NAMESPACE_UID.to_owned(),
         controller_uid: "88888888-8888-4888-8888-888888888888".to_owned(),
         service_account_uid: "77777777-7777-4777-8777-777777777777".to_owned(),
         pod_uid: "99999999-9999-4999-8999-999999999999".to_owned(),
-        container_id: "containerd://converter".to_owned(),
+        container_id: format!("scheduled:{seed}"),
         container_name: "converter".to_owned(),
         container_kind: ContainerKindV1::Application,
-        // Kubernetes inventory passes the immutable digest that runtime admission verifies.
         image_digest: concat!(
             "sha256:",
             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         )
         .to_owned(),
         pod_labels: BTreeMap::from([("app".to_owned(), "converter".to_owned())]),
-        kubernetes: None,
-    }]
+        kubernetes: Some(KubernetesWorkloadIdentityV1 {
+            namespace_name: "tenant-a".to_owned(),
+            pod_name: "converter-pod".to_owned(),
+            profile_id: policy.profile_id().to_owned(),
+            policy_source_revision_id: source.policy_source_revision_id,
+            binding_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa".to_owned(),
+            protected_scope_id: policy.protected_universe.protected_scope_ids[0].clone(),
+            workload_selector_id: policy.workload_selectors[0].workload_selector_id.clone(),
+            kubernetes_node_name: "worker-a".to_owned(),
+            kubernetes_node_uid: "dddddddd-dddd-4ddd-8ddd-dddddddddddd".to_owned(),
+            node_boot_id: "01".repeat(16),
+            label_epoch: 1,
+        }),
+    };
+    target.workload_binding_generation_digest = workload_target_fact_digest(&target)?;
+    Ok(vec![target])
 }
 
-fn two_node_inventory() -> Vec<WorkloadTargetFactV1> {
-    let node_a = inventory(&"1".repeat(64)).remove(0);
+fn two_node_inventory() -> TestResult<Vec<WorkloadTargetFactV1>> {
+    let spec = policy()?;
+    let resource = resource(&spec, "profile", OBJECT_UID, 1, false)?;
+    two_node_inventory_for_resource(&resource)
+}
+
+fn two_node_inventory_for_resource(
+    resource: &WorkloadProtectionPolicy,
+) -> TestResult<Vec<WorkloadTargetFactV1>> {
+    let node_a = inventory_for_resource(resource, &"1".repeat(64))?.remove(0);
     let mut node_b = node_a.clone();
     node_b.node_id = "node-b".to_owned();
-    node_b.workload_binding_generation_digest = "2".repeat(64);
     node_b.execution_set_id = "44444444-4444-4444-8444-444444444445".to_owned();
     node_b.pod_uid = "99999999-9999-4999-8999-999999999998".to_owned();
     node_b.container_id = "containerd://converter-b".to_owned();
-    vec![node_a, node_b]
+    if let Some(identity) = node_b.kubernetes.as_mut() {
+        identity.pod_name = "converter-pod-b".to_owned();
+        identity.binding_id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaab".to_owned();
+        identity.kubernetes_node_name = "worker-b".to_owned();
+        identity.kubernetes_node_uid = "dddddddd-dddd-4ddd-8ddd-ddddddddddde".to_owned();
+    }
+    node_b.workload_binding_generation_digest = workload_target_fact_digest(&node_b)?;
+    Ok(vec![node_a, node_b])
 }
 
 fn acknowledgement(
@@ -167,20 +217,13 @@ fn kubernetes_inventory(
     policy_source_revision_id: &str,
     profile_id: &str,
 ) -> TestResult<Vec<WorkloadTargetFactV1>> {
-    let mut target = inventory("").remove(0);
-    target.kubernetes = Some(KubernetesWorkloadIdentityV1 {
-        namespace_name: "tenant-a".to_owned(),
-        pod_name: "converter-pod".to_owned(),
-        profile_id: profile_id.to_owned(),
-        policy_source_revision_id: policy_source_revision_id.to_owned(),
-        binding_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa".to_owned(),
-        protected_scope_id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb".to_owned(),
-        workload_selector_id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc".to_owned(),
-        kubernetes_node_name: "worker-a".to_owned(),
-        kubernetes_node_uid: "dddddddd-dddd-4ddd-8ddd-dddddddddddd".to_owned(),
-        node_boot_id: "01".repeat(16),
-        label_epoch: 1,
-    });
+    let mut target = inventory("")?.remove(0);
+    let identity = target
+        .kubernetes
+        .as_mut()
+        .ok_or("the Kubernetes target fixture has no provenance")?;
+    identity.profile_id = profile_id.to_owned();
+    identity.policy_source_revision_id = policy_source_revision_id.to_owned();
     target.workload_binding_generation_digest = workload_target_fact_digest(&target)?;
     Ok(vec![target])
 }
@@ -258,7 +301,7 @@ fn exception_is_bounded_to_one_active_container_and_replays_revocation() -> Test
     let initial = owner.reconcile(
         &policy_resource,
         NAMESPACE_UID,
-        &inventory(&"1".repeat(64)),
+        &inventory(&"1".repeat(64))?,
         NOW,
     )?;
     let profile_id = &initial.bundles[0]
@@ -406,7 +449,7 @@ fn terminal_exception_does_not_block_a_new_bounded_instance() -> TestResult {
     let initial = owner.reconcile(
         &policy_resource,
         NAMESPACE_UID,
-        &inventory(&"1".repeat(64)),
+        &inventory(&"1".repeat(64))?,
         NOW,
     )?;
     let profile_id = &initial.bundles[0]
@@ -464,7 +507,7 @@ fn activation_delivery_covers_the_complete_bounded_authority_window() -> TestRes
     let initial = owner.reconcile(
         &policy_resource,
         NAMESPACE_UID,
-        &inventory(&"1".repeat(64)),
+        &inventory(&"1".repeat(64))?,
         NOW,
     )?;
     let profile_id = initial.bundles[0]
@@ -505,12 +548,9 @@ fn create_update_duplicate_and_restart_preserve_one_monotonic_rollout() -> TestR
     let store = ControlStore::open(directory.path())?;
     let owner = make_owner(store.clone());
     let first_policy = policy()?;
-    let first = owner.reconcile(
-        &resource(&first_policy, "profile", OBJECT_UID, 1, false)?,
-        NAMESPACE_UID,
-        &inventory(&"1".repeat(64)),
-        NOW,
-    )?;
+    let first_resource = resource(&first_policy, "profile", OBJECT_UID, 1, false)?;
+    let first_inventory = inventory_for_resource(&first_resource, &"1".repeat(64))?;
+    let first = owner.reconcile(&first_resource, NAMESPACE_UID, &first_inventory, NOW)?;
     assert_eq!(first.bundles.len(), 1);
     assert_eq!(
         first.bundles[0].candidate.operation,
@@ -520,23 +560,15 @@ fn create_update_duplicate_and_restart_preserve_one_monotonic_rollout() -> TestR
     assert_eq!(first.bundles[0].profile_artifact.header.issuer_sequence, 1);
 
     let first_commit = store.commit_index();
-    let duplicate = owner.reconcile(
-        &resource(&first_policy, "profile", OBJECT_UID, 1, false)?,
-        NAMESPACE_UID,
-        &inventory(&"1".repeat(64)),
-        NOW,
-    )?;
+    let duplicate = owner.reconcile(&first_resource, NAMESPACE_UID, &first_inventory, NOW)?;
     assert_eq!(duplicate, first);
     assert_eq!(store.commit_index(), first_commit);
 
     let mut second_policy = first_policy;
     second_policy.roles[0].files[0].operations.reverse();
-    let second = owner.reconcile(
-        &resource(&second_policy, "profile", OBJECT_UID, 2, false)?,
-        NAMESPACE_UID,
-        &inventory(&"1".repeat(64)),
-        NOW + 1,
-    )?;
+    let second_resource = resource(&second_policy, "profile", OBJECT_UID, 2, false)?;
+    let second_inventory = first_inventory.clone();
+    let second = owner.reconcile(&second_resource, NAMESPACE_UID, &second_inventory, NOW + 1)?;
     assert_eq!(
         second.bundles[0].candidate.operation,
         PolicyDeliveryOperationV1::Replace
@@ -554,7 +586,7 @@ fn create_update_duplicate_and_restart_preserve_one_monotonic_rollout() -> TestR
     let stale = owner.reconcile(
         &resource(&second_policy, "profile", OBJECT_UID, 1, false)?,
         NAMESPACE_UID,
-        &inventory(&"1".repeat(64)),
+        &second_inventory,
         NOW + 2,
     );
     assert!(stale.is_err());
@@ -563,9 +595,9 @@ fn create_update_duplicate_and_restart_preserve_one_monotonic_rollout() -> TestR
     drop(store);
     let reopened = ControlStore::open(directory.path())?;
     let restarted = make_owner(reopened.clone()).reconcile(
-        &resource(&second_policy, "profile", OBJECT_UID, 2, false)?,
+        &second_resource,
         NAMESPACE_UID,
-        &inventory(&"1".repeat(64)),
+        &second_inventory,
         NOW + 3,
     )?;
     assert_eq!(restarted.bundles, second.bundles);
@@ -580,8 +612,8 @@ fn bound_inventory_change_reconciles_without_a_policy_source_change() -> TestRes
     let owner = make_owner(store);
     let policy = policy()?;
     let resource = resource(&policy, "profile", OBJECT_UID, 1, false)?;
-    let first = owner.reconcile(&resource, NAMESPACE_UID, &inventory(&"1".repeat(64)), NOW)?;
-    let second = owner.reconcile(&resource, NAMESPACE_UID, &two_node_inventory(), NOW + 1)?;
+    let first = owner.reconcile(&resource, NAMESPACE_UID, &inventory(&"1".repeat(64))?, NOW)?;
+    let second = owner.reconcile(&resource, NAMESPACE_UID, &two_node_inventory()?, NOW + 1)?;
 
     assert_eq!(
         first.source_revision.policy_source_revision_id,
@@ -627,7 +659,7 @@ fn health_snapshot_exposes_bounded_operational_counts_without_payloads() -> Test
     owner.reconcile(
         &resource(&policy()?, "profile", OBJECT_UID, 1, false)?,
         NAMESPACE_UID,
-        &inventory(&"1".repeat(64)),
+        &inventory(&"1".repeat(64))?,
         NOW,
     )?;
     let control = ControlPlane::new(
@@ -662,7 +694,7 @@ fn rejected_source_metadata_is_counted_as_a_reconcile_failure() -> TestResult {
     let mut invalid = resource(&policy()?, "profile", OBJECT_UID, 1, false)?;
     invalid.metadata.uid = None;
     assert!(owner
-        .reconcile(&invalid, NAMESPACE_UID, &inventory(&"1".repeat(64)), NOW,)
+        .reconcile(&invalid, NAMESPACE_UID, &inventory(&"1".repeat(64))?, NOW,)
         .is_err());
     let health = owner.health()?;
     assert_eq!(health.successful_reconciles, 0);
@@ -672,41 +704,20 @@ fn rejected_source_metadata_is_counted_as_a_reconcile_failure() -> TestResult {
 }
 
 #[test]
-fn exact_workload_claims_do_not_replace_valid_rollout() -> TestResult {
+fn node_reported_target_cannot_enter_a_crd_rollout() -> TestResult {
     let directory = TempDir::new()?;
     let store = ControlStore::open(directory.path())?;
-    let owner = make_owner(store.clone());
-    let first_policy = policy()?;
-    let first = owner.reconcile(
-        &resource(&first_policy, "one", OBJECT_UID, 1, false)?,
-        NAMESPACE_UID,
-        &inventory(&"1".repeat(64)),
-        NOW,
-    )?;
+    let owner = make_owner(store);
+    let policy = policy()?;
+    let resource = resource(&policy, "profile", OBJECT_UID, 1, false)?;
+    let mut reported = inventory_for_resource(&resource, &"1".repeat(64))?.remove(0);
+    reported.kubernetes = None;
+    reported.workload_binding_generation_digest = workload_target_fact_digest(&reported)?;
 
-    let overlapping = first_policy;
-    let overlap = owner.reconcile(
-        &resource(
-            &overlapping,
-            "three",
-            "30000000-0000-4000-8000-000000000003",
-            1,
-            false,
-        )?,
-        NAMESPACE_UID,
-        &inventory(&"1".repeat(64)),
-        NOW + 1,
-    );
-    let Err(overlap) = overlap else {
-        return Err("an exact workload overlap must fail".into());
-    };
-    assert!(overlap
-        .to_string()
-        .contains("CFG_OVERLAPPING_WORKLOAD_OWNER"));
-    assert_eq!(
-        store.bundle_for_node("node-a")?,
-        Some(first.bundles[0].clone())
-    );
+    let result = owner.reconcile(&resource, NAMESPACE_UID, &[reported], NOW)?;
+
+    assert!(result.target_snapshot.targets.is_empty());
+    assert!(result.bundles.is_empty());
     Ok(())
 }
 
@@ -717,7 +728,7 @@ fn status_refreshes_from_durable_node_rollout_state() -> TestResult {
     let owner = make_owner(store.clone());
     let policy = policy()?;
     let resource = resource(&policy, "profile", OBJECT_UID, 1, false)?;
-    let first = owner.reconcile(&resource, NAMESPACE_UID, &inventory(&"1".repeat(64)), NOW)?;
+    let first = owner.reconcile(&resource, NAMESPACE_UID, &inventory(&"1".repeat(64))?, NOW)?;
     let bundle = &first.bundles[0];
     owner.rollout_owner().acknowledge(
         PolicyActivationAcknowledgementV1 {
@@ -744,7 +755,7 @@ fn status_refreshes_from_durable_node_rollout_state() -> TestResult {
     let refreshed = owner.reconcile(
         &resource,
         NAMESPACE_UID,
-        &inventory(&"1".repeat(64)),
+        &inventory(&"1".repeat(64))?,
         NOW + 2,
     )?;
     assert_eq!(refreshed.status.rollout.active, 1);
@@ -772,7 +783,7 @@ fn rejected_candidate_stops_redelivery_and_projects_degraded_status() -> TestRes
     let owner = make_owner(store.clone());
     let policy = policy()?;
     let resource = resource(&policy, "profile", OBJECT_UID, 1, false)?;
-    let first = owner.reconcile(&resource, NAMESPACE_UID, &inventory(&"1".repeat(64)), NOW)?;
+    let first = owner.reconcile(&resource, NAMESPACE_UID, &inventory(&"1".repeat(64))?, NOW)?;
     let bundle = &first.bundles[0];
     assert_eq!(
         store.next_bundle_for_node("node-a", "", &[])?,
@@ -804,7 +815,7 @@ fn rejected_candidate_stops_redelivery_and_projects_degraded_status() -> TestRes
     let refreshed = owner.reconcile(
         &resource,
         NAMESPACE_UID,
-        &inventory(&"1".repeat(64)),
+        &inventory(&"1".repeat(64))?,
         NOW + 2,
     )?;
     assert_eq!(refreshed.status.rollout.failed, 1);
@@ -824,7 +835,7 @@ fn deletion_names_exact_predecessor_and_recreate_gets_a_new_source_identity() ->
     let first = owner.reconcile(
         &resource(&policy, "profile", OBJECT_UID, 1, false)?,
         NAMESPACE_UID,
-        &inventory(&"1".repeat(64)),
+        &inventory(&"1".repeat(64))?,
         NOW,
     )?;
     let retiring = owner.reconcile(
@@ -849,21 +860,23 @@ fn deletion_names_exact_predecessor_and_recreate_gets_a_new_source_identity() ->
         .reconcile(
             &resource(&policy, "profile", OBJECT_UID, 1, false)?,
             NAMESPACE_UID,
-            &inventory(&"1".repeat(64)),
+            &inventory(&"1".repeat(64))?,
             NOW + 2,
         )
         .is_err());
 
+    let recreated_resource = resource(
+        &policy,
+        "profile",
+        "30000000-0000-4000-8000-000000000004",
+        1,
+        false,
+    )?;
+    let recreated_inventory = inventory_for_resource(&recreated_resource, &"1".repeat(64))?;
     let recreated = owner.reconcile(
-        &resource(
-            &policy,
-            "profile",
-            "30000000-0000-4000-8000-000000000004",
-            1,
-            false,
-        )?,
+        &recreated_resource,
         NAMESPACE_UID,
-        &inventory(&"1".repeat(64)),
+        &recreated_inventory,
         NOW + 3,
     )?;
     assert_ne!(
@@ -890,7 +903,7 @@ fn completed_relist_retires_a_source_that_is_absent_from_the_snapshot() -> TestR
     let accepted = owner.reconcile(
         &resource(&policy()?, "profile", OBJECT_UID, 1, false)?,
         NAMESPACE_UID,
-        &inventory(&"1".repeat(64)),
+        &inventory(&"1".repeat(64))?,
         NOW,
     )?;
 
@@ -918,10 +931,10 @@ fn two_node_create_update_restart_delete_and_recreate_preserve_provenance() -> T
     let directory = TempDir::new()?;
     let store = ControlStore::open(directory.path())?;
     let owner = make_owner(store.clone());
-    let inventory = two_node_inventory();
     let mut first_policy = policy()?;
     let first_resource = resource(&first_policy, "profile", OBJECT_UID, 1, false)?;
-    let first = owner.reconcile(&first_resource, NAMESPACE_UID, &inventory, NOW)?;
+    let first_inventory = two_node_inventory_for_resource(&first_resource)?;
+    let first = owner.reconcile(&first_resource, NAMESPACE_UID, &first_inventory, NOW)?;
     assert_eq!(first.bundles.len(), 2);
     assert_eq!(
         first.source_revision.canonical_spec_digest,
@@ -950,14 +963,15 @@ fn two_node_create_update_restart_delete_and_recreate_preserve_provenance() -> T
     )?)?;
     // Preserve mixed per-node results before a new source revision supersedes both candidates.
     let first_status = owner
-        .reconcile(&first_resource, NAMESPACE_UID, &inventory, NOW + 2)?
+        .reconcile(&first_resource, NAMESPACE_UID, &first_inventory, NOW + 2)?
         .status;
     assert_eq!(first_status.rollout.active, 1);
     assert_eq!(first_status.rollout.failed, 1);
 
     first_policy.roles[0].files[0].operations.reverse();
     let second_resource = resource(&first_policy, "profile", OBJECT_UID, 2, false)?;
-    let second = owner.reconcile(&second_resource, NAMESPACE_UID, &inventory, NOW + 3)?;
+    let second_inventory = first_inventory.clone();
+    let second = owner.reconcile(&second_resource, NAMESPACE_UID, &second_inventory, NOW + 3)?;
     let second_by_node = second
         .bundles
         .iter()
@@ -999,7 +1013,7 @@ fn two_node_create_update_restart_delete_and_recreate_preserve_provenance() -> T
         PolicyActivationStateV1::Active,
         NOW + 4,
     )?)?;
-    let mixed = owner.reconcile(&second_resource, NAMESPACE_UID, &inventory, NOW + 5)?;
+    let mixed = owner.reconcile(&second_resource, NAMESPACE_UID, &second_inventory, NOW + 5)?;
     assert_eq!(mixed.status.rollout.active, 1);
     assert_eq!(mixed.status.rollout.updating, 1);
     assert!(mixed.status.conditions.iter().any(|condition| {
@@ -1013,7 +1027,7 @@ fn two_node_create_update_restart_delete_and_recreate_preserve_provenance() -> T
     let reopened = ControlStore::open(directory.path())?;
     let restarted_owner = make_owner(reopened.clone());
     let restarted =
-        restarted_owner.reconcile(&second_resource, NAMESPACE_UID, &inventory, NOW + 6)?;
+        restarted_owner.reconcile(&second_resource, NAMESPACE_UID, &second_inventory, NOW + 6)?;
     assert_eq!(restarted.bundles, second.bundles);
     assert_eq!(restarted.status.rollout.active, 1);
     assert_eq!(restarted.status.rollout.updating, 1);
@@ -1048,8 +1062,13 @@ fn two_node_create_update_restart_delete_and_recreate_preserve_provenance() -> T
         1,
         false,
     )?;
-    let recreated =
-        restarted_owner.reconcile(&recreated_resource, NAMESPACE_UID, &inventory, NOW + 8)?;
+    let recreated_inventory = two_node_inventory_for_resource(&recreated_resource)?;
+    let recreated = restarted_owner.reconcile(
+        &recreated_resource,
+        NAMESPACE_UID,
+        &recreated_inventory,
+        NOW + 8,
+    )?;
     assert_eq!(recreated.bundles.len(), 2);
     for bundle in &recreated.bundles {
         assert_eq!(
@@ -1073,7 +1092,7 @@ fn corrupt_or_incompatible_commit_chain_blocks_store_recovery() -> TestResult {
     make_owner(store.clone()).reconcile(
         &resource(&policy()?, "profile", OBJECT_UID, 1, false)?,
         NAMESPACE_UID,
-        &inventory(&"1".repeat(64)),
+        &inventory(&"1".repeat(64))?,
         NOW,
     )?;
     drop(store);

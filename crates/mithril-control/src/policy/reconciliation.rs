@@ -334,6 +334,7 @@ impl PolicyDesiredStateOwner {
         self.store
             .accept_source_revision(source.clone(), policy.clone())?;
         let mut targets = resolve_targets(
+            &source,
             policy,
             inventory,
             &self.config.tenant_id,
@@ -919,7 +920,7 @@ async fn relist_cluster(
         && owner
             .retire_missing_sources(
                 &seen_object_uids,
-                &control.workload_inventory(),
+                &control.kubernetes_workload_inventory(),
                 utc_now_ns(),
             )
             .is_ok();
@@ -964,7 +965,7 @@ async fn reconcile_resource(
         .reconcile_observation(
             &resource,
             namespace_uid.as_deref().unwrap_or_default(),
-            &control.workload_inventory(),
+            &control.kubernetes_workload_inventory(),
             utc_now_ns(),
             source_state,
         )
@@ -1025,6 +1026,7 @@ pub(super) fn preserve_transition_times(
 }
 
 fn resolve_targets(
+    source: &PolicySourceRevisionV1,
     policy: &PolicyDocumentV1,
     inventory: &[WorkloadTargetFactV1],
     tenant_id: &str,
@@ -1062,11 +1064,36 @@ fn resolve_targets(
                     }
                 })
         });
-        let profile_matches = fact.kubernetes.as_ref().is_none_or(|identity| {
-            identity.profile_id == policy.profile_id()
-                && !identity.policy_source_revision_id.is_empty()
+        let has_current_kubernetes_provenance = fact.kubernetes.as_ref().is_some_and(|identity| {
+            identity.namespace_name == source.namespace_name
+                && !identity.pod_name.is_empty()
+                && identity.profile_id == policy.profile_id()
+                // A live Pod keeps the source revision that admission bound. Later policy
+                // generations still target that same API-observed Pod and profile.
+                && valid_sha256(&identity.policy_source_revision_id)
+                && canonical_uuid(&identity.binding_id)
+                && policy
+                    .protected_universe
+                    .protected_scope_ids
+                    .contains(&identity.protected_scope_id)
+                && selector_ids.contains(identity.workload_selector_id.as_str())
+                && !identity.kubernetes_node_name.is_empty()
+                && canonical_uuid(&identity.kubernetes_node_uid)
+                && identity.node_boot_id.len() == 32
+                && identity
+                    .node_boot_id
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+                && identity.label_epoch > 0
+                && fact.cluster_uid == source.cluster_uid
+                && fact.namespace_uid == source.namespace_uid
+                && workload_target_fact_digest(fact)
+                    .is_ok_and(|digest| digest == fact.workload_binding_generation_digest)
         });
-        if matches_selector && profile_matches && selected_by_rollout(policy, fact) {
+        if matches_selector
+            && has_current_kubernetes_provenance
+            && selected_by_rollout(policy, fact)
+        {
             ensure!(
                 fact.cluster_uid == cluster_uid
                     && crate::node_id_is_valid(&fact.node_id)

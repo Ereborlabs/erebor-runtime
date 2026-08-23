@@ -238,6 +238,21 @@ impl ControlPlane {
         )
     }
 
+    #[must_use]
+    pub fn kubernetes_workload_inventory(&self) -> Vec<crate::WorkloadTargetFactV1> {
+        // CRD reconciliation accepts only scheduler facts that the API inventory owner projected.
+        self.state.lock().map_or_else(
+            |_| Vec::new(),
+            |state| {
+                state
+                    .kubernetes_workload_targets
+                    .values()
+                    .cloned()
+                    .collect()
+            },
+        )
+    }
+
     pub fn replace_kubernetes_workload_inventory(
         &self,
         targets: Vec<crate::WorkloadTargetFactV1>,
@@ -247,11 +262,26 @@ impl ControlPlane {
                 "Kubernetes workload inventory exceeds 65,536 targets",
             ));
         }
+        let target_count = targets.len();
+        if targets.iter().any(|target| {
+            target.kubernetes.is_none()
+                || crate::workload_target_fact_digest(target).ok().as_deref()
+                    != Some(&target.workload_binding_generation_digest)
+        }) {
+            return Err(Status::invalid_argument(
+                "Kubernetes workload inventory contains incomplete or altered scheduler facts",
+            ));
+        }
         // Key by the complete fact digest so replacement removes targets absent from the snapshot.
         let targets = targets
             .into_iter()
             .map(|target| (target.workload_binding_generation_digest.clone(), target))
             .collect::<BTreeMap<_, _>>();
+        if targets.len() != target_count {
+            return Err(Status::invalid_argument(
+                "Kubernetes workload inventory contains duplicate scheduler facts",
+            ));
+        }
         let mut state = self.lock_state()?;
         if state.kubernetes_workload_targets == targets {
             return Ok(false);
@@ -1574,7 +1604,7 @@ mod tests {
     use super::{valid_registration, ControlPlane, StreamIdentity};
     use crate::{
         AllowedNodeIdentity, CapabilityRecord, NodeReadinessReport, NodeRegistration,
-        NodeSessionContext, TrustGenerationV1,
+        NodeSessionContext, RegisteredWorkloadTarget, TrustGenerationV1,
     };
 
     fn control() -> ControlPlane {
@@ -1625,6 +1655,38 @@ mod tests {
             .register("node-a".to_owned(), &context, &registration())
             .is_err());
         assert_eq!(control.registered_nonce_count(), 1);
+    }
+
+    #[test]
+    fn kubernetes_inventory_excludes_node_reported_targets() -> Result<(), tonic::Status> {
+        let control = control();
+        let context = NodeSessionContext {
+            node_id: "node-a".to_owned(),
+            node_boot_id: vec![1; 16],
+            connection_nonce: vec![2; 16],
+        };
+        let mut registration = registration();
+        registration.workload_targets = vec![RegisteredWorkloadTarget {
+            workload_binding_generation_digest: "1".repeat(64),
+            execution_set_id: "40000000-0000-4000-8000-000000000001".to_owned(),
+            cluster_uid: "50000000-0000-4000-8000-000000000001".to_owned(),
+            namespace_uid: "60000000-0000-4000-8000-000000000001".to_owned(),
+            controller_uid: "70000000-0000-4000-8000-000000000001".to_owned(),
+            service_account_uid: "80000000-0000-4000-8000-000000000001".to_owned(),
+            pod_uid: "90000000-0000-4000-8000-000000000001".to_owned(),
+            container_id: "containerd://converter".to_owned(),
+            container_name: "converter".to_owned(),
+            container_kind: "APPLICATION".to_owned(),
+            image_digest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                .to_owned(),
+            pod_labels: std::collections::HashMap::new(),
+        }];
+
+        control.register("node-a".to_owned(), &context, &registration)?;
+
+        assert_eq!(control.workload_inventory().len(), 1);
+        assert!(control.kubernetes_workload_inventory().is_empty());
+        Ok(())
     }
 
     #[test]

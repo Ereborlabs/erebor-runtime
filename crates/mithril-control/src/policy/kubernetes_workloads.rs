@@ -251,7 +251,7 @@ impl KubernetesAdmissionOwner {
         // Read the API source inside admission so watch lag cannot admit a matching Pod unprotected.
         let resources =
             list_inventory(&api, "WorkloadProtectionPolicies for Pod admission").await?;
-        let inventory = self.control.workload_inventory();
+        let inventory = self.control.kubernetes_workload_inventory();
         let mut matches = Vec::new();
         for resource in resources {
             if resource.metadata.deletion_timestamp.is_some() {
@@ -553,10 +553,7 @@ impl KubernetesWorkloadInventoryOwner {
                 ))
             })
             .collect::<BTreeMap<_, _>>();
-        let mut targets = Vec::new();
-        for pod in pods {
-            targets.extend(self.bound_pod_targets(&pod, &nodes, &namespaces, &service_accounts)?);
-        }
+        let targets = self.targets_for_pods(&pods, &nodes, &namespaces, &service_accounts)?;
         let inventory_changed = self
             .control
             .replace_kubernetes_workload_inventory(targets)
@@ -589,7 +586,7 @@ impl KubernetesWorkloadInventoryOwner {
             let Ok(result) = self.policies.reconcile(
                 &resource,
                 namespace_uid,
-                &self.control.workload_inventory(),
+                &self.control.kubernetes_workload_inventory(),
                 utc_now_ns(),
             ) else {
                 projection_complete = false;
@@ -635,7 +632,7 @@ impl KubernetesWorkloadInventoryOwner {
             let Ok(result) = self.policies.reconcile_exception(
                 &resource,
                 namespace_uid,
-                &self.control.workload_inventory(),
+                &self.control.kubernetes_workload_inventory(),
                 utc_now_ns(),
             ) else {
                 projection_complete = false;
@@ -669,6 +666,20 @@ impl KubernetesWorkloadInventoryOwner {
             self.projected_control_commit_index = Some(observed_commit_index);
         }
         Ok(())
+    }
+
+    fn targets_for_pods(
+        &self,
+        pods: &[Pod],
+        nodes: &BTreeMap<String, Node>,
+        namespaces: &BTreeMap<String, String>,
+        service_accounts: &BTreeMap<(String, String), String>,
+    ) -> Result<Vec<WorkloadTargetFactV1>> {
+        let mut targets = Vec::new();
+        for pod in pods {
+            targets.extend(self.bound_pod_targets(pod, nodes, namespaces, service_accounts)?);
+        }
+        Ok(targets)
     }
 
     fn bound_pod_targets(
@@ -708,10 +719,11 @@ impl KubernetesWorkloadInventoryOwner {
             .spec
             .as_ref()
             .ok_or_else(|| admission_error("protected bound Pod has no specification"))?;
-        let kubernetes_node_name = spec
-            .node_name
-            .as_deref()
-            .ok_or_else(|| admission_error("protected Pod is not bound to a Node"))?;
+        // Admission precedes scheduler binding. A pending protected Pod has no node authority yet.
+        let Some(kubernetes_node_name) = spec.node_name.as_deref().filter(|name| !name.is_empty())
+        else {
+            return Ok(Vec::new());
+        };
         let node = nodes
             .get(kubernetes_node_name)
             .ok_or_else(|| admission_error("protected Pod Node is absent"))?;
@@ -1400,8 +1412,10 @@ mod tests {
         list_inventory, mutate_node_quarantine, mutate_protected_pod, pod_admission_facts,
         pod_policy_identity, policy_matches_pod, policy_matching_containers_are_pinned,
         status_projection_is_current, DaemonSetNodeConstraintsV1, KubernetesAdmissionOwner,
-        KubernetesNodeReadinessOwner, KUBERNETES_NOT_READY_TAINT, KUBERNETES_PROFILE_ANNOTATION,
-        KUBERNETES_READY_LABEL, KUBERNETES_SOURCE_ANNOTATION,
+        KubernetesNodeReadinessOwner, KubernetesWorkloadInventoryOwner,
+        KUBERNETES_LABEL_EPOCH_ANNOTATION, KUBERNETES_NODE_BOOT_ANNOTATION,
+        KUBERNETES_NODE_ID_ANNOTATION, KUBERNETES_NODE_UID_ANNOTATION, KUBERNETES_NOT_READY_TAINT,
+        KUBERNETES_PROFILE_ANNOTATION, KUBERNETES_READY_LABEL, KUBERNETES_SOURCE_ANNOTATION,
     };
     use crate::{
         ContainerKindV1, ControlPlane, ControlStore, KubernetesNodeControlConfigV1,
@@ -1455,6 +1469,40 @@ mod tests {
                 }],
             }),
         }
+    }
+
+    fn test_policy_owner(root: &std::path::Path) -> crate::Result<PolicyDesiredStateOwner> {
+        Ok(PolicyDesiredStateOwner::new(
+            PolicyDesiredStateConfigV1 {
+                tenant_id: TENANT_ID.to_owned(),
+                cluster_uid: CLUSTER_UID.to_owned(),
+                signer: PolicySignerConfigV1 {
+                    signing_key_id: "policy-key-a".to_owned(),
+                    signing_key_path: PathBuf::from("/unused/policy-key"),
+                    seal_request_path: PathBuf::from("/unused/seal-request"),
+                    distribution_sequence_epoch: 9,
+                    candidate_validity_ns: 60_000_000_000,
+                },
+            },
+            ControlStore::open(root)?,
+            SigningKey::from_bytes(&[7; 32]),
+            ProfileSealRequestV1 {
+                signing_key_id: "policy-key-a".to_owned(),
+                issuer_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa".to_owned(),
+                sequence_epoch: 4,
+                issuer_sequence: 0,
+                rollback_authorization_id: None,
+                registry_digests: RegistryDigestsV1 {
+                    provider_numeric_registry_bundle_digest: "0".repeat(64),
+                    required_capability_schema_digest: "0".repeat(64),
+                    source_selector_registry_digest: "0".repeat(64),
+                    object_classifier_registry_digest: "0".repeat(64),
+                    reason_code_registry_digest: "0".repeat(64),
+                    correlation_package_registry_digest: "0".repeat(64),
+                    provider_vocabulary_registry_digest: "0".repeat(64),
+                },
+            },
+        ))
     }
 
     #[test]
@@ -1709,6 +1757,111 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn pending_protected_pod_does_not_block_bound_pod_inventory(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let directory = TempDir::new()?;
+        let policies = test_policy_owner(directory.path())?;
+        let spec = WorkloadProtectionPolicySpec::parse(
+            std::path::Path::new("kubernetes-policy-v1.yaml"),
+            KUBERNETES_POLICY.as_bytes(),
+        )?;
+        let resource: WorkloadProtectionPolicy = serde_json::from_value(json!({
+            "apiVersion": "mithril.erebor.dev/v1alpha1",
+            "kind": "WorkloadProtectionPolicy",
+            "metadata": {
+                "name": "profile-a",
+                "namespace": "tenant-a",
+                "uid": "30000000-0000-4000-8000-000000000001",
+                "generation": 1,
+                "resourceVersion": "source-1"
+            },
+            "spec": spec,
+        }))?;
+        let reconciled = policies.reconcile(&resource, NAMESPACE_UID, &[], 1)?;
+        let document = policies
+            .store()
+            .policy_document(&reconciled.source_revision.policy_source_revision_id)?
+            .ok_or("the reconciled policy has no document")?;
+
+        let service = service_fn(|_request: Request<KubeBody>| async move {
+            Ok::<_, Infallible>(Response::new(Body::empty()))
+        });
+        let owner = KubernetesWorkloadInventoryOwner::new(
+            Client::new(service, "default"),
+            policies,
+            ControlPlane::new(
+                Vec::new(),
+                TrustGenerationV1 {
+                    generation: 1,
+                    bundle_digest: "0".repeat(64),
+                    policy_issuer_sequence_epoch: 0,
+                    policy_signers: Vec::new(),
+                },
+            ),
+        );
+        let node_uid = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
+        let node = Node {
+            metadata: ObjectMeta {
+                name: Some("worker-a".to_owned()),
+                uid: Some(node_uid.to_owned()),
+                annotations: Some(BTreeMap::from([
+                    (
+                        KUBERNETES_NODE_ID_ANNOTATION.to_owned(),
+                        "node-a".to_owned(),
+                    ),
+                    (
+                        KUBERNETES_NODE_UID_ANNOTATION.to_owned(),
+                        node_uid.to_owned(),
+                    ),
+                    (KUBERNETES_NODE_BOOT_ANNOTATION.to_owned(), "01".repeat(16)),
+                    (KUBERNETES_LABEL_EPOCH_ANNOTATION.to_owned(), "1".to_owned()),
+                ])),
+                ..ObjectMeta::default()
+            },
+            ..Node::default()
+        };
+        let mut bound = pod();
+        bound.metadata.name = Some("converter-pod".to_owned());
+        bound.metadata.uid = Some("99999999-9999-4999-8999-999999999999".to_owned());
+        bound.metadata.annotations = Some(BTreeMap::from([
+            (
+                KUBERNETES_PROFILE_ANNOTATION.to_owned(),
+                document.profile_id().to_owned(),
+            ),
+            (
+                KUBERNETES_SOURCE_ANNOTATION.to_owned(),
+                reconciled.source_revision.policy_source_revision_id,
+            ),
+        ]));
+        if let Some(spec) = bound.spec.as_mut() {
+            spec.node_name = Some("worker-a".to_owned());
+        }
+        let mut pending = bound.clone();
+        if let Some(spec) = pending.spec.as_mut() {
+            spec.node_name = None;
+        }
+
+        let targets = owner.targets_for_pods(
+            &[pending, bound],
+            &BTreeMap::from([("worker-a".to_owned(), node)]),
+            &BTreeMap::from([("tenant-a".to_owned(), NAMESPACE_UID.to_owned())]),
+            &BTreeMap::from([(
+                ("tenant-a".to_owned(), "default".to_owned()),
+                "77777777-7777-4777-8777-777777777777".to_owned(),
+            )]),
+        )?;
+
+        assert_eq!(targets.len(), 1);
+        assert_eq!(targets[0].node_id, "node-a");
+        assert!(targets[0].kubernetes.is_some());
+        assert!(owner
+            .control
+            .replace_kubernetes_workload_inventory(targets.clone())?);
+        assert_eq!(owner.control.kubernetes_workload_inventory(), targets);
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn inventory_list_reads_every_kubernetes_page() -> crate::Result<()> {
         let requests = Arc::new(Mutex::new(Vec::new()));
         let service_requests = requests.clone();
@@ -1812,37 +1965,7 @@ mod tests {
             }
         });
         let directory = TempDir::new()?;
-        let policies = PolicyDesiredStateOwner::new(
-            PolicyDesiredStateConfigV1 {
-                tenant_id: TENANT_ID.to_owned(),
-                cluster_uid: CLUSTER_UID.to_owned(),
-                signer: PolicySignerConfigV1 {
-                    signing_key_id: "policy-key-a".to_owned(),
-                    signing_key_path: PathBuf::from("/unused/policy-key"),
-                    seal_request_path: PathBuf::from("/unused/seal-request"),
-                    distribution_sequence_epoch: 9,
-                    candidate_validity_ns: 60_000_000_000,
-                },
-            },
-            ControlStore::open(directory.path())?,
-            SigningKey::from_bytes(&[7; 32]),
-            ProfileSealRequestV1 {
-                signing_key_id: "policy-key-a".to_owned(),
-                issuer_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa".to_owned(),
-                sequence_epoch: 4,
-                issuer_sequence: 0,
-                rollback_authorization_id: None,
-                registry_digests: RegistryDigestsV1 {
-                    provider_numeric_registry_bundle_digest: "0".repeat(64),
-                    required_capability_schema_digest: "0".repeat(64),
-                    source_selector_registry_digest: "0".repeat(64),
-                    object_classifier_registry_digest: "0".repeat(64),
-                    reason_code_registry_digest: "0".repeat(64),
-                    correlation_package_registry_digest: "0".repeat(64),
-                    provider_vocabulary_registry_digest: "0".repeat(64),
-                },
-            },
-        );
+        let policies = test_policy_owner(directory.path())?;
         assert!(policies.live_policies_in_namespace("tenant-a")?.is_empty());
         let owner = KubernetesAdmissionOwner {
             kube: Client::new(service, "default"),
