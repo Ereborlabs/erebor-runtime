@@ -19,7 +19,8 @@ use snafu::ResultExt;
 use crate::{
     error::session_manager::{OutputSnafu, RuntimeIoSnafu},
     surfaces::intrinsic::{FilesystemBinding, LinuxOstreeOverlayFilesystemRuntime},
-    DurableStreamCursor, SessionManagerError, SessionOutputStores, StreamKind,
+    DurableStreamCursor, HeldWorkloadBoundary, SessionManagerError, SessionOutputStores,
+    StreamKind,
 };
 
 use super::output_endpoints;
@@ -45,6 +46,18 @@ pub trait SessionInterceptionRouterFactory: Send + Sync {
 
     fn cleanup(&self, _spec: &SessionSpec) -> Result<(), SessionManagerError> {
         Ok(())
+    }
+
+    fn activate_workload(
+        &self,
+        spec: &SessionSpec,
+        _boundary: &HeldWorkloadBoundary,
+    ) -> Result<(), SessionManagerError> {
+        Err(SessionManagerError::InvalidRuntime {
+            session_id: spec.session_id().as_str().to_owned(),
+            reason: String::from("physical interception activation is unavailable"),
+            location: snafu::Location::default(),
+        })
     }
 }
 
@@ -524,6 +537,12 @@ pub(crate) trait SessionRuntime: Send + Sync {
         recovering: bool,
     ) -> Result<Vec<(String, String)>, SessionManagerError>;
 
+    fn activate_workload(
+        &self,
+        spec: &SessionSpec,
+        boundary: &HeldWorkloadBoundary,
+    ) -> Result<(), SessionManagerError>;
+
     fn cleanup(&self, spec: &SessionSpec) -> Result<(), SessionManagerError>;
 
     /// Applies the runtime-owned retention policy after a Session has stopped
@@ -575,6 +594,14 @@ impl SessionRuntime for SessionRuntimeResources {
     ) -> Result<Vec<(String, String)>, SessionManagerError> {
         self.router_factory.register(spec, output)?;
         Ok(Vec::new())
+    }
+
+    fn activate_workload(
+        &self,
+        spec: &SessionSpec,
+        boundary: &HeldWorkloadBoundary,
+    ) -> Result<(), SessionManagerError> {
+        self.router_factory.activate_workload(spec, boundary)
     }
 
     fn cleanup(&self, spec: &SessionSpec) -> Result<(), SessionManagerError> {

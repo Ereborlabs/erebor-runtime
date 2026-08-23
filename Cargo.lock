@@ -1360,6 +1360,8 @@ dependencies = [
  "erebor-runtime-telemetry",
  "erebor-runtime-terminal",
  "futures-util",
+ "libc",
+ "linux-raw-sys",
  "rustix",
  "serde",
  "serde_json",

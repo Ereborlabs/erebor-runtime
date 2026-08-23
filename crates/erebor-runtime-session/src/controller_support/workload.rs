@@ -1,6 +1,5 @@
 use std::{
     io::{self, Read},
-    process::Child,
     sync::{mpsc, Arc},
     thread,
 };
@@ -89,16 +88,6 @@ pub(super) fn child_exit(status: std::process::ExitStatus) -> WorkloadExit {
         exit_code: status.code(),
         signal: status.signal(),
     }
-}
-
-pub(super) fn wait_child(child: &mut Child) -> Result<WorkloadExit, SessionControllerError> {
-    let status = child.wait().map_err(|source| SessionControllerError::Io {
-        action: "waiting for governed workload",
-        path: std::path::PathBuf::from("<workload>"),
-        source,
-        location: snafu::Location::default(),
-    })?;
-    Ok(child_exit(status))
 }
 
 #[cfg(test)]

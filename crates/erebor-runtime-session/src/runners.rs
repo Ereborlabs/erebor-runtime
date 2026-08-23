@@ -10,6 +10,7 @@ use erebor_runtime_core::{
     RunnerBinding, RunnerCapabilityDocument, RunnerId, RuntimeError, SafePathBinding, SafePathKind,
     ScriptInterpreterBinding, SessionOwner, SessionSpec, WorkloadPrivilegePlan,
 };
+use serde::{Deserialize, Serialize};
 use snafu::{OptionExt, ResultExt};
 
 pub(crate) mod docker;
@@ -27,6 +28,7 @@ use crate::{
 pub struct RunnerInstallConfig {
     program_overrides: BTreeMap<String, PathBuf>,
     use_systemd_scope: bool,
+    physical_interception: bool,
 }
 
 impl RunnerInstallConfig {
@@ -34,10 +36,12 @@ impl RunnerInstallConfig {
     pub const fn new(
         program_overrides: BTreeMap<String, PathBuf>,
         use_systemd_scope: bool,
+        physical_interception: bool,
     ) -> Self {
         Self {
             program_overrides,
             use_systemd_scope,
+            physical_interception,
         }
     }
 
@@ -46,12 +50,33 @@ impl RunnerInstallConfig {
         self.use_systemd_scope
     }
 
+    #[must_use]
+    pub const fn physical_interception(&self) -> bool {
+        self.physical_interception
+    }
+
     pub(crate) fn program(&self, name: &str, default: &Path) -> PathBuf {
         self.program_overrides
             .get(name)
             .cloned()
             .unwrap_or_else(|| default.to_path_buf())
     }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum HeldWorkloadBoundary {
+    LinuxCgroup {
+        path: PathBuf,
+        id: u64,
+        controller_id: u64,
+    },
+}
+
+pub trait HeldRunnerSession: Send {
+    fn boundary(&self) -> &HeldWorkloadBoundary;
+
+    fn release(self: Box<Self>) -> Result<Box<dyn ActiveSession>, RuntimeError>;
 }
 
 pub struct RunnerAdmissionRequest<'a> {
@@ -310,6 +335,18 @@ pub trait RunnerDriver: Send + Sync {
         spec: &SessionSpec,
         output: &OutputEndpoints,
     ) -> Result<Box<dyn ActiveSession>, RuntimeError>;
+
+    fn start_held(
+        &self,
+        _spec: &SessionSpec,
+        _output: &OutputEndpoints,
+    ) -> Result<Box<dyn HeldRunnerSession>, RuntimeError> {
+        Err(RuntimeError::SessionRunnerUnavailable {
+            runner: self.id().as_str().to_owned(),
+            reason: String::from("runner does not support held workload activation"),
+            location: snafu::Location::default(),
+        })
+    }
 
     fn recover(
         &self,

@@ -370,6 +370,11 @@ impl RunnerCapabilityDocument {
     }
 
     #[must_use]
+    pub const fn physical_interception(&self) -> bool {
+        self.physical_interception
+    }
+
+    #[must_use]
     pub const fn tty_supported(&self) -> bool {
         self.tty_supported
     }

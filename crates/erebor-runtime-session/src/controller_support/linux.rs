@@ -5,11 +5,15 @@ use std::{
     io::{Read, Write},
     os::unix::{fs::PermissionsExt, process::CommandExt},
     path::{Path, PathBuf},
-    process::{Child, ChildStdin, Command, Stdio},
+    process::{Child, Command, Stdio},
     thread,
     time::{Duration, Instant},
 };
 
+#[path = "linux/cgroup.rs"]
+mod cgroup;
+#[path = "linux/clone3.rs"]
+mod clone3;
 #[path = "linux/prepared.rs"]
 mod prepared;
 #[path = "linux/privileges.rs"]
@@ -28,6 +32,7 @@ use rustix::{
         mount, mount_bind, mount_change, mount_move, mount_remount, MountFlags,
         MountPropagationFlags,
     },
+    pipe::{pipe_with, PipeFlags},
     process::{ioctl_tiocsctty, setsid},
     pty::{grantpt, ioctl_tiocgptpeer, openpt, unlockpt, OpenptFlags},
     termios::{tcsetpgrp, tcsetwinsize, Winsize},
@@ -35,29 +40,53 @@ use rustix::{
 };
 use users::os::unix::UserExt;
 
-use crate::{runners::linux::LinuxControllerHandoff, SessionControllerError, StreamKind};
+use crate::{
+    runners::linux::LinuxControllerHandoff, HeldWorkloadBoundary, SessionControllerError,
+    StreamKind,
+};
 
-use self::prepared::PreparedLinuxExecution;
+use self::{
+    cgroup::OwnedWorkloadCgroup, clone3::CloneIntoCgroupChild, prepared::PreparedLinuxExecution,
+    privileges::WorkloadPrivileges,
+};
 use super::{
     output::HelperOutput,
-    workload::{child_exit, pump_output, wait_child, OutputFailureMonitor, WorkloadExit},
+    workload::{child_exit, pump_output, OutputFailureMonitor, WorkloadExit},
 };
 
 const PRIVATE_ADMITTED_EXECUTABLE_PATH: &str = "/run/erebor/admitted-executable";
 const PRIVATE_WORKSPACE_PATH: &str = "/run/erebor/workspace";
 
 pub(crate) struct LinuxWorkload {
-    child: Child,
+    child: LinuxChild,
     process_group: Pid,
     stable_identity: String,
     input: Option<LinuxWorkloadInput>,
     output_pumps: Vec<thread::JoinHandle<()>>,
     output_failures: OutputFailureMonitor,
+    cgroup: Option<OwnedWorkloadCgroup>,
 }
 
 enum LinuxWorkloadInput {
     Terminal(File),
-    Pipe(ChildStdin),
+    Pipe(Box<dyn Write + Send>),
+}
+
+enum LinuxChild {
+    Standard(Child),
+    Cgroup(CloneIntoCgroupChild),
+}
+
+pub(crate) struct HeldLinuxWorkload {
+    host_proc: File,
+    cgroup: OwnedWorkloadCgroup,
+    command: Command,
+    privileges: WorkloadPrivileges,
+    program: PathBuf,
+    input: Option<LinuxWorkloadInput>,
+    controlling_terminal: Option<File>,
+    stdout: Option<File>,
+    stderr: Option<File>,
 }
 
 struct PrivateLinuxNamespace {
@@ -99,19 +128,11 @@ impl LinuxWorkload {
             .env("EREBOR_SESSION_RUNNER", "linux_host")
             .current_dir(private_namespace.workspace_path)
             .env("EREBOR_TERMINAL_TTY", handoff.spec.tty().to_string());
-        let privileges = privileges::WorkloadPrivileges {
-            uid: handoff.spec.owner().uid(),
-            gid: handoff.spec.owner().gid(),
-            supplementary_groups: handoff
-                .spec
-                .workload_privileges()
-                .supplementary_groups()
-                .to_vec(),
-            mask: handoff.spec.workload_privileges().umask(),
-            maximum_open_files: handoff.spec.workload_privileges().maximum_open_files(),
-            maximum_processes: handoff.spec.workload_privileges().maximum_processes(),
-            maximum_core_bytes: handoff.spec.workload_privileges().maximum_core_bytes(),
-        };
+        let privileges = WorkloadPrivileges::from_plan(
+            handoff.spec.owner().uid(),
+            handoff.spec.owner().gid(),
+            handoff.spec.workload_privileges(),
+        );
         privileges
             .apply()
             .map_err(|source| SessionControllerError::Io {
@@ -200,7 +221,10 @@ impl LinuxWorkload {
                 location: snafu::Location::default(),
             })?;
         if !handoff.spec.tty() {
-            input = child.stdin.take().map(LinuxWorkloadInput::Pipe);
+            input = child
+                .stdin
+                .take()
+                .map(|stream| LinuxWorkloadInput::Pipe(Box::new(stream)));
         }
         let pid = Pid::from_raw(child.id() as i32).ok_or_else(|| {
             SessionControllerError::InvalidHandoff {
@@ -216,8 +240,54 @@ impl LinuxWorkload {
                 location: snafu::Location::default(),
             })?;
         }
-        let start_time = process_start_time(&host_proc, child.id()).unwrap_or(0);
-        let stable_identity = format!("linux:pid={}:start={start_time}", child.id());
+        let stdout: Option<Box<dyn Read + Send>> = child
+            .stdout
+            .take()
+            .map(|stream| Box::new(stream) as Box<dyn Read + Send>);
+        let stderr: Option<Box<dyn Read + Send>> = child
+            .stderr
+            .take()
+            .map(|stream| Box::new(stream) as Box<dyn Read + Send>);
+        Self::from_child(
+            LinuxChild::Standard(child),
+            pid,
+            &host_proc,
+            input,
+            stdout,
+            stderr,
+            output,
+            None,
+        )
+    }
+
+    fn wait_child(&mut self) -> Result<WorkloadExit, SessionControllerError> {
+        let exit = self
+            .child
+            .wait()
+            .map_err(|source| SessionControllerError::Io {
+                action: "waiting for governed workload",
+                path: PathBuf::from("<workload>"),
+                source,
+                location: snafu::Location::default(),
+            })?;
+        self.terminate_remaining()?;
+        Ok(exit)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn from_child(
+        child: LinuxChild,
+        pid: Pid,
+        host_proc: &File,
+        input: Option<LinuxWorkloadInput>,
+        stdout: Option<Box<dyn Read + Send>>,
+        stderr: Option<Box<dyn Read + Send>>,
+        output: &HelperOutput,
+        cgroup: Option<OwnedWorkloadCgroup>,
+    ) -> Result<Self, SessionControllerError> {
+        let raw_pid = pid.as_raw_nonzero().get() as u32;
+        let start_time = process_start_time(host_proc, raw_pid).unwrap_or(0);
+        let stable_identity = format!("linux:pid={raw_pid}:start={start_time}");
         let mut output_pumps = Vec::new();
         let (output_failures, failure_sender) = OutputFailureMonitor::new();
         match input.as_ref() {
@@ -240,7 +310,7 @@ impl LinuxWorkload {
                 ));
             }
             Some(LinuxWorkloadInput::Pipe(_)) | None => {
-                if let Some(stdout) = child.stdout.take() {
+                if let Some(stdout) = stdout {
                     output_pumps.push(pump_output(
                         stdout,
                         Arc::clone(&output.stdout),
@@ -249,7 +319,7 @@ impl LinuxWorkload {
                         failure_sender.clone(),
                     ));
                 }
-                if let Some(stderr) = child.stderr.take() {
+                if let Some(stderr) = stderr {
                     output_pumps.push(pump_output(
                         stderr,
                         Arc::clone(&output.stderr),
@@ -267,6 +337,7 @@ impl LinuxWorkload {
             input,
             output_pumps,
             output_failures,
+            cgroup,
         })
     }
 
@@ -388,9 +459,9 @@ impl LinuxWorkload {
                 path: std::path::PathBuf::from("<workload>"),
                 source,
                 location: snafu::Location::default(),
-            })?
-            .map(child_exit);
+            })?;
         if exit.is_some() {
+            self.terminate_remaining()?;
             self.join_output_pumps()?;
         }
         Ok(exit)
@@ -406,7 +477,7 @@ impl LinuxWorkload {
             thread::sleep(Duration::from_millis(10));
         }
         signal_group(self.process_group, Signal::KILL)?;
-        let exit = wait_child(&mut self.child)?;
+        let exit = self.wait_child()?;
         self.join_output_pumps()?;
         Ok(exit)
     }
@@ -421,7 +492,7 @@ impl LinuxWorkload {
             ActiveSessionSignal::Interrupt => Signal::INT,
         };
         signal_group(self.process_group, signal)?;
-        let exit = wait_child(&mut self.child)?;
+        let exit = self.wait_child()?;
         self.join_output_pumps()?;
         Ok(exit)
     }
@@ -436,6 +507,239 @@ impl LinuxWorkload {
         }
         Ok(())
     }
+
+    fn terminate_remaining(&self) -> Result<(), SessionControllerError> {
+        match self.cgroup.as_ref() {
+            Some(cgroup) => cgroup.terminate_remaining(),
+            None => Ok(()),
+        }
+    }
+}
+
+impl HeldLinuxWorkload {
+    pub(crate) fn prepare(
+        handoff: &LinuxControllerHandoff,
+    ) -> Result<Self, SessionControllerError> {
+        let host_proc = File::open("/proc").map_err(|source| SessionControllerError::Io {
+            action: "opening host proc before session namespace isolation",
+            path: PathBuf::from("/proc"),
+            source,
+            location: snafu::Location::default(),
+        })?;
+        let cgroup = OwnedWorkloadCgroup::create()?;
+        let prepared = PreparedLinuxExecution::open(handoff)?;
+        let private_namespace = prepare_private_namespace(handoff, &prepared)?;
+        let admitted_command =
+            prepared.admitted_command(handoff, private_namespace.executable_path.as_deref());
+        let (program, arguments) = admitted_command.split_first().ok_or_else(|| {
+            SessionControllerError::InvalidHandoff {
+                reason: String::from("admitted Linux command is empty"),
+                location: snafu::Location::default(),
+            }
+        })?;
+        let mut command = Command::new(program);
+        command
+            .args(arguments)
+            .env_clear()
+            .envs(handoff.spec.environment().iter().cloned())
+            .envs(private_namespace.runtime_environment)
+            .env("EREBOR_PRIVATE_SESSION_NAMESPACE", "1")
+            .env("EREBOR_SESSION_ID", handoff.spec.session_id().as_str())
+            .env("EREBOR_ACTOR_ID", "agent")
+            .env("EREBOR_SESSION_RUNNER", "linux_host")
+            .current_dir(private_namespace.workspace_path)
+            .env("EREBOR_TERMINAL_TTY", handoff.spec.tty().to_string())
+            .process_group(0);
+        let privileges = WorkloadPrivileges::from_plan(
+            handoff.spec.owner().uid(),
+            handoff.spec.owner().gid(),
+            handoff.spec.workload_privileges(),
+        );
+        let (input, controlling_terminal, stdout, stderr) = if handoff.spec.tty() {
+            setsid().map_err(|source| SessionControllerError::Io {
+                action: "creating Linux pseudoterminal session",
+                path: PathBuf::from("<pty-session>"),
+                source: source.into(),
+                location: snafu::Location::default(),
+            })?;
+            let (master, slave) = LinuxWorkload::open_pty()?;
+            privileges.assign_terminal_owner(&slave).map_err(|source| {
+                SessionControllerError::Io {
+                    action: "assigning the Linux pseudoterminal to the workload",
+                    path: PathBuf::from("<pty-slave>"),
+                    source,
+                    location: snafu::Location::default(),
+                }
+            })?;
+            let terminal_size = handoff.spec.terminal_size().ok_or_else(|| {
+                SessionControllerError::InvalidHandoff {
+                    reason: String::from("TTY session did not retain initial terminal geometry"),
+                    location: snafu::Location::default(),
+                }
+            })?;
+            LinuxWorkload::set_terminal_size(
+                &slave,
+                terminal_size,
+                "setting initial Linux pseudoterminal size",
+            )?;
+            let controlling_terminal =
+                slave
+                    .try_clone()
+                    .map_err(|source| SessionControllerError::Io {
+                        action: "duplicating Linux pseudoterminal slave",
+                        path: PathBuf::from("<pty-slave>"),
+                        source,
+                        location: snafu::Location::default(),
+                    })?;
+            ioctl_tiocsctty(&controlling_terminal).map_err(|source| {
+                SessionControllerError::Io {
+                    action: "setting Linux pseudoterminal controlling terminal",
+                    path: PathBuf::from("<pty-slave>"),
+                    source: source.into(),
+                    location: snafu::Location::default(),
+                }
+            })?;
+            let standard_input =
+                slave
+                    .try_clone()
+                    .map_err(|source| SessionControllerError::Io {
+                        action: "duplicating Linux pseudoterminal stdin",
+                        path: PathBuf::from("<pty-slave>"),
+                        source,
+                        location: snafu::Location::default(),
+                    })?;
+            let standard_output =
+                slave
+                    .try_clone()
+                    .map_err(|source| SessionControllerError::Io {
+                        action: "duplicating Linux pseudoterminal stdout",
+                        path: PathBuf::from("<pty-slave>"),
+                        source,
+                        location: snafu::Location::default(),
+                    })?;
+            command
+                .stdin(Stdio::from(standard_input))
+                .stdout(Stdio::from(standard_output))
+                .stderr(Stdio::from(slave));
+            (
+                Some(LinuxWorkloadInput::Terminal(master)),
+                Some(controlling_terminal),
+                None,
+                None,
+            )
+        } else {
+            let (child_input, parent_input) =
+                pipe_with(PipeFlags::CLOEXEC).map_err(|source| SessionControllerError::Io {
+                    action: "creating held Linux workload stdin",
+                    path: PathBuf::from("<workload-stdin>"),
+                    source: source.into(),
+                    location: snafu::Location::default(),
+                })?;
+            let (parent_stdout, child_stdout) =
+                pipe_with(PipeFlags::CLOEXEC).map_err(|source| SessionControllerError::Io {
+                    action: "creating held Linux workload stdout",
+                    path: PathBuf::from("<workload-stdout>"),
+                    source: source.into(),
+                    location: snafu::Location::default(),
+                })?;
+            let (parent_stderr, child_stderr) =
+                pipe_with(PipeFlags::CLOEXEC).map_err(|source| SessionControllerError::Io {
+                    action: "creating held Linux workload stderr",
+                    path: PathBuf::from("<workload-stderr>"),
+                    source: source.into(),
+                    location: snafu::Location::default(),
+                })?;
+            command
+                .stdin(Stdio::from(child_input))
+                .stdout(Stdio::from(child_stdout))
+                .stderr(Stdio::from(child_stderr));
+            (
+                Some(LinuxWorkloadInput::Pipe(Box::new(File::from(parent_input)))),
+                None,
+                Some(File::from(parent_stdout)),
+                Some(File::from(parent_stderr)),
+            )
+        };
+        cgroup.verify_empty()?;
+        Ok(Self {
+            host_proc,
+            cgroup,
+            command,
+            privileges,
+            program: PathBuf::from(program),
+            input,
+            controlling_terminal,
+            stdout,
+            stderr,
+        })
+    }
+
+    pub(crate) fn boundary(&self) -> HeldWorkloadBoundary {
+        self.cgroup.boundary()
+    }
+
+    pub(crate) fn release(
+        self,
+        output: &HelperOutput,
+    ) -> Result<LinuxWorkload, SessionControllerError> {
+        self.cgroup.verify_empty()?;
+        let mut child =
+            CloneIntoCgroupChild::spawn(self.cgroup.directory(), self.command, &self.privileges)
+                .map_err(|source| SessionControllerError::Io {
+                    action: "starting the held Linux workload in its cgroup",
+                    path: self.program,
+                    source,
+                    location: snafu::Location::default(),
+                })?;
+        let pid = child.pid();
+        if let Some(terminal) = self.controlling_terminal {
+            if let Err(source) = tcsetpgrp(&terminal, pid) {
+                let _result = rustix::process::kill_process(pid, Signal::KILL);
+                let _result = child.wait();
+                return Err(SessionControllerError::Io {
+                    action: "setting Linux pseudoterminal foreground process group",
+                    path: PathBuf::from("<pty-slave>"),
+                    source: source.into(),
+                    location: snafu::Location::default(),
+                });
+            }
+        }
+        LinuxWorkload::from_child(
+            LinuxChild::Cgroup(child),
+            pid,
+            &self.host_proc,
+            self.input,
+            self.stdout
+                .map(|stream| Box::new(stream) as Box<dyn Read + Send>),
+            self.stderr
+                .map(|stream| Box::new(stream) as Box<dyn Read + Send>),
+            output,
+            Some(self.cgroup),
+        )
+    }
+}
+
+impl LinuxChild {
+    fn try_wait(&mut self) -> std::io::Result<Option<WorkloadExit>> {
+        match self {
+            Self::Standard(child) => child.try_wait().map(|status| status.map(child_exit)),
+            Self::Cgroup(child) => child.try_wait().map(|status| status.map(raw_child_exit)),
+        }
+    }
+
+    fn wait(&mut self) -> std::io::Result<WorkloadExit> {
+        match self {
+            Self::Standard(child) => child.wait().map(child_exit),
+            Self::Cgroup(child) => child.wait().map(raw_child_exit),
+        }
+    }
+}
+
+fn raw_child_exit(status: rustix::process::WaitStatus) -> WorkloadExit {
+    WorkloadExit {
+        exit_code: status.exit_status(),
+        signal: status.terminating_signal(),
+    }
 }
 
 impl Drop for LinuxWorkload {
@@ -444,6 +748,7 @@ impl Drop for LinuxWorkload {
             let _result = kill_process_group(self.process_group, Signal::KILL);
             let _result = self.child.wait();
         }
+        let _result = self.terminate_remaining();
         for pump in self.output_pumps.drain(..) {
             let _result = pump.join();
         }

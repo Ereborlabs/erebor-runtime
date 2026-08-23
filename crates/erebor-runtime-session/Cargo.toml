@@ -19,6 +19,8 @@ erebor-runtime-packages = { path = "../erebor-runtime-packages" }
 erebor-runtime-terminal = { path = "../erebor-runtime-terminal" }
 erebor-runtime-telemetry = { path = "../erebor-runtime-telemetry" }
 futures-util.workspace = true
+libc = "0.2.186"
+linux-raw-sys = { version = "0.12.1", features = ["general"] }
 serde_json.workspace = true
 serde.workspace = true
 sha2.workspace = true
@@ -28,7 +30,7 @@ tokio-stream.workspace = true
 tonic.workspace = true
 uuid.workspace = true
 users = "0.10.0"
-rustix = { version = "1.1.4", features = ["event", "fs", "net", "process", "mount", "pty", "termios", "thread"] }
+rustix = { version = "1.1.4", features = ["event", "fs", "net", "pipe", "process", "mount", "pty", "termios", "thread"] }
 
 [dev-dependencies]
 rustix = { version = "1.1.4", features = ["fs"] }

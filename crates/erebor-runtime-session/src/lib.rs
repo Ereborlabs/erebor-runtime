@@ -54,8 +54,9 @@ pub use error::{
 #[doc(hidden)]
 pub use linux_controller::run_linux_session_controller;
 pub use runners::{
-    RunnerAdmissionContext, RunnerAdmissionRequest, RunnerCapabilityReport, RunnerDriver,
-    RunnerExecutionAdmission, RunnerInstallConfig, RunnerPreparation, RunnerRegistry,
+    HeldRunnerSession, HeldWorkloadBoundary, RunnerAdmissionContext, RunnerAdmissionRequest,
+    RunnerCapabilityReport, RunnerDriver, RunnerExecutionAdmission, RunnerInstallConfig,
+    RunnerPreparation, RunnerRegistry,
 };
 pub use session_manager::{
     output_endpoints, ResolvedSessionPath, SessionAttachOutcome, SessionInterceptionRouterFactory,

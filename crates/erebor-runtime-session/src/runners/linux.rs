@@ -17,8 +17,8 @@ use erebor_runtime_core::{
 use serde::{Deserialize, Serialize};
 
 use super::{
-    RunnerAdmissionContext, RunnerDriver, RunnerExecutionAdmission, RunnerInstallConfig,
-    RunnerPreparation,
+    HeldRunnerSession, HeldWorkloadBoundary, RunnerAdmissionContext, RunnerDriver,
+    RunnerExecutionAdmission, RunnerInstallConfig, RunnerPreparation,
 };
 use crate::SessionManagerError;
 
@@ -28,11 +28,13 @@ const CONTROLLER_PROGRAM: &str = "linux-session-controller";
 const SYSTEMD_RUN_PROGRAM: &str = "systemd-run";
 const DEFAULT_CONTROLLER_PATH: &str = "/usr/libexec/erebor/erebor-linux-session-controller";
 const DEFAULT_SYSTEMD_RUN_PATH: &str = "/usr/bin/systemd-run";
-const LINUX_RECOVERY_FORMAT_VERSION: u32 = 1;
+const LINUX_RECOVERY_FORMAT_VERSION_V1: u32 = 1;
+const LINUX_RECOVERY_FORMAT_VERSION_V2: u32 = 2;
 const DEFAULT_SANITIZED_EXECUTABLE_PATH: &str = "/usr/local/bin:/usr/bin:/bin";
 const MAX_SCRIPT_INTERPRETER_CHAIN: usize = 4;
 const MAX_SCRIPT_HEADER_BYTES: u64 = 4096;
 const MAX_CONTROLLER_DIAGNOSTIC_CHARS: usize = 4096;
+const CONTROLLER_CLEANUP_TIMEOUT: Duration = Duration::from_secs(2);
 
 struct LinuxExecutableAdmission {
     executable: SafePathBinding,
@@ -45,10 +47,20 @@ pub(crate) struct LinuxRunnerDriver {
     controller_path: PathBuf,
     systemd_run_path: PathBuf,
     use_systemd_scope: bool,
+    physical_interception: bool,
 }
 
 impl LinuxRunnerDriver {
     pub(crate) fn from_install_config(config: &RunnerInstallConfig) -> Result<Self, RuntimeError> {
+        if config.physical_interception() && !config.use_systemd_scope() {
+            return Err(RuntimeError::SessionRunnerUnavailable {
+                runner: String::from(RUNNER_ID),
+                reason: String::from(
+                    "physical interception requires delegated systemd containment",
+                ),
+                location: snafu::Location::default(),
+            });
+        }
         Ok(Self {
             id: RunnerId::new(RUNNER_ID).map_err(|error| {
                 RuntimeError::SessionRunnerUnavailable {
@@ -61,6 +73,7 @@ impl LinuxRunnerDriver {
             systemd_run_path: config
                 .program(SYSTEMD_RUN_PROGRAM, Path::new(DEFAULT_SYSTEMD_RUN_PATH)),
             use_systemd_scope: config.use_systemd_scope(),
+            physical_interception: config.physical_interception(),
         })
     }
 
@@ -77,6 +90,11 @@ impl LinuxRunnerDriver {
     }
 
     fn capability(&self) -> Result<RunnerCapabilityDocument, RuntimeError> {
+        let daemon_failure_modes = if self.physical_interception {
+            BTreeSet::from([DaemonFailureMode::Terminate])
+        } else {
+            BTreeSet::from([DaemonFailureMode::Terminate, DaemonFailureMode::Continue])
+        };
         RunnerCapabilityDocument::new(
             self.id.clone(),
             IMPLEMENTATION_ID,
@@ -84,7 +102,7 @@ impl LinuxRunnerDriver {
             std::env::consts::OS,
             std::env::consts::ARCH,
             true,
-            true,
+            self.physical_interception,
             BTreeSet::from([String::from("stdout"), String::from("stderr")]),
             BTreeSet::from([
                 ActiveSessionSignalKind::Terminate,
@@ -93,7 +111,7 @@ impl LinuxRunnerDriver {
             ]),
             true,
             true,
-            BTreeSet::from([DaemonFailureMode::Terminate, DaemonFailureMode::Continue]),
+            daemon_failure_modes,
             BTreeMap::from([
                 (
                     String::from("controller"),
@@ -126,6 +144,72 @@ impl LinuxRunnerDriver {
         output: &OutputEndpoints,
         capability: RunnerCapabilityDocument,
     ) -> Result<Box<dyn ActiveSession>, RuntimeError> {
+        let mut controller = self.spawn_controller(spec, output, false)?;
+        let started: LinuxControllerEvent = read_json_line(
+            controller
+                .output
+                .as_mut()
+                .ok_or_else(|| self.protocol("controller stdout missing"))?,
+            &self.id,
+        )
+        .map_err(|error| {
+            self.startup_error_with_diagnostics(error, &controller.diagnostics_path)
+        })?;
+        let LinuxControllerEvent::Started {
+            workload_identity,
+            controller_pid,
+        } = started
+        else {
+            return Err(self.protocol(format!("expected started event, received {started:?}")));
+        };
+        self.active_session(
+            controller,
+            capability,
+            workload_identity,
+            controller_pid,
+            None,
+        )
+    }
+
+    fn launch_held(
+        &self,
+        spec: &SessionSpec,
+        output: &OutputEndpoints,
+        capability: RunnerCapabilityDocument,
+    ) -> Result<Box<dyn HeldRunnerSession>, RuntimeError> {
+        let mut controller = self.spawn_controller(spec, output, true)?;
+        let prepared: LinuxControllerEvent = read_json_line(
+            controller
+                .output
+                .as_mut()
+                .ok_or_else(|| self.protocol("controller stdout missing"))?,
+            &self.id,
+        )
+        .map_err(|error| {
+            self.startup_error_with_diagnostics(error, &controller.diagnostics_path)
+        })?;
+        let LinuxControllerEvent::Prepared {
+            boundary,
+            controller_pid,
+        } = prepared
+        else {
+            return Err(self.protocol(format!("expected prepared event, received {prepared:?}")));
+        };
+        Ok(Box::new(LinuxHeldControllerSession {
+            boundary,
+            controller_pid,
+            capability,
+            controller: Some(controller),
+            id: self.id.clone(),
+        }))
+    }
+
+    fn spawn_controller(
+        &self,
+        spec: &SessionSpec,
+        output: &OutputEndpoints,
+        physical_interception: bool,
+    ) -> Result<LinuxControllerProcess, RuntimeError> {
         let unit = format!("erebor-session-{}.scope", spec.session_id().as_str());
         let session_slice = format!("erebor-session-{}.slice", spec.session_id().as_str());
         let handoff = LinuxControllerHandoff {
@@ -143,6 +227,7 @@ impl LinuxRunnerDriver {
             prepared_private_state_projection: output.prepared_private_state_projection().cloned(),
             systemd_scope_unit: self.use_systemd_scope.then_some(unit.clone()),
             systemd_session_slice: self.use_systemd_scope.then_some(session_slice.clone()),
+            physical_interception,
         };
         let mut command = if self.use_systemd_scope {
             let mut command = Command::new(&self.systemd_run_path);
@@ -185,9 +270,19 @@ impl LinuxRunnerDriver {
         } else {
             &self.controller_path
         };
-        let mut child = command
+        let child = command
             .spawn()
             .map_err(|source| self.launch_error(launch_path, source))?;
+        let mut controller = LinuxControllerProcess {
+            child: Some(child),
+            input: None,
+            output: None,
+            diagnostics_path,
+        };
+        let child = controller
+            .child
+            .as_mut()
+            .ok_or_else(|| self.protocol("controller process missing after spawn"))?;
         let mut input = child
             .stdin
             .take()
@@ -196,30 +291,41 @@ impl LinuxRunnerDriver {
             .stdout
             .take()
             .ok_or_else(|| self.protocol("controller stdout missing"))?;
-        write_json_line(&mut input, &self.id, &handoff)
-            .map_err(|error| self.startup_error_with_diagnostics(error, &diagnostics_path))?;
-        let mut output_reader = BufReader::new(output_pipe);
-        let started: LinuxControllerEvent = read_json_line(&mut output_reader, &self.id)
-            .map_err(|error| self.startup_error_with_diagnostics(error, &diagnostics_path))?;
-        let LinuxControllerEvent::Started {
-            workload_identity,
-            controller_pid,
-        } = started
-        else {
-            return Err(self.protocol(format!("expected started event, received {started:?}")));
-        };
+        write_json_line(&mut input, &self.id, &handoff).map_err(|error| {
+            self.startup_error_with_diagnostics(error, &controller.diagnostics_path)
+        })?;
+        controller.input = Some(input);
+        controller.output = Some(BufReader::new(output_pipe));
+        Ok(controller)
+    }
+
+    fn active_session(
+        &self,
+        controller: LinuxControllerProcess,
+        capability: RunnerCapabilityDocument,
+        workload_identity: String,
+        controller_pid: u32,
+        cgroup: Option<LinuxCgroupRecovery>,
+    ) -> Result<Box<dyn ActiveSession>, RuntimeError> {
+        let cgroup_path = cgroup.as_ref().map(|cgroup| cgroup.path.clone());
         let recovery = LinuxRecovery {
             workload_identity,
             controller_pid,
             controller_start: process_start_time(controller_pid).unwrap_or(0),
+            cgroup,
         };
+        let recovery = encode_recovery(&recovery)?;
+        let (child, input, output) = controller
+            .into_parts()
+            .ok_or_else(|| self.protocol("controller startup ownership is incomplete"))?;
         Ok(Box::new(LinuxControllerSession {
-            recovery: encode_recovery(&recovery)?,
+            recovery,
             capability,
             child,
             input,
-            output: output_reader,
+            output,
             observed_exit: None,
+            cgroup_path,
             id: self.id.clone(),
         }))
     }
@@ -355,6 +461,20 @@ impl RunnerDriver for LinuxRunnerDriver {
         self.launch(spec, output, self.capability()?)
     }
 
+    fn start_held(
+        &self,
+        spec: &SessionSpec,
+        output: &OutputEndpoints,
+    ) -> Result<Box<dyn HeldRunnerSession>, RuntimeError> {
+        self.require_installed()?;
+        if !self.physical_interception || !self.use_systemd_scope {
+            return Err(self.protocol(
+                "held Linux workload activation requires physical systemd interception",
+            ));
+        }
+        self.launch_held(spec, output, self.capability()?)
+    }
+
     fn recover(
         &self,
         _spec: &SessionSpec,
@@ -364,6 +484,18 @@ impl RunnerDriver for LinuxRunnerDriver {
         let capability = self.inspect()?;
         if binding.runner() != &self.id || binding.implementation_id() != IMPLEMENTATION_ID {
             return Err(self.protocol("saved runner binding does not match this implementation"));
+        }
+        if decode_recovery(binding.recovery(), &self.id)?
+            .cgroup
+            .is_some()
+        {
+            return Err(RuntimeError::SessionRunnerUnavailable {
+                runner: self.id.as_str().to_owned(),
+                reason: String::from(
+                    "intercepted Linux session recovery requires workload-owner adoption",
+                ),
+                location: snafu::Location::default(),
+            });
         }
         Ok(Box::new(RecoveredLinuxSession::new(
             binding.recovery(),
@@ -560,11 +692,14 @@ pub(crate) struct LinuxControllerHandoff {
         Option<erebor_runtime_core::PreparedPrivateStateProjection>,
     pub(crate) systemd_scope_unit: Option<String>,
     pub(crate) systemd_session_slice: Option<String>,
+    pub(crate) physical_interception: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "command", rename_all = "snake_case")]
 pub(crate) enum LinuxControllerCommand {
+    Release,
+    Cancel,
     Stop { grace_period_ms: u64 },
     Kill { signal: ActiveSessionSignal },
     Input { data: Vec<u8> },
@@ -576,6 +711,10 @@ pub(crate) enum LinuxControllerCommand {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "event", rename_all = "snake_case")]
 pub(crate) enum LinuxControllerEvent {
+    Prepared {
+        boundary: HeldWorkloadBoundary,
+        controller_pid: u32,
+    },
     Started {
         workload_identity: String,
         controller_pid: u32,
@@ -600,11 +739,218 @@ pub(crate) enum LinuxControllerEvent {
     },
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug)]
 struct LinuxRecovery {
     workload_identity: String,
     controller_pid: u32,
     controller_start: u64,
+    cgroup: Option<LinuxCgroupRecovery>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct LinuxCgroupRecovery {
+    path: PathBuf,
+    id: u64,
+    controller_id: u64,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct LinuxRecoveryV1 {
+    workload_identity: String,
+    controller_pid: u32,
+    controller_start: u64,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct LinuxRecoveryV2 {
+    workload_identity: String,
+    controller_pid: u32,
+    controller_start: u64,
+    cgroup: LinuxCgroupRecovery,
+}
+
+struct LinuxControllerProcess {
+    child: Option<Child>,
+    input: Option<ChildStdin>,
+    output: Option<BufReader<ChildStdout>>,
+    diagnostics_path: PathBuf,
+}
+
+impl LinuxControllerProcess {
+    fn terminate(&mut self) {
+        self.input.take();
+        self.wait_or_kill();
+    }
+
+    fn cancel_prepared(&mut self, id: &RunnerId) {
+        if let Some(input) = self.input.as_mut() {
+            let _result = write_json_line(input, id, &LinuxControllerCommand::Cancel);
+        }
+        self.input.take();
+        self.wait_or_kill();
+    }
+
+    fn wait_or_kill(&mut self) {
+        let deadline = std::time::Instant::now() + CONTROLLER_CLEANUP_TIMEOUT;
+        while std::time::Instant::now() < deadline {
+            let Some(child) = self.child.as_mut() else {
+                return;
+            };
+            match child.try_wait() {
+                Ok(Some(_status)) => {
+                    self.child.take();
+                    return;
+                }
+                Ok(None) => std::thread::sleep(Duration::from_millis(10)),
+                Err(_error) => break,
+            }
+        }
+        if let Some(mut child) = self.child.take() {
+            let _result = child.kill();
+            let _result = child.wait();
+        }
+    }
+
+    fn into_parts(mut self) -> Option<(Child, ChildStdin, BufReader<ChildStdout>)> {
+        Some((self.child.take()?, self.input.take()?, self.output.take()?))
+    }
+}
+
+impl Drop for LinuxControllerProcess {
+    fn drop(&mut self) {
+        self.terminate();
+    }
+}
+
+struct LinuxHeldControllerSession {
+    boundary: HeldWorkloadBoundary,
+    controller_pid: u32,
+    capability: RunnerCapabilityDocument,
+    controller: Option<LinuxControllerProcess>,
+    id: RunnerId,
+}
+
+impl LinuxHeldControllerSession {
+    fn protocol(&self, reason: impl Into<String>) -> RuntimeError {
+        RuntimeError::SessionRunnerProtocol {
+            runner: self.id.as_str().to_owned(),
+            reason: reason.into(),
+            location: snafu::Location::default(),
+        }
+    }
+
+    fn terminate_released(&self, controller: &mut LinuxControllerProcess) {
+        if let Some(input) = controller.input.as_mut() {
+            let _result = write_json_line(
+                input,
+                &self.id,
+                &LinuxControllerCommand::Kill {
+                    signal: ActiveSessionSignal::Kill,
+                },
+            );
+        }
+        controller.terminate();
+    }
+}
+
+impl HeldRunnerSession for LinuxHeldControllerSession {
+    fn boundary(&self) -> &HeldWorkloadBoundary {
+        &self.boundary
+    }
+
+    fn release(mut self: Box<Self>) -> Result<Box<dyn ActiveSession>, RuntimeError> {
+        let mut controller = self
+            .controller
+            .take()
+            .ok_or_else(|| self.protocol("held Linux controller is unavailable"))?;
+        if let Err(error) = write_json_line(
+            controller
+                .input
+                .as_mut()
+                .ok_or_else(|| self.protocol("held Linux controller stdin is unavailable"))?,
+            &self.id,
+            &LinuxControllerCommand::Release,
+        ) {
+            self.terminate_released(&mut controller);
+            return Err(error);
+        }
+        let started: LinuxControllerEvent = match read_json_line(
+            controller
+                .output
+                .as_mut()
+                .ok_or_else(|| self.protocol("held Linux controller stdout is unavailable"))?,
+            &self.id,
+        ) {
+            Ok(event) => event,
+            Err(error) => {
+                self.terminate_released(&mut controller);
+                return Err(error);
+            }
+        };
+        let LinuxControllerEvent::Started {
+            workload_identity,
+            controller_pid,
+        } = started
+        else {
+            self.terminate_released(&mut controller);
+            return Err(self.protocol(format!(
+                "expected started event after release, received {started:?}"
+            )));
+        };
+        if controller_pid != self.controller_pid {
+            self.terminate_released(&mut controller);
+            return Err(self.protocol("Linux controller identity changed during held activation"));
+        }
+        let cgroup = match &self.boundary {
+            HeldWorkloadBoundary::LinuxCgroup {
+                path,
+                id,
+                controller_id,
+            } => LinuxCgroupRecovery {
+                path: path.clone(),
+                id: *id,
+                controller_id: *controller_id,
+            },
+        };
+        let recovery = LinuxRecovery {
+            workload_identity,
+            controller_pid,
+            controller_start: process_start_time(controller_pid).unwrap_or(0),
+            cgroup: Some(cgroup),
+        };
+        let cgroup_path = recovery.cgroup.as_ref().map(|cgroup| cgroup.path.clone());
+        let recovery = match encode_recovery(&recovery) {
+            Ok(recovery) => recovery,
+            Err(error) => {
+                self.terminate_released(&mut controller);
+                return Err(error);
+            }
+        };
+        let (child, input, output) = controller
+            .into_parts()
+            .ok_or_else(|| self.protocol("released Linux controller ownership is incomplete"))?;
+        Ok(Box::new(LinuxControllerSession {
+            recovery,
+            capability: self.capability.clone(),
+            child,
+            input,
+            output,
+            observed_exit: None,
+            cgroup_path,
+            id: self.id.clone(),
+        }))
+    }
+}
+
+impl Drop for LinuxHeldControllerSession {
+    fn drop(&mut self) {
+        if let Some(controller) = self.controller.as_mut() {
+            controller.cancel_prepared(&self.id);
+        }
+    }
 }
 
 struct LinuxControllerSession {
@@ -614,6 +960,7 @@ struct LinuxControllerSession {
     input: ChildStdin,
     output: BufReader<ChildStdout>,
     observed_exit: Option<ActiveSessionExit>,
+    cgroup_path: Option<PathBuf>,
     id: RunnerId,
 }
 
@@ -644,7 +991,8 @@ impl LinuxControllerSession {
                     return self.observe_exit(exit_code, signal);
                 }
                 LinuxControllerEvent::Failed { reason } => return self.observe_failure(reason),
-                LinuxControllerEvent::Started { .. }
+                LinuxControllerEvent::Prepared { .. }
+                | LinuxControllerEvent::Started { .. }
                 | LinuxControllerEvent::Health { .. }
                 | LinuxControllerEvent::InputAccepted { .. }
                 | LinuxControllerEvent::Resized { .. }
@@ -659,7 +1007,6 @@ impl LinuxControllerSession {
         signal: Option<i32>,
     ) -> Result<ActiveSessionExit, RuntimeError> {
         let exit = ActiveSessionExit::new(exit_code, signal);
-        self.observed_exit = Some(exit.clone());
         self.child
             .wait()
             .map_err(|source| RuntimeError::SessionRunnerLaunch {
@@ -668,12 +1015,12 @@ impl LinuxControllerSession {
                 source,
                 location: snafu::Location::default(),
             })?;
+        self.observed_exit = Some(exit.clone());
         Ok(exit)
     }
 
     fn observe_failure(&mut self, reason: String) -> Result<ActiveSessionExit, RuntimeError> {
         let exit = ActiveSessionExit::failed(Some(125), None, reason);
-        self.observed_exit = Some(exit.clone());
         self.child
             .wait()
             .map_err(|source| RuntimeError::SessionRunnerLaunch {
@@ -682,7 +1029,32 @@ impl LinuxControllerSession {
                 source,
                 location: snafu::Location::default(),
             })?;
+        self.observed_exit = Some(exit.clone());
         Ok(exit)
+    }
+}
+
+impl Drop for LinuxControllerSession {
+    fn drop(&mut self) {
+        if self.observed_exit.is_none() && self.cgroup_path.is_some() {
+            let _result = write_json_line(
+                &mut self.input,
+                &self.id,
+                &LinuxControllerCommand::Kill {
+                    signal: ActiveSessionSignal::Kill,
+                },
+            );
+            let deadline = std::time::Instant::now() + CONTROLLER_CLEANUP_TIMEOUT;
+            while std::time::Instant::now() < deadline {
+                match self.child.try_wait() {
+                    Ok(Some(_status)) => return,
+                    Ok(None) => std::thread::sleep(Duration::from_millis(10)),
+                    Err(_error) => break,
+                }
+            }
+            let _result = self.child.kill();
+            let _result = self.child.wait();
+        }
     }
 }
 
@@ -779,7 +1151,8 @@ impl ActiveSession for LinuxControllerSession {
                 self.observe_failure(reason)?;
                 Ok(ActiveSessionHealth::Exited)
             }
-            LinuxControllerEvent::Started { .. }
+            LinuxControllerEvent::Prepared { .. }
+            | LinuxControllerEvent::Started { .. }
             | LinuxControllerEvent::InputAccepted { .. }
             | LinuxControllerEvent::Resized { .. }
             | LinuxControllerEvent::InputClosed => Ok(ActiveSessionHealth::Starting),
@@ -797,7 +1170,8 @@ impl LinuxControllerSession {
                 self.observe_exit(exit_code, signal)
             }
             LinuxControllerEvent::Failed { reason } => self.observe_failure(reason),
-            LinuxControllerEvent::Started { .. }
+            LinuxControllerEvent::Prepared { .. }
+            | LinuxControllerEvent::Started { .. }
             | LinuxControllerEvent::Health { .. }
             | LinuxControllerEvent::InputAccepted { .. }
             | LinuxControllerEvent::Resized { .. }
@@ -928,13 +1302,31 @@ impl ActiveSession for RecoveredLinuxSession {
 }
 
 fn encode_recovery(value: &LinuxRecovery) -> Result<RunnerRecovery, RuntimeError> {
-    let payload =
-        serde_json::to_string(value).map_err(|error| RuntimeError::SessionRunnerProtocol {
-            runner: String::from(RUNNER_ID),
-            reason: error.to_string(),
-            location: snafu::Location::default(),
-        })?;
-    RunnerRecovery::new(LINUX_RECOVERY_FORMAT_VERSION, payload).map_err(|error| {
+    let (format_version, payload) = match &value.cgroup {
+        None => (
+            LINUX_RECOVERY_FORMAT_VERSION_V1,
+            serde_json::to_string(&LinuxRecoveryV1 {
+                workload_identity: value.workload_identity.clone(),
+                controller_pid: value.controller_pid,
+                controller_start: value.controller_start,
+            }),
+        ),
+        Some(cgroup) => (
+            LINUX_RECOVERY_FORMAT_VERSION_V2,
+            serde_json::to_string(&LinuxRecoveryV2 {
+                workload_identity: value.workload_identity.clone(),
+                controller_pid: value.controller_pid,
+                controller_start: value.controller_start,
+                cgroup: cgroup.clone(),
+            }),
+        ),
+    };
+    let payload = payload.map_err(|error| RuntimeError::SessionRunnerProtocol {
+        runner: String::from(RUNNER_ID),
+        reason: error.to_string(),
+        location: snafu::Location::default(),
+    })?;
+    RunnerRecovery::new(format_version, payload).map_err(|error| {
         RuntimeError::SessionRunnerProtocol {
             runner: String::from(RUNNER_ID),
             reason: error.to_string(),
@@ -947,10 +1339,29 @@ fn decode_recovery(
     recovery: &RunnerRecovery,
     id: &RunnerId,
 ) -> Result<LinuxRecovery, RuntimeError> {
-    if recovery.format_version() != LINUX_RECOVERY_FORMAT_VERSION {
-        return Err(recovery_error(id));
+    match recovery.format_version() {
+        LINUX_RECOVERY_FORMAT_VERSION_V1 => {
+            let value: LinuxRecoveryV1 =
+                serde_json::from_str(recovery.payload()).map_err(|_error| recovery_error(id))?;
+            Ok(LinuxRecovery {
+                workload_identity: value.workload_identity,
+                controller_pid: value.controller_pid,
+                controller_start: value.controller_start,
+                cgroup: None,
+            })
+        }
+        LINUX_RECOVERY_FORMAT_VERSION_V2 => {
+            let value: LinuxRecoveryV2 =
+                serde_json::from_str(recovery.payload()).map_err(|_error| recovery_error(id))?;
+            Ok(LinuxRecovery {
+                workload_identity: value.workload_identity,
+                controller_pid: value.controller_pid,
+                controller_start: value.controller_start,
+                cgroup: Some(value.cgroup),
+            })
+        }
+        _ => Err(recovery_error(id)),
     }
-    serde_json::from_str(recovery.payload()).map_err(|_error| recovery_error(id))
 }
 
 fn recovery_error(id: &RunnerId) -> RuntimeError {
@@ -1049,15 +1460,17 @@ mod tests {
     };
 
     use super::{
-        decode_recovery, encode_recovery, LinuxRecovery, LinuxRunnerDriver, CONTROLLER_PROGRAM,
-        DEFAULT_CONTROLLER_PATH, MAX_CONTROLLER_DIAGNOSTIC_CHARS, RUNNER_ID,
+        decode_recovery, encode_recovery, LinuxControllerCommand, LinuxControllerEvent,
+        LinuxRecovery, LinuxRunnerDriver, CONTROLLER_PROGRAM, DEFAULT_CONTROLLER_PATH,
+        LINUX_RECOVERY_FORMAT_VERSION_V1, LINUX_RECOVERY_FORMAT_VERSION_V2,
+        MAX_CONTROLLER_DIAGNOSTIC_CHARS, RUNNER_ID,
     };
     use crate::{
-        ResolvedSessionPath, RunnerAdmissionRequest, RunnerInstallConfig, RunnerRegistry,
-        SessionPathResolver, SessionPathResolverError,
+        HeldWorkloadBoundary, ResolvedSessionPath, RunnerAdmissionRequest, RunnerInstallConfig,
+        RunnerRegistry, SessionPathResolver, SessionPathResolverError,
     };
     use erebor_runtime_core::{
-        RunnerId, RuntimeError, SafePathBinding, SafePathKind, SessionOwner,
+        RunnerId, RunnerRecovery, RuntimeError, SafePathBinding, SafePathKind, SessionOwner,
     };
 
     struct ScriptResolver;
@@ -1096,9 +1509,70 @@ mod tests {
         let configured = LinuxRunnerDriver::from_install_config(&RunnerInstallConfig::new(
             BTreeMap::from([(String::from(CONTROLLER_PROGRAM), override_path.clone())]),
             false,
+            false,
         ))?;
         assert_eq!(configured.controller_path, override_path);
         assert!(!configured.use_systemd_scope);
+        Ok(())
+    }
+
+    #[test]
+    fn linux_driver_rejects_physical_interception_without_systemd() {
+        let result = LinuxRunnerDriver::from_install_config(&RunnerInstallConfig::new(
+            BTreeMap::new(),
+            false,
+            true,
+        ));
+
+        assert!(matches!(
+            result,
+            Err(RuntimeError::SessionRunnerUnavailable { .. })
+        ));
+    }
+
+    #[test]
+    fn physical_interception_advertises_only_terminating_daemon_loss(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let driver = LinuxRunnerDriver::from_install_config(&RunnerInstallConfig::new(
+            BTreeMap::new(),
+            true,
+            true,
+        ))?;
+        let capability = driver.capability()?;
+
+        assert!(capability.supports_failure_mode(erebor_runtime_core::DaemonFailureMode::Terminate));
+        assert!(!capability.supports_failure_mode(erebor_runtime_core::DaemonFailureMode::Continue));
+        Ok(())
+    }
+
+    #[test]
+    fn held_controller_protocol_has_distinct_prepare_and_release_messages(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let boundary = HeldWorkloadBoundary::LinuxCgroup {
+            path: PathBuf::from("/sys/fs/cgroup/session/workload"),
+            id: 42,
+            controller_id: 41,
+        };
+        let event = LinuxControllerEvent::Prepared {
+            boundary: boundary.clone(),
+            controller_pid: 99,
+        };
+
+        let encoded_event = serde_json::to_string(&event)?;
+        let decoded_event: LinuxControllerEvent = serde_json::from_str(&encoded_event)?;
+        let LinuxControllerEvent::Prepared {
+            boundary: decoded_boundary,
+            controller_pid,
+        } = decoded_event
+        else {
+            return Err("prepared event changed variant".into());
+        };
+        assert_eq!(decoded_boundary, boundary);
+        assert_eq!(controller_pid, 99);
+        assert_eq!(
+            serde_json::to_string(&LinuxControllerCommand::Release)?,
+            r#"{"command":"release"}"#
+        );
         Ok(())
     }
 
@@ -1109,13 +1583,50 @@ mod tests {
             workload_identity: String::from("linux:pid=42:start=99"),
             controller_pid: 41,
             controller_start: 98,
+            cgroup: None,
         };
         let encoded = encode_recovery(&expected)?;
+        assert_eq!(encoded.format_version(), LINUX_RECOVERY_FORMAT_VERSION_V1);
         let decoded = decode_recovery(&encoded, &RunnerId::new(RUNNER_ID)?)?;
 
         assert_eq!(decoded.workload_identity, expected.workload_identity);
         assert_eq!(decoded.controller_pid, expected.controller_pid);
         assert_eq!(decoded.controller_start, expected.controller_start);
+        Ok(())
+    }
+
+    #[test]
+    fn linux_driver_retains_the_intercepted_cgroup_recovery_boundary(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let expected = LinuxRecovery {
+            workload_identity: String::from("linux:pid=42:start=99"),
+            controller_pid: 41,
+            controller_start: 98,
+            cgroup: Some(super::LinuxCgroupRecovery {
+                path: PathBuf::from("/sys/fs/cgroup/session/workload"),
+                id: 42,
+                controller_id: 41,
+            }),
+        };
+
+        let encoded = encode_recovery(&expected)?;
+        assert_eq!(encoded.format_version(), LINUX_RECOVERY_FORMAT_VERSION_V2);
+        let decoded = decode_recovery(&encoded, &RunnerId::new(RUNNER_ID)?)?;
+        let cgroup = decoded.cgroup.ok_or("cgroup recovery was not retained")?;
+        assert_eq!(cgroup.path, Path::new("/sys/fs/cgroup/session/workload"));
+        assert_eq!(cgroup.id, 42);
+        assert_eq!(cgroup.controller_id, 41);
+        Ok(())
+    }
+
+    #[test]
+    fn legacy_recovery_rejects_interception_fields() -> Result<(), Box<dyn std::error::Error>> {
+        let recovery = RunnerRecovery::new(
+            LINUX_RECOVERY_FORMAT_VERSION_V1,
+            r#"{"workload_identity":"linux:pid=42:start=99","controller_pid":41,"controller_start":98,"cgroup":{"path":"/sys/fs/cgroup/session/workload","id":42,"controller_id":41}}"#,
+        )?;
+
+        assert!(decode_recovery(&recovery, &RunnerId::new(RUNNER_ID)?).is_err());
         Ok(())
     }
 

@@ -1188,6 +1188,7 @@ mod tests {
         let configured = DockerRunnerDriver::from_install_config(&RunnerInstallConfig::new(
             BTreeMap::from([(String::from(CONTROLLER_PROGRAM), override_path.clone())]),
             false,
+            false,
         ))?;
         assert_eq!(configured.controller_path, override_path);
         assert!(!configured.use_systemd_scope);

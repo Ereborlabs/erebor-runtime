@@ -24,7 +24,8 @@ use crate::{
         RepositorySnafu, RunnerSnafu, StateLockSnafu,
     },
     runners::{
-        RunnerAdmissionRequest, RunnerExecutionAdmission, RunnerPreparation, RunnerRegistry,
+        RunnerAdmissionRequest, RunnerDriver, RunnerExecutionAdmission, RunnerPreparation,
+        RunnerRegistry,
     },
     DurableSessionRecord, DurableStreamCursor, InputLease, InputLeaseManager, SessionAlias,
     SessionManagerError, SessionPruneResult, SessionRepository, SessionRepositoryError, StreamKind,
@@ -540,7 +541,7 @@ impl SessionManager {
             }
             .fail();
         }
-        let mut active = match runner.start(starting.spec(), output) {
+        let mut active = match self.start_runner(runner.as_ref(), starting.spec(), output) {
             Ok(active) => active,
             Err(source) => {
                 let _failed = self.repository.transition(
@@ -551,7 +552,7 @@ impl SessionManager {
                     None,
                     Some(source.to_string()),
                 );
-                return Err(source).context(RunnerSnafu);
+                return Err(source);
             }
         };
         let binding = RunnerBinding::new(
@@ -583,6 +584,20 @@ impl SessionManager {
         self.active_handles(&session_id)?
             .insert((uid, session_id.clone()), Arc::new(Mutex::new(active)));
         Ok(running)
+    }
+
+    fn start_runner(
+        &self,
+        runner: &dyn RunnerDriver,
+        spec: &SessionSpec,
+        output: &OutputEndpoints,
+    ) -> Result<Box<dyn ActiveSession>, SessionManagerError> {
+        if !spec.runner_capability().physical_interception() {
+            return runner.start(spec, output).context(RunnerSnafu);
+        }
+        let held = runner.start_held(spec, output).context(RunnerSnafu)?;
+        self.runtime.activate_workload(spec, held.boundary())?;
+        held.release().context(RunnerSnafu)
     }
 
     fn fail_start(
@@ -1160,16 +1175,16 @@ mod tests {
         ActiveSession, ActiveSessionExit, ActiveSessionHealth, ActiveSessionSignal,
         ActiveSessionSignalKind, DaemonFailureMode, EvidenceRequirement, FilesystemProjection,
         ImmutableIdentity, OutputEndpoints, OutputPlan, OutputStreamRequirements, RunnerBinding,
-        RunnerCapabilityDocument, RunnerId, RunnerRecovery, SafePathBinding, SafePathKind,
-        SessionAdmission, SessionOwner, SessionSpec, WorkloadPrivilegePlan,
+        RunnerCapabilityDocument, RunnerId, RunnerRecovery, RuntimeError, SafePathBinding,
+        SafePathKind, SessionAdmission, SessionOwner, SessionSpec, WorkloadPrivilegePlan,
     };
     use erebor_runtime_events::SessionId;
     use tempfile::TempDir;
 
     use crate::{
-        ResolvedSessionPath, RunnerAdmissionContext, RunnerAdmissionRequest, RunnerDriver,
-        RunnerExecutionAdmission, SessionOutputStores, SessionPathResolver,
-        SessionPathResolverError,
+        HeldRunnerSession, HeldWorkloadBoundary, ResolvedSessionPath, RunnerAdmissionContext,
+        RunnerAdmissionRequest, RunnerDriver, RunnerExecutionAdmission, SessionOutputStores,
+        SessionPathResolver, SessionPathResolverError,
     };
 
     use super::{
@@ -1195,6 +1210,9 @@ mod tests {
         running: Arc<AtomicBool>,
         preparations: AtomicUsize,
         starts: AtomicUsize,
+        held_starts: AtomicUsize,
+        releases: AtomicUsize,
+        held_drops: AtomicUsize,
         fail_start: AtomicBool,
         admissions: AtomicUsize,
         recoveries: AtomicUsize,
@@ -1202,6 +1220,7 @@ mod tests {
         inputs: Arc<Mutex<Vec<Vec<u8>>>>,
         resizes: Arc<Mutex<Vec<erebor_runtime_core::TerminalSize>>>,
         input_closed: Arc<AtomicBool>,
+        order: Arc<Mutex<Vec<&'static str>>>,
     }
 
     struct FakeRunner {
@@ -1213,7 +1232,10 @@ mod tests {
     struct FakeRuntimeState {
         preparations: AtomicUsize,
         cleanups: AtomicUsize,
+        activations: AtomicUsize,
         fail_prepare: AtomicBool,
+        fail_activation: AtomicBool,
+        order: Arc<Mutex<Vec<&'static str>>>,
     }
 
     struct FakeRuntime {
@@ -1262,6 +1284,30 @@ mod tests {
             _recovering: bool,
         ) -> Result<Vec<(String, String)>, SessionManagerError> {
             Ok(Vec::new())
+        }
+
+        fn activate_workload(
+            &self,
+            spec: &SessionSpec,
+            _boundary: &crate::HeldWorkloadBoundary,
+        ) -> Result<(), SessionManagerError> {
+            self.state.activations.fetch_add(1, Ordering::SeqCst);
+            self.state
+                .order
+                .lock()
+                .map_err(|_error| SessionManagerError::StateLock {
+                    resource: "fake activation order",
+                    location: snafu::Location::default(),
+                })?
+                .push("activate");
+            if self.state.fail_activation.load(Ordering::SeqCst) {
+                return Err(SessionManagerError::InvalidRuntime {
+                    session_id: spec.session_id().as_str().to_owned(),
+                    reason: String::from("injected workload activation failure"),
+                    location: snafu::Location::default(),
+                });
+            }
+            Ok(())
         }
 
         fn cleanup(&self, _spec: &SessionSpec) -> Result<(), SessionManagerError> {
@@ -1381,6 +1427,66 @@ mod tests {
         }
     }
 
+    struct FakeHeldSession {
+        state: Arc<FakeRunnerState>,
+        boundary: HeldWorkloadBoundary,
+        active: Option<Box<dyn ActiveSession>>,
+    }
+
+    impl HeldRunnerSession for FakeHeldSession {
+        fn boundary(&self) -> &HeldWorkloadBoundary {
+            &self.boundary
+        }
+
+        fn release(mut self: Box<Self>) -> Result<Box<dyn ActiveSession>, RuntimeError> {
+            self.state.releases.fetch_add(1, Ordering::SeqCst);
+            self.state
+                .order
+                .lock()
+                .map_err(|_error| RuntimeError::SessionRunnerProtocol {
+                    runner: String::from("test-runner"),
+                    reason: String::from("fake release order lock is poisoned"),
+                    location: snafu::Location::default(),
+                })?
+                .push("release");
+            self.state.running.store(true, Ordering::SeqCst);
+            self.active
+                .take()
+                .ok_or_else(|| RuntimeError::SessionRunnerProtocol {
+                    runner: String::from("test-runner"),
+                    reason: String::from("fake held session was already released"),
+                    location: snafu::Location::default(),
+                })
+        }
+    }
+
+    impl Drop for FakeHeldSession {
+        fn drop(&mut self) {
+            if self.active.is_some() {
+                self.state.held_drops.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+    }
+
+    impl FakeRunner {
+        fn active_session(&self, recovery: &str) -> Result<Box<dyn ActiveSession>, RuntimeError> {
+            Ok(Box::new(FakeActiveSession {
+                capability: self.inspect()?,
+                recovery: RunnerRecovery::new(1, recovery).map_err(|error| {
+                    RuntimeError::SessionRunnerProtocol {
+                        runner: self.id.as_str().to_owned(),
+                        reason: error.to_string(),
+                        location: snafu::Location::default(),
+                    }
+                })?,
+                running: Arc::clone(&self.state.running),
+                inputs: Arc::clone(&self.state.inputs),
+                resizes: Arc::clone(&self.state.resizes),
+                input_closed: Arc::clone(&self.state.input_closed),
+            }))
+        }
+    }
+
     impl RunnerDriver for FakeRunner {
         fn id(&self) -> &RunnerId {
             &self.id
@@ -1452,6 +1558,15 @@ mod tests {
             _output: &OutputEndpoints,
         ) -> Result<Box<dyn ActiveSession>, erebor_runtime_core::RuntimeError> {
             self.state.starts.fetch_add(1, Ordering::SeqCst);
+            self.state
+                .order
+                .lock()
+                .map_err(|_error| RuntimeError::SessionRunnerProtocol {
+                    runner: self.id.as_str().to_owned(),
+                    reason: String::from("fake start order lock is poisoned"),
+                    location: snafu::Location::default(),
+                })?
+                .push("start");
             if self.state.fail_start.load(Ordering::SeqCst) {
                 return Err(erebor_runtime_core::RuntimeError::SessionRunnerProtocol {
                     runner: self.id.as_str().to_owned(),
@@ -1460,19 +1575,39 @@ mod tests {
                 });
             }
             self.state.running.store(true, Ordering::SeqCst);
-            Ok(Box::new(FakeActiveSession {
-                capability: self.inspect()?,
-                recovery: RunnerRecovery::new(1, r#"{"fake":"active"}"#).map_err(|error| {
-                    erebor_runtime_core::RuntimeError::SessionRunnerProtocol {
-                        runner: self.id.as_str().to_owned(),
-                        reason: error.to_string(),
-                        location: snafu::Location::default(),
-                    }
-                })?,
-                running: Arc::clone(&self.state.running),
-                inputs: Arc::clone(&self.state.inputs),
-                resizes: Arc::clone(&self.state.resizes),
-                input_closed: Arc::clone(&self.state.input_closed),
+            self.active_session(r#"{"fake":"active"}"#)
+        }
+
+        fn start_held(
+            &self,
+            _spec: &SessionSpec,
+            _output: &OutputEndpoints,
+        ) -> Result<Box<dyn HeldRunnerSession>, RuntimeError> {
+            self.state.held_starts.fetch_add(1, Ordering::SeqCst);
+            self.state
+                .order
+                .lock()
+                .map_err(|_error| RuntimeError::SessionRunnerProtocol {
+                    runner: self.id.as_str().to_owned(),
+                    reason: String::from("fake held-start order lock is poisoned"),
+                    location: snafu::Location::default(),
+                })?
+                .push("held");
+            if self.state.fail_start.load(Ordering::SeqCst) {
+                return Err(RuntimeError::SessionRunnerProtocol {
+                    runner: self.id.as_str().to_owned(),
+                    reason: String::from("injected runner start failure"),
+                    location: snafu::Location::default(),
+                });
+            }
+            Ok(Box::new(FakeHeldSession {
+                state: Arc::clone(&self.state),
+                boundary: HeldWorkloadBoundary::LinuxCgroup {
+                    path: PathBuf::from("/sys/fs/cgroup/fake-workload"),
+                    id: 42,
+                    controller_id: 41,
+                },
+                active: Some(self.active_session(r#"{"fake":"held"}"#)?),
             }))
         }
 
@@ -1513,6 +1648,14 @@ mod tests {
         version: &str,
         tty_supported: bool,
     ) -> Result<RunnerCapabilityDocument, Box<dyn std::error::Error>> {
+        capability_with_interception(version, tty_supported, false)
+    }
+
+    fn capability_with_interception(
+        version: &str,
+        tty_supported: bool,
+        physical_interception: bool,
+    ) -> Result<RunnerCapabilityDocument, Box<dyn std::error::Error>> {
         RunnerCapabilityDocument::new(
             RunnerId::new("test-runner")?,
             "fake-linux-runner",
@@ -1520,7 +1663,7 @@ mod tests {
             "linux",
             "x86_64",
             true,
-            true,
+            physical_interception,
             BTreeSet::from([String::from("stdout"), String::from("stderr")]),
             BTreeSet::from([
                 ActiveSessionSignalKind::Terminate,
@@ -1546,11 +1689,28 @@ mod tests {
         daemon_failure_mode: DaemonFailureMode,
         tty: bool,
     ) -> Result<ManagerFixture, TestError> {
+        fixture_with_mode_tty_and_interception(root, daemon_failure_mode, tty, false)
+    }
+
+    fn fixture_with_mode_tty_and_interception(
+        root: &TempDir,
+        daemon_failure_mode: DaemonFailureMode,
+        tty: bool,
+        physical_interception: bool,
+    ) -> Result<ManagerFixture, TestError> {
+        let order = Arc::new(Mutex::new(Vec::new()));
         let state = Arc::new(FakeRunnerState {
-            capability: Mutex::new(capability("1", tty)?),
+            capability: Mutex::new(capability_with_interception(
+                "1",
+                tty,
+                physical_interception,
+            )?),
             running: Arc::new(AtomicBool::new(false)),
             preparations: AtomicUsize::new(0),
             starts: AtomicUsize::new(0),
+            held_starts: AtomicUsize::new(0),
+            releases: AtomicUsize::new(0),
+            held_drops: AtomicUsize::new(0),
             fail_start: AtomicBool::new(false),
             admissions: AtomicUsize::new(0),
             recoveries: AtomicUsize::new(0),
@@ -1558,12 +1718,20 @@ mod tests {
             inputs: Arc::new(Mutex::new(Vec::new())),
             resizes: Arc::new(Mutex::new(Vec::new())),
             input_closed: Arc::new(AtomicBool::new(false)),
+            order: Arc::clone(&order),
         });
         let runner = Arc::new(FakeRunner {
             id: RunnerId::new("test-runner")?,
             state: Arc::clone(&state),
         }) as Arc<dyn RunnerDriver>;
-        let runtime_state = Arc::new(FakeRuntimeState::default());
+        let runtime_state = Arc::new(FakeRuntimeState {
+            preparations: AtomicUsize::new(0),
+            cleanups: AtomicUsize::new(0),
+            activations: AtomicUsize::new(0),
+            fail_prepare: AtomicBool::new(false),
+            fail_activation: AtomicBool::new(false),
+            order,
+        });
         let runtime = Arc::new(FakeRuntime {
             state: Arc::clone(&runtime_state),
         }) as Arc<dyn SessionRuntime>;
@@ -1587,7 +1755,7 @@ mod tests {
             policy_inputs: vec![ImmutableIdentity::new("root-policy", digest)?],
             policy_set: ImmutableIdentity::new("policy-set", digest)?,
             resource_association: None,
-            runner_capability: capability("1", tty)?,
+            runner_capability: capability_with_interception("1", tty, physical_interception)?,
             workspace: SafePathBinding::new(
                 PathBuf::from("/workspace"),
                 1,
@@ -1702,6 +1870,78 @@ mod tests {
         );
         assert_eq!(state.starts.load(Ordering::SeqCst), 1);
         assert_eq!(runtime.preparations.load(Ordering::SeqCst), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn manager_activates_a_held_boundary_before_release() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let root = TempDir::new()?;
+        let (manager, state, runtime, spec) = fixture_with_mode_tty_and_interception(
+            &root,
+            DaemonFailureMode::Terminate,
+            false,
+            true,
+        )?;
+        manager.create(spec)?;
+
+        let running = manager.start(1000, "session-manager-test", &start_constraints(), false)?;
+
+        assert_eq!(
+            running.state(),
+            erebor_runtime_core::SessionLifecycleState::Running
+        );
+        assert_eq!(state.starts.load(Ordering::SeqCst), 0);
+        assert_eq!(state.held_starts.load(Ordering::SeqCst), 1);
+        assert_eq!(runtime.activations.load(Ordering::SeqCst), 1);
+        assert_eq!(state.releases.load(Ordering::SeqCst), 1);
+        assert_eq!(state.held_drops.load(Ordering::SeqCst), 0);
+        assert_eq!(
+            state
+                .order
+                .lock()
+                .map_err(|_error| "order lock poisoned")?
+                .as_slice(),
+            &["held", "activate", "release"]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn manager_drops_a_held_workload_when_activation_fails(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let root = TempDir::new()?;
+        let (manager, state, runtime, spec) = fixture_with_mode_tty_and_interception(
+            &root,
+            DaemonFailureMode::Terminate,
+            false,
+            true,
+        )?;
+        runtime.fail_activation.store(true, Ordering::SeqCst);
+        manager.create(spec)?;
+
+        assert!(manager
+            .start(1000, "session-manager-test", &start_constraints(), false)
+            .is_err());
+
+        assert_eq!(
+            manager.inspect(1000, "session-manager-test")?.state(),
+            erebor_runtime_core::SessionLifecycleState::Failed
+        );
+        assert_eq!(state.held_starts.load(Ordering::SeqCst), 1);
+        assert_eq!(runtime.activations.load(Ordering::SeqCst), 1);
+        assert_eq!(state.releases.load(Ordering::SeqCst), 0);
+        assert_eq!(state.held_drops.load(Ordering::SeqCst), 1);
+        assert!(!state.running.load(Ordering::SeqCst));
+        assert_eq!(runtime.cleanups.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            state
+                .order
+                .lock()
+                .map_err(|_error| "order lock poisoned")?
+                .as_slice(),
+            &["held", "activate"]
+        );
         Ok(())
     }
 

@@ -9,7 +9,11 @@ use erebor_runtime_core::{DaemonFailureMode, TerminalSize};
 use snafu::ResultExt;
 
 use crate::{
-    controller_support::{linux::LinuxWorkload, output::HelperOutput, workload::WorkloadExit},
+    controller_support::{
+        linux::{HeldLinuxWorkload, LinuxWorkload},
+        output::HelperOutput,
+        workload::WorkloadExit,
+    },
     error::session_controller::{CommandChannelSnafu, InvalidHandoffSnafu, ProtocolSnafu},
     runners::linux::{LinuxControllerCommand, LinuxControllerEvent, LinuxControllerHandoff},
     SessionControllerError,
@@ -20,7 +24,31 @@ pub fn run_linux_session_controller() -> Result<(), SessionControllerError> {
     let handoff: LinuxControllerHandoff = read_json_line(&mut standard_input.lock())?;
     validate_handoff(&handoff)?;
     let output = HelperOutput::open(&handoff)?;
-    let mut workload = LinuxWorkload::start(&handoff, &output)?;
+    let mut workload = if handoff.physical_interception {
+        let held = HeldLinuxWorkload::prepare(&handoff)?;
+        let boundary = held.boundary();
+        output.record_event(
+            "workload_prepared",
+            serde_json::json!({"boundary": boundary}),
+        )?;
+        write_event(&LinuxControllerEvent::Prepared {
+            boundary,
+            controller_pid: std::process::id(),
+        })?;
+        let command: LinuxControllerCommand = read_json_line(&mut standard_input.lock())?;
+        match command {
+            LinuxControllerCommand::Release => held.release(&output)?,
+            LinuxControllerCommand::Cancel => return Ok(()),
+            _ => {
+                return InvalidHandoffSnafu {
+                    reason: String::from("held Linux workload requires release or cancellation"),
+                }
+                .fail();
+            }
+        }
+    } else {
+        LinuxWorkload::start(&handoff, &output)?
+    };
     output.record_event(
         "workload_started",
         serde_json::json!({
@@ -121,6 +149,10 @@ fn apply_command(
     command: LinuxControllerCommand,
 ) -> Result<Option<WorkloadExit>, SessionControllerError> {
     match command {
+        LinuxControllerCommand::Release | LinuxControllerCommand::Cancel => InvalidHandoffSnafu {
+            reason: String::from("Linux workload was already released"),
+        }
+        .fail(),
         LinuxControllerCommand::Stop { grace_period_ms } => {
             let exit = workload.stop(Duration::from_millis(grace_period_ms))?;
             Ok(Some(exit))
@@ -179,6 +211,14 @@ fn validate_handoff(handoff: &LinuxControllerHandoff) -> Result<(), SessionContr
     if !cfg!(all(target_os = "linux", target_arch = "x86_64")) {
         return InvalidHandoffSnafu {
             reason: String::from("Linux-host controller is unavailable on this platform"),
+        }
+        .fail();
+    }
+    if handoff.physical_interception
+        && (handoff.systemd_scope_unit.is_none() || handoff.systemd_session_slice.is_none())
+    {
+        return InvalidHandoffSnafu {
+            reason: String::from("physical interception requires delegated systemd containment"),
         }
         .fail();
     }
