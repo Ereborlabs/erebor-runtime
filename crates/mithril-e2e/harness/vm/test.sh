@@ -14,6 +14,48 @@ for script in "$directory/run.sh" "$directory/two-node-network.sh" \
   bash -n "$script"
 done
 
+. "$directory/runtime-interceptor.sh"
+diagnostic_root=$test_root/runtime-interceptor-diagnostics
+mkdir -p "$diagnostic_root"
+set +e
+(
+  set -Ee
+  lane_root=$diagnostic_root
+  trap report_probe_failure ERR
+  [[ diagnostic-left == diagnostic-right ]]
+) 2>"$diagnostic_root/stderr.txt"
+status=$?
+set -e
+[[ $status -eq 1 ]]
+grep -qx 'status=1' "$diagnostic_root/failure.txt"
+grep -Eq '^line=[0-9]+$' "$diagnostic_root/failure.txt"
+grep -Fqx 'command=[[ diagnostic-left == diagnostic-right ]]' \
+  "$diagnostic_root/failure.txt"
+grep -Eq '^Runtime Interceptor probe failed at line [0-9]+: ' \
+  "$diagnostic_root/stderr.txt"
+
+failure_session_root=$test_root/runtime-interceptor-session-state
+failure_binding_root=$test_root/runtime-interceptor-binding-state
+for index in $(seq -w 0 32); do
+  mkdir -p "$failure_session_root/session-$index/output"
+done
+printf '%s\n' '{"state":"failed"}' \
+  >"$failure_session_root/session-00/session.json"
+truncate -s 1048577 \
+  "$failure_session_root/session-00/output/linux-controller-diagnostics.log"
+mkdir -p "$failure_binding_root"
+printf '%s\n' '{"status":"active"}' >"$failure_binding_root/binding.json"
+collect_failure_state "$diagnostic_root/durable-state" \
+  "$failure_session_root" "$failure_binding_root"
+cmp -s "$failure_session_root/session-00/session.json" \
+  "$diagnostic_root/durable-state/sessions/session-00/session.json"
+captured_diagnostics=$diagnostic_root/durable-state/sessions/session-00/linux-controller-diagnostics.log
+[[ $(stat -c %s "$captured_diagnostics") == 1048576 ]]
+[[ -f $captured_diagnostics.truncated ]]
+[[ -f "$diagnostic_root/durable-state/sessions.limit" ]]
+cmp -s "$failure_binding_root/binding.json" \
+  "$diagnostic_root/durable-state/bindings/binding.json"
+
 runtime_file_probe=$test_root/runtime-file-probe
 runtime_file_target=$test_root/runtime-file-target
 cc -nostdlib -static -no-pie -Wl,--build-id=none -Wl,-z,noexecstack \

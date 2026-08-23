@@ -239,10 +239,23 @@ if [[ $runtime_interceptor == true ]]; then
   "$provider" put "$vm_name" "$directory/runtime-interceptor.sh" \
     "$remote_runtime/scripts/runtime-interceptor.sh"
   runtime_partial=$output_directory/runtime-interceptor-physical-proof.json.partial
-  "$provider" run "$vm_name" sudo bash \
-    "$remote_runtime/scripts/runtime-interceptor.sh" install-and-run \
-    "$remote_runtime" "/sys/fs/bpf/$vm_name-runtime" "$remote_result" \
-    "$keep_vm"
+  remote_failure=$remote_runtime/runtime-interceptor-failure.tar.gz
+  runtime_failure=$output_directory/runtime-interceptor-failure.tar.gz
+  runtime_failure_partial=$runtime_failure.partial
+  if ! "$provider" run "$vm_name" sudo bash \
+      "$remote_runtime/scripts/runtime-interceptor.sh" install-and-run \
+      "$remote_runtime" "/sys/fs/bpf/$vm_name-runtime" "$remote_result" \
+      "$keep_vm"; then
+    if "$provider" get "$vm_name" "$remote_failure" \
+        "$runtime_failure_partial"; then
+      mv -- "$runtime_failure_partial" "$runtime_failure"
+      echo "Runtime Interceptor failure evidence: $runtime_failure" >&2
+    else
+      rm -f -- "$runtime_failure_partial"
+      echo "Runtime Interceptor failure evidence was not available" >&2
+    fi
+    exit 1
+  fi
   "$provider" get "$vm_name" "$remote_result" "$runtime_partial"
   python3 -m json.tool "$runtime_partial" >/dev/null
   mv -- "$runtime_partial" \

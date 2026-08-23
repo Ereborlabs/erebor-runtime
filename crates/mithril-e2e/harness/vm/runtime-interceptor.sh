@@ -355,15 +355,13 @@ run_file_probe_denial_case() {
   local output=$lane_root/$label-output.txt
   local command="stty rows 24 cols 80; exec $erebor run --policy $policy --workspace /home/$client_user $agent"
   snapshot_sessions "$before"
-  set +e
   if [[ -n $input ]]; then
     printf '%s' "$input" | timeout 30s runuser -u "$client_user" -- \
-      script -qefc "$command" /dev/null >"$output" 2>&1
+      script -qefc "$command" /dev/null >"$output" 2>&1 || true
   else
     timeout 30s runuser -u "$client_user" -- \
-      script -qefc "$command" /dev/null </dev/null >"$output" 2>&1
+      script -qefc "$command" /dev/null </dev/null >"$output" 2>&1 || true
   fi
-  set -e
   capture_new_session "$before"
   case_session=$captured_session
   await_state "$case_session" failed
@@ -540,10 +538,80 @@ record_artifact() {
   fact "${name}_sha256" "$(sha256sum "$path" | awk '{print $1}')"
 }
 
+report_probe_failure() {
+  local status=$?
+  local command=$BASH_COMMAND
+  local line=${BASH_LINENO[0]}
+  trap - ERR
+  {
+    printf 'status=%s\n' "$status"
+    printf 'line=%s\n' "$line"
+    printf 'command=%s\n' "$command"
+  } >"$lane_root/failure.txt"
+  echo "Runtime Interceptor probe failed at line $line: $command" >&2
+}
+
+copy_bounded_failure_file() {
+  local source=$1
+  local destination=$2
+  local size
+  [[ -f $source && ! -L $source ]] || return 0
+  size=$(stat -c %s -- "$source") || return 0
+  install -d -m 0700 "$(dirname -- "$destination")"
+  if ((size <= 1048576)); then
+    install -m 0600 "$source" "$destination"
+  else
+    head -c 1048576 -- "$source" >"$destination"
+    chmod 0600 "$destination"
+    printf 'source_bytes=%s captured_bytes=1048576\n' "$size" \
+      >"$destination.truncated"
+  fi
+}
+
+collect_failure_state() {
+  local destination=$1
+  local session_root=$2
+  local binding_root=$3
+  local count=0
+  local name
+  local path
+  install -d -m 0700 "$destination/sessions" "$destination/bindings"
+  if [[ -d $session_root && ! -L $session_root ]]; then
+    while IFS= read -r path; do
+      if ((count >= 32)); then
+        printf '%s\n' 'Only the first 32 session directories were captured.' \
+          >"$destination/sessions.limit"
+        break
+      fi
+      name=${path##*/}
+      copy_bounded_failure_file "$path/session.json" \
+        "$destination/sessions/$name/session.json"
+      copy_bounded_failure_file \
+        "$path/output/linux-controller-diagnostics.log" \
+        "$destination/sessions/$name/linux-controller-diagnostics.log"
+      count=$((count + 1))
+    done < <(find "$session_root" -mindepth 1 -maxdepth 1 -type d | sort)
+  fi
+  count=0
+  if [[ -d $binding_root && ! -L $binding_root ]]; then
+    while IFS= read -r path; do
+      if ((count >= 32)); then
+        printf '%s\n' 'Only the first 32 binding records were captured.' \
+          >"$destination/bindings.limit"
+        break
+      fi
+      name=${path##*/}
+      copy_bounded_failure_file "$path" "$destination/bindings/$name"
+      count=$((count + 1))
+    done < <(find "$binding_root" -mindepth 1 -maxdepth 1 \
+      -name '*.json' -type f | sort)
+  fi
+}
+
 probe() {
   (($# == 0)) || { usage; exit 2; }
   require_root
-  for command in cmp python3 runuser script sha256sum stty systemctl; do
+  for command in cmp head python3 runuser script sha256sum stty systemctl tar; do
     require_command "$command"
   done
   erebor=/usr/local/bin/erebor
@@ -577,16 +645,32 @@ probe() {
   install -d -m 0700 "$lane_root"
   : >"$facts"
 
+  trap report_probe_failure ERR
+
   cleanup_probe() {
     local status=$?
-    trap - EXIT
+    trap - EXIT ERR
     [[ -z ${socket_server_pid:-} ]] || kill "$socket_server_pid" >/dev/null 2>&1 || true
     rm -f -- "$file_target" "${runtime_file_open_target:-}" \
       "${runtime_file_read_target:-}" "${runtime_file_mutation_target:-}" \
       "${long_fifo:-}"
     if [[ $status -ne 0 ]]; then
-      systemctl status erebord.service --no-pager >&2 || true
-      journalctl -u erebord.service --no-pager >&2 || true
+      local failure_archive
+      systemctl status erebord.service --no-pager \
+        >"$lane_root/erebord-status.txt" 2>&1 || true
+      journalctl -u erebord.service --no-pager \
+        >"$lane_root/erebord-journal.txt" 2>&1 || true
+      cat "$lane_root/erebord-status.txt" >&2 || true
+      cat "$lane_root/erebord-journal.txt" >&2 || true
+      collect_failure_state "$lane_root/durable-state" \
+        "/var/lib/erebor/users/$client_uid/sessions" \
+        /var/lib/erebor/runtime-interceptor/bindings || true
+      failure_archive=$(dirname -- "$result")/runtime-interceptor-failure.tar.gz
+      if tar -C "$lane_root" -czf "$failure_archive" .; then
+        echo "Runtime Interceptor failure evidence: $failure_archive" >&2
+      else
+        echo "Runtime Interceptor failure evidence could not be archived" >&2
+      fi
     fi
     exit "$status"
   }
@@ -838,11 +922,9 @@ PY
 
   before=$lane_root/deny-exec-sessions-before
   snapshot_sessions "$before"
-  set +e
   as_user "$client_user" run --policy runtime-deny-exec \
     --workspace "/home/$client_user" --app-server "$agent_name" \
-    </dev/null >"$lane_root/deny_exec-output.txt" 2>&1
-  set -e
+    </dev/null >"$lane_root/deny_exec-output.txt" 2>&1 || true
   capture_new_session "$before"
   local deny_exec_session=$captured_session
   await_state "$deny_exec_session" failed
@@ -866,12 +948,10 @@ PY
   snapshot_sessions "$before"
   local bindings_before
   bindings_before=$(binding_count)
-  set +e
+  local dynamic_status=0
   as_user "$client_user" run --policy runtime-dynamic-reject \
     --workspace "/home/$client_user" --app-server "$agent_name" \
-    </dev/null >"$lane_root/dynamic-output.txt" 2>&1
-  local dynamic_status=$?
-  set -e
+    </dev/null >"$lane_root/dynamic-output.txt" 2>&1 || dynamic_status=$?
   [[ $dynamic_status -ne 0 ]]
   grep -q 'command_contains' "$lane_root/dynamic-output.txt"
   capture_new_session "$before"
@@ -1094,6 +1174,10 @@ PY
   rm -f -- "$file_target" "$runtime_file_open_target" \
     "$runtime_file_read_target" "$runtime_file_mutation_target"
 }
+
+if [[ ${BASH_SOURCE[0]} != "$0" ]]; then
+  return 0
+fi
 
 case ${1:-} in
   install-and-run)
