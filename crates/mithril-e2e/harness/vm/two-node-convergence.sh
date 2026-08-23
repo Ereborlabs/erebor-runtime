@@ -571,8 +571,9 @@ jq -e '
   (.metadata.annotations["mithril.erebor.dev/policy-source-revision"] | length) == 64 and
   (.spec.nodeName // "") == "" and
   .spec.nodeSelector["mithril.erebor.dev/pool"] == "protected" and
+  .spec.nodeSelector["mithril.erebor.dev/ready"] == "true" and
   any(.spec.affinity.nodeAffinity.requiredDuringSchedulingIgnoredDuringExecution.nodeSelectorTerms[].matchExpressions[]?;
-      .key == "mithril.erebor.dev/ready" and .operator == "In" and .values == ["true"])
+      .key == "kubernetes.io/arch" and .operator == "In" and .values == ["amd64"])
 ' <<<"$protected_dry_run" >/dev/null
 
 bypass=$work_a/bypass.json
