@@ -9,7 +9,7 @@
 
 Phase 6.2 is **Not done**. Source implementation and automated acceptance for
 D6.2.1-D6.2.12 passed at code commit
-`bc7ccde8b435cb0eecf5787a013670021635b28d`. The required physical Kubernetes
+`781ee425320ce75cd6b7bf786e06cb23f36b6b91`. The required physical Kubernetes
 and stock-runtime acceptance has not run.
 
 The amendment is not closed by CRD reconciliation alone. A result is complete
@@ -51,14 +51,15 @@ policy and cgroup binding.
 | Seam | Positive proof | Negative oracle |
 | --- | --- | --- |
 | DaemonSet derivation | Selector and required affinity accept the same labeled nodes as the supported DaemonSet template. | Unsupported or changed constraints do not leave a stale ready projection. |
-| Node quarantine | A matching node stays tainted until its authenticated current-boot session reports complete readiness. | A missing, stale, wrong-name, wrong-boot, or unhealthy session cannot remove the taint. |
-| Pod match | One same-namespace profile match produces a protected admission result. | Zero matches do not mutate the Pod. Multiple matches reject it. |
-| Pod scheduling constraints | Existing Pod constraints and derived Mithril constraints are combined, and the scheduler can choose either of two eligible ready nodes. | `nodeName`, quarantine toleration, conflicting mutation input, and stale ready state reject. |
+| Node quarantine | A matching node stays tainted until its authenticated current-boot session reports complete readiness. | A missing, stale, wrong-name, wrong-UID, wrong-boot, or unhealthy session cannot remove the taint. A replacement Node cannot inherit readiness by name. |
+| Pod match | One same-namespace profile match produces a protected admission result. | Zero matches do not mutate the Pod. Multiple matches and caller-supplied Mithril annotations reject. |
+| Pod scheduling constraints | Existing Pod constraints and derived Mithril constraints are combined, and the scheduler can choose either of two eligible ready nodes. | `nodeName`, quarantine toleration, conflicting mutation input, excessive affinity expansion, and stale ready state reject. |
+| Pod update | A protected Pod keeps its admitted policy identity and digest-pinned matching containers. | An unprotected scheduled Pod cannot enter a profile through an update. A protected Pod cannot change its profile identity through a Pod or ephemeral-container update. |
 | Scheduler binding | A binding to an eligible ready node with the current session succeeds. | A binding to another node, UID, boot, or stale session rejects. |
 | Workload target | Persisted Pod UID, selected node, controller, ServiceAccount, container, and digest create one immutable exact target. | Pod deletion, UID reuse, node change, or container change retires the old target. |
 | Policy delivery | Only the selected node can inventory, fetch, verify, and acknowledge the target-bound candidate. | Every other node and boot rejects the candidate even when it has the same profile artifact. |
-| Runtime gate | The held OCI initial PID is released after policy activation and exact cgroup binding readback. | Missing candidate, wrong annotations, PID or cgroup mismatch, timeout, disconnect, and restart reject without release. |
-| Retirement | A signed restrictive successor replaces the exact active target. | CRD deletion, API loss, or Control loss cannot erase the last valid local generation. |
+| Runtime gate | The held OCI initial PID is released after policy activation and exact cgroup binding readback. | Missing candidate, wrong policy annotations, PID or cgroup mismatch, timeout, disconnect, active socket-owner replacement, and restart reject without release. |
+| Retirement | A signed restrictive successor replaces the exact active target. A complete relist retires a durable source that disappeared. | A partial relist, historical event, CRD deletion, API loss, or Control loss cannot erase the last valid local generation. |
 
 ## Physical Proof Matrix
 
@@ -80,27 +81,32 @@ No physical result is recorded yet.
 ## Verification State
 
 The following checks passed for code commit
-`bc7ccde8b435cb0eecf5787a013670021635b28d`:
+`781ee425320ce75cd6b7bf786e06cb23f36b6b91`:
 
 ```sh
 bash .github/scripts/verify-rust-ci.sh
 # Passed the repository format, check, clippy, and full workspace test gate.
 
-rtk bash packaging/mithril/helm/tests/verify.sh
+bash packaging/mithril/helm/tests/verify.sh
 # Passed chart lint and the rendered packaging contract.
 
-rtk cargo test -p mithril-control --test kubernetes_policy_api
+cargo test -p mithril-control --test kubernetes_policy_api
 # 5 passed.
 
-rtk cargo test -p mithril-e2e --lib
+cargo test -p mithril-e2e --lib
 # 70 passed in the final repository gate.
 
-rtk cargo test -p mithril-node --lib
-# 128 passed in the final repository gate.
+cargo test -p mithril-node --lib
+# 129 passed in the final repository gate.
 
-rtk cargo test -p mithril-node --bin mithril-oci-hook
+cargo test -p mithril-node --bin mithril-oci-hook
 # 2 passed in the final repository gate.
 ```
+
+The first review gate exposed test-only strict-Clippy failures. The test was
+corrected, and the complete gate passed. The final Control unit-test count was
+63. An earlier complete gate had one transient browser discovery failure with
+`WouldBlock`; the isolated test and the next complete gate passed.
 
 The live cluster and physical stock-runtime cases have not run. Automated
 tests do not change those cases from `Not run` to `Pass`.

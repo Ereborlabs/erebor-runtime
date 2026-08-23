@@ -2,7 +2,7 @@
 
 Status: Not done. Source implementation and automated acceptance for
 D6.2.1-D6.2.12 passed on 2026-08-22 at code commit
-`bc7ccde8b435cb0eecf5787a013670021635b28d`. The required physical Kubernetes
+`781ee425320ce75cd6b7bf786e06cb23f36b6b91`. The required physical Kubernetes
 and stock-runtime acceptance has not run.
 
 Master: [Mithril Hugging Face Intrusion Prevention](./README.md)
@@ -94,6 +94,12 @@ Pod CREATE
   -> admission rejects nodeName and quarantine-taint toleration bypasses
   -> the Kubernetes scheduler chooses one ready Node from the constrained set
 
+Pod or ephemeral-container UPDATE
+  -> validating admission preserves the admitted Mithril policy annotations
+  -> an unprotected scheduled Pod cannot enter a protected profile through an update
+  -> a protected Pod cannot leave or replace its admitted profile through an update
+  -> a matching new container must keep the admitted selector and image-pin contract
+
 Scheduler submits the Pod binding
   -> binding admission verifies the selected Node against the same live constraints
   -> binding admission verifies the current Mithril-ready node session and boot
@@ -118,6 +124,8 @@ Pod or container terminates
   -> another Pod, container, Node, or boot cannot reuse the retired authority
 
 WorkloadProtectionProfile deletion
+  -> a Deleted event or a complete relist detects the missing object UID
+  -> deletion uses the last accepted generation because Kubernetes does not increment generation
   -> Control enters RETIRING for every exact current target
   -> each selected Node receives a signed restrictive replacement
   -> removal completes through normal stage, readback, probe, and activation
@@ -176,7 +184,9 @@ Add one `PolicyDesiredStateOwner` to `mithril-control`. It alone may accept a
 CRD revision and change the desired policy revision. It must use list/watch,
 recover from compaction by relisting, deduplicate repeated events, reject stale
 UID or generation state, and reconstruct the same desired revision after a
-Control restart.
+Control restart. A complete relist must retire each durable live source whose
+object UID is absent from the API snapshot. A partial relist must not retire a
+source.
 
 Require one live CRD owner for each `(tenant, trust domain, profile ID)` and
 one active `WorkloadProtectionProfile` for each exact workload binding in
@@ -365,6 +375,12 @@ ambiguous authority error. Remove the configured namespace list as a
 protection selector; watch the cluster for namespaced profiles, namespace
 identity, and protected Pod lifecycle facts.
 
+Reserve the Mithril profile and source annotations for admission. Reject a Pod
+that supplies either annotation. Validate Pod and ephemeral-container updates
+without changing the scheduler binding. An unprotected scheduled Pod cannot
+enter a protected profile through an update. A protected Pod update must keep
+the admitted annotations, selector match, and digest-pinned protected images.
+
 For one match, add the live DaemonSet node selector, its required node
 affinity, and the Mithril-ready label as scheduling requirements. Combine the
 requirements with the Pod's existing constraints. Never write `spec.nodeName`
@@ -454,8 +470,9 @@ evidence. No graph or finding is created in this phase.
   authenticated node-name binding, boot change, stale session, and Control
   restart tests.
 - Pod no-match, one-match, ambiguous-match, mutation composition, `nodeName`,
-  toleration bypass, scheduler binding, stale ready label, wrong Node UID, and
-  wrong boot tests.
+  toleration bypass, reserved annotation, bounded affinity, update and
+  ephemeral-container bypass, scheduler binding, stale ready label, replaced
+  Node UID, and wrong boot tests.
 - Bound Pod inventory drift, same-policy new target, exact-node candidate,
   wrong-node rejection, Pod deletion, container restart, and name/UID reuse
   tests.
@@ -497,10 +514,10 @@ audit history and the privileged/unmatched workload floor.
 State: Not done. Source implementation and automated acceptance passed. The required physical Kubernetes and stock-runtime acceptance has not run.
 Validated architecture revision/digest: 0c87aaf6c2d0347e06b53ce0ccb9f69577a9b248a4a90463082335d7865d77ae.
 Completed deliverable IDs: D6.2.1-D6.2.12 are source-complete. D6.2.9-D6.2.12 do not have the required physical result.
-Files and durable owners changed: WorkloadProtectionProfile CRD and Helm package; PolicyDesiredStateOwner; PolicyRolloutOwner; TrustBundleOwner; KubernetesNodeReadinessOwner; KubernetesAdmissionOwner; bound-workload reconciler; one append-only ControlStore for policy, trust, rollout, acknowledgement, evidence, coverage, and cursor transactions; generated NodePolicy and ControlHealth services; NodePolicyDeliveryOwner; the existing node activation and cgroup-binding paths; and the stateless OCI adapter. The BPF ABI and BPF programs did not change.
+Files and durable owners changed: WorkloadProtectionProfile CRD and Helm package; PolicyDesiredStateOwner; PolicyRolloutOwner; TrustBundleOwner; KubernetesNodeReadinessOwner; KubernetesAdmissionOwner; KubernetesWorkloadInventoryOwner; one append-only ControlStore for policy, trust, rollout, acknowledgement, evidence, coverage, and cursor transactions; generated NodePolicy and ControlHealth services; NodePolicyDeliveryOwner; RuntimeAdmissionClient; RuntimeAdmissionServer; ScheduledRuntimeBindingV1; the existing node activation and cgroup-binding paths; and the stateless OCI adapter. The BPF ABI and BPF programs did not change.
 Upstream-adoption dossier IDs used: none.
 Fixture cases and exact physical results: no new Appendix C fixture or physical result. The deterministic two-node Control tests passed. The physical two-node manual run was not run.
-Commands and exact source state covered: `bash .github/scripts/verify-rust-ci.sh` passed the repository format, check, clippy, and full workspace test gate at code commit bc7ccde8b435cb0eecf5787a013670021635b28d. The final gate included 57 mithril-control unit tests, 5 Kubernetes API tests, 70 mithril-e2e unit tests, 128 mithril-node unit tests, 2 OCI adapter tests, and 5 mTLS integration tests. `rtk bash packaging/mithril/helm/tests/verify.sh` passed chart lint and the rendered packaging contract for the same source state.
+Commands and exact source state covered: `bash .github/scripts/verify-rust-ci.sh` passed the repository format, check, clippy, and full workspace test gate at code commit 781ee425320ce75cd6b7bf786e06cb23f36b6b91. The first review gate exposed test-only strict-Clippy failures. The test was corrected, and the complete gate passed. The final gate included 63 mithril-control unit tests, 5 Kubernetes API tests, 70 mithril-e2e unit tests, 129 mithril-node unit tests, 2 OCI adapter tests, and 5 mTLS integration tests. An earlier complete gate had one transient browser discovery test failure with `WouldBlock`; the isolated test and the next complete gate passed. `bash packaging/mithril/helm/tests/verify.sh` passed chart lint and the rendered packaging contract for the reviewed source.
 Platform/kernel/runtime manifests: the Helm package contains the generated closed CRD, Control RBAC, the exact DaemonSet reader Role, the Control Deployment and Service, fail-closed admission webhooks, the node DaemonSet, and the OCI hook installation. No BPF program or kernel ABI changed. No live platform manifest was recorded.
 Performance/capacity results: no new benchmark. Evidence gRPC messages are limited to 4 MiB. Policy gRPC messages are limited to 128 KiB. The pending evidence window is limited to 4,096 records. Health reports fixed counts and booleans only.
 Unsupported/degraded paths: no live Kubernetes API-server, RBAC denial, watch-compaction, network-partition, storage-outage, stock-runtime ordering, or physical two-node result was recorded. Phase 7 graph and finding behavior is not present.
