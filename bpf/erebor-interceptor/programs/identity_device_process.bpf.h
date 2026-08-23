@@ -346,7 +346,7 @@ static __always_inline bool controller_signal_authorized(
     __u64 controller_cgroup_id = bpf_get_current_cgroup_id();
     int binding_lookup;
 
-    if (!signal_mask || !controller_cgroup_id)
+    if (!scratch || !signal_mask || !controller_cgroup_id)
         return false;
     __builtin_memset(&scratch->controller_signal_authority_key, 0,
                      sizeof(scratch->controller_signal_authority_key));
