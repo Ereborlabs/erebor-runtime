@@ -59,6 +59,7 @@ use crate::{
     idempotency::{MutationIntent, MutationResponse, MutationResponseType},
     local_store::{DaemonLocalStore, StaticSessionAdmission, StoredStaticSession},
     path_broker::DescriptorBroker,
+    runtime_interception::host::RuntimeKernelInterceptionOwner,
     DaemonPaths, Result,
 };
 
@@ -117,6 +118,33 @@ impl DaemonSessionApi {
     ) -> Result<Self> {
         let state_root = paths.session_state_path();
         let runtime_root = paths.session_runtime_path();
+        let kernel_interception = match config.linux_runner().interceptor() {
+            Some(interceptor) => Some(Arc::new(
+                RuntimeKernelInterceptionOwner::start(interceptor, &state_root).map_err(
+                    |error| {
+                        crate::error::InvalidRequestSnafu {
+                            reason: format!(
+                                "starting the daemon-owned Runtime Interceptor failed: {error}"
+                            ),
+                        }
+                        .build()
+                    },
+                )?,
+            )),
+            None => {
+                RuntimeKernelInterceptionOwner::require_disabled_safe(&state_root).map_err(
+                    |error| {
+                        crate::error::InvalidRequestSnafu {
+                            reason: format!(
+                                "the daemon-owned Runtime Interceptor cannot remain disabled: {error}"
+                            ),
+                        }
+                        .build()
+                    },
+                )?;
+                None
+            }
+        };
         let descriptor_broker = Arc::new(
             config
                 .linux_runner()
@@ -152,15 +180,18 @@ impl DaemonSessionApi {
             state_root.clone(),
             runtime_root.clone(),
             Arc::clone(&descriptor_broker) as Arc<dyn erebor_runtime_session::SessionPathResolver>,
-            Arc::new(StoredPolicyInterceptionRouterFactory::new(
-                Arc::clone(&local_store),
-                Arc::clone(&codex_hook_service),
-                Arc::clone(&codex_app_server_service),
-                Arc::clone(&context_resolver),
-                Arc::clone(&child_deliveries) as Arc<dyn ChildContextDeliveryHandler>,
-                Arc::clone(&agent_controls) as Arc<dyn ContextAgentControlHandler>,
-                Arc::clone(&operation_admissions) as Arc<dyn ContextOperationAdmissionHandler>,
-            )),
+            Arc::new(
+                StoredPolicyInterceptionRouterFactory::new(
+                    Arc::clone(&local_store),
+                    Arc::clone(&codex_hook_service),
+                    Arc::clone(&codex_app_server_service),
+                    Arc::clone(&context_resolver),
+                    Arc::clone(&child_deliveries) as Arc<dyn ChildContextDeliveryHandler>,
+                    Arc::clone(&agent_controls) as Arc<dyn ContextAgentControlHandler>,
+                    Arc::clone(&operation_admissions) as Arc<dyn ContextOperationAdmissionHandler>,
+                )
+                .with_kernel_interception(kernel_interception),
+            ),
         )
         .context(SessionSnafu)?;
         Ok(Self {
@@ -183,6 +214,10 @@ impl DaemonSessionApi {
             context_coordinators: Arc::new(Mutex::new(BTreeMap::new())),
             codex_app_server_output_monitors: Arc::new(Mutex::new(BTreeSet::new())),
         })
+    }
+
+    pub(crate) fn shutdown(&self) -> Result<()> {
+        self.manager.shutdown().context(SessionSnafu)
     }
 
     pub(crate) fn bind_child_delivery_handler(

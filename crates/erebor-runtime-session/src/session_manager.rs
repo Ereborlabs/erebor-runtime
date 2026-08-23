@@ -83,8 +83,9 @@ impl SessionAttachOutcome {
 pub struct SessionManager {
     repository: SessionRepository,
     runners: RunnerRegistry,
-    runtime: Arc<dyn SessionRuntime>,
+    // Rust drops fields in declaration order. Keep active handles before the runtime owner.
     active: Mutex<ActiveHandles>,
+    runtime: Arc<dyn SessionRuntime>,
     leases: Mutex<InputLeases>,
 }
 
@@ -106,8 +107,8 @@ impl SessionManager {
         Self {
             repository,
             runners,
-            runtime,
             active: Mutex::new(BTreeMap::new()),
+            runtime,
             leases: Mutex::new(BTreeMap::new()),
         }
     }
@@ -820,6 +821,36 @@ impl SessionManager {
         self.repository
             .prune(uid, terminal_before_unix_ms, maximum_sessions)
             .context(RepositorySnafu)
+    }
+
+    /// Stops active Sessions that require termination when the daemon exits.
+    pub fn shutdown(&self) -> Result<(), SessionManagerError> {
+        let identities = self
+            .active_handles("daemon shutdown")?
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>();
+        let mut first_error = None;
+        for (uid, session_id) in identities {
+            if let Err(error) = self.shutdown_session(uid, &session_id) {
+                if first_error.is_none() {
+                    first_error = Some(error);
+                }
+            }
+        }
+        first_error.map_or(Ok(()), Err)
+    }
+
+    fn shutdown_session(&self, uid: u32, session_id: &str) -> Result<(), SessionManagerError> {
+        let record = self.inspect(uid, session_id)?;
+        if record.spec().daemon_failure_mode() == DaemonFailureMode::Continue {
+            return Ok(());
+        }
+        let grace_period = Duration::from_secs(record.spec().loss_grace_seconds());
+        if self.stop(uid, session_id, grace_period).is_err() {
+            self.kill(uid, session_id, ActiveSessionSignal::Kill)?;
+        }
+        Ok(())
     }
 
     /// Opens filesystem storage only through the intrinsic filesystem runtime
@@ -2301,6 +2332,45 @@ mod tests {
             erebor_runtime_core::SessionLifecycleState::Failed
         );
         assert_eq!(stop_runtime.cleanups.load(Ordering::SeqCst), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn manager_shutdown_terminates_owned_sessions_before_runtime_cleanup(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let root = TempDir::new()?;
+        let (manager, state, runtime, spec) =
+            fixture_with_mode(&root, DaemonFailureMode::Terminate)?;
+        manager.create(spec)?;
+        manager.start(1000, "session-manager-test", &start_constraints(), false)?;
+
+        manager.shutdown()?;
+
+        assert!(!state.running.load(Ordering::SeqCst));
+        assert_eq!(runtime.cleanups.load(Ordering::SeqCst), 1);
+        assert!(manager
+            .inspect(1000, "session-manager-test")?
+            .state()
+            .is_terminal());
+        Ok(())
+    }
+
+    #[test]
+    fn manager_shutdown_preserves_continue_sessions() -> Result<(), Box<dyn std::error::Error>> {
+        let root = TempDir::new()?;
+        let (manager, state, runtime, spec) =
+            fixture_with_mode(&root, DaemonFailureMode::Continue)?;
+        manager.create(spec)?;
+        manager.start(1000, "session-manager-test", &start_constraints(), false)?;
+
+        manager.shutdown()?;
+
+        assert!(state.running.load(Ordering::SeqCst));
+        assert_eq!(runtime.cleanups.load(Ordering::SeqCst), 0);
+        assert_eq!(
+            manager.inspect(1000, "session-manager-test")?.state(),
+            erebor_runtime_core::SessionLifecycleState::Running
+        );
         Ok(())
     }
 

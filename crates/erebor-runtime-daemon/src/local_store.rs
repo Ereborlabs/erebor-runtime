@@ -245,6 +245,7 @@ impl SurfaceRegistry {
             surface,
             ExecutionSurface::Terminal
                 | ExecutionSurface::Filesystem
+                | ExecutionSurface::Network
                 | ExecutionSurface::BrowserCdp
         ) {
             return Ok(());
@@ -261,7 +262,7 @@ impl SurfaceRegistry {
     fn validate_named_surface_type(surface_type: &str) -> Result<()> {
         match surface_type {
             "browser_cdp" => Ok(()),
-            "terminal" | "filesystem" => InvalidRequestSnafu {
+            "terminal" | "filesystem" | "network" => InvalidRequestSnafu {
                 reason: format!(
                     "Surface spec.type `{surface_type}` is intrinsic and has no named Surface record"
                 ),
@@ -943,10 +944,15 @@ impl DaemonLocalStore {
                     String::from("terminal.json"),
                     br#"{"rules":[{"id":"generic-host-allow-terminal","match":{"surface":"terminal"},"decision":"allow"}]}"#.to_vec(),
                 ),
+                (
+                    String::from("network.json"),
+                    br#"{"rules":[{"id":"generic-host-allow-network","match":{"surface":"network"},"decision":"allow"}]}"#.to_vec(),
+                ),
             ]),
             std::collections::BTreeMap::new(),
             std::collections::BTreeMap::from([
                 (String::from("filesystem.json"), br#"{}"#.to_vec()),
+                (String::from("network.json"), br#"{}"#.to_vec()),
                 (String::from("terminal.json"), br#"{}"#.to_vec()),
             ]),
             b"# Built-in generic host minimum\n".to_vec(),
@@ -2826,17 +2832,24 @@ mod tests {
     }
 
     #[test]
-    fn builtin_generic_host_policy_covers_the_intrinsic_filesystem_surface(
+    fn builtin_generic_host_policy_covers_intrinsic_effect_surfaces(
     ) -> Result<(), Box<dyn std::error::Error>> {
         let (_package, policy) = DaemonLocalStore::builtin_generic_content()?;
-        let rule = std::str::from_utf8(
-            policy
-                .rules()
-                .get("filesystem.json")
-                .ok_or("built-in filesystem policy rule is missing")?,
+        for surface in ["filesystem", "network", "terminal"] {
+            let rule_name = format!("{surface}.json");
+            let rule = std::str::from_utf8(
+                policy
+                    .rules()
+                    .get(&rule_name)
+                    .ok_or("built-in policy rule is missing")?,
+            )?;
+            assert!(rule.contains(&format!("\"surface\":\"{surface}\"")));
+            assert!(policy.tests().contains_key(&rule_name));
+        }
+        crate::runtime_interception::policy::RuntimePolicyImage::compile(
+            "builtin-generic-host",
+            vec![policy],
         )?;
-        assert!(rule.contains("\"surface\":\"filesystem\""));
-        assert!(policy.tests().contains_key("filesystem.json"));
         Ok(())
     }
 
@@ -3220,6 +3233,9 @@ mod tests {
             .is_err());
         assert!(store
             .create_user_surface(1000, "intrinsic-filesystem", "filesystem")
+            .is_err());
+        assert!(store
+            .create_user_surface(1000, "intrinsic-network", "network")
             .is_err());
         Ok(())
     }

@@ -1,5 +1,6 @@
 use std::{
     collections::BTreeMap,
+    future::Future,
     os::unix::{
         fs::{FileTypeExt, MetadataExt, PermissionsExt},
         net::UnixListener as StdUnixListener,
@@ -68,6 +69,18 @@ struct DaemonControlState {
 struct DaemonConfiguration {
     value: DaemonConfig,
     generation: u64,
+}
+
+impl DaemonConfiguration {
+    fn require_reloadable(&self, replacement: &DaemonConfig) -> Result<()> {
+        if self.value.linux_runner() != replacement.linux_runner() {
+            return InvalidRequestSnafu {
+                reason: String::from("Linux runner configuration changes require a daemon restart"),
+            }
+            .fail();
+        }
+        Ok(())
+    }
 }
 
 impl ChildContextDeliveryHandler for DaemonControlState {
@@ -239,26 +252,43 @@ impl DaemonControlService {
         })
     }
 
-    pub async fn serve(mut self) -> Result<()> {
+    pub async fn serve(self) -> Result<()> {
+        self.serve_with_shutdown(std::future::pending()).await
+    }
+
+    /// Serves requests until the daemon or the supplied signal requests shutdown.
+    pub async fn serve_with_shutdown(
+        mut self,
+        shutdown_signal: impl Future<Output = ()>,
+    ) -> Result<()> {
         let listener = self.listener.take().ok_or_else(|| {
             InvalidRequestSnafu {
                 reason: String::from("daemon gRPC listener is unavailable"),
             }
             .build()
         })?;
-        let result = grpc::serve(listener, Arc::clone(&self.state), self.shutdown.clone())
-            .await
-            .map_err(|source| DaemonError::Grpc {
-                source,
-                location: snafu::Location::default(),
-            });
+        let server = grpc::serve(listener, Arc::clone(&self.state), self.shutdown.clone());
+        tokio::pin!(server);
+        tokio::pin!(shutdown_signal);
+        let result = tokio::select! {
+            result = &mut server => result,
+            () = &mut shutdown_signal => {
+                let _result = self.state.shutdown.send(true);
+                server.await
+            }
+        }
+        .map_err(|source| DaemonError::Grpc {
+            source,
+            location: snafu::Location::default(),
+        });
         if result.is_err() {
             let _result = self
                 .state
                 .telemetry
                 .emit(|| error!("daemon control service terminated unexpectedly"));
         }
-        result
+        result?;
+        self.state.sessions.shutdown()
     }
 
     fn bind_listener(path: &PathBuf, security: DaemonSecurity) -> Result<UnixListener> {
@@ -482,6 +512,10 @@ impl DaemonControlState {
         configuration: DaemonConfig,
         generation: u64,
     ) -> Result<String> {
+        self.configuration
+            .read()
+            .map_err(|_error| StateLockSnafu.build())?
+            .require_reloadable(&configuration)?;
         self.sessions.seed_root_curated(&configuration)?;
         let mut active = self
             .configuration
@@ -792,6 +826,48 @@ mod tests {
             .map_err(|_error| "configuration lock poisoned")?;
         assert_eq!(active.value, replacement);
         assert_eq!(active.generation, 2);
+        Ok(())
+    }
+
+    #[test]
+    fn reload_rejects_linux_runner_owner_changes() -> Result<(), Box<dyn std::error::Error>> {
+        let disabled = DaemonConfig::default();
+        let enabled: DaemonConfig = serde_json::from_str(
+            r#"{
+                "socket_group_gid": 0,
+                "linux_runner": {
+                    "containment": "systemd",
+                    "interceptor": {
+                        "runtime_btf_path": "/sys/kernel/btf/vmlinux",
+                        "lease_path": "/run/erebor/interceptor.lock",
+                        "pin_root": "/sys/fs/bpf/erebor-runtime"
+                    }
+                }
+            }"#,
+        )?;
+        let changed_identity: DaemonConfig = serde_json::from_str(
+            r#"{
+                "socket_group_gid": 0,
+                "linux_runner": {
+                    "containment": "systemd",
+                    "interceptor": {
+                        "runtime_btf_path": "/sys/kernel/btf/vmlinux",
+                        "lease_path": "/run/erebor/changed.lock",
+                        "pin_root": "/sys/fs/bpf/erebor-runtime"
+                    }
+                }
+            }"#,
+        )?;
+
+        let mut active = DaemonConfiguration {
+            value: disabled.clone(),
+            generation: 1,
+        };
+        assert!(active.require_reloadable(&enabled).is_err());
+        active.value = enabled.clone();
+        assert!(active.require_reloadable(&disabled).is_err());
+        assert!(active.require_reloadable(&changed_identity).is_err());
+        assert!(active.require_reloadable(&enabled).is_ok());
         Ok(())
     }
 

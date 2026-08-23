@@ -54,18 +54,24 @@ pub struct LinuxRunnerConfig {
     descriptor_broker_path: Option<PathBuf>,
     #[serde(default)]
     systemd_run_path: Option<PathBuf>,
+    #[serde(default)]
+    interceptor: Option<RuntimeInterceptorConfig>,
 }
 
 impl LinuxRunnerConfig {
     fn validate(&self) -> bool {
-        [
+        let programs_are_valid = [
             self.controller_path.as_deref(),
             self.descriptor_broker_path.as_deref(),
             self.systemd_run_path.as_deref(),
         ]
         .into_iter()
         .flatten()
-        .all(normalized_absolute)
+        .all(normalized_absolute);
+        let interceptor_is_valid = self.interceptor.as_ref().is_none_or(|interceptor| {
+            matches!(self.containment, LinuxRunnerContainment::Systemd) && interceptor.validate()
+        });
+        programs_are_valid && interceptor_is_valid
     }
 
     pub(crate) fn install_config(&self) -> RunnerInstallConfig {
@@ -79,11 +85,45 @@ impl LinuxRunnerConfig {
         RunnerInstallConfig::new(
             program_overrides,
             matches!(self.containment, LinuxRunnerContainment::Systemd),
+            self.interceptor.is_some(),
         )
     }
 
     pub(crate) fn descriptor_broker_path(&self) -> Option<&Path> {
         self.descriptor_broker_path.as_deref()
+    }
+
+    pub(crate) const fn interceptor(&self) -> Option<&RuntimeInterceptorConfig> {
+        self.interceptor.as_ref()
+    }
+}
+
+/// The paths for the Runtime-owned shared Interceptor instance.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct RuntimeInterceptorConfig {
+    runtime_btf_path: PathBuf,
+    lease_path: PathBuf,
+    pin_root: PathBuf,
+}
+
+impl RuntimeInterceptorConfig {
+    fn validate(&self) -> bool {
+        [&self.runtime_btf_path, &self.lease_path, &self.pin_root]
+            .into_iter()
+            .all(|path| normalized_absolute(path) && path != Path::new("/"))
+    }
+
+    pub(crate) fn runtime_btf_path(&self) -> &Path {
+        &self.runtime_btf_path
+    }
+
+    pub(crate) fn lease_path(&self) -> &Path {
+        &self.lease_path
+    }
+
+    pub(crate) fn pin_root(&self) -> &Path {
+        &self.pin_root
     }
 }
 
@@ -498,11 +538,47 @@ mod tests {
     ) -> Result<(), Box<dyn std::error::Error>> {
         let direct: DaemonConfig = serde_json::from_str(r#"{"socket_group_gid":1000}"#)?;
         assert!(!direct.linux_runner().install_config().use_systemd_scope());
+        assert!(!direct
+            .linux_runner()
+            .install_config()
+            .physical_interception());
 
         let systemd: DaemonConfig = serde_json::from_str(
             r#"{"socket_group_gid":1000,"linux_runner":{"containment":"systemd"}}"#,
         )?;
         assert!(systemd.linux_runner().install_config().use_systemd_scope());
+        assert!(!systemd
+            .linux_runner()
+            .install_config()
+            .physical_interception());
+        Ok(())
+    }
+
+    #[test]
+    fn runtime_interceptor_requires_delegated_systemd_containment(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let source = r#"{
+            "socket_group_gid": 1000,
+            "linux_runner": {
+                "containment": "systemd",
+                "interceptor": {
+                    "runtime_btf_path": "/sys/kernel/btf/vmlinux",
+                    "lease_path": "/run/erebor/interceptor.lock",
+                    "pin_root": "/sys/fs/bpf/erebor-runtime"
+                }
+            }
+        }"#;
+        let systemd: DaemonConfig = serde_json::from_str(source)?;
+        assert!(systemd.validate(Path::new("<test-config>")).is_ok());
+        assert!(systemd
+            .linux_runner()
+            .install_config()
+            .physical_interception());
+        assert!(systemd.linux_runner().interceptor().is_some());
+
+        let direct = source.replace("\"containment\": \"systemd\",", "");
+        let direct: DaemonConfig = serde_json::from_str(&direct)?;
+        assert!(direct.validate(Path::new("<test-config>")).is_err());
         Ok(())
     }
 

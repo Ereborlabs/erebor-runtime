@@ -77,11 +77,13 @@ async fn main() {
             std::process::exit(1);
         }
     };
-    let result = tokio::select! {
-        result = service.serve() => result,
-        _received = terminate.recv() => Ok(()),
-        _received = interrupt.recv() => Ok(()),
+    let shutdown_signal = async move {
+        tokio::select! {
+            _received = terminate.recv() => {}
+            _received = interrupt.recv() => {}
+        }
     };
+    let result = service.serve_with_shutdown(shutdown_signal).await;
     if result.is_err() {
         std::process::exit(1);
     }

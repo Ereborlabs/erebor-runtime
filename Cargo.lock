@@ -1223,6 +1223,8 @@ dependencies = [
 name = "erebor-runtime-daemon"
 version = "0.1.0"
 dependencies = [
+ "erebor-interceptor",
+ "erebor-interceptor-abi",
  "erebor-runtime-approvals",
  "erebor-runtime-audit",
  "erebor-runtime-client",
@@ -1237,6 +1239,7 @@ dependencies = [
  "erebor-runtime-session",
  "erebor-runtime-telemetry",
  "futures-util",
+ "hex",
  "prost",
  "rustix",
  "serde",
@@ -1249,6 +1252,7 @@ dependencies = [
  "tonic",
  "users",
  "uuid",
+ "zerocopy",
 ]
 
 [[package]]

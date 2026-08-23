@@ -19,16 +19,19 @@ use erebor_runtime_packages::PolicyPackageRevision;
 use erebor_runtime_policy::{
     Decision, LayeredDecision, LayeredPolicySet, LocalPolicy, PolicyLayer, PolicySet,
 };
-use erebor_runtime_session::SessionInterceptionRouterFactory;
 use erebor_runtime_session::{
     ChildContextDeliveryHandler, CodexAppServerService, CodexHookService, CodexHookSessionHandlers,
     ContextAgentControlHandler, ContextOperationAdmissionHandler, SessionManagerError,
 };
+use erebor_runtime_session::{HeldWorkloadBoundary, SessionInterceptionRouterFactory};
 use erebor_runtime_telemetry::warn;
 use uuid::Uuid;
 
 use crate::context_dag::SessionContextResolver;
 use crate::local_store::DaemonLocalStore;
+use crate::runtime_interception::{
+    host::RuntimeKernelInterceptionOwner, policy::RuntimePolicyImage,
+};
 
 // The Linux controller moves the descriptor-held executable to this private
 // path before it starts Codex.
@@ -45,6 +48,7 @@ pub(super) struct StoredPolicyInterceptionRouterFactory {
     child_deliveries: Arc<dyn ChildContextDeliveryHandler>,
     agent_controls: Arc<dyn ContextAgentControlHandler>,
     operation_admissions: Arc<dyn ContextOperationAdmissionHandler>,
+    kernel_interception: Option<Arc<RuntimeKernelInterceptionOwner>>,
 }
 
 impl StoredPolicyInterceptionRouterFactory {
@@ -65,7 +69,16 @@ impl StoredPolicyInterceptionRouterFactory {
             child_deliveries,
             agent_controls,
             operation_admissions,
+            kernel_interception: None,
         }
+    }
+
+    pub(super) fn with_kernel_interception(
+        mut self,
+        kernel_interception: Option<Arc<RuntimeKernelInterceptionOwner>>,
+    ) -> Self {
+        self.kernel_interception = kernel_interception;
+        self
     }
 }
 
@@ -122,10 +135,37 @@ impl SessionInterceptionRouterFactory for StoredPolicyInterceptionRouterFactory 
     }
 
     fn cleanup(&self, spec: &SessionSpec) -> Result<(), SessionManagerError> {
+        if let Some(kernel_interception) = &self.kernel_interception {
+            kernel_interception
+                .cleanup(spec)
+                .map_err(|error| self.invalid_error(spec, error.to_string()))?;
+        }
         self.codex_hook_service
             .unregister(spec.session_id().as_str())
             .map_err(|error| self.invalid_error(spec, error.to_string()))?;
         Ok(())
+    }
+
+    fn activate_workload(
+        &self,
+        spec: &SessionSpec,
+        boundary: &HeldWorkloadBoundary,
+    ) -> Result<(), SessionManagerError> {
+        let kernel_interception = self.kernel_interception.as_ref().ok_or_else(|| {
+            self.invalid_error(
+                spec,
+                "physical interception has no daemon-owned kernel host",
+            )
+        })?;
+        let revisions = self
+            .local_store
+            .policy_packages_for_session(spec)
+            .map_err(|error| self.invalid_error(spec, error.to_string()))?;
+        let image = RuntimePolicyImage::compile(spec.policy_set().sha256(), revisions)
+            .map_err(|error| self.invalid_error(spec, error.to_string()))?;
+        kernel_interception
+            .activate(spec, boundary, &image)
+            .map_err(|error| self.invalid_error(spec, error.to_string()))
     }
 }
 
