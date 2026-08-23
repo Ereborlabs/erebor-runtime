@@ -269,6 +269,26 @@ struct ExceptionDesiredTransactionV1 {
     source_revision: ExceptionSourceRevisionV1,
     candidate: ExceptionDeliveryCandidateV1,
     rollout_state: ExceptionRolloutStateV1,
+    // Omit the original purpose so existing commit digests remain valid during replay.
+    #[serde(
+        default,
+        skip_serializing_if = "ExceptionDesiredPurposeV1::is_source_lifecycle"
+    )]
+    purpose: ExceptionDesiredPurposeV1,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub(crate) enum ExceptionDesiredPurposeV1 {
+    #[default]
+    SourceLifecycle,
+    TargetRetirement,
+}
+
+impl ExceptionDesiredPurposeV1 {
+    fn is_source_lifecycle(&self) -> bool {
+        *self == Self::SourceLifecycle
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -803,11 +823,12 @@ impl ControlStore {
             }))
     }
 
-    pub fn record_exception_desired(
+    pub(crate) fn record_exception_desired(
         &self,
         source: ExceptionSourceRevisionV1,
         candidate: ExceptionDeliveryCandidateV1,
         rollout_state: ExceptionRolloutStateV1,
+        purpose: ExceptionDesiredPurposeV1,
     ) -> Result<u64> {
         let mut inner = self.lock()?;
         if let Some(existing) = inner
@@ -835,21 +856,17 @@ impl ControlStore {
             }
             .fail();
         }
-        validate_exception_desired(
-            &inner.state,
-            &source,
-            &candidate,
-            &rollout_state,
-            &inner.root,
-        )?;
+        let desired = ExceptionDesiredTransactionV1 {
+            source_revision: source,
+            candidate,
+            rollout_state,
+            purpose,
+        };
+        validate_exception_desired(&inner.state, &desired, &inner.root)?;
         commit(
             &mut inner,
             ControlTransactionV1::ExceptionDesired {
-                desired: Box::new(ExceptionDesiredTransactionV1 {
-                    source_revision: source,
-                    candidate,
-                    rollout_state,
-                }),
+                desired: Box::new(desired),
             },
         )
     }
@@ -2549,13 +2566,7 @@ fn apply_transaction(
             );
         }
         ControlTransactionV1::ExceptionDesired { desired } => {
-            validate_exception_desired(
-                state,
-                &desired.source_revision,
-                &desired.candidate,
-                &desired.rollout_state,
-                path,
-            )?;
+            validate_exception_desired(state, desired, path)?;
             let key = PolicyObjectKeyV1::from(&desired.source_revision);
             state.exception_source_revisions.insert(
                 desired.source_revision.exception_source_revision_id.clone(),
@@ -2980,11 +2991,12 @@ fn apply_accepted_evidence(
 
 fn validate_exception_desired(
     state: &ControlStoreState,
-    source: &ExceptionSourceRevisionV1,
-    candidate: &ExceptionDeliveryCandidateV1,
-    rollout: &ExceptionRolloutStateV1,
+    desired: &ExceptionDesiredTransactionV1,
     path: &Path,
 ) -> Result<()> {
+    let source = &desired.source_revision;
+    let candidate = &desired.candidate;
+    let rollout = &desired.rollout_state;
     source.validate()?;
     candidate.validate_content()?;
     let object_key = PolicyObjectKeyV1::from(source);
@@ -3003,52 +3015,92 @@ fn validate_exception_desired(
             )
         });
 
-    let source_transition_is_valid = match (source.state, previous_source) {
-        (ExceptionSourceStateV1::Accepted, None) => true,
-        (ExceptionSourceStateV1::Accepted, Some(previous)) => {
-            let prior_revoke_finished = state.exception_rollout_states.values().any(|entry| {
-                entry.exception_source_revision_id == previous.exception_source_revision_id
-                    && entry.state == crate::WorkloadProtectionExceptionStateV1::Revoked
-            });
-            previous.object_uid != source.object_uid
-                && previous.state == ExceptionSourceStateV1::DeletionRequested
-                && prior_revoke_finished
+    let source_transition_is_valid = match desired.purpose {
+        ExceptionDesiredPurposeV1::SourceLifecycle => match (source.state, previous_source) {
+            (ExceptionSourceStateV1::Accepted, None) => true,
+            (ExceptionSourceStateV1::Accepted, Some(previous)) => {
+                let prior_revoke_finished = state.exception_rollout_states.values().any(|entry| {
+                    entry.exception_source_revision_id == previous.exception_source_revision_id
+                        && entry.state == crate::WorkloadProtectionExceptionStateV1::Revoked
+                });
+                previous.object_uid != source.object_uid
+                    && previous.state == ExceptionSourceStateV1::DeletionRequested
+                    && prior_revoke_finished
+            }
+            (ExceptionSourceStateV1::DeletionRequested, Some(previous)) => {
+                previous.object_uid == source.object_uid
+                    && previous.object_generation == source.object_generation
+                    && previous.state == ExceptionSourceStateV1::Accepted
+                    && previous.canonical_spec_digest == source.canonical_spec_digest
+                    && previous.base_policy_source_revision_id
+                        == source.base_policy_source_revision_id
+                    && previous.grant_id == source.grant_id
+                    && previous.requested_duration_ns == source.requested_duration_ns
+                    && previous.requested_uses == source.requested_uses
+            }
+            (ExceptionSourceStateV1::DeletionRequested, None) => false,
+        },
+        ExceptionDesiredPurposeV1::TargetRetirement => {
+            source.state == ExceptionSourceStateV1::Accepted && previous_source == Some(source)
         }
-        (ExceptionSourceStateV1::DeletionRequested, Some(previous)) => {
-            previous.object_uid == source.object_uid
-                && previous.object_generation == source.object_generation
-                && previous.state == ExceptionSourceStateV1::Accepted
-                && previous.canonical_spec_digest == source.canonical_spec_digest
-                && previous.base_policy_source_revision_id == source.base_policy_source_revision_id
-                && previous.grant_id == source.grant_id
-                && previous.requested_duration_ns == source.requested_duration_ns
-                && previous.requested_uses == source.requested_uses
-        }
-        (ExceptionSourceStateV1::DeletionRequested, None) => false,
     };
-    let operation_is_valid = match (source.state, previous_candidate) {
-        (ExceptionSourceStateV1::Accepted, None) => {
-            candidate.operation == ExceptionDeliveryOperationV1::Activate
-                && candidate.predecessor_candidate_content_id.is_none()
+    let exact_revocation = previous_candidate.is_some_and(|previous| {
+        candidate.operation == ExceptionDeliveryOperationV1::Revoke
+            && candidate.predecessor_candidate_content_id.as_deref()
+                == Some(previous.candidate_content_id.as_str())
+            && candidate.exact_target == previous.exact_target
+            && candidate.base_candidate_content_id == previous.base_candidate_content_id
+            && candidate.profile_generation_ref_id == previous.profile_generation_ref_id
+            && candidate.maximum_uses == previous.maximum_uses
+            && candidate.valid_until_utc_ns == previous.valid_until_utc_ns
+            && candidate.expires_utc_ns >= previous.valid_until_utc_ns
+            && (
+                candidate.distribution_sequence_epoch,
+                candidate.distribution_sequence,
+            ) > (
+                previous.distribution_sequence_epoch,
+                previous.distribution_sequence,
+            )
+    });
+    let operation_is_valid = match desired.purpose {
+        ExceptionDesiredPurposeV1::SourceLifecycle => match source.state {
+            ExceptionSourceStateV1::Accepted => {
+                previous_candidate.is_none()
+                    && candidate.operation == ExceptionDeliveryOperationV1::Activate
+                    && candidate.predecessor_candidate_content_id.is_none()
+            }
+            ExceptionSourceStateV1::DeletionRequested => exact_revocation,
+        },
+        ExceptionDesiredPurposeV1::TargetRetirement => {
+            exact_revocation
+                && previous_candidate.is_some_and(|previous| {
+                    previous.operation == ExceptionDeliveryOperationV1::Activate
+                        && state
+                            .exception_rollout_states
+                            .get(&PolicyRolloutKeyV1 {
+                                candidate_content_id: previous.candidate_content_id.clone(),
+                                node_id: previous.exact_target.node_id.clone(),
+                            })
+                            .is_some_and(|rollout| {
+                                matches!(
+                                    rollout.state,
+                                    crate::WorkloadProtectionExceptionStateV1::Pending
+                                        | crate::WorkloadProtectionExceptionStateV1::Active
+                                )
+                            })
+                        // The base-policy snapshot is the durable proof that the exact
+                        // scheduler target disappeared from a complete inventory.
+                        && state
+                            .latest_desired_snapshots
+                            .get(&source.base_policy_source_revision_id)
+                            .and_then(|digest| state.target_snapshots.get(digest))
+                            .is_some_and(|snapshot| {
+                                !snapshot.targets.iter().any(|target| {
+                                    target.workload_targets.contains(&previous.exact_target)
+                                })
+                            })
+                })
         }
-        (ExceptionSourceStateV1::DeletionRequested, Some(previous)) => {
-            candidate.operation == ExceptionDeliveryOperationV1::Revoke
-                && candidate.predecessor_candidate_content_id.as_deref()
-                    == Some(previous.candidate_content_id.as_str())
-                && candidate.exact_target == previous.exact_target
-                && candidate.base_candidate_content_id == previous.base_candidate_content_id
-                && candidate.profile_generation_ref_id == previous.profile_generation_ref_id
-                && candidate.maximum_uses == previous.maximum_uses
-                && candidate.valid_until_utc_ns == previous.valid_until_utc_ns
-                && (
-                    candidate.distribution_sequence_epoch,
-                    candidate.distribution_sequence,
-                ) > (
-                    previous.distribution_sequence_epoch,
-                    previous.distribution_sequence,
-                )
-        }
-        _ => false,
     };
     let base_source = state
         .source_revisions
@@ -3121,7 +3173,7 @@ fn validate_exception_desired(
         && rollout.latest_acknowledgement_content_id.is_none()
         && rollout.transition_version == 0
         && rollout.updated_utc_ns == candidate.issued_utc_ns;
-    let overlaps_live_grant = source.state == ExceptionSourceStateV1::Accepted
+    let overlaps_live_grant = candidate.operation == ExceptionDeliveryOperationV1::Activate
         && state.latest_exception_sources.values().any(|source_id| {
             state
                 .exception_source_revisions

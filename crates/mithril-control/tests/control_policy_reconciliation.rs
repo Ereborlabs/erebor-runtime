@@ -6,12 +6,13 @@ use mithril_control::{
     canonical_kubernetes_policy_spec_digest, lower_kubernetes_policy, workload_target_fact_digest,
     CompiledPhysicalResultV1, ContainerKindV1, ControlPlane, ControlStore,
     ExceptionActivationAcknowledgementV1, ExceptionActivationStateV1, ExceptionDeliveryOperationV1,
-    KubernetesConditionStatusV1, KubernetesWorkloadIdentityV1, PolicyActivationAcknowledgementV1,
-    PolicyActivationStateV1, PolicyBundleV1, PolicyDeliveryOperationV1, PolicyDesiredStateConfigV1,
-    PolicyDesiredStateOwner, PolicySignerConfigV1, PolicySourceRevisionV1, PolicySourceStateV1,
-    ProfileSealRequestV1, RegistryDigestsV1, TrustGenerationV1, WorkloadProtectionException,
-    WorkloadProtectionPolicy, WorkloadProtectionPolicySpec, WorkloadTargetFactV1, EXCEPTION_KIND,
-    POLICY_API_VERSION, POLICY_KIND,
+    ExceptionReconcileResultV1, ExceptionSourceStateV1, KubernetesConditionStatusV1,
+    KubernetesWorkloadIdentityV1, PolicyActivationAcknowledgementV1, PolicyActivationStateV1,
+    PolicyBundleV1, PolicyDeliveryOperationV1, PolicyDesiredStateConfigV1, PolicyDesiredStateOwner,
+    PolicySignerConfigV1, PolicySourceRevisionV1, PolicySourceStateV1, ProfileSealRequestV1,
+    RegistryDigestsV1, TrustGenerationV1, WorkloadProtectionException,
+    WorkloadProtectionExceptionStateV1, WorkloadProtectionPolicy, WorkloadProtectionPolicySpec,
+    WorkloadTargetFactV1, EXCEPTION_KIND, POLICY_API_VERSION, POLICY_KIND,
 };
 use serde_json::json;
 use tempfile::TempDir;
@@ -307,6 +308,49 @@ fn exception_acknowledgement(
     .finalize()?)
 }
 
+struct PreparedException {
+    owner: PolicyDesiredStateOwner,
+    policy_resource: WorkloadProtectionPolicy,
+    inventory: Vec<WorkloadTargetFactV1>,
+    resource: WorkloadProtectionException,
+    activation: ExceptionReconcileResultV1,
+}
+
+fn prepare_exception(store: &ControlStore) -> TestResult<PreparedException> {
+    let owner = make_owner(store.clone());
+    let policy_resource = resource(&policy()?, "profile", OBJECT_UID, 1, false)?;
+    let initial = owner.reconcile(
+        &policy_resource,
+        NAMESPACE_UID,
+        &inventory(&"1".repeat(64))?,
+        NOW,
+    )?;
+    let profile_id = &initial.bundles[0]
+        .profile_artifact
+        .policy_document
+        .metadata
+        .profile_id;
+    let inventory = kubernetes_inventory(
+        &initial.source_revision.policy_source_revision_id,
+        profile_id,
+    )?;
+    let bound = owner.reconcile(&policy_resource, NAMESPACE_UID, &inventory, NOW + 1)?;
+    owner.rollout_owner().acknowledge(acknowledgement(
+        &bound.bundles[0],
+        PolicyActivationStateV1::Active,
+        NOW + 2,
+    )?)?;
+    let resource = exception_resource(EXCEPTION_UID, false)?;
+    let activation = owner.reconcile_exception(&resource, NAMESPACE_UID, &inventory, NOW + 3)?;
+    Ok(PreparedException {
+        owner,
+        policy_resource,
+        inventory,
+        resource,
+        activation,
+    })
+}
+
 #[test]
 fn exception_is_bounded_to_one_active_container_and_replays_revocation() -> TestResult {
     let directory = TempDir::new()?;
@@ -452,6 +496,182 @@ fn exception_is_bounded_to_one_active_container_and_replays_revocation() -> Test
     drop(restarted);
     drop(reopened);
     assert!(ControlStore::open(directory.path()).is_ok());
+    Ok(())
+}
+
+#[test]
+fn missing_exact_target_revokes_the_accepted_exception_once() -> TestResult {
+    let directory = TempDir::new()?;
+    let store = ControlStore::open(directory.path())?;
+    let mut prepared = prepare_exception(&store)?;
+    prepared
+        .owner
+        .rollout_owner()
+        .acknowledge_exception(exception_acknowledgement(
+            &prepared.activation.candidate,
+            ExceptionActivationStateV1::Active,
+            1,
+            NOW + 4,
+        )?)?;
+
+    let commit_before_status_update = store.commit_index();
+    prepared.resource.metadata.resource_version = Some("exception-status-update".to_owned());
+    let status_update = prepared.owner.reconcile_exception(
+        &prepared.resource,
+        NAMESPACE_UID,
+        &prepared.inventory,
+        NOW + 5,
+    )?;
+    assert_eq!(status_update.candidate, prepared.activation.candidate);
+    assert_eq!(store.commit_index(), commit_before_status_update);
+
+    let commit_before_incomplete_inventory = store.commit_index();
+    assert!(prepared
+        .owner
+        .reconcile_exception(&prepared.resource, NAMESPACE_UID, &[], NOW + 6)
+        .is_err());
+    assert_eq!(store.commit_index(), commit_before_incomplete_inventory);
+
+    let mut replacement_inventory = prepared.inventory.clone();
+    replacement_inventory[0].pod_uid = "99999999-9999-4999-8999-999999999998".to_owned();
+    replacement_inventory[0].workload_binding_generation_digest =
+        workload_target_fact_digest(&replacement_inventory[0])?;
+    prepared.owner.reconcile(
+        &prepared.policy_resource,
+        NAMESPACE_UID,
+        &replacement_inventory,
+        NOW + 7,
+    )?;
+    let retired = prepared.owner.reconcile_exception(
+        &prepared.resource,
+        NAMESPACE_UID,
+        &replacement_inventory,
+        NOW + 8,
+    )?;
+
+    assert_eq!(retired.source_revision, prepared.activation.source_revision);
+    assert_eq!(
+        retired.source_revision.state,
+        ExceptionSourceStateV1::Accepted
+    );
+    assert_eq!(
+        retired.candidate.operation,
+        ExceptionDeliveryOperationV1::Revoke
+    );
+    assert_eq!(
+        retired.candidate.exact_target,
+        prepared.activation.candidate.exact_target
+    );
+    assert_eq!(
+        retired.candidate.maximum_uses,
+        prepared.activation.candidate.maximum_uses
+    );
+    assert_eq!(
+        retired.candidate.valid_until_utc_ns,
+        prepared.activation.candidate.valid_until_utc_ns
+    );
+    assert_eq!(
+        retired
+            .candidate
+            .predecessor_candidate_content_id
+            .as_deref(),
+        Some(prepared.activation.candidate.candidate_content_id.as_str())
+    );
+    assert!(retired.candidate.expires_utc_ns >= retired.candidate.valid_until_utc_ns);
+    assert!(retired
+        .status
+        .conditions
+        .iter()
+        .any(|condition| condition.reason == "TargetRetirementPending"));
+    assert_eq!(
+        store
+            .next_exception_candidate_for_node("node-a", &[])?
+            .map(|candidate| candidate.candidate_content_id),
+        Some(retired.candidate.candidate_content_id.clone())
+    );
+
+    let retirement_commit = store.commit_index();
+    let duplicate = prepared.owner.reconcile_exception(
+        &prepared.resource,
+        NAMESPACE_UID,
+        &replacement_inventory,
+        NOW + 9,
+    )?;
+    assert_eq!(duplicate.candidate, retired.candidate);
+    assert_eq!(store.commit_index(), retirement_commit);
+
+    drop(prepared.owner);
+    drop(store);
+    let reopened = ControlStore::open(directory.path())?;
+    let restarted = make_owner(reopened.clone());
+    let replayed = restarted.reconcile_exception(
+        &prepared.resource,
+        NAMESPACE_UID,
+        &replacement_inventory,
+        NOW + 10,
+    )?;
+    assert_eq!(replayed.candidate, retired.candidate);
+    assert_eq!(reopened.commit_index(), retirement_commit);
+    restarted
+        .rollout_owner()
+        .acknowledge_exception(exception_acknowledgement(
+            &retired.candidate,
+            ExceptionActivationStateV1::Revoked,
+            1,
+            NOW + 11,
+        )?)?;
+
+    let reappeared = restarted.reconcile_exception(
+        &prepared.resource,
+        NAMESPACE_UID,
+        &prepared.inventory,
+        NOW + 12,
+    )?;
+    assert_eq!(reappeared.candidate, retired.candidate);
+    assert_eq!(
+        reappeared.status.state,
+        WorkloadProtectionExceptionStateV1::Revoked
+    );
+    Ok(())
+}
+
+#[test]
+fn pending_activation_settles_before_target_retirement() -> TestResult {
+    let directory = TempDir::new()?;
+    let store = ControlStore::open(directory.path())?;
+    let prepared = prepare_exception(&store)?;
+    prepared
+        .owner
+        .reconcile(&prepared.policy_resource, NAMESPACE_UID, &[], NOW + 4)?;
+    let retired =
+        prepared
+            .owner
+            .reconcile_exception(&prepared.resource, NAMESPACE_UID, &[], NOW + 5)?;
+
+    let first = store
+        .next_exception_candidate_for_node("node-a", &[])?
+        .ok_or("the pending activation is not deliverable")?;
+    assert_eq!(first, prepared.activation.candidate);
+    prepared
+        .owner
+        .rollout_owner()
+        .acknowledge_exception(exception_acknowledgement(
+            &prepared.activation.candidate,
+            ExceptionActivationStateV1::Expired,
+            1,
+            NOW + 6,
+        )?)?;
+    let second = store
+        .next_exception_candidate_for_node("node-a", &[])?
+        .ok_or("the target retirement is not deliverable")?;
+    assert_eq!(second, retired.candidate);
+    assert_eq!(
+        retired
+            .candidate
+            .predecessor_candidate_content_id
+            .as_deref(),
+        Some(prepared.activation.candidate.candidate_content_id.as_str())
+    );
     Ok(())
 }
 

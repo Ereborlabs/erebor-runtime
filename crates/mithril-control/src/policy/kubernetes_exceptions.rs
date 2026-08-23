@@ -17,6 +17,7 @@ use super::{
     WorkloadProtectionExceptionStatusV1, WorkloadTargetFactV1, EXCEPTION_KIND, POLICY_API_VERSION,
 };
 use crate::error::{PolicySignatureSnafu, PolicyValidationSnafu};
+use crate::store::ExceptionDesiredPurposeV1;
 use crate::Result;
 
 const EXCEPTION_SOURCE_DOMAIN: &[u8] = b"MITHRIL-EXCEPTION-SOURCE-REVISION-V1\0";
@@ -252,6 +253,27 @@ impl ExceptionSourceRevisionV1 {
         revision.state = ExceptionSourceStateV1::DeletionRequested;
         revision.exception_source_revision_id = revision.content_id()?;
         Ok(revision)
+    }
+
+    fn is_same_accepted_request(&self, observed: &Self) -> bool {
+        // Status writes change resourceVersion. They do not create a new exception budget.
+        self.schema_version == observed.schema_version
+            && self.tenant_id == observed.tenant_id
+            && self.cluster_uid == observed.cluster_uid
+            && self.namespace_uid == observed.namespace_uid
+            && self.object_uid == observed.object_uid
+            && self.namespace_name == observed.namespace_name
+            && self.object_name == observed.object_name
+            && self.api_version == observed.api_version
+            && self.kind == observed.kind
+            && self.object_generation == observed.object_generation
+            && self.canonical_spec_digest == observed.canonical_spec_digest
+            && self.base_policy_source_revision_id == observed.base_policy_source_revision_id
+            && self.grant_id == observed.grant_id
+            && self.requested_duration_ns == observed.requested_duration_ns
+            && self.requested_uses == observed.requested_uses
+            && self.state == ExceptionSourceStateV1::Accepted
+            && observed.state == ExceptionSourceStateV1::Accepted
     }
 
     fn content_id(&self) -> Result<String> {
@@ -526,23 +548,38 @@ impl PolicyDesiredStateOwner {
             namespace_uid,
             object_name,
         )?;
-        // Deletion uses the durable base generation. A changed or absent live policy
-        // cannot widen it.
+        // An accepted exception stays on its first base generation. A later policy
+        // update cannot regrant the same bounded request.
         let base_source = match state {
-            ExceptionSourceStateV1::Accepted => self
-                .store
-                .latest_source(
-                    &self.config.tenant_id,
-                    namespace_uid,
-                    &resource.spec.policy_ref.name,
-                )?
-                .filter(|source| source.state == PolicySourceStateV1::Accepted)
-                .ok_or_else(|| {
-                    invalid(
-                        object_uid,
-                        "the exception does not reference an accepted policy in its namespace",
-                    )
-                })?,
+            ExceptionSourceStateV1::Accepted => {
+                if let Some(current) = current.as_ref().filter(|current| {
+                    current.object_uid == object_uid
+                        && current.state == ExceptionSourceStateV1::Accepted
+                }) {
+                    self.store
+                        .source_revision(&current.base_policy_source_revision_id)?
+                        .ok_or_else(|| {
+                            invalid(
+                                object_uid,
+                                "the accepted exception has no durable base-policy generation",
+                            )
+                        })?
+                } else {
+                    self.store
+                        .latest_source(
+                            &self.config.tenant_id,
+                            namespace_uid,
+                            &resource.spec.policy_ref.name,
+                        )?
+                        .filter(|source| source.state == PolicySourceStateV1::Accepted)
+                        .ok_or_else(|| {
+                            invalid(
+                                object_uid,
+                                "the exception does not reference an accepted policy in its namespace",
+                            )
+                        })?
+                }
+            }
             ExceptionSourceStateV1::DeletionRequested => current
                 .as_ref()
                 .filter(|source| source.object_uid == object_uid)
@@ -559,7 +596,7 @@ impl PolicyDesiredStateOwner {
                     )
                 })?,
         };
-        let source = ExceptionSourceRevisionV1::from_resource(
+        let observed_source = ExceptionSourceRevisionV1::from_resource(
             resource,
             &self.config.tenant_id,
             &self.config.cluster_uid,
@@ -567,11 +604,36 @@ impl PolicyDesiredStateOwner {
             &base_source.policy_source_revision_id,
             state,
         )?;
+        let source = current
+            .as_ref()
+            .filter(|current| current.is_same_accepted_request(&observed_source))
+            .cloned()
+            .unwrap_or(observed_source);
         if current.as_ref().is_some_and(|current| current == &source) {
-            return self.stored_exception_result(&source, now_utc_ns);
+            let stored = self.stored_exception_result(&source, now_utc_ns)?;
+            let target_disappeared = source.state == ExceptionSourceStateV1::Accepted
+                && stored.candidate.operation == ExceptionDeliveryOperationV1::Activate
+                && matches!(
+                    stored.rollout_state.state,
+                    WorkloadProtectionExceptionStateV1::Pending
+                        | WorkloadProtectionExceptionStateV1::Active
+                )
+                && !inventory.contains(&stored.candidate.exact_target);
+            if target_disappeared {
+                return self.reconcile_exception_revocation(
+                    source,
+                    now_utc_ns,
+                    ExceptionDesiredPurposeV1::TargetRetirement,
+                );
+            }
+            return Ok(stored);
         }
         if state == ExceptionSourceStateV1::DeletionRequested {
-            return self.reconcile_exception_revocation(source, now_utc_ns);
+            return self.reconcile_exception_revocation(
+                source,
+                now_utc_ns,
+                ExceptionDesiredPurposeV1::SourceLifecycle,
+            );
         }
         // Only API-derived scheduler facts can resolve the requested Pod and container.
         let mut targets = inventory.iter().filter(|target| {
@@ -625,12 +687,14 @@ impl PolicyDesiredStateOwner {
             source.clone(),
             candidate.clone(),
             rollout_state.clone(),
+            ExceptionDesiredPurposeV1::SourceLifecycle,
         )?;
+        let status = exception_status(&source, &candidate, &rollout_state, now_utc_ns);
         Ok(ExceptionReconcileResultV1 {
             source_revision: source.clone(),
             candidate,
             rollout_state: rollout_state.clone(),
-            status: exception_status(&source, &rollout_state, now_utc_ns),
+            status,
         })
     }
 
@@ -650,7 +714,11 @@ impl PolicyDesiredStateOwner {
             .into_iter()
             .filter(|source| !seen_object_uids.contains(&source.object_uid))
             .map(|source| {
-                self.reconcile_exception_revocation(source.deletion_requested()?, now_utc_ns)
+                self.reconcile_exception_revocation(
+                    source.deletion_requested()?,
+                    now_utc_ns,
+                    ExceptionDesiredPurposeV1::SourceLifecycle,
+                )
             })
             .collect()
     }
@@ -659,6 +727,7 @@ impl PolicyDesiredStateOwner {
         &self,
         source: ExceptionSourceRevisionV1,
         now_utc_ns: i64,
+        purpose: ExceptionDesiredPurposeV1,
     ) -> Result<ExceptionReconcileResultV1> {
         // Revocation keeps the original target and names its activation as the predecessor.
         let previous = self
@@ -694,12 +763,14 @@ impl PolicyDesiredStateOwner {
             source.clone(),
             candidate.clone(),
             rollout_state.clone(),
+            purpose,
         )?;
+        let status = exception_status(&source, &candidate, &rollout_state, now_utc_ns);
         Ok(ExceptionReconcileResultV1 {
             source_revision: source.clone(),
             candidate,
             rollout_state: rollout_state.clone(),
-            status: exception_status(&source, &rollout_state, now_utc_ns),
+            status,
         })
     }
 
@@ -734,9 +805,9 @@ impl PolicyDesiredStateOwner {
             })?;
         Ok(ExceptionReconcileResultV1 {
             source_revision: source.clone(),
-            candidate,
+            candidate: candidate.clone(),
             rollout_state: rollout_state.clone(),
-            status: exception_status(source, &rollout_state, now_utc_ns),
+            status: exception_status(source, &candidate, &rollout_state, now_utc_ns),
         })
     }
 }
@@ -760,11 +831,11 @@ impl PolicyRolloutOwner {
                     "the active base-policy acknowledgement has no generation reference",
                 )
             })?;
-        let operation = if source.state == ExceptionSourceStateV1::DeletionRequested {
+        // An exception has one root activation. Any predecessor makes the new
+        // candidate the restrictive close of that exact authority.
+        let operation = predecessor.map_or(ExceptionDeliveryOperationV1::Activate, |_| {
             ExceptionDeliveryOperationV1::Revoke
-        } else {
-            ExceptionDeliveryOperationV1::Activate
-        };
+        });
         // Revocation preserves the original budget. It cannot create a new validity window.
         let (maximum_uses, valid_until_utc_ns) = predecessor.map_or_else(
             || {
@@ -792,12 +863,8 @@ impl PolicyRolloutOwner {
                     "the exception delivery validity exceeds the signed time range",
                 )
             })?;
-        // An activation remains deliverable for its complete bounded authority window.
-        let expires_utc_ns = if operation == ExceptionDeliveryOperationV1::Activate {
-            delivery_expires_utc_ns.max(valid_until_utc_ns)
-        } else {
-            delivery_expires_utc_ns
-        };
+        // Delivery cannot expire while the authority that a revocation closes can remain live.
+        let expires_utc_ns = delivery_expires_utc_ns.max(valid_until_utc_ns);
         let sequence = self.store.next_exception_distribution_sequence(
             &target.node_id,
             &source.object_uid,
@@ -898,6 +965,7 @@ impl PolicyRolloutOwner {
 
 fn exception_status(
     source: &ExceptionSourceRevisionV1,
+    candidate: &ExceptionDeliveryCandidateV1,
     rollout: &ExceptionRolloutStateV1,
     now_utc_ns: i64,
 ) -> WorkloadProtectionExceptionStatusV1 {
@@ -908,6 +976,20 @@ fn exception_status(
             | WorkloadProtectionExceptionStateV1::Revoked
             | WorkloadProtectionExceptionStateV1::Failed
     );
+    let target_retirement_pending = source.state == ExceptionSourceStateV1::Accepted
+        && candidate.operation == ExceptionDeliveryOperationV1::Revoke
+        && rollout.state == WorkloadProtectionExceptionStateV1::Pending;
+    let (terminal_reason, terminal_message) = if target_retirement_pending {
+        (
+            "TargetRetirementPending",
+            "Control is waiting for the node to revoke authority for the absent exact target.",
+        )
+    } else {
+        (
+            "RuntimeStateObserved",
+            "Control projects the latest authenticated node state.",
+        )
+    };
     WorkloadProtectionExceptionStatusV1 {
         observed_generation: source.object_generation,
         state: rollout.state,
@@ -924,8 +1006,8 @@ fn exception_status(
                 "Terminal",
                 terminal,
                 source.object_generation,
-                "RuntimeStateObserved",
-                "Control projects the latest authenticated node state.",
+                terminal_reason,
+                terminal_message,
                 now_utc_ns,
             ),
         ],
