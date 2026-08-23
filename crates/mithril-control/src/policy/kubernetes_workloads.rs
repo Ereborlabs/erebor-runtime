@@ -164,7 +164,7 @@ impl KubernetesAdmissionOwner {
                 }
             );
             ensure!(
-                policy_matching_containers_are_pinned(policy, &facts),
+                policy_matching_containers_are_pinned(policy, &facts)?,
                 InvalidConfigurationSnafu {
                     reason: "each protected container image must use an exact sha256 digest",
                 }
@@ -277,7 +277,7 @@ impl KubernetesAdmissionOwner {
                 && policy.profile_id() == profile_id
                 && store.compiled_artifact(source_revision_id)?.is_some()
                 && policy_matches_pod(&policy, &facts)
-                && policy_matching_containers_are_pinned(&policy, &facts),
+                && policy_matching_containers_are_pinned(&policy, &facts)?,
             InvalidConfigurationSnafu {
                 reason: "Pod update does not preserve its admitted protected profile",
             }
@@ -889,6 +889,17 @@ pub fn validate_selected_node(
 }
 
 fn selector_matches_pod(selector: &WorkloadSelectorV1, facts: &PodAdmissionFactsV1) -> bool {
+    selector_matches_workload_scope(selector, facts)
+        && facts
+            .containers
+            .iter()
+            .any(|container| selector_matches_container(selector, container))
+}
+
+fn selector_matches_workload_scope(
+    selector: &WorkloadSelectorV1,
+    facts: &PodAdmissionFactsV1,
+) -> bool {
     selector.cluster_uids.contains(&facts.cluster_uid)
         && selector.namespace_uids.contains(&facts.namespace_uid)
         && optional_value_matches(&selector.controller_uids, facts.controller_uid.as_deref())
@@ -909,10 +920,6 @@ fn selector_matches_pod(selector: &WorkloadSelectorV1, facts: &PodAdmissionFacts
                 LabelOperatorV1::DoesNotExist => value.is_none(),
             }
         })
-        && facts
-            .containers
-            .iter()
-            .any(|container| selector_matches_container(selector, container))
 }
 
 fn selector_matches_container(
@@ -938,29 +945,7 @@ fn matching_selector_id(
         .workload_selectors
         .iter()
         .filter(|selector| {
-            selector.cluster_uids.contains(&facts.cluster_uid)
-                && selector.namespace_uids.contains(&facts.namespace_uid)
-                && optional_value_matches(
-                    &selector.controller_uids,
-                    facts.controller_uid.as_deref(),
-                )
-                && optional_value_matches(
-                    &selector.service_account_uids,
-                    Some(&facts.service_account_uid),
-                )
-                && selector.pod_label_requirements.iter().all(|requirement| {
-                    let value = facts.labels.get(&requirement.key);
-                    match requirement.operator {
-                        LabelOperatorV1::In => {
-                            value.is_some_and(|value| requirement.values.contains(value))
-                        }
-                        LabelOperatorV1::NotIn => {
-                            value.is_some_and(|value| !requirement.values.contains(value))
-                        }
-                        LabelOperatorV1::Exists => value.is_some(),
-                        LabelOperatorV1::DoesNotExist => value.is_none(),
-                    }
-                })
+            selector_matches_workload_scope(selector, facts)
                 && selector_matches_container(selector, container)
         })
         .map(|selector| selector.workload_selector_id.clone())
@@ -977,13 +962,15 @@ fn matching_selector_id(
 fn policy_matching_containers_are_pinned(
     policy: &PolicyDocumentV1,
     facts: &PodAdmissionFactsV1,
-) -> bool {
-    facts.containers.iter().all(|container| {
-        policy.workload_selectors.iter().all(|selector| {
-            !selector_matches_container(selector, container)
-                || pinned_image_digest(&container.image).is_some()
-        })
-    })
+) -> Result<bool> {
+    for container in &facts.containers {
+        if matching_selector_id(policy, facts, container)?.is_some()
+            && pinned_image_digest(&container.image).is_none()
+        {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
 fn pinned_image_digest(image: &str) -> Option<String> {
@@ -1205,8 +1192,9 @@ mod tests {
 
     use super::{
         mutate_node_quarantine, mutate_protected_pod, pod_admission_facts, pod_policy_identity,
-        policy_matches_pod, DaemonSetNodeConstraintsV1, KUBERNETES_NOT_READY_TAINT,
-        KUBERNETES_PROFILE_ANNOTATION, KUBERNETES_READY_LABEL, KUBERNETES_SOURCE_ANNOTATION,
+        policy_matches_pod, policy_matching_containers_are_pinned, DaemonSetNodeConstraintsV1,
+        KUBERNETES_NOT_READY_TAINT, KUBERNETES_PROFILE_ANNOTATION, KUBERNETES_READY_LABEL,
+        KUBERNETES_SOURCE_ANNOTATION,
     };
     use crate::{ContainerKindV1, PolicyDocumentV1};
 
@@ -1262,6 +1250,24 @@ mod tests {
         let mut wrong_account = facts;
         wrong_account.service_account_uid = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa".to_owned();
         assert!(!policy_matches_pod(&policy, &wrong_account));
+        Ok(())
+    }
+
+    #[test]
+    fn image_pinning_uses_the_complete_workload_selector_scope(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let mut policy =
+            PolicyDocumentV1::parse(std::path::Path::new("policy-v1.yaml"), POLICY.as_bytes())?;
+        let facts = pod_admission_facts(
+            &pod(),
+            "55555555-5555-4555-8555-555555555555",
+            "66666666-6666-4666-8666-666666666666",
+            "77777777-7777-4777-8777-777777777777",
+        );
+        assert!(!policy_matching_containers_are_pinned(&policy, &facts)?);
+        policy.workload_selectors[0].service_account_uids =
+            vec!["aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa".to_owned()];
+        assert!(policy_matching_containers_are_pinned(&policy, &facts)?);
         Ok(())
     }
 
