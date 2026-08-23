@@ -33,6 +33,12 @@ webhooks:
     matchPolicy: Equivalent
     reinvocationPolicy: Never
     timeoutSeconds: {{ .Values.control.admission.webhookTimeoutSeconds }}
+    # Control must start before fail-closed admission can serve workload requests.
+    namespaceSelector:
+      matchExpressions:
+        - key: kubernetes.io/metadata.name
+          operator: NotIn
+          values: [{{ .Release.Namespace | quote }}]
     clientConfig:
       caBundle: {{ $caBundle | quote }}
       service:
@@ -59,6 +65,11 @@ webhooks:
     failurePolicy: Fail
     matchPolicy: Equivalent
     timeoutSeconds: {{ .Values.control.admission.webhookTimeoutSeconds }}
+    namespaceSelector:
+      matchExpressions:
+        - key: kubernetes.io/metadata.name
+          operator: NotIn
+          values: [{{ .Release.Namespace | quote }}]
     clientConfig:
       caBundle: {{ $caBundle | quote }}
       service:
@@ -79,6 +90,11 @@ webhooks:
     failurePolicy: Fail
     matchPolicy: Equivalent
     timeoutSeconds: {{ .Values.control.admission.webhookTimeoutSeconds }}
+    namespaceSelector:
+      matchExpressions:
+        - key: kubernetes.io/metadata.name
+          operator: NotIn
+          values: [{{ .Release.Namespace | quote }}]
     clientConfig:
       caBundle: {{ $caBundle | quote }}
       service:
