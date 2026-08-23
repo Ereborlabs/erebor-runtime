@@ -129,6 +129,9 @@ pub struct PolicyDeliveryStatusV1 {
     pub pending_exception_count: usize,
     pub active_exception_count: usize,
     pub terminal_exception_count: usize,
+    pub consumed_exception_count: usize,
+    pub expired_exception_count: usize,
+    pub revoked_exception_count: usize,
     pub exception_ack_pending_count: usize,
 }
 
@@ -241,6 +244,24 @@ impl NodePolicyDeliveryOwner {
                             | LocalExceptionStateV1::Stale
                     )
                 })
+                .count(),
+            consumed_exception_count: self
+                .state
+                .exception_records
+                .values()
+                .filter(|record| record.state == LocalExceptionStateV1::Consumed)
+                .count(),
+            expired_exception_count: self
+                .state
+                .exception_records
+                .values()
+                .filter(|record| record.state == LocalExceptionStateV1::Expired)
+                .count(),
+            revoked_exception_count: self
+                .state
+                .exception_records
+                .values()
+                .filter(|record| record.state == LocalExceptionStateV1::Revoked)
                 .count(),
             exception_ack_pending_count: self
                 .state
@@ -2689,6 +2710,7 @@ mod tests {
         assert_eq!(consumed_ack.state, "CONSUMED");
         assert_eq!(consumed_ack.transition_version, 2);
         assert_eq!(restarted.status().terminal_exception_count, 1);
+        assert_eq!(restarted.status().consumed_exception_count, 1);
         restarted.acknowledge_exception_control(&activation.candidate_content_id)?;
 
         let deletion = source.deletion_requested().context(PolicySnafu)?;
@@ -2741,6 +2763,7 @@ mod tests {
                 .map(|acknowledgement| acknowledgement.state),
             Some("REVOKED".to_owned())
         );
+        assert_eq!(restarted.status().revoked_exception_count, 1);
         assert!(restarted
             .prepare_exception_delivery(activation, &trust, &config, &[1; 16], 7, 63)
             .is_err());
