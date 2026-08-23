@@ -13,6 +13,7 @@ output_directory=
 keep_vms=false
 manual_environment=false
 k3s_version=${MITHRIL_VM_K3S_VERSION:-v1.35.5+k3s1}
+nri_release=${MITHRIL_VM_NRI_RELEASE:-v0.10.0}
 reuse_images=${MITHRIL_VM_REUSE_IMAGES:-false}
 system_namespace=mithril-system
 workload_namespace=mithril-convergence
@@ -65,6 +66,10 @@ done
 }
 [[ $k3s_version =~ ^v[0-9]+\.[0-9]+\.[0-9]+\+k3s[0-9]+$ ]] || {
   echo "invalid MITHRIL_VM_K3S_VERSION: $k3s_version" >&2
+  exit 2
+}
+[[ $nri_release =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
+  echo "invalid MITHRIL_VM_NRI_RELEASE: $nri_release" >&2
   exit 2
 }
 [[ $reuse_images == true || $reuse_images == false ]] || {
@@ -254,6 +259,13 @@ done
   k3s-product-runtime "$remote_b"
 "$provider" run "$vm_a" sudo bash "$remote_a/harness/guest.sh" \
   k3s-product-runtime "$remote_a"
+
+# The stock NRI plugin is the containerd owner that reads the chart's hook file.
+# The positive runtime has no base-spec hook, so it cannot bypass this path.
+"$provider" run "$vm_a" sudo /usr/local/bin/k3s kubectl apply -k \
+  "github.com/containerd/nri/contrib/kustomize/hook-injector?ref=$nri_release" >/dev/null
+"$provider" run "$vm_a" sudo /usr/local/bin/k3s kubectl -n kube-system \
+  rollout status daemonset/nri-plugin-hook-injector --timeout=300s >/dev/null
 
 nodes_json=$("$provider" run "$vm_a" sudo /usr/local/bin/k3s kubectl get nodes -o json)
 node_a_name=$(jq -er --arg address "$address_a" '

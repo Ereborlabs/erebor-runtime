@@ -216,17 +216,10 @@ case ${1:-} in
       exit 2
     fi
 
-    base_spec=/etc/containerd/mithril-product-base-spec.json
     fail_spec=/etc/containerd/mithril-product-fail-base-spec.json
     template=/var/lib/rancher/k3s/agent/etc/containerd/config-v3.toml.tmpl
-    temporary_spec=$work_directory/mithril-product-base-spec.json
+    temporary_spec=$work_directory/mithril-product-fail-base-spec.json
     install -d -m 755 /etc/containerd "$(dirname "$template")"
-    /usr/local/bin/k3s ctr oci spec | jq \
-      '.hooks.prestart = [{
-        path: "/opt/mithril/bin/mithril-oci-hook",
-        args: ["mithril-oci-hook", "--socket", "/run/mithril/runtime-admission.sock", "--timeout-ms", "4000"]
-      }]' >"$temporary_spec"
-    install -m 600 "$temporary_spec" "$base_spec"
     /usr/local/bin/k3s ctr oci spec | jq \
       '.hooks.prestart = [{
         path: "/opt/mithril/bin/mithril-oci-hook",
@@ -238,7 +231,6 @@ case ${1:-} in
       '{{ template "base" . }}' \
       '[plugins.'\''io.containerd.cri.v1.runtime'\''.containerd.runtimes.mithril]' \
       'runtime_type = "io.containerd.runc.v2"' \
-      'base_runtime_spec = "/etc/containerd/mithril-product-base-spec.json"' \
       'pod_annotations = ["mithril.erebor.dev/*"]' \
       '[plugins.'\''io.containerd.cri.v1.runtime'\''.containerd.runtimes.mithril.options]' \
       'SystemdCgroup = true' \
