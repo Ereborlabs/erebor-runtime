@@ -86,6 +86,7 @@ pub(super) struct KubernetesWorkloadInventoryOwner {
     control: ControlPlane,
     // Track the durable commit whose policy and exception statuses reached the API.
     projected_control_commit_index: Option<u64>,
+    last_reconcile_error: Option<String>,
 }
 
 impl KubernetesAdmissionHttpConfigV1 {
@@ -495,12 +496,27 @@ impl KubernetesWorkloadInventoryOwner {
             policies,
             control,
             projected_control_commit_index: None,
+            last_reconcile_error: None,
         }
     }
 
     pub(super) async fn run(mut self) {
         loop {
-            let _result = self.reconcile_once().await;
+            match self.reconcile_once().await {
+                Ok(()) => {
+                    if self.last_reconcile_error.take().is_some() {
+                        eprintln!("Kubernetes workload inventory reconciliation recovered");
+                    }
+                }
+                Err(error) => {
+                    let message = error.to_string();
+                    // Report a changed failure once. The one-second retry must not flood logs.
+                    if self.last_reconcile_error.as_deref() != Some(&message) {
+                        eprintln!("Kubernetes workload inventory reconciliation failed: {message}");
+                    }
+                    self.last_reconcile_error = Some(message);
+                }
+            }
             tokio::time::sleep(Duration::from_secs(1)).await;
         }
     }
@@ -537,7 +553,6 @@ impl KubernetesWorkloadInventoryOwner {
                 ))
             })
             .collect::<BTreeMap<_, _>>();
-        // Only persisted Pod bindings select the exact node that receives a candidate.
         let mut targets = Vec::new();
         for pod in pods {
             targets.extend(self.bound_pod_targets(&pod, &nodes, &namespaces, &service_accounts)?);
