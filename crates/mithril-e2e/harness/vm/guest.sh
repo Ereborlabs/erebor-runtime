@@ -21,7 +21,9 @@ require_command() {
 }
 
 require_harness_guest() {
-  [[ $1 =~ ^/var/tmp/mithril-runtime-qualification-[0-9]+$ && -d $1 ]] || {
+  [[ -d $1 &&
+     ($1 =~ ^/var/tmp/mithril-runtime-qualification-[0-9]+$ ||
+      $1 =~ ^/var/tmp/mithril-vm-[a-z0-9]+(-[a-z0-9]+)*$) ]] || {
     echo "refusing to modify a guest outside the disposable VM harness: $1" >&2
     exit 2
   }

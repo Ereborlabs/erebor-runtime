@@ -4,6 +4,9 @@ set -euo pipefail
 
 directory=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 repo_root=$(cd -- "$directory/../../../.." && pwd)
+. "$directory/identity.sh"
+branch_name=$(mithril_vm_branch_name "$repo_root")
+branch_key=$(mithril_vm_branch_key "$branch_name")
 provider=$directory/providers/libvirt.sh
 output_directory=
 with_k3s=false
@@ -103,7 +106,7 @@ fi
 mkdir -p -- "$output_directory"
 output_directory=$(cd -- "$output_directory" && pwd)
 
-vm_name=mithril-runtime-qualification-$$
+vm_name=$(mithril_vm_name "$branch_key" s "$$")
 work_directory=$(mktemp -d /tmp/mithril-vm-test.XXXXXX)
 export MITHRIL_VM_KNOWN_HOSTS=${MITHRIL_VM_KNOWN_HOSTS:-$work_directory/known_hosts}
 ssh_user=${MITHRIL_VM_SSH_USER:-ubuntu}
@@ -121,6 +124,7 @@ cleanup() {
   fi
   if [[ $created == true && $keep_vm == true ]]; then
     {
+      printf 'branch_name=%q\nbranch_key=%q\n' "$branch_name" "$branch_key"
       printf 'vm_name=%q\nwork_directory=%q\nprovider=%q\n' \
         "$vm_name" "$work_directory" "$provider"
       printf 'export MITHRIL_VM_KNOWN_HOSTS=%q\n' "$MITHRIL_VM_KNOWN_HOSTS"

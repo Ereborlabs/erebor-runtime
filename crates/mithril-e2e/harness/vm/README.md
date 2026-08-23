@@ -142,19 +142,31 @@ remains the outer cleanup boundary.
 `manual.sh` for manual work. It owns the VM name and the provider record.
 `--keep-vm` writes `retained-vm.txt` for provider-level diagnosis.
 
+The harness derives a bounded VM namespace from the current Git branch. The
+namespace contains a readable branch prefix and a digest of the complete branch
+name. The runner adds its lane, process, and node identity. Manual state uses
+the same namespace under `${XDG_STATE_HOME:-$HOME/.local/state}`. Two worktrees
+on different branches therefore create, inspect, reconnect to, and destroy only
+their own VMs. A detached checkout uses its abbreviated commit ID.
+
 ## Manual Testing In A VM
 
 On the host:
 
 ```bash
-crates/mithril-e2e/harness/vm/manual.sh start
-crates/mithril-e2e/harness/vm/manual.sh ssh
+crates/mithril-e2e/harness/vm/manual.sh create
+crates/mithril-e2e/harness/vm/manual.sh status
+crates/mithril-e2e/harness/vm/manual.sh reconnect
 ```
 
-`start` creates one Kubernetes VM through the K3s distribution, mounts the
+`create` retains one Kubernetes VM through the K3s distribution, mounts the
 current repository read-only at `/mnt/mithril-source`, and builds
 `mithril-node`, `mithril-inspect`, and `mithril-policy`. Do not start a second
 Mithril owner in this VM.
+
+`status` prints the current branch, VM name, and provider state. `reconnect`
+opens SSH for that branch's retained VM. The earlier `start` and `ssh` command
+names remain aliases for existing runbooks.
 
 In the guest:
 
@@ -195,8 +207,9 @@ For the two-node policy-convergence case, create and enter the retained
 environment with:
 
 ```bash
-crates/mithril-e2e/harness/vm/manual.sh start-convergence
-crates/mithril-e2e/harness/vm/manual.sh ssh-convergence
+crates/mithril-e2e/harness/vm/manual.sh create-convergence
+crates/mithril-e2e/harness/vm/manual.sh status-convergence
+crates/mithril-e2e/harness/vm/manual.sh reconnect-convergence
 ```
 
 The environment contains two K3s Nodes, the installed Mithril chart, unique
@@ -241,7 +254,8 @@ object but does not install a deny entry for the benchmark file.
 
 All harness-owned configuration is checked in beside this README:
 `cloud-init-v1.yaml`, `k3s-config-v1.yaml`, `k3s-workload-v1.yaml`, and
-the two k3s node templates. The narrow administrative policy authorizes only
+the two k3s node templates. `identity.sh` owns the branch key and bounded VM
+name. The narrow administrative policy authorizes only
 the checked executable object for the restricted external role. The
 `oidc-fixture.py` file is the credential-free disposable identity provider.
 The templates contain no key, credential, or certificate. The provider
@@ -263,10 +277,12 @@ these commands:
 | --- | --- |
 | `address NAME` | Return the exact provider address for one ready guest. |
 | `create NAME WORK_DIRECTORY PUBLIC_KEY` | Create one new isolated guest. Reject a name collision. |
+| `status NAME WORK_DIRECTORY` | Return the provider state only when the ownership record matches the live guest. |
 | `wait NAME` | Return only after SSH, runtime BTF, cgroup v2, bpffs, and BPF LSM are ready. |
 | `put NAME LOCAL REMOTE` | Copy one file to the guest. |
 | `get NAME REMOTE LOCAL` | Copy one evidence file from the guest. |
 | `run NAME COMMAND...` | Run the command in the guest and return its status. |
+| `ssh NAME` | Open an interactive shell in one ready guest. |
 | `destroy NAME WORK_DIRECTORY` | Remove only the named guest and its provider-owned resources. Be idempotent. |
 
 A cloud adapter can implement this contract with its official CLI or SDK. It

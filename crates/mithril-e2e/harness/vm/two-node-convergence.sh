@@ -6,6 +6,9 @@ trap 'echo "two-node convergence failed at line $LINENO: $BASH_COMMAND" >&2' ERR
 
 directory=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 repo_root=$(cd -- "$directory/../../../.." && pwd)
+. "$directory/identity.sh"
+branch_name=$(mithril_vm_branch_name "$repo_root")
+branch_key=$(mithril_vm_branch_key "$branch_name")
 provider=$directory/providers/libvirt.sh
 output_directory=
 keep_vms=false
@@ -96,8 +99,8 @@ output_directory=$(cd -- "$output_directory" && pwd)
 
 work_a=$(mktemp -d /tmp/mithril-vm-test.XXXXXX)
 work_b=$(mktemp -d /tmp/mithril-vm-test.XXXXXX)
-vm_a=mithril-runtime-qualification-$$1
-vm_b=mithril-runtime-qualification-$$2
+vm_a=$(mithril_vm_name "$branch_key" c "$$" a)
+vm_b=$(mithril_vm_name "$branch_key" c "$$" b)
 export MITHRIL_VM_KNOWN_HOSTS=$work_a/known_hosts
 ssh_public_key=${MITHRIL_VM_SSH_PUBLIC_KEY:-$HOME/.ssh/id_rsa.pub}
 created_a=false
@@ -121,6 +124,7 @@ cleanup() {
   fi
   if [[ $keep_vms == true ]]; then
     {
+      printf 'branch_name=%q\nbranch_key=%q\n' "$branch_name" "$branch_key"
       printf 'node_a=%q\nnode_a_work_directory=%q\n' "$vm_a" "$work_a"
       printf 'node_b=%q\nnode_b_work_directory=%q\n' "$vm_b" "$work_b"
       printf 'provider=%q\n' "$provider"

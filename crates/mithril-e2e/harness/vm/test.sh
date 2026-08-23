@@ -8,10 +8,31 @@ trap 'rm -rf -- "$test_root"' EXIT
 
 for script in "$directory/run.sh" "$directory/two-node-network.sh" \
   "$directory/two-node-convergence.sh" \
-  "$directory/manual.sh" "$directory/guest.sh" \
+  "$directory/manual.sh" "$directory/identity.sh" "$directory/guest.sh" \
   "$directory/providers/libvirt.sh" "$directory/test.sh"; do
   bash -n "$script"
 done
+
+. "$directory/identity.sh"
+repo_root=$(cd -- "$directory/../../../.." && pwd)
+branch_name=$(mithril_vm_branch_name "$repo_root")
+branch_key=$(mithril_vm_branch_key "$branch_name")
+[[ $branch_key =~ ^[a-z0-9]+(-[a-z0-9]+)*-[0-9a-f]{12}$ ]]
+[[ $(mithril_vm_branch_key feature/a_b) != \
+   "$(mithril_vm_branch_key feature/a-b)" ]]
+long_key=$(mithril_vm_branch_key \
+  feature/this-is-a-very-long-branch-name-that-must-not-reach-the-hostname-limit)
+single_name=$(mithril_vm_name "$long_key" s 4194304)
+network_a=$(mithril_vm_name "$long_key" n 4194304 a)
+network_b=$(mithril_vm_name "$long_key" n 4194304 b)
+convergence_a=$(mithril_vm_name "$long_key" c 4194304 a)
+[[ ${#single_name} -le 63 && ${#network_a} -le 63 ]]
+[[ $single_name != "$network_a" && $network_a != "$network_b" &&
+   $network_a != "$convergence_a" ]]
+if mithril_vm_name "$long_key" invalid 4194304 >/dev/null; then
+  echo "invalid VM lanes must fail" >&2
+  exit 1
+fi
 
 help=$("$directory/run.sh" --help 2>&1)
 [[ $help == *--with-k3s* ]]
@@ -44,22 +65,33 @@ manual_usage=$("$directory/manual.sh" 2>&1)
 status=$?
 set -e
 [[ $status -eq 2 && $manual_usage == \
-  "usage: $directory/manual.sh {start|ssh|destroy|start-convergence|ssh-convergence|destroy-convergence}" ]]
+  "usage: $directory/manual.sh {create|status|reconnect|destroy|create-convergence|status-convergence|reconnect-convergence|destroy-convergence}" ]]
 
 manual_state=$test_root/manual-state
-mkdir -p "$manual_state/mithril-manual-vm"
-touch "$manual_state/mithril-manual-vm/retained-vm.txt"
+other_branch_key=$(mithril_vm_branch_key other/work)
+mkdir -p "$manual_state/mithril-manual-vm/$other_branch_key"
+touch "$manual_state/mithril-manual-vm/$other_branch_key/retained-vm.txt"
 set +e
-manual_existing=$(XDG_STATE_HOME=$manual_state "$directory/manual.sh" start 2>&1)
+branch_isolated=$(XDG_STATE_HOME=$manual_state \
+  "$directory/manual.sh" status 2>&1)
+status=$?
+set -e
+[[ $status -eq 2 && $branch_isolated == \
+  *"no manual VM exists for $branch_name"* ]]
+
+mkdir -p "$manual_state/mithril-manual-vm/$branch_key"
+touch "$manual_state/mithril-manual-vm/$branch_key/retained-vm.txt"
+set +e
+manual_existing=$(XDG_STATE_HOME=$manual_state "$directory/manual.sh" create 2>&1)
 status=$?
 set -e
 [[ $status -eq 2 && $manual_existing == *"manual VM already exists"* ]]
 
-mkdir -p "$manual_state/mithril-convergence-manual-vm"
-touch "$manual_state/mithril-convergence-manual-vm/retained-vms.txt"
+mkdir -p "$manual_state/mithril-convergence-manual-vm/$branch_key"
+touch "$manual_state/mithril-convergence-manual-vm/$branch_key/retained-vms.txt"
 set +e
 convergence_existing=$(XDG_STATE_HOME=$manual_state \
-  "$directory/manual.sh" start-convergence 2>&1)
+  "$directory/manual.sh" create-convergence 2>&1)
 status=$?
 set -e
 [[ $status -eq 2 && $convergence_existing == \
@@ -85,8 +117,51 @@ set -e
 [[ $status -eq 2 && $skip_without_k3s == "--skip-administrative-exec requires --with-k3s" ]]
 
 fake_provider=$test_root/provider
-printf '#!/usr/bin/env bash\nexit 0\n' >"$fake_provider"
+printf '%s\n' '#!/usr/bin/env bash' \
+  'case ${1:-} in' \
+  '  status) echo running ;;' \
+  '  ssh) printf "ssh=%s\\n" "$2" ;;' \
+  '  destroy) exit 0 ;;' \
+  'esac' >"$fake_provider"
 chmod +x "$fake_provider"
+
+manual_work=$(mktemp -d /tmp/mithril-vm-test.XXXXXX)
+manual_vm=$(mithril_vm_name "$branch_key" s 12345)
+manual_state_file=$manual_state/mithril-manual-vm/$branch_key/retained-vm.txt
+printf 'branch_name=%q\nbranch_key=%q\nvm_name=%q\nwork_directory=%q\nprovider=%q\n' \
+  "$branch_name" "$branch_key" "$manual_vm" "$manual_work" "$fake_provider" \
+  >"$manual_state_file"
+manual_status=$(XDG_STATE_HOME=$manual_state "$directory/manual.sh" status)
+[[ $manual_status == *"branch=$branch_name"* && $manual_status == *"vm=$manual_vm"* &&
+   $manual_status == *running* ]]
+manual_reconnect=$(XDG_STATE_HOME=$manual_state "$directory/manual.sh" reconnect)
+[[ $manual_reconnect == "ssh=$manual_vm" ]]
+XDG_STATE_HOME=$manual_state "$directory/manual.sh" destroy >/dev/null
+[[ ! -e $manual_state_file && ! -d $manual_work ]]
+
+convergence_work_a=$(mktemp -d /tmp/mithril-vm-test.XXXXXX)
+convergence_work_b=$(mktemp -d /tmp/mithril-vm-test.XXXXXX)
+convergence_vm_a=$(mithril_vm_name "$branch_key" c 12345 a)
+convergence_vm_b=$(mithril_vm_name "$branch_key" c 12345 b)
+convergence_state_file=$manual_state/mithril-convergence-manual-vm/$branch_key/retained-vms.txt
+printf 'branch_name=%q\nbranch_key=%q\nnode_a=%q\nnode_a_work_directory=%q\n' \
+  "$branch_name" "$branch_key" "$convergence_vm_a" "$convergence_work_a" \
+  >"$convergence_state_file"
+printf 'node_b=%q\nnode_b_work_directory=%q\nprovider=%q\nmanual_environment=true\n' \
+  "$convergence_vm_b" "$convergence_work_b" "$fake_provider" \
+  >>"$convergence_state_file"
+convergence_status=$(XDG_STATE_HOME=$manual_state \
+  "$directory/manual.sh" status-convergence)
+[[ $convergence_status == *"branch=$branch_name"* &&
+   $convergence_status == *"vm=$convergence_vm_a"* &&
+   $convergence_status == *"vm=$convergence_vm_b"* ]]
+convergence_reconnect=$(XDG_STATE_HOME=$manual_state \
+  "$directory/manual.sh" reconnect-convergence)
+[[ $convergence_reconnect == "ssh=$convergence_vm_a" ]]
+XDG_STATE_HOME=$manual_state "$directory/manual.sh" destroy-convergence >/dev/null
+[[ ! -e $convergence_state_file && ! -d $convergence_work_a &&
+   ! -d $convergence_work_b ]]
+
 mkdir "$test_root/evidence"
 touch "$test_root/evidence/stale.json"
 set +e
@@ -123,6 +198,7 @@ cat >"$fake_bin/virsh" <<'EOF'
 case " $* " in
   *" dominfo "*) exit 0 ;;
   *" domuuid "*) printf '%s\n' "${TEST_DOMAIN_UUID:?}" ;;
+  *" domstate "*) printf 'running\n' ;;
   *" destroy "*|*" undefine "*) printf '%s\n' "$*" >>"${TEST_VIRSH_LOG:?}" ;;
 esac
 EOF
@@ -147,6 +223,20 @@ PATH="$fake_bin:$PATH" TEST_DOMAIN_UUID="$owner_uuid" \
   TEST_VIRSH_LOG="$test_root/virsh.log" \
   "$directory/providers/libvirt.sh" destroy "$domain_name" "$work_directory"
 grep -q 'destroy.*mithril-runtime-qualification-123' "$test_root/virsh.log"
+[[ ! -e $work_directory/libvirt-domain-owner ]]
+rm -rf -- "$work_directory"
+
+work_directory=$(mktemp -d /tmp/mithril-vm-test.XXXXXX)
+domain_name=$(mithril_vm_name "$branch_key" s 123)
+printf '%s\n%s\n' "$domain_name" "$owner_uuid" \
+  >"$work_directory/libvirt-domain-owner"
+domain_status=$(PATH="$fake_bin:$PATH" TEST_DOMAIN_UUID="$owner_uuid" \
+  "$directory/providers/libvirt.sh" status "$domain_name" "$work_directory")
+[[ $domain_status == running ]]
+PATH="$fake_bin:$PATH" TEST_DOMAIN_UUID="$owner_uuid" \
+  TEST_VIRSH_LOG="$test_root/virsh.log" \
+  "$directory/providers/libvirt.sh" destroy "$domain_name" "$work_directory"
+grep -q "destroy.*$domain_name" "$test_root/virsh.log"
 [[ ! -e $work_directory/libvirt-domain-owner ]]
 rm -rf -- "$work_directory"
 

@@ -26,6 +26,37 @@ require_command() {
   }
 }
 
+require_vm_name() {
+  [[ $1 =~ ^mithril-runtime-qualification-[0-9]+$ ||
+     $1 =~ ^mithril-vm-[a-z0-9]+(-[a-z0-9]+)*$ ]] || {
+    echo "unexpected VM name: $1" >&2
+    exit 2
+  }
+}
+
+load_domain_ownership() {
+  local requested_name=$1
+  local requested_work_directory=$2
+
+  require_vm_name "$requested_name"
+  [[ $requested_work_directory == /tmp/mithril-vm-test.* &&
+     -d $requested_work_directory ]] || {
+    echo "refusing access without the VM work directory: $requested_work_directory" >&2
+    exit 2
+  }
+  owner_file=$requested_work_directory/$owner_file_name
+  [[ -r $owner_file ]] || {
+    echo "refusing access without a domain ownership record: $owner_file" >&2
+    exit 2
+  }
+  mapfile -t ownership <"$owner_file"
+  [[ ${#ownership[@]} -eq 2 && ${ownership[0]} == "$requested_name" &&
+     ${ownership[1]} =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ ]] || {
+    echo "refusing access with an invalid domain ownership record" >&2
+    exit 2
+  }
+}
+
 address() {
   virsh -c "$connection" domifaddr "$1" --source lease 2>/dev/null \
     | awk '$3 == "ipv4" && !found {sub(/\/.*/, "", $4); print $4; found = 1} END {exit !found}'
@@ -47,6 +78,7 @@ case ${1:-} in
     name=$2
     work_directory=$3
     public_key_path=$4
+    require_vm_name "$name"
     require_command curl
     require_command qemu-img
     require_command sha256sum
@@ -143,6 +175,23 @@ case ${1:-} in
       "${filesystem[@]}" \
       --cloud-init "user-data=$user_data,disable=on"
     ;;
+  status)
+    (($# == 3)) || { echo "usage: $0 status NAME WORK_DIRECTORY" >&2; exit 2; }
+    name=$2
+    work_directory=$3
+    require_command virsh
+    load_domain_ownership "$name" "$work_directory"
+    if ! virsh -c "$connection" dominfo "$name" >/dev/null 2>&1; then
+      echo absent
+      exit 1
+    fi
+    live_uuid=$(virsh -c "$connection" domuuid "$name")
+    [[ $live_uuid == "${ownership[1]}" ]] || {
+      echo "refusing access to a domain with a different UUID: $name" >&2
+      exit 2
+    }
+    virsh -c "$connection" domstate "$name"
+    ;;
   wait)
     (($# == 2)) || { echo "usage: $0 wait NAME" >&2; exit 2; }
     name=$2
@@ -217,25 +266,7 @@ case ${1:-} in
     (($# == 3)) || { echo "usage: $0 destroy NAME WORK_DIRECTORY" >&2; exit 2; }
     name=$2
     work_directory=$3
-    case $name in
-      mithril-runtime-qualification-[0-9]*) ;;
-      *) echo "refusing to destroy an unexpected domain: $name" >&2; exit 2 ;;
-    esac
-    [[ $work_directory == /tmp/mithril-vm-test.* && -d $work_directory ]] || {
-      echo "refusing cleanup without the VM work directory: $work_directory" >&2
-      exit 2
-    }
-    owner_file=$work_directory/$owner_file_name
-    [[ -r $owner_file ]] || {
-      echo "refusing cleanup without a domain ownership record: $owner_file" >&2
-      exit 2
-    }
-    mapfile -t ownership <"$owner_file"
-    [[ ${#ownership[@]} -eq 2 && ${ownership[0]} == "$name" &&
-       ${ownership[1]} =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ ]] || {
-      echo "refusing cleanup with an invalid domain ownership record" >&2
-      exit 2
-    }
+    load_domain_ownership "$name" "$work_directory"
     if virsh -c "$connection" dominfo "$name" >/dev/null 2>&1; then
       live_uuid=$(virsh -c "$connection" domuuid "$name")
       [[ $live_uuid == "${ownership[1]}" ]] || {
@@ -249,7 +280,7 @@ case ${1:-} in
     rm -f -- "$owner_file"
     ;;
   *)
-    echo "usage: $0 {address|create|wait|put|get|run|ssh|destroy} ..." >&2
+    echo "usage: $0 {address|create|status|wait|put|get|run|ssh|destroy} ..." >&2
     exit 2
     ;;
 esac

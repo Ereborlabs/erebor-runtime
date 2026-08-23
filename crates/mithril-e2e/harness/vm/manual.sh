@@ -4,27 +4,32 @@ set -euo pipefail
 
 directory=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 repo_root=$(cd -- "$directory/../../../.." && pwd)
+. "$directory/identity.sh"
+current_branch_name=$(mithril_vm_branch_name "$repo_root")
+current_branch_key=$(mithril_vm_branch_key "$current_branch_name")
 run=$directory/run.sh
 two_node_convergence=$directory/two-node-convergence.sh
-state_directory=${XDG_STATE_HOME:-$HOME/.local/state}/mithril-manual-vm
+state_directory=${XDG_STATE_HOME:-$HOME/.local/state}/mithril-manual-vm/$current_branch_key
 state=$state_directory/retained-vm.txt
-convergence_state_directory=${XDG_STATE_HOME:-$HOME/.local/state}/mithril-convergence-manual-vm
+convergence_state_directory=${XDG_STATE_HOME:-$HOME/.local/state}/mithril-convergence-manual-vm/$current_branch_key
 convergence_state=$convergence_state_directory/retained-vms.txt
 
 usage() {
-  echo "usage: $0 {start|ssh|destroy|start-convergence|ssh-convergence|destroy-convergence}" >&2
+  echo "usage: $0 {create|status|reconnect|destroy|create-convergence|status-convergence|reconnect-convergence|destroy-convergence}" >&2
 }
 
 load_convergence_state() {
   [[ -r $convergence_state ]] || {
-    echo "no convergence VMs exist; run: $0 start-convergence" >&2
+    echo "no convergence VMs exist for $current_branch_name; run: $0 create-convergence" >&2
     exit 2
   }
   set -a
   # The harness writes this file with shell-quoted values.
   . "$convergence_state"
   set +a
-  [[ ${manual_environment:-} == true && -n ${node_a:-} &&
+  [[ ${branch_name:-} == "$current_branch_name" &&
+     ${branch_key:-} == "$current_branch_key" &&
+     ${manual_environment:-} == true && -n ${node_a:-} &&
      -n ${node_a_work_directory:-} && -n ${node_b:-} &&
      -n ${node_b_work_directory:-} && -x ${provider:-} ]] || {
     echo "manual convergence VM state is invalid: $convergence_state" >&2
@@ -34,24 +39,26 @@ load_convergence_state() {
 
 load_state() {
   [[ -r $state ]] || {
-    echo "no manual VM exists; run: $0 start" >&2
+    echo "no manual VM exists for $current_branch_name; run: $0 create" >&2
     exit 2
   }
   set -a
   # The harness writes this file with shell-quoted values.
   . "$state"
   set +a
-  [[ -n ${vm_name:-} && -n ${work_directory:-} && -x ${provider:-} ]] || {
+  [[ ${branch_name:-} == "$current_branch_name" &&
+     ${branch_key:-} == "$current_branch_key" &&
+     -n ${vm_name:-} && -n ${work_directory:-} && -x ${provider:-} ]] || {
     echo "manual VM state is invalid: $state" >&2
     exit 2
   }
 }
 
 case ${1:-} in
-  start)
+  create|start)
     (($# == 1)) || { usage; exit 2; }
     [[ ! -e $state ]] || {
-      echo "a manual VM already exists; run: $0 ssh or $0 destroy" >&2
+      echo "a manual VM already exists for $current_branch_name; run: $0 reconnect or $0 destroy" >&2
       exit 2
     }
     mkdir -p -- "$state_directory"
@@ -72,9 +79,15 @@ case ${1:-} in
       echo "manual VM start did not write state" >&2
       exit 1
     }
-    echo "Manual VM ready. Run: $0 ssh"
+    echo "Manual VM ready for $current_branch_name. Run: $0 reconnect"
     ;;
-  ssh)
+  status)
+    (($# == 1)) || { usage; exit 2; }
+    load_state
+    printf 'branch=%s\nvm=%s\n' "$current_branch_name" "$vm_name"
+    "$provider" status "$vm_name" "$work_directory"
+    ;;
+  reconnect|ssh)
     (($# == 1)) || { usage; exit 2; }
     load_state
     exec "$provider" ssh "$vm_name"
@@ -87,10 +100,10 @@ case ${1:-} in
     rm -f -- "$state"
     echo "Manual VM removed."
     ;;
-  start-convergence)
+  create-convergence|start-convergence)
     (($# == 1)) || { usage; exit 2; }
     [[ ! -e $convergence_state ]] || {
-      echo "a convergence environment already exists; run: $0 ssh-convergence or $0 destroy-convergence" >&2
+      echo "a convergence environment already exists for $current_branch_name; run: $0 reconnect-convergence or $0 destroy-convergence" >&2
       exit 2
     }
     mkdir -p -- "$convergence_state_directory"
@@ -112,9 +125,19 @@ case ${1:-} in
       echo "manual convergence environment did not write state" >&2
       exit 1
     }
-    echo "Manual convergence environment ready. Run: $0 ssh-convergence"
+    echo "Manual convergence environment ready for $current_branch_name. Run: $0 reconnect-convergence"
     ;;
-  ssh-convergence)
+  status-convergence)
+    (($# == 1)) || { usage; exit 2; }
+    load_convergence_state
+    status=0
+    printf 'branch=%s\nvm=%s\n' "$current_branch_name" "$node_a"
+    "$provider" status "$node_a" "$node_a_work_directory" || status=1
+    printf 'vm=%s\n' "$node_b"
+    "$provider" status "$node_b" "$node_b_work_directory" || status=1
+    exit "$status"
+    ;;
+  reconnect-convergence|ssh-convergence)
     (($# == 1)) || { usage; exit 2; }
     load_convergence_state
     exec "$provider" ssh "$node_a"
