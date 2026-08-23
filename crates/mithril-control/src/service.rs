@@ -580,6 +580,32 @@ impl ControlPlane {
         Ok(identity)
     }
 
+    fn set_session_readiness(
+        &self,
+        node_id: &str,
+        context: &NodeSessionContext,
+        report: &crate::NodeReadinessReport,
+    ) -> Result<(), Status> {
+        let identity = self.require_session(node_id, context)?;
+        if !report.kernel_ready || !report.control_ready {
+            return Err(Status::failed_precondition(
+                "node readiness requires kernel and control readiness",
+            ));
+        }
+        // Trust must be current before Control exposes the node to the Kubernetes scheduler.
+        self.require_current_trust(node_id, context)?;
+        let mut state = self.lock_state()?;
+        let session = state
+            .sessions
+            .get_mut(node_id)
+            .ok_or_else(|| Status::unauthenticated("node session is not registered"))?;
+        if session.identity != identity {
+            return Err(Status::unauthenticated("node session changed"));
+        }
+        session.admission_ready = report.admission_ready;
+        Ok(())
+    }
+
     fn session_label_epoch(&self, identity: &StreamIdentity) -> Result<u64, Status> {
         let state = self.lock_state()?;
         let session = state
@@ -719,21 +745,7 @@ impl NodeRegistry for ControlPlane {
         let report = request
             .report
             .ok_or_else(|| Status::invalid_argument("node readiness report is required"))?;
-        let identity = self.require_session(&node_id, context)?;
-        if !report.kernel_ready || !report.control_ready {
-            return Err(Status::failed_precondition(
-                "node readiness requires kernel and control readiness",
-            ));
-        }
-        let mut state = self.lock_state()?;
-        let session = state
-            .sessions
-            .get_mut(&node_id)
-            .ok_or_else(|| Status::unauthenticated("node session is not registered"))?;
-        if session.identity != identity {
-            return Err(Status::unauthenticated("node session changed"));
-        }
-        session.admission_ready = report.admission_ready;
+        self.set_session_readiness(&node_id, context, &report)?;
         Ok(Response::new(RegistrationAccepted {}))
     }
 }
@@ -1390,8 +1402,8 @@ async fn await_administrative<T>(
 mod tests {
     use super::{valid_registration, ControlPlane, StreamIdentity};
     use crate::{
-        AllowedNodeIdentity, CapabilityRecord, NodeRegistration, NodeSessionContext,
-        TrustGenerationV1,
+        AllowedNodeIdentity, CapabilityRecord, NodeReadinessReport, NodeRegistration,
+        NodeSessionContext, TrustGenerationV1,
     };
 
     fn control() -> ControlPlane {
@@ -1459,6 +1471,46 @@ mod tests {
         };
         assert!(control.require_session("node-a", &stale).is_err());
         Ok::<(), tonic::Status>(())
+    }
+
+    #[test]
+    fn readiness_requires_current_trust_acknowledgement() -> Result<(), tonic::Status> {
+        let control = control();
+        let context = NodeSessionContext {
+            node_id: "node-a".to_owned(),
+            node_boot_id: vec![1; 16],
+            connection_nonce: vec![2; 16],
+        };
+        control.register("node-a".to_owned(), &context, &registration())?;
+        let report = NodeReadinessReport {
+            kernel_ready: true,
+            control_ready: true,
+            admission_ready: true,
+        };
+
+        assert!(control
+            .set_session_readiness("node-a", &context, &report)
+            .is_err());
+        let trust = control
+            .trust
+            .current()
+            .map_err(super::invalid_policy_status)?;
+        control
+            .trust
+            .acknowledge(
+                "node-a",
+                context.node_boot_id.as_slice().try_into().map_err(|_| {
+                    tonic::Status::invalid_argument("test boot identity is not Id128")
+                })?,
+                registration().label_epoch,
+                trust.generation,
+                &trust.bundle_digest,
+            )
+            .map_err(super::invalid_policy_status)?;
+        control.set_session_readiness("node-a", &context, &report)?;
+
+        assert!(control.require_ready_session("node-a", &context).is_ok());
+        Ok(())
     }
 
     #[test]
