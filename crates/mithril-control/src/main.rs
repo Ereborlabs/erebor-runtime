@@ -2,8 +2,7 @@ use std::path::PathBuf;
 
 use clap::Parser;
 use mithril_control::{
-    serve, serve_administrative_http, serve_kubernetes_admission, ControlConfig,
-    ControlRuntimeParts,
+    serve, serve_administrative_http, ControlConfig, ControlRuntimeParts, KubernetesAdmissionOwner,
 };
 
 #[derive(Parser)]
@@ -59,7 +58,7 @@ async fn run() -> mithril_control::Result<()> {
             admission_policy_owner,
             admission_node_owner,
         ) {
-            serve_kubernetes_admission(config, admission_control, policies, nodes, async {
+            KubernetesAdmissionOwner::serve(config, admission_control, policies, nodes, async {
                 std::future::pending::<()>().await;
             })
             .await
