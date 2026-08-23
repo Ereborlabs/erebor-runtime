@@ -35,7 +35,7 @@ remove_marker() {
   local marker=$2
   local pod
   pod=$(node_pod "$node_name")
-  kubectl -n "$system_namespace" exec "$pod" -- \
+  kubectl -n "$system_namespace" exec -c mithril-node "$pod" -- \
     rm -f "/var/lib/mithril/markers/$marker"
 }
 
@@ -143,7 +143,7 @@ node_status() {
   local node_name=$1
   local pod
   pod=$(node_pod "$node_name")
-  kubectl -n "$system_namespace" exec "$pod" -- \
+  kubectl -n "$system_namespace" exec -c mithril-node "$pod" -- \
     mithril-inspect policy-delivery --state-directory /var/lib/mithril
 }
 
@@ -293,7 +293,7 @@ jq -e '
 for node_name in "${eligible_nodes[@]}"; do
   # The scheduler-selected node is the only node that can hold this Pod lifetime.
   if [[ $node_name == "$selected_node" ]]; then
-    kubectl -n "$system_namespace" exec "$(node_pod "$node_name")" -- \
+    kubectl -n "$system_namespace" exec -c mithril-node "$(node_pod "$node_name")" -- \
       test -e "/var/lib/mithril/markers/$protected_pod.started"
   else
     jq -e '
@@ -302,7 +302,7 @@ for node_name in "${eligible_nodes[@]}"; do
       .scheduled_binding_count == 0 and
       .runtime_binding_count == 0
     ' <<<"$(node_status "$node_name")" >/dev/null
-    kubectl -n "$system_namespace" exec "$(node_pod "$node_name")" -- \
+    kubectl -n "$system_namespace" exec -c mithril-node "$(node_pod "$node_name")" -- \
       test ! -e "/var/lib/mithril/markers/$protected_pod.started"
   fi
 done
@@ -328,7 +328,7 @@ for _attempt in {1..120}; do
   sleep 1
 done
 for node_name in "${eligible_nodes[@]}"; do
-  kubectl -n "$system_namespace" exec "$(node_pod "$node_name")" -- \
+  kubectl -n "$system_namespace" exec -c mithril-node "$(node_pod "$node_name")" -- \
     test ! -e "/var/lib/mithril/markers/$failed_pod.started"
 done
 kubectl -n "$scenario_namespace" delete pod "$failed_pod" \
@@ -337,7 +337,7 @@ kubectl -n "$scenario_namespace" delete pod "$failed_pod" \
 # A restart must replace the exact runtime authority, not reactivate the first binding.
 container_before=$(kubectl -n "$scenario_namespace" get pod "$protected_pod" \
   -o jsonpath='{.status.containerStatuses[0].containerID}')
-kubectl -n "$system_namespace" exec "$(node_pod "$selected_node")" -- \
+kubectl -n "$system_namespace" exec -c mithril-node "$(node_pod "$selected_node")" -- \
   touch "/var/lib/mithril/markers/$protected_pod.restart"
 for _attempt in {1..180}; do
   container_after=$(kubectl -n "$scenario_namespace" get pod "$protected_pod" \
