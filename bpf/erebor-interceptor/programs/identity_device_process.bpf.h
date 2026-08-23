@@ -68,19 +68,6 @@ static __noinline int identity_device_ioctl_effect(struct file *file,
     scratch->observation.controller_transition_version =
         scratch->process.transition_version;
     scratch->observation.operation_argument = cmd;
-    if (exact_device_from_file(&scratch->file_object, file, &device_type,
-                               &device_major, &device_minor))
-        return hard_effect_result(
-            config, scratch,
-            effect_observation_reason_v1_unsupported_object);
-    scratch->file_object.profile_generation_ref_id =
-        scratch->process.active_profile_generation_ref_id;
-    if (!exact_file_keys_equal(&scratch->file_object,
-                               &scratch->observation.file_object) ||
-        !scratch->observation.exact_object_key_id)
-        return hard_effect_result(
-            config, scratch,
-            effect_observation_reason_v1_unresolved_object);
     generation = bpf_map_lookup_elem(
         &profile_generation_descriptors,
         &scratch->process.active_profile_generation_ref_id);
@@ -102,6 +89,19 @@ static __noinline int identity_device_ioctl_effect(struct file *file,
     if (operation_decision)
         return apply_effect_decision(config, scratch, generation,
                                      operation_decision, true, false);
+    if (exact_device_from_file(&scratch->file_object, file, &device_type,
+                               &device_major, &device_minor))
+        return hard_effect_result(
+            config, scratch,
+            effect_observation_reason_v1_unsupported_object);
+    scratch->file_object.profile_generation_ref_id =
+        scratch->process.active_profile_generation_ref_id;
+    if (!exact_file_keys_equal(&scratch->file_object,
+                               &scratch->observation.file_object) ||
+        !scratch->observation.exact_object_key_id)
+        return hard_effect_result(
+            config, scratch,
+            effect_observation_reason_v1_unresolved_object);
 
     __builtin_memset(&scratch->device_effect_key, 0,
                      sizeof(scratch->device_effect_key));

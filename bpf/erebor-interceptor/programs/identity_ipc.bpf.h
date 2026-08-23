@@ -8,10 +8,11 @@
  * send, and receive. unix_stream_connect supplies both exact sock peers and
  * the accepted child before the effect. socket_accept does not, so it is not
  * used as false peer authority. Datagram, socketpair, SysV IPC, and shared
- * memory attach remain explicit unsupported paths. Pipes use object hooks and
- * are not represented as an exact process pair.
+ * memory attach remain unsupported without an operation-scoped decision.
+ * Pipes use object hooks and are not represented as an exact process pair.
  */
 #define IPC_ACTOR_OUTSIDE_PROTECTED_SCOPE 1
+#define IPC_OPERATION_SCOPE_MISSING 2
 
 static __always_inline struct sock *ipc_socket_sock(struct socket *socket)
 {
@@ -41,6 +42,47 @@ static __always_inline execution_set_binding_state_v1 *ipc_current_binding(void)
         return NULL;
     binding = binding_for_cgroup(cgroup, &binding_lookup);
     return binding_lookup ? NULL : binding;
+}
+
+static __noinline int ipc_apply_operation_scope(
+    identity_runtime_config_v1 *config, struct identity_scratch_v1 *scratch,
+    const execution_set_binding_state_v1 *binding,
+    ipc_operation_v1 operation)
+{
+    profile_generation_descriptor_v1 *generation;
+    physical_decision_v1 *decision;
+    task_label_v1 *label;
+
+    label = bpf_task_storage_get(
+        &task_labels, bpf_get_current_task_btf(), 0, 0);
+    if (!current_typed_effect_context(config, scratch, label) ||
+        !binding_matches_label(binding, label))
+        return hard_effect_result(
+            config, scratch,
+            effect_observation_reason_v1_corrupt_identity_or_generation);
+    scratch->observation.operation_argument = operation;
+    generation = bpf_map_lookup_elem(
+        &profile_generation_descriptors,
+        &scratch->process.active_profile_generation_ref_id);
+    if (!generation_allows_existing_holder(generation) ||
+        generation->profile_generation_ref_id !=
+            scratch->process.active_profile_generation_ref_id ||
+        generation->label_epoch != config->label_epoch ||
+        !id128_equal(&generation->node_boot_id, &config->node_boot_id) ||
+        !id128_equal(&generation->profile_id, &binding->profile_id))
+        return hard_effect_result(
+            config, scratch,
+            effect_observation_reason_v1_corrupt_identity_or_generation);
+    decision = operation_effect_decision(
+        scratch, scratch->process.active_profile_generation_ref_id,
+        scratch->process.active_role_id,
+        scratch->process.process_state_vector_id,
+        scratch->observation.entry_kind, binding->lifecycle_state,
+        kernel_effect_family_v1_ipc, kernel_effect_operation_v1_ipc_access);
+    if (!decision)
+        return IPC_OPERATION_SCOPE_MISSING;
+    return apply_effect_decision(config, scratch, generation, decision, true,
+                                 false);
 }
 
 /*
@@ -232,7 +274,6 @@ static __always_inline int ipc_apply_relationship(
     ipc_operation_v1 operation)
 {
     physical_decision_v1 *decision;
-    physical_decision_v1 *operation_decision;
     profile_generation_descriptor_v1 *generation;
 
     scratch->observation.operation_argument = operation;
@@ -248,15 +289,6 @@ static __always_inline int ipc_apply_relationship(
         return hard_effect_result(
             config, scratch,
             effect_observation_reason_v1_corrupt_identity_or_generation);
-    operation_decision = operation_effect_decision(
-        scratch, scratch->process.active_profile_generation_ref_id,
-        scratch->process.active_role_id,
-        scratch->process.process_state_vector_id,
-        scratch->observation.entry_kind, binding->lifecycle_state,
-        kernel_effect_family_v1_ipc, kernel_effect_operation_v1_ipc_access);
-    if (operation_decision)
-        return apply_effect_decision(config, scratch, generation,
-                                     operation_decision, true, false);
     __builtin_memset(&scratch->ipc_relationship_key, 0,
                      sizeof(scratch->ipc_relationship_key));
     scratch->ipc_relationship_key.actor_profile_generation_ref_id =
@@ -282,6 +314,7 @@ static __noinline int ipc_unsupported(int ret, int status)
 {
     identity_runtime_config_v1 *config;
     struct identity_scratch_v1 *scratch;
+    execution_set_binding_state_v1 *binding;
 
     if (status == IPC_ACTOR_OUTSIDE_PROTECTED_SCOPE)
         return ret;
@@ -289,8 +322,13 @@ static __noinline int ipc_unsupported(int ret, int status)
         return status;
     config = identity_runtime_config();
     scratch = identity_scratch_record();
-    if (!config || !scratch)
+    binding = ipc_current_binding();
+    if (!config || !scratch || !binding)
         return -EACCES;
+    status = ipc_apply_operation_scope(
+        config, scratch, binding, ipc_operation_v1_unknown);
+    if (status != IPC_OPERATION_SCOPE_MISSING)
+        return status;
     return hard_effect_result(config, scratch,
                               effect_observation_reason_v1_unsupported_object);
 }
@@ -318,7 +356,9 @@ static __noinline int ipc_connected_effect(struct socket *socket,
     binding = ipc_current_binding();
     if (!config || !scratch || !binding)
         return -EACCES;
-    scratch->observation.operation_argument = operation;
+    status = ipc_apply_operation_scope(config, scratch, binding, operation);
+    if (status != IPC_OPERATION_SCOPE_MISSING)
+        return status;
     sock = ipc_socket_sock(socket);
     state = sock ? bpf_sk_storage_get(&ipc_socket_states, sock, 0, 0) : NULL;
     if (!state || state->state != ipc_socket_state_kind_v1_connected ||
@@ -396,7 +436,10 @@ static __noinline int ipc_unix_stream_connect_effect(
     binding = ipc_current_binding();
     if (!config || !scratch || !binding)
         return -EACCES;
-    scratch->observation.operation_argument = ipc_operation_v1_connect;
+    status = ipc_apply_operation_scope(
+        config, scratch, binding, ipc_operation_v1_connect);
+    if (status != IPC_OPERATION_SCOPE_MISSING)
+        return status;
     client = bpf_sk_storage_get(&ipc_socket_states, sock, 0, 0);
     listener = bpf_sk_storage_get(&ipc_socket_states, other, 0, 0);
     if (!client || !listener ||
