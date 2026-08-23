@@ -785,7 +785,7 @@ enum OperationPolicy {
 use KernelEffectFamilyV1 as Family;
 use KernelEffectOperationV1 as Operation;
 
-const OPERATION_MATRIX: [(Family, Operation, OperationPolicy); 39] = [
+const OPERATION_MATRIX: &[(Family, Operation, OperationPolicy)] = &[
     (
         Family::Exec,
         Operation::Execute,
@@ -826,14 +826,19 @@ const OPERATION_MATRIX: [(Family, Operation, OperationPolicy); 39] = [
         OperationPolicy::Portable(PortableEffectClass::FileMutation),
     ),
     (
-        Family::File,
+        Family::Exec,
         Operation::MmapExec,
-        OperationPolicy::Portable(PortableEffectClass::FileRead),
+        OperationPolicy::Portable(PortableEffectClass::ProcessExec),
     ),
     (
         Family::File,
         Operation::Mprotect,
         OperationPolicy::Portable(PortableEffectClass::FileMutation),
+    ),
+    (
+        Family::Exec,
+        Operation::Mprotect,
+        OperationPolicy::Portable(PortableEffectClass::ProcessExec),
     ),
     (Family::Ipc, Operation::IpcAccess, OperationPolicy::Allow),
     (
@@ -2832,7 +2837,7 @@ fn validate_durable_record(record: &DurableBindingRecordV1, path: &Path) -> Resu
         || record.root_cgroup_live_interval_id.is_zero()
         || record.profile_generation_ref_id == 0
         || record.policy_image_digest.is_empty()
-        || record.operation_decisions.len() != KernelEffectOperationV1::OpenPath as usize
+        || record.operation_decisions.len() != OPERATION_MATRIX.len()
     {
         return invalid(format!(
             "durable binding record `{}` has an incomplete owner identity",
@@ -2946,7 +2951,8 @@ mod tests {
         session_owner_key, validate_durable_record, DurableBindingRecordV1, DurableBindingStatusV1,
         EvidencePollBarrier, KernelMaps, PreparedActivation, RecoveryBinding, Result,
         RuntimeKernelInterceptionOwner, ACTIVATION_TARGET_MAP, ACTIVE_PROFILE_MAP, DESCRIPTOR_MAP,
-        EFFECT_DEFAULT_MAP, EXECUTION_BINDING_MAP, SIGNAL_AUTHORITY_MAP, STATE_SCHEMA_VERSION,
+        EFFECT_DEFAULT_MAP, EXECUTION_BINDING_MAP, OPERATION_MATRIX, SIGNAL_AUTHORITY_MAP,
+        STATE_SCHEMA_VERSION,
     };
     use crate::runtime_interception::evidence::{
         EvidenceOwnerSnapshot, EvidenceRouteSnapshot, KernelEvidenceSnapshot, RuntimeEvidenceRouter,
@@ -2955,7 +2961,7 @@ mod tests {
 
     const POLICY: &str = r#"{
         "rules": [
-            {"id":"exec","match":{"surface":"terminal","action":"process_exec"},"decision":"allow"},
+            {"id":"exec","match":{"surface":"terminal","action":"process_exec"},"decision":"deny","reason":"deny exec"},
             {"id":"open","match":{"surface":"filesystem","action":"file_open"},"decision":"allow"},
             {"id":"read","match":{"surface":"filesystem","action":"file_read"},"decision":"deny","reason":"deny reads"},
             {"id":"mutation","match":{"surface":"filesystem","action":"file_mutation"},"decision":"allow"},
@@ -3155,13 +3161,14 @@ mod tests {
 
     fn deny(
         prepared: &PreparedActivation,
+        family: KernelEffectFamilyV1,
         operation: KernelEffectOperationV1,
     ) -> std::result::Result<bool, Box<dyn std::error::Error>> {
         Ok(prepared
             .record
             .operation_decisions
             .iter()
-            .find(|row| row.operation == operation as u16)
+            .find(|row| row.effect_family == family as u16 && row.operation == operation as u16)
             .ok_or("operation row is absent")?
             .deny)
     }
@@ -3172,23 +3179,72 @@ mod tests {
         let temporary = TempDir::new()?;
         let prepared = prepared(&temporary)?;
 
-        assert_eq!(prepared.effect_rows.len(), 39);
-        for operation in 1_u16..=KernelEffectOperationV1::OpenPath as u16 {
+        assert_eq!(prepared.effect_rows.len(), OPERATION_MATRIX.len());
+        assert_eq!(prepared.effect_rows.len(), 40);
+        for &(family, operation, _policy) in OPERATION_MATRIX {
             assert_eq!(
                 prepared
                     .record
                     .operation_decisions
                     .iter()
-                    .filter(|row| row.operation == operation)
+                    .filter(|row| {
+                        row.effect_family == family as u16 && row.operation == operation as u16
+                    })
                     .count(),
                 1
             );
         }
-        assert!(deny(&prepared, KernelEffectOperationV1::OpenRead)?);
-        assert!(!deny(&prepared, KernelEffectOperationV1::OpenWrite)?);
-        assert!(!deny(&prepared, KernelEffectOperationV1::Mprotect)?);
-        assert!(deny(&prepared, KernelEffectOperationV1::Ptrace)?);
-        assert!(!deny(&prepared, KernelEffectOperationV1::Signal)?);
+        for operation in 1_u16..=KernelEffectOperationV1::OpenPath as u16 {
+            assert!(prepared
+                .record
+                .operation_decisions
+                .iter()
+                .any(|row| row.operation == operation));
+        }
+        assert!(deny(
+            &prepared,
+            KernelEffectFamilyV1::File,
+            KernelEffectOperationV1::OpenRead,
+        )?);
+        assert!(!deny(
+            &prepared,
+            KernelEffectFamilyV1::File,
+            KernelEffectOperationV1::OpenWrite,
+        )?);
+        assert!(deny(
+            &prepared,
+            KernelEffectFamilyV1::Exec,
+            KernelEffectOperationV1::Execute,
+        )?);
+        assert!(deny(
+            &prepared,
+            KernelEffectFamilyV1::Exec,
+            KernelEffectOperationV1::MmapExec,
+        )?);
+        assert!(!deny(
+            &prepared,
+            KernelEffectFamilyV1::File,
+            KernelEffectOperationV1::Mprotect,
+        )?);
+        assert!(deny(
+            &prepared,
+            KernelEffectFamilyV1::Exec,
+            KernelEffectOperationV1::Mprotect,
+        )?);
+        assert!(!prepared.record.operation_decisions.iter().any(|row| {
+            row.effect_family == KernelEffectFamilyV1::File as u16
+                && row.operation == KernelEffectOperationV1::MmapExec as u16
+        }));
+        assert!(deny(
+            &prepared,
+            KernelEffectFamilyV1::Privilege,
+            KernelEffectOperationV1::Ptrace,
+        )?);
+        assert!(!deny(
+            &prepared,
+            KernelEffectFamilyV1::Privilege,
+            KernelEffectOperationV1::Signal,
+        )?);
         for operation in [
             KernelEffectOperationV1::Bpf,
             KernelEffectOperationV1::IoUringSetup,
@@ -3197,15 +3253,8 @@ mod tests {
             KernelEffectOperationV1::IoUringOverrideCreds,
             KernelEffectOperationV1::IoUringCommand,
         ] {
-            assert!(deny(&prepared, operation)?);
+            assert!(deny(&prepared, KernelEffectFamilyV1::Privilege, operation,)?);
         }
-        let mprotect = prepared
-            .record
-            .operation_decisions
-            .iter()
-            .find(|row| row.operation == KernelEffectOperationV1::Mprotect as u16)
-            .ok_or("mprotect row is absent")?;
-        assert_eq!(mprotect.effect_family, KernelEffectFamilyV1::File as u16);
         Ok(())
     }
 
@@ -3223,8 +3272,8 @@ mod tests {
         })?;
 
         assert!(checked.get());
-        assert_eq!(maps.len(), 48);
-        assert_eq!(maps.map_len(EFFECT_DEFAULT_MAP), 39);
+        assert_eq!(maps.len(), 49);
+        assert_eq!(maps.map_len(EFFECT_DEFAULT_MAP), 40);
         assert_eq!(maps.map_len(SIGNAL_AUTHORITY_MAP), 2);
         assert_eq!(maps.map_len(ACTIVATION_TARGET_MAP), 1);
         assert_eq!(maps.map_len(ACTIVE_PROFILE_MAP), 1);
@@ -3246,6 +3295,22 @@ mod tests {
         let descriptor = ProfileGenerationDescriptorV1::try_read_from_bytes(&descriptor)
             .map_err(|error| error.to_string())?;
         assert_eq!(descriptor.state, PolicyGenerationStateV1::Active);
+        assert_eq!(descriptor.default_count, OPERATION_MATRIX.len() as u32);
+        assert_eq!(descriptor.table_digest, prepared.record.table_digest);
+        for family in [KernelEffectFamilyV1::File, KernelEffectFamilyV1::Exec] {
+            let (key, value) = prepared
+                .effect_rows
+                .iter()
+                .find(|(key, _value)| {
+                    key.effect_family == family as u16
+                        && key.operation == KernelEffectOperationV1::Mprotect as u16
+                })
+                .ok_or("mprotect effect row is absent")?;
+            assert_eq!(
+                maps.lookup(EFFECT_DEFAULT_MAP, key.as_bytes())?.as_deref(),
+                Some(value.as_bytes())
+            );
+        }
         assert!(maps.rows.borrow().iter().any(|((map, _key), value)| {
             map == SIGNAL_AUTHORITY_MAP
                 && ControllerSignalAuthorityV1::try_read_from_bytes(value)
@@ -3313,7 +3378,7 @@ mod tests {
         let temporary = TempDir::new()?;
         let prepared = prepared(&temporary)?;
         let maps = FakeMaps::default();
-        maps.fail_at(51);
+        maps.fail_at(52);
 
         assert!(publish_activation(&maps, &prepared, || Ok(())).is_err());
         assert_eq!(maps.len(), 0);
@@ -3326,7 +3391,7 @@ mod tests {
         let temporary = TempDir::new()?;
         let prepared = prepared(&temporary)?;
         let maps = FakeMaps::default();
-        maps.fail_at_many(&[51, 52]);
+        maps.fail_at_many(&[52, 53]);
 
         let error = publish_activation(&maps, &prepared, || Ok(()))
             .err()
@@ -3396,6 +3461,35 @@ mod tests {
             &changed.operation_decisions,
         );
         changed.table_digest = effect_table_digest_from(&changed.policy_image_digest, &rows);
+        assert!(validate_durable_record(&changed, Path::new("changed.json")).is_err());
+
+        let mut missing = prepared.record.clone();
+        let position = missing
+            .operation_decisions
+            .iter()
+            .position(|row| {
+                row.effect_family == KernelEffectFamilyV1::Exec as u16
+                    && row.operation == KernelEffectOperationV1::Mprotect as u16
+            })
+            .ok_or("exec mprotect row is absent")?;
+        missing.operation_decisions.remove(position);
+        let rows = effect_rows(
+            missing.profile_generation_ref_id,
+            &missing.operation_decisions,
+        );
+        missing.table_digest = effect_table_digest_from(&missing.policy_image_digest, &rows);
+        assert!(validate_durable_record(&missing, Path::new("missing.json")).is_err());
+
+        let mut changed = prepared.record.clone();
+        let exec_mprotect = changed
+            .operation_decisions
+            .iter_mut()
+            .find(|row| {
+                row.effect_family == KernelEffectFamilyV1::Exec as u16
+                    && row.operation == KernelEffectOperationV1::Mprotect as u16
+            })
+            .ok_or("exec mprotect row is absent")?;
+        exec_mprotect.deny = !exec_mprotect.deny;
         assert!(validate_durable_record(&changed, Path::new("changed.json")).is_err());
         assert_eq!(
             binding_from_record(&prepared.record).binding_id,
