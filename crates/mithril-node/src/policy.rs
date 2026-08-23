@@ -3757,6 +3757,51 @@ fn generation_has_retained_authority(host: &KernelHost, generation: u64) -> Resu
     Ok(false)
 }
 
+pub(crate) fn generation_publication_is_absent(host: &KernelHost, generation: u64) -> Result<bool> {
+    if host
+        .lookup_map("profile_generation_descriptors", &generation.to_ne_bytes())
+        .context(InterceptorSnafu)?
+        .is_some()
+    {
+        return Ok(false);
+    }
+    for key in host
+        .map_keys("binding_activation_targets")
+        .context(InterceptorSnafu)?
+    {
+        let key = BindingActivationTargetKeyV1::try_read_from_bytes(&key).map_err(|error| {
+            IdentityStateSnafu {
+                reason: format!("binding activation target key is invalid: {error}"),
+            }
+            .build()
+        })?;
+        if key.profile_generation_ref_id == generation {
+            return Ok(false);
+        }
+    }
+    for key in host
+        .map_keys("execution_set_bindings")
+        .context(InterceptorSnafu)?
+    {
+        let Some(value) = host
+            .lookup_map("execution_set_bindings", &key)
+            .context(InterceptorSnafu)?
+        else {
+            continue;
+        };
+        let binding = ExecutionSetBindingStateV1::try_read_from_bytes(&value).map_err(|error| {
+            IdentityStateSnafu {
+                reason: format!("execution-set binding is invalid: {error}"),
+            }
+            .build()
+        })?;
+        if binding.active_profile_generation_ref_id == generation {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
 fn retire_generation_rows(
     host: &KernelHost,
     generation: u64,
@@ -4751,7 +4796,7 @@ fn merge_rows(
     Ok(())
 }
 
-fn parse_id(name: &str, value: &str) -> Result<Id128V1> {
+pub(crate) fn parse_id(name: &str, value: &str) -> Result<Id128V1> {
     let uuid = Uuid::parse_str(value).map_err(|error| {
         IdentityStateSnafu {
             reason: format!("{name} is not an Id128 UUID: {error}"),

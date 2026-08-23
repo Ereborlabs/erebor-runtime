@@ -134,7 +134,7 @@ impl NodeChassis {
         config.validate()?;
         // Load trust and delivery state before BPF recovery can accept dynamic policy material.
         let trust = TrustCache::load(&config.state_directory)?;
-        let policy_delivery =
+        let mut policy_delivery =
             crate::policy_delivery::NodePolicyDeliveryOwner::load(&config.state_directory)?;
         if !held_initial_pids.is_empty() {
             snafu::ensure!(
@@ -166,13 +166,7 @@ impl NodeChassis {
         );
         let label_epoch = NodeEpochs::label_epoch(&config.state_directory, recover_identity)?;
         // Restore signed policy, but restore scheduled targets only for this boot and label epoch.
-        policy_delivery.restore_config_for_session(
-            &mut config,
-            &trust,
-            crate::policy::current_utc_ns()?,
-            &boot_id,
-            label_epoch,
-        )?;
+        policy_delivery.restore_config_for_session(&mut config, &trust, &boot_id, label_epoch)?;
         config.validate()?;
         let identity = match config.container_runtime.as_ref() {
             Some(runtime) => NativeSecurityStateOwner::for_effect_controller(
@@ -190,6 +184,14 @@ impl NodeChassis {
             label_epoch,
         ));
         let mut host = owner.start().context(InterceptorSnafu)?;
+        policy_delivery.reconcile_old_session_delivery(
+            &host,
+            &trust,
+            &config,
+            &boot_id,
+            label_epoch,
+        )?;
+        let pending_policy = policy_delivery.validate_pending_activation_pointer(&host)?;
         identity.claim_effect_controller(&host)?;
         let mut bindings = if let Some(runtime) = config.container_runtime.as_ref() {
             WorkloadBindingOwner::system_with_runtime(node_boot_id, label_epoch, runtime).await?
@@ -225,10 +227,43 @@ impl NodeChassis {
         if policy.is_some() {
             bindings.adopt_activated_profiles(&host, &config.workload_bindings)?;
         }
-        let mut policy_delivery = policy_delivery;
-        // A pending record becomes active only when live BPF readback proves the prior CAS won.
-        if policy.is_some() {
-            policy_delivery.recover_pending_activation(&host, &config)?;
+        if pending_policy {
+            // Normal installation must finish the same durable candidate with exact readback.
+            policy_delivery.commit_pending_activation_from_readback(
+                &host,
+                &config,
+                crate::policy::current_utc_ns()?,
+            )?;
+        }
+        // Reconcile durable exception intent before this node can report readiness to Control.
+        let pending_exception = policy_delivery.reconcile_pending_exception(
+            &host,
+            &trust,
+            &config,
+            &boot_id,
+            label_epoch,
+            crate::policy::current_utc_ns()?,
+        )?;
+        if let Some(prepared) = pending_exception.filter(|prepared| {
+            prepared.candidate.operation == mithril_control::ExceptionDeliveryOperationV1::Revoke
+        }) {
+            let policy = policy.as_ref().ok_or_else(|| {
+                IdentityStateSnafu {
+                    reason: "pending exception revocation has no restored policy owner".to_owned(),
+                }
+                .build()
+            })?;
+            let observation = policy.apply_exception_candidate(
+                &host,
+                &prepared.candidate,
+                prepared.grant_handle,
+            )?;
+            policy_delivery.commit_exception_result(
+                &prepared.candidate,
+                observation.state,
+                observation.consumed_uses,
+                crate::policy::current_utc_ns()?,
+            )?;
         }
         // Dynamic policy needs evidence and either runtime admission or exact local target facts.
         let dynamic_policy_capable = config.evidence.is_some()
@@ -533,6 +568,15 @@ impl NodeChassis {
                     effect_task = None;
                     break;
                 }
+                result = runtime_admission_finished(&mut runtime_admission_task) => {
+                    runtime_admission_task = None;
+                    run_error = runtime_admission_exit(
+                        &self.readiness,
+                        result,
+                        *shutdown.borrow(),
+                    );
+                    break;
+                }
             };
             match connection {
                 Ok(mut connection) => {
@@ -763,6 +807,15 @@ impl NodeChassis {
                                 effect_task = None;
                                 break 'running;
                             }
+                            result = runtime_admission_finished(&mut runtime_admission_task) => {
+                                runtime_admission_task = None;
+                                run_error = runtime_admission_exit(
+                                    &self.readiness,
+                                    result,
+                                    *shutdown.borrow(),
+                                );
+                                break 'running;
+                            }
                             () = async {
                                 tokio::select! {
                                     () = self.bindings.wait_for_runtime_change() => {}
@@ -888,6 +941,15 @@ impl NodeChassis {
                         );
                         run_error = result.err();
                         effect_task = None;
+                        break 'running;
+                    }
+                    result = runtime_admission_finished(&mut runtime_admission_task) => {
+                        runtime_admission_task = None;
+                        run_error = runtime_admission_exit(
+                            &self.readiness,
+                            result,
+                            *shutdown.borrow(),
+                        );
                         break 'running;
                     }
                     () = async {
@@ -1303,17 +1365,22 @@ impl NodeChassis {
                 .acknowledge_exception_control(&candidate_content_id)?;
             return Ok(true);
         }
-        let now_utc_ns = crate::policy::current_utc_ns()?;
         let node_boot_id = self.node_boot_id.to_be_bytes();
+        let host = self.host.as_ref().ok_or_else(|| {
+            IdentityStateSnafu {
+                reason: "exception delivery has no live kernel host".to_owned(),
+            }
+            .build()
+        })?;
         let Some(prepared) = self
             .policy_delivery
             .fetch_exception_candidate(
                 connection,
+                host,
                 &self.trust,
                 &self.config,
                 &node_boot_id,
                 self.label_epoch,
-                now_utc_ns,
             )
             .await?
         else {
@@ -1322,12 +1389,6 @@ impl NodeChassis {
         let policy = self.policy.as_ref().ok_or_else(|| {
             IdentityStateSnafu {
                 reason: "exception delivery has no active policy owner".to_owned(),
-            }
-            .build()
-        })?;
-        let host = self.host.as_ref().ok_or_else(|| {
-            IdentityStateSnafu {
-                reason: "exception delivery has no live kernel host".to_owned(),
             }
             .build()
         })?;
@@ -1670,6 +1731,32 @@ async fn effect_reader_finished(
     .fail()
 }
 
+async fn runtime_admission_finished(
+    task: &mut Option<tokio::task::JoinHandle<Result<()>>>,
+) -> Result<()> {
+    match task.as_mut() {
+        Some(task) => task.await.context(LocalTaskSnafu)?,
+        None => std::future::pending().await,
+    }
+}
+
+fn runtime_admission_exit(
+    readiness: &watch::Sender<NodeReadinessV1>,
+    result: Result<()>,
+    shutdown_requested: bool,
+) -> Option<crate::Error> {
+    if shutdown_requested {
+        return result.err();
+    }
+    readiness.send_modify(|readiness| readiness.admission_ready = false);
+    Some(result.err().unwrap_or_else(|| {
+        IdentityStateSnafu {
+            reason: "runtime admission listener stopped before node shutdown".to_owned(),
+        }
+        .build()
+    }))
+}
+
 async fn next_runtime_admission(
     receiver: &mut Option<crate::runtime_admission::RuntimeAdmissionReceiver>,
 ) -> crate::runtime_admission::RuntimeAdmissionEnvelope {
@@ -1851,7 +1938,8 @@ pub(crate) fn workload_binding_generation_digest(
 mod tests {
     use super::{
         close_identity_claims, close_kernel_claims, effect_reader_finished,
-        restore_identity_claims, NodeReadinessV1,
+        restore_identity_claims, runtime_admission_exit, runtime_admission_finished,
+        NodeReadinessV1,
     };
     use mithril_control::{CapabilityRecord, NodeRegistration};
     use tokio::sync::watch;
@@ -2058,5 +2146,25 @@ mod tests {
         assert!(effect_reader_finished(&mut task)
             .await
             .is_err_and(|error| error.to_string().contains("stopped before node shutdown")));
+    }
+
+    #[tokio::test]
+    async fn a_runtime_admission_listener_exit_closes_admission_readiness() {
+        let (readiness, receiver) = watch::channel(NodeReadinessV1 {
+            kernel_ready: true,
+            identity_ready: true,
+            control_ready: true,
+            admission_ready: true,
+            effect_prevention_claims_enabled: true,
+        });
+        let mut task = Some(tokio::spawn(async { Ok(()) }));
+        let result = runtime_admission_finished(&mut task).await;
+        assert!(
+            runtime_admission_exit(&readiness, result, false).is_some_and(|error| error
+                .to_string()
+                .contains("listener stopped before node shutdown"))
+        );
+        assert!(!receiver.borrow().admission_ready);
+        assert!(!receiver.borrow().admits_new_work());
     }
 }

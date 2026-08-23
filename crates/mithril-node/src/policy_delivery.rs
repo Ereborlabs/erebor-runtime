@@ -4,6 +4,10 @@ use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
 use erebor_interceptor::EXCEPTION_USE_RECEIPT_CAPACITY;
+use erebor_interceptor_abi::{
+    ExceptionBindingStateV1, ExceptionHandleBindingKeyV1, ExceptionHandleBindingV1,
+    ExceptionRuntimeStateKeyV1, ExceptionRuntimeStateKindV1, ExceptionRuntimeStateV1,
+};
 use mithril_control::{
     CapabilityRecord, EntryKindV1, ExceptionActivationAcknowledgement, ExceptionActivationStateV1,
     ExceptionDeliveryCandidateV1, ExceptionDeliveryOperationV1, PolicyActivationAcknowledgement,
@@ -13,8 +17,11 @@ use mithril_control::{
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 use snafu::{ensure, OptionExt as _, ResultExt as _};
+use zerocopy::{IntoBytes as _, TryFromBytes as _};
 
-use crate::error::{ControlProtocolSnafu, IdentityStateSnafu, IoSnafu, JsonSnafu, PolicySnafu};
+use crate::error::{
+    ControlProtocolSnafu, IdentityStateSnafu, InterceptorSnafu, IoSnafu, JsonSnafu, PolicySnafu,
+};
 use crate::{
     ControlConnection, NodeConfig, PolicyCandidateConfig, Result, TrustCache, WorkloadBindingConfig,
 };
@@ -65,6 +72,8 @@ struct ActivePolicyRecordV1 {
     artifact_file: String,
     public_key_file: String,
     profile_generation_ref_id: u64,
+    #[serde(default)]
+    staged_utc_ns: i64,
     binding_ids: Vec<String>,
     #[serde(default)]
     scheduled_bindings: Vec<WorkloadBindingConfig>,
@@ -78,13 +87,21 @@ struct ActivePolicyRecordV1 {
 #[serde(deny_unknown_fields)]
 // Pending state is durable before kernel activation and becomes active after readback proof.
 struct PendingPolicyRecordV1 {
+    #[serde(default)]
+    tenant_id: String,
     candidate_content_id: String,
+    #[serde(default)]
+    policy_source_revision_id: String,
+    #[serde(default)]
+    target_snapshot_digest: String,
     bundle_digest: String,
     profile_id: String,
     artifact_file: String,
     public_key_file: String,
     bundle_file: String,
     profile_generation_ref_id: u64,
+    #[serde(default)]
+    staged_utc_ns: i64,
     binding_ids: Vec<String>,
     #[serde(default)]
     scheduled_bindings: Vec<WorkloadBindingConfig>,
@@ -102,17 +119,37 @@ enum LocalExceptionStateV1 {
     Stale,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PendingExceptionPhysicalV1 {
+    Absent,
+    Active { consumed_uses: u32 },
+    Consumed { consumed_uses: u32 },
+    Expired { consumed_uses: u32 },
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 struct ExceptionDeliveryRecordV1 {
+    #[serde(default)]
+    tenant_id: String,
     candidate_content_id: String,
+    #[serde(default)]
+    exception_source_revision_id: String,
     candidate_file: String,
     operation: ExceptionDeliveryOperationV1,
+    #[serde(default)]
+    profile_generation_ref_id: u64,
+    #[serde(default)]
+    grant_handle: u32,
+    #[serde(default)]
+    valid_until_utc_ns: i64,
     state: LocalExceptionStateV1,
     consumed_uses: u32,
     transition_version: u64,
     observed_utc_ns: i64,
     control_acknowledged: bool,
+    #[serde(default = "default_true")]
+    report_to_control: bool,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -147,6 +184,7 @@ pub(crate) struct PreparedPolicyActivationV1 {
     pub profile_id: String,
     pub binding_ids: Vec<String>,
     pub profile_generation_ref_id: u64,
+    staged_utc_ns: i64,
 }
 
 pub(crate) struct PolicyActivationProofV1 {
@@ -189,15 +227,49 @@ impl NodePolicyDeliveryOwner {
                 });
             }
         };
-        let owner = Self {
+        let mut owner = Self {
             root,
             state_path,
             transfer_path,
             state,
         };
+        owner.hydrate_exception_ack_identities()?;
         // Invalid recovery state blocks policy delivery instead of dropping replay history.
         owner.validate_state()?;
         Ok(owner)
+    }
+
+    fn hydrate_exception_ack_identities(&mut self) -> Result<()> {
+        // Pending legacy identity is filled only after the candidate passes current verification.
+        let legacy = self
+            .state
+            .exception_records
+            .iter()
+            .filter(|(_, record)| {
+                record.state != LocalExceptionStateV1::Pending
+                    && (record.tenant_id.is_empty()
+                        || record.exception_source_revision_id.is_empty())
+            })
+            .map(|(instance_id, record)| (instance_id.clone(), record.clone()))
+            .collect::<Vec<_>>();
+        let mut changed = false;
+        for (instance_id, record) in legacy {
+            let candidate = self.read_exception_candidate(&record)?;
+            let stored =
+                self.state
+                    .exception_records
+                    .get_mut(&instance_id)
+                    .context(IdentityStateSnafu {
+                        reason: "the legacy exception record disappeared during recovery",
+                    })?;
+            stored.tenant_id = candidate.tenant_id;
+            stored.exception_source_revision_id = candidate.exception_source_revision_id;
+            changed = true;
+        }
+        if changed {
+            self.persist_state()?;
+        }
+        Ok(())
     }
 
     fn status(&self) -> PolicyDeliveryStatusV1 {
@@ -275,7 +347,9 @@ impl NodePolicyDeliveryOwner {
                 .exception_records
                 .values()
                 .filter(|record| {
-                    record.state != LocalExceptionStateV1::Pending && !record.control_acknowledged
+                    record.state != LocalExceptionStateV1::Pending
+                        && !record.control_acknowledged
+                        && record.report_to_control
                 })
                 .count(),
         }
@@ -283,34 +357,32 @@ impl NodePolicyDeliveryOwner {
 
     #[cfg(test)]
     pub(crate) fn restore_config(
-        &self,
+        &mut self,
         config: &mut NodeConfig,
         trust: &TrustCache,
-        now_utc_ns: i64,
     ) -> Result<()> {
-        self.restore_config_inner(config, trust, now_utc_ns, None)
+        self.restore_config_inner(config, trust, None)
     }
 
     pub(crate) fn restore_config_for_session(
-        &self,
+        &mut self,
         config: &mut NodeConfig,
         trust: &TrustCache,
-        now_utc_ns: i64,
         node_boot_id: &[u8],
         label_epoch: u64,
     ) -> Result<()> {
-        self.restore_config_inner(config, trust, now_utc_ns, Some((node_boot_id, label_epoch)))
+        self.restore_config_inner(config, trust, Some((node_boot_id, label_epoch)))
     }
 
     fn restore_config_inner(
-        &self,
+        &mut self,
         config: &mut NodeConfig,
         trust: &TrustCache,
-        now_utc_ns: i64,
         session: Option<(&[u8], u64)>,
     ) -> Result<()> {
         // Rebuild dynamic config only from durable bundles that still pass current trust checks.
-        for (profile_id, record) in &self.state.active_profiles {
+        let active_profiles = self.state.active_profiles.clone();
+        for (profile_id, record) in &active_profiles {
             let artifact_path = self.checked_bundle_file(&record.artifact_file)?;
             let public_key_path = self.checked_bundle_file(&record.public_key_file)?;
             ensure!(
@@ -319,16 +391,6 @@ impl NodePolicyDeliveryOwner {
                     reason: "the active policy cache has a missing artifact or public key",
                 }
             );
-            config.policy_candidates.retain(|candidate| {
-                candidate.artifact_path != artifact_path
-                    && candidate.public_key_path != public_key_path
-            });
-            config.policy_candidates.push(PolicyCandidateConfig {
-                artifact_path,
-                public_key_path,
-                rollback_authorization_path: None,
-                rollback_public_key_path: None,
-            });
             let bundle_path = self
                 .root
                 .join("bundles")
@@ -340,10 +402,38 @@ impl NodePolicyDeliveryOwner {
                 bundle.profile_artifact.header.sequence_epoch,
             )?;
             bundle
-                .verify(&trusted_key, &config.node_id, record.observed_utc_ns)
+                .verify(
+                    &trusted_key,
+                    &config.node_id,
+                    if record.staged_utc_ns == 0 {
+                        bundle.candidate.issued_utc_ns
+                    } else {
+                        record.staged_utc_ns
+                    },
+                )
                 .context(PolicySnafu)?;
+            let scheduled_session = scheduled_session_state(&bundle, config, session)?;
+            if scheduled_session == Some(false) {
+                ensure!(
+                    scheduled_record_is_exclusive(&record.binding_ids, &record.scheduled_bindings,),
+                    IdentityStateSnafu {
+                        reason: "an old-session active policy mixes scheduled and static ownership",
+                    }
+                );
+                continue;
+            }
+            config.policy_candidates.retain(|candidate| {
+                candidate.artifact_path != artifact_path
+                    && candidate.public_key_path != public_key_path
+            });
+            config.policy_candidates.push(PolicyCandidateConfig {
+                artifact_path,
+                public_key_path,
+                rollback_authorization_path: None,
+                rollback_public_key_path: None,
+            });
             // Scheduled authority does not survive a node boot or label-epoch change.
-            if scheduled_session_matches(&bundle, config, session) {
+            if scheduled_session == Some(true) {
                 config
                     .workload_bindings
                     .extend(record.scheduled_bindings.clone());
@@ -361,18 +451,38 @@ impl NodePolicyDeliveryOwner {
                 }
             }
         }
-        if let Some(pending) = &self.state.pending_activation {
-            let artifact_path = self.checked_bundle_file(&pending.artifact_file)?;
-            let public_key_path = self.checked_bundle_file(&pending.public_key_file)?;
-            let bundle_path = self.checked_bundle_file(&pending.bundle_file)?;
-            ensure!(
-                artifact_path.is_file() && public_key_path.is_file() && bundle_path.is_file(),
-                IdentityStateSnafu {
-                    reason: "the pending policy cache has a missing artifact, key, or bundle",
-                }
-            );
-            let bundle = self.read_bundle(&bundle_path)?;
-            self.verify_pending_bundle(pending, &bundle, trust, config, now_utc_ns)?;
+        if let Some(pending) = self.state.pending_activation.clone() {
+            let recovered: Result<(PathBuf, PathBuf, PolicyBundleV1)> = (|| {
+                let artifact_path = self.checked_bundle_file(&pending.artifact_file)?;
+                let public_key_path = self.checked_bundle_file(&pending.public_key_file)?;
+                let bundle_path = self.checked_bundle_file(&pending.bundle_file)?;
+                ensure!(
+                    artifact_path.is_file() && public_key_path.is_file() && bundle_path.is_file(),
+                    IdentityStateSnafu {
+                        reason: "the pending policy cache has a missing artifact, key, or bundle",
+                    }
+                );
+                let bundle = self.read_bundle(&bundle_path)?;
+                Ok((artifact_path, public_key_path, bundle))
+            })();
+            let (artifact_path, public_key_path, bundle) = recovered?;
+            self.verify_pending_bundle(&pending, &bundle, trust, config)?;
+            self.hydrate_pending_policy_ack_identity(&pending, &bundle)?;
+            let scheduled_session = scheduled_session_state(&bundle, config, session)?;
+            if scheduled_session == Some(false) {
+                ensure!(
+                    scheduled_record_is_exclusive(
+                        &pending.binding_ids,
+                        &pending.scheduled_bindings,
+                    ),
+                    IdentityStateSnafu {
+                        reason:
+                            "an old-session pending policy mixes scheduled and static ownership",
+                    }
+                );
+                // Keep durable ownership until post-host readback proves old authority absent.
+                return Ok(());
+            }
             config.policy_candidates.retain(|candidate| {
                 candidate.artifact_path != artifact_path
                     && candidate.public_key_path != public_key_path
@@ -383,7 +493,7 @@ impl NodePolicyDeliveryOwner {
                 rollback_authorization_path: None,
                 rollback_public_key_path: None,
             });
-            if scheduled_session_matches(&bundle, config, session) {
+            if scheduled_session == Some(true) {
                 config
                     .workload_bindings
                     .extend(pending.scheduled_bindings.clone());
@@ -424,7 +534,7 @@ impl NodePolicyDeliveryOwner {
         self.state
             .exception_records
             .values()
-            .filter(|record| !record.control_acknowledged)
+            .filter(|record| !record.control_acknowledged && record.report_to_control)
             .map(|record| record.candidate_content_id.clone())
             .collect()
     }
@@ -432,17 +542,26 @@ impl NodePolicyDeliveryOwner {
     pub(crate) async fn fetch_exception_candidate(
         &mut self,
         connection: &mut ControlConnection,
+        host: &erebor_interceptor::KernelHost,
         trust: &TrustCache,
         config: &NodeConfig,
         node_boot_id: &[u8],
         label_epoch: u64,
-        now_utc_ns: i64,
     ) -> Result<Option<PreparedExceptionDeliveryV1>> {
-        if let Some(pending) =
-            self.pending_exception_delivery(trust, config, node_boot_id, label_epoch, now_utc_ns)?
-        {
+        let now_utc_ns = crate::policy::current_utc_ns()?;
+        if let Some(pending) = self.reconcile_pending_exception(
+            host,
+            trust,
+            config,
+            node_boot_id,
+            label_epoch,
+            now_utc_ns,
+        )? {
             // Recovery completes local work before the node asks Control for newer authority.
             return Ok(Some(pending));
+        }
+        if self.pending_exception_acknowledgement()?.is_some() {
+            return Ok(None);
         }
         let inventory = connection
             .exception_inventory(self.unacknowledged_exception_candidate_ids())
@@ -521,14 +640,23 @@ impl NodePolicyDeliveryOwner {
         self.state.exception_records.insert(
             instance_id.clone(),
             ExceptionDeliveryRecordV1 {
+                tenant_id: prepared.candidate.tenant_id.clone(),
                 candidate_content_id: prepared.candidate.candidate_content_id.clone(),
+                exception_source_revision_id: prepared
+                    .candidate
+                    .exception_source_revision_id
+                    .clone(),
                 candidate_file: self.relative_bundle_file(&path)?,
                 operation: prepared.candidate.operation,
+                profile_generation_ref_id: prepared.candidate.profile_generation_ref_id,
+                grant_handle: prepared.grant_handle,
+                valid_until_utc_ns: prepared.candidate.valid_until_utc_ns,
                 state: LocalExceptionStateV1::Pending,
                 consumed_uses,
                 transition_version: 0,
                 observed_utc_ns: now_utc_ns,
                 control_acknowledged: false,
+                report_to_control: true,
             },
         );
         self.state.exception_distribution_high_water.insert(
@@ -542,42 +670,346 @@ impl NodePolicyDeliveryOwner {
         self.persist_state()
     }
 
-    fn pending_exception_delivery(
-        &self,
+    pub(crate) fn reconcile_pending_exception(
+        &mut self,
+        host: &erebor_interceptor::KernelHost,
         trust: &TrustCache,
         config: &NodeConfig,
         node_boot_id: &[u8],
         label_epoch: u64,
         now_utc_ns: i64,
     ) -> Result<Option<PreparedExceptionDeliveryV1>> {
-        let Some(record) = self
-            .state
-            .exception_records
-            .values()
-            .find(|record| record.state == LocalExceptionStateV1::Pending)
+        self.reconcile_pending_exception_with_readback(
+            trust,
+            config,
+            (node_boot_id, label_epoch),
+            now_utc_ns,
+            |instance_id, record, candidate| {
+                Self::observe_pending_exception(host, config, instance_id, record, candidate)
+            },
+        )
+    }
+
+    fn reconcile_pending_exception_with_readback<F>(
+        &mut self,
+        trust: &TrustCache,
+        config: &NodeConfig,
+        session: (&[u8], u64),
+        now_utc_ns: i64,
+        readback: F,
+    ) -> Result<Option<PreparedExceptionDeliveryV1>>
+    where
+        F: FnOnce(
+            &str,
+            &ExceptionDeliveryRecordV1,
+            &ExceptionDeliveryCandidateV1,
+        ) -> Result<PendingExceptionPhysicalV1>,
+    {
+        let Some((instance_id, candidate, prepared)) =
+            self.verified_pending_exception(trust, config, session.0, session.1)?
         else {
             return Ok(None);
         };
-        let path = self.checked_bundle_file(&record.candidate_file)?;
-        let candidate: ExceptionDeliveryCandidateV1 =
-            serde_json::from_slice(&fs::read(&path).context(IoSnafu { path: &path })?)
-                .context(JsonSnafu { path: &path })?;
-        ensure!(
-            candidate.candidate_content_id == record.candidate_content_id
-                && candidate.operation == record.operation,
-            IdentityStateSnafu {
-                reason: "the pending exception record differs from its durable candidate",
-            }
-        );
-        self.prepare_exception_delivery(
-            candidate,
+        let record = self
+            .state
+            .exception_records
+            .get(&instance_id)
+            .context(IdentityStateSnafu {
+                reason: "the verified pending exception disappeared during recovery",
+            })?
+            .clone();
+        let physical = readback(&instance_id, &record, &candidate)?;
+        self.resolve_pending_exception(&instance_id, &candidate, prepared, physical, now_utc_ns)
+    }
+
+    fn verified_pending_exception(
+        &mut self,
+        trust: &TrustCache,
+        config: &NodeConfig,
+        node_boot_id: &[u8],
+        label_epoch: u64,
+    ) -> Result<
+        Option<(
+            String,
+            ExceptionDeliveryCandidateV1,
+            PreparedExceptionDeliveryV1,
+        )>,
+    > {
+        let Some((instance_id, record)) = self
+            .state
+            .exception_records
+            .iter()
+            .find(|(_, record)| record.state == LocalExceptionStateV1::Pending)
+            .map(|(instance_id, record)| (instance_id.clone(), record.clone()))
+        else {
+            return Ok(None);
+        };
+        let candidate = self.read_exception_candidate(&record)?;
+        let prepared = self.prepare_exception_delivery(
+            candidate.clone(),
             trust,
             config,
             node_boot_id,
             label_epoch,
-            now_utc_ns,
+            record.observed_utc_ns,
+        )?;
+        self.restore_exception_recovery_identity(&instance_id, &candidate, &prepared)?;
+        Ok(Some((instance_id, candidate, prepared)))
+    }
+
+    fn restore_exception_recovery_identity(
+        &mut self,
+        instance_id: &str,
+        candidate: &ExceptionDeliveryCandidateV1,
+        prepared: &PreparedExceptionDeliveryV1,
+    ) -> Result<()> {
+        let record =
+            self.state
+                .exception_records
+                .get_mut(instance_id)
+                .context(IdentityStateSnafu {
+                    reason: "the pending exception record disappeared during recovery",
+                })?;
+        let complete = record.tenant_id == candidate.tenant_id
+            && record.exception_source_revision_id == candidate.exception_source_revision_id
+            && record.profile_generation_ref_id == candidate.profile_generation_ref_id
+            && record.grant_handle == prepared.grant_handle
+            && record.valid_until_utc_ns == candidate.valid_until_utc_ns;
+        if complete {
+            return Ok(());
+        }
+        ensure!(
+            record.tenant_id.is_empty()
+                && record.exception_source_revision_id.is_empty()
+                && record.profile_generation_ref_id == 0
+                && record.grant_handle == 0
+                && record.valid_until_utc_ns == 0,
+            IdentityStateSnafu {
+                reason: "the pending exception recovery identity differs from its candidate",
+            }
+        );
+        record.tenant_id.clone_from(&candidate.tenant_id);
+        record
+            .exception_source_revision_id
+            .clone_from(&candidate.exception_source_revision_id);
+        record.profile_generation_ref_id = candidate.profile_generation_ref_id;
+        record.grant_handle = prepared.grant_handle;
+        record.valid_until_utc_ns = candidate.valid_until_utc_ns;
+        self.persist_state()
+    }
+
+    fn observe_pending_exception(
+        host: &erebor_interceptor::KernelHost,
+        config: &NodeConfig,
+        instance_id: &str,
+        record: &ExceptionDeliveryRecordV1,
+        candidate: &ExceptionDeliveryCandidateV1,
+    ) -> Result<PendingExceptionPhysicalV1> {
+        let runtime_key = ExceptionRuntimeStateKeyV1 {
+            node_id: crate::policy::stable_node_id(&config.node_id)?,
+            exception_instance_id: crate::policy::parse_id("exception_instance_id", instance_id)?,
+        };
+        let binding_key = ExceptionHandleBindingKeyV1 {
+            profile_generation_ref_id: record.profile_generation_ref_id,
+            exception_numeric_handle: record.grant_handle,
+            reserved: 0,
+        };
+        let runtime = host
+            .lookup_map_locked("exception_runtime_states", runtime_key.as_bytes())
+            .context(InterceptorSnafu)?;
+        let binding = host
+            .lookup_map("exception_handle_bindings", binding_key.as_bytes())
+            .context(InterceptorSnafu)?;
+        let definition: [u8; 32] = hex::decode(&record.candidate_content_id)
+            .ok()
+            .and_then(|bytes| bytes.try_into().ok())
+            .context(IdentityStateSnafu {
+                reason: "the pending exception definition digest is invalid",
+            })?;
+        Self::pending_exception_physical_state(
+            runtime.as_deref(),
+            binding.as_deref(),
+            runtime_key,
+            definition,
+            candidate.maximum_uses,
+            crate::policy::current_boottime_ns()?,
         )
-        .map(Some)
+    }
+
+    fn pending_exception_physical_state(
+        runtime: Option<&[u8]>,
+        binding: Option<&[u8]>,
+        runtime_key: ExceptionRuntimeStateKeyV1,
+        definition: [u8; 32],
+        maximum_uses: u32,
+        now_boottime_ns: u64,
+    ) -> Result<PendingExceptionPhysicalV1> {
+        let (runtime, binding) = match (runtime, binding) {
+            (None, None) => return Ok(PendingExceptionPhysicalV1::Absent),
+            (Some(runtime), Some(binding)) => (runtime, binding),
+            _ => {
+                return IdentityStateSnafu {
+                    reason: "the pending exception has an incomplete physical publication"
+                        .to_owned(),
+                }
+                .fail()
+            }
+        };
+        let runtime = ExceptionRuntimeStateV1::try_read_from_bytes(runtime).map_err(|error| {
+            IdentityStateSnafu {
+                reason: format!("the pending exception runtime state is invalid: {error}"),
+            }
+            .build()
+        })?;
+        let binding = ExceptionHandleBindingV1::try_read_from_bytes(binding).map_err(|error| {
+            IdentityStateSnafu {
+                reason: format!("the pending exception binding is invalid: {error}"),
+            }
+            .build()
+        })?;
+        ensure!(
+            binding.runtime_state_key == runtime_key
+                && binding.state == ExceptionBindingStateV1::Active
+                && runtime.exception_definition_sha256 == definition
+                && runtime.maximum_uses == maximum_uses
+                && runtime.consumed_uses <= runtime.maximum_uses
+                && runtime.bound_profile_generation_refs > 0,
+            IdentityStateSnafu {
+                reason: "the pending exception physical state differs from its durable identity",
+            }
+        );
+        let consumed_uses = runtime.consumed_uses;
+        match runtime.state {
+            ExceptionRuntimeStateKindV1::Active
+                if now_boottime_ns >= runtime.deadline_boottime_ns =>
+            {
+                Ok(PendingExceptionPhysicalV1::Expired { consumed_uses })
+            }
+            ExceptionRuntimeStateKindV1::Active => {
+                Ok(PendingExceptionPhysicalV1::Active { consumed_uses })
+            }
+            ExceptionRuntimeStateKindV1::Exhausted => {
+                Ok(PendingExceptionPhysicalV1::Consumed { consumed_uses })
+            }
+            ExceptionRuntimeStateKindV1::Expired => {
+                Ok(PendingExceptionPhysicalV1::Expired { consumed_uses })
+            }
+            ExceptionRuntimeStateKindV1::Unknown
+            | ExceptionRuntimeStateKindV1::ReconciliationRequired => IdentityStateSnafu {
+                reason: "the pending exception physical state is ambiguous".to_owned(),
+            }
+            .fail(),
+        }
+    }
+
+    fn resolve_pending_exception(
+        &mut self,
+        instance_id: &str,
+        candidate: &ExceptionDeliveryCandidateV1,
+        prepared: PreparedExceptionDeliveryV1,
+        physical: PendingExceptionPhysicalV1,
+        now_utc_ns: i64,
+    ) -> Result<Option<PreparedExceptionDeliveryV1>> {
+        match (candidate.operation, physical) {
+            (ExceptionDeliveryOperationV1::Activate, PendingExceptionPhysicalV1::Absent)
+                if now_utc_ns < candidate.valid_until_utc_ns =>
+            {
+                Ok(Some(prepared))
+            }
+            (ExceptionDeliveryOperationV1::Activate, PendingExceptionPhysicalV1::Absent)
+            | (
+                ExceptionDeliveryOperationV1::Activate,
+                PendingExceptionPhysicalV1::Expired { .. },
+            ) => {
+                let consumed_uses = match physical {
+                    PendingExceptionPhysicalV1::Expired { consumed_uses } => consumed_uses,
+                    _ => 0,
+                };
+                self.commit_recovered_exception(
+                    instance_id,
+                    LocalExceptionStateV1::Expired,
+                    consumed_uses,
+                    now_utc_ns,
+                )?;
+                Ok(None)
+            }
+            (
+                ExceptionDeliveryOperationV1::Activate,
+                PendingExceptionPhysicalV1::Active { consumed_uses },
+            ) => {
+                self.commit_recovered_exception(
+                    instance_id,
+                    LocalExceptionStateV1::Active,
+                    consumed_uses,
+                    now_utc_ns,
+                )?;
+                Ok(None)
+            }
+            (
+                ExceptionDeliveryOperationV1::Activate,
+                PendingExceptionPhysicalV1::Consumed { consumed_uses },
+            ) => {
+                self.commit_recovered_exception(
+                    instance_id,
+                    LocalExceptionStateV1::Consumed,
+                    consumed_uses,
+                    now_utc_ns,
+                )?;
+                Ok(None)
+            }
+            (ExceptionDeliveryOperationV1::Revoke, PendingExceptionPhysicalV1::Absent) => {
+                let consumed_uses = self
+                    .state
+                    .exception_records
+                    .get(instance_id)
+                    .map_or(0, |record| record.consumed_uses);
+                self.commit_recovered_exception(
+                    instance_id,
+                    LocalExceptionStateV1::Revoked,
+                    consumed_uses,
+                    now_utc_ns,
+                )?;
+                Ok(None)
+            }
+            (ExceptionDeliveryOperationV1::Revoke, _) => Ok(Some(prepared)),
+        }
+    }
+
+    fn commit_recovered_exception(
+        &mut self,
+        instance_id: &str,
+        state: LocalExceptionStateV1,
+        consumed_uses: u32,
+        observed_utc_ns: i64,
+    ) -> Result<()> {
+        let record =
+            self.state
+                .exception_records
+                .get_mut(instance_id)
+                .context(IdentityStateSnafu {
+                    reason: "the pending exception record disappeared during recovery",
+                })?;
+        ensure!(
+            record.state == LocalExceptionStateV1::Pending
+                && matches!(
+                    state,
+                    LocalExceptionStateV1::Active
+                        | LocalExceptionStateV1::Consumed
+                        | LocalExceptionStateV1::Expired
+                        | LocalExceptionStateV1::Revoked
+                )
+                && observed_utc_ns > 0,
+            IdentityStateSnafu {
+                reason: "the recovered exception terminal state is invalid",
+            }
+        );
+        record.state = state;
+        record.consumed_uses = consumed_uses;
+        record.transition_version = 1;
+        record.observed_utc_ns = observed_utc_ns;
+        record.control_acknowledged = false;
+        // Control must receive this durable result before it can send another exception.
+        self.persist_state()
     }
 
     fn prepare_exception_delivery(
@@ -765,15 +1197,16 @@ impl NodePolicyDeliveryOwner {
         &self,
     ) -> Result<Option<ExceptionActivationAcknowledgement>> {
         let Some(record) = self.state.exception_records.values().find(|record| {
-            record.state != LocalExceptionStateV1::Pending && !record.control_acknowledged
+            record.state != LocalExceptionStateV1::Pending
+                && !record.control_acknowledged
+                && record.report_to_control
         }) else {
             return Ok(None);
         };
-        let candidate = self.read_exception_candidate(record)?;
         Ok(Some(ExceptionActivationAcknowledgement {
-            tenant_id: candidate.tenant_id,
+            tenant_id: record.tenant_id.clone(),
             candidate_content_id: record.candidate_content_id.clone(),
-            exception_source_revision_id: candidate.exception_source_revision_id,
+            exception_source_revision_id: record.exception_source_revision_id.clone(),
             state: local_exception_state_name(record.state).to_owned(),
             consumed_uses: record.consumed_uses,
             transition_version: record.transition_version,
@@ -1203,6 +1636,7 @@ impl NodePolicyDeliveryOwner {
             profile_id,
             binding_ids,
             profile_generation_ref_id,
+            staged_utc_ns: now_utc_ns,
         })
     }
 
@@ -1225,6 +1659,7 @@ impl NodePolicyDeliveryOwner {
             artifact_file: self.relative_bundle_file(&artifact_path)?,
             public_key_file: self.relative_bundle_file(&public_key_path)?,
             profile_generation_ref_id: prepared.profile_generation_ref_id,
+            staged_utc_ns: prepared.staged_utc_ns,
             binding_ids: prepared.binding_ids.clone(),
             scheduled_bindings: prepared_scheduled_bindings(prepared),
             node_bound_generation_digest: proof.node_bound_generation_digest,
@@ -1275,35 +1710,166 @@ impl NodePolicyDeliveryOwner {
         let bundle_file = self.relative_bundle_file(&bundle_directory.join("bundle.json"))?;
         // This record lets restart recovery distinguish staged intent from committed activation.
         self.state.pending_activation = Some(PendingPolicyRecordV1 {
+            tenant_id: bundle.candidate.tenant_id.clone(),
             candidate_content_id: bundle.candidate.candidate_content_id.clone(),
+            policy_source_revision_id: bundle.candidate.policy_source_revision_id.clone(),
+            target_snapshot_digest: bundle.candidate.target_snapshot_digest.clone(),
             bundle_digest: bundle.bundle_digest.clone(),
             profile_id: prepared.profile_id.clone(),
             artifact_file,
             public_key_file,
             bundle_file,
             profile_generation_ref_id: prepared.profile_generation_ref_id,
+            staged_utc_ns: prepared.staged_utc_ns,
             binding_ids: prepared.binding_ids.clone(),
             scheduled_bindings: prepared_scheduled_bindings(prepared),
         });
         self.persist_state()
     }
 
-    pub(crate) fn recover_pending_activation(
+    pub(crate) fn validate_pending_activation_pointer(
+        &self,
+        host: &erebor_interceptor::KernelHost,
+    ) -> Result<bool> {
+        let Some(pending) = self.state.pending_activation.clone() else {
+            return Ok(false);
+        };
+        let observed = self.pending_profile_generation(host, &pending)?;
+        self.validate_pending_activation_generation(&pending, observed)?;
+        Ok(true)
+    }
+
+    pub(crate) fn commit_pending_activation_from_readback(
         &mut self,
         host: &erebor_interceptor::KernelHost,
         config: &NodeConfig,
+        observed_utc_ns: i64,
     ) -> Result<()> {
         let Some(pending) = self.state.pending_activation.clone() else {
             return Ok(());
         };
-        let bundle_path = self.checked_bundle_file(&pending.bundle_file)?;
-        let bundle = self.read_bundle(&bundle_path)?;
-        // Recover only when the kernel active pointer proves that the pending generation won.
+        let observed = self.pending_profile_generation(host, &pending)?;
+        ensure!(
+            observed == Some(pending.profile_generation_ref_id),
+            IdentityStateSnafu {
+                reason: "policy restart did not publish the exact pending generation",
+            }
+        );
         let receipt = crate::NodePolicyGenerationOwner::activation_receipt(
             host,
             &pending.profile_id,
             pending.profile_generation_ref_id,
         )?;
+        self.commit_pending_activation_with_proof(
+            config,
+            pending.profile_generation_ref_id,
+            PolicyActivationProofV1 {
+                node_bound_generation_digest: receipt.node_bound_generation_digest,
+                readback_digest: receipt.readback_digest,
+                probe_result_digest: receipt.probe_result_digest,
+                observed_utc_ns,
+            },
+        )
+    }
+
+    fn pending_profile_generation(
+        &self,
+        host: &erebor_interceptor::KernelHost,
+        pending: &PendingPolicyRecordV1,
+    ) -> Result<Option<u64>> {
+        Self::profile_generation(host, &pending.profile_id)
+    }
+
+    fn profile_generation(
+        host: &erebor_interceptor::KernelHost,
+        profile_id: &str,
+    ) -> Result<Option<u64>> {
+        let profile_id = crate::policy::parse_id("profile_id", profile_id)?;
+        host.lookup_map(
+            "active_profile_generations",
+            zerocopy::IntoBytes::as_bytes(&profile_id),
+        )
+        .context(InterceptorSnafu)?
+        .as_deref()
+        .map(|bytes| {
+            <[u8; 8]>::try_from(bytes)
+                .map(u64::from_ne_bytes)
+                .map_err(|error| {
+                    IdentityStateSnafu {
+                        reason: format!("the active policy pointer is invalid: {error}"),
+                    }
+                    .build()
+                })
+        })
+        .transpose()
+    }
+
+    fn validate_pending_activation_generation(
+        &self,
+        pending: &PendingPolicyRecordV1,
+        observed: Option<u64>,
+    ) -> Result<()> {
+        let bundle = self.read_bundle(&self.checked_bundle_file(&pending.bundle_file)?)?;
+        let expected_predecessor = match bundle.candidate.operation {
+            PolicyDeliveryOperationV1::Activate => {
+                ensure!(
+                    bundle.candidate.predecessor_candidate_content_id.is_none()
+                        && !self.state.active_profiles.contains_key(&pending.profile_id),
+                    IdentityStateSnafu {
+                        reason: "a root pending policy has an active predecessor",
+                    }
+                );
+                None
+            }
+            PolicyDeliveryOperationV1::Replace
+            | PolicyDeliveryOperationV1::RetireToRestrictiveTerminal => {
+                let predecessor = self
+                    .state
+                    .active_profiles
+                    .get(&pending.profile_id)
+                    .context(IdentityStateSnafu {
+                        reason: "a replacement pending policy has no durable predecessor",
+                    })?;
+                ensure!(
+                    bundle.candidate.predecessor_candidate_content_id.as_deref()
+                        == Some(predecessor.candidate_content_id.as_str()),
+                    IdentityStateSnafu {
+                        reason: "the pending policy names a different durable predecessor",
+                    }
+                );
+                Some(predecessor.profile_generation_ref_id)
+            }
+        };
+        ensure!(
+            observed == Some(pending.profile_generation_ref_id) || observed == expected_predecessor,
+            IdentityStateSnafu {
+                reason: "the active policy pointer is neither pending nor its exact predecessor",
+            }
+        );
+        Ok(())
+    }
+
+    fn commit_pending_activation_with_proof(
+        &mut self,
+        config: &NodeConfig,
+        active_generation: u64,
+        proof: PolicyActivationProofV1,
+    ) -> Result<()> {
+        let pending = self
+            .state
+            .pending_activation
+            .clone()
+            .context(IdentityStateSnafu {
+                reason: "physical policy recovery has no durable pending identity",
+            })?;
+        ensure!(
+            active_generation == pending.profile_generation_ref_id && proof.observed_utc_ns > 0,
+            IdentityStateSnafu {
+                reason: "pending policy recovery lacks exact active-generation proof",
+            }
+        );
+        let bundle_path = self.checked_bundle_file(&pending.bundle_file)?;
+        let bundle = self.read_bundle(&bundle_path)?;
         self.commit_activation(
             &bundle,
             &PreparedPolicyActivationV1 {
@@ -1311,13 +1877,9 @@ impl NodePolicyDeliveryOwner {
                 profile_id: pending.profile_id,
                 binding_ids: pending.binding_ids,
                 profile_generation_ref_id: pending.profile_generation_ref_id,
+                staged_utc_ns: pending.staged_utc_ns,
             },
-            PolicyActivationProofV1 {
-                node_bound_generation_digest: receipt.node_bound_generation_digest,
-                readback_digest: receipt.readback_digest,
-                probe_result_digest: receipt.probe_result_digest,
-                observed_utc_ns: crate::policy::current_utc_ns()?,
-            },
+            proof,
         )
     }
 
@@ -1573,6 +2135,7 @@ impl NodePolicyDeliveryOwner {
                         && is_sha256(&record.target_snapshot_digest)
                         && is_sha256(&record.bundle_digest)
                         && record.profile_generation_ref_id > 0
+                        && record.staged_utc_ns >= 0
                         && !record.binding_ids.is_empty()
                         && record.binding_ids.windows(2).all(|pair| pair[0] < pair[1])
                         && is_sha256(&record.node_bound_generation_digest)
@@ -1585,11 +2148,20 @@ impl NodePolicyDeliveryOwner {
                     .pending_activation
                     .as_ref()
                     .is_none_or(|pending| {
-                        is_sha256(&pending.candidate_content_id)
+                        let legacy_identity = pending.tenant_id.is_empty()
+                            && pending.policy_source_revision_id.is_empty()
+                            && pending.target_snapshot_digest.is_empty();
+                        let complete_identity = uuid::Uuid::parse_str(&pending.tenant_id)
+                            .is_ok_and(|id| id.hyphenated().to_string() == pending.tenant_id)
+                            && is_sha256(&pending.policy_source_revision_id)
+                            && is_sha256(&pending.target_snapshot_digest);
+                        (legacy_identity || complete_identity)
+                            && is_sha256(&pending.candidate_content_id)
                             && is_sha256(&pending.bundle_digest)
                             && uuid::Uuid::parse_str(&pending.profile_id)
                                 .is_ok_and(|id| id.hyphenated().to_string() == pending.profile_id)
                             && pending.profile_generation_ref_id > 0
+                            && pending.staged_utc_ns >= 0
                             && !pending.binding_ids.is_empty()
                             && pending.binding_ids.windows(2).all(|pair| pair[0] < pair[1])
                             && !pending.bundle_file.is_empty()
@@ -1604,8 +2176,23 @@ impl NodePolicyDeliveryOwner {
                     .exception_records
                     .iter()
                     .all(|(instance_id, record)| {
+                        let legacy_pending_identity = record.state
+                            == LocalExceptionStateV1::Pending
+                            && record.tenant_id.is_empty()
+                            && record.exception_source_revision_id.is_empty();
+                        let complete_ack_identity = uuid::Uuid::parse_str(&record.tenant_id)
+                            .is_ok_and(|id| id.hyphenated().to_string() == record.tenant_id)
+                            && is_sha256(&record.exception_source_revision_id);
+                        let legacy_physical_identity = record.profile_generation_ref_id == 0
+                            && record.grant_handle == 0
+                            && record.valid_until_utc_ns == 0;
+                        let complete_physical_identity = record.profile_generation_ref_id > 0
+                            && record.grant_handle > 0
+                            && record.valid_until_utc_ns > 0;
                         uuid::Uuid::parse_str(instance_id)
                             .is_ok_and(|id| id.hyphenated().to_string() == *instance_id)
+                            && (legacy_pending_identity || complete_ack_identity)
+                            && (legacy_physical_identity || complete_physical_identity)
                             && is_sha256(&record.candidate_content_id)
                             && !record.candidate_file.is_empty()
                             && record.observed_utc_ns > 0
@@ -1613,6 +2200,12 @@ impl NodePolicyDeliveryOwner {
                                 LocalExceptionStateV1::Pending => record.transition_version == 0,
                                 _ => record.transition_version > 0,
                             }
+                            && (record.report_to_control
+                                || matches!(
+                                    record.state,
+                                    LocalExceptionStateV1::Consumed
+                                        | LocalExceptionStateV1::Revoked
+                                ))
                     })
                 && self.state.exception_distribution_high_water.iter().all(
                     |(instance_id, sequence)| {
@@ -1633,8 +2226,26 @@ impl NodePolicyDeliveryOwner {
                 reason: "the durable exception record capacity is invalid",
             }
         );
-        // Recovery reads each signed candidate now so corrupt state cannot suppress an ACK later.
-        for record in self.state.exception_records.values() {
+        ensure!(
+            self.state
+                .exception_records
+                .values()
+                .filter(|record| record.state == LocalExceptionStateV1::Pending)
+                .count()
+                <= 1,
+            IdentityStateSnafu {
+                reason: "durable exception delivery has more than one pending candidate",
+            }
+        );
+        // Rejected records keep ACK identity separately because their candidate bytes can be bad.
+        for record in self.state.exception_records.values().filter(|record| {
+            !matches!(
+                record.state,
+                LocalExceptionStateV1::Pending
+                    | LocalExceptionStateV1::Rejected
+                    | LocalExceptionStateV1::Stale
+            )
+        }) {
             self.read_exception_candidate(record)?;
         }
         Ok(())
@@ -1724,23 +2335,319 @@ impl NodePolicyDeliveryOwner {
         Ok(candidate)
     }
 
+    fn hydrate_pending_policy_ack_identity(
+        &mut self,
+        pending: &PendingPolicyRecordV1,
+        bundle: &PolicyBundleV1,
+    ) -> Result<()> {
+        if !pending.tenant_id.is_empty() {
+            return Ok(());
+        }
+        let stored = self
+            .state
+            .pending_activation
+            .as_mut()
+            .context(IdentityStateSnafu {
+                reason: "the pending policy record disappeared during recovery",
+            })?;
+        stored.tenant_id.clone_from(&bundle.candidate.tenant_id);
+        stored
+            .policy_source_revision_id
+            .clone_from(&bundle.candidate.policy_source_revision_id);
+        stored
+            .target_snapshot_digest
+            .clone_from(&bundle.candidate.target_snapshot_digest);
+        self.persist_state()
+    }
+
+    fn retire_old_session_active_profile(
+        &mut self,
+        profile_id: &str,
+        record: &ActivePolicyRecordV1,
+        observed_generation: Option<u64>,
+        generation_rows_absent: bool,
+    ) -> Result<()> {
+        ensure!(
+            observed_generation.is_none() && generation_rows_absent,
+            IdentityStateSnafu {
+                reason: "an old-session active policy still has a live pointer or generation row",
+            }
+        );
+        self.state.active_profiles.remove(profile_id);
+        if self.state.active_candidate_content_id.as_deref()
+            == Some(record.candidate_content_id.as_str())
+        {
+            self.state.active_candidate_content_id = None;
+            self.state.active_bundle_digest = None;
+            self.state.control_acknowledged_candidate_content_id = None;
+        }
+        // The source high-water stays durable while session-bound authority is retired.
+        self.persist_state()
+    }
+
+    pub(crate) fn reconcile_old_session_delivery(
+        &mut self,
+        host: &erebor_interceptor::KernelHost,
+        trust: &TrustCache,
+        config: &NodeConfig,
+        node_boot_id: &[u8],
+        label_epoch: u64,
+    ) -> Result<()> {
+        let session = Some((node_boot_id, label_epoch));
+        self.retire_old_session_pending_exception(host, trust, config, node_boot_id, label_epoch)?;
+
+        for (profile_id, record) in self.state.active_profiles.clone() {
+            let bundle = self.read_bundle(
+                &self
+                    .root
+                    .join("bundles")
+                    .join(&record.bundle_digest)
+                    .join("bundle.json"),
+            )?;
+            let key = trust.policy_signing_key(
+                &bundle.candidate.signing_key_id,
+                bundle.profile_artifact.header.sequence_epoch,
+            )?;
+            bundle
+                .verify(
+                    &key,
+                    &config.node_id,
+                    if record.staged_utc_ns == 0 {
+                        bundle.candidate.issued_utc_ns
+                    } else {
+                        record.staged_utc_ns
+                    },
+                )
+                .context(PolicySnafu)?;
+            if scheduled_session_state(&bundle, config, session)? != Some(false) {
+                continue;
+            }
+            ensure!(
+                scheduled_record_is_exclusive(&record.binding_ids, &record.scheduled_bindings),
+                IdentityStateSnafu {
+                    reason: "an old-session active policy mixes scheduled and static ownership",
+                }
+            );
+            let observed = Self::profile_generation(host, &profile_id)?;
+            let rows_absent = crate::policy::generation_publication_is_absent(
+                host,
+                record.profile_generation_ref_id,
+            )?;
+            self.retire_old_session_active_profile(&profile_id, &record, observed, rows_absent)?;
+        }
+
+        if let Some(pending) = self.state.pending_activation.clone() {
+            let bundle = self.read_bundle(&self.checked_bundle_file(&pending.bundle_file)?)?;
+            self.verify_pending_bundle(&pending, &bundle, trust, config)?;
+            if scheduled_session_state(&bundle, config, session)? == Some(false) {
+                ensure!(
+                    scheduled_record_is_exclusive(
+                        &pending.binding_ids,
+                        &pending.scheduled_bindings,
+                    ),
+                    IdentityStateSnafu {
+                        reason:
+                            "an old-session pending policy mixes scheduled and static ownership",
+                    }
+                );
+                let observed = Self::profile_generation(host, &pending.profile_id)?;
+                let rows_absent = crate::policy::generation_publication_is_absent(
+                    host,
+                    pending.profile_generation_ref_id,
+                )?;
+                self.retire_old_session_pending_policy(&bundle, observed, rows_absent)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn retire_old_session_pending_exception(
+        &mut self,
+        host: &erebor_interceptor::KernelHost,
+        trust: &TrustCache,
+        config: &NodeConfig,
+        node_boot_id: &[u8],
+        label_epoch: u64,
+    ) -> Result<()> {
+        let Some((instance_id, record)) = self
+            .state
+            .exception_records
+            .iter()
+            .find(|(_, record)| record.state == LocalExceptionStateV1::Pending)
+            .map(|(instance_id, record)| (instance_id.clone(), record.clone()))
+        else {
+            return Ok(());
+        };
+        let candidate = self.read_exception_candidate(&record)?;
+        let identity = candidate
+            .exact_target
+            .kubernetes
+            .as_ref()
+            .context(IdentityStateSnafu {
+                reason: "pending exception recovery has no Kubernetes identity",
+            })?;
+        let signed_boot_id = hex::decode(&identity.node_boot_id).map_err(|error| {
+            IdentityStateSnafu {
+                reason: format!("pending exception recovery has an invalid boot ID: {error}"),
+            }
+            .build()
+        })?;
+        let prepared = self.prepare_exception_delivery(
+            candidate.clone(),
+            trust,
+            config,
+            &signed_boot_id,
+            identity.label_epoch,
+            record.observed_utc_ns,
+        )?;
+        self.restore_exception_recovery_identity(&instance_id, &candidate, &prepared)?;
+        if signed_boot_id == node_boot_id && identity.label_epoch == label_epoch {
+            return Ok(());
+        }
+
+        let record = self
+            .state
+            .exception_records
+            .get(&instance_id)
+            .context(IdentityStateSnafu {
+                reason: "the old-session pending exception disappeared during recovery",
+            })?
+            .clone();
+        let runtime_key = ExceptionRuntimeStateKeyV1 {
+            node_id: crate::policy::stable_node_id(&config.node_id)?,
+            exception_instance_id: crate::policy::parse_id("exception_instance_id", &instance_id)?,
+        };
+        let binding_key = ExceptionHandleBindingKeyV1 {
+            profile_generation_ref_id: record.profile_generation_ref_id,
+            exception_numeric_handle: record.grant_handle,
+            reserved: 0,
+        };
+        let runtime_present = host
+            .lookup_map_locked("exception_runtime_states", runtime_key.as_bytes())
+            .context(InterceptorSnafu)?
+            .is_some();
+        let binding_present = host
+            .lookup_map("exception_handle_bindings", binding_key.as_bytes())
+            .context(InterceptorSnafu)?
+            .is_some();
+        self.settle_old_session_pending_exception(
+            &instance_id,
+            candidate.operation,
+            candidate.maximum_uses,
+            runtime_present,
+            binding_present,
+            crate::policy::current_utc_ns()?,
+        )
+    }
+
+    fn settle_old_session_pending_exception(
+        &mut self,
+        instance_id: &str,
+        operation: ExceptionDeliveryOperationV1,
+        maximum_uses: u32,
+        runtime_present: bool,
+        binding_present: bool,
+        observed_utc_ns: i64,
+    ) -> Result<()> {
+        ensure!(
+            !runtime_present && !binding_present,
+            IdentityStateSnafu {
+                reason: "an old-session pending exception still has live physical authority",
+            }
+        );
+        let stored =
+            self.state
+                .exception_records
+                .get_mut(instance_id)
+                .context(IdentityStateSnafu {
+                    reason: "the old-session pending exception disappeared before retirement",
+                })?;
+        ensure!(
+            stored.state == LocalExceptionStateV1::Pending
+                && stored.operation == operation
+                && observed_utc_ns > 0,
+            IdentityStateSnafu {
+                reason: "the old-session exception retirement identity is invalid",
+            }
+        );
+        stored.state = match operation {
+            ExceptionDeliveryOperationV1::Activate => {
+                stored.consumed_uses = maximum_uses;
+                LocalExceptionStateV1::Consumed
+            }
+            ExceptionDeliveryOperationV1::Revoke => LocalExceptionStateV1::Revoked,
+        };
+        stored.transition_version = 1;
+        stored.observed_utc_ns = observed_utc_ns;
+        stored.control_acknowledged = false;
+        stored.report_to_control = false;
+        // This tombstone preserves replay and use state without crossing node sessions.
+        self.persist_state()
+    }
+
+    fn retire_old_session_pending_policy(
+        &mut self,
+        bundle: &PolicyBundleV1,
+        observed_generation: Option<u64>,
+        generation_rows_absent: bool,
+    ) -> Result<()> {
+        ensure!(
+            observed_generation.is_none() && generation_rows_absent,
+            IdentityStateSnafu {
+                reason: "an old-session pending policy still has a live pointer or generation row",
+            }
+        );
+        advance_sequence(
+            &mut self.state.issuer_high_water,
+            bundle.candidate.signing_key_id.clone(),
+            SequenceV1 {
+                epoch: bundle.profile_artifact.header.sequence_epoch,
+                sequence: bundle.profile_artifact.header.issuer_sequence,
+            },
+        );
+        advance_sequence(
+            &mut self.state.distribution_high_water,
+            bundle.profile_artifact.header.profile_id.clone(),
+            SequenceV1 {
+                epoch: bundle.candidate.distribution_sequence_epoch,
+                sequence: bundle.candidate.distribution_sequence,
+            },
+        );
+        self.state.pending_activation = None;
+        // Control must issue a fresh chain for the current node session.
+        self.persist_state()
+    }
+
     fn verify_pending_bundle(
         &self,
         pending: &PendingPolicyRecordV1,
         bundle: &PolicyBundleV1,
         trust: &TrustCache,
         config: &NodeConfig,
-        now_utc_ns: i64,
     ) -> Result<()> {
         let key = trust.policy_signing_key(
             &bundle.candidate.signing_key_id,
             bundle.profile_artifact.header.sequence_epoch,
         )?;
         bundle
-            .verify(&key, &config.node_id, now_utc_ns)
+            .verify(
+                &key,
+                &config.node_id,
+                if pending.staged_utc_ns == 0 {
+                    bundle.candidate.issued_utc_ns
+                } else {
+                    pending.staged_utc_ns
+                },
+            )
             .context(PolicySnafu)?;
         ensure!(
             pending.candidate_content_id == bundle.candidate.candidate_content_id
+                && (pending.tenant_id.is_empty()
+                    || (pending.tenant_id == bundle.candidate.tenant_id
+                        && pending.policy_source_revision_id
+                            == bundle.candidate.policy_source_revision_id
+                        && pending.target_snapshot_digest
+                            == bundle.candidate.target_snapshot_digest))
                 && pending.bundle_digest == bundle.bundle_digest
                 && pending.profile_id == bundle.profile_artifact.header.profile_id
                 && key.to_bytes().as_slice() == bundle.profile_signing_public_key.as_slice(),
@@ -1939,30 +2846,68 @@ fn prepared_scheduled_bindings(
     bindings
 }
 
-fn scheduled_session_matches(
+fn scheduled_record_is_exclusive(
+    binding_ids: &[String],
+    scheduled_bindings: &[WorkloadBindingConfig],
+) -> bool {
+    let scheduled_ids = scheduled_bindings
+        .iter()
+        .map(|binding| binding.binding_id.as_str())
+        .collect::<BTreeSet<_>>();
+    binding_ids.len() == scheduled_ids.len()
+        && binding_ids
+            .iter()
+            .all(|binding_id| scheduled_ids.contains(binding_id.as_str()))
+}
+
+fn advance_sequence(target: &mut BTreeMap<String, SequenceV1>, key: String, value: SequenceV1) {
+    target
+        .entry(key)
+        .and_modify(|current| *current = (*current).max(value))
+        .or_insert(value);
+}
+
+fn scheduled_session_state(
     bundle: &PolicyBundleV1,
     config: &NodeConfig,
     session: Option<(&[u8], u64)>,
-) -> bool {
+) -> Result<Option<bool>> {
     let targets = &bundle.candidate.exact_target.workload_targets;
     if targets.is_empty() {
-        return false;
+        return Ok(None);
     }
     let Some((node_boot_id, label_epoch)) = session else {
-        return false;
+        return Ok(None);
     };
-    let Some(node_name) = config.kubernetes_node_name.as_deref() else {
-        return false;
-    };
+    let node_name = config
+        .kubernetes_node_name
+        .as_deref()
+        .context(IdentityStateSnafu {
+            reason: "scheduled policy recovery has no Kubernetes Node name",
+        })?;
     let boot_id = hex::encode(node_boot_id);
-    targets.iter().all(|target| {
-        target.kubernetes.as_ref().is_some_and(|identity| {
-            target.node_id == config.node_id
-                && identity.kubernetes_node_name == node_name
-                && identity.node_boot_id == boot_id
-                && identity.label_epoch == label_epoch
+    let current = targets
+        .iter()
+        .map(|target| {
+            let identity = target.kubernetes.as_ref().context(IdentityStateSnafu {
+                reason: "scheduled policy recovery has a non-Kubernetes target",
+            })?;
+            ensure!(
+                target.node_id == config.node_id && identity.kubernetes_node_name == node_name,
+                IdentityStateSnafu {
+                    reason: "scheduled policy recovery targets another node identity",
+                }
+            );
+            Ok(identity.node_boot_id == boot_id && identity.label_epoch == label_epoch)
         })
-    })
+        .collect::<Result<Vec<_>>>()?;
+    ensure!(
+        current.iter().all(|matches| *matches) || current.iter().all(|matches| !*matches),
+        IdentityStateSnafu {
+            reason: "scheduled policy recovery mixes current and old node sessions",
+        }
+    );
+    Ok(Some(current[0]))
 }
 
 fn entry_role_handle(
@@ -2115,6 +3060,10 @@ fn sha256(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
 }
 
+const fn default_true() -> bool {
+    true
+}
+
 fn is_sha256(value: &str) -> bool {
     value.len() == 64
         && value
@@ -2137,6 +3086,7 @@ mod tests {
     };
     use sha2::{Digest as _, Sha256};
     use snafu::ResultExt as _;
+    use zerocopy::IntoBytes as _;
 
     use super::{
         write_atomic, NodePolicyDeliveryOwner, PolicyActivationProofV1, PolicyDeliveryOperationV1,
@@ -2177,11 +3127,7 @@ mod tests {
         owner.begin_activation(&bundle, &prepared)?;
 
         let mut restored = config.clone();
-        NodePolicyDeliveryOwner::load(directory.path())?.restore_config(
-            &mut restored,
-            &trust,
-            20,
-        )?;
+        NodePolicyDeliveryOwner::load(directory.path())?.restore_config(&mut restored, &trust)?;
         assert_eq!(
             restored.workload_bindings[0].active_profile_generation_ref_id,
             2
@@ -2213,6 +3159,183 @@ mod tests {
         assert!(reloaded
             .prepare_activation(&bundle, &trust, &config, &capabilities, 3, 22)
             .is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn pending_policy_restart_reapplies_expected_pointer_and_rejects_ambiguity() -> crate::Result<()>
+    {
+        for observed_before_install in [None, Some(2)] {
+            let directory = tempfile::tempdir().context(IoSnafu {
+                path: "temporary policy crash recovery directory",
+            })?;
+            let (config, trust, candidate, mut restarted) =
+                pending_policy_fixture(directory.path())?;
+            let mut restored = config.clone();
+            restarted.restore_config(&mut restored, &trust)?;
+            assert!(restarted.status().activation_pending);
+            assert_eq!(restored.policy_candidates.len(), 1);
+            let pending = restarted.state.pending_activation.clone().ok_or_else(|| {
+                super::IdentityStateSnafu {
+                    reason: "restart lost its pending policy identity".to_owned(),
+                }
+                .build()
+            })?;
+            restarted.validate_pending_activation_generation(&pending, observed_before_install)?;
+            restarted.commit_pending_activation_with_proof(
+                &restored,
+                2,
+                PolicyActivationProofV1 {
+                    node_bound_generation_digest: "1".repeat(64),
+                    readback_digest: "2".repeat(64),
+                    probe_result_digest: "3".repeat(64),
+                    observed_utc_ns: 31,
+                },
+            )?;
+            let acknowledgement = restarted.pending_acknowledgement().ok_or_else(|| {
+                super::IdentityStateSnafu {
+                    reason: "resolved pending policy has no durable acknowledgement".to_owned(),
+                }
+                .build()
+            })?;
+            assert_eq!(acknowledgement.state, "ACTIVE");
+            assert_eq!(
+                acknowledgement.candidate_content_id,
+                candidate.candidate.candidate_content_id
+            );
+            assert_eq!(
+                NodePolicyDeliveryOwner::load(directory.path())?
+                    .pending_acknowledgement()
+                    .map(|acknowledgement| acknowledgement.state),
+                Some("ACTIVE".to_owned())
+            );
+        }
+
+        let directory = tempfile::tempdir().context(IoSnafu {
+            path: "temporary unexpected policy pointer directory",
+        })?;
+        let (ambiguous_config, ambiguous_trust, _candidate, mut ambiguous) =
+            pending_policy_fixture(directory.path())?;
+        let mut restored = ambiguous_config;
+        ambiguous.restore_config(&mut restored, &ambiguous_trust)?;
+        let pending = ambiguous.state.pending_activation.clone().ok_or_else(|| {
+            super::IdentityStateSnafu {
+                reason: "restart lost its ambiguous pending policy".to_owned(),
+            }
+            .build()
+        })?;
+        assert!(ambiguous
+            .validate_pending_activation_generation(&pending, Some(99))
+            .is_err());
+        assert!(ambiguous.status().activation_pending);
+        assert!(ambiguous.pending_acknowledgement().is_none());
+
+        let directory = tempfile::tempdir().context(IoSnafu {
+            path: "temporary replacement policy recovery directory",
+        })?;
+        let config = config(directory.path());
+        let key = SigningKey::from_bytes(&[9; 32]);
+        let trust = trust(directory.path(), &key)?;
+        let mut replacement = NodePolicyDeliveryOwner::load(directory.path())?;
+        let active = bundle(
+            &config,
+            &key,
+            1,
+            1,
+            PolicyDeliveryOperationV1::Activate,
+            None,
+            10,
+            100,
+            "node-a",
+        )?;
+        let active_prepared =
+            replacement.prepare_activation(&active, &trust, &config, &capabilities(), 2, 20)?;
+        replacement.begin_activation(&active, &active_prepared)?;
+        replacement.commit_activation(
+            &active,
+            &active_prepared,
+            PolicyActivationProofV1 {
+                node_bound_generation_digest: "1".repeat(64),
+                readback_digest: "2".repeat(64),
+                probe_result_digest: "3".repeat(64),
+                observed_utc_ns: 21,
+            },
+        )?;
+        let next = bundle(
+            &config,
+            &key,
+            2,
+            2,
+            PolicyDeliveryOperationV1::Replace,
+            Some(active.candidate.candidate_content_id.clone()),
+            22,
+            30,
+            "node-a",
+        )?;
+        let next_prepared =
+            replacement.prepare_activation(&next, &trust, &config, &capabilities(), 3, 23)?;
+        replacement.begin_activation(&next, &next_prepared)?;
+        let pending = replacement
+            .state
+            .pending_activation
+            .clone()
+            .ok_or_else(|| {
+                super::IdentityStateSnafu {
+                    reason: "replacement restart lost its pending policy".to_owned(),
+                }
+                .build()
+            })?;
+        replacement.validate_pending_activation_generation(&pending, Some(2))?;
+        replacement.commit_pending_activation_with_proof(
+            &next_prepared.config,
+            3,
+            PolicyActivationProofV1 {
+                node_bound_generation_digest: "4".repeat(64),
+                readback_digest: "5".repeat(64),
+                probe_result_digest: "6".repeat(64),
+                observed_utc_ns: 31,
+            },
+        )?;
+        assert_eq!(
+            replacement
+                .pending_acknowledgement()
+                .map(|acknowledgement| acknowledgement.state),
+            Some("ACTIVE".to_owned())
+        );
+
+        for corrupt in [false, true] {
+            let directory = tempfile::tempdir().context(IoSnafu {
+                path: "temporary invalid policy crash recovery directory",
+            })?;
+            let (config, trust, _candidate, mut restarted) =
+                pending_policy_fixture(directory.path())?;
+            let bundle_file = restarted
+                .state
+                .pending_activation
+                .as_ref()
+                .map(|pending| pending.bundle_file.clone())
+                .ok_or_else(|| {
+                    super::IdentityStateSnafu {
+                        reason: "staged policy has no pending activation".to_owned(),
+                    }
+                    .build()
+                })?;
+            let path = restarted.checked_bundle_file(&bundle_file)?;
+            if corrupt {
+                write_atomic(&path, b"not a signed policy bundle")?;
+            } else {
+                std::fs::remove_file(&path).context(IoSnafu { path: &path })?;
+            }
+            let mut restored = config.clone();
+            assert!(restarted.restore_config(&mut restored, &trust).is_err());
+            assert!(restarted.status().activation_pending);
+            assert!(restarted.pending_acknowledgement().is_none());
+            assert!(
+                NodePolicyDeliveryOwner::load(directory.path())?
+                    .status()
+                    .activation_pending
+            );
+        }
         Ok(())
     }
 
@@ -2495,6 +3618,48 @@ mod tests {
             )
             .is_err());
         owner.begin_activation(&scheduled, &prepared)?;
+        let pending_snapshot = owner.state.clone();
+        let mut same_boot_pending = config.clone();
+        same_boot_pending.workload_bindings.clear();
+        NodePolicyDeliveryOwner::load(directory.path())?.restore_config_for_session(
+            &mut same_boot_pending,
+            &trust,
+            &[1; 16],
+            7,
+        )?;
+        assert_eq!(same_boot_pending.workload_bindings.len(), 1);
+        let mut old_boot_pending_config = config.clone();
+        old_boot_pending_config.workload_bindings.clear();
+        old_boot_pending_config.policy_candidates.clear();
+        let mut old_boot_pending = NodePolicyDeliveryOwner::load(directory.path())?;
+        old_boot_pending.restore_config_for_session(
+            &mut old_boot_pending_config,
+            &trust,
+            &[2; 16],
+            7,
+        )?;
+        assert!(old_boot_pending_config.workload_bindings.is_empty());
+        assert!(old_boot_pending_config.policy_candidates.is_empty());
+        assert!(old_boot_pending.status().activation_pending);
+        assert!(old_boot_pending
+            .retire_old_session_pending_policy(&scheduled, Some(2), true)
+            .is_err());
+        assert!(old_boot_pending.status().activation_pending);
+        assert!(old_boot_pending
+            .retire_old_session_pending_policy(&scheduled, None, false)
+            .is_err());
+        old_boot_pending.retire_old_session_pending_policy(&scheduled, None, true)?;
+        assert!(!old_boot_pending.status().activation_pending);
+        assert_eq!(
+            old_boot_pending
+                .state
+                .distribution_high_water
+                .get(scheduled.profile_artifact.policy_document.profile_id())
+                .map(|sequence| sequence.sequence),
+            Some(1)
+        );
+        owner.state = pending_snapshot;
+        owner.persist_state()?;
         owner.commit_activation(
             &scheduled,
             &prepared,
@@ -2543,7 +3708,6 @@ mod tests {
         NodePolicyDeliveryOwner::load(directory.path())?.restore_config_for_session(
             &mut restored,
             &trust,
-            22,
             &[1; 16],
             7,
         )?;
@@ -2559,7 +3723,6 @@ mod tests {
         NodePolicyDeliveryOwner::load(directory.path())?.restore_config_for_session(
             &mut new_boot,
             &trust,
-            22,
             &[2; 16],
             7,
         )?;
@@ -2568,6 +3731,32 @@ mod tests {
         let rolled_back = super::policy_delivery_status(directory.path())?;
         assert_eq!(rolled_back.scheduled_binding_count, 1);
         assert_eq!(rolled_back.runtime_binding_count, 0);
+        let mut old_boot_active = NodePolicyDeliveryOwner::load(directory.path())?;
+        let (profile_id, record) = old_boot_active
+            .state
+            .active_profiles
+            .iter()
+            .next()
+            .map(|(profile_id, record)| (profile_id.clone(), record.clone()))
+            .ok_or_else(|| {
+                super::IdentityStateSnafu {
+                    reason: "scheduled restart has no active profile".to_owned(),
+                }
+                .build()
+            })?;
+        assert!(old_boot_active
+            .retire_old_session_active_profile(&profile_id, &record, Some(2), true)
+            .is_err());
+        assert_eq!(old_boot_active.status().active_profile_ids.len(), 1);
+        assert!(old_boot_active
+            .retire_old_session_active_profile(&profile_id, &record, None, false)
+            .is_err());
+        old_boot_active.retire_old_session_active_profile(&profile_id, &record, None, true)?;
+        assert!(old_boot_active.status().active_profile_ids.is_empty());
+        assert!(old_boot_active
+            .state
+            .policy_candidate_bundles
+            .contains_key(&record.candidate_content_id));
         Ok(())
     }
 
@@ -2576,149 +3765,38 @@ mod tests {
         let directory = tempfile::tempdir().context(IoSnafu {
             path: "temporary exception delivery directory",
         })?;
-        let static_config = config(directory.path());
-        let key = SigningKey::from_bytes(&[9; 32]);
-        let trust = trust(directory.path(), &key)?;
-        let mut document = PolicyDocumentV1::parse(
-            std::path::Path::new("policy-v1.yaml"),
-            include_bytes!("../../mithril-control/tests/fixtures/policy-v1.yaml"),
-        )
-        .context(PolicySnafu)?;
-        document.rollout.desired_profile_mode = ProfileModeV1::Protect;
-        document.file_exception_grants = vec![FileExceptionGrantTemplateV1 {
-            grant_id: "temporary-file-access".to_owned(),
-            denied_file_rule_ids: vec!["deny-projected-token-open".to_owned()],
-            maximum_duration_ns: 300_000_000_000,
-            maximum_uses: 1,
-        }];
-        let base = bundle_from_document(
-            &static_config,
-            &key,
-            1,
-            1,
-            PolicyDeliveryOperationV1::Activate,
-            None,
-            10,
-            100,
-            "node-a",
-            document,
-        )?;
-        let scheduled = scheduled_bundle(base, &key, "worker-a", &[1; 16])?;
-        let mut config = static_config;
-        config.kubernetes_node_name = Some("worker-a".to_owned());
-        config.runtime_admission = Some(RuntimeAdmissionConfig {
-            socket_path: directory.path().join("runtime-admission.sock"),
-            maximum_request_bytes: 64 * 1_024,
-            timeout_ms: 10_000,
-        });
-        config.container_runtime = Some(ContainerRuntimeConfig {
-            socket_path: directory.path().join("containerd.sock"),
-            effect_controller_cgroup_path: directory.path().join("mithril-node-cgroup"),
-            containerd_event_socket_path: None,
-            reconciliation_interval_ms: 2_000,
-        });
-        config.workload_bindings.clear();
-        config.validate()?;
-        let mut owner = NodePolicyDeliveryOwner::load(directory.path())?;
-        let prepared = owner.prepare_activation_for_session(
-            &scheduled,
-            &trust,
-            &config,
-            &capabilities(),
-            2,
-            20,
-            &[1; 16],
-            7,
-        )?;
-        owner.begin_activation(&scheduled, &prepared)?;
-        owner.commit_activation(
-            &scheduled,
-            &prepared,
-            PolicyActivationProofV1 {
-                node_bound_generation_digest: "1".repeat(64),
-                readback_digest: "2".repeat(64),
-                probe_result_digest: "3".repeat(64),
-                observed_utc_ns: 21,
-            },
-        )?;
-        let resource: WorkloadProtectionException = serde_json::from_value(serde_json::json!({
-            "apiVersion": "mithril.erebor.dev/v1alpha1",
-            "kind": "WorkloadProtectionException",
-            "metadata": {
-                "name": "temporary-file-access",
-                "namespace": "default",
-                "uid": "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
-                "generation": 1,
-                "resourceVersion": "exception-1"
-            },
-            "spec": {
-                "policyRef": {"name": "profile"},
-                "grant": "temporary-file-access",
-                "target": {
-                    "pod": {
-                        "name": "converter-0",
-                        "uid": "aaaaaaaa-1111-4111-8111-111111111111"
-                    },
-                    "containerName": "converter"
-                },
-                "requestedDuration": "30s",
-                "requestedUses": 1
-            }
-        }))
-        .context(super::JsonSnafu {
-            path: "in-memory exception",
-        })?;
-        let source = ExceptionSourceRevisionV1::from_resource(
-            &resource,
-            "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
-            "55555555-5555-4555-8555-555555555555",
-            "66666666-6666-4666-8666-666666666666",
-            &scheduled.candidate.policy_source_revision_id,
-            ExceptionSourceStateV1::Accepted,
-        )
-        .context(PolicySnafu)?;
-        let target = scheduled.candidate.exact_target.workload_targets[0].clone();
-        let activation = ExceptionDeliveryCandidateV1::sign(
-            &source,
-            scheduled.candidate.candidate_content_id.clone(),
-            scheduled
-                .profile_artifact
-                .policy_document
-                .profile_id()
-                .to_owned(),
-            2,
-            target.clone(),
-            ExceptionDeliveryOperationV1::Activate,
-            1,
-            50,
-            None,
-            1,
-            1,
-            22,
-            100,
-            "test-key".to_owned(),
-            &key,
-        )
-        .context(PolicySnafu)?;
-        let prepared_exception = owner.prepare_exception_delivery(
-            activation.clone(),
-            &trust,
-            &config,
-            &[1; 16],
-            7,
-            23,
-        )?;
-        let activation_json = serde_json::to_vec(&activation).context(super::JsonSnafu {
-            path: "in-memory exception candidate",
-        })?;
-        owner.stage_exception_delivery(&prepared_exception, &activation_json, 23)?;
+        let PendingExceptionFixture {
+            config,
+            trust,
+            key,
+            scheduled,
+            source,
+            target,
+            activation,
+            owner,
+        } = pending_exception_fixture(directory.path())?;
+        let expired_restart_state = owner.state.clone();
         let pending_status = owner.status();
         assert_eq!(pending_status.pending_exception_count, 1);
         assert_eq!(pending_status.active_exception_count, 0);
 
         let mut restarted = NodePolicyDeliveryOwner::load(directory.path())?;
+        let (instance_id, recovered_candidate, recovered) = restarted
+            .verified_pending_exception(&trust, &config, &[1; 16], 7)?
+            .ok_or_else(|| {
+                super::IdentityStateSnafu {
+                    reason: "restart lost its valid pending exception".to_owned(),
+                }
+                .build()
+            })?;
         assert!(restarted
-            .pending_exception_delivery(&trust, &config, &[1; 16], 7, 24)?
+            .resolve_pending_exception(
+                &instance_id,
+                &recovered_candidate,
+                recovered,
+                super::PendingExceptionPhysicalV1::Absent,
+                24,
+            )?
             .is_some());
         restarted.commit_exception_result(
             &activation,
@@ -2799,6 +3877,7 @@ mod tests {
             })?,
             61,
         )?;
+        let pending_revocation_state = restarted.state.clone();
         restarted.commit_exception_result(
             &revocation,
             ExceptionActivationStateV1::Revoked,
@@ -2813,8 +3892,412 @@ mod tests {
         );
         assert_eq!(restarted.status().revoked_exception_count, 1);
         assert!(restarted
-            .prepare_exception_delivery(activation, &trust, &config, &[1; 16], 7, 63)
+            .prepare_exception_delivery(activation.clone(), &trust, &config, &[1; 16], 7, 63)
             .is_err());
+
+        restarted.state = pending_revocation_state.clone();
+        restarted.persist_state()?;
+        let startup_revocation = restarted
+            .reconcile_pending_exception_with_readback(
+                &trust,
+                &config,
+                (&[1; 16], 7),
+                63,
+                |_, _, _| Ok(super::PendingExceptionPhysicalV1::Active { consumed_uses: 1 }),
+            )?
+            .ok_or_else(|| {
+                super::IdentityStateSnafu {
+                    reason: "startup lost a pending physical revocation".to_owned(),
+                }
+                .build()
+            })?;
+        assert_eq!(
+            startup_revocation.candidate.operation,
+            ExceptionDeliveryOperationV1::Revoke
+        );
+        assert_eq!(restarted.status().pending_exception_count, 1);
+
+        restarted.state = pending_revocation_state.clone();
+        restarted.persist_state()?;
+        assert!(restarted
+            .reconcile_pending_exception_with_readback(
+                &trust,
+                &config,
+                (&[1; 16], 7),
+                63,
+                |_, _, _| Ok(super::PendingExceptionPhysicalV1::Absent),
+            )?
+            .is_none());
+        let recovered_revocation =
+            restarted
+                .pending_exception_acknowledgement()?
+                .ok_or_else(|| {
+                    super::IdentityStateSnafu {
+                        reason: "the recovered revocation has no acknowledgement".to_owned(),
+                    }
+                    .build()
+                })?;
+        assert_eq!(recovered_revocation.state, "REVOKED");
+        assert_eq!(recovered_revocation.consumed_uses, 1);
+
+        restarted.state = pending_revocation_state;
+        restarted.persist_state()?;
+        restarted.settle_old_session_pending_exception(
+            &revocation.exception_instance_id,
+            ExceptionDeliveryOperationV1::Revoke,
+            revocation.maximum_uses,
+            false,
+            false,
+            64,
+        )?;
+        let retired = restarted
+            .state
+            .exception_records
+            .get(&revocation.exception_instance_id)
+            .ok_or_else(|| {
+                super::IdentityStateSnafu {
+                    reason: "old-session revocation lost its durable tombstone".to_owned(),
+                }
+                .build()
+            })?;
+        assert_eq!(retired.state, super::LocalExceptionStateV1::Revoked);
+        assert_eq!(retired.consumed_uses, 1);
+        assert!(!retired.report_to_control);
+        assert!(restarted.pending_exception_acknowledgement()?.is_none());
+
+        // Restore the crash checkpoint from before physical activation and restart after expiry.
+        restarted.state = expired_restart_state.clone();
+        restarted.persist_state()?;
+        drop(restarted);
+        let mut expired = NodePolicyDeliveryOwner::load(directory.path())?;
+        let (instance_id, recovered_candidate, recovered) = expired
+            .verified_pending_exception(&trust, &config, &[1; 16], 7)?
+            .ok_or_else(|| {
+                super::IdentityStateSnafu {
+                    reason: "restart lost its expired pending exception".to_owned(),
+                }
+                .build()
+            })?;
+        assert!(expired
+            .resolve_pending_exception(
+                &instance_id,
+                &recovered_candidate,
+                recovered,
+                super::PendingExceptionPhysicalV1::Absent,
+                101,
+            )?
+            .is_none());
+        assert_eq!(expired.status().pending_exception_count, 0);
+        assert_eq!(expired.status().expired_exception_count, 1);
+        let expired_ack = expired
+            .pending_exception_acknowledgement()?
+            .ok_or_else(|| {
+                super::IdentityStateSnafu {
+                    reason: "expired pending exception has no durable acknowledgement".to_owned(),
+                }
+                .build()
+            })?;
+        assert_eq!(expired_ack.state, "EXPIRED");
+        assert_eq!(
+            expired_ack.candidate_content_id,
+            activation.candidate_content_id
+        );
+
+        let replayed = NodePolicyDeliveryOwner::load(directory.path())?;
+        assert_eq!(
+            replayed
+                .pending_exception_acknowledgement()?
+                .map(|acknowledgement| acknowledgement.state),
+            Some("EXPIRED".to_owned())
+        );
+        drop(replayed);
+
+        let mut still_active = NodePolicyDeliveryOwner::load(directory.path())?;
+        still_active.state = expired_restart_state.clone();
+        still_active.persist_state()?;
+        let (instance_id, recovered_candidate, recovered) = still_active
+            .verified_pending_exception(&trust, &config, &[1; 16], 7)?
+            .ok_or_else(|| {
+                super::IdentityStateSnafu {
+                    reason: "restart lost its physically active exception".to_owned(),
+                }
+                .build()
+            })?;
+        assert!(still_active
+            .resolve_pending_exception(
+                &instance_id,
+                &recovered_candidate,
+                recovered,
+                super::PendingExceptionPhysicalV1::Active { consumed_uses: 0 },
+                101,
+            )?
+            .is_none());
+        assert_eq!(
+            still_active
+                .pending_exception_acknowledgement()?
+                .map(|acknowledgement| acknowledgement.state),
+            Some("ACTIVE".to_owned())
+        );
+        drop(still_active);
+
+        let mut invalid = NodePolicyDeliveryOwner::load(directory.path())?;
+        invalid.state = expired_restart_state;
+        invalid.persist_state()?;
+        let candidate_file = invalid
+            .state
+            .exception_records
+            .values()
+            .find(|record| record.state == super::LocalExceptionStateV1::Pending)
+            .map(|record| record.candidate_file.clone())
+            .ok_or_else(|| {
+                super::IdentityStateSnafu {
+                    reason: "staged exception has no pending record".to_owned(),
+                }
+                .build()
+            })?;
+        let candidate_path = invalid.checked_bundle_file(&candidate_file)?;
+        write_atomic(&candidate_path, b"not a signed exception candidate")?;
+        drop(invalid);
+
+        let mut invalid = NodePolicyDeliveryOwner::load(directory.path())?;
+        assert!(invalid
+            .verified_pending_exception(&trust, &config, &[1; 16], 7)
+            .is_err());
+        assert_eq!(invalid.status().pending_exception_count, 1);
+        assert!(invalid.pending_exception_acknowledgement()?.is_none());
+        assert_eq!(
+            NodePolicyDeliveryOwner::load(directory.path())?
+                .status()
+                .pending_exception_count,
+            1
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn startup_exception_reconciliation_blocks_ambiguous_durable_or_physical_state(
+    ) -> crate::Result<()> {
+        let directory = tempfile::tempdir().context(IoSnafu {
+            path: "temporary startup exception recovery directory",
+        })?;
+        let PendingExceptionFixture {
+            config,
+            trust,
+            mut owner,
+            ..
+        } = pending_exception_fixture(directory.path())?;
+        let pending = owner.state.clone();
+
+        assert!(owner
+            .reconcile_pending_exception_with_readback(
+                &trust,
+                &config,
+                (&[1; 16], 7),
+                24,
+                |_, _, _| Ok(super::PendingExceptionPhysicalV1::Absent),
+            )?
+            .is_some());
+        assert_eq!(owner.status().pending_exception_count, 1);
+
+        owner.state = pending.clone();
+        owner.persist_state()?;
+        let partial_runtime = [0; std::mem::size_of::<super::ExceptionRuntimeStateV1>()];
+        assert!(owner
+            .reconcile_pending_exception_with_readback(
+                &trust,
+                &config,
+                (&[1; 16], 7),
+                24,
+                |_, _, _| {
+                    NodePolicyDeliveryOwner::pending_exception_physical_state(
+                        Some(&partial_runtime),
+                        None,
+                        super::ExceptionRuntimeStateKeyV1 {
+                            node_id: erebor_interceptor_abi::Id128V1::new(1, 2),
+                            exception_instance_id: erebor_interceptor_abi::Id128V1::new(3, 4),
+                        },
+                        [7; 32],
+                        1,
+                        24,
+                    )
+                },
+            )
+            .is_err());
+        assert_eq!(owner.status().pending_exception_count, 1);
+
+        owner.state = pending.clone();
+        owner.persist_state()?;
+        let instance_id = owner
+            .state
+            .exception_records
+            .keys()
+            .next()
+            .cloned()
+            .ok_or_else(|| {
+                super::IdentityStateSnafu {
+                    reason: "the startup fixture has no exception instance".to_owned(),
+                }
+                .build()
+            })?;
+        assert!(owner
+            .settle_old_session_pending_exception(
+                &instance_id,
+                ExceptionDeliveryOperationV1::Activate,
+                1,
+                true,
+                false,
+                24,
+            )
+            .is_err());
+        assert_eq!(owner.status().pending_exception_count, 1);
+        owner.settle_old_session_pending_exception(
+            &instance_id,
+            ExceptionDeliveryOperationV1::Activate,
+            1,
+            false,
+            false,
+            24,
+        )?;
+        assert_eq!(owner.status().pending_exception_count, 0);
+        assert_eq!(owner.status().terminal_exception_count, 1);
+        let retired_activation =
+            owner
+                .state
+                .exception_records
+                .get(&instance_id)
+                .ok_or_else(|| {
+                    super::IdentityStateSnafu {
+                        reason: "old-session activation lost its durable tombstone".to_owned(),
+                    }
+                    .build()
+                })?;
+        assert_eq!(
+            retired_activation.state,
+            super::LocalExceptionStateV1::Consumed
+        );
+        assert_eq!(retired_activation.consumed_uses, 1);
+        assert!(!retired_activation.report_to_control);
+        assert!(owner.pending_exception_acknowledgement()?.is_none());
+
+        owner.state = pending.clone();
+        let duplicate = owner
+            .state
+            .exception_records
+            .values()
+            .next()
+            .cloned()
+            .ok_or_else(|| {
+                super::IdentityStateSnafu {
+                    reason: "the startup fixture has no pending exception".to_owned(),
+                }
+                .build()
+            })?;
+        owner
+            .state
+            .exception_records
+            .insert("dddddddd-dddd-4ddd-8ddd-dddddddddddd".to_owned(), duplicate);
+        owner.persist_state()?;
+        assert!(NodePolicyDeliveryOwner::load(directory.path()).is_err());
+
+        owner.state = pending;
+        owner.persist_state()?;
+        let candidate_file = owner
+            .state
+            .exception_records
+            .values()
+            .next()
+            .map(|record| record.candidate_file.clone())
+            .ok_or_else(|| {
+                super::IdentityStateSnafu {
+                    reason: "the startup fixture has no candidate file".to_owned(),
+                }
+                .build()
+            })?;
+        let candidate_path = owner.checked_bundle_file(&candidate_file)?;
+        write_atomic(&candidate_path, b"not a signed exception candidate")?;
+        let mut readback_called = false;
+        assert!(owner
+            .reconcile_pending_exception_with_readback(
+                &trust,
+                &config,
+                (&[1; 16], 7),
+                24,
+                |_, _, _| {
+                    readback_called = true;
+                    Ok(super::PendingExceptionPhysicalV1::Absent)
+                },
+            )
+            .is_err());
+        // Invalid staged identity stops startup before physical state can justify readiness.
+        assert!(!readback_called);
+        assert_eq!(owner.status().pending_exception_count, 1);
+        Ok(())
+    }
+
+    #[test]
+    fn pending_exception_terminal_state_requires_exact_physical_readback() -> crate::Result<()> {
+        let runtime_key = super::ExceptionRuntimeStateKeyV1 {
+            node_id: erebor_interceptor_abi::Id128V1::new(1, 2),
+            exception_instance_id: erebor_interceptor_abi::Id128V1::new(3, 4),
+        };
+        let definition = [7; 32];
+        let runtime = super::ExceptionRuntimeStateV1 {
+            maximum_uses: 2,
+            consumed_uses: 1,
+            bound_profile_generation_refs: 1,
+            deadline_boottime_ns: 100,
+            exception_definition_sha256: definition,
+            state: super::ExceptionRuntimeStateKindV1::Active,
+            ..Default::default()
+        };
+        let binding = super::ExceptionHandleBindingV1 {
+            runtime_state_key: runtime_key,
+            state: super::ExceptionBindingStateV1::Active,
+            ..Default::default()
+        };
+
+        assert_eq!(
+            NodePolicyDeliveryOwner::pending_exception_physical_state(
+                Some(runtime.as_bytes()),
+                Some(binding.as_bytes()),
+                runtime_key,
+                definition,
+                2,
+                99,
+            )?,
+            super::PendingExceptionPhysicalV1::Active { consumed_uses: 1 }
+        );
+        assert_eq!(
+            NodePolicyDeliveryOwner::pending_exception_physical_state(
+                Some(runtime.as_bytes()),
+                Some(binding.as_bytes()),
+                runtime_key,
+                definition,
+                2,
+                100,
+            )?,
+            super::PendingExceptionPhysicalV1::Expired { consumed_uses: 1 }
+        );
+        assert_eq!(
+            NodePolicyDeliveryOwner::pending_exception_physical_state(
+                None,
+                None,
+                runtime_key,
+                definition,
+                2,
+                100,
+            )?,
+            super::PendingExceptionPhysicalV1::Absent
+        );
+        assert!(NodePolicyDeliveryOwner::pending_exception_physical_state(
+            Some(runtime.as_bytes()),
+            None,
+            runtime_key,
+            definition,
+            2,
+            100,
+        )
+        .is_err());
         Ok(())
     }
 
@@ -3042,6 +4525,203 @@ mod tests {
                 reason_code: "TEST_CAPABILITY".to_owned(),
             })
             .collect()
+    }
+
+    struct PendingExceptionFixture {
+        config: NodeConfig,
+        trust: TrustCache,
+        key: SigningKey,
+        scheduled: mithril_control::PolicyBundleV1,
+        source: ExceptionSourceRevisionV1,
+        target: WorkloadTargetFactV1,
+        activation: ExceptionDeliveryCandidateV1,
+        owner: NodePolicyDeliveryOwner,
+    }
+
+    fn pending_exception_fixture(
+        state_directory: &std::path::Path,
+    ) -> crate::Result<PendingExceptionFixture> {
+        let static_config = config(state_directory);
+        let key = SigningKey::from_bytes(&[9; 32]);
+        let trust = trust(state_directory, &key)?;
+        let mut document = PolicyDocumentV1::parse(
+            std::path::Path::new("policy-v1.yaml"),
+            include_bytes!("../../mithril-control/tests/fixtures/policy-v1.yaml"),
+        )
+        .context(PolicySnafu)?;
+        document.rollout.desired_profile_mode = ProfileModeV1::Protect;
+        document.file_exception_grants = vec![FileExceptionGrantTemplateV1 {
+            grant_id: "temporary-file-access".to_owned(),
+            denied_file_rule_ids: vec!["deny-projected-token-open".to_owned()],
+            maximum_duration_ns: 300_000_000_000,
+            maximum_uses: 1,
+        }];
+        let base = bundle_from_document(
+            &static_config,
+            &key,
+            1,
+            1,
+            PolicyDeliveryOperationV1::Activate,
+            None,
+            10,
+            100,
+            "node-a",
+            document,
+        )?;
+        let scheduled = scheduled_bundle(base, &key, "worker-a", &[1; 16])?;
+        let mut config = static_config;
+        config.kubernetes_node_name = Some("worker-a".to_owned());
+        config.runtime_admission = Some(RuntimeAdmissionConfig {
+            socket_path: state_directory.join("runtime-admission.sock"),
+            maximum_request_bytes: 64 * 1_024,
+            timeout_ms: 10_000,
+        });
+        config.container_runtime = Some(ContainerRuntimeConfig {
+            socket_path: state_directory.join("containerd.sock"),
+            effect_controller_cgroup_path: state_directory.join("mithril-node-cgroup"),
+            containerd_event_socket_path: None,
+            reconciliation_interval_ms: 2_000,
+        });
+        config.workload_bindings.clear();
+        config.validate()?;
+        let mut owner = NodePolicyDeliveryOwner::load(state_directory)?;
+        let prepared = owner.prepare_activation_for_session(
+            &scheduled,
+            &trust,
+            &config,
+            &capabilities(),
+            2,
+            20,
+            &[1; 16],
+            7,
+        )?;
+        owner.begin_activation(&scheduled, &prepared)?;
+        owner.commit_activation(
+            &scheduled,
+            &prepared,
+            PolicyActivationProofV1 {
+                node_bound_generation_digest: "1".repeat(64),
+                readback_digest: "2".repeat(64),
+                probe_result_digest: "3".repeat(64),
+                observed_utc_ns: 21,
+            },
+        )?;
+        let resource: WorkloadProtectionException = serde_json::from_value(serde_json::json!({
+            "apiVersion": "mithril.erebor.dev/v1alpha1",
+            "kind": "WorkloadProtectionException",
+            "metadata": {
+                "name": "temporary-file-access",
+                "namespace": "default",
+                "uid": "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
+                "generation": 1,
+                "resourceVersion": "exception-1"
+            },
+            "spec": {
+                "policyRef": {"name": "profile"},
+                "grant": "temporary-file-access",
+                "target": {
+                    "pod": {
+                        "name": "converter-0",
+                        "uid": "aaaaaaaa-1111-4111-8111-111111111111"
+                    },
+                    "containerName": "converter"
+                },
+                "requestedDuration": "30s",
+                "requestedUses": 1
+            }
+        }))
+        .context(super::JsonSnafu {
+            path: "in-memory exception",
+        })?;
+        let source = ExceptionSourceRevisionV1::from_resource(
+            &resource,
+            "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+            "55555555-5555-4555-8555-555555555555",
+            "66666666-6666-4666-8666-666666666666",
+            &scheduled.candidate.policy_source_revision_id,
+            ExceptionSourceStateV1::Accepted,
+        )
+        .context(PolicySnafu)?;
+        let target = scheduled.candidate.exact_target.workload_targets[0].clone();
+        let activation = ExceptionDeliveryCandidateV1::sign(
+            &source,
+            scheduled.candidate.candidate_content_id.clone(),
+            scheduled
+                .profile_artifact
+                .policy_document
+                .profile_id()
+                .to_owned(),
+            2,
+            target.clone(),
+            ExceptionDeliveryOperationV1::Activate,
+            1,
+            50,
+            None,
+            1,
+            1,
+            22,
+            100,
+            "test-key".to_owned(),
+            &key,
+        )
+        .context(PolicySnafu)?;
+        let prepared_exception = owner.prepare_exception_delivery(
+            activation.clone(),
+            &trust,
+            &config,
+            &[1; 16],
+            7,
+            23,
+        )?;
+        let activation_json = serde_json::to_vec(&activation).context(super::JsonSnafu {
+            path: "in-memory exception candidate",
+        })?;
+        owner.stage_exception_delivery(&prepared_exception, &activation_json, 23)?;
+        Ok(PendingExceptionFixture {
+            config,
+            trust,
+            key,
+            scheduled,
+            source,
+            target,
+            activation,
+            owner,
+        })
+    }
+
+    fn pending_policy_fixture(
+        state_directory: &std::path::Path,
+    ) -> crate::Result<(
+        NodeConfig,
+        TrustCache,
+        mithril_control::PolicyBundleV1,
+        NodePolicyDeliveryOwner,
+    )> {
+        let config = config(state_directory);
+        let key = SigningKey::from_bytes(&[9; 32]);
+        let trust = trust(state_directory, &key)?;
+        let candidate = bundle(
+            &config,
+            &key,
+            1,
+            1,
+            PolicyDeliveryOperationV1::Activate,
+            None,
+            10,
+            30,
+            "node-a",
+        )?;
+        let mut owner = NodePolicyDeliveryOwner::load(state_directory)?;
+        let prepared =
+            owner.prepare_activation(&candidate, &trust, &config, &capabilities(), 2, 20)?;
+        owner.begin_activation(&candidate, &prepared)?;
+        drop(owner);
+        Ok((
+            config,
+            trust,
+            candidate,
+            NodePolicyDeliveryOwner::load(state_directory)?,
+        ))
     }
 
     fn config(state_directory: &std::path::Path) -> NodeConfig {
