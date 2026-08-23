@@ -2,8 +2,8 @@
 
 This harness builds and runs the repository-owned kernel, identity,
 effect-observation, and local-enforcement physical probes in one disposable VM.
-It copies the JSON evidence to the host. It then destroys the VM on success or
-failure.
+It copies the JSON evidence to the host. By default, it then destroys the VM
+on success or failure. The `--keep-vm` option retains the VM for diagnosis.
 
 The default provider uses libvirt and the official Ubuntu 24.04 cloud image.
 It verifies the image with the published `SHA256SUMS` file. The guest must have
@@ -19,6 +19,32 @@ Run:
 crates/mithril-e2e/harness/vm/run.sh \
   --output-directory /tmp/mithril-vm-test-evidence
 ```
+
+Run the isolated Runtime Interceptor lane after VM provisioning is approved:
+
+```bash
+crates/mithril-e2e/harness/vm/run.sh --runtime-interceptor \
+  --output-directory /tmp/erebor-runtime-interceptor-evidence
+```
+
+This option uses a separate branch-scoped VM name. It cannot run with
+`--with-k3s` or `--manual`. The guest starts the installed `erebord` service
+with delegated systemd containment and a branch-scoped bpffs pin root. It uses
+the `codex-v1-fixture` Agent, three root-curated static-probe packages, and
+seven dedicated policy packages. The execute-only static probe makes
+`OpenPath`, inherited-PTY `Read`, or target `OpenWrite` the first file
+operation in each negative case. The lane checks process execution, file open,
+file read, file mutation, socket connect,
+held-cgroup separation, first-exec denial, stop and kill cleanup, activation
+cancellation, restart fencing, and evidence coverage. The App Server pipe and
+interactive PTY cases are transport checks. They do not qualify exact pipe or
+PTY policy semantics.
+
+The lane writes `runtime-interceptor-physical-proof.json` only after all
+oracles pass. A failed run can leave only the host `.partial` file. The
+current source state has not run this VM lane. See the
+[Runtime Interceptor VM proof review guide](../../../../docs/guides/runtime-interceptor-vm-proof.md)
+before you qualify a result.
 
 Add the optional single-node Kubernetes lane. The harness uses the K3s
 distribution:

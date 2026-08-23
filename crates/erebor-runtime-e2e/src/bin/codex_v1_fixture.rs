@@ -41,6 +41,12 @@ use tokio_stream::wrappers::ReceiverStream;
 use tonic::Request;
 
 const FIXTURE_NAME: &str = "codex-v1-fixture";
+const RUNTIME_FILE_OPEN_PACKAGE: &str = "runtime-file-open-probe";
+const RUNTIME_FILE_OPEN_TARGET: &str = "/tmp/erebor-runtime-file-open-target";
+const RUNTIME_FILE_READ_PACKAGE: &str = "runtime-file-read-probe";
+const RUNTIME_FILE_READ_TARGET: &str = "/tmp/erebor-runtime-file-read-target";
+const RUNTIME_FILE_MUTATION_PACKAGE: &str = "runtime-file-mutation-probe";
+const RUNTIME_FILE_MUTATION_TARGET: &str = "/tmp/erebor-runtime-file-mutation-target";
 const MANAGED_HOOK_PATH: &str = "/run/erebor/codex/erebor-codex-hook";
 const REQUIREMENTS_PATH: &str = "/run/erebor/codex/requirements.toml";
 const SHELL_STARTUP_PATH: &str = "/run/erebor/codex/shell-startup";
@@ -1247,7 +1253,33 @@ fn configure(arguments: &[String]) -> FixtureResult<()> {
 
     let definition = package_definition(&options.trust_root, &fixture)?;
     let package = package_manifest(&definition)?;
+    let mut root_curated_codex_packages = vec![json!({
+        "package": package,
+        "definition": definition,
+        "trust_root": options.trust_root,
+    })];
+    if let Some(probe) = options.runtime_file_probe.as_deref() {
+        for (name, mode, target) in [
+            (RUNTIME_FILE_OPEN_PACKAGE, "open", RUNTIME_FILE_OPEN_TARGET),
+            (RUNTIME_FILE_READ_PACKAGE, "read", RUNTIME_FILE_READ_TARGET),
+            (
+                RUNTIME_FILE_MUTATION_PACKAGE,
+                "mutation",
+                RUNTIME_FILE_MUTATION_TARGET,
+            ),
+        ] {
+            let definition =
+                runtime_file_probe_definition(&options.trust_root, probe, name, mode, target)?;
+            let package = package_manifest_for(name, &definition, vec![String::from("codex")])?;
+            root_curated_codex_packages.push(json!({
+                "package": package,
+                "definition": definition,
+                "trust_root": options.trust_root,
+            }));
+        }
+    }
     let fixture_policy = fixture_policy_package(&options.trust_root)?;
+    let runtime_policy_root = runtime_policy_packages(&options.trust_root)?;
     let root_policy = root_policy()?;
     let root_admissions = options
         .owner_uids
@@ -1263,11 +1295,7 @@ fn configure(arguments: &[String]) -> FixtureResult<()> {
             "systemd_run_path": options.systemd_run,
         },
         "root_curated_admissions": root_admissions,
-        "root_curated_codex_packages": [{
-            "package": package,
-            "definition": definition,
-            "trust_root": options.trust_root,
-        }],
+        "root_curated_codex_packages": root_curated_codex_packages,
     });
     if let Some(parent) = options.config.parent() {
         fs::create_dir_all(parent)?;
@@ -1276,6 +1304,15 @@ fn configure(arguments: &[String]) -> FixtureResult<()> {
     fs::set_permissions(&options.config, fs::Permissions::from_mode(0o640))?;
     println!("package_name={FIXTURE_NAME}");
     println!("fixture_policy_path={}", fixture_policy.display());
+    println!("runtime_policy_root={}", runtime_policy_root.display());
+    if options.runtime_file_probe.is_some() {
+        println!("runtime_file_open_package={RUNTIME_FILE_OPEN_PACKAGE}");
+        println!("runtime_file_open_target={RUNTIME_FILE_OPEN_TARGET}");
+        println!("runtime_file_read_package={RUNTIME_FILE_READ_PACKAGE}");
+        println!("runtime_file_read_target={RUNTIME_FILE_READ_TARGET}");
+        println!("runtime_file_mutation_package={RUNTIME_FILE_MUTATION_PACKAGE}");
+        println!("runtime_file_mutation_target={RUNTIME_FILE_MUTATION_TARGET}");
+    }
     Ok(())
 }
 
@@ -1288,6 +1325,7 @@ struct ConfigureOptions {
     linux_runner_controller: Option<PathBuf>,
     descriptor_broker: Option<PathBuf>,
     systemd_run: Option<PathBuf>,
+    runtime_file_probe: Option<PathBuf>,
 }
 
 impl ConfigureOptions {
@@ -1300,6 +1338,7 @@ impl ConfigureOptions {
         let mut linux_runner_controller = None;
         let mut descriptor_broker = None;
         let mut systemd_run = None;
+        let mut runtime_file_probe = None;
         let mut index = 0;
         while let Some(option) = arguments.get(index) {
             let value = arguments
@@ -1326,6 +1365,9 @@ impl ConfigureOptions {
                     descriptor_broker = Some(absolute_option_path(option, value)?);
                 }
                 "--systemd-run" => systemd_run = Some(absolute_option_path(option, value)?),
+                "--runtime-file-probe" => {
+                    runtime_file_probe = Some(absolute_option_path(option, value)?);
+                }
                 _ => return Err(format!("unknown configure option `{option}`").into()),
             }
             index += 2;
@@ -1339,6 +1381,7 @@ impl ConfigureOptions {
             linux_runner_controller,
             descriptor_broker,
             systemd_run,
+            runtime_file_probe,
         })
     }
 }
@@ -1353,29 +1396,7 @@ fn absolute_option_path(option: &str, value: &str) -> FixtureResult<PathBuf> {
 }
 
 fn package_definition(trust_root: &Path, fixture: &Path) -> FixtureResult<CodexPackageDefinition> {
-    let requirements = trust_root.join("requirements.toml");
-    let shell_startup = trust_root.join("shell-startup");
     let fixture_digest = digest_file(fixture)?;
-    let managed_artifacts = CodexManagedArtifacts::new(
-        artifact(&requirements)?,
-        PathBuf::from(REQUIREMENTS_PATH),
-        CodexArtifact::new(fixture.to_path_buf(), fixture_digest.clone())?,
-        PathBuf::from(MANAGED_HOOK_PATH),
-        artifact(&shell_startup)?,
-        PathBuf::from(SHELL_STARTUP_PATH),
-        None,
-        None,
-    )?;
-    let events = vec![
-        CodexHookEventName::SessionStart,
-        CodexHookEventName::UserPromptSubmit,
-        CodexHookEventName::PreToolUse,
-        CodexHookEventName::PermissionRequest,
-        CodexHookEventName::PostToolUse,
-        CodexHookEventName::SubagentStart,
-        CodexHookEventName::SubagentStop,
-        CodexHookEventName::Stop,
-    ];
     CodexPackageDefinition::new(
         FIXTURE_NAME,
         fixture_digest.clone(),
@@ -1388,21 +1409,85 @@ fn package_definition(trust_root: &Path, fixture: &Path) -> FixtureResult<CodexP
                 true,
             )?,
         ],
-        managed_artifacts,
-        CodexHookContract::new(
-            CodexHookShell::Direct,
-            vec![
-                CodexHookExec::InstalledExecutable,
-                CodexHookExec::ManagedHook,
-            ],
-            events,
-            None,
-        )?,
+        fixture_managed_artifacts(trust_root, fixture)?,
+        fixture_hook_contract()?,
     )
     .map_err(Into::into)
 }
 
+fn runtime_file_probe_definition(
+    trust_root: &Path,
+    probe: &Path,
+    name: &str,
+    mode: &str,
+    target: &str,
+) -> FixtureResult<CodexPackageDefinition> {
+    let fixture = trust_root.join(FIXTURE_NAME);
+    CodexPackageDefinition::new(
+        name,
+        digest_file(probe)?,
+        CodexSupportedPlatform::LinuxX86_64,
+        vec![CodexEntrypoint::new(
+            "codex",
+            vec![mode.to_owned(), target.to_owned()],
+            false,
+        )?],
+        fixture_managed_artifacts(trust_root, &fixture)?,
+        fixture_hook_contract()?,
+    )
+    .map_err(Into::into)
+}
+
+fn fixture_managed_artifacts(
+    trust_root: &Path,
+    fixture: &Path,
+) -> FixtureResult<CodexManagedArtifacts> {
+    Ok(CodexManagedArtifacts::new(
+        artifact(&trust_root.join("requirements.toml"))?,
+        PathBuf::from(REQUIREMENTS_PATH),
+        artifact(fixture)?,
+        PathBuf::from(MANAGED_HOOK_PATH),
+        artifact(&trust_root.join("shell-startup"))?,
+        PathBuf::from(SHELL_STARTUP_PATH),
+        None,
+        None,
+    )?)
+}
+
+fn fixture_hook_contract() -> FixtureResult<CodexHookContract> {
+    Ok(CodexHookContract::new(
+        CodexHookShell::Direct,
+        vec![
+            CodexHookExec::InstalledExecutable,
+            CodexHookExec::ManagedHook,
+        ],
+        vec![
+            CodexHookEventName::SessionStart,
+            CodexHookEventName::UserPromptSubmit,
+            CodexHookEventName::PreToolUse,
+            CodexHookEventName::PermissionRequest,
+            CodexHookEventName::PostToolUse,
+            CodexHookEventName::SubagentStart,
+            CodexHookEventName::SubagentStop,
+            CodexHookEventName::Stop,
+        ],
+        None,
+    )?)
+}
+
 fn package_manifest(definition: &CodexPackageDefinition) -> FixtureResult<AgentPackageManifest> {
+    package_manifest_for(
+        FIXTURE_NAME,
+        definition,
+        vec![String::from("codex"), String::from("codex-app-server")],
+    )
+}
+
+fn package_manifest_for(
+    name: &str,
+    definition: &CodexPackageDefinition,
+    entrypoints: Vec<String>,
+) -> FixtureResult<AgentPackageManifest> {
     let descriptor = AgentAdapterDescriptor::codex_v1()?;
     let requirements = definition
         .managed_artifacts()
@@ -1420,10 +1505,10 @@ fn package_manifest(definition: &CodexPackageDefinition) -> FixtureResult<AgentP
         .sha256()
         .clone();
     AgentPackageManifest::with_adapter_and_config(
-        FIXTURE_NAME,
+        name,
         descriptor.id(),
         env!("CARGO_PKG_VERSION"),
-        vec![String::from("codex"), String::from("codex-app-server")],
+        entrypoints,
         ContentDigest::new(descriptor.sha256()?)?,
         definition.canonical_digest()?,
         vec![requirements, hook, startup],
@@ -1466,15 +1551,119 @@ fn root_policy() -> FixtureResult<PolicyPackageRevision> {
                 String::from("terminal.json"),
                 br#"{"rules":[{"id":"fixture-allow-terminal","match":{"surface":"terminal"},"decision":"allow"}]}"#.to_vec(),
             ),
+            (
+                String::from("network.json"),
+                br#"{"rules":[{"id":"fixture-allow-network","match":{"surface":"network"},"decision":"allow"}]}"#.to_vec(),
+            ),
         ]),
         BTreeMap::new(),
         BTreeMap::from([
             (String::from("filesystem.json"), br#"{}"#.to_vec()),
+            (String::from("network.json"), br#"{}"#.to_vec()),
             (String::from("terminal.json"), br#"{}"#.to_vec()),
         ]),
         b"# Deterministic Codex fixture host minimum\n".to_vec(),
     )
     .map_err(Into::into)
+}
+
+fn runtime_policy_packages(trust_root: &Path) -> FixtureResult<PathBuf> {
+    let root = trust_root.join("runtime-interceptor-policies");
+    for (name, denied_class, dynamic) in [
+        ("runtime-allow-all", None, false),
+        ("runtime-deny-exec", Some("process_exec"), false),
+        ("runtime-deny-file-open", Some("file_open"), false),
+        ("runtime-deny-file-read", Some("file_read"), false),
+        ("runtime-deny-file-mutation", Some("file_mutation"), false),
+        ("runtime-deny-socket-connect", Some("socket_connect"), false),
+        ("runtime-dynamic-reject", None, true),
+    ] {
+        write_runtime_policy_package(&root, name, denied_class, dynamic)?;
+    }
+    Ok(root)
+}
+
+fn write_runtime_policy_package(
+    root: &Path,
+    name: &str,
+    denied_class: Option<&str>,
+    dynamic: bool,
+) -> FixtureResult<()> {
+    let package = root.join(name);
+    fs::create_dir_all(package.join("rules"))?;
+    fs::create_dir_all(package.join("examples"))?;
+    fs::create_dir_all(package.join("tests"))?;
+    fs::write(package.join("policy.toml"), format!("name = \"{name}\"\n"))?;
+
+    let decision = |effect_class: &str| {
+        if denied_class == Some(effect_class) {
+            json!({
+                "decision": "deny",
+                "reason": format!("Runtime physical fixture denies {effect_class}")
+            })
+        } else {
+            json!({"decision": "allow"})
+        }
+    };
+    let mut rules = Vec::new();
+    if dynamic {
+        rules.push(json!({
+            "id": "runtime-dynamic-exec",
+            "match": {
+                "surface": "terminal",
+                "action": "process_exec",
+                "command_contains": "runtime-dynamic"
+            },
+            "decision": "deny",
+            "reason": "Runtime physical fixture requires dynamic command matching"
+        }));
+    }
+    for (id, effect_class, surface, action) in [
+        (
+            "runtime-process-exec",
+            "process_exec",
+            "terminal",
+            "process_exec",
+        ),
+        ("runtime-file-open", "file_open", "filesystem", "file_open"),
+        ("runtime-file-read", "file_read", "filesystem", "file_read"),
+        (
+            "runtime-file-mutation",
+            "file_mutation",
+            "filesystem",
+            "file_mutation",
+        ),
+        (
+            "runtime-socket-connect",
+            "socket_connect",
+            "network",
+            "network_request",
+        ),
+    ] {
+        let mut rule = json!({
+            "id": id,
+            "match": {"surface": surface, "action": action}
+        });
+        rule.as_object_mut()
+            .ok_or("runtime fixture rule must be an object")?
+            .extend(
+                decision(effect_class)
+                    .as_object()
+                    .ok_or("runtime fixture decision must be an object")?
+                    .clone(),
+            );
+        rules.push(rule);
+    }
+    fs::write(
+        package.join("rules").join("effects.json"),
+        serde_json::to_vec_pretty(&json!({"rules": rules}))?,
+    )?;
+    fs::write(package.join("tests").join("effects.json"), "{}\n")?;
+    fs::write(
+        package.join("README.md"),
+        format!("# {name}\n\nRuntime Interceptor physical fixture policy.\n"),
+    )?;
+    Ok(())
 }
 
 fn fixture_policy_package(trust_root: &Path) -> FixtureResult<PathBuf> {

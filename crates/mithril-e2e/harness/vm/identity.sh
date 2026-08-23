@@ -36,7 +36,7 @@ mithril_vm_name() {
   [[ $branch_key =~ ^[a-z0-9]+(-[a-z0-9]+)*-[0-9a-f]{12}$ \
     && $process_id =~ ^[1-9][0-9]*$ ]] || return 2
   case "$lane:$node" in
-    s:|n:a|n:b|c:a|c:b) ;;
+    s:|r:|n:a|n:b|c:a|c:b) ;;
     *) return 2 ;;
   esac
   name=mithril-vm-$branch_key-$lane-$process_id

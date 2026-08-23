@@ -9,9 +9,33 @@ trap 'rm -rf -- "$test_root"' EXIT
 for script in "$directory/run.sh" "$directory/two-node-network.sh" \
   "$directory/two-node-convergence.sh" \
   "$directory/manual.sh" "$directory/identity.sh" "$directory/guest.sh" \
-  "$directory/providers/libvirt.sh" "$directory/test.sh"; do
+  "$directory/runtime-interceptor.sh" "$directory/providers/libvirt.sh" \
+  "$directory/test.sh"; do
   bash -n "$script"
 done
+
+runtime_file_probe=$test_root/runtime-file-probe
+runtime_file_target=$test_root/runtime-file-target
+cc -nostdlib -static -no-pie -Wl,--build-id=none -Wl,-z,noexecstack \
+  -Wl,-T,"$directory/runtime-file-probe.ld" \
+  "$directory/runtime-file-probe.S" -o "$runtime_file_probe"
+file "$runtime_file_probe" | grep -q 'statically linked'
+! readelf -l "$runtime_file_probe" | grep -q ' INTERP '
+[[ $(readelf -lW "$runtime_file_probe" \
+  | awk '$1 == "LOAD" { print $7 }') == E ]]
+printf '%s' runtime-target >"$runtime_file_target"
+[[ $($runtime_file_probe open "$runtime_file_target") == \
+  runtime-file-open-succeeded ]]
+[[ $(printf r | "$runtime_file_probe" read "$runtime_file_target") == \
+  runtime-file-read-succeeded ]]
+printf '%s' mutation-sentinel >"$runtime_file_target"
+[[ $("$runtime_file_probe" mutation "$runtime_file_target") == \
+  runtime-file-mutation-succeeded ]]
+[[ $(<"$runtime_file_target") == Xutation-sentinel ]]
+runtime_file_pty_output=$(printf 'r\n' | script -qefc \
+  "stty rows 24 cols 80; exec $runtime_file_probe read $runtime_file_target" \
+  /dev/null)
+[[ $runtime_file_pty_output == *runtime-file-read-succeeded* ]]
 
 . "$directory/identity.sh"
 repo_root=$(cd -- "$directory/../../../.." && pwd)
@@ -23,11 +47,13 @@ branch_key=$(mithril_vm_branch_key "$branch_name")
 long_key=$(mithril_vm_branch_key \
   feature/this-is-a-very-long-branch-name-that-must-not-reach-the-hostname-limit)
 single_name=$(mithril_vm_name "$long_key" s 4194304)
+runtime_name=$(mithril_vm_name "$long_key" r 4194304)
 network_a=$(mithril_vm_name "$long_key" n 4194304 a)
 network_b=$(mithril_vm_name "$long_key" n 4194304 b)
 convergence_a=$(mithril_vm_name "$long_key" c 4194304 a)
-[[ ${#single_name} -le 63 && ${#network_a} -le 63 ]]
-[[ $single_name != "$network_a" && $network_a != "$network_b" &&
+[[ ${#single_name} -le 63 && ${#runtime_name} -le 63 && ${#network_a} -le 63 ]]
+[[ $single_name != "$runtime_name" && $runtime_name != "$network_a" &&
+   $network_a != "$network_b" &&
    $network_a != "$convergence_a" ]]
 if mithril_vm_name "$long_key" invalid 4194304 >/dev/null; then
   echo "invalid VM lanes must fail" >&2
@@ -37,6 +63,7 @@ fi
 help=$("$directory/run.sh" --help 2>&1)
 [[ $help == *--with-k3s* ]]
 [[ $help == *--skip-administrative-exec* ]]
+[[ $help == *--runtime-interceptor* ]]
 [[ $help == *--keep-vm* ]]
 [[ $help == *--manual* ]]
 "$directory/guest.sh" --help >/dev/null 2>&1
@@ -115,6 +142,13 @@ skip_without_k3s=$("$directory/run.sh" --skip-administrative-exec 2>&1)
 status=$?
 set -e
 [[ $status -eq 2 && $skip_without_k3s == "--skip-administrative-exec requires --with-k3s" ]]
+
+set +e
+runtime_with_k3s=$("$directory/run.sh" --runtime-interceptor --with-k3s 2>&1)
+status=$?
+set -e
+[[ $status -eq 2 && $runtime_with_k3s == \
+  "--runtime-interceptor cannot run with --with-k3s or --manual" ]]
 
 fake_provider=$test_root/provider
 printf '%s\n' '#!/usr/bin/env bash' \

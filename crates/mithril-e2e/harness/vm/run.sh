@@ -13,11 +13,12 @@ with_k3s=false
 keep_vm=false
 skip_administrative_exec=false
 manual_vm=false
+runtime_interceptor=false
 k3s_version=${MITHRIL_VM_K3S_VERSION:-v1.35.5+k3s1}
 source_mount=${MITHRIL_VM_SOURCE_MOUNT:-}
 
 usage() {
-  echo "usage: $0 [--provider PATH] [--output-directory PATH] [--with-k3s] [--skip-administrative-exec] [--keep-vm] [--manual]" >&2
+  echo "usage: $0 [--provider PATH] [--output-directory PATH] [--with-k3s] [--skip-administrative-exec] [--runtime-interceptor] [--keep-vm] [--manual]" >&2
 }
 
 while (($#)); do
@@ -38,6 +39,10 @@ while (($#)); do
       ;;
     --skip-administrative-exec)
       skip_administrative_exec=true
+      shift
+      ;;
+    --runtime-interceptor)
+      runtime_interceptor=true
       shift
       ;;
     --keep-vm)
@@ -64,6 +69,10 @@ done
 
 [[ $skip_administrative_exec == false || $with_k3s == true ]] || {
   echo "--skip-administrative-exec requires --with-k3s" >&2
+  exit 2
+}
+[[ $runtime_interceptor == false || $with_k3s == false ]] || {
+  echo "--runtime-interceptor cannot run with --with-k3s or --manual" >&2
   exit 2
 }
 [[ -x $provider ]] || {
@@ -106,7 +115,9 @@ fi
 mkdir -p -- "$output_directory"
 output_directory=$(cd -- "$output_directory" && pwd)
 
-vm_name=$(mithril_vm_name "$branch_key" s "$$")
+vm_lane=s
+[[ $runtime_interceptor == false ]] || vm_lane=r
+vm_name=$(mithril_vm_name "$branch_key" "$vm_lane" "$$")
 work_directory=$(mktemp -d /tmp/mithril-vm-test.XXXXXX)
 export MITHRIL_VM_KNOWN_HOSTS=${MITHRIL_VM_KNOWN_HOSTS:-$work_directory/known_hosts}
 ssh_user=${MITHRIL_VM_SSH_USER:-ubuntu}
@@ -156,6 +167,32 @@ if [[ $manual_vm == true ]]; then
   (cd -- "$repo_root" && cargo build --locked \
     -p mithril-node --bin mithril-node --bin mithril-inspect \
     -p mithril-control --bin mithril-policy)
+elif [[ $runtime_interceptor == true ]]; then
+  echo "Building the Runtime Interceptor physical-proof artifacts"
+  (cd -- "$repo_root" && cargo build --locked \
+    -p erebor-runtime-cli --bin erebor \
+    -p erebor-runtime-daemon --bin erebord --bin erebor-path-broker \
+    -p erebor-runtime-session --bin erebor-linux-session-controller \
+    -p erebor-runtime-e2e --bin codex-v1-fixture)
+  runtime_file_probe=$work_directory/runtime-file-probe
+  cc -nostdlib -static -no-pie -Wl,--build-id=none -Wl,-z,noexecstack \
+    -Wl,-T,"$directory/runtime-file-probe.ld" \
+    "$directory/runtime-file-probe.S" -o "$runtime_file_probe"
+  file "$runtime_file_probe" | grep -q 'statically linked'
+  if readelf -l "$runtime_file_probe" | grep -q ' INTERP '; then
+    echo "Runtime file probe has a dynamic program interpreter" >&2
+    exit 1
+  fi
+  [[ $(readelf -lW "$runtime_file_probe" \
+    | awk '$1 == "LOAD" { print $7 }') == E ]]
+  runtime_source_state=$work_directory/runtime-source-state
+  source_commit=$(git -C "$repo_root" rev-parse HEAD)
+  [[ $source_commit =~ ^[0-9a-f]{40}$ ]]
+  source_dirty=false
+  [[ -z $(git -C "$repo_root" status --porcelain=v1 --untracked-files=all) ]] || \
+    source_dirty=true
+  printf 'source_commit=%s\nsource_dirty=%s\n' \
+    "$source_commit" "$source_dirty" >"$runtime_source_state"
 else
   echo "Building the repository-owned physical probes and platform inspector"
   (cd -- "$repo_root" && cargo build --locked -p mithril-e2e \
@@ -178,6 +215,41 @@ created=true
 remote_root=/var/tmp/$vm_name
 remote_source=$remote_root/source
 remote_bin=$remote_root/bin
+if [[ $runtime_interceptor == true ]]; then
+  remote_runtime=$remote_root/runtime-interceptor
+  remote_result=$remote_runtime/runtime-interceptor-physical-proof.json
+  "$provider" run "$vm_name" \
+    'sudo apt-get update && sudo apt-get install -y --no-install-recommends bubblewrap git iproute2 libostree-1-1 passwd python3 util-linux'
+  "$provider" run "$vm_name" mkdir -p "$remote_runtime/bin" "$remote_runtime/scripts"
+  for binary in \
+    erebor erebord erebor-path-broker erebor-linux-session-controller \
+    codex-v1-fixture; do
+    "$provider" put "$vm_name" "$repo_root/target/debug/$binary" \
+      "$remote_runtime/bin/$binary"
+  done
+  "$provider" put "$vm_name" "$runtime_file_probe" \
+    "$remote_runtime/bin/runtime-file-probe"
+  "$provider" put "$vm_name" "$runtime_source_state" \
+    "$remote_runtime/source-state"
+  "$provider" put "$vm_name" "$repo_root/packaging/systemd/erebord.service" \
+    "$remote_runtime/erebord.service"
+  "$provider" put "$vm_name" \
+    "$repo_root/.github/scripts/daemon-systemd-control-plane.sh" \
+    "$remote_runtime/scripts/daemon-systemd-control-plane.sh"
+  "$provider" put "$vm_name" "$directory/runtime-interceptor.sh" \
+    "$remote_runtime/scripts/runtime-interceptor.sh"
+  runtime_partial=$output_directory/runtime-interceptor-physical-proof.json.partial
+  "$provider" run "$vm_name" sudo bash \
+    "$remote_runtime/scripts/runtime-interceptor.sh" install-and-run \
+    "$remote_runtime" "/sys/fs/bpf/$vm_name-runtime" "$remote_result" \
+    "$keep_vm"
+  "$provider" get "$vm_name" "$remote_result" "$runtime_partial"
+  python3 -m json.tool "$runtime_partial" >/dev/null
+  mv -- "$runtime_partial" \
+    "$output_directory/runtime-interceptor-physical-proof.json"
+  echo "Runtime Interceptor VM proof passed. Evidence: $output_directory"
+  exit 0
+fi
 if [[ $manual_vm == true ]]; then
   "$provider" run "$vm_name" mkdir -p "$remote_root"
   "$provider" run "$vm_name" test -x \
