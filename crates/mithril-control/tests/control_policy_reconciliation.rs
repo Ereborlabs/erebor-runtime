@@ -186,6 +186,22 @@ fn two_node_inventory_for_resource(
     Ok(vec![node_a, node_b])
 }
 
+fn two_workload_inventory_for_resource(
+    resource: &WorkloadProtectionPolicy,
+) -> TestResult<Vec<WorkloadTargetFactV1>> {
+    let first = inventory_for_resource(resource, &"1".repeat(64))?.remove(0);
+    let mut second = first.clone();
+    second.execution_set_id = "44444444-4444-4444-8444-444444444445".to_owned();
+    second.pod_uid = "99999999-9999-4999-8999-999999999998".to_owned();
+    second.container_id = "containerd://converter-b".to_owned();
+    if let Some(identity) = second.kubernetes.as_mut() {
+        identity.pod_name = "converter-pod-b".to_owned();
+        identity.binding_id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaab".to_owned();
+    }
+    second.workload_binding_generation_digest = workload_target_fact_digest(&second)?;
+    Ok(vec![first, second])
+}
+
 fn acknowledgement(
     bundle: &PolicyBundleV1,
     state: PolicyActivationStateV1,
@@ -786,6 +802,186 @@ fn bound_inventory_change_reconciles_without_a_policy_source_change() -> TestRes
     assert_eq!(
         node_b.candidate.operation,
         PolicyDeliveryOperationV1::Activate
+    );
+    Ok(())
+}
+
+#[test]
+fn removed_node_gets_one_atomic_restrictive_retirement() -> TestResult {
+    let directory = TempDir::new()?;
+    let store = ControlStore::open(directory.path())?;
+    let owner = make_owner(store.clone());
+    let policy = policy()?;
+    let resource = resource(&policy, "profile", OBJECT_UID, 1, false)?;
+    let inventory = two_node_inventory_for_resource(&resource)?;
+    let first = owner.reconcile(&resource, NAMESPACE_UID, &inventory, NOW)?;
+    let first_by_node = first
+        .bundles
+        .iter()
+        .map(|bundle| (bundle.candidate.exact_target.node_id.as_str(), bundle))
+        .collect::<BTreeMap<_, _>>();
+    let commit_before_shrink = store.commit_index();
+
+    let shrunk = owner.reconcile(
+        &resource,
+        NAMESPACE_UID,
+        std::slice::from_ref(&inventory[0]),
+        NOW + 1,
+    )?;
+
+    assert_eq!(store.commit_index(), commit_before_shrink + 1);
+    assert_eq!(shrunk.source_revision.state, PolicySourceStateV1::Accepted);
+    assert_eq!(shrunk.target_snapshot.targets.len(), 1);
+    assert_eq!(shrunk.bundles.len(), 1);
+    assert_eq!(shrunk.retirement_bundles.len(), 1);
+    assert_eq!(shrunk.retirement_rollout_states.len(), 1);
+    let retirement = &shrunk.retirement_bundles[0];
+    let prior = first_by_node
+        .get("node-b")
+        .ok_or("the initial rollout has no node-b bundle")?;
+    assert_eq!(
+        retirement.candidate.operation,
+        PolicyDeliveryOperationV1::RetireToRestrictiveTerminal
+    );
+    assert_eq!(
+        retirement.candidate.exact_target,
+        prior.candidate.exact_target
+    );
+    assert_eq!(
+        retirement
+            .candidate
+            .predecessor_candidate_content_id
+            .as_deref(),
+        Some(prior.candidate.candidate_content_id.as_str())
+    );
+    assert_eq!(retirement.candidate.expires_utc_ns, i64::MAX);
+    assert!(retirement
+        .profile_artifact
+        .policy_document
+        .file_exception_grants
+        .is_empty());
+    assert_eq!(shrunk.status.rollout.desired, 2);
+    assert_eq!(shrunk.status.rollout.updating, 2);
+    let delivered = store
+        .next_bundle_for_node("node-b", std::slice::from_ref(&prior.bundle_digest))?
+        .ok_or("the removed node has no retirement candidate")?;
+    assert_eq!(delivered, *retirement);
+    Ok(())
+}
+
+#[test]
+fn same_node_partial_removal_uses_one_exact_replacement() -> TestResult {
+    let directory = TempDir::new()?;
+    let store = ControlStore::open(directory.path())?;
+    let owner = make_owner(store);
+    let policy = policy()?;
+    let resource = resource(&policy, "profile", OBJECT_UID, 1, false)?;
+    let inventory = two_workload_inventory_for_resource(&resource)?;
+    let first = owner.reconcile(&resource, NAMESPACE_UID, &inventory, NOW)?;
+    assert_eq!(
+        first.bundles[0]
+            .candidate
+            .exact_target
+            .workload_targets
+            .len(),
+        2
+    );
+
+    let shrunk = owner.reconcile(
+        &resource,
+        NAMESPACE_UID,
+        std::slice::from_ref(&inventory[0]),
+        NOW + 1,
+    )?;
+
+    assert!(shrunk.retirement_bundles.is_empty());
+    assert_eq!(shrunk.bundles.len(), 1);
+    assert_eq!(
+        shrunk.bundles[0].candidate.operation,
+        PolicyDeliveryOperationV1::Replace
+    );
+    assert_eq!(
+        shrunk.bundles[0]
+            .candidate
+            .exact_target
+            .workload_binding_generation_digests,
+        vec![inventory[0].workload_binding_generation_digest.clone()]
+    );
+    assert!(
+        shrunk.bundles[0].profile_artifact.header.issuer_sequence
+            > first.bundles[0].profile_artifact.header.issuer_sequence
+    );
+    Ok(())
+}
+
+#[test]
+fn empty_target_retirement_replays_idempotently_and_readd_advances_issuer() -> TestResult {
+    let directory = TempDir::new()?;
+    let store = ControlStore::open(directory.path())?;
+    let owner = make_owner(store.clone());
+    let policy = policy()?;
+    let resource = resource(&policy, "profile", OBJECT_UID, 1, false)?;
+    let inventory = inventory_for_resource(&resource, &"1".repeat(64))?;
+    let first = owner.reconcile(&resource, NAMESPACE_UID, &inventory, NOW)?;
+    let first_bundle = first.bundles[0].clone();
+
+    let emptied = owner.reconcile(&resource, NAMESPACE_UID, &[], NOW + 1)?;
+    assert!(emptied.target_snapshot.targets.is_empty());
+    assert!(emptied.bundles.is_empty());
+    assert_eq!(emptied.retirement_bundles.len(), 1);
+    let retirement = emptied.retirement_bundles[0].clone();
+    let committed = store.commit_index();
+    drop(owner);
+    drop(store);
+
+    let reopened = ControlStore::open(directory.path())?;
+    let restarted = make_owner(reopened.clone());
+    let replayed = restarted.reconcile(&resource, NAMESPACE_UID, &[], NOW + 2)?;
+    assert_eq!(reopened.commit_index(), committed);
+    assert_eq!(replayed.target_snapshot, emptied.target_snapshot);
+    assert_eq!(replayed.retirement_bundles, vec![retirement.clone()]);
+    assert_eq!(
+        reopened
+            .next_bundle_for_node("node-a", std::slice::from_ref(&first_bundle.bundle_digest),)?,
+        Some(retirement.clone())
+    );
+
+    restarted.rollout_owner().acknowledge(acknowledgement(
+        &retirement,
+        PolicyActivationStateV1::Active,
+        NOW + 3,
+    )?)?;
+    let settled = restarted.reconcile(&resource, NAMESPACE_UID, &[], NOW + 4)?;
+    assert!(settled.retirement_bundles.is_empty());
+    assert_eq!(settled.status.rollout.total(), 0);
+    assert!(settled.status.conditions.iter().any(|condition| {
+        condition.condition_type == "Available"
+            && condition.status == KubernetesConditionStatusV1::True
+    }));
+
+    let readded = restarted.reconcile(&resource, NAMESPACE_UID, &inventory, NOW + 5)?;
+    assert!(readded.retirement_bundles.is_empty());
+    assert_eq!(readded.bundles.len(), 1);
+    let active = &readded.bundles[0];
+    assert_eq!(
+        active.candidate.operation,
+        PolicyDeliveryOperationV1::Replace
+    );
+    assert_eq!(
+        active.candidate.predecessor_candidate_content_id.as_deref(),
+        Some(retirement.candidate.candidate_content_id.as_str())
+    );
+    assert!(
+        active.profile_artifact.header.issuer_sequence
+            > retirement.profile_artifact.header.issuer_sequence
+    );
+    assert_eq!(
+        active.profile_artifact.policy_document,
+        lower_kubernetes_policy(&resource, TENANT_ID, CLUSTER_UID, NAMESPACE_UID,)?
+    );
+    assert_eq!(
+        reopened.next_bundle_for_node("node-a", std::slice::from_ref(&retirement.bundle_digest),)?,
+        Some(active.clone())
     );
     Ok(())
 }

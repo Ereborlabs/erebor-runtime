@@ -107,6 +107,8 @@ pub struct PolicyReconcileResultV1 {
     pub target_snapshot: PolicyTargetSnapshotV1,
     pub bundles: Vec<PolicyBundleV1>,
     pub rollout_states: Vec<PolicyRolloutStateV1>,
+    pub retirement_bundles: Vec<PolicyBundleV1>,
+    pub retirement_rollout_states: Vec<PolicyRolloutStateV1>,
     pub status: WorkloadProtectionPolicyStatusV1,
 }
 
@@ -330,6 +332,47 @@ impl PolicyDesiredStateOwner {
         result
     }
 
+    fn compile_artifact_after(
+        &self,
+        document: &PolicyDocumentV1,
+        predecessor: Option<&ProfileCandidateArtifactV1>,
+    ) -> Result<ProfileCandidateArtifactV1> {
+        let compiled = match self.compiler.compile(document) {
+            Ok(compiled) => {
+                let mut state = self.state()?;
+                state.successful_compiles = state.successful_compiles.saturating_add(1);
+                compiled
+            }
+            Err(error) => {
+                let mut state = self.state()?;
+                state.failed_compiles = state.failed_compiles.saturating_add(1);
+                return Err(error);
+            }
+        };
+        let mut seal_request = (*self.seal_request).clone();
+        let durable_next = self.store.next_policy_issuer_sequence(
+            &seal_request.signing_key_id,
+            seal_request.sequence_epoch,
+            seal_request.issuer_sequence,
+        )?;
+        seal_request.issuer_sequence = predecessor.map_or(Ok(durable_next), |artifact| {
+            artifact
+                .header
+                .issuer_sequence
+                .checked_add(1)
+                .map(|next| durable_next.max(next))
+                .ok_or_else(|| {
+                    PolicyValidationSnafu {
+                        policy_id: document.profile_id(),
+                        code: "CFG_POLICY_ISSUER_SEQUENCE",
+                        reason: "the policy-issuer sequence is exhausted".to_owned(),
+                    }
+                    .build()
+                })
+        })?;
+        ProfileCandidateArtifactV1::sign(document, compiled, seal_request, &self.signing_key)
+    }
+
     fn reconcile_inner(
         &self,
         source: PolicySourceRevisionV1,
@@ -397,30 +440,7 @@ impl PolicyDesiredStateOwner {
         {
             artifact
         } else {
-            let compiled = match self.compiler.compile(&artifact_document) {
-                Ok(compiled) => {
-                    let mut state = self.state()?;
-                    state.successful_compiles = state.successful_compiles.saturating_add(1);
-                    compiled
-                }
-                Err(error) => {
-                    let mut state = self.state()?;
-                    state.failed_compiles = state.failed_compiles.saturating_add(1);
-                    return Err(error);
-                }
-            };
-            let mut seal_request = (*self.seal_request).clone();
-            seal_request.issuer_sequence = self.store.next_policy_issuer_sequence(
-                &seal_request.signing_key_id,
-                seal_request.sequence_epoch,
-                seal_request.issuer_sequence,
-            )?;
-            ProfileCandidateArtifactV1::sign(
-                &artifact_document,
-                compiled,
-                seal_request,
-                &self.signing_key,
-            )?
+            self.compile_artifact_after(&artifact_document, None)?
         };
         // Promote the source and its signed artifact in one durable transaction.
         self.store.accept_compiled_source_revision(
@@ -428,6 +448,10 @@ impl PolicyDesiredStateOwner {
             policy.clone(),
             artifact.clone(),
         )?;
+        if source.state == PolicySourceStateV1::Accepted {
+            return self
+                .reconcile_accepted_target_set(source, policy, targets, artifact, now_utc_ns);
+        }
         let artifact_bytes = serde_json::to_vec(&artifact).map_err(|error| {
             PolicyValidationSnafu {
                 policy_id: policy.profile_id(),
@@ -471,6 +495,161 @@ impl PolicyDesiredStateOwner {
             target_snapshot: snapshot,
             bundles,
             rollout_states,
+            retirement_bundles: Vec::new(),
+            retirement_rollout_states: Vec::new(),
+            status,
+        };
+        self.state()?.reconciled.insert(
+            result.source_revision.policy_source_revision_id.clone(),
+            result.clone(),
+        );
+        Ok(result)
+    }
+
+    fn reconcile_accepted_target_set(
+        &self,
+        source: PolicySourceRevisionV1,
+        policy: &PolicyDocumentV1,
+        targets: Vec<PolicyTargetV1>,
+        stored_artifact: ProfileCandidateArtifactV1,
+        now_utc_ns: i64,
+    ) -> Result<PolicyReconcileResultV1> {
+        let previous_snapshot = self
+            .store
+            .latest_snapshot_for_source(&source.policy_source_revision_id)?;
+        let targets_changed = previous_snapshot
+            .as_ref()
+            .is_some_and(|snapshot| snapshot.targets != targets);
+        // A target-only replacement needs a newer signed artifact for node anti-rollback.
+        let refreshed_active_artifact = (targets_changed && !targets.is_empty())
+            .then(|| self.compile_artifact_after(policy, None))
+            .transpose()?;
+        let active_artifact = refreshed_active_artifact
+            .as_ref()
+            .unwrap_or(&stored_artifact);
+        let active_digest = sha256(&serde_json::to_vec(active_artifact).map_err(|error| {
+            PolicyValidationSnafu {
+                policy_id: policy.profile_id(),
+                code: "CFG_POLICY_ARTIFACT",
+                reason: format!("the signed profile artifact cannot be encoded: {error}"),
+            }
+            .build()
+        })?);
+        let desired_snapshot = PolicyTargetSnapshotV1::new(
+            source.policy_source_revision_id.clone(),
+            active_digest,
+            policy.rollout.rollout_generation,
+            targets,
+        )?;
+        let desired_nodes = desired_snapshot
+            .targets
+            .iter()
+            .map(|target| target.node_id.as_str())
+            .collect::<BTreeSet<_>>();
+        let previous_heads = self.store.latest_bundles_for_object(&source.object_uid)?;
+        let mut retirement_targets = previous_heads
+            .iter()
+            .filter(|bundle| {
+                !desired_nodes.contains(bundle.candidate.exact_target.node_id.as_str())
+                    && bundle.candidate.operation
+                        != PolicyDeliveryOperationV1::RetireToRestrictiveTerminal
+            })
+            .map(|bundle| bundle.candidate.exact_target.clone())
+            .collect::<Vec<_>>();
+        retirement_targets.sort();
+        retirement_targets.dedup();
+
+        let desired_is_current = previous_snapshot.as_ref() == Some(&desired_snapshot);
+        let (desired_bundles, desired_states) = if desired_is_current {
+            (
+                self.store
+                    .bundles_for_snapshot(&desired_snapshot.target_snapshot_digest)?,
+                self.store
+                    .rollout_states_for_snapshot(&desired_snapshot.target_snapshot_digest)?,
+            )
+        } else {
+            self.rollout.build(
+                &source,
+                &desired_snapshot,
+                active_artifact,
+                &self.signing_key.verifying_key().to_bytes(),
+                now_utc_ns,
+                false,
+            )?
+        };
+
+        if !desired_is_current || !retirement_targets.is_empty() {
+            let retirement = if retirement_targets.is_empty() {
+                None
+            } else {
+                let terminal_document = restrictive_terminal_document(policy);
+                let terminal_artifact =
+                    self.compile_artifact_after(&terminal_document, Some(active_artifact))?;
+                let terminal_digest =
+                    sha256(&serde_json::to_vec(&terminal_artifact).map_err(|error| {
+                        PolicyValidationSnafu {
+                            policy_id: policy.profile_id(),
+                            code: "CFG_POLICY_ARTIFACT",
+                            reason: format!("the restrictive artifact cannot be encoded: {error}"),
+                        }
+                        .build()
+                    })?);
+                let snapshot = PolicyTargetSnapshotV1::new(
+                    source.policy_source_revision_id.clone(),
+                    terminal_digest,
+                    policy.rollout.rollout_generation,
+                    retirement_targets,
+                )?;
+                let (bundles, states) = self.rollout.build(
+                    &source,
+                    &snapshot,
+                    &terminal_artifact,
+                    &self.signing_key.verifying_key().to_bytes(),
+                    now_utc_ns,
+                    true,
+                )?;
+                Some((snapshot, bundles, states))
+            };
+            self.store.reconcile_target_set(
+                desired_snapshot.clone(),
+                desired_bundles.clone(),
+                desired_states.clone(),
+                retirement,
+                refreshed_active_artifact,
+            )?;
+        }
+
+        let mut retirement_bundles = Vec::new();
+        let mut retirement_states = Vec::new();
+        for bundle in self.store.latest_bundles_for_object(&source.object_uid)? {
+            if desired_nodes.contains(bundle.candidate.exact_target.node_id.as_str())
+                || bundle.candidate.operation
+                    != PolicyDeliveryOperationV1::RetireToRestrictiveTerminal
+            {
+                continue;
+            }
+            let Some(state) = self.store.rollout_state(
+                &bundle.candidate.candidate_content_id,
+                &bundle.candidate.exact_target.node_id,
+            )?
+            else {
+                continue;
+            };
+            if state.state != PolicyRolloutStatusV1::Active {
+                retirement_bundles.push(bundle);
+                retirement_states.push(state);
+            }
+        }
+        let mut status_states = desired_states.clone();
+        status_states.extend(retirement_states.iter().cloned());
+        let status = status_for(&source, &status_states, None, now_utc_ns);
+        let result = PolicyReconcileResultV1 {
+            source_revision: source,
+            target_snapshot: desired_snapshot,
+            bundles: desired_bundles,
+            rollout_states: desired_states,
+            retirement_bundles,
+            retirement_rollout_states: retirement_states,
             status,
         };
         self.state()?.reconciled.insert(
@@ -698,19 +877,46 @@ impl PolicyRolloutOwner {
         public_key: Vec<u8>,
         now_utc_ns: i64,
     ) -> Result<(Vec<PolicyBundleV1>, Vec<PolicyRolloutStateV1>)> {
+        let result = self.build(
+            source,
+            &snapshot,
+            &artifact,
+            &public_key,
+            now_utc_ns,
+            source.state == PolicySourceStateV1::DeletionRequested,
+        )?;
+        self.store
+            .create_rollout(snapshot, result.0.clone(), result.1.clone())?;
+        Ok(result)
+    }
+
+    fn build(
+        &self,
+        source: &PolicySourceRevisionV1,
+        snapshot: &PolicyTargetSnapshotV1,
+        artifact: &ProfileCandidateArtifactV1,
+        public_key: &[u8],
+        now_utc_ns: i64,
+        retirement: bool,
+    ) -> Result<(Vec<PolicyBundleV1>, Vec<PolicyRolloutStateV1>)> {
         let mut bundles = Vec::with_capacity(snapshot.targets.len());
         let mut rollout_states = Vec::with_capacity(snapshot.targets.len());
-        let valid_until_utc_ns = now_utc_ns
-            .checked_add(self.candidate_validity_ns)
-            .ok_or_else(|| {
-                PolicyValidationSnafu {
-                    policy_id: &source.policy_source_revision_id,
-                    code: "CFG_POLICY_CANDIDATE_VALIDITY",
-                    reason: "the candidate validity interval exceeds the signed time range"
-                        .to_owned(),
-                }
-                .build()
-            })?;
+        let valid_until_utc_ns = if retirement {
+            // A restrictive terminal remains safe and deliverable while its old node is offline.
+            i64::MAX
+        } else {
+            now_utc_ns
+                .checked_add(self.candidate_validity_ns)
+                .ok_or_else(|| {
+                    PolicyValidationSnafu {
+                        policy_id: &source.policy_source_revision_id,
+                        code: "CFG_POLICY_CANDIDATE_VALIDITY",
+                        reason: "the candidate validity interval exceeds the signed time range"
+                            .to_owned(),
+                    }
+                    .build()
+                })?
+        };
         for target in &snapshot.targets {
             // Distribution ordering is per node and profile, separate from issuer ordering.
             let sequence = self.store.next_distribution_sequence(
@@ -730,7 +936,7 @@ impl PolicyRolloutOwner {
                     &artifact.policy_document.metadata.profile_id,
                 )?
                 .map(|bundle| bundle.candidate.candidate_content_id);
-            let operation = if source.state == PolicySourceStateV1::DeletionRequested {
+            let operation = if retirement {
                 PolicyDeliveryOperationV1::RetireToRestrictiveTerminal
             } else if predecessor.is_some() {
                 PolicyDeliveryOperationV1::Replace
@@ -741,7 +947,7 @@ impl PolicyRolloutOwner {
                 source.tenant_id.clone(),
                 source.policy_source_revision_id.clone(),
                 snapshot.signed_profile_digest.clone(),
-                &snapshot,
+                snapshot,
                 target.clone(),
                 operation,
                 predecessor,
@@ -756,7 +962,7 @@ impl PolicyRolloutOwner {
             bundles.push(PolicyBundleV1::new(
                 candidate,
                 artifact.clone(),
-                public_key.clone(),
+                public_key.to_vec(),
             )?);
             rollout_states.push(PolicyRolloutStateV1 {
                 policy_source_revision_id: source.policy_source_revision_id.clone(),
@@ -769,8 +975,6 @@ impl PolicyRolloutOwner {
                 updated_utc_ns: now_utc_ns,
             });
         }
-        self.store
-            .create_rollout(snapshot, bundles.clone(), rollout_states.clone())?;
         Ok((bundles, rollout_states))
     }
 
@@ -1275,7 +1479,7 @@ fn status_for(
     // Status summarizes durable per-target state. It never grants rollout authority.
     let counts = PolicyRolloutCountsV1::from_states(states);
     let retiring = source.state == PolicySourceStateV1::DeletionRequested;
-    let available = counts.total() > 0 && counts.active == counts.total();
+    let available = counts.active == counts.total() && (!retiring || counts.total() > 0);
     let degraded = degraded_reason.is_some() || counts.failed > 0;
     let progressing = !available && !retiring;
     let condition = |condition, status, reason, message| {
