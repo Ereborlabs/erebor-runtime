@@ -235,7 +235,11 @@ fn exception_acknowledgement(
         candidate_content_id: candidate.candidate_content_id.clone(),
         exception_source_revision_id: candidate.exception_source_revision_id.clone(),
         state,
-        consumed_uses: 0,
+        consumed_uses: if state == ExceptionActivationStateV1::Consumed {
+            candidate.maximum_uses
+        } else {
+            0
+        },
         transition_version,
         observed_utc_ns,
         reason_code: rejected.then(|| "EXCEPTION_REJECTED".to_owned()),
@@ -389,6 +393,64 @@ fn exception_is_bounded_to_one_active_container_and_replays_revocation() -> Test
     drop(restarted);
     drop(reopened);
     assert!(ControlStore::open(directory.path()).is_ok());
+    Ok(())
+}
+
+#[test]
+fn terminal_exception_does_not_block_a_new_bounded_instance() -> TestResult {
+    let directory = TempDir::new()?;
+    let store = ControlStore::open(directory.path())?;
+    let owner = make_owner(store);
+    let policy = policy()?;
+    let policy_resource = resource(&policy, "profile", OBJECT_UID, 1, false)?;
+    let initial = owner.reconcile(
+        &policy_resource,
+        NAMESPACE_UID,
+        &inventory(&"1".repeat(64)),
+        NOW,
+    )?;
+    let profile_id = &initial.bundles[0]
+        .profile_artifact
+        .policy_document
+        .metadata
+        .profile_id;
+    let inventory = kubernetes_inventory(
+        &initial.source_revision.policy_source_revision_id,
+        profile_id,
+    )?;
+    let bound = owner.reconcile(&policy_resource, NAMESPACE_UID, &inventory, NOW + 1)?;
+    owner.rollout_owner().acknowledge(acknowledgement(
+        &bound.bundles[0],
+        PolicyActivationStateV1::Active,
+        NOW + 2,
+    )?)?;
+
+    let first = owner.reconcile_exception(
+        &exception_resource(EXCEPTION_UID, false)?,
+        NAMESPACE_UID,
+        &inventory,
+        NOW + 3,
+    )?;
+    owner
+        .rollout_owner()
+        .acknowledge_exception(exception_acknowledgement(
+            &first.candidate,
+            ExceptionActivationStateV1::Consumed,
+            1,
+            NOW + 4,
+        )?)?;
+
+    let mut next_resource = exception_resource("30000000-0000-4000-8000-000000000003", false)?;
+    next_resource.metadata.name = Some("temporary-file-access-next".to_owned());
+    let next = owner.reconcile_exception(&next_resource, NAMESPACE_UID, &inventory, NOW + 5)?;
+    assert_eq!(
+        next.rollout_state.state,
+        mithril_control::WorkloadProtectionExceptionStateV1::Pending
+    );
+    assert_ne!(
+        next.candidate.exception_instance_id,
+        first.candidate.exception_instance_id
+    );
     Ok(())
 }
 

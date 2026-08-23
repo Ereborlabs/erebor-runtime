@@ -2318,9 +2318,21 @@ fn validate_exception_desired(
                 })
                 .is_some_and(|existing| {
                     state.exception_candidates.values().any(|prior| {
+                        let rollout = state.exception_rollout_states.get(&PolicyRolloutKeyV1 {
+                            candidate_content_id: prior.candidate_content_id.clone(),
+                            node_id: prior.exact_target.node_id.clone(),
+                        });
+                        // Only pending and active candidates still carry usable authority.
                         prior.exception_source_revision_id == existing.exception_source_revision_id
                             && prior.exact_target.workload_binding_generation_digest
                                 == candidate.exact_target.workload_binding_generation_digest
+                            && rollout.is_some_and(|rollout| {
+                                matches!(
+                                    rollout.state,
+                                    crate::WorkloadProtectionExceptionStateV1::Pending
+                                        | crate::WorkloadProtectionExceptionStateV1::Active
+                                )
+                            })
                     })
                 })
         });
