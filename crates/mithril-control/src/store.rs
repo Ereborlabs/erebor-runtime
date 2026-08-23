@@ -14,10 +14,10 @@ use crate::{
     EvidenceStoreOutcomeV1, ExceptionActivationAcknowledgementV1, ExceptionActivationStateV1,
     ExceptionDeliveryCandidateV1, ExceptionDeliveryOperationV1, ExceptionRolloutStateV1,
     ExceptionSourceRevisionV1, ExceptionSourceStateV1, IntakeStateV1,
-    PolicyActivationAcknowledgementV1, PolicyBundleV1, PolicyDocumentV1, PolicyRolloutStateV1,
-    PolicySourceRevisionV1, PolicySourceStateV1, PolicyTargetSnapshotV1,
-    ProfileCandidateArtifactV1, Result, StoredCoverageReportV1, StoredEvidenceBatchV1,
-    StoredRecordV1, TrustGenerationAcknowledgementV1, TrustGenerationV1,
+    PolicyActivationAcknowledgementV1, PolicyActivationStateV1, PolicyBundleV1, PolicyDocumentV1,
+    PolicyRolloutStateV1, PolicyRolloutStatusV1, PolicySourceRevisionV1, PolicySourceStateV1,
+    PolicyTargetSnapshotV1, ProfileCandidateArtifactV1, Result, StoredCoverageReportV1,
+    StoredEvidenceBatchV1, StoredRecordV1, TrustGenerationAcknowledgementV1, TrustGenerationV1,
     MAX_PENDING_EVIDENCE_RECORDS,
 };
 
@@ -512,46 +512,15 @@ impl ControlStore {
         {
             return Ok(inner.state.commit_index);
         }
-        acknowledgement.validate()?;
-        let key = PolicyRolloutKeyV1 {
-            candidate_content_id: acknowledgement.candidate_content_id.clone(),
-            node_id: acknowledgement.node_id.clone(),
+        let result = PolicyAcknowledgementTransactionV1 {
+            acknowledgement,
+            rollout_state,
         };
-        let current = inner.state.rollout_states.get(&key).ok_or_else(|| {
-            ControlStoreSnafu {
-                path: inner.root.clone(),
-                reason: "the acknowledgement has no current rollout target".to_owned(),
-            }
-            .build()
-        })?;
-        // The transition version is the compare-and-swap guard for concurrent or stale replies.
-        let expected_transition_version = checked_store_increment(
-            current.transition_version,
-            &inner.root,
-            "the rollout transition version is exhausted",
-        )?;
-        if rollout_state.transition_version != expected_transition_version
-            || rollout_state.target != current.target
-            || rollout_state.desired_candidate_content_id != current.desired_candidate_content_id
-            || rollout_state.policy_source_revision_id != current.policy_source_revision_id
-            || rollout_state.target_snapshot_digest != current.target_snapshot_digest
-            || rollout_state.latest_acknowledgement_content_id.as_deref()
-                != Some(&acknowledgement.acknowledgement_content_id)
-        {
-            return ControlStoreSnafu {
-                path: inner.root.clone(),
-                reason: "the rollout acknowledgement failed its compare-and-swap transition"
-                    .to_owned(),
-            }
-            .fail();
-        }
+        validate_policy_acknowledgement(&inner.state, &result, &inner.root)?;
         commit(
             &mut inner,
             ControlTransactionV1::Acknowledged {
-                result: Box::new(PolicyAcknowledgementTransactionV1 {
-                    acknowledgement,
-                    rollout_state,
-                }),
+                result: Box::new(result),
             },
         )
     }
@@ -622,48 +591,15 @@ impl ControlStore {
         {
             return Ok(inner.state.commit_index);
         }
-        let key = PolicyRolloutKeyV1 {
-            candidate_content_id: acknowledgement.candidate_content_id.clone(),
-            node_id: acknowledgement.node_id.clone(),
+        let result = ExceptionAcknowledgementTransactionV1 {
+            acknowledgement,
+            rollout_state,
         };
-        let current = inner
-            .state
-            .exception_rollout_states
-            .get(&key)
-            .ok_or_else(|| {
-                ControlStoreSnafu {
-                    path: inner.root.clone(),
-                    reason: "the exception acknowledgement has no current rollout target"
-                        .to_owned(),
-                }
-                .build()
-            })?;
-        if rollout_state.transition_version
-            != checked_store_increment(
-                current.transition_version,
-                &inner.root,
-                "the exception transition version is exhausted",
-            )?
-            || rollout_state.candidate_content_id != current.candidate_content_id
-            || rollout_state.exception_source_revision_id != current.exception_source_revision_id
-            || rollout_state.node_id != current.node_id
-            || rollout_state.latest_acknowledgement_content_id.as_deref()
-                != Some(&acknowledgement.acknowledgement_content_id)
-        {
-            return ControlStoreSnafu {
-                path: inner.root.clone(),
-                reason: "the exception acknowledgement failed its compare-and-swap transition"
-                    .to_owned(),
-            }
-            .fail();
-        }
+        validate_exception_acknowledgement(&inner.state, &result, &inner.root)?;
         commit(
             &mut inner,
             ControlTransactionV1::ExceptionAcknowledged {
-                result: Box::new(ExceptionAcknowledgementTransactionV1 {
-                    acknowledgement,
-                    rollout_state,
-                }),
+                result: Box::new(result),
             },
         )
     }
@@ -1726,6 +1662,7 @@ fn apply_transaction(
                 acknowledgement,
                 rollout_state,
             } = result.as_ref();
+            validate_policy_acknowledgement(state, result, path)?;
             state.acknowledgements.insert(
                 acknowledgement.acknowledgement_content_id.clone(),
                 acknowledgement.clone(),
@@ -2362,6 +2299,88 @@ impl ControlStoreState {
     }
 }
 
+fn validate_policy_acknowledgement(
+    state: &ControlStoreState,
+    result: &PolicyAcknowledgementTransactionV1,
+    path: &Path,
+) -> Result<()> {
+    let acknowledgement = &result.acknowledgement;
+    let rollout = &result.rollout_state;
+    acknowledgement.validate()?;
+    let current = state.rollout_states.get(&PolicyRolloutKeyV1 {
+        candidate_content_id: acknowledgement.candidate_content_id.clone(),
+        node_id: acknowledgement.node_id.clone(),
+    });
+    let expected_transition = current.and_then(|entry| entry.transition_version.checked_add(1));
+    let expected_state = match acknowledgement.state {
+        PolicyActivationStateV1::Received => PolicyRolloutStatusV1::Delivered,
+        PolicyActivationStateV1::Staged => PolicyRolloutStatusV1::Staged,
+        PolicyActivationStateV1::Active => PolicyRolloutStatusV1::Active,
+        PolicyActivationStateV1::Rejected => PolicyRolloutStatusV1::Rejected,
+        PolicyActivationStateV1::Stale => PolicyRolloutStatusV1::Stale,
+        PolicyActivationStateV1::Unknown => PolicyRolloutStatusV1::Unknown,
+    };
+    let transition_is_valid = current
+        .is_some_and(|current| valid_policy_rollout_transition(current.state, rollout.state));
+    let rollout_is_valid = current.is_some_and(|current| {
+        rollout.policy_source_revision_id == current.policy_source_revision_id
+            && rollout.target_snapshot_digest == current.target_snapshot_digest
+            && rollout.target == current.target
+            && rollout.desired_candidate_content_id == current.desired_candidate_content_id
+    }) && expected_transition == Some(rollout.transition_version)
+        && rollout.state == expected_state
+        && rollout.latest_acknowledgement_content_id.as_deref()
+            == Some(acknowledgement.acknowledgement_content_id.as_str())
+        && rollout.updated_utc_ns == acknowledgement.observed_utc_ns;
+    let acknowledgement_is_bound = state
+        .bundles
+        .get(&acknowledgement.candidate_content_id)
+        .is_some_and(|bundle| {
+            bundle.candidate.tenant_id == acknowledgement.tenant_id
+                && bundle.candidate.policy_source_revision_id
+                    == acknowledgement.policy_source_revision_id
+                && bundle.candidate.target_snapshot_digest == acknowledgement.target_snapshot_digest
+                && bundle.candidate.exact_target.node_id == acknowledgement.node_id
+                && bundle
+                    .candidate
+                    .exact_target
+                    .workload_targets
+                    .iter()
+                    .all(|target| {
+                        target.kubernetes.as_ref().is_some_and(|identity| {
+                            hex::encode(&acknowledgement.node_boot_id) == identity.node_boot_id
+                                && acknowledgement.label_epoch == identity.label_epoch
+                        })
+                    })
+        });
+    if !transition_is_valid || !rollout_is_valid || !acknowledgement_is_bound {
+        return ControlStoreSnafu {
+            path: path.to_owned(),
+            reason: "the policy acknowledgement does not match its candidate or current rollout"
+                .to_owned(),
+        }
+        .fail();
+    }
+    Ok(())
+}
+
+const fn valid_policy_rollout_transition(
+    current: PolicyRolloutStatusV1,
+    next: PolicyRolloutStatusV1,
+) -> bool {
+    match current {
+        PolicyRolloutStatusV1::Pending | PolicyRolloutStatusV1::Unknown => true,
+        PolicyRolloutStatusV1::Delivered => !matches!(next, PolicyRolloutStatusV1::Pending),
+        PolicyRolloutStatusV1::Staged => !matches!(
+            next,
+            PolicyRolloutStatusV1::Pending | PolicyRolloutStatusV1::Delivered
+        ),
+        PolicyRolloutStatusV1::Active => matches!(next, PolicyRolloutStatusV1::Active),
+        PolicyRolloutStatusV1::Rejected => matches!(next, PolicyRolloutStatusV1::Rejected),
+        PolicyRolloutStatusV1::Stale => matches!(next, PolicyRolloutStatusV1::Stale),
+    }
+}
+
 fn validate_exception_acknowledgement(
     state: &ControlStoreState,
     result: &ExceptionAcknowledgementTransactionV1,
@@ -2380,6 +2399,8 @@ fn validate_exception_acknowledgement(
         })
     });
     let expected_transition = current.and_then(|entry| entry.transition_version.checked_add(1));
+    let transition_is_valid = current
+        .is_some_and(|current| valid_exception_rollout_transition(current.state, rollout.state));
     let candidate_is_valid = candidate.is_some_and(|candidate| {
         let operation_state_is_valid = match candidate.operation {
             ExceptionDeliveryOperationV1::Activate => {
@@ -2426,7 +2447,7 @@ fn validate_exception_acknowledgement(
             == Some(acknowledgement.acknowledgement_content_id.as_str())
         && rollout.transition_version == acknowledgement.transition_version
         && rollout.updated_utc_ns == acknowledgement.observed_utc_ns;
-    if !candidate_is_valid || !rollout_is_valid {
+    if !candidate_is_valid || !rollout_is_valid || !transition_is_valid {
         return ControlStoreSnafu {
             path: path.to_owned(),
             reason:
@@ -2436,6 +2457,25 @@ fn validate_exception_acknowledgement(
         .fail();
     }
     Ok(())
+}
+
+const fn valid_exception_rollout_transition(
+    current: crate::WorkloadProtectionExceptionStateV1,
+    next: crate::WorkloadProtectionExceptionStateV1,
+) -> bool {
+    use crate::WorkloadProtectionExceptionStateV1 as State;
+
+    match current {
+        State::Pending => true,
+        State::Active => matches!(
+            next,
+            State::Active | State::Consumed | State::Expired | State::Failed
+        ),
+        State::Consumed => matches!(next, State::Consumed),
+        State::Expired => matches!(next, State::Expired),
+        State::Revoked => matches!(next, State::Revoked),
+        State::Failed => matches!(next, State::Failed),
+    }
 }
 
 fn validate_rollout_transaction(
@@ -2635,6 +2675,34 @@ mod tests {
             Some(42)
         );
         assert!(super::checked_store_increment(u64::MAX, Path::new("store"), "exhausted").is_err());
+    }
+
+    #[test]
+    fn rollout_state_machines_do_not_regress_terminal_authority() {
+        use crate::{
+            PolicyRolloutStatusV1 as Policy, WorkloadProtectionExceptionStateV1 as Exception,
+        };
+
+        assert!(super::valid_policy_rollout_transition(
+            Policy::Staged,
+            Policy::Active
+        ));
+        assert!(!super::valid_policy_rollout_transition(
+            Policy::Active,
+            Policy::Staged
+        ));
+        assert!(super::valid_exception_rollout_transition(
+            Exception::Active,
+            Exception::Consumed
+        ));
+        assert!(!super::valid_exception_rollout_transition(
+            Exception::Consumed,
+            Exception::Active
+        ));
+        assert!(!super::valid_exception_rollout_transition(
+            Exception::Revoked,
+            Exception::Active
+        ));
     }
 
     #[test]
