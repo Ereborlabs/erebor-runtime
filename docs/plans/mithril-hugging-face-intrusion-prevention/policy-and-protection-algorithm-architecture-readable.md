@@ -1,8 +1,9 @@
 # Mithril: Linux-Native Prevention, Evidence, And Verified Response
 
 **Status: VALIDATED DESIGN AUTHORITY — 2026-08-08; CONTROL POLICY AND EVIDENCE
-AMENDMENT — 2026-08-19; gRPC SERVICE AND IPC AMENDMENT — 2026-08-21.** This is
-the sole normative Mithril architecture for implementation planning.
+AMENDMENT — 2026-08-19; gRPC SERVICE AND IPC AMENDMENT — 2026-08-21;
+CAPABILITY-GROUNDED KUBERNETES POLICY API AMENDMENT — 2026-08-23.** This is the
+sole normative Mithril architecture for implementation planning.
 Implementation still requires allocation and approval through the master plan
 and one named phase. Historical architecture text may explain rejected
 designs, but cannot override this file.
@@ -20,6 +21,13 @@ transport versions, message kinds, payload envelopes, and correlation fields.
 It does not remove domain generations, cursors, digests, request IDs, boot
 epochs, or replay rules. Local gRPC retains Unix peer-credential and cgroup
 authorization. Remote node gRPC retains mTLS identity binding.
+
+The 2026-08-23 amendment replaces the flattened Kubernetes policy document
+with `WorkloadProtectionPolicy` and `WorkloadProtectionException`. The public
+resources contain only qualified Kubernetes enforcement fields. Control keeps
+one explicit lowering path from the base policy to the wider internal signed
+policy document. An exception activates one precompiled grant without
+migrating the base generation.
 
 Status: proposed architecture. This document does not authorize an
 implementation phase. The
@@ -369,7 +377,8 @@ redesigning the protected system is not.
 allowed additions:
   one mithril-node DaemonSet Pod or equivalent host package per node
   Mithril's control service
-  one WorkloadProtectionProfile CRD and least-privilege Control RBAC
+  one WorkloadProtectionPolicy CRD, one bounded
+    WorkloadProtectionException CRD, and least-privilege Control RBAC
   one Control-owned Kubernetes mutating and validating admission endpoint
   configuration of documented OCI, NRI, runtime, Kubernetes audit/API,
     CI provider, and verification extension points
@@ -1773,276 +1782,257 @@ Seccomp surface is adopted and installed at process start*, a supported runtime
 admission hook, `pids.max`, or a CPU controller. A file hook cannot claim that
 result.
 
-### 11. The Operator Writes One Policy Model
+### 11. The Operator Uses A Capability-Grounded Kubernetes Policy
 
-The human source object is one `WorkloadProtectionProfile`. In production
-Kubernetes mode, it is a namespaced
-`WorkloadProtectionProfile.mithril.erebor.dev` custom resource. Its stored
-`.spec` is the desired policy source. The Kubernetes object identity,
-generation, and canonical spec digest form a separate immutable source
-revision. Kubernetes status and `resourceVersion` do not grant authority.
+Production Kubernetes mode has one namespaced base-policy kind,
+`WorkloadProtectionPolicy.mithril.erebor.dev`, and one namespaced bounded
+exception kind, `WorkloadProtectionException.mithril.erebor.dev`. These
+resources expose only the enforcement surface that Control, node lowering,
+the BPF hooks, and the Kubernetes runtime path can use. They do not expose the
+wider internal policy document.
 
-The restricted YAML form remains available for offline review, import, and
-qualification. It cannot activate production Kubernetes policy directly. Both
-forms normalize to the same closed `PolicyDocumentV1`, and a golden must prove
-byte equality for the same semantic policy. The original submitted Kubernetes
-YAML is not authoritative after API-server storage and conversion; the stored
-typed `.spec` is authoritative.
+The stored typed `.spec` is the desired-state source. Kubernetes object UID and
+generation identify a source revision. Status, `resourceVersion`, labels, and
+annotations do not grant policy authority. A restricted offline policy form
+uses the same `WorkloadProtectionPolicy.spec` schema for review, import, and
+qualification. It cannot activate production Kubernetes policy directly.
 
-The policy contains:
+Control is the only CRD reader that can create signed node policy. It derives
+cluster, namespace, controller, ServiceAccount, Pod UID, full container ID,
+selected Node, node UID, boot, cgroup lifetime, and internal capability and
+proof facts from authenticated platform state. None of those facts is a user
+selector. The Kubernetes scheduler selects the exact Node from the constraints
+that Mithril derives from the live `mithril-node` DaemonSet.
 
-```text
-identity and signature
-selectors and required platform capabilities
-default postures and failure posture
-entry rules
-roles and native transitions
-local effect rules
-native-lineage restriction rules
-IPC relationship rules and unmatched-IPC disposition
-provider/authority behavior rules
-correlation packages
-notification and response rules
-coverage requirements
-rollout and exact exceptions
-```
-
-Version 1 permits one live CRD owner for each `(tenant, trust domain,
-profile_id)` and one active `WorkloadProtectionProfile` for each exact workload
-binding. If two CRDs claim the same profile ID or resolve to the same workload,
-Control reports a conflict and creates no conflicting candidate. Namespace or
-object name, creation time, YAML order, priority, and “deny wins” cannot choose
-between profiles. The previous valid non-conflicting generation remains
-active. Cross-profile composition requires a later closed composition contract.
-
-Selectors find candidate workloads in userspace. They never become kernel
-authority. Binding resolves a selector to exact Pod UID, full container ID,
-image digest, cgroup live interval and nonce, mount/network namespace
-generation, and profile-generation handle.
-
-#### A complete readable example
-
-This YAML is a design-level source example; the exact Version 1 serialization
-is the closed deterministic-CBOR schema in Appendix A.
+#### The base policy resource
 
 ```yaml
-profile: hf-conversion-worker
-version: 8
-mode: protect
-
-selector:
+apiVersion: mithril.erebor.dev/v1alpha1
+kind: WorkloadProtectionPolicy
+metadata:
+  name: conversion-worker
   namespace: datasets
-  labels: {app: conversion-worker}
+spec:
+  podSelector:
+    matchLabels:
+      app: conversion-worker
 
-defaults:
-  entry: restrict-external
-  admissionRequest: reject-when-configured-interface-supports-it
-  transition: deny
-  file: deny
-  network: deny
-  device: deny
-  privilege: deny
+  mode: Protect
 
-failurePosture:
-  missingTaskIdentity: deny
-  requiredClassifierUnknown: deny
-  runtimeMetadataUnavailable: restrict-external-or-deny-effect
-  providerFeedUnavailable: alert
-  notificationUnavailable: keep-enforcement-and-buffer
+  containers:
+    - names: [worker]
+      kinds: [Application]
+      images: [immutable-image-reference]
+      initialRole: worker
+      externalRole: runtime-external
 
-entries:
-  - id: initial-worker
-    kind: container-start
-    imageDigest: sha256:approved-worker-image
-    role: conversion-worker
-    onMismatch: unresolved-fail-closed
+  roles:
+    - name: worker
 
-  - id: stock-runtime-external
-    kind: external-runtime-unknown
-    creator: outside-labeled-application-tree
-    role: runtime-external-restricted
-    purpose: unknown
+      files:
+        - name: allow-worker-runtime
+          path: /usr
+          recursive: true
+          operations: [OpenRead, Read, MmapRead]
+          action: Allow
 
-roles:
-  conversion-worker:
-    forkWithoutExec: conversion-child
-    maxNativeDepth: 8
-    exec:
-      - object: approved-converter-helper
-        targetRole: converter-helper
-    files:
-      - {operation: read, class: dataset-input, disposition: allow}
-      - {operation: read, class: worker-runtime, disposition: allow}
-      - {operation: write, class: worker-scratch, disposition: allow}
-      - id: deny-worker-token
-        operation: read
-        class: projected-service-account-token
-        disposition: deny
-        errno: EACCES
-        finding: HF-PROC-001
-    network:
-      - {operation: connect, destination: approved-result-service, disposition: allow}
-      - {operation: connect, destination: kubernetes-api, disposition: deny}
-      - {operation: connect, destination: cloud-imds, disposition: deny}
-      - {operation: connect, destination: public-internet, disposition: deny}
-    devices: []
-    privilege: []
+        - name: deny-service-account-files
+          path: /var/run/secrets/kubernetes.io/serviceaccount
+          recursive: true
+          operations: [OpenRead, Read, MmapRead]
+          action: Deny
 
-  runtime-external-restricted:
-    # Stock CRI cannot distinguish readiness, PreStop, kubectl exec, or
-    # direct runtime exec. This is the common safe budget for all of them.
-    files:
-      - {operation: read, class: probe-health-file, disposition: allow}
-      - {operation: write, class: declared-cleanup-state, disposition: allow}
-    network:
-      - {operation: send, destination: declared-drain-endpoint, disposition: allow}
-    onActiveContainment: deny
-    childProcesses: deny
-    devices: []
-    privilege: []
+      execution:
+        - name: allow-worker-binaries
+          path: /usr/bin
+          recursive: true
+          operations: [Execute, MmapExecute, Mprotect]
+          action: Allow
 
-authorityBehavior:
-  - principal: conversion-worker-service-account
-    sourceRole: conversion-worker
-    stage: post-effect
-    authority: kubernetes
-    allowedOperations: []
-    onDeviation: alert
-    response: restrict-compromised-worker
+      network:
+        socketControls:
+          - operations: [Create, Shutdown]
+            action: Allow
+
+        destinations:
+          - name: result-service-addresses
+            operations: [Connect, Send, Receive]
+            protocols: [TCP]
+            cidrs: [declared-address-prefix]
+            ports:
+              - first: 443
+                last: 443
+            action: Allow
+
+      processControl:
+        - name: signal-probe
+          targetRole: worker
+          operation: Signal
+          signals: [0]
+          action: Allow
+
+      unixStreams:
+        - name: worker-helper
+          peerRoles: [helper]
+          action: Allow
+
+    - name: runtime-external
+      files: []
+      execution: []
+      network:
+        socketControls: []
+        destinations: []
+      processControl: []
+      unixStreams: []
+
+  exceptionGrants:
+    - name: temporary-file-access
+      fileRules: [deny-service-account-files]
+      maximumDuration: 5m
+      maximumUses: 1
 ```
 
-This allows many logical conversion jobs in one Pod. Mithril protects process
-trees and effects; it does not require one Pod or one process per job. A
-readiness task, `PreStop`, `kubectl exec`, and direct runtime exec all receive
-the same external budget because stock CRI does not expose their purpose. That
-budget can read the health file, update the declared cleanup file, and contact
-only the drain endpoint; it cannot read the mounted token or use the public
-Internet. An attacker who enters through `kubectl exec` receives those same
-limited permissions, not application authority.
+Every Pod container must match exactly one `containers` entry. An unmatched or
+multiply matched container rejects admission. `images` contains digest-pinned
+immutable image references, and admission preserves that match on updates.
+Container kinds are `Init`, `Sidecar`, `Application`, and `Ephemeral`.
 
-This example deliberately does not enable the approved administrative-exec
-feature. A deployment that enables it adds the explicit approved role and the
-plugin, admission, node-slot, accepted next-match race, and failure settings
-from Chapter 6. Merely adding a wider role to this YAML cannot make stock `kubectl exec`
-eligible for it.
+A role is a static authority label. An exact initial container receives
+`initialRole`. A later runtime-created root whose purpose is not proven receives
+`externalRole`. Forked processes inherit the current role. Ordinary exec keeps
+the current role. The CRD has no native role transition, process-state bit,
+state transition, maximum native depth, or fork-role field because the node
+does not lower those fields into active policy.
 
-If the drain permission is too broad, the operator may remove it and accept
-that `PreStop` fails, or deny external roots entirely. Giving only `PreStop`
-the drain permission requires a qualified existing interface that supplies an
-authoritative purpose and unique task join. No policy field can manufacture
-that missing fact.
+File rules and execution rules use canonical paths. Version 1 supports a
+non-recursive allow or deny and a recursive deny. A recursive allow is accepted
+only after its legitimate Kubernetes runtime control passes physical
+qualification. Before that proof, Control rejects it as unsupported. The
+example shows the intended recursive allow after that gate passes.
 
-#### Entries, roles, transitions, and effects
+File operations are `OpenRead`, `OpenWrite`, `Read`, `Write`, `MmapRead`,
+`MmapWrite`, `Create`, `SetAttributes`, `Unlink`, `Link`, and `Rename`.
+Execution operations are `Execute`, `MmapExecute`, and `Mprotect`. A path may
+deny the projected ServiceAccount mount, but the result is a path denial. It is
+not semantic projected-token identity, rotation binding, named-volume identity,
+immutable-artifact identity, or content identity.
 
-An entry rule names the proven root class, container kind, evidence source and
-proof quality, lifecycle states, target role, and default result. Initial
-container identity can come from existing Kubernetes/runtime metadata. A
-later stock runtime exec normally has `purpose=UNKNOWN` and receives the
-external role.
+Network destination rules contain IPv4 or IPv6 prefixes, `TCP` or `UDP`, port
+ranges, and the applicable `Connect`, `Send`, `Receive`, or `Bind` operation.
+Socket controls contain the qualified address-free `Create`, `Listen`,
+`Accept`, `Shutdown`, or socket-option operation. Node enforcement retains
+creator authority, intersects current-actor authority, and validates the final
+address. The CRD has no Kubernetes Service reference, Pod destination
+selector, DNS name or query rule, TLS or HTTP meaning, provider meaning, or CNI
+or service-mesh guarantee.
 
-Canonical argv is length-delimited raw bytes:
+A Unix-stream rule grants or denies one role-to-role relationship for connect,
+send, and receive as one unit. Stale, unmatched, inherited, or passed endpoint
+use is revalidated and denies when the relationship is not active. Pipes, Unix
+datagrams, shared memory, SysV IPC, zero-copy channels, and generic
+asynchronous IPC authority are not supported.
 
-```text
-u32_be(argument_count) || for each argument:
-  u32_be(byte_length) || raw_argument_bytes
+A process-control rule can match an exact signal number, including signal zero,
+against an exact target role. Unmatched signals deny. Exact ptrace requests can
+be denied. Positive general ptrace authority is not exposed.
+
+`action` is `Allow` or `Deny`. Unlisted protected operations use the fixed
+conservative denial that Control lowers into the internal policy. In `Protect`
+mode, a policy denial returns the operation-specific safe result. In `Observe`
+mode, that policy denial becomes would-deny evidence. Missing identity,
+unsupported objects, and corrupt state remain fail-closed in both modes. The
+operator cannot choose errno, capability IDs, proof predicates, or other
+compiler inputs.
+
+Overlapping rules with different actions reject. Rule order, object creation
+time, name, and “deny wins” do not resolve a conflict. More than one matching
+`WorkloadProtectionPolicy` also rejects the Pod. Control keeps the previous
+valid non-conflicting generation for an existing target.
+
+#### The bounded exception resource
+
+The base policy can name a file-rule grant and its maximum duration and use
+count. A separate resource requests one exact instance:
+
+```yaml
+apiVersion: mithril.erebor.dev/v1alpha1
+kind: WorkloadProtectionException
+metadata:
+  name: conversion-worker-temporary-file-access
+  namespace: datasets
+spec:
+  policyRef:
+    name: conversion-worker
+  grant: temporary-file-access
+  target:
+    pod:
+      name: conversion-worker-7f8d4
+      uid: exact-pod-uid
+    containerName: worker
+  requestedDuration: 2m
+  requestedUses: 1
 ```
 
-There is no shell re-tokenization, whitespace folding, Unicode normalization,
-or comparison against redacted display text. Argv may be checked as an effect
-allowed to an already assigned role. It never assigns the role, proves probe
-or lifecycle purpose, or replaces physical file/network/device policy.
+The exception spec is immutable. It can request only a same-namespace policy,
+a named `exceptionGrants` entry, one exact Pod UID, one matching container, a
+duration no greater than the grant maximum, and a use count no greater than the
+grant maximum. Version 1 grants only the named denied file rules. It exposes no
+network, IPC, device, privilege, or mount exception.
 
-A role names its entry origins and one effect-policy state. A transition rule
-is the only authority for fork, thread, exec, and privilege transitions. Role
-fields such as `forkWithoutExec` are shorthand that the compiler expands into
-that same table. If shorthand and an explicit transition disagree, compilation
-fails; no hook chooses a different authority.
+At base-policy compilation, each named grant produces conditional allow cells
+for the referenced denied file rules and a generation-local exception handle.
+The base generation installs no active runtime binding for that handle. A
+missing, inactive, expired, exhausted, or mismatched binding therefore keeps
+the base denial. This precompiled indirection lets a later exact exception
+affect an existing task: the effect gate reads the live exception binding and
+runtime state for every use, so no task or base-policy generation migrates.
+This path uses the existing exception-handle binding, runtime-state, receipt,
+and effect-decision ABI. Phase 6.2 does not change the frozen BPF ABI.
 
-An effect rule names:
+The exception object is a bounded request, not a compiled authority record.
+The API server authenticates and authorizes the writer through separate
+exception-writer RBAC. Control resolves the stored source, base policy, and
+live Pod; resolves the role, named rules, precompiled decision cells, selected
+Node, current boot, and active base-policy generation; and signs the bounded
+exception candidate. The stored
+object proves accepted desired state, but it does not prove which human wrote
+it. The resource cannot supply approval proof, compiled keys, authority deltas,
+policy or candidate digests, or a node target. The node consumes a use
+atomically and reports a durable receipt. Expiry, exhaustion, deletion, or
+revocation closes that runtime instance through a signed revocation without
+resetting the consumption record or migrating the base policy generation.
 
-```text
-role + effect family + operation + composite object class + exact key if needed
-+ process/native-lineage state + workload lifecycle
--> allow, audit-allow, or errno denial
-+ optional monotonic state transition and evidence requirement
-```
+#### Deliberately absent fields
 
-An object has several axes at once. A projected token is not reduced to one
-label:
+| Field | Reason |
+| --- | --- |
+| States and native transitions | Control validates internal forms, but the node does not lower them. |
+| Device rules | Exact local ioctl enforcement exists, but scheduled-Pod object measurement is not integrated into the runtime gate. |
+| Capability or BPF permission rules | Only conservative denial is qualified; positive granular authority is not. |
+| Mount permission rules | Mount invalidation and fail closure exist, but complete mount authority is not qualified. |
+| ServiceAccount-token target | Rotation binding is not qualified. |
+| Container-image target | Immutable executable and content proof is not qualified. `containers.images` is admission matching only. |
+| Kubernetes Service destination | Current active network policy accepts address prefixes only. |
+| Audit severity and finding routes | Phase 7 does not yet own the finding lifecycle. |
+| Response actions | A later phase owns response. |
+| Arbitrary policy errno | The compiler selects the fixed safe result for each operation. |
+| User capability IDs or proof predicates | Control derives them. |
+| User node selector | The DaemonSet and scheduler flow own node selection. |
 
-```text
-credential=service_account_token
-backing=projected_volume
-mutability=provider_rotated
-persistence=pod_lifetime
-```
-
-The compiler enumerates the bounded cross-product into one composite atom. A
-missing required axis or unknown atom denies. Likewise, Kubernetes API over a
-private TLS address remains both `cluster_control_plane` and `private`; the
-private address cannot erase the control-plane rule.
-
-#### Local effects and provider behavior are different stages
-
-Linux may deny a process connecting to the Kubernetes API. It cannot see the
-verb and object inside direct TLS. A provider/authority behavior rule names a
-versioned vocabulary, typed resource selector, principal/session fields,
-result class, proof, and either:
-
-- `REMOTE_PRE_ADMISSION`: an existing configured synchronous Kubernetes,
-  provider, or connector authorization API may allow, alert-and-allow, or
-  reject without changing that product's code or traffic path; or
-- `POST_EFFECT`: authoritative audit may record or alert after success, denial
-  by provider, failure, or unknown result.
-
-At `POST_EFFECT`, “allow” means “record without a deviation finding.” It does
-not mean the already completed action was allowed by Mithril. Free-form
-operation strings are invalid; provider adapters own checked numeric
-vocabularies and schemas.
-
-#### The four operator dispositions
-
-| Disposition | Physical result | Legal stage |
-| --- | --- | --- |
-| `allow` | Admit/forward/let the local effect proceed; emit only required evidence | Any stage, with post-effect meaning record-only |
-| `alert` | Proceed or record completion, then create and route a finding | Any observable stage |
-| `deny` | Return the qualified negative errno before a local transition/effect completes | `NATIVE_TRANSITION` or `LOCAL_PRE_EFFECT` only |
-| `reject` | Refuse the higher-level entry, lease, CI, deployment, or provider request before admission | `ENTRY_ADMISSION` or `REMOTE_PRE_ADMISSION` only |
-
-Therefore a token `open(2)` can be `deny + finding`. A runtime start is
-`reject` only when a configured stock admission hook actually returned the
-rejection; otherwise the root's protected effects are denied. A provider audit
-record can only `alert + optional response`.
-Choosing `deny` in YAML cannot change a completed AWS or GitHub action into a
-prevented action.
-
-Every rule separately controls physical result, evidence level, finding,
-notification routes, optional response, proof requirement, fallbacks, rate /
-concurrency / lifetime budgets, validity, approval, and exact exceptions.
-Notification schemas allowlist fields by sensitivity:
-
-```text
-PUBLIC < INTERNAL < SENSITIVE_IDENTIFIER < SECRET
-```
-
-`SECRET` never leaves through a notification. Forensic evidence may retain
-specific bounded raw fields encrypted locally, but notification redaction does
-not weaken.
-
-#### Exceptions are bounded authority changes
-
-An exception names the rule it changes, exact protected scopes/workloads,
-entries, roles, immutable definitions, exact compiled key digests, authority
-delta, approver and proof, start/end, maximum uses, and maximum lifetime.
-
-It cannot target `*`, never expire, override a product hard invariant, or use
-free-form reason text as authority. `BOUNDED_BROADENING` is visible in the
-activation explanation and full-claim exclusions.
+The internal closed policy can retain fields needed by host mode and later
+qualified phases. Their presence in `PolicyDocumentV1` does not make them part
+of either Kubernetes CRD. Control owns one explicit lowering function from the
+public base policy to that internal document. A bounded exception resolves a
+grant that the bound base generation already compiled; it does not rewrite the
+policy document.
 
 ### 12. Compiler, Signature, And Atomic Activation
 
-An accepted CRD `.spec` or the offline restricted YAML form is normalized into
-closed `PolicyDocumentV1` bytes. The signed profile uses deterministic CBOR
+An accepted base policy, or the offline restricted base-policy form, is lowered
+into closed `PolicyDocumentV1` bytes. Named exception grants become inactive
+conditional cells in that base policy. A `WorkloadProtectionException`
+activates one exact runtime instance separately.
+The signed profile uses deterministic CBOR
 and Ed25519 with domain separator
 `MITHRIL-PROFILE-V1`. The signature header binds the policy digest and the
 numeric registries for providers, capabilities, selectors, object classifiers,
@@ -2073,17 +2063,18 @@ wrong target, wrong platform, expired, or replayed rollback proof fails.
 #### Compilation pipeline
 
 ```text
-stored CRD desired revision or offline review source
-  -> immutable PolicySourceRevisionV1 in production Kubernetes mode
+stored base-policy revision or offline base-policy review source
+  -> immutable KubernetesDesiredSourceRevisionV1 in production Kubernetes mode
+  -> capability-grounded public-to-internal lowering
   -> closed canonical PolicyDocumentV1
   -> bounded schema, registry, capability, and source-revision validation
   -> selectors resolved to immutable workload snapshots
-  -> entries, roles, states, transitions, and effects checked for reachability
+  -> container entries, static roles, and supported effects checked for reachability
   -> non-path selectors expanded to a finite exact decision universe;
      hierarchical path components compiled to the bounded resolver in Chapter 15
      and then reduced to an exact final object decision key
-  -> conflicts require signed override/exception edges
-  -> objects, composite atoms, responses, coverage, and provider vocabularies lowered
+  -> conflicting public rules reject; exception grants compile inactive cells
+  -> unsupported internal families remain fixed empty or conservative
   -> simulate against a recorded legitimate-workload baseline
   -> human approval
   -> assign issuer sequence and sign the immutable profile
@@ -2097,17 +2088,36 @@ stored CRD desired revision or offline review source
   -> authenticated node activation acknowledgement and rollout inventory
 ```
 
+The bounded exception path is separate:
+
+```text
+stored exception source revision
+  -> resolve the active base-policy generation and named precompiled grant
+  -> resolve exact Pod UID, container, selected Node, and current boot
+  -> validate requested duration and uses against the base grant
+  -> sign one target-bound exception activation or revocation candidate
+  -> authenticated Control-to-node delivery
+  -> verify source, base generation, grant, target, time, and replay state
+  -> ExceptionAuthorityOwner activates or closes the runtime instance
+  -> BPF effect gate atomically consumes each permitted use
+  -> durable receipt and bounded exception status
+```
+
 The API server's accepted object under configured RBAC records desired state.
 A watch event does not prove the human actor. Any separate human approval
-required by `RolloutV1` remains required and binds the exact source revision.
+required by the internal rollout remains required and binds the exact
+base-policy source revision. Any separately required exception approval binds
+the exact exception source, base generation, grant, and target.
 The Control signing key proves candidate authenticity; it does not invent
 approval. There is no cluster-wide atomic activation. Each node reports its
 exact candidate and generation state. A partial rollout stays visible and
 limits later findings and policy claims.
 
-CRD deletion starts a monotonic retirement transaction. It does not erase a
-node generation. The retirement candidate names the exact current candidate
-and an approved successor or restrictive terminal state. If no valid
+Base-policy deletion starts a monotonic retirement transaction. Exception
+deletion, expiry, exhaustion, or revocation sends a signed close operation to
+the exact runtime instance. Neither action erases a node generation. A base
+retirement candidate names the exact current candidate and an approved
+successor or restrictive terminal state. If no valid
 retirement candidate can activate, the last valid local generation remains
 active. A Kubernetes finalizer reports reconciliation progress only; removal
 of the finalizer is not node authority.
@@ -4515,7 +4525,10 @@ The useful upstream ideas fit one pipeline. They are not two daemons and not
 two independent sources of authority.
 
 ```text
-WorkloadProtectionProfile CRD -> Control compile/sign/target -> node activation
+WorkloadProtectionPolicy
+  -> Control lower/compile/sign/target -> node policy activation
+WorkloadProtectionException
+  -> Control resolves one precompiled grant -> node exception activation
   -> kernel task creation + runtime/Kubernetes inventory + optional stock hooks
   -> classify labeled native child, known initial root, external root, or unknown
   -> install or retain restrictive task/process identity before covered effects
@@ -4869,10 +4882,11 @@ and no competing daemon that can assign security identity.
 | `AuthorizationProofOwner` | `mithril-node` | Validate real Mithril/operator/provider authorizations, replay protection, and target scope | Invent kubelet/runner purpose, infer intent from argv/timing, or let an adapter grant a role |
 | `WorkloadBindingOwner` | `mithril-node` | Container execution sets, cgroup lifetime/storage, initial/native/external classification, node-floor binding | Create namespaces, perform the OCI runtime's normal job, or claim a hook field that stock runtime did not send |
 | `NativeSecurityStateOwner` | `mithril-node` plus owned BPF transitions | Task/process/native-family/mm state, inherited restrictions, and local response refs | Build provider graph conclusions or merge independent IPC peers |
-| `PolicyDesiredStateOwner` | Control | Accept one CRD source revision, reconcile list/watch state, and project bounded CRD status | Sign or activate a candidate, treat status as authority, or store evidence/graph data in the CRD |
+| `PolicyDesiredStateOwner` | Control | Accept policy and exception source revisions, reconcile list/watch state, lower the base policy, validate bounded exception requests, and project bounded CRD status | Sign or activate a candidate, select a node, expose internal-only fields, treat status as authority, or store evidence/graph data in a CRD |
 | `PolicyCompiler` | Control | Validate/lower source policy and sign immutable artifact | Change a node's active pointer |
-| `PolicyRolloutOwner` | Control | Freeze target snapshots, deliver signed candidates, and maintain exact per-node rollout inventory | Write node BPF maps, claim cluster-wide atomic activation, or accept a stale acknowledgement |
+| `PolicyRolloutOwner` | Control | Freeze policy target snapshots; resolve exact exception generation, grant, workload, Node, and boot targets; deliver signed candidates; and maintain exact inventory | Write node BPF maps, change exception use state, claim cluster-wide atomic activation, or accept a stale acknowledgement |
 | `PolicyActivationOwner` | `mithril-node` | Stage/read back/probe generation, pointer CAS, generation-retention counts, retirement/rollback | Own native-family membership, pending intent, or response semantics |
+| `ExceptionAuthorityOwner` | `mithril-node` plus the BPF effect gate | Durable bounded exception instances, receipts, restart recovery, and atomic pre-effect use consumption | Approve an exception, select a Kubernetes target, refund an unproved use, or widen the compiled grant |
 | `KernelHostOwner` | `mithril-node` | One loader, link/map object lifecycle, ABI, capability state | Invent roles or semantic transitions |
 | `ObjectAndSocketStateOwner` | `mithril-node` effect modules | Exact object/socket identity, lifetime, peer resolution, and IPC relationship result | Mutate native-family membership or infer byte provenance |
 | `CoverageHealthOwner` | Node source plus merged control view | Source epochs, sequences, intervals, gaps, negative-claim eligibility | Change physical decisions |
@@ -4938,7 +4952,7 @@ generation.
 | 5 | Enforce role-aware socket lifecycle, local peer relationships, final destination, DNS/IP floor, packet and established-flow fence, and shared-socket blast radius. |
 | 6 | Complete source sequences, WAL, coverage intervals, immutable generation recovery, link/map/pin health, restart/reuse truth, and sole-gatherer failure. |
 | 6.1 | Replace supported custom-framed IPC with typed gRPC services, remove the ptrace protocol exception, split node-control operations by service family, and prove peer identity, bounds, cancellation, reconnect, and durable cursor behavior. |
-| 6.2 | Add the production `WorkloadProtectionProfile` CRD, Control desired-state reconciliation, compile/sign/target/distribution, exact node rollout inventory, and durable Control evidence intake. Keep node activation and graph ownership separate. |
+| 6.2 | Add the production `WorkloadProtectionPolicy` and bounded `WorkloadProtectionException` CRDs, capability-grounded lowering, Control desired-state reconciliation, compile/sign/target/distribution, exact node rollout inventory, and durable Control evidence intake. Keep node activation and graph ownership separate. |
 | 7 | Extend committed Phase 6.2 evidence and policy provenance into the one Control graph owner. Implement `HF-PROC-001`, `HF-DW-001`, authority behavior, deterministic package replay, notification routing, and provider-neutral leases. |
 | 8 | Join Kubernetes audit/object/runtime evidence, build typed multi-node graph, and prove fan-out/reuse/contradiction behavior. |
 | 9 | Implement response roots, cgroup/socket actions, explicit blast-radius approval, replacement-controller watch, readback, and verified postconditions. |
@@ -4956,7 +4970,7 @@ listed proof.
 | --- | --- | --- | --- |
 | Shared Rust/BPF ABI, exact-type closure, closed enums, map/link manifest, capability and source registries, golden bytes | 0 / 1 | `erebor-linux-sensor-abi`; generated C header + Rust types; `erebor-linux-sensor-host::KernelHostOwner`; Phase 0 schema checker | Every active `*V1` name is exact or an exact alias; Rust/C byte equality; second loader cannot acquire pin-root lease; failed attach is `UNSUPPORTED`. |
 | Typed local and node-control gRPC services | 1 / 6.1 | `erebor-runtime-ipc` generated local services; `mithril-control` generated mTLS node services; existing Runtime, node, and Control domain owners | Descriptor closure; Unix peer and mTLS identity rejection; no custom frame, generic envelope, ptrace exception, fallback listener, false durable acknowledgement, or owner change. |
-| Offline policy YAML, Kubernetes CRD desired state, signed compiled artifact, rollout, rollback, dispositions | 0 / 4 / 6.2 | `mithril-control::policy_schema`, `PolicyDesiredStateOwner`, `PolicyCompiler`, `PolicyRolloutOwner`; node `PolicyActivationOwner` | `CFG-V1-GOLDEN-002`, CRD/offline canonical equality, duplicate/unknown rejection, relist/restart, stale acknowledgement, partial rollout, rollback/replay, inactive readback, allow/deny probes, one pointer CAS. |
+| Offline base-policy YAML, Kubernetes policy and exception desired state, internal signed compiled artifact, rollout, rollback, dispositions | 0 / 4 / 6.2 | `mithril-control::policy_schema`, `PolicyDesiredStateOwner`, `PolicyCompiler`, `PolicyRolloutOwner`; node `PolicyActivationOwner` and `ExceptionAuthorityOwner` | `CFG-V1-GOLDEN-002`, public-spec/offline equality, public-to-internal lowering, absent-field rejection, target-bound exception activation without generation migration, bounded consumption, relist/restart, stale acknowledgement, partial rollout, rollback/replay, inactive readback, allow/deny probes, one pointer CAS. |
 | Fixture/family/claim/qualification schemas | 0 / 11 | `mithril-e2e::qualification_schema` and `QualificationOwner` | `FIXTURE-REGISTRY-COMPLETE-001`; digest splice, missing negative control, degraded-PASS, and wrong platform all reject. |
 | Task/process/exec identity and native inheritance | 0 / 2 | `mithril-node::identity::NativeSecurityStateOwner`; owned `lifecycle.bpf.c`, `exec.bpf.c` | Fork-without-exec label before token open; moved-task/non-leader exec/PID reuse/ref cleanup pass. |
 | Process/native-state/set/mm state | 0 / 2-4 | Same `NativeSecurityStateOwner`; kernel maps hold native-family restrictions, while `KernelHostOwner` only owns their lifecycle | Thread races cannot recover authority; map N+1 fails closed; Rust/BPF decision bytes agree; partial VMA snapshot never relaxes. |
@@ -5036,10 +5050,10 @@ amendment.
 | Same TLS endpoint | Existing provider permission/authorization or honest audit; no MITM | Whole-channel deny blocks both allowed and forbidden verbs. |
 | Several logical jobs in one process | Exact native process only; logical job remains unknown when the existing platform exposes no boundary | Apply process-wide policy and disclose the blast radius; Mithril does not require application instrumentation. |
 | Learning | Observations create review-only candidates | Auto-authorizing observed behavior is rejected because compromise trains it. |
-| Production policy source | Stored typed `WorkloadProtectionProfile` CRD `.spec`; offline restricted YAML is review/import input | Node-side watches, free-form YAML in a CRD string, and CRD status as authority are rejected. |
+| Production policy source | Stored typed `WorkloadProtectionPolicy` `.spec` plus applicable bounded `WorkloadProtectionException` objects; offline restricted base-policy YAML is review/import input | The public API cannot embed the internal policy document. Node-side watches, free-form YAML in a CRD string, and CRD status as authority are rejected. |
 | CRD deletion | Signed monotonic retirement to an approved successor or restrictive terminal state; otherwise keep the last valid local generation | Object disappearance, namespace deletion, or finalizer removal cannot erase protection. |
 | Partial rollout | Report the exact candidate and active generation for each target; stop on signed rollout conditions | A Kubernetes `Available` condition or aggregate count cannot mean cluster-wide atomic activation. |
-| Overlapping policy CRDs | One live profile ID and one active profile per exact workload binding; reject conflicts and keep the previous valid generation | Name, namespace, creation time, priority, source order, and “deny wins” cannot compose profiles. |
+| Overlapping base policies | At most one policy can match one Pod; reject conflicts and keep the previous valid generation for existing targets | Name, namespace, creation time, priority, source order, and “deny wins” cannot compose policies. A bounded exception can change only a grant named by that one base policy. |
 | Upstream code | Reuse ideas/code only after Phase 0 license/provenance review; keep Mithril Rust chassis | A fork must replace, not duplicate, the single owner. |
 | Intent | Signed envelopes only for real Mithril/operator/provider authorization | Stock kubelet/runner events remain facts with their actual proof quality; signing a normalized observation does not create missing purpose. |
 | `aws`/`gcloud`/`gsutil` | Normal native processes; login is separate authority lease | CLI-specific entry kinds are rejected. |
@@ -5721,7 +5735,8 @@ The remaining intentionally non-struct names have explicit status:
 | Type | One job |
 | --- | --- |
 | `PolicyDocumentV1` | Closed source-policy root whose canonical bytes are signed and compiled |
-| `PolicySourceRevisionV1` | Immutable tenant/cluster/CRD identity, generation, canonical spec, policy digest, and deletion state for one accepted desired revision |
+| `KubernetesDesiredSourceRevisionV1` | Immutable tenant, cluster, CRD kind and identity, generation, canonical public spec, and deletion state for one policy or exception source |
+| `PolicyExceptionCandidateV1` / `PolicyExceptionAcknowledgementV1` | One signed, exact-target activation or revocation for a precompiled base-policy file grant and its authenticated node result |
 | `PolicyTargetV1` / `PolicyTargetSnapshotV1` | Exact immutable node/workload target set for one rollout revision |
 | `PolicyDeliveryCandidateV1` | Signed target-bound activation or retirement candidate sent by Control to one node |
 | `PolicyActivationAcknowledgementV1` | Authenticated node receipt that binds candidate, boot/label epoch, node-bound generation, readback, probe, and state |
@@ -5752,6 +5767,7 @@ The remaining intentionally non-struct names have explicit status:
 | `FallbackV1` | Explicit degraded result for a named missing capability/source; never issuer-selected fail-open |
 | `BudgetSetV1` | Bounded counts, rates, lifetimes, concurrency, and depth |
 | `ExceptionV1` | Signed, expiring, scoped authority delta with uses and approver |
+| `FileExceptionGrantTemplateV1` | Signed base-policy template for one named set of denied file rules and its maximum duration and uses; it is not an active instance |
 | `ExactExceptionSubjectSelectorV1` | Immutable exact workload/entry/role/key subject of an exception; no `*` |
 | `PermittedAuthorityDeltaV1` | Machine-readable permission widening or narrowing that an exception requests |
 | `ExceptionUseIdentityV1` | Exact claim-slot or kernel-effect-attempt identity that makes exception consumption idempotent across programs |
@@ -7338,24 +7354,26 @@ Chapters 11-12 describe one policy model. This section closes the places where
 two implementations might otherwise make different choices.
 
 **Problem.** An operator writes one rule denying the conversion worker access
-to a projected ServiceAccount token. Rust, BPF, the policy-review UI, and the
-qualification runner must all agree on the same actor, object, operation,
-failure result, and bytes. YAML order or a library's permissive defaults cannot
-change that decision.
+to a canonical path. Rust, BPF, the policy-review UI, and the qualification
+runner must all agree on the same actor, path, operation, failure result, and
+bytes. This path rule does not become semantic projected-token identity. YAML
+order or a library's permissive defaults cannot change the decision.
 
 #### A.11.1 Source-file rules
 
-Production Kubernetes mode serves the structural
-`WorkloadProtectionProfile.mithril.erebor.dev/v1alpha1` CRD. The API server's
-stored typed `.spec`, after the declared storage-version conversion, is the
-desired-state source. The CRD schema and Control decoder reject unknown
-fields, unknown enums, lossy conversions, and input beyond the declared size,
-depth, and count limits. The original submitted YAML bytes, comments, map
-order, Kubernetes status, managed fields, and watch order carry no authority.
+Production Kubernetes mode serves two structural CRDs. The base policy uses
+group `mithril.erebor.dev`, plural `workloadprotectionpolicies`, kind
+`WorkloadProtectionPolicy`, namespaced scope, served version `v1alpha1`, and
+one declared storage version. A bounded exception uses the same group, scope,
+and versions, plural `workloadprotectionexceptions`, and kind
+`WorkloadProtectionException`.
 
-The exact Kubernetes identity is group `mithril.erebor.dev`, plural
-`workloadprotectionprofiles`, kind `WorkloadProtectionProfile`, namespaced
-scope, served version `v1alpha1`, and one declared storage version.
+The API server's stored typed `.spec`, after the declared storage-version
+conversion, is the desired-state source. Each CRD schema and the Control
+decoder reject unknown fields, unknown enums, lossy conversions, and input
+beyond declared size, depth, and count limits. The original submitted YAML
+bytes, comments, map order, Kubernetes status, managed fields, and watch order
+carry no authority.
 
 The supported Kubernetes write path requires strict API field validation. An
 unknown field cannot reach stored state or a candidate. A server/client mode
@@ -7363,128 +7381,237 @@ that silently prunes unknown input is unsupported for the exact-source claim;
 the operator must not mistake a pruned request for the policy that Control
 compiled.
 
-Offline review, import, and qualification use UTF-8 YAML 1.2 restricted to the
-JSON data model. That decoder rejects duplicate keys, anchors, aliases, merge
-keys, custom tags, non-string map keys, implicit timestamps, NaN/infinity,
+Offline review, import, and qualification use the exact
+`WorkloadProtectionPolicy.spec` shape in UTF-8 YAML 1.2 restricted to the JSON
+data model. That decoder rejects duplicate keys, anchors, aliases, merge keys,
+custom tags, non-string map keys, implicit timestamps, NaN or infinity,
 integers outside the declared type, unknown fields, unknown enums, and input
-beyond the signed size, depth, and count limits. Enum source values are
-uppercase ASCII. Durations match `^[0-9]+(ns|us|ms|s|m|h)$`; zero is legal only
-where the field says so. Offline YAML cannot activate production Kubernetes
-policy without creating or updating the CRD through the authenticated API.
+beyond the declared size, depth, and count limits. Durations match
+`^[0-9]+(ns|us|ms|s|m|h)$`; zero is legal only where the field says so. Offline
+YAML cannot activate production Kubernetes policy without creating or updating
+the CRD through the authenticated API.
 
-Both source forms map to the same closed `PolicyDocumentV1` and deterministic
-CBOR. A required golden compares their canonical bytes. Version 1 has no
-generic extension or metadata bag.
+The public shapes are:
 
 ```text
-PolicyDocumentV1 {
-  api_version: exactly "mithril.erebor.dev/v1"
-  kind: exactly "ProtectionPolicy"
-  metadata {
-    profile_id: Id128
-    profile_version: nonzero u64
-    trust_domain_id: Id128
-    valid_from_utc: RFC3339 UTC normalized to i64 nanoseconds
-    valid_until_utc?: RFC3339 UTC normalized to i64 nanoseconds
-  }
-  required_capability_ids[]
-  protected_universe {
-    workload_selector_ids[]
-    protected_scope_ids[]
-    execution_set_ids[]
-    role_ids[]
-    entry_kind_ids[]
-    object_class_ids[]
-    provider_account_ids[]
-  }
-  workload_selectors[]: WorkloadSelectorV1
-  classifier_bindings[]: ObjectClassifierBindingV1
-  roles[]: RoleDefinitionV1
-  entry_role_assignments[]: EntryRoleAssignmentV1
-  native_transition_rules[]: NativeRoleTransitionRuleV1
-  state_bit_definitions[]: StateBitDefinitionV1
-  process_state_definitions[]: ProcessStateDefinitionV1
-  native_authority_state_rules[]: NativeAuthorityStateRuleV1
-  ipc_relationship_rules[]: IpcRelationshipRuleV1
-  unmatched_ipc_disposition: ALLOW | ALERT | DENY
-  effect_family_defaults[]: EffectFamilyDefaultV1
-  authority_behavior_rules[]: AuthorityBehaviorRuleV1
-  correlation_package_bindings[]: CorrelationPackageBindingV1
-  default_postures: DefaultPosturesV1
-  notification_routes[]: NotificationRouteV1
-  response_bindings[]: ResponseBindingV1
-  exceptions[]: ExceptionV1
-  rules[]: DetectionDispositionRuleV1
-  source_coverage_health_rules[]: SourceCoverageHealthRuleV1
-  rollout: RolloutV1
+WorkloadProtectionPolicySpecV1 {
+  pod_selector: KubernetesLabelSelectorV1
+  mode: OBSERVE | PROTECT
+  containers[1..256]: ContainerPolicyMatchV1
+  roles[1..256]: KubernetesRolePolicyV1
+  exception_grants[0..256]: FileExceptionGrantV1
 }
 
-PolicyLocalIdV1 = UTF-8 matching ^[a-z][a-z0-9.-]{0,127}$
-RegistrySymbolV1 = ASCII matching ^[A-Z][A-Z0-9_]{0,127}$
-PackageIdV1 = ASCII matching ^[A-Z][A-Z0-9-]{0,126}[0-9]$
-CapabilityIdV1 = RegistrySymbolV1
-OracleValidatorIdV1 = RegistrySymbolV1
-OracleSchemaIdV1 = RegistrySymbolV1
-ReasonCodeIdV1 = RegistrySymbolV1
-ObjectClassIdV1 = RegistrySymbolV1
-ResultCodeIdV1 = RegistrySymbolV1
-CapabilityRecordIdV1 = Id128
-QualificationRecordIdV1 = Id128
+ContainerPolicyMatchV1 {
+  names[1..64]: Kubernetes container names
+  kinds[1..4]: INIT | SIDECAR | APPLICATION | EPHEMERAL
+  images[1..256]: digest-pinned immutable image references
+  initial_role, external_role: PolicyLocalIdV1
+}
 
-CanonicalArgvV1 =
-  u32_be(argument_count) ||
-  for each argument in order: u32_be(byte_length) || raw argument bytes
+KubernetesRolePolicyV1 {
+  name: PolicyLocalIdV1
+  files[0..1024]: PathRuleV1
+  execution[0..1024]: PathRuleV1
+  network: NetworkRulesV1
+  process_control[0..1024]: ProcessControlRuleV1
+  unix_streams[0..1024]: UnixStreamRelationshipV1
+}
+
+PathRuleV1 {
+  name: PolicyLocalIdV1
+  path: absolute canonical path
+  recursive: bool
+  operations[1..16]: closed operation enum for the containing family
+  action: ALLOW | DENY
+}
+
+FileOperationV1 = OPEN_READ | OPEN_WRITE | READ | WRITE | MMAP_READ |
+  MMAP_WRITE | CREATE | SET_ATTRIBUTES | UNLINK | LINK | RENAME
+ExecutionOperationV1 = EXECUTE | MMAP_EXECUTE | MPROTECT
+
+NetworkRulesV1 {
+  socket_controls[0..256]: SocketControlRuleV1
+  destinations[0..1024]: AddressDestinationRuleV1
+}
+
+SocketControlRuleV1 {
+  operations[1..5]: CREATE | LISTEN | ACCEPT | SHUTDOWN | SET_SOCKET_OPTION
+  action: ALLOW | DENY
+}
+
+AddressDestinationRuleV1 {
+  name: PolicyLocalIdV1
+  operations[1..4]: CONNECT | SEND | RECEIVE | BIND
+  protocols[1..2]: TCP | UDP
+  cidrs[1..256]: canonical IPv4 or IPv6 prefixes
+  ports[1..256]: { first:u16, last:u16 }
+  action: ALLOW | DENY
+}
+
+ProcessControlRuleV1 =
+  SIGNAL {
+    name: PolicyLocalIdV1
+    target_role: PolicyLocalIdV1
+    signals[1..64]: sorted unique u32
+    action: ALLOW | DENY
+  }
+  | PTRACE {
+      name: PolicyLocalIdV1
+      target_role: PolicyLocalIdV1
+      requests[1..64]: sorted unique u32
+      action: exactly DENY
+    }
+
+UnixStreamRelationshipV1 {
+  name: PolicyLocalIdV1
+  peer_roles[1..256]: sorted unique PolicyLocalIdV1
+  action: ALLOW | DENY
+}
+
+FileExceptionGrantV1 {
+  name: PolicyLocalIdV1
+  file_rules[1..256]: PolicyLocalIdV1
+  maximum_duration: bounded nonzero duration
+  maximum_uses: 1..65535
+}
+
+FileExceptionGrantTemplateV1 {
+  grant_id: PolicyLocalIdV1
+  denied_file_rule_ids[1..256]: sorted unique PolicyLocalIdV1
+  maximum_duration_ns: nonzero u64
+  maximum_uses: 1..65535
+}
+
+WorkloadProtectionExceptionSpecV1 {
+  policy_ref: { name: Kubernetes object name }
+  grant: PolicyLocalIdV1
+  target {
+    pod { name: Kubernetes Pod name, uid: Kubernetes UID }
+    container_name: Kubernetes container name
+  }
+  requested_duration: bounded nonzero duration
+  requested_uses: 1..65535
+}
+
+WorkloadProtectionPolicyStatusV1 {
+  observed_generation: nonnegative i64
+  rollout { desired:u32, active:u32, updating:u32, failed:u32 }
+  conditions[0..8]: Kubernetes Condition
+}
+
+WorkloadProtectionExceptionStatusV1 {
+  observed_generation: nonnegative i64
+  state: PENDING | ACTIVE | CONSUMED | EXPIRED | REVOKED | FAILED
+  conditions[0..8]: Kubernetes Condition
+}
 ```
 
-`CanonicalArgvV1` contains `1..256` arguments and at most 4096 aggregate
-argument bytes. Embedded NUL is rejected where Linux/Kubernetes cannot
-represent it. There is no shell parsing, `PATH` resolution, Unicode folding,
-or whitespace normalization in this encoding. A digest is calculated only
-when a containing signed or content-addressed contract needs the argv identity.
+All names that form internal IDs are unique in their containing policy. Rule
+operations are closed to the applicable sets in Chapter 11. The schema rejects
+recursive allow until its Kubernetes runtime control is physically qualified.
+It also rejects overlapping rules with different actions, more than one
+container match, more than one policy match, a missing reference, an exception
+outside its base grant, and every deliberately absent field listed in Chapter
+11.
 
-In production Kubernetes mode, Control records the source before it can create
-a candidate:
+The public policy and the offline source lower through the same Control
+function. A golden compares the derived internal `PolicyDocumentV1` bytes for
+the same public spec. The public source never accepts `PolicyDocumentV1`
+directly. Each public `exceptionGrants` entry becomes one closed
+`FileExceptionGrantTemplateV1` in the internal policy. The internal static
+`exceptions` list remains empty for this Kubernetes source; exact runtime
+instances come only from `WorkloadProtectionException`. Version 1 has no
+generic extension or metadata bag.
+
+Control records every accepted source before it can create a candidate:
 
 ```text
-PolicySourceRevisionV1 {
+KubernetesDesiredSourceRevisionV1 {
   schema_version: exactly 1
+  source_kind: POLICY | EXCEPTION
   tenant_id, cluster_uid, namespace_uid, object_uid: Id128
-  namespace_name: UTF-8 Kubernetes namespace name
-  object_name: UTF-8 Kubernetes object name
+  namespace_name, object_name: Kubernetes names
   api_version: exactly "mithril.erebor.dev/v1alpha1"
-  kind: exactly "WorkloadProtectionProfile"
   object_generation: nonzero u64
   opaque_resource_version: bstr(1..1024)
   canonical_spec_digest: DigestV1
-  policy_document_digest: DigestV1
+  policy_document_digest?: DigestV1, present only for POLICY
   state: ACCEPTED | DELETION_REQUESTED
+  source_revision_id: DigestV1
 }
 
-policy_source_revision_id =
-  SHA-256(ASCII("MITHRIL-POLICY-SOURCE-REVISION-V1") || 0x00 ||
-    deterministic-CBOR(tenant_id, cluster_uid, namespace_uid, object_uid,
-      object_generation, canonical_spec_digest, policy_document_digest, state))
+PolicyExceptionCandidateV1 {
+  schema_version: exactly 1
+  exception_source_revision_id, policy_source_revision_id: DigestV1
+  signed_profile_digest: DigestV1
+  profile_generation_ref_id: nonzero u64
+  grant_name: PolicyLocalIdV1
+  compiled_cell_digests[1..256]: sorted unique DigestV1
+  exception_instance_id: ExceptionInstanceIdV1
+  tenant_id, cluster_uid, namespace_uid, pod_uid: Id128
+  container_name: Kubernetes container name
+  node_identity: NodeIdentityV1
+  node_boot_id: Id128
+  label_epoch: nonzero u64
+  maximum_uses: 1..65535
+  deadline_utc_ns: i64
+  operation: ACTIVATE | REVOKE
+  predecessor_candidate_content_id?: ArtifactContentIdV1
+  distribution_sequence_epoch, distribution_sequence: nonzero u64
+  candidate_content_id: ArtifactContentIdV1
+  seal: SignedArtifactSealV1
+}
+
+PolicyExceptionAcknowledgementV1 {
+  candidate_content_id: ArtifactContentIdV1
+  exception_instance_id: ExceptionInstanceIdV1
+  node_identity: NodeIdentityV1
+  node_boot_id: Id128
+  state: ACTIVE | REVOKED | CONSUMED | EXPIRED | REJECTED | STALE
+  consumed_uses: u32
+  latest_receipt_id?: ArtifactContentIdV1
+  observed_utc_ns: i64
+}
 ```
 
-The `PolicyDocumentV1.metadata` fields are policy fields in `.spec`; Kubernetes
-object metadata does not replace them. A conversion between served and stored
-CRD versions must preserve the canonical `PolicyDocumentV1` bytes or reject.
+Control derives internal policy metadata, protected-universe IDs, workload and
+entry IDs, capability and proof requirements, conservative failure posture,
+fixed operation results, object registries, rollout fields, and signature
+metadata. It assigns a monotonic internal policy version whenever the
+base-policy source revision changes. It lowers native transitions, state bits,
+authority behavior, correlation, findings, notifications, responses, and
+coverage rules to the fixed empty or conservative values required by this
+Kubernetes API.
+Later phases cannot expose one of those fields without a new qualified public
+contract.
+
 `opaque_resource_version` supports watch resumption only. Control uses object
-UID, generation, and canonical spec digest for source identity and uses the
-policy version and issuer sequence for anti-rollback.
+UID, generation, and canonical spec digest for source identity. It uses the
+base-policy source revision, internal policy version, and issuer sequence for
+policy anti-rollback. Exception candidates use their own source identity,
+target-bound distribution sequence, predecessor, and non-refunding instance
+state. A served-to-storage conversion must preserve the public semantic spec or
+reject.
 
 Control derives tenant, cluster, namespace UID, and object UID from its
 authenticated cluster configuration and API-server records. A CRD field,
-label, annotation, or status cannot select its own tenant. Control watches only
-configured tenant namespaces. Cross-tenant selectors reject before candidate
-creation.
+label, annotation, or status cannot select its own tenant. Control watches the
+namespaced resources cluster-wide. The resource namespace scopes the policy;
+there is no second configured protected-namespace selector. Cross-tenant
+references reject before candidate creation.
 
 List/watch delivery is at-least-once and may close, repeat, or compact. Control
-persists the accepted source revision, relists after compaction, and produces
-the same desired state after restart. A watch event by itself cannot sign,
-target, distribute, retire, or activate policy.
+persists accepted policy and exception source revisions, relists after
+compaction, and produces the same base-policy and exception desired state after
+restart. A watch event by itself cannot sign, target, distribute, retire, or
+activate policy or exception authority.
 
 #### A.11.2 Selectors classify candidates; bindings create authority
+
+The types below are internal compiler and signed-artifact types. Their wider
+fields do not appear in either Kubernetes CRD. The public lowering function
+constructs only the capability-grounded subset described in A.11.1.
 
 ```text
 LabelRequirementV1 {
@@ -8424,16 +8551,26 @@ The activation owner durably records the greatest accepted issuer sequence and
 profile version before publishing a generation. Lower signed values reject
 unless the exact rollback authorization is valid and unused.
 
-`policy_source_revision_id` is required for a profile produced from the
-production Kubernetes source and absent for an offline qualification profile.
-It binds the signed semantic policy to the accepted CRD revision without
-making Kubernetes metadata or status part of the policy document.
+`policy_source_revision_id` is required for a profile produced from a
+production Kubernetes base policy and absent for an offline qualification
+profile. It binds the signed semantic policy to one accepted base-policy
+revision without making Kubernetes metadata or status part of the policy
+document.
+
+`PolicyExceptionCandidateV1` uses domain separator
+`MITHRIL-POLICY-EXCEPTION-CANDIDATE-V1`. Its signature binds the exception
+source, active base-policy generation, grant, exact workload and node target,
+deadline, use limit, operation, predecessor, and distribution sequence. It is
+not a profile signature and cannot change policy cells.
 
 #### A.11.7 Build, read back, probe, activate, and retire
 
 ```text
-accept and persist the CRD source revision, or load the offline review source
-parse and validate the closed source, registries, and capabilities
+accept and persist the base-policy source revision,
+  or load the offline base-policy review source
+validate the closed public policy source and references
+lower the public base policy and inactive exception grants into the internal policy
+validate the internal policy, registries, and capabilities
 resolve selectors into immutable workload/object snapshots
 validate the role/transition graph and required capabilities
 expand every exact decision cell and reject conflicts/capacity overflow
@@ -8448,6 +8585,11 @@ run isolated allow and deny probes
 publish one active-generation handle for new admissions
 return an authenticated activation acknowledgement to Control
 ```
+
+An exception follows the separate path in Chapter 12. It resolves an inactive
+grant in an already active generation and changes only
+`ExceptionAuthorityOwner` runtime state. It does not build or publish another
+base-policy generation.
 
 Expansion happens in two immutable stages:
 
@@ -8605,8 +8747,8 @@ PolicyRolloutStateV1 {
 ```
 
 The candidate signature binds the exact target and operation. A node rejects
-a candidate for another node, tenant, source revision, target snapshot, or
-distribution sequence. The signed profile keeps its separate policy-issuer
+a candidate for another node, tenant, policy source revision, target snapshot,
+or distribution sequence. The signed profile keeps its separate policy-issuer
 sequence and rollback rules. The candidate sequence is keyed by distribution
 signer and exact target and prevents an older target assignment from becoming
 current. Idempotent redelivery requires the same candidate content ID. Control
@@ -8629,19 +8771,23 @@ and digest-verified. A reference to an artifact already on the node is valid
 only after exact durable readback of that digest.
 
 Selection is immutable per snapshot. A changed Pod, workload binding, or node
-inventory creates a new target snapshot and rollout transition. Control does
-not edit an old snapshot to make rollout health look complete. CRD status may
-project `observedGeneration`, source and candidate digests, aggregate bounded
-counts, and `Accepted`, `Compiled`, `Progressing`, `Available`, `Degraded`, or
-`Retiring` conditions. The durable per-target record remains
-`PolicyRolloutStateV1`, and status cannot authorize any transition.
+inventory creates a new target snapshot and rollout
+transition. Control does not edit an old snapshot to make rollout health look
+complete. Policy status projects `observedGeneration`, standard conditions,
+and bounded `desired`, `active`, `updating`, and `failed` counts. Exception
+status projects `observedGeneration`, standard conditions, and one bounded
+state. Source and candidate digests, signatures, receipts, counters, and
+per-target inventory stay in the Control store. Status cannot authorize any
+transition.
 
-Deletion creates `DELETION_REQUESTED` source state and a signed `REPLACE` or
-`RETIRE_TO_RESTRICTIVE_TERMINAL` candidate. The candidate names the exact
-predecessor. A node never removes a generation merely because the CRD, its
-namespace, or its finalizer disappeared. If no valid successor activates, the
-last valid generation remains available to its existing and new applicable
-admissions according to its signed validity and local failure posture.
+Base-policy deletion creates `DELETION_REQUESTED` source state and a signed
+`REPLACE` or `RETIRE_TO_RESTRICTIVE_TERMINAL` candidate. Exception deletion,
+expiry, exhaustion, or revocation creates a signed `REVOKE` operation for the
+exact exception instance and keeps the consumption record. Every restrictive
+operation names the exact predecessor. A node never removes a generation
+merely because a CRD, namespace, or finalizer disappeared. If no valid policy
+successor activates, the last valid base generation remains available
+according to its signed validity and local failure posture.
 
 #### A.11.8 Required goldens and stable failures
 
@@ -8651,15 +8797,17 @@ CBOR, every registry payload/digest, header, signature, envelope, compiler
 cells, and round trip. Prose substitutions and the retained stale
 `CFG-V1-GOLDEN-001` bytes are not conformance data.
 
-The Phase 6.2 source golden adds the stored CRD `.spec`,
-`PolicySourceRevisionV1`, target snapshot, signed delivery candidate, and
-activation acknowledgement. It proves that the CRD and offline source forms
-produce the same `PolicyDocumentV1` bytes. It also covers unknown CRD fields,
-lossy version conversion, duplicate watch delivery, stale UID/generation,
-duplicate profile ID, overlapping workload selection, watch
-compaction/relist, delete/recreate, wrong target, stale boot, partial rollout,
-and status mutation. These are phase-owned tests; they do not add an Appendix
-C fixture ID.
+The Phase 6.2 source golden adds the stored policy spec, policy and exception
+source revisions, policy target snapshot and delivery candidate, exception
+activation and revocation candidates, and both acknowledgement families. It
+proves that the stored policy
+spec and offline policy form produce the same internal `PolicyDocumentV1`
+bytes. It also covers every absent public field, unknown fields, lossy version
+conversion, invalid references, bounded exception consumption, duplicate watch
+delivery, stale UID or generation, overlapping workload selection, watch
+compaction and relist, delete and recreate, wrong target, stale boot, partial
+rollout, and status mutation. These are phase-owned tests; they do not add an
+Appendix C fixture ID.
 
 `CFG-ROLLBACK-GOLDEN-002` covers exact current-to-older success and wrong
 current, wrong target, wrong platform, expired, replayed, and signed-without-
@@ -10372,8 +10520,8 @@ never upgrades an edge to exact.
 
 The intake source registration and evidence batch bind node identity, boot,
 label epoch, source, and source epoch. The activation acknowledgement binds
-that coordinate and the node-local profile-generation reference to the source
-revision, candidate, target snapshot, and node-bound generation. Phase 7
+that coordinate and the node-local profile-generation reference to the derived
+policy revision, candidate, target snapshot, and node-bound generation. Phase 7
 creates `PolicyObservationProvenanceV1` from those exact records. Time, CRD
 status, and aggregate rollout counts cannot fill a missing join. A finding that
 depends on policy state lists the exact provenance ID or reports it missing or
@@ -11080,11 +11228,11 @@ accidentally revive them. They are history, not a second normative contract.
 | Rejected or corrected idea | Why it is wrong | Replacement |
 | --- | --- | --- |
 | Version 1 generic metadata extensions | Unknown signed fields create divergent interpretations | Closed schema; unknown/duplicate key rejects (§12) |
-| Put free-form policy YAML in one CRD string | API schema, conversion, field ownership, and typed rejection cannot protect the policy shape | Structural `WorkloadProtectionProfile` `.spec` mapped exactly to closed `PolicyDocumentV1` (Ch. 11-12, Appendix A.11) |
+| Flatten the internal policy document into a CRD or put YAML in one string | The API would expose unqualified capabilities, and schema, conversion, field ownership, and typed rejection could not preserve the public boundary | Structural `WorkloadProtectionPolicy` and bounded `WorkloadProtectionException` resources lower through one Control owner into internal `PolicyDocumentV1` (Ch. 11-12, Appendix A.11) |
 | Every node watches policy CRDs | It creates many policy-source owners and bypasses Control compilation, signing, targeting, and rollout truth | Control alone reconciles CRDs and sends signed target-bound candidates; node alone activates them (Ch. 5, §12, §34) |
 | CRD status or finalizer grants node authority | Status is mutable reporting state and finalizers can be removed | Authenticated signed candidate plus node readback/probe/CAS; status is a bounded projection only (§12, Appendix A.11.7) |
 | CRD deletion erases active node policy | API or Control outage could remove protection without a safe node transaction | Signed exact retirement or successor through normal activation; otherwise keep the last valid generation (§12, §32) |
-| Compose overlapping CRDs by priority, creation order, or “deny wins” | The result depends on mutable metadata or an incomplete conflict rule and can create two policy owners for one workload | Version 1 rejects duplicate profile IDs and exact workload overlap; a later composition model must define one closed exact-cell compiler (§11-12) |
+| Compose overlapping base-policy CRDs by priority, creation order, or “deny wins” | The result depends on mutable metadata or an incomplete conflict rule and can create two policy owners for one workload | Version 1 rejects more than one policy match for one Pod. A bounded exception can change only a named file grant in that one base policy. A later composition model must define one closed exact-cell compiler (§11-12). |
 | Two independent transition authorities | Role shorthand and explicit transition could disagree | Compiler lowers both to one table and rejects conflicts (§11-12) |
 | Cgroup lookup before existing task label | Moving a task can escape policy | Task-first lookup everywhere (§13) |
 | Prose specificity, YAML order, priority, or “deny wins” resolves source conflict | These rules are ambiguous before exact lowering | Expand exact cell; identical physical results merge; differing results need explicit signed override (§12) |
