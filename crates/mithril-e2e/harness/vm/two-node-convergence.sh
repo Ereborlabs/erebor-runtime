@@ -525,6 +525,8 @@ wait_node_projection "$node_b_name" true false
 
 if [[ $manual_environment == true ]]; then
   manual_env=$work_a/mithril-convergence-manual.env
+  # K3s dispatches kubectl by executable name in the operator shell.
+  "$provider" run "$vm_a" sudo ln -s /usr/local/bin/k3s /usr/local/bin/kubectl
   {
     printf 'MITHRIL_MANUAL_SOURCE=%q\n' /mnt/mithril-source
     printf 'MITHRIL_BIN_DIRECTORY=%q\n' /mnt/mithril-source/target/debug
