@@ -630,6 +630,11 @@ impl KubernetesWorkloadInventoryOwner {
             .uid
             .as_deref()
             .ok_or_else(|| admission_error("protected bound Pod has no UID"))?;
+        let pod_name = pod
+            .metadata
+            .name
+            .as_deref()
+            .ok_or_else(|| admission_error("protected bound Pod has no name"))?;
         let spec = pod
             .spec
             .as_ref()
@@ -724,6 +729,7 @@ impl KubernetesWorkloadInventoryOwner {
             ]);
             let kubernetes = KubernetesWorkloadIdentityV1 {
                 namespace_name: namespace_name.clone(),
+                pod_name: pod_name.to_owned(),
                 profile_id: profile_id.clone(),
                 policy_source_revision_id: source_revision_id.clone(),
                 binding_id,

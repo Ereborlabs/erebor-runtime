@@ -48,6 +48,8 @@ pub struct WorkloadTargetFactV1 {
 #[serde(deny_unknown_fields)]
 pub struct KubernetesWorkloadIdentityV1 {
     pub namespace_name: String,
+    #[serde(default)]
+    pub pod_name: String,
     pub profile_id: String,
     pub policy_source_revision_id: String,
     pub binding_id: String,
@@ -122,15 +124,15 @@ pub struct PolicyReconcileHealthV1 {
 #[derive(Clone)]
 /// Owns accepted desired state, compilation, conflict checks, and reconciliation status.
 pub struct PolicyDesiredStateOwner {
-    config: Arc<PolicyDesiredStateConfigV1>,
-    store: ControlStore,
+    pub(super) config: Arc<PolicyDesiredStateConfigV1>,
+    pub(super) store: ControlStore,
     compiler: Arc<PolicyCompiler>,
     signing_key: Arc<SigningKey>,
     seal_request: Arc<ProfileSealRequestV1>,
     state: Arc<Mutex<DesiredStateMemory>>,
     // One guard owns the multi-commit reconcile transaction across watch and admission callers.
-    reconcile_lock: Arc<Mutex<()>>,
-    rollout: PolicyRolloutOwner,
+    pub(super) reconcile_lock: Arc<Mutex<()>>,
+    pub(super) rollout: PolicyRolloutOwner,
 }
 
 #[derive(Default)]
@@ -150,11 +152,11 @@ struct DesiredStateMemory {
 #[derive(Clone)]
 /// Owns immutable target snapshots, node candidates, and acknowledgement transitions.
 pub struct PolicyRolloutOwner {
-    store: ControlStore,
-    signing_key: Arc<SigningKey>,
-    signing_key_id: Arc<str>,
-    distribution_sequence_epoch: u64,
-    candidate_validity_ns: i64,
+    pub(super) store: ControlStore,
+    pub(super) signing_key: Arc<SigningKey>,
+    pub(super) signing_key_id: Arc<str>,
+    pub(super) distribution_sequence_epoch: u64,
+    pub(super) candidate_validity_ns: i64,
 }
 
 impl PolicyDesiredStateConfigV1 {
@@ -1167,7 +1169,7 @@ fn status_for(
     }
 }
 
-fn kubernetes_condition(
+pub(super) fn kubernetes_condition(
     condition_type: &str,
     status: bool,
     observed_generation: u64,

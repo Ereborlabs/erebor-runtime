@@ -396,8 +396,12 @@ impl WorkloadProtectionExceptionSpec {
                 reason: "the exception needs one policy, grant, exact Pod UID, container, and nonzero use count",
             }
         );
-        parse_duration_ns(&self.requested_duration, exception_id)?;
+        self.requested_duration_ns(exception_id)?;
         Ok(())
+    }
+
+    pub fn requested_duration_ns(&self, exception_id: &str) -> Result<u64> {
+        parse_duration_ns(&self.requested_duration, exception_id)
     }
 }
 

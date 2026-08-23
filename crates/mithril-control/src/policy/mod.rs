@@ -2,6 +2,7 @@ mod artifact;
 mod canonical;
 mod compiler;
 mod kubernetes;
+mod kubernetes_exceptions;
 mod kubernetes_nodes;
 mod kubernetes_workloads;
 mod path;
@@ -20,6 +21,7 @@ pub use compiler::{
     StaticDecisionKeyV1, StaticExpandedProfileV1,
 };
 pub use kubernetes::*;
+pub use kubernetes_exceptions::*;
 pub use kubernetes_nodes::*;
 pub use kubernetes_workloads::*;
 pub use path::*;
