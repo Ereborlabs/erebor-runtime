@@ -515,7 +515,7 @@ impl NodeChassis {
                     });
                     backoff = self.config.control.reconnect_minimum();
                     let mut evidence_in_flight = false;
-                    let mut coverage_in_flight = None;
+                    let mut coverage_in_flight = Vec::new();
                     let mut acknowledged_coverage = None;
                     let mut evidence_upload = tokio::time::interval(Duration::from_millis(100));
                     evidence_upload
@@ -556,12 +556,17 @@ impl NodeChassis {
                                         evidence_in_flight = false;
                                     }
                                     NodeControlMessage::CoverageAck(ack) => {
-                                        if coverage_in_flight.as_ref() != Some(&ack) {
+                                        let Some(position) = coverage_in_flight
+                                            .iter()
+                                            .position(|expected| expected == &ack)
+                                        else {
                                             break;
+                                        };
+                                        coverage_in_flight.swap_remove(position);
+                                        if coverage_in_flight.is_empty() {
+                                            acknowledged_coverage =
+                                                Some((ack.source_epoch, ack.revision));
                                         }
-                                        acknowledged_coverage =
-                                            Some((ack.source_epoch, ack.revision));
-                                        coverage_in_flight = None;
                                     }
                                 }
                             }
@@ -586,12 +591,12 @@ impl NodeChassis {
                                         }
                                     }
                                 }
-                                if coverage_in_flight.is_none() {
+                                if coverage_in_flight.is_empty() {
                                     if let Some(snapshot) = self.observations.coverage_snapshot() {
                                         let key = (snapshot.source_epoch, snapshot.revision);
                                         if acknowledged_coverage != Some(key) {
-                                            match connection.send_coverage_report(snapshot).await {
-                                                Ok(expected) => coverage_in_flight = Some(expected),
+                                            match connection.send_coverage_reports(snapshot).await {
+                                                Ok(expected) => coverage_in_flight = expected,
                                                 Err(error) => {
                                                     eprintln!("Mithril node coverage report failed: {error}");
                                                     break;
