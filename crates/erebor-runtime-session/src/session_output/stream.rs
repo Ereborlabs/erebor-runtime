@@ -137,6 +137,7 @@ impl DurableStreamStore {
             action: "creating stream directory",
             path: &directory,
         })?;
+        let _stream_lock = lock_stream(&directory, kind, FlockOperation::LockShared)?;
         let state = inspect_segments(&directory, kind)?;
         Ok(Self {
             directory,
@@ -160,6 +161,8 @@ impl DurableStreamStore {
             }
             .build()
         })?;
+        let _stream_lock = lock_stream(&self.directory, self.kind, FlockOperation::LockExclusive)?;
+        refresh_state_if_changed(&self.directory, self.kind, &mut state)?;
         let mut record = DurableStreamRecord {
             sequence: state.next_sequence,
             timestamp_unix_ms,
@@ -238,10 +241,18 @@ impl DurableStreamStore {
             }
             .build()
         })?;
+        let _stream_lock = lock_stream(&self.directory, self.kind, FlockOperation::LockShared)?;
         let mut records = Vec::new();
         let mut expected_previous = None;
         let mut expected_sequence = None;
-        for path in segment_paths(&self.directory, self.kind)? {
+        let paths = segment_paths(&self.directory, self.kind)?;
+        let first_sequence = paths
+            .first()
+            .map(|path| first_sequence(path))
+            .transpose()?
+            .flatten()
+            .unwrap_or(state.next_sequence);
+        for path in paths {
             for line in locked_reader(&path)?.lines() {
                 let line = line.context(IoSnafu {
                     action: "reading stream segment",
@@ -266,7 +277,7 @@ impl DurableStreamStore {
         Ok(DurableStreamCursor {
             records,
             durable_cursor,
-            truncated_before_cursor: state.first_sequence > after_sequence.saturating_add(1),
+            truncated_before_cursor: first_sequence > after_sequence.saturating_add(1),
         })
     }
 
@@ -306,6 +317,69 @@ impl DurableStreamStore {
         self.directory
             .join(format!("{}-{segment:020}.jsonl", self.kind.as_str()))
     }
+}
+
+fn lock_stream(
+    directory: &Path,
+    kind: StreamKind,
+    operation: FlockOperation,
+) -> Result<File, SessionOutputError> {
+    let path = directory.join(format!(".{}.lock", kind.as_str()));
+    let file = OpenOptions::new()
+        .create(true)
+        .read(true)
+        .truncate(false)
+        .write(true)
+        .open(&path)
+        .context(IoSnafu {
+            action: "opening stream lock",
+            path: &path,
+        })?;
+    flock(&file, operation)
+        .map_err(std::io::Error::from)
+        .context(IoSnafu {
+            action: "locking stream",
+            path: &path,
+        })?;
+    Ok(file)
+}
+
+fn refresh_state_if_changed(
+    directory: &Path,
+    kind: StreamKind,
+    state: &mut StreamState,
+) -> Result<(), SessionOutputError> {
+    let paths = segment_paths(directory, kind)?;
+    let mut total_bytes = 0_u64;
+    for path in &paths {
+        total_bytes = total_bytes.saturating_add(
+            path.metadata()
+                .context(IoSnafu {
+                    action: "inspecting stream segment",
+                    path,
+                })?
+                .len(),
+        );
+    }
+    let current_tail = paths
+        .last()
+        .map(|path| {
+            Ok((
+                segment_number(path).unwrap_or(0),
+                path.metadata()
+                    .context(IoSnafu {
+                        action: "inspecting stream segment",
+                        path,
+                    })?
+                    .len(),
+            ))
+        })
+        .transpose()?;
+    let cached_tail = (state.segment_bytes > 0).then_some((state.segment, state.segment_bytes));
+    if current_tail != cached_tail || total_bytes != state.total_bytes {
+        *state = inspect_segments(directory, kind)?;
+    }
+    Ok(())
 }
 
 pub struct SessionOutputStores {
@@ -662,6 +736,32 @@ mod tests {
 
         assert_eq!(page.records().len(), 128);
         assert_eq!(page.durable_cursor(), 128);
+        Ok(())
+    }
+
+    #[test]
+    fn independent_writers_refresh_the_authoritative_chain(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let temporary = TempDir::new()?;
+        let first =
+            DurableStreamStore::open(temporary.path(), StreamKind::Evidence, 64 * 1024, 256, true)?;
+        let second =
+            DurableStreamStore::open(temporary.path(), StreamKind::Evidence, 64 * 1024, 256, true)?;
+
+        let appended = vec![
+            first.append(1, "daemon", b"one".to_vec())?,
+            second.append(2, "controller", b"two".to_vec())?,
+            first.append(3, "daemon", b"three".to_vec())?,
+            second.append(4, "controller", b"four".to_vec())?,
+        ];
+        let page = first.read_after(0, 10)?;
+
+        assert_eq!(page.records(), appended.as_slice());
+        assert!(page.records()[0].previous_sha256().is_empty());
+        for records in page.records().windows(2) {
+            assert_eq!(records[1].sequence(), records[0].sequence() + 1);
+            assert_eq!(records[1].previous_sha256(), records[0].sha256());
+        }
         Ok(())
     }
 }
