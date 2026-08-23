@@ -773,7 +773,7 @@ impl NodeChassis {
                         }
                     }
                 }
-                Err(_error) => {}
+                Err(error) => eprintln!("Mithril node Control connection failed: {error}"),
             }
             if let (Some(administrative), Some(host)) =
                 (self.administrative.as_mut(), self.host.as_mut())
