@@ -32,9 +32,9 @@ This option uses a separate branch-scoped VM name. It cannot run with
 with delegated systemd containment and a branch-scoped bpffs pin root. It uses
 the `codex-v1-fixture` Agent, three root-curated static-probe packages, and
 seven dedicated policy packages. The execute-only static probe makes
-`OpenPath`, inherited-PTY `Read`, or target `OpenWrite` the first file
-operation in each negative case. The lane checks process execution, file open,
-file read, file mutation, socket connect,
+`OpenRead` without a read syscall, inherited-PTY `Read`, or target `OpenWrite`
+the first file operation in each negative case. The lane checks process
+execution, file open, file read, file mutation, socket connect,
 held-cgroup separation, first-exec denial, stop and kill cleanup, activation
 cancellation, restart fencing, and evidence coverage. The App Server pipe and
 interactive PTY cases are transport checks. They do not qualify exact pipe or

@@ -26,6 +26,7 @@ file "$runtime_file_probe" | grep -q 'statically linked'
 printf '%s' runtime-target >"$runtime_file_target"
 [[ $($runtime_file_probe open "$runtime_file_target") == \
   runtime-file-open-succeeded ]]
+[[ $(<"$runtime_file_target") == runtime-target ]]
 [[ $(printf r | "$runtime_file_probe" read "$runtime_file_target") == \
   runtime-file-read-succeeded ]]
 printf '%s' mutation-sentinel >"$runtime_file_target"

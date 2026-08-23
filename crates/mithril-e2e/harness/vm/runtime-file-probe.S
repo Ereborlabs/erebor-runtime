@@ -89,10 +89,11 @@ write_success:
         jmp exit_probe
 
 open_target:
+        /* O_RDONLY|O_CLOEXEC emits OpenRead without a read syscall. */
         movl $257, %eax
         movl $-100, %edi
         movq %r12, %rsi
-        movl $0x280000, %edx
+        movl $0x80000, %edx
         xorl %r10d, %r10d
         syscall
         ret

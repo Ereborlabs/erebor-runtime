@@ -1001,8 +1001,16 @@ checks = {
     "allow_file_mutation": has_effect(allow, 2, (3, 5, 8, 10, 16, 17, 18, 25, 26), 0),
     "allow_socket_connect": has_effect(allow, 3, 12, 0),
     "deny_exec": has_effect(deny_exec, 1, 1, 1),
-    "deny_file_open": facts["file_open_success_marker_absent"] == "true" and has_effect(deny_file_open, 2, 39, 1),
-    "deny_file_read": facts["file_read_success_marker_absent"] == "true" and has_effect(deny_file_read, 2, 4, 1) and not has_effect(deny_file_read, 2, 39),
+    "deny_file_open": (
+        facts["file_open_success_marker_absent"] == "true"
+        and has_effect(deny_file_open, 2, 2, 1)
+        and not has_effect(deny_file_open, 2, 39)
+    ),
+    "deny_file_read": (
+        facts["file_read_success_marker_absent"] == "true"
+        and has_effect(deny_file_read, 2, 4, 1)
+        and not has_effect(deny_file_read, 2, 2)
+    ),
     "deny_file_mutation": (
         facts["file_mutation_success_marker_absent"] == "true"
         and facts["file_mutation_target_unchanged"] == "true"
