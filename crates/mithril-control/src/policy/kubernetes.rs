@@ -2006,7 +2006,7 @@ impl PolicyTargetSnapshotV1 {
             PolicyValidationSnafu {
                 policy_id: &policy_source_revision_id,
                 code: "CFG_POLICY_TARGETS",
-                reason: "the target snapshot is empty, duplicate, invalid, or exceeds its bound",
+                reason: "the target snapshot is duplicate, invalid, or exceeds its bound",
             }
         );
         let mut snapshot = Self {

@@ -1512,19 +1512,19 @@ fn status_for(
                 "Progressing",
                 progressing,
                 "RolloutPending",
-                "One or more selected targets have not activated the desired policy.",
+                "One or more current or retiring targets have not reached the desired state.",
             ),
             condition(
                 "Available",
                 available,
                 "AllTargetsActive",
-                "All selected targets activated the desired policy.",
+                "All current targets are active and no retirement is pending.",
             ),
             condition(
                 "Degraded",
                 degraded,
                 degraded_reason.unwrap_or("NoDegradedTarget"),
-                "One or more selected targets rejected or lost the desired policy.",
+                "One or more current or retiring targets rejected or lost the desired state.",
             ),
             condition(
                 "Retiring",
