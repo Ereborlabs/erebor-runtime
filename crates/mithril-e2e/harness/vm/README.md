@@ -191,6 +191,37 @@ crates/mithril-e2e/harness/vm/manual.sh destroy
 
 `destroy` removes the VM and its local work directory.
 
+For the two-node policy-convergence case, create and enter the retained
+environment with:
+
+```bash
+crates/mithril-e2e/harness/vm/manual.sh start-convergence
+crates/mithril-e2e/harness/vm/manual.sh ssh-convergence
+```
+
+The environment contains two K3s Nodes, the installed Mithril chart, unique
+node identities, the stock OCI hooks, and the repository mounted read-only at
+`/mnt/mithril-source`. In the first guest, prepare the shell with:
+
+```bash
+sudo -i
+. /var/tmp/mithril-convergence-manual.env
+cd "$MITHRIL_MANUAL_SOURCE"
+kubectl get nodes -o wide
+kubectl -n mithril-system get pods -o wide
+```
+
+Run the scenario command from its example README. The harness does not select
+or run the scenario. After the example reports that it removed its namespace
+and RuntimeClasses, leave the guest and remove both VMs from the host:
+
+```bash
+crates/mithril-e2e/harness/vm/manual.sh destroy-convergence
+```
+
+The destroy command checks both retained provider ownership records before it
+removes the VMs and their local work directories.
+
 The current administrative lane reaches draft creation, admission, and slot
 arm. Stock runc `1.4.2` then fails closed before target exec because its sealed
 self-clone and inherited bootstrap channels are unsupported. Treat this as a
