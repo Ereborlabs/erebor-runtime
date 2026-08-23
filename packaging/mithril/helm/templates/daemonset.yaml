@@ -105,6 +105,10 @@ spec:
             - name: btf
               mountPath: /sys/kernel/btf
               readOnly: true
+            # libbpf reads host tracepoint IDs before it attaches tracepoint programs.
+            - name: tracing
+              mountPath: /sys/kernel/tracing
+              readOnly: true
             - name: cgroup
               mountPath: /sys/fs/cgroup
               readOnly: true
@@ -134,6 +138,10 @@ spec:
         - name: btf
           hostPath:
             path: /sys/kernel/btf
+            type: Directory
+        - name: tracing
+          hostPath:
+            path: /sys/kernel/tracing
             type: Directory
         - name: cgroup
           hostPath:
