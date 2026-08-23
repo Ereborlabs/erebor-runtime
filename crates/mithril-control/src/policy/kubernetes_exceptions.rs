@@ -526,6 +526,8 @@ impl PolicyDesiredStateOwner {
             namespace_uid,
             object_name,
         )?;
+        // Deletion uses the durable base generation. A changed or absent live policy
+        // cannot widen it.
         let base_source = match state {
             ExceptionSourceStateV1::Accepted => self
                 .store
@@ -571,6 +573,7 @@ impl PolicyDesiredStateOwner {
         if state == ExceptionSourceStateV1::DeletionRequested {
             return self.reconcile_exception_revocation(source, now_utc_ns);
         }
+        // Only API-derived scheduler facts can resolve the requested Pod and container.
         let mut targets = inventory.iter().filter(|target| {
             target.cluster_uid == self.config.cluster_uid
                 && target.namespace_uid == namespace_uid
@@ -597,6 +600,7 @@ impl PolicyDesiredStateOwner {
                 reason: "the exception target resolves to more than one container",
             }
         );
+        // The exception cannot precede active base-policy readback for this exact binding.
         let (base_bundle, base_acknowledgement) = self
             .store
             .active_policy_for_workload(
@@ -656,6 +660,7 @@ impl PolicyDesiredStateOwner {
         source: ExceptionSourceRevisionV1,
         now_utc_ns: i64,
     ) -> Result<ExceptionReconcileResultV1> {
+        // Revocation keeps the original target and names its activation as the predecessor.
         let previous = self
             .store
             .latest_exception_candidate_for_object(&source.object_uid)?
@@ -760,6 +765,7 @@ impl PolicyRolloutOwner {
         } else {
             ExceptionDeliveryOperationV1::Activate
         };
+        // Revocation preserves the original budget. It cannot create a new validity window.
         let (maximum_uses, valid_until_utc_ns) = predecessor.map_or_else(
             || {
                 let duration = i64::try_from(source.requested_duration_ns).map_err(|_| {
