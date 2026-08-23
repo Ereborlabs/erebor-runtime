@@ -503,6 +503,14 @@ fn deletion_names_exact_predecessor_and_recreate_gets_a_new_source_identity() ->
             .as_deref(),
         Some(first.bundles[0].candidate.candidate_content_id.as_str())
     );
+    assert!(owner
+        .reconcile(
+            &resource(&policy, "profile", OBJECT_UID, 1, false)?,
+            NAMESPACE_UID,
+            &inventory(&"1".repeat(64)),
+            NOW + 2,
+        )
+        .is_err());
 
     let recreated = owner.reconcile(
         &resource(
@@ -514,7 +522,7 @@ fn deletion_names_exact_predecessor_and_recreate_gets_a_new_source_identity() ->
         )?,
         NAMESPACE_UID,
         &inventory(&"1".repeat(64)),
-        NOW + 2,
+        NOW + 3,
     )?;
     assert_ne!(
         recreated.source_revision.policy_source_revision_id,

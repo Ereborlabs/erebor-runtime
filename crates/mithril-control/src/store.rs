@@ -277,6 +277,7 @@ impl ControlStore {
         policy_document: PolicyDocumentV1,
     ) -> Result<u64> {
         let mut inner = self.lock()?;
+        let key = PolicyObjectKeyV1::from(&revision);
         if inner
             .state
             .source_revisions
@@ -294,6 +295,14 @@ impl ControlStore {
                 }
                 .fail();
             }
+            if inner.state.latest_sources.get(&key) != Some(&revision.policy_source_revision_id) {
+                return ControlStoreSnafu {
+                    path: inner.root.clone(),
+                    reason: "a historical source revision cannot replace the current source"
+                        .to_owned(),
+                }
+                .fail();
+            }
             return Ok(inner.state.commit_index);
         }
         let document_digest = canonical_policy_spec_digest(&policy_document)?;
@@ -306,7 +315,6 @@ impl ControlStore {
             }
             .fail();
         }
-        let key = PolicyObjectKeyV1::from(&revision);
         if let Some(current_id) = inner.state.latest_sources.get(&key) {
             let current = inner
                 .state
