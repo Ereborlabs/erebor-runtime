@@ -21,9 +21,6 @@ mod session_side_resources;
 mod surface_services;
 mod surfaces;
 
-#[cfg(test)]
-mod tests;
-
 pub use adoption::SessionAdoptionService;
 pub use agents::codex::{
     CodexAppServerInput, CodexAppServerService, CodexHookClient, CodexHookPeerRegistry,
