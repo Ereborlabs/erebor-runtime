@@ -295,6 +295,7 @@ impl ControlStore {
                 }
                 .fail();
             }
+            // A known revision is idempotent only while it remains the latest object revision.
             if inner.state.latest_sources.get(&key) != Some(&revision.policy_source_revision_id) {
                 return ControlStoreSnafu {
                     path: inner.root.clone(),

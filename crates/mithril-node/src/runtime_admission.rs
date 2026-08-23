@@ -50,6 +50,7 @@ pub(crate) struct KubernetesRuntimeIdentityV1 {
     pub profile_id: String,
 }
 
+/// This owner converts signed scheduling authority into one container lifetime.
 pub(crate) struct ScheduledRuntimeBindingV1 {
     pub binding_index: usize,
     pub previous_binding_id: Option<String>,
@@ -61,6 +62,7 @@ pub(crate) struct RuntimeAdmissionEnvelope {
     pub response: oneshot::Sender<RuntimeAdmissionResponseV1>,
 }
 
+/// This owner controls the socket path, listener, and concurrent request dispatch.
 pub(crate) struct RuntimeAdmissionServer {
     listener: UnixListener,
     socket_path: PathBuf,
@@ -69,10 +71,12 @@ pub(crate) struct RuntimeAdmissionServer {
     requests: mpsc::Sender<RuntimeAdmissionEnvelope>,
 }
 
+/// This receiver gives the node event loop one bounded runtime request stream.
 pub(crate) struct RuntimeAdmissionReceiver {
     requests: mpsc::Receiver<RuntimeAdmissionEnvelope>,
 }
 
+/// This client controls one hook exchange and its fail-closed deadline.
 pub struct RuntimeAdmissionClient {
     socket_path: PathBuf,
     timeout: Duration,
@@ -121,6 +125,8 @@ impl RuntimeAdmissionRequestV1 {
         );
         let profile_id = required(PROFILE_ID_ANNOTATION)?;
         let policy_source_revision_id = required(POLICY_SOURCE_REVISION_ANNOTATION)?;
+        // Treat the source annotation as untrusted provenance. The signed local
+        // target selects the active source revision.
         ensure!(
             canonical_uuid(&profile_id) && valid_sha256(&policy_source_revision_id),
             IdentityStateSnafu {
@@ -444,6 +450,7 @@ fn valid_sha256(value: &str) -> bool {
 }
 
 fn remove_stale_socket(socket_path: &Path) -> Result<()> {
+    // Unlink only when connect proves that no live admission owner holds the path.
     match StandardUnixStream::connect(socket_path) {
         Ok(_stream) => IdentityStateSnafu {
             reason: "another runtime admission owner is active".to_owned(),
@@ -562,6 +569,7 @@ impl RuntimeAdmissionServer {
             if response.reason_code != POLICY_CONVERGENCE_PENDING {
                 return Ok(response);
             }
+            // Re-submit so that the node event loop can advance policy between attempts.
             tokio::time::sleep(Duration::from_millis(25)).await;
         }
     }

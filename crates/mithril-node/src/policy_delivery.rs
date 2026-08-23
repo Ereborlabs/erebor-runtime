@@ -1110,6 +1110,8 @@ fn materialize_scheduled_bindings(
             external_role_id,
             arm_initial_root: true,
         };
+        // A policy refresh keeps the current runtime lifetime. Only runtime
+        // admission can replace it with a new container identity.
         if let Some(existing) = prior {
             ensure!(
                 existing.profile_id == binding.profile_id

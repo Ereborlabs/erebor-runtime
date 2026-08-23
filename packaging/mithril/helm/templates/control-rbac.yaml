@@ -42,6 +42,7 @@ rules:
   - apiGroups: [""]
     resources: ["namespaces", "pods", "serviceaccounts"]
     verbs: ["get", "list"]
+  # Built-in RBAC cannot restrict a Node patch to the Mithril projection fields.
   - apiGroups: [""]
     resources: ["nodes"]
     verbs: ["get", "list", "watch", "patch"]

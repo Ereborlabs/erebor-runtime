@@ -415,6 +415,8 @@ impl PolicyDesiredStateOwner {
         Ok(result)
     }
 
+    /// Retires live sources that are absent from one complete API snapshot.
+    /// The caller must not use UIDs from a partial list.
     pub fn retire_missing_sources(
         &self,
         seen_object_uids: &BTreeSet<String>,

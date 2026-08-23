@@ -166,6 +166,8 @@ impl KubernetesNodeReadinessOwner {
     ) -> Result<String> {
         let mut continuation = None::<String>;
         let mut resource_version = None::<String>;
+        // Finish this snapshot before the watch starts. An unvisited page must
+        // not bypass the initial readiness projection.
         loop {
             let mut params = ListParams::default().limit(500);
             if let Some(token) = &continuation {
@@ -301,6 +303,7 @@ pub fn node_projection_patch(
             value: Some("true".to_owned()),
         });
     }
+    // Keep identity during a temporary readiness loss only for the same Node object.
     let retained_identity = eligible
         .then_some(node.metadata.annotations.as_ref())
         .flatten()

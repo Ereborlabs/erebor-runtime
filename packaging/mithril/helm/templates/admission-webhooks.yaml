@@ -46,6 +46,7 @@ webhooks:
         resources: ["pods"]
         scope: Namespaced
 ---
+# Pod updates are validation-only. The webhook does not rewrite scheduled Pods.
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingWebhookConfiguration
 metadata:
