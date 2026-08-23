@@ -1,9 +1,8 @@
 # Phase 6.2: Control Policy And Evidence Convergence
 
 Status: Not done. Source implementation and automated acceptance for
-D6.2.1-D6.2.12 passed on 2026-08-22 at code commit
-`23b9db450114e18d1113665cc265398002de555d`. The required physical Kubernetes
-and stock-runtime acceptance has not run.
+D6.2.1-D6.2.12 passed. The required physical Kubernetes and stock-runtime
+acceptance has not run.
 
 Master: [Mithril Hugging Face Intrusion Prevention](./README.md)
 
@@ -512,12 +511,11 @@ audit history and the privileged/unmatched workload floor.
 
 ```text
 State: Not done. Source implementation and automated acceptance passed. The required physical Kubernetes and stock-runtime acceptance has not run.
-Validated architecture revision/digest: 0c87aaf6c2d0347e06b53ce0ccb9f69577a9b248a4a90463082335d7865d77ae.
 Completed deliverable IDs: D6.2.1-D6.2.12 are source-complete. D6.2.9-D6.2.12 do not have the required physical result.
 Files and durable owners changed: WorkloadProtectionProfile CRD and Helm package; PolicyDesiredStateOwner; PolicyRolloutOwner; TrustBundleOwner; KubernetesNodeReadinessOwner; KubernetesAdmissionOwner; KubernetesWorkloadInventoryOwner; one append-only ControlStore for policy, trust, rollout, acknowledgement, evidence, coverage, and cursor transactions; generated NodePolicy and ControlHealth services; NodePolicyDeliveryOwner; RuntimeAdmissionClient; RuntimeAdmissionServer; ScheduledRuntimeBindingV1; the existing node activation and cgroup-binding paths; and the stateless OCI adapter. The BPF ABI and BPF programs did not change.
 Upstream-adoption dossier IDs used: none.
 Fixture cases and exact physical results: no new Appendix C fixture or physical result. The deterministic two-node Control tests passed. The physical two-node manual run was not run.
-Commands and exact source state covered: `bash .github/scripts/verify-rust-ci.sh` passed the repository format, check, clippy, and full workspace test gate at code commit 23b9db450114e18d1113665cc265398002de555d. The first review gate exposed test-only strict-Clippy failures. The test was corrected, and the complete gate passed. The final gate included 63 mithril-control unit tests, 5 Kubernetes API tests, 70 mithril-e2e unit tests, 129 mithril-node unit tests, 2 OCI adapter tests, and 5 mTLS integration tests. An earlier complete gate had one transient browser discovery test failure with `WouldBlock`; the isolated test and the next complete gate passed. `bash packaging/mithril/helm/tests/verify.sh` passed chart lint and the rendered packaging contract for the reviewed source.
+Automated verification: `bash .github/scripts/verify-rust-ci.sh` passed the repository format, check, clippy, and full workspace test gate. The first review gate exposed test-only strict-Clippy failures. The test was corrected, and the complete gate passed. The final gate included the Mithril Control, end-to-end, node, OCI adapter, and mTLS tests. An earlier complete gate had one transient browser discovery test failure with `WouldBlock`; the isolated test and the next complete gate passed. `bash packaging/mithril/helm/tests/verify.sh` passed chart lint and the rendered packaging contract.
 Platform/kernel/runtime manifests: the Helm package contains the generated closed CRD, Control RBAC, the exact DaemonSet reader Role, the Control Deployment and Service, fail-closed admission webhooks, the node DaemonSet, and the OCI hook installation. No BPF program or kernel ABI changed. No live platform manifest was recorded.
 Performance/capacity results: no new benchmark. Evidence gRPC messages are limited to 4 MiB. Policy gRPC messages are limited to 128 KiB. The pending evidence window is limited to 4,096 records. Health reports fixed counts and booleans only.
 Unsupported/degraded paths: no live Kubernetes API-server, RBAC denial, watch-compaction, network-partition, storage-outage, stock-runtime ordering, or physical two-node result was recorded. Phase 7 graph and finding behavior is not present.

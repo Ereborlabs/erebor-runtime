@@ -1,8 +1,7 @@
 # How To Manually Accept Phase 6.2
 
-Status: Automated acceptance passed at code commit
-`23b9db450114e18d1113665cc265398002de555d`. The Kubernetes scheduling and
-runtime-gate manual procedure is available. This procedure has not been run.
+Status: Automated acceptance passed. The Kubernetes scheduling and runtime-gate
+manual procedure is available. This procedure has not been run.
 
 Phase: [Control Policy And Evidence Convergence](../phase-6-2-control-policy-and-evidence-convergence.md)
 
@@ -32,12 +31,13 @@ rtk cargo test -p mithril-node --test control_tls
 rtk bash .github/scripts/verify-rust-ci.sh
 ```
 
-Record the exact source commit and results. Automated reconciliation and
-runtime-gate tests are not substitutes for this physical run.
+Record the commands and results outside the repository. Automated
+reconciliation and runtime-gate tests are not substitutes for this physical
+run.
 
 ## Preflight
 
-1. Run the automated companion from the exact source commit under test.
+1. Run the automated companion against the source under test.
 2. Record the Kubernetes, CRI-O or containerd, runc, OCI hook manager, and NRI
    hook-injector versions. For containerd, verify that NRI and the hook-injector
    are active. Verify that the runtime reads the configured hook directory.
