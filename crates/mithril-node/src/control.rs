@@ -1,4 +1,4 @@
-use std::{collections::BTreeSet, fs, time::Duration};
+use std::{fs, time::Duration};
 
 use mithril_control::{
     node_administrative_arm_client::NodeAdministrativeArmClient,
@@ -337,21 +337,27 @@ impl ControlConnection {
         Ok(())
     }
 
-    pub async fn send_coverage_report(
+    pub async fn send_coverage_reports(
         &mut self,
         snapshot: crate::CoverageSnapshotV1,
-    ) -> Result<CoverageAck> {
-        let current: BTreeSet<_> = snapshot
-            .current_intervals()
-            .into_iter()
-            .map(|interval| interval.interval_id)
-            .collect();
-        let intervals = snapshot
-            .all_intervals()
-            .into_iter()
-            .map(|interval| {
-                let is_current = current.contains(&interval.interval_id);
-                CoverageInterval {
+    ) -> Result<Vec<CoverageAck>> {
+        let current = snapshot.current_intervals();
+        if current.is_empty() {
+            return ControlProtocolSnafu {
+                reason: String::from("coverage snapshot has no current source"),
+            }
+            .fail();
+        }
+        let all_intervals = snapshot.all_intervals();
+        let mut expected_acks = Vec::with_capacity(current.len());
+        // Control persists one cursor per source, so each report has one current identity.
+        for current_interval in current {
+            let intervals = all_intervals
+                .iter()
+                .filter(|interval| interval.source_id == current_interval.source_id)
+                .cloned()
+                .map(|interval| CoverageInterval {
+                    current: interval.interval_id == current_interval.interval_id,
                     interval_id: interval.interval_id.to_be_bytes().to_vec(),
                     source_id: interval.source_id.to_be_bytes().to_vec(),
                     source_epoch: interval.source_epoch,
@@ -367,35 +373,35 @@ impl ControlConnection {
                         .into_iter()
                         .map(|reason| reason.as_str().to_owned())
                         .collect(),
-                    current: is_current,
-                }
-            })
-            .collect();
-        let mut report = CoverageReport {
-            source_epoch: snapshot.source_epoch,
-            revision: snapshot.revision,
-            intervals,
-            negative_claim_eligible: snapshot.supports_negative_claim(),
-            report_sha256: Vec::new(),
-        };
-        report.report_sha256 = Sha256::digest(report.encode_to_vec()).to_vec();
-        let expected = CoverageAck {
-            source_epoch: report.source_epoch,
-            revision: report.revision,
-            report_sha256: report.report_sha256.clone(),
-        };
-        let response = self
-            .coverage
-            .report(Request::new(CoverageReportRequest {
-                session: Some(self.identity.clone()),
-                report: Some(report),
-            }))
-            .await
-            .context(ControlRpcSnafu)?
-            .into_inner();
-        self.queued
-            .push_back(NodeControlMessage::CoverageAck(response));
-        Ok(expected)
+                })
+                .collect();
+            let mut report = CoverageReport {
+                source_epoch: snapshot.source_epoch,
+                revision: snapshot.revision,
+                intervals,
+                negative_claim_eligible: current_interval.supports_negative_claim(),
+                report_sha256: Vec::new(),
+            };
+            report.report_sha256 = Sha256::digest(report.encode_to_vec()).to_vec();
+            let expected = CoverageAck {
+                source_epoch: report.source_epoch,
+                revision: report.revision,
+                report_sha256: report.report_sha256.clone(),
+            };
+            let response = self
+                .coverage
+                .report(Request::new(CoverageReportRequest {
+                    session: Some(self.identity.clone()),
+                    report: Some(report),
+                }))
+                .await
+                .context(ControlRpcSnafu)?
+                .into_inner();
+            self.queued
+                .push_back(NodeControlMessage::CoverageAck(response));
+            expected_acks.push(expected);
+        }
+        Ok(expected_acks)
     }
 
     pub async fn send_resolution(&mut self, response: AdministrativeExecResolution) -> Result<()> {

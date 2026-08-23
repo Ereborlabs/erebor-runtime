@@ -218,6 +218,17 @@ async fn mtls_coverage_upload_preserves_gap_truth_at_control() -> Result<(), Box
         }
         .as_bytes(),
     );
+    observations.record_bytes(
+        erebor_interceptor_abi::EffectObservationV1 {
+            source_sequence: 3,
+            source_cpu_id: 1,
+            task_cookie: 8,
+            reason: 9,
+            physical_result: 1,
+            ..erebor_interceptor_abi::EffectObservationV1::default()
+        }
+        .as_bytes(),
+    );
     let connector =
         NodeControlConnector::new(files.node_config(address), "node-a".to_owned(), [7; 16]);
     let mut trust = TrustCache::load(directory.path())?;
@@ -226,33 +237,34 @@ async fn mtls_coverage_upload_preserves_gap_truth_at_control() -> Result<(), Box
     let snapshot = observations
         .coverage_snapshot()
         .ok_or("missing coverage snapshot")?;
-    let source_id = snapshot
-        .current_intervals()
-        .first()
-        .ok_or("missing current coverage interval")?
-        .source_id
-        .to_be_bytes();
-    let coverage_identity = EvidenceIntakeIdentityV1 {
-        tenant_id: EvidenceIdV1::new(1, 2).to_be_bytes(),
-        node_id: "node-a".to_owned(),
-        node_boot_id: [7; 16],
-        label_epoch: 1,
-        source_id,
-        source_epoch: snapshot.source_epoch,
-    };
-    let expected = connection.send_coverage_report(snapshot).await?;
-    let NodeControlMessage::CoverageAck(actual) = connection.next_message().await? else {
-        return Err("Control did not acknowledge coverage".into());
-    };
-    assert_eq!(actual, expected);
-    let persisted = EvidenceIntakeOwner::open(&intake_path)?
-        .latest_coverage_report(&coverage_identity)?
-        .ok_or("Control did not persist coverage")?;
-    assert!(!persisted.negative_claim_eligible);
-    assert!(persisted
-        .intervals
-        .iter()
-        .any(|interval| interval.current && interval.state != "HEALTHY"));
+    let source_epoch = snapshot.source_epoch;
+    let current = snapshot.current_intervals();
+    let expected = connection.send_coverage_reports(snapshot).await?;
+    assert_eq!(expected.len(), 2);
+    for expected_ack in expected {
+        let NodeControlMessage::CoverageAck(actual) = connection.next_message().await? else {
+            return Err("Control did not acknowledge coverage".into());
+        };
+        assert_eq!(actual, expected_ack);
+    }
+    let intake = EvidenceIntakeOwner::open(&intake_path)?;
+    for interval in current {
+        let coverage_identity = EvidenceIntakeIdentityV1 {
+            tenant_id: EvidenceIdV1::new(1, 2).to_be_bytes(),
+            node_id: "node-a".to_owned(),
+            node_boot_id: [7; 16],
+            label_epoch: 1,
+            source_id: interval.source_id.to_be_bytes(),
+            source_epoch,
+        };
+        let persisted = intake
+            .latest_coverage_report(&coverage_identity)?
+            .ok_or("Control did not persist coverage")?;
+        assert!(!persisted.negative_claim_eligible);
+        assert_eq!(persisted.intervals.len(), 1);
+        assert!(persisted.intervals[0].current);
+        assert_ne!(persisted.intervals[0].state, "HEALTHY");
+    }
 
     drop(connection);
     let _result = shutdown.send(());
