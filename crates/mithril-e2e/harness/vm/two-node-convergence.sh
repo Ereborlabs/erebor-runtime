@@ -478,8 +478,9 @@ wait_node_projection "$node_b_name" true false
 
 [[ $(remote_kubectl auth can-i list workloadprotectionprofiles.mithril.erebor.dev \
   --all-namespaces --as=system:serviceaccount:$system_namespace:mithril-control) == yes ]]
-[[ $(remote_kubectl auth can-i patch workloadprotectionprofiles.mithril.erebor.dev/status \
-  --all-namespaces --as=system:serviceaccount:$system_namespace:mithril-control) == yes ]]
+[[ $(remote_kubectl auth can-i patch workloadprotectionprofiles.mithril.erebor.dev \
+  --subresource=status --all-namespaces \
+  --as=system:serviceaccount:$system_namespace:mithril-control) == yes ]]
 [[ $(remote_kubectl auth can-i patch nodes \
   --as=system:serviceaccount:$system_namespace:mithril-control) == yes ]]
 [[ $(remote_kubectl auth can-i update workloadprotectionprofiles.mithril.erebor.dev \
