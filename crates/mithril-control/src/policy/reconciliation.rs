@@ -14,11 +14,11 @@ use tokio_stream::StreamExt as _;
 
 use super::{
     CohortSelectionV1, ContainerKindV1, LabelOperatorV1, PolicyActivationAcknowledgementV1,
-    PolicyActivationStateV1, PolicyBundleV1, PolicyConditionKindV1, PolicyConditionV1,
-    PolicyDeliveryCandidateV1, PolicyDeliveryOperationV1, PolicyDocumentV1, PolicyRolloutCountsV1,
-    PolicyRolloutStateV1, PolicyRolloutStatusV1, PolicySourceRevisionV1, PolicySourceStateV1,
-    PolicyTargetSnapshotV1, PolicyTargetV1, ProfileCandidateArtifactV1, ProfileSealRequestV1,
-    WorkloadProtectionProfile, WorkloadProtectionProfileStatusV1,
+    PolicyActivationStateV1, PolicyBundleV1, PolicyDeliveryCandidateV1, PolicyDeliveryOperationV1,
+    PolicyDocumentV1, PolicyRolloutCountsV1, PolicyRolloutStateV1, PolicyRolloutStatusV1,
+    PolicySourceRevisionV1, PolicySourceStateV1, PolicyTargetSnapshotV1, PolicyTargetV1,
+    ProfileCandidateArtifactV1, ProfileSealRequestV1, WorkloadProtectionPolicy,
+    WorkloadProtectionPolicyStatusV1,
 };
 use crate::error::{IoSnafu, PolicySignatureSnafu, PolicyValidationSnafu};
 use crate::{ControlStore, PolicyCompiler, Result};
@@ -102,7 +102,7 @@ pub struct PolicyReconcileResultV1 {
     pub target_snapshot: PolicyTargetSnapshotV1,
     pub bundles: Vec<PolicyBundleV1>,
     pub rollout_states: Vec<PolicyRolloutStateV1>,
-    pub status: WorkloadProtectionProfileStatusV1,
+    pub status: WorkloadProtectionPolicyStatusV1,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -223,7 +223,7 @@ impl PolicyDesiredStateOwner {
 
     pub fn reconcile(
         &self,
-        resource: &WorkloadProtectionProfile,
+        resource: &WorkloadProtectionPolicy,
         namespace_uid: &str,
         inventory: &[WorkloadTargetFactV1],
         now_utc_ns: i64,
@@ -238,21 +238,28 @@ impl PolicyDesiredStateOwner {
 
     pub(super) fn reconcile_observation(
         &self,
-        resource: &WorkloadProtectionProfile,
+        resource: &WorkloadProtectionPolicy,
         namespace_uid: &str,
         inventory: &[WorkloadTargetFactV1],
         now_utc_ns: i64,
         state: PolicySourceStateV1,
     ) -> Result<PolicyReconcileResultV1> {
         self.track_reconcile(|| {
+            let policy = super::lower_kubernetes_policy(
+                resource,
+                &self.config.tenant_id,
+                &self.config.cluster_uid,
+                namespace_uid,
+            )?;
             let source = PolicySourceRevisionV1::from_resource(
                 resource,
+                &policy,
                 &self.config.tenant_id,
                 &self.config.cluster_uid,
                 namespace_uid,
                 state,
             )?;
-            self.reconcile_inner(source, &resource.spec.policy, inventory, now_utc_ns)
+            self.reconcile_inner(source, &policy, inventory, now_utc_ns)
         })
     }
 
@@ -412,14 +419,7 @@ impl PolicyDesiredStateOwner {
                 now_utc_ns,
             )?
         };
-        let status = status_for(
-            &source,
-            bundles
-                .first()
-                .map(|bundle| bundle.candidate.candidate_content_id.clone()),
-            &rollout_states,
-            None,
-        );
+        let status = status_for(&source, &rollout_states, None, now_utc_ns);
         let result = PolicyReconcileResultV1 {
             source_revision: source,
             target_snapshot: snapshot,
@@ -480,6 +480,11 @@ impl PolicyDesiredStateOwner {
     #[must_use]
     pub fn cluster_uid(&self) -> &str {
         &self.config.cluster_uid
+    }
+
+    #[must_use]
+    pub fn tenant_id(&self) -> &str {
+        &self.config.tenant_id
     }
 
     #[must_use]
@@ -813,7 +818,7 @@ async fn reconcile_cluster(
     owner: PolicyDesiredStateOwner,
     control: crate::ControlPlane,
 ) {
-    let api = Api::<WorkloadProtectionProfile>::all(client.clone());
+    let api = Api::<WorkloadProtectionPolicy>::all(client.clone());
     let namespaces = Api::<Namespace>::all(client);
     // Each watch starts from a complete relist cursor and restarts after any stream error.
     loop {
@@ -852,7 +857,7 @@ async fn reconcile_cluster(
 }
 
 async fn relist_cluster(
-    api: &Api<WorkloadProtectionProfile>,
+    api: &Api<WorkloadProtectionPolicy>,
     namespaces: &Api<Namespace>,
     owner: &PolicyDesiredStateOwner,
     control: &crate::ControlPlane,
@@ -883,7 +888,7 @@ async fn relist_cluster(
         continuation = match super::kubernetes::next_continuation_token(
             continuation.as_deref(),
             page.metadata.continue_,
-            "WorkloadProtectionProfile",
+            "WorkloadProtectionPolicy",
         ) {
             Ok(continuation) => continuation,
             Err(_) => {
@@ -914,11 +919,11 @@ async fn relist_cluster(
 }
 
 async fn reconcile_resource(
-    api: &Api<WorkloadProtectionProfile>,
+    api: &Api<WorkloadProtectionPolicy>,
     namespaces: &Api<Namespace>,
     owner: &PolicyDesiredStateOwner,
     control: &crate::ControlPlane,
-    resource: WorkloadProtectionProfile,
+    resource: WorkloadProtectionPolicy,
     deleted: bool,
 ) {
     let Some(name) = resource.metadata.name.clone() else {
@@ -957,29 +962,18 @@ async fn reconcile_resource(
         .await;
 }
 
-fn rejected_status(generation: u64) -> WorkloadProtectionProfileStatusV1 {
-    let condition = |condition| PolicyConditionV1 {
-        condition,
-        status: false,
-        reason_code: "RECONCILE_REJECTED".to_owned(),
+fn rejected_status(generation: u64) -> WorkloadProtectionPolicyStatusV1 {
+    WorkloadProtectionPolicyStatusV1 {
         observed_generation: generation,
-    };
-    WorkloadProtectionProfileStatusV1 {
-        observed_generation: generation,
-        source_revision_id: None,
-        canonical_spec_digest: None,
-        candidate_content_id: None,
-        rollout_counts: PolicyRolloutCountsV1::default(),
-        conditions: [
-            PolicyConditionKindV1::Accepted,
-            PolicyConditionKindV1::Compiled,
-            PolicyConditionKindV1::Progressing,
-            PolicyConditionKindV1::Available,
-            PolicyConditionKindV1::Degraded,
-            PolicyConditionKindV1::Retiring,
-        ]
-        .map(condition)
-        .to_vec(),
+        rollout: PolicyRolloutCountsV1::default(),
+        conditions: vec![kubernetes_condition(
+            "Accepted",
+            false,
+            generation,
+            "ReconcileRejected",
+            "Control rejected the stored policy source.",
+            utc_now_ns(),
+        )],
     }
 }
 
@@ -1109,53 +1103,96 @@ fn selected_by_rollout(policy: &PolicyDocumentV1, fact: &WorkloadTargetFactV1) -
 
 fn status_for(
     source: &PolicySourceRevisionV1,
-    candidate_content_id: Option<String>,
     states: &[PolicyRolloutStateV1],
     degraded_reason: Option<&str>,
-) -> WorkloadProtectionProfileStatusV1 {
+    now_utc_ns: i64,
+) -> WorkloadProtectionPolicyStatusV1 {
     // Status summarizes durable per-target state. It never grants rollout authority.
     let counts = PolicyRolloutCountsV1::from_states(states);
     let retiring = source.state == PolicySourceStateV1::DeletionRequested;
     let available = counts.total() > 0 && counts.active == counts.total();
-    let degraded =
-        degraded_reason.is_some() || counts.rejected > 0 || counts.stale > 0 || counts.unknown > 0;
+    let degraded = degraded_reason.is_some() || counts.failed > 0;
     let progressing = !available && !retiring;
-    let condition = |condition, status, reason_code: &str| PolicyConditionV1 {
-        condition,
-        status,
-        reason_code: reason_code.to_owned(),
-        observed_generation: source.object_generation,
+    let condition = |condition, status, reason, message| {
+        kubernetes_condition(
+            condition,
+            status,
+            source.object_generation,
+            reason,
+            message,
+            now_utc_ns,
+        )
     };
-    WorkloadProtectionProfileStatusV1 {
+    WorkloadProtectionPolicyStatusV1 {
         observed_generation: source.object_generation,
-        source_revision_id: Some(source.policy_source_revision_id.clone()),
-        canonical_spec_digest: Some(source.canonical_spec_digest.clone()),
-        candidate_content_id,
-        rollout_counts: counts,
+        rollout: counts,
         conditions: vec![
-            condition(PolicyConditionKindV1::Accepted, true, "SOURCE_ACCEPTED"),
-            condition(PolicyConditionKindV1::Compiled, true, "POLICY_COMPILED"),
             condition(
-                PolicyConditionKindV1::Progressing,
+                "Accepted",
+                true,
+                "SourceAccepted",
+                "Control accepted the stored policy source.",
+            ),
+            condition(
+                "Compiled",
+                true,
+                "PolicyCompiled",
+                "Control compiled and signed the policy source.",
+            ),
+            condition(
+                "Progressing",
                 progressing,
-                "ROLLOUT_PENDING",
+                "RolloutPending",
+                "One or more selected targets have not activated the desired policy.",
             ),
             condition(
-                PolicyConditionKindV1::Available,
+                "Available",
                 available,
-                "ALL_TARGETS_ACTIVE",
+                "AllTargetsActive",
+                "All selected targets activated the desired policy.",
             ),
             condition(
-                PolicyConditionKindV1::Degraded,
+                "Degraded",
                 degraded,
-                degraded_reason.unwrap_or("NO_DEGRADED_TARGET"),
+                degraded_reason.unwrap_or("NoDegradedTarget"),
+                "One or more selected targets rejected or lost the desired policy.",
             ),
             condition(
-                PolicyConditionKindV1::Retiring,
+                "Retiring",
                 retiring,
-                "DELETION_REQUESTED",
+                "DeletionRequested",
+                "Control is replacing the deleted policy with restrictive state.",
             ),
         ],
+    }
+}
+
+fn kubernetes_condition(
+    condition_type: &str,
+    status: bool,
+    observed_generation: u64,
+    reason: &str,
+    message: &str,
+    now_utc_ns: i64,
+) -> super::KubernetesConditionV1 {
+    let timestamp = time::OffsetDateTime::from_unix_timestamp_nanos(i128::from(now_utc_ns))
+        .ok()
+        .and_then(|time| {
+            time.format(&time::format_description::well_known::Rfc3339)
+                .ok()
+        })
+        .unwrap_or_else(|| "1970-01-01T00:00:00Z".to_owned());
+    super::KubernetesConditionV1 {
+        condition_type: condition_type.to_owned(),
+        status: if status {
+            super::KubernetesConditionStatusV1::True
+        } else {
+            super::KubernetesConditionStatusV1::False
+        },
+        observed_generation,
+        last_transition_time: timestamp,
+        reason: reason.to_owned(),
+        message: message.to_owned(),
     }
 }
 

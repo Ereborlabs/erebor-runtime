@@ -49,7 +49,7 @@ impl Validate for PolicyDocumentV1 {
             workload_selectors, classifier_bindings, path_selectors, roles, entry_role_assignments,
             native_transition_rules, state_bit_definitions, process_state_definitions,
             ipc_relationship_rules, effect_family_defaults, path_tree_deny_floors,
-            notification_routes, response_bindings, exceptions, rules,
+            notification_routes, response_bindings, file_exception_grants, exceptions, rules,
             authority_behavior_rules, source_coverage_health_rules
         );
         if let Some(network_policy) = &self.network_policy {
@@ -99,6 +99,11 @@ impl PolicyDocumentV1 {
             .exceptions
             .iter()
             .map(|value| value.exception_id.as_str())
+            .collect::<BTreeSet<_>>();
+        let exception_grants = self
+            .file_exception_grants
+            .iter()
+            .map(|value| value.grant_id.as_str())
             .collect::<BTreeSet<_>>();
         let ipc_ids = self
             .ipc_relationship_rules
@@ -178,6 +183,7 @@ impl PolicyDocumentV1 {
             && routes.len() == self.notification_routes.len()
             && responses.len() == self.response_bindings.len()
             && exceptions.len() == self.exceptions.len()
+            && exception_grants.len() == self.file_exception_grants.len()
             && ipc_ids.len() == self.ipc_relationship_rules.len()
             && destination_ids.len()
                 == self
@@ -464,6 +470,28 @@ impl PolicyDocumentV1 {
             .iter()
             .map(|rule| rule.rule_id.as_str())
             .collect::<BTreeSet<_>>();
+        for grant in &self.file_exception_grants {
+            require!(
+                grant
+                    .denied_file_rule_ids
+                    .iter()
+                    .all(|id| base_rule_ids.contains(id.as_str())
+                        && self.rules.iter().any(|rule| {
+                            rule.rule_id == *id
+                                && rule.requested_disposition == PolicyDispositionV1::Deny
+                                && matches!(
+                                    &rule.rule_match,
+                                    RuleMatchV1::LocalPreEffect(effect)
+                                        if effect.effect_families == [EffectFamilyV1::File]
+                                )
+                        })),
+                "CFG_EXCEPTION_GRANT",
+                format!(
+                    "exception grant `{}` must reference denied file rules",
+                    grant.grant_id
+                )
+            );
+        }
         for exception in &self.exceptions {
             let subject = &exception.exact_subject;
             let known_rules = all_in!(&exception.changed_rule_ids, base_rule_ids);

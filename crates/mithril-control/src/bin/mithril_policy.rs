@@ -2,8 +2,8 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand, ValueEnum};
 use mithril_control::{
-    policy_custom_resource, HardSafetyConditionV1, PolicyArtifactOwner, PolicyDocumentV1,
-    PolicySignerTrustV1, TrustGenerationV1,
+    policy_custom_resource, HardSafetyConditionV1, PolicyArtifactOwner, PolicySignerTrustV1,
+    TrustGenerationV1, WorkloadProtectionPolicySpec,
 };
 
 #[derive(Parser)]
@@ -16,6 +16,8 @@ struct Cli {
 #[derive(Subcommand)]
 enum Command {
     PrintCrd {
+        #[arg(long)]
+        kind: CrdKindArg,
         #[arg(long)]
         output: Option<PathBuf>,
     },
@@ -79,6 +81,12 @@ enum HardSafetyConditionArg {
     UnsupportedPhysicalBoundary,
 }
 
+#[derive(Clone, Copy, ValueEnum)]
+enum CrdKindArg {
+    Policy,
+    Exception,
+}
+
 impl From<HardSafetyConditionArg> for HardSafetyConditionV1 {
     fn from(value: HardSafetyConditionArg) -> Self {
         match value {
@@ -104,9 +112,12 @@ fn main() {
 fn run() -> Result<(), Box<dyn std::error::Error>> {
     let owner = PolicyArtifactOwner::default();
     match Cli::parse().command {
-        Command::PrintCrd { output } => {
+        Command::PrintCrd { kind, output } => {
             // The checked-in Helm CRD is generated from this Rust schema to keep one schema owner.
-            let crd = mithril_control::policy_custom_resource_definition()?;
+            let crd = match kind {
+                CrdKindArg::Policy => mithril_control::policy_custom_resource_definition()?,
+                CrdKindArg::Exception => mithril_control::exception_custom_resource_definition()?,
+            };
             write_json(output, &crd)?;
         }
         Command::PrintPolicyManifest {
@@ -116,11 +127,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             output,
         } => {
             let bytes = std::fs::read(&source)?;
-            let document = PolicyDocumentV1::parse(&source, &bytes)?;
-            write_json(
-                output,
-                &policy_custom_resource(&name, &namespace, document)?,
-            )?;
+            let spec = WorkloadProtectionPolicySpec::parse(&source, &bytes)?;
+            write_json(output, &policy_custom_resource(&name, &namespace, spec)?)?;
         }
         Command::PrintTrustGeneration {
             signing_key_id,

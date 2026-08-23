@@ -311,9 +311,7 @@ impl ControlStore {
             return Ok(inner.state.commit_index);
         }
         let document_digest = canonical_policy_spec_digest(&policy_document)?;
-        if revision.canonical_spec_digest != document_digest
-            || revision.policy_document_digest != document_digest
-        {
+        if revision.policy_document_digest != document_digest {
             return ControlStoreSnafu {
                 path: inner.root.clone(),
                 reason: "the source revision does not bind the supplied policy document".to_owned(),
@@ -1254,9 +1252,7 @@ fn apply_transaction(
             policy_document,
         } => {
             let digest = canonical_policy_spec_digest(policy_document)?;
-            if source_revision.canonical_spec_digest != digest
-                || source_revision.policy_document_digest != digest
-            {
+            if source_revision.policy_document_digest != digest {
                 return ControlStoreSnafu {
                     path: path.to_owned(),
                     reason: "the committed source does not bind its policy document".to_owned(),

@@ -1,0 +1,64 @@
+podSelector:
+  matchLabels:
+    app: converter
+  matchExpressions: []
+mode: Protect
+containers:
+  - names: [converter]
+    kinds: [Application]
+    images:
+      - registry.example/converter@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    initialRole: worker
+    externalRole: worker
+roles:
+  - name: worker
+    files:
+      - name: allow-python-read
+        path: /usr/bin/python
+        recursive: false
+        operations: [OpenRead, Read, MmapRead]
+        action: Allow
+      - name: deny-service-account-files
+        path: /var/run/secrets/kubernetes.io/serviceaccount
+        recursive: true
+        operations: [OpenRead, Read, MmapRead]
+        action: Deny
+    execution:
+      - name: allow-python-execute
+        path: /usr/bin/python
+        recursive: false
+        operations: [Execute, MmapExecute, Mprotect]
+        action: Allow
+    network:
+      socketControls:
+        - operations: [Create, Shutdown]
+          action: Allow
+      destinations:
+        - name: result-service-addresses
+          operations: [Connect, Send, Receive]
+          protocols: [TCP]
+          cidrs: [192.0.2.0/24]
+          ports:
+            - first: 443
+              last: 443
+          action: Allow
+    processControl:
+      - name: signal-probe
+        targetRole: worker
+        operation: Signal
+        signals: [0]
+        action: Allow
+      - name: deny-ptrace
+        targetRole: worker
+        operation: Ptrace
+        requests: [16]
+        action: Deny
+    unixStreams:
+      - name: worker-loopback
+        peerRoles: [worker]
+        action: Allow
+exceptionGrants:
+  - name: temporary-file-access
+    fileRules: [deny-service-account-files]
+    maximumDuration: 5m
+    maximumUses: 1

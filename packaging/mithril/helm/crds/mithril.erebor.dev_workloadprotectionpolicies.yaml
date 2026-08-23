@@ -1,0 +1,687 @@
+{
+  "apiVersion": "apiextensions.k8s.io/v1",
+  "kind": "CustomResourceDefinition",
+  "metadata": {
+    "name": "workloadprotectionpolicies.mithril.erebor.dev"
+  },
+  "spec": {
+    "group": "mithril.erebor.dev",
+    "names": {
+      "kind": "WorkloadProtectionPolicy",
+      "plural": "workloadprotectionpolicies",
+      "shortNames": [
+        "wpp"
+      ],
+      "singular": "workloadprotectionpolicy"
+    },
+    "scope": "Namespaced",
+    "versions": [
+      {
+        "name": "v1alpha1",
+        "schema": {
+          "openAPIV3Schema": {
+            "description": "Auto-generated derived type for WorkloadProtectionPolicySpec via `CustomResource`",
+            "properties": {
+              "spec": {
+                "description": "Defines the CRD desired state. Control creates signed node artifacts from this value.",
+                "maxProperties": 4096,
+                "properties": {
+                  "containers": {
+                    "items": {
+                      "maxProperties": 4096,
+                      "properties": {
+                        "externalRole": {
+                          "maxLength": 4096,
+                          "type": "string"
+                        },
+                        "images": {
+                          "items": {
+                            "maxLength": 4096,
+                            "type": "string"
+                          },
+                          "maxItems": 256,
+                          "minItems": 1,
+                          "type": "array"
+                        },
+                        "initialRole": {
+                          "maxLength": 4096,
+                          "type": "string"
+                        },
+                        "kinds": {
+                          "items": {
+                            "enum": [
+                              "Init",
+                              "Sidecar",
+                              "Application",
+                              "Ephemeral"
+                            ],
+                            "maxLength": 4096,
+                            "type": "string"
+                          },
+                          "maxItems": 4,
+                          "minItems": 1,
+                          "type": "array"
+                        },
+                        "names": {
+                          "items": {
+                            "maxLength": 4096,
+                            "type": "string"
+                          },
+                          "maxItems": 64,
+                          "minItems": 1,
+                          "type": "array"
+                        }
+                      },
+                      "required": [
+                        "externalRole",
+                        "images",
+                        "initialRole",
+                        "kinds",
+                        "names"
+                      ],
+                      "type": "object"
+                    },
+                    "maxItems": 256,
+                    "minItems": 1,
+                    "type": "array"
+                  },
+                  "exceptionGrants": {
+                    "default": [],
+                    "items": {
+                      "maxProperties": 4096,
+                      "properties": {
+                        "fileRules": {
+                          "items": {
+                            "maxLength": 4096,
+                            "type": "string"
+                          },
+                          "maxItems": 256,
+                          "minItems": 1,
+                          "type": "array"
+                        },
+                        "maximumDuration": {
+                          "maxLength": 4096,
+                          "type": "string"
+                        },
+                        "maximumUses": {
+                          "format": "uint32",
+                          "minimum": 1.0,
+                          "type": "integer"
+                        },
+                        "name": {
+                          "maxLength": 4096,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "fileRules",
+                        "maximumDuration",
+                        "maximumUses",
+                        "name"
+                      ],
+                      "type": "object"
+                    },
+                    "maxItems": 256,
+                    "type": "array"
+                  },
+                  "mode": {
+                    "enum": [
+                      "Observe",
+                      "Protect"
+                    ],
+                    "maxLength": 4096,
+                    "type": "string"
+                  },
+                  "podSelector": {
+                    "maxProperties": 4096,
+                    "properties": {
+                      "matchExpressions": {
+                        "default": [],
+                        "items": {
+                          "maxProperties": 4096,
+                          "properties": {
+                            "key": {
+                              "maxLength": 4096,
+                              "type": "string"
+                            },
+                            "operator": {
+                              "enum": [
+                                "In",
+                                "NotIn",
+                                "Exists",
+                                "DoesNotExist"
+                              ],
+                              "maxLength": 4096,
+                              "type": "string"
+                            },
+                            "values": {
+                              "default": [],
+                              "items": {
+                                "maxLength": 4096,
+                                "type": "string"
+                              },
+                              "maxItems": 256,
+                              "type": "array"
+                            }
+                          },
+                          "required": [
+                            "key",
+                            "operator"
+                          ],
+                          "type": "object"
+                        },
+                        "maxItems": 256,
+                        "type": "array"
+                      },
+                      "matchLabels": {
+                        "additionalProperties": {
+                          "maxLength": 4096,
+                          "type": "string"
+                        },
+                        "default": {},
+                        "maxProperties": 4096,
+                        "type": "object"
+                      }
+                    },
+                    "type": "object"
+                  },
+                  "roles": {
+                    "items": {
+                      "maxProperties": 4096,
+                      "properties": {
+                        "execution": {
+                          "items": {
+                            "maxProperties": 4096,
+                            "properties": {
+                              "action": {
+                                "enum": [
+                                  "Allow",
+                                  "Deny"
+                                ],
+                                "maxLength": 4096,
+                                "type": "string"
+                              },
+                              "name": {
+                                "maxLength": 4096,
+                                "type": "string"
+                              },
+                              "operations": {
+                                "items": {
+                                  "enum": [
+                                    "Execute",
+                                    "MmapExecute",
+                                    "Mprotect"
+                                  ],
+                                  "maxLength": 4096,
+                                  "type": "string"
+                                },
+                                "maxItems": 3,
+                                "minItems": 1,
+                                "type": "array"
+                              },
+                              "path": {
+                                "maxLength": 4096,
+                                "type": "string"
+                              },
+                              "recursive": {
+                                "type": "boolean"
+                              }
+                            },
+                            "required": [
+                              "action",
+                              "name",
+                              "operations",
+                              "path",
+                              "recursive"
+                            ],
+                            "type": "object"
+                          },
+                          "maxItems": 1024,
+                          "type": "array"
+                        },
+                        "files": {
+                          "items": {
+                            "maxProperties": 4096,
+                            "properties": {
+                              "action": {
+                                "enum": [
+                                  "Allow",
+                                  "Deny"
+                                ],
+                                "maxLength": 4096,
+                                "type": "string"
+                              },
+                              "name": {
+                                "maxLength": 4096,
+                                "type": "string"
+                              },
+                              "operations": {
+                                "items": {
+                                  "enum": [
+                                    "OpenRead",
+                                    "OpenWrite",
+                                    "Read",
+                                    "Write",
+                                    "MmapRead",
+                                    "MmapWrite",
+                                    "Create",
+                                    "SetAttributes",
+                                    "Unlink",
+                                    "Link",
+                                    "Rename"
+                                  ],
+                                  "maxLength": 4096,
+                                  "type": "string"
+                                },
+                                "maxItems": 16,
+                                "minItems": 1,
+                                "type": "array"
+                              },
+                              "path": {
+                                "maxLength": 4096,
+                                "type": "string"
+                              },
+                              "recursive": {
+                                "type": "boolean"
+                              }
+                            },
+                            "required": [
+                              "action",
+                              "name",
+                              "operations",
+                              "path",
+                              "recursive"
+                            ],
+                            "type": "object"
+                          },
+                          "maxItems": 1024,
+                          "type": "array"
+                        },
+                        "name": {
+                          "maxLength": 4096,
+                          "type": "string"
+                        },
+                        "network": {
+                          "maxProperties": 4096,
+                          "properties": {
+                            "destinations": {
+                              "items": {
+                                "maxProperties": 4096,
+                                "properties": {
+                                  "action": {
+                                    "enum": [
+                                      "Allow",
+                                      "Deny"
+                                    ],
+                                    "maxLength": 4096,
+                                    "type": "string"
+                                  },
+                                  "cidrs": {
+                                    "items": {
+                                      "maxLength": 4096,
+                                      "type": "string"
+                                    },
+                                    "maxItems": 256,
+                                    "minItems": 1,
+                                    "type": "array"
+                                  },
+                                  "name": {
+                                    "maxLength": 4096,
+                                    "type": "string"
+                                  },
+                                  "operations": {
+                                    "items": {
+                                      "enum": [
+                                        "Connect",
+                                        "Send",
+                                        "Receive",
+                                        "Bind"
+                                      ],
+                                      "maxLength": 4096,
+                                      "type": "string"
+                                    },
+                                    "maxItems": 4,
+                                    "minItems": 1,
+                                    "type": "array"
+                                  },
+                                  "ports": {
+                                    "items": {
+                                      "maxProperties": 4096,
+                                      "properties": {
+                                        "first": {
+                                          "format": "uint16",
+                                          "maximum": 65535.0,
+                                          "minimum": 1.0,
+                                          "type": "integer"
+                                        },
+                                        "last": {
+                                          "format": "uint16",
+                                          "maximum": 65535.0,
+                                          "minimum": 1.0,
+                                          "type": "integer"
+                                        }
+                                      },
+                                      "required": [
+                                        "first",
+                                        "last"
+                                      ],
+                                      "type": "object"
+                                    },
+                                    "maxItems": 256,
+                                    "minItems": 1,
+                                    "type": "array"
+                                  },
+                                  "protocols": {
+                                    "items": {
+                                      "enum": [
+                                        "TCP",
+                                        "UDP"
+                                      ],
+                                      "maxLength": 4096,
+                                      "type": "string"
+                                    },
+                                    "maxItems": 2,
+                                    "minItems": 1,
+                                    "type": "array"
+                                  }
+                                },
+                                "required": [
+                                  "action",
+                                  "cidrs",
+                                  "name",
+                                  "operations",
+                                  "ports",
+                                  "protocols"
+                                ],
+                                "type": "object"
+                              },
+                              "maxItems": 1024,
+                              "type": "array"
+                            },
+                            "socketControls": {
+                              "items": {
+                                "maxProperties": 4096,
+                                "properties": {
+                                  "action": {
+                                    "enum": [
+                                      "Allow",
+                                      "Deny"
+                                    ],
+                                    "maxLength": 4096,
+                                    "type": "string"
+                                  },
+                                  "operations": {
+                                    "items": {
+                                      "enum": [
+                                        "Create",
+                                        "Listen",
+                                        "Accept",
+                                        "Shutdown",
+                                        "SetSocketOption"
+                                      ],
+                                      "maxLength": 4096,
+                                      "type": "string"
+                                    },
+                                    "maxItems": 5,
+                                    "minItems": 1,
+                                    "type": "array"
+                                  }
+                                },
+                                "required": [
+                                  "action",
+                                  "operations"
+                                ],
+                                "type": "object"
+                              },
+                              "maxItems": 256,
+                              "type": "array"
+                            }
+                          },
+                          "required": [
+                            "destinations",
+                            "socketControls"
+                          ],
+                          "type": "object"
+                        },
+                        "processControl": {
+                          "items": {
+                            "maxProperties": 4096,
+                            "properties": {
+                              "action": {
+                                "enum": [
+                                  "Allow",
+                                  "Deny"
+                                ],
+                                "maxLength": 4096,
+                                "type": "string"
+                              },
+                              "name": {
+                                "maxLength": 4096,
+                                "type": "string"
+                              },
+                              "operation": {
+                                "enum": [
+                                  "Signal",
+                                  "Ptrace"
+                                ],
+                                "maxLength": 4096,
+                                "type": "string"
+                              },
+                              "requests": {
+                                "items": {
+                                  "format": "uint32",
+                                  "minimum": 0.0,
+                                  "type": "integer"
+                                },
+                                "maxItems": 64,
+                                "minItems": 1,
+                                "type": "array"
+                              },
+                              "signals": {
+                                "items": {
+                                  "format": "uint32",
+                                  "minimum": 0.0,
+                                  "type": "integer"
+                                },
+                                "maxItems": 64,
+                                "minItems": 1,
+                                "type": "array"
+                              },
+                              "targetRole": {
+                                "maxLength": 4096,
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "operation"
+                            ],
+                            "type": "object",
+                            "x-kubernetes-validations": [
+                              {
+                                "message": "fields do not match operation Signal",
+                                "rule": "self.operation != 'Signal' || (has(self.action) && has(self.name) && has(self.signals) && has(self.targetRole) && !has(self.requests))"
+                              },
+                              {
+                                "message": "fields do not match operation Ptrace",
+                                "rule": "self.operation != 'Ptrace' || (has(self.action) && has(self.name) && has(self.requests) && has(self.targetRole) && !has(self.signals))"
+                              }
+                            ]
+                          },
+                          "maxItems": 1024,
+                          "type": "array"
+                        },
+                        "unixStreams": {
+                          "items": {
+                            "maxProperties": 4096,
+                            "properties": {
+                              "action": {
+                                "enum": [
+                                  "Allow",
+                                  "Deny"
+                                ],
+                                "maxLength": 4096,
+                                "type": "string"
+                              },
+                              "name": {
+                                "maxLength": 4096,
+                                "type": "string"
+                              },
+                              "peerRoles": {
+                                "items": {
+                                  "maxLength": 4096,
+                                  "type": "string"
+                                },
+                                "maxItems": 256,
+                                "minItems": 1,
+                                "type": "array"
+                              }
+                            },
+                            "required": [
+                              "action",
+                              "name",
+                              "peerRoles"
+                            ],
+                            "type": "object"
+                          },
+                          "maxItems": 1024,
+                          "type": "array"
+                        }
+                      },
+                      "required": [
+                        "execution",
+                        "files",
+                        "name",
+                        "network",
+                        "processControl",
+                        "unixStreams"
+                      ],
+                      "type": "object"
+                    },
+                    "maxItems": 256,
+                    "minItems": 1,
+                    "type": "array"
+                  }
+                },
+                "required": [
+                  "containers",
+                  "mode",
+                  "podSelector",
+                  "roles"
+                ],
+                "type": "object"
+              },
+              "status": {
+                "description": "Projects Control state for operators. This status does not authorize node activation.",
+                "maxProperties": 4096,
+                "nullable": true,
+                "properties": {
+                  "conditions": {
+                    "items": {
+                      "maxProperties": 4096,
+                      "properties": {
+                        "lastTransitionTime": {
+                          "maxLength": 4096,
+                          "type": "string"
+                        },
+                        "message": {
+                          "maxLength": 4096,
+                          "type": "string"
+                        },
+                        "observedGeneration": {
+                          "format": "uint64",
+                          "minimum": 0.0,
+                          "type": "integer"
+                        },
+                        "reason": {
+                          "maxLength": 4096,
+                          "type": "string"
+                        },
+                        "status": {
+                          "enum": [
+                            "True",
+                            "False",
+                            "Unknown"
+                          ],
+                          "maxLength": 4096,
+                          "type": "string"
+                        },
+                        "type": {
+                          "maxLength": 4096,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "lastTransitionTime",
+                        "message",
+                        "observedGeneration",
+                        "reason",
+                        "status",
+                        "type"
+                      ],
+                      "type": "object"
+                    },
+                    "maxItems": 8,
+                    "type": "array"
+                  },
+                  "observedGeneration": {
+                    "format": "uint64",
+                    "minimum": 0.0,
+                    "type": "integer"
+                  },
+                  "rollout": {
+                    "maxProperties": 4096,
+                    "properties": {
+                      "active": {
+                        "format": "uint32",
+                        "minimum": 0.0,
+                        "type": "integer"
+                      },
+                      "desired": {
+                        "format": "uint32",
+                        "minimum": 0.0,
+                        "type": "integer"
+                      },
+                      "failed": {
+                        "format": "uint32",
+                        "minimum": 0.0,
+                        "type": "integer"
+                      },
+                      "updating": {
+                        "format": "uint32",
+                        "minimum": 0.0,
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "active",
+                      "desired",
+                      "failed",
+                      "updating"
+                    ],
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "conditions",
+                  "observedGeneration",
+                  "rollout"
+                ],
+                "type": "object"
+              }
+            },
+            "required": [
+              "spec"
+            ],
+            "title": "WorkloadProtectionPolicy",
+            "type": "object"
+          }
+        },
+        "served": true,
+        "storage": true,
+        "subresources": {
+          "status": {}
+        }
+      }
+    ]
+  }
+}

@@ -26,7 +26,7 @@ use uuid::Uuid;
 use super::{
     ContainerKindV1, DaemonSetNodeConstraintsV1, KubernetesNodeReadinessOwner,
     KubernetesWorkloadIdentityV1, LabelOperatorV1, PolicyDesiredStateOwner, PolicyDocumentV1,
-    PolicySourceRevisionV1, PolicySourceStateV1, WorkloadProtectionProfile, WorkloadSelectorV1,
+    PolicySourceRevisionV1, PolicySourceStateV1, WorkloadProtectionPolicy, WorkloadSelectorV1,
     WorkloadTargetFactV1, KUBERNETES_LABEL_EPOCH_ANNOTATION, KUBERNETES_NODE_BOOT_ANNOTATION,
     KUBERNETES_NODE_ID_ANNOTATION, KUBERNETES_NODE_UID_ANNOTATION, KUBERNETES_NOT_READY_TAINT,
     KUBERNETES_READY_LABEL,
@@ -158,7 +158,7 @@ impl KubernetesAdmissionOwner {
             ensure!(
                 matches.len() <= 1,
                 InvalidConfigurationSnafu {
-                    reason: "more than one compiled WorkloadProtectionProfile matches the Pod",
+                    reason: "more than one compiled WorkloadProtectionPolicy matches the Pod",
                 }
             );
             let Some((source, policy)) = matches.first() else {
@@ -245,19 +245,26 @@ impl KubernetesAdmissionOwner {
         namespace: &str,
         facts: &PodAdmissionFactsV1,
     ) -> Result<Vec<(PolicySourceRevisionV1, PolicyDocumentV1)>> {
-        let api = Api::<WorkloadProtectionProfile>::namespaced(self.kube.clone(), namespace);
+        let api = Api::<WorkloadProtectionPolicy>::namespaced(self.kube.clone(), namespace);
         // Read the API source inside admission so watch lag cannot admit a matching Pod unprotected.
         let resources =
-            list_inventory(&api, "WorkloadProtectionProfiles for Pod admission").await?;
+            list_inventory(&api, "WorkloadProtectionPolicies for Pod admission").await?;
         let inventory = self.control.workload_inventory();
         let mut matches = Vec::new();
         for resource in resources {
-            if resource.metadata.deletion_timestamp.is_some()
-                || !policy_matches_pod(&resource.spec.policy, facts)
-            {
+            if resource.metadata.deletion_timestamp.is_some() {
                 continue;
             }
-            validate_kubernetes_policy_shape(&resource.spec.policy)?;
+            let policy = super::lower_kubernetes_policy(
+                &resource,
+                self.policies.tenant_id(),
+                self.policies.cluster_uid(),
+                &facts.namespace_uid,
+            )?;
+            if !policy_matches_pod(&policy, facts) {
+                continue;
+            }
+            validate_kubernetes_policy_shape(&policy)?;
             let result = self.policies.reconcile_observation(
                 &resource,
                 &facts.namespace_uid,
@@ -265,7 +272,7 @@ impl KubernetesAdmissionOwner {
                 utc_now_ns(),
                 PolicySourceStateV1::Accepted,
             )?;
-            matches.push((result.source_revision, resource.spec.policy));
+            matches.push((result.source_revision, policy));
         }
         Ok(matches)
     }
@@ -549,7 +556,7 @@ impl KubernetesWorkloadInventoryOwner {
             return Ok(());
         }
         let resources = list_inventory(
-            &Api::<WorkloadProtectionProfile>::all(self.kube.clone()),
+            &Api::<WorkloadProtectionPolicy>::all(self.kube.clone()),
             "policies for status projection",
         )
         .await?;
@@ -577,7 +584,7 @@ impl KubernetesWorkloadInventoryOwner {
                 continue;
             };
             let api =
-                Api::<WorkloadProtectionProfile>::namespaced(self.kube.clone(), &namespace_name);
+                Api::<WorkloadProtectionPolicy>::namespaced(self.kube.clone(), &namespace_name);
             let patch = Patch::Merge(serde_json::json!({"status": result.status}));
             // Projection errors retry. The durable store remains authoritative.
             if api
@@ -1071,10 +1078,10 @@ fn policy_matching_containers_are_pinned(
     policy: &PolicyDocumentV1,
     facts: &PodAdmissionFactsV1,
 ) -> Result<bool> {
-    // Require a digest only when the complete workload and container scope matches.
+    // One policy match protects the whole Pod, so every container needs one signed role path.
     for container in &facts.containers {
-        if matching_selector_id(policy, facts, container)?.is_some()
-            && pinned_image_digest(&container.image).is_none()
+        if matching_selector_id(policy, facts, container)?.is_none()
+            || pinned_image_digest(&container.image).is_none()
         {
             return Ok(false);
         }
@@ -1322,13 +1329,14 @@ mod tests {
         KUBERNETES_READY_LABEL, KUBERNETES_SOURCE_ANNOTATION,
     };
     use crate::{
-        canonical_policy_spec_digest, ContainerKindV1, ControlPlane, ControlStore,
-        KubernetesNodeControlConfigV1, PolicyDesiredStateConfigV1, PolicyDesiredStateOwner,
-        PolicyDocumentV1, PolicySignerConfigV1, ProfileSealRequestV1, RegistryDigestsV1,
-        TrustGenerationV1, WorkloadProtectionProfile, SUBMITTED_SPEC_DIGEST_ANNOTATION,
+        ContainerKindV1, ControlPlane, ControlStore, KubernetesNodeControlConfigV1,
+        PolicyDesiredStateConfigV1, PolicyDesiredStateOwner, PolicyDocumentV1,
+        PolicySignerConfigV1, ProfileSealRequestV1, RegistryDigestsV1, TrustGenerationV1,
+        WorkloadProtectionPolicy, WorkloadProtectionPolicySpec,
     };
 
     const POLICY: &str = include_str!("../../tests/fixtures/policy-v1.yaml");
+    const KUBERNETES_POLICY: &str = include_str!("../../tests/fixtures/kubernetes-policy-v1.yaml");
     const TENANT_ID: &str = "10000000-0000-4000-8000-000000000001";
     const CLUSTER_UID: &str = "55555555-5555-4555-8555-555555555555";
     const NAMESPACE_UID: &str = "66666666-6666-4666-8666-666666666666";
@@ -1337,13 +1345,19 @@ mod tests {
         Pod {
             metadata: ObjectMeta {
                 namespace: Some("tenant-a".to_owned()),
-                labels: Some(BTreeMap::from([("app".to_owned(), "worker".to_owned())])),
+                labels: Some(BTreeMap::from([("app".to_owned(), "converter".to_owned())])),
                 ..ObjectMeta::default()
             },
             spec: Some(PodSpec {
                 containers: vec![Container {
                     name: "converter".to_owned(),
-                    image: Some("registry.example/converter@sha256:converter".to_owned()),
+                    image: Some(
+                        concat!(
+                            "registry.example/converter@sha256:",
+                            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                        )
+                        .to_owned(),
+                    ),
                     ..Container::default()
                 }],
                 ..PodSpec::default()
@@ -1387,20 +1401,25 @@ mod tests {
     }
 
     #[test]
-    fn image_pinning_uses_the_complete_workload_selector_scope(
+    fn every_protected_container_needs_one_matching_pinned_selector(
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let mut policy =
+        let policy =
             PolicyDocumentV1::parse(std::path::Path::new("policy-v1.yaml"), POLICY.as_bytes())?;
-        let facts = pod_admission_facts(
+        let mut facts = pod_admission_facts(
             &pod(),
             "55555555-5555-4555-8555-555555555555",
             "66666666-6666-4666-8666-666666666666",
             "77777777-7777-4777-8777-777777777777",
         );
-        assert!(!policy_matching_containers_are_pinned(&policy, &facts)?);
-        policy.workload_selectors[0].service_account_uids =
-            vec!["aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa".to_owned()];
         assert!(policy_matching_containers_are_pinned(&policy, &facts)?);
+        facts.containers[0].image = "registry.example/converter:mutable".to_owned();
+        assert!(!policy_matching_containers_are_pinned(&policy, &facts)?);
+        facts.containers[0].image = pod()
+            .spec
+            .and_then(|spec| spec.containers[0].image.clone())
+            .ok_or("test Pod has no image")?;
+        facts.service_account_uid = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa".to_owned();
+        assert!(!policy_matching_containers_are_pinned(&policy, &facts)?);
         Ok(())
     }
 
@@ -1683,20 +1702,19 @@ mod tests {
     #[tokio::test]
     async fn pod_admission_reads_a_matching_profile_before_watch_reconciliation(
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let policy =
-            PolicyDocumentV1::parse(std::path::Path::new("policy-v1.yaml"), POLICY.as_bytes())?;
-        let resource: WorkloadProtectionProfile = serde_json::from_value(json!({
+        let policy = WorkloadProtectionPolicySpec::parse(
+            std::path::Path::new("kubernetes-policy-v1.yaml"),
+            KUBERNETES_POLICY.as_bytes(),
+        )?;
+        let resource: WorkloadProtectionPolicy = serde_json::from_value(json!({
             "apiVersion": "mithril.erebor.dev/v1alpha1",
-            "kind": "WorkloadProtectionProfile",
+            "kind": "WorkloadProtectionPolicy",
             "metadata": {
                 "name": "profile-a",
                 "namespace": "tenant-a",
                 "uid": "30000000-0000-4000-8000-000000000001",
                 "generation": 1,
-                "resourceVersion": "source-1",
-                "annotations": {
-                    SUBMITTED_SPEC_DIGEST_ANNOTATION: canonical_policy_spec_digest(&policy)?,
-                }
+                "resourceVersion": "source-1"
             },
             "spec": policy,
         }))?;
@@ -1706,7 +1724,7 @@ mod tests {
             async move {
                 let value = json!({
                     "apiVersion": "mithril.erebor.dev/v1alpha1",
-                    "kind": "WorkloadProtectionProfileList",
+                    "kind": "WorkloadProtectionPolicyList",
                     "metadata": {"resourceVersion": "snapshot-1"},
                     "items": [list_item]
                 });

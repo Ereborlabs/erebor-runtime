@@ -3,40 +3,39 @@ use std::path::{Path, PathBuf};
 
 use ed25519_dalek::SigningKey;
 use mithril_control::{
-    canonical_policy_spec_digest, ContainerKindV1, ControlPlane, ControlStore,
-    PolicyActivationAcknowledgementV1, PolicyActivationStateV1, PolicyBundleV1,
-    PolicyConditionKindV1, PolicyDeliveryOperationV1, PolicyDesiredStateConfigV1,
-    PolicyDesiredStateOwner, PolicyDocumentV1, PolicySignerConfigV1, ProfileSealRequestV1,
-    RegistryDigestsV1, TrustGenerationV1, WorkloadProtectionProfile, WorkloadTargetFactV1,
-    POLICY_API_VERSION, POLICY_KIND, SUBMITTED_SPEC_DIGEST_ANNOTATION,
+    canonical_kubernetes_policy_spec_digest, ContainerKindV1, ControlPlane, ControlStore,
+    KubernetesConditionStatusV1, PolicyActivationAcknowledgementV1, PolicyActivationStateV1,
+    PolicyBundleV1, PolicyDeliveryOperationV1, PolicyDesiredStateConfigV1, PolicyDesiredStateOwner,
+    PolicySignerConfigV1, ProfileSealRequestV1, RegistryDigestsV1, TrustGenerationV1,
+    WorkloadProtectionPolicy, WorkloadProtectionPolicySpec, WorkloadTargetFactV1,
+    POLICY_API_VERSION, POLICY_KIND,
 };
 use serde_json::json;
 use tempfile::TempDir;
 
 type TestResult<T = ()> = Result<T, Box<dyn std::error::Error>>;
 
-const POLICY: &str = include_str!("fixtures/policy-v1.yaml");
+const POLICY: &str = include_str!("fixtures/kubernetes-policy-v1.yaml");
 const TENANT_ID: &str = "10000000-0000-4000-8000-000000000001";
 const CLUSTER_UID: &str = "55555555-5555-4555-8555-555555555555";
 const NAMESPACE_UID: &str = "66666666-6666-4666-8666-666666666666";
 const OBJECT_UID: &str = "30000000-0000-4000-8000-000000000001";
 const NOW: i64 = 1_800_000_000_000_000_000;
 
-fn policy() -> TestResult<PolicyDocumentV1> {
-    Ok(PolicyDocumentV1::parse(
-        Path::new("policy-v1.yaml"),
+fn policy() -> TestResult<WorkloadProtectionPolicySpec> {
+    Ok(WorkloadProtectionPolicySpec::parse(
+        Path::new("kubernetes-policy-v1.yaml"),
         POLICY.as_bytes(),
     )?)
 }
 
 fn resource(
-    document: &PolicyDocumentV1,
+    spec: &WorkloadProtectionPolicySpec,
     name: &str,
     uid: &str,
     generation: u64,
     deleting: bool,
-) -> TestResult<WorkloadProtectionProfile> {
-    let digest = canonical_policy_spec_digest(document)?;
+) -> TestResult<WorkloadProtectionPolicy> {
     let resource_version = if deleting {
         format!("opaque-{generation}-deleting")
     } else {
@@ -48,7 +47,6 @@ fn resource(
         "uid": uid,
         "generation": generation,
         "resourceVersion": resource_version,
-        "annotations": {SUBMITTED_SPEC_DIGEST_ANNOTATION: digest},
     });
     if deleting {
         metadata["deletionTimestamp"] = json!("2027-01-15T00:00:00Z");
@@ -57,7 +55,7 @@ fn resource(
         "apiVersion": POLICY_API_VERSION,
         "kind": POLICY_KIND,
         "metadata": metadata,
-        "spec": document,
+        "spec": spec,
     }))?)
 }
 
@@ -113,8 +111,12 @@ fn inventory(binding_digest: &str) -> Vec<WorkloadTargetFactV1> {
         container_id: "containerd://converter".to_owned(),
         container_name: "converter".to_owned(),
         container_kind: ContainerKindV1::Application,
-        image_digest: "sha256:converter".to_owned(),
-        pod_labels: BTreeMap::new(),
+        image_digest: concat!(
+            "registry.example/converter@sha256:",
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        )
+        .to_owned(),
+        pod_labels: BTreeMap::from([("app".to_owned(), "converter".to_owned())]),
         kubernetes: None,
     }]
 }
@@ -188,8 +190,7 @@ fn create_update_duplicate_and_restart_preserve_one_monotonic_rollout() -> TestR
     assert_eq!(store.commit_index(), first_commit);
 
     let mut second_policy = first_policy;
-    second_policy.metadata.profile_version = 2;
-    second_policy.rollout.rollout_generation = 2;
+    second_policy.roles[0].files[0].operations.reverse();
     let second = owner.reconcile(
         &resource(&second_policy, "profile", OBJECT_UID, 2, false)?,
         NAMESPACE_UID,
@@ -328,7 +329,7 @@ fn rejected_source_metadata_is_counted_as_a_reconcile_failure() -> TestResult {
 }
 
 #[test]
-fn duplicate_profile_and_exact_workload_claims_do_not_replace_valid_rollout() -> TestResult {
+fn exact_workload_claims_do_not_replace_valid_rollout() -> TestResult {
     let directory = TempDir::new()?;
     let store = ControlStore::open(directory.path())?;
     let owner = make_owner(store.clone());
@@ -340,27 +341,7 @@ fn duplicate_profile_and_exact_workload_claims_do_not_replace_valid_rollout() ->
         NOW,
     )?;
 
-    let duplicate_profile = owner.reconcile(
-        &resource(
-            &first_policy,
-            "two",
-            "30000000-0000-4000-8000-000000000002",
-            1,
-            false,
-        )?,
-        NAMESPACE_UID,
-        &inventory(&"2".repeat(64)),
-        NOW + 1,
-    );
-    let Err(duplicate_profile) = duplicate_profile else {
-        return Err("a duplicate profile owner must fail".into());
-    };
-    assert!(duplicate_profile
-        .to_string()
-        .contains("CFG_DUPLICATE_PROFILE_OWNER"));
-
-    let mut overlapping = first_policy;
-    overlapping.metadata.profile_id = "11111111-1111-4111-8111-111111111112".to_owned();
+    let overlapping = first_policy;
     let overlap = owner.reconcile(
         &resource(
             &overlapping,
@@ -371,7 +352,7 @@ fn duplicate_profile_and_exact_workload_claims_do_not_replace_valid_rollout() ->
         )?,
         NAMESPACE_UID,
         &inventory(&"1".repeat(64)),
-        NOW + 2,
+        NOW + 1,
     );
     let Err(overlap) = overlap else {
         return Err("an exact workload overlap must fail".into());
@@ -423,11 +404,12 @@ fn status_refreshes_from_durable_node_rollout_state() -> TestResult {
         &inventory(&"1".repeat(64)),
         NOW + 2,
     )?;
-    assert_eq!(refreshed.status.rollout_counts.active, 1);
-    assert_eq!(refreshed.status.rollout_counts.total(), 1);
+    assert_eq!(refreshed.status.rollout.active, 1);
+    assert_eq!(refreshed.status.rollout.total(), 1);
     assert_eq!(refreshed.status.conditions.len(), 6);
     assert!(refreshed.status.conditions.iter().any(|condition| {
-        condition.condition == PolicyConditionKindV1::Available && condition.status
+        condition.condition_type == "Available"
+            && condition.status == KubernetesConditionStatusV1::True
     }));
     assert!(store
         .next_bundle_for_node(
@@ -482,9 +464,10 @@ fn rejected_candidate_stops_redelivery_and_projects_degraded_status() -> TestRes
         &inventory(&"1".repeat(64)),
         NOW + 2,
     )?;
-    assert_eq!(refreshed.status.rollout_counts.rejected, 1);
+    assert_eq!(refreshed.status.rollout.failed, 1);
     assert!(refreshed.status.conditions.iter().any(|condition| {
-        condition.condition == PolicyConditionKindV1::Degraded && condition.status
+        condition.condition_type == "Degraded"
+            && condition.status == KubernetesConditionStatusV1::True
     }));
     Ok(())
 }
@@ -546,19 +529,13 @@ fn deletion_names_exact_predecessor_and_recreate_gets_a_new_source_identity() ->
     );
     assert_eq!(
         recreated.bundles[0].candidate.operation,
-        PolicyDeliveryOperationV1::Replace
+        PolicyDeliveryOperationV1::Activate
     );
-    assert_eq!(
-        recreated.bundles[0]
-            .candidate
-            .predecessor_candidate_content_id
-            .as_deref(),
-        Some(retiring.bundles[0].candidate.candidate_content_id.as_str())
-    );
-    assert!(
-        recreated.bundles[0].candidate.distribution_sequence
-            > retiring.bundles[0].candidate.distribution_sequence
-    );
+    assert!(recreated.bundles[0]
+        .candidate
+        .predecessor_candidate_content_id
+        .is_none());
+    assert_eq!(recreated.bundles[0].candidate.distribution_sequence, 1);
     Ok(())
 }
 
@@ -605,7 +582,7 @@ fn two_node_create_update_restart_delete_and_recreate_preserve_provenance() -> T
     assert_eq!(first.bundles.len(), 2);
     assert_eq!(
         first.source_revision.canonical_spec_digest,
-        canonical_policy_spec_digest(&first_policy)?
+        canonical_kubernetes_policy_spec_digest(&first_policy)?
     );
     let first_by_node = first
         .bundles
@@ -632,11 +609,10 @@ fn two_node_create_update_restart_delete_and_recreate_preserve_provenance() -> T
     let first_status = owner
         .reconcile(&first_resource, NAMESPACE_UID, &inventory, NOW + 2)?
         .status;
-    assert_eq!(first_status.rollout_counts.active, 1);
-    assert_eq!(first_status.rollout_counts.rejected, 1);
+    assert_eq!(first_status.rollout.active, 1);
+    assert_eq!(first_status.rollout.failed, 1);
 
-    first_policy.metadata.profile_version = 2;
-    first_policy.rollout.rollout_generation = 2;
+    first_policy.roles[0].files[0].operations.reverse();
     let second_resource = resource(&first_policy, "profile", OBJECT_UID, 2, false)?;
     let second = owner.reconcile(&second_resource, NAMESPACE_UID, &inventory, NOW + 3)?;
     let second_by_node = second
@@ -681,10 +657,11 @@ fn two_node_create_update_restart_delete_and_recreate_preserve_provenance() -> T
         NOW + 4,
     )?)?;
     let mixed = owner.reconcile(&second_resource, NAMESPACE_UID, &inventory, NOW + 5)?;
-    assert_eq!(mixed.status.rollout_counts.active, 1);
-    assert_eq!(mixed.status.rollout_counts.pending, 1);
+    assert_eq!(mixed.status.rollout.active, 1);
+    assert_eq!(mixed.status.rollout.updating, 1);
     assert!(mixed.status.conditions.iter().any(|condition| {
-        condition.condition == PolicyConditionKindV1::Progressing && condition.status
+        condition.condition_type == "Progressing"
+            && condition.status == KubernetesConditionStatusV1::True
     }));
 
     // Restart recovery must reproduce the exact candidates and mixed rollout state.
@@ -695,8 +672,8 @@ fn two_node_create_update_restart_delete_and_recreate_preserve_provenance() -> T
     let restarted =
         restarted_owner.reconcile(&second_resource, NAMESPACE_UID, &inventory, NOW + 6)?;
     assert_eq!(restarted.bundles, second.bundles);
-    assert_eq!(restarted.status.rollout_counts.active, 1);
-    assert_eq!(restarted.status.rollout_counts.pending, 1);
+    assert_eq!(restarted.status.rollout.active, 1);
+    assert_eq!(restarted.status.rollout.updating, 1);
 
     let deleting_resource = resource(&first_policy, "profile", OBJECT_UID, 2, true)?;
     let retiring = restarted_owner.reconcile(&deleting_resource, NAMESPACE_UID, &[], NOW + 7)?;
@@ -720,7 +697,7 @@ fn two_node_create_update_restart_delete_and_recreate_preserve_provenance() -> T
         );
     }
 
-    // A new Kubernetes object UID starts a new source identity but follows the terminal chain.
+    // A new Kubernetes object UID starts a separate source and cannot reuse old authority.
     let recreated_resource = resource(
         &first_policy,
         "profile",
@@ -732,18 +709,12 @@ fn two_node_create_update_restart_delete_and_recreate_preserve_provenance() -> T
         restarted_owner.reconcile(&recreated_resource, NAMESPACE_UID, &inventory, NOW + 8)?;
     assert_eq!(recreated.bundles.len(), 2);
     for bundle in &recreated.bundles {
-        let terminal = retiring_by_node
-            .get(bundle.candidate.exact_target.node_id.as_str())
-            .ok_or("recreated target has no terminal predecessor")?;
         assert_eq!(
             bundle.candidate.operation,
-            PolicyDeliveryOperationV1::Replace
+            PolicyDeliveryOperationV1::Activate
         );
-        assert_eq!(
-            bundle.candidate.predecessor_candidate_content_id.as_deref(),
-            Some(terminal.candidate.candidate_content_id.as_str())
-        );
-        assert!(bundle.candidate.distribution_sequence > terminal.candidate.distribution_sequence);
+        assert!(bundle.candidate.predecessor_candidate_content_id.is_none());
+        assert_eq!(bundle.candidate.distribution_sequence, 1);
     }
     assert_ne!(
         recreated.source_revision.policy_source_revision_id,
