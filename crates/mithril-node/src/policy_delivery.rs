@@ -49,6 +49,7 @@ struct PolicyDeliveryStateV1 {
 }
 
 const MAX_ACTIVE_POLICY_PROFILES: usize = 256;
+const MAX_INSPECTED_POLICY_TARGETS: usize = 256;
 
 pub(crate) struct RuntimeBindingRollbackV1 {
     previous: PolicyDeliveryStateV1,
@@ -187,6 +188,9 @@ struct TransferStateV1 {
 pub struct PolicyDeliveryStatusV1 {
     pub active_candidate_content_id: Option<String>,
     pub active_profile_ids: Vec<String>,
+    pub active_target_count: usize,
+    pub active_targets_truncated: bool,
+    pub active_targets: Vec<PolicyDeliveryTargetStatusV1>,
     pub scheduled_binding_count: usize,
     pub runtime_binding_count: usize,
     pub activation_pending: bool,
@@ -198,6 +202,28 @@ pub struct PolicyDeliveryStatusV1 {
     pub expired_exception_count: usize,
     pub revoked_exception_count: usize,
     pub exception_ack_pending_count: usize,
+}
+
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+/// Projects one signed Kubernetes target and its current runtime lifetime.
+pub struct PolicyDeliveryTargetStatusV1 {
+    pub profile_id: String,
+    pub candidate_content_id: String,
+    pub policy_source_revision_id: String,
+    pub workload_binding_generation_digest: String,
+    pub node_id: String,
+    pub kubernetes_node_name: String,
+    pub kubernetes_node_uid: String,
+    pub node_boot_id: String,
+    pub label_epoch: u64,
+    pub namespace_name: String,
+    pub pod_name: String,
+    pub pod_uid: String,
+    pub container_name: String,
+    pub image_digest: String,
+    pub runtime_container_id: Option<String>,
+    pub runtime_binding_id: Option<String>,
+    pub container_generation: Option<u64>,
 }
 
 pub(crate) struct PreparedPolicyActivationV1 {
@@ -320,6 +346,9 @@ impl NodePolicyDeliveryOwner {
         PolicyDeliveryStatusV1 {
             active_candidate_content_id: self.state.active_candidate_content_id.clone(),
             active_profile_ids: self.state.active_profiles.keys().cloned().collect(),
+            active_target_count: 0,
+            active_targets_truncated: false,
+            active_targets: Vec::new(),
             scheduled_binding_count: bindings
                 .iter()
                 .filter(|binding| binding.container_id.starts_with("scheduled:"))
@@ -389,6 +418,79 @@ impl NodePolicyDeliveryOwner {
                 })
                 .count(),
         }
+    }
+
+    fn inspection_status(&self) -> Result<PolicyDeliveryStatusV1> {
+        let mut status = self.status();
+        let mut targets = Vec::new();
+        for (profile_id, record) in &self.state.active_profiles {
+            let bundle_path = self
+                .root
+                .join("bundles")
+                .join(&record.bundle_digest)
+                .join("bundle.json");
+            let bundle = self.read_bundle(&bundle_path)?;
+            let canonical_bundle = PolicyBundleV1::new(
+                bundle.candidate.clone(),
+                bundle.profile_artifact.clone(),
+                bundle.profile_signing_public_key.clone(),
+            )
+            .context(PolicySnafu)?;
+            ensure!(
+                canonical_bundle == bundle
+                    && bundle.bundle_digest == record.bundle_digest
+                    && bundle.candidate.candidate_content_id == record.candidate_content_id
+                    && bundle.candidate.policy_source_revision_id
+                        == record.policy_source_revision_id
+                    && bundle.profile_artifact.header.profile_id == *profile_id,
+                IdentityStateSnafu {
+                    reason: "the active policy record differs from its signed bundle",
+                }
+            );
+            for target in &bundle.candidate.exact_target.workload_targets {
+                let identity = target.kubernetes.as_ref().context(IdentityStateSnafu {
+                    reason: "an inspected scheduled target has no Kubernetes identity",
+                })?;
+                let binding = record
+                    .scheduled_bindings
+                    .iter()
+                    .find(|binding| {
+                        binding.scheduled_target_digest.as_deref()
+                            == Some(target.workload_binding_generation_digest.as_str())
+                    })
+                    .context(IdentityStateSnafu {
+                        reason: "an inspected scheduled target has no node binding",
+                    })?;
+                let runtime_bound = !binding.container_id.starts_with("scheduled:");
+                targets.push(PolicyDeliveryTargetStatusV1 {
+                    profile_id: profile_id.clone(),
+                    candidate_content_id: record.candidate_content_id.clone(),
+                    policy_source_revision_id: record.policy_source_revision_id.clone(),
+                    workload_binding_generation_digest: target
+                        .workload_binding_generation_digest
+                        .clone(),
+                    node_id: target.node_id.clone(),
+                    kubernetes_node_name: identity.kubernetes_node_name.clone(),
+                    kubernetes_node_uid: identity.kubernetes_node_uid.clone(),
+                    node_boot_id: identity.node_boot_id.clone(),
+                    label_epoch: identity.label_epoch,
+                    namespace_name: identity.namespace_name.clone(),
+                    pod_name: identity.pod_name.clone(),
+                    pod_uid: target.pod_uid.clone(),
+                    container_name: target.container_name.clone(),
+                    image_digest: target.image_digest.clone(),
+                    runtime_container_id: runtime_bound.then(|| binding.container_id.clone()),
+                    runtime_binding_id: runtime_bound.then(|| binding.binding_id.clone()),
+                    container_generation: runtime_bound.then_some(binding.container_generation),
+                });
+            }
+        }
+        targets.sort();
+        status.active_target_count = targets.len();
+        status.active_targets_truncated = targets.len() > MAX_INSPECTED_POLICY_TARGETS;
+        targets.truncate(MAX_INSPECTED_POLICY_TARGETS);
+        status.active_targets = targets;
+        Ok(status)
     }
 
     #[cfg(test)]
@@ -3206,7 +3308,7 @@ impl NodePolicyDeliveryOwner {
 }
 
 pub fn policy_delivery_status(state_directory: &Path) -> Result<PolicyDeliveryStatusV1> {
-    Ok(NodePolicyDeliveryOwner::load(state_directory)?.status())
+    NodePolicyDeliveryOwner::load(state_directory)?.inspection_status()
 }
 
 fn materialize_scheduled_bindings(
@@ -4667,6 +4769,33 @@ mod tests {
         );
         assert_eq!(admitted.scheduled_binding_count, 0);
         assert_eq!(admitted.runtime_binding_count, 1);
+        assert_eq!(admitted.active_target_count, 1);
+        assert!(!admitted.active_targets_truncated);
+        let inspected_target = &admitted.active_targets[0];
+        let signed_target = &scheduled.candidate.exact_target.workload_targets[0];
+        let signed_identity = signed_target.kubernetes.as_ref().ok_or_else(|| {
+            super::IdentityStateSnafu {
+                reason: "the signed test target has no Kubernetes identity",
+            }
+            .build()
+        })?;
+        assert_eq!(inspected_target.node_id, signed_target.node_id);
+        assert_eq!(inspected_target.pod_uid, signed_target.pod_uid);
+        assert_eq!(
+            inspected_target.kubernetes_node_uid,
+            signed_identity.kubernetes_node_uid
+        );
+        assert_eq!(inspected_target.node_boot_id, signed_identity.node_boot_id);
+        assert_eq!(inspected_target.label_epoch, signed_identity.label_epoch);
+        assert_eq!(
+            inspected_target.runtime_container_id.as_deref(),
+            Some(runtime_binding.container_id.as_str())
+        );
+        assert_eq!(
+            inspected_target.runtime_binding_id.as_deref(),
+            Some(runtime_binding.binding_id.as_str())
+        );
+        assert_eq!(inspected_target.container_generation, Some(42));
         let mut restored = config.clone();
         restored.workload_bindings.clear();
         restored.policy_candidates.clear();
@@ -4696,6 +4825,9 @@ mod tests {
         let rolled_back = super::policy_delivery_status(directory.path())?;
         assert_eq!(rolled_back.scheduled_binding_count, 1);
         assert_eq!(rolled_back.runtime_binding_count, 0);
+        assert_eq!(rolled_back.active_target_count, 1);
+        assert!(rolled_back.active_targets[0].runtime_container_id.is_none());
+        assert!(rolled_back.active_targets[0].runtime_binding_id.is_none());
         let mut old_boot_active = NodePolicyDeliveryOwner::load(directory.path())?;
         let (profile_id, record) = old_boot_active
             .state
