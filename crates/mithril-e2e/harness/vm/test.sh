@@ -3,14 +3,56 @@
 set -euo pipefail
 
 directory=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+manual_case=$directory/../../../../examples/mithril-kubernetes-convergence-manual/run.sh
 test_root=$(mktemp -d /tmp/mithril-vm-harness-test.XXXXXX)
 trap 'rm -rf -- "$test_root"' EXIT
 
 for script in "$directory/run.sh" "$directory/two-node-network.sh" \
   "$directory/two-node-convergence.sh" \
   "$directory/manual.sh" "$directory/guest.sh" \
-  "$directory/providers/libvirt.sh" "$directory/test.sh"; do
+  "$directory/providers/libvirt.sh" "$directory/test.sh" "$manual_case"; do
   bash -n "$script"
+done
+
+fake_manual_bin=$test_root/manual-bin
+mkdir "$fake_manual_bin"
+cat >"$fake_manual_bin/kubectl" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"${TEST_KUBECTL_LOG:?}"
+[[ $* == "get --raw=/readyz" ]] && exit 0
+[[ ${1:-} == -n && ${3:-} == rollout && ${4:-} == status ]] && exit 0
+if [[ ${1:-} == get && ${2:-} == namespace ]]; then
+  [[ ${TEST_EXISTING_RESOURCE:?} == namespace ]]
+  exit
+fi
+if [[ ${1:-} == get && ${2:-} == runtimeclass ]]; then
+  [[ ${TEST_EXISTING_RESOURCE:?} == runtimeclass && ${3:-} == mithril-convergence-manual ]]
+  exit
+fi
+[[ " $* " == *" delete "* ]] && exit 97
+exit 98
+EOF
+chmod +x "$fake_manual_bin/kubectl"
+cat >"$fake_manual_bin/id" <<'EOF'
+#!/usr/bin/env bash
+if [[ ${1:-} == -u ]]; then
+  echo 0
+else
+  exec /usr/bin/id "$@"
+fi
+EOF
+chmod +x "$fake_manual_bin/id"
+for existing_resource in namespace runtimeclass; do
+  manual_log=$test_root/manual-$existing_resource.log
+  set +e
+  manual_refusal=$(PATH="$fake_manual_bin:$PATH" \
+    TEST_KUBECTL_LOG="$manual_log" TEST_EXISTING_RESOURCE="$existing_resource" \
+    "$manual_case" 2>&1)
+  status=$?
+  set -e
+  [[ $status -eq 2 && $manual_refusal == \
+    *"manual scenario refuses to replace an existing resource"* ]]
+  ! grep -q ' delete ' "$manual_log"
 done
 
 help=$("$directory/run.sh" --help 2>&1)

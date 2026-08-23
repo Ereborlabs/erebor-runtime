@@ -12,6 +12,9 @@ protected_pod=protected
 failed_pod=gate-failure
 work_directory=$(mktemp -d /tmp/mithril-convergence-manual.XXXXXX)
 eligible_nodes=()
+owns_namespace=false
+owns_runtime_class=false
+owns_failed_runtime_class=false
 
 require_command() {
   command -v "$1" >/dev/null || {
@@ -87,25 +90,36 @@ cleanup() {
     remove_marker "$node_name" "$protected_pod.exception-result" >/dev/null 2>&1 ||
       status=1
   done
-  kubectl delete namespace "$scenario_namespace" --ignore-not-found=true \
-    --wait=true --timeout=120s >/dev/null 2>&1 || status=1
-  kubectl delete runtimeclass "$runtime_class" "$failed_runtime_class" \
-    --ignore-not-found=true --wait=true --timeout=120s >/dev/null 2>&1 ||
-    status=1
+  if [[ $owns_namespace == true ]]; then
+    kubectl delete namespace "$scenario_namespace" --ignore-not-found=true \
+      --wait=true --timeout=120s >/dev/null 2>&1 || status=1
+  fi
+  if [[ $owns_runtime_class == true ]]; then
+    kubectl delete runtimeclass "$runtime_class" --ignore-not-found=true \
+      --wait=true --timeout=120s >/dev/null 2>&1 || status=1
+  fi
+  if [[ $owns_failed_runtime_class == true ]]; then
+    kubectl delete runtimeclass "$failed_runtime_class" --ignore-not-found=true \
+      --wait=true --timeout=120s >/dev/null 2>&1 || status=1
+  fi
   [[ $work_directory == /tmp/mithril-convergence-manual.* ]] &&
     rm -rf -- "$work_directory"
   if ((status == 0)); then
-    kubectl get namespace "$scenario_namespace" >/dev/null 2>&1 && status=1
-    kubectl get runtimeclass "$runtime_class" >/dev/null 2>&1 && status=1
-    kubectl get runtimeclass "$failed_runtime_class" >/dev/null 2>&1 && status=1
+    if [[ $owns_namespace == true ]]; then
+      kubectl get namespace "$scenario_namespace" >/dev/null 2>&1 && status=1
+    fi
+    if [[ $owns_runtime_class == true ]]; then
+      kubectl get runtimeclass "$runtime_class" >/dev/null 2>&1 && status=1
+    fi
+    if [[ $owns_failed_runtime_class == true ]]; then
+      kubectl get runtimeclass "$failed_runtime_class" >/dev/null 2>&1 && status=1
+    fi
   fi
   exit "$status"
 }
 trap cleanup EXIT
 
 assert_absent() {
-  # Resource absence establishes cleanup ownership before this case changes
-  # the cluster.
   if kubectl get "$@" >/dev/null 2>&1; then
     echo "manual scenario refuses to replace an existing resource: $*" >&2
     exit 2
@@ -219,6 +233,11 @@ kubectl -n "$system_namespace" rollout status deployment/mithril-control \
 kubectl -n "$system_namespace" rollout status daemonset/mithril-node \
   --timeout=120s >/dev/null
 
+# Refuse existing names before marker or Kubernetes state changes.
+assert_absent namespace "$scenario_namespace"
+assert_absent runtimeclass "$runtime_class"
+assert_absent runtimeclass "$failed_runtime_class"
+
 mapfile -t eligible_nodes < <(
   kubectl -n "$system_namespace" get pods \
     -l app.kubernetes.io/name=mithril-node -o json |
@@ -274,26 +293,26 @@ assert_cluster_access false "$control_subject" update mithril.erebor.dev \
   workloadprotectionexceptions
 assert_cluster_access false "$node_subject" get "" nodes
 
-assert_absent namespace "$scenario_namespace"
-assert_absent runtimeclass "$runtime_class"
-assert_absent runtimeclass "$failed_runtime_class"
-
-cat >"$work_directory/runtime-classes.yaml" <<EOF
+kubectl apply --server-side --field-manager=mithril-convergence-manual \
+  --validate=strict -f - >/dev/null <<EOF
 apiVersion: node.k8s.io/v1
 kind: RuntimeClass
 metadata:
   name: $runtime_class
 handler: mithril
----
+EOF
+owns_runtime_class=true
+kubectl apply --server-side --field-manager=mithril-convergence-manual \
+  --validate=strict -f - >/dev/null <<EOF
 apiVersion: node.k8s.io/v1
 kind: RuntimeClass
 metadata:
   name: $failed_runtime_class
 handler: mithril-fail
 EOF
-kubectl apply --server-side --field-manager=mithril-convergence-manual \
-  --validate=strict -f "$work_directory/runtime-classes.yaml" >/dev/null
+owns_failed_runtime_class=true
 kubectl create namespace "$scenario_namespace" >/dev/null
+owns_namespace=true
 kubectl -n "$scenario_namespace" create serviceaccount converter >/dev/null
 kubectl -n "$scenario_namespace" create serviceaccount policy-writer >/dev/null
 kubectl -n "$scenario_namespace" create serviceaccount exception-writer >/dev/null
