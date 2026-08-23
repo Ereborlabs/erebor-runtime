@@ -353,61 +353,7 @@ impl ControlStore {
             }
             return Ok(inner.state.commit_index);
         }
-        let document_digest = canonical_policy_spec_digest(&policy_document)?;
-        if revision.policy_document_digest != document_digest {
-            return ControlStoreSnafu {
-                path: inner.root.clone(),
-                reason: "the source revision does not bind the supplied policy document".to_owned(),
-            }
-            .fail();
-        }
-        // Object UID, generation, and lifecycle state form the monotonic source history.
-        if let Some(current_id) = inner.state.latest_sources.get(&key) {
-            let current = inner
-                .state
-                .source_revisions
-                .get(current_id)
-                .ok_or_else(|| {
-                    ControlStoreSnafu {
-                        path: inner.root.clone(),
-                        reason: "the latest source index has no source revision".to_owned(),
-                    }
-                    .build()
-                })?;
-            if current.object_uid != revision.object_uid {
-                if current.state == crate::PolicySourceStateV1::Accepted {
-                    return ControlStoreSnafu {
-                        path: inner.root.clone(),
-                        reason:
-                            "a recreated policy object arrived before retirement of the prior UID"
-                                .to_owned(),
-                    }
-                    .fail();
-                }
-            } else if revision.object_generation < current.object_generation {
-                return ControlStoreSnafu {
-                    path: inner.root.clone(),
-                    reason: "a stale policy generation cannot replace the current source revision"
-                        .to_owned(),
-                }
-                .fail();
-            } else if revision.object_generation == current.object_generation {
-                // Kubernetes deletion does not increment metadata.generation.
-                let deletion_transition = current.state == crate::PolicySourceStateV1::Accepted
-                    && revision.state == crate::PolicySourceStateV1::DeletionRequested
-                    && revision.canonical_spec_digest == current.canonical_spec_digest
-                    && revision.policy_document_digest == current.policy_document_digest;
-                if !deletion_transition {
-                    return ControlStoreSnafu {
-                        path: inner.root.clone(),
-                        reason:
-                            "one policy generation has conflicting source bytes or lifecycle state"
-                                .to_owned(),
-                    }
-                    .fail();
-                }
-            }
-        }
+        validate_source_acceptance(&inner.state, &revision, &policy_document, &inner.root)?;
         commit(
             &mut inner,
             ControlTransactionV1::SourceAccepted {
@@ -1603,6 +1549,64 @@ fn checked_store_increment(value: u64, path: &Path, reason: &str) -> Result<u64>
     })
 }
 
+fn validate_source_acceptance(
+    state: &ControlStoreState,
+    revision: &PolicySourceRevisionV1,
+    policy_document: &PolicyDocumentV1,
+    path: &Path,
+) -> Result<()> {
+    if revision.policy_document_digest != canonical_policy_spec_digest(policy_document)? {
+        return ControlStoreSnafu {
+            path: path.to_owned(),
+            reason: "the source revision does not bind the supplied policy document".to_owned(),
+        }
+        .fail();
+    }
+    let key = PolicyObjectKeyV1::from(revision);
+    let Some(current_id) = state.latest_sources.get(&key) else {
+        return Ok(());
+    };
+    let current = state.source_revisions.get(current_id).ok_or_else(|| {
+        ControlStoreSnafu {
+            path: path.to_owned(),
+            reason: "the latest source index has no source revision".to_owned(),
+        }
+        .build()
+    })?;
+    if current.object_uid != revision.object_uid {
+        if current.state == PolicySourceStateV1::Accepted {
+            return ControlStoreSnafu {
+                path: path.to_owned(),
+                reason: "a recreated policy object arrived before retirement of the prior UID"
+                    .to_owned(),
+            }
+            .fail();
+        }
+    } else if revision.object_generation < current.object_generation {
+        return ControlStoreSnafu {
+            path: path.to_owned(),
+            reason: "a stale policy generation cannot replace the current source revision"
+                .to_owned(),
+        }
+        .fail();
+    } else if revision.object_generation == current.object_generation {
+        // Kubernetes deletion keeps the generation and changes only the lifecycle state.
+        let deletion_transition = current.state == PolicySourceStateV1::Accepted
+            && revision.state == PolicySourceStateV1::DeletionRequested
+            && revision.canonical_spec_digest == current.canonical_spec_digest
+            && revision.policy_document_digest == current.policy_document_digest;
+        if !deletion_transition {
+            return ControlStoreSnafu {
+                path: path.to_owned(),
+                reason: "one policy generation has conflicting source bytes or lifecycle state"
+                    .to_owned(),
+            }
+            .fail();
+        }
+    }
+    Ok(())
+}
+
 fn apply_transaction(
     state: &mut ControlStoreState,
     transaction: &ControlTransactionV1,
@@ -1614,14 +1618,7 @@ fn apply_transaction(
             source_revision,
             policy_document,
         } => {
-            let digest = canonical_policy_spec_digest(policy_document)?;
-            if source_revision.policy_document_digest != digest {
-                return ControlStoreSnafu {
-                    path: path.to_owned(),
-                    reason: "the committed source does not bind its policy document".to_owned(),
-                }
-                .fail();
-            }
+            validate_source_acceptance(state, source_revision, policy_document, path)?;
             let key = PolicyObjectKeyV1::from(source_revision.as_ref());
             if let Some(existing) = state
                 .source_revisions
@@ -2627,6 +2624,10 @@ fn write_commit(path: &Path, commit: &ControlCommitV1) -> Result<()> {
 mod tests {
     use std::path::Path;
 
+    use crate::{
+        canonical_policy_spec_digest, PolicyDocumentV1, PolicySourceRevisionV1, PolicySourceStateV1,
+    };
+
     #[test]
     fn durable_sequence_increment_rejects_exhaustion() {
         assert_eq!(
@@ -2634,5 +2635,64 @@ mod tests {
             Some(42)
         );
         assert!(super::checked_store_increment(u64::MAX, Path::new("store"), "exhausted").is_err());
+    }
+
+    #[test]
+    fn replay_rejects_a_stale_source_transition() -> crate::Result<()> {
+        let document = PolicyDocumentV1::parse(
+            Path::new("policy-v1.yaml"),
+            include_bytes!("../tests/fixtures/policy-v1.yaml"),
+        )?;
+        let mut first = PolicySourceRevisionV1 {
+            schema_version: 1,
+            tenant_id: "10000000-0000-4000-8000-000000000001".to_owned(),
+            cluster_uid: "20000000-0000-4000-8000-000000000001".to_owned(),
+            namespace_uid: "30000000-0000-4000-8000-000000000001".to_owned(),
+            object_uid: "40000000-0000-4000-8000-000000000001".to_owned(),
+            namespace_name: "tenant-a".to_owned(),
+            object_name: "profile".to_owned(),
+            api_version: crate::POLICY_API_VERSION.to_owned(),
+            kind: crate::POLICY_KIND.to_owned(),
+            object_generation: 1,
+            opaque_resource_version: b"one".to_vec(),
+            canonical_spec_digest: "1".repeat(64),
+            policy_document_digest: canonical_policy_spec_digest(&document)?,
+            state: PolicySourceStateV1::Accepted,
+            policy_source_revision_id: "2".repeat(64),
+        };
+        let mut state = super::ControlStoreState::default();
+        super::apply_transaction(
+            &mut state,
+            &super::ControlTransactionV1::SourceAccepted {
+                source_revision: Box::new(first.clone()),
+                policy_document: Box::new(document.clone()),
+            },
+            Path::new("first-commit"),
+        )?;
+        first.object_generation = 2;
+        first.opaque_resource_version = b"two".to_vec();
+        first.policy_source_revision_id = "3".repeat(64);
+        super::apply_transaction(
+            &mut state,
+            &super::ControlTransactionV1::SourceAccepted {
+                source_revision: Box::new(first.clone()),
+                policy_document: Box::new(document.clone()),
+            },
+            Path::new("second-commit"),
+        )?;
+
+        first.object_generation = 1;
+        first.opaque_resource_version = b"stale".to_vec();
+        first.policy_source_revision_id = "4".repeat(64);
+        assert!(super::apply_transaction(
+            &mut state,
+            &super::ControlTransactionV1::SourceAccepted {
+                source_revision: Box::new(first),
+                policy_document: Box::new(document),
+            },
+            Path::new("stale-commit"),
+        )
+        .is_err());
+        Ok(())
     }
 }
