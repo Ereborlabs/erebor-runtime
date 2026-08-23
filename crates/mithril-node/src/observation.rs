@@ -48,6 +48,7 @@ struct Inner {
     capacity: usize,
     decoder_errors: AtomicU64,
     evidence_errors: AtomicU64,
+    first_evidence_error: Mutex<Option<String>>,
     durable: Option<Mutex<DurableEvidence>>,
 }
 
@@ -93,6 +94,7 @@ impl EffectObservationStore {
                 capacity,
                 decoder_errors: AtomicU64::new(0),
                 evidence_errors: AtomicU64::new(0),
+                first_evidence_error: Mutex::new(None),
                 durable: None,
             }),
         }
@@ -117,6 +119,7 @@ impl EffectObservationStore {
                 capacity,
                 decoder_errors: AtomicU64::new(0),
                 evidence_errors: AtomicU64::new(0),
+                first_evidence_error: Mutex::new(None),
                 durable: Some(Mutex::new(DurableEvidence {
                     canonicalizer,
                     wal: EvidenceWalOwner::open(&wal_root, limits)?,
@@ -130,7 +133,7 @@ impl EffectObservationStore {
         let Ok(event) = EffectObservationV1::read_from_bytes(bytes) else {
             self.inner.decoder_errors.fetch_add(1, Ordering::Relaxed);
             if let Some(durable) = &self.inner.durable {
-                self.inner.evidence_errors.fetch_add(1, Ordering::Relaxed);
+                self.record_evidence_error("effect observation bytes are invalid");
                 let _result = durable
                     .lock()
                     .unwrap_or_else(PoisonError::into_inner)
@@ -167,8 +170,8 @@ impl EffectObservationStore {
                 }
                 crate::Result::Ok(())
             })();
-            if result.is_err() {
-                self.inner.evidence_errors.fetch_add(1, Ordering::Relaxed);
+            if let Err(error) = result {
+                self.record_evidence_error(error.to_string());
             }
         }
     }
@@ -187,6 +190,15 @@ impl EffectObservationStore {
     #[must_use]
     pub fn evidence_errors(&self) -> u64 {
         self.inner.evidence_errors.load(Ordering::Relaxed)
+    }
+
+    #[must_use]
+    pub fn first_evidence_error(&self) -> Option<String> {
+        self.inner
+            .first_evidence_error
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
     }
 
     pub fn sample_coverage_health(&self, per_cpu_bytes: &[u8]) -> crate::Result<()> {
@@ -288,6 +300,19 @@ impl EffectObservationStore {
             })?
             .lock()
             .unwrap_or_else(PoisonError::into_inner))
+    }
+
+    fn record_evidence_error(&self, error: impl Into<String>) {
+        self.inner.evidence_errors.fetch_add(1, Ordering::Relaxed);
+        let mut first = self
+            .inner
+            .first_evidence_error
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        // Keep the first failure because it identifies the stage that closed evidence claims.
+        if first.is_none() {
+            *first = Some(error.into());
+        }
     }
 }
 
@@ -689,6 +714,9 @@ mod tests {
         }
         assert_eq!(store.recent().len(), 2);
         assert_eq!(store.evidence_errors(), 1);
+        assert!(store
+            .first_evidence_error()
+            .is_some_and(|error| error.contains("retention or record capacity is exhausted")));
         let snapshot = store
             .coverage_snapshot()
             .ok_or("coverage snapshot missing")?;

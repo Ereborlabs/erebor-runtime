@@ -160,7 +160,7 @@ async fn mtls_evidence_upload_replays_after_disconnect_and_advances_only_on_ack(
     let connector =
         NodeControlConnector::new(files.node_config(address), "node-a".to_owned(), [7; 16]);
     let mut trust = TrustCache::load(directory.path())?;
-    let mut first = connector.connect(registration(), true, &mut trust).await?;
+    let mut first = connector.connect(registration(), false, &mut trust).await?;
     tokio::time::sleep(Duration::from_millis(20)).await;
     let first_batch = observations
         .next_evidence_batch()
@@ -171,7 +171,7 @@ async fn mtls_evidence_upload_replays_after_disconnect_and_advances_only_on_ack(
     tokio::time::sleep(Duration::from_millis(20)).await;
     assert!(observations.next_evidence_batch().is_some());
 
-    let mut second = connector.connect(registration(), true, &mut trust).await?;
+    let mut second = connector.connect(registration(), false, &mut trust).await?;
     tokio::time::sleep(Duration::from_millis(20)).await;
     let replay = observations
         .next_evidence_batch()
