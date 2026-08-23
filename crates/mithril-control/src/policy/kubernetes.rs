@@ -10,7 +10,7 @@ use snafu::ensure;
 
 use super::canonical::canonical_cbor;
 use super::{PolicyDocumentV1, ProfileCandidateArtifactV1};
-use crate::error::{PolicySignatureSnafu, PolicyValidationSnafu};
+use crate::error::{InvalidConfigurationSnafu, PolicySignatureSnafu, PolicyValidationSnafu};
 use crate::Result;
 
 pub const POLICY_API_VERSION: &str = "mithril.erebor.dev/v1alpha1";
@@ -854,6 +854,22 @@ fn sha256(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
 }
 
+pub(super) fn next_continuation_token(
+    current: Option<&str>,
+    next: Option<String>,
+    description: &str,
+) -> Result<Option<String>> {
+    let next = next.filter(|token| !token.is_empty());
+    // A repeated token cannot advance the snapshot and would otherwise keep the relist open.
+    ensure!(
+        next.is_none() || next.as_deref() != current,
+        InvalidConfigurationSnafu {
+            reason: format!("Kubernetes {description} list repeated a continuation token"),
+        }
+    );
+    Ok(next)
+}
+
 fn domain_digest(domain: &[u8], bytes: &[u8]) -> String {
     let mut digest = Sha256::new();
     digest.update(domain);
@@ -895,5 +911,27 @@ fn close_openapi_schema(value: &mut serde_json::Value) {
             }
         }
         _ => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::next_continuation_token;
+
+    #[test]
+    fn continuation_token_must_advance() -> crate::Result<()> {
+        assert_eq!(
+            next_continuation_token(None, Some("next".to_owned()), "test resources")?,
+            Some("next".to_owned())
+        );
+        assert_eq!(
+            next_continuation_token(Some("next"), Some(String::new()), "test resources")?,
+            None
+        );
+        assert!(
+            next_continuation_token(Some("next"), Some("next".to_owned()), "test resources")
+                .is_err()
+        );
+        Ok(())
     }
 }

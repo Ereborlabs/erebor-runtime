@@ -785,14 +785,11 @@ where
             }
         );
         items.extend(page.items);
-        let next = page.metadata.continue_.filter(|token| !token.is_empty());
-        ensure!(
-            next.is_none() || next != continuation,
-            InvalidConfigurationSnafu {
-                reason: format!("Kubernetes {description} inventory repeated a continuation token"),
-            }
-        );
-        continuation = next;
+        continuation = super::kubernetes::next_continuation_token(
+            continuation.as_deref(),
+            page.metadata.continue_,
+            description,
+        )?;
         if continuation.is_none() {
             return Ok(items);
         }
