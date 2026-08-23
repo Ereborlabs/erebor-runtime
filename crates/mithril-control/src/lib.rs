@@ -23,5 +23,5 @@ pub use service::{
     AllowedNodeIdentity, ControlPlane, KubernetesNodeSessionV1, PolicySignerTrustV1,
     TrustGenerationV1,
 };
-pub use store::{ControlStore, ControlStoreHealthV1};
+pub use store::{startup_absence_proof_digest, ControlStore, ControlStoreHealthV1};
 pub use trust::*;

@@ -807,6 +807,66 @@ fn bound_inventory_change_reconciles_without_a_policy_source_change() -> TestRes
 }
 
 #[test]
+fn kubernetes_node_uid_rebind_keeps_the_exact_physical_predecessor() -> TestResult {
+    let directory = TempDir::new()?;
+    let store = ControlStore::open(directory.path())?;
+    let owner = make_owner(store.clone());
+    let policy = policy()?;
+    let resource = resource(&policy, "profile", OBJECT_UID, 1, false)?;
+    let first_inventory = inventory_for_resource(&resource, &"1".repeat(64))?;
+    let first = owner.reconcile(&resource, NAMESPACE_UID, &first_inventory, NOW)?;
+    let first_bundle = first.bundles[0].clone();
+    let active_acknowledgement =
+        acknowledgement(&first_bundle, PolicyActivationStateV1::Active, NOW + 1)?;
+
+    let mut rebound_inventory = first_inventory;
+    let identity = rebound_inventory[0]
+        .kubernetes
+        .as_mut()
+        .ok_or("the rebound target has no Kubernetes identity")?;
+    identity.kubernetes_node_uid = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee".to_owned();
+    rebound_inventory[0].workload_binding_generation_digest =
+        workload_target_fact_digest(&rebound_inventory[0])?;
+    let rebound = owner.reconcile(&resource, NAMESPACE_UID, &rebound_inventory, NOW + 2)?;
+    let rebound_bundle = &rebound.bundles[0];
+
+    assert_eq!(
+        rebound_bundle.candidate.operation,
+        PolicyDeliveryOperationV1::Replace
+    );
+    assert_eq!(
+        rebound_bundle
+            .candidate
+            .predecessor_candidate_content_id
+            .as_deref(),
+        Some(first_bundle.candidate.candidate_content_id.as_str())
+    );
+    assert_eq!(
+        rebound_bundle.candidate.exact_target.workload_targets[0]
+            .kubernetes
+            .as_ref()
+            .map(|identity| identity.kubernetes_node_uid.as_str()),
+        Some("eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee")
+    );
+    // The old UID does not invalidate a delayed ACK from the same physical epoch.
+    owner.rollout_owner().acknowledge(active_acknowledgement)?;
+
+    let committed = store.commit_index();
+    drop(owner);
+    drop(store);
+    let replayed = ControlStore::open(directory.path())?;
+    let result = make_owner(replayed.clone()).reconcile(
+        &resource,
+        NAMESPACE_UID,
+        &rebound_inventory,
+        NOW + 3,
+    )?;
+    assert_eq!(result.bundles, rebound.bundles);
+    assert_eq!(replayed.commit_index(), committed);
+    Ok(())
+}
+
+#[test]
 fn removed_node_gets_one_atomic_restrictive_retirement() -> TestResult {
     let directory = TempDir::new()?;
     let store = ControlStore::open(directory.path())?;

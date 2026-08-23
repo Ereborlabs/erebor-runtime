@@ -151,6 +151,51 @@ impl NodePolicyGenerationOwner {
         .next_handle()
     }
 
+    pub(crate) fn retire_profile_generation(
+        host: &KernelHost,
+        profile_id: &str,
+        profile_generation_ref_id: u64,
+        node_boot_id: Id128V1,
+        label_epoch: u64,
+    ) -> Result<bool> {
+        let profile_id = parse_id("profile_id", profile_id)?;
+        let observed = read_active_generation(host, &profile_id)?;
+        ensure!(
+            observed.is_none_or(|generation| generation == profile_generation_ref_id),
+            IdentityStateSnafu {
+                reason: "terminal cleanup found a different active profile generation",
+            }
+        );
+        if observed.is_some() {
+            host.delete_map_entry("active_profile_generations", profile_id.as_bytes())
+                .context(InterceptorSnafu)?;
+        }
+        ensure!(
+            read_active_generation(host, &profile_id)?.is_none(),
+            IdentityStateSnafu {
+                reason: "terminal cleanup active profile pointer survived deletion",
+            }
+        );
+        reconcile_generation_retirement(host, node_boot_id, label_epoch)?;
+        Ok(host
+            .lookup_map(
+                "profile_generation_descriptors",
+                &profile_generation_ref_id.to_ne_bytes(),
+            )
+            .context(InterceptorSnafu)?
+            .is_none())
+    }
+
+    pub(crate) fn terminal_profile_generation_is_absent(
+        host: &KernelHost,
+        profile_id: &str,
+        profile_generation_ref_id: u64,
+    ) -> Result<bool> {
+        let profile_id = parse_id("profile_id", profile_id)?;
+        Ok(read_active_generation(host, &profile_id)?.is_none()
+            && generation_publication_is_absent(host, profile_generation_ref_id)?)
+    }
+
     pub(crate) fn activation_receipt(
         host: &KernelHost,
         profile_id: &str,
@@ -3556,12 +3601,17 @@ fn reconcile_generation_retirement(
             );
         }
         ensure!(
-            descriptor.state == PolicyGenerationStateV1::Retiring,
+            matches!(
+                descriptor.state,
+                PolicyGenerationStateV1::Retiring | PolicyGenerationStateV1::Tombstoned
+            ),
             IdentityStateSnafu {
                 reason: "inactive profile generation has an invalid lifecycle state",
             }
         );
-        if generation_has_retained_authority(host, generation)? {
+        if descriptor.state == PolicyGenerationStateV1::Retiring
+            && generation_has_retained_authority(host, generation)?
+        {
             continue;
         }
         retire_generation_rows(host, generation, &mut descriptor, &descriptor_key)?;
@@ -3808,30 +3858,39 @@ fn retire_generation_rows(
     descriptor: &mut ProfileGenerationDescriptorV1,
     descriptor_key: &[u8],
 ) -> Result<()> {
-    descriptor.state = PolicyGenerationStateV1::Tombstoned;
-    descriptor.transition_version =
-        descriptor
-            .transition_version
-            .checked_add(1)
-            .context(IdentityStateSnafu {
-                reason: "profile generation transition version exhausted",
-            })?;
-    host.update_map(
-        "profile_generation_descriptors",
-        descriptor_key,
-        descriptor.as_bytes(),
-    )
-    .context(InterceptorSnafu)?;
+    if generation_retirement_needs_tombstone(descriptor.state)? {
+        descriptor.state = PolicyGenerationStateV1::Tombstoned;
+        descriptor.transition_version =
+            descriptor
+                .transition_version
+                .checked_add(1)
+                .context(IdentityStateSnafu {
+                    reason: "profile generation transition version exhausted",
+                })?;
+        host.update_map(
+            "profile_generation_descriptors",
+            descriptor_key,
+            descriptor.as_bytes(),
+        )
+        .context(InterceptorSnafu)?;
+        ensure!(
+            host.lookup_map("profile_generation_descriptors", descriptor_key)
+                .context(InterceptorSnafu)?
+                .as_deref()
+                == Some(descriptor.as_bytes()),
+            IdentityStateSnafu {
+                reason: "TOMBSTONED profile generation failed readback",
+            }
+        );
+    }
     ensure!(
-        host.lookup_map("profile_generation_descriptors", descriptor_key)
-            .context(InterceptorSnafu)?
-            .as_deref()
-            == Some(descriptor.as_bytes()),
+        descriptor.state == PolicyGenerationStateV1::Tombstoned,
         IdentityStateSnafu {
-            reason: "TOMBSTONED profile generation failed readback",
+            reason: "generation row retirement requires a TOMBSTONED descriptor",
         }
     );
 
+    // A persisted tombstone resumes deletion here after any earlier process exit.
     for map in [
         "effect_decisions",
         "effect_defaults",
@@ -3872,6 +3931,19 @@ fn retire_generation_rows(
         }
     );
     Ok(())
+}
+
+fn generation_retirement_needs_tombstone(state: PolicyGenerationStateV1) -> Result<bool> {
+    ensure!(
+        matches!(
+            state,
+            PolicyGenerationStateV1::Retiring | PolicyGenerationStateV1::Tombstoned
+        ),
+        IdentityStateSnafu {
+            reason: "generation row retirement has an invalid lifecycle state",
+        }
+    );
+    Ok(state == PolicyGenerationStateV1::Retiring)
 }
 
 fn delete_generation_prefixed_rows(
@@ -4898,14 +4970,31 @@ mod tests {
 
     use super::{
         add_binding_activation, ensure_active_generation_unchanged, ensure_committed_generation,
-        ensure_map_capacity, exception_counter_is_consistent, parse_id, same_exact_file,
-        LoweredGeneration, ProfileActivation,
+        ensure_map_capacity, exception_counter_is_consistent,
+        generation_retirement_needs_tombstone, parse_id, same_exact_file, LoweredGeneration,
+        ProfileActivation,
     };
     use crate::error::IdentityStateSnafu;
     use crate::{
         ContainerKindV1, ExactDeviceConfig, ExactDeviceType, ExactFileObjectConfig,
         WorkloadBindingConfig,
     };
+
+    #[test]
+    fn tombstoned_generation_resumes_row_deletion_without_a_second_transition() -> crate::Result<()>
+    {
+        assert!(generation_retirement_needs_tombstone(
+            erebor_interceptor_abi::PolicyGenerationStateV1::Retiring,
+        )?);
+        assert!(!generation_retirement_needs_tombstone(
+            erebor_interceptor_abi::PolicyGenerationStateV1::Tombstoned,
+        )?);
+        assert!(generation_retirement_needs_tombstone(
+            erebor_interceptor_abi::PolicyGenerationStateV1::Active,
+        )
+        .is_err());
+        Ok(())
+    }
 
     #[test]
     fn capacity_preflight_counts_existing_and_planned_unique_keys() -> crate::Result<()> {

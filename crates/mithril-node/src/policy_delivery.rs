@@ -11,9 +11,9 @@ use erebor_interceptor_abi::{
 use mithril_control::{
     CapabilityRecord, EntryKindV1, ExceptionActivationAcknowledgement, ExceptionActivationStateV1,
     ExceptionDeliveryCandidateV1, ExceptionDeliveryOperationV1, ExceptionInventory,
-    PolicyActivationAcknowledgement, PolicyBundleV1, PolicyChunk, PolicyDeliveryOperationV1,
-    PolicyInventory, MAX_EXCEPTION_CANDIDATE_BYTES, MAX_POLICY_BUNDLE_BYTES,
-    MAX_POLICY_BUNDLE_CHUNK_BYTES,
+    PolicyAcknowledgementAccepted, PolicyActivationAcknowledgement, PolicyBundleV1, PolicyChunk,
+    PolicyDeliveryOperationV1, PolicyInventory, MAX_EXCEPTION_CANDIDATE_BYTES,
+    MAX_POLICY_BUNDLE_BYTES, MAX_POLICY_BUNDLE_CHUNK_BYTES,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
@@ -40,11 +40,15 @@ struct PolicyDeliveryStateV1 {
     distribution_high_water: BTreeMap<String, SequenceV1>,
     control_acknowledged_candidate_content_id: Option<String>,
     #[serde(default)]
+    terminal_cleanup_authorization: Option<TerminalPolicyCleanupV1>,
+    #[serde(default)]
     // One durable record per Kubernetes exception UID owns replay and ACK progress.
     exception_records: BTreeMap<String, ExceptionDeliveryRecordV1>,
     #[serde(default)]
     exception_distribution_high_water: BTreeMap<String, SequenceV1>,
 }
+
+const MAX_ACTIVE_POLICY_PROFILES: usize = 256;
 
 pub(crate) struct RuntimeBindingRollbackV1 {
     previous: PolicyDeliveryStateV1,
@@ -104,6 +108,24 @@ struct PendingPolicyRecordV1 {
     binding_ids: Vec<String>,
     #[serde(default)]
     scheduled_bindings: Vec<WorkloadBindingConfig>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct TerminalPolicyCleanupV1 {
+    pub candidate_content_id: String,
+    pub profile_id: String,
+    pub bundle_digest: String,
+    pub profile_generation_ref_id: u64,
+    pub binding_ids: Vec<String>,
+    pub control_commit_index: u64,
+    #[serde(default)]
+    delivery_state_retired: bool,
+}
+
+pub(crate) struct StartupAuthorityAbsenceV1 {
+    pub policy_authority_absent: bool,
+    pub exception_authority_absent: bool,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -394,6 +416,7 @@ impl NodePolicyDeliveryOwner {
         trust: &TrustCache,
         session: Option<(&[u8], u64)>,
     ) -> Result<()> {
+        self.omit_terminal_cleanup_from_config(config)?;
         // Rebuild dynamic config only from durable bundles that still pass current trust checks.
         let active_profiles = self.state.active_profiles.clone();
         for (profile_id, record) in &active_profiles {
@@ -426,6 +449,14 @@ impl NodePolicyDeliveryOwner {
                     },
                 )
                 .context(PolicySnafu)?;
+            if self
+                .state
+                .terminal_cleanup_authorization
+                .as_ref()
+                .is_some_and(|cleanup| cleanup.profile_id == *profile_id)
+            {
+                continue;
+            }
             let scheduled_session = scheduled_session_state(&bundle, config, session)?;
             if scheduled_session == Some(false) {
                 ensure!(
@@ -527,6 +558,104 @@ impl NodePolicyDeliveryOwner {
                 }
             }
         }
+        Ok(())
+    }
+
+    pub(crate) fn terminal_cleanup(&self) -> Option<TerminalPolicyCleanupV1> {
+        self.state.terminal_cleanup_authorization.clone()
+    }
+
+    pub(crate) fn startup_authority_absence(
+        &self,
+        host: &erebor_interceptor::KernelHost,
+        config: &NodeConfig,
+    ) -> Result<StartupAuthorityAbsenceV1> {
+        let node_id = crate::policy::stable_node_id(&config.node_id)?;
+        let mut exception_physical_present = false;
+        for (instance_id, record) in &self.state.exception_records {
+            if matches!(
+                record.state,
+                LocalExceptionStateV1::Rejected | LocalExceptionStateV1::Stale
+            ) {
+                continue;
+            }
+            let runtime_key = ExceptionRuntimeStateKeyV1 {
+                node_id,
+                exception_instance_id: crate::policy::parse_id(
+                    "exception_instance_id",
+                    instance_id,
+                )?,
+            };
+            let binding_key = ExceptionHandleBindingKeyV1 {
+                profile_generation_ref_id: record.profile_generation_ref_id,
+                exception_numeric_handle: record.grant_handle,
+                reserved: 0,
+            };
+            exception_physical_present |= host
+                .lookup_map_locked("exception_runtime_states", runtime_key.as_bytes())
+                .context(InterceptorSnafu)?
+                .is_some()
+                || host
+                    .lookup_map("exception_handle_bindings", binding_key.as_bytes())
+                    .context(InterceptorSnafu)?
+                    .is_some();
+        }
+        Ok(self.startup_authority_absence_from_readback(exception_physical_present))
+    }
+
+    fn startup_authority_absence_from_readback(
+        &self,
+        exception_physical_present: bool,
+    ) -> StartupAuthorityAbsenceV1 {
+        StartupAuthorityAbsenceV1 {
+            policy_authority_absent: self.state.active_profiles.is_empty()
+                && self.state.pending_activation.is_none()
+                && self.state.terminal_cleanup_authorization.is_none(),
+            exception_authority_absent: !exception_physical_present
+                && self.state.exception_records.values().all(|record| {
+                    !matches!(
+                        record.state,
+                        LocalExceptionStateV1::Pending | LocalExceptionStateV1::Active
+                    )
+                }),
+        }
+    }
+
+    pub(crate) fn omit_terminal_cleanup_from_config(&self, config: &mut NodeConfig) -> Result<()> {
+        let Some(cleanup) = self.state.terminal_cleanup_authorization.as_ref() else {
+            return Ok(());
+        };
+        let directory = self.root.join("bundles").join(&cleanup.bundle_digest);
+        let artifact = directory.join("profile-artifact.json");
+        let public_key = directory.join("profile-public-key.hex");
+        ensure!(
+            config.policy_candidates.iter().all(|candidate| {
+                (candidate.artifact_path == artifact) == (candidate.public_key_path == public_key)
+            }),
+            IdentityStateSnafu {
+                reason: "terminal cleanup found a partial policy cache identity",
+            }
+        );
+        config.policy_candidates.retain(|candidate| {
+            candidate.artifact_path != artifact && candidate.public_key_path != public_key
+        });
+        let binding_ids = cleanup.binding_ids.iter().collect::<BTreeSet<_>>();
+        ensure!(
+            config.workload_bindings.iter().all(|binding| {
+                !binding_ids.contains(&binding.binding_id)
+                    || (binding.profile_id == cleanup.profile_id
+                        && binding.active_profile_generation_ref_id
+                            == cleanup.profile_generation_ref_id)
+            }),
+            IdentityStateSnafu {
+                reason: "terminal cleanup binding identity names another profile generation",
+            }
+        );
+        config.workload_bindings.retain(|binding| {
+            !(binding.profile_id == cleanup.profile_id
+                && binding.active_profile_generation_ref_id == cleanup.profile_generation_ref_id
+                && binding_ids.contains(&binding.binding_id))
+        });
         Ok(())
     }
 
@@ -1694,6 +1823,7 @@ impl NodePolicyDeliveryOwner {
         prepared: &PreparedPolicyActivationV1,
         proof: PolicyActivationProofV1,
     ) -> Result<()> {
+        self.ensure_active_profile_inventory_capacity(&prepared.profile_id)?;
         let profile = &bundle.profile_artifact;
         let bundle_directory = self.root.join("bundles").join(&bundle.bundle_digest);
         let artifact_path = bundle_directory.join("profile-artifact.json");
@@ -1743,6 +1873,17 @@ impl NodePolicyDeliveryOwner {
             },
         );
         self.persist_state()
+    }
+
+    fn ensure_active_profile_inventory_capacity(&self, profile_id: &str) -> Result<()> {
+        ensure!(
+            self.state.active_profiles.contains_key(profile_id)
+                || self.state.active_profiles.len() < MAX_ACTIVE_POLICY_PROFILES,
+            IdentityStateSnafu {
+                reason: "the active policy profile inventory reached its protocol bound",
+            }
+        );
+        Ok(())
     }
 
     pub(crate) fn begin_activation(
@@ -1962,16 +2103,219 @@ impl NodePolicyDeliveryOwner {
         })
     }
 
-    pub(crate) fn acknowledge_control(&mut self, candidate_content_id: &str) -> Result<()> {
+    pub(crate) fn acknowledge_control(
+        &mut self,
+        acknowledgement: &PolicyActivationAcknowledgement,
+        accepted: &PolicyAcknowledgementAccepted,
+    ) -> Result<bool> {
+        let candidate_content_id = acknowledgement.candidate_content_id.as_str();
+        ensure!(
+            accepted.control_commit_index > 0
+                && accepted.rollout_state == acknowledgement.state
+                && (!accepted.terminal_chain_closure_authorized
+                    || acknowledgement.state == "ACTIVE"),
+            IdentityStateSnafu {
+                reason: "Control returned an invalid policy acknowledgement receipt",
+            }
+        );
+        if acknowledgement.state != "ACTIVE" {
+            return Ok(false);
+        }
         ensure!(
             self.state.active_candidate_content_id.as_deref() == Some(candidate_content_id),
             IdentityStateSnafu {
-                reason: "Control accepted an acknowledgement for a noncurrent candidate",
+                reason: "Control accepted an acknowledgement for a noncurrent active candidate",
             }
         );
+        let record = self
+            .state
+            .active_profiles
+            .values()
+            .find(|record| record.candidate_content_id == candidate_content_id)
+            .context(IdentityStateSnafu {
+                reason: "Control accepted a candidate without an active delivery record",
+            })?;
+        ensure!(
+            acknowledgement.tenant_id == record.tenant_id
+                && acknowledgement.policy_source_revision_id == record.policy_source_revision_id
+                && acknowledgement.target_snapshot_digest == record.target_snapshot_digest
+                && acknowledgement.profile_generation_ref_id == record.profile_generation_ref_id
+                && acknowledgement.node_bound_generation_digest
+                    == record.node_bound_generation_digest
+                && acknowledgement.readback_digest == record.readback_digest
+                && acknowledgement.probe_result_digest == record.probe_result_digest
+                && acknowledgement.observed_utc_ns == record.observed_utc_ns,
+            IdentityStateSnafu {
+                reason: "Control accepted proof that differs from the durable active policy",
+            }
+        );
+        let bundle = self.read_bundle(
+            &self
+                .root
+                .join("bundles")
+                .join(&record.bundle_digest)
+                .join("bundle.json"),
+        )?;
+        let terminal =
+            bundle.candidate.operation == PolicyDeliveryOperationV1::RetireToRestrictiveTerminal;
+        ensure!(
+            !accepted.terminal_chain_closure_authorized || terminal,
+            IdentityStateSnafu {
+                reason: "Control authorized cleanup for a nonterminal policy candidate",
+            }
+        );
+        if terminal && !accepted.terminal_chain_closure_authorized {
+            // Replay the terminal proof until Control authorizes physical chain closure.
+            return Ok(false);
+        }
+        let previous = self.state.clone();
         self.state.control_acknowledged_candidate_content_id =
             Some(candidate_content_id.to_owned());
-        self.persist_state()
+        if accepted.terminal_chain_closure_authorized {
+            self.state.terminal_cleanup_authorization = Some(TerminalPolicyCleanupV1 {
+                candidate_content_id: candidate_content_id.to_owned(),
+                profile_id: bundle.profile_artifact.header.profile_id,
+                bundle_digest: record.bundle_digest.clone(),
+                profile_generation_ref_id: record.profile_generation_ref_id,
+                binding_ids: record.binding_ids.clone(),
+                control_commit_index: accepted.control_commit_index,
+                delivery_state_retired: false,
+            });
+        }
+        self.persist_state_or_restore(previous)?;
+        Ok(accepted.terminal_chain_closure_authorized)
+    }
+
+    pub(crate) fn finish_terminal_cleanup(&mut self) -> Result<()> {
+        let cleanup = self.retire_terminal_delivery_state()?;
+        let transfer = self.load_transfer()?;
+        if transfer.bundle_digest == cleanup.bundle_digest {
+            self.persist_transfer(&TransferStateV1::default())?;
+            remove_directory_if_present(&self.transfer_directory(&cleanup.bundle_digest))?;
+        }
+        self.remove_unreferenced_bundle_directories()?;
+        let previous = self.state.clone();
+        self.state.terminal_cleanup_authorization = None;
+        self.persist_state_or_restore(previous)
+    }
+
+    fn retire_terminal_delivery_state(&mut self) -> Result<TerminalPolicyCleanupV1> {
+        let cleanup =
+            self.state
+                .terminal_cleanup_authorization
+                .clone()
+                .context(IdentityStateSnafu {
+                    reason: "terminal policy cleanup has no durable Control authorization",
+                })?;
+        if !cleanup.delivery_state_retired {
+            let previous = self.state.clone();
+            let record = self
+                .state
+                .active_profiles
+                .get(&cleanup.profile_id)
+                .context(IdentityStateSnafu {
+                    reason: "terminal cleanup lost its active policy delivery record",
+                })?;
+            ensure!(
+                record.candidate_content_id == cleanup.candidate_content_id
+                    && record.bundle_digest == cleanup.bundle_digest
+                    && record.profile_generation_ref_id == cleanup.profile_generation_ref_id
+                    && record.binding_ids == cleanup.binding_ids,
+                IdentityStateSnafu {
+                    reason: "terminal cleanup identity differs from the active policy record",
+                }
+            );
+            self.state.active_profiles.remove(&cleanup.profile_id);
+            if self.state.active_candidate_content_id.as_deref()
+                == Some(cleanup.candidate_content_id.as_str())
+            {
+                self.state.active_candidate_content_id = None;
+                self.state.active_bundle_digest = None;
+                self.state.control_acknowledged_candidate_content_id = None;
+            }
+            let mut referenced_candidates = self.exception_base_candidate_ids()?;
+            referenced_candidates.extend(
+                self.state
+                    .active_profiles
+                    .values()
+                    .map(|record| record.candidate_content_id.clone()),
+            );
+            referenced_candidates.extend(
+                self.state
+                    .pending_activation
+                    .iter()
+                    .map(|pending| pending.candidate_content_id.clone()),
+            );
+            self.state
+                .policy_candidate_bundles
+                .retain(|candidate, _digest| referenced_candidates.contains(candidate));
+            self.state
+                .terminal_cleanup_authorization
+                .as_mut()
+                .context(IdentityStateSnafu {
+                    reason: "terminal cleanup authorization disappeared during retirement",
+                })?
+                .delivery_state_retired = true;
+            // Keep the receipt until cache cleanup completes after this durable state transition.
+            self.persist_state_or_restore(previous)?;
+        }
+        Ok(cleanup)
+    }
+
+    fn exception_base_candidate_ids(&self) -> Result<BTreeSet<String>> {
+        self.state
+            .exception_records
+            .values()
+            .filter(|record| {
+                !matches!(
+                    record.state,
+                    LocalExceptionStateV1::Rejected | LocalExceptionStateV1::Stale
+                )
+            })
+            .map(|record| {
+                self.read_exception_candidate(record)
+                    .map(|candidate| candidate.base_candidate_content_id)
+            })
+            .collect()
+    }
+
+    fn remove_unreferenced_bundle_directories(&self) -> Result<()> {
+        let referenced = self
+            .state
+            .active_profiles
+            .values()
+            .map(|record| record.bundle_digest.as_str())
+            .chain(
+                self.state
+                    .pending_activation
+                    .iter()
+                    .map(|pending| pending.bundle_digest.as_str()),
+            )
+            .chain(
+                self.state
+                    .policy_candidate_bundles
+                    .values()
+                    .map(String::as_str),
+            )
+            .collect::<BTreeSet<_>>();
+        let bundles = self.root.join("bundles");
+        for entry in fs::read_dir(&bundles).context(IoSnafu { path: &bundles })? {
+            let entry = entry.context(IoSnafu { path: &bundles })?;
+            let name = entry.file_name();
+            let Some(digest) = name.to_str() else {
+                continue;
+            };
+            if entry
+                .file_type()
+                .context(IoSnafu { path: &bundles })?
+                .is_dir()
+                && is_sha256(digest)
+                && !referenced.contains(digest)
+            {
+                remove_directory_if_present(&entry.path())?;
+            }
+        }
+        Ok(())
     }
 
     pub(crate) fn record_runtime_binding(
@@ -2168,29 +2512,39 @@ impl NodePolicyDeliveryOwner {
         write_atomic(&self.state_path, &bytes)
     }
 
+    fn persist_state_or_restore(&mut self, previous: PolicyDeliveryStateV1) -> Result<()> {
+        if let Err(error) = self.persist_state() {
+            self.state = previous;
+            return Err(error);
+        }
+        Ok(())
+    }
+
     fn validate_state(&self) -> Result<()> {
         ensure!(
-            self.state
-                .active_profiles
-                .iter()
-                .all(|(profile_id, record)| {
-                    uuid::Uuid::parse_str(profile_id)
-                        .is_ok_and(|id| id.hyphenated().to_string() == *profile_id)
-                        && uuid::Uuid::parse_str(&record.tenant_id)
-                            .is_ok_and(|id| id.hyphenated().to_string() == record.tenant_id)
-                        && is_sha256(&record.candidate_content_id)
-                        && is_sha256(&record.policy_source_revision_id)
-                        && is_sha256(&record.target_snapshot_digest)
-                        && is_sha256(&record.bundle_digest)
-                        && record.profile_generation_ref_id > 0
-                        && record.staged_utc_ns >= 0
-                        && !record.binding_ids.is_empty()
-                        && record.binding_ids.windows(2).all(|pair| pair[0] < pair[1])
-                        && is_sha256(&record.node_bound_generation_digest)
-                        && is_sha256(&record.readback_digest)
-                        && is_sha256(&record.probe_result_digest)
-                        && record.observed_utc_ns > 0
-                })
+            self.state.active_profiles.len() <= MAX_ACTIVE_POLICY_PROFILES
+                && self
+                    .state
+                    .active_profiles
+                    .iter()
+                    .all(|(profile_id, record)| {
+                        uuid::Uuid::parse_str(profile_id)
+                            .is_ok_and(|id| id.hyphenated().to_string() == *profile_id)
+                            && uuid::Uuid::parse_str(&record.tenant_id)
+                                .is_ok_and(|id| id.hyphenated().to_string() == record.tenant_id)
+                            && is_sha256(&record.candidate_content_id)
+                            && is_sha256(&record.policy_source_revision_id)
+                            && is_sha256(&record.target_snapshot_digest)
+                            && is_sha256(&record.bundle_digest)
+                            && record.profile_generation_ref_id > 0
+                            && record.staged_utc_ns >= 0
+                            && !record.binding_ids.is_empty()
+                            && record.binding_ids.windows(2).all(|pair| pair[0] < pair[1])
+                            && is_sha256(&record.node_bound_generation_digest)
+                            && is_sha256(&record.readback_digest)
+                            && is_sha256(&record.probe_result_digest)
+                            && record.observed_utc_ns > 0
+                    })
                 && self
                     .state
                     .pending_activation
@@ -2285,6 +2639,37 @@ impl NodePolicyDeliveryOwner {
                 reason: "durable exception delivery has more than one pending candidate",
             }
         );
+        if let Some(cleanup) = self.state.terminal_cleanup_authorization.as_ref() {
+            let valid_identity = is_sha256(&cleanup.candidate_content_id)
+                && uuid::Uuid::parse_str(&cleanup.profile_id)
+                    .is_ok_and(|id| id.hyphenated().to_string() == cleanup.profile_id)
+                && is_sha256(&cleanup.bundle_digest)
+                && cleanup.profile_generation_ref_id > 0
+                && !cleanup.binding_ids.is_empty()
+                && cleanup.binding_ids.windows(2).all(|pair| pair[0] < pair[1])
+                && cleanup.control_commit_index > 0;
+            let active_matches = self
+                .state
+                .active_profiles
+                .get(&cleanup.profile_id)
+                .is_some_and(|record| {
+                    record.candidate_content_id == cleanup.candidate_content_id
+                        && record.bundle_digest == cleanup.bundle_digest
+                        && record.profile_generation_ref_id == cleanup.profile_generation_ref_id
+                        && record.binding_ids == cleanup.binding_ids
+                });
+            ensure!(
+                valid_identity
+                    && if cleanup.delivery_state_retired {
+                        !self.state.active_profiles.contains_key(&cleanup.profile_id)
+                    } else {
+                        active_matches
+                    },
+                IdentityStateSnafu {
+                    reason: "the durable terminal policy cleanup receipt is invalid",
+                }
+            );
+        }
         // Rejected records keep ACK identity separately because their candidate bytes can be bad.
         for record in self.state.exception_records.values().filter(|record| {
             !matches!(
@@ -2442,9 +2827,18 @@ impl NodePolicyDeliveryOwner {
         label_epoch: u64,
     ) -> Result<()> {
         let session = Some((node_boot_id, label_epoch));
-        self.retire_old_session_pending_exception(host, trust, config, node_boot_id, label_epoch)?;
+        self.retire_old_session_exceptions(host, trust, config, node_boot_id, label_epoch)?;
 
         for (profile_id, record) in self.state.active_profiles.clone() {
+            if self
+                .state
+                .terminal_cleanup_authorization
+                .as_ref()
+                .is_some_and(|cleanup| cleanup.profile_id == profile_id)
+            {
+                // Terminal cleanup owns this record until exact post-host absence is durable.
+                continue;
+            }
             let bundle = self.read_bundle(
                 &self
                     .root
@@ -2509,7 +2903,7 @@ impl NodePolicyDeliveryOwner {
         Ok(())
     }
 
-    fn retire_old_session_pending_exception(
+    fn retire_old_session_exceptions(
         &mut self,
         host: &erebor_interceptor::KernelHost,
         trust: &TrustCache,
@@ -2517,82 +2911,174 @@ impl NodePolicyDeliveryOwner {
         node_boot_id: &[u8],
         label_epoch: u64,
     ) -> Result<()> {
-        let Some((instance_id, record)) = self
+        let records = self
             .state
             .exception_records
             .iter()
-            .find(|(_, record)| record.state == LocalExceptionStateV1::Pending)
+            .filter(|(_, record)| {
+                matches!(
+                    record.state,
+                    LocalExceptionStateV1::Pending | LocalExceptionStateV1::Active
+                )
+            })
             .map(|(instance_id, record)| (instance_id.clone(), record.clone()))
-        else {
-            return Ok(());
-        };
-        let candidate = self.read_exception_candidate(&record)?;
-        let identity = candidate
-            .exact_target
-            .kubernetes
-            .as_ref()
-            .context(IdentityStateSnafu {
-                reason: "pending exception recovery has no Kubernetes identity",
+            .collect::<Vec<_>>();
+        for (instance_id, record) in records {
+            let candidate = self.read_exception_candidate(&record)?;
+            let prepared = self.verify_stored_exception_candidate(
+                &instance_id,
+                &record,
+                candidate.clone(),
+                trust,
+                config,
+            )?;
+            self.restore_exception_recovery_identity(&instance_id, &candidate, &prepared)?;
+            let identity =
+                candidate
+                    .exact_target
+                    .kubernetes
+                    .as_ref()
+                    .context(IdentityStateSnafu {
+                        reason: "stored exception recovery has no Kubernetes identity",
+                    })?;
+            let signed_boot_id = hex::decode(&identity.node_boot_id).map_err(|error| {
+                IdentityStateSnafu {
+                    reason: format!("stored exception recovery has an invalid boot ID: {error}"),
+                }
+                .build()
             })?;
-        let signed_boot_id = hex::decode(&identity.node_boot_id).map_err(|error| {
-            IdentityStateSnafu {
-                reason: format!("pending exception recovery has an invalid boot ID: {error}"),
+            if signed_boot_id == node_boot_id && identity.label_epoch == label_epoch {
+                continue;
             }
-            .build()
-        })?;
-        let prepared = self.prepare_exception_delivery(
-            candidate.clone(),
-            trust,
-            config,
-            &signed_boot_id,
-            identity.label_epoch,
-            record.observed_utc_ns,
-        )?;
-        self.restore_exception_recovery_identity(&instance_id, &candidate, &prepared)?;
-        if signed_boot_id == node_boot_id && identity.label_epoch == label_epoch {
-            return Ok(());
-        }
 
-        let record = self
-            .state
-            .exception_records
-            .get(&instance_id)
-            .context(IdentityStateSnafu {
-                reason: "the old-session pending exception disappeared during recovery",
-            })?
-            .clone();
-        let runtime_key = ExceptionRuntimeStateKeyV1 {
-            node_id: crate::policy::stable_node_id(&config.node_id)?,
-            exception_instance_id: crate::policy::parse_id("exception_instance_id", &instance_id)?,
-        };
-        let binding_key = ExceptionHandleBindingKeyV1 {
-            profile_generation_ref_id: record.profile_generation_ref_id,
-            exception_numeric_handle: record.grant_handle,
-            reserved: 0,
-        };
-        let runtime_present = host
-            .lookup_map_locked("exception_runtime_states", runtime_key.as_bytes())
-            .context(InterceptorSnafu)?
-            .is_some();
-        let binding_present = host
-            .lookup_map("exception_handle_bindings", binding_key.as_bytes())
-            .context(InterceptorSnafu)?
-            .is_some();
-        self.settle_old_session_pending_exception(
-            &instance_id,
-            candidate.operation,
-            candidate.maximum_uses,
-            runtime_present,
-            binding_present,
-            crate::policy::current_utc_ns()?,
-        )
+            let stored = self
+                .state
+                .exception_records
+                .get(&instance_id)
+                .context(IdentityStateSnafu {
+                    reason: "the old-session exception disappeared during recovery",
+                })?
+                .clone();
+            let runtime_key = ExceptionRuntimeStateKeyV1 {
+                node_id: crate::policy::stable_node_id(&config.node_id)?,
+                exception_instance_id: crate::policy::parse_id(
+                    "exception_instance_id",
+                    &instance_id,
+                )?,
+            };
+            let binding_key = ExceptionHandleBindingKeyV1 {
+                profile_generation_ref_id: stored.profile_generation_ref_id,
+                exception_numeric_handle: stored.grant_handle,
+                reserved: 0,
+            };
+            let runtime_present = host
+                .lookup_map_locked("exception_runtime_states", runtime_key.as_bytes())
+                .context(InterceptorSnafu)?
+                .is_some();
+            let binding_present = host
+                .lookup_map("exception_handle_bindings", binding_key.as_bytes())
+                .context(InterceptorSnafu)?
+                .is_some();
+            self.settle_old_session_exception(
+                &instance_id,
+                &candidate,
+                runtime_present,
+                binding_present,
+                crate::policy::current_utc_ns()?,
+            )?;
+        }
+        Ok(())
     }
 
-    fn settle_old_session_pending_exception(
+    fn verify_stored_exception_candidate(
+        &self,
+        instance_id: &str,
+        record: &ExceptionDeliveryRecordV1,
+        candidate: ExceptionDeliveryCandidateV1,
+        trust: &TrustCache,
+        config: &NodeConfig,
+    ) -> Result<PreparedExceptionDeliveryV1> {
+        let base_bundle = self.policy_bundle_for_candidate(&candidate.base_candidate_content_id)?;
+        let trusted_key = trust.policy_signing_key(
+            &candidate.signing_key_id,
+            base_bundle.profile_artifact.header.sequence_epoch,
+        )?;
+        candidate
+            .verify(&trusted_key, &config.node_id, candidate.issued_utc_ns)
+            .context(PolicySnafu)?;
+        let grant = base_bundle
+            .profile_artifact
+            .policy_document
+            .file_exception_grants
+            .iter()
+            .find(|grant| grant.grant_id == candidate.grant_id)
+            .context(IdentityStateSnafu {
+                reason: "the stored exception has no signed base-policy grant",
+            })?;
+        let requested_duration = candidate
+            .valid_until_utc_ns
+            .saturating_sub(candidate.issued_utc_ns);
+        let expected_node_name =
+            config
+                .kubernetes_node_name
+                .as_deref()
+                .context(IdentityStateSnafu {
+                    reason: "stored exception recovery needs the Kubernetes Node name",
+                })?;
+        let tenant_id = config
+            .evidence
+            .as_ref()
+            .map(|evidence| evidence.tenant_id.as_str())
+            .unwrap_or_default();
+        ensure!(
+            candidate.exception_instance_id == instance_id
+                && record.candidate_content_id == candidate.candidate_content_id
+                && record.operation == candidate.operation
+                && candidate.tenant_id == tenant_id
+                && candidate.tenant_id == base_bundle.candidate.tenant_id
+                && candidate.base_policy_source_revision_id
+                    == base_bundle.candidate.policy_source_revision_id
+                && candidate.profile_id
+                    == base_bundle
+                        .profile_artifact
+                        .policy_document
+                        .metadata
+                        .profile_id
+                && base_bundle
+                    .candidate
+                    .exact_target
+                    .workload_targets
+                    .contains(&candidate.exact_target)
+                && candidate.exact_target.node_id == config.node_id
+                && candidate
+                    .exact_target
+                    .kubernetes
+                    .as_ref()
+                    .is_some_and(|identity| identity.kubernetes_node_name == expected_node_name)
+                && candidate.maximum_uses <= grant.maximum_uses
+                && (candidate.operation == ExceptionDeliveryOperationV1::Revoke
+                    || u64::try_from(requested_duration)
+                        .is_ok_and(|duration| duration <= grant.maximum_duration_ns))
+                && (record.state == LocalExceptionStateV1::Pending
+                    || (record.state == LocalExceptionStateV1::Active
+                        && candidate.operation == ExceptionDeliveryOperationV1::Activate)),
+            IdentityStateSnafu {
+                reason: "the stored exception differs from its signed base-policy authority",
+            }
+        );
+        Ok(PreparedExceptionDeliveryV1 {
+            grant_handle: exception_grant_handle(
+                &base_bundle.profile_artifact.policy_document,
+                &candidate.grant_id,
+            )?,
+            candidate,
+        })
+    }
+
+    fn settle_old_session_exception(
         &mut self,
         instance_id: &str,
-        operation: ExceptionDeliveryOperationV1,
-        maximum_uses: u32,
+        candidate: &ExceptionDeliveryCandidateV1,
         runtime_present: bool,
         binding_present: bool,
         observed_utc_ns: i64,
@@ -2600,7 +3086,7 @@ impl NodePolicyDeliveryOwner {
         ensure!(
             !runtime_present && !binding_present,
             IdentityStateSnafu {
-                reason: "an old-session pending exception still has live physical authority",
+                reason: "an old-session exception still has live physical authority",
             }
         );
         let stored =
@@ -2608,24 +3094,36 @@ impl NodePolicyDeliveryOwner {
                 .exception_records
                 .get_mut(instance_id)
                 .context(IdentityStateSnafu {
-                    reason: "the old-session pending exception disappeared before retirement",
+                    reason: "the old-session exception disappeared before retirement",
                 })?;
         ensure!(
-            stored.state == LocalExceptionStateV1::Pending
-                && stored.operation == operation
+            matches!(
+                stored.state,
+                LocalExceptionStateV1::Pending | LocalExceptionStateV1::Active
+            ) && stored.operation == candidate.operation
                 && observed_utc_ns > 0,
             IdentityStateSnafu {
                 reason: "the old-session exception retirement identity is invalid",
             }
         );
-        stored.state = match operation {
-            ExceptionDeliveryOperationV1::Activate => {
-                stored.consumed_uses = maximum_uses;
+        stored.state = match (
+            candidate.operation,
+            candidate.valid_until_utc_ns <= observed_utc_ns,
+        ) {
+            (ExceptionDeliveryOperationV1::Activate, false) => {
+                stored.consumed_uses = candidate.maximum_uses;
                 LocalExceptionStateV1::Consumed
             }
-            ExceptionDeliveryOperationV1::Revoke => LocalExceptionStateV1::Revoked,
+            (ExceptionDeliveryOperationV1::Activate, true) => LocalExceptionStateV1::Expired,
+            (ExceptionDeliveryOperationV1::Revoke, _) => LocalExceptionStateV1::Revoked,
         };
-        stored.transition_version = 1;
+        stored.transition_version =
+            stored
+                .transition_version
+                .checked_add(1)
+                .context(IdentityStateSnafu {
+                    reason: "old-session exception transition version exhausted",
+                })?;
         stored.observed_utc_ns = observed_utc_ns;
         stored.control_acknowledged = false;
         stored.report_to_control = false;
@@ -3043,6 +3541,18 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
         .context(IoSnafu { path: parent })
 }
 
+fn remove_directory_if_present(path: &Path) -> Result<()> {
+    match fs::remove_dir_all(path) {
+        Ok(()) => Ok(()),
+        Err(source) if source.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(source) => Err(crate::Error::Io {
+            path: path.to_path_buf(),
+            source,
+            location: snafu::Location::default(),
+        }),
+    }
+}
+
 fn file_sha256(path: &Path) -> Option<String> {
     fs::read(path).ok().map(|bytes| sha256(&bytes))
 }
@@ -3127,10 +3637,11 @@ mod tests {
     use mithril_control::{
         CapabilityRecord, ExceptionActivationStateV1, ExceptionDeliveryCandidateV1,
         ExceptionDeliveryOperationV1, ExceptionSourceRevisionV1, ExceptionSourceStateV1,
-        FileExceptionGrantTemplateV1, KubernetesWorkloadIdentityV1, PolicyChunk, PolicyCompiler,
-        PolicyDeliveryCandidateV1, PolicyDocumentV1, PolicyInventory, PolicySignerTrust,
-        PolicyTargetSnapshotV1, PolicyTargetV1, ProfileCandidateArtifactV1, ProfileModeV1,
-        ProfileSealRequestV1, RegistryDigestsV1, WorkloadProtectionException, WorkloadTargetFactV1,
+        FileExceptionGrantTemplateV1, KubernetesWorkloadIdentityV1, PolicyAcknowledgementAccepted,
+        PolicyChunk, PolicyCompiler, PolicyDeliveryCandidateV1, PolicyDocumentV1, PolicyInventory,
+        PolicySignerTrust, PolicyTargetSnapshotV1, PolicyTargetV1, ProfileCandidateArtifactV1,
+        ProfileModeV1, ProfileSealRequestV1, RegistryDigestsV1, WorkloadProtectionException,
+        WorkloadTargetFactV1,
     };
     use sha2::{Digest as _, Sha256};
     use snafu::ResultExt as _;
@@ -3199,13 +3710,103 @@ mod tests {
         };
         assert_eq!(acknowledgement.state, "ACTIVE");
         assert_eq!(acknowledgement.profile_generation_ref_id, 2);
+        assert!(owner
+            .acknowledge_control(
+                &acknowledgement,
+                &PolicyAcknowledgementAccepted {
+                    control_commit_index: 1,
+                    rollout_state: "ACTIVE".to_owned(),
+                    terminal_chain_closure_authorized: true,
+                },
+            )
+            .is_err());
 
         let mut reloaded = NodePolicyDeliveryOwner::load(directory.path())?;
         assert!(reloaded.pending_acknowledgement().is_some());
-        reloaded.acknowledge_control(&bundle.candidate.candidate_content_id)?;
+        let acknowledgement = reloaded.pending_acknowledgement().ok_or_else(|| {
+            super::IdentityStateSnafu {
+                reason: "a committed activation lost its pending acknowledgement".to_owned(),
+            }
+            .build()
+        })?;
+        reloaded.acknowledge_control(
+            &acknowledgement,
+            &PolicyAcknowledgementAccepted {
+                control_commit_index: 1,
+                rollout_state: "ACTIVE".to_owned(),
+                terminal_chain_closure_authorized: false,
+            },
+        )?;
         assert!(reloaded.pending_acknowledgement().is_none());
         assert!(reloaded
             .prepare_activation(&bundle, &trust, &config, &capabilities, 3, 22)
+            .is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn rejected_policy_receipt_is_recomputed_after_restart() -> crate::Result<()> {
+        let directory = tempfile::tempdir().context(IoSnafu {
+            path: "temporary rejected policy receipt directory",
+        })?;
+        let config = config(directory.path());
+        let key = SigningKey::from_bytes(&[9; 32]);
+        let trust = trust(directory.path(), &key)?;
+        let bundle = bundle(
+            &config,
+            &key,
+            1,
+            1,
+            PolicyDeliveryOperationV1::Activate,
+            None,
+            10,
+            100,
+            "node-a",
+        )?;
+        let owner = NodePolicyDeliveryOwner::load(directory.path())?;
+        assert!(owner
+            .prepare_activation(&bundle, &trust, &config, &capabilities()[..1], 2, 20)
+            .is_err());
+        let acknowledgement = mithril_control::PolicyActivationAcknowledgement {
+            tenant_id: bundle.candidate.tenant_id.clone(),
+            candidate_content_id: bundle.candidate.candidate_content_id.clone(),
+            policy_source_revision_id: bundle.candidate.policy_source_revision_id.clone(),
+            target_snapshot_digest: bundle.candidate.target_snapshot_digest.clone(),
+            state: "REJECTED".to_owned(),
+            node_bound_generation_digest: String::new(),
+            profile_generation_ref_id: 0,
+            readback_digest: String::new(),
+            probe_result_digest: String::new(),
+            reason_code: "NODE_POLICY_REJECTED".to_owned(),
+            observed_utc_ns: 20,
+        };
+        drop(owner);
+        let mut recovered = NodePolicyDeliveryOwner::load(directory.path())?;
+        assert!(!recovered.acknowledge_control(
+            &acknowledgement,
+            &PolicyAcknowledgementAccepted {
+                control_commit_index: 3,
+                rollout_state: "REJECTED".to_owned(),
+                terminal_chain_closure_authorized: false,
+            },
+        )?);
+        assert!(recovered
+            .acknowledge_control(
+                &acknowledgement,
+                &PolicyAcknowledgementAccepted {
+                    control_commit_index: 3,
+                    rollout_state: "ACTIVE".to_owned(),
+                    terminal_chain_closure_authorized: false,
+                },
+            )
+            .is_err());
+        drop(recovered);
+
+        let replayed = NodePolicyDeliveryOwner::load(directory.path())?;
+        assert!(replayed.pending_acknowledgement().is_none());
+        // A process loss does not turn an ephemeral rejection into durable policy state.
+        assert!(replayed
+            .prepare_activation(&bundle, &trust, &config, &capabilities()[..1], 2, 21)
             .is_err());
         Ok(())
     }
@@ -3444,6 +4045,64 @@ mod tests {
     }
 
     #[test]
+    fn active_profile_inventory_enforces_the_control_protocol_bound() -> crate::Result<()> {
+        let directory = tempfile::tempdir().context(IoSnafu {
+            path: "temporary active profile inventory directory",
+        })?;
+        let mut owner = NodePolicyDeliveryOwner::load(directory.path())?;
+        for index in 0..super::MAX_ACTIVE_POLICY_PROFILES {
+            let profile_id = uuid::Uuid::from_u128(index as u128 + 1)
+                .hyphenated()
+                .to_string();
+            owner.state.active_profiles.insert(
+                profile_id,
+                super::ActivePolicyRecordV1 {
+                    tenant_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa".to_owned(),
+                    candidate_content_id: format!("{index:064x}"),
+                    policy_source_revision_id: "b".repeat(64),
+                    target_snapshot_digest: "c".repeat(64),
+                    bundle_digest: "d".repeat(64),
+                    artifact_file: "bundles/d/profile-artifact.json".to_owned(),
+                    public_key_file: "bundles/d/profile-public-key.hex".to_owned(),
+                    profile_generation_ref_id: index as u64 + 1,
+                    staged_utc_ns: 1,
+                    binding_ids: vec![uuid::Uuid::from_u128(index as u128 + 1_000)
+                        .hyphenated()
+                        .to_string()],
+                    scheduled_bindings: Vec::new(),
+                    node_bound_generation_digest: "e".repeat(64),
+                    readback_digest: "f".repeat(64),
+                    probe_result_digest: "1".repeat(64),
+                    observed_utc_ns: 2,
+                },
+            );
+        }
+        let existing = owner
+            .state
+            .active_profiles
+            .keys()
+            .next()
+            .cloned()
+            .ok_or_else(|| {
+                super::IdentityStateSnafu {
+                    reason: "the bounded inventory fixture is empty".to_owned(),
+                }
+                .build()
+            })?;
+        owner.ensure_active_profile_inventory_capacity(&existing)?;
+        assert!(owner
+            .ensure_active_profile_inventory_capacity(
+                &uuid::Uuid::from_u128(10_000).hyphenated().to_string(),
+            )
+            .is_err());
+        owner.state.active_profiles.remove(&existing);
+        owner.ensure_active_profile_inventory_capacity(
+            &uuid::Uuid::from_u128(10_000).hyphenated().to_string(),
+        )?;
+        Ok(())
+    }
+
+    #[test]
     fn retirement_stages_the_restrictive_terminal_and_keeps_predecessor_order() -> crate::Result<()>
     {
         let directory = tempfile::tempdir().context(IoSnafu {
@@ -3513,6 +4172,11 @@ mod tests {
                 .map(|acknowledgement| acknowledgement.candidate_content_id),
             Some(retirement.candidate.candidate_content_id.clone())
         );
+        assert!(
+            !owner
+                .startup_authority_absence_from_readback(false)
+                .policy_authority_absent
+        );
 
         let wrong_predecessor = bundle(
             &config,
@@ -3528,6 +4192,164 @@ mod tests {
         assert!(owner
             .prepare_activation(&wrong_predecessor, &trust, &config, &capabilities, 4, 26,)
             .is_err());
+
+        let acknowledgement = owner.pending_acknowledgement().ok_or_else(|| {
+            super::IdentityStateSnafu {
+                reason: "terminal activation has no pending acknowledgement".to_owned(),
+            }
+            .build()
+        })?;
+        assert!(!owner.acknowledge_control(
+            &acknowledgement,
+            &PolicyAcknowledgementAccepted {
+                control_commit_index: 4,
+                rollout_state: "ACTIVE".to_owned(),
+                terminal_chain_closure_authorized: false,
+            },
+        )?);
+        assert!(owner.pending_acknowledgement().is_some());
+        let state_path = owner.state_path.clone();
+        let blocked_state_path = directory.path().join("blocked-state");
+        std::fs::create_dir(&blocked_state_path).context(IoSnafu {
+            path: &blocked_state_path,
+        })?;
+        owner.state_path = blocked_state_path;
+        assert!(owner
+            .acknowledge_control(
+                &acknowledgement,
+                &PolicyAcknowledgementAccepted {
+                    control_commit_index: 5,
+                    rollout_state: "ACTIVE".to_owned(),
+                    terminal_chain_closure_authorized: true,
+                },
+            )
+            .is_err());
+        assert!(owner.terminal_cleanup().is_none());
+        assert!(owner.pending_acknowledgement().is_some());
+        owner.state_path = state_path;
+        assert!(owner.acknowledge_control(
+            &acknowledgement,
+            &PolicyAcknowledgementAccepted {
+                control_commit_index: 5,
+                rollout_state: "ACTIVE".to_owned(),
+                terminal_chain_closure_authorized: true,
+            },
+        )?);
+
+        let mut restarted = NodePolicyDeliveryOwner::load(directory.path())?;
+        assert!(restarted.terminal_cleanup().is_some());
+        let mut restored = retirement_prepared.config.clone();
+        restarted.restore_config(&mut restored, &trust)?;
+        assert!(restored.policy_candidates.is_empty());
+        assert!(restored.workload_bindings.is_empty());
+
+        let terminal_profile_id = retirement.profile_artifact.header.profile_id.clone();
+        let terminal_record = restarted.state.active_profiles[&terminal_profile_id].clone();
+        let issuer_high_water = restarted.state.issuer_high_water.clone();
+        let distribution_high_water = restarted.state.distribution_high_water.clone();
+        restarted.retire_terminal_delivery_state()?;
+        drop(restarted);
+
+        let mut recovered = NodePolicyDeliveryOwner::load(directory.path())?;
+        assert!(recovered
+            .terminal_cleanup()
+            .is_some_and(|cleanup| cleanup.delivery_state_retired));
+        let mut crash_recovery_config = retirement_prepared.config.clone();
+        recovered.restore_config(&mut crash_recovery_config, &trust)?;
+        assert!(crash_recovery_config.policy_candidates.is_empty());
+        assert!(crash_recovery_config.workload_bindings.is_empty());
+        assert!(!recovered
+            .state
+            .active_profiles
+            .contains_key(&terminal_profile_id));
+        assert!(!recovered
+            .state
+            .policy_candidate_bundles
+            .contains_key(&active.candidate.candidate_content_id));
+        assert_eq!(recovered.state.issuer_high_water, issuer_high_water);
+        assert_eq!(
+            recovered.state.distribution_high_water,
+            distribution_high_water
+        );
+        recovered.finish_terminal_cleanup()?;
+        assert!(recovered.state.active_profiles.is_empty());
+        assert!(
+            recovered
+                .startup_authority_absence_from_readback(false)
+                .policy_authority_absent
+        );
+
+        let other_profile_id = "22222222-2222-4222-8222-222222222222".to_owned();
+        let mut other_record = terminal_record.clone();
+        other_record.candidate_content_id = "d".repeat(64);
+        other_record.bundle_digest = "e".repeat(64);
+        other_record.profile_generation_ref_id = 4;
+        other_record.binding_ids = vec!["88888888-8888-4888-8888-888888888888".to_owned()];
+        recovered
+            .state
+            .active_profiles
+            .insert(terminal_profile_id.clone(), terminal_record.clone());
+        recovered
+            .state
+            .active_profiles
+            .insert(other_profile_id, other_record);
+        recovered.state.terminal_cleanup_authorization = Some(super::TerminalPolicyCleanupV1 {
+            candidate_content_id: terminal_record.candidate_content_id,
+            profile_id: terminal_profile_id,
+            bundle_digest: terminal_record.bundle_digest,
+            profile_generation_ref_id: terminal_record.profile_generation_ref_id,
+            binding_ids: terminal_record.binding_ids,
+            control_commit_index: 6,
+            delivery_state_retired: false,
+        });
+        recovered.finish_terminal_cleanup()?;
+        assert_eq!(recovered.state.active_profiles.len(), 1);
+        assert_eq!(recovered.state.issuer_high_water, issuer_high_water);
+        assert_eq!(
+            recovered.state.distribution_high_water,
+            distribution_high_water
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn terminal_cleanup_keeps_a_bundle_used_by_durable_exception_state() -> crate::Result<()> {
+        let directory = tempfile::tempdir().context(IoSnafu {
+            path: "temporary exception base cache directory",
+        })?;
+        let fixture = pending_exception_fixture(directory.path())?;
+        let mut owner = fixture.owner;
+        assert!(
+            !owner
+                .startup_authority_absence_from_readback(false)
+                .exception_authority_absent
+        );
+        let profile_id = fixture.scheduled.profile_artifact.header.profile_id;
+        let record = owner.state.active_profiles[&profile_id].clone();
+        owner.state.terminal_cleanup_authorization = Some(super::TerminalPolicyCleanupV1 {
+            candidate_content_id: record.candidate_content_id.clone(),
+            profile_id,
+            bundle_digest: record.bundle_digest.clone(),
+            profile_generation_ref_id: record.profile_generation_ref_id,
+            binding_ids: record.binding_ids.clone(),
+            control_commit_index: 1,
+            delivery_state_retired: false,
+        });
+        owner.finish_terminal_cleanup()?;
+
+        let recovered = NodePolicyDeliveryOwner::load(directory.path())?;
+        assert_eq!(
+            recovered
+                .state
+                .policy_candidate_bundles
+                .get(&record.candidate_content_id),
+            Some(&record.bundle_digest)
+        );
+        assert!(directory
+            .path()
+            .join("policy-delivery-v1/bundles")
+            .join(record.bundle_digest)
+            .is_dir());
         Ok(())
     }
 
@@ -4085,10 +4907,9 @@ mod tests {
 
         restarted.state = pending_revocation_state;
         restarted.persist_state()?;
-        restarted.settle_old_session_pending_exception(
+        restarted.settle_old_session_exception(
             &revocation.exception_instance_id,
-            ExceptionDeliveryOperationV1::Revoke,
-            revocation.maximum_uses,
+            &revocation,
             false,
             false,
             64,
@@ -4226,6 +5047,7 @@ mod tests {
         let PendingExceptionFixture {
             config,
             trust,
+            activation,
             mut owner,
             ..
         } = pending_exception_fixture(directory.path())?;
@@ -4283,24 +5105,10 @@ mod tests {
                 .build()
             })?;
         assert!(owner
-            .settle_old_session_pending_exception(
-                &instance_id,
-                ExceptionDeliveryOperationV1::Activate,
-                1,
-                true,
-                false,
-                24,
-            )
+            .settle_old_session_exception(&instance_id, &activation, true, false, 24,)
             .is_err());
         assert_eq!(owner.status().pending_exception_count, 1);
-        owner.settle_old_session_pending_exception(
-            &instance_id,
-            ExceptionDeliveryOperationV1::Activate,
-            1,
-            false,
-            false,
-            24,
-        )?;
+        owner.settle_old_session_exception(&instance_id, &activation, false, false, 24)?;
         assert_eq!(owner.status().pending_exception_count, 0);
         assert_eq!(owner.status().terminal_exception_count, 1);
         let retired_activation =
@@ -4321,6 +5129,42 @@ mod tests {
         assert_eq!(retired_activation.consumed_uses, 1);
         assert!(!retired_activation.report_to_control);
         assert!(owner.pending_exception_acknowledgement()?.is_none());
+
+        owner.state = pending.clone();
+        let active = owner
+            .state
+            .exception_records
+            .get_mut(&instance_id)
+            .ok_or_else(|| {
+                super::IdentityStateSnafu {
+                    reason: "the startup fixture lost its active exception".to_owned(),
+                }
+                .build()
+            })?;
+        active.state = super::LocalExceptionStateV1::Active;
+        active.transition_version = 1;
+        active.control_acknowledged = true;
+        owner.settle_old_session_exception(&instance_id, &activation, false, false, 24)?;
+        let active_retirement = &owner.state.exception_records[&instance_id];
+        assert_eq!(
+            active_retirement.state,
+            super::LocalExceptionStateV1::Consumed
+        );
+        assert_eq!(active_retirement.transition_version, 2);
+        assert_eq!(active_retirement.consumed_uses, 1);
+
+        owner.state = pending.clone();
+        owner.settle_old_session_exception(
+            &instance_id,
+            &activation,
+            false,
+            false,
+            activation.valid_until_utc_ns,
+        )?;
+        assert_eq!(
+            owner.state.exception_records[&instance_id].state,
+            super::LocalExceptionStateV1::Expired
+        );
 
         owner.state = pending.clone();
         let duplicate = owner

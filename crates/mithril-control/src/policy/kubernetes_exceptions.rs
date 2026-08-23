@@ -841,6 +841,18 @@ impl PolicyRolloutOwner {
         &self,
         acknowledgement: ExceptionActivationAcknowledgementV1,
     ) -> Result<ExceptionRolloutStateV1> {
+        ensure!(
+            self.store.current_node_session_matches(
+                &acknowledgement.node_id,
+                &acknowledgement.node_boot_id,
+                acknowledgement.label_epoch,
+            )?,
+            PolicyValidationSnafu {
+                policy_id: &acknowledgement.exception_source_revision_id,
+                code: "CFG_EXCEPTION_ACKNOWLEDGEMENT",
+                reason: "the exception acknowledgement physical node session is stale",
+            }
+        );
         let current = self
             .store
             .exception_rollout_state(

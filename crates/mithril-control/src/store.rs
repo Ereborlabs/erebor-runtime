@@ -71,6 +71,8 @@ struct ControlStoreState {
     exception_candidates: BTreeMap<String, ExceptionDeliveryCandidateV1>,
     exception_rollout_states: BTreeMap<PolicyRolloutKeyV1, ExceptionRolloutStateV1>,
     exception_acknowledgements: BTreeMap<String, ExceptionActivationAcknowledgementV1>,
+    exception_consumed_uses: BTreeMap<PolicyRolloutKeyV1, u32>,
+    node_sessions: BTreeMap<String, DurableNodeSessionV1>,
     trust_generations: BTreeMap<u64, TrustGenerationV1>,
     trust_acknowledgements:
         BTreeMap<(String, u64, [u8; 16], u64), TrustGenerationAcknowledgementV1>,
@@ -143,6 +145,12 @@ struct ControlCommitV1 {
 #[serde(tag = "kind", rename_all = "SCREAMING_SNAKE_CASE")]
 // Each variant contains all state that must become durable in one transaction.
 enum ControlTransactionV1 {
+    NodeSessionAdvanced {
+        advance: Box<NodeSessionAdvanceTransactionV1>,
+    },
+    KubernetesNodeBound {
+        binding: Box<KubernetesNodeBindingTransactionV1>,
+    },
     SourceAccepted {
         source_revision: Box<PolicySourceRevisionV1>,
         policy_document: Box<PolicyDocumentV1>,
@@ -184,6 +192,49 @@ enum ControlTransactionV1 {
     TrustAcknowledged {
         acknowledgement: Box<TrustGenerationAcknowledgementV1>,
     },
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(deny_unknown_fields)]
+struct NodePhysicalEpochV1 {
+    node_id: String,
+    node_boot_id: Vec<u8>,
+    label_epoch: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct DurableNodeSessionV1 {
+    pub(crate) node_id: String,
+    pub(crate) node_boot_id: Vec<u8>,
+    pub(crate) label_epoch: u64,
+    pub(crate) kubernetes_node_name: Option<String>,
+    pub(crate) kubernetes_node_uid: Option<String>,
+    pub(crate) startup_absence_proof_digest: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct NodeSessionAdvanceTransactionV1 {
+    session: DurableNodeSessionV1,
+    policy_rollout_states: Vec<PolicyRolloutStateV1>,
+    exception_settlements: Vec<ExceptionSessionSettlementV1>,
+    observed_utc_ns: i64,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct ExceptionSessionSettlementV1 {
+    rollout_state: ExceptionRolloutStateV1,
+    consumed_uses: u32,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct KubernetesNodeBindingTransactionV1 {
+    physical_epoch: NodePhysicalEpochV1,
+    kubernetes_node_name: String,
+    kubernetes_node_uid: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -239,6 +290,41 @@ struct EvidenceBatchTransactionV1 {
 struct EvidenceAcceptedTransactionV1 {
     identity: EvidenceIntakeIdentityV1,
     batches: Vec<StoredEvidenceBatchV1>,
+}
+
+impl DurableNodeSessionV1 {
+    fn physical_epoch(&self) -> NodePhysicalEpochV1 {
+        NodePhysicalEpochV1 {
+            node_id: self.node_id.clone(),
+            node_boot_id: self.node_boot_id.clone(),
+            label_epoch: self.label_epoch,
+        }
+    }
+}
+
+#[must_use]
+pub fn startup_absence_proof_digest(
+    node_id: &str,
+    node_boot_id: &[u8],
+    label_epoch: u64,
+    policy_authority_absent: bool,
+    exception_authority_absent: bool,
+) -> String {
+    let mut digest = Sha256::new();
+    digest.update(b"MITHRIL-NODE-STARTUP-ABSENCE-V1\0");
+    digest.update(
+        u64::try_from(node_id.len())
+            .unwrap_or(u64::MAX)
+            .to_be_bytes(),
+    );
+    digest.update(node_id.as_bytes());
+    digest.update(node_boot_id);
+    digest.update(label_epoch.to_be_bytes());
+    digest.update([
+        u8::from(policy_authority_absent),
+        u8::from(exception_authority_absent),
+    ]);
+    format!("{:x}", digest.finalize())
 }
 
 impl ControlStore {
@@ -335,6 +421,135 @@ impl ControlStore {
                 }),
             coverage_cursors: count(inner.state.coverage_cursors.len()),
         })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn register_node_physical_session(
+        &self,
+        node_id: &str,
+        node_boot_id: &[u8],
+        label_epoch: u64,
+        kubernetes_node_name: Option<&str>,
+        proof_digest: &str,
+        policy_authority_absent: bool,
+        exception_authority_absent: bool,
+        observed_utc_ns: i64,
+    ) -> Result<DurableNodeSessionV1> {
+        let mut inner = self.lock()?;
+        let physical_epoch = NodePhysicalEpochV1 {
+            node_id: node_id.to_owned(),
+            node_boot_id: node_boot_id.to_vec(),
+            label_epoch,
+        };
+        if let Some(current) = inner.state.node_sessions.get(node_id) {
+            if physical_epoch == current.physical_epoch() {
+                if current.kubernetes_node_name.as_deref() != kubernetes_node_name {
+                    return ControlStoreSnafu {
+                        path: inner.root.clone(),
+                        reason: "a reconnect changed its Kubernetes Node name".to_owned(),
+                    }
+                    .fail();
+                }
+                return Ok(current.clone());
+            }
+        }
+        if !policy_authority_absent
+            || !exception_authority_absent
+            || proof_digest
+                != startup_absence_proof_digest(
+                    node_id,
+                    node_boot_id,
+                    label_epoch,
+                    policy_authority_absent,
+                    exception_authority_absent,
+                )
+        {
+            return ControlStoreSnafu {
+                path: inner.root.clone(),
+                reason: "a physical node-session advance has no exact startup absence proof"
+                    .to_owned(),
+            }
+            .fail();
+        }
+        let session = DurableNodeSessionV1 {
+            node_id: node_id.to_owned(),
+            node_boot_id: node_boot_id.to_vec(),
+            label_epoch,
+            kubernetes_node_name: kubernetes_node_name.map(str::to_owned),
+            kubernetes_node_uid: None,
+            startup_absence_proof_digest: proof_digest.to_owned(),
+        };
+        let advance =
+            node_session_advance(&inner.state, session.clone(), observed_utc_ns, &inner.root)?;
+        commit(
+            &mut inner,
+            ControlTransactionV1::NodeSessionAdvanced {
+                advance: Box::new(advance),
+            },
+        )?;
+        Ok(session)
+    }
+
+    pub(crate) fn bind_kubernetes_node_session(
+        &self,
+        node_id: &str,
+        node_boot_id: &[u8],
+        label_epoch: u64,
+        kubernetes_node_name: &str,
+        kubernetes_node_uid: &str,
+    ) -> Result<bool> {
+        let mut inner = self.lock()?;
+        let physical_epoch = NodePhysicalEpochV1 {
+            node_id: node_id.to_owned(),
+            node_boot_id: node_boot_id.to_vec(),
+            label_epoch,
+        };
+        let current = inner.state.node_sessions.get(node_id).ok_or_else(|| {
+            ControlStoreSnafu {
+                path: inner.root.clone(),
+                reason: "a Kubernetes Node binding has no durable physical session".to_owned(),
+            }
+            .build()
+        })?;
+        if current.physical_epoch() != physical_epoch
+            || current.kubernetes_node_name.as_deref() != Some(kubernetes_node_name)
+        {
+            return ControlStoreSnafu {
+                path: inner.root.clone(),
+                reason: "a Kubernetes Node binding does not match the physical session".to_owned(),
+            }
+            .fail();
+        }
+        if current.kubernetes_node_uid.as_deref() == Some(kubernetes_node_uid) {
+            return Ok(false);
+        }
+        commit(
+            &mut inner,
+            ControlTransactionV1::KubernetesNodeBound {
+                binding: Box::new(KubernetesNodeBindingTransactionV1 {
+                    physical_epoch,
+                    kubernetes_node_name: kubernetes_node_name.to_owned(),
+                    kubernetes_node_uid: kubernetes_node_uid.to_owned(),
+                }),
+            },
+        )?;
+        Ok(true)
+    }
+
+    pub(crate) fn current_node_session_matches(
+        &self,
+        node_id: &str,
+        node_boot_id: &[u8],
+        label_epoch: u64,
+    ) -> Result<bool> {
+        let inner = self.lock()?;
+        Ok(inner
+            .state
+            .node_sessions
+            .get(node_id)
+            .is_none_or(|session| {
+                session.node_boot_id == node_boot_id && session.label_epoch == label_epoch
+            }))
     }
 
     pub fn accept_compiled_source_revision(
@@ -525,6 +740,18 @@ impl ControlStore {
         rollout_state: PolicyRolloutStateV1,
     ) -> Result<(PolicyRolloutStateV1, bool)> {
         let mut inner = self.lock()?;
+        if !node_session_matches_acknowledgement(
+            &inner.state,
+            &acknowledgement.node_id,
+            &acknowledgement.node_boot_id,
+            acknowledgement.label_epoch,
+        ) {
+            return ControlStoreSnafu {
+                path: inner.root.clone(),
+                reason: "a policy acknowledgement belongs to an old physical session".to_owned(),
+            }
+            .fail();
+        }
         if let Some(existing) = inner
             .state
             .policy_acknowledgement_results
@@ -634,6 +861,19 @@ impl ControlStore {
     ) -> Result<u64> {
         let mut inner = self.lock()?;
         acknowledgement.validate()?;
+        if !node_session_matches_acknowledgement(
+            &inner.state,
+            &acknowledgement.node_id,
+            &acknowledgement.node_boot_id,
+            acknowledgement.label_epoch,
+        ) {
+            return ControlStoreSnafu {
+                path: inner.root.clone(),
+                reason: "an exception acknowledgement belongs to an old physical session"
+                    .to_owned(),
+            }
+            .fail();
+        }
         if inner
             .state
             .exception_acknowledgements
@@ -1103,51 +1343,30 @@ impl ControlStore {
         known_candidate_ids: &[String],
     ) -> Result<Option<ExceptionDeliveryCandidateV1>> {
         let inner = self.lock()?;
-        Ok(inner
-            .state
-            .exception_candidates
-            .values()
-            .filter(|candidate| {
-                let predecessor_ready = candidate.predecessor_candidate_content_id.as_ref().map_or(
-                    candidate.operation == ExceptionDeliveryOperationV1::Activate,
-                    |id| {
-                        inner
-                            .state
-                            .exception_rollout_states
-                            .get(&PolicyRolloutKeyV1 {
-                                candidate_content_id: id.clone(),
-                                node_id: node_id.to_owned(),
-                            })
-                            .is_some_and(|rollout| {
-                                rollout.state != crate::WorkloadProtectionExceptionStateV1::Pending
-                            })
-                    },
-                );
-                candidate.exact_target.node_id == node_id
-                    && !known_candidate_ids.contains(&candidate.candidate_content_id)
-                    && predecessor_ready
-                    && inner
-                        .state
-                        .exception_rollout_states
-                        .get(&PolicyRolloutKeyV1 {
-                            candidate_content_id: candidate.candidate_content_id.clone(),
-                            node_id: node_id.to_owned(),
-                        })
-                        .is_some_and(|rollout| {
-                            // A node receives each candidate until its first durable state ACK.
-                            rollout.state == crate::WorkloadProtectionExceptionStateV1::Pending
-                        })
-            })
-            // Deliver the oldest ready chain member before any later revocation.
-            .min_by_key(|candidate| {
-                (
-                    candidate.issued_utc_ns,
-                    candidate.distribution_sequence_epoch,
-                    candidate.distribution_sequence,
-                    candidate.candidate_content_id.as_str(),
-                )
-            })
-            .cloned())
+        Ok(next_exception_candidate(&inner.state, node_id, known_candidate_ids, None).cloned())
+    }
+
+    pub(crate) fn next_exception_candidate_for_session(
+        &self,
+        node_id: &str,
+        node_boot_id: &[u8],
+        label_epoch: u64,
+        known_candidate_ids: &[String],
+    ) -> Result<Option<ExceptionDeliveryCandidateV1>> {
+        let inner = self.lock()?;
+        let session = current_physical_epoch(&inner.state, node_id, node_boot_id, label_epoch)
+            .ok_or_else(|| {
+                ControlStoreSnafu {
+                    path: inner.root.clone(),
+                    reason: "exception inventory does not match the current physical session"
+                        .to_owned(),
+                }
+                .build()
+            })?;
+        Ok(
+            next_exception_candidate(&inner.state, node_id, known_candidate_ids, Some(&session))
+                .cloned(),
+        )
     }
 
     pub fn exception_candidate(
@@ -1343,70 +1562,33 @@ impl ControlStore {
         durable_bundle_digests: &[String],
     ) -> Result<Option<PolicyBundleV1>> {
         let inner = self.lock()?;
-        let mut active_by_profile = BTreeMap::<(&str, &str, &str), &PolicyBundleV1>::new();
-        for bundle in inner.state.bundles.values().filter(|bundle| {
-            bundle.candidate.exact_target.node_id == node_id
-                && durable_bundle_digests.contains(&bundle.bundle_digest)
-        }) {
-            let key = bundle_profile_key(bundle);
-            let replace = active_by_profile
-                .get(&key)
-                .is_none_or(|current| bundle_sequence(bundle) > bundle_sequence(current));
-            if replace {
-                active_by_profile.insert(key, bundle);
-            }
-        }
-        // A node reports one durable active bundle for each profile. That report owns chain progress.
-        Ok(inner
-            .state
-            .bundles
-            .values()
-            .filter_map(|bundle| {
-                if bundle.candidate.exact_target.node_id != node_id {
-                    return None;
+        Ok(next_policy_bundle(&inner.state, node_id, durable_bundle_digests, None).cloned())
+    }
+
+    pub(crate) fn next_bundle_for_node_session(
+        &self,
+        node_id: &str,
+        node_boot_id: &[u8],
+        label_epoch: u64,
+        durable_bundle_digests: &[String],
+    ) -> Result<Option<PolicyBundleV1>> {
+        let inner = self.lock()?;
+        let session = current_physical_epoch(&inner.state, node_id, node_boot_id, label_epoch)
+            .ok_or_else(|| {
+                ControlStoreSnafu {
+                    path: inner.root.clone(),
+                    reason: "policy inventory does not match the current physical session"
+                        .to_owned(),
                 }
-                if bundle_is_in_closed_terminal_chain(&inner.state, bundle) {
-                    return None;
-                }
-                let rollout = inner.state.rollout_states.get(&PolicyRolloutKeyV1 {
-                    candidate_content_id: bundle.candidate.candidate_content_id.clone(),
-                    node_id: node_id.to_owned(),
-                })?;
-                let eligible = match rollout.state {
-                    crate::PolicyRolloutStatusV1::Rejected
-                    | crate::PolicyRolloutStatusV1::Stale => false,
-                    crate::PolicyRolloutStatusV1::Active => {
-                        !durable_bundle_digests.contains(&bundle.bundle_digest)
-                    }
-                    crate::PolicyRolloutStatusV1::Pending
-                    | crate::PolicyRolloutStatusV1::Delivered
-                    | crate::PolicyRolloutStatusV1::Staged
-                    | crate::PolicyRolloutStatusV1::Unknown => true,
-                };
-                let active_candidate = active_by_profile
-                    .get(&bundle_profile_key(bundle))
-                    .map(|active| active.candidate.candidate_content_id.as_str());
-                let predecessor_ready = match bundle.candidate.operation {
-                    crate::PolicyDeliveryOperationV1::Activate => {
-                        active_candidate.is_none()
-                            && bundle.candidate.predecessor_candidate_content_id.is_none()
-                    }
-                    crate::PolicyDeliveryOperationV1::Replace
-                    | crate::PolicyDeliveryOperationV1::RetireToRestrictiveTerminal => {
-                        bundle.candidate.predecessor_candidate_content_id.as_deref()
-                            == active_candidate
-                    }
-                };
-                (eligible && predecessor_ready).then_some(bundle)
-            })
-            .min_by_key(|bundle| {
-                (
-                    bundle.candidate.distribution_sequence_epoch,
-                    bundle.candidate.distribution_sequence,
-                    bundle.candidate.candidate_content_id.as_str(),
-                )
-            })
-            .cloned())
+                .build()
+            })?;
+        Ok(next_policy_bundle(
+            &inner.state,
+            node_id,
+            durable_bundle_digests,
+            Some(&session),
+        )
+        .cloned())
     }
 
     pub fn candidate_is_current_or_unsettled_predecessor(
@@ -1433,6 +1615,30 @@ impl ControlStore {
             .bundles
             .get(candidate_content_id)
             .filter(|bundle| bundle.candidate.exact_target.node_id == node_id)
+            .cloned())
+    }
+
+    pub(crate) fn bundle_for_candidate_for_session(
+        &self,
+        node_id: &str,
+        node_boot_id: &[u8],
+        label_epoch: u64,
+        candidate_content_id: &str,
+    ) -> Result<Option<PolicyBundleV1>> {
+        let inner = self.lock()?;
+        let session = current_physical_epoch(&inner.state, node_id, node_boot_id, label_epoch)
+            .ok_or_else(|| {
+                ControlStoreSnafu {
+                    path: inner.root.clone(),
+                    reason: "policy fetch does not match the current physical session".to_owned(),
+                }
+                .build()
+            })?;
+        Ok(inner
+            .state
+            .bundles
+            .get(candidate_content_id)
+            .filter(|bundle| policy_target_matches_epoch(&bundle.candidate.exact_target, &session))
             .cloned())
     }
 
@@ -1511,6 +1717,157 @@ impl ControlStore {
     }
 }
 
+fn current_physical_epoch(
+    state: &ControlStoreState,
+    node_id: &str,
+    node_boot_id: &[u8],
+    label_epoch: u64,
+) -> Option<NodePhysicalEpochV1> {
+    state.node_sessions.get(node_id).and_then(|session| {
+        (session.node_boot_id == node_boot_id && session.label_epoch == label_epoch)
+            .then(|| session.physical_epoch())
+    })
+}
+
+fn node_session_matches_acknowledgement(
+    state: &ControlStoreState,
+    node_id: &str,
+    node_boot_id: &[u8],
+    label_epoch: u64,
+) -> bool {
+    state.node_sessions.get(node_id).is_none_or(|session| {
+        session.node_boot_id == node_boot_id && session.label_epoch == label_epoch
+    })
+}
+
+fn next_policy_bundle<'a>(
+    state: &'a ControlStoreState,
+    node_id: &str,
+    durable_bundle_digests: &[String],
+    session: Option<&NodePhysicalEpochV1>,
+) -> Option<&'a PolicyBundleV1> {
+    let matches_session = |bundle: &PolicyBundleV1| {
+        session.is_none_or(|session| {
+            policy_target_matches_epoch(&bundle.candidate.exact_target, session)
+        })
+    };
+    let mut active_by_profile = BTreeMap::<(&str, &str, &str), &PolicyBundleV1>::new();
+    for bundle in state.bundles.values().filter(|bundle| {
+        bundle.candidate.exact_target.node_id == node_id
+            && matches_session(bundle)
+            && durable_bundle_digests.contains(&bundle.bundle_digest)
+    }) {
+        let key = bundle_profile_key(bundle);
+        let replace = active_by_profile
+            .get(&key)
+            .is_none_or(|current| bundle_sequence(bundle) > bundle_sequence(current));
+        if replace {
+            active_by_profile.insert(key, bundle);
+        }
+    }
+    // Only the current physical epoch can use node-reported digests as chain progress.
+    state
+        .bundles
+        .values()
+        .filter_map(|bundle| {
+            if bundle.candidate.exact_target.node_id != node_id
+                || !matches_session(bundle)
+                || bundle_is_in_closed_terminal_chain(state, bundle)
+            {
+                return None;
+            }
+            let rollout = state.rollout_states.get(&PolicyRolloutKeyV1 {
+                candidate_content_id: bundle.candidate.candidate_content_id.clone(),
+                node_id: node_id.to_owned(),
+            })?;
+            let eligible = match rollout.state {
+                crate::PolicyRolloutStatusV1::Rejected | crate::PolicyRolloutStatusV1::Stale => {
+                    false
+                }
+                crate::PolicyRolloutStatusV1::Active => {
+                    !durable_bundle_digests.contains(&bundle.bundle_digest)
+                }
+                crate::PolicyRolloutStatusV1::Pending
+                | crate::PolicyRolloutStatusV1::Delivered
+                | crate::PolicyRolloutStatusV1::Staged
+                | crate::PolicyRolloutStatusV1::Unknown => true,
+            };
+            let active_candidate = active_by_profile
+                .get(&bundle_profile_key(bundle))
+                .map(|active| active.candidate.candidate_content_id.as_str());
+            let predecessor_ready = match bundle.candidate.operation {
+                crate::PolicyDeliveryOperationV1::Activate => {
+                    active_candidate.is_none()
+                        && bundle.candidate.predecessor_candidate_content_id.is_none()
+                }
+                crate::PolicyDeliveryOperationV1::Replace
+                | crate::PolicyDeliveryOperationV1::RetireToRestrictiveTerminal => {
+                    bundle.candidate.predecessor_candidate_content_id.as_deref() == active_candidate
+                }
+            };
+            (eligible && predecessor_ready).then_some(bundle)
+        })
+        .min_by_key(|bundle| {
+            (
+                bundle.candidate.distribution_sequence_epoch,
+                bundle.candidate.distribution_sequence,
+                bundle.candidate.candidate_content_id.as_str(),
+            )
+        })
+}
+
+fn next_exception_candidate<'a>(
+    state: &'a ControlStoreState,
+    node_id: &str,
+    known_candidate_ids: &[String],
+    session: Option<&NodePhysicalEpochV1>,
+) -> Option<&'a ExceptionDeliveryCandidateV1> {
+    state
+        .exception_candidates
+        .values()
+        .filter(|candidate| {
+            let predecessor_ready = candidate.predecessor_candidate_content_id.as_ref().map_or(
+                candidate.operation == ExceptionDeliveryOperationV1::Activate,
+                |id| {
+                    state
+                        .exception_rollout_states
+                        .get(&PolicyRolloutKeyV1 {
+                            candidate_content_id: id.clone(),
+                            node_id: node_id.to_owned(),
+                        })
+                        .is_some_and(|rollout| {
+                            rollout.state != crate::WorkloadProtectionExceptionStateV1::Pending
+                        })
+                },
+            );
+            candidate.exact_target.node_id == node_id
+                && session.is_none_or(|session| {
+                    workload_target_matches_epoch(&candidate.exact_target, session)
+                })
+                && !known_candidate_ids.contains(&candidate.candidate_content_id)
+                && predecessor_ready
+                && state
+                    .exception_rollout_states
+                    .get(&PolicyRolloutKeyV1 {
+                        candidate_content_id: candidate.candidate_content_id.clone(),
+                        node_id: node_id.to_owned(),
+                    })
+                    .is_some_and(|rollout| {
+                        // A node receives each candidate until its first durable state ACK.
+                        rollout.state == crate::WorkloadProtectionExceptionStateV1::Pending
+                    })
+        })
+        // Deliver the oldest ready chain member before any later revocation.
+        .min_by_key(|candidate| {
+            (
+                candidate.issued_utc_ns,
+                candidate.distribution_sequence_epoch,
+                candidate.distribution_sequence,
+                candidate.candidate_content_id.as_str(),
+            )
+        })
+}
+
 impl From<&PolicySourceRevisionV1> for PolicyObjectKeyV1 {
     fn from(revision: &PolicySourceRevisionV1) -> Self {
         Self {
@@ -1584,6 +1941,256 @@ fn checked_store_increment(value: u64, path: &Path, reason: &str) -> Result<u64>
         }
         .build()
     })
+}
+
+fn node_session_advance(
+    state: &ControlStoreState,
+    session: DurableNodeSessionV1,
+    observed_utc_ns: i64,
+    path: &Path,
+) -> Result<NodeSessionAdvanceTransactionV1> {
+    let policy_rollout_states =
+        stale_policy_rollouts_for_session(state, &session.physical_epoch(), observed_utc_ns, path)?;
+    let exception_settlements =
+        settle_exceptions_for_session(state, &session.physical_epoch(), observed_utc_ns, path)?;
+    let advance = NodeSessionAdvanceTransactionV1 {
+        session,
+        policy_rollout_states,
+        exception_settlements,
+        observed_utc_ns,
+    };
+    validate_node_session_advance(state, &advance, path)?;
+    Ok(advance)
+}
+
+fn validate_node_session_advance(
+    state: &ControlStoreState,
+    advance: &NodeSessionAdvanceTransactionV1,
+    path: &Path,
+) -> Result<()> {
+    let session = &advance.session;
+    let previous = state.node_sessions.get(&session.node_id);
+    let identity_is_valid = crate::node_id_is_valid(&session.node_id)
+        && session.node_boot_id.len() == 16
+        && session.node_boot_id.iter().any(|byte| *byte != 0)
+        && session.label_epoch > 0
+        && session.kubernetes_node_uid.is_none()
+        && session
+            .kubernetes_node_name
+            .as_deref()
+            .is_none_or(kubernetes_node_name_is_valid)
+        && session.startup_absence_proof_digest
+            == startup_absence_proof_digest(
+                &session.node_id,
+                &session.node_boot_id,
+                session.label_epoch,
+                true,
+                true,
+            );
+    // A higher label is the bounded anti-rollback counter for every physical reset.
+    let epoch_is_advanced = previous.is_none_or(|previous| {
+        session.label_epoch > previous.label_epoch
+            && previous.kubernetes_node_name == session.kubernetes_node_name
+    });
+    let expected_policy = stale_policy_rollouts_for_session(
+        state,
+        &session.physical_epoch(),
+        advance.observed_utc_ns,
+        path,
+    )?;
+    let expected_exceptions = settle_exceptions_for_session(
+        state,
+        &session.physical_epoch(),
+        advance.observed_utc_ns,
+        path,
+    )?;
+    if !identity_is_valid
+        || !epoch_is_advanced
+        || advance.observed_utc_ns <= 0
+        || advance.policy_rollout_states != expected_policy
+        || advance.exception_settlements != expected_exceptions
+    {
+        return ControlStoreSnafu {
+            path: path.to_owned(),
+            reason: "a node-session advance is not exact, monotonic, or absence bound".to_owned(),
+        }
+        .fail();
+    }
+    Ok(())
+}
+
+fn stale_policy_rollouts_for_session(
+    state: &ControlStoreState,
+    session: &NodePhysicalEpochV1,
+    observed_utc_ns: i64,
+    path: &Path,
+) -> Result<Vec<PolicyRolloutStateV1>> {
+    state
+        .rollout_states
+        .iter()
+        .filter_map(|(key, rollout)| {
+            let bundle = state.bundles.get(&key.candidate_content_id)?;
+            (key.node_id == session.node_id
+                && !policy_target_matches_epoch(&bundle.candidate.exact_target, session)
+                && !matches!(
+                    rollout.state,
+                    crate::PolicyRolloutStatusV1::Rejected | crate::PolicyRolloutStatusV1::Stale
+                ))
+            .then_some((rollout, key))
+        })
+        .map(|(rollout, key)| {
+            Ok(PolicyRolloutStateV1 {
+                state: crate::PolicyRolloutStatusV1::Stale,
+                transition_version: rollout.transition_version.checked_add(1).ok_or_else(|| {
+                    ControlStoreSnafu {
+                        path: path.to_owned(),
+                        reason: format!(
+                            "policy rollout {} exhausted its session transition",
+                            key.candidate_content_id
+                        ),
+                    }
+                    .build()
+                })?,
+                updated_utc_ns: observed_utc_ns,
+                ..rollout.clone()
+            })
+        })
+        .collect()
+}
+
+fn settle_exceptions_for_session(
+    state: &ControlStoreState,
+    session: &NodePhysicalEpochV1,
+    observed_utc_ns: i64,
+    path: &Path,
+) -> Result<Vec<ExceptionSessionSettlementV1>> {
+    state
+        .exception_rollout_states
+        .iter()
+        .filter_map(|(key, rollout)| {
+            let candidate = state.exception_candidates.get(&key.candidate_content_id)?;
+            (key.node_id == session.node_id
+                && !workload_target_matches_epoch(&candidate.exact_target, session)
+                && matches!(
+                    rollout.state,
+                    crate::WorkloadProtectionExceptionStateV1::Pending
+                        | crate::WorkloadProtectionExceptionStateV1::Active
+                ))
+            .then_some((rollout, candidate, key))
+        })
+        .map(|(rollout, candidate, key)| {
+            let source_requests_deletion = state
+                .exception_source_revisions
+                .get(&candidate.exception_source_revision_id)
+                .is_some_and(|source| source.state == ExceptionSourceStateV1::DeletionRequested);
+            let (settled_state, consumed_uses) = if candidate.operation
+                == ExceptionDeliveryOperationV1::Revoke
+                || source_requests_deletion
+            {
+                (
+                    crate::WorkloadProtectionExceptionStateV1::Revoked,
+                    state.exception_consumed_uses.get(key).copied().unwrap_or(0),
+                )
+            } else if candidate.valid_until_utc_ns <= observed_utc_ns {
+                (
+                    crate::WorkloadProtectionExceptionStateV1::Expired,
+                    state.exception_consumed_uses.get(key).copied().unwrap_or(0),
+                )
+            } else {
+                // Authority can have consumed its complete budget before the absence proof.
+                (
+                    crate::WorkloadProtectionExceptionStateV1::Consumed,
+                    candidate.maximum_uses,
+                )
+            };
+            Ok(ExceptionSessionSettlementV1 {
+                rollout_state: ExceptionRolloutStateV1 {
+                    state: settled_state,
+                    transition_version: rollout.transition_version.checked_add(1).ok_or_else(
+                        || {
+                            ControlStoreSnafu {
+                                path: path.to_owned(),
+                                reason: format!(
+                                    "exception rollout {} exhausted its session transition",
+                                    key.candidate_content_id
+                                ),
+                            }
+                            .build()
+                        },
+                    )?,
+                    updated_utc_ns: observed_utc_ns,
+                    ..rollout.clone()
+                },
+                consumed_uses,
+            })
+        })
+        .collect()
+}
+
+fn policy_target_matches_epoch(
+    target: &crate::PolicyTargetV1,
+    session: &NodePhysicalEpochV1,
+) -> bool {
+    target.node_id == session.node_id
+        && !target.workload_targets.is_empty()
+        && target
+            .workload_targets
+            .iter()
+            .all(|target| workload_target_matches_epoch(target, session))
+}
+
+fn workload_target_matches_epoch(
+    target: &crate::WorkloadTargetFactV1,
+    session: &NodePhysicalEpochV1,
+) -> bool {
+    target.node_id == session.node_id
+        && target.kubernetes.as_ref().is_some_and(|identity| {
+            identity.node_boot_id == hex::encode(&session.node_boot_id)
+                && identity.label_epoch == session.label_epoch
+        })
+}
+
+fn validate_kubernetes_node_binding(
+    state: &ControlStoreState,
+    binding: &KubernetesNodeBindingTransactionV1,
+    path: &Path,
+) -> Result<()> {
+    let current = state.node_sessions.get(&binding.physical_epoch.node_id);
+    let valid = current.is_some_and(|session| {
+        session.physical_epoch() == binding.physical_epoch
+            && session.kubernetes_node_name.as_deref() == Some(&binding.kubernetes_node_name)
+            && session.kubernetes_node_uid.as_deref() != Some(&binding.kubernetes_node_uid)
+    }) && kubernetes_node_name_is_valid(&binding.kubernetes_node_name)
+        && uuid::Uuid::parse_str(&binding.kubernetes_node_uid)
+            .is_ok_and(|uid| uid.hyphenated().to_string() == binding.kubernetes_node_uid);
+    if !valid {
+        return ControlStoreSnafu {
+            path: path.to_owned(),
+            reason: "a Kubernetes Node binding is not exact or current".to_owned(),
+        }
+        .fail();
+    }
+    Ok(())
+}
+
+pub(crate) fn kubernetes_node_name_is_valid(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 253
+        && value.split('.').all(|label| {
+            !label.is_empty()
+                && label.len() <= 63
+                && label
+                    .bytes()
+                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+                && label
+                    .as_bytes()
+                    .first()
+                    .is_some_and(u8::is_ascii_alphanumeric)
+                && label
+                    .as_bytes()
+                    .last()
+                    .is_some_and(u8::is_ascii_alphanumeric)
+        })
 }
 
 fn validate_source_acceptance(
@@ -1722,6 +2329,47 @@ fn apply_transaction(
 ) -> Result<()> {
     // Use the same transition code before a write and during startup replay.
     match transaction {
+        ControlTransactionV1::NodeSessionAdvanced { advance } => {
+            validate_node_session_advance(state, advance, path)?;
+            for rollout in &advance.policy_rollout_states {
+                state.rollout_states.insert(
+                    PolicyRolloutKeyV1 {
+                        candidate_content_id: rollout.desired_candidate_content_id.clone(),
+                        node_id: rollout.target.node_id.clone(),
+                    },
+                    rollout.clone(),
+                );
+            }
+            for settlement in &advance.exception_settlements {
+                let key = PolicyRolloutKeyV1 {
+                    candidate_content_id: settlement.rollout_state.candidate_content_id.clone(),
+                    node_id: settlement.rollout_state.node_id.clone(),
+                };
+                state
+                    .exception_rollout_states
+                    .insert(key.clone(), settlement.rollout_state.clone());
+                state
+                    .exception_consumed_uses
+                    .insert(key, settlement.consumed_uses);
+            }
+            state
+                .node_sessions
+                .insert(advance.session.node_id.clone(), advance.session.clone());
+        }
+        ControlTransactionV1::KubernetesNodeBound { binding } => {
+            validate_kubernetes_node_binding(state, binding, path)?;
+            let session = state
+                .node_sessions
+                .get_mut(&binding.physical_epoch.node_id)
+                .ok_or_else(|| {
+                    ControlStoreSnafu {
+                        path: path.to_owned(),
+                        reason: "a validated Kubernetes Node binding lost its session".to_owned(),
+                    }
+                    .build()
+                })?;
+            session.kubernetes_node_uid = Some(binding.kubernetes_node_uid.clone());
+        }
         ControlTransactionV1::SourceAccepted {
             source_revision,
             policy_document,
@@ -1942,6 +2590,15 @@ fn apply_transaction(
                 },
                 result.rollout_state.clone(),
             );
+            let key = PolicyRolloutKeyV1 {
+                candidate_content_id: result.rollout_state.candidate_content_id.clone(),
+                node_id: result.rollout_state.node_id.clone(),
+            };
+            state
+                .exception_consumed_uses
+                .entry(key)
+                .and_modify(|uses| *uses = (*uses).max(result.acknowledgement.consumed_uses))
+                .or_insert(result.acknowledgement.consumed_uses);
         }
         ControlTransactionV1::EvidencePending { pending } => {
             validate_evidence_identity(&pending.identity, path)?;
@@ -2581,6 +3238,12 @@ fn validate_policy_acknowledgement(
         });
     let terminal_closure_is_valid = !result.terminal_chain_closure_authorized
         || terminal_chain_closure_can_be_authorized(state, acknowledgement);
+    let current_session_is_valid = node_session_matches_acknowledgement(
+        state,
+        &acknowledgement.node_id,
+        &acknowledgement.node_boot_id,
+        acknowledgement.label_epoch,
+    );
     let candidate_is_current = candidate_is_current_or_unsettled_predecessor(
         state,
         &acknowledgement.node_id,
@@ -2590,6 +3253,7 @@ fn validate_policy_acknowledgement(
         || !rollout_is_valid
         || !acknowledgement_is_bound
         || !terminal_closure_is_valid
+        || !current_session_is_valid
         || !candidate_is_current
     {
         return ControlStoreSnafu {
@@ -2685,7 +3349,25 @@ fn validate_exception_acknowledgement(
             == Some(acknowledgement.acknowledgement_content_id.as_str())
         && rollout.transition_version == acknowledgement.transition_version
         && rollout.updated_utc_ns == acknowledgement.observed_utc_ns;
-    if !candidate_is_valid || !rollout_is_valid || !transition_is_valid {
+    let current_session_is_valid = node_session_matches_acknowledgement(
+        state,
+        &acknowledgement.node_id,
+        &acknowledgement.node_boot_id,
+        acknowledgement.label_epoch,
+    );
+    let consumed_uses_are_monotonic = state
+        .exception_consumed_uses
+        .get(&PolicyRolloutKeyV1 {
+            candidate_content_id: acknowledgement.candidate_content_id.clone(),
+            node_id: acknowledgement.node_id.clone(),
+        })
+        .is_none_or(|consumed| acknowledgement.consumed_uses >= *consumed);
+    if !candidate_is_valid
+        || !rollout_is_valid
+        || !transition_is_valid
+        || !current_session_is_valid
+        || !consumed_uses_are_monotonic
+    {
         return ControlStoreSnafu {
             path: path.to_owned(),
             reason:
@@ -3362,18 +4044,23 @@ fn write_commit(path: &Path, commit: &ControlCommitV1) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
     use std::path::Path;
 
     use ed25519_dalek::SigningKey;
     use snafu::ResultExt as _;
 
     use crate::{
-        canonical_policy_spec_digest, PolicyActivationAcknowledgementV1, PolicyActivationStateV1,
-        PolicyBundleV1, PolicyCompiler, PolicyDeliveryCandidateV1, PolicyDeliveryOperationV1,
-        PolicyDocumentV1, PolicyRolloutStateV1, PolicyRolloutStatusV1, PolicySourceRevisionV1,
-        PolicySourceStateV1, PolicyTargetSnapshotV1, PolicyTargetV1, ProfileCandidateArtifactV1,
-        ProfileSealRequestV1, RegistryDigestsV1,
+        canonical_policy_spec_digest, workload_target_fact_digest, ContainerKindV1,
+        ExceptionDeliveryCandidateV1, ExceptionDeliveryOperationV1, ExceptionRolloutStateV1,
+        ExceptionSourceRevisionV1, ExceptionSourceStateV1, KubernetesWorkloadIdentityV1,
+        PolicyActivationAcknowledgementV1, PolicyActivationStateV1, PolicyBundleV1, PolicyCompiler,
+        PolicyDeliveryCandidateV1, PolicyDeliveryOperationV1, PolicyDocumentV1,
+        PolicyRolloutStateV1, PolicyRolloutStatusV1, PolicySourceRevisionV1, PolicySourceStateV1,
+        PolicyTargetSnapshotV1, PolicyTargetV1, ProfileCandidateArtifactV1, ProfileSealRequestV1,
+        RegistryDigestsV1, WorkloadProtectionExceptionStateV1, WorkloadTargetFactV1,
     };
+    use tempfile::TempDir;
 
     fn signed_artifact(
         document: &PolicyDocumentV1,
@@ -3436,6 +4123,240 @@ mod tests {
             workload_binding_generation_digests: vec![digest.to_string().repeat(64)],
             workload_targets: Vec::new(),
         }
+    }
+
+    fn kubernetes_target(
+        source: &PolicySourceRevisionV1,
+        document: &PolicyDocumentV1,
+        kubernetes_node_uid: &str,
+        boot_byte: u8,
+        label_epoch: u64,
+    ) -> crate::Result<PolicyTargetV1> {
+        let mut workload = WorkloadTargetFactV1 {
+            node_id: "node-a".to_owned(),
+            workload_binding_generation_digest: String::new(),
+            execution_set_id: "50000000-0000-4000-8000-000000000001".to_owned(),
+            cluster_uid: source.cluster_uid.clone(),
+            namespace_uid: source.namespace_uid.clone(),
+            controller_uid: "60000000-0000-4000-8000-000000000001".to_owned(),
+            service_account_uid: "70000000-0000-4000-8000-000000000001".to_owned(),
+            pod_uid: "80000000-0000-4000-8000-000000000001".to_owned(),
+            container_id: "containerd://converter".to_owned(),
+            container_name: "converter".to_owned(),
+            container_kind: ContainerKindV1::Application,
+            image_digest: format!("sha256:{}", "a".repeat(64)),
+            pod_labels: BTreeMap::from([("app".to_owned(), "converter".to_owned())]),
+            kubernetes: Some(KubernetesWorkloadIdentityV1 {
+                namespace_name: source.namespace_name.clone(),
+                pod_name: "converter-pod".to_owned(),
+                profile_id: document.metadata.profile_id.clone(),
+                policy_source_revision_id: source.policy_source_revision_id.clone(),
+                binding_id: "90000000-0000-4000-8000-000000000001".to_owned(),
+                protected_scope_id: "a0000000-0000-4000-8000-000000000001".to_owned(),
+                workload_selector_id: "b0000000-0000-4000-8000-000000000001".to_owned(),
+                kubernetes_node_name: "worker-a.example".to_owned(),
+                kubernetes_node_uid: kubernetes_node_uid.to_owned(),
+                node_boot_id: hex::encode([boot_byte; 16]),
+                label_epoch,
+            }),
+        };
+        workload.workload_binding_generation_digest = workload_target_fact_digest(&workload)?;
+        Ok(PolicyTargetV1 {
+            tenant_id: source.tenant_id.clone(),
+            cluster_uid: source.cluster_uid.clone(),
+            node_id: workload.node_id.clone(),
+            workload_binding_generation_digests: vec![workload
+                .workload_binding_generation_digest
+                .clone()],
+            workload_targets: vec![workload],
+        })
+    }
+
+    fn durable_session(boot_byte: u8, label_epoch: u64) -> super::DurableNodeSessionV1 {
+        super::DurableNodeSessionV1 {
+            node_id: "node-a".to_owned(),
+            node_boot_id: vec![boot_byte; 16],
+            label_epoch,
+            kubernetes_node_name: Some("worker-a.example".to_owned()),
+            kubernetes_node_uid: None,
+            startup_absence_proof_digest: super::startup_absence_proof_digest(
+                "node-a",
+                &[boot_byte; 16],
+                label_epoch,
+                true,
+                true,
+            ),
+        }
+    }
+
+    fn exception_candidate(
+        candidate_id: char,
+        source_id: char,
+        operation: ExceptionDeliveryOperationV1,
+        valid_until_utc_ns: i64,
+        target: &WorkloadTargetFactV1,
+    ) -> ExceptionDeliveryCandidateV1 {
+        ExceptionDeliveryCandidateV1 {
+            schema_version: 1,
+            tenant_id: "10000000-0000-4000-8000-000000000001".to_owned(),
+            exception_source_revision_id: source_id.to_string().repeat(64),
+            base_policy_source_revision_id: "8".repeat(64),
+            base_candidate_content_id: "7".repeat(64),
+            profile_id: "40000000-0000-4000-8000-000000000001".to_owned(),
+            profile_generation_ref_id: 1,
+            grant_id: "temporary-file-access".to_owned(),
+            exception_instance_id: "c0000000-0000-4000-8000-000000000001".to_owned(),
+            exact_target: target.clone(),
+            operation,
+            maximum_uses: 5,
+            valid_until_utc_ns,
+            predecessor_candidate_content_id: None,
+            distribution_sequence_epoch: 1,
+            distribution_sequence: u64::from(candidate_id as u32),
+            issued_utc_ns: 1,
+            expires_utc_ns: i64::MAX,
+            signing_key_id: "test-key".to_owned(),
+            candidate_content_id: candidate_id.to_string().repeat(64),
+            signature: vec![1; 64],
+        }
+    }
+
+    fn exception_session_advance_fixture() -> crate::Result<(
+        super::ControlStoreState,
+        super::NodeSessionAdvanceTransactionV1,
+        [String; 3],
+    )> {
+        let (mut state, _reconciliation) = target_set_validation_fixture()?;
+        state
+            .node_sessions
+            .insert("node-a".to_owned(), durable_session(1, 1));
+        let source = state
+            .source_revisions
+            .values()
+            .next()
+            .cloned()
+            .ok_or_else(|| {
+                crate::error::ControlStoreSnafu {
+                    path: Path::new("exception-session").to_owned(),
+                    reason: "the exception session fixture has no policy source".to_owned(),
+                }
+                .build()
+            })?;
+        let document = state
+            .policy_documents
+            .values()
+            .next()
+            .cloned()
+            .ok_or_else(|| {
+                crate::error::ControlStoreSnafu {
+                    path: Path::new("exception-session").to_owned(),
+                    reason: "the exception session fixture has no policy document".to_owned(),
+                }
+                .build()
+            })?;
+        let target = kubernetes_target(
+            &source,
+            &document,
+            "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+            1,
+            1,
+        )?
+        .workload_targets
+        .into_iter()
+        .next()
+        .ok_or_else(|| {
+            crate::error::ControlStoreSnafu {
+                path: Path::new("exception-session").to_owned(),
+                reason: "the exception session fixture has no workload target".to_owned(),
+            }
+            .build()
+        })?;
+        let accepted_source_id = "c".repeat(64);
+        let deletion_source_id = "d".repeat(64);
+        for (id, source_state) in [
+            (&accepted_source_id, ExceptionSourceStateV1::Accepted),
+            (
+                &deletion_source_id,
+                ExceptionSourceStateV1::DeletionRequested,
+            ),
+        ] {
+            state.exception_source_revisions.insert(
+                id.clone(),
+                ExceptionSourceRevisionV1 {
+                    schema_version: 1,
+                    tenant_id: source.tenant_id.clone(),
+                    cluster_uid: source.cluster_uid.clone(),
+                    namespace_uid: source.namespace_uid.clone(),
+                    object_uid: "c0000000-0000-4000-8000-000000000001".to_owned(),
+                    namespace_name: source.namespace_name.clone(),
+                    object_name: "temporary-file-access".to_owned(),
+                    api_version: crate::POLICY_API_VERSION.to_owned(),
+                    kind: crate::EXCEPTION_KIND.to_owned(),
+                    object_generation: 1,
+                    opaque_resource_version: vec![1],
+                    canonical_spec_digest: "1".repeat(64),
+                    base_policy_source_revision_id: source.policy_source_revision_id.clone(),
+                    grant_id: "temporary-file-access".to_owned(),
+                    requested_duration_ns: 100,
+                    requested_uses: 5,
+                    state: source_state,
+                    exception_source_revision_id: id.clone(),
+                },
+            );
+        }
+        let candidates = [
+            exception_candidate(
+                'e',
+                'c',
+                ExceptionDeliveryOperationV1::Activate,
+                101,
+                &target,
+            ),
+            exception_candidate(
+                'f',
+                'c',
+                ExceptionDeliveryOperationV1::Activate,
+                100,
+                &target,
+            ),
+            exception_candidate('9', 'd', ExceptionDeliveryOperationV1::Revoke, 101, &target),
+        ];
+        let candidate_ids = candidates
+            .each_ref()
+            .map(|candidate| candidate.candidate_content_id.clone());
+        for (index, candidate) in candidates.into_iter().enumerate() {
+            let key = super::PolicyRolloutKeyV1 {
+                candidate_content_id: candidate.candidate_content_id.clone(),
+                node_id: candidate.exact_target.node_id.clone(),
+            };
+            state.exception_rollout_states.insert(
+                key.clone(),
+                ExceptionRolloutStateV1 {
+                    exception_source_revision_id: candidate.exception_source_revision_id.clone(),
+                    candidate_content_id: candidate.candidate_content_id.clone(),
+                    node_id: candidate.exact_target.node_id.clone(),
+                    state: if index == 0 {
+                        WorkloadProtectionExceptionStateV1::Active
+                    } else {
+                        WorkloadProtectionExceptionStateV1::Pending
+                    },
+                    latest_acknowledgement_content_id: None,
+                    transition_version: 1,
+                    updated_utc_ns: 1,
+                },
+            );
+            if index > 0 {
+                state
+                    .exception_consumed_uses
+                    .insert(key, u32::try_from(index).unwrap_or(u32::MAX));
+            }
+            state
+                .exception_candidates
+                .insert(candidate.candidate_content_id.clone(), candidate);
+        }
+        let advance =
+            super::node_session_advance(&state, durable_session(2, 2), 100, Path::new("advance"))?;
+        Ok((state, advance, candidate_ids))
     }
 
     fn rollout_transaction(
@@ -3713,6 +4634,347 @@ mod tests {
             Exception::Revoked,
             Exception::Active
         ));
+    }
+
+    #[test]
+    fn uid_rebind_preserves_the_chain_and_physical_reset_restarts_it() -> crate::Result<()> {
+        let directory = TempDir::new().map_err(|error| {
+            crate::error::ControlStoreSnafu {
+                path: Path::new("session-test").to_owned(),
+                reason: error.to_string(),
+            }
+            .build()
+        })?;
+        let store = super::ControlStore::open(directory.path())?;
+        let first_proof = super::startup_absence_proof_digest("node-a", &[1; 16], 1, true, true);
+        store.register_node_physical_session(
+            "node-a",
+            &[1; 16],
+            1,
+            Some("worker-a.example"),
+            &first_proof,
+            true,
+            true,
+            1,
+        )?;
+        store.bind_kubernetes_node_session(
+            "node-a",
+            &[1; 16],
+            1,
+            "worker-a.example",
+            "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        )?;
+
+        let document = PolicyDocumentV1::parse(
+            Path::new("policy-v1.yaml"),
+            include_bytes!("../tests/fixtures/policy-v1.yaml"),
+        )?;
+        let source = source_revision(&document, PolicySourceStateV1::Accepted, 1, '8')?;
+        let artifact = signed_artifact(&document, 1)?;
+        store.accept_compiled_source_revision(
+            source.clone(),
+            document.clone(),
+            artifact.clone(),
+        )?;
+        let signing_key = SigningKey::from_bytes(&[7; 32]);
+        let initial = rollout_transaction(
+            &source,
+            &artifact,
+            vec![(
+                kubernetes_target(
+                    &source,
+                    &document,
+                    "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+                    1,
+                    1,
+                )?,
+                None,
+            )],
+            PolicyDeliveryOperationV1::Activate,
+            document.rollout.rollout_generation,
+            1,
+            &signing_key,
+        )?;
+        let initial_bundle = initial.bundles[0].clone();
+        let initial_rollout = initial.rollout_states[0].clone();
+        store.create_rollout(
+            initial.target_snapshot,
+            initial.bundles,
+            initial.rollout_states,
+        )?;
+        let initial_ack =
+            active_acknowledgement_transaction(&initial_bundle, &initial_rollout, false)?;
+        store.acknowledge_policy(
+            initial_ack.acknowledgement.clone(),
+            initial_ack.rollout_state.clone(),
+        )?;
+
+        store.bind_kubernetes_node_session(
+            "node-a",
+            &[1; 16],
+            1,
+            "worker-a.example",
+            "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+        )?;
+        let rebound = rollout_transaction(
+            &source,
+            &artifact,
+            vec![(
+                kubernetes_target(
+                    &source,
+                    &document,
+                    "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+                    1,
+                    1,
+                )?,
+                Some(initial_bundle.candidate.candidate_content_id.clone()),
+            )],
+            PolicyDeliveryOperationV1::Replace,
+            document.rollout.rollout_generation,
+            2,
+            &signing_key,
+        )?;
+        let rebound_bundle = rebound.bundles[0].clone();
+        store.create_rollout(
+            rebound.target_snapshot,
+            rebound.bundles,
+            rebound.rollout_states,
+        )?;
+        assert_eq!(
+            rebound_bundle
+                .candidate
+                .predecessor_candidate_content_id
+                .as_deref(),
+            Some(initial_bundle.candidate.candidate_content_id.as_str())
+        );
+        // A Kubernetes UID change does not change the physical enforcement epoch.
+        assert!(store
+            .acknowledge_policy(
+                initial_ack.acknowledgement.clone(),
+                initial_ack.rollout_state.clone(),
+            )
+            .is_ok());
+
+        let reset_proof = super::startup_absence_proof_digest("node-a", &[2; 16], 2, true, true);
+        store.register_node_physical_session(
+            "node-a",
+            &[2; 16],
+            2,
+            Some("worker-a.example"),
+            &reset_proof,
+            true,
+            true,
+            10,
+        )?;
+        for candidate_id in [
+            &initial_bundle.candidate.candidate_content_id,
+            &rebound_bundle.candidate.candidate_content_id,
+        ] {
+            assert_eq!(
+                store
+                    .rollout_state(candidate_id, "node-a")?
+                    .ok_or_else(|| crate::error::ControlStoreSnafu {
+                        path: Path::new("session-test").to_owned(),
+                        reason: "a stale rollout is absent".to_owned(),
+                    }
+                    .build())?
+                    .state,
+                PolicyRolloutStatusV1::Stale
+            );
+        }
+        assert!(store
+            .acknowledge_policy(initial_ack.acknowledgement, initial_ack.rollout_state)
+            .is_err());
+        assert!(store
+            .next_bundle_for_node_session(
+                "node-a",
+                &[2; 16],
+                2,
+                &[
+                    initial_bundle.bundle_digest.clone(),
+                    rebound_bundle.bundle_digest
+                ],
+            )?
+            .is_none());
+
+        store.bind_kubernetes_node_session(
+            "node-a",
+            &[2; 16],
+            2,
+            "worker-a.example",
+            "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+        )?;
+        let restarted = rollout_transaction(
+            &source,
+            &artifact,
+            vec![(
+                kubernetes_target(
+                    &source,
+                    &document,
+                    "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+                    2,
+                    2,
+                )?,
+                None,
+            )],
+            PolicyDeliveryOperationV1::Activate,
+            document.rollout.rollout_generation,
+            3,
+            &signing_key,
+        )?;
+        let restarted_bundle = restarted.bundles[0].clone();
+        store.create_rollout(
+            restarted.target_snapshot,
+            restarted.bundles,
+            restarted.rollout_states,
+        )?;
+        assert!(restarted_bundle
+            .candidate
+            .predecessor_candidate_content_id
+            .is_none());
+        assert_eq!(
+            store.next_bundle_for_node_session("node-a", &[2; 16], 2, &[])?,
+            Some(restarted_bundle.clone())
+        );
+        let committed = store.commit_index();
+        drop(store);
+
+        let replayed = super::ControlStore::open(directory.path())?;
+        assert_eq!(replayed.commit_index(), committed);
+        assert_eq!(
+            replayed.next_bundle_for_node_session("node-a", &[2; 16], 2, &[])?,
+            Some(restarted_bundle)
+        );
+        assert!(replayed
+            .next_bundle_for_node_session("node-a", &[1; 16], 1, &[])
+            .is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn physical_reset_settles_exception_authority_by_proven_terminal_reason() -> crate::Result<()> {
+        let (state, advance, candidate_ids) = exception_session_advance_fixture()?;
+        let settlements = advance
+            .exception_settlements
+            .iter()
+            .map(|settlement| {
+                (
+                    settlement.rollout_state.candidate_content_id.as_str(),
+                    (settlement.rollout_state.state, settlement.consumed_uses),
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+        assert_eq!(
+            settlements.get(candidate_ids[0].as_str()),
+            Some(&(WorkloadProtectionExceptionStateV1::Consumed, 5))
+        );
+        assert_eq!(
+            settlements.get(candidate_ids[1].as_str()),
+            Some(&(WorkloadProtectionExceptionStateV1::Expired, 1))
+        );
+        assert_eq!(
+            settlements.get(candidate_ids[2].as_str()),
+            Some(&(WorkloadProtectionExceptionStateV1::Revoked, 2))
+        );
+
+        let transaction = super::ControlTransactionV1::NodeSessionAdvanced {
+            advance: Box::new(advance),
+        };
+        let mut live = state.clone();
+        super::apply_transaction(&mut live, &transaction, Path::new("live-reset"))?;
+        let encoded = serde_json::to_vec(&transaction).context(crate::error::JsonSnafu {
+            path: Path::new("replayed-reset"),
+        })?;
+        let replayed_transaction =
+            serde_json::from_slice(&encoded).context(crate::error::JsonSnafu {
+                path: Path::new("replayed-reset"),
+            })?;
+        let mut replayed = state;
+        super::apply_transaction(
+            &mut replayed,
+            &replayed_transaction,
+            Path::new("replayed-reset"),
+        )?;
+        assert_eq!(live.node_sessions, replayed.node_sessions);
+        assert_eq!(
+            live.exception_rollout_states,
+            replayed.exception_rollout_states
+        );
+        assert_eq!(
+            live.exception_consumed_uses,
+            replayed.exception_consumed_uses
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn physical_reset_rejects_omitted_or_tampered_derived_settlements() -> crate::Result<()> {
+        let (state, advance, _candidate_ids) = exception_session_advance_fixture()?;
+
+        let mut omitted_policy = advance.clone();
+        omitted_policy.policy_rollout_states.clear();
+        assert!(super::apply_transaction(
+            &mut state.clone(),
+            &super::ControlTransactionV1::NodeSessionAdvanced {
+                advance: Box::new(omitted_policy),
+            },
+            Path::new("omitted-policy-session-settlement"),
+        )
+        .is_err());
+
+        let mut omitted_exception = advance.clone();
+        omitted_exception.exception_settlements.pop();
+        assert!(super::apply_transaction(
+            &mut state.clone(),
+            &super::ControlTransactionV1::NodeSessionAdvanced {
+                advance: Box::new(omitted_exception),
+            },
+            Path::new("omitted-exception-session-settlement"),
+        )
+        .is_err());
+
+        let mut refunded = advance.clone();
+        let consumed = refunded
+            .exception_settlements
+            .iter_mut()
+            .find(|settlement| {
+                settlement.rollout_state.state == WorkloadProtectionExceptionStateV1::Consumed
+            })
+            .ok_or_else(|| {
+                crate::error::ControlStoreSnafu {
+                    path: Path::new("refunded-session-settlement").to_owned(),
+                    reason: "the reset fixture has no consumed exception".to_owned(),
+                }
+                .build()
+            })?;
+        consumed.consumed_uses -= 1;
+        assert!(super::apply_transaction(
+            &mut state.clone(),
+            &super::ControlTransactionV1::NodeSessionAdvanced {
+                advance: Box::new(refunded),
+            },
+            Path::new("refunded-session-settlement"),
+        )
+        .is_err());
+
+        let mut wrong_epoch = advance;
+        wrong_epoch.session.label_epoch = 1;
+        wrong_epoch.session.startup_absence_proof_digest = super::startup_absence_proof_digest(
+            "node-a",
+            &wrong_epoch.session.node_boot_id,
+            1,
+            true,
+            true,
+        );
+        assert!(super::apply_transaction(
+            &mut state.clone(),
+            &super::ControlTransactionV1::NodeSessionAdvanced {
+                advance: Box::new(wrong_epoch),
+            },
+            Path::new("non-monotonic-session"),
+        )
+        .is_err());
+        Ok(())
     }
 
     #[test]

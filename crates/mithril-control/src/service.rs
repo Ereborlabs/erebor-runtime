@@ -92,7 +92,7 @@ struct ControlState {
 }
 
 struct NodeSession {
-    // The boot identity and connection nonce prevent a reconnect from inheriting this session.
+    // The connection nonce replaces streams but does not define a physical enforcement epoch.
     identity: StreamIdentity,
     kubernetes_node_name: Option<String>,
     kubernetes_node_uid: Option<String>,
@@ -180,8 +180,8 @@ impl ControlPlane {
             ),
             trust,
             state: Arc::new(Mutex::new(ControlState::default())),
-            evidence: Some(crate::EvidenceIntakeOwner::from_store(store)),
-            policy_store: None,
+            evidence: Some(crate::EvidenceIntakeOwner::from_store(store.clone())),
+            policy_store: Some(store),
             policy_rollout: None,
             policy_desired_state: None,
         })
@@ -332,16 +332,24 @@ impl ControlPlane {
             .values_mut()
             .find(|session| session.kubernetes_node_name.as_deref() == Some(kubernetes_node_name))
             .ok_or_else(|| Status::unavailable("Kubernetes Node has no registered session"))?;
-        // A session can bind one API object UID. Node recreation requires a new session.
-        if session
+        let uid_changed = session
             .kubernetes_node_uid
             .as_deref()
-            .is_some_and(|uid| uid != kubernetes_node_uid)
-        {
+            .is_some_and(|uid| uid != kubernetes_node_uid);
+        if let Some(store) = &self.policy_store {
+            store
+                .bind_kubernetes_node_session(
+                    &session.identity.node_id,
+                    &session.identity.node_boot_id,
+                    session.label_epoch,
+                    kubernetes_node_name,
+                    kubernetes_node_uid,
+                )
+                .map_err(invalid_policy_status)?;
+        }
+        if uid_changed {
+            // Recheck readiness before the replacement API object can receive protected Pods.
             session.admission_ready = false;
-            return Err(Status::failed_precondition(
-                "Kubernetes Node UID changed during the registered session",
-            ));
         }
         session.kubernetes_node_uid = Some(kubernetes_node_uid.to_owned());
         Ok(())
@@ -555,6 +563,18 @@ impl ControlPlane {
                 "node registration contains an invalid digest, epoch, or capability set",
             ));
         }
+        let proof_digest = crate::startup_absence_proof_digest(
+            &node_id,
+            &context.node_boot_id,
+            registration.label_epoch,
+            registration.policy_authority_absent,
+            registration.exception_authority_absent,
+        );
+        if registration.startup_absence_proof_digest != proof_digest {
+            return Err(Status::invalid_argument(
+                "node registration has an invalid startup absence proof",
+            ));
+        }
         let workload_targets = registration
             .workload_targets
             .iter()
@@ -573,9 +593,51 @@ impl ControlPlane {
                 "Kubernetes Node name is registered by another node identity",
             ));
         }
-        if !state.registrations.insert(identity.clone()) {
+        if state.registrations.contains(&identity) {
             return Err(Status::already_exists("registration nonce was replayed"));
         }
+        let previous_session = state.sessions.get(&node_id);
+        let kubernetes_node_uid = if let Some(store) = &self.policy_store {
+            store
+                .register_node_physical_session(
+                    &node_id,
+                    &context.node_boot_id,
+                    registration.label_epoch,
+                    kubernetes_node_name.as_deref(),
+                    &registration.startup_absence_proof_digest,
+                    registration.policy_authority_absent,
+                    registration.exception_authority_absent,
+                    utc_now_ns()?,
+                )
+                .map_err(invalid_policy_status)?
+                .kubernetes_node_uid
+        } else {
+            if let Some(previous) = previous_session {
+                let reconnect = previous.identity.node_boot_id == context.node_boot_id
+                    && previous.label_epoch == registration.label_epoch;
+                let advance = registration.label_epoch > previous.label_epoch
+                    && registration.policy_authority_absent
+                    && registration.exception_authority_absent;
+                if !reconnect && !advance {
+                    return Err(Status::failed_precondition(
+                        "node physical session did not advance its label epoch",
+                    ));
+                }
+            } else if !registration.policy_authority_absent
+                || !registration.exception_authority_absent
+            {
+                return Err(Status::failed_precondition(
+                    "initial node registration requires startup authority absence",
+                ));
+            }
+            previous_session.and_then(|session| {
+                (session.identity.node_boot_id == context.node_boot_id
+                    && session.label_epoch == registration.label_epoch)
+                    .then(|| session.kubernetes_node_uid.clone())
+                    .flatten()
+            })
+        };
+        state.registrations.insert(identity.clone());
         // A valid reconnect replaces prior streams and pending requests for this node identity.
         state
             .pending
@@ -585,7 +647,7 @@ impl ControlPlane {
             NodeSession {
                 identity,
                 kubernetes_node_name,
-                kubernetes_node_uid: None,
+                kubernetes_node_uid,
                 resolution_output: None,
                 arm_output: None,
                 admission_ready: false,
@@ -922,8 +984,9 @@ impl NodePolicy for ControlPlane {
             .session
             .as_ref()
             .ok_or_else(|| Status::invalid_argument("node session context is required"))?;
-        self.require_ready_session(&node_id, context)?;
+        let identity = self.require_ready_session(&node_id, context)?;
         self.require_current_trust(&node_id, context)?;
+        let label_epoch = self.session_label_epoch(&identity)?;
         if request.durable_bundle_digests.len() > 256
             || request
                 .durable_bundle_digests
@@ -941,7 +1004,12 @@ impl NodePolicy for ControlPlane {
         })?;
         // Durable bundle digests identify the active candidate for each profile on this mTLS node.
         let Some(bundle) = store
-            .next_bundle_for_node(&node_id, &request.durable_bundle_digests)
+            .next_bundle_for_node_session(
+                &node_id,
+                &context.node_boot_id,
+                label_epoch,
+                &request.durable_bundle_digests,
+            )
             .map_err(internal_status)?
         else {
             return Ok(Response::new(PolicyInventory::default()));
@@ -971,14 +1039,20 @@ impl NodePolicy for ControlPlane {
             .session
             .as_ref()
             .ok_or_else(|| Status::invalid_argument("node session context is required"))?;
-        self.require_ready_session(&node_id, context)?;
+        let identity = self.require_ready_session(&node_id, context)?;
         self.require_current_trust(&node_id, context)?;
+        let label_epoch = self.session_label_epoch(&identity)?;
         let store = self.policy_store.as_ref().ok_or_else(|| {
             Status::failed_precondition("Control has no durable policy rollout store")
         })?;
         // Re-resolve every chunk request against the immutable node-specific candidate.
         let bundle = store
-            .bundle_for_candidate(&node_id, &request.candidate_content_id)
+            .bundle_for_candidate_for_session(
+                &node_id,
+                &context.node_boot_id,
+                label_epoch,
+                &request.candidate_content_id,
+            )
             .map_err(internal_status)?
             .ok_or_else(|| Status::not_found("the node has no desired policy candidate"))?;
         if request.candidate_content_id != bundle.candidate.candidate_content_id
@@ -1072,8 +1146,9 @@ impl NodePolicy for ControlPlane {
             .session
             .as_ref()
             .ok_or_else(|| Status::invalid_argument("node session context is required"))?;
-        self.require_ready_session(&node_id, context)?;
+        let identity = self.require_ready_session(&node_id, context)?;
         self.require_current_trust(&node_id, context)?;
+        let label_epoch = self.session_label_epoch(&identity)?;
         // Inventory never accepts a node name from the payload. mTLS owns the target identity.
         if request.durable_candidate_content_ids.len() > 256
             || request
@@ -1089,7 +1164,12 @@ impl NodePolicy for ControlPlane {
             Status::failed_precondition("Control has no durable policy rollout store")
         })?;
         let Some(candidate) = store
-            .next_exception_candidate_for_node(&node_id, &request.durable_candidate_content_ids)
+            .next_exception_candidate_for_session(
+                &node_id,
+                &context.node_boot_id,
+                label_epoch,
+                &request.durable_candidate_content_ids,
+            )
             .map_err(internal_status)?
         else {
             return Ok(Response::new(ExceptionInventory::default()));
@@ -1387,6 +1467,14 @@ fn count(value: usize) -> u64 {
     u64::try_from(value).unwrap_or(u64::MAX)
 }
 
+fn utc_now_ns() -> Result<i64, Status> {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|_| Status::internal("system time is before the Unix epoch"))?
+        .as_nanos();
+    i64::try_from(nanos).map_err(|_| Status::internal("system time exceeds the signed range"))
+}
+
 fn internal_status(error: crate::Error) -> Status {
     Status::internal(error.to_string())
 }
@@ -1399,6 +1487,7 @@ fn valid_registration(registration: &crate::NodeRegistration) -> bool {
     registration.label_epoch > 0
         && is_sha256_hex(&registration.platform_digest)
         && is_sha256_hex(&registration.program_digest)
+        && is_sha256_hex(&registration.startup_absence_proof_digest)
         && !registration.capabilities.is_empty()
         && registration.capabilities.iter().all(|capability| {
             !capability.capability_id.is_empty()
@@ -1416,7 +1505,7 @@ fn valid_registration(registration: &crate::NodeRegistration) -> bool {
             .len()
             == registration.capabilities.len()
         && (registration.kubernetes_node_name.is_empty()
-            || kubernetes_node_name_is_valid(&registration.kubernetes_node_name))
+            || crate::store::kubernetes_node_name_is_valid(&registration.kubernetes_node_name))
         && registration.workload_targets.len() <= 65_536
         && registration
             .workload_targets
@@ -1425,26 +1514,6 @@ fn valid_registration(registration: &crate::NodeRegistration) -> bool {
             .collect::<BTreeSet<_>>()
             .len()
             == registration.workload_targets.len()
-}
-
-fn kubernetes_node_name_is_valid(value: &str) -> bool {
-    !value.is_empty()
-        && value.len() <= 253
-        && value.split('.').all(|label| {
-            !label.is_empty()
-                && label.len() <= 63
-                && label
-                    .bytes()
-                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
-                && label
-                    .as_bytes()
-                    .first()
-                    .is_some_and(u8::is_ascii_alphanumeric)
-                && label
-                    .as_bytes()
-                    .last()
-                    .is_some_and(u8::is_ascii_alphanumeric)
-        })
 }
 
 fn registered_workload_target(
@@ -1604,6 +1673,9 @@ mod tests {
         AllowedNodeIdentity, CapabilityRecord, NodeReadinessReport, NodeRegistration,
         NodeSessionContext, RegisteredWorkloadTarget, TrustGenerationV1,
     };
+    use tempfile::TempDir;
+
+    type TestResult = Result<(), Box<dyn std::error::Error>>;
 
     fn control() -> ControlPlane {
         ControlPlane::new(
@@ -1629,6 +1701,11 @@ mod tests {
             kernel_ready: true,
             effect_prevention_claims_enabled: true,
             kubernetes_node_name: String::new(),
+            startup_absence_proof_digest: crate::startup_absence_proof_digest(
+                "node-a", &[1; 16], 1, true, true,
+            ),
+            policy_authority_absent: true,
+            exception_authority_absent: true,
             capabilities: vec![CapabilityRecord {
                 capability_id: "capability".to_owned(),
                 state: "SUPPORTED".to_owned(),
@@ -1636,6 +1713,47 @@ mod tests {
             }],
             workload_targets: Vec::new(),
         }
+    }
+
+    fn registration_for(
+        context: &NodeSessionContext,
+        label_epoch: u64,
+        policy_authority_absent: bool,
+        exception_authority_absent: bool,
+    ) -> NodeRegistration {
+        let mut registration = registration();
+        registration.label_epoch = label_epoch;
+        registration.policy_authority_absent = policy_authority_absent;
+        registration.exception_authority_absent = exception_authority_absent;
+        registration.startup_absence_proof_digest = crate::startup_absence_proof_digest(
+            &context.node_id,
+            &context.node_boot_id,
+            label_epoch,
+            policy_authority_absent,
+            exception_authority_absent,
+        );
+        registration
+    }
+
+    fn durable_control(
+        directory: &TempDir,
+    ) -> Result<(ControlPlane, crate::ControlStore), Box<dyn std::error::Error>> {
+        let store = crate::ControlStore::open(directory.path())?;
+        let control = ControlPlane::with_control_store(
+            vec![AllowedNodeIdentity {
+                node_id: "node-a".to_owned(),
+                certificate_sha256: "a".repeat(64),
+                tenant_id: "00000000-0000-0001-0000-000000000002".to_owned(),
+            }],
+            TrustGenerationV1 {
+                generation: 7,
+                bundle_digest: "b".repeat(64),
+                policy_issuer_sequence_epoch: 0,
+                policy_signers: Vec::new(),
+            },
+            store.clone(),
+        )?;
+        Ok((control, store))
     }
 
     #[test]
@@ -1653,6 +1771,218 @@ mod tests {
             .register("node-a".to_owned(), &context, &registration())
             .is_err());
         assert_eq!(control.registered_nonce_count(), 1);
+    }
+
+    #[test]
+    fn first_durable_session_rejects_existing_unowned_authority() -> TestResult {
+        let directory = TempDir::new()?;
+        let (control, store) = durable_control(&directory)?;
+        let context = NodeSessionContext {
+            node_id: "node-a".to_owned(),
+            node_boot_id: vec![1; 16],
+            connection_nonce: vec![2; 16],
+        };
+        let registration = registration_for(&context, 1, false, true);
+        let committed = store.commit_index();
+
+        assert!(control
+            .register("node-a".to_owned(), &context, &registration)
+            .is_err());
+        assert_eq!(store.commit_index(), committed);
+        assert_eq!(control.registered_nonce_count(), 0);
+        Ok(())
+    }
+
+    #[test]
+    fn reconnect_preserves_the_durable_physical_session_without_an_advance() -> TestResult {
+        let directory = TempDir::new()?;
+        let (control, store) = durable_control(&directory)?;
+        let first = NodeSessionContext {
+            node_id: "node-a".to_owned(),
+            node_boot_id: vec![1; 16],
+            connection_nonce: vec![2; 16],
+        };
+        let mut registration = registration_for(&first, 1, true, true);
+        registration.kubernetes_node_name = "worker-a.example".to_owned();
+        control.register("node-a".to_owned(), &first, &registration)?;
+        control.bind_kubernetes_node_session(
+            "worker-a.example",
+            "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        )?;
+        let committed = store.commit_index();
+        drop(control);
+        drop(store);
+
+        let reconnect = NodeSessionContext {
+            connection_nonce: vec![3; 16],
+            ..first
+        };
+        let (control, store) = durable_control(&directory)?;
+        control.register("node-a".to_owned(), &reconnect, &registration)?;
+        assert_eq!(store.commit_index(), committed);
+        assert_eq!(
+            control
+                .lock_state()?
+                .sessions
+                .get("node-a")
+                .and_then(|session| session.kubernetes_node_uid.as_deref()),
+            Some("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn uid_only_rebind_preserves_the_physical_epoch_and_withholds_readiness() -> TestResult {
+        let directory = TempDir::new()?;
+        let (control, store) = durable_control(&directory)?;
+        let context = NodeSessionContext {
+            node_id: "node-a".to_owned(),
+            node_boot_id: vec![1; 16],
+            connection_nonce: vec![2; 16],
+        };
+        let mut registration = registration_for(&context, 1, true, true);
+        registration.kubernetes_node_name = "worker-a.example".to_owned();
+        control.register("node-a".to_owned(), &context, &registration)?;
+        control.bind_kubernetes_node_session(
+            "worker-a.example",
+            "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        )?;
+        control
+            .lock_state()?
+            .sessions
+            .get_mut("node-a")
+            .ok_or("the test session is absent")?
+            .admission_ready = true;
+        let committed = store.commit_index();
+
+        control.bind_kubernetes_node_session(
+            "worker-a.example",
+            "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+        )?;
+        let state = control.lock_state()?;
+        let session = state
+            .sessions
+            .get("node-a")
+            .ok_or("the rebound session is absent")?;
+        assert_eq!(session.identity.node_boot_id, vec![1; 16]);
+        assert_eq!(session.label_epoch, 1);
+        assert_eq!(
+            session.kubernetes_node_uid.as_deref(),
+            Some("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb")
+        );
+        assert!(!session.admission_ready);
+        assert_eq!(store.commit_index(), committed + 1);
+        drop(state);
+        drop(control);
+        drop(store);
+
+        let (replayed, replayed_store) = durable_control(&directory)?;
+        let reconnect = NodeSessionContext {
+            connection_nonce: vec![3; 16],
+            ..context
+        };
+        replayed.register("node-a".to_owned(), &reconnect, &registration)?;
+        assert_eq!(replayed_store.commit_index(), committed + 1);
+        assert_eq!(
+            replayed
+                .lock_state()?
+                .sessions
+                .get("node-a")
+                .and_then(|session| session.kubernetes_node_uid.as_deref()),
+            Some("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn physical_reset_requires_a_higher_label_and_exact_absence() -> TestResult {
+        let directory = TempDir::new()?;
+        let (control, store) = durable_control(&directory)?;
+        let first = NodeSessionContext {
+            node_id: "node-a".to_owned(),
+            node_boot_id: vec![1; 16],
+            connection_nonce: vec![2; 16],
+        };
+        let mut first_registration = registration_for(&first, 1, true, true);
+        first_registration.kubernetes_node_name = "worker-a.example".to_owned();
+        control.register("node-a".to_owned(), &first, &first_registration)?;
+        let committed = store.commit_index();
+
+        let same_label_new_boot = NodeSessionContext {
+            node_boot_id: vec![2; 16],
+            connection_nonce: vec![3; 16],
+            ..first.clone()
+        };
+        let mut same_label_registration = registration_for(&same_label_new_boot, 1, true, true);
+        same_label_registration.kubernetes_node_name = "worker-a.example".to_owned();
+        assert!(control
+            .register(
+                "node-a".to_owned(),
+                &same_label_new_boot,
+                &same_label_registration,
+            )
+            .is_err());
+        let missing_absence = NodeSessionContext {
+            connection_nonce: vec![4; 16],
+            ..same_label_new_boot.clone()
+        };
+        let mut missing_absence_registration = registration_for(&missing_absence, 2, false, true);
+        missing_absence_registration.kubernetes_node_name = "worker-a.example".to_owned();
+        assert!(control
+            .register(
+                "node-a".to_owned(),
+                &missing_absence,
+                &missing_absence_registration,
+            )
+            .is_err());
+        assert_eq!(store.commit_index(), committed);
+
+        let advanced = NodeSessionContext {
+            connection_nonce: vec![5; 16],
+            ..same_label_new_boot
+        };
+        let mut advanced_registration = registration_for(&advanced, 2, true, true);
+        advanced_registration.kubernetes_node_name = "worker-a.example".to_owned();
+        control.register("node-a".to_owned(), &advanced, &advanced_registration)?;
+        assert_eq!(store.commit_index(), committed + 1);
+        assert!(control.require_session("node-a", &first).is_err());
+        control.bind_kubernetes_node_session(
+            "worker-a.example",
+            "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+        )?;
+        let rebound_commit = store.commit_index();
+        drop(control);
+        drop(store);
+
+        let (replayed, replayed_store) = durable_control(&directory)?;
+        let reconnect = NodeSessionContext {
+            connection_nonce: vec![6; 16],
+            ..advanced.clone()
+        };
+        replayed.register("node-a".to_owned(), &reconnect, &advanced_registration)?;
+        assert_eq!(replayed_store.commit_index(), rebound_commit);
+        assert_eq!(
+            replayed
+                .lock_state()?
+                .sessions
+                .get("node-a")
+                .and_then(|session| session.kubernetes_node_uid.as_deref()),
+            Some("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb")
+        );
+
+        let same_boot_advance = NodeSessionContext {
+            connection_nonce: vec![7; 16],
+            ..advanced
+        };
+        let mut same_boot_registration = registration_for(&same_boot_advance, 3, true, true);
+        same_boot_registration.kubernetes_node_name = "worker-a.example".to_owned();
+        replayed.register(
+            "node-a".to_owned(),
+            &same_boot_advance,
+            &same_boot_registration,
+        )?;
+        assert_eq!(replayed_store.commit_index(), rebound_commit + 1);
+        Ok(())
     }
 
     #[test]

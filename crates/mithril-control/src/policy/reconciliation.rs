@@ -987,6 +987,18 @@ impl PolicyRolloutOwner {
         &self,
         acknowledgement: PolicyActivationAcknowledgementV1,
     ) -> Result<PolicyAcknowledgementResultV1> {
+        ensure!(
+            self.store.current_node_session_matches(
+                &acknowledgement.node_id,
+                &acknowledgement.node_boot_id,
+                acknowledgement.label_epoch,
+            )?,
+            PolicyValidationSnafu {
+                policy_id: &acknowledgement.policy_source_revision_id,
+                code: "CFG_STALE_POLICY_ACKNOWLEDGEMENT",
+                reason: "the acknowledgement physical node session is stale",
+            }
+        );
         if let Some((rollout_state, terminal_chain_closure_authorized)) =
             self.store.policy_acknowledgement_result(&acknowledgement)?
         {

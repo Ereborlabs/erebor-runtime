@@ -341,7 +341,7 @@ impl NodeChassis {
         if let Some(administrative) = administrative.as_mut() {
             administrative.reconcile(&host)?;
         }
-        let policy_loaded = policy.is_some();
+        let policy_loaded = policy.is_some() || policy_delivery.terminal_cleanup().is_some();
         // Start loss-aware evidence before the first dynamically delivered policy can activate.
         let policy_observation_enabled = policy_loaded || dynamic_policy_capable;
         let prevention_enabled = policy
@@ -479,7 +479,6 @@ impl NodeChassis {
                 )
             })
             .transpose()?;
-        // The server owns socket I/O; this chassis remains the only policy and binding decision owner.
         let (runtime_admission_server, runtime_admission_requests) = config
             .runtime_admission
             .as_ref()
@@ -488,7 +487,7 @@ impl NodeChassis {
             .map_or((None, None), |(server, requests)| {
                 (Some(server), Some(requests))
             });
-        Ok(Self {
+        let mut chassis = Self {
             config,
             effect_reader,
             host: Some(host),
@@ -507,7 +506,11 @@ impl NodeChassis {
             observations,
             node_boot_id,
             label_epoch,
-        })
+        };
+        // Bound sockets do not serve until authorized cleanup completes.
+        chassis.reconcile_terminal_policy_cleanup()?;
+        chassis.refresh_registration_authority_state()?;
+        Ok(chassis)
     }
 
     #[must_use]
@@ -563,6 +566,8 @@ impl NodeChassis {
                 control_disconnected_since + self.evidence_control_delay();
             let evidence_configured =
                 self.effect_reader.is_some() || self.config.evidence.is_some();
+            // A reconnect must not reuse an absence claim from before policy activation.
+            self.refresh_registration_authority_state()?;
             // Continue runtime admission while Control reconnects so held starts fail closed.
             let connection = tokio::select! {
                 result = self.connector.connect(
@@ -1254,17 +1259,131 @@ impl NodeChassis {
         }
     }
 
+    fn refresh_registration_authority_state(&mut self) -> Result<()> {
+        let absence = self.policy_delivery.startup_authority_absence(
+            self.host.as_ref().ok_or_else(|| {
+                IdentityStateSnafu {
+                    reason: "startup authority proof has no live kernel host".to_owned(),
+                }
+                .build()
+            })?,
+            &self.config,
+        )?;
+        self.registration.policy_authority_absent = absence.policy_authority_absent;
+        self.registration.exception_authority_absent = absence.exception_authority_absent;
+        self.registration.startup_absence_proof_digest =
+            mithril_control::startup_absence_proof_digest(
+                &self.config.node_id,
+                &self.node_boot_id.to_be_bytes(),
+                self.label_epoch,
+                absence.policy_authority_absent,
+                absence.exception_authority_absent,
+            );
+        Ok(())
+    }
+
+    fn reconcile_terminal_policy_cleanup(&mut self) -> Result<bool> {
+        let Some(cleanup) = self.policy_delivery.terminal_cleanup() else {
+            return Ok(false);
+        };
+        self.policy_delivery
+            .omit_terminal_cleanup_from_config(&mut self.config)?;
+        let host = self.host.as_mut().ok_or_else(|| {
+            IdentityStateSnafu {
+                reason: "terminal policy cleanup has no live kernel host".to_owned(),
+            }
+            .build()
+        })?;
+        if let Some(administrative) = self.administrative.as_mut() {
+            administrative.cancel_armed_slots(host)?;
+        }
+        self.bindings.retire_profile_bindings(
+            host,
+            &cleanup.profile_id,
+            cleanup.profile_generation_ref_id,
+            &cleanup.binding_ids,
+        )?;
+        let generation_retired = crate::NodePolicyGenerationOwner::retire_profile_generation(
+            host,
+            &cleanup.profile_id,
+            cleanup.profile_generation_ref_id,
+            self.node_boot_id,
+            self.label_epoch,
+        )?;
+
+        let next_policy = if self.config.policy_candidates.is_empty() {
+            None
+        } else {
+            Some(
+                crate::NodePolicyGenerationOwner::load_and_install_for_bindings(
+                    &self.config,
+                    host,
+                    &self.bindings,
+                    self.node_boot_id,
+                    self.label_epoch,
+                )?,
+            )
+        };
+        if next_policy.is_some() || generation_retired {
+            self.policy = next_policy;
+        }
+        // Keep the global policy gate active while an old generation still has live references.
+        self.identity
+            .activate_with_effect_policy(host, self.policy.is_some() || !generation_retired)?;
+        if let Some(policy) = self.policy.as_ref() {
+            self.bindings
+                .adopt_activated_profiles(host, &self.config.workload_bindings)?;
+            let prevention_enabled = policy.prevention_enabled();
+            self.registration.effect_prevention_claims_enabled &= prevention_enabled;
+            self.readiness.send_modify(|readiness| {
+                readiness.effect_prevention_claims_enabled &= prevention_enabled;
+            });
+        } else {
+            self.registration.effect_prevention_claims_enabled = false;
+            self.readiness.send_modify(|readiness| {
+                readiness.effect_prevention_claims_enabled = false;
+            });
+        }
+        if !generation_retired {
+            return Ok(false);
+        }
+
+        self.bindings.finalize_retired_profile_bindings(
+            host,
+            &cleanup.profile_id,
+            cleanup.profile_generation_ref_id,
+            &cleanup.binding_ids,
+        )?;
+        snafu::ensure!(
+            crate::NodePolicyGenerationOwner::terminal_profile_generation_is_absent(
+                host,
+                &cleanup.profile_id,
+                cleanup.profile_generation_ref_id,
+            )?,
+            IdentityStateSnafu {
+                reason: "terminal policy cleanup lacks exact kernel absence proof",
+            }
+        );
+        self.policy_delivery.finish_terminal_cleanup()?;
+        Ok(true)
+    }
+
     async fn reconcile_bindings(&mut self, recover_evidence: bool) -> ReconciliationOutcome {
+        if self.reconcile_terminal_policy_cleanup().is_err() {
+            return ReconciliationOutcome::IdentityUnhealthy;
+        }
         let Some(host) = self.host.as_mut() else {
             return ReconciliationOutcome::KernelUnhealthy;
         };
+        let policy_authority_present =
+            self.policy.is_some() || self.policy_delivery.terminal_cleanup().is_some();
         if host.verify_live_manifest().is_err() {
             let _result = self
                 .observations
                 .mark_coverage_gapped(CoverageGapReasonV1::KernelStateMismatch);
             return ReconciliationOutcome::KernelUnhealthy;
         }
-        if self.policy.is_some()
+        if policy_authority_present
             && (self.observations.evidence_errors() > 0
                 || sample_effect_health(host, &self.observations, recover_evidence).is_err())
         {
@@ -1275,7 +1394,7 @@ impl NodeChassis {
         }
         if self
             .identity
-            .reconcile(host, self.policy.is_some())
+            .reconcile(host, policy_authority_present)
             .is_err()
         {
             return ReconciliationOutcome::IdentityUnhealthy;
@@ -1376,25 +1495,30 @@ impl NodeChassis {
         evidence_healthy: bool,
     ) -> Result<PolicyControlStepV1> {
         if let Some(acknowledgement) = work.rejected_acknowledgement.take() {
-            let Some(_accepted) = self
-                .await_policy_rpc(connection.acknowledge_policy(acknowledgement))
+            let Some(accepted) = self
+                .await_policy_rpc(connection.acknowledge_policy(acknowledgement.clone()))
                 .await?
             else {
                 return Ok(PolicyControlStepV1::Reconnect);
             };
+            self.policy_delivery
+                .acknowledge_control(&acknowledgement, &accepted)?;
             return Ok(PolicyControlStepV1::Idle);
         }
         if work.phase == PolicyControlPhaseV1::Transfer {
             if let Some(acknowledgement) = self.policy_delivery.pending_acknowledgement() {
-                let candidate_content_id = acknowledgement.candidate_content_id.clone();
-                let Some(_accepted) = self
-                    .await_policy_rpc(connection.acknowledge_policy(acknowledgement))
+                let Some(accepted) = self
+                    .await_policy_rpc(connection.acknowledge_policy(acknowledgement.clone()))
                     .await?
                 else {
                     return Ok(PolicyControlStepV1::Reconnect);
                 };
-                self.policy_delivery
-                    .acknowledge_control(&candidate_content_id)?;
+                if self
+                    .policy_delivery
+                    .acknowledge_control(&acknowledgement, &accepted)?
+                {
+                    self.reconcile_terminal_policy_cleanup()?;
+                }
                 if work.reconnect_after_acknowledgement {
                     return Ok(PolicyControlStepV1::Reconnect);
                 }
@@ -2006,6 +2130,9 @@ fn registration(
         effect_prevention_claims_enabled,
         capabilities,
         kubernetes_node_name: kubernetes_node_name.unwrap_or_default().to_owned(),
+        startup_absence_proof_digest: String::new(),
+        policy_authority_absent: false,
+        exception_authority_absent: false,
         // Report only bindings with complete exact workload identity to Control.
         workload_targets: workload_bindings
             .iter()
@@ -2164,6 +2291,9 @@ mod tests {
             kernel_ready: true,
             effect_prevention_claims_enabled: true,
             kubernetes_node_name: String::new(),
+            startup_absence_proof_digest: "c".repeat(64),
+            policy_authority_absent: true,
+            exception_authority_absent: true,
             capabilities: [
                 "EXACT_NATIVE_IDENTITY",
                 "LOCAL_EFFECT_OBSERVATION",
@@ -2216,6 +2346,9 @@ mod tests {
             kernel_ready: true,
             effect_prevention_claims_enabled: true,
             kubernetes_node_name: String::new(),
+            startup_absence_proof_digest: "c".repeat(64),
+            policy_authority_absent: true,
+            exception_authority_absent: true,
             capabilities: healthy_capabilities.clone(),
             workload_targets: Vec::new(),
         };
@@ -2243,6 +2376,9 @@ mod tests {
             kernel_ready: true,
             effect_prevention_claims_enabled: true,
             kubernetes_node_name: String::new(),
+            startup_absence_proof_digest: "c".repeat(64),
+            policy_authority_absent: true,
+            exception_authority_absent: true,
             capabilities: vec![
                 CapabilityRecord {
                     capability_id: "EXACT_NATIVE_IDENTITY".to_owned(),
@@ -2359,6 +2495,9 @@ mod tests {
                 kernel_ready: true,
                 effect_prevention_claims_enabled: true,
                 kubernetes_node_name: String::new(),
+                startup_absence_proof_digest: "c".repeat(64),
+                policy_authority_absent: true,
+                exception_authority_absent: true,
                 capabilities: Vec::new(),
                 workload_targets: Vec::new(),
             },

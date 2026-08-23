@@ -532,6 +532,11 @@ fn registration() -> NodeRegistration {
         kernel_ready: true,
         effect_prevention_claims_enabled: false,
         kubernetes_node_name: String::new(),
+        startup_absence_proof_digest: mithril_control::startup_absence_proof_digest(
+            "node-a", &[7; 16], 1, true, true,
+        ),
+        policy_authority_absent: true,
+        exception_authority_absent: true,
         capabilities: capabilities(),
         workload_targets: Vec::new(),
     }

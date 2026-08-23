@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File};
 use std::mem::size_of;
 use std::os::fd::AsRawFd as _;
@@ -326,6 +326,198 @@ impl WorkloadBindingOwner {
             self.bindings.remove(&root);
         }
         Ok(())
+    }
+
+    pub(crate) fn retire_profile_bindings(
+        &mut self,
+        host: &KernelHost,
+        profile_id: &str,
+        profile_generation_ref_id: u64,
+        binding_ids: &[String],
+    ) -> Result<()> {
+        let profile_id = parse_id("profile_id", profile_id)?;
+        let binding_ids = binding_ids
+            .iter()
+            .map(|binding_id| parse_id("binding_id", binding_id))
+            .collect::<Result<BTreeSet<_>>>()?;
+        let roots = self
+            .bindings
+            .iter()
+            .filter(|(_root, binding)| binding_ids.contains(&binding.state.binding_id))
+            .map(|(root, _binding)| *root)
+            .collect::<Vec<_>>();
+        for root in roots {
+            let binding = self.bindings.get(&root).context(IdentityStateSnafu {
+                reason: "terminal cleanup lost an owned workload binding",
+            })?;
+            ensure!(
+                self.terminal_binding_matches_session(
+                    &binding.state,
+                    profile_id,
+                    profile_generation_ref_id,
+                ),
+                IdentityStateSnafu {
+                    reason: "terminal cleanup binding belongs to another profile generation",
+                }
+            );
+            self.terminate(host, root)?;
+            self.bindings.remove(&root);
+        }
+
+        let mut observed = BTreeSet::new();
+        for key in host
+            .map_keys("execution_set_bindings")
+            .context(InterceptorSnafu)?
+        {
+            let Some(bytes) = host
+                .lookup_map("execution_set_bindings", &key)
+                .context(InterceptorSnafu)?
+            else {
+                continue;
+            };
+            let mut binding = execution_set_binding_state(&bytes)?;
+            if !binding_ids.contains(&binding.binding_id) {
+                continue;
+            }
+            ensure!(
+                observed.insert(binding.binding_id)
+                    && self.terminal_binding_matches_session(
+                        &binding,
+                        profile_id,
+                        profile_generation_ref_id,
+                    ),
+                IdentityStateSnafu {
+                    reason: "terminal cleanup found a duplicate or mismatched workload binding",
+                }
+            );
+            if matches!(
+                binding.lifecycle_state,
+                BindingLifecycleStateV1::Preparing
+                    | BindingLifecycleStateV1::Active
+                    | BindingLifecycleStateV1::Draining
+            ) {
+                binding.lifecycle_state = BindingLifecycleStateV1::Terminating;
+                binding.initial_root_state = InitialRootStateV1::Consumed;
+                binding.transition_version =
+                    binding
+                        .transition_version
+                        .checked_add(1)
+                        .context(IdentityStateSnafu {
+                            reason: "terminal cleanup binding transition version exhausted",
+                        })?;
+                host.update_map("execution_set_bindings", &key, binding.as_bytes())
+                    .context(InterceptorSnafu)?;
+                ensure!(
+                    host.lookup_map("execution_set_bindings", &key)
+                        .context(InterceptorSnafu)?
+                        .as_deref()
+                        == Some(binding.as_bytes()),
+                    IdentityStateSnafu {
+                        reason: "terminal cleanup binding failed terminating readback",
+                    }
+                );
+            } else {
+                ensure!(
+                    matches!(
+                        binding.lifecycle_state,
+                        BindingLifecycleStateV1::Terminating | BindingLifecycleStateV1::Tombstoned
+                    ),
+                    IdentityStateSnafu {
+                        reason: "terminal cleanup binding has an invalid lifecycle state",
+                    }
+                );
+            }
+        }
+        Ok(())
+    }
+
+    pub(crate) fn finalize_retired_profile_bindings(
+        &self,
+        host: &KernelHost,
+        profile_id: &str,
+        profile_generation_ref_id: u64,
+        binding_ids: &[String],
+    ) -> Result<()> {
+        let profile_id = parse_id("profile_id", profile_id)?;
+        let binding_ids = binding_ids
+            .iter()
+            .map(|binding_id| parse_id("binding_id", binding_id))
+            .collect::<Result<BTreeSet<_>>>()?;
+        let mut observed = BTreeSet::new();
+        for key in host
+            .map_keys("execution_set_bindings")
+            .context(InterceptorSnafu)?
+        {
+            let Some(bytes) = host
+                .lookup_map("execution_set_bindings", &key)
+                .context(InterceptorSnafu)?
+            else {
+                continue;
+            };
+            let mut binding = execution_set_binding_state(&bytes)?;
+            if !binding_ids.contains(&binding.binding_id) {
+                continue;
+            }
+            ensure!(
+                observed.insert(binding.binding_id)
+                    && self.terminal_binding_matches_session(
+                        &binding,
+                        profile_id,
+                        profile_generation_ref_id,
+                    )
+                    && matches!(
+                        binding.lifecycle_state,
+                        BindingLifecycleStateV1::Terminating | BindingLifecycleStateV1::Tombstoned
+                    ),
+                IdentityStateSnafu {
+                    reason: "terminal cleanup cannot finalize a live or mismatched binding",
+                }
+            );
+            if binding.lifecycle_state == BindingLifecycleStateV1::Terminating {
+                binding.lifecycle_state = BindingLifecycleStateV1::Tombstoned;
+                binding.transition_version =
+                    binding
+                        .transition_version
+                        .checked_add(1)
+                        .context(IdentityStateSnafu {
+                            reason: "terminal cleanup binding transition version exhausted",
+                        })?;
+                host.update_map("execution_set_bindings", &key, binding.as_bytes())
+                    .context(InterceptorSnafu)?;
+                ensure!(
+                    host.lookup_map("execution_set_bindings", &key)
+                        .context(InterceptorSnafu)?
+                        .as_deref()
+                        == Some(binding.as_bytes()),
+                    IdentityStateSnafu {
+                        reason: "terminal cleanup binding failed tombstone readback",
+                    }
+                );
+            }
+            host.delete_map_entry("execution_set_bindings", &key)
+                .context(InterceptorSnafu)?;
+            ensure!(
+                host.lookup_map("execution_set_bindings", &key)
+                    .context(InterceptorSnafu)?
+                    .is_none(),
+                IdentityStateSnafu {
+                    reason: "terminal cleanup binding survived deletion",
+                }
+            );
+        }
+        Ok(())
+    }
+
+    fn terminal_binding_matches_session(
+        &self,
+        binding: &ExecutionSetBindingStateV1,
+        profile_id: Id128V1,
+        profile_generation_ref_id: u64,
+    ) -> bool {
+        binding.profile_id == profile_id
+            && binding.active_profile_generation_ref_id == profile_generation_ref_id
+            && binding.node_boot_id == self.node_boot_id
+            && binding.label_epoch == self.label_epoch
     }
 
     pub(crate) fn publish_held_activated_root(
@@ -1408,6 +1600,37 @@ mod tests {
         recovered.root_cgroup_live_interval_id = desired.root_cgroup_live_interval_id;
         recovered.execution_set_id = Id128V1::new(11, 12);
         assert!(!same_runtime_binding(&desired, &recovered));
+        Ok(())
+    }
+
+    #[test]
+    fn terminal_cleanup_rejects_a_binding_from_another_node_session() -> crate::Result<()> {
+        let temporary = tempfile::tempdir().context(IoSnafu {
+            path: "temporary terminal binding session directory",
+        })?;
+        let root = temporary.path().join("workload");
+        fs::create_dir(&root).context(IoSnafu { path: &root })?;
+        fs::write(root.join("cgroup.procs"), "").context(IoSnafu { path: &root })?;
+        let owner = WorkloadBindingOwner::at(temporary.path(), Id128V1::new(1, 2), 3)?;
+        let mut binding = owner.prepare(&spec(&root))?.state;
+        assert!(owner.terminal_binding_matches_session(
+            &binding,
+            binding.profile_id,
+            binding.active_profile_generation_ref_id,
+        ));
+        binding.node_boot_id = Id128V1::new(9, 10);
+        assert!(!owner.terminal_binding_matches_session(
+            &binding,
+            binding.profile_id,
+            binding.active_profile_generation_ref_id,
+        ));
+        binding.node_boot_id = Id128V1::new(1, 2);
+        binding.label_epoch = 4;
+        assert!(!owner.terminal_binding_matches_session(
+            &binding,
+            binding.profile_id,
+            binding.active_profile_generation_ref_id,
+        ));
         Ok(())
     }
 

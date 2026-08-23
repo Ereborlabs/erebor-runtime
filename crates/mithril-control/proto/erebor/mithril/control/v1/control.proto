@@ -128,6 +128,9 @@ message NodeRegistration {
   repeated CapabilityRecord capabilities = 8;
   repeated RegisteredWorkloadTarget workload_targets = 9;
   string kubernetes_node_name = 10;
+  string startup_absence_proof_digest = 11;
+  bool policy_authority_absent = 12;
+  bool exception_authority_absent = 13;
 }
 
 // Reports static non-Kubernetes workload facts from a registered node.
