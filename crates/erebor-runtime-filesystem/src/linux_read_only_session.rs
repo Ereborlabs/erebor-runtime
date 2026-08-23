@@ -253,13 +253,16 @@ impl<'a> LinuxReadOnlyWrapperScript<'a> {
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
+    use std::{fs, process::Command};
+
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
 
     use super::{LinuxReadOnlySessionProjection, LinuxReadOnlySessionView};
     use crate::{FilesystemSessionStorage, FilesystemVolumeMode, FilesystemVolumeStorageRequest};
 
     #[test]
-    fn renders_a_read_only_namespace_wrapper_for_file_and_directory(
+    fn missing_projection_target_fails_without_creating_it(
     ) -> Result<(), Box<dyn std::error::Error>> {
         let root =
             std::env::temp_dir().join(format!("erebor-read-only-view-{}", std::process::id()));
@@ -267,9 +270,7 @@ mod tests {
         fs::create_dir_all(root.join("host"))?;
         fs::create_dir_all(root.join("target"))?;
         let source_file = root.join("artifact.toml");
-        let source_directory = root.join("hooks");
         fs::write(&source_file, "hooks = true")?;
-        fs::create_dir_all(&source_directory)?;
         let storage = FilesystemSessionStorage::prepare(
             root.join("record"),
             [FilesystemVolumeStorageRequest::new(
@@ -279,27 +280,26 @@ mod tests {
                 FilesystemVolumeMode::Writable,
             )?],
         )?;
+        let missing_target = root.join("projection-target/requirements.toml");
+        fs::create_dir_all(missing_target.parent().ok_or("target parent is required")?)?;
         let view = LinuxReadOnlySessionView::prepare(
             &storage,
-            &[
-                LinuxReadOnlySessionProjection::new(&source_file, "/etc/codex/requirements.toml")?,
-                LinuxReadOnlySessionProjection::new(
-                    &source_directory,
-                    "/usr/lib/erebor/codex-hooks",
-                )?,
-            ],
+            &[LinuxReadOnlySessionProjection::new(
+                &source_file,
+                &missing_target,
+            )?],
         )?;
-        let script = fs::read_to_string(view.wrapper_path())?;
-        assert!(script.contains("--erebor-read-only-child"));
-        assert!(script.contains("mount --bind"));
-        assert!(script.contains("remount,bind,ro"));
-        assert!(script.contains("/etc/codex/requirements.toml"));
-        assert!(script.contains("/usr/lib/erebor/codex-hooks"));
-        assert!(script.contains("target parent is not preinstalled"));
-        assert!(script.contains("EREBOR_DROP_MOUNT_NAMESPACE_CAPABILITIES=1"));
-        assert!(script.contains("setpriv --inh-caps=-all --ambient-caps=-all --bounding-set=-all"));
-        assert!(!script.contains("mkdir -p"));
-        assert!(!script.contains(": >"));
+        let output = Command::new(view.wrapper_path())
+            .arg("--erebor-read-only-child")
+            .arg("true")
+            .output()?;
+        assert!(!output.status.success());
+        assert!(!missing_target.exists());
+        #[cfg(unix)]
+        assert_eq!(
+            fs::metadata(view.wrapper_path())?.permissions().mode() & 0o777,
+            0o700
+        );
         fs::remove_dir_all(root)?;
         Ok(())
     }

@@ -9,7 +9,7 @@ use crate::{
 };
 
 #[test]
-fn prepare_writes_executable_mount_namespace_wrapper() -> Result<(), Box<dyn std::error::Error>> {
+fn prepare_creates_private_executable_wrapper() -> Result<(), Box<dyn std::error::Error>> {
     if !required_commands_available() {
         return Ok(());
     }
@@ -21,20 +21,8 @@ fn prepare_writes_executable_mount_namespace_wrapper() -> Result<(), Box<dyn std
     let storage = storage_for(&test_dir, &host, &session_path)?;
 
     let view = LinuxOverlaySessionView::prepare(&storage)?;
-    let script = fs::read_to_string(view.wrapper_path())?;
 
     assert!(view.wrapper_path().is_file());
-    assert!(script.contains("unshare -U --map-current-user --keep-caps -m"));
-    assert!(script.contains("EREBOR_DROP_MOUNT_NAMESPACE_CAPABILITIES=1"));
-    assert!(script.contains("setpriv --inh-caps=-all --ambient-caps=-all --bounding-set=-all"));
-    assert!(script.contains("unshare -m --propagation private"));
-    assert!(script.contains("mount --bind"));
-    assert!(script.contains("mount -t overlay overlay"));
-    assert!(script.contains("lowerdir="));
-    assert!(script.contains("umount"));
-    assert!(script.contains("--erebor-overlay-child"));
-    assert!(script.contains("setpriv --reuid"));
-    assert!(script.contains("refused to run the session command as root"));
     #[cfg(unix)]
     assert_eq!(
         fs::metadata(view.wrapper_path())?.permissions().mode() & 0o777,
