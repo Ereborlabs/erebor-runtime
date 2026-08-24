@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, HashSet, VecDeque},
+    collections::{HashMap, VecDeque},
     sync::{Arc, Mutex},
 };
 
@@ -14,7 +14,6 @@ use super::{
 pub const MAX_APP_SERVER_FRAME_BYTES: usize = 1024 * 1024;
 pub const CODEX_APP_SERVER_OUTPUT_VALIDATION_EVENT: &str = "codex_app_server_output_validation_v1";
 const MAX_INFLIGHT_REQUESTS: usize = 128;
-const MAX_CANCELLED_REQUESTS: usize = MAX_INFLIGHT_REQUESTS;
 const MAX_CACHED_OUTPUT_BYTES: usize = MAX_APP_SERVER_FRAME_BYTES * 2;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -436,8 +435,6 @@ struct CodexAppServerLedger {
     reconciliation: Arc<CodexPromptReconciliation>,
     lease_owner: Arc<CodexInvocationLeaseOwner>,
     pending: HashMap<String, PendingPrompt>,
-    used_request_ids: HashSet<String>,
-    cancelled: VecDeque<String>,
     output: CodexAppServerOutputValidator,
     projected_output: VecDeque<CodexAppServerOutputChunk>,
     projected_output_bytes: usize,
@@ -461,7 +458,6 @@ enum PreparedAppServerInput {
 
 enum InputMutation {
     None,
-    Cancel(String),
     Pending {
         key: String,
         request_id: Value,
@@ -484,8 +480,6 @@ impl CodexAppServerLedger {
             reconciliation,
             lease_owner,
             pending: HashMap::new(),
-            used_request_ids: HashSet::new(),
-            cancelled: VecDeque::new(),
             output: CodexAppServerOutputValidator::default(),
             projected_output: VecDeque::new(),
             projected_output_bytes: 0,
@@ -533,10 +527,15 @@ impl CodexAppServerLedger {
                 .and_then(Value::as_object)
                 .and_then(|params| params.get("id"))
                 .ok_or_else(|| protocol_error("App Server cancellation has no request id"))?;
-            let mutation = InputMutation::Cancel(request_key(cancelled_id)?);
+            let cancelled_key = request_key(cancelled_id)?;
+            if !self.pending.contains_key(&cancelled_key) {
+                return Err(protocol_error(
+                    "App Server cancellation does not match an in-flight request",
+                ));
+            }
             return Ok(PreparedAppServerInput::Forward {
                 frame: frame.to_vec(),
-                mutation,
+                mutation: InputMutation::None,
             });
         }
         if sensitive_method(method)
@@ -548,7 +547,7 @@ impl CodexAppServerLedger {
         }
         let mutation = if let Some(id) = id {
             let key = request_key(&id)?;
-            if self.pending.len() >= MAX_INFLIGHT_REQUESTS || self.used_request_ids.contains(&key) {
+            if self.pending.len() >= MAX_INFLIGHT_REQUESTS || self.pending.contains_key(&key) {
                 return Err(protocol_error(
                     "App Server request ledger rejected the in-flight id",
                 ));
@@ -578,17 +577,6 @@ impl CodexAppServerLedger {
     fn commit_input(&mut self, mutation: InputMutation) -> Result<(), CodexSessionError> {
         match mutation {
             InputMutation::None => Ok(()),
-            InputMutation::Cancel(key) => {
-                if self.pending.remove(&key).is_some() {
-                    self.cancelled.push_back(key);
-                    while self.cancelled.len() > MAX_CANCELLED_REQUESTS {
-                        if let Some(evicted) = self.cancelled.pop_front() {
-                            self.used_request_ids.remove(&evicted);
-                        }
-                    }
-                }
-                Ok(())
-            }
             InputMutation::Pending {
                 key,
                 request_id,
@@ -629,14 +617,13 @@ impl CodexAppServerLedger {
                     (String::new(), None)
                 };
                 self.pending.insert(
-                    key.clone(),
+                    key,
                     PendingPrompt {
                         scope_ref,
                         thread_id,
                         prompt_path,
                     },
                 );
-                self.used_request_ids.insert(key);
                 Ok(())
             }
         }
@@ -676,20 +663,10 @@ impl CodexAppServerLedger {
         }
         let key = request_key(id)?;
         let Some(prompt) = self.pending.remove(&key) else {
-            if let Some(index) = self
-                .cancelled
-                .iter()
-                .position(|cancelled| cancelled == &key)
-            {
-                self.cancelled.remove(index);
-                self.used_request_ids.remove(&key);
-                return Ok(());
-            }
             return Err(protocol_error(
                 "App Server response does not match an in-flight request",
             ));
         };
-        self.used_request_ids.remove(&key);
         if object.contains_key("error") {
             return Ok(());
         }
@@ -1341,7 +1318,7 @@ mod tests {
             .lock()
             .map_err(|_error| "ledger lock is poisoned")?
             .pending
-            .is_empty());
+            .contains_key("1"));
         assert!(registered
             .service
             .accept_input("session-test", request)
@@ -1349,16 +1326,17 @@ mod tests {
         registered.service.observe_output_chunk(
             "session-test",
             1,
-            b"{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{}}\n",
+            b"{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"turnId\":\"turn-1\"}}\n",
         )?;
-        assert!(registered
-            .service
-            .observe_output_chunk(
-                "session-test",
-                2,
-                b"{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{}}\n",
-            )
-            .is_err());
+        assert!(matches!(
+            registered.service.accept_input("session-test", request,)?,
+            CodexAppServerInput::Forward(_)
+        ));
+        registered.service.observe_output_chunk(
+            "session-test",
+            2,
+            b"{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"turnId\":\"turn-2\"}}\n",
+        )?;
         Ok(())
     }
 
