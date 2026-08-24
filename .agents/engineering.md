@@ -127,17 +127,34 @@
   Map public/domain errors through `erebor_runtime_error::ErrorExt` with stable
   status, category, and retry hints. Never collapse policy denial, invalid
   input, and infrastructure failure into one error class.
-- Use repository telemetry wrappers for runtime logging. Direct `tracing` is
-  limited to telemetry internals and narrow CLI setup. Log once at the owning
-  boundary with structured fields, for example `error!(err; "...")`; lower
-  layers return enriched errors. Use `println!` and `eprintln!` only for CLI
-  user output.
+- `erebor-telemetry` owns the repository telemetry wrappers and shared stderr
+  initialization. Direct `tracing` is limited to telemetry internals,
+  attributes, and narrow CLI setup.
+- Service stderr uses the current human-readable `tracing-subscriber` format:
+  timestamp, level, Rust target, static message, and optional `key=value`
+  fields. Do not add a custom renderer. Use the Rust target for product and
+  component filters.
+- Use `ERROR` when the process cannot continue safely or fail-closed rollback
+  fails. Use `WARN` for recoverable degradation. Use `INFO` for low-frequency
+  lifecycle changes and expected security decisions. Use `DEBUG` for one
+  request, retry, reconciliation step, or bounded batch. Use `TRACE` for
+  high-frequency protocol and kernel detail.
+- Log once at the boundary that selects exit, retry, rejection, quarantine, or
+  reduced readiness. Lower layers return enriched errors. Put changing values
+  in structured fields, for example `error!(err; "...", node_id = %node_id)`.
+- Do not log policy, exception, evidence, audit, file, command, environment,
+  credential, request-body, response-body, or complete Kubernetes metadata
+  payloads. Use bounded identifiers, states, reasons, and counts.
+- Use `println!` and `eprintln!` only for CLI user output. Keep service logs out
+  of command stdout.
 
 ## Change Control And Handoff
 
-- Preserve unrelated user changes. Never run `git commit`; the user commits.
+- Preserve unrelated user changes. Run `git commit` only when the user
+  explicitly requests it. Stage only the requested scope and use a concise
+  repository-style message. Otherwise, the user commits.
 - For Rust changes, run the final shared CI procedure in
   [verification.md](verification.md) after the last relevant edit.
 - At handoff, state what changed, verification evidence, any exact blocker,
-  and a concise commit message. Do not include a phase name in any outward
-  output unless the user explicitly asks.
+  and the commit or a concise commit message. Do not include a phase name in
+  any outward output unless the user explicitly asks.
