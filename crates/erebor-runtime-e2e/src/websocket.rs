@@ -1,6 +1,6 @@
 use std::{net::SocketAddr, sync::Arc, time::Duration};
 
-use erebor_runtime_telemetry::{debug, error, info, warn};
+use erebor_telemetry::{debug, error, info, warn};
 use futures_util::{SinkExt, StreamExt};
 use serde_json::Value;
 use snafu::ResultExt;

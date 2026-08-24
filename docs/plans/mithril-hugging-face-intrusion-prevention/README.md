@@ -233,6 +233,7 @@ writer under a different type or process name.
 | 6 | Durable evidence, coverage intervals, WAL, generation/restart recovery, loss and owner-health truth | Ch. 9, 22, 31-33; A.3-A.7, A.15.1-A.15.2 |
 | 6.1 | Typed gRPC services for all supported IPC, removal of the ptrace protocol exception, and node-control service separation | Ch. 5, 22, 30, 32-35; A.3-A.7, A.15.1 |
 | 6.2 | Kubernetes policy desired state, Control reconciliation/signing/rollout, secure node delivery, and durable Control evidence intake | Ch. 5, 11-12, 22, 30, 32, 34-37; A.8.1, A.11, A.15.1 |
+| 6.3 | Product-neutral shared telemetry and structured Mithril operational logs with component-specific verbosity | Ch. 32-35 operational visibility; no authority or evidence change |
 | 7 | Accepted-evidence indexes, deterministic graph/finding packages, policy provenance, notifications, and provider-neutral authority leases | Ch. 8, 22-25, 30, 32, 34-35; A.10, A.15 |
 | 8 | Kubernetes/runtime/audit multi-node causality and conservative purpose classification | Ch. 7-8, 23, 25, 30-31; A.9-A.10, A.15.3 |
 | 9 | Authorized local and distributed response with blast-radius disclosure and verified postconditions | Ch. 24-25, 32, 34; A.15.4-A.15.6 |
@@ -240,8 +241,8 @@ writer under a different type or process name.
 | 11 | Packaging, upgrade, platform qualification, performance, complete HF conformance, and signed release claims | Ch. 25, 30-33, 37; A.4-A.7; C |
 | 12 | Independent decisions/prototypes for deferred surfaces and optional upstream evidence adapters | Ch. 5, 7, 14, 21, 26, 35.1; A.13.6, A.16 |
 
-Phase order is strict through Phase 11, including Phases 6.1 and 6.2 between
-Phases 6 and 7. Phase 12 allocation decisions may begin after Phase 0, but a
+Phase order is strict through Phase 11, including Phases 6.1, 6.2, and 6.3
+between Phases 6 and 7. Phase 12 allocation decisions may begin after Phase 0, but a
 physical evaluation must wait for the owning prerequisite named in Phase 12.
 Phase 12 cannot satisfy a Phase 11 core gate.
 
@@ -552,10 +553,11 @@ HF-GRAN-CI-BUILDRS-001
 SECCOMP-QUAL-001
 ```
 
-Phases 3, 6.1, 6.2, 7, and 11 have no new first-owned Appendix C IDs. Phase 3
+Phases 3, 6.1, 6.2, 6.3, 7, and 11 have no new first-owned Appendix C IDs. Phase 3
 must prove the observation/simulation form of the exact Phase 4/5 IDs. Phase
 6.1 must prove its named gRPC service and cutover cases. Phase 6.2 must
-prove its named reconciliation, rollout, and intake cases. Phase 7 must prove
+prove its named reconciliation, rollout, and intake cases. Phase 6.3 must
+prove structured service output without treating logs as evidence. Phase 7 must prove
 the named detection packages using already-owned inputs. Phase 11 must prove
 registry equality and every criterion active in the signed claim. A
 phase-owned test that is not an Appendix C fixture remains required by its
@@ -576,6 +578,7 @@ the registry artifact, criterion mapping, and this allocation in one review.
 | ring/reader/WAL/map/link/pin/restart failure | 6 | physical decision preserved where live; coverage gap/claim closure |
 | gRPC peer, method, stream, bound, cancellation, or cutover failure | 6.1 | no fallback dispatch or authorization change; durable state advances only through its domain rule |
 | CRD watch, compile, rollout, Control intake, or acknowledgement failure | 6.2 | last valid local generation remains; mixed state and missing durable acknowledgement stay explicit |
+| operational log initialization or rendering failure | 6.3 | invalid configuration prevents readiness; later output loss cannot change enforcement, evidence, policy, or recovery state |
 | Control, audit, notification, or provider source outage | 6-10 | local generation remains authoritative; remote conclusion/action becomes unavailable or weaker |
 | stale/reused/wider response target | 9-10 | no actuation until exact re-resolution and blast-radius approval |
 | unsupported platform, upgrade, or performance/capacity failure | 11 | signed claim omitted or narrowed for that exact manifest |
@@ -592,6 +595,7 @@ the registry artifact, criterion mapping, and this allocation in one review.
 - [Phase 6: Durable Evidence, Coverage, And Recovery](./phase-6-durable-evidence-coverage-and-recovery.md)
 - [Phase 6.1: gRPC Service And IPC Convergence](./phase-6-1-grpc-service-and-ipc-convergence.md)
 - [Phase 6.2: Control Policy And Evidence Convergence](./phase-6-2-control-policy-and-evidence-convergence.md)
+- [Phase 6.3: Shared Telemetry And Operational Logging](./phase-6-3-shared-telemetry-and-operational-logging.md)
 - [Phase 7: Mithril Control And Detection Packages](./phase-7-mithril-control-and-detection-packages.md)
 - [Phase 8: Kubernetes Distributed Causality](./phase-8-kubernetes-distributed-causality.md)
 - [Phase 9: Local And Distributed Response](./phase-9-local-and-distributed-response.md)

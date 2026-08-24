@@ -1,6 +1,6 @@
 use std::future::Future;
 
-use erebor_runtime_telemetry::{debug, warn};
+use erebor_telemetry::{debug, warn};
 use tokio::task::JoinHandle;
 
 use crate::{websocket::JsonWebSocketHandler, E2eError, MiniJsonWebSocketServer};

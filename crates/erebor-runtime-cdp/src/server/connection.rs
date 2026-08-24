@@ -1,6 +1,6 @@
 use std::{net::SocketAddr, sync::Arc};
 
-use erebor_runtime_telemetry::debug;
+use erebor_telemetry::debug;
 use futures_util::{SinkExt, StreamExt};
 use tokio::net::TcpStream;
 use tokio_tungstenite::{accept_async, connect_async, tungstenite::Message};

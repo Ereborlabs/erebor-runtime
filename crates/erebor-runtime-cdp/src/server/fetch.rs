@@ -1,5 +1,5 @@
 use cdp_protocol::{fetch, network, types::Event as ProtocolEvent};
-use erebor_runtime_telemetry::{debug, info};
+use erebor_telemetry::{debug, info};
 
 use super::{
     audit::CdpAuditRecorder,

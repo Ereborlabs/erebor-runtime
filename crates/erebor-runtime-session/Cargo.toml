@@ -17,7 +17,7 @@ erebor-runtime-ipc = { path = "../erebor-runtime-ipc" }
 erebor-runtime-policy = { path = "../erebor-runtime-policy" }
 erebor-runtime-packages = { path = "../erebor-runtime-packages" }
 erebor-runtime-terminal = { path = "../erebor-runtime-terminal" }
-erebor-runtime-telemetry = { path = "../erebor-runtime-telemetry" }
+erebor-telemetry = { path = "../erebor-telemetry" }
 futures-util.workspace = true
 serde_json.workspace = true
 serde.workspace = true

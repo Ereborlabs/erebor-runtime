@@ -25,7 +25,7 @@ use erebor_runtime_ipc::{
     },
 };
 use erebor_runtime_packages::{CodexHookEventName, CodexPackageDefinition};
-use erebor_runtime_telemetry::warn;
+use erebor_telemetry::warn;
 use serde::Deserialize;
 use serde_json::json;
 use snafu::{ensure, ResultExt};

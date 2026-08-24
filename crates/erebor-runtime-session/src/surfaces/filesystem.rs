@@ -14,7 +14,7 @@ use erebor_runtime_events::{
     SessionId, TargetRef,
 };
 use erebor_runtime_policy::{Decision, PolicyEvaluator, PolicySet};
-use erebor_runtime_telemetry::warn;
+use erebor_telemetry::warn;
 
 mod mediation;
 mod path;

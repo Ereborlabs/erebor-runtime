@@ -4,7 +4,7 @@ use std::{
 };
 
 use erebor_runtime_policy::{LocalPolicy, PolicySet};
-use erebor_runtime_telemetry::debug;
+use erebor_telemetry::debug;
 use snafu::ResultExt;
 
 use crate::{

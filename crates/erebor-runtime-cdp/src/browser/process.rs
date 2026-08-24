@@ -5,7 +5,7 @@ use std::{
 };
 
 use erebor_runtime_core::{BrowserCdpSurfaceConfig, BrowserLaunchConfig};
-use erebor_runtime_telemetry::debug;
+use erebor_telemetry::debug;
 use snafu::ResultExt;
 
 use super::{

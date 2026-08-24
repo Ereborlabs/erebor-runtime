@@ -24,7 +24,7 @@ use erebor_runtime_session::{
     ChildContextDeliveryHandler, CodexAppServerService, CodexHookService, CodexHookSessionHandlers,
     ContextAgentControlHandler, ContextOperationAdmissionHandler, SessionManagerError,
 };
-use erebor_runtime_telemetry::warn;
+use erebor_telemetry::warn;
 use uuid::Uuid;
 
 use crate::context_dag::SessionContextResolver;

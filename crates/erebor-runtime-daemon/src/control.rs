@@ -14,7 +14,7 @@ use erebor_runtime_ipc::v1::{
     ApprovalRecord as ApprovalRecordMessage, DaemonCommandResult, PolicyTestRequest,
     PolicyTestResponse, RunnerCapabilityRecord,
 };
-use erebor_runtime_telemetry::{error, info, JsonlTelemetry};
+use erebor_telemetry::{error, info, JsonlTelemetry};
 use prost::Message;
 use rustix::{
     fs::chown,
@@ -691,7 +691,7 @@ mod tests {
         AgentPackageManifest, CanonicalEncoding, ContentDigest, InstallationRecord,
         PolicyPackageRevision, PolicySetRevision,
     };
-    use erebor_runtime_telemetry::JsonlTelemetry;
+    use erebor_telemetry::JsonlTelemetry;
     use rustix::process::geteuid;
     use tempfile::TempDir;
     use tokio::{io::AsyncWriteExt as _, net::UnixListener};

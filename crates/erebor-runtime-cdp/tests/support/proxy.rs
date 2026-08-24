@@ -6,7 +6,7 @@ use erebor_runtime_e2e::{
     MiniSystem,
 };
 use erebor_runtime_policy::{LocalPolicy, PolicySet};
-use erebor_runtime_telemetry::error;
+use erebor_telemetry::error;
 use serde_json::Value;
 
 pub use crate::common::{

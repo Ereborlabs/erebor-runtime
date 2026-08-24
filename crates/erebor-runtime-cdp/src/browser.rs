@@ -12,7 +12,7 @@ use std::{net::SocketAddr, path::PathBuf};
 use erebor_runtime_core::{BrowserCdpSurfaceConfig, LocalEnforcementEngine, RuntimeAuditConfig};
 use erebor_runtime_events::{ActorIdentity, SessionId};
 use erebor_runtime_policy::PolicySet;
-use erebor_runtime_telemetry::info;
+use erebor_telemetry::info;
 
 use self::process::{BrowserUpstream, OwnedBrowserProcess};
 use crate::{CdpError, CdpProxyServer, CdpProxyServerConfig, CdpSessionContext};

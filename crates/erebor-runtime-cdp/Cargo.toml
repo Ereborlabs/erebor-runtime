@@ -12,7 +12,7 @@ erebor-runtime-core = { path = "../erebor-runtime-core" }
 erebor-runtime-error = { path = "../erebor-runtime-error" }
 erebor-runtime-events = { path = "../erebor-runtime-events" }
 erebor-runtime-policy = { path = "../erebor-runtime-policy" }
-erebor-runtime-telemetry = { path = "../erebor-runtime-telemetry" }
+erebor-telemetry = { path = "../erebor-telemetry" }
 futures-util.workspace = true
 serde = { workspace = true }
 serde_json = { workspace = true }

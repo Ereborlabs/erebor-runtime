@@ -12,7 +12,7 @@ members = [
     "crates/erebor-runtime-daemon",
     "crates/erebor-runtime-e2e",
     "crates/erebor-runtime-error",
-    "crates/erebor-runtime-telemetry",
+    "crates/erebor-telemetry",
     "crates/erebor-runtime-events",
     "crates/erebor-runtime-filesystem",
     "crates/erebor-runtime-ipc",

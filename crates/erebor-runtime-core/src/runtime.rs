@@ -4,7 +4,7 @@ use std::{
     sync::mpsc::{self, Receiver, Sender},
 };
 
-use erebor_runtime_telemetry::{debug, info};
+use erebor_telemetry::{debug, info};
 use snafu::ResultExt;
 use tokio::runtime::Runtime;
 

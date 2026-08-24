@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use erebor_runtime_audit::{FilteredAuditSink, JsonlAuditSink};
 use erebor_runtime_core::{AuditRecord, AuditSink, RuntimeAuditConfig};
-use erebor_runtime_telemetry::warn;
+use erebor_telemetry::warn;
 
 #[derive(Clone, Debug)]
 pub(super) struct CdpAuditRecorder {

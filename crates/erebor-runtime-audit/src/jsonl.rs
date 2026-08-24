@@ -5,7 +5,7 @@ use std::{
 };
 
 use erebor_runtime_core::{AuditError, AuditRecord, AuditSink, DurableAuditSink};
-use erebor_runtime_telemetry::debug;
+use erebor_telemetry::debug;
 use snafu::{Location, ResultExt};
 
 use crate::error::{

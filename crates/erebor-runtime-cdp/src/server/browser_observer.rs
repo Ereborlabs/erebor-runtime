@@ -3,7 +3,7 @@ mod flow;
 use std::sync::Arc;
 
 use cdp_protocol::target;
-use erebor_runtime_telemetry::warn;
+use erebor_telemetry::warn;
 use futures_util::StreamExt;
 use tokio::time::sleep;
 use tokio_tungstenite::{connect_async, tungstenite::Message};

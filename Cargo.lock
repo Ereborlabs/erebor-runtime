@@ -1121,7 +1121,7 @@ dependencies = [
  "erebor-runtime-error",
  "erebor-runtime-events",
  "erebor-runtime-policy",
- "erebor-runtime-telemetry",
+ "erebor-telemetry",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -1139,7 +1139,7 @@ dependencies = [
  "erebor-runtime-error",
  "erebor-runtime-events",
  "erebor-runtime-policy",
- "erebor-runtime-telemetry",
+ "erebor-telemetry",
  "futures-util",
  "reqwest",
  "serde",
@@ -1163,7 +1163,7 @@ dependencies = [
  "erebor-runtime-events",
  "erebor-runtime-ipc",
  "erebor-runtime-session",
- "erebor-runtime-telemetry",
+ "erebor-telemetry",
  "rustix",
  "serde",
  "serde_json",
@@ -1210,7 +1210,7 @@ dependencies = [
  "erebor-runtime-events",
  "erebor-runtime-filesystem",
  "erebor-runtime-policy",
- "erebor-runtime-telemetry",
+ "erebor-telemetry",
  "rustix",
  "serde",
  "serde_json",
@@ -1236,7 +1236,7 @@ dependencies = [
  "erebor-runtime-packages",
  "erebor-runtime-policy",
  "erebor-runtime-session",
- "erebor-runtime-telemetry",
+ "erebor-telemetry",
  "futures-util",
  "prost",
  "rustix",
@@ -1267,7 +1267,7 @@ dependencies = [
  "erebor-runtime-packages",
  "erebor-runtime-policy",
  "erebor-runtime-session",
- "erebor-runtime-telemetry",
+ "erebor-telemetry",
  "futures-util",
  "rustix",
  "serde_json",
@@ -1358,8 +1358,8 @@ dependencies = [
  "erebor-runtime-ipc",
  "erebor-runtime-packages",
  "erebor-runtime-policy",
- "erebor-runtime-telemetry",
  "erebor-runtime-terminal",
+ "erebor-telemetry",
  "futures-util",
  "rustix",
  "serde",
@@ -1375,19 +1375,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "erebor-runtime-telemetry"
-version = "0.1.0"
-dependencies = [
- "erebor-runtime-error",
- "serde",
- "serde_json",
- "snafu",
- "tempfile",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
 name = "erebor-runtime-terminal"
 version = "0.1.0"
 dependencies = [
@@ -1397,6 +1384,19 @@ dependencies = [
  "erebor-runtime-policy",
  "serde_json",
  "snafu",
+]
+
+[[package]]
+name = "erebor-telemetry"
+version = "0.1.0"
+dependencies = [
+ "erebor-runtime-error",
+ "serde",
+ "serde_json",
+ "snafu",
+ "tempfile",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]

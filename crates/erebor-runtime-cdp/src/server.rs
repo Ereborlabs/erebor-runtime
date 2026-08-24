@@ -11,7 +11,7 @@ use std::{net::SocketAddr, path::PathBuf, sync::Arc};
 
 use erebor_runtime_core::{LocalEnforcementEngine, RuntimeAuditConfig};
 use erebor_runtime_policy::PolicySet;
-use erebor_runtime_telemetry::{debug, info, warn};
+use erebor_telemetry::{debug, info, warn};
 use snafu::ResultExt;
 use tokio::net::TcpListener;
 

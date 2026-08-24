@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use cdp_protocol::{fetch, page, runtime as cdp_runtime};
-use erebor_runtime_telemetry::{debug, warn};
+use erebor_telemetry::{debug, warn};
 use futures_util::StreamExt;
 use snafu::ResultExt;
 use tokio::time::{sleep, timeout};

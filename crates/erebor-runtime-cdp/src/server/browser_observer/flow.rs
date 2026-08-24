@@ -1,5 +1,5 @@
 use cdp_protocol::{page, runtime as cdp_runtime, target, types::Event as ProtocolEvent};
-use erebor_runtime_telemetry::debug;
+use erebor_telemetry::debug;
 use futures_util::StreamExt;
 use snafu::ResultExt;
 use tokio::time::timeout;

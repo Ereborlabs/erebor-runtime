@@ -3,7 +3,7 @@ use std::{any::Any, io, path::PathBuf};
 use erebor_runtime_approvals::ApprovalError;
 use erebor_runtime_error::{ErrorExt, RetryHint, StatusCode};
 use erebor_runtime_session::SessionManagerError;
-use erebor_runtime_telemetry::TelemetryError;
+use erebor_telemetry::TelemetryError;
 use snafu::{Location, Snafu};
 
 #[derive(Debug, Snafu)]

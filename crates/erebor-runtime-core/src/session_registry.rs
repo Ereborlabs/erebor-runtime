@@ -6,7 +6,7 @@ use std::{
 
 use erebor_runtime_context::ContextPin;
 use erebor_runtime_events::{ActorKind, SessionId};
-use erebor_runtime_telemetry::info;
+use erebor_telemetry::info;
 use serde::{Deserialize, Serialize};
 use snafu::ResultExt;
 

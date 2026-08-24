@@ -15,7 +15,7 @@ use erebor_runtime_events::{
 use erebor_runtime_ipc::v1::HookEventKind;
 use erebor_runtime_packages::CodexFrozenContextMode;
 use erebor_runtime_policy::Decision;
-use erebor_runtime_telemetry::warn;
+use erebor_telemetry::warn;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 

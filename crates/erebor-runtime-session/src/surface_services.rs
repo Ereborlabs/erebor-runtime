@@ -2,7 +2,7 @@ use erebor_runtime_cdp::BrowserCdpSurface;
 use erebor_runtime_core::{
     SessionSurfaceDefinition, SessionSurfaceKind, SessionSurfaceLaunchPlan, SessionSurfaceLauncher,
 };
-use erebor_runtime_telemetry::info;
+use erebor_telemetry::info;
 use snafu::ResultExt;
 
 use crate::{

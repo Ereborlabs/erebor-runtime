@@ -3,7 +3,7 @@ use erebor_runtime_core::{
     SessionSurfaceFailure, SessionSurfaceFailureSender, SessionSurfaceKind, SessionSurfaceService,
 };
 use erebor_runtime_policy::PolicySet;
-use erebor_runtime_telemetry::{debug, info};
+use erebor_telemetry::{debug, info};
 use snafu::Location;
 use tokio::runtime::Runtime;
 

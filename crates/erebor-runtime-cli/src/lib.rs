@@ -16,7 +16,7 @@ fn exit_on_error(result: Result<(), error::CliError>) {
     if let Err(error) = result {
         let status_code = error.status_code();
         let retry_hint = error.retry_hint();
-        erebor_runtime_telemetry::error!(
+        erebor_telemetry::error!(
             %error;
             "command failed",
             status_code = %status_code,

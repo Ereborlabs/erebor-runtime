@@ -4,7 +4,7 @@ use erebor_runtime_events::{
     ActionKind, EventId, ExecutionSurface, RiskLevel, RiskMetadata, TargetRef,
 };
 use erebor_runtime_policy::Decision;
-use erebor_runtime_telemetry::{debug, warn};
+use erebor_telemetry::{debug, warn};
 use futures_util::SinkExt;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};

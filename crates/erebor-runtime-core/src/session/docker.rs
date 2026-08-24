@@ -1,6 +1,6 @@
 use std::process::Command as ProcessCommand;
 
-use erebor_runtime_telemetry::info;
+use erebor_telemetry::info;
 use snafu::ResultExt;
 
 use crate::error::{SessionRunnerExitSnafu, SessionRunnerLaunchSnafu};

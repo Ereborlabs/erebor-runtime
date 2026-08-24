@@ -2,7 +2,7 @@ use std::{ffi::OsString, path::PathBuf};
 
 use erebor_runtime_daemon::{DaemonControlService, DaemonPaths};
 use erebor_runtime_error::ErrorExt;
-use erebor_runtime_telemetry::{error, init_stderr_logging};
+use erebor_telemetry::{error, init_stderr_logging};
 use tokio::signal::unix::{signal, SignalKind};
 
 enum LaunchMode {

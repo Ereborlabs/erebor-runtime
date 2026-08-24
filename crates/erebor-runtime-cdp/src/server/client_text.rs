@@ -2,7 +2,7 @@
 mod tests;
 
 use cdp_protocol::{target, types::CallId, types::Method};
-use erebor_runtime_telemetry::{debug, info};
+use erebor_telemetry::{debug, info};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use snafu::Location;
