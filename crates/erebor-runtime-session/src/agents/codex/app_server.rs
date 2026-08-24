@@ -15,7 +15,6 @@ pub const MAX_APP_SERVER_FRAME_BYTES: usize = 1024 * 1024;
 pub const CODEX_APP_SERVER_OUTPUT_VALIDATION_EVENT: &str = "codex_app_server_output_validation_v1";
 const MAX_INFLIGHT_REQUESTS: usize = 128;
 const MAX_CANCELLED_REQUESTS: usize = MAX_INFLIGHT_REQUESTS;
-const MAX_TRACKED_REQUEST_IDS: usize = 4096;
 const MAX_CACHED_OUTPUT_BYTES: usize = MAX_APP_SERVER_FRAME_BYTES * 2;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -549,10 +548,7 @@ impl CodexAppServerLedger {
         }
         let mutation = if let Some(id) = id {
             let key = request_key(&id)?;
-            if self.pending.len() >= MAX_INFLIGHT_REQUESTS
-                || self.used_request_ids.len() >= MAX_TRACKED_REQUEST_IDS
-                || self.used_request_ids.contains(&key)
-            {
+            if self.pending.len() >= MAX_INFLIGHT_REQUESTS || self.used_request_ids.contains(&key) {
                 return Err(protocol_error(
                     "App Server request ledger rejected the in-flight id",
                 ));
@@ -586,7 +582,9 @@ impl CodexAppServerLedger {
                 if self.pending.remove(&key).is_some() {
                     self.cancelled.push_back(key);
                     while self.cancelled.len() > MAX_CANCELLED_REQUESTS {
-                        self.cancelled.pop_front();
+                        if let Some(evicted) = self.cancelled.pop_front() {
+                            self.used_request_ids.remove(&evicted);
+                        }
                     }
                 }
                 Ok(())
@@ -684,12 +682,14 @@ impl CodexAppServerLedger {
                 .position(|cancelled| cancelled == &key)
             {
                 self.cancelled.remove(index);
+                self.used_request_ids.remove(&key);
                 return Ok(());
             }
             return Err(protocol_error(
                 "App Server response does not match an in-flight request",
             ));
         };
+        self.used_request_ids.remove(&key);
         if object.contains_key("error") {
             return Ok(());
         }
@@ -1414,13 +1414,18 @@ mod tests {
             1,
             b"{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{}}\n",
         )?;
-        assert!(completed_reuse
-            .service
-            .accept_input(
+        assert!(matches!(
+            completed_reuse.service.accept_input(
                 "session-test",
                 b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"model/list\"}\n",
-            )
-            .is_err());
+            )?,
+            CodexAppServerInput::Forward(_)
+        ));
+        completed_reuse.service.observe_output_chunk(
+            "session-test",
+            2,
+            b"{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{}}\n",
+        )?;
         Ok(())
     }
 
