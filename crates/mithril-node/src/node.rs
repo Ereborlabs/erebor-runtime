@@ -98,7 +98,7 @@ enum PolicyControlStepV1 {
     Reconnect,
 }
 
-struct CommittedRuntimeAdmissionV1 {
+struct CommittedRuntimePreparationV1 {
     runtime_binding_id: String,
     previous_config: NodeConfig,
     durable_rollback: crate::policy_delivery::RuntimeBindingRollbackV1,
@@ -174,7 +174,7 @@ impl NodeChassis {
                     && held_initial_pids.iter().all(|pid| *pid > 0),
                 IdentityStateSnafu {
                     reason:
-                        "prestart admission requires one held root for each armed static binding",
+                        "runtime admission requires one held root for each armed static binding",
                 }
             );
         }
@@ -188,7 +188,7 @@ impl NodeChassis {
         snafu::ensure!(
             held_initial_pids.is_empty() || !recover_identity,
             IdentityStateSnafu {
-                reason: "prestart admission requires a fresh identity pin root",
+                reason: "runtime admission requires a fresh identity pin root",
             }
         );
         let label_epoch = NodeEpochs::label_epoch(&config.state_directory, recover_identity)?;
@@ -1071,11 +1071,11 @@ impl NodeChassis {
             return Ok(());
         }
         match envelope.request.operation {
-            crate::runtime_admission::RuntimeAdmissionOperationV1::CreateContainer => {
+            crate::runtime_admission::RuntimeAdmissionOperationV1::StageRuntimeFacts => {
                 self.answer_runtime_stage(envelope).await
             }
-            crate::runtime_admission::RuntimeAdmissionOperationV1::Prestart => {
-                self.answer_runtime_prestart(envelope).await
+            crate::runtime_admission::RuntimeAdmissionOperationV1::PrepareContainer => {
+                self.answer_runtime_preparation(envelope).await
             }
         }
     }
@@ -1084,7 +1084,8 @@ impl NodeChassis {
         &mut self,
         envelope: crate::runtime_admission::RuntimeAdmissionEnvelope,
     ) -> Result<()> {
-        if envelope.request.kubernetes_identity().is_err() {
+        if let Err(error) = envelope.request.kubernetes_identity() {
+            eprintln!("Mithril rejected the first OCI runtime-fact hook: {error}");
             let _result = envelope
                 .deliver(crate::RuntimeAdmissionResponseV1 {
                     allowed: false,
@@ -1094,13 +1095,13 @@ impl NodeChassis {
             return Ok(());
         }
         let container_id = envelope.request.container_id.clone();
-        // CreateContainer is inside the CRI callback. Stage only immutable hook
-        // facts here; prestart owns the independent CRI Created-state proof.
-        if self
+        // The first ordered hook stages facts only. The second hook owns CRI
+        // Created-state proof and exact prepared-binding publication.
+        if let Err(error) = self
             .bindings
             .stage_runtime_admission(&self.config.workload_bindings, &envelope.request)
-            .is_err()
         {
+            eprintln!("Mithril could not stage first-hook OCI facts: {error}");
             let _result = envelope
                 .deliver(crate::RuntimeAdmissionResponseV1 {
                     allowed: false,
@@ -1122,7 +1123,7 @@ impl NodeChassis {
         Ok(())
     }
 
-    async fn answer_runtime_prestart(
+    async fn answer_runtime_preparation(
         &mut self,
         envelope: crate::runtime_admission::RuntimeAdmissionEnvelope,
     ) -> Result<()> {
@@ -1151,7 +1152,7 @@ impl NodeChassis {
                 .await;
             return Ok(());
         }
-        match self.admit_runtime_start(&envelope).await {
+        match self.prepare_runtime_start(&envelope).await {
             Ok(commit) => {
                 let container_id = envelope.request.container_id.clone();
                 let delivered = envelope
@@ -1161,13 +1162,17 @@ impl NodeChassis {
                     })
                     .await;
                 if delivered.is_err() {
-                    self.rollback_runtime_admission(commit)?;
+                    self.rollback_runtime_preparation(commit)?;
                 } else {
                     self.bindings.discard_runtime_stage(&container_id);
                 }
             }
             Err(error) if error.fatal => return Err(error.source),
-            Err(_error) => {
+            Err(error) => {
+                eprintln!(
+                    "Mithril rejected second-hook container preparation: {}",
+                    error.source
+                );
                 let _result = envelope
                     .deliver(crate::RuntimeAdmissionResponseV1 {
                         allowed: false,
@@ -1179,10 +1184,10 @@ impl NodeChassis {
         Ok(())
     }
 
-    async fn admit_runtime_start(
+    async fn prepare_runtime_start(
         &mut self,
         envelope: &crate::runtime_admission::RuntimeAdmissionEnvelope,
-    ) -> std::result::Result<CommittedRuntimeAdmissionV1, RuntimeAdmissionFailureV1> {
+    ) -> std::result::Result<CommittedRuntimePreparationV1, RuntimeAdmissionFailureV1> {
         envelope.ensure_active()?;
         let request = &envelope.request;
         let readiness = *self.readiness.borrow();
@@ -1194,7 +1199,7 @@ impl NodeChassis {
         );
         let scheduled = self
             .bindings
-            .verify_runtime_admission(&self.config.workload_bindings, request)
+            .verify_runtime_preparation(&self.config.workload_bindings, request)
             .await?;
         let mut dynamic = self.config.clone();
         dynamic.workload_bindings[scheduled.binding_index] = scheduled.resolved.clone();
@@ -1231,7 +1236,7 @@ impl NodeChassis {
         if let Err(error) = self.bindings.publish_held_activated_root(
             host,
             &scheduled.resolved,
-            request.prestart_pid()?,
+            request.held_initial_pid()?,
         ) {
             self.bindings.cancel_runtime_admission();
             return Err(RuntimeAdmissionFailureV1::fatal(error));
@@ -1277,13 +1282,13 @@ impl NodeChassis {
             }
         };
         let previous_config = std::mem::replace(&mut self.config, dynamic);
-        let commit = CommittedRuntimeAdmissionV1 {
+        let commit = CommittedRuntimePreparationV1 {
             runtime_binding_id: scheduled.resolved.binding_id,
             previous_config,
             durable_rollback,
         };
         if let Err(error) = envelope.ensure_active() {
-            return match self.rollback_runtime_admission(commit) {
+            return match self.rollback_runtime_preparation(commit) {
                 Ok(()) => Err(error.into()),
                 Err(rollback) => Err(RuntimeAdmissionFailureV1::fatal(
                     IdentityStateSnafu {
@@ -1298,7 +1303,10 @@ impl NodeChassis {
         Ok(commit)
     }
 
-    fn rollback_runtime_admission(&mut self, commit: CommittedRuntimeAdmissionV1) -> Result<()> {
+    fn rollback_runtime_preparation(
+        &mut self,
+        commit: CommittedRuntimePreparationV1,
+    ) -> Result<()> {
         let kernel = self.host.as_ref().map_or_else(
             || {
                 IdentityStateSnafu {
@@ -2652,7 +2660,7 @@ mod tests {
 
     fn admission_test_request() -> RuntimeAdmissionRequestV1 {
         RuntimeAdmissionRequestV1 {
-            operation: crate::RuntimeAdmissionOperationV1::Prestart,
+            operation: crate::RuntimeAdmissionOperationV1::PrepareContainer,
             container_id: "a".repeat(64),
             initial_pid: Some(1),
             cgroup_path: Some(PathBuf::from("/sys/fs/cgroup/kubepods/pod-a/container-a")),

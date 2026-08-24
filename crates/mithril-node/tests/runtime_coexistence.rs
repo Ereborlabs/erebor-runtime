@@ -1,4 +1,8 @@
-use std::{error::Error as StdError, fs, os::unix::fs::MetadataExt as _};
+use std::{
+    error::Error as StdError,
+    fs,
+    os::unix::fs::{MetadataExt as _, PermissionsExt as _},
+};
 
 use erebor_interceptor::{KernelLinkManifestV1, KernelObjectManifestV1, KernelPreflightV1};
 use erebor_runtime_client::MithrilObservationClient;
@@ -11,6 +15,7 @@ use tokio::sync::watch;
 async fn runtime_client_is_peer_authenticated_cgroup_scoped_and_read_only(
 ) -> Result<(), Box<dyn StdError>> {
     let directory = tempfile::tempdir()?;
+    fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700))?;
     let socket = directory.path().join("mithril-observation.sock");
     let cgroup_scope = current_cgroup_scope()?;
     let (readiness, readiness_receiver) = watch::channel(NodeReadinessV1 {

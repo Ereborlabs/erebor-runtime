@@ -91,11 +91,13 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             }
             for effect in snapshot.recent_effects {
                 println!(
-                    "observed_boottime_ns={} task_cookie={} family={} operation={} reason={} result={} object={}:{}:{}:{}:{} exact_object_key_id={} composite_atom_id={} kernel_result={}",
+                    "observed_boottime_ns={} task_cookie={} target_task_cookie={} family={} operation={} operation_argument={} reason={} result={} object={}:{}:{}:{}:{} exact_object_key_id={} composite_atom_id={} kernel_result={}",
                     effect.observed_boottime_ns,
                     effect.task_cookie,
+                    effect.target_task_cookie,
                     effect.effect_family,
                     effect.operation,
+                    effect.operation_argument,
                     effect.reason,
                     effect.physical_result,
                     effect.mount_namespace_inode,

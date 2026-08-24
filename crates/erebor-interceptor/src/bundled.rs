@@ -9,7 +9,7 @@ pub fn bundled_bpf_sha256() -> String {
 
 #[cfg(test)]
 mod tests {
-    use libbpf_rs::{MapType, ObjectBuilder};
+    use libbpf_rs::ObjectBuilder;
 
     use super::{bundled_bpf_sha256, BUNDLED_BPF_OBJECT};
 
@@ -52,8 +52,7 @@ mod tests {
 
         use erebor_interceptor_abi::{
             BindingActivationTargetKeyV1, EffectObservationHealthV1, ExceptionRuntimeStateKeyV1,
-            ExceptionRuntimeStateV1, ExecutionSetBindingStateV1, RuntimeBootstrapObjectKeyV1,
-            RuntimeBootstrapObjectStateV1, TaskEffectAttemptStateV1,
+            ExceptionRuntimeStateV1, ExecutionSetBindingStateV1, TaskEffectAttemptStateV1,
         };
 
         let object = open_object()?;
@@ -129,26 +128,6 @@ mod tests {
             size_of::<ExecutionSetBindingStateV1>()
         );
         assert_eq!(activation_map.max_entries(), 65_536);
-        let bootstrap_objects = object
-            .maps()
-            .find(|map| map.name().to_string_lossy() == "runtime_bootstrap_objects")
-            .ok_or_else(|| {
-                crate::error::InvalidConfigurationSnafu {
-                    path: std::path::Path::new("embedded erebor-interceptor.bpf.o"),
-                    reason: "bounded runtime bootstrap object map is missing".to_owned(),
-                }
-                .build()
-            })?;
-        assert_eq!(bootstrap_objects.map_type(), MapType::LruHash);
-        assert_eq!(bootstrap_objects.max_entries(), 65_536);
-        assert_eq!(
-            bootstrap_objects.key_size() as usize,
-            size_of::<RuntimeBootstrapObjectKeyV1>()
-        );
-        assert_eq!(
-            bootstrap_objects.value_size() as usize,
-            size_of::<RuntimeBootstrapObjectStateV1>()
-        );
         let health = object
             .maps()
             .find(|map| map.name().to_string_lossy() == "effect_observation_health")

@@ -1,7 +1,4 @@
 use std::collections::BTreeMap;
-use std::fs;
-use std::os::unix::fs::{FileTypeExt as _, MetadataExt as _, PermissionsExt as _};
-use std::os::unix::net::UnixStream as StandardUnixStream;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -40,8 +37,8 @@ pub struct RuntimeAdmissionRequestV1 {
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum RuntimeAdmissionOperationV1 {
-    CreateContainer,
-    Prestart,
+    StageRuntimeFacts,
+    PrepareContainer,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -83,6 +80,7 @@ struct RuntimeAdmissionDispatch {
 /// This owner controls the socket path, listener, and concurrent request dispatch.
 pub(crate) struct RuntimeAdmissionServer {
     listener: UnixListener,
+    _socket_owner: crate::unix_socket::UnixSocketPathOwner,
     socket_path: PathBuf,
     maximum_request_bytes: usize,
     timeout: Duration,
@@ -103,11 +101,11 @@ pub struct RuntimeAdmissionClient {
 impl RuntimeAdmissionRequestV1 {
     pub(crate) fn kubernetes_identity(&self) -> Result<KubernetesRuntimeIdentityV1> {
         let operation_is_canonical = match self.operation {
-            RuntimeAdmissionOperationV1::CreateContainer => {
+            RuntimeAdmissionOperationV1::StageRuntimeFacts => {
                 self.initial_pid.is_none()
                     && self.cgroup_path.as_deref().is_some_and(clean_cgroup_path)
             }
-            RuntimeAdmissionOperationV1::Prestart => {
+            RuntimeAdmissionOperationV1::PrepareContainer => {
                 self.initial_pid.is_some_and(|pid| pid > 0)
                     && self.cgroup_path.as_deref().is_some_and(clean_cgroup_path)
             }
@@ -170,27 +168,27 @@ impl RuntimeAdmissionRequestV1 {
         })
     }
 
-    pub(crate) fn prestart_pid(&self) -> Result<u32> {
+    pub(crate) fn held_initial_pid(&self) -> Result<u32> {
         ensure!(
-            self.operation == RuntimeAdmissionOperationV1::Prestart,
+            self.operation == RuntimeAdmissionOperationV1::PrepareContainer,
             IdentityStateSnafu {
-                reason: "runtime authority requires an OCI prestart request",
+                reason: "container preparation requires the second ordered OCI hook",
             }
         );
         self.initial_pid.context(IdentityStateSnafu {
-            reason: "OCI prestart request has no initial process",
+            reason: "OCI runtime admission has no initial process",
         })
     }
 
-    pub(crate) fn prestart_cgroup_path(&self) -> Result<&Path> {
+    pub(crate) fn held_cgroup_path(&self) -> Result<&Path> {
         ensure!(
-            self.operation == RuntimeAdmissionOperationV1::Prestart,
+            self.operation == RuntimeAdmissionOperationV1::PrepareContainer,
             IdentityStateSnafu {
-                reason: "runtime authority requires an OCI prestart request",
+                reason: "container preparation requires the second ordered OCI hook",
             }
         );
         self.cgroup_path.as_deref().context(IdentityStateSnafu {
-            reason: "OCI prestart request has no cgroup path",
+            reason: "OCI runtime admission has no cgroup path",
         })
     }
 }
@@ -235,54 +233,13 @@ impl RuntimeAdmissionServer {
     pub(crate) fn bind(
         config: &RuntimeAdmissionConfig,
     ) -> Result<(Self, RuntimeAdmissionReceiver)> {
-        let parent = config.socket_path.parent().ok_or_else(|| {
-            IdentityStateSnafu {
-                reason: "runtime admission socket has no parent directory".to_owned(),
-            }
-            .build()
-        })?;
-        // The root-owned parent and socket mode make this local endpoint a privileged boundary.
-        let parent_metadata = fs::metadata(parent).context(IoSnafu { path: parent })?;
-        ensure!(
-            parent_metadata.is_dir()
-                && parent_metadata.uid() == 0
-                && parent_metadata.mode() & 0o022 == 0,
-            IdentityStateSnafu {
-                reason: "runtime admission socket parent must be root-owned and not group-writable or world-writable",
-            }
-        );
-        if let Ok(metadata) = fs::symlink_metadata(&config.socket_path) {
-            ensure!(
-                metadata.file_type().is_socket() && metadata.uid() == 0,
-                IdentityStateSnafu {
-                    reason: "runtime admission socket path is occupied by an unsafe object",
-                }
-            );
-            remove_stale_socket(&config.socket_path)?;
-        }
-        let listener = UnixListener::bind(&config.socket_path).context(IoSnafu {
-            path: &config.socket_path,
-        })?;
-        fs::set_permissions(&config.socket_path, fs::Permissions::from_mode(0o600)).context(
-            IoSnafu {
-                path: &config.socket_path,
-            },
-        )?;
-        let metadata = fs::metadata(&config.socket_path).context(IoSnafu {
-            path: &config.socket_path,
-        })?;
-        ensure!(
-            metadata.file_type().is_socket()
-                && metadata.uid() == 0
-                && metadata.mode() & 0o777 == 0o600,
-            IdentityStateSnafu {
-                reason: "runtime admission socket is not a root-owned mode 0600 socket",
-            }
-        );
+        let (listener, socket_owner) =
+            crate::unix_socket::UnixSocketPathOwner::bind(&config.socket_path, 0)?;
         let (requests, receiver) = mpsc::channel(128);
         Ok((
             Self {
                 listener,
+                _socket_owner: socket_owner,
                 socket_path: config.socket_path.clone(),
                 maximum_request_bytes: config.maximum_request_bytes,
                 timeout: Duration::from_millis(config.timeout_ms),
@@ -304,14 +261,17 @@ impl RuntimeAdmissionServer {
                     let maximum_request_bytes = self.maximum_request_bytes;
                     let timeout = self.timeout;
                     tokio::spawn(async move {
-                        let _result = Self::handle_connection(
+                        if let Err(error) = Self::handle_connection(
                             stream,
                             &path,
                             maximum_request_bytes,
                             timeout,
                             requests,
                         )
-                        .await;
+                        .await
+                        {
+                            eprintln!("Mithril runtime admission exchange failed: {error}");
+                        }
                     });
                 }
                 changed = shutdown.changed() => {
@@ -320,7 +280,7 @@ impl RuntimeAdmissionServer {
                 }
             }
         }
-        remove_owned_socket(&self.socket_path)
+        Ok(())
     }
 }
 
@@ -393,7 +353,7 @@ impl RuntimeAdmissionClient {
         &self,
         request: &RuntimeAdmissionRequestV1,
     ) -> Result<RuntimeAdmissionResponseV1> {
-        // Timeout is denial because the OCI prestart process stays held during this exchange.
+        // Timeout is denial because the exact initial task stays held during this exchange.
         tokio::time::timeout(self.timeout, async {
             let stream = UnixStream::connect(&self.socket_path)
                 .await
@@ -465,12 +425,12 @@ impl ScheduledRuntimeBindingV1 {
         request: &RuntimeAdmissionRequestV1,
     ) -> Result<Self> {
         ensure!(
-            request.operation == RuntimeAdmissionOperationV1::Prestart,
+            request.operation == RuntimeAdmissionOperationV1::PrepareContainer,
             IdentityStateSnafu {
-                reason: "scheduled runtime activation requires an OCI prestart request",
+                reason: "scheduled runtime activation requires the second ordered OCI hook",
             }
         );
-        Self::resolve_request(configured, request, Some(request.prestart_cgroup_path()?))
+        Self::resolve_request(configured, request, Some(request.held_cgroup_path()?))
     }
 
     pub(crate) fn resolve_stage(
@@ -478,9 +438,9 @@ impl ScheduledRuntimeBindingV1 {
         request: &RuntimeAdmissionRequestV1,
     ) -> Result<Self> {
         ensure!(
-            request.operation == RuntimeAdmissionOperationV1::CreateContainer,
+            request.operation == RuntimeAdmissionOperationV1::StageRuntimeFacts,
             IdentityStateSnafu {
-                reason: "runtime fact staging requires an OCI createContainer request",
+                reason: "runtime fact staging requires the first ordered OCI hook",
             }
         );
         Self::resolve_request(configured, request, None)
@@ -610,37 +570,6 @@ fn valid_sha256(value: &str) -> bool {
             .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
 }
 
-fn remove_stale_socket(socket_path: &Path) -> Result<()> {
-    // Unlink only when connect proves that no live admission owner holds the path.
-    match StandardUnixStream::connect(socket_path) {
-        Ok(_stream) => IdentityStateSnafu {
-            reason: "another runtime admission owner is active".to_owned(),
-        }
-        .fail(),
-        Err(error) if error.kind() == std::io::ErrorKind::ConnectionRefused => {
-            fs::remove_file(socket_path).context(IoSnafu { path: socket_path })
-        }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(error) => IdentityStateSnafu {
-            reason: format!("runtime admission socket ownership is not provable: {error}"),
-        }
-        .fail(),
-    }
-}
-
-fn remove_owned_socket(socket_path: &Path) -> Result<()> {
-    match fs::remove_file(socket_path) {
-        Ok(()) => Ok(()),
-        // Packaging can unlink the endpoint first to close admission during termination.
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(source) => Err(crate::Error::Io {
-            path: socket_path.to_path_buf(),
-            source,
-            location: snafu::Location::new(file!(), line!(), column!()),
-        }),
-    }
-}
-
 fn clean_cgroup_path(path: &Path) -> bool {
     path.is_absolute()
         && path.starts_with("/sys/fs/cgroup")
@@ -726,14 +655,20 @@ impl RuntimeAdmissionServer {
         .await;
         let response = match result {
             Ok(Ok(())) => return Ok(()),
-            Err(_elapsed) => RuntimeAdmissionResponseV1 {
-                allowed: false,
-                reason_code: "ADMISSION_TIMEOUT".to_owned(),
-            },
-            Ok(Err(_error)) => RuntimeAdmissionResponseV1 {
-                allowed: false,
-                reason_code: "ADMISSION_REJECTED".to_owned(),
-            },
+            Err(_elapsed) => {
+                eprintln!("Mithril runtime admission request exceeded its fail-closed deadline");
+                RuntimeAdmissionResponseV1 {
+                    allowed: false,
+                    reason_code: "ADMISSION_TIMEOUT".to_owned(),
+                }
+            }
+            Ok(Err(error)) => {
+                eprintln!("Mithril runtime admission request was rejected: {error}");
+                RuntimeAdmissionResponseV1 {
+                    allowed: false,
+                    reason_code: "ADMISSION_REJECTED".to_owned(),
+                }
+            }
         };
         // Convert every timeout and internal error into an explicit denial response.
         let bytes = serde_json::to_vec(&response).context(JsonSnafu {
@@ -793,18 +728,17 @@ mod tests {
     use std::time::Duration;
 
     use super::{
-        remove_owned_socket, remove_stale_socket, RuntimeAdmissionClient,
-        RuntimeAdmissionOperationV1, RuntimeAdmissionRequestV1, RuntimeAdmissionResponseV1,
-        RuntimeAdmissionServer, ScheduledRuntimeBindingV1, CONTAINER_NAME_ANNOTATION,
-        IMAGE_NAME_ANNOTATION, POD_NAMESPACE_ANNOTATION, POD_UID_ANNOTATION,
-        POLICY_CONVERGENCE_PENDING, POLICY_SOURCE_REVISION_ANNOTATION, PROFILE_ID_ANNOTATION,
-        SANDBOX_ID_ANNOTATION,
+        RuntimeAdmissionClient, RuntimeAdmissionOperationV1, RuntimeAdmissionRequestV1,
+        RuntimeAdmissionResponseV1, RuntimeAdmissionServer, ScheduledRuntimeBindingV1,
+        CONTAINER_NAME_ANNOTATION, IMAGE_NAME_ANNOTATION, POD_NAMESPACE_ANNOTATION,
+        POD_UID_ANNOTATION, POLICY_CONVERGENCE_PENDING, POLICY_SOURCE_REVISION_ANNOTATION,
+        PROFILE_ID_ANNOTATION, SANDBOX_ID_ANNOTATION,
     };
     use crate::{ContainerKindV1, WorkloadBindingConfig};
 
     fn request() -> RuntimeAdmissionRequestV1 {
         RuntimeAdmissionRequestV1 {
-            operation: RuntimeAdmissionOperationV1::Prestart,
+            operation: RuntimeAdmissionOperationV1::PrepareContainer,
             container_id: "a".repeat(64),
             initial_pid: Some(42),
             cgroup_path: Some(PathBuf::from("/sys/fs/cgroup/kubepods/pod-a/container-a")),
@@ -868,10 +802,9 @@ mod tests {
     }
 
     #[test]
-    fn create_container_can_stage_facts_but_cannot_request_runtime_authority() -> crate::Result<()>
-    {
+    fn first_hook_can_stage_facts_but_cannot_request_runtime_authority() -> crate::Result<()> {
         let mut stage = request();
-        stage.operation = RuntimeAdmissionOperationV1::CreateContainer;
+        stage.operation = RuntimeAdmissionOperationV1::StageRuntimeFacts;
         stage.initial_pid = None;
         let scheduled = scheduled_binding();
         let resolved = ScheduledRuntimeBindingV1::resolve_stage(&[scheduled], &stage)?;
@@ -901,30 +834,6 @@ mod tests {
             .annotations
             .insert(PROFILE_ID_ANNOTATION.to_owned(), "profile-a".to_owned());
         assert!(forged_profile.kubernetes_identity().is_err());
-    }
-
-    #[test]
-    fn an_active_runtime_admission_owner_cannot_be_replaced(
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        let directory = tempfile::tempdir()?;
-        let socket = directory.path().join("runtime-admission.sock");
-        let _listener = std::os::unix::net::UnixListener::bind(&socket)?;
-        assert!(remove_stale_socket(&socket).is_err());
-        assert!(socket.exists());
-        Ok(())
-    }
-
-    #[test]
-    fn packaging_can_close_the_socket_before_server_shutdown(
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        let directory = tempfile::tempdir()?;
-        let socket = directory.path().join("runtime-admission.sock");
-        let _listener = std::os::unix::net::UnixListener::bind(&socket)?;
-
-        remove_owned_socket(&socket)?;
-        remove_owned_socket(&socket)?;
-        assert!(!socket.exists());
-        Ok(())
     }
 
     #[test]

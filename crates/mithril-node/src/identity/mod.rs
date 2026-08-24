@@ -11,5 +11,7 @@ pub use authorization::{
 };
 pub(crate) use binding::ExactObjectBindingTargetV1;
 pub use binding::{AdministrativeBindingTargetV1, WorkloadBindingOwner};
-pub use inspection::{NativeIdentityInspector, NativeTaskSnapshotV1};
+pub use inspection::{
+    NativeIdentityInspector, NativeRuntimeBindingSnapshotV1, NativeTaskSnapshotV1,
+};
 pub use native::{NativeSecurityStateOwner, ReconciliationReportV1};

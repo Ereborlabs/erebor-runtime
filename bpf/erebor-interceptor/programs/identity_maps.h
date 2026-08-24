@@ -48,8 +48,7 @@ struct exception_runtime_state_bpf_v1 {
 #define EFFECT_GATE_DENY_EXCEPTION_V1 2
 #define EFFECT_GATE_FILE_OPEN_ATTEMPT_V1 4
 #define EFFECT_GATE_PATH_SUPPLIED_V1 8
-#define EFFECT_GATE_RUNTIME_INHERITED_CLAIM_V1 16
-#define EFFECT_GATE_RUNTIME_RECEIVED_V1 32
+#define EFFECT_GATE_PREPARED_EXEC_EVALUATION_V1 16
 #define MAX_CANONICAL_MOUNTS_V1 4096
 #define CANONICAL_MOUNT_CACHE_READY_V1 1
 #define CANONICAL_MOUNT_CACHE_MISS_V1 1
@@ -184,8 +183,6 @@ struct identity_scratch_v1 {
     __u32 path_mount_namespace_inode;
     struct path effect_path;
     exact_file_object_key_v1 file_object;
-    runtime_bootstrap_object_key_v1 runtime_bootstrap_object_key;
-    runtime_bootstrap_object_state_v1 runtime_bootstrap_object_candidate;
     task_label_v1 target_label;
     task_coordinate_v1 target_coordinate;
     process_security_state_v1 target_process;
@@ -310,13 +307,6 @@ struct {
     __type(key, __u64);
     __type(value, execution_set_binding_state_v1);
 } execution_set_bindings SEC(".maps");
-
-struct {
-    __uint(type, BPF_MAP_TYPE_LRU_HASH);
-    __uint(max_entries, 65536);
-    __type(key, runtime_bootstrap_object_key_v1);
-    __type(value, runtime_bootstrap_object_state_v1);
-} runtime_bootstrap_objects SEC(".maps");
 
 struct {
     __uint(type, BPF_MAP_TYPE_HASH);

@@ -461,8 +461,8 @@ const fn reason_name(reason: u8) -> &'static str {
         value if value == EffectObservationReasonV1::NetworkResponseFence as u8 => {
             "NETWORK_RESPONSE_FENCE"
         }
-        value if value == EffectObservationReasonV1::RuntimeBootstrapAuthority as u8 => {
-            "RUNTIME_BOOTSTRAP_AUTHORITY"
+        value if value == EffectObservationReasonV1::PreparedRuntimeInfrastructure as u8 => {
+            "PREPARED_RUNTIME_INFRASTRUCTURE"
         }
         _ => "UNKNOWN",
     }
@@ -515,8 +515,8 @@ mod tests {
             "EXCEPTION_UNAVAILABLE"
         );
         assert_eq!(
-            reason_name(EffectObservationReasonV1::RuntimeBootstrapAuthority as u8),
-            "RUNTIME_BOOTSTRAP_AUTHORITY"
+            reason_name(EffectObservationReasonV1::PreparedRuntimeInfrastructure as u8),
+            "PREPARED_RUNTIME_INFRASTRUCTURE"
         );
     }
 

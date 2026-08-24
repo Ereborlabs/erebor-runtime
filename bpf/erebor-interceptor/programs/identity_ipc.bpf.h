@@ -65,6 +65,9 @@ static __noinline int socket_current_actor(__u16 effect_family,
         return ret;
     config = identity_runtime_config();
     scratch = identity_scratch_record();
+    // Prepared runtime sockets must not become workload IPC authority.
+    if (prepared_runtime_effect_was_allowed(scratch))
+        return IPC_ACTOR_OUTSIDE_PROTECTED_SCOPE;
     if (!config || !config->enabled || !config->effect_policy_enabled ||
         !scratch || id128_is_zero(&scratch->observation.binding_id))
         return IPC_ACTOR_OUTSIDE_PROTECTED_SCOPE;

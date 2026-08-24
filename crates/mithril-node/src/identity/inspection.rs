@@ -1,12 +1,14 @@
+use std::fs;
 use std::os::fd::AsRawFd as _;
-use std::path::PathBuf;
+use std::os::unix::fs::MetadataExt as _;
+use std::path::{Path, PathBuf};
 
 use erebor_interceptor::KernelStateReader;
 use erebor_interceptor_abi::{
-    CreatedByEdgeV1, ExternalRootClassV1, ExternalRootClassificationV1, Id128V1, ImageProvenanceV1,
-    InstalledRoleClassV1, KernelRealParentIntervalKeyV1, KernelRealParentIntervalV1,
-    ProcessExecutionInstanceV1, ProcessSecurityStateV1, ProcessStateVectorV1, TaskCoordinateV1,
-    TaskLabelV1,
+    CreatedByEdgeV1, ExecutionSetBindingStateV1, ExternalRootClassV1, ExternalRootClassificationV1,
+    Id128V1, ImageProvenanceV1, InstalledRoleClassV1, KernelRealParentIntervalKeyV1,
+    KernelRealParentIntervalV1, PreparedContainerStateV1, ProcessExecutionInstanceV1,
+    ProcessSecurityStateV1, ProcessStateVectorV1, TaskCoordinateV1, TaskLabelV1,
 };
 use rustix::process::{pidfd_open, Pid, PidfdFlags};
 use serde::{Deserialize, Serialize};
@@ -21,6 +23,9 @@ pub struct NativeTaskSnapshotV1 {
     pub task_cookie: u64,
     #[serde(default)]
     pub execution_set_id: Option<String>,
+    pub entry_instance_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub runtime_binding: Option<NativeRuntimeBindingSnapshotV1>,
     pub creator_task_cookie: Option<u64>,
     pub root_class: Option<String>,
     pub installed_role_class: Option<String>,
@@ -43,6 +48,17 @@ pub struct NativeTaskSnapshotV1 {
     pub coordinate_state: u8,
     pub exec_guard_state: u8,
     pub profile_generation_ref_id: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct NativeRuntimeBindingSnapshotV1 {
+    pub binding_id: String,
+    pub root_cgroup_id: u64,
+    pub prepared_container_state: String,
+    pub prepared_container_deadline_boottime_ns: u64,
+    pub prepared_container_entry_instance_id: String,
+    pub prepared_container_exec_task_cookie: u64,
+    pub prepared_container_initial_host_tgid: u32,
 }
 
 pub struct NativeIdentityInspector {
@@ -83,6 +99,23 @@ impl NativeIdentityInspector {
         let task_cookie = label.task_cookie;
         let process_state_id = label.process_state_id;
         let profile_generation_ref_id = label.birth_profile_generation_ref_id;
+        let runtime_binding = self.runtime_binding(host_pid, label.execution_set_id)?.map(
+            |(root_cgroup_id, binding)| NativeRuntimeBindingSnapshotV1 {
+                binding_id: id_string(binding.binding_id),
+                root_cgroup_id,
+                prepared_container_state: prepared_container_state_name(
+                    binding.prepared_container_state,
+                )
+                .to_owned(),
+                prepared_container_deadline_boottime_ns: binding
+                    .prepared_container_deadline_boottime_ns,
+                prepared_container_entry_instance_id: id_string(
+                    binding.prepared_container_entry_instance_id,
+                ),
+                prepared_container_exec_task_cookie: binding.prepared_container_exec_task_cookie,
+                prepared_container_initial_host_tgid: binding.prepared_container_initial_host_tgid,
+            },
+        );
         let process = self.required(
             "process_states",
             process_state_id.as_bytes(),
@@ -160,6 +193,8 @@ impl NativeIdentityInspector {
         Ok(Some(NativeTaskSnapshotV1 {
             task_cookie,
             execution_set_id: Some(id_string(label.execution_set_id)),
+            entry_instance_id: id_string(label.entry_instance_id),
+            runtime_binding,
             creator_task_cookie,
             root_class,
             installed_role_class,
@@ -202,6 +237,54 @@ impl NativeIdentityInspector {
                 reason: format!("{name} is missing"),
             })
     }
+
+    fn runtime_binding(
+        &self,
+        host_pid: u32,
+        execution_set_id: Id128V1,
+    ) -> Result<Option<(u64, ExecutionSetBindingStateV1)>> {
+        let proc_path = PathBuf::from(format!("/proc/{host_pid}/cgroup"));
+        let cgroups = fs::read_to_string(&proc_path).context(IoSnafu { path: &proc_path })?;
+        let Some(relative) = crate::config::unified_cgroup_path(&cgroups) else {
+            return Ok(None);
+        };
+        let candidate = Path::new("/sys/fs/cgroup").join(relative.trim_start_matches('/'));
+        let cgroup_path = fs::canonicalize(&candidate).context(IoSnafu { path: &candidate })?;
+        ensure_cgroup_path(&cgroup_path)?;
+        let root_cgroup_id = fs::metadata(&cgroup_path)
+            .context(IoSnafu { path: &cgroup_path })?
+            .ino();
+
+        // The live cgroup inode is the binding key. An execution-set ID alone
+        // could select a retired container lifetime with the same policy.
+        let Some(binding) = self
+            .state
+            .lookup("execution_set_bindings", &root_cgroup_id.to_ne_bytes())
+            .context(InterceptorSnafu)?
+        else {
+            return Ok(None);
+        };
+        let binding =
+            read_abi_value::<ExecutionSetBindingStateV1>(&binding, "execution-set binding")?;
+        if binding.root_cgroup_id != root_cgroup_id || binding.execution_set_id != execution_set_id
+        {
+            return IdentityStateSnafu {
+                reason: "live task and execution-set binding identity differ".to_owned(),
+            }
+            .fail();
+        }
+        Ok(Some((root_cgroup_id, binding)))
+    }
+}
+
+fn ensure_cgroup_path(path: &Path) -> Result<()> {
+    if path != Path::new("/sys/fs/cgroup") && path.starts_with("/sys/fs/cgroup/") {
+        return Ok(());
+    }
+    IdentityStateSnafu {
+        reason: format!("live task cgroup `{}` is outside cgroup2", path.display()),
+    }
+    .fail()
 }
 
 fn read_abi_value<T: KnownLayout + TryFromBytes>(bytes: &[u8], name: &str) -> Result<T> {
@@ -235,5 +318,16 @@ fn installed_role_class_name(value: InstalledRoleClassV1) -> &'static str {
         InstalledRoleClassV1::QualifiedRegisteredRole => "qualified_registered_role",
         InstalledRoleClassV1::ApprovedAdministrativeRole => "approved_administrative_role",
         InstalledRoleClassV1::Unknown => "unknown",
+    }
+}
+
+fn prepared_container_state_name(value: PreparedContainerStateV1) -> &'static str {
+    match value {
+        PreparedContainerStateV1::Unarmed => "unarmed",
+        PreparedContainerStateV1::Prepared => "prepared",
+        PreparedContainerStateV1::ExecPending => "exec_pending",
+        PreparedContainerStateV1::Active => "active",
+        PreparedContainerStateV1::Expired => "expired",
+        PreparedContainerStateV1::Corrupt => "corrupt",
     }
 }

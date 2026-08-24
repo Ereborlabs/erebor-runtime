@@ -12,7 +12,7 @@ use serde::Deserialize;
 const MAXIMUM_OCI_STATE_BYTES: u64 = 1_048_576;
 
 #[derive(Parser)]
-#[command(about = "Stage OCI facts or hold prestart until Mithril activates the exact binding")]
+#[command(about = "Run one ordered OCI runtime-fact or container-preparation step")]
 struct Cli {
     #[arg(long, value_enum)]
     stage: HookStageV1,
@@ -26,8 +26,8 @@ struct Cli {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
 enum HookStageV1 {
-    CreateContainer,
-    Prestart,
+    StageRuntimeFacts,
+    PrepareContainer,
 }
 
 #[derive(Deserialize)]
@@ -97,18 +97,18 @@ fn request_with_cgroup(
     cgroup_path: PathBuf,
 ) -> io::Result<RuntimeAdmissionRequestV1> {
     let (operation, initial_pid, cgroup_path) = match stage {
-        HookStageV1::CreateContainer => (
-            RuntimeAdmissionOperationV1::CreateContainer,
+        HookStageV1::StageRuntimeFacts => (
+            RuntimeAdmissionOperationV1::StageRuntimeFacts,
             None,
             Some(cgroup_path),
         ),
-        HookStageV1::Prestart => {
+        HookStageV1::PrepareContainer => {
             if state.pid == 0 {
-                return Err(invalid_data("OCI prestart has no initial process"));
+                return Err(invalid_data("OCI runtime admission has no initial process"));
             }
-            // Prestart keeps the task held while the node publishes its exact binding.
+            // The second ordered hook keeps the task held until exact map readback succeeds.
             (
-                RuntimeAdmissionOperationV1::Prestart,
+                RuntimeAdmissionOperationV1::PrepareContainer,
                 Some(state.pid),
                 Some(cgroup_path),
             )
@@ -189,7 +189,7 @@ mod tests {
     }
 
     #[test]
-    fn create_container_stages_cgroup_without_runtime_authority(
+    fn first_hook_stages_cgroup_without_preparing_the_container(
     ) -> Result<(), Box<dyn std::error::Error>> {
         let state: OciStateV1 = serde_json::from_value(serde_json::json!({
             "ociVersion": "1.0.2",
@@ -200,15 +200,39 @@ mod tests {
             "annotations": {}
         }))?;
         let request = request_with_cgroup(
-            HookStageV1::CreateContainer,
+            HookStageV1::StageRuntimeFacts,
             state,
             Path::new("/sys/fs/cgroup/kubepods/pod-a/container-a").to_path_buf(),
         )?;
         assert_eq!(
             request.operation,
-            RuntimeAdmissionOperationV1::CreateContainer
+            RuntimeAdmissionOperationV1::StageRuntimeFacts
         );
         assert_eq!(request.initial_pid, None);
+        assert!(request.cgroup_path.is_some());
+        Ok(())
+    }
+
+    #[test]
+    fn second_hook_carries_the_exact_held_initial_task() -> Result<(), Box<dyn std::error::Error>> {
+        let state: OciStateV1 = serde_json::from_value(serde_json::json!({
+            "ociVersion": "1.0.2",
+            "id": "a".repeat(64),
+            "status": "creating",
+            "pid": 42,
+            "bundle": "/run/containerd/io.containerd.runtime.v2.task/k8s.io/container-a",
+            "annotations": {}
+        }))?;
+        let request = request_with_cgroup(
+            HookStageV1::PrepareContainer,
+            state,
+            Path::new("/sys/fs/cgroup/kubepods/pod-a/container-a").to_path_buf(),
+        )?;
+        assert_eq!(
+            request.operation,
+            RuntimeAdmissionOperationV1::PrepareContainer
+        );
+        assert_eq!(request.initial_pid, Some(42));
         assert!(request.cgroup_path.is_some());
         Ok(())
     }

@@ -546,7 +546,7 @@ fn is_sha256(value: &str) -> bool {
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
-fn unified_cgroup_path(cgroups: &str) -> Option<&str> {
+pub(crate) fn unified_cgroup_path(cgroups: &str) -> Option<&str> {
     // Accept one non-root cgroup2 path so the node cannot silently broaden CRI scope.
     let mut paths = cgroups.lines().filter_map(|line| line.strip_prefix("0::"));
     let path = paths.next()?;

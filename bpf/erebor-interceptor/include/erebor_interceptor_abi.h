@@ -240,22 +240,22 @@ typedef enum initial_root_state_v1 initial_root_state_v1;
 typedef uint64_t initial_root_state_v1;
 #endif // __STDC_VERSION__ >= 202311L
 
-enum runtime_bootstrap_state_v1
+enum prepared_container_state_v1
 #if __STDC_VERSION__ >= 202311L
   : uint64_t
 #endif // __STDC_VERSION__ >= 202311L
  {
-  runtime_bootstrap_state_v1_unarmed = 0,
-  runtime_bootstrap_state_v1_armed = 1,
-  runtime_bootstrap_state_v1_handoff_pending = 2,
-  runtime_bootstrap_state_v1_consumed = 3,
-  runtime_bootstrap_state_v1_expired = 4,
-  runtime_bootstrap_state_v1_corrupt = 5,
+  prepared_container_state_v1_unarmed = 0,
+  prepared_container_state_v1_prepared = 1,
+  prepared_container_state_v1_exec_pending = 2,
+  prepared_container_state_v1_active = 3,
+  prepared_container_state_v1_expired = 4,
+  prepared_container_state_v1_corrupt = 5,
 };
 #if __STDC_VERSION__ >= 202311L
-typedef enum runtime_bootstrap_state_v1 runtime_bootstrap_state_v1;
+typedef enum prepared_container_state_v1 prepared_container_state_v1;
 #else
-typedef uint64_t runtime_bootstrap_state_v1;
+typedef uint64_t prepared_container_state_v1;
 #endif // __STDC_VERSION__ >= 202311L
 
 enum installed_role_class_v1
@@ -309,7 +309,7 @@ enum effect_observation_reason_v1
   effect_observation_reason_v1_exception_unavailable = 10,
   effect_observation_reason_v1_path_tree_policy_deny = 11,
   effect_observation_reason_v1_network_response_fence = 12,
-  effect_observation_reason_v1_runtime_bootstrap_authority = 13,
+  effect_observation_reason_v1_prepared_runtime_infrastructure = 13,
 };
 #if __STDC_VERSION__ >= 202311L
 typedef enum effect_observation_reason_v1 effect_observation_reason_v1;
@@ -426,21 +426,6 @@ enum exception_use_identity_kind_v1
 typedef enum exception_use_identity_kind_v1 exception_use_identity_kind_v1;
 #else
 typedef uint8_t exception_use_identity_kind_v1;
-#endif // __STDC_VERSION__ >= 202311L
-
-enum runtime_bootstrap_object_kind_v1
-#if __STDC_VERSION__ >= 202311L
-  : uint8_t
-#endif // __STDC_VERSION__ >= 202311L
- {
-  runtime_bootstrap_object_kind_v1_unknown = 0,
-  runtime_bootstrap_object_kind_v1_pipe = 1,
-  runtime_bootstrap_object_kind_v1_memfd = 2,
-};
-#if __STDC_VERSION__ >= 202311L
-typedef enum runtime_bootstrap_object_kind_v1 runtime_bootstrap_object_kind_v1;
-#else
-typedef uint8_t runtime_bootstrap_object_kind_v1;
 #endif // __STDC_VERSION__ >= 202311L
 
 enum io_uring_execution_state_kind_v1
@@ -1129,10 +1114,12 @@ typedef struct execution_set_binding_state_v1 {
   binding_lifecycle_state_v1 lifecycle_state;
   uint8_t reserved[7];
   initial_root_state_v1 initial_root_state;
-  runtime_bootstrap_state_v1 runtime_bootstrap_state;
-  uint64_t runtime_bootstrap_deadline_boottime_ns;
-  struct id128_v1 runtime_bootstrap_entry_instance_id;
-  uint64_t runtime_bootstrap_handoff_task_cookie;
+  prepared_container_state_v1 prepared_container_state;
+  uint64_t prepared_container_deadline_boottime_ns;
+  struct id128_v1 prepared_container_entry_instance_id;
+  uint64_t prepared_container_exec_task_cookie;
+  uint32_t prepared_container_initial_host_tgid;
+  uint32_t prepared_container_reserved;
 } execution_set_binding_state_v1;
 
 typedef struct external_root_classification_v1 {
@@ -1397,23 +1384,6 @@ typedef struct identity_runtime_config_v1 {
   uint8_t reserved[2];
 } identity_runtime_config_v1;
 
-typedef struct runtime_bootstrap_object_key_v1 {
-  uint64_t inode;
-  uint64_t filesystem_magic;
-  uint32_t filesystem_device;
-  uint32_t inode_generation;
-} runtime_bootstrap_object_key_v1;
-
-typedef struct runtime_bootstrap_object_state_v1 {
-  struct id128_v1 binding_id;
-  struct id128_v1 binding_nonce;
-  struct id128_v1 entry_instance_id;
-  uint64_t deadline_boottime_ns;
-  uint64_t transition_version;
-  runtime_bootstrap_object_kind_v1 kind;
-  uint8_t reserved[7];
-} runtime_bootstrap_object_state_v1;
-
 typedef struct io_uring_actor_snapshot_v1 {
   struct id128_v1 node_boot_id;
   struct id128_v1 process_lineage_id;
@@ -1658,7 +1628,7 @@ typedef struct pending_exec_v1 {
   struct id128_v1 source_execution_id;
   uint32_t source_role_id;
   uint16_t candidate_count;
-  uint8_t runtime_bootstrap_exec;
+  uint8_t prepared_runtime_exec;
   uint8_t reserved_0;
   uint64_t source_profile_generation_ref_id;
   uint64_t pending_exec_response_set_ref_id;

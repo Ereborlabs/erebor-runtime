@@ -269,12 +269,22 @@ static __always_inline int create_external_root(
     __u8 root_class = external_root_class_v1_external_runtime_root;
     __u8 role_class = installed_role_class_v1_runtime_external_restricted;
     __u32 role_id;
+    __u64 pid_tgid;
     bool initial_root;
 
     activation = binding_activation_for_new_root(binding, config);
     if (!activation)
         return identity_deny(config);
     role_id = activation->external_role_id;
+    if (binding->prepared_container_state ==
+        prepared_container_state_v1_prepared) {
+        pid_tgid = bpf_get_current_pid_tgid();
+        if (!prepared_container_binding_is_prepared(binding) ||
+            !binding->prepared_container_initial_host_tgid ||
+            binding->prepared_container_initial_host_tgid !=
+                (__u32)(pid_tgid >> 32))
+            return identity_deny(config);
+    }
     initial_root = consume_initial_root(binding);
 
     if (binding->lifecycle_state != binding_lifecycle_state_v1_active)
@@ -288,19 +298,16 @@ static __always_inline int create_external_root(
                              role_class, role_id);
 
     if (result && initial_root &&
-        binding->runtime_bootstrap_state ==
-            runtime_bootstrap_state_v1_armed) {
-        binding->runtime_bootstrap_state = runtime_bootstrap_state_v1_corrupt;
-        binding->transition_version++;
-    }
+        binding->prepared_container_state ==
+            prepared_container_state_v1_prepared)
+        prepared_container_mark_corrupt(binding);
     if (result || !initial_root)
         return result;
-    if (binding->runtime_bootstrap_state ==
-            runtime_bootstrap_state_v1_armed &&
-        runtime_bootstrap_set_initial_entry(
+    if (binding->prepared_container_state ==
+            prepared_container_state_v1_prepared &&
+        prepared_container_set_initial_entry(
             binding, &scratch->label.entry_instance_id)) {
-        binding->runtime_bootstrap_state = runtime_bootstrap_state_v1_corrupt;
-        binding->transition_version++;
+        prepared_container_mark_corrupt(binding);
         return identity_deny(config);
     }
     return 0;

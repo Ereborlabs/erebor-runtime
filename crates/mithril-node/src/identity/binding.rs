@@ -9,8 +9,8 @@ use std::time::{Duration, Instant};
 use erebor_interceptor::{KernelHost, MapInsertResult};
 use erebor_interceptor_abi::{
     BindingActivationTargetKeyV1, BindingLifecycleStateV1, ExecutionSetBindingStateV1, Id128V1,
-    InitialRootStateV1, PolicyGenerationStateV1, ProfileGenerationDescriptorV1,
-    RuntimeBootstrapStateV1, TaskLabelV1,
+    InitialRootStateV1, PolicyGenerationStateV1, PreparedContainerStateV1,
+    ProfileGenerationDescriptorV1, TaskLabelV1,
 };
 use erebor_runtime_error::{ErrorExt as _, RetryHint};
 use rustix::process::{pidfd_open, Pid, PidfdFlags};
@@ -29,7 +29,7 @@ use crate::{ContainerRuntimeConfig, Result, WorkloadBindingConfig};
 
 use super::runtime::{ContainerRuntimeInventory, RuntimeContainerIdentity};
 
-const RUNTIME_BOOTSTRAP_LIFETIME_NS: u64 = 10_000_000_000;
+const PREPARED_CONTAINER_LIFETIME_NS: u64 = 10_000_000_000;
 const RUNTIME_STAGE_LIFETIME: Duration = Duration::from_secs(30);
 const MAXIMUM_RUNTIME_STAGES: usize = 128;
 
@@ -64,91 +64,119 @@ pub struct AdministrativeBindingTargetV1 {
 }
 
 impl PublishedBinding {
-    fn arm_runtime_bootstrap(&mut self, now_boottime_ns: u64) -> Result<()> {
+    fn prepare_container(&mut self, now_boottime_ns: u64) -> Result<()> {
         ensure!(
             self.held_initial_pid.is_some()
-                && self.state.runtime_bootstrap_state == RuntimeBootstrapStateV1::Unarmed
-                && self.state.runtime_bootstrap_deadline_boottime_ns == 0
-                && self.state.runtime_bootstrap_entry_instance_id.is_zero()
-                && self.state.runtime_bootstrap_handoff_task_cookie == 0,
+                && self.state.prepared_container_state == PreparedContainerStateV1::Unarmed
+                && self.state.prepared_container_deadline_boottime_ns == 0
+                && self.state.prepared_container_entry_instance_id.is_zero()
+                && self.state.prepared_container_exec_task_cookie == 0
+                && self.state.prepared_container_initial_host_tgid == 0
+                && self.state.prepared_container_reserved == 0,
             IdentityStateSnafu {
-                reason: "runtime bootstrap can arm only for one held initial task",
+                reason: "a container can be prepared only for one held initial task",
             }
         );
-        self.state.runtime_bootstrap_deadline_boottime_ns = now_boottime_ns
-            .checked_add(RUNTIME_BOOTSTRAP_LIFETIME_NS)
+        self.state.prepared_container_deadline_boottime_ns = now_boottime_ns
+            .checked_add(PREPARED_CONTAINER_LIFETIME_NS)
             .context(IdentityStateSnafu {
-                reason: "runtime bootstrap deadline overflowed",
+                reason: "prepared-container deadline overflowed",
             })?;
-        self.state.runtime_bootstrap_state = RuntimeBootstrapStateV1::Armed;
+        self.state.prepared_container_initial_host_tgid =
+            self.held_initial_pid.context(IdentityStateSnafu {
+                reason: "prepared container has no held initial task",
+            })?;
+        self.state.prepared_container_state = PreparedContainerStateV1::Prepared;
         Ok(())
     }
 
-    fn reconcile_recovered_runtime_bootstrap(&mut self, now_boottime_ns: u64) -> Result<bool> {
+    fn reconcile_recovered_prepared_container(&mut self, now_boottime_ns: u64) -> Result<bool> {
         let state = &mut self.state;
-        match state.runtime_bootstrap_state {
-            RuntimeBootstrapStateV1::Unarmed => {
+        match state.prepared_container_state {
+            PreparedContainerStateV1::Unarmed => {
                 ensure!(
-                    state.runtime_bootstrap_deadline_boottime_ns == 0
-                        && state.runtime_bootstrap_entry_instance_id.is_zero()
-                        && state.runtime_bootstrap_handoff_task_cookie == 0,
+                    state.prepared_container_deadline_boottime_ns == 0
+                        && state.prepared_container_entry_instance_id.is_zero()
+                        && state.prepared_container_exec_task_cookie == 0
+                        && state.prepared_container_initial_host_tgid == 0
+                        && state.prepared_container_reserved == 0,
                     IdentityStateSnafu {
-                        reason: "unarmed runtime bootstrap contains authority fields",
+                        reason: "an unarmed container has prepared-state fields",
                     }
                 );
                 Ok(false)
             }
-            RuntimeBootstrapStateV1::Armed => {
+            PreparedContainerStateV1::Prepared => {
                 ensure!(
-                    state.runtime_bootstrap_deadline_boottime_ns != 0
-                        && state.runtime_bootstrap_handoff_task_cookie == 0,
+                    state.prepared_container_deadline_boottime_ns != 0
+                        && state.prepared_container_exec_task_cookie == 0
+                        && state.prepared_container_initial_host_tgid != 0
+                        && state.prepared_container_reserved == 0,
                     IdentityStateSnafu {
-                        reason: "armed runtime bootstrap has an invalid deadline or handoff",
+                        reason: "prepared container has an invalid deadline or exec reservation",
                     }
                 );
-                if now_boottime_ns < state.runtime_bootstrap_deadline_boottime_ns {
+                if now_boottime_ns < state.prepared_container_deadline_boottime_ns {
                     return IdentityStateSnafu {
-                        reason: "runtime bootstrap is still active during node recovery".to_owned(),
+                        reason: "prepared container is still active during node recovery"
+                            .to_owned(),
                     }
                     .fail();
                 }
-                state.runtime_bootstrap_state = RuntimeBootstrapStateV1::Expired;
+                state.prepared_container_exec_task_cookie = 0;
+                state.prepared_container_state = PreparedContainerStateV1::Expired;
                 state.transition_version =
                     state
                         .transition_version
                         .checked_add(1)
                         .context(IdentityStateSnafu {
-                            reason: "runtime bootstrap expiry transition overflowed",
+                            reason: "prepared-container expiry transition overflowed",
                         })?;
                 Ok(true)
             }
-            RuntimeBootstrapStateV1::HandoffPending => IdentityStateSnafu {
-                reason: "runtime bootstrap handoff is incomplete during node recovery".to_owned(),
+            PreparedContainerStateV1::ExecPending => IdentityStateSnafu {
+                reason: "prepared-container exec is incomplete during node recovery".to_owned(),
             }
             .fail(),
-            RuntimeBootstrapStateV1::Consumed => {
+            PreparedContainerStateV1::Active => {
                 ensure!(
-                    state.runtime_bootstrap_deadline_boottime_ns != 0
-                        && !state.runtime_bootstrap_entry_instance_id.is_zero()
-                        && state.runtime_bootstrap_handoff_task_cookie == 0,
+                    state.prepared_container_deadline_boottime_ns != 0
+                        && !state.prepared_container_entry_instance_id.is_zero()
+                        && state.prepared_container_initial_host_tgid != 0
+                        && state.prepared_container_reserved == 0,
                     IdentityStateSnafu {
-                        reason: "consumed runtime bootstrap has incomplete identity",
+                        reason: "active container has incomplete prepared identity",
+                    }
+                );
+                if state.prepared_container_exec_task_cookie == 0 {
+                    return Ok(false);
+                }
+                // ACTIVE is written only at the successful exec commit point.
+                // A remaining cookie is a crash residue, not pending authority.
+                state.prepared_container_exec_task_cookie = 0;
+                state.transition_version =
+                    state
+                        .transition_version
+                        .checked_add(1)
+                        .context(IdentityStateSnafu {
+                            reason: "prepared-container recovery transition overflowed",
+                        })?;
+                Ok(true)
+            }
+            PreparedContainerStateV1::Expired => {
+                ensure!(
+                    state.prepared_container_deadline_boottime_ns != 0
+                        && state.prepared_container_exec_task_cookie == 0
+                        && state.prepared_container_initial_host_tgid != 0
+                        && state.prepared_container_reserved == 0,
+                    IdentityStateSnafu {
+                        reason: "expired prepared container has an exec reservation",
                     }
                 );
                 Ok(false)
             }
-            RuntimeBootstrapStateV1::Expired => {
-                ensure!(
-                    state.runtime_bootstrap_deadline_boottime_ns != 0
-                        && state.runtime_bootstrap_handoff_task_cookie == 0,
-                    IdentityStateSnafu {
-                        reason: "expired runtime bootstrap has incomplete identity",
-                    }
-                );
-                Ok(false)
-            }
-            RuntimeBootstrapStateV1::Corrupt => IdentityStateSnafu {
-                reason: "runtime bootstrap state is corrupt".to_owned(),
+            PreparedContainerStateV1::Corrupt => IdentityStateSnafu {
+                reason: "prepared-container state is corrupt".to_owned(),
             }
             .fail(),
         }
@@ -181,7 +209,7 @@ impl PublishedBinding {
             admitted,
             IdentityStateSnafu {
                 reason: format!(
-                    "initial-root admission for `{}` requires an empty cgroup or its one held prestart PID",
+                    "initial-root admission for `{}` requires an empty cgroup or its one held PID",
                     self.root_cgroup_path.display(),
                 ),
             }
@@ -240,7 +268,7 @@ struct StagedRuntimeAdmissionV1 {
 }
 
 impl StagedRuntimeAdmissionV1 {
-    fn verify_prestart(
+    fn verify_preparation(
         &self,
         authority_head_binding_id: &str,
         request: &RuntimeAdmissionRequestV1,
@@ -250,9 +278,9 @@ impl StagedRuntimeAdmissionV1 {
             self.deadline > now
                 && authority_head_binding_id == self.authority_head_binding_id
                 && request.kubernetes_identity()? == self.identity
-                && request.prestart_cgroup_path()? == self.cgroup_path,
+                && request.held_cgroup_path()? == self.cgroup_path,
             IdentityStateSnafu {
-                reason: "OCI prestart differs from its immutable createContainer stage",
+                reason: "the second OCI hook differs from its immutable first stage",
             }
         );
         Ok(())
@@ -317,7 +345,7 @@ impl WorkloadBindingOwner {
         if self.runtime.is_some() {
             return self.reconcile_runtime(host, configured).await;
         }
-        // Scheduled placeholders have no cgroup until OCI prestart supplies the held process.
+        // Scheduled placeholders have no cgroup until runtime admission supplies the held task.
         self.publish(
             host,
             configured
@@ -529,8 +557,10 @@ impl WorkloadBindingOwner {
             ) {
                 binding.lifecycle_state = BindingLifecycleStateV1::Terminating;
                 binding.initial_root_state = InitialRootStateV1::Consumed;
-                binding.runtime_bootstrap_state = RuntimeBootstrapStateV1::Consumed;
-                binding.runtime_bootstrap_handoff_task_cookie = 0;
+                if binding.prepared_container_state != PreparedContainerStateV1::Active {
+                    binding.prepared_container_state = PreparedContainerStateV1::Expired;
+                }
+                binding.prepared_container_exec_task_cookie = 0;
                 binding.transition_version =
                     binding
                         .transition_version
@@ -707,9 +737,9 @@ impl WorkloadBindingOwner {
         request: &RuntimeAdmissionRequestV1,
     ) -> Result<bool> {
         ensure!(
-            request.operation == RuntimeAdmissionOperationV1::CreateContainer,
+            request.operation == RuntimeAdmissionOperationV1::StageRuntimeFacts,
             IdentityStateSnafu {
-                reason: "only OCI createContainer can stage runtime facts",
+                reason: "only the first ordered OCI hook can stage runtime facts",
             }
         );
         let now = Instant::now();
@@ -721,7 +751,7 @@ impl WorkloadBindingOwner {
             authority_head_binding_id,
             identity: request.kubernetes_identity()?,
             cgroup_path: request.cgroup_path.clone().context(IdentityStateSnafu {
-                reason: "OCI createContainer stage has no cgroup path",
+                reason: "OCI runtime-fact stage has no cgroup path",
             })?,
             deadline: now + RUNTIME_STAGE_LIFETIME,
         };
@@ -731,7 +761,7 @@ impl WorkloadBindingOwner {
                     && existing.identity == stage.identity
                     && existing.cgroup_path == stage.cgroup_path,
                 IdentityStateSnafu {
-                    reason: "OCI createContainer changed an existing runtime stage",
+                    reason: "the first OCI hook changed an existing runtime stage",
                 }
             );
             return Ok(false);
@@ -747,7 +777,7 @@ impl WorkloadBindingOwner {
         Ok(true)
     }
 
-    pub(crate) async fn verify_runtime_admission(
+    pub(crate) async fn verify_runtime_preparation(
         &mut self,
         configured: &[WorkloadBindingConfig],
         request: &RuntimeAdmissionRequestV1,
@@ -764,10 +794,10 @@ impl WorkloadBindingOwner {
             .get(&request.container_id)
             .cloned()
             .context(IdentityStateSnafu {
-                reason: "OCI prestart has no live createContainer stage",
+                reason: "runtime admission has no live first-hook stage",
             })?;
         let mut scheduled = ScheduledRuntimeBindingV1::resolve(configured, request)?;
-        staged.verify_prestart(
+        staged.verify_preparation(
             &configured[scheduled.binding_index].binding_id,
             request,
             now,
@@ -903,12 +933,12 @@ impl WorkloadBindingOwner {
             ensure!(
                 held_initial_pid.is_none() || spec.arm_initial_root,
                 IdentityStateSnafu {
-                    reason: "prestart admission requires an armed initial root",
+                    reason: "runtime admission requires an armed initial root",
                 }
             );
             binding.held_initial_pid = held_initial_pid;
             if held_initial_pid.is_some() {
-                binding.arm_runtime_bootstrap(current_boottime_ns()?)?;
+                binding.prepare_container(current_boottime_ns()?)?;
             }
             ensure!(
                 !self.bindings.contains_key(&binding.root_cgroup_id)
@@ -975,7 +1005,7 @@ impl WorkloadBindingOwner {
                     }
                 );
                 binding.state = recovered;
-                if binding.reconcile_recovered_runtime_bootstrap(current_boottime_ns()?)? {
+                if binding.reconcile_recovered_prepared_container(current_boottime_ns()?)? {
                     host.update_map("execution_set_bindings", &key, binding.state.as_bytes())
                         .context(InterceptorSnafu)?;
                     ensure!(
@@ -984,7 +1014,7 @@ impl WorkloadBindingOwner {
                             .as_deref()
                             == Some(binding.state.as_bytes()),
                         IdentityStateSnafu {
-                            reason: "expired runtime bootstrap failed kernel readback",
+                            reason: "expired prepared container failed kernel readback",
                         }
                     );
                 }
@@ -1428,10 +1458,12 @@ impl WorkloadBindingOwner {
                 } else {
                     InitialRootStateV1::Unarmed
                 },
-                runtime_bootstrap_state: RuntimeBootstrapStateV1::Unarmed,
-                runtime_bootstrap_deadline_boottime_ns: 0,
-                runtime_bootstrap_entry_instance_id: Id128V1::ZERO,
-                runtime_bootstrap_handoff_task_cookie: 0,
+                prepared_container_state: PreparedContainerStateV1::Unarmed,
+                prepared_container_deadline_boottime_ns: 0,
+                prepared_container_entry_instance_id: Id128V1::ZERO,
+                prepared_container_exec_task_cookie: 0,
+                prepared_container_initial_host_tgid: 0,
+                prepared_container_reserved: 0,
             },
         };
         binding.validate_live_cgroup()?;
@@ -1458,8 +1490,10 @@ impl WorkloadBindingOwner {
         }
         binding.state.lifecycle_state = BindingLifecycleStateV1::Terminating;
         binding.state.initial_root_state = InitialRootStateV1::Consumed;
-        binding.state.runtime_bootstrap_state = RuntimeBootstrapStateV1::Consumed;
-        binding.state.runtime_bootstrap_handoff_task_cookie = 0;
+        if binding.state.prepared_container_state != PreparedContainerStateV1::Active {
+            binding.state.prepared_container_state = PreparedContainerStateV1::Expired;
+        }
+        binding.state.prepared_container_exec_task_cookie = 0;
         binding.state.transition_version += 1;
         host.update_map(
             "execution_set_bindings",
@@ -1525,8 +1559,10 @@ impl WorkloadBindingOwner {
             );
             value.lifecycle_state = BindingLifecycleStateV1::Terminating;
             value.initial_root_state = InitialRootStateV1::Consumed;
-            value.runtime_bootstrap_state = RuntimeBootstrapStateV1::Consumed;
-            value.runtime_bootstrap_handoff_task_cookie = 0;
+            if value.prepared_container_state != PreparedContainerStateV1::Active {
+                value.prepared_container_state = PreparedContainerStateV1::Expired;
+            }
+            value.prepared_container_exec_task_cookie = 0;
             value.transition_version =
                 value.transition_version.checked_add(1).ok_or_else(|| {
                     IdentityStateSnafu {
@@ -1641,11 +1677,13 @@ fn same_runtime_binding(
     desired.external_role_id = recovered.external_role_id;
     desired.lifecycle_state = recovered.lifecycle_state;
     desired.initial_root_state = recovered.initial_root_state;
-    desired.runtime_bootstrap_state = recovered.runtime_bootstrap_state;
-    desired.runtime_bootstrap_deadline_boottime_ns =
-        recovered.runtime_bootstrap_deadline_boottime_ns;
-    desired.runtime_bootstrap_entry_instance_id = recovered.runtime_bootstrap_entry_instance_id;
-    desired.runtime_bootstrap_handoff_task_cookie = recovered.runtime_bootstrap_handoff_task_cookie;
+    desired.prepared_container_state = recovered.prepared_container_state;
+    desired.prepared_container_deadline_boottime_ns =
+        recovered.prepared_container_deadline_boottime_ns;
+    desired.prepared_container_entry_instance_id = recovered.prepared_container_entry_instance_id;
+    desired.prepared_container_exec_task_cookie = recovered.prepared_container_exec_task_cookie;
+    desired.prepared_container_initial_host_tgid = recovered.prepared_container_initial_host_tgid;
+    desired.prepared_container_reserved = recovered.prepared_container_reserved;
     desired == *recovered
 }
 
@@ -1660,10 +1698,12 @@ fn same_activation_identity(
     live.external_role_id = target.external_role_id;
     live.lifecycle_state = target.lifecycle_state;
     live.initial_root_state = target.initial_root_state;
-    live.runtime_bootstrap_state = target.runtime_bootstrap_state;
-    live.runtime_bootstrap_deadline_boottime_ns = target.runtime_bootstrap_deadline_boottime_ns;
-    live.runtime_bootstrap_entry_instance_id = target.runtime_bootstrap_entry_instance_id;
-    live.runtime_bootstrap_handoff_task_cookie = target.runtime_bootstrap_handoff_task_cookie;
+    live.prepared_container_state = target.prepared_container_state;
+    live.prepared_container_deadline_boottime_ns = target.prepared_container_deadline_boottime_ns;
+    live.prepared_container_entry_instance_id = target.prepared_container_entry_instance_id;
+    live.prepared_container_exec_task_cookie = target.prepared_container_exec_task_cookie;
+    live.prepared_container_initial_host_tgid = target.prepared_container_initial_host_tgid;
+    live.prepared_container_reserved = target.prepared_container_reserved;
     live == *target
 }
 
@@ -1678,7 +1718,7 @@ mod tests {
 
     use super::{
         same_activation_identity, same_runtime_binding, RuntimeContainerIdentity,
-        StagedRuntimeAdmissionV1, WorkloadBindingOwner, RUNTIME_BOOTSTRAP_LIFETIME_NS,
+        StagedRuntimeAdmissionV1, WorkloadBindingOwner, PREPARED_CONTAINER_LIFETIME_NS,
     };
     use crate::error::{IdentityStateSnafu, IoSnafu};
     use crate::identity::runtime::RuntimeContainerState;
@@ -1689,7 +1729,7 @@ mod tests {
         POD_UID_ANNOTATION, POLICY_SOURCE_REVISION_ANNOTATION, PROFILE_ID_ANNOTATION,
         SANDBOX_ID_ANNOTATION,
     };
-    use erebor_interceptor_abi::{Id128V1, InitialRootStateV1, RuntimeBootstrapStateV1};
+    use erebor_interceptor_abi::{Id128V1, InitialRootStateV1, PreparedContainerStateV1};
 
     fn spec(root: &Path) -> WorkloadBindingConfig {
         WorkloadBindingConfig {
@@ -1722,9 +1762,9 @@ mod tests {
         }
     }
 
-    fn prestart_request(cgroup_path: &Path) -> RuntimeAdmissionRequestV1 {
+    fn authorization_request(cgroup_path: &Path) -> RuntimeAdmissionRequestV1 {
         RuntimeAdmissionRequestV1 {
-            operation: RuntimeAdmissionOperationV1::Prestart,
+            operation: RuntimeAdmissionOperationV1::PrepareContainer,
             container_id: "a".repeat(64),
             initial_pid: Some(42),
             cgroup_path: Some(cgroup_path.to_path_buf()),
@@ -1747,9 +1787,9 @@ mod tests {
     }
 
     #[test]
-    fn prestart_must_match_the_staged_authority_head_and_runtime_facts() -> crate::Result<()> {
+    fn preparation_must_match_the_staged_authority_head_and_runtime_facts() -> crate::Result<()> {
         let cgroup = PathBuf::from("/sys/fs/cgroup/kubepods/pod-a/container-a");
-        let request = prestart_request(&cgroup);
+        let request = authorization_request(&cgroup);
         let stage = StagedRuntimeAdmissionV1 {
             authority_head_binding_id: "authority-head-a".to_owned(),
             identity: request.kubernetes_identity()?,
@@ -1757,33 +1797,33 @@ mod tests {
             deadline: Instant::now() + Duration::from_secs(1),
         };
         let now = Instant::now();
-        stage.verify_prestart("authority-head-a", &request, now)?;
+        stage.verify_preparation("authority-head-a", &request, now)?;
 
         assert!(stage
-            .verify_prestart("authority-head-b", &request, now)
+            .verify_preparation("authority-head-b", &request, now)
             .is_err());
         let wrong_cgroup =
-            prestart_request(Path::new("/sys/fs/cgroup/kubepods/pod-a/another-container"));
+            authorization_request(Path::new("/sys/fs/cgroup/kubepods/pod-a/another-container"));
         assert!(stage
-            .verify_prestart("authority-head-a", &wrong_cgroup, now)
+            .verify_preparation("authority-head-a", &wrong_cgroup, now)
             .is_err());
         let mut expired = stage;
         expired.deadline = now;
         assert!(expired
-            .verify_prestart("authority-head-a", &request, now)
+            .verify_preparation("authority-head-a", &request, now)
             .is_err());
         Ok(())
     }
 
     #[test]
-    fn create_container_stage_does_not_wait_for_cri() -> crate::Result<()> {
+    fn first_create_runtime_stage_does_not_wait_for_cri() -> crate::Result<()> {
         let temporary = tempfile::tempdir().context(IoSnafu {
             path: "temporary runtime stage root",
         })?;
         let mut owner = WorkloadBindingOwner::at(temporary.path(), Id128V1::new(1, 2), 3)?;
         let cgroup = PathBuf::from("/sys/fs/cgroup/kubepods/pod-a/container-a");
-        let mut request = prestart_request(&cgroup);
-        request.operation = RuntimeAdmissionOperationV1::CreateContainer;
+        let mut request = authorization_request(&cgroup);
+        request.operation = RuntimeAdmissionOperationV1::StageRuntimeFacts;
         request.initial_pid = None;
         let authority = ScheduledRuntimeBindingV1::authority_binding_id("pod-uid-a", "worker");
         let mut scheduled = spec(temporary.path());
@@ -1805,19 +1845,20 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn prestart_without_a_create_container_stage_fails_before_cri() -> crate::Result<()> {
+    async fn authorization_without_a_first_hook_stage_fails_before_cri() -> crate::Result<()> {
         let temporary = tempfile::tempdir().context(IoSnafu {
             path: "temporary missing runtime stage root",
         })?;
         let mut owner = WorkloadBindingOwner::at(temporary.path(), Id128V1::new(1, 2), 3)?;
-        let request = prestart_request(Path::new("/sys/fs/cgroup/kubepods/pod-a/container-a"));
-        let Err(error) = owner.verify_runtime_admission(&[], &request).await else {
+        let request = authorization_request(Path::new("/sys/fs/cgroup/kubepods/pod-a/container-a"));
+        let Err(error) = owner.verify_runtime_preparation(&[], &request).await else {
             return IdentityStateSnafu {
-                reason: "prestart without staging reached runtime inventory".to_owned(),
+                reason: "runtime authorization without staging reached runtime inventory"
+                    .to_owned(),
             }
             .fail();
         };
-        assert!(error.to_string().contains("no live createContainer stage"));
+        assert!(error.to_string().contains("no live first-hook stage"));
         Ok(())
     }
 
@@ -1858,7 +1899,7 @@ mod tests {
     }
 
     #[test]
-    fn held_prestart_pid_can_claim_initial_root() -> crate::Result<()> {
+    fn held_initial_pid_can_claim_initial_root() -> crate::Result<()> {
         let temporary = tempfile::tempdir().context(IoSnafu {
             path: "temporary cgroup root",
         })?;
@@ -1885,9 +1926,9 @@ mod tests {
     }
 
     #[test]
-    fn only_a_held_runtime_root_arms_the_bounded_bootstrap() -> crate::Result<()> {
+    fn only_a_held_runtime_root_prepares_the_container() -> crate::Result<()> {
         let temporary = tempfile::tempdir().context(IoSnafu {
-            path: "temporary runtime bootstrap cgroup root",
+            path: "temporary prepared-container cgroup root",
         })?;
         let root = temporary.path().join("workload");
         fs::create_dir(&root).context(IoSnafu { path: &root })?;
@@ -1895,29 +1936,31 @@ mod tests {
         let owner = WorkloadBindingOwner::at(temporary.path(), Id128V1::new(1, 2), 3)?;
         let mut binding = owner.prepare(&spec(&root))?;
         assert_eq!(
-            binding.state.runtime_bootstrap_state,
-            RuntimeBootstrapStateV1::Unarmed
+            binding.state.prepared_container_state,
+            PreparedContainerStateV1::Unarmed
         );
-        assert_eq!(binding.state.runtime_bootstrap_deadline_boottime_ns, 0);
+        assert_eq!(binding.state.prepared_container_deadline_boottime_ns, 0);
+        assert_eq!(binding.state.prepared_container_initial_host_tgid, 0);
 
         binding.held_initial_pid = Some(42);
-        binding.arm_runtime_bootstrap(100)?;
+        binding.prepare_container(100)?;
         assert_eq!(
-            binding.state.runtime_bootstrap_state,
-            RuntimeBootstrapStateV1::Armed
+            binding.state.prepared_container_state,
+            PreparedContainerStateV1::Prepared
         );
         assert_eq!(
-            binding.state.runtime_bootstrap_deadline_boottime_ns,
-            100 + RUNTIME_BOOTSTRAP_LIFETIME_NS
+            binding.state.prepared_container_deadline_boottime_ns,
+            100 + PREPARED_CONTAINER_LIFETIME_NS
         );
-        assert!(binding.arm_runtime_bootstrap(101).is_err());
+        assert_eq!(binding.state.prepared_container_initial_host_tgid, 42);
+        assert!(binding.prepare_container(101).is_err());
         Ok(())
     }
 
     #[test]
-    fn recovery_expires_old_bootstrap_but_refuses_live_or_ambiguous_state() -> crate::Result<()> {
+    fn recovery_expires_old_preparation_but_refuses_live_or_ambiguous_state() -> crate::Result<()> {
         let temporary = tempfile::tempdir().context(IoSnafu {
-            path: "temporary runtime bootstrap recovery root",
+            path: "temporary prepared-container recovery root",
         })?;
         let root = temporary.path().join("workload");
         fs::create_dir(&root).context(IoSnafu { path: &root })?;
@@ -1925,19 +1968,27 @@ mod tests {
         let owner = WorkloadBindingOwner::at(temporary.path(), Id128V1::new(1, 2), 3)?;
         let mut binding = owner.prepare(&spec(&root))?;
         binding.held_initial_pid = Some(42);
-        binding.arm_runtime_bootstrap(100)?;
+        binding.prepare_container(100)?;
 
-        assert!(binding.reconcile_recovered_runtime_bootstrap(101).is_err());
-        assert!(binding.reconcile_recovered_runtime_bootstrap(100 + RUNTIME_BOOTSTRAP_LIFETIME_NS)?);
-        assert_eq!(
-            binding.state.runtime_bootstrap_state,
-            RuntimeBootstrapStateV1::Expired
+        assert!(binding.reconcile_recovered_prepared_container(101).is_err());
+        assert!(
+            binding.reconcile_recovered_prepared_container(100 + PREPARED_CONTAINER_LIFETIME_NS)?
         );
-
-        binding.state.runtime_bootstrap_state = RuntimeBootstrapStateV1::HandoffPending;
-        binding.state.runtime_bootstrap_handoff_task_cookie = 42;
+        assert_eq!(
+            binding.state.prepared_container_state,
+            PreparedContainerStateV1::Expired
+        );
+        binding.state.prepared_container_state = PreparedContainerStateV1::Active;
+        binding.state.prepared_container_entry_instance_id = Id128V1::new(9, 10);
+        binding.state.prepared_container_exec_task_cookie = 42;
+        assert!(
+            binding.reconcile_recovered_prepared_container(100 + PREPARED_CONTAINER_LIFETIME_NS)?
+        );
+        assert_eq!(binding.state.prepared_container_exec_task_cookie, 0);
+        binding.state.prepared_container_state = PreparedContainerStateV1::ExecPending;
+        binding.state.prepared_container_exec_task_cookie = 42;
         assert!(binding
-            .reconcile_recovered_runtime_bootstrap(100 + RUNTIME_BOOTSTRAP_LIFETIME_NS)
+            .reconcile_recovered_prepared_container(100 + PREPARED_CONTAINER_LIFETIME_NS)
             .is_err());
         Ok(())
     }

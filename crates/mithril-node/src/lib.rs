@@ -12,6 +12,7 @@ mod policy;
 mod policy_delivery;
 mod runtime_admission;
 mod trust;
+mod unix_socket;
 
 pub use config::{
     AdministrativeAuthorizationConfig, ContainerKindV1, ContainerRuntimeConfig, EvidenceConfig,
@@ -27,8 +28,9 @@ pub use exact_object::ExactFileObjectResolver;
 pub use identity::{
     AdministrativeBindingTargetV1, AdministrativeExecIdentityV1,
     AdministrativeFileObjectIdentityV1, AuthorizationProofOwner, AuthorizationTargetV1,
-    IssuerTrustV1, NativeIdentityInspector, NativeSecurityStateOwner, NativeTaskSnapshotV1,
-    PortableProfileGenerationIdentityV1, PreparedAuthorizationProofV1, ReconciliationReportV1,
+    IssuerTrustV1, NativeIdentityInspector, NativeRuntimeBindingSnapshotV1,
+    NativeSecurityStateOwner, NativeTaskSnapshotV1, PortableProfileGenerationIdentityV1,
+    PreparedAuthorizationProofV1, ReconciliationReportV1,
     ResolvedAdministrativeExecutableIdentityV1, TrustBundleV1, WorkloadBindingOwner,
 };
 pub use local::RuntimeObservationServer;

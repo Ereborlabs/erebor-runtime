@@ -131,11 +131,16 @@ static __noinline int identity_device_ioctl_effect(struct file *file,
 static __always_inline int identity_device_ioctl_gate(struct file *file,
                                                       __u32 cmd, int ret)
 {
+    struct identity_scratch_v1 *scratch;
+
     ret = identity_effect_actor_gate(
         file, kernel_effect_family_v1_device,
         kernel_effect_operation_v1_ioctl, ret);
     if (ret)
         return ret;
+    scratch = identity_scratch_record();
+    if (prepared_runtime_effect_was_allowed(scratch))
+        return 0;
     return identity_device_ioctl_effect(file, cmd);
 }
 
@@ -362,17 +367,6 @@ static __noinline int identity_process_control_effect(
     scratch->observation.target_process_state_vector_id =
         scratch->target_process.process_state_vector_id;
     scratch->observation.operation_argument = operation_argument;
-    if (ptrace_mode_is_read_only(operation, operation_argument) &&
-        id128_equal(&controller_label->entry_instance_id,
-                    &scratch->target_label.entry_instance_id) &&
-        id128_equal(&binding->binding_id, &target_binding->binding_id) &&
-        id128_equal(&binding->binding_nonce, &target_binding->binding_nonce) &&
-        runtime_bootstrap_actor_is_exact(
-            binding, controller_label,
-            bpf_map_lookup_elem(&entry_states,
-                                &controller_label->entry_instance_id)))
-        return runtime_bootstrap_effect_result(scratch);
-
     __builtin_memset(&scratch->process_control_rule_key, 0,
                      sizeof(scratch->process_control_rule_key));
     scratch->process_control_rule_key.profile_generation_ref_id =
@@ -450,10 +444,15 @@ static __always_inline int identity_process_control_gate(
     struct task_struct *target, __u16 operation, __u32 operation_argument,
     int ret)
 {
+    struct identity_scratch_v1 *scratch;
+
     ret = identity_effect_actor_gate(
         NULL, kernel_effect_family_v1_privilege, operation, ret);
     if (ret)
         return ret;
+    scratch = identity_scratch_record();
+    if (prepared_runtime_effect_was_allowed(scratch))
+        return 0;
     return identity_process_control_effect(target, operation,
                                            operation_argument);
 }

@@ -1,5 +1,4 @@
 use std::fs;
-use std::os::unix::fs::PermissionsExt as _;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -16,18 +15,16 @@ use erebor_runtime_ipc::{
 };
 use mithril_control::CapabilityRecord;
 use prost::Message as _;
-use rustix::{fs::chown, process::Uid};
-use snafu::ResultExt as _;
 use tokio::net::UnixListener;
 use tokio::sync::watch;
 use tonic::{Request, Response, Status};
 
-use crate::error::{ControlProtocolSnafu, IoSnafu};
 use crate::{EffectObservationStore, NodeReadinessV1, Result, RuntimeObservationConfig};
 
 pub struct RuntimeObservationServer {
     config: RuntimeObservationConfig,
     listener: Option<UnixListener>,
+    _socket_owner: crate::unix_socket::UnixSocketPathOwner,
     snapshot: MithrilObservationSnapshot,
     observations: EffectObservationStore,
     kernel_reader: Option<KernelStateReader>,
@@ -77,41 +74,8 @@ impl RuntimeObservationServer {
         kernel_reader: Option<KernelStateReader>,
         readiness: watch::Receiver<NodeReadinessV1>,
     ) -> Result<Self> {
-        if let Some(parent) = config.socket_path.parent() {
-            fs::create_dir_all(parent).context(IoSnafu { path: parent })?;
-        }
-        if config.socket_path.exists() {
-            return ControlProtocolSnafu {
-                reason: format!(
-                    "Runtime observation socket `{}` already exists",
-                    config.socket_path.display()
-                ),
-            }
-            .fail();
-        }
-        let listener = UnixListener::bind(&config.socket_path).context(IoSnafu {
-            path: &config.socket_path,
-        })?;
-        let configured = chown(
-            &config.socket_path,
-            Some(Uid::from_raw(config.allowed_uid)),
-            None,
-        )
-        .map_err(std::io::Error::from)
-        .context(IoSnafu {
-            path: &config.socket_path,
-        })
-        .and_then(|()| {
-            fs::set_permissions(&config.socket_path, fs::Permissions::from_mode(0o600)).context(
-                IoSnafu {
-                    path: &config.socket_path,
-                },
-            )
-        });
-        if let Err(error) = configured {
-            let _result = fs::remove_file(&config.socket_path);
-            return Err(error);
-        }
+        let (listener, socket_owner) =
+            crate::unix_socket::UnixSocketPathOwner::bind(&config.socket_path, config.allowed_uid)?;
         let snapshot = MithrilObservationSnapshot {
             cgroup_scope: config.cgroup_scope.clone(),
             node_boot_id: manifest.node_boot_id.clone(),
@@ -140,6 +104,7 @@ impl RuntimeObservationServer {
         Ok(Self {
             config,
             listener: Some(listener),
+            _socket_owner: socket_owner,
             snapshot,
             observations,
             kernel_reader,
@@ -181,12 +146,6 @@ impl RuntimeObservationServer {
                 source,
                 location: snafu::Location::default(),
             })
-    }
-}
-
-impl Drop for RuntimeObservationServer {
-    fn drop(&mut self) {
-        let _result = fs::remove_file(&self.config.socket_path);
     }
 }
 

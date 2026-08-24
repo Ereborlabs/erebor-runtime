@@ -189,9 +189,11 @@ int erebor_cgroup_release(struct bpf_raw_tracepoint_args *context)
     if (binding) {
         binding->lifecycle_state = binding_lifecycle_state_v1_tombstoned;
         binding->initial_root_state = initial_root_state_v1_consumed;
-        binding->runtime_bootstrap_state =
-            runtime_bootstrap_state_v1_consumed;
-        binding->runtime_bootstrap_handoff_task_cookie = 0;
+        if (binding->prepared_container_state !=
+            prepared_container_state_v1_active)
+            binding->prepared_container_state =
+                prepared_container_state_v1_expired;
+        binding->prepared_container_exec_task_cookie = 0;
         binding->transition_version++;
     }
     return 0;

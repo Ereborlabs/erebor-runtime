@@ -68,11 +68,9 @@ _Static_assert(sizeof(io_uring_setup_state_v1) == 32,
                "io_uring setup state ABI size");
 _Static_assert(sizeof(io_uring_actor_snapshot_v1) == 232,
                "io_uring actor snapshot ABI size");
-_Static_assert(sizeof(execution_set_binding_state_v1) == 224,
+_Static_assert(sizeof(execution_set_binding_state_v1) == 232,
                "execution-set binding ABI size");
-_Static_assert(sizeof(runtime_bootstrap_object_state_v1) == 72,
-               "runtime bootstrap object ABI size");
-_Static_assert(sizeof(io_uring_ring_state_v1) == 528,
+_Static_assert(sizeof(io_uring_ring_state_v1) == 536,
                "io_uring ring state ABI size");
 _Static_assert(sizeof(io_uring_request_state_v1) == 344,
                "io_uring request state ABI size");
@@ -116,7 +114,7 @@ _Static_assert(sizeof(mount_mutation_attempt_v1) == 8,
                "mount mutation attempt ABI size");
 
 #include "identity_task_helpers.h"
-#include "identity_runtime_bootstrap.h"
+#include "identity_prepared_container.h"
 #include "identity_root_helpers.h"
 #include "identity_path.bpf.h"
 
@@ -268,6 +266,12 @@ static __noinline int identity_effect_gate(struct file *file,
 static __noinline int identity_path_effect_gate(const struct path *path,
                                                 __u16 effect_family,
                                                 __u16 operation, int ret);
+static __noinline int identity_effect_actor_gate(
+    struct file *file, __u16 effect_family, __u16 operation, int ret);
+#define PREPARED_EXEC_POLICY_MISS_V1 1
+static __always_inline int prepared_runtime_effect_result(
+    struct identity_scratch_v1 *scratch);
+static __noinline int prepared_exec_policy_gate(struct file *file);
 static __noinline int resolved_io_uring_effect_gate(
     struct file *file, __u16 effect_family, __u16 operation, int ret,
     struct identity_scratch_v1 *scratch);

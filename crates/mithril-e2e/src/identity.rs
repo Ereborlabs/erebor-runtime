@@ -113,7 +113,6 @@ const REQUIRED_IDENTITY_MAPS: [&str; 66] = [
     "profile_generation_async_refs",
     "profile_generation_socket_refs",
     "profile_generation_task_refs",
-    "runtime_bootstrap_objects",
     "task_coordinates",
     "task_labels",
     "task_reference_tombstones",
