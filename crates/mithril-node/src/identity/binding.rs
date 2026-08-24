@@ -4,6 +4,7 @@ use std::mem::size_of;
 use std::os::fd::AsRawFd as _;
 use std::os::unix::fs::MetadataExt as _;
 use std::path::PathBuf;
+use std::time::{Duration, Instant};
 
 use erebor_interceptor::{KernelHost, MapInsertResult};
 use erebor_interceptor_abi::{
@@ -20,11 +21,17 @@ use zerocopy::{FromBytes as _, IntoBytes as _, TryFromBytes as _};
 
 use crate::error::{IdentityStateSnafu, InterceptorSnafu, IoSnafu};
 use crate::policy::current_boottime_ns;
+use crate::runtime_admission::{
+    KubernetesRuntimeIdentityV1, RuntimeAdmissionOperationV1, RuntimeAdmissionRequestV1,
+    ScheduledRuntimeBindingV1,
+};
 use crate::{ContainerRuntimeConfig, Result, WorkloadBindingConfig};
 
 use super::runtime::{ContainerRuntimeInventory, RuntimeContainerIdentity};
 
 const RUNTIME_BOOTSTRAP_LIFETIME_NS: u64 = 10_000_000_000;
+const RUNTIME_STAGE_LIFETIME: Duration = Duration::from_secs(30);
+const MAXIMUM_RUNTIME_STAGES: usize = 128;
 
 #[derive(Debug)]
 struct PublishedBinding {
@@ -210,6 +217,7 @@ pub struct WorkloadBindingOwner {
     runtime: Option<ContainerRuntimeInventory>,
     // Keep one verified CRI identity between inspection and held-root publication.
     pending_runtime_admission: Option<RuntimeContainerIdentity>,
+    staged_runtime_admissions: BTreeMap<String, StagedRuntimeAdmissionV1>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -221,6 +229,34 @@ pub(crate) struct ExactObjectBindingTargetV1<'a> {
 struct RuntimeBindingUpdate {
     root_id: u64,
     identity: RuntimeContainerIdentity,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct StagedRuntimeAdmissionV1 {
+    authority_head_binding_id: String,
+    identity: KubernetesRuntimeIdentityV1,
+    runtime: RuntimeContainerIdentity,
+    deadline: Instant,
+}
+
+impl StagedRuntimeAdmissionV1 {
+    fn verify_prestart(
+        &self,
+        authority_head_binding_id: &str,
+        request: &RuntimeAdmissionRequestV1,
+        now: Instant,
+    ) -> Result<()> {
+        ensure!(
+            self.deadline > now
+                && authority_head_binding_id == self.authority_head_binding_id
+                && request.kubernetes_identity()? == self.identity
+                && request.prestart_cgroup_path()? == self.runtime.cgroup_path,
+            IdentityStateSnafu {
+                reason: "OCI prestart differs from its immutable createContainer stage",
+            }
+        );
+        Ok(())
+    }
 }
 
 #[derive(Default)]
@@ -269,6 +305,7 @@ impl WorkloadBindingOwner {
             profile_handles: BTreeMap::new(),
             runtime: None,
             pending_runtime_admission: None,
+            staged_runtime_admissions: BTreeMap::new(),
         })
     }
 
@@ -664,28 +701,113 @@ impl WorkloadBindingOwner {
         Ok(())
     }
 
+    pub(crate) async fn stage_runtime_admission(
+        &mut self,
+        configured: &[WorkloadBindingConfig],
+        request: &RuntimeAdmissionRequestV1,
+    ) -> Result<bool> {
+        ensure!(
+            request.operation == RuntimeAdmissionOperationV1::CreateContainer,
+            IdentityStateSnafu {
+                reason: "only OCI createContainer can stage runtime facts",
+            }
+        );
+        let now = Instant::now();
+        self.staged_runtime_admissions
+            .retain(|_container_id, stage| stage.deadline > now);
+        let scheduled = ScheduledRuntimeBindingV1::resolve_stage(configured, request)?;
+        let authority_head_binding_id = configured[scheduled.binding_index].binding_id.clone();
+        let runtime = self
+            .runtime
+            .as_mut()
+            .context(IdentityStateSnafu {
+                reason: "runtime fact staging has no CRI inventory owner",
+            })?
+            .inspect_created_for_admission(&scheduled.resolved)
+            .await?;
+        ensure!(
+            request.cgroup_path.as_deref() == Some(runtime.cgroup_path.as_path()),
+            IdentityStateSnafu {
+                reason: "OCI createContainer cgroup differs from CRI",
+            }
+        );
+        let stage = StagedRuntimeAdmissionV1 {
+            authority_head_binding_id,
+            identity: request.kubernetes_identity()?,
+            runtime,
+            deadline: now + RUNTIME_STAGE_LIFETIME,
+        };
+        if let Some(existing) = self.staged_runtime_admissions.get(&request.container_id) {
+            ensure!(
+                existing.authority_head_binding_id == stage.authority_head_binding_id
+                    && existing.identity == stage.identity
+                    && existing.runtime == stage.runtime,
+                IdentityStateSnafu {
+                    reason: "OCI createContainer changed an existing runtime stage",
+                }
+            );
+            return Ok(false);
+        }
+        ensure!(
+            self.staged_runtime_admissions.len() < MAXIMUM_RUNTIME_STAGES,
+            IdentityStateSnafu {
+                reason: "runtime fact stage capacity is exhausted",
+            }
+        );
+        self.staged_runtime_admissions
+            .insert(request.container_id.clone(), stage);
+        Ok(true)
+    }
+
     pub(crate) async fn verify_runtime_admission(
         &mut self,
-        spec: &mut WorkloadBindingConfig,
-    ) -> Result<()> {
+        configured: &[WorkloadBindingConfig],
+        request: &RuntimeAdmissionRequestV1,
+    ) -> Result<ScheduledRuntimeBindingV1> {
         ensure!(
             self.pending_runtime_admission.is_none(),
             IdentityStateSnafu {
                 reason: "one runtime admission is already pending",
             }
         );
+        let now = Instant::now();
+        let staged = self
+            .staged_runtime_admissions
+            .get(&request.container_id)
+            .cloned()
+            .context(IdentityStateSnafu {
+                reason: "OCI prestart has no live createContainer stage",
+            })?;
+        let mut scheduled = ScheduledRuntimeBindingV1::resolve(configured, request)?;
+        staged.verify_prestart(
+            &configured[scheduled.binding_index].binding_id,
+            request,
+            now,
+        )?;
         let runtime = self.runtime.as_mut().context(IdentityStateSnafu {
             reason: "runtime admission has no CRI inventory owner",
         })?;
         // CRI must still report Created while the OCI hook holds the initial process.
-        let identity = runtime.inspect_created_for_admission(spec).await?;
-        spec.container_generation = identity.generation;
+        let identity = runtime
+            .inspect_created_for_admission(&scheduled.resolved)
+            .await?;
+        ensure!(
+            staged.runtime.same_lifetime_as(&identity),
+            IdentityStateSnafu {
+                reason: "CRI identity changed after OCI createContainer staging",
+            }
+        );
+        scheduled.resolved.container_generation = identity.generation;
         self.pending_runtime_admission = Some(identity);
-        Ok(())
+        Ok(scheduled)
     }
 
     pub(crate) fn cancel_runtime_admission(&mut self) {
         self.pending_runtime_admission = None;
+    }
+
+    pub(crate) fn discard_runtime_stage(&mut self, container_id: &str) {
+        self.staged_runtime_admissions.remove(container_id);
     }
 
     fn install_late_activation_target(
@@ -1568,16 +1690,22 @@ mod tests {
     use std::collections::BTreeMap;
     use std::fs;
     use std::path::{Path, PathBuf};
+    use std::time::{Duration, Instant};
 
     use snafu::{OptionExt as _, ResultExt as _};
 
     use super::{
         same_activation_identity, same_runtime_binding, RuntimeContainerIdentity,
-        WorkloadBindingOwner, RUNTIME_BOOTSTRAP_LIFETIME_NS,
+        StagedRuntimeAdmissionV1, WorkloadBindingOwner, RUNTIME_BOOTSTRAP_LIFETIME_NS,
     };
     use crate::error::{IdentityStateSnafu, IoSnafu};
     use crate::identity::runtime::RuntimeContainerState;
-    use crate::WorkloadBindingConfig;
+    use crate::{
+        RuntimeAdmissionOperationV1, RuntimeAdmissionRequestV1, WorkloadBindingConfig,
+        CONTAINER_NAME_ANNOTATION, IMAGE_NAME_ANNOTATION, POD_NAMESPACE_ANNOTATION,
+        POD_UID_ANNOTATION, POLICY_SOURCE_REVISION_ANNOTATION, PROFILE_ID_ANNOTATION,
+        SANDBOX_ID_ANNOTATION,
+    };
     use erebor_interceptor_abi::{Id128V1, InitialRootStateV1, RuntimeBootstrapStateV1};
 
     fn spec(root: &Path) -> WorkloadBindingConfig {
@@ -1609,6 +1737,89 @@ mod tests {
             external_role_id: 11,
             arm_initial_root: true,
         }
+    }
+
+    fn prestart_request(cgroup_path: &Path) -> RuntimeAdmissionRequestV1 {
+        RuntimeAdmissionRequestV1 {
+            operation: RuntimeAdmissionOperationV1::Prestart,
+            container_id: "a".repeat(64),
+            initial_pid: Some(42),
+            cgroup_path: Some(cgroup_path.to_path_buf()),
+            annotations: BTreeMap::from([
+                (POD_NAMESPACE_ANNOTATION.to_owned(), "default".to_owned()),
+                (POD_UID_ANNOTATION.to_owned(), "pod-uid-a".to_owned()),
+                (CONTAINER_NAME_ANNOTATION.to_owned(), "worker".to_owned()),
+                (
+                    IMAGE_NAME_ANNOTATION.to_owned(),
+                    format!("worker@sha256:{}", "b".repeat(64)),
+                ),
+                (SANDBOX_ID_ANNOTATION.to_owned(), "c".repeat(64)),
+                (
+                    PROFILE_ID_ANNOTATION.to_owned(),
+                    "33333333-3333-4333-8333-333333333333".to_owned(),
+                ),
+                (POLICY_SOURCE_REVISION_ANNOTATION.to_owned(), "d".repeat(64)),
+            ]),
+        }
+    }
+
+    #[test]
+    fn prestart_must_match_the_staged_authority_head_and_runtime_facts() -> crate::Result<()> {
+        let cgroup = PathBuf::from("/sys/fs/cgroup/kubepods/pod-a/container-a");
+        let request = prestart_request(&cgroup);
+        let stage = StagedRuntimeAdmissionV1 {
+            authority_head_binding_id: "authority-head-a".to_owned(),
+            identity: request.kubernetes_identity()?,
+            runtime: RuntimeContainerIdentity {
+                full_container_id: request.container_id.clone(),
+                namespace: "default".to_owned(),
+                pod_uid: "pod-uid-a".to_owned(),
+                sandbox_id: "c".repeat(64),
+                container_name: "worker".to_owned(),
+                image_digest: format!("sha256:{}", "b".repeat(64)),
+                generation: 1,
+                cgroup_path: cgroup.clone(),
+                init_pid: 0,
+                working_directory: PathBuf::from("/"),
+                path_entries: vec![PathBuf::from("/bin")],
+                state: RuntimeContainerState::Created,
+            },
+            deadline: Instant::now() + Duration::from_secs(1),
+        };
+        let now = Instant::now();
+        stage.verify_prestart("authority-head-a", &request, now)?;
+
+        assert!(stage
+            .verify_prestart("authority-head-b", &request, now)
+            .is_err());
+        let wrong_cgroup =
+            prestart_request(Path::new("/sys/fs/cgroup/kubepods/pod-a/another-container"));
+        assert!(stage
+            .verify_prestart("authority-head-a", &wrong_cgroup, now)
+            .is_err());
+        let mut expired = stage;
+        expired.deadline = now;
+        assert!(expired
+            .verify_prestart("authority-head-a", &request, now)
+            .is_err());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn prestart_without_a_create_container_stage_fails_before_cri() -> crate::Result<()> {
+        let temporary = tempfile::tempdir().context(IoSnafu {
+            path: "temporary missing runtime stage root",
+        })?;
+        let mut owner = WorkloadBindingOwner::at(temporary.path(), Id128V1::new(1, 2), 3)?;
+        let request = prestart_request(Path::new("/sys/fs/cgroup/kubepods/pod-a/container-a"));
+        let Err(error) = owner.verify_runtime_admission(&[], &request).await else {
+            return IdentityStateSnafu {
+                reason: "prestart without staging reached runtime inventory".to_owned(),
+            }
+            .fail();
+        };
+        assert!(error.to_string().contains("no live createContainer stage"));
+        Ok(())
     }
 
     #[test]

@@ -57,7 +57,8 @@ spec:
             - install
             - {{ $runtimeHookOwner | quote }}
             - /usr/local/bin/mithril-oci-hook
-            - /hook-source/99-mithril.json
+            - /hook-source/98-mithril-create-container.json
+            - /hook-source/99-mithril-prestart.json
 {{- else }}
             - cleanup
             - {{ $runtimeHookOwner | quote }}

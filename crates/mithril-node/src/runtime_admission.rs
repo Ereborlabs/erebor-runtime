@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
-use snafu::{ensure, ResultExt as _};
+use snafu::{ensure, OptionExt as _, ResultExt as _};
 use tokio::io::{AsyncBufReadExt as _, AsyncReadExt as _, AsyncWriteExt as _, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::{mpsc, oneshot, watch};
@@ -28,10 +28,20 @@ pub(crate) const POLICY_CONVERGENCE_PENDING: &str = "POLICY_CONVERGENCE_PENDING"
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct RuntimeAdmissionRequestV1 {
+    pub operation: RuntimeAdmissionOperationV1,
     pub container_id: String,
-    pub initial_pid: u32,
-    pub cgroup_path: PathBuf,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub initial_pid: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cgroup_path: Option<PathBuf>,
     pub annotations: BTreeMap<String, String>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum RuntimeAdmissionOperationV1 {
+    CreateContainer,
+    Prestart,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -92,14 +102,23 @@ pub struct RuntimeAdmissionClient {
 
 impl RuntimeAdmissionRequestV1 {
     pub(crate) fn kubernetes_identity(&self) -> Result<KubernetesRuntimeIdentityV1> {
+        let operation_is_canonical = match self.operation {
+            RuntimeAdmissionOperationV1::CreateContainer => {
+                self.initial_pid.is_none()
+                    && self.cgroup_path.as_deref().is_some_and(clean_cgroup_path)
+            }
+            RuntimeAdmissionOperationV1::Prestart => {
+                self.initial_pid.is_some_and(|pid| pid > 0)
+                    && self.cgroup_path.as_deref().is_some_and(clean_cgroup_path)
+            }
+        };
         ensure!(
             (32..=128).contains(&self.container_id.len())
                 && self
                     .container_id
                     .bytes()
                     .all(|byte| byte.is_ascii_alphanumeric() || b"-_.:".contains(&byte))
-                && self.initial_pid > 0
-                && clean_cgroup_path(&self.cgroup_path)
+                && operation_is_canonical
                 && self.annotations.len() <= 64
                 && self.annotations.iter().all(|(key, value)| {
                     !key.is_empty() && key.len() <= 253 && !value.is_empty() && value.len() <= 4_096
@@ -148,6 +167,30 @@ impl RuntimeAdmissionRequestV1 {
             image_digest: image_digest.to_owned(),
             sandbox_id: required(SANDBOX_ID_ANNOTATION)?,
             profile_id,
+        })
+    }
+
+    pub(crate) fn prestart_pid(&self) -> Result<u32> {
+        ensure!(
+            self.operation == RuntimeAdmissionOperationV1::Prestart,
+            IdentityStateSnafu {
+                reason: "runtime authority requires an OCI prestart request",
+            }
+        );
+        self.initial_pid.context(IdentityStateSnafu {
+            reason: "OCI prestart request has no initial process",
+        })
+    }
+
+    pub(crate) fn prestart_cgroup_path(&self) -> Result<&Path> {
+        ensure!(
+            self.operation == RuntimeAdmissionOperationV1::Prestart,
+            IdentityStateSnafu {
+                reason: "runtime authority requires an OCI prestart request",
+            }
+        );
+        self.cgroup_path.as_deref().context(IdentityStateSnafu {
+            reason: "OCI prestart request has no cgroup path",
         })
     }
 }
@@ -423,6 +466,33 @@ impl ScheduledRuntimeBindingV1 {
         configured: &[WorkloadBindingConfig],
         request: &RuntimeAdmissionRequestV1,
     ) -> Result<Self> {
+        ensure!(
+            request.operation == RuntimeAdmissionOperationV1::Prestart,
+            IdentityStateSnafu {
+                reason: "scheduled runtime activation requires an OCI prestart request",
+            }
+        );
+        Self::resolve_request(configured, request, Some(request.prestart_cgroup_path()?))
+    }
+
+    pub(crate) fn resolve_stage(
+        configured: &[WorkloadBindingConfig],
+        request: &RuntimeAdmissionRequestV1,
+    ) -> Result<Self> {
+        ensure!(
+            request.operation == RuntimeAdmissionOperationV1::CreateContainer,
+            IdentityStateSnafu {
+                reason: "runtime fact staging requires an OCI createContainer request",
+            }
+        );
+        Self::resolve_request(configured, request, None)
+    }
+
+    fn resolve_request(
+        configured: &[WorkloadBindingConfig],
+        request: &RuntimeAdmissionRequestV1,
+        cgroup_path: Option<&Path>,
+    ) -> Result<Self> {
         let identity = request.kubernetes_identity()?;
         ensure!(
             (32..=128).contains(&identity.sandbox_id.len())
@@ -493,7 +563,7 @@ impl ScheduledRuntimeBindingV1 {
         );
         resolved.container_id = request.container_id.clone();
         resolved.sandbox_id = identity.sandbox_id;
-        resolved.root_cgroup_path = Some(request.cgroup_path.clone());
+        resolved.root_cgroup_path = cgroup_path.map(Path::to_path_buf);
         resolved.container_generation = if current_is_placeholder {
             1
         } else {
@@ -712,19 +782,20 @@ mod tests {
     use std::time::Duration;
 
     use super::{
-        remove_stale_socket, RuntimeAdmissionClient, RuntimeAdmissionRequestV1,
-        RuntimeAdmissionResponseV1, RuntimeAdmissionServer, ScheduledRuntimeBindingV1,
-        CONTAINER_NAME_ANNOTATION, IMAGE_NAME_ANNOTATION, POD_NAMESPACE_ANNOTATION,
-        POD_UID_ANNOTATION, POLICY_CONVERGENCE_PENDING, POLICY_SOURCE_REVISION_ANNOTATION,
-        PROFILE_ID_ANNOTATION, SANDBOX_ID_ANNOTATION,
+        remove_stale_socket, RuntimeAdmissionClient, RuntimeAdmissionOperationV1,
+        RuntimeAdmissionRequestV1, RuntimeAdmissionResponseV1, RuntimeAdmissionServer,
+        ScheduledRuntimeBindingV1, CONTAINER_NAME_ANNOTATION, IMAGE_NAME_ANNOTATION,
+        POD_NAMESPACE_ANNOTATION, POD_UID_ANNOTATION, POLICY_CONVERGENCE_PENDING,
+        POLICY_SOURCE_REVISION_ANNOTATION, PROFILE_ID_ANNOTATION, SANDBOX_ID_ANNOTATION,
     };
     use crate::{ContainerKindV1, WorkloadBindingConfig};
 
     fn request() -> RuntimeAdmissionRequestV1 {
         RuntimeAdmissionRequestV1 {
+            operation: RuntimeAdmissionOperationV1::Prestart,
             container_id: "a".repeat(64),
-            initial_pid: 42,
-            cgroup_path: PathBuf::from("/sys/fs/cgroup/kubepods/pod-a/container-a"),
+            initial_pid: Some(42),
+            cgroup_path: Some(PathBuf::from("/sys/fs/cgroup/kubepods/pod-a/container-a")),
             annotations: BTreeMap::from([
                 (POD_NAMESPACE_ANNOTATION.to_owned(), "tenant-a".to_owned()),
                 (POD_UID_ANNOTATION.to_owned(), "pod-a".to_owned()),
@@ -785,9 +856,25 @@ mod tests {
     }
 
     #[test]
+    fn create_container_can_stage_facts_but_cannot_request_runtime_authority() -> crate::Result<()>
+    {
+        let mut stage = request();
+        stage.operation = RuntimeAdmissionOperationV1::CreateContainer;
+        stage.initial_pid = None;
+        let scheduled = scheduled_binding();
+        let resolved = ScheduledRuntimeBindingV1::resolve_stage(&[scheduled], &stage)?;
+        assert_eq!(resolved.resolved.root_cgroup_path, None);
+        assert!(ScheduledRuntimeBindingV1::resolve(&[resolved.resolved], &stage).is_err());
+
+        stage.initial_pid = Some(42);
+        assert!(stage.kubernetes_identity().is_err());
+        Ok(())
+    }
+
+    #[test]
     fn malformed_or_unpinned_requests_fail_closed() {
         let mut invalid_path = request();
-        invalid_path.cgroup_path = PathBuf::from("/tmp/not-a-cgroup");
+        invalid_path.cgroup_path = Some(PathBuf::from("/tmp/not-a-cgroup"));
         assert!(invalid_path.kubernetes_identity().is_err());
 
         let mut unpinned = request();
@@ -838,7 +925,7 @@ mod tests {
         assert_eq!(resolved.resolved.container_id, request.container_id);
         assert_eq!(
             resolved.resolved.root_cgroup_path.as_deref(),
-            Some(request.cgroup_path.as_path())
+            request.cgroup_path.as_deref()
         );
         assert!(resolved.previous_binding_id.is_none());
         Ok(())

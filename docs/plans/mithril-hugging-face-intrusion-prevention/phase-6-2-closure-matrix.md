@@ -20,7 +20,8 @@ scheduler binding, selected-node delivery, policy activation, runtime binding,
 and durable evidence intake. Stock `runc` container start then failed because
 its bootstrap uses an anonymous file write and IPC access that have no typed
 authority. The approved `RuntimeBootstrap` design is now part of the
-architecture and phase plan. It is not implemented or physically proved yet.
+architecture and phase plan. The current source implements it, but no current
+physical result proves it yet.
 
 The amendment is not closed by custom resource reconciliation alone. A result
 is complete only when a matching Pod can be scheduled by the Kubernetes
@@ -54,12 +55,12 @@ fresh-root checks.
 | `D6.2.5` | **Partial.** | Automated intake failure, duplicate, gap, reorder, replay, storage, restart, and WAL migration tests pass. The required physical evidence variants remain `Not run`. |
 | `D6.2.6` | **Implemented and automated; physical result not done.** | Tests cover policy target shrink, restrictive retirement, terminal closure, exception use, expiry, revocation, target disappearance, restart, reconnect, and physical-session settlement. Run the current physical lifecycle. |
 | `D6.2.7` | **Implemented and automated; physical result not done.** | Both statuses are bounded and contain no authority material. Separate writer roles and Control status-only permissions are rendered and exercised by typed authorization reviews. Run them against the current installed CRDs. |
-| `D6.2.8` | **Blocked at physical protected start.** | Implement the approved stock-runtime bootstrap authority. Then run the complete current policy and exception transaction through application start and cleanup. |
+| `D6.2.8` | **Implemented; physical protected start not done.** | Run the complete current policy and exception transaction through application start and cleanup with the bounded RuntimeBootstrap owner active. |
 | `D6.2.9` | **Implemented and scripted; physical result not done.** | Automated tests cover session expiry, reconnect, Node UID rebind, boot and label reset, and startup absence proof. The physical fixture scripts quarantine, UID replacement, selector re-entry, process restart, and host reboot. Run the fixture. |
 | `D6.2.10` | **Implemented and automated; physical result not done.** | Policy and container matching, immutable image pins, Pod mutation, update validation, binding validation, and scheduler choice tests pass. Run the current physical admission flow. |
-| `D6.2.11` | **Implemented and automated; physical result blocked.** | Exact selected-node delivery, activation, cgroup binding, cancellation rollback, runtime lifetime replacement, terminal cleanup, and timeout tests pass. Stock-runtime process release still needs the approved bootstrap authority and a physical pass. |
-| `D6.2.12` | **Implemented and rendered; physical result not done.** | The chart packages both CRDs, RBAC, admission, node and Control workloads, atomic hook ownership and cleanup, automated fixture, and independent manual example. Run install, full scenario, uninstall, and host-path cleanup physically. |
-| `D6.2.13` | **Approved; not implemented.** | Implement createContainer staging, exact prestart activation, the bounded BPF transition and object ownership, one-use application handoff, recovery, automated behavior, and current stock-runtime physical proof. |
+| `D6.2.11` | **Implemented and automated; physical result not done.** | Exact selected-node delivery, activation, staged runtime fact equality, cgroup binding, cancellation rollback, runtime lifetime replacement, terminal cleanup, and timeout tests pass. Run the stock-runtime process-release path physically. |
+| `D6.2.12` | **Implemented and rendered; physical result not done.** | The chart packages both CRDs, RBAC, admission, node and Control workloads, atomically owned createContainer and prestart hooks, bounded cleanup, automated fixture, and independent manual example. Run install, full scenario, uninstall, and host-path cleanup physically. |
+| `D6.2.13` | **Implemented and automated; physical result not done.** | Focused behavior tests cover createContainer staging without PID authority, exact prestart matching, missing and expired stages, node arm and recovery transitions, Helm hook ordering, and cleanup. ABI and compiled-object checks cover the bounded BPF binding and anonymous-object state. Prove the BPF effects and complete handoff on the current stock runtime. |
 
 ## Automated Proof Matrix
 

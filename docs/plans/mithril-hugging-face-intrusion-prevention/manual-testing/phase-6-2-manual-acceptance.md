@@ -6,7 +6,8 @@ branch implements both resources and the current fixture flows. The current
 source is not physically tested. The earlier run used the superseded flattened
 resource and stopped when stock `runc` used bootstrap operations that have no
 typed authority. The bounded internal `RuntimeBootstrap` flow is approved but
-is not implemented or physically proved.
+is now implemented in source and focused automated tests. It is not physically
+proved.
 
 Phase: [Control Policy And Evidence Convergence](../phase-6-2-control-policy-and-evidence-convergence.md)
 
@@ -36,8 +37,8 @@ because they have no typed authority. The application process did not start.
 
 The previous result is a product blocker, not test noise. The validated
 architecture forbids a broad `runc`, pipe, or socket exception. Completion
-requires implementation and physical proof of the approved typed, bounded
-`RuntimeBootstrap` authority.
+requires current stock-runtime physical proof of the implemented typed,
+bounded `RuntimeBootstrap` authority.
 The current automated fixture now contains gate-failure, task lifetime, Pod
 UID, Node UID, host epoch, selector, exception target-retirement, terminal
 cleanup, and fresh-root oracles. These physical cases remain `Not run`. Watch

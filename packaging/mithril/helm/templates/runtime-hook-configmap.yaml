@@ -12,13 +12,38 @@ data:
   runtime-hook-owner.sh: |-
 {{ .Files.Get "files/runtime-hook-owner.sh" | indent 4 }}
 {{- if .Values.node.runtimeHook.install }}
-  99-mithril.json: |-
+  98-mithril-create-container.json: |-
     {
       "version": "1.0.0",
       "hook": {
         "path": {{ printf "%s/mithril-oci-hook" .Values.node.runtimeHook.hostBinaryDirectory | quote }},
         "args": [
           "mithril-oci-hook",
+          "--stage",
+          "create-container",
+          "--socket",
+          {{ .Values.node.runtimeHook.socketPath | quote }},
+          "--timeout-ms",
+          {{ .Values.node.runtimeHook.timeoutMs | quote }}
+        ],
+        "timeout": {{ .Values.node.runtimeHook.runtimeTimeoutSeconds }}
+      },
+      "when": {
+        "annotations": {
+          "^mithril\\.erebor\\.dev/profile-id$": ".+"
+        }
+      },
+      "stages": ["createContainer"]
+    }
+  99-mithril-prestart.json: |-
+    {
+      "version": "1.0.0",
+      "hook": {
+        "path": {{ printf "%s/mithril-oci-hook" .Values.node.runtimeHook.hostBinaryDirectory | quote }},
+        "args": [
+          "mithril-oci-hook",
+          "--stage",
+          "prestart",
           "--socket",
           {{ .Values.node.runtimeHook.socketPath | quote }},
           "--timeout-ms",

@@ -288,29 +288,31 @@ impl ContainerRuntimeInventory {
                 reason: "runtime admission CRI identity differs from signed workload material",
             }
         );
-        // A Created container has no running init PID; its cgroup must match the held process path.
+        // CreateContainer records the CRI cgroup first. Prestart later proves that
+        // the held initial process has the same cgroup.
         let process = runtime_process_from_info(
             &response.info,
             &self.cgroup_root,
             RuntimeContainerState::Created,
         )?;
-        let expected_cgroup = expected.root_cgroup_path.as_ref().ok_or_else(|| {
-            IdentityStateSnafu {
-                reason: "runtime admission has no expected cgroup".to_owned(),
-            }
-            .build()
-        })?;
         ensure!(
-            process.init_pid == 0
-                && fs::canonicalize(&process.cgroup_path).context(IoSnafu {
+            process.init_pid == 0,
+            IdentityStateSnafu {
+                reason: "runtime admission CRI record already has a running initial process",
+            }
+        );
+        if let Some(expected_cgroup) = expected.root_cgroup_path.as_ref() {
+            ensure!(
+                fs::canonicalize(&process.cgroup_path).context(IoSnafu {
                     path: &process.cgroup_path,
                 })? == fs::canonicalize(expected_cgroup).context(IoSnafu {
                     path: expected_cgroup,
                 })?,
-            IdentityStateSnafu {
-                reason: "runtime admission CRI cgroup differs from the held initial process",
-            }
-        );
+                IdentityStateSnafu {
+                    reason: "runtime admission CRI cgroup differs from the held initial process",
+                }
+            );
+        }
         Ok(RuntimeContainerIdentity {
             full_container_id: status.id,
             namespace: namespace.clone(),

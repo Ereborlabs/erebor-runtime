@@ -61,27 +61,39 @@ publish_file() {
 install_hook() {
   hook_owner=$1
   binary_source=$2
-  config_source=$3
-  binary_directory=$4
-  config_directory=$5
+  create_config_source=$3
+  prestart_config_source=$4
+  binary_directory=$5
+  config_directory=$6
   binary_target=$binary_directory/mithril-oci-hook
   binary_marker=$binary_directory/.mithril-oci-hook.helm-owner
-  config_target=$config_directory/99-mithril.json
-  config_marker=$config_directory/.99-mithril.json.helm-owner
+  create_config_target=$config_directory/98-mithril-create-container.json
+  create_config_marker=$config_directory/.98-mithril-create-container.json.helm-owner
+  prestart_config_target=$config_directory/99-mithril-prestart.json
+  prestart_config_marker=$config_directory/.99-mithril-prestart.json.helm-owner
+  legacy_config_target=$config_directory/99-mithril.json
+  legacy_config_marker=$config_directory/.99-mithril.json.helm-owner
 
   [ -d "$binary_directory" ] || fail "binary directory does not exist"
   [ -d "$config_directory" ] || fail "hook configuration directory does not exist"
   [ -f "$binary_source" ] || fail "hook binary source does not exist"
-  [ -f "$config_source" ] || fail "hook configuration source does not exist"
+  [ -f "$create_config_source" ] || fail "createContainer hook source does not exist"
+  [ -f "$prestart_config_source" ] || fail "prestart hook source does not exist"
   require_owned_or_absent "$binary_target" "$binary_marker" "$hook_owner"
-  require_owned_or_absent "$config_target" "$config_marker" "$hook_owner"
+  require_owned_or_absent "$create_config_target" "$create_config_marker" "$hook_owner"
+  require_owned_or_absent "$prestart_config_target" "$prestart_config_marker" "$hook_owner"
+  require_owned_or_absent "$legacy_config_target" "$legacy_config_marker" "$hook_owner"
 
   # Publish ownership before content. An interrupted first install can retry,
   # but it cannot leave content that a later release can claim as unowned.
   publish_owner "$binary_marker" "$hook_owner"
-  publish_owner "$config_marker" "$hook_owner"
+  publish_owner "$create_config_marker" "$hook_owner"
+  publish_owner "$prestart_config_marker" "$hook_owner"
   publish_file "$binary_source" "$binary_target" 0755
-  publish_file "$config_source" "$config_target" 0644
+  # Publish the fail-closed prestart gate before staging or legacy removal.
+  publish_file "$prestart_config_source" "$prestart_config_target" 0644
+  remove_owned "$legacy_config_target" "$legacy_config_marker" "$hook_owner"
+  publish_file "$create_config_source" "$create_config_target" 0644
 }
 
 remove_owned() {
@@ -100,7 +112,11 @@ cleanup_hook() {
   hook_owner=$1
   binary_directory=$2
   config_directory=$3
-  # Remove the registration first so that the runtime cannot call a missing hook.
+  # Remove staging first. A concurrent prestart then denies because it has no stage.
+  remove_owned "$config_directory/98-mithril-create-container.json" \
+    "$config_directory/.98-mithril-create-container.json.helm-owner" "$hook_owner"
+  remove_owned "$config_directory/99-mithril-prestart.json" \
+    "$config_directory/.99-mithril-prestart.json.helm-owner" "$hook_owner"
   remove_owned "$config_directory/99-mithril.json" \
     "$config_directory/.99-mithril.json.helm-owner" "$hook_owner"
   remove_owned "$binary_directory/mithril-oci-hook" \
@@ -116,8 +132,8 @@ esac
 
 case $action in
   install)
-    [ "$#" -eq 6 ] || fail "install requires owner, sources, and target directories"
-    install_hook "$owner" "$3" "$4" "$5" "$6"
+    [ "$#" -eq 7 ] || fail "install requires owner, sources, and target directories"
+    install_hook "$owner" "$3" "$4" "$5" "$6" "$7"
     ;;
   cleanup)
     [ "$#" -eq 4 ] || fail "cleanup requires owner and target directories"

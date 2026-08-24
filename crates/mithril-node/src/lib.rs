@@ -49,8 +49,9 @@ pub use policy_delivery::{
     policy_delivery_status, PolicyDeliveryStatusV1, PolicyDeliveryTargetStatusV1,
 };
 pub use runtime_admission::{
-    RuntimeAdmissionClient, RuntimeAdmissionRequestV1, RuntimeAdmissionResponseV1,
-    CONTAINER_NAME_ANNOTATION, IMAGE_NAME_ANNOTATION, POD_NAMESPACE_ANNOTATION, POD_UID_ANNOTATION,
-    POLICY_SOURCE_REVISION_ANNOTATION, PROFILE_ID_ANNOTATION, SANDBOX_ID_ANNOTATION,
+    RuntimeAdmissionClient, RuntimeAdmissionOperationV1, RuntimeAdmissionRequestV1,
+    RuntimeAdmissionResponseV1, CONTAINER_NAME_ANNOTATION, IMAGE_NAME_ANNOTATION,
+    POD_NAMESPACE_ANNOTATION, POD_UID_ANNOTATION, POLICY_SOURCE_REVISION_ANNOTATION,
+    PROFILE_ID_ANNOTATION, SANDBOX_ID_ANNOTATION,
 };
 pub use trust::{InstalledTrustGenerationV1, TrustCache};

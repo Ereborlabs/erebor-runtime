@@ -1054,6 +1054,70 @@ impl NodeChassis {
         if envelope.ensure_active().is_err() {
             return Ok(());
         }
+        match envelope.request.operation {
+            crate::runtime_admission::RuntimeAdmissionOperationV1::CreateContainer => {
+                self.answer_runtime_stage(envelope).await
+            }
+            crate::runtime_admission::RuntimeAdmissionOperationV1::Prestart => {
+                self.answer_runtime_prestart(envelope).await
+            }
+        }
+    }
+
+    async fn answer_runtime_stage(
+        &mut self,
+        envelope: crate::runtime_admission::RuntimeAdmissionEnvelope,
+    ) -> Result<()> {
+        let malformed = envelope.request.kubernetes_identity().is_err();
+        let ready = crate::runtime_admission::ScheduledRuntimeBindingV1::resolve_stage(
+            &self.config.workload_bindings,
+            &envelope.request,
+        )
+        .is_ok();
+        if !malformed && !ready {
+            let _result = envelope
+                .deliver(crate::RuntimeAdmissionResponseV1 {
+                    allowed: false,
+                    reason_code: crate::runtime_admission::POLICY_CONVERGENCE_PENDING.to_owned(),
+                })
+                .await;
+            return Ok(());
+        }
+        let container_id = envelope.request.container_id.clone();
+        match self
+            .bindings
+            .stage_runtime_admission(&self.config.workload_bindings, &envelope.request)
+            .await
+        {
+            Ok(staged_new) => {
+                if envelope
+                    .deliver(crate::RuntimeAdmissionResponseV1 {
+                        allowed: true,
+                        reason_code: "RUNTIME_FACTS_STAGED".to_owned(),
+                    })
+                    .await
+                    .is_err()
+                    && staged_new
+                {
+                    self.bindings.discard_runtime_stage(&container_id);
+                }
+            }
+            Err(_error) => {
+                let _result = envelope
+                    .deliver(crate::RuntimeAdmissionResponseV1 {
+                        allowed: false,
+                        reason_code: "RUNTIME_FACT_STAGING_REJECTED".to_owned(),
+                    })
+                    .await;
+            }
+        }
+        Ok(())
+    }
+
+    async fn answer_runtime_prestart(
+        &mut self,
+        envelope: crate::runtime_admission::RuntimeAdmissionEnvelope,
+    ) -> Result<()> {
         // Only a valid first-use request can wait; malformed and replayed requests fail immediately.
         let malformed = envelope.request.kubernetes_identity().is_err();
         let reused = self.config.workload_bindings.iter().any(|binding| {
@@ -1081,6 +1145,7 @@ impl NodeChassis {
         }
         match self.admit_runtime_start(&envelope).await {
             Ok(commit) => {
+                let container_id = envelope.request.container_id.clone();
                 let delivered = envelope
                     .deliver(crate::RuntimeAdmissionResponseV1 {
                         allowed: true,
@@ -1089,6 +1154,8 @@ impl NodeChassis {
                     .await;
                 if delivered.is_err() {
                     self.rollback_runtime_admission(commit)?;
+                } else {
+                    self.bindings.discard_runtime_stage(&container_id);
                 }
             }
             Err(error) if error.fatal => return Err(error.source),
@@ -1117,17 +1184,13 @@ impl NodeChassis {
                 reason: "runtime admission has no healthy active prevention generation",
             }
         );
-        let mut scheduled = crate::runtime_admission::ScheduledRuntimeBindingV1::resolve(
-            &self.config.workload_bindings,
-            request,
-        )?;
+        let scheduled = self
+            .bindings
+            .verify_runtime_admission(&self.config.workload_bindings, request)
+            .await?;
         let mut dynamic = self.config.clone();
         dynamic.workload_bindings[scheduled.binding_index] = scheduled.resolved.clone();
         dynamic.validate()?;
-        // Confirm CRI Created state while the hook holds this exact initial process.
-        self.bindings
-            .verify_runtime_admission(&mut scheduled.resolved)
-            .await?;
         if let Err(error) = envelope.ensure_active() {
             self.bindings.cancel_runtime_admission();
             return Err(error.into());
@@ -1160,7 +1223,7 @@ impl NodeChassis {
         if let Err(error) = self.bindings.publish_held_activated_root(
             host,
             &scheduled.resolved,
-            request.initial_pid,
+            request.prestart_pid()?,
         ) {
             self.bindings.cancel_runtime_admission();
             return Err(RuntimeAdmissionFailureV1::fatal(error));
@@ -2581,9 +2644,10 @@ mod tests {
 
     fn admission_test_request() -> RuntimeAdmissionRequestV1 {
         RuntimeAdmissionRequestV1 {
+            operation: crate::RuntimeAdmissionOperationV1::Prestart,
             container_id: "a".repeat(64),
-            initial_pid: 1,
-            cgroup_path: PathBuf::from("/sys/fs/cgroup/kubepods/pod-a/container-a"),
+            initial_pid: Some(1),
+            cgroup_path: Some(PathBuf::from("/sys/fs/cgroup/kubepods/pod-a/container-a")),
             annotations: BTreeMap::from([
                 (POD_NAMESPACE_ANNOTATION.to_owned(), "default".to_owned()),
                 (POD_UID_ANNOTATION.to_owned(), "pod-a".to_owned()),
