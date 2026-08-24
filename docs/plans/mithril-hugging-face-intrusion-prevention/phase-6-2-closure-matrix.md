@@ -10,9 +10,10 @@
 Phase 6.2 is **Not done**. The approved API correction replaces the flattened
 `WorkloadProtectionProfile` with a capability-grounded
 `WorkloadProtectionPolicy` and a separate bounded
-`WorkloadProtectionException`. The branch does not implement those resources,
-their lowering, or their complete fixtures. The previous API proof does not
-close the corrected design.
+`WorkloadProtectionException`. The branch now implements both resources,
+their lowering, their durable Control and node lifecycles, and current
+automated and manual fixture flows. The current source has not passed the
+physical procedure.
 
 The earlier physical Kubernetes run remains partial evidence. It reached
 scheduler binding, selected-node delivery, policy activation, runtime binding,
@@ -21,11 +22,13 @@ its bootstrap uses an anonymous file write and IPC access that have no typed
 authority. The architecture still requires an approved runtime-bootstrap
 authority and forbids a broad runtime exception.
 
-The amendment is not closed by CRD reconciliation alone. A result is complete
-only when a matching Pod can be scheduled by the Kubernetes scheduler onto a
-node derived from the live `mithril-node` DaemonSet, and the exact initial
-container process remains held until that node activates the Pod's exact
-policy and cgroup binding.
+The amendment is not closed by custom resource reconciliation alone. A result
+is complete only when a matching Pod can be scheduled by the Kubernetes
+scheduler onto a node derived from the live `mithril-node` DaemonSet, and the
+exact initial container process remains held until that node activates the
+Pod's exact policy and cgroup binding. The complete current physical flow must
+also pass retirement, restart, Node UID replacement, host epoch, cleanup, and
+fresh-root checks.
 
 ## Authority Corrections
 
@@ -43,18 +46,18 @@ policy and cgroup binding.
 
 | Deliverable | Current result | Evidence required to close |
 | --- | --- | --- |
-| `D6.2.1` | Corrected API design: **Not done**. | Implement both structural CRDs, strict public schemas, bounded status, offline policy form, and public-to-internal golden. Prove that internal-only fields reject. |
-| `D6.2.2` | Corrected desired-state owner: **Not done**. | Reconcile both source kinds, lower base-policy grants, enforce separate exception-writer RBAC, and prove deterministic restart and relist behavior. |
-| `D6.2.3` | Prior scheduler-bound inventory proof is reusable; corrected provenance: **Not done**. | Bind the base-policy source to one exact target snapshot and bind each exception source to the active base-policy generation, grant, Pod, container, Node, and boot. |
-| `D6.2.4` | Prior selected-node delivery proof is reusable; corrected candidate contract: **Not done**. | Deliver and acknowledge base-policy candidates and separate bounded exception activation or revocation candidates. |
-| `D6.2.5` | Durable intake happy path is proven; required failure variants: **Not done**. | Run physical failure, replay, reordering, backpressure, restart, and WAL-truncation variants. |
-| `D6.2.6` | Existing policy lifecycle proof is reusable; exception lifecycle: **Not done**. | Prove policy retirement plus exception consumption, expiry, revocation, deletion, replay rejection, restart, reconnect, and boot change. |
-| `D6.2.7` | Existing readiness and RBAC proof is reusable; corrected status and RBAC: **Not done**. | Prove standard bounded status for both resources, no digest or receipt exposure, separate operator rights, Control status-only writes, and live RBAC denials. |
-| `D6.2.8` | Corrected end-to-end transaction: **Not done**. | Prove policy and exception convergence, then resolve runtime bootstrap and prove protected process start and lifecycle with stock `runc`. |
-| `D6.2.9` | Initial node readiness is proven; required lifecycle variants: **Not done**. | Run readiness loss, stale session, boot change, Node UID replacement, restart, and DaemonSet-selector variants. |
-| `D6.2.10` | Prior Pod admission and scheduler binding proof is reusable; corrected policy matching: **Not done**. | Prove one policy match, exactly one container-entry match for every container, image pinning, absent-field rejection, and unchanged scheduler choice. |
-| `D6.2.11` | Prior exact-node delivery, activation, and runtime binding proof is reusable: **Not done**. | Prove corrected policy delivery and exception activation without base-generation migration, then resolve runtime bootstrap and prove process release, restart, and timeout behavior. |
-| `D6.2.12` | Prior chart installation proof is obsolete for the API package: **Not done**. | Package and physically test both CRDs, corrected RBAC, manual examples, protected start, lifecycle, and cleanup. |
+| `D6.2.1` | **Implemented and automated.** | The two generated structural CRDs, strict schemas, bounded status, offline policy form, lowering golden, and internal-field rejection tests pass. Physical API installation remains unverified. |
+| `D6.2.2` | **Implemented and automated.** | One desired-state owner reconciles both source kinds. The store proves atomic source and artifact acceptance, restart, complete relist retirement, partial relist safety, and separate exception retirement. |
+| `D6.2.3` | **Implemented and automated.** | API-only workload inventory binds exact scheduler, Pod, container, Node, Node UID, boot, and label facts. Node claims cannot create a Kubernetes target. |
+| `D6.2.4` | **Implemented and automated.** | Policy and exception candidates use bounded chain-ordered delivery, resumable transfer, exact acknowledgements, rejection recovery, and terminal cleanup authorization. |
+| `D6.2.5` | **Partial.** | Automated intake failure, duplicate, gap, reorder, replay, storage, restart, and WAL migration tests pass. The required physical evidence variants remain `Not run`. |
+| `D6.2.6` | **Implemented and automated; physical result not done.** | Tests cover policy target shrink, restrictive retirement, terminal closure, exception use, expiry, revocation, target disappearance, restart, reconnect, and physical-session settlement. Run the current physical lifecycle. |
+| `D6.2.7` | **Implemented and automated; physical result not done.** | Both statuses are bounded and contain no authority material. Separate writer roles and Control status-only permissions are rendered and exercised by typed authorization reviews. Run them against the current installed CRDs. |
+| `D6.2.8` | **Blocked at physical protected start.** | Resolve the approved stock-runtime bootstrap-authority gap. Then run the complete current policy and exception transaction through application start and cleanup. |
+| `D6.2.9` | **Implemented and scripted; physical result not done.** | Automated tests cover session expiry, reconnect, Node UID rebind, boot and label reset, and startup absence proof. The physical fixture scripts quarantine, UID replacement, selector re-entry, process restart, and host reboot. Run the fixture. |
+| `D6.2.10` | **Implemented and automated; physical result not done.** | Policy and container matching, immutable image pins, Pod mutation, update validation, binding validation, and scheduler choice tests pass. Run the current physical admission flow. |
+| `D6.2.11` | **Implemented and automated; physical result blocked.** | Exact selected-node delivery, activation, cgroup binding, cancellation rollback, runtime lifetime replacement, terminal cleanup, and timeout tests pass. Stock-runtime process release still needs the approved bootstrap authority and a physical pass. |
+| `D6.2.12` | **Implemented and rendered; physical result not done.** | The chart packages both CRDs, RBAC, admission, node and Control workloads, atomic hook ownership and cleanup, automated fixture, and independent manual example. Run install, full scenario, uninstall, and host-path cleanup physically. |
 
 ## Automated Proof Matrix
 
@@ -77,59 +80,41 @@ policy and cgroup binding.
 ## Physical Proof Matrix
 
 The physical result must use the current stock Kubernetes and OCI runtime
-extension points. It must record their versions and exact configuration.
-The observations below used the superseded flattened CRD. They remain evidence
-for the node, scheduler, delivery, runtime-gate, and intake seams, but they do
-not prove either corrected CRD.
+extension points. It must record their versions and exact configuration. The
+current source has not run this matrix. The observations marked `Prior pass`
+or `Prior fail` used the superseded flattened resource. They do not prove the
+current CRDs or fixture.
 
 | Scenario | Result | Observation |
 | --- | --- | --- |
-| New eligible node | **Pass** | Each matching Node started quarantined. Its DaemonSet Pod registered and proved readiness before Control removed the taint. |
-| Two eligible nodes | **Pass** | Kubernetes selected the worker. Only that node received and activated the exact candidate. |
-| Unready node | **Not run** | The run did not remove one node session after initial readiness. |
-| Protected start | **Fail** | Policy activation and runtime binding completed. Stock `runc` then used an anonymous file write and IPC access with no typed authority. The runtime reported start failure, and the application did not run. |
-| Gate failure | **Not run** | The protected-start failure stopped the procedure before this case. |
-| Lifecycle | **Not run** | The protected-start failure stopped the procedure before restart and UID-reuse cases. |
-| Selector change | **Not run** | The protected-start failure stopped the procedure before this case. |
+| New eligible node | **Prior pass; current not run** | The old run observed initial quarantine and ready projection. The current fixture also requires same-name UID replacement and host epoch advance. |
+| Two eligible nodes | **Prior pass; current not run** | The old run observed one scheduler-selected node and selected-node delivery. The current fixture compares the complete typed target with live Node and Pod facts. |
+| Protected start | **Prior fail; current not run** | The old run activated policy and binding. Stock `runc` then used anonymous-file and IPC operations with no typed authority. The application did not run. |
+| Runtime and policy lifecycle | **Not run** | The current fixture contains task replacement, exception target retirement, terminal cleanup, restart, no-root replay, and fresh-root checks. |
+| Node lifecycle | **Not run** | The current fixture contains session loss, quarantine, same-name Node UID replacement, DaemonSet exclusion and re-entry, node process restart, and host reboot checks. |
+| Evidence failure variants | **Not run** | Automated tests pass. Physical duplicate, gap, reorder, storage failure, restart, and WAL truncation remain required. |
+| Watch and outage variants | **Not run** | Physical complete and partial relist, Control outage, API outage, and mixed rollout remain required. |
+| Installation cleanup | **Not run** | Rendered Helm tests pass. The physical fixture now checks exact hook paths and owned uninstall cleanup on both hosts. |
 
 The procedure cleanup removed the test namespace and runtime classes. Control
 accepted the denial evidence before the node truncated the related WAL data.
 
-## Previous Verification State
+## Current Automated Verification
 
-The following checks passed before the API correction:
+The repository Rust CI script passed format, workspace check, strict Clippy,
+and the full workspace test gate. The final gate included 89 Mithril Control
+library tests, 28 reconciliation tests, 6 Kubernetes policy API tests, 150
+Mithril node library tests, 2 OCI adapter tests, and 5 node mutual Transport
+Layer Security integration tests.
 
-```sh
-bash .github/scripts/verify-rust-ci.sh
-# Passed the repository format, check, clippy, and full workspace test gate.
+The Helm verification passed hook ownership behavior, chart lint, and the
+render contract. The VM harness behavior suite passed. The independent manual
+example behavior suite passed. `git diff --check` passed.
 
-bash packaging/mithril/helm/tests/verify.sh
-# Passed chart lint and the rendered packaging contract.
-
-cargo test -p mithril-control --test kubernetes_policy_api
-# 5 passed.
-
-cargo test -p mithril-e2e --lib
-# 70 passed in the final repository gate.
-
-cargo test -p mithril-node --lib
-# 129 passed in the final repository gate.
-
-cargo test -p mithril-node --bin mithril-oci-hook
-# 2 passed in the final repository gate.
-```
-
-The first review gate exposed test-only strict-Clippy failures. The test was
-corrected, and the complete gate passed. The final Control unit-test count was
-63. An earlier complete gate had one transient browser discovery failure with
-`WouldBlock`; the isolated test and the next complete gate passed.
-
-These commands do not prove the corrected public schemas, lowering, exception
-resource, status, RBAC, package, or examples. They must run again after the
-implementation changes. The previous live cluster case passed through runtime
-binding and durable evidence intake. The stock-runtime protected-start case
-failed. Automated tests do not change the remaining physical cases from `Not
-run` to `Pass`.
+These automated results prove the current API and source behavior. They do not
+change an unrun physical case to `Pass`. The previous live cluster case used
+the old API, passed through runtime binding and durable evidence intake, and
+then failed stock-runtime protected start.
 
 ## Unadvertised Work
 

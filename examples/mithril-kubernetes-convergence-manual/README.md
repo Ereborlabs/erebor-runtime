@@ -3,6 +3,10 @@
 Status: The case is implemented. The current source has not passed this manual
 case.
 
+The last physical attempt used the old API and stopped after stock `runc` used
+anonymous-file and IPC bootstrap operations that have no typed authority. Do
+not treat this result as test noise. Do not add a broad runtime exception.
+
 This case uses the production Kubernetes API, admission webhooks, scheduler,
 Control service, node DaemonSet, OCI prestart hook, policy compiler, exception
 authority, and node policy inspector. It does not call an automated test.
@@ -13,8 +17,11 @@ uses separate policy-writer and exception-writer identities. It verifies the
 Control and node RBAC boundaries, server-side Pod mutation, direct-node bypass
 rejection, scheduler-selected placement, selected-node-only policy delivery,
 base-policy denial, exact-node exception activation, one-use consumption,
-exception revocation, a held protected start, fail-closed hook failure, and a
-new binding for a restarted container.
+exception revocation, unused-exception retirement after Pod disappearance, a
+held protected start, fail-closed hook failure, and a new binding for a
+restarted container. It then closes the terminal policy chain, restarts
+Control and the selected node process, proves that the old root does not
+replay, and proves that a recreated policy starts from a new root activation.
 
 ## Start The Environment
 
@@ -56,13 +63,15 @@ examples/mithril-kubernetes-convergence-manual/run.sh
 ```
 
 The command must print one JSON object with `"result": "PASS"`. The object
-names the scheduler-selected Node and two different container lifetime IDs. It
-also records the CRD, writer separation, exception consumption, and revocation
-oracles. The command returns nonzero if admission sets `spec.nodeName`, accepts
-the direct-node bypass, delivers authority to another Node, fails to enforce
-the base denial, permits more than one exception use, fails to revoke the
-exception, releases a container without its exact binding, permits start
-without the runtime gate, or reuses the first container lifetime.
+names the scheduler-selected Nodes and two different container lifetime IDs.
+It also records the custom resource, writer separation, exact-target,
+exception, terminal-cleanup, restart, and fresh-root oracles. The command
+returns nonzero if admission sets `spec.nodeName`, accepts the direct-node
+bypass, delivers authority to another Node, fails to enforce the base denial,
+permits more than one exception use, refunds an unused exception after target
+disappearance, releases a container without its exact binding, permits start
+without the runtime gate, reuses the first runtime binding, replays a closed
+root, or gives a recreated policy a predecessor-bound candidate.
 
 The EXIT trap removes the namespace, both RuntimeClasses, all case marker
 files, and the private temporary directory on success, failure, or

@@ -2,9 +2,10 @@
 
 Status: Not done. This procedure now targets the approved
 `WorkloadProtectionPolicy` and `WorkloadProtectionException` resources. The
-corrected resources are not implemented or physically tested. The earlier run
-used the superseded flattened CRD and stopped when stock `runc` used bootstrap
-operations that have no typed authority.
+branch implements both resources and the current fixture flows. The current
+source is not physically tested. The earlier run used the superseded flattened
+resource and stopped when stock `runc` used bootstrap operations that have no
+typed authority.
 
 Phase: [Control Policy And Evidence Convergence](../phase-6-2-control-policy-and-evidence-convergence.md)
 
@@ -23,7 +24,8 @@ reaches the production Control transaction before the node truncates its WAL.
 
 ## Current Physical Result
 
-The previous provisioned two-node Kubernetes fixture passed readiness, typed
+The current source has not run this physical procedure. The previous
+provisioned two-node Kubernetes fixture passed readiness, typed
 RBAC review, CRD reconciliation, Pod mutation and bypass rejection, scheduler
 selection, exact selected-node delivery, policy activation, runtime binding,
 Control acknowledgement, and durable evidence intake. The procedure then
@@ -31,12 +33,14 @@ failed protected container start. Stock `runc` used an anonymous file write
 and IPC access after binding. The BPF enforcement path denied both operations
 because they have no typed authority. The application process did not start.
 
-This result is a product blocker, not test noise. The validated architecture
-forbids a broad `runc`, pipe, or socket exception. Completion requires approval
-for a signed, typed, bounded runtime-bootstrap authority. The gate-failure,
-restart, Pod UID reuse, selector-change, watch-compaction, network-partition,
-and storage-outage cases remain `Not run`. Scenario cleanup removed the test
-namespace and runtime classes.
+The previous result is a product blocker, not test noise. The validated
+architecture forbids a broad `runc`, pipe, or socket exception. Completion
+requires approval for a signed, typed, bounded runtime-bootstrap authority.
+The current automated fixture now contains gate-failure, task lifetime, Pod
+UID, Node UID, host epoch, selector, exception target-retirement, terminal
+cleanup, and fresh-root oracles. These physical cases remain `Not run`. Watch
+compaction, network partition, and storage outage also remain `Not run`. The
+previous scenario cleanup removed the test namespace and runtime classes.
 
 ## Automated Companion
 
@@ -48,6 +52,8 @@ rtk cargo test -p mithril-control --test control_policy_reconciliation
 rtk cargo test -p mithril-control --lib --tests
 rtk cargo test -p mithril-node --lib --tests
 rtk cargo test -p mithril-node --test control_tls
+rtk bash crates/mithril-e2e/harness/vm/test.sh
+rtk bash examples/mithril-kubernetes-convergence-manual/test.sh
 rtk bash .github/scripts/verify-rust-ci.sh
 ```
 
@@ -132,7 +138,10 @@ run.
    the current boot before it becomes ready again. In the test cluster, replace
    that Node with a Node that has the same name and a new UID. Verify that the
    old session cannot make the replacement ready. Re-enroll the exact new Node
-   name and UID before continuing.
+   name and UID before continuing. Reboot one enrolled host. Verify that its
+   boot ID changes, its label epoch increases, old-epoch messages reject, and
+   it does not become ready until startup proves that old policy and exception
+   authority is absent.
 5. Change the DaemonSet selector or required affinity. Verify Control derives
    the new live constraint. Verify nodes outside it lose the Mithril readiness
    projection and nodes newly inside it start quarantined. Restore the intended
@@ -174,17 +183,20 @@ run.
     sends the exception candidate only to the selected node. Verify the active
     base generation does not change. Consume each permitted use and prove that
     the next use denies. Repeat with expiry, deletion, revocation, stale update,
-    overlap, and object recreation. Verify no case refunds a consumed use or
-    widens another rule family.
+    overlap, and object recreation. Keep one recreated exception active and
+    unused. Delete its exact Pod. Verify Control sends an exact revocation, the
+    node removes the active authority, and the result does not refund a use.
+    Verify no case widens another rule family.
 13. Stop the node admission service or withhold the exact candidate. Start a
     new protected container. Verify the OCI runtime terminates the hook at the
     configured outer deadline, reports container-start failure, and never runs
     the application marker. Restore the service and use a new container
     lifetime for the next attempt.
-14. Restart the protected container. Verify it receives a new runtime binding
-    and cannot reuse the terminated binding. Delete and recreate the Pod with
-    the same name. Verify the new Pod UID creates a new target and the old
-    authority cannot start it.
+14. Restart the protected container. Record the old and new Container Runtime
+    Interface IDs, runtime binding IDs, host process IDs, and task cookies.
+    Verify the new lifetime cannot reuse the old runtime binding or task root.
+    Delete and recreate the Pod with the same name. Verify the new Pod UID
+    creates a new target and the old authority cannot start it.
 15. Create a second policy with an overlapping Pod selector. Verify that an
    ambiguously matched Pod rejects without changing the first policy's active
    node generations.
@@ -199,12 +211,16 @@ run.
    these actions remove the last valid node generation.
 19. Restore Control and the API, force watch compaction and relist, then delete
    and recreate the policy CRD. Verify that deletion retires the last accepted
-   generation even though Kubernetes does not increment it. Interrupt the
-   watch so that Control misses one deletion event. Verify that a complete
-   relist retires the missing durable source. Interrupt a paginated relist
-   before it completes and verify that it retires no source. Verify UID,
-   generation, retirement, and replacement behavior without historical-state
-   reuse.
+   generation even though Kubernetes does not increment it. Wait for terminal
+   activation, acknowledgement, cleanup authorization, empty node inventory,
+   and exact local generation removal. Restart Control and the node. Verify
+   that the closed root does not replay. Recreate the policy and Pod. Verify
+   that the new policy uses a higher-sequence root `ACTIVATE` with no
+   predecessor. Interrupt the watch so that Control misses one deletion event.
+   Verify that a complete relist retires the missing durable source. Interrupt
+   a paginated relist before it completes and verify that it retires no source.
+   Verify UID, generation, retirement, and replacement behavior without
+   historical-state reuse.
 20. Upload a Phase 6 evidence window with duplicates, delay, reordering, a gap,
    and one conflicting duplicate. Stop storage before acknowledgement, restart
    Control, restore storage, and complete the upload.
@@ -228,7 +244,7 @@ run.
 | Partial rollout | Per-node state and mixed generation are explicit; no global-active claim |
 | Stale node message | Old boot, target, source, or candidate cannot advance current state |
 | Policy deletion | Disappearance creates signed retirement; it does not directly erase a local generation |
-| Exception removal | Expiry, exhaustion, deletion, or revocation creates an exact signed revocation and preserves consumption history |
+| Exception removal | Target disappearance, deletion, or explicit revocation creates an exact signed revocation. Expiry and exhaustion settle from the installed bounds. All paths preserve consumption history. |
 | Control/API outage | Installed local policy continues; new Control-owned work is unavailable |
 | Watch relist | Same source revision and target state reconstruct without duplicate authority |
 | Complete relist deletion | A durable source that is absent from the complete snapshot enters signed retirement |

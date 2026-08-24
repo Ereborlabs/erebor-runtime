@@ -1,13 +1,12 @@
 # Phase 6.2: Control Policy And Evidence Convergence
 
-Status: Not done. The approved Kubernetes API correction replaces the
-flattened `WorkloadProtectionProfile` with a capability-grounded
-`WorkloadProtectionPolicy` and a separate `WorkloadProtectionException`.
-The previous API proof does not close the corrected design. The earlier
-physical run reached scheduler binding, selected-node delivery, policy
-activation, runtime binding, and durable evidence intake. Stock `runc`
-container start then failed because its bootstrap uses an anonymous file write
-and IPC access that have no typed authority.
+Status: Not done. The branch implements the approved capability-grounded
+`WorkloadProtectionPolicy` and separate `WorkloadProtectionException`, their
+Control and node lifecycles, Helm package, automated fixture, and independent
+manual example. The current source has not passed the complete physical
+procedure. The earlier physical run used the superseded API and stopped after
+stock `runc` used an anonymous file write and IPC access that have no typed
+authority.
 
 Master: [Mithril Hugging Face Intrusion Prevention](./README.md)
 
@@ -83,11 +82,36 @@ New or existing Node matches the derived DaemonSet constraints
   -> Control verifies the live Node, node session, boot, and readiness report
   -> Control adds the Mithril-ready label and removes the quarantine taint
 
-Ready node loses its session, boot identity, BPF health, or DaemonSet eligibility
+Ready Node loses its session or BPF health
   -> Control removes the Mithril-ready label
   -> Control restores the quarantine taint
   -> the scheduler cannot place another protected Pod on that Node
   -> the last valid local generation continues to protect existing workloads
+
+Node no longer matches the live DaemonSet constraints
+  -> Control removes the Mithril-ready label
+  -> Control removes the Mithril quarantine taint because the Node is outside the managed set
+  -> admission no longer includes that Node in the derived protected scheduling set
+  -> existing local authority is not erased by the selector change
+
+Node becomes eligible again
+  -> Control adds the quarantine taint before the node session becomes ready
+  -> the DaemonSet starts mithril-node through its quarantine toleration
+  -> the current exact node session must report complete readiness
+  -> Control removes quarantine only after that report
+
+Kubernetes replaces a Node object with the same name and a new UID
+  -> Control clears the old readiness projection
+  -> the new Node remains quarantined until Control binds its exact UID
+  -> the physical policy chain keeps its live predecessor
+  -> Control sends an exact REPLACE candidate that binds the new Node UID
+
+Host reboots and its label epoch increases
+  -> mithril-node opens the kernel owner before it registers
+  -> mithril-node proves that old policy and exception authority is absent
+  -> Control records the higher physical epoch and stales old-session rollouts
+  -> old-epoch delivery and acknowledgements reject
+  -> Control signs a higher-sequence root candidate for the new physical epoch
 
 WorkloadProtectionPolicy CREATE or UPDATE
   -> PolicyDesiredStateOwner reads the namespaced CRD
@@ -146,13 +170,24 @@ Pod changes Node, UID, container identity, or policy match
 
 Pod or container terminates
   -> mithril-node retires the exact cgroup binding after the runtime lifetime ends
-  -> Control removes the exact target from the next rollout snapshot
+  -> Control removes the exact target from the next desired snapshot
+  -> Control sends a restrictive terminal candidate to each removed node-profile target
+  -> the node activates and acknowledges the exact terminal candidate
+  -> Control authorizes cleanup only when no viable successor depends on the terminal
+  -> the node durably records the authorization and removes the closed local chain
   -> another Pod, container, Node, or boot cannot reuse the retired authority
 
-WorkloadProtectionException deletion or expiry
+WorkloadProtectionException target disappears or the request deletes
   -> Control sends a signed revocation for the exact exception instance
   -> ExceptionAuthorityOwner closes it without changing the base generation
-  -> deletion cannot reset a consumed-use counter or widen the base policy
+  -> target disappearance keeps the accepted source but makes it terminal
+  -> no result can reset a consumed-use counter or widen the base policy
+
+WorkloadProtectionException expires or consumes its uses
+  -> the BPF effect gate applies the signed deadline and use bound
+  -> ExceptionAuthorityOwner records the exact terminal result
+  -> the node reports the terminal result without a new authority grant
+  -> no result can reset a consumed-use counter or widen the base policy
 
 WorkloadProtectionPolicy deletion
   -> a Deleted event or a complete relist detects the missing object UID
@@ -160,6 +195,8 @@ WorkloadProtectionPolicy deletion
   -> Control enters RETIRING for every exact current target
   -> each selected Node receives a signed restrictive replacement
   -> removal completes through normal stage, readback, probe, and activation
+  -> terminal acknowledgement and dependency checks close the candidate chain
+  -> a recreated policy UID starts with a higher-sequence root candidate
   -> deletion or Control loss cannot erase the last valid local protection
 ```
 
@@ -388,16 +425,18 @@ Control's sole durable copy immediately eligible for deletion.
 ### D6.2.6 — Deletion, restart, and outage behavior
 
 Policy deletion enters `RETIRING`. It does not tell a node to erase its active
-generation. Control produces a signed monotonic retirement candidate that
-names the exact current candidate and its approved replacement or restrictive
-terminal state. A node applies retirement through the normal stage, readback,
-probe, and activation path. If no valid successor is available, the last valid
-local generation stays active.
+generation. Control produces a signed restrictive-terminal candidate that
+names the exact viable predecessor. A node applies retirement through the
+normal stage, readback, probe, and activation path. Control can authorize
+local chain cleanup only after the terminal is active and no viable successor
+depends on it. Until then, the last valid local generation stays active.
 
-Exception deletion, expiry, exhaustion, or revocation closes the exact runtime
-instance through a signed revocation candidate. Control and the node preserve
-the consumed-use record. The base policy generation does not change. A stale
-exception event or recreated object cannot restore the old instance.
+Exception deletion, target disappearance, or explicit revocation closes the
+exact runtime instance through a signed revocation candidate. Expiry and
+exhaustion become terminal through the signed deadline and use bound already
+installed on the node. Control and the node preserve the consumed-use record.
+The base policy generation does not change. A stale exception event or
+recreated object cannot restore the old instance.
 
 Control does not require or update a CRD finalizer. Forced object deletion,
 namespace deletion, API-server loss, or Control loss cannot remove a node's
@@ -473,10 +512,12 @@ current boot, BPF state, identity state, and policy-admission readiness.
 
 Project this Control decision through a bounded Mithril-ready Node label and
 taint removal. Remove the label and restore the taint after session expiry,
-boot change, readiness loss, or DaemonSet constraint change. The label is a
-scheduler projection. The authenticated Control session remains the
-authority. Do not evict an existing protected Pod merely because a
-`NoSchedule` taint is restored.
+boot change, or readiness loss. If a DaemonSet constraint change makes a Node
+ineligible, remove both the ready label and the quarantine taint because the
+Node is outside the managed set. Add the taint before a newly eligible Node can
+be ready. The label is a scheduler projection. The authenticated Control
+session remains the authority. Do not evict an existing protected Pod merely
+because a `NoSchedule` taint is restored.
 
 ### D6.2.10 — Protected Pod and scheduler-binding admission
 
@@ -536,9 +577,10 @@ candidate rejects the hook and keeps the runtime start fail-closed.
 Package both CRDs, the admission Service, webhook configurations, TLS inputs,
 DaemonSet taint toleration, Node identity input, Control permissions, health,
 and bounded timeouts. RBAC can read the one DaemonSet and workload facts and
-can patch only the Mithril-owned Node readiness projection. Control can update
-the two status subresources but cannot write either spec. Node identities
-cannot modify Kubernetes policy, exceptions, or Node readiness.
+can patch Nodes because Kubernetes RBAC cannot restrict a patch to individual
+fields. The readiness owner changes only the Mithril projection. Control can
+update the two status subresources but cannot write either spec. Node
+identities cannot modify Kubernetes policy, exceptions, or Node readiness.
 
 Prove both structural schemas, policy-to-internal lowering, exception bounding
 and consumption, DaemonSet selector and affinity derivation, selector change,
@@ -655,15 +697,15 @@ privileged or unmatched workload floor.
 ## Phase Result
 
 ```text
-State: Not done. The capability-grounded Kubernetes API design is approved, but the branch still implements the superseded flattened WorkloadProtectionProfile. Stock runc bootstrap authority also remains unresolved.
-Completed deliverable IDs: none under the corrected API. Prior proof for evidence intake, node readiness, admission, scheduler binding, selected-node targeting, policy activation, and runtime binding remains useful but must run again with the two corrected CRDs. Protected process release and the remaining lifecycle cases are not complete.
-Files and durable owners changed: the current branch contains the superseded WorkloadProtectionProfile CRD and Helm package; PolicyDesiredStateOwner; PolicyRolloutOwner; TrustBundleOwner; KubernetesNodeReadinessOwner; KubernetesAdmissionOwner; KubernetesWorkloadInventoryOwner; one append-only ControlStore for policy, trust, rollout, acknowledgement, evidence, coverage, and cursor transactions; generated NodePolicy and ControlHealth services; NodePolicyDeliveryOwner; RuntimeAdmissionClient; RuntimeAdmissionServer; ScheduledRuntimeBindingV1; the existing node activation and cgroup-binding paths; and the stateless OCI adapter. The corrected WorkloadProtectionPolicy and WorkloadProtectionException resources are not implemented yet. The BPF ABI and BPF programs did not change.
+State: Not done. The corrected policy and exception implementation, package, automated fixture, and independent manual example are present. The current source has not passed the physical procedure. Stock runc bootstrap authority remains unresolved.
+Implemented deliverable scope: D6.2.1 through D6.2.4 are implemented and automated. D6.2.5 has automated intake and WAL proof but lacks the physical failure variants. D6.2.6, D6.2.7, D6.2.9, D6.2.10, D6.2.11, and D6.2.12 have implemented owners and automated or rendered proof, but their required current physical results are not done. D6.2.8 is blocked at stock-runtime protected start.
+Files and durable owners changed: the branch contains both namespaced CRDs and their Helm package; PolicyDesiredStateOwner; PolicyRolloutOwner; the exception desired-state path; TrustBundleOwner; KubernetesNodeReadinessOwner; KubernetesAdmissionOwner; KubernetesWorkloadInventoryOwner; one append-only ControlStore for policy, exception, node session, trust, rollout, acknowledgement, evidence, coverage, and cursor transactions; generated NodePolicy and ControlHealth services; NodePolicyDeliveryOwner; ExceptionAuthorityOwner; RuntimeAdmissionClient; RuntimeAdmissionServer; ScheduledRuntimeBindingV1; the node activation and cgroup-binding paths; the stateless OCI adapter; hook ownership and cleanup; the two-node fixture; and the independent manual example. The BPF ABI and BPF programs did not change.
 Upstream-adoption dossier IDs used: none.
-Fixture cases and exact physical results: the deterministic two-node Control tests passed. The physical two-node Kubernetes run passed node readiness, typed RBAC review, CRD reconciliation, Pod mutation and bypass rejection, scheduler selection, exact selected-node delivery, policy activation, runtime binding, Control acknowledgement, and durable evidence intake. Protected container start failed when stock runc used an anonymous file write and IPC access. The application process did not start. Scenario cleanup passed.
-Automated verification: `bash .github/scripts/verify-rust-ci.sh` passed the repository format, check, clippy, and full workspace test gate. The first review gate exposed test-only strict-Clippy failures. The test was corrected, and the complete gate passed. The final gate included the Mithril Control, end-to-end, node, OCI adapter, and mTLS tests. An earlier complete gate had one transient browser discovery test failure with `WouldBlock`; the isolated test and the next complete gate passed. `bash packaging/mithril/helm/tests/verify.sh` passed chart lint and the rendered packaging contract.
-Platform/kernel/runtime manifests: the Helm package contains the generated closed CRD, Control RBAC, the exact DaemonSet reader Role, the Control Deployment and Service, fail-closed admission webhooks, the node DaemonSet, and the OCI hook installation. No BPF program or kernel ABI changed. No live platform manifest was recorded.
+Fixture cases and exact physical results: the current physical two-node fixture and manual example are Not run. The prior old-API run passed node readiness, typed RBAC review, admission, scheduler selection, selected-node delivery, policy activation, runtime binding, Control acknowledgement, and durable evidence intake. Protected container start then failed when stock runc used an anonymous file write and IPC access. The application process did not start. The prior cleanup passed.
+Automated verification: the repository Rust CI script passed format, workspace check, strict Clippy, and the full workspace test gate. The final gate included 89 Mithril Control library tests, 28 reconciliation tests, 6 Kubernetes policy API tests, 150 Mithril node library tests, 2 OCI adapter tests, and 5 node mTLS integration tests. Helm hook ownership, chart lint, and render verification passed. The VM harness behavior suite and independent manual example behavior suite passed. Diff hygiene passed.
+Platform/kernel/runtime manifests: the Helm package contains both generated closed CRDs, separate writer and Control RBAC, the exact DaemonSet reader Role, the Control Deployment and Service, fail-closed admission webhooks, the node DaemonSet, atomic OCI hook ownership, and bounded uninstall cleanup. No BPF program or kernel ABI changed. No live current-source platform manifest was recorded.
 Performance/capacity results: no new benchmark. Evidence gRPC messages are limited to 4 MiB. Policy gRPC messages are limited to 128 KiB. The pending evidence window is limited to 4,096 records. Health reports fixed counts and booleans only.
-Unsupported/degraded paths: the run did not complete the gate-failure, restart, Pod UID reuse, DaemonSet-selector change, watch-compaction, network-partition, or storage-outage cases. Stock-runc bootstrap is unsupported while its anonymous file write and IPC access have no typed authority. Phase 7 graph and finding behavior is not present.
-Remaining work in this phase: replace the public API and fixtures; implement policy lowering and bounded exception reconciliation; re-run automated and physical policy convergence; and approve and implement a signed, typed, bounded runtime-bootstrap authority, or retain stock-runc protected start as unsupported. Then rerun the physical procedure through protected start, lifecycle, recovery, and cleanup.
+Unsupported/degraded paths: stock-runc bootstrap is unsupported while its anonymous file write and IPC access have no typed authority. The current physical protected-start, lifecycle, evidence failure, watch-compaction, network-partition, and storage-outage cases are Not run. Phase 7 graph and finding behavior is not present.
+Remaining work in this phase: approve and implement a signed, typed, bounded runtime-bootstrap authority. Then run the current physical procedure through protected start, exact target, exception, runtime task, policy terminal cleanup, Node UID replacement, host epoch, watch, evidence failure, restart, uninstall, and cleanup cases.
 Next phase not authorized: yes.
 ```
