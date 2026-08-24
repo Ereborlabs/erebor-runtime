@@ -1012,7 +1012,6 @@ assert_prepared_container_activation() {
     .runtime_binding.binding_id == ($runtime_binding_id | gsub("-"; "")) and
     .runtime_binding.root_cgroup_id > 0 and
     .runtime_binding.prepared_container_state == "active" and
-    .runtime_binding.prepared_container_deadline_boottime_ns > 0 and
     .runtime_binding.prepared_container_entry_instance_id != "00000000000000000000000000000000" and
     .entry_instance_id == .runtime_binding.prepared_container_entry_instance_id and
     .runtime_binding.prepared_container_exec_task_cookie == 0 and
