@@ -42,9 +42,9 @@ use erebor_runtime_ipc::{
         SessionEvidenceRecord, SessionEvidenceRequest, SessionEvidenceStreamItem,
         SessionInputLeaseReleaseRequest, SessionInputLeaseRenewRequest, SessionInputLeaseResponse,
         SessionInputRequest, SessionInputResponse, SessionInspectRequest, SessionKillRequest,
-        SessionListRequest, SessionListResponse, SessionLogChunk, SessionLogStreamItem,
-        SessionLogsEnd, SessionLogsRequest, SessionPruneRequest, SessionPruneResponse,
-        SessionRecord, SessionRemoveRequest, SessionStartRequest, SessionStopRequest,
+        SessionListRequest, SessionListResponse, SessionLogStreamItem, SessionLogsEnd,
+        SessionLogsRequest, SessionPruneRequest, SessionPruneResponse, SessionRecord,
+        SessionRemoveRequest, SessionStartRequest, SessionStopRequest,
         SessionTerminalResizeRequest, SessionTerminalResizeResponse, SessionWaitRequest,
         SurfaceCreateRequest, SurfaceInspectRequest, SurfaceListRequest, SurfaceListResponse,
         SurfaceRecord,
@@ -651,7 +651,7 @@ impl SessionService for DaemonGrpc {
         let page = self
             .state
             .sessions
-            .stream(
+            .logs(
                 peer.uid,
                 &session_id,
                 kind,
@@ -660,21 +660,10 @@ impl SessionService for DaemonGrpc {
             )
             .map_err(status)?;
         let mut items = page
-            .records()
-            .iter()
+            .records
+            .into_iter()
             .map(|record| SessionLogStreamItem {
-                item: Some(
-                    erebor_runtime_ipc::v1::session_log_stream_item::Item::Record(
-                        SessionLogChunk {
-                            session_id: session_id.clone(),
-                            stream: request.stream.clone(),
-                            sequence: record.sequence(),
-                            timestamp_unix_ms: record.timestamp_unix_ms(),
-                            data: record.data().to_vec(),
-                            durable: true,
-                        },
-                    ),
-                ),
+                item: Some(erebor_runtime_ipc::v1::session_log_stream_item::Item::Record(record)),
             })
             .collect::<Vec<_>>();
         items.push(SessionLogStreamItem {
@@ -682,8 +671,8 @@ impl SessionService for DaemonGrpc {
                 SessionLogsEnd {
                     session_id,
                     stream: request.stream,
-                    durable_cursor: page.durable_cursor(),
-                    truncated_before_cursor: page.truncated_before_cursor(),
+                    durable_cursor: page.durable_cursor,
+                    truncated_before_cursor: page.truncated_before_cursor,
                 },
             )),
         });

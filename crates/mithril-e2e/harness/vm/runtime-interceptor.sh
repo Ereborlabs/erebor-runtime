@@ -330,7 +330,8 @@ run_app_server_case() {
       command_frame "$index" "$command"
       index=$((index + 1))
     done
-  } | as_user "$client_user" run --policy "$policy" \
+  } | timeout 60s runuser -u "$client_user" -- "$erebor" run \
+    --policy "$policy" \
     --workspace "/home/$client_user" --app-server "$agent_name" \
     >"$output" 2>&1
   capture_new_session "$before"

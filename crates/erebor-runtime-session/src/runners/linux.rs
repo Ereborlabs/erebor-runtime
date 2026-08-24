@@ -1072,12 +1072,18 @@ impl ActiveSession for LinuxControllerSession {
     }
 
     fn stop(&mut self, grace_period: Duration) -> Result<ActiveSessionExit, RuntimeError> {
+        if let Some(exit) = &self.observed_exit {
+            return Ok(exit.clone());
+        }
         let grace_period_ms = u64::try_from(grace_period.as_millis()).unwrap_or(u64::MAX);
         let event = self.command(&LinuxControllerCommand::Stop { grace_period_ms })?;
         self.exit_from_event(event)
     }
 
     fn kill(&mut self, signal: ActiveSessionSignal) -> Result<ActiveSessionExit, RuntimeError> {
+        if let Some(exit) = &self.observed_exit {
+            return Ok(exit.clone());
+        }
         let event = self.command(&LinuxControllerCommand::Kill { signal })?;
         self.exit_from_event(event)
     }
@@ -1092,6 +1098,10 @@ impl ActiveSession for LinuxControllerSession {
             LinuxControllerEvent::InputAccepted {
                 accepted_bytes: observed,
             } if observed == accepted_bytes => Ok(()),
+            LinuxControllerEvent::Failed { reason } => {
+                self.observe_failure(reason)?;
+                Err(self.protocol("Linux controller rejected workload input"))
+            }
             event => Err(self.protocol(format!(
                 "expected interactive-input acknowledgement, received {event:?}"
             ))),

@@ -24,20 +24,21 @@ use erebor_runtime_ipc::v1::{
     CodexRunRequest, PolicyPackageRecord, PolicySetRecord, SessionAliasListResponse,
     SessionAliasRecord, SessionAttachResponse, SessionCreateRequest, SessionCreateResponse,
     SessionEnvironmentEntry, SessionInputLeaseResponse, SessionInputResponse, SessionListResponse,
-    SessionPruneResponse, SessionRecord, SessionTerminalResizeResponse, SurfaceListResponse,
-    SurfaceRecord,
+    SessionLogChunk, SessionPruneResponse, SessionRecord, SessionTerminalResizeResponse,
+    SurfaceListResponse, SurfaceRecord,
 };
 use erebor_runtime_packages::{
     CodexHookContract, ContentDigest, LocalArtifactProvider, VerifiedLocalArtifact,
 };
 use erebor_runtime_session::{
     AgentAdapterRegistry, ChildContextDelivery, ChildContextDeliveryDispatcher,
-    ChildContextDeliveryHandler, CodexAppServerService, CodexHookService, ContextAgentControl,
-    ContextAgentControlDispatcher, ContextAgentControlHandler, ContextAgentControlResult,
-    ContextOperationAdmission, ContextOperationAdmissionDispatcher,
-    ContextOperationAdmissionHandler, DurableSessionRecord, RunnerAdmissionRequest, RunnerRegistry,
-    SessionManager, SessionManagerError, SessionRepository, SessionRepositoryError,
-    SessionRuntimeResources, StreamKind, ValidatedStartConstraints,
+    ChildContextDeliveryHandler, CodexAppServerOutputValidator, CodexAppServerService,
+    CodexHookService, CodexSessionError, ContextAgentControl, ContextAgentControlDispatcher,
+    ContextAgentControlHandler, ContextAgentControlResult, ContextOperationAdmission,
+    ContextOperationAdmissionDispatcher, ContextOperationAdmissionHandler, DurableSessionRecord,
+    RunnerAdmissionRequest, RunnerRegistry, SessionManager, SessionManagerError, SessionRepository,
+    SessionRepositoryError, SessionRuntimeResources, StreamKind, ValidatedStartConstraints,
+    CODEX_APP_SERVER_OUTPUT_VALIDATION_EVENT,
 };
 use prost::Message;
 use sha2::{Digest, Sha256};
@@ -69,6 +70,50 @@ use self::{
     response::session_record,
 };
 
+fn invalid_app_server_output(error: CodexSessionError) -> crate::error::DaemonError {
+    crate::error::InvalidRequestSnafu {
+        reason: format!("Codex App Server output is invalid: {error}"),
+    }
+    .build()
+}
+
+fn app_server_validation_cursor(
+    source: &str,
+    data: &[u8],
+    session_id: &str,
+) -> Result<Option<u64>> {
+    if source != CODEX_APP_SERVER_OUTPUT_VALIDATION_EVENT {
+        return Ok(None);
+    }
+    let payload: serde_json::Value = serde_json::from_slice(data).map_err(|error| {
+        crate::error::InvalidRequestSnafu {
+            reason: format!("Codex App Server validation result is invalid: {error}"),
+        }
+        .build()
+    })?;
+    if payload
+        .get("schema_version")
+        .and_then(serde_json::Value::as_u64)
+        != Some(1)
+        || payload
+            .get("session_id")
+            .and_then(serde_json::Value::as_str)
+            != Some(session_id)
+    {
+        return Ok(None);
+    }
+    payload
+        .get("stdout_cursor")
+        .and_then(serde_json::Value::as_u64)
+        .map(Some)
+        .ok_or_else(|| {
+            crate::error::InvalidRequestSnafu {
+                reason: String::from("Codex App Server validation result has no stdout cursor"),
+            }
+            .build()
+        })
+}
+
 pub(crate) struct DaemonSessionApi {
     manager: Arc<SessionManager>,
     state_root: PathBuf,
@@ -84,6 +129,12 @@ pub(crate) struct DaemonSessionApi {
     context_resolver: Arc<SessionContextResolver>,
     context_coordinators: Arc<Mutex<BTreeMap<String, Arc<ContextDagCoordinator>>>>,
     codex_app_server_output_monitors: Arc<Mutex<BTreeSet<String>>>,
+}
+
+pub(crate) struct DaemonSessionLogPage {
+    pub(crate) records: Vec<SessionLogChunk>,
+    pub(crate) durable_cursor: u64,
+    pub(crate) truncated_before_cursor: bool,
 }
 
 pub(crate) struct VerifiedCodexInstallation {
@@ -971,6 +1022,14 @@ impl DaemonSessionApi {
             }
             .fail();
         }
+        if entrypoint.app_server_stdio() && request.daemon_failure_mode != "terminate" {
+            return crate::error::InvalidRequestSnafu {
+                reason: String::from(
+                    "Codex App Server Sessions require terminate daemon-failure mode",
+                ),
+            }
+            .fail();
+        }
         if !entrypoint.app_server_stdio() && !request.tty {
             return crate::error::InvalidRequestSnafu {
                 reason: String::from(
@@ -1830,23 +1889,213 @@ impl DaemonSessionApi {
         maximum_records: usize,
     ) -> Result<erebor_runtime_session::DurableStreamCursor> {
         let session_id = self.resolve_session_reference(uid, session_id)?;
+        self.manager
+            .stream(uid, &session_id, kind, after_sequence, maximum_records)
+            .context(SessionSnafu)
+    }
+
+    pub(crate) fn logs(
+        &self,
+        uid: u32,
+        session_id: &str,
+        kind: StreamKind,
+        after_sequence: u64,
+        maximum_records: usize,
+    ) -> Result<DaemonSessionLogPage> {
+        let session_id = self.resolve_session_reference(uid, session_id)?;
+        if kind == StreamKind::Stdout && self.is_codex_app_server(uid, &session_id)? {
+            return self.codex_app_server_logs(uid, &session_id, after_sequence, maximum_records);
+        }
         let page = self
             .manager
             .stream(uid, &session_id, kind, after_sequence, maximum_records)
             .context(SessionSnafu)?;
-        if kind == StreamKind::Stdout && self.is_codex_app_server(uid, &session_id)? {
-            for record in page.records() {
-                self.codex_app_server_service
-                    .observe_output_chunk(&session_id, record.sequence(), record.data())
-                    .map_err(|error| {
-                        crate::error::InvalidRequestSnafu {
-                            reason: format!("Codex App Server output is invalid: {error}"),
-                        }
-                        .build()
-                    })?;
+        let records = page
+            .records()
+            .iter()
+            .map(|record| SessionLogChunk {
+                session_id: session_id.clone(),
+                stream: kind.as_str().to_owned(),
+                sequence: record.sequence(),
+                timestamp_unix_ms: record.timestamp_unix_ms(),
+                data: record.data().to_vec(),
+                durable: true,
+            })
+            .collect();
+        Ok(DaemonSessionLogPage {
+            records,
+            durable_cursor: page.durable_cursor(),
+            truncated_before_cursor: page.truncated_before_cursor(),
+        })
+    }
+
+    fn codex_app_server_logs(
+        &self,
+        uid: u32,
+        session_id: &str,
+        after_sequence: u64,
+        maximum_records: usize,
+    ) -> Result<DaemonSessionLogPage> {
+        let record = self
+            .manager
+            .inspect(uid, session_id)
+            .context(SessionSnafu)?;
+        let registered = self
+            .codex_app_server_service
+            .is_registered(session_id)
+            .map_err(invalid_app_server_output)?;
+        let terminal = record.state().is_terminal();
+        let validation_frontier = if terminal {
+            self.retained_app_server_output_cursor(uid, session_id)?
+        } else if registered {
+            self.codex_app_server_service
+                .observed_output_sequence(session_id)
+                .map_err(invalid_app_server_output)?
+        } else {
+            return crate::error::InvalidRequestSnafu {
+                reason: String::from("Codex App Server output has no active validation owner"),
+            }
+            .fail();
+        };
+        if terminal {
+            let tail = self
+                .manager
+                .stream_tail(uid, session_id, StreamKind::Stdout, validation_frontier, 1)
+                .context(SessionSnafu)?;
+            if tail.truncated_before_cursor() || !tail.records().is_empty() {
+                return crate::error::InvalidRequestSnafu {
+                    reason: String::from(
+                        "Codex App Server stdout changed after completion validation",
+                    ),
+                }
+                .fail();
             }
         }
-        Ok(page)
+
+        let cache_has_terminal_verdict = !terminal
+            || (registered
+                && self
+                    .codex_app_server_service
+                    .durable_output_cursor(session_id)
+                    .map_err(invalid_app_server_output)?
+                    == Some(validation_frontier));
+        if registered && cache_has_terminal_verdict {
+            if let Some(output) = self
+                .codex_app_server_service
+                .projected_output_after(session_id, after_sequence, maximum_records)
+                .map_err(invalid_app_server_output)?
+            {
+                let records = output
+                    .into_iter()
+                    .map(|output| SessionLogChunk {
+                        session_id: session_id.to_owned(),
+                        stream: String::from("stdout"),
+                        sequence: output.sequence(),
+                        timestamp_unix_ms: output.timestamp_unix_ms(),
+                        data: output.data().to_vec(),
+                        durable: true,
+                    })
+                    .collect::<Vec<_>>();
+                return Ok(DaemonSessionLogPage {
+                    durable_cursor: records
+                        .last()
+                        .map_or(after_sequence, |record| record.sequence),
+                    records,
+                    truncated_before_cursor: false,
+                });
+            }
+        }
+
+        let mut validator = CodexAppServerOutputValidator::default();
+        let mut records = Vec::new();
+        let maximum_records = maximum_records.max(1);
+        let page = self
+            .manager
+            .stream(uid, session_id, StreamKind::Stdout, 0, usize::MAX)
+            .context(SessionSnafu)?;
+        if page.truncated_before_cursor() {
+            return crate::error::InvalidRequestSnafu {
+                reason: String::from(
+                    "Codex App Server stdout rotated before attachment validation",
+                ),
+            }
+            .fail();
+        }
+        let mut raw_cursor = 0;
+        for record in page.records() {
+            if record.sequence() > validation_frontier {
+                break;
+            }
+            let frames = validator
+                .observe_chunk(record.sequence(), record.data())
+                .map_err(invalid_app_server_output)?;
+            raw_cursor = record.sequence();
+            if record.sequence() <= after_sequence
+                || frames.is_empty()
+                || records.len() == maximum_records
+            {
+                continue;
+            }
+            records.push(SessionLogChunk {
+                session_id: session_id.to_owned(),
+                stream: String::from("stdout"),
+                sequence: record.sequence(),
+                timestamp_unix_ms: record.timestamp_unix_ms(),
+                data: frames.concat(),
+                durable: true,
+            });
+        }
+        if terminal {
+            validator.finish().map_err(invalid_app_server_output)?;
+            if raw_cursor != validation_frontier {
+                return crate::error::InvalidRequestSnafu {
+                    reason: String::from(
+                        "Codex App Server stdout changed after completion validation",
+                    ),
+                }
+                .fail();
+            }
+        }
+        Ok(DaemonSessionLogPage {
+            durable_cursor: records
+                .last()
+                .map_or(after_sequence, |record| record.sequence),
+            records,
+            truncated_before_cursor: false,
+        })
+    }
+
+    fn retained_app_server_output_cursor(&self, uid: u32, session_id: &str) -> Result<u64> {
+        let record = self
+            .manager
+            .inspect(uid, session_id)
+            .context(SessionSnafu)?;
+        if !record.state().is_terminal() {
+            return crate::error::InvalidRequestSnafu {
+                reason: String::from("Codex App Server output has no active validation owner"),
+            }
+            .fail();
+        }
+        let mut stdout_cursor = None;
+        let page = self
+            .manager
+            .stream(uid, session_id, StreamKind::Events, 0, usize::MAX)
+            .context(SessionSnafu)?;
+        for event in page.records() {
+            if let Some(cursor) =
+                app_server_validation_cursor(event.source(), event.data(), session_id)?
+            {
+                stdout_cursor = Some(cursor);
+            }
+        }
+        stdout_cursor.ok_or_else(|| {
+            crate::error::InvalidRequestSnafu {
+                reason: String::from(
+                    "Codex App Server output has no durable successful validation result",
+                ),
+            }
+            .build()
+        })
     }
 
     pub(crate) fn has_unresolved_sessions(&self) -> Result<bool> {
@@ -1969,10 +2218,7 @@ impl DaemonSessionApi {
         let records = self.manager.reconcile().context(SessionSnafu)?;
         for record in &records {
             if !record.state().is_terminal() {
-                self.monitor_codex_app_server_output(
-                    record.spec().owner().uid(),
-                    record.spec().session_id().as_str(),
-                )?;
+                self.monitor_running_codex_app_server(record)?;
             }
         }
         Ok(records)
@@ -2033,7 +2279,7 @@ impl DaemonSessionApi {
             .manager
             .start(uid, &session_id, constraints, resume_pending)
             .context(SessionSnafu)?;
-        self.monitor_codex_app_server_output(uid, &session_id)?;
+        self.monitor_running_codex_app_server(&record)?;
         message(MutationResponseType::SessionRecord, &self.record(&record))
     }
 
@@ -2265,28 +2511,33 @@ impl DaemonSessionApi {
         let session_id = self.resolve_session_reference(uid, session_id)?;
         self.require_codex_app_server(uid, &session_id)?;
         let input = self
-            .codex_app_server_service
-            .accept_input(&session_id, frame)
-            .map_err(|error| {
-                crate::error::InvalidRequestSnafu {
-                    reason: format!("Codex App Server request is invalid: {error}"),
-                }
-                .build()
-            })?;
+            .manager
+            .transact_structured_input(
+                uid,
+                &session_id,
+                lease_id,
+                client_instance_id,
+                frame.len(),
+                |active| {
+                    self.codex_app_server_service
+                        .transact_input(&session_id, frame, |data| {
+                            active.write_input(data).map_err(|source| {
+                                CodexSessionError::InvalidHookEvent {
+                                    reason: format!("writing App Server stdin failed: {source}"),
+                                    location: snafu::Location::default(),
+                                }
+                            })
+                        })
+                        .map_err(|source| SessionManagerError::InvalidOperation {
+                            session_id: session_id.clone(),
+                            reason: format!("Codex App Server input transaction failed: {source}"),
+                            location: snafu::Location::default(),
+                        })
+                },
+            )
+            .context(SessionSnafu)?;
         match input {
             erebor_runtime_session::CodexAppServerInput::Forward(frame) => {
-                if let Err(error) = self.manager.write_structured_input(
-                    uid,
-                    &session_id,
-                    lease_id,
-                    client_instance_id,
-                    &frame,
-                ) {
-                    let _result = self
-                        .codex_app_server_service
-                        .abort_input(&session_id, &frame);
-                    return Err(error).context(SessionSnafu);
-                }
                 Ok(CodexAppServerInputResponse {
                     session_id,
                     accepted_bytes: u32::try_from(frame.len()).map_err(|_error| {
@@ -2449,52 +2700,139 @@ impl DaemonSessionApi {
             return Ok(());
         }
         drop(monitors);
-        let manager = Arc::clone(&self.manager);
-        let service = Arc::clone(&self.codex_app_server_service);
-        let monitors = Arc::clone(&self.codex_app_server_output_monitors);
-        let session_id = session_id.to_owned();
-        thread::Builder::new()
+        let worker = || {
+            let manager = Arc::clone(&self.manager);
+            let service = Arc::clone(&self.codex_app_server_service);
+            let monitors = Arc::clone(&self.codex_app_server_output_monitors);
+            let session_id = session_id.to_owned();
+            let monitor_key = monitor_key.clone();
+            move || {
+                Self::run_codex_app_server_output_monitor(
+                    manager,
+                    service,
+                    monitors,
+                    monitor_key,
+                    uid,
+                    session_id,
+                );
+            }
+        };
+        if let Err(source) = thread::Builder::new()
             .name(format!("erebor-codex-app-server-{session_id}"))
-            .spawn(move || {
-                let mut after_sequence = 0;
-                loop {
-                    let page = match manager.stream(
-                        uid,
-                        &session_id,
-                        StreamKind::Stdout,
-                        after_sequence,
-                        256,
-                    ) {
-                        Ok(page) => page,
-                        Err(_) => break,
-                    };
-                    let invalid_output = page.records().iter().any(|record| {
-                        after_sequence = after_sequence.max(record.sequence());
-                        service
-                            .observe_output_chunk(&session_id, record.sequence(), record.data())
-                            .is_err()
-                    });
-                    if invalid_output {
-                        let _result = manager.kill(uid, &session_id, ActiveSessionSignal::Kill);
-                        break;
-                    }
-                    match manager.inspect(uid, &session_id) {
-                        Ok(record) if record.state().is_terminal() => break,
-                        Ok(_) => thread::sleep(Duration::from_millis(50)),
-                        Err(_) => break,
-                    }
-                }
-                if let Ok(mut monitors) = monitors.lock() {
-                    monitors.remove(&monitor_key);
-                }
-            })
-            .map_err(|source| {
-                crate::error::InvalidRequestSnafu {
-                    reason: format!("starting Codex App Server output monitor failed: {source}"),
-                }
-                .build()
-            })?;
+            .spawn(worker())
+        {
+            if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+                runtime.spawn_blocking(worker());
+                return Ok(());
+            }
+            if let Ok(mut monitors) = self.codex_app_server_output_monitors.lock() {
+                monitors.remove(&monitor_key);
+            }
+            return Err(crate::error::InvalidRequestSnafu {
+                reason: format!("starting Codex App Server output monitor failed: {source}"),
+            }
+            .build());
+        }
         Ok(())
+    }
+
+    fn run_codex_app_server_output_monitor(
+        manager: Arc<SessionManager>,
+        service: Arc<CodexAppServerService>,
+        monitors: Arc<Mutex<BTreeSet<String>>>,
+        monitor_key: String,
+        uid: u32,
+        session_id: String,
+    ) {
+        let mut after_sequence = 0;
+        let mut invalid_output = false;
+        let mut stream_failures = 0_u8;
+        let mut lifecycle_failures = 0_u8;
+        loop {
+            if !invalid_output {
+                match manager.stream_tail(uid, &session_id, StreamKind::Stdout, after_sequence, 256)
+                {
+                    Ok(page) => {
+                        stream_failures = 0;
+                        invalid_output = page.records().iter().any(|record| {
+                            after_sequence = after_sequence.max(record.sequence());
+                            service
+                                .observe_durable_output_chunk(
+                                    &session_id,
+                                    record.sequence(),
+                                    record.timestamp_unix_ms(),
+                                    record.data(),
+                                )
+                                .is_err()
+                        });
+                    }
+                    Err(_) => {
+                        stream_failures = stream_failures.saturating_add(1);
+                        if stream_failures >= 3 {
+                            let _result = service.reject_output(
+                                &session_id,
+                                "Codex App Server stdout could not be validated",
+                            );
+                            invalid_output = true;
+                        }
+                    }
+                }
+            }
+            if invalid_output {
+                match manager.kill(uid, &session_id, ActiveSessionSignal::Kill) {
+                    Ok(_) => break,
+                    Err(SessionManagerError::Repository {
+                        source: SessionRepositoryError::NotFound { .. },
+                        ..
+                    }) => break,
+                    Err(_) => match manager.reap_if_exited(uid, &session_id) {
+                        Ok(record) if record.state().is_terminal() => break,
+                        Err(SessionManagerError::Repository {
+                            source: SessionRepositoryError::NotFound { .. },
+                            ..
+                        }) => break,
+                        Ok(_) | Err(_) => {
+                            thread::sleep(Duration::from_millis(250));
+                            continue;
+                        }
+                    },
+                }
+            }
+            match manager.reap_if_exited(uid, &session_id) {
+                Ok(record) if record.state().is_terminal() => break,
+                Ok(_) => {
+                    lifecycle_failures = 0;
+                    thread::sleep(Duration::from_millis(50));
+                }
+                Err(SessionManagerError::Repository {
+                    source: SessionRepositoryError::NotFound { .. },
+                    ..
+                }) => break,
+                Err(_) => {
+                    lifecycle_failures = lifecycle_failures.saturating_add(1);
+                    if lifecycle_failures >= 3 {
+                        let _result = service.reject_output(
+                            &session_id,
+                            "Codex App Server lifecycle could not be observed",
+                        );
+                        invalid_output = true;
+                    }
+                    thread::sleep(Duration::from_millis(250));
+                }
+            }
+        }
+        if let Ok(mut monitors) = monitors.lock() {
+            monitors.remove(&monitor_key);
+        }
+    }
+
+    fn monitor_running_codex_app_server(&self, record: &DurableSessionRecord) -> Result<()> {
+        if record.state().is_terminal() {
+            return Ok(());
+        }
+        let uid = record.spec().owner().uid();
+        let session_id = record.spec().session_id().as_str();
+        self.monitor_codex_app_server_output(uid, session_id)
     }
 
     fn prune(
@@ -2699,7 +3037,41 @@ mod tests {
         CodexHookContract, CodexHookEventName, CodexHookExec, CodexHookShell,
     };
 
-    use super::DaemonSessionApi;
+    use super::{app_server_validation_cursor, DaemonSessionApi};
+    use erebor_runtime_session::CODEX_APP_SERVER_OUTPUT_VALIDATION_EVENT;
+
+    #[test]
+    fn retained_app_server_output_requires_its_exact_durable_validation_result(
+    ) -> Result<(), crate::DaemonError> {
+        let result = br#"{"schema_version":1,"session_id":"session-a","stdout_cursor":42}"#;
+        assert_eq!(
+            app_server_validation_cursor(
+                CODEX_APP_SERVER_OUTPUT_VALIDATION_EVENT,
+                result,
+                "session-a",
+            )?,
+            Some(42)
+        );
+        assert_eq!(
+            app_server_validation_cursor(
+                CODEX_APP_SERVER_OUTPUT_VALIDATION_EVENT,
+                result,
+                "session-b",
+            )?,
+            None
+        );
+        assert_eq!(
+            app_server_validation_cursor("controller", b"not-json", "session-a")?,
+            None
+        );
+        assert!(app_server_validation_cursor(
+            CODEX_APP_SERVER_OUTPUT_VALIDATION_EVENT,
+            br#"{"schema_version":1,"session_id":"session-a"}"#,
+            "session-a",
+        )
+        .is_err());
+        Ok(())
+    }
 
     #[test]
     fn session_reference_requires_an_exact_or_unique_owner_scoped_prefix(

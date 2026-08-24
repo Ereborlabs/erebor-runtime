@@ -13,7 +13,10 @@ mod ticket;
 
 pub(crate) use adapter::CodexV1Adapter;
 pub(crate) use app_server::CodexAppServerRegistration;
-pub use app_server::{CodexAppServerInput, CodexAppServerService, MAX_APP_SERVER_FRAME_BYTES};
+pub use app_server::{
+    CodexAppServerInput, CodexAppServerOutputChunk, CodexAppServerOutputValidator,
+    CodexAppServerService, CODEX_APP_SERVER_OUTPUT_VALIDATION_EVENT, MAX_APP_SERVER_FRAME_BYTES,
+};
 pub use broker::{CodexHookService, CodexHookSessionHandlers, CodexSessionHookRegistration};
 pub(crate) use context::{CodexContextDag, CodexScopeContextBinding};
 pub use error::CodexSessionError;

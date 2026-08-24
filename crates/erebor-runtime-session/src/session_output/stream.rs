@@ -1,6 +1,6 @@
 use std::{
     fs::{self, File, OpenOptions},
-    io::{BufRead, BufReader, Write},
+    io::{BufRead, BufReader, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
     sync::Mutex,
 };
@@ -115,6 +115,15 @@ struct StreamState {
     last_sha256: String,
 }
 
+#[derive(Default)]
+struct TailReadState {
+    cursor: u64,
+    segment: Option<u64>,
+    offset: u64,
+    previous_sha256: Option<String>,
+    expected_sequence: Option<u64>,
+}
+
 pub struct DurableStreamStore {
     directory: PathBuf,
     kind: StreamKind,
@@ -122,6 +131,7 @@ pub struct DurableStreamStore {
     rotation_bytes: u64,
     required: bool,
     state: Mutex<StreamState>,
+    tail: Mutex<TailReadState>,
 }
 
 impl DurableStreamStore {
@@ -146,6 +156,7 @@ impl DurableStreamStore {
             rotation_bytes,
             required,
             state: Mutex::new(state),
+            tail: Mutex::new(TailReadState::default()),
         })
     }
 
@@ -274,6 +285,105 @@ impl DurableStreamStore {
         let durable_cursor = records
             .last()
             .map_or(after_sequence, DurableStreamRecord::sequence);
+        Ok(DurableStreamCursor {
+            records,
+            durable_cursor,
+            truncated_before_cursor: first_sequence > after_sequence.saturating_add(1),
+        })
+    }
+
+    pub fn read_tail_after(
+        &self,
+        after_sequence: u64,
+        maximum_records: usize,
+    ) -> Result<DurableStreamCursor, SessionOutputError> {
+        let mut tail = self.tail.lock().map_err(|_error| {
+            StateLockSnafu {
+                stream: self.kind.as_str().to_owned(),
+            }
+            .build()
+        })?;
+        let _stream_lock = lock_stream(&self.directory, self.kind, FlockOperation::LockShared)?;
+        let paths = segment_paths(&self.directory, self.kind)?;
+        let first_sequence = paths
+            .first()
+            .map(|path| first_sequence(path))
+            .transpose()?
+            .flatten()
+            .unwrap_or(after_sequence.saturating_add(1));
+        let resume_index = tail.segment.and_then(|segment| {
+            paths
+                .iter()
+                .position(|path| segment_number(path) == Some(segment))
+        });
+        let can_resume = tail.cursor == after_sequence
+            && match (tail.segment, resume_index) {
+                (Some(_), Some(index)) => paths[index]
+                    .metadata()
+                    .is_ok_and(|metadata| metadata.len() >= tail.offset),
+                (None, _) => paths.is_empty(),
+                _ => false,
+            };
+        if !can_resume {
+            *tail = TailReadState::default();
+        }
+
+        let mut records = Vec::new();
+        let start_index = if can_resume {
+            resume_index.unwrap_or(paths.len())
+        } else {
+            0
+        };
+        'segments: for (index, path) in paths.iter().enumerate().skip(start_index) {
+            let segment = segment_number(path).unwrap_or(0);
+            let mut reader = locked_reader(path)?;
+            if can_resume && index == start_index {
+                reader.seek(SeekFrom::Start(tail.offset)).context(IoSnafu {
+                    action: "seeking durable stream tail",
+                    path,
+                })?;
+            }
+            loop {
+                let mut line = String::new();
+                let bytes = reader.read_line(&mut line).context(IoSnafu {
+                    action: "reading durable stream tail",
+                    path,
+                })?;
+                if bytes == 0 {
+                    tail.segment = Some(segment);
+                    tail.offset = reader.stream_position().context(IoSnafu {
+                        action: "reading durable stream tail position",
+                        path,
+                    })?;
+                    break;
+                }
+                let record: DurableStreamRecord =
+                    serde_json::from_str(line.trim_end()).context(DecodeSnafu { path })?;
+                let mut previous_sha256 = tail.previous_sha256.clone();
+                let mut expected_sequence = tail.expected_sequence;
+                verify_record(path, &record, &mut previous_sha256, &mut expected_sequence)?;
+                tail.previous_sha256 = previous_sha256;
+                tail.expected_sequence = expected_sequence;
+                tail.cursor = record.sequence;
+                tail.segment = Some(segment);
+                tail.offset = reader.stream_position().context(IoSnafu {
+                    action: "reading durable stream tail position",
+                    path,
+                })?;
+                if record.sequence > after_sequence {
+                    records.push(record);
+                    if records.len() == maximum_records.max(1) {
+                        break 'segments;
+                    }
+                }
+            }
+        }
+        let durable_cursor = records
+            .last()
+            .map_or(after_sequence, DurableStreamRecord::sequence);
+        if records.is_empty() {
+            tail.cursor = after_sequence;
+        }
         Ok(DurableStreamCursor {
             records,
             durable_cursor,
@@ -655,6 +765,33 @@ mod tests {
         assert_eq!(page.records(), &[second]);
         assert_eq!(page.durable_cursor(), 2);
         assert!(!page.truncated_before_cursor());
+        Ok(())
+    }
+
+    #[test]
+    fn tail_reader_resumes_without_replaying_verified_records(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let temporary = TempDir::new()?;
+        let writer =
+            DurableStreamStore::open(temporary.path(), StreamKind::Stdout, 64 * 1024, 256, true)?;
+        let reader =
+            DurableStreamStore::open(temporary.path(), StreamKind::Stdout, 64 * 1024, 256, true)?;
+        writer.append(1, "workload", b"one".to_vec())?;
+        writer.append(2, "workload", b"two".to_vec())?;
+
+        let first = reader.read_tail_after(0, 1)?;
+        assert_eq!(first.durable_cursor(), 1);
+        let second = reader.read_tail_after(first.durable_cursor(), 1)?;
+        assert_eq!(second.durable_cursor(), 2);
+        assert!(reader
+            .read_tail_after(second.durable_cursor(), 1)?
+            .records()
+            .is_empty());
+
+        writer.append(3, "workload", b"three".to_vec())?;
+        let third = reader.read_tail_after(second.durable_cursor(), 1)?;
+        assert_eq!(third.records()[0].data(), b"three");
+        assert_eq!(third.durable_cursor(), 3);
         Ok(())
     }
 

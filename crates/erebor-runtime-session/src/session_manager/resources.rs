@@ -1,8 +1,9 @@
 use std::{
+    collections::BTreeMap,
     fs::{self, File},
     os::{fd::AsRawFd, unix::fs::PermissionsExt},
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{Arc, Mutex},
 };
 
 use erebor_runtime_core::{
@@ -17,7 +18,7 @@ use rustix::{
 use snafu::ResultExt;
 
 use crate::{
-    error::session_manager::{OutputSnafu, RuntimeIoSnafu},
+    error::session_manager::{OutputSnafu, RuntimeIoSnafu, StateLockSnafu},
     surfaces::intrinsic::{FilesystemBinding, LinuxOstreeOverlayFilesystemRuntime},
     DurableStreamCursor, HeldWorkloadBoundary, SessionManagerError, SessionOutputStores,
     StreamKind,
@@ -42,9 +43,18 @@ pub trait SessionInterceptionRouterFactory: Send + Sync {
         &self,
         spec: &SessionSpec,
         output: &OutputEndpoints,
+        recovering: bool,
     ) -> Result<(), SessionManagerError>;
 
     fn cleanup(&self, _spec: &SessionSpec) -> Result<(), SessionManagerError> {
+        Ok(())
+    }
+
+    fn validate_completion_output(
+        &self,
+        _spec: &SessionSpec,
+        _output: &SessionOutputStores,
+    ) -> Result<(), SessionManagerError> {
         Ok(())
     }
 
@@ -91,6 +101,7 @@ pub struct SessionRuntimeResources {
     filesystem: LinuxOstreeOverlayFilesystemRuntime,
     path_resolver: Arc<dyn SessionPathResolver>,
     router_factory: Arc<dyn SessionInterceptionRouterFactory>,
+    output_stores: Mutex<BTreeMap<(u32, String), Arc<SessionOutputStores>>>,
 }
 
 /// The daemon-owned mountpoints prepared before a runner starts a workload.
@@ -118,6 +129,7 @@ impl SessionRuntimeResources {
             filesystem,
             path_resolver,
             router_factory,
+            output_stores: Mutex::new(BTreeMap::new()),
         })
     }
 
@@ -438,8 +450,45 @@ impl SessionRuntimeResources {
     fn output_stores(
         &self,
         spec: &SessionSpec,
-    ) -> Result<SessionOutputStores, SessionManagerError> {
-        SessionOutputStores::open(spec.output()).context(OutputSnafu)
+    ) -> Result<Arc<SessionOutputStores>, SessionManagerError> {
+        let key = (spec.owner().uid(), spec.session_id().as_str().to_owned());
+        if let Some(stores) = self
+            .output_stores
+            .lock()
+            .map_err(|_error| {
+                StateLockSnafu {
+                    resource: "session output store registry",
+                }
+                .build()
+            })?
+            .get(&key)
+            .cloned()
+        {
+            return Ok(stores);
+        }
+        let opened = Arc::new(SessionOutputStores::open(spec.output()).context(OutputSnafu)?);
+        let mut stores = self.output_stores.lock().map_err(|_error| {
+            StateLockSnafu {
+                resource: "session output store registry",
+            }
+            .build()
+        })?;
+        Ok(Arc::clone(
+            stores.entry(key).or_insert_with(|| Arc::clone(&opened)),
+        ))
+    }
+
+    fn remove_output_stores(&self, spec: &SessionSpec) -> Result<(), SessionManagerError> {
+        self.output_stores
+            .lock()
+            .map_err(|_error| {
+                StateLockSnafu {
+                    resource: "session output store registry",
+                }
+                .build()
+            })?
+            .remove(&(spec.owner().uid(), spec.session_id().as_str().to_owned()));
+        Ok(())
     }
 
     fn cleanup_staging(&self, spec: &SessionSpec) -> Result<(), SessionManagerError> {
@@ -545,6 +594,10 @@ pub(crate) trait SessionRuntime: Send + Sync {
 
     fn cleanup(&self, spec: &SessionSpec) -> Result<(), SessionManagerError>;
 
+    fn validate_completion(&self, _spec: &SessionSpec) -> Result<(), SessionManagerError> {
+        Ok(())
+    }
+
     /// Applies the runtime-owned retention policy after a Session has stopped
     /// and before its durable record is marked removed.
     fn remove(&self, _spec: &SessionSpec) -> Result<(), SessionManagerError> {
@@ -567,6 +620,16 @@ pub(crate) trait SessionRuntime: Send + Sync {
         after_sequence: u64,
         maximum_records: usize,
     ) -> Result<DurableStreamCursor, SessionManagerError>;
+
+    fn stream_tail(
+        &self,
+        spec: &SessionSpec,
+        kind: StreamKind,
+        after_sequence: u64,
+        maximum_records: usize,
+    ) -> Result<DurableStreamCursor, SessionManagerError> {
+        self.stream(spec, kind, after_sequence, maximum_records)
+    }
 }
 
 impl SessionRuntime for SessionRuntimeResources {
@@ -590,9 +653,9 @@ impl SessionRuntime for SessionRuntimeResources {
         &self,
         spec: &SessionSpec,
         output: &OutputEndpoints,
-        _recovering: bool,
+        recovering: bool,
     ) -> Result<Vec<(String, String)>, SessionManagerError> {
-        self.router_factory.register(spec, output)?;
+        self.router_factory.register(spec, output, recovering)?;
         Ok(Vec::new())
     }
 
@@ -609,8 +672,15 @@ impl SessionRuntime for SessionRuntimeResources {
         self.cleanup_staging(spec)
     }
 
+    fn validate_completion(&self, spec: &SessionSpec) -> Result<(), SessionManagerError> {
+        let stores = self.output_stores(spec)?;
+        self.router_factory
+            .validate_completion_output(spec, &stores)
+    }
+
     fn remove(&self, spec: &SessionSpec) -> Result<(), SessionManagerError> {
-        self.filesystem.discard_writable_view(spec)
+        self.filesystem.discard_writable_view(spec)?;
+        self.remove_output_stores(spec)
     }
 
     fn filesystem_storage(
@@ -630,6 +700,19 @@ impl SessionRuntime for SessionRuntimeResources {
         self.output_stores(spec)?
             .stream(kind)
             .read_after(after_sequence, maximum_records)
+            .context(OutputSnafu)
+    }
+
+    fn stream_tail(
+        &self,
+        spec: &SessionSpec,
+        kind: StreamKind,
+        after_sequence: u64,
+        maximum_records: usize,
+    ) -> Result<DurableStreamCursor, SessionManagerError> {
+        self.output_stores(spec)?
+            .stream(kind)
+            .read_tail_after(after_sequence, maximum_records)
             .context(OutputSnafu)
     }
 }

@@ -23,9 +23,10 @@ mod surfaces;
 
 pub use adoption::SessionAdoptionService;
 pub use agents::codex::{
-    CodexAppServerInput, CodexAppServerService, CodexHookClient, CodexHookPeerRegistry,
-    CodexHookResultOutput, CodexHookService, CodexHookSessionHandlers, CodexManagedSession,
-    CodexNativeHookEvent, CodexSessionError, CodexSessionHookRegistration,
+    CodexAppServerInput, CodexAppServerOutputChunk, CodexAppServerOutputValidator,
+    CodexAppServerService, CodexHookClient, CodexHookPeerRegistry, CodexHookResultOutput,
+    CodexHookService, CodexHookSessionHandlers, CodexManagedSession, CodexNativeHookEvent,
+    CodexSessionError, CodexSessionHookRegistration, CODEX_APP_SERVER_OUTPUT_VALIDATION_EVENT,
     MAX_APP_SERVER_FRAME_BYTES,
 };
 pub use agents::{AgentAdapter, AgentAdapterRegistry, PreparedAgentInvocation};

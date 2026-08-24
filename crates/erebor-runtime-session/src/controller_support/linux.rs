@@ -2,8 +2,11 @@ use std::{
     collections::BTreeSet,
     ffi::CString,
     fs::{self, File},
-    io::{Read, Write},
-    os::unix::{fs::PermissionsExt, process::CommandExt},
+    io::{self, Read, Write},
+    os::{
+        fd::AsFd,
+        unix::{fs::PermissionsExt, process::CommandExt},
+    },
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     thread,
@@ -27,7 +30,8 @@ use rustix::process::{kill_process_group, Pid, Signal};
 #[allow(deprecated)]
 use rustix::thread::unshare;
 use rustix::{
-    fs::{openat, Mode, OFlags},
+    event::{poll, PollFd, PollFlags, Timespec},
+    fs::{fcntl_getfl, fcntl_setfl, openat, Mode, OFlags},
     mount::{
         mount, mount_bind, mount_change, mount_move, mount_remount, MountFlags,
         MountPropagationFlags,
@@ -56,6 +60,7 @@ use super::{
 
 const PRIVATE_ADMITTED_EXECUTABLE_PATH: &str = "/run/erebor/admitted-executable";
 const PRIVATE_WORKSPACE_PATH: &str = "/run/erebor/workspace";
+const WORKLOAD_INPUT_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub(crate) struct LinuxWorkload {
     child: LinuxChild,
@@ -69,8 +74,12 @@ pub(crate) struct LinuxWorkload {
 
 enum LinuxWorkloadInput {
     Terminal(File),
-    Pipe(Box<dyn Write + Send>),
+    Pipe(Box<dyn WorkloadInputWriter>),
 }
+
+trait WorkloadInputWriter: Write + AsFd + Send {}
+
+impl<T> WorkloadInputWriter for T where T: Write + AsFd + Send {}
 
 enum LinuxChild {
     Standard(Child),
@@ -394,7 +403,7 @@ impl LinuxWorkload {
             LinuxWorkloadInput::Terminal(input) => {
                 input.write_all(data).and_then(|()| input.flush())
             }
-            LinuxWorkloadInput::Pipe(input) => input.write_all(data).and_then(|()| input.flush()),
+            LinuxWorkloadInput::Pipe(input) => write_input_with_deadline(input.as_mut(), data),
         }
         .map_err(|source| SessionControllerError::Io {
             action: "writing Linux workload stdin",
@@ -514,6 +523,54 @@ impl LinuxWorkload {
             None => Ok(()),
         }
     }
+}
+
+fn write_input_with_deadline<T>(input: &mut T, data: &[u8]) -> io::Result<()>
+where
+    T: Write + AsFd + ?Sized,
+{
+    write_input_with_timeout(input, data, WORKLOAD_INPUT_TIMEOUT)
+}
+
+fn write_input_with_timeout<T>(input: &mut T, mut data: &[u8], timeout: Duration) -> io::Result<()>
+where
+    T: Write + AsFd + ?Sized,
+{
+    let original_flags = fcntl_getfl(&*input).map_err(io::Error::from)?;
+    fcntl_setfl(&*input, original_flags | OFlags::NONBLOCK).map_err(io::Error::from)?;
+    let deadline = Instant::now() + timeout;
+    let result = (|| {
+        while !data.is_empty() {
+            match input.write(data) {
+                Ok(0) => return Err(io::ErrorKind::WriteZero.into()),
+                Ok(written) => data = &data[written..],
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                    let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
+                        return Err(io::Error::new(
+                            io::ErrorKind::TimedOut,
+                            "Linux workload stdin write timed out",
+                        ));
+                    };
+                    let timeout = Timespec {
+                        tv_sec: i64::try_from(remaining.as_secs()).unwrap_or(i64::MAX),
+                        tv_nsec: i64::from(remaining.subsec_nanos()),
+                    };
+                    let mut readiness = [PollFd::from_borrowed_fd(input.as_fd(), PollFlags::OUT)];
+                    if poll(&mut readiness, Some(&timeout)).map_err(io::Error::from)? == 0 {
+                        return Err(io::Error::new(
+                            io::ErrorKind::TimedOut,
+                            "Linux workload stdin write timed out",
+                        ));
+                    }
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        input.flush()
+    })();
+    let restore = fcntl_setfl(&*input, original_flags).map_err(io::Error::from);
+    result.and(restore)
 }
 
 impl HeldLinuxWorkload {
@@ -1903,9 +1960,10 @@ fn create_private_projection_parent(
 #[cfg(test)]
 mod tests {
     use std::{
-        fs,
+        fs::{self, File},
         os::unix::fs::PermissionsExt,
         path::{Path, PathBuf},
+        time::Duration,
     };
 
     use erebor_runtime_core::{
@@ -1916,8 +1974,26 @@ mod tests {
     use super::{
         create_private_projection_parent, create_projection_target,
         filesystem_projection_view_matches, held_private_state_path,
-        private_state_path_in_workspace,
+        private_state_path_in_workspace, write_input_with_timeout,
     };
+
+    #[test]
+    fn workload_input_write_has_a_deadline() -> Result<(), Box<dyn std::error::Error>> {
+        let (_reader, writer) = rustix::pipe::pipe_with(rustix::pipe::PipeFlags::CLOEXEC)?;
+        let mut writer = File::from(writer);
+
+        let error = match write_input_with_timeout(
+            &mut writer,
+            &vec![b'x'; 1024 * 1024],
+            Duration::from_millis(20),
+        ) {
+            Ok(()) => return Err("an unread pipe did not reach the input deadline".into()),
+            Err(error) => error,
+        };
+
+        assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
+        Ok(())
+    }
 
     #[test]
     fn private_projection_parents_are_searchable_but_not_listable(

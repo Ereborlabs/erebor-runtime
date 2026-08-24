@@ -90,19 +90,26 @@ pub fn run_linux_session_controller() -> Result<(), SessionControllerError> {
         }
         match receiver.try_recv() {
             Ok(ControlInput::Command(command)) => {
-                if let Some(exit) = apply_command(&mut workload, &output, command)? {
-                    if let Some(failure) = workload.take_output_failure() {
+                match apply_command(&mut workload, &output, command) {
+                    Ok(Some(exit)) => {
+                        if let Some(failure) = workload.take_output_failure() {
+                            fail_closed_for_output(&mut workload, failure, control_connected);
+                            return Ok(());
+                        }
+                        output.finish(exit.exit_code, exit.signal)?;
+                        if control_connected {
+                            write_event(&LinuxControllerEvent::Exited {
+                                exit_code: exit.exit_code,
+                                signal: exit.signal,
+                            })?;
+                        }
+                        return Ok(());
+                    }
+                    Ok(None) => {}
+                    Err(failure) => {
                         fail_closed_for_output(&mut workload, failure, control_connected);
                         return Ok(());
                     }
-                    output.finish(exit.exit_code, exit.signal)?;
-                    if control_connected {
-                        write_event(&LinuxControllerEvent::Exited {
-                            exit_code: exit.exit_code,
-                            signal: exit.signal,
-                        })?;
-                    }
-                    return Ok(());
                 }
             }
             Ok(ControlInput::Eof) => {

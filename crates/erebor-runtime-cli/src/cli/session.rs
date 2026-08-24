@@ -32,6 +32,8 @@ use interactive::{
     InteractiveInput, InteractiveTerminal, StructuredJsonlEvent, StructuredJsonlInput,
 };
 
+const APP_SERVER_INPUT_BATCH_SIZE: usize = 32;
+
 pub(super) use args::{CodexRunArgs, SessionArgs};
 
 pub(super) struct SessionCommandOwner<'a> {
@@ -317,12 +319,28 @@ impl<'a> SessionCommandOwner<'a> {
             .session_start(&created.session_id, &format!("{key}:start"))
             .await
             .context(DaemonClientSnafu)?;
+        let terminal = matches!(
+            started.state.as_str(),
+            "succeeded" | "failed" | "interrupted" | "removed"
+        );
         if !app_server {
             Self::write_record(started);
         }
         if !args.detached {
             let client_instance_id = format!("erebor-cli-{}", std::process::id());
             if app_server {
+                if terminal {
+                    let mut stdout_cursor = 0;
+                    let mut stderr_cursor = 0;
+                    Self::drain_codex_app_server_logs(
+                        client,
+                        &created.session_id,
+                        &mut stdout_cursor,
+                        &mut stderr_cursor,
+                    )
+                    .await?;
+                    return Ok(());
+                }
                 Self::follow_codex_app_server(
                     client,
                     &created.session_id,
@@ -352,8 +370,25 @@ impl<'a> SessionCommandOwner<'a> {
                 },
                 &format!("{key}:app-server-attach"),
             )
-            .await
-            .context(DaemonClientSnafu)?;
+            .await;
+        let attachment = match attachment {
+            Ok(attachment) => attachment,
+            Err(source) => {
+                let mut stdout_cursor = 0;
+                let mut stderr_cursor = 0;
+                if Self::drain_if_codex_app_server_terminal(
+                    client,
+                    session_id,
+                    &mut stdout_cursor,
+                    &mut stderr_cursor,
+                )
+                .await?
+                {
+                    return Ok(());
+                }
+                return Err(source).context(DaemonClientSnafu);
+            }
+        };
         if attachment.read_only {
             return InvalidSessionCommandSnafu {
                 reason: String::from(
@@ -372,7 +407,10 @@ impl<'a> SessionCommandOwner<'a> {
         let interrupt = tokio::signal::ctrl_c();
         tokio::pin!(interrupt);
         loop {
-            while !input_closed {
+            for _ in 0..APP_SERVER_INPUT_BATCH_SIZE {
+                if interrupt_sent || input_closed {
+                    break;
+                }
                 let Some(event) = input.try_event() else {
                     break;
                 };
@@ -394,8 +432,19 @@ impl<'a> SessionCommandOwner<'a> {
                                 client_instance_id: client_instance_id.to_owned(),
                                 jsonl_frame,
                             })
-                            .await
-                            .context(DaemonClientSnafu)?;
+                            .await;
+                        if response.is_err()
+                            && Self::drain_if_codex_app_server_terminal(
+                                client,
+                                &attachment.session_id,
+                                &mut stdout_cursor,
+                                &mut stderr_cursor,
+                            )
+                            .await?
+                        {
+                            return Ok(());
+                        }
+                        let response = response.context(DaemonClientSnafu)?;
                         if response.session_id != attachment.session_id {
                             return InvalidSessionCommandSnafu {
                                 reason: String::from(
@@ -437,8 +486,19 @@ impl<'a> SessionCommandOwner<'a> {
                                 input_lease_id: attachment.input_lease_id.clone(),
                                 client_instance_id: client_instance_id.to_owned(),
                             })
-                            .await
-                            .context(DaemonClientSnafu)?;
+                            .await;
+                        if response.is_err()
+                            && Self::drain_if_codex_app_server_terminal(
+                                client,
+                                &attachment.session_id,
+                                &mut stdout_cursor,
+                                &mut stderr_cursor,
+                            )
+                            .await?
+                        {
+                            return Ok(());
+                        }
+                        let response = response.context(DaemonClientSnafu)?;
                         if response.session_id != attachment.session_id || !response.closed {
                             return InvalidSessionCommandSnafu {
                                 reason: String::from(
@@ -456,21 +516,6 @@ impl<'a> SessionCommandOwner<'a> {
                         });
                     }
                 }
-            }
-            if Instant::now() >= renew_at {
-                renewal = renewal.saturating_add(1);
-                client
-                    .session_input_lease_renew(
-                        SessionInputLeaseRenewRequest {
-                            session_id: attachment.session_id.clone(),
-                            input_lease_id: attachment.input_lease_id.clone(),
-                            client_instance_id: client_instance_id.to_owned(),
-                        },
-                        &format!("{key}:app-server-lease-renew-{renewal}"),
-                    )
-                    .await
-                    .context(DaemonClientSnafu)?;
-                renew_at = Instant::now() + Duration::from_secs(10);
             }
             stdout_cursor = Self::write_stream_page(
                 client
@@ -492,34 +537,118 @@ impl<'a> SessionCommandOwner<'a> {
                 record.state.as_str(),
                 "succeeded" | "failed" | "interrupted" | "removed"
             ) {
-                Self::release_codex_app_server_lease(
+                Self::drain_codex_app_server_logs(
                     client,
-                    &attachment,
-                    client_instance_id,
-                    &format!("{key}:app-server-finished"),
+                    &attachment.session_id,
+                    &mut stdout_cursor,
+                    &mut stderr_cursor,
                 )
                 .await?;
                 return Ok(());
             }
-            if interrupt_sent {
-                tokio::time::sleep(Duration::from_millis(100)).await;
-            } else {
-                tokio::select! {
-                    _ = &mut interrupt => {
+            if Instant::now() >= renew_at {
+                renewal = renewal.saturating_add(1);
+                let renewal_result = client
+                    .session_input_lease_renew(
+                        SessionInputLeaseRenewRequest {
+                            session_id: attachment.session_id.clone(),
+                            input_lease_id: attachment.input_lease_id.clone(),
+                            client_instance_id: client_instance_id.to_owned(),
+                        },
+                        &format!("{key}:app-server-lease-renew-{renewal}"),
+                    )
+                    .await;
+                if renewal_result.is_err()
+                    && matches!(
                         client
-                            .session_kill(
-                                &attachment.session_id,
-                                "interrupt",
-                                &format!("{key}:app-server-interrupt"),
-                            )
+                            .session_inspect(&attachment.session_id)
                             .await
-                            .context(DaemonClientSnafu)?;
-                        interrupt_sent = true;
-                    }
-                    _ = tokio::time::sleep(Duration::from_millis(100)) => {}
+                            .context(DaemonClientSnafu)?
+                            .state
+                            .as_str(),
+                        "succeeded" | "failed" | "interrupted" | "removed"
+                    )
+                {
+                    Self::drain_codex_app_server_logs(
+                        client,
+                        &attachment.session_id,
+                        &mut stdout_cursor,
+                        &mut stderr_cursor,
+                    )
+                    .await?;
+                    return Ok(());
                 }
+                renewal_result.context(DaemonClientSnafu)?;
+                renew_at = Instant::now() + Duration::from_secs(10);
+            }
+            tokio::select! {
+                _ = &mut interrupt, if !interrupt_sent => {
+                    client
+                        .session_stop(
+                            &attachment.session_id,
+                            2,
+                            &format!("{key}:app-server-interrupt"),
+                        )
+                        .await
+                        .context(DaemonClientSnafu)?;
+                    interrupt_sent = true;
+                }
+                _ = tokio::time::sleep(Duration::from_millis(100)) => {}
             }
         }
+    }
+
+    async fn drain_codex_app_server_logs(
+        client: &DaemonClient,
+        session_id: &str,
+        stdout_cursor: &mut u64,
+        stderr_cursor: &mut u64,
+    ) -> Result<(), CliError> {
+        loop {
+            let previous = *stdout_cursor;
+            *stdout_cursor = Self::write_stream_page(
+                client
+                    .session_logs(session_id, "stdout", previous, 256)
+                    .await
+                    .context(DaemonClientSnafu)?,
+            )?;
+            if *stdout_cursor == previous {
+                break;
+            }
+        }
+        loop {
+            let previous = *stderr_cursor;
+            *stderr_cursor = Self::write_stream_page_to_stderr(
+                client
+                    .session_logs(session_id, "stderr", previous, 256)
+                    .await
+                    .context(DaemonClientSnafu)?,
+            )?;
+            if *stderr_cursor == previous {
+                break;
+            }
+        }
+        Ok(())
+    }
+
+    async fn drain_if_codex_app_server_terminal(
+        client: &DaemonClient,
+        session_id: &str,
+        stdout_cursor: &mut u64,
+        stderr_cursor: &mut u64,
+    ) -> Result<bool, CliError> {
+        let record = client
+            .session_inspect(session_id)
+            .await
+            .context(DaemonClientSnafu)?;
+        if !matches!(
+            record.state.as_str(),
+            "succeeded" | "failed" | "interrupted" | "removed"
+        ) {
+            return Ok(false);
+        }
+        Self::drain_codex_app_server_logs(client, session_id, stdout_cursor, stderr_cursor).await?;
+        Ok(true)
     }
 
     async fn follow_attached(
@@ -756,27 +885,8 @@ impl<'a> SessionCommandOwner<'a> {
         Ok(())
     }
 
-    async fn release_codex_app_server_lease(
-        client: &DaemonClient,
-        attachment: &erebor_runtime_ipc::v1::CodexAppServerAttachResponse,
-        client_instance_id: &str,
-        idempotency_key: &str,
-    ) -> Result<(), CliError> {
-        client
-            .session_input_lease_release(
-                SessionInputLeaseReleaseRequest {
-                    session_id: attachment.session_id.clone(),
-                    input_lease_id: attachment.input_lease_id.clone(),
-                    client_instance_id: client_instance_id.to_owned(),
-                },
-                idempotency_key,
-            )
-            .await
-            .context(DaemonClientSnafu)?;
-        Ok(())
-    }
-
     fn write_stream_page(page: erebor_runtime_client::SessionLogPage) -> Result<u64, CliError> {
+        Self::require_complete_stream_page(&page)?;
         let mut output = io::stdout().lock();
         for record in page.records {
             output
@@ -792,6 +902,7 @@ impl<'a> SessionCommandOwner<'a> {
     fn write_stream_page_to_stderr(
         page: erebor_runtime_client::SessionLogPage,
     ) -> Result<u64, CliError> {
+        Self::require_complete_stream_page(&page)?;
         let mut output = io::stderr().lock();
         for record in page.records {
             output
@@ -802,6 +913,21 @@ impl<'a> SessionCommandOwner<'a> {
             .flush()
             .context(crate::error::WriteSessionOutputSnafu)?;
         Ok(page.end.durable_cursor)
+    }
+
+    fn require_complete_stream_page(
+        page: &erebor_runtime_client::SessionLogPage,
+    ) -> Result<(), CliError> {
+        if page.end.truncated_before_cursor {
+            return InvalidSessionCommandSnafu {
+                reason: format!(
+                    "{} output rotated before the attachment consumed it",
+                    page.end.stream
+                ),
+            }
+            .fail();
+        }
+        Ok(())
     }
 
     async fn logs(&self, client: &DaemonClient, args: &SessionLogsArgs) -> Result<(), CliError> {

@@ -35,6 +35,8 @@ pub(crate) use self::resources::SessionRuntime;
 
 type ActiveHandle = Arc<Mutex<Box<dyn ActiveSession>>>;
 type ActiveHandles = BTreeMap<(u32, String), ActiveHandle>;
+type FinalizationHandle = Arc<Mutex<bool>>;
+type FinalizationHandles = BTreeMap<(u32, String), FinalizationHandle>;
 type InputLeases = BTreeMap<(u32, String), Arc<InputLeaseManager>>;
 
 const INPUT_LEASE_DURATION: Duration = Duration::from_secs(30);
@@ -87,6 +89,7 @@ pub struct SessionManager {
     active: Mutex<ActiveHandles>,
     runtime: Arc<dyn SessionRuntime>,
     leases: Mutex<InputLeases>,
+    finalizations: Mutex<FinalizationHandles>,
 }
 
 impl SessionManager {
@@ -110,6 +113,7 @@ impl SessionManager {
             active: Mutex::new(BTreeMap::new()),
             runtime,
             leases: Mutex::new(BTreeMap::new()),
+            finalizations: Mutex::new(BTreeMap::new()),
         }
     }
 
@@ -183,6 +187,19 @@ impl SessionManager {
             .stream(record.spec(), kind, after_sequence, maximum_records)
     }
 
+    pub fn stream_tail(
+        &self,
+        uid: u32,
+        session_id: &str,
+        kind: StreamKind,
+        after_sequence: u64,
+        maximum_records: usize,
+    ) -> Result<DurableStreamCursor, SessionManagerError> {
+        let record = self.inspect(uid, session_id)?;
+        self.runtime
+            .stream_tail(record.spec(), kind, after_sequence, maximum_records)
+    }
+
     pub fn has_unresolved_sessions(&self) -> Result<bool, SessionManagerError> {
         Ok(self
             .list_all()?
@@ -213,11 +230,7 @@ impl SessionManager {
             });
         }
         let lease = if request_input_lease {
-            Some(
-                self.lease(uid, session_id)?
-                    .acquire(client_instance_id, INPUT_LEASE_DURATION)
-                    .context(OutputSnafu)?,
-            )
+            Some(self.acquire_input_lease(uid, session_id, client_instance_id)?)
         } else {
             None
         };
@@ -240,10 +253,7 @@ impl SessionManager {
                 location: snafu::Location::default(),
             });
         }
-        let lease = self
-            .lease(uid, session_id)?
-            .acquire(client_instance_id, INPUT_LEASE_DURATION)
-            .context(OutputSnafu)?;
+        let lease = self.acquire_input_lease(uid, session_id, client_instance_id)?;
         Ok(SessionAttachOutcome { lease: Some(lease) })
     }
 
@@ -254,8 +264,15 @@ impl SessionManager {
         lease_id: &str,
         client_instance_id: &str,
     ) -> Result<InputLease, SessionManagerError> {
+        let handle = self.handle(uid, session_id)?;
+        let _active = handle.lock().map_err(|_error| {
+            ActiveHandleLockSnafu {
+                session_id: session_id.to_owned(),
+            }
+            .build()
+        })?;
         self.require_attach_supported_session(uid, session_id)?;
-        self.lease(uid, session_id)?
+        self.existing_lease(uid, session_id)?
             .renew(lease_id, client_instance_id, INPUT_LEASE_DURATION)
             .context(OutputSnafu)
     }
@@ -267,8 +284,15 @@ impl SessionManager {
         lease_id: &str,
         client_instance_id: &str,
     ) -> Result<(), SessionManagerError> {
+        let handle = self.handle(uid, session_id)?;
+        let _active = handle.lock().map_err(|_error| {
+            ActiveHandleLockSnafu {
+                session_id: session_id.to_owned(),
+            }
+            .build()
+        })?;
         self.require_attach_supported_session(uid, session_id)?;
-        self.lease(uid, session_id)?
+        self.existing_lease(uid, session_id)?
             .release(lease_id, client_instance_id)
             .context(OutputSnafu)
     }
@@ -281,7 +305,6 @@ impl SessionManager {
         client_instance_id: &str,
         data: &[u8],
     ) -> Result<(), SessionManagerError> {
-        self.require_input_lease_session(uid, session_id)?;
         if data.is_empty() || data.len() > MAX_INPUT_CHUNK_BYTES {
             return Err(SessionManagerError::InvalidOperation {
                 session_id: session_id.to_owned(),
@@ -291,19 +314,18 @@ impl SessionManager {
                 location: snafu::Location::default(),
             });
         }
-        self.lease(uid, session_id)?
+        let handle = self.handle(uid, session_id)?;
+        let mut active = handle.lock().map_err(|_error| {
+            ActiveHandleLockSnafu {
+                session_id: session_id.to_owned(),
+            }
+            .build()
+        })?;
+        self.require_input_lease_session(uid, session_id)?;
+        self.existing_lease(uid, session_id)?
             .require_current(lease_id, client_instance_id)
             .context(OutputSnafu)?;
-        self.handle(uid, session_id)?
-            .lock()
-            .map_err(|_error| {
-                ActiveHandleLockSnafu {
-                    session_id: session_id.to_owned(),
-                }
-                .build()
-            })?
-            .write_input(data)
-            .context(RunnerSnafu)
+        active.write_input(data).context(RunnerSnafu)
     }
 
     /// Changes the daemon-owned PTY size only after proving the caller still
@@ -316,20 +338,18 @@ impl SessionManager {
         client_instance_id: &str,
         terminal_size: TerminalSize,
     ) -> Result<(), SessionManagerError> {
+        let handle = self.handle(uid, session_id)?;
+        let mut active = handle.lock().map_err(|_error| {
+            ActiveHandleLockSnafu {
+                session_id: session_id.to_owned(),
+            }
+            .build()
+        })?;
         self.require_input_lease_session(uid, session_id)?;
-        self.lease(uid, session_id)?
+        self.existing_lease(uid, session_id)?
             .require_current(lease_id, client_instance_id)
             .context(OutputSnafu)?;
-        self.handle(uid, session_id)?
-            .lock()
-            .map_err(|_error| {
-                ActiveHandleLockSnafu {
-                    session_id: session_id.to_owned(),
-                }
-                .build()
-            })?
-            .resize_terminal(terminal_size)
-            .context(RunnerSnafu)
+        active.resize_terminal(terminal_size).context(RunnerSnafu)
     }
 
     /// Writes a daemon-validated structured-stdio frame after the owning
@@ -352,19 +372,77 @@ impl SessionManager {
                 location: snafu::Location::default(),
             });
         }
-        self.lease(uid, session_id)?
+        let handle = self.handle(uid, session_id)?;
+        let mut active = handle.lock().map_err(|_error| {
+            ActiveHandleLockSnafu {
+                session_id: session_id.to_owned(),
+            }
+            .build()
+        })?;
+        self.require_attach_supported_session(uid, session_id)?;
+        self.existing_lease(uid, session_id)?
             .require_current(lease_id, client_instance_id)
             .context(OutputSnafu)?;
-        self.handle(uid, session_id)?
-            .lock()
-            .map_err(|_error| {
-                ActiveHandleLockSnafu {
-                    session_id: session_id.to_owned(),
+        active.write_input(data).context(RunnerSnafu)
+    }
+
+    pub fn transact_structured_input<T>(
+        &self,
+        uid: u32,
+        session_id: &str,
+        lease_id: &str,
+        client_instance_id: &str,
+        input_bytes: usize,
+        transaction: impl FnOnce(&mut dyn ActiveSession) -> Result<T, SessionManagerError>,
+    ) -> Result<T, SessionManagerError> {
+        if input_bytes == 0 || input_bytes > crate::agents::codex::MAX_APP_SERVER_FRAME_BYTES {
+            return Err(SessionManagerError::InvalidOperation {
+                session_id: session_id.to_owned(),
+                reason: format!(
+                    "structured input must contain between one and {} bytes",
+                    crate::agents::codex::MAX_APP_SERVER_FRAME_BYTES
+                ),
+                location: snafu::Location::default(),
+            });
+        }
+        let handle = self.handle(uid, session_id)?;
+        let mut active = handle.lock().map_err(|_error| {
+            ActiveHandleLockSnafu {
+                session_id: session_id.to_owned(),
+            }
+            .build()
+        })?;
+        self.require_attach_supported_session(uid, session_id)?;
+        self.existing_lease(uid, session_id)?
+            .require_current(lease_id, client_instance_id)
+            .context(OutputSnafu)?;
+        let source = match transaction(active.as_mut()) {
+            Ok(input) => return Ok(input),
+            Err(source) => source,
+        };
+        let current = self.inspect(uid, session_id)?;
+        if !current.state().is_terminal() {
+            let stopping = self.begin_stopping(uid, session_id)?;
+            match active.kill(ActiveSessionSignal::Kill) {
+                Ok(exit) => {
+                    self.finish(stopping, exit)?;
                 }
-                .build()
-            })?
-            .write_input(data)
-            .context(RunnerSnafu)
+                Err(termination) => {
+                    return Err(SessionManagerError::InvalidOperation {
+                        session_id: session_id.to_owned(),
+                        reason: format!(
+                            "structured input transaction failed: {source}; terminating the ambiguous delivery failed: {termination}"
+                        ),
+                        location: snafu::Location::default(),
+                    });
+                }
+            }
+        }
+        Err(SessionManagerError::InvalidOperation {
+            session_id: session_id.to_owned(),
+            reason: format!("structured input transaction failed: {source}"),
+            location: snafu::Location::default(),
+        })
     }
 
     pub fn close_structured_input(
@@ -374,19 +452,18 @@ impl SessionManager {
         lease_id: &str,
         client_instance_id: &str,
     ) -> Result<(), SessionManagerError> {
-        self.lease(uid, session_id)?
+        let handle = self.handle(uid, session_id)?;
+        let mut active = handle.lock().map_err(|_error| {
+            ActiveHandleLockSnafu {
+                session_id: session_id.to_owned(),
+            }
+            .build()
+        })?;
+        self.require_attach_supported_session(uid, session_id)?;
+        self.existing_lease(uid, session_id)?
             .require_current(lease_id, client_instance_id)
             .context(OutputSnafu)?;
-        self.handle(uid, session_id)?
-            .lock()
-            .map_err(|_error| {
-                ActiveHandleLockSnafu {
-                    session_id: session_id.to_owned(),
-                }
-                .build()
-            })?
-            .close_input()
-            .context(RunnerSnafu)
+        active.close_input().context(RunnerSnafu)
     }
 
     pub fn inspect_runner(
@@ -473,7 +550,7 @@ impl SessionManager {
             Ok(output) => output,
             Err(source) => {
                 let failed = self.fail_start(&starting, source.to_string())?;
-                self.cleanup_runtime(&failed)?;
+                self.finalize_runtime(&failed)?;
                 return Err(source);
             }
         };
@@ -489,7 +566,7 @@ impl SessionManager {
                 } else {
                     current
                 };
-                self.cleanup_runtime(&failed)?;
+                self.finalize_runtime(&failed)?;
                 return Err(source);
             }
         };
@@ -631,39 +708,44 @@ impl SessionManager {
         uid: u32,
         session_id: &str,
     ) -> Result<DurableSessionRecord, SessionManagerError> {
-        let current = self.inspect(uid, session_id)?;
-        if current.state().is_terminal() {
-            self.finalize_runtime(&current)?;
-            return Ok(current);
-        }
-        let handle = self.handle(uid, session_id)?;
-        let exit = loop {
-            let health = handle
-                .lock()
-                .map_err(|_error| {
-                    ActiveHandleLockSnafu {
-                        session_id: session_id.to_owned(),
-                    }
-                    .build()
-                })?
-                .health()
-                .context(RunnerSnafu)?;
-            if health == ActiveSessionHealth::Exited {
-                break handle
-                    .lock()
-                    .map_err(|_error| {
-                        ActiveHandleLockSnafu {
-                            session_id: session_id.to_owned(),
-                        }
-                        .build()
-                    })?
-                    .wait()
-                    .context(RunnerSnafu)?;
+        loop {
+            let record = self.reap_if_exited(uid, session_id)?;
+            if record.state().is_terminal() {
+                return Ok(record);
             }
             std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    pub fn reap_if_exited(
+        &self,
+        uid: u32,
+        session_id: &str,
+    ) -> Result<DurableSessionRecord, SessionManagerError> {
+        let Some(handle) = self.lifecycle_handle(uid, session_id)? else {
+            let current = self.inspect(uid, session_id)?;
+            self.finalize_runtime(&current)?;
+            return Ok(current);
         };
-        let record = self.inspect(uid, session_id)?;
-        self.finish(record, exit)
+        let mut active = handle.lock().map_err(|_error| {
+            ActiveHandleLockSnafu {
+                session_id: session_id.to_owned(),
+            }
+            .build()
+        })?;
+        let current = self.inspect(uid, session_id)?;
+        if current.state().is_terminal() {
+            let result = self.finish_terminal_if_owned(current);
+            drop(active);
+            return result;
+        }
+        if active.health().context(RunnerSnafu)? != ActiveSessionHealth::Exited {
+            return Ok(current);
+        }
+        let exit = active.wait().context(RunnerSnafu)?;
+        let result = self.finish(current, exit);
+        drop(active);
+        result
     }
 
     pub fn stop(
@@ -672,24 +754,28 @@ impl SessionManager {
         session_id: &str,
         grace_period: Duration,
     ) -> Result<DurableSessionRecord, SessionManagerError> {
-        let current = self.inspect(uid, session_id)?;
-        if current.state().is_terminal() {
+        let Some(handle) = self.lifecycle_handle(uid, session_id)? else {
+            let current = self.inspect(uid, session_id)?;
             self.finalize_runtime(&current)?;
             return Ok(current);
+        };
+        let mut active = handle.lock().map_err(|_error| {
+            ActiveHandleLockSnafu {
+                session_id: session_id.to_owned(),
+            }
+            .build()
+        })?;
+        let current = self.inspect(uid, session_id)?;
+        if current.state().is_terminal() {
+            let result = self.finish_terminal_if_owned(current);
+            drop(active);
+            return result;
         }
         let stopping = self.begin_stopping(uid, session_id)?;
-        let handle = self.handle(uid, session_id)?;
-        let exit = handle
-            .lock()
-            .map_err(|_error| {
-                ActiveHandleLockSnafu {
-                    session_id: session_id.to_owned(),
-                }
-                .build()
-            })?
-            .stop(grace_period)
-            .context(RunnerSnafu)?;
-        self.finish(stopping, exit)
+        let exit = active.stop(grace_period).context(RunnerSnafu)?;
+        let result = self.finish(stopping, exit);
+        drop(active);
+        result
     }
 
     pub fn kill(
@@ -698,24 +784,28 @@ impl SessionManager {
         session_id: &str,
         signal: ActiveSessionSignal,
     ) -> Result<DurableSessionRecord, SessionManagerError> {
-        let current = self.inspect(uid, session_id)?;
-        if current.state().is_terminal() {
+        let Some(handle) = self.lifecycle_handle(uid, session_id)? else {
+            let current = self.inspect(uid, session_id)?;
             self.finalize_runtime(&current)?;
             return Ok(current);
+        };
+        let mut active = handle.lock().map_err(|_error| {
+            ActiveHandleLockSnafu {
+                session_id: session_id.to_owned(),
+            }
+            .build()
+        })?;
+        let current = self.inspect(uid, session_id)?;
+        if current.state().is_terminal() {
+            let result = self.finish_terminal_if_owned(current);
+            drop(active);
+            return result;
         }
         let stopping = self.begin_stopping(uid, session_id)?;
-        let handle = self.handle(uid, session_id)?;
-        let exit = handle
-            .lock()
-            .map_err(|_error| {
-                ActiveHandleLockSnafu {
-                    session_id: session_id.to_owned(),
-                }
-                .build()
-            })?
-            .kill(signal)
-            .context(RunnerSnafu)?;
-        self.finish(stopping, exit)
+        let exit = active.kill(signal).context(RunnerSnafu)?;
+        let result = self.finish(stopping, exit);
+        drop(active);
+        result
     }
 
     pub fn remove(
@@ -725,8 +815,9 @@ impl SessionManager {
         force: bool,
     ) -> Result<DurableSessionRecord, SessionManagerError> {
         let mut record = self.inspect(uid, session_id)?;
+        let mut finalized = false;
         if record.state() == SessionLifecycleState::Removed {
-            self.finalize_runtime(&record)?;
+            self.remove_finalization(uid, session_id)?;
             return Ok(record);
         }
         if !record.state().is_terminal() {
@@ -737,8 +828,11 @@ impl SessionManager {
                     .context(RepositorySnafu);
             }
             record = self.kill(uid, session_id, ActiveSessionSignal::Kill)?;
+            finalized = true;
         }
-        self.cleanup_runtime(&record)?;
+        if !finalized {
+            record = self.finalize_terminal_owner(uid, session_id)?;
+        }
         self.runners
             .get(record.spec().runner_capability().runner())?
             .remove(record.spec(), record.runner_binding())
@@ -749,6 +843,7 @@ impl SessionManager {
             .remove(uid, session_id, record.generation())
             .context(RepositorySnafu)?;
         self.remove_lease(uid, session_id)?;
+        self.remove_finalization(uid, session_id)?;
         Ok(removed)
     }
 
@@ -767,6 +862,10 @@ impl SessionManager {
         let mut reconciled = Vec::new();
         for record in self.list_all()? {
             let state = record.state();
+            if state.is_terminal() {
+                self.finalize_runtime(&record)?;
+                continue;
+            }
             if !matches!(
                 state,
                 SessionLifecycleState::Starting
@@ -816,7 +915,11 @@ impl SessionManager {
         maximum_sessions: usize,
     ) -> Result<SessionPruneResult, SessionManagerError> {
         for record in self.list(uid)? {
-            self.finalize_runtime(&record)?;
+            if record.state() == SessionLifecycleState::Removed {
+                self.remove_finalization(uid, record.spec().session_id().as_str())?;
+            } else if record.state().is_terminal() {
+                self.finalize_terminal_owner(uid, record.spec().session_id().as_str())?;
+            }
         }
         self.repository
             .prune(uid, terminal_before_unix_ms, maximum_sessions)
@@ -899,31 +1002,49 @@ impl SessionManager {
     ) -> Result<DurableSessionRecord, SessionManagerError> {
         let uid = record.spec().owner().uid();
         let session_id = record.spec().session_id().as_str().to_owned();
-        let next = match (exit.exit_code(), exit.signal()) {
-            (Some(0), _) => SessionLifecycleState::Succeeded,
-            (Some(_), _) | (_, Some(_)) => SessionLifecycleState::Failed,
-            (None, None) => SessionLifecycleState::Interrupted,
-        };
-        let failure = (next == SessionLifecycleState::Failed).then(|| {
-            exit.failure().map_or_else(
-                || {
-                    format!(
-                        "runner exited with code {:?} signal {:?}",
-                        exit.exit_code(),
-                        exit.signal()
-                    )
-                },
-                str::to_owned,
-            )
-        });
+        let (next, failure) = self.terminal_outcome(&record, &exit);
         let finished = self
             .repository
             .transition(uid, &session_id, record.generation(), next, None, failure)
             .context(RepositorySnafu)?;
-        self.active_handles(&session_id)?
-            .remove(&(uid, session_id.clone()));
-        self.finalize_runtime(&finished)?;
-        Ok(finished)
+        self.finalize_active_terminal(finished)
+    }
+
+    fn terminal_outcome(
+        &self,
+        record: &DurableSessionRecord,
+        exit: &ActiveSessionExit,
+    ) -> (SessionLifecycleState, Option<String>) {
+        let completion_failure = self
+            .runtime
+            .validate_completion(record.spec())
+            .err()
+            .map(|error| format!("session completion validation failed: {error}"));
+        let next = match (
+            completion_failure.is_some(),
+            exit.exit_code(),
+            exit.signal(),
+        ) {
+            (true, _, _) => SessionLifecycleState::Failed,
+            (false, Some(0), _) => SessionLifecycleState::Succeeded,
+            (false, Some(_), _) | (false, _, Some(_)) => SessionLifecycleState::Failed,
+            (false, None, None) => SessionLifecycleState::Interrupted,
+        };
+        let failure = completion_failure.or_else(|| {
+            (next == SessionLifecycleState::Failed).then(|| {
+                exit.failure().map_or_else(
+                    || {
+                        format!(
+                            "runner exited with code {:?} signal {:?}",
+                            exit.exit_code(),
+                            exit.signal()
+                        )
+                    },
+                    str::to_owned,
+                )
+            })
+        });
+        (next, failure)
     }
 
     fn finish_starting(
@@ -932,13 +1053,7 @@ impl SessionManager {
         binding: RunnerBinding,
         exit: ActiveSessionExit,
     ) -> Result<DurableSessionRecord, SessionManagerError> {
-        let next = if exit.exit_code() == Some(0) {
-            SessionLifecycleState::Succeeded
-        } else if exit.exit_code().is_none() && exit.signal().is_none() {
-            SessionLifecycleState::Interrupted
-        } else {
-            SessionLifecycleState::Failed
-        };
+        let (next, failure) = self.terminal_outcome(&record, &exit);
         let finished = self
             .repository
             .transition(
@@ -947,10 +1062,7 @@ impl SessionManager {
                 record.generation(),
                 next,
                 Some(binding),
-                (next != SessionLifecycleState::Succeeded).then(|| {
-                    exit.failure()
-                        .map_or_else(|| String::from("runner exited during start"), str::to_owned)
-                }),
+                failure,
             )
             .context(RepositorySnafu)?;
         Ok(finished)
@@ -1069,10 +1181,98 @@ impl SessionManager {
     }
 
     fn finalize_runtime(&self, record: &DurableSessionRecord) -> Result<(), SessionManagerError> {
-        if record.state().is_terminal() {
-            self.cleanup_runtime(record)?;
+        if !record.state().is_terminal() || record.state() == SessionLifecycleState::Removed {
+            return Ok(());
         }
+        let finalization = self.finalization_handle(
+            record.spec().owner().uid(),
+            record.spec().session_id().as_str(),
+        )?;
+        let mut finalized = finalization.lock().map_err(|_error| {
+            StateLockSnafu {
+                resource: "session finalization",
+            }
+            .build()
+        })?;
+        let current = self.inspect(
+            record.spec().owner().uid(),
+            record.spec().session_id().as_str(),
+        )?;
+        if current.state() == SessionLifecycleState::Removed {
+            drop(finalized);
+            self.remove_finalization(
+                current.spec().owner().uid(),
+                current.spec().session_id().as_str(),
+            )?;
+            return Ok(());
+        }
+        if *finalized {
+            return Ok(());
+        }
+        self.cleanup_runtime(&current)?;
+        *finalized = true;
         Ok(())
+    }
+
+    fn finalize_active_terminal(
+        &self,
+        record: DurableSessionRecord,
+    ) -> Result<DurableSessionRecord, SessionManagerError> {
+        self.finalize_runtime(&record)?;
+        self.active_handles(record.spec().session_id().as_str())?
+            .remove(&(
+                record.spec().owner().uid(),
+                record.spec().session_id().as_str().to_owned(),
+            ));
+        Ok(record)
+    }
+
+    fn finalize_terminal_owner(
+        &self,
+        uid: u32,
+        session_id: &str,
+    ) -> Result<DurableSessionRecord, SessionManagerError> {
+        let Some(handle) = self.lifecycle_handle(uid, session_id)? else {
+            let record = self.inspect(uid, session_id)?;
+            self.finalize_runtime(&record)?;
+            return Ok(record);
+        };
+        let active = handle.lock().map_err(|_error| {
+            ActiveHandleLockSnafu {
+                session_id: session_id.to_owned(),
+            }
+            .build()
+        })?;
+        let record = self.inspect(uid, session_id)?;
+        if !record.state().is_terminal() {
+            return Err(SessionManagerError::InvalidState {
+                session_id: session_id.to_owned(),
+                operation: "finalize terminal ownership",
+                state: record.state().as_str().to_owned(),
+                location: snafu::Location::default(),
+            });
+        }
+        let result = self.finish_terminal_if_owned(record);
+        drop(active);
+        result
+    }
+
+    fn finish_terminal_if_owned(
+        &self,
+        record: DurableSessionRecord,
+    ) -> Result<DurableSessionRecord, SessionManagerError> {
+        let key = (
+            record.spec().owner().uid(),
+            record.spec().session_id().as_str().to_owned(),
+        );
+        if self
+            .active_handles(record.spec().session_id().as_str())?
+            .contains_key(&key)
+        {
+            self.finalize_active_terminal(record)
+        } else {
+            Ok(record)
+        }
     }
 
     fn cleanup_runtime(&self, record: &DurableSessionRecord) -> Result<(), SessionManagerError> {
@@ -1083,7 +1283,57 @@ impl SessionManager {
         )
     }
 
-    fn lease(
+    fn finalization_handle(
+        &self,
+        uid: u32,
+        session_id: &str,
+    ) -> Result<FinalizationHandle, SessionManagerError> {
+        let mut finalizations = self.finalizations.lock().map_err(|_error| {
+            StateLockSnafu {
+                resource: "session finalization registry",
+            }
+            .build()
+        })?;
+        Ok(Arc::clone(
+            finalizations
+                .entry((uid, session_id.to_owned()))
+                .or_insert_with(|| Arc::new(Mutex::new(false))),
+        ))
+    }
+
+    fn remove_finalization(&self, uid: u32, session_id: &str) -> Result<(), SessionManagerError> {
+        self.finalizations
+            .lock()
+            .map_err(|_error| {
+                StateLockSnafu {
+                    resource: "session finalization registry",
+                }
+                .build()
+            })?
+            .remove(&(uid, session_id.to_owned()));
+        Ok(())
+    }
+
+    fn acquire_input_lease(
+        &self,
+        uid: u32,
+        session_id: &str,
+        client_instance_id: &str,
+    ) -> Result<InputLease, SessionManagerError> {
+        let handle = self.handle(uid, session_id)?;
+        let _active = handle.lock().map_err(|_error| {
+            ActiveHandleLockSnafu {
+                session_id: session_id.to_owned(),
+            }
+            .build()
+        })?;
+        self.require_attach_supported_session(uid, session_id)?;
+        self.lease_or_create(uid, session_id)?
+            .acquire(client_instance_id, INPUT_LEASE_DURATION)
+            .context(OutputSnafu)
+    }
+
+    fn lease_or_create(
         &self,
         uid: u32,
         session_id: &str,
@@ -1099,6 +1349,28 @@ impl SessionManager {
                 .entry((uid, session_id.to_owned()))
                 .or_insert_with(|| Arc::new(InputLeaseManager::new(session_id))),
         ))
+    }
+
+    fn existing_lease(
+        &self,
+        uid: u32,
+        session_id: &str,
+    ) -> Result<Arc<InputLeaseManager>, SessionManagerError> {
+        self.leases
+            .lock()
+            .map_err(|_error| {
+                StateLockSnafu {
+                    resource: "input lease",
+                }
+                .build()
+            })?
+            .get(&(uid, session_id.to_owned()))
+            .cloned()
+            .ok_or_else(|| SessionManagerError::InvalidOperation {
+                session_id: session_id.to_owned(),
+                reason: String::from("the Session has no active input lease"),
+                location: snafu::Location::default(),
+            })
     }
 
     fn remove_lease(&self, uid: u32, session_id: &str) -> Result<(), SessionManagerError> {
@@ -1139,10 +1411,12 @@ impl SessionManager {
         session_id: &str,
     ) -> Result<(), SessionManagerError> {
         let record = self.inspect(uid, session_id)?;
-        if !record.spec().runner_capability().attach_supported() {
+        if record.state() != SessionLifecycleState::Running
+            || !record.spec().runner_capability().attach_supported()
+        {
             return Err(SessionManagerError::InvalidOperation {
                 session_id: session_id.to_owned(),
-                reason: String::from("the admitted runner does not support input leases"),
+                reason: String::from("input leases require a running attachable Session"),
                 location: snafu::Location::default(),
             });
         }
@@ -1156,6 +1430,31 @@ impl SessionManager {
             .context(ActiveHandleMissingSnafu {
                 session_id: session_id.to_owned(),
             })
+    }
+
+    fn lifecycle_handle(
+        &self,
+        uid: u32,
+        session_id: &str,
+    ) -> Result<Option<ActiveHandle>, SessionManagerError> {
+        let current = self.inspect(uid, session_id)?;
+        if current.state().is_terminal() {
+            return Ok(self
+                .active_handles(session_id)?
+                .get(&(uid, session_id.to_owned()))
+                .cloned());
+        }
+        match self.handle(uid, session_id) {
+            Ok(handle) => Ok(Some(handle)),
+            Err(error @ SessionManagerError::ActiveHandleMissing { .. }) => {
+                if self.inspect(uid, session_id)?.state().is_terminal() {
+                    Ok(None)
+                } else {
+                    Err(error)
+                }
+            }
+            Err(error) => Err(error),
+        }
     }
 
     fn active_handles(
@@ -1197,8 +1496,9 @@ mod tests {
         path::{Path, PathBuf},
         sync::{
             atomic::{AtomicBool, AtomicUsize, Ordering},
-            Arc, Mutex,
+            mpsc, Arc, Barrier, Mutex,
         },
+        thread,
         time::Duration,
     };
 
@@ -1245,6 +1545,7 @@ mod tests {
         releases: AtomicUsize,
         held_drops: AtomicUsize,
         fail_start: AtomicBool,
+        exit_immediately: AtomicBool,
         admissions: AtomicUsize,
         recoveries: AtomicUsize,
         removals: AtomicUsize,
@@ -1252,6 +1553,7 @@ mod tests {
         resizes: Arc<Mutex<Vec<erebor_runtime_core::TerminalSize>>>,
         input_closed: Arc<AtomicBool>,
         order: Arc<Mutex<Vec<&'static str>>>,
+        wait_gate: Option<Arc<FakeWaitGate>>,
     }
 
     struct FakeRunner {
@@ -1264,9 +1566,13 @@ mod tests {
         preparations: AtomicUsize,
         cleanups: AtomicUsize,
         activations: AtomicUsize,
+        completion_validations: AtomicUsize,
         fail_prepare: AtomicBool,
         fail_activation: AtomicBool,
+        fail_cleanup: AtomicBool,
+        fail_completion_validation: AtomicBool,
         order: Arc<Mutex<Vec<&'static str>>>,
+        cleanup_gate: Mutex<Option<Arc<FakeWaitGate>>>,
     }
 
     struct FakeRuntime {
@@ -1342,7 +1648,41 @@ mod tests {
         }
 
         fn cleanup(&self, _spec: &SessionSpec) -> Result<(), SessionManagerError> {
+            let gate = self
+                .state
+                .cleanup_gate
+                .lock()
+                .map_err(|_error| SessionManagerError::StateLock {
+                    resource: "fake cleanup gate",
+                    location: snafu::Location::default(),
+                })?
+                .clone();
+            if let Some(gate) = gate {
+                gate.entered.wait();
+                gate.release.wait();
+            }
             self.state.cleanups.fetch_add(1, Ordering::SeqCst);
+            if self.state.fail_cleanup.load(Ordering::SeqCst) {
+                return Err(SessionManagerError::InvalidRuntime {
+                    session_id: String::from("session-manager-test"),
+                    reason: String::from("injected runtime cleanup failure"),
+                    location: snafu::Location::default(),
+                });
+            }
+            Ok(())
+        }
+
+        fn validate_completion(&self, spec: &SessionSpec) -> Result<(), SessionManagerError> {
+            self.state
+                .completion_validations
+                .fetch_add(1, Ordering::SeqCst);
+            if self.state.fail_completion_validation.load(Ordering::SeqCst) {
+                return Err(SessionManagerError::InvalidRuntime {
+                    session_id: spec.session_id().as_str().to_owned(),
+                    reason: String::from("injected completion validation failure"),
+                    location: snafu::Location::default(),
+                });
+            }
             Ok(())
         }
 
@@ -1374,6 +1714,12 @@ mod tests {
         inputs: Arc<Mutex<Vec<Vec<u8>>>>,
         resizes: Arc<Mutex<Vec<erebor_runtime_core::TerminalSize>>>,
         input_closed: Arc<AtomicBool>,
+        wait_gate: Option<Arc<FakeWaitGate>>,
+    }
+
+    struct FakeWaitGate {
+        entered: Barrier,
+        release: Barrier,
     }
 
     impl ActiveSession for FakeActiveSession {
@@ -1386,6 +1732,10 @@ mod tests {
         }
 
         fn wait(&mut self) -> Result<ActiveSessionExit, erebor_runtime_core::RuntimeError> {
+            if let Some(gate) = &self.wait_gate {
+                gate.entered.wait();
+                gate.release.wait();
+            }
             self.running.store(false, Ordering::SeqCst);
             Ok(ActiveSessionExit::new(Some(0), None))
         }
@@ -1480,7 +1830,10 @@ mod tests {
                     location: snafu::Location::default(),
                 })?
                 .push("release");
-            self.state.running.store(true, Ordering::SeqCst);
+            self.state.running.store(
+                !self.state.exit_immediately.load(Ordering::SeqCst),
+                Ordering::SeqCst,
+            );
             self.active
                 .take()
                 .ok_or_else(|| RuntimeError::SessionRunnerProtocol {
@@ -1514,6 +1867,7 @@ mod tests {
                 inputs: Arc::clone(&self.state.inputs),
                 resizes: Arc::clone(&self.state.resizes),
                 input_closed: Arc::clone(&self.state.input_closed),
+                wait_gate: self.state.wait_gate.clone(),
             }))
         }
     }
@@ -1605,7 +1959,10 @@ mod tests {
                     location: snafu::Location::default(),
                 });
             }
-            self.state.running.store(true, Ordering::SeqCst);
+            self.state.running.store(
+                !self.state.exit_immediately.load(Ordering::SeqCst),
+                Ordering::SeqCst,
+            );
             self.active_session(r#"{"fake":"active"}"#)
         }
 
@@ -1662,6 +2019,7 @@ mod tests {
                 inputs: Arc::clone(&self.state.inputs),
                 resizes: Arc::clone(&self.state.resizes),
                 input_closed: Arc::clone(&self.state.input_closed),
+                wait_gate: self.state.wait_gate.clone(),
             }))
         }
 
@@ -1729,6 +2087,22 @@ mod tests {
         tty: bool,
         physical_interception: bool,
     ) -> Result<ManagerFixture, TestError> {
+        fixture_with_mode_tty_interception_and_wait_gate(
+            root,
+            daemon_failure_mode,
+            tty,
+            physical_interception,
+            None,
+        )
+    }
+
+    fn fixture_with_mode_tty_interception_and_wait_gate(
+        root: &TempDir,
+        daemon_failure_mode: DaemonFailureMode,
+        tty: bool,
+        physical_interception: bool,
+        wait_gate: Option<Arc<FakeWaitGate>>,
+    ) -> Result<ManagerFixture, TestError> {
         let order = Arc::new(Mutex::new(Vec::new()));
         let state = Arc::new(FakeRunnerState {
             capability: Mutex::new(capability_with_interception(
@@ -1743,6 +2117,7 @@ mod tests {
             releases: AtomicUsize::new(0),
             held_drops: AtomicUsize::new(0),
             fail_start: AtomicBool::new(false),
+            exit_immediately: AtomicBool::new(false),
             admissions: AtomicUsize::new(0),
             recoveries: AtomicUsize::new(0),
             removals: AtomicUsize::new(0),
@@ -1750,6 +2125,7 @@ mod tests {
             resizes: Arc::new(Mutex::new(Vec::new())),
             input_closed: Arc::new(AtomicBool::new(false)),
             order: Arc::clone(&order),
+            wait_gate,
         });
         let runner = Arc::new(FakeRunner {
             id: RunnerId::new("test-runner")?,
@@ -1759,9 +2135,13 @@ mod tests {
             preparations: AtomicUsize::new(0),
             cleanups: AtomicUsize::new(0),
             activations: AtomicUsize::new(0),
+            completion_validations: AtomicUsize::new(0),
             fail_prepare: AtomicBool::new(false),
             fail_activation: AtomicBool::new(false),
+            fail_cleanup: AtomicBool::new(false),
+            fail_completion_validation: AtomicBool::new(false),
             order,
+            cleanup_gate: Mutex::new(None),
         });
         let runtime = Arc::new(FakeRuntime {
             state: Arc::clone(&runtime_state),
@@ -2145,6 +2525,66 @@ mod tests {
     }
 
     #[test]
+    fn structured_input_transaction_failure_terminates_and_cleans_once(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let root = TempDir::new()?;
+        let (manager, state, runtime, spec) = fixture(&root)?;
+        manager.create(spec)?;
+        manager.start(1000, "session-manager-test", &start_constraints(), false)?;
+        let lease = manager
+            .attach_structured_input(1000, "session-manager-test", "app-server-client")?
+            .lease()
+            .cloned()
+            .ok_or("structured attach did not create a lease")?;
+
+        let result = manager.transact_structured_input(
+            1000,
+            "session-manager-test",
+            lease.lease_id(),
+            lease.client_id(),
+            2,
+            |active| {
+                active.write_input(b"{}").map_err(|source| {
+                    SessionManagerError::InvalidOperation {
+                        session_id: String::from("session-manager-test"),
+                        reason: source.to_string(),
+                        location: snafu::Location::default(),
+                    }
+                })?;
+                Err::<(), _>(SessionManagerError::InvalidOperation {
+                    session_id: String::from("session-manager-test"),
+                    reason: String::from("injected post-delivery failure"),
+                    location: snafu::Location::default(),
+                })
+            },
+        );
+
+        assert!(result.is_err());
+        assert_eq!(
+            manager.inspect(1000, "session-manager-test")?.state(),
+            erebor_runtime_core::SessionLifecycleState::Failed
+        );
+        assert_eq!(
+            *state
+                .inputs
+                .lock()
+                .map_err(|_error| "fake input lock is poisoned")?,
+            vec![b"{}".to_vec()]
+        );
+        assert_eq!(runtime.cleanups.load(Ordering::SeqCst), 1);
+        assert!(manager.handle(1000, "session-manager-test").is_err());
+        assert!(manager
+            .renew_input_lease(
+                1000,
+                "session-manager-test",
+                lease.lease_id(),
+                lease.client_id(),
+            )
+            .is_err());
+        Ok(())
+    }
+
+    #[test]
     fn manager_marks_runtime_preparation_failure_and_cleans_once(
     ) -> Result<(), Box<dyn std::error::Error>> {
         let root = TempDir::new()?;
@@ -2332,6 +2772,245 @@ mod tests {
             erebor_runtime_core::SessionLifecycleState::Failed
         );
         assert_eq!(stop_runtime.cleanups.load(Ordering::SeqCst), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn reap_if_exited_preserves_running_sessions_and_finishes_exited_sessions(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let root = TempDir::new()?;
+        let (manager, state, runtime, spec) = fixture(&root)?;
+        manager.create(spec)?;
+        manager.start(1000, "session-manager-test", &start_constraints(), false)?;
+
+        let running = manager.reap_if_exited(1000, "session-manager-test")?;
+        assert_eq!(
+            running.state(),
+            erebor_runtime_core::SessionLifecycleState::Running
+        );
+        assert_eq!(runtime.cleanups.load(Ordering::SeqCst), 0);
+
+        state.running.store(false, Ordering::SeqCst);
+        let finished = manager.reap_if_exited(1000, "session-manager-test")?;
+        assert_eq!(
+            finished.state(),
+            erebor_runtime_core::SessionLifecycleState::Succeeded
+        );
+        assert_eq!(runtime.cleanups.load(Ordering::SeqCst), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn completion_validation_failure_fails_and_cleans_the_session(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let root = TempDir::new()?;
+        let (manager, state, runtime, spec) = fixture(&root)?;
+        manager.create(spec)?;
+        manager.start(1000, "session-manager-test", &start_constraints(), false)?;
+        runtime
+            .fail_completion_validation
+            .store(true, Ordering::SeqCst);
+        state.running.store(false, Ordering::SeqCst);
+
+        let finished = manager.reap_if_exited(1000, "session-manager-test")?;
+        assert_eq!(
+            finished.state(),
+            erebor_runtime_core::SessionLifecycleState::Failed
+        );
+        assert!(finished
+            .failure()
+            .is_some_and(|failure| failure.contains("injected completion validation failure")));
+        assert_eq!(runtime.completion_validations.load(Ordering::SeqCst), 1);
+        assert_eq!(runtime.cleanups.load(Ordering::SeqCst), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn immediate_exit_uses_completion_validation_before_terminal_cleanup(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let root = TempDir::new()?;
+        let (manager, state, runtime, spec) = fixture(&root)?;
+        manager.create(spec)?;
+        state.exit_immediately.store(true, Ordering::SeqCst);
+        runtime
+            .fail_completion_validation
+            .store(true, Ordering::SeqCst);
+
+        let finished = manager.start(1000, "session-manager-test", &start_constraints(), false)?;
+        assert_eq!(
+            finished.state(),
+            erebor_runtime_core::SessionLifecycleState::Failed
+        );
+        assert!(finished
+            .failure()
+            .is_some_and(|failure| failure.contains("injected completion validation failure")));
+        assert_eq!(runtime.completion_validations.load(Ordering::SeqCst), 1);
+        assert_eq!(runtime.cleanups.load(Ordering::SeqCst), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn pending_start_retry_retries_failed_terminal_cleanup(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let root = TempDir::new()?;
+        let (manager, state, runtime, spec) = fixture(&root)?;
+        manager.create(spec)?;
+        state.exit_immediately.store(true, Ordering::SeqCst);
+        runtime.fail_cleanup.store(true, Ordering::SeqCst);
+        assert!(manager
+            .start(1000, "session-manager-test", &start_constraints(), false)
+            .is_err());
+        assert!(manager
+            .inspect(1000, "session-manager-test")?
+            .state()
+            .is_terminal());
+
+        runtime.fail_cleanup.store(false, Ordering::SeqCst);
+        let finished = manager.start(1000, "session-manager-test", &start_constraints(), true)?;
+        assert!(finished.state().is_terminal());
+        assert_eq!(runtime.cleanups.load(Ordering::SeqCst), 2);
+        Ok(())
+    }
+
+    #[test]
+    fn recovery_finishes_terminal_cleanup_after_a_crash_window(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let root = TempDir::new()?;
+        let (manager, state, runtime_state, spec) = fixture(&root)?;
+        manager.create(spec)?;
+        let running = manager.start(1000, "session-manager-test", &start_constraints(), false)?;
+        manager.repository.transition(
+            1000,
+            "session-manager-test",
+            running.generation(),
+            erebor_runtime_core::SessionLifecycleState::Succeeded,
+            None,
+            None,
+        )?;
+        assert_eq!(runtime_state.cleanups.load(Ordering::SeqCst), 0);
+        drop(manager);
+
+        let runner = Arc::new(FakeRunner {
+            id: RunnerId::new("test-runner")?,
+            state,
+        }) as Arc<dyn RunnerDriver>;
+        let recovered = SessionManager::new_with_runtime(
+            SessionRepository::new(root.path()),
+            RunnerRegistry::new([runner]),
+            Arc::new(FakeRuntime {
+                state: Arc::clone(&runtime_state),
+            }),
+        );
+        assert!(recovered.reconcile()?.is_empty());
+        assert_eq!(runtime_state.cleanups.load(Ordering::SeqCst), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn concurrent_wait_and_kill_converge_on_one_terminal_transition(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let root = TempDir::new()?;
+        let gate = Arc::new(FakeWaitGate {
+            entered: Barrier::new(2),
+            release: Barrier::new(2),
+        });
+        let (manager, state, runtime, spec) = fixture_with_mode_tty_interception_and_wait_gate(
+            &root,
+            DaemonFailureMode::Terminate,
+            false,
+            false,
+            Some(Arc::clone(&gate)),
+        )?;
+        manager.create(spec)?;
+        manager.start(1000, "session-manager-test", &start_constraints(), false)?;
+        state.running.store(false, Ordering::SeqCst);
+        let manager = Arc::new(manager);
+        let wait_manager = Arc::clone(&manager);
+        let waiter = thread::spawn(move || wait_manager.wait(1000, "session-manager-test"));
+        gate.entered.wait();
+
+        let (started, receiver) = mpsc::channel();
+        let kill_manager = Arc::clone(&manager);
+        let killer = thread::spawn(move || {
+            started.send(())?;
+            Ok::<_, Box<dyn std::error::Error + Send + Sync>>(kill_manager.kill(
+                1000,
+                "session-manager-test",
+                ActiveSessionSignal::Kill,
+            )?)
+        });
+        receiver.recv()?;
+        thread::sleep(Duration::from_millis(100));
+        assert_eq!(
+            manager.inspect(1000, "session-manager-test")?.state(),
+            erebor_runtime_core::SessionLifecycleState::Running
+        );
+        gate.release.wait();
+
+        let waited = waiter
+            .join()
+            .map_err(|_| std::io::Error::other("wait thread panicked"))??;
+        let killed = killer
+            .join()
+            .map_err(|_| std::io::Error::other("kill thread panicked"))?
+            .map_err(|error| error as Box<dyn std::error::Error>)?;
+        assert_eq!(waited.state(), killed.state());
+        assert_eq!(waited.generation(), killed.generation());
+        assert!(waited.state().is_terminal());
+        assert_eq!(runtime.cleanups.load(Ordering::SeqCst), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn remove_waits_for_the_active_terminal_cleanup_owner() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let root = TempDir::new()?;
+        let (manager, state, runtime, spec) = fixture(&root)?;
+        manager.create(spec)?;
+        manager.start(1000, "session-manager-test", &start_constraints(), false)?;
+        state.running.store(false, Ordering::SeqCst);
+        let cleanup_gate = Arc::new(FakeWaitGate {
+            entered: Barrier::new(2),
+            release: Barrier::new(2),
+        });
+        *runtime
+            .cleanup_gate
+            .lock()
+            .map_err(|_| "cleanup gate lock is poisoned")? = Some(Arc::clone(&cleanup_gate));
+        let manager = Arc::new(manager);
+        let reap_manager = Arc::clone(&manager);
+        let reaper =
+            thread::spawn(move || reap_manager.reap_if_exited(1000, "session-manager-test"));
+        cleanup_gate.entered.wait();
+
+        let (sender, receiver) = mpsc::channel();
+        let remove_manager = Arc::clone(&manager);
+        let remover = thread::spawn(move || {
+            let result = remove_manager.remove(1000, "session-manager-test", false);
+            sender.send(result).map_err(std::io::Error::other)
+        });
+        thread::sleep(Duration::from_millis(100));
+        assert!(receiver.try_recv().is_err());
+        assert!(manager
+            .inspect(1000, "session-manager-test")?
+            .state()
+            .is_terminal());
+        cleanup_gate.release.wait();
+
+        let reaped = reaper
+            .join()
+            .map_err(|_| std::io::Error::other("reaper thread panicked"))??;
+        let removed = receiver.recv()??;
+        remover
+            .join()
+            .map_err(|_| std::io::Error::other("remove thread panicked"))??;
+        assert!(reaped.state().is_terminal());
+        assert_eq!(
+            removed.state(),
+            erebor_runtime_core::SessionLifecycleState::Removed
+        );
+        assert_eq!(runtime.cleanups.load(Ordering::SeqCst), 1);
+        assert_eq!(state.removals.load(Ordering::SeqCst), 1);
         Ok(())
     }
 

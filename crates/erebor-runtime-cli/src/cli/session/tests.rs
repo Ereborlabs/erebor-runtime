@@ -1,10 +1,29 @@
 use clap::Parser;
-use erebor_runtime_ipc::v1::{ContextGraphActivity, ContextGraphResponse, ContextScopeGraphNode};
+use erebor_runtime_client::SessionLogPage;
+use erebor_runtime_ipc::v1::{
+    ContextGraphActivity, ContextGraphResponse, ContextScopeGraphNode, SessionLogsEnd,
+};
 
 use super::{args::SessionCommand, SessionCommandOwner};
 use crate::cli::{Cli, Command};
 
 const DIGEST: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
+#[test]
+fn attached_output_rejects_a_truncated_durable_prefix() {
+    assert!(
+        SessionCommandOwner::require_complete_stream_page(&SessionLogPage {
+            records: Vec::new(),
+            end: SessionLogsEnd {
+                session_id: String::from("session-test"),
+                stream: String::from("stdout"),
+                durable_cursor: 42,
+                truncated_before_cursor: true,
+            },
+        })
+        .is_err()
+    );
+}
 
 #[test]
 fn generic_session_commands_use_the_daemon_installed_admission(

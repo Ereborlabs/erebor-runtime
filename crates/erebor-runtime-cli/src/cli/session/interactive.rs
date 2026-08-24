@@ -14,6 +14,7 @@ use crate::error::CliError;
 const DETACH_PREFIX: u8 = 0x10;
 const DETACH_SUFFIX: u8 = 0x11;
 const MAX_APP_SERVER_FRAME_BYTES: usize = 1024 * 1024;
+const APP_SERVER_INPUT_QUEUE_CAPACITY: usize = 32;
 
 pub(super) struct InteractiveTerminal {
     stdin: io::Stdin,
@@ -42,7 +43,7 @@ pub(super) enum StructuredJsonlEvent {
 
 impl StructuredJsonlInput {
     pub(super) fn open() -> Self {
-        let (sender, receiver) = mpsc::channel();
+        let (sender, receiver) = mpsc::sync_channel(APP_SERVER_INPUT_QUEUE_CAPACITY);
         thread::spawn(move || read_structured_jsonl(sender));
         Self { receiver }
     }
@@ -172,7 +173,7 @@ fn terminal_size(terminal: impl rustix::fd::AsFd) -> Result<TerminalSize, CliErr
     })
 }
 
-fn read_structured_jsonl(sender: mpsc::Sender<StructuredJsonlEvent>) {
+fn read_structured_jsonl(sender: mpsc::SyncSender<StructuredJsonlEvent>) {
     let mut stdin = io::stdin();
     let mut pending = Vec::new();
     loop {

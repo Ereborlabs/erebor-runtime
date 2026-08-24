@@ -22,6 +22,7 @@ use erebor_runtime_policy::{
 use erebor_runtime_session::{
     ChildContextDeliveryHandler, CodexAppServerService, CodexHookService, CodexHookSessionHandlers,
     ContextAgentControlHandler, ContextOperationAdmissionHandler, SessionManagerError,
+    SessionOutputStores, StreamKind, CODEX_APP_SERVER_OUTPUT_VALIDATION_EVENT,
 };
 use erebor_runtime_session::{HeldWorkloadBoundary, SessionInterceptionRouterFactory};
 use erebor_runtime_telemetry::warn;
@@ -87,6 +88,7 @@ impl SessionInterceptionRouterFactory for StoredPolicyInterceptionRouterFactory 
         &self,
         spec: &SessionSpec,
         output: &OutputEndpoints,
+        recovering: bool,
     ) -> Result<(), SessionManagerError> {
         let admission = self
             .local_store
@@ -130,6 +132,17 @@ impl SessionInterceptionRouterFactory for StoredPolicyInterceptionRouterFactory 
                     .unregister(spec.session_id().as_str());
                 return Err(self.invalid_error(spec, error.to_string()));
             }
+            if recovering {
+                if let Err(error) = self.codex_app_server_service.reject_output(
+                    spec.session_id().as_str(),
+                    "Codex App Server request correlation was interrupted by daemon recovery",
+                ) {
+                    let _result = self
+                        .codex_hook_service
+                        .unregister(spec.session_id().as_str());
+                    return Err(self.invalid_error(spec, error.to_string()));
+                }
+            }
         }
         Ok(())
     }
@@ -142,6 +155,50 @@ impl SessionInterceptionRouterFactory for StoredPolicyInterceptionRouterFactory 
         }
         self.codex_hook_service
             .unregister(spec.session_id().as_str())
+            .map_err(|error| self.invalid_error(spec, error.to_string()))?;
+        Ok(())
+    }
+
+    fn validate_completion_output(
+        &self,
+        spec: &SessionSpec,
+        output: &SessionOutputStores,
+    ) -> Result<(), SessionManagerError> {
+        if !self
+            .codex_app_server_service
+            .is_registered(spec.session_id().as_str())
+            .map_err(|error| self.invalid_error(spec, error.to_string()))?
+        {
+            return Ok(());
+        }
+        let stdout_cursor = self
+            .codex_app_server_service
+            .validate_durable_output(
+                spec.session_id().as_str(),
+                output.stream(StreamKind::Stdout),
+            )
+            .map_err(|error| self.invalid_error(spec, error.to_string()))?;
+        let timestamp_unix_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |duration| {
+                u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
+            });
+        let payload = serde_json::to_vec(&serde_json::json!({
+            "schema_version": 1,
+            "session_id": spec.session_id().as_str(),
+            "stdout_cursor": stdout_cursor,
+        }))
+        .map_err(|error| self.invalid_error(spec, error.to_string()))?;
+        output
+            .stream(StreamKind::Events)
+            .append(
+                timestamp_unix_ms,
+                CODEX_APP_SERVER_OUTPUT_VALIDATION_EVENT,
+                payload,
+            )
+            .map_err(|error| self.invalid_error(spec, error.to_string()))?;
+        self.codex_app_server_service
+            .record_durable_output_cursor(spec.session_id().as_str(), stdout_cursor)
             .map_err(|error| self.invalid_error(spec, error.to_string()))?;
         Ok(())
     }
