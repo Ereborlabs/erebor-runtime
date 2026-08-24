@@ -46,6 +46,11 @@ current source state has not run this VM lane. See the
 [Runtime Interceptor VM proof review guide](../../../../docs/guides/runtime-interceptor-vm-proof.md)
 before you qualify a result.
 
+The App Server transport case uses `terminate` daemon-failure mode. The daemon
+owns its input lease, bounded JSONL validation, request correlation, output
+projection, monitor, and terminal cleanup. The case does not qualify daemon
+restart continuity for an in-flight App Server request.
+
 Add the optional single-node Kubernetes lane. The harness uses the K3s
 distribution:
 

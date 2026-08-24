@@ -2,6 +2,11 @@
 
 Status: Done. The implementation used this map as its deletion control.
 
+Runtime replacement status: **Not done**. The source implementation now has a
+Runtime-owned Interceptor path for new Linux Sessions. Its physical VM lane has
+not run on the final source. Managed-browser launch replacement and
+existing-process adoption remain unsupported.
+
 Parent: [Phase 6.1](./phase-6-1-grpc-service-and-ipc-convergence.md)
 
 ## Rule
@@ -37,6 +42,30 @@ git diff-tree --no-commit-id --name-only -r --diff-filter=D 2a15ba1
 Only `fb1353b`, `3a4a926`, and `2a15ba1` delete complete tracked files. Other
 implementation commits remove code from retained files. The semantic ledger
 below records those removals.
+
+## Runtime Replacement Update
+
+This update does not change the completed deletion audit. It records the
+current replacement boundary on branch `codex/erebor-runtime-interceptor`.
+
+| Removed capability | Current replacement owner | Current result |
+| --- | --- | --- |
+| Process exec interception | One daemon-owned Runtime kernel host compiles a static policy image and binds it to an empty held workload cgroup before the first exec. | Source and local tests are complete. Final Linux VM proof is not run. |
+| File open, read, and mutation interception | The same kernel host publishes exact operation-family decisions. The VM lane has separate `OpenRead`, `Read`, and `OpenWrite` denial oracles. | Source and harness checks are complete. Final Linux VM proof is not run. |
+| Socket connect interception | The same kernel host owns numeric address, port, and protocol decisions for a Runtime-owned workload cgroup. | Source and local tests are complete. Final Linux VM proof is not run. Hostname, scheme, and URL-path policy are unsupported. |
+| Existing-process adoption | No owner. | Unsupported. Runtime governs only a workload that it creates in an empty bound cgroup. |
+| Managed-browser terminal replacement | No admitted launch-route and endpoint owner. | Unsupported. The retained owned-browser CDP path does not intercept an arbitrary terminal child. |
+| Portable policy connection | The Runtime policy compiler accepts one closed static subset. It rejects dynamic string matchers, approval, and mediation. | Implemented and locally tested. |
+| Process and resource setup | The Linux controller remains the owner. | Preserved. The held launch adds delegated cgroup identity and atomic `clone3(CLONE_INTO_CGROUP)` release. |
+| Guard and broker lifecycle | The daemon-owned kernel host, Session runtime, Linux controller, and typed daemon API own the replacement lifecycle. | The removed guard binary, custom socket protocol, and standalone codec remain removed. |
+| Runtime evidence | The daemon-owned evidence reader routes kernel observations to the required Session stream and records explicit coverage. | Local lifecycle and recovery tests pass. Physical completeness is not qualified until the VM lane passes. |
+
+The App Server pipe case is a transport check for the normal Runtime launch.
+The daemon owns its structured-input lease, JSONL validation, request
+correlation, output projection, terminal reaping, and cleanup. It admits only
+the `terminate` daemon-failure mode because request-correlation state is not
+recoverable. This transport owner does not implement managed-browser launch
+replacement.
 
 ## Process Guard Removal
 

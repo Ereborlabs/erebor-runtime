@@ -38,13 +38,18 @@ Read these owners in order:
 8. [`linux.rs`](../../crates/erebor-runtime-session/src/runners/linux.rs) and
    [`cgroup.rs`](../../crates/erebor-runtime-session/src/controller_support/linux/cgroup.rs)
    create the delegated systemd scope and the empty child workload cgroup.
-9. [`policy.rs`](../../crates/erebor-runtime-daemon/src/runtime_interception/policy.rs)
+9. [`session_manager.rs`](../../crates/erebor-runtime-session/src/session_manager.rs),
+   [`app_server.rs`](../../crates/erebor-runtime-session/src/agents/codex/app_server.rs),
+   and [`linux_controller.rs`](../../crates/erebor-runtime-session/src/linux_controller.rs)
+   own structured input, output validation, terminal reaping, and bounded
+   controller failure convergence.
+10. [`policy.rs`](../../crates/erebor-runtime-daemon/src/runtime_interception/policy.rs)
    compiles the five portable policy classes into one static policy image.
-10. [`host.rs`](../../crates/erebor-runtime-daemon/src/runtime_interception/host.rs)
+11. [`host.rs`](../../crates/erebor-runtime-daemon/src/runtime_interception/host.rs)
    owns kernel activation, durable binding records, cleanup, and recovery.
-11. [`evidence.rs`](../../crates/erebor-runtime-daemon/src/runtime_interception/evidence.rs)
+12. [`evidence.rs`](../../crates/erebor-runtime-daemon/src/runtime_interception/evidence.rs)
     routes effect observations and the final coverage record to the session.
-12. [`identity_exec.bpf.h`](../../bpf/erebor-interceptor/programs/identity_exec.bpf.h),
+13. [`identity_exec.bpf.h`](../../bpf/erebor-interceptor/programs/identity_exec.bpf.h),
     [`identity_effects.bpf.h`](../../bpf/erebor-interceptor/programs/identity_effects.bpf.h),
     and [`identity_ipc.bpf.h`](../../bpf/erebor-interceptor/programs/identity_ipc.bpf.h)
     contain the kernel hooks used by the exec, file, and socket cases.
@@ -58,6 +63,7 @@ Read these owners in order:
 | Guest Runtime probe | Agent fixture, policies, sessions, case files, and facts | The script installs fixed-path binaries, creates fixture state, and removes its temporary targets. VM destruction is the outer cleanup boundary. | Input is the staged directory, bpffs pin root, and result path. Output is the physical-proof JSON record. |
 | Static file probe | Three syscall sequences and three success markers | The fixture creates three root-curated Agent packages for one staged binary. The guest creates and removes each target. | Input is the package-owned mode and target. Output is one explicit file operation or a success marker. |
 | Session runner | Controller scope and child workload cgroup | The Linux runner creates a held empty cgroup. The controller removes the workload cgroup after it terminates all members. | Input is the public Session request. Output is a held boundary and then an active Session. |
+| App Server transport | Structured-input lease, request ledger, validated output projection, and monitor | The daemon registers one ledger before launch. One monitor validates durable stdout and reaps the Session. Cleanup removes the ledger and lease. | Input is bounded JSON-RPC JSONL. Output is a validated frame projection and one terminal Session result. |
 | Runtime kernel owner | Static image rows, kernel binding, pins, durable binding record, and evidence reader | The daemon starts this owner. Activation publishes one binding. Session cleanup tombstones the durable record and removes session rows. Restart recovery fences old bindings. | Input is the held boundary and resolved PolicySet. Output is a physical decision and durable evidence. |
 | Kernel programs | Task state, binding state, policy rows, and effect observations | The Interceptor loader attaches and pins the programs. The production identity object retains pins across daemon exit for recovery. | Input is a kernel hook and pinned map state. Output is allow or negative errno, plus a bounded observation. |
 
@@ -149,7 +155,7 @@ The guest writes the final result only when all checks pass.
 | Deny file read | The static probe cannot read one byte from its inherited pseudo-terminal. The Session fails before the probe opens its target or writes its success marker. The target stays unchanged. Evidence has a denied `Read` (`4`) operation and no `OpenRead` (`2`) operation. |
 | Deny file mutation | The static probe cannot open the sentinel target with `O_WRONLY|O_CLOEXEC`. The Session fails before it writes a replacement byte or its success marker. The sentinel stays unchanged. Evidence has a denied `OpenWrite` (`3`) operation and no denied `Write` (`5`) or `MmapWrite` (`8`) fallback. |
 | Allow and deny socket connect | The allow command completes its connection and writes its marker. Its `Connect` observation has physical result `0`, which means `UnknownAfterPreEffect`. The deny case receives a failed connect and a denied `Connect` observation. |
-| Pipe transport | The App Server exchanges bounded JSON-RPC JSONL frames through its normal pipe transport and reaches complete evidence coverage. This is not exact pipe policy proof. |
+| Pipe transport | The App Server exchanges bounded JSON-RPC JSONL frames through its normal pipe transport. Prompt ingress is durable before delivery. Response IDs match one owned request. A write timeout or invalid output terminates and reaps the Session. This is not exact pipe policy proof. |
 | PTY transport | The detached TTY Session reports readiness and kernel terminal size, accepts `exit`, and reaches complete evidence coverage. This is not exact PTY policy proof. |
 | Stop and kill descendants | A Session contains the fixture, shell, and `sleep` descendant. Public stop and kill commands remove the cgroup and all recorded PIDs. |
 | Activation cancellation | Dynamic static-image rejection leaves no binding, active scope, or workload process. |
@@ -263,6 +269,16 @@ managed-browser row in the removed-code replacement map still needs an
 admitted launch-route and endpoint contract; a kernel deny cannot create and
 return a governed CDP endpoint.
 
+The certified App Server path admits only `terminate` daemon-failure mode.
+Recovery cannot reconstruct its in-flight request ledger, so a recovered
+registration is marked invalid and the normal recovery owner terminates and
+reaps the workload. Input and output frames are newline-delimited JSON-RPC.
+The daemon permits at most 128 in-flight requests. It releases a request
+identifier after its normal response. A canceled identifier stays reserved
+until one late response arrives or the bounded cancellation window evicts it.
+Server-initiated requests are unsupported. Notifications and correlated
+responses remain supported.
+
 Evidence is honest but not lossless. A ring-buffer reservation failure can
 occur after the physical decision. Normal coverage is complete only when the
 reader barrier, route counters, and kernel health deltas stay consistent.
@@ -291,6 +307,10 @@ all oracle values before you qualify the result.
 
 Status: **Not run** for the VM lane.
 
-The source state has only unprivileged fixture, syntax, and harness checks.
-No guest exists from this work. No physical oracle has a result. These checks
-do not qualify a guest, kernel, staged artifact set, or restart recovery path.
+The source state has local Rust, fixture, syntax, and harness checks. The
+focused App Server suite, Session lifecycle suite, Linux runner tests, daemon
+Session API tests, CLI Session tests, and warnings-as-errors Clippy pass. The
+Unix peer-credential broker test passes outside the restricted sandbox. The VM
+harness behavior test and shell syntax checks pass. No guest exists from this
+work. No physical oracle has a result. These checks do not qualify a guest,
+kernel, staged artifact set, or restart recovery path.
