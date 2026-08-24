@@ -330,6 +330,17 @@ int erebor_reconcile_tasks(struct bpf_iter__task *context)
     }
     if (!binding)
         return 0;
+    if (binding->prepared_container_state ==
+        prepared_container_state_v1_prepared) {
+        /* The iterator can see the held task before the OCI response. Keep
+         * the exact prepared-root proof when reconciliation labels it. */
+        if (label_external_root(task, binding, config)) {
+            health = identity_health_record();
+            if (health)
+                health->reconciliation_required++;
+        }
+        return 0;
+    }
     scratch = identity_scratch_record();
     health = identity_health_record();
     claim = scratch ? claim_task_label(task) : -EACCES;

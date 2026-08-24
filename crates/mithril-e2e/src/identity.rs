@@ -5758,13 +5758,57 @@ impl IdentityTestRunner {
                     ],
                 )
                 .context(NodeSnafu)?;
-            NativeSecurityStateOwner::new(node_boot_id, 1)
+            let identity = NativeSecurityStateOwner::new(node_boot_id, 1);
+            identity
                 .activate_held_initial_admission(
                     host.as_mut()
                         .ok_or_else(|| invalid_state("the PostStart identity host is missing"))?,
                     false,
                 )
                 .context(NodeSnafu)?;
+            let held_reconciliation = identity
+                .reconcile(
+                    host.as_mut()
+                        .ok_or_else(|| invalid_state("the PostStart identity host is missing"))?,
+                    false,
+                )
+                .context(NodeSnafu)?;
+            ensure!(
+                held_reconciliation == Default::default(),
+                InvalidInputSnafu {
+                    path: pin_root,
+                    reason: format!(
+                        "held initial tasks failed prepared reconciliation: {held_reconciliation:?}"
+                    ),
+                }
+            );
+            let held_inspector = NativeIdentityInspector::new(pin_root);
+            for (pid, binding) in [
+                (entrypoint_first_init_pid, &entrypoint_first_binding),
+                (hook_first_init_pid, &hook_first_binding),
+                (repeat_init_pid, &repeat_binding),
+            ] {
+                let root = held_inspector
+                    .snapshot(pid)
+                    .context(NodeSnafu)?
+                    .ok_or_else(|| invalid_state("a held initial task has no native identity"))?;
+                let runtime = root.runtime_binding.as_ref().ok_or_else(|| {
+                    invalid_state("a held initial task has no exact runtime binding")
+                })?;
+                ensure!(
+                    root.creator_task_cookie.is_none()
+                        && root.root_class.as_deref() == Some("initial_container_root")
+                        && root.installed_role_class.as_deref() == Some("initial_role")
+                        && root.active_role_id == binding.initial_role_id
+                        && runtime.prepared_container_state == "prepared"
+                        && runtime.prepared_container_entry_instance_id == root.entry_instance_id
+                        && runtime.prepared_container_initial_host_tgid == pid,
+                    InvalidInputSnafu {
+                        path: pin_root,
+                        reason: "iterator reconciliation did not preserve the exact prepared root",
+                    }
+                );
+            }
             for request in [
                 &entrypoint_first_request,
                 &hook_first_request,
