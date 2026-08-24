@@ -757,6 +757,44 @@ mod tests {
     }
 
     #[test]
+    fn intake_accepts_an_extended_retry_after_the_prefix_ack_is_lost(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let intake = EvidenceIntakeOwner::open(directory.path())?;
+        let first = batch(1, 1, [0; 32])?;
+        let extended = batch(1, 3, [0; 32])?;
+
+        assert_eq!(intake.receive(&authenticated(), &first)?.last_cursor, 1);
+        let acknowledgement = intake.receive(&authenticated(), &extended)?;
+        assert_eq!(acknowledgement.first_cursor, 1);
+        assert_eq!(acknowledgement.last_cursor, 3);
+        assert_eq!(intake.contiguous_cursor(&evidence_identity())?, 3);
+        assert_eq!(
+            intake
+                .store()
+                .accepted_evidence_records(&evidence_identity())?
+                .len(),
+            3
+        );
+
+        drop(intake);
+        let intake = EvidenceIntakeOwner::open(directory.path())?;
+        assert_eq!(
+            intake.receive(&authenticated(), &extended)?,
+            acknowledgement
+        );
+        assert_eq!(intake.contiguous_cursor(&evidence_identity())?, 3);
+        assert_eq!(
+            intake
+                .store()
+                .accepted_evidence_records(&evidence_identity())?
+                .len(),
+            3
+        );
+        Ok(())
+    }
+
+    #[test]
     fn intake_rejects_corruption_and_conflicting_accepted_ranges(
     ) -> Result<(), Box<dyn std::error::Error>> {
         let directory = tempfile::tempdir()?;

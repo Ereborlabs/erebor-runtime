@@ -980,12 +980,53 @@ impl ControlStore {
             .get(&identity)
             .copied()
             .unwrap_or_default();
+        let mut batch = batch;
         if batch.first_cursor <= cursor.contiguous_cursor {
-            return ControlStoreSnafu {
-                path: inner.root.clone(),
-                reason: "an evidence range overlaps the accepted contiguous cursor".to_owned(),
+            let overlap_last = batch.last_cursor.min(cursor.contiguous_cursor);
+            let overlap_count = overlap_last
+                .checked_sub(batch.first_cursor)
+                .and_then(|count| count.checked_add(1))
+                .and_then(|count| usize::try_from(count).ok())
+                .ok_or_else(|| {
+                    ControlStoreSnafu {
+                        path: inner.root.clone(),
+                        reason: "an overlapping evidence range exceeds local bounds".to_owned(),
+                    }
+                    .build()
+                })?;
+            let overlap_matches = batch.records[..overlap_count].iter().all(|record| {
+                inner.state.evidence_records.get(&EvidenceRecordKeyV1 {
+                    identity: identity.clone(),
+                    cursor: record.cursor,
+                }) == Some(record)
+            });
+            if !overlap_matches {
+                return ControlStoreSnafu {
+                    path: inner.root.clone(),
+                    reason: "an evidence retry conflicts with accepted record content".to_owned(),
+                }
+                .fail();
             }
-            .fail();
+            if batch.last_cursor <= cursor.contiguous_cursor {
+                return Ok(EvidenceStoreOutcomeV1::Accepted);
+            }
+
+            // An acknowledgement can be lost while the node extends its current WAL batch.
+            // Commit only the new suffix after the accepted prefix matches durable records.
+            let suffix_records = batch.records.split_off(overlap_count);
+            batch = StoredEvidenceBatchV1 {
+                first_cursor: cursor.contiguous_cursor.checked_add(1).ok_or_else(|| {
+                    ControlStoreSnafu {
+                        path: inner.root.clone(),
+                        reason: "the evidence cursor is exhausted".to_owned(),
+                    }
+                    .build()
+                })?,
+                last_cursor: batch.last_cursor,
+                batch_sha256: stored_batch_digest(&suffix_records),
+                records: suffix_records,
+            };
+            validate_stored_batch(&batch, &inner.root)?;
         }
         for (key, existing) in inner
             .state
@@ -2818,6 +2859,7 @@ fn validate_stored_batch(batch: &StoredEvidenceBatchV1, path: &Path) -> Result<(
     let valid = batch.first_cursor > 0
         && batch.last_cursor >= batch.first_cursor
         && batch.batch_sha256 != [0; 32]
+        && batch.batch_sha256 == stored_batch_digest(&batch.records)
         && batch.last_cursor - batch.first_cursor + 1
             == u64::try_from(batch.records.len()).unwrap_or(u64::MAX)
         && !batch.records.is_empty()
@@ -2840,6 +2882,15 @@ fn validate_stored_batch(batch: &StoredEvidenceBatchV1, path: &Path) -> Result<(
         .fail();
     }
     Ok(())
+}
+
+fn stored_batch_digest(records: &[StoredRecordV1]) -> [u8; 32] {
+    let mut digest = Sha256::new();
+    for record in records {
+        digest.update(record.cursor.to_be_bytes());
+        digest.update(&record.record_sha256);
+    }
+    digest.finalize().into()
 }
 
 fn source_epoch_key(identity: &EvidenceIntakeIdentityV1) -> EvidenceSourceEpochKeyV1 {
