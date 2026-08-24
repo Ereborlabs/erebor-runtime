@@ -10,6 +10,7 @@ static __always_inline int label_external_root(
     identity_health_v1 *health = identity_health_record();
     struct identity_scratch_v1 *scratch;
     int claim;
+    int result;
 
     scratch = identity_scratch_record();
     if (!scratch) {
@@ -25,11 +26,13 @@ static __always_inline int label_external_root(
             health->allocation_failures++;
         return -EACCES;
     }
-    if (create_external_root(task, config, binding, scratch)) {
+    result = create_external_root(task, config, binding, scratch);
+
+    if (result) {
         bpf_task_storage_delete(&task_labels, task);
-        if (health)
+        if (health && result != PREPARED_CONTAINER_IDENTITY_DEFER_V1)
             health->allocation_failures++;
-        return -EACCES;
+        return result;
     }
     if (finalize_task_coordinate(task, &scratch->label)) {
         task_coordinate_v1 *coordinate =
@@ -255,6 +258,7 @@ int erebor_reconcile_tasks(struct bpf_iter__task *context)
     struct task_struct *task = context->task;
     struct cgroup *cgroup = NULL;
     int binding_lookup = -EACCES;
+    int result;
 
     if (!task)
         return 0;
@@ -334,7 +338,9 @@ int erebor_reconcile_tasks(struct bpf_iter__task *context)
         prepared_container_state_v1_prepared) {
         /* The iterator can see the held task before the OCI response. Keep
          * the exact prepared-root proof when reconciliation labels it. */
-        if (label_external_root(task, binding, config)) {
+        result = label_external_root(task, binding, config);
+
+        if (result && result != PREPARED_CONTAINER_IDENTITY_DEFER_V1) {
             health = identity_health_record();
             if (health)
                 health->reconciliation_required++;

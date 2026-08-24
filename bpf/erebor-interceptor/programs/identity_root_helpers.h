@@ -269,7 +269,7 @@ static __always_inline int create_external_root(
     __u8 root_class = external_root_class_v1_external_runtime_root;
     __u8 role_class = installed_role_class_v1_runtime_external_restricted;
     __u32 role_id;
-    __u32 host_tgid = 0;
+    __u32 host_tid = 0;
     bool initial_root;
 
     activation = binding_activation_for_new_root(binding, config);
@@ -280,12 +280,15 @@ static __always_inline int create_external_root(
         prepared_container_state_v1_prepared) {
         /* Iterator reconciliation runs in the reader's context. Read the
          * target task so the held-process proof does not depend on the caller. */
-        BPF_CORE_READ_INTO(&host_tgid, task, tgid);
+        BPF_CORE_READ_INTO(&host_tid, task, pid);
         if (!prepared_container_binding_is_prepared(binding) ||
-            !binding->prepared_container_initial_host_tgid ||
-            binding->prepared_container_initial_host_tgid !=
-                host_tgid)
+            !binding->prepared_container_initial_host_tgid)
             return identity_deny(config);
+        /* Keep the canonical root on the held task. After that claim, any
+         * task in the exact prepared binding can receive runtime identity. */
+        if (binding->initial_root_state == initial_root_state_v1_available &&
+            host_tid != binding->prepared_container_initial_host_tgid)
+            return PREPARED_CONTAINER_IDENTITY_DEFER_V1;
     }
     initial_root = consume_initial_root(binding);
 
