@@ -26,6 +26,7 @@ data:
           "--timeout-ms",
           {{ .Values.node.runtimeHook.timeoutMs | quote }}
         ],
+        "env": [{{ printf "RUST_LOG=%s" .Values.node.logFilter | quote }}],
         "timeout": {{ .Values.node.runtimeHook.runtimeTimeoutSeconds }}
       },
       "when": {
@@ -49,6 +50,7 @@ data:
           "--timeout-ms",
           {{ .Values.node.runtimeHook.timeoutMs | quote }}
         ],
+        "env": [{{ printf "RUST_LOG=%s" .Values.node.logFilter | quote }}],
         "timeout": {{ .Values.node.runtimeHook.runtimeTimeoutSeconds }}
       },
       "when": {

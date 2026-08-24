@@ -34,6 +34,9 @@ spec:
           image: {{ .Values.control.image | quote }}
           imagePullPolicy: {{ .Values.control.imagePullPolicy }}
           args: ["--config", "/etc/mithril/control.json"]
+          env:
+            - name: RUST_LOG
+              value: {{ .Values.control.logFilter | quote }}
           ports:
             - name: grpc
               containerPort: {{ .Values.control.grpcPort }}

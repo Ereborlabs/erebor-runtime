@@ -11,6 +11,47 @@ helm template mithril "$chart_directory" \
   --namespace mithril-system \
   --values "$chart_directory/tests/values.yaml" >/dev/null
 
+default_node_logs=$(helm template mithril "$chart_directory" \
+  --namespace mithril-system \
+  --values "$chart_directory/tests/values.yaml" \
+  --show-only templates/daemonset.yaml)
+grep -Fq 'value: "info"' <<<"$default_node_logs"
+
+default_control_logs=$(helm template mithril "$chart_directory" \
+  --namespace mithril-system \
+  --values "$chart_directory/tests/values.yaml" \
+  --show-only templates/control-deployment.yaml)
+grep -Fq 'value: "info"' <<<"$default_control_logs"
+
+node_logs=$(helm template mithril "$chart_directory" \
+  --namespace mithril-system \
+  --values "$chart_directory/tests/values.yaml" \
+  --show-only templates/daemonset.yaml \
+  --set-string 'node.logFilter=mithril_node::runtime_admission=debug')
+grep -Fq 'value: "mithril_node::runtime_admission=debug"' <<<"$node_logs"
+
+control_logs=$(helm template mithril "$chart_directory" \
+  --namespace mithril-system \
+  --values "$chart_directory/tests/values.yaml" \
+  --show-only templates/control-deployment.yaml \
+  --set-string 'control.logFilter=mithril_control::store=trace')
+grep -Fq 'value: "mithril_control::store=trace"' <<<"$control_logs"
+
+hook_logs=$(helm template mithril "$chart_directory" \
+  --namespace mithril-system \
+  --values "$chart_directory/tests/values.yaml" \
+  --show-only templates/runtime-hook-configmap.yaml \
+  --set-string 'node.logFilter=mithril_oci_hook=debug')
+[[ $(grep -Fc '"env": ["RUST_LOG=mithril_oci_hook=debug"]' <<<"$hook_logs") -eq 2 ]]
+
+if helm template mithril "$chart_directory" \
+  --namespace mithril-system \
+  --values "$chart_directory/tests/values.yaml" \
+  --set-string 'control.logFilter=' >/dev/null 2>&1; then
+  echo 'chart accepted an empty Control log filter' >&2
+  exit 1
+fi
+
 if helm template mithril "$chart_directory" --namespace mithril-system >/dev/null 2>&1; then
   echo 'chart accepted a missing admission CA bundle' >&2
   exit 1

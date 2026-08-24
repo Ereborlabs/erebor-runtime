@@ -89,6 +89,25 @@ lifecycle as the Mithril node owner. Set `node.runtimeHook.injector.enabled` to
 `false` only when the runtime reads OCI hook configuration without NRI. The
 package does not replace or patch the container runtime.
 
+## Operational Logs
+
+`control.logFilter` and `node.logFilter` set `RUST_LOG` for their service
+containers. `node.logFilter` also applies to the installed OCI hooks. Both
+values default to `info`. Use a Rust target to enable bounded detail for one
+owner, for example:
+
+```yaml
+node:
+  logFilter: info,mithril_node::runtime_admission=debug
+control:
+  logFilter: info,mithril_control::store=trace
+```
+
+A Helm upgrade changes the Pod template and restarts the affected owner. Logs
+remain human-readable service stderr. The filter does not change policy,
+evidence, readiness, or enforcement state. The chart bounds each value and
+rejects line breaks. The service validates the complete filter before startup.
+
 ## Verification
 
 ```sh

@@ -1,6 +1,7 @@
 node:
   image: ereborlabs/mithril-node:dev
   imagePullPolicy: IfNotPresent
+  logFilter: info
   configHostPath: /etc/mithril/node.json
   identityHostPath: /etc/mithril/identity
   stateHostPath: /var/lib/mithril
@@ -28,6 +29,7 @@ control:
   enabled: true
   image: ereborlabs/mithril-control:dev
   imagePullPolicy: IfNotPresent
+  logFilter: info
   configSecretName: mithril-control-config
   statePersistentVolumeClaim: mithril-control-state
   grpcPort: 8443

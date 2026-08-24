@@ -105,6 +105,8 @@ spec:
           imagePullPolicy: {{ .Values.node.imagePullPolicy }}
           args: ["--config", "/etc/mithril/node.json"]
           env:
+            - name: RUST_LOG
+              value: {{ .Values.node.logFilter | quote }}
             # The downward API binds the node session to the scheduler-visible Node name.
             - name: MITHRIL_KUBERNETES_NODE_NAME
               valueFrom:
