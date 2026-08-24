@@ -4,7 +4,8 @@ Status: Rewritten from the validated architecture on 2026-08-08, amended for
 Control policy and evidence convergence on 2026-08-19, and amended for gRPC
 service and IPC convergence on 2026-08-21. The capability-grounded Kubernetes
 policy API amendment was approved on 2026-08-23. Proposed; this document does
-not authorize implementation until the user approves one phase by name.
+not authorize implementation until the user approves one phase by name. The
+stock-runtime bootstrap amendment was approved for Phase 6.2 on 2026-08-23.
 
 Design authority:
 
@@ -38,6 +39,13 @@ capability-grounded `WorkloadProtectionPolicy` and a separate bounded
 internal signed policy. An exception activates one precompiled grant without
 migrating the base generation. The amendment does not expose unqualified
 internal fields or change the frozen BPF ABI.
+
+The approved stock-runtime amendment adds one internal `RuntimeBootstrap`
+transition to the node binding and BPF decision ABI. The node can arm it only
+for the exact held initial task after it verifies the scheduled binding and
+active signed policy. BPF restricts it to a fixed qualified operation set,
+one entry lineage, owned anonymous objects, one deadline, and one application
+handoff. It is not a CRD field, a policy rule, or a runtime-selected bypass.
 
 ## Goal And Release Boundary
 

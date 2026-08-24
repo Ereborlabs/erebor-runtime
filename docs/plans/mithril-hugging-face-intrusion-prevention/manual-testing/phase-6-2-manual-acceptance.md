@@ -5,7 +5,8 @@ Status: Not done. This procedure now targets the approved
 branch implements both resources and the current fixture flows. The current
 source is not physically tested. The earlier run used the superseded flattened
 resource and stopped when stock `runc` used bootstrap operations that have no
-typed authority.
+typed authority. The bounded internal `RuntimeBootstrap` flow is approved but
+is not implemented or physically proved.
 
 Phase: [Control Policy And Evidence Convergence](../phase-6-2-control-policy-and-evidence-convergence.md)
 
@@ -35,7 +36,8 @@ because they have no typed authority. The application process did not start.
 
 The previous result is a product blocker, not test noise. The validated
 architecture forbids a broad `runc`, pipe, or socket exception. Completion
-requires approval for a signed, typed, bounded runtime-bootstrap authority.
+requires implementation and physical proof of the approved typed, bounded
+`RuntimeBootstrap` authority.
 The current automated fixture now contains gate-failure, task lifetime, Pod
 UID, Node UID, host epoch, selector, exception target-retirement, terminal
 cleanup, and fresh-root oracles. These physical cases remain `Not run`. Watch
@@ -172,11 +174,17 @@ run.
     records the Pod, controller, ServiceAccount, container, pinned image,
     selected Node, node UID, node ID, boot ID, and label epoch. Verify only the
     selected node inventories and downloads the exact signed candidate.
-11. Observe the stock OCI prestart hook for the protected container. Prove the
-    initial PID remains the sole process in its cgroup while the node stages,
-    reads back, probes, activates, and publishes the exact binding. Prove the
-    application marker does not appear before activation. Verify the runtime
-    releases the process only after active policy and cgroup-binding readback.
+11. Observe the injected createContainer and prestart hooks for the protected
+    container. Prove createContainer stages the exact container, cgroup,
+    image, and Pod facts without runtime authority. Prove the initial PID
+    remains held while the node verifies the same staged facts, CRI `Created`
+    state, active policy, and exact binding. Verify map readback before the
+    hook releases the task. Exercise the qualified anonymous-file, pipe,
+    sealed runtime self-exec, and initial namespace operations. Verify the
+    first policy-approved application exec consumes `RuntimeBootstrap` once.
+    Verify another entry, container, external path, network destination,
+    expired identity, replay, and post-handoff use reject. Prove the
+    application marker does not appear before the handoff.
 12. Create one `WorkloadProtectionException` for a named file grant, exact Pod
     UID, and matching container. Verify the request cannot exceed the grant
     duration or uses. Verify Control resolves the precompiled file cells and
@@ -262,6 +270,7 @@ run.
 | Ephemeral-container update | A protected Pod cannot add a matching container outside the admitted image-pin contract |
 | Exact delivery | Only the persisted scheduler-selected node receives the Pod target and candidate |
 | Protected start | The initial process remains held until exact policy and cgroup-binding activation |
+| Runtime bootstrap | Only the exact initial entry uses owned anonymous bootstrap objects before one deadline; the first policy-approved application exec consumes the identity |
 | Gate failure | The runtime reports start failure at the bounded hook deadline and no application marker runs |
 | Runtime lifetime | Container restart and Pod UID replacement create new authority and cannot reuse the old binding |
 

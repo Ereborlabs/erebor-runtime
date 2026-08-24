@@ -2,8 +2,9 @@
 
 **Status: VALIDATED DESIGN AUTHORITY — 2026-08-08; CONTROL POLICY AND EVIDENCE
 AMENDMENT — 2026-08-19; gRPC SERVICE AND IPC AMENDMENT — 2026-08-21;
-CAPABILITY-GROUNDED KUBERNETES POLICY API AMENDMENT — 2026-08-23.** This is the
-sole normative Mithril architecture for implementation planning.
+CAPABILITY-GROUNDED KUBERNETES POLICY API AMENDMENT — 2026-08-23;
+STOCK-RUNTIME BOOTSTRAP AMENDMENT — 2026-08-23.** This is the sole normative
+Mithril architecture for implementation planning.
 Implementation still requires allocation and approval through the master plan
 and one named phase. Historical architecture text may explain rejected
 designs, but cannot override this file.
@@ -28,6 +29,11 @@ resources contain only qualified Kubernetes enforcement fields. Control keeps
 one explicit lowering path from the base policy to the wider internal signed
 policy document. An exception activates one precompiled grant without
 migrating the base generation.
+
+The stock-runtime bootstrap amendment adds one internal, typed transition to
+the node binding and BPF decision ABI. It does not add a public policy field or
+a generic runtime exception. Historical phase results keep their recorded ABI.
+Phase 6.2 and later results bind the amended ABI and architecture.
 
 Status: proposed architecture. This document does not authorize an
 implementation phase. The
@@ -2490,13 +2496,54 @@ external task in the controller cgroup. This narrow inspection permission lets
 the node open the authenticated task mount namespace after the restrictive
 effect profile is active.
 
-This controller permission does not authorize runc bootstrap. On the current
-qualified stock path, a new policy-active runc exec needs unlabelled read-mode
-process inspection and an anonymous bootstrap pipe before the child reaches
-its signed executable. The strict process-control and unsupported-file floors
-deny that setup. Policy-active runtime exec remains `UNSUPPORTED` until a
-separate runtime-bootstrap authority owns those exact operations. An Exact
-path selector must not create a broad runtime bypass.
+This controller permission does not authorize runc bootstrap. The node binding
+owner derives one internal `RuntimeBootstrap` identity only after it verifies a
+held prestart request, the CRI `Created` state, the scheduled Pod binding, and
+the active signed policy. This identity is not a policy selector, exception,
+or runtime-supplied permission.
+
+```text
+NRI CreateContainer
+  -> inject Mithril createContainer and prestart hooks
+  -> createContainer stages immutable container, cgroup, image, and Pod facts
+  -> no runtime authority is granted
+
+OCI prestart with the exact initial task held
+  -> send the container ID, PID, and cgroup to mithril-node
+  -> verify CRI Created state and the staged immutable facts
+  -> verify the scheduled Pod binding and active signed policy
+  -> publish RuntimeBootstrap for the exact initial entry lineage
+  -> return allow only after map readback succeeds
+
+Stock runc bootstrap
+  -> permit only the fixed runtime-qualified bootstrap operation classes
+  -> bind each anonymous object to the exact binding and entry lineage
+  -> deny an external path, network destination, another binding, or another entry
+  -> enforce one kernel monotonic-time deadline
+
+First application exec
+  -> verify the executable through the active signed policy and exact binding
+  -> atomically change RuntimeBootstrap from ARMED to CONSUMED
+  -> activate the normal workload execution identity
+  -> make all remaining bootstrap object records non-authoritative
+```
+
+The fixed operation classes are same-lineage read-only process inspection,
+bootstrap-owned anonymous-file and pipe access, sealed bootstrap self-exec,
+and the already qualified initial namespace mount transitions. The BPF program
+identifies these classes. Runtime input cannot select or extend them. An
+anonymous object grants bootstrap access only when BPF recorded its creation
+by the exact armed entry lineage. A native child in that entry may inherit the
+object. Another container, external runtime root, entry lineage, network hook,
+or path-backed file cannot use the authority.
+
+A sealed runtime self-exec keeps the bootstrap identity. The first executable
+that matches the application entry in the active signed policy performs the
+one-use handoff. The kernel transition, not a userspace event, closes the
+bootstrap identity. Expiry closes it without application activation. A node
+restart must read back the exact binding, entry, deadline, and transition or
+keep admission readiness closed. An Exact path selector does not participate
+in this internal authority.
 Mithril resolves paths with Meta's bounded canonical-path algorithm:
 reconstruct the path through a verified mount tree, canonicalizing a repeated
 mount-root dentry to its oldest mount before matching components with a

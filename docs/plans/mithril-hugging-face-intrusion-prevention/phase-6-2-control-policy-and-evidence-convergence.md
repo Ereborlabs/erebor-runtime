@@ -6,7 +6,8 @@ Control and node lifecycles, Helm package, automated fixture, and independent
 manual example. The current source has not passed the complete physical
 procedure. The earlier physical run used the superseded API and stopped after
 stock `runc` used an anonymous file write and IPC access that have no typed
-authority.
+authority. The internal `RuntimeBootstrap` flow is approved below but is not
+implemented yet.
 
 Master: [Mithril Hugging Face Intrusion Prevention](./README.md)
 
@@ -146,11 +147,20 @@ Scheduler submits the Pod binding
   -> Control observes the persisted binding and immutable Pod identity facts
   -> PolicyRolloutOwner creates an exact target for that Pod and Node
   -> Control delivers the exact signed policy and binding material only to that Node
+  -> NRI injects Mithril createContainer and prestart hooks
+  -> createContainer stages immutable container, cgroup, image, and Pod facts
+  -> createContainer grants no runtime authority
   -> the stock OCI prestart hook holds the exact initial container process
-  -> mithril-node verifies the hook request against the scheduled Pod and runtime state
+  -> mithril-node verifies CRI Created state and the staged immutable facts
+  -> mithril-node verifies the scheduled Pod binding and active signed policy
   -> mithril-node stages, reads back, probes, and activates the exact policy generation
-  -> mithril-node publishes the exact cgroup binding while the initial process is held
-  -> the runtime gate releases that process only after policy and binding activation
+  -> mithril-node publishes the exact cgroup binding and RuntimeBootstrap identity
+  -> the runtime gate releases that process only after policy and binding readback
+  -> BPF limits RuntimeBootstrap to the exact initial entry and owned anonymous objects
+  -> BPF permits only the fixed stock-runtime bootstrap operation classes
+  -> a fixed monotonic deadline closes unused bootstrap authority
+  -> the first policy-approved application exec atomically consumes RuntimeBootstrap
+  -> application effects use only normal policy and exception authority
 
 WorkloadProtectionException CREATE for the running Pod
   -> the API server authenticates and authorizes an exception writer
@@ -295,9 +305,10 @@ own tenant.
 Treat both CRDs, source revisions, policy rollout, policy candidate, exception
 candidate, acknowledgement, evidence batch, and intake-receipt types as an additive
 architecture amendment. Update the exact-type closure and canonical goldens,
-and rerun the affected Phase 0 schema checks. Do not change the frozen BPF ABI
-or rewrite a historical phase
-result. Phase 6.2 and later results bind the amended architecture digest.
+and rerun the affected Phase 0 schema checks. The separately approved
+`RuntimeBootstrap` transition is the only BPF ABI amendment in this phase. Do
+not rewrite a historical phase result. Phase 6.2 and later results bind the
+amended architecture and ABI digest.
 
 ### D6.2.2 — Desired-state reconciliation and signing
 
@@ -563,14 +574,15 @@ must reject material for another Node, boot, Pod, profile, or candidate. Keep
 non-Kubernetes static workload bindings available for the existing host mode;
 they cannot authorize a Kubernetes Pod that Control did not observe as bound.
 
-Use the supported stock OCI prestart adapter as a stateless forwarding hook.
-The adapter sends the exact container ID, held initial PID, OCI annotations,
-and cgroup path to `mithril-node`. The node validates the root-owned endpoint,
-live PID, cgroup membership, Pod UID, container name, image digest, selected
-Node, candidate, and active generation. It then publishes the cgroup binding
-and releases the runtime only after activation readback and probes succeed.
-Timeout, mismatch, stale state, unavailable node service, or unavailable exact
-candidate rejects the hook and keeps the runtime start fail-closed.
+Use one stateless OCI adapter for the injected createContainer and prestart
+hooks. The createContainer call sends immutable container, cgroup, image, and
+Pod facts. The prestart call adds the exact held initial PID. The node validates
+the root-owned endpoint, staged fact equality, live PID, cgroup membership,
+Pod UID, container name, image digest, selected Node, candidate, and active
+generation. It then publishes the cgroup binding and releases the runtime only
+after activation and binding readback succeed. Timeout, mismatch, stale state,
+unavailable node service, or unavailable exact candidate rejects the hook and
+keeps the runtime start fail-closed.
 
 ### D6.2.12 — Packaging and convergence proof
 
@@ -590,6 +602,40 @@ timeout denial, restart recovery, Pod deletion, container restart, and policy
 retirement. Use API-server admission review objects and deterministic runtime
 gate tests in automated acceptance. Use the current stock Kubernetes and OCI
 runtime path for the physical manual result.
+
+### D6.2.13 — Stock-runtime bootstrap authority
+
+Extend the existing node binding owner. Do not add a policy watcher, public
+CRD field, runtime-selected permission, or generic process exemption. The NRI
+`CreateContainer` callback injects both Mithril OCI hooks. The createContainer
+hook sends immutable container, cgroup, image, and Pod facts to the node. The
+node keeps one bounded, expiring staged record and grants no authority at this
+step.
+
+At prestart, keep the exact initial task held. Require an exact staged-record
+match, live PID and cgroup proof, CRI `Created` state, scheduler-selected Pod
+binding, current node session, active signed candidate, and generation
+readback. Publish the binding and one `RuntimeBootstrap` identity only after
+all checks succeed. A failed publication or response delivery must remove the
+new binding and bootstrap state before the runtime can retry.
+
+Bind `RuntimeBootstrap` to the exact binding lifetime and initial entry
+lineage. Use one non-evictable kernel transition with `UNARMED`, `ARMED`,
+`CONSUMED`, and `EXPIRED` states and one monotonic deadline. Record each
+bootstrap anonymous object against that binding and entry when BPF observes
+its creation. Permit only same-lineage read-only process inspection,
+bootstrap-owned anonymous-file and pipe access, sealed bootstrap self-exec,
+and the qualified initial namespace mount transitions. Do not grant path-backed
+file, network, another binding, another entry, later external-root, or
+post-handoff authority.
+
+Keep sealed runtime self-exec in `RuntimeBootstrap`. When the exact application
+executable matches the active signed policy, atomically consume the bootstrap
+state and activate the normal workload execution identity. All bootstrap
+object records become non-authoritative through that one transition. Expiry,
+state mismatch, missing object ownership, map pressure, restart ambiguity, or
+readback failure denies the effect and keeps node admission readiness closed
+until recovery proves one exact state.
 
 ## Checkpoint
 
@@ -648,6 +694,14 @@ created in this phase.
 - OCI prestart valid release, missing candidate, invalid annotation, PID and
   cgroup mismatch, stale candidate, timeout, node restart, and fail-closed
   endpoint tests.
+- NRI createContainer staging, immutable stage mismatch, stage expiry and
+  capacity, no-authority-before-prestart, exact initial-entry binding,
+  bootstrap deadline, one-use application handoff, restart readback, and
+  response-delivery rollback tests.
+- Bootstrap anonymous-file, pipe, sealed self-exec, same-lineage inheritance,
+  and initial namespace-transition positive tests. Path-backed file, network,
+  unsealed exec, other-entry, other-container, external-root, expired,
+  post-handoff, and map-pressure negative tests.
 - Phase 6.2 owns no new Appendix C fixture ID. These named phase tests remain
   mandatory and Phase 11 must run them for each advertised Kubernetes mode.
 
@@ -697,15 +751,15 @@ privileged or unmatched workload floor.
 ## Phase Result
 
 ```text
-State: Not done. The corrected policy and exception implementation, package, automated fixture, and independent manual example are present. The current source has not passed the physical procedure. Stock runc bootstrap authority remains unresolved.
-Implemented deliverable scope: D6.2.1 through D6.2.4 are implemented and automated. D6.2.5 has automated intake and WAL proof but lacks the physical failure variants. D6.2.6, D6.2.7, D6.2.9, D6.2.10, D6.2.11, and D6.2.12 have implemented owners and automated or rendered proof, but their required current physical results are not done. D6.2.8 is blocked at stock-runtime protected start.
+State: Not done. The corrected policy and exception implementation, package, automated fixture, and independent manual example are present. The current source has not passed the physical procedure. RuntimeBootstrap is approved but not implemented.
+Implemented deliverable scope: D6.2.1 through D6.2.4 are implemented and automated. D6.2.5 has automated intake and WAL proof but lacks the physical failure variants. D6.2.6, D6.2.7, D6.2.9, D6.2.10, D6.2.11, and D6.2.12 have implemented owners and automated or rendered proof, but their required current physical results are not done. D6.2.8 is blocked at stock-runtime protected start. D6.2.13 is approved and not implemented.
 Files and durable owners changed: the branch contains both namespaced CRDs and their Helm package; PolicyDesiredStateOwner; PolicyRolloutOwner; the exception desired-state path; TrustBundleOwner; KubernetesNodeReadinessOwner; KubernetesAdmissionOwner; KubernetesWorkloadInventoryOwner; one append-only ControlStore for policy, exception, node session, trust, rollout, acknowledgement, evidence, coverage, and cursor transactions; generated NodePolicy and ControlHealth services; NodePolicyDeliveryOwner; ExceptionAuthorityOwner; RuntimeAdmissionClient; RuntimeAdmissionServer; ScheduledRuntimeBindingV1; the node activation and cgroup-binding paths; the stateless OCI adapter; hook ownership and cleanup; the two-node fixture; and the independent manual example. The BPF ABI and BPF programs did not change.
 Upstream-adoption dossier IDs used: none.
 Fixture cases and exact physical results: the current physical two-node fixture and manual example are Not run. The prior old-API run passed node readiness, typed RBAC review, admission, scheduler selection, selected-node delivery, policy activation, runtime binding, Control acknowledgement, and durable evidence intake. Protected container start then failed when stock runc used an anonymous file write and IPC access. The application process did not start. The prior cleanup passed.
 Automated verification: the repository Rust CI script passed format, workspace check, strict Clippy, and the full workspace test gate. The final gate included 89 Mithril Control library tests, 28 reconciliation tests, 6 Kubernetes policy API tests, 150 Mithril node library tests, 2 OCI adapter tests, and 5 node mTLS integration tests. Helm hook ownership, chart lint, and render verification passed. The VM harness behavior suite and independent manual example behavior suite passed. Diff hygiene passed.
 Platform/kernel/runtime manifests: the Helm package contains both generated closed CRDs, separate writer and Control RBAC, the exact DaemonSet reader Role, the Control Deployment and Service, fail-closed admission webhooks, the node DaemonSet, atomic OCI hook ownership, and bounded uninstall cleanup. No BPF program or kernel ABI changed. No live current-source platform manifest was recorded.
 Performance/capacity results: no new benchmark. Evidence gRPC messages are limited to 4 MiB. Policy gRPC messages are limited to 128 KiB. The pending evidence window is limited to 4,096 records. Health reports fixed counts and booleans only.
-Unsupported/degraded paths: stock-runc bootstrap is unsupported while its anonymous file write and IPC access have no typed authority. The current physical protected-start, lifecycle, evidence failure, watch-compaction, network-partition, and storage-outage cases are Not run. Phase 7 graph and finding behavior is not present.
-Remaining work in this phase: approve and implement a signed, typed, bounded runtime-bootstrap authority. Then run the current physical procedure through protected start, exact target, exception, runtime task, policy terminal cleanup, Node UID replacement, host epoch, watch, evidence failure, restart, uninstall, and cleanup cases.
+Unsupported/degraded paths: stock-runc bootstrap is unsupported until the approved internal RuntimeBootstrap authority is implemented. The current physical protected-start, lifecycle, evidence failure, watch-compaction, network-partition, and storage-outage cases are Not run. Phase 7 graph and finding behavior is not present.
+Remaining work in this phase: implement the approved typed, bounded RuntimeBootstrap authority. Then run the current physical procedure through protected start, exact target, exception, runtime task, policy terminal cleanup, Node UID replacement, host epoch, watch, evidence failure, restart, uninstall, and cleanup cases.
 Next phase not authorized: yes.
 ```

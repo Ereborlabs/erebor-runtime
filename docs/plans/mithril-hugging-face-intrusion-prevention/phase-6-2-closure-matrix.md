@@ -19,8 +19,8 @@ The earlier physical Kubernetes run remains partial evidence. It reached
 scheduler binding, selected-node delivery, policy activation, runtime binding,
 and durable evidence intake. Stock `runc` container start then failed because
 its bootstrap uses an anonymous file write and IPC access that have no typed
-authority. The architecture still requires an approved runtime-bootstrap
-authority and forbids a broad runtime exception.
+authority. The approved `RuntimeBootstrap` design is now part of the
+architecture and phase plan. It is not implemented or physically proved yet.
 
 The amendment is not closed by custom resource reconciliation alone. A result
 is complete only when a matching Pod can be scheduled by the Kubernetes
@@ -41,6 +41,7 @@ fresh-root checks.
 | Whether a node can receive a new protected Pod | Control verifies the authenticated node session, current boot, BPF and identity readiness, and DaemonSet eligibility. It projects the result as a ready label and quarantine-taint removal. | A self-applied node label, DaemonSet Pod readiness alone, or stale Node status. |
 | Which node receives policy | The persisted Pod UID and scheduler-selected `spec.nodeName` create one immutable rollout target. | Cluster-wide broadcast, all DaemonSet nodes, or admission-time prediction. |
 | Whether the initial process can start | The selected `mithril-node` verifies the exact OCI prestart request, active policy generation, and cgroup binding before it releases the held process. | Pod admission success, scheduler binding success, Control status, or policy download alone. |
+| Which bootstrap effects can occur | BPF grants the internal `RuntimeBootstrap` identity only to the exact held initial entry, fixed operation classes, and anonymous objects created by that entry before the deadline. | A CRD field, path-backed file, network destination, another entry or container, later external root, or post-handoff process. |
 
 ## Deliverable Closure
 
@@ -53,11 +54,12 @@ fresh-root checks.
 | `D6.2.5` | **Partial.** | Automated intake failure, duplicate, gap, reorder, replay, storage, restart, and WAL migration tests pass. The required physical evidence variants remain `Not run`. |
 | `D6.2.6` | **Implemented and automated; physical result not done.** | Tests cover policy target shrink, restrictive retirement, terminal closure, exception use, expiry, revocation, target disappearance, restart, reconnect, and physical-session settlement. Run the current physical lifecycle. |
 | `D6.2.7` | **Implemented and automated; physical result not done.** | Both statuses are bounded and contain no authority material. Separate writer roles and Control status-only permissions are rendered and exercised by typed authorization reviews. Run them against the current installed CRDs. |
-| `D6.2.8` | **Blocked at physical protected start.** | Resolve the approved stock-runtime bootstrap-authority gap. Then run the complete current policy and exception transaction through application start and cleanup. |
+| `D6.2.8` | **Blocked at physical protected start.** | Implement the approved stock-runtime bootstrap authority. Then run the complete current policy and exception transaction through application start and cleanup. |
 | `D6.2.9` | **Implemented and scripted; physical result not done.** | Automated tests cover session expiry, reconnect, Node UID rebind, boot and label reset, and startup absence proof. The physical fixture scripts quarantine, UID replacement, selector re-entry, process restart, and host reboot. Run the fixture. |
 | `D6.2.10` | **Implemented and automated; physical result not done.** | Policy and container matching, immutable image pins, Pod mutation, update validation, binding validation, and scheduler choice tests pass. Run the current physical admission flow. |
 | `D6.2.11` | **Implemented and automated; physical result blocked.** | Exact selected-node delivery, activation, cgroup binding, cancellation rollback, runtime lifetime replacement, terminal cleanup, and timeout tests pass. Stock-runtime process release still needs the approved bootstrap authority and a physical pass. |
 | `D6.2.12` | **Implemented and rendered; physical result not done.** | The chart packages both CRDs, RBAC, admission, node and Control workloads, atomic hook ownership and cleanup, automated fixture, and independent manual example. Run install, full scenario, uninstall, and host-path cleanup physically. |
+| `D6.2.13` | **Approved; not implemented.** | Implement createContainer staging, exact prestart activation, the bounded BPF transition and object ownership, one-use application handoff, recovery, automated behavior, and current stock-runtime physical proof. |
 
 ## Automated Proof Matrix
 
@@ -75,6 +77,7 @@ fresh-root checks.
 | Workload target | Persisted Pod UID, selected node, controller, ServiceAccount, container, and digest create one immutable exact target. | Pod deletion, UID reuse, node change, or container change retires the old target. |
 | Policy delivery | Only the selected node can inventory, fetch, verify, and acknowledge the target-bound candidate. | Every other node and boot rejects the candidate even when it has the same signed policy artifact. |
 | Runtime gate | The held OCI initial PID is released after policy activation and exact cgroup binding readback. | Missing candidate, wrong policy annotations, PID or cgroup mismatch, timeout, disconnect, active socket-owner replacement, and restart reject without release. |
+| Runtime bootstrap | The exact initial entry creates and uses only owned anonymous bootstrap objects, then one policy-approved application exec consumes the authority. | Authority before prestart, a path-backed or network object, another entry or binding, an unsealed self-exec, expiry, replay, or any post-handoff use rejects. |
 | Retirement | A signed restrictive successor replaces the exact active base target. A complete relist retires a durable base source. A signed exception revocation closes only its runtime instance. | A partial relist, historical event, API loss, Control loss, or recreated exception cannot erase the last valid base generation or restore consumed authority. |
 
 ## Physical Proof Matrix
