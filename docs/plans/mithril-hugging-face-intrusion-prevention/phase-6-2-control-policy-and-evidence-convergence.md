@@ -160,7 +160,7 @@ Scheduler submits the Pod binding
   -> BPF recognizes the exact prepared container binding
   -> every runtime action in that binding can complete implementation-specific setup
   -> runtime-created objects gain no independent or inherited workload authority
-  -> a fixed monotonic deadline closes an incomplete prepared state
+  -> PREPARED remains until application activation or exact binding retirement
   -> the first policy-approved application exec atomically changes PreparedContainer to Active
   -> application effects use only normal policy and exception authority
 
@@ -642,10 +642,11 @@ binding. The action then uses the same prepared-binding bypass. This rule lets
 helpers, anonymous objects, IPC, or setup operations without a Mithril update.
 
 Use one non-evictable kernel transition with `UNARMED`, `PREPARED`,
-`EXEC_PENDING`, `ACTIVE`, `EXPIRED`, and fail-closed `CORRUPT` states and one
-monotonic deadline. Treat every governed effect from the exact prepared
-binding as trusted node runtime infrastructure until a signed-policy-approved
-application exec commits or the deadline expires. Do not identify the runtime
+`EXEC_PENDING`, `ACTIVE`, `EXPIRED`, and fail-closed `CORRUPT` states. State,
+not elapsed time, owns this boundary. Treat every governed effect from the
+exact prepared binding as trusted node runtime infrastructure until a
+signed-policy-approved application exec commits or the exact binding retires.
+Do not identify the runtime
 by a `runc`, `crun`, or `youki` syscall or operation sequence. Do not record
 anonymous files, pipes, Unix endpoints, root handles, network destinations, or
 other runtime-created objects as independent authority.
@@ -793,7 +794,7 @@ Upstream-adoption dossier IDs used: none.
 Fixture cases and exact physical results: the current physical two-node fixture and manual example are Not run. The prior old-API run passed node readiness, typed RBAC review, admission, scheduler selection, selected-node delivery, policy activation, runtime binding, Control acknowledgement, and durable evidence intake. Protected container start then failed under the superseded runtime boundary. The application process did not start. The prior cleanup passed.
 Automated verification: PreparedContainer ABI, compiled BPF object, node behavior, strict Clippy, Helm verification, VM-harness behavior, independent manual-example behavior, and diff checks passed. The full current-source workspace gate and physical procedure are not run yet.
 Platform/kernel/runtime manifests: the Helm package contains both generated closed CRDs, separate writer and Control RBAC, the exact DaemonSet reader Role, the Control Deployment and Service, fail-closed admission webhooks, the node DaemonSet, two atomically owned `createRuntime` hook registrations, and bounded uninstall cleanup. No live current-source platform manifest was recorded.
-Performance/capacity results: no new benchmark. Runtime stages are limited to 128 records and 30 seconds. PreparedContainer is designed for one exact binding, one application activation, and a 10-second kernel deadline. Evidence gRPC messages are limited to 4 MiB. Policy gRPC messages are limited to 128 KiB. The pending evidence window is limited to 4,096 records. Health reports fixed counts and booleans only.
+Performance/capacity results: no new benchmark. Runtime stages are limited to 128 records and 30 seconds. PreparedContainer is designed for one exact binding and one application activation. Evidence gRPC messages are limited to 4 MiB. Policy gRPC messages are limited to 128 KiB. The pending evidence window is limited to 4,096 records. Health reports fixed counts and booleans only.
 Unsupported/degraded paths: PreparedContainer is not physically qualified. The current physical protected-start, lifecycle, evidence failure, watch-compaction, network-partition, and storage-outage cases are Not run. Phase 7 graph and finding behavior is not present.
 Remaining work in this phase: run the full current-source workspace gate and the physical procedure through protected start, application activation, exact target, exception, runtime task, policy terminal cleanup, Node UID replacement, host epoch, watch, evidence failure, restart, uninstall, and cleanup cases.
 Next phase not authorized: yes.
