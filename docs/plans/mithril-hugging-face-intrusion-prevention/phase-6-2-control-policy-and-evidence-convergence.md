@@ -631,10 +631,14 @@ lineage. Use one non-evictable kernel transition with `UNARMED`, `ARMED`,
 one monotonic deadline. `HANDOFF_PENDING` reserves one task across the
 multi-pass exec path and returns to `ARMED` only when that exec fails before
 commit. Record each bootstrap anonymous object against that binding and entry
-when BPF observes its creation. Permit only same-lineage read-only process inspection,
-bootstrap-owned anonymous-file and pipe access, sealed bootstrap self-exec,
-and the qualified initial namespace mount transitions. Do not grant path-backed
-file, network, another binding, another entry, later external-root, or
+when BPF observes its creation. The held lineage can also claim one inherited
+Unix endpoint only when both ends are unnamed, mutually paired, and already
+connected. Record authority on the held endpoint only. Do not give authority
+to the runtime parent endpoint. Permit only same-lineage read-only process
+inspection, bootstrap-owned anonymous-file and pipe access, the qualified
+inherited endpoint, sealed bootstrap self-exec, and the qualified initial
+namespace mount transitions. Do not grant path-backed file, network, named
+Unix socket, another binding, another entry, later external-root, or
 post-handoff authority.
 
 Keep sealed runtime self-exec in `RuntimeBootstrap`. When the exact application
@@ -707,9 +711,10 @@ created in this phase.
   bootstrap deadline, one-use application handoff, restart readback, and
   response-delivery rollback tests.
 - Bootstrap anonymous-file, pipe, sealed self-exec, same-lineage inheritance,
-  and initial namespace-transition positive tests. Path-backed file, network,
-  unsealed exec, other-entry, other-container, external-root, expired,
-  post-handoff, and map-pressure negative tests.
+  mutually paired unnamed Unix endpoint, and initial namespace-transition
+  positive tests. Path-backed file, network, named or unpaired Unix endpoint,
+  transferred held endpoint, unsealed exec, other-entry, other-container,
+  external-root, expired, post-handoff, and map-pressure negative tests.
 - Phase 6.2 owns no new Appendix C fixture ID. These named phase tests remain
   mandatory and Phase 11 must run them for each advertised Kubernetes mode.
 
