@@ -510,6 +510,12 @@ impl NodeChassis {
         // Bound sockets do not serve until authorized cleanup completes.
         chassis.reconcile_terminal_policy_cleanup()?;
         chassis.refresh_registration_authority_state()?;
+        erebor_telemetry::info!(
+            "initialized Mithril Node",
+            node_id = %chassis.config.node_id,
+            node_boot_id = %hex::encode(chassis.node_boot_id.to_be_bytes()),
+            label_epoch = %chassis.label_epoch
+        );
         Ok(chassis)
     }
 
@@ -553,6 +559,7 @@ impl NodeChassis {
         let mut control_disconnected_since = tokio::time::Instant::now();
         let mut run_error = None;
         let mut evidence_error_reported = false;
+        let mut control_failure_reported = false;
         let mut healthy_identity_capabilities = self.registration.capabilities.clone();
         let mut healthy_effect_prevention_claims =
             self.registration.effect_prevention_claims_enabled;
@@ -622,6 +629,12 @@ impl NodeChassis {
             let mut reconnect_immediately = false;
             match connection {
                 Ok(mut connection) => {
+                    erebor_telemetry::info!(
+                        "connected to Mithril Control",
+                        node_id = %self.config.node_id,
+                        label_epoch = %self.label_epoch
+                    );
+                    control_failure_reported = false;
                     self.policy_delivery.begin_control_session();
                     self.readiness.send_replace(NodeReadinessV1 {
                         kernel_ready: kernel_healthy,
@@ -653,7 +666,13 @@ impl NodeChassis {
                                 let message = match result {
                                     Ok(message) => message,
                                     Err(error) => {
-                                        eprintln!("Mithril node Control stream failed: {error}");
+                                        erebor_telemetry::warn!(
+                                            error;
+                                            "lost the Mithril Control stream",
+                                            node_id = %self.config.node_id,
+                                            retry = %"reconnect"
+                                        );
+                                        control_failure_reported = true;
                                         break;
                                     }
                                 };
@@ -700,11 +719,13 @@ impl NodeChassis {
                             _instant = evidence_upload.tick() => {
                                 if self.observations.evidence_errors() > 0 {
                                     if !evidence_error_reported {
-                                        eprintln!(
-                                            "Mithril node durable evidence failed: {}",
-                                            self.observations
+                                        erebor_telemetry::warn!(
+                                            "durable evidence became unhealthy",
+                                            node_id = %self.config.node_id,
+                                            error = %self.observations
                                                 .first_evidence_error()
-                                                .unwrap_or_else(|| "the exact error is unavailable".to_owned())
+                                                .unwrap_or_else(|| "the exact error is unavailable".to_owned()),
+                                            retry = %"after_reconciliation"
                                         );
                                         evidence_error_reported = true;
                                     }
@@ -726,7 +747,12 @@ impl NodeChassis {
                                         {
                                             Ok(()) => evidence_in_flight = true,
                                             Err(error) => {
-                                                eprintln!("Mithril node evidence upload failed: {error}");
+                                                erebor_telemetry::warn!(
+                                                    error;
+                                                    "failed to upload an evidence batch",
+                                                    node_id = %self.config.node_id,
+                                                    retry = %"after_registration"
+                                                );
                                                 break;
                                             }
                                         }
@@ -742,8 +768,10 @@ impl NodeChassis {
                                         if acknowledged_coverage != Some(key) {
                                             coverage_pending = snapshot.current_intervals().into();
                                             if coverage_pending.is_empty() {
-                                                eprintln!(
-                                                    "Mithril node coverage snapshot has no current source"
+                                                erebor_telemetry::warn!(
+                                                    "evidence coverage has no current source",
+                                                    node_id = %self.config.node_id,
+                                                    retry = %"after_reconciliation"
                                                 );
                                                 break;
                                             }
@@ -767,7 +795,12 @@ impl NodeChassis {
                                                 coverage_pending.pop_front();
                                             }
                                             Err(error) => {
-                                                eprintln!("Mithril node coverage report failed: {error}");
+                                                erebor_telemetry::warn!(
+                                                    error;
+                                                    "failed to report evidence coverage",
+                                                    node_id = %self.config.node_id,
+                                                    retry = %"after_registration"
+                                                );
                                                 break;
                                             }
                                         }
@@ -882,12 +915,23 @@ impl NodeChassis {
                                                 });
                                         }
                                         if recovered {
+                                            erebor_telemetry::info!(
+                                                "recovered Mithril Node readiness",
+                                                node_id = %self.config.node_id,
+                                                evidence_ready = %evidence_healthy,
+                                                identity_ready = %identity_healthy
+                                            );
                                             reconnect_immediately = true;
                                             break;
                                         }
                                     }
                                     ReconciliationOutcome::EvidenceUnhealthy(reason) => {
-                                        eprintln!("Mithril node evidence reconciliation became unhealthy: {reason}");
+                                        erebor_telemetry::warn!(
+                                            "evidence reconciliation became unhealthy",
+                                            node_id = %self.config.node_id,
+                                            error = %reason,
+                                            retry = %"after_reconciliation"
+                                        );
                                         evidence_healthy = false;
                                         close_evidence_claims(&mut self.registration);
                                         self.readiness.send_modify(|readiness| {
@@ -897,7 +941,13 @@ impl NodeChassis {
                                         break;
                                     }
                                     ReconciliationOutcome::IdentityUnhealthy { owner, reason } => {
-                                        eprintln!("Mithril node {owner} reconciliation became unhealthy: {reason}");
+                                        erebor_telemetry::warn!(
+                                            "identity reconciliation became unhealthy",
+                                            node_id = %self.config.node_id,
+                                            owner = %owner,
+                                            error = %reason,
+                                            retry = %"after_reconciliation"
+                                        );
                                         identity_healthy = false;
                                         close_identity_claims(&mut self.registration);
                                         self.readiness.send_replace(NodeReadinessV1 {
@@ -910,7 +960,11 @@ impl NodeChassis {
                                         break;
                                     }
                                     ReconciliationOutcome::KernelUnhealthy(reason) => {
-                                        eprintln!("Mithril node kernel reconciliation became unhealthy: {reason}");
+                                        erebor_telemetry::error!(
+                                            "kernel reconciliation became unhealthy",
+                                            node_id = %self.config.node_id,
+                                            error = %reason
+                                        );
                                         kernel_healthy = false;
                                         identity_healthy = false;
                                         self.close_kernel_claims();
@@ -921,7 +975,28 @@ impl NodeChassis {
                         }
                     }
                 }
-                Err(error) => eprintln!("Mithril node Control connection failed: {error}"),
+                Err(error) if control_failure_reported => {
+                    erebor_telemetry::debug!(
+                        "Mithril Control connection retry failed",
+                        node_id = %self.config.node_id,
+                        error = %error
+                    );
+                }
+                Err(error) => {
+                    erebor_telemetry::warn!(
+                        error;
+                        "failed to connect to Mithril Control",
+                        node_id = %self.config.node_id,
+                        retry = %"backoff"
+                    );
+                    control_failure_reported = true;
+                }
+            }
+            if reconnect_immediately {
+                erebor_telemetry::debug!(
+                    "reconnecting to Mithril Control after a durable transition",
+                    node_id = %self.config.node_id
+                );
             }
             if let (Some(administrative), Some(host)) =
                 (self.administrative.as_mut(), self.host.as_mut())
@@ -1085,13 +1160,21 @@ impl NodeChassis {
         envelope: crate::runtime_admission::RuntimeAdmissionEnvelope,
     ) -> Result<()> {
         if let Err(error) = envelope.request.kubernetes_identity() {
-            eprintln!("Mithril rejected the first OCI runtime-fact hook: {error}");
-            let _result = envelope
+            let request = envelope.request.clone();
+            let delivered = envelope
                 .deliver(crate::RuntimeAdmissionResponseV1 {
                     allowed: false,
                     reason_code: "RUNTIME_ADMISSION_REJECTED".to_owned(),
                 })
                 .await;
+            if delivered.is_ok() {
+                erebor_telemetry::debug!(
+                    "rejected runtime fact staging",
+                    container_id = %request.container_id,
+                    reason_code = %"RUNTIME_ADMISSION_REJECTED",
+                    error = %error
+                );
+            }
             return Ok(());
         }
         let container_id = envelope.request.container_id.clone();
@@ -1101,15 +1184,24 @@ impl NodeChassis {
             .bindings
             .stage_runtime_admission(&self.config.workload_bindings, &envelope.request)
         {
-            eprintln!("Mithril could not stage first-hook OCI facts: {error}");
-            let _result = envelope
+            let request = envelope.request.clone();
+            let delivered = envelope
                 .deliver(crate::RuntimeAdmissionResponseV1 {
                     allowed: false,
                     reason_code: crate::runtime_admission::POLICY_CONVERGENCE_PENDING.to_owned(),
                 })
                 .await;
+            if delivered.is_ok() {
+                erebor_telemetry::debug!(
+                    "deferred runtime fact staging",
+                    container_id = %request.container_id,
+                    reason_code = %crate::runtime_admission::POLICY_CONVERGENCE_PENDING,
+                    error = %error
+                );
+            }
             return Ok(());
         }
+        let request = envelope.request.clone();
         if envelope
             .deliver(crate::RuntimeAdmissionResponseV1 {
                 allowed: true,
@@ -1119,6 +1211,11 @@ impl NodeChassis {
             .is_err()
         {
             self.bindings.discard_runtime_stage(&container_id);
+        } else {
+            erebor_telemetry::debug!(
+                "staged runtime facts",
+                container_id = %request.container_id
+            );
         }
         Ok(())
     }
@@ -1144,16 +1241,25 @@ impl NodeChassis {
         };
         // Only a canonical, unused identity can wait for policy convergence.
         if !malformed && !reused && !ready {
-            let _result = envelope
+            let request = envelope.request.clone();
+            let delivered = envelope
                 .deliver(crate::RuntimeAdmissionResponseV1 {
                     allowed: false,
                     reason_code: crate::runtime_admission::POLICY_CONVERGENCE_PENDING.to_owned(),
                 })
                 .await;
+            if delivered.is_ok() {
+                erebor_telemetry::trace!(
+                    "runtime start is waiting for policy convergence",
+                    container_id = %request.container_id,
+                    reason_code = %crate::runtime_admission::POLICY_CONVERGENCE_PENDING
+                );
+            }
             return Ok(());
         }
         match self.prepare_runtime_start(&envelope).await {
             Ok(commit) => {
+                let request = envelope.request.clone();
                 let container_id = envelope.request.container_id.clone();
                 let delivered = envelope
                     .deliver(crate::RuntimeAdmissionResponseV1 {
@@ -1165,20 +1271,32 @@ impl NodeChassis {
                     self.rollback_runtime_preparation(commit)?;
                 } else {
                     self.bindings.discard_runtime_stage(&container_id);
+                    // Log allow only after the hook receives it and no rollback is required.
+                    log_runtime_admission_decision(
+                        &request,
+                        true,
+                        "ACTIVE_POLICY_AND_BINDING_VERIFIED",
+                        None,
+                    );
                 }
             }
             Err(error) if error.fatal => return Err(error.source),
             Err(error) => {
-                eprintln!(
-                    "Mithril rejected second-hook container preparation: {}",
-                    error.source
-                );
-                let _result = envelope
+                let request = envelope.request.clone();
+                let delivered = envelope
                     .deliver(crate::RuntimeAdmissionResponseV1 {
                         allowed: false,
                         reason_code: "RUNTIME_ADMISSION_REJECTED".to_owned(),
                     })
                     .await;
+                if delivered.is_ok() {
+                    log_runtime_admission_decision(
+                        &request,
+                        false,
+                        "RUNTIME_ADMISSION_REJECTED",
+                        Some(&error.source),
+                    );
+                }
             }
         }
         Ok(())
@@ -1618,7 +1736,12 @@ impl NodeChassis {
             Err(
                 error @ (crate::Error::ControlRpc { .. } | crate::Error::ControlTransport { .. }),
             ) => {
-                eprintln!("Mithril node policy Control RPC failed: {error}");
+                erebor_telemetry::debug!(
+                    "policy Control RPC failed",
+                    node_id = %self.config.node_id,
+                    error = %error,
+                    retry = %"reconnect"
+                );
                 Ok(None)
             }
             Err(error) => Err(error),
@@ -2051,6 +2174,34 @@ fn close_kernel_claims(
         }
     }
     readiness.send_modify(NodeReadinessV1::close_kernel_claims);
+}
+
+fn log_runtime_admission_decision(
+    request: &crate::RuntimeAdmissionRequestV1,
+    allowed: bool,
+    reason_code: &'static str,
+    error: Option<&crate::Error>,
+) {
+    if let Some(error) = error {
+        erebor_telemetry::info!(
+            "denied a protected runtime start",
+            container_id = %request.container_id,
+            reason_code = %reason_code,
+            error = %error
+        );
+    } else if allowed {
+        erebor_telemetry::info!(
+            "allowed a protected runtime start",
+            container_id = %request.container_id,
+            reason_code = %reason_code
+        );
+    } else {
+        erebor_telemetry::info!(
+            "denied a protected runtime start",
+            container_id = %request.container_id,
+            reason_code = %reason_code
+        );
+    }
 }
 
 fn close_evidence_claims(registration: &mut NodeRegistration) {

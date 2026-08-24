@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use clap::Parser;
+use erebor_telemetry::{error, info, init_stderr_logging};
 use mithril_node::{NodeChassis, NodeConfig};
 use tokio::sync::watch;
 
@@ -15,10 +16,15 @@ struct Cli {
 
 #[tokio::main]
 async fn main() {
-    if let Err(error) = run().await {
-        eprintln!("{error}");
+    if let Err(error) = init_stderr_logging() {
+        eprintln!("Mithril Node logging initialization failed: {error}");
         std::process::exit(1);
     }
+    if let Err(error) = run().await {
+        error!(%error; "Mithril Node stopped with an error");
+        std::process::exit(1);
+    }
+    info!("stopped Mithril Node");
 }
 
 async fn run() -> mithril_node::Result<()> {
@@ -30,6 +36,11 @@ async fn run() -> mithril_node::Result<()> {
         }
         None => NodeConfig::load(&cli.config)?,
     };
+    info!(
+        "starting Mithril Node",
+        node_id = %config.node_id,
+        kubernetes_node = %config.kubernetes_node_name.as_deref().unwrap_or("none")
+    );
     let node = NodeChassis::start_with_held_initial_pids(config, &cli.held_initial_pid).await?;
     let (shutdown, receiver) = watch::channel(false);
     tokio::spawn(async move {

@@ -177,14 +177,30 @@ impl EffectObservationStore {
     }
 
     pub fn next_evidence_batch(&self) -> Option<EvidenceBatchV1> {
-        self.inner
+        let batch = self
+            .inner
             .durable
             .as_ref()
-            .and_then(|durable| durable.lock().ok()?.wal.next_batch())
+            .and_then(|durable| durable.lock().ok()?.wal.next_batch());
+        if let Some(batch) = &batch {
+            erebor_telemetry::debug!(
+                "prepared an evidence batch",
+                first_cursor = %batch.first_cursor,
+                last_cursor = %batch.last_cursor,
+                count = %batch.records.len()
+            );
+        }
+        batch
     }
 
     pub fn acknowledge_evidence(&self, ack: EvidenceAckV1) -> crate::Result<()> {
-        self.lock_durable()?.wal.acknowledge(ack)
+        self.lock_durable()?.wal.acknowledge(ack)?;
+        erebor_telemetry::debug!(
+            "acknowledged an evidence batch",
+            first_cursor = %ack.first_cursor,
+            last_cursor = %ack.last_cursor
+        );
+        Ok(())
     }
 
     #[must_use]
@@ -216,11 +232,27 @@ impl EffectObservationStore {
                 reason: "effect observation health bytes are invalid".to_owned(),
                 location: snafu::Location::new(file!(), line!(), column!()),
             })?;
-        self.lock_durable()?.coverage.recover_after_probe(&samples)
+        self.lock_durable()?
+            .coverage
+            .recover_after_probe(&samples)?;
+        erebor_telemetry::info!("recovered evidence coverage", count = %samples.len());
+        Ok(())
     }
 
     pub fn mark_coverage_gapped(&self, reason: CoverageGapReasonV1) -> crate::Result<()> {
-        self.lock_durable()?.coverage.mark_all_gapped(reason)
+        self.lock_durable()?.coverage.mark_all_gapped(reason)?;
+        if reason == CoverageGapReasonV1::ReaderStopped {
+            erebor_telemetry::debug!(
+                "marked evidence coverage as gapped",
+                reason = %reason.as_str()
+            );
+        } else {
+            erebor_telemetry::warn!(
+                "marked evidence coverage as gapped",
+                reason = %reason.as_str()
+            );
+        }
+        Ok(())
     }
 
     #[must_use]
@@ -731,6 +763,40 @@ mod tests {
         assert!(snapshot.current_intervals()[0]
             .gap_reasons
             .contains(&CoverageGapReasonV1::WalCapacity));
+        Ok(())
+    }
+
+    #[test]
+    fn evidence_gap_transition_emits_one_owned_warning() -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let store = EffectObservationStore::durable(
+            4,
+            directory.path().join("wal"),
+            EvidenceWalLimits::default(),
+            ObservationCanonicalizer::new(
+                EvidenceIdV1::new(1, 2),
+                EvidenceIdV1::new(3, 4),
+                1,
+                EvidenceIdV1::new(5, 6),
+            )?,
+        )?;
+        store.sample_coverage_health(EffectObservationHealthV1::default().as_bytes())?;
+        let telemetry = erebor_telemetry::JsonlTelemetry::open(
+            directory.path().join("observation-logs"),
+            16 * 1_024,
+        )?;
+
+        telemetry.emit(|| store.mark_coverage_gapped(CoverageGapReasonV1::ControlDelay))??;
+
+        let records = telemetry.records_after(0, 4)?;
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].target, "mithril_node::observation");
+        assert_eq!(records[0].level, "WARN");
+        assert_eq!(records[0].message, "marked evidence coverage as gapped");
+        assert_eq!(
+            records[0].fields.get("reason").map(String::as_str),
+            Some("CONTROL_DELAY")
+        );
         Ok(())
     }
 }

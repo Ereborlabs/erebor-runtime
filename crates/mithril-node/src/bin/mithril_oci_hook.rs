@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use clap::{Parser, ValueEnum};
+use erebor_telemetry::{error, init_stderr_logging};
 use mithril_node::{
     RuntimeAdmissionClient, RuntimeAdmissionOperationV1, RuntimeAdmissionRequestV1,
 };
@@ -41,8 +42,12 @@ struct OciStateV1 {
 
 #[tokio::main]
 async fn main() {
+    if let Err(error) = init_stderr_logging() {
+        eprintln!("Mithril OCI hook logging initialization failed: {error}");
+        std::process::exit(1);
+    }
     if let Err(error) = run().await {
-        eprintln!("{error}");
+        error!(%error; "Mithril OCI hook stopped with an error");
         std::process::exit(1);
     }
 }

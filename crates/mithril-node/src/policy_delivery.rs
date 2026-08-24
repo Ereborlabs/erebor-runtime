@@ -1466,7 +1466,14 @@ impl NodePolicyDeliveryOwner {
         record.observed_utc_ns = observed_utc_ns;
         record.control_acknowledged = false;
         // Persist the physical result before the network acknowledgement can leave this node.
-        self.persist_state()
+        self.persist_state()?;
+        erebor_telemetry::info!(
+            "changed local exception authority",
+            candidate_id = %candidate.candidate_content_id,
+            state = %local_exception_state_name(local_exception_state(state)),
+            consumed_uses = %consumed_uses
+        );
+        Ok(())
     }
 
     pub(crate) fn pending_exception_acknowledgement(
@@ -1582,7 +1589,12 @@ impl NodePolicyDeliveryOwner {
             }
         );
         record.control_acknowledged = true;
-        self.persist_state()
+        self.persist_state()?;
+        erebor_telemetry::debug!(
+            "acknowledged local exception authority with Control",
+            candidate_id = %candidate_content_id
+        );
+        Ok(())
     }
 
     pub(crate) fn begin_control_session(&mut self) {
@@ -1624,6 +1636,7 @@ impl NodePolicyDeliveryOwner {
     pub(crate) fn accept_inventory(&mut self, inventory: PolicyInventory) -> Result<bool> {
         if !inventory.candidate_available {
             self.session_inventory = None;
+            erebor_telemetry::trace!("policy inventory has no candidate");
             return Ok(false);
         }
         self.validate_inventory(&inventory)?;
@@ -1648,6 +1661,12 @@ impl NodePolicyDeliveryOwner {
                 chunk_digests: BTreeMap::new(),
             };
             self.persist_transfer(&transfer)?;
+            erebor_telemetry::debug!(
+                "started a policy bundle transfer",
+                candidate_id = %inventory.candidate_content_id,
+                chunk_count = %inventory.chunk_count,
+                bundle_bytes = %inventory.bundle_bytes
+            );
         }
         let directory = self.transfer_directory(&inventory.bundle_digest);
         fs::create_dir_all(&directory).context(IoSnafu { path: &directory })?;
@@ -1682,7 +1701,14 @@ impl NodePolicyDeliveryOwner {
         transfer
             .chunk_digests
             .insert(chunk.chunk_index, chunk.chunk_sha256);
-        self.persist_transfer(&transfer)
+        self.persist_transfer(&transfer)?;
+        erebor_telemetry::trace!(
+            "stored a policy bundle chunk",
+            candidate_id = %chunk.candidate_content_id,
+            chunk_index = %chunk.chunk_index,
+            chunk_count = %chunk.chunk_count
+        );
+        Ok(())
     }
 
     #[cfg(test)]
@@ -1718,7 +1744,7 @@ impl NodePolicyDeliveryOwner {
         node_boot_id: &[u8],
         label_epoch: u64,
     ) -> Result<PreparedPolicyActivationV1> {
-        self.prepare_activation_inner(
+        let prepared = self.prepare_activation_inner(
             bundle,
             trust,
             config,
@@ -1726,7 +1752,16 @@ impl NodePolicyDeliveryOwner {
             profile_generation_ref_id,
             now_utc_ns,
             Some((node_boot_id, label_epoch)),
-        )
+        );
+        if let Err(error) = &prepared {
+            erebor_telemetry::warn!(
+                error;
+                "rejected a policy candidate",
+                candidate_id = %bundle.candidate.candidate_content_id,
+                retry = %"after_new_candidate"
+            );
+        }
+        prepared
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1993,7 +2028,16 @@ impl NodePolicyDeliveryOwner {
                 sequence: bundle.candidate.distribution_sequence,
             },
         );
-        self.persist_state()
+        self.persist_state()?;
+        // Emit the transition only after restart recovery can observe the same active record.
+        erebor_telemetry::info!(
+            "activated a policy candidate",
+            candidate_id = %bundle.candidate.candidate_content_id,
+            profile_id = %prepared.profile_id,
+            operation = %policy_delivery_operation_name(bundle.candidate.operation),
+            target_count = %prepared.binding_ids.len()
+        );
+        Ok(())
     }
 
     fn ensure_active_profile_inventory_capacity(&self, profile_id: &str) -> Result<()> {
@@ -2034,7 +2078,14 @@ impl NodePolicyDeliveryOwner {
             binding_ids: prepared.binding_ids.clone(),
             scheduled_bindings: prepared_scheduled_bindings(prepared),
         });
-        self.persist_state()
+        self.persist_state()?;
+        erebor_telemetry::debug!(
+            "staged a policy candidate",
+            candidate_id = %bundle.candidate.candidate_content_id,
+            profile_id = %prepared.profile_id,
+            operation = %policy_delivery_operation_name(bundle.candidate.operation)
+        );
+        Ok(())
     }
 
     pub(crate) fn validate_pending_activation_pointer(
@@ -2304,6 +2355,19 @@ impl NodePolicyDeliveryOwner {
             });
         }
         self.persist_state_or_restore(previous)?;
+        if accepted.terminal_chain_closure_authorized {
+            erebor_telemetry::info!(
+                "authorized terminal policy cleanup",
+                candidate_id = %candidate_content_id,
+                commit_index = %accepted.control_commit_index
+            );
+        } else {
+            erebor_telemetry::debug!(
+                "acknowledged an active policy candidate with Control",
+                candidate_id = %candidate_content_id,
+                commit_index = %accepted.control_commit_index
+            );
+        }
         Ok(accepted.terminal_chain_closure_authorized)
     }
 
@@ -2317,7 +2381,13 @@ impl NodePolicyDeliveryOwner {
         self.remove_unreferenced_bundle_directories()?;
         let previous = self.state.clone();
         self.state.terminal_cleanup_authorization = None;
-        self.persist_state_or_restore(previous)
+        self.persist_state_or_restore(previous)?;
+        erebor_telemetry::info!(
+            "completed terminal policy cleanup",
+            candidate_id = %cleanup.candidate_content_id,
+            profile_id = %cleanup.profile_id
+        );
+        Ok(())
     }
 
     fn retire_terminal_delivery_state(&mut self) -> Result<TerminalPolicyCleanupV1> {
@@ -3633,6 +3703,14 @@ const fn node_container_kind(kind: mithril_control::ContainerKindV1) -> crate::C
         mithril_control::ContainerKindV1::Sidecar => crate::ContainerKindV1::Sidecar,
         mithril_control::ContainerKindV1::Application => crate::ContainerKindV1::Application,
         mithril_control::ContainerKindV1::Ephemeral => crate::ContainerKindV1::Ephemeral,
+    }
+}
+
+const fn policy_delivery_operation_name(operation: PolicyDeliveryOperationV1) -> &'static str {
+    match operation {
+        PolicyDeliveryOperationV1::Activate => "ACTIVATE",
+        PolicyDeliveryOperationV1::Replace => "REPLACE",
+        PolicyDeliveryOperationV1::RetireToRestrictiveTerminal => "RETIRE_TO_RESTRICTIVE_TERMINAL",
     }
 }
 

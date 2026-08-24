@@ -3245,6 +3245,7 @@ dependencies = [
  "erebor-runtime-client",
  "erebor-runtime-error",
  "erebor-runtime-ipc",
+ "erebor-telemetry",
  "hex",
  "hyper-util",
  "k8s-cri",

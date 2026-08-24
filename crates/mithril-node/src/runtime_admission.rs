@@ -270,7 +270,11 @@ impl RuntimeAdmissionServer {
                         )
                         .await
                         {
-                            eprintln!("Mithril runtime admission exchange failed: {error}");
+                            erebor_telemetry::warn!(
+                                error;
+                                "runtime admission exchange failed",
+                                retry = %"caller"
+                            );
                         }
                     });
                 }
@@ -656,14 +660,21 @@ impl RuntimeAdmissionServer {
         let response = match result {
             Ok(Ok(())) => return Ok(()),
             Err(_elapsed) => {
-                eprintln!("Mithril runtime admission request exceeded its fail-closed deadline");
+                erebor_telemetry::info!(
+                    "denied a runtime admission request",
+                    reason_code = %"ADMISSION_TIMEOUT"
+                );
                 RuntimeAdmissionResponseV1 {
                     allowed: false,
                     reason_code: "ADMISSION_TIMEOUT".to_owned(),
                 }
             }
             Ok(Err(error)) => {
-                eprintln!("Mithril runtime admission request was rejected: {error}");
+                erebor_telemetry::info!(
+                    "denied a runtime admission request",
+                    reason_code = %"ADMISSION_REJECTED",
+                    error = %error
+                );
                 RuntimeAdmissionResponseV1 {
                     allowed: false,
                     reason_code: "ADMISSION_REJECTED".to_owned(),
