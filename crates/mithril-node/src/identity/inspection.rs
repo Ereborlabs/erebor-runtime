@@ -55,7 +55,6 @@ pub struct NativeRuntimeBindingSnapshotV1 {
     pub binding_id: String,
     pub root_cgroup_id: u64,
     pub prepared_container_state: String,
-    pub prepared_container_deadline_boottime_ns: u64,
     pub prepared_container_entry_instance_id: String,
     pub prepared_container_exec_task_cookie: u64,
     pub prepared_container_initial_host_tgid: u32,
@@ -107,8 +106,6 @@ impl NativeIdentityInspector {
                     binding.prepared_container_state,
                 )
                 .to_owned(),
-                prepared_container_deadline_boottime_ns: binding
-                    .prepared_container_deadline_boottime_ns,
                 prepared_container_entry_instance_id: id_string(
                     binding.prepared_container_entry_instance_id,
                 ),

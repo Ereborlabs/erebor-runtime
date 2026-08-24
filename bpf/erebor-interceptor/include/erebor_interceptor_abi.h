@@ -1115,7 +1115,6 @@ typedef struct execution_set_binding_state_v1 {
   uint8_t reserved[7];
   initial_root_state_v1 initial_root_state;
   prepared_container_state_v1 prepared_container_state;
-  uint64_t prepared_container_deadline_boottime_ns;
   struct id128_v1 prepared_container_entry_instance_id;
   uint64_t prepared_container_exec_task_cookie;
   uint32_t prepared_container_initial_host_tgid;

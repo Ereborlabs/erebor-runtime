@@ -1357,7 +1357,7 @@ mod tests {
         assert_eq!(KernelEffectOperationV1::IoUringCommand as u16, 31);
         assert_eq!(size_of::<IoUringSetupStateV1>(), 32);
         assert_eq!(size_of::<IoUringActorSnapshotV1>(), 232);
-        assert_eq!(size_of::<IoUringRingStateV1>(), 536);
+        assert_eq!(size_of::<IoUringRingStateV1>(), 528);
         assert_eq!(size_of::<IoUringRequestStateV1>(), 344);
         assert_eq!(size_of::<IoUringExecutionStateV1>(), 64);
         assert_eq!(IoUringSetupStateKindV1::Authorized as u8, 2);

@@ -20,7 +20,6 @@ use uuid::Uuid;
 use zerocopy::{FromBytes as _, IntoBytes as _, TryFromBytes as _};
 
 use crate::error::{IdentityStateSnafu, InterceptorSnafu, IoSnafu};
-use crate::policy::current_boottime_ns;
 use crate::runtime_admission::{
     KubernetesRuntimeIdentityV1, RuntimeAdmissionOperationV1, RuntimeAdmissionRequestV1,
     ScheduledRuntimeBindingV1,
@@ -29,7 +28,6 @@ use crate::{ContainerRuntimeConfig, Result, WorkloadBindingConfig};
 
 use super::runtime::{ContainerRuntimeInventory, RuntimeContainerIdentity};
 
-const PREPARED_CONTAINER_LIFETIME_NS: u64 = 10_000_000_000;
 const RUNTIME_STAGE_LIFETIME: Duration = Duration::from_secs(30);
 const MAXIMUM_RUNTIME_STAGES: usize = 128;
 
@@ -64,11 +62,10 @@ pub struct AdministrativeBindingTargetV1 {
 }
 
 impl PublishedBinding {
-    fn prepare_container(&mut self, now_boottime_ns: u64) -> Result<()> {
+    fn prepare_container(&mut self) -> Result<()> {
         ensure!(
             self.held_initial_pid.is_some()
                 && self.state.prepared_container_state == PreparedContainerStateV1::Unarmed
-                && self.state.prepared_container_deadline_boottime_ns == 0
                 && self.state.prepared_container_entry_instance_id.is_zero()
                 && self.state.prepared_container_exec_task_cookie == 0
                 && self.state.prepared_container_initial_host_tgid == 0
@@ -77,11 +74,6 @@ impl PublishedBinding {
                 reason: "a container can be prepared only for one held initial task",
             }
         );
-        self.state.prepared_container_deadline_boottime_ns = now_boottime_ns
-            .checked_add(PREPARED_CONTAINER_LIFETIME_NS)
-            .context(IdentityStateSnafu {
-                reason: "prepared-container deadline overflowed",
-            })?;
         self.state.prepared_container_initial_host_tgid =
             self.held_initial_pid.context(IdentityStateSnafu {
                 reason: "prepared container has no held initial task",
@@ -90,13 +82,12 @@ impl PublishedBinding {
         Ok(())
     }
 
-    fn reconcile_recovered_prepared_container(&mut self, now_boottime_ns: u64) -> Result<bool> {
+    fn reconcile_recovered_prepared_container(&mut self) -> Result<bool> {
         let state = &mut self.state;
         match state.prepared_container_state {
             PreparedContainerStateV1::Unarmed => {
                 ensure!(
-                    state.prepared_container_deadline_boottime_ns == 0
-                        && state.prepared_container_entry_instance_id.is_zero()
+                    state.prepared_container_entry_instance_id.is_zero()
                         && state.prepared_container_exec_task_cookie == 0
                         && state.prepared_container_initial_host_tgid == 0
                         && state.prepared_container_reserved == 0,
@@ -108,31 +99,17 @@ impl PublishedBinding {
             }
             PreparedContainerStateV1::Prepared => {
                 ensure!(
-                    state.prepared_container_deadline_boottime_ns != 0
-                        && state.prepared_container_exec_task_cookie == 0
+                    state.prepared_container_exec_task_cookie == 0
                         && state.prepared_container_initial_host_tgid != 0
                         && state.prepared_container_reserved == 0,
                     IdentityStateSnafu {
-                        reason: "prepared container has an invalid deadline or exec reservation",
+                        reason: "prepared container has an invalid exec reservation",
                     }
                 );
-                if now_boottime_ns < state.prepared_container_deadline_boottime_ns {
-                    return IdentityStateSnafu {
-                        reason: "prepared container is still active during node recovery"
-                            .to_owned(),
-                    }
-                    .fail();
+                IdentityStateSnafu {
+                    reason: "prepared container remains active during node recovery".to_owned(),
                 }
-                state.prepared_container_exec_task_cookie = 0;
-                state.prepared_container_state = PreparedContainerStateV1::Expired;
-                state.transition_version =
-                    state
-                        .transition_version
-                        .checked_add(1)
-                        .context(IdentityStateSnafu {
-                            reason: "prepared-container expiry transition overflowed",
-                        })?;
-                Ok(true)
+                .fail()
             }
             PreparedContainerStateV1::ExecPending => IdentityStateSnafu {
                 reason: "prepared-container exec is incomplete during node recovery".to_owned(),
@@ -140,8 +117,7 @@ impl PublishedBinding {
             .fail(),
             PreparedContainerStateV1::Active => {
                 ensure!(
-                    state.prepared_container_deadline_boottime_ns != 0
-                        && !state.prepared_container_entry_instance_id.is_zero()
+                    !state.prepared_container_entry_instance_id.is_zero()
                         && state.prepared_container_initial_host_tgid != 0
                         && state.prepared_container_reserved == 0,
                     IdentityStateSnafu {
@@ -165,8 +141,7 @@ impl PublishedBinding {
             }
             PreparedContainerStateV1::Expired => {
                 ensure!(
-                    state.prepared_container_deadline_boottime_ns != 0
-                        && state.prepared_container_exec_task_cookie == 0
+                    state.prepared_container_exec_task_cookie == 0
                         && state.prepared_container_initial_host_tgid != 0
                         && state.prepared_container_reserved == 0,
                     IdentityStateSnafu {
@@ -757,8 +732,7 @@ impl WorkloadBindingOwner {
                 && live.lifecycle_state == BindingLifecycleStateV1::Active
                 && live.prepared_container_state == PreparedContainerStateV1::Prepared
                 && live.prepared_container_initial_host_tgid == initial_pid
-                && !live.prepared_container_entry_instance_id.is_zero()
-                && current_boottime_ns()? < live.prepared_container_deadline_boottime_ns,
+                && !live.prepared_container_entry_instance_id.is_zero(),
             IdentityStateSnafu {
                 reason: "prepared runtime binding has no live exact initial entry",
             }
@@ -1030,7 +1004,7 @@ impl WorkloadBindingOwner {
             );
             binding.held_initial_pid = held_initial_pid;
             if held_initial_pid.is_some() {
-                binding.prepare_container(current_boottime_ns()?)?;
+                binding.prepare_container()?;
             }
             ensure!(
                 !self.bindings.contains_key(&binding.root_cgroup_id)
@@ -1097,7 +1071,7 @@ impl WorkloadBindingOwner {
                     }
                 );
                 binding.state = recovered;
-                if binding.reconcile_recovered_prepared_container(current_boottime_ns()?)? {
+                if binding.reconcile_recovered_prepared_container()? {
                     host.update_map("execution_set_bindings", &key, binding.state.as_bytes())
                         .context(InterceptorSnafu)?;
                     ensure!(
@@ -1551,7 +1525,6 @@ impl WorkloadBindingOwner {
                     InitialRootStateV1::Unarmed
                 },
                 prepared_container_state: PreparedContainerStateV1::Unarmed,
-                prepared_container_deadline_boottime_ns: 0,
                 prepared_container_entry_instance_id: Id128V1::ZERO,
                 prepared_container_exec_task_cookie: 0,
                 prepared_container_initial_host_tgid: 0,
@@ -1770,8 +1743,6 @@ fn same_runtime_binding(
     desired.lifecycle_state = recovered.lifecycle_state;
     desired.initial_root_state = recovered.initial_root_state;
     desired.prepared_container_state = recovered.prepared_container_state;
-    desired.prepared_container_deadline_boottime_ns =
-        recovered.prepared_container_deadline_boottime_ns;
     desired.prepared_container_entry_instance_id = recovered.prepared_container_entry_instance_id;
     desired.prepared_container_exec_task_cookie = recovered.prepared_container_exec_task_cookie;
     desired.prepared_container_initial_host_tgid = recovered.prepared_container_initial_host_tgid;
@@ -1791,7 +1762,6 @@ fn same_activation_identity(
     live.lifecycle_state = target.lifecycle_state;
     live.initial_root_state = target.initial_root_state;
     live.prepared_container_state = target.prepared_container_state;
-    live.prepared_container_deadline_boottime_ns = target.prepared_container_deadline_boottime_ns;
     live.prepared_container_entry_instance_id = target.prepared_container_entry_instance_id;
     live.prepared_container_exec_task_cookie = target.prepared_container_exec_task_cookie;
     live.prepared_container_initial_host_tgid = target.prepared_container_initial_host_tgid;
@@ -1810,7 +1780,7 @@ mod tests {
 
     use super::{
         same_activation_identity, same_runtime_binding, RuntimeContainerIdentity,
-        StagedRuntimeAdmissionV1, WorkloadBindingOwner, PREPARED_CONTAINER_LIFETIME_NS,
+        StagedRuntimeAdmissionV1, WorkloadBindingOwner,
     };
     use crate::error::{IdentityStateSnafu, IoSnafu};
     use crate::identity::runtime::RuntimeContainerState;
@@ -2031,26 +2001,21 @@ mod tests {
             binding.state.prepared_container_state,
             PreparedContainerStateV1::Unarmed
         );
-        assert_eq!(binding.state.prepared_container_deadline_boottime_ns, 0);
         assert_eq!(binding.state.prepared_container_initial_host_tgid, 0);
 
         binding.held_initial_pid = Some(42);
-        binding.prepare_container(100)?;
+        binding.prepare_container()?;
         assert_eq!(
             binding.state.prepared_container_state,
             PreparedContainerStateV1::Prepared
         );
-        assert_eq!(
-            binding.state.prepared_container_deadline_boottime_ns,
-            100 + PREPARED_CONTAINER_LIFETIME_NS
-        );
         assert_eq!(binding.state.prepared_container_initial_host_tgid, 42);
-        assert!(binding.prepare_container(101).is_err());
+        assert!(binding.prepare_container().is_err());
         Ok(())
     }
 
     #[test]
-    fn recovery_expires_old_preparation_but_refuses_live_or_ambiguous_state() -> crate::Result<()> {
+    fn recovery_refuses_prepared_or_ambiguous_state() -> crate::Result<()> {
         let temporary = tempfile::tempdir().context(IoSnafu {
             path: "temporary prepared-container recovery root",
         })?;
@@ -2060,28 +2025,17 @@ mod tests {
         let owner = WorkloadBindingOwner::at(temporary.path(), Id128V1::new(1, 2), 3)?;
         let mut binding = owner.prepare(&spec(&root))?;
         binding.held_initial_pid = Some(42);
-        binding.prepare_container(100)?;
+        binding.prepare_container()?;
 
-        assert!(binding.reconcile_recovered_prepared_container(101).is_err());
-        assert!(
-            binding.reconcile_recovered_prepared_container(100 + PREPARED_CONTAINER_LIFETIME_NS)?
-        );
-        assert_eq!(
-            binding.state.prepared_container_state,
-            PreparedContainerStateV1::Expired
-        );
+        assert!(binding.reconcile_recovered_prepared_container().is_err());
         binding.state.prepared_container_state = PreparedContainerStateV1::Active;
         binding.state.prepared_container_entry_instance_id = Id128V1::new(9, 10);
         binding.state.prepared_container_exec_task_cookie = 42;
-        assert!(
-            binding.reconcile_recovered_prepared_container(100 + PREPARED_CONTAINER_LIFETIME_NS)?
-        );
+        assert!(binding.reconcile_recovered_prepared_container()?);
         assert_eq!(binding.state.prepared_container_exec_task_cookie, 0);
         binding.state.prepared_container_state = PreparedContainerStateV1::ExecPending;
         binding.state.prepared_container_exec_task_cookie = 42;
-        assert!(binding
-            .reconcile_recovered_prepared_container(100 + PREPARED_CONTAINER_LIFETIME_NS)
-            .is_err());
+        assert!(binding.reconcile_recovered_prepared_container().is_err());
         Ok(())
     }
 

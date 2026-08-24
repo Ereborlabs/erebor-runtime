@@ -561,7 +561,6 @@ pub struct ExecutionSetBindingStateV1 {
     pub reserved: [u8; 7],
     pub initial_root_state: InitialRootStateV1,
     pub prepared_container_state: PreparedContainerStateV1,
-    pub prepared_container_deadline_boottime_ns: u64,
     pub prepared_container_entry_instance_id: Id128V1,
     pub prepared_container_exec_task_cookie: u64,
     pub prepared_container_initial_host_tgid: u32,
@@ -943,7 +942,7 @@ mod tests {
         );
         assert_eq!(size_of::<ExactExecutableCandidateV1>(), 24);
         assert_eq!(size_of::<ProcessExecutionInstanceV1>(), 80);
-        assert_eq!(size_of::<ExecutionSetBindingStateV1>(), 232);
+        assert_eq!(size_of::<ExecutionSetBindingStateV1>(), 224);
         assert_eq!(size_of::<IdentityRuntimeConfigV1>(), 48);
         assert_eq!(size_of::<ApprovedExecArgumentKeyV1>(), 4_120);
         assert_eq!(size_of::<ApprovedExecSlotV1>(), 4_776);

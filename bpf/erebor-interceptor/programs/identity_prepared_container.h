@@ -17,27 +17,10 @@ static __always_inline void prepared_container_mark_corrupt(
 static __always_inline bool prepared_container_binding_is_prepared(
     execution_set_binding_state_v1 *binding)
 {
-    __u64 now;
-
-    if (!binding ||
-        binding->lifecycle_state != binding_lifecycle_state_v1_active ||
-        binding->prepared_container_state !=
-            prepared_container_state_v1_prepared)
-        return false;
-    now = bpf_ktime_get_ns();
-    if (!binding->prepared_container_deadline_boottime_ns ||
-        now >= binding->prepared_container_deadline_boottime_ns) {
-        if (__sync_val_compare_and_swap(
-                &binding->prepared_container_state,
-                prepared_container_state_v1_prepared,
-                prepared_container_state_v1_expired) ==
-            prepared_container_state_v1_prepared) {
-            binding->prepared_container_exec_task_cookie = 0;
-            __sync_fetch_and_add(&binding->transition_version, 1);
-        }
-        return false;
-    }
-    return true;
+    return binding &&
+           binding->lifecycle_state == binding_lifecycle_state_v1_active &&
+           binding->prepared_container_state ==
+               prepared_container_state_v1_prepared;
 }
 
 static __always_inline bool prepared_container_actor_identity_is_exact(
@@ -64,7 +47,7 @@ static __always_inline bool prepared_container_actor_identity_is_exact(
         !coordinate->host_tgid || !coordinate->host_tid)
         return false;
     /* PREPARED is an exact binding state, not a runtime implementation
-     * model. Every valid task in this binding receives the same short bypass. */
+     * model. Every valid task in this binding receives the same state-bound bypass. */
     return true;
 }
 
@@ -86,9 +69,7 @@ static __always_inline bool prepared_container_exec_actor_is_exact(
         binding->lifecycle_state != binding_lifecycle_state_v1_active ||
         binding->prepared_container_state !=
             prepared_container_state_v1_exec_pending ||
-        binding->prepared_container_exec_task_cookie != label->task_cookie ||
-        !binding->prepared_container_deadline_boottime_ns ||
-        bpf_ktime_get_ns() >= binding->prepared_container_deadline_boottime_ns)
+        binding->prepared_container_exec_task_cookie != label->task_cookie)
         return false;
     return prepared_container_actor_identity_is_exact(binding, label, entry);
 }
@@ -171,9 +152,6 @@ static __always_inline bool prepared_container_commit_activation(
     execution_set_binding_state_v1 *binding, __u64 task_cookie)
 {
     if (!binding ||
-        !binding->prepared_container_deadline_boottime_ns ||
-        bpf_ktime_get_ns() >=
-            binding->prepared_container_deadline_boottime_ns ||
         binding->prepared_container_exec_task_cookie != task_cookie ||
         __sync_val_compare_and_swap(
             &binding->prepared_container_state,
