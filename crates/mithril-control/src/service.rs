@@ -332,10 +332,6 @@ impl ControlPlane {
             .values_mut()
             .find(|session| session.kubernetes_node_name.as_deref() == Some(kubernetes_node_name))
             .ok_or_else(|| Status::unavailable("Kubernetes Node has no registered session"))?;
-        let uid_changed = session
-            .kubernetes_node_uid
-            .as_deref()
-            .is_some_and(|uid| uid != kubernetes_node_uid);
         if let Some(store) = &self.policy_store {
             store
                 .bind_kubernetes_node_session(
@@ -347,10 +343,8 @@ impl ControlPlane {
                 )
                 .map_err(invalid_policy_status)?;
         }
-        if uid_changed {
-            // Recheck readiness before the replacement API object can receive protected Pods.
-            session.admission_ready = false;
-        }
+        // A Node UID is scheduling provenance, not a new physical enforcement epoch.
+        // Projection still requires this exact UID before the scheduler can use the Node.
         session.kubernetes_node_uid = Some(kubernetes_node_uid.to_owned());
         Ok(())
     }
@@ -1832,7 +1826,7 @@ mod tests {
     }
 
     #[test]
-    fn uid_only_rebind_preserves_the_physical_epoch_and_withholds_readiness() -> TestResult {
+    fn uid_only_rebind_preserves_the_ready_physical_session() -> TestResult {
         let directory = TempDir::new()?;
         let (control, store) = durable_control(&directory)?;
         let context = NodeSessionContext {
@@ -1870,9 +1864,17 @@ mod tests {
             session.kubernetes_node_uid.as_deref(),
             Some("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb")
         );
-        assert!(!session.admission_ready);
+        assert!(session.admission_ready);
         assert_eq!(store.commit_index(), committed + 1);
         drop(state);
+        let ready = control.ready_kubernetes_node_sessions(std::time::Duration::from_secs(1));
+        assert_eq!(
+            ready
+                .first()
+                .ok_or("the rebound session is not ready")?
+                .kubernetes_node_uid,
+            "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+        );
         drop(control);
         drop(store);
 
