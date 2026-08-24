@@ -33,6 +33,12 @@ pub enum TelemetryError {
         #[snafu(implicit)]
         location: Location,
     },
+    #[snafu(display("the RUST_LOG filter is invalid: {source}"))]
+    InvalidFilter {
+        source: tracing_subscriber::filter::FromEnvError,
+        #[snafu(implicit)]
+        location: Location,
+    },
 }
 
 pub type Result<T> = std::result::Result<T, TelemetryError>;
@@ -44,6 +50,7 @@ impl ErrorExt for TelemetryError {
             Self::Encode { .. } | Self::Decode { .. } | Self::StateLock { .. } => {
                 StatusCode::Internal
             }
+            Self::InvalidFilter { .. } => StatusCode::InvalidArguments,
         }
     }
 
@@ -53,6 +60,7 @@ impl ErrorExt for TelemetryError {
             Self::Encode { .. } | Self::Decode { .. } | Self::StateLock { .. } => {
                 RetryHint::NonRetryable
             }
+            Self::InvalidFilter { .. } => RetryHint::NonRetryable,
         }
     }
 

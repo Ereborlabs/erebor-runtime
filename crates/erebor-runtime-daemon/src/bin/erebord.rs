@@ -53,7 +53,7 @@ async fn main() {
     let service = match DaemonControlService::start_with_paths(paths).await {
         Ok(service) => service,
         Err(error) => {
-            init_stderr_logging();
+            let _logging_result = init_stderr_logging();
             error!(error; "erebord failed before daemon telemetry initialized");
             eprintln!("{}", error.output_msg());
             std::process::exit(1);
@@ -62,7 +62,7 @@ async fn main() {
     let mut terminate = match signal(SignalKind::terminate()) {
         Ok(signal) => signal,
         Err(error) => {
-            init_stderr_logging();
+            let _logging_result = init_stderr_logging();
             error!(error; "erebord could not register SIGTERM handling");
             eprintln!("erebord could not register SIGTERM handling: {error}");
             std::process::exit(1);
@@ -71,7 +71,7 @@ async fn main() {
     let mut interrupt = match signal(SignalKind::interrupt()) {
         Ok(signal) => signal,
         Err(error) => {
-            init_stderr_logging();
+            let _logging_result = init_stderr_logging();
             error!(error; "erebord could not register SIGINT handling");
             eprintln!("erebord could not register SIGINT handling: {error}");
             std::process::exit(1);
