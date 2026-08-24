@@ -738,6 +738,7 @@ static __noinline int identity_effect_actor_gate(
     struct file *file, __u16 effect_family, __u16 operation, int ret)
 {
     struct identity_scratch_v1 *scratch = identity_scratch_record();
+    int result;
 
     if (scratch) {
         scratch->effect_gate_flags = EFFECT_GATE_DEFER_DECISION_V1;
@@ -746,8 +747,10 @@ static __noinline int identity_effect_actor_gate(
     }
     if (!ret)
         prepare_effect_identity();
-    return dispatch_identity_effect_gate(file, NULL, effect_family, operation,
-                                         ret);
+    result = dispatch_identity_effect_gate(file, NULL, effect_family,
+                                           operation, ret);
+    /* Internal decision sentinels must not cross an LSM hook boundary. */
+    return result > 0 ? identity_deny(identity_runtime_config()) : result;
 }
 
 static __noinline int identity_path_effect_gate(const struct path *path,
