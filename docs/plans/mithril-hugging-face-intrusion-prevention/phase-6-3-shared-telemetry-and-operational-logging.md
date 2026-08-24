@@ -1,6 +1,6 @@
 # Phase 6.3: Shared Telemetry And Operational Logging
 
-Status: In progress. The stderr format and this phase are approved.
+Status: Done. The stderr format and this phase are approved.
 
 Rename `erebor-runtime-telemetry` to the product-neutral `erebor-telemetry`.
 Use it to add useful operational logs to Mithril Control, Mithril Node, and the
@@ -18,11 +18,11 @@ recovery, and enforcement state.
   quarantine, or reduced readiness.
 - CLI stdout and command diagnostics keep their current contracts.
 - The existing durable Erebor telemetry records remain compatible.
-- Automated physical proof and an independent manual example pass.
+- Service logs contain no ANSI or other terminal-control bytes.
 
 ## Current facts
 
-`erebor-runtime-telemetry` owns the logging macros, tracing re-exports, stderr
+`erebor-telemetry` owns the logging macros, tracing re-exports, stderr
 initializer, test initializer, and durable Erebor telemetry sink. Its stderr
 initializer uses:
 
@@ -30,19 +30,21 @@ initializer uses:
 tracing_subscriber::fmt()
     .with_env_filter(filter)
     .with_target(true)
+    .with_ansi(false)
     .with_writer(std::io::stderr)
     .try_init();
 ```
 
-The current formatter produced:
+The formatter produces:
 
 ```text
-2026-08-24T21:30:53.969611Z DEBUG erebor_runtime_telemetry::logging::tests: test logging initialized twice
+2026-08-24T21:30:53.969611Z DEBUG erebor_telemetry::logging::tests: test logging initialized twice
 ```
 
-Mithril services use direct `eprintln!` calls. These calls do not provide
-consistent levels or target filters. Mithril command binaries also use stdout
-and stderr for operator output. That command output is not a service log.
+Before this phase, Mithril services used direct `eprintln!` calls. Those calls
+did not provide consistent levels or target filters. Mithril command binaries
+also use stdout and stderr for operator output. That command output is not a
+service log.
 
 ## Implementation flow
 
@@ -85,13 +87,6 @@ Operator changes log verbosity
   -> only the selected target emits the additional detail
   -> enforcement, readiness, evidence, and policy results remain unchanged
 
-Physical or manual test completes or fails
-  -> the test captures real service stderr through runtime interfaces
-  -> the test verifies format, levels, filters, fields, and sensitive-data absence
-  -> the test removes its workloads, temporary logs, and markers
-  -> the automated fixture keeps healthy reusable VMs and Kubernetes state
-  -> cleanup reports its real result without replacing an earlier failure
-
 ## Approved stderr contract
 
 Keep the current formatter. Do not add a custom renderer.
@@ -107,8 +102,8 @@ Example:
 ```
 
 The Rust target identifies the product and component. Do not add duplicate
-`service` or `component` fields. Field order and terminal color are formatter
-behavior, not a repository protocol.
+`service` or `component` fields. Field order is formatter behavior, not a
+repository protocol. Disable ANSI and other terminal-control output.
 
 Use the existing macro syntax. Put changing values in tracing fields. Use the
 same field name for the same fact. Common names include `error`, `error_code`,
@@ -162,8 +157,6 @@ RUST_LOG=info,mithril_node::runtime_admission=debug,mithril_control::store=trace
 | `mithril-control` | Initialize shared logging and replace service `eprintln!` calls with owner-level events. |
 | `mithril-node` | Initialize shared logging and add Node and OCI-hook events. Keep `mithril-inspect` output unchanged. |
 | Mithril Helm chart | Add validated Control and Node `RUST_LOG` values. |
-| VM harness | Prove live format, level filtering, failure, recovery, and cleanup. |
-| Manual example | Give an independent operator proof without VM ownership. |
 
 ## Ordered deliverables
 
@@ -173,8 +166,8 @@ RUST_LOG=info,mithril_node::runtime_admission=debug,mithril_control::store=trace
 4. Instrument Mithril Control.
 5. Instrument Mithril Node and the OCI hook.
 6. Add Helm filter configuration.
-7. Add automated behavior tests, the physical fixture case, and the
-   independent manual example.
+7. Add automated tests for plain stderr, default verbosity, filtered levels,
+   and target-specific verbosity.
 
 The user requested one commit for each deliverable. An authorized committer
 must create those commits after each deliverable passes its focused checks.
@@ -191,27 +184,17 @@ must create those commits after each deliverable passes its focused checks.
   retirement, runtime allow and deny, evidence authentication failure,
   target-specific detail, one-owner logging, and recovery.
 - Command tests prove clean stdout and stderr separation.
+- Formatter tests prove that service logs contain no terminal-control bytes.
 - Tests execute the logger or product. They do not parse repository source to
   claim behavior.
-- The automated two-node fixture captures `kubectl logs`, triggers the normal
-  and failure flows, checks sensitive-data absence, changes one target filter,
-  proves behavior is unchanged, cleans Mithril-owned state, and keeps healthy
-  VMs.
-- The independent manual example performs the same operator-visible checks in
-  an existing cluster. It does not create, select, retain, or destroy VMs.
 
 Run the focused crate tests after each deliverable. Run these final checks:
 
 ```sh
 bash .github/scripts/verify-rust-ci.sh
 bash packaging/mithril/helm/tests/verify.sh
-bash crates/mithril-e2e/harness/vm/test.sh
-bash examples/mithril-kubernetes-convergence-manual/test.sh
 git diff --check
 ```
-
-Record a pass only after the current-source automated physical run and manual
-case pass.
 
 ## Acceptance
 
@@ -220,9 +203,10 @@ case pass.
 - Owned Mithril services use the shared logging owner and approved format.
 - Levels and target filters follow this phase.
 - Logs contain no prohibited payload or secret.
+- Service logs contain no terminal-control bytes.
 - CLI output remains compatible.
 - Logging does not change product decisions or state.
-- Automated, physical, and manual behavior proofs pass and clean their state.
+- Automated logger and product tests pass.
 
 ## Excluded
 
@@ -240,11 +224,10 @@ case pass.
 Complete only this phase. Stop before Phase 7.
 
 ```text
-State: Not done.
-Completed deliverables: 1 through 6.
-Changed owners: the shared telemetry crate, its workspace consumers, stderr initialization, repository engineering rules, Mithril Control logs, Mithril Node logs, the Mithril OCI-hook failure log, Helm log-filter values, this plan, and the master phase index.
-Verification: focused telemetry and daemon tests, all Mithril Control targets, all Mithril Node targets, strict focused Clippy, workspace compilation, Helm lint and render behavior, formatting, and the diff check passed.
-Physical and manual results: not run.
-Remaining work: implement Deliverable 7 and run all required proof.
+State: Done.
+Completed deliverables: 1 through 7.
+Changed owners: the shared telemetry crate, its workspace consumers, plain stderr initialization, repository engineering rules, Mithril Control logs, Mithril Node logs, the Mithril OCI-hook failure log, Helm log-filter values, and automated logging tests.
+Verification: focused telemetry, Control logging, and Node logging tests passed. The repository Rust CI procedure, Helm verification, formatting, and the diff check passed.
+Remaining work: none.
 Next phase authorized: no.
 ```

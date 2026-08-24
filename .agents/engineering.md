@@ -133,7 +133,7 @@
 - Service stderr uses the current human-readable `tracing-subscriber` format:
   timestamp, level, Rust target, static message, and optional `key=value`
   fields. Do not add a custom renderer. Use the Rust target for product and
-  component filters.
+  component filters. Do not emit ANSI or other terminal-control bytes.
 - Use `ERROR` when the process cannot continue safely or fail-closed rollback
   fails. Use `WARN` for recoverable degradation. Use `INFO` for low-frequency
   lifecycle changes and expected security decisions. Use `DEBUG` for one

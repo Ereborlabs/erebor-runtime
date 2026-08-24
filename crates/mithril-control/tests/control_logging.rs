@@ -22,7 +22,9 @@ fn invalid_store_exits_with_one_formatted_owner_error() -> TestResult {
         .output()?;
 
     assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
     let stderr = String::from_utf8(output.stderr)?;
+    assert!(!stderr.contains('\u{1b}'), "{stderr}");
     assert_eq!(
         stderr
             .lines()
@@ -50,6 +52,7 @@ fn invalid_filter_fails_before_control_startup() -> TestResult {
         .output()?;
 
     assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
     let stderr = String::from_utf8(output.stderr)?;
     assert!(
         stderr.contains(

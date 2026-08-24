@@ -21,6 +21,7 @@ pub fn init_stderr_logging() -> Result<()> {
         let _result = tracing_subscriber::fmt()
             .with_env_filter(filter)
             .with_target(true)
+            .with_ansi(false)
             .with_writer(std::io::stderr)
             .try_init();
     });
@@ -35,6 +36,7 @@ pub fn init_test_logging() {
 
         let _ = tracing_subscriber::fmt()
             .with_env_filter(filter)
+            .with_ansi(false)
             .with_test_writer()
             .try_init();
     });
@@ -82,6 +84,7 @@ mod tests {
         assert!(line.contains(" INFO "));
         assert!(line.contains("erebor_telemetry::logging::tests:"));
         assert!(line.contains("sample_count=7"));
+        assert!(!info.contains('\u{1b}'));
         assert!(line
             .split_whitespace()
             .next()
@@ -90,6 +93,11 @@ mod tests {
 
         let target = child_output("normal", "info,erebor_telemetry::logging::tests=debug")?;
         assert!(target.contains("telemetry target override proof"));
+        assert!(!target.contains('\u{1b}'));
+
+        let warn = child_output("normal", "warn")?;
+        assert!(!warn.contains("telemetry formatter proof"));
+        assert!(!warn.contains("telemetry target override proof"));
         Ok(())
     }
 

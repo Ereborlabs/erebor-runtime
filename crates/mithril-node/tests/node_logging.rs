@@ -20,7 +20,9 @@ fn invalid_config_exits_with_one_formatted_owner_error() -> TestResult {
         .output()?;
 
     assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
     let stderr = String::from_utf8(output.stderr)?;
+    assert!(!stderr.contains('\u{1b}'), "{stderr}");
     assert_eq!(
         stderr
             .lines()
@@ -48,6 +50,7 @@ fn invalid_filter_fails_before_node_startup() -> TestResult {
         .output()?;
 
     assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
     let stderr = String::from_utf8(output.stderr)?;
     assert!(
         stderr
@@ -69,6 +72,7 @@ fn oci_hook_failure_uses_the_shared_format_without_stdout() -> TestResult {
     assert!(!output.status.success());
     assert!(output.stdout.is_empty());
     let stderr = String::from_utf8(output.stderr)?;
+    assert!(!stderr.contains('\u{1b}'), "{stderr}");
     assert_eq!(
         stderr
             .lines()
