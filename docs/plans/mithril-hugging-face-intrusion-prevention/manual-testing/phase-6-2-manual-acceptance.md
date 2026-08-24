@@ -175,8 +175,8 @@ run.
     records the Pod, controller, ServiceAccount, container, pinned image,
     selected Node, node UID, node ID, boot ID, and label epoch. Verify only the
     selected node inventories and downloads the exact signed candidate.
-11. Observe the injected createContainer and prestart hooks for the protected
-    container. Prove createContainer stages the exact container, cgroup,
+11. Observe the two ordered injected `createRuntime` hooks for the protected
+    container. Prove the first hook stages the exact container, cgroup,
     image, and Pod facts without runtime authority. Prove the initial PID
     remains held while the node verifies the same staged facts, CRI `Created`
     state, active policy, and exact binding. Verify map readback before the

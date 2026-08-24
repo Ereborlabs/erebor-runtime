@@ -2504,11 +2504,11 @@ or runtime-supplied permission.
 
 ```text
 NRI CreateContainer
-  -> inject Mithril createContainer and prestart hooks
-  -> createContainer stages immutable container, cgroup, image, and Pod facts
+  -> inject two ordered Mithril createRuntime hooks
+  -> the first hook stages immutable container, cgroup, image, and Pod facts
   -> no runtime authority is granted
 
-OCI prestart with the exact initial task held
+Second OCI createRuntime hook with the exact initial task held
   -> send the container ID, PID, and cgroup to mithril-node
   -> verify CRI Created state and the staged immutable facts
   -> verify the scheduled Pod binding and active signed policy

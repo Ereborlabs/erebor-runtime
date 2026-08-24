@@ -147,10 +147,10 @@ Scheduler submits the Pod binding
   -> Control observes the persisted binding and immutable Pod identity facts
   -> PolicyRolloutOwner creates an exact target for that Pod and Node
   -> Control delivers the exact signed policy and binding material only to that Node
-  -> NRI injects Mithril createContainer and prestart hooks
-  -> createContainer stages immutable container, cgroup, image, and Pod facts
-  -> createContainer grants no runtime authority
-  -> the stock OCI prestart hook holds the exact initial container process
+  -> NRI injects two ordered Mithril createRuntime hooks
+  -> the first hook stages immutable container, cgroup, image, and Pod facts
+  -> the first hook grants no runtime authority
+  -> the second hook keeps the exact initial container process held
   -> mithril-node verifies CRI Created state and the staged immutable facts
   -> mithril-node verifies the scheduled Pod binding and active signed policy
   -> mithril-node stages, reads back, probes, and activates the exact policy generation
@@ -574,10 +574,14 @@ must reject material for another Node, boot, Pod, profile, or candidate. Keep
 non-Kubernetes static workload bindings available for the existing host mode;
 they cannot authorize a Kubernetes Pod that Control did not observe as bound.
 
-Use one stateless OCI adapter for the injected createContainer and prestart
-hooks. The createContainer call sends immutable container, cgroup, image, and
-Pod facts. The prestart call adds the exact held initial PID. The node validates
-the root-owned endpoint, staged fact equality, live PID, cgroup membership,
+Use one stateless OCI adapter for two ordered `createRuntime` hook entries.
+OCI requires deprecated `prestart` hooks to run before `createRuntime` and
+requires `createContainer` hooks to run after `createRuntime`. Therefore,
+those two hook stages cannot implement the required stage-then-gate order.
+The first `createRuntime` call sends immutable container, cgroup, image, and
+Pod facts without PID authority. The second call adds the exact held initial
+PID. The node validates the root-owned endpoint, staged fact equality, live PID,
+cgroup membership,
 Pod UID, container name, image digest, selected Node, candidate, and active
 generation. It then publishes the cgroup binding and releases the runtime only
 after activation and binding readback succeed. Timeout, mismatch, stale state,
@@ -597,7 +601,8 @@ identities cannot modify Kubernetes policy, exceptions, or Node readiness.
 Prove both structural schemas, policy-to-internal lowering, exception bounding
 and consumption, DaemonSet selector and affinity derivation, selector change,
 new-node quarantine, stale-session quarantine, Pod mutation, scheduler choice
-among two eligible nodes, binding rejection, exact-node delivery, held prestart release,
+among two eligible nodes, binding rejection, exact-node delivery, held
+initial-task release,
 timeout denial, restart recovery, Pod deletion, container restart, and policy
 retirement. Use API-server admission review objects and deterministic runtime
 gate tests in automated acceptance. Use the current stock Kubernetes and OCI
@@ -607,13 +612,14 @@ runtime path for the physical manual result.
 
 Extend the existing node binding owner. Do not add a policy watcher, public
 CRD field, runtime-selected permission, or generic process exemption. The NRI
-`CreateContainer` callback injects both Mithril OCI hooks. The createContainer
-hook sends immutable container, cgroup, image, and Pod facts to the node. The
-node keeps one bounded, expiring staged record and grants no authority at this
-step.
+`CreateContainer` callback injects both ordered Mithril `createRuntime` hooks.
+The first hook sends immutable container, cgroup, image, and Pod facts to the
+node. The node keeps one bounded, expiring staged record and grants no authority
+at this step.
 
-At prestart, keep the exact initial task held. Require an exact staged-record
-match, live PID and cgroup proof, CRI `Created` state, scheduler-selected Pod
+In the second hook, keep the exact initial task held. Require an exact
+staged-record match, live PID and cgroup proof, CRI `Created` state,
+scheduler-selected Pod
 binding, current node session, active signed candidate, and generation
 readback. Publish the binding and one `RuntimeBootstrap` identity only after
 all checks succeed. A failed publication or response delivery must remove the
@@ -693,11 +699,11 @@ created in this phase.
 - Bound Pod inventory drift, same-policy new target, exact-node candidate,
   wrong-node rejection, Pod deletion, container restart, and name/UID reuse
   tests.
-- OCI prestart valid release, missing candidate, invalid annotation, PID and
+- OCI held-task valid release, missing candidate, invalid annotation, PID and
   cgroup mismatch, stale candidate, timeout, node restart, and fail-closed
   endpoint tests.
-- NRI createContainer staging, immutable stage mismatch, stage expiry and
-  capacity, no-authority-before-prestart, exact initial-entry binding,
+- Ordered createRuntime staging, immutable stage mismatch, stage expiry and
+  capacity, no-authority-before-admission, exact initial-entry binding,
   bootstrap deadline, one-use application handoff, restart readback, and
   response-delivery rollback tests.
 - Bootstrap anonymous-file, pipe, sealed self-exec, same-lineage inheritance,
