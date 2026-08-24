@@ -78,6 +78,49 @@ async fn mtls_registration_acknowledges_trust_and_reconnects_with_a_fresh_nonce(
 }
 
 #[tokio::test]
+async fn mtls_connection_renews_the_ready_session_while_its_owner_is_idle(
+) -> Result<(), Box<dyn StdError>> {
+    let directory = tempfile::tempdir()?;
+    let certificates = Certificates::issue(false)?;
+    let files = certificates.write(directory.path())?;
+    let address = free_address()?;
+    let control = ControlPlane::new(
+        vec![AllowedNodeIdentity {
+            node_id: "node-a".to_owned(),
+            certificate_sha256: certificates.node_digest(),
+            tenant_id: "00000000-0000-0001-0000-000000000002".to_owned(),
+        }],
+        TrustGenerationV1 {
+            generation: 4,
+            bundle_digest: "d".repeat(64),
+            policy_issuer_sequence_epoch: 0,
+            policy_signers: Vec::new(),
+        },
+    );
+    let (shutdown, server) = start_server(address, &files, control.clone());
+    tokio::time::sleep(Duration::from_millis(20)).await;
+
+    let connector =
+        NodeControlConnector::new(files.node_config(address), "node-a".to_owned(), [7; 16]);
+    let mut trust = TrustCache::load(directory.path())?;
+    let mut node = registration();
+    node.kubernetes_node_name = "worker-a.example".to_owned();
+    let connection = connector.connect(node, true, &mut trust).await?;
+    control
+        .bind_kubernetes_node_session("worker-a.example", "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")?;
+
+    // The initial report is older than this lease window. Only renewal can keep it ready.
+    tokio::time::sleep(Duration::from_millis(2_300)).await;
+    let ready = control.ready_kubernetes_node_sessions(Duration::from_millis(1_500));
+    assert_eq!(ready.len(), 1);
+    assert_eq!(ready[0].kubernetes_node_name, "worker-a.example");
+    drop(connection);
+    let _result = shutdown.send(());
+    server.await??;
+    Ok(())
+}
+
+#[tokio::test]
 async fn mtls_rejects_wrong_node_binding_and_expired_client_identity(
 ) -> Result<(), Box<dyn StdError>> {
     assert_rejected_identity(false, "node-b").await?;

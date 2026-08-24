@@ -32,6 +32,7 @@ use crate::{NodeControlConfig, Result, TrustCache};
 
 const CONTROL_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const CONTROL_UNARY_TIMEOUT: Duration = Duration::from_secs(1);
+const CONTROL_READINESS_RENEWAL_INTERVAL: Duration = Duration::from_secs(1);
 
 pub struct NodeControlConnector {
     config: NodeControlConfig,
@@ -48,6 +49,8 @@ pub struct ControlConnection {
     evidence: NodeEvidenceClient<Channel>,
     coverage: NodeCoverageClient<Channel>,
     policy: NodePolicyClient<Channel>,
+    readiness_failure: mpsc::Receiver<crate::Error>,
+    readiness_renewal: tokio::task::JoinHandle<()>,
     queued: std::collections::VecDeque<NodeControlMessage>,
     resolution_closed: bool,
     arm_closed: bool,
@@ -134,16 +137,18 @@ impl NodeControlConnector {
         )
         .await?;
         bounded_response(NodeRegistryClient::new(channel.clone()).report_readiness(
-            bounded_request(NodeReadinessRequest {
-                session: Some(identity.clone()),
-                report: Some(NodeReadinessReport {
-                    kernel_ready,
-                    control_ready: true,
-                    admission_ready,
-                }),
-            }),
+            bounded_request(readiness_request(&identity, kernel_ready, admission_ready)),
         ))
         .await?;
+
+        let (readiness_failure_output, readiness_failure) = mpsc::channel(1);
+        let readiness_renewal = tokio::spawn(renew_readiness(
+            NodeRegistryClient::new(channel.clone()),
+            identity.clone(),
+            kernel_ready,
+            admission_ready,
+            readiness_failure_output,
+        ));
 
         let (resolution_output, resolution_receiver) = mpsc::channel(8);
         resolution_output
@@ -198,6 +203,8 @@ impl NodeControlConnector {
             policy: NodePolicyClient::new(channel)
                 .max_decoding_message_size(MAX_POLICY_GRPC_MESSAGE_BYTES)
                 .max_encoding_message_size(MAX_POLICY_GRPC_MESSAGE_BYTES),
+            readiness_failure,
+            readiness_renewal,
             queued: std::collections::VecDeque::new(),
             resolution_closed: false,
             arm_closed: false,
@@ -318,6 +325,15 @@ impl ControlConnection {
                 .fail();
             }
             tokio::select! {
+                failure = self.readiness_failure.recv() => {
+                    return match failure {
+                        Some(error) => Err(error),
+                        None => ControlProtocolSnafu {
+                            reason: String::from("Control readiness renewal stopped"),
+                        }
+                        .fail(),
+                    };
+                }
                 message = self.resolution_input.message(), if !self.resolution_closed => {
                     match message.context(ControlRpcSnafu)? {
                         Some(request) => return Ok(NodeControlMessage::Administrative(
@@ -465,6 +481,52 @@ impl ControlConnection {
                 }
                 .fail()
             })
+    }
+}
+
+impl Drop for ControlConnection {
+    fn drop(&mut self) {
+        // A detached renewal could keep a stale session ready after its owner reconnects.
+        self.readiness_renewal.abort();
+    }
+}
+
+fn readiness_request(
+    identity: &NodeSessionContext,
+    kernel_ready: bool,
+    admission_ready: bool,
+) -> NodeReadinessRequest {
+    NodeReadinessRequest {
+        session: Some(identity.clone()),
+        report: Some(NodeReadinessReport {
+            kernel_ready,
+            control_ready: true,
+            admission_ready,
+        }),
+    }
+}
+
+async fn renew_readiness(
+    mut registry: NodeRegistryClient<Channel>,
+    identity: NodeSessionContext,
+    kernel_ready: bool,
+    admission_ready: bool,
+    failure: mpsc::Sender<crate::Error>,
+) {
+    let mut interval = tokio::time::interval(CONTROL_READINESS_RENEWAL_INTERVAL);
+    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    // The connection setup sent the first report. Do not send a duplicate immediately.
+    interval.tick().await;
+    loop {
+        interval.tick().await;
+        let result = bounded_response(registry.report_readiness(bounded_request(
+            readiness_request(&identity, kernel_ready, admission_ready),
+        )))
+        .await;
+        if let Err(error) = result {
+            let _result = failure.send(error).await;
+            return;
+        }
     }
 }
 
