@@ -30,10 +30,13 @@ one explicit lowering path from the base policy to the wider internal signed
 policy document. An exception activates one precompiled grant without
 migrating the base generation.
 
-The stock-runtime bootstrap amendment adds one internal, typed transition to
-the node binding and BPF decision ABI. It does not add a public policy field or
-a generic runtime exception. Historical phase results keep their recorded ABI.
-Phase 6.2 and later results bind the amended ABI and architecture.
+The prepared-container amendment adds one internal, typed transition to the
+node binding and BPF decision ABI. It treats the verified initial runtime entry
+as trusted node infrastructure until the first signed-policy-approved
+application exec. It does not add a public policy field, a generic runtime
+exception, or a runtime-specific syscall list. Historical phase results keep
+their recorded ABI. Phase 6.2 and later results bind the amended ABI and
+architecture.
 
 Status: proposed architecture. This document does not authorize an
 implementation phase. The
@@ -2496,11 +2499,12 @@ external task in the controller cgroup. This narrow inspection permission lets
 the node open the authenticated task mount namespace after the restrictive
 effect profile is active.
 
-This controller permission does not authorize runc bootstrap. The node binding
-owner derives one internal `RuntimeBootstrap` identity only after it verifies a
-held prestart request, the CRI `Created` state, the scheduled Pod binding, and
-the active signed policy. This identity is not a policy selector, exception,
-or runtime-supplied permission.
+This controller permission does not authorize container setup. The node
+binding owner publishes `PreparedContainer` only after it verifies a held
+runtime request, the CRI `Created` state, the scheduled Pod binding, and the
+active signed policy. This state is not a policy selector, exception, or
+runtime-supplied permission. It records that the exact initial entry is still
+part of the trusted runtime boundary and is not yet an active workload.
 
 ```text
 NRI CreateContainer
@@ -2512,40 +2516,43 @@ Second OCI createRuntime hook with the exact initial task held
   -> send the container ID, PID, and cgroup to mithril-node
   -> verify CRI Created state and the staged immutable facts
   -> verify the scheduled Pod binding and active signed policy
-  -> publish RuntimeBootstrap for the exact initial entry lineage
+  -> publish PreparedContainer for the exact binding and initial entry
   -> return allow only after map readback succeeds
 
-Stock runc bootstrap
-  -> permit only the fixed runtime-qualified bootstrap operation classes
-  -> bind each anonymous object to the exact binding and entry lineage
-  -> deny an external path, network destination, another binding, or another entry
+Trusted runtime setup
+  -> recognize the exact prepared binding and initial runtime entry
+  -> permit runtime implementation details without a runc-specific operation list
+  -> give runtime-created files, pipes, sockets, and handles no independent authority
+  -> deny another binding, another entry, a later external root, or an expired state
   -> enforce one kernel monotonic-time deadline
 
 First application exec
-  -> verify the executable through the active signed policy and exact binding
-  -> atomically change RuntimeBootstrap from ARMED to CONSUMED
+  -> resolve the exact executable through the active signed policy and binding
+  -> atomically change PreparedContainer from PREPARED to ACTIVE
   -> activate the normal workload execution identity
-  -> make all remaining bootstrap object records non-authoritative
+  -> enforce every later effect through normal policy and exception authority
 ```
 
-The fixed operation classes are same-lineage read-only process inspection,
-bootstrap-owned anonymous-file and pipe access, sealed bootstrap self-exec,
-and the already qualified initial namespace mount transitions. The BPF program
-identifies these classes. Runtime input cannot select or extend them. An
-anonymous object grants bootstrap access only when BPF recorded its creation
-by the exact armed entry lineage. A native child in that entry may inherit the
-object. Another container, external runtime root, entry lineage, network hook,
-or path-backed file cannot use the authority.
+The runtime is part of the node trusted computing base while the binding is
+`PREPARED`. Mithril does not infer runtime identity from a `runc`, `crun`, or
+`youki` syscall sequence. The exact binding and initial entry define the
+boundary. Runtime implementation changes can add an anonymous file, pipe,
+socket, namespace operation, or internal exec without changing the Mithril
+policy model. This trust is intentionally broad inside that exact boundary.
+It does not extend to another entry, another container, a later external root,
+or a task after application activation.
 
-A sealed runtime self-exec keeps the bootstrap identity. The first executable
-that matches the application entry in the active signed policy performs the
-one-use handoff. BPF first reserves that task as `HANDOFF_PENDING` across the
-multi-pass exec path. A pre-commit exec failure restores `ARMED`; a successful
-exec commit changes the state to `CONSUMED`. The kernel transition, not a
-userspace event, closes the bootstrap identity. Expiry closes it without application activation. A node
-restart must read back the exact binding, entry, deadline, and transition or
-keep admission readiness closed. An Exact path selector does not participate
-in this internal authority.
+Runtime-created objects receive no durable bootstrap record. An application
+can use such an object only when the normal signed policy resolves and permits
+that use after activation. A runtime-internal exec that does not satisfy the
+signed workload policy stays `PREPARED`. The first exec that does satisfy the
+signed policy reserves `EXEC_PENDING` across the multi-pass exec path. A
+pre-commit failure restores `PREPARED`; a successful commit changes the state
+to `ACTIVE`. The kernel transition, not a userspace event, opens workload
+authority and closes the trusted-runtime boundary. Expiry closes an incomplete
+prepared state without application activation. A node restart must read back
+the exact binding, entry, deadline, and transition or keep admission readiness
+closed. An `EXACT` path selector does not participate in the prepared state.
 Mithril resolves paths with Meta's bounded canonical-path algorithm:
 reconstruct the path through a verified mount tree, canonicalizing a repeated
 mount-root dentry to its oldest mount before matching components with a
@@ -4459,33 +4466,34 @@ intersections, never logged ambiguity.
 
 #### 29.4 Use each stock runtime hook for what it really proves
 
-Runtime hook stages have different contracts. A checked `createRuntime` path
-can report metadata or reject a request, but it does not expose a held target
-task. The qualified OCI `prestart` path runs after runc creates the container
-init task and before runc starts the application. The synchronous hook reports
-the exact PID, full container ID, cgroup, and Kubernetes annotations. It waits
-until Mithril verifies the live CRI record, verifies that the cgroup contains
-only that PID, publishes the static binding, and activates identity state.
-Only then does the hook return and let runc continue.
+Runtime hook stages have different contracts. The stock NRI hook injector can
+inject OCI hooks but does not provide Mithril with a private runtime protocol.
+Two ordered `createRuntime` entries provide the required stage-then-admit
+sequence. The first reports immutable container, cgroup, image, and Pod facts.
+The second reports the exact held PID and the same facts. The synchronous
+second hook waits until Mithril verifies the CRI `Created` record, proves that
+the cgroup contains only that PID, activates the signed generation, publishes
+the binding as `PreparedContainer`, and reads it back. Only then does the hook
+return and let the runtime continue.
 
-The held task is still in runtime mount setup before its first successful
-exec. Mithril permits mount mutations only while this exact committed initial
-container root still has its process-birth execution. The first successful
-application exec replaces that execution and closes the setup allowance. All
-other effect families continue through their normal identity gate.
+The exact prepared entry remains trusted runtime infrastructure. Mithril does
+not encode the setup operations of one runtime release. The first exec that
+satisfies the signed workload policy changes the binding to `ACTIVE`. Every
+later effect then uses normal workload policy. A runtime-internal exec stays
+`PREPARED` and remains bounded by the same entry, binding, and deadline.
 
-The qualified prestart hook commits task identity only. On the qualified runc
-path, it does not expose the final mount topology that an `EXACT` selector
-needs. Exact path-to-inode binding uses the separate authenticated CRI
-`Running` inventory path. Stock containerd supplies that state after process
-start, so this path records an initial Exact-binding gap. Live `PATH` selectors
-remain kernel path-graph decisions and do not use this userspace resolution.
+The ordered hooks commit task identity only. They do not expose the final
+mount topology that an `EXACT` selector needs. Exact path-to-inode binding uses
+the separate authenticated CRI `Running` inventory path. Stock containerd
+supplies that state after process start, so this path records an initial
+Exact-binding gap. Live `PATH` selectors remain kernel path-graph decisions
+and do not use this userspace resolution.
 
-**Example.** The prestart hook reports PID A and cgroup C. CRI readback must
-show the same full container ID in `Created` state, and C must contain only A.
-If any fact differs, Mithril does not publish the initial role. The passing
-Phase 2 result qualifies the accepted path on the configured K3s, containerd,
-and runc versions. Hook timeout, mismatch, and rejection remain separate
+**Example.** The second hook reports PID A and cgroup C. CRI readback must show
+the same full container ID in `Created` state, and C must contain only A. If a
+fact differs, Mithril does not publish `PreparedContainer`. If the facts match,
+runtime setup can change across supported runtime versions without a new
+Mithril operation list. Hook timeout, mismatch, and rejection remain separate
 failure fixtures.
 
 #### 29.5 Keep stable process coordinates separate from authority identity
