@@ -32,7 +32,7 @@ impl SessionReviewConfig {
                     "diagnostics": [
                       {
                         "name": "raw-cdp",
-                        "command": ["sh", "--remote-debugging-port=9222"]
+                        "command": ["sh", "-c", "exit 7"]
                       }
                     ],
             "#,

@@ -46,11 +46,12 @@ mod linux_host {
         assert!(Path::new(json_string(&registry_record, "/policy_artifact_paths/0")?).exists());
         assert!(Path::new(json_string(&registry_record, "/config_artifact_path")?).exists());
         let reviews = SessionReviewSource::new(test_dir.join(".erebor/sessions"));
-        let list = reviews.render_list(SessionReviewOutputFormat::Text)?;
+        let list = reviews.render_list(SessionReviewOutputFormat::Json)?;
 
-        assert!(list.contains(session_id.as_str()));
-        assert!(list.contains("terminal"));
-        assert!(list.contains("failed"));
+        assert!(list.contains(&format!(r#""session_id": "{session_id}""#)));
+        assert!(list.contains(r#""surfaces": ["#));
+        assert!(list.contains(r#""terminal""#));
+        assert!(list.contains(r#""status": "failed""#));
 
         Ok(())
     }
@@ -66,7 +67,7 @@ mod linux_host {
             &config,
             SessionRunnerKind::LinuxHost,
             SessionId::new("session-review-run"),
-            vec!["sh".to_owned(), "--remote-debugging-port=9222".to_owned()],
+            vec!["sh".to_owned(), "-c".to_owned(), "exit 7".to_owned()],
         )?;
         plan.set_config_path(&config_path);
         assert!(SessionExecutionService::run_plan(&config, &plan).is_err());
@@ -85,11 +86,11 @@ mod linux_host {
         assert!(Path::new(json_string(&registry_record, "/policy_artifact_paths/0")?).exists());
 
         let reviews = SessionReviewSource::new(test_dir.join(".erebor/sessions"));
-        let list = reviews.render_list(SessionReviewOutputFormat::Text)?;
+        let list = reviews.render_list(SessionReviewOutputFormat::Json)?;
 
-        assert!(list.contains(session_id));
-        assert!(list.contains("failed"));
-        assert!(list.contains("terminal"));
+        assert!(list.contains(&format!(r#""session_id": "{session_id}""#)));
+        assert!(list.contains(r#""status": "failed""#));
+        assert!(list.contains(r#""terminal""#));
 
         Ok(())
     }
