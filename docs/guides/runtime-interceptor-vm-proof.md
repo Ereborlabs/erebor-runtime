@@ -274,10 +274,10 @@ Recovery cannot reconstruct its in-flight request ledger, so a recovered
 registration is marked invalid and the normal recovery owner terminates and
 reaps the workload. Input and output frames are newline-delimited JSON-RPC.
 The daemon permits at most 128 in-flight requests. It releases a request
-identifier after its normal response. A canceled identifier stays reserved
-until one late response arrives or the bounded cancellation window evicts it.
-Server-initiated requests are unsupported. Notifications and correlated
-responses remain supported.
+identifier after its terminal response. A cancellation keeps the original
+request owner until that response arrives, so it cannot bind a reused
+identifier. Server-initiated requests are unsupported. Notifications and
+correlated responses remain supported.
 
 Evidence is honest but not lossless. A ring-buffer reservation failure can
 occur after the physical decision. Normal coverage is complete only when the
