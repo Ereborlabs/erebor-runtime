@@ -65,12 +65,12 @@ impl NodeReadinessV1 {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Debug)]
 enum ReconciliationOutcome {
     Healthy,
-    EvidenceUnhealthy,
-    IdentityUnhealthy,
-    KernelUnhealthy,
+    EvidenceUnhealthy(String),
+    IdentityUnhealthy { owner: &'static str, reason: String },
+    KernelUnhealthy(String),
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -886,8 +886,8 @@ impl NodeChassis {
                                             break;
                                         }
                                     }
-                                    ReconciliationOutcome::EvidenceUnhealthy => {
-                                        eprintln!("Mithril node evidence reconciliation became unhealthy");
+                                    ReconciliationOutcome::EvidenceUnhealthy(reason) => {
+                                        eprintln!("Mithril node evidence reconciliation became unhealthy: {reason}");
                                         evidence_healthy = false;
                                         close_evidence_claims(&mut self.registration);
                                         self.readiness.send_modify(|readiness| {
@@ -896,8 +896,8 @@ impl NodeChassis {
                                         });
                                         break;
                                     }
-                                    ReconciliationOutcome::IdentityUnhealthy => {
-                                        eprintln!("Mithril node identity reconciliation became unhealthy");
+                                    ReconciliationOutcome::IdentityUnhealthy { owner, reason } => {
+                                        eprintln!("Mithril node {owner} reconciliation became unhealthy: {reason}");
                                         identity_healthy = false;
                                         close_identity_claims(&mut self.registration);
                                         self.readiness.send_replace(NodeReadinessV1 {
@@ -909,8 +909,8 @@ impl NodeChassis {
                                         });
                                         break;
                                     }
-                                    ReconciliationOutcome::KernelUnhealthy => {
-                                        eprintln!("Mithril node kernel reconciliation became unhealthy");
+                                    ReconciliationOutcome::KernelUnhealthy(reason) => {
+                                        eprintln!("Mithril node kernel reconciliation became unhealthy: {reason}");
                                         kernel_healthy = false;
                                         identity_healthy = false;
                                         self.close_kernel_claims();
@@ -1003,15 +1003,15 @@ impl NodeChassis {
                                     });
                                 }
                             }
-                            ReconciliationOutcome::EvidenceUnhealthy => {
+                            ReconciliationOutcome::EvidenceUnhealthy(_reason) => {
                                 evidence_healthy = false;
                                 close_evidence_claims(&mut self.registration);
                             }
-                            ReconciliationOutcome::IdentityUnhealthy => {
+                            ReconciliationOutcome::IdentityUnhealthy { .. } => {
                                 identity_healthy = false;
                                 close_identity_claims(&mut self.registration);
                             }
-                            ReconciliationOutcome::KernelUnhealthy => {
+                            ReconciliationOutcome::KernelUnhealthy(_reason) => {
                                 kernel_healthy = false;
                                 identity_healthy = false;
                                 self.close_kernel_claims();
@@ -1448,63 +1448,90 @@ impl NodeChassis {
     }
 
     async fn reconcile_bindings(&mut self, recover_evidence: bool) -> ReconciliationOutcome {
-        if self.reconcile_terminal_policy_cleanup().is_err() {
-            return ReconciliationOutcome::IdentityUnhealthy;
+        if let Err(error) = self.reconcile_terminal_policy_cleanup() {
+            return ReconciliationOutcome::IdentityUnhealthy {
+                owner: "terminal policy cleanup",
+                reason: error.to_string(),
+            };
         }
         let Some(host) = self.host.as_mut() else {
-            return ReconciliationOutcome::KernelUnhealthy;
+            return ReconciliationOutcome::KernelUnhealthy(
+                "the kernel host is not open".to_owned(),
+            );
         };
         let policy_authority_present =
             self.policy.is_some() || self.policy_delivery.terminal_cleanup().is_some();
-        if host.verify_live_manifest().is_err() {
+        if let Err(error) = host.verify_live_manifest() {
             let _result = self
                 .observations
                 .mark_coverage_gapped(CoverageGapReasonV1::KernelStateMismatch);
-            return ReconciliationOutcome::KernelUnhealthy;
+            return ReconciliationOutcome::KernelUnhealthy(error.to_string());
         }
-        if policy_authority_present
-            && (self.observations.evidence_errors() > 0
-                || sample_effect_health(host, &self.observations, recover_evidence).is_err())
-        {
+        if policy_authority_present && self.observations.evidence_errors() > 0 {
             let _result = self
                 .observations
                 .mark_coverage_gapped(CoverageGapReasonV1::WalFailure);
-            return ReconciliationOutcome::EvidenceUnhealthy;
+            return ReconciliationOutcome::EvidenceUnhealthy(format!(
+                "the evidence owner recorded {} durable errors",
+                self.observations.evidence_errors()
+            ));
         }
-        if self
-            .identity
-            .reconcile(host, policy_authority_present)
-            .is_err()
-        {
-            return ReconciliationOutcome::IdentityUnhealthy;
+        if policy_authority_present {
+            if let Err(error) = sample_effect_health(host, &self.observations, recover_evidence) {
+                let _result = self
+                    .observations
+                    .mark_coverage_gapped(CoverageGapReasonV1::WalFailure);
+                return ReconciliationOutcome::EvidenceUnhealthy(error.to_string());
+            }
         }
-        if self
+        if let Err(error) = self.identity.reconcile(host, policy_authority_present) {
+            return ReconciliationOutcome::IdentityUnhealthy {
+                owner: "execution identity",
+                reason: error.to_string(),
+            };
+        }
+        if let Err(error) = self
             .bindings
             .reconcile(host, &self.config.workload_bindings)
             .await
-            .is_err()
         {
-            return ReconciliationOutcome::IdentityUnhealthy;
+            return ReconciliationOutcome::IdentityUnhealthy {
+                owner: "runtime binding",
+                reason: error.to_string(),
+            };
         }
         if let Some(policy) = self.policy.as_mut() {
-            if self
+            if let Err(error) = self
                 .bindings
                 .adopt_activated_profiles(host, &self.config.workload_bindings)
-                .is_err()
-                || policy
-                    .reconcile_cri_exact_bindings(&self.config, host, &self.bindings)
-                    .is_err()
-                || policy.reconcile_mount_views(host).is_err()
             {
-                return ReconciliationOutcome::IdentityUnhealthy;
+                return ReconciliationOutcome::IdentityUnhealthy {
+                    owner: "activated profile",
+                    reason: error.to_string(),
+                };
+            }
+            if let Err(error) =
+                policy.reconcile_cri_exact_bindings(&self.config, host, &self.bindings)
+            {
+                return ReconciliationOutcome::IdentityUnhealthy {
+                    owner: "policy runtime binding",
+                    reason: error.to_string(),
+                };
+            }
+            if let Err(error) = policy.reconcile_mount_views(host) {
+                return ReconciliationOutcome::IdentityUnhealthy {
+                    owner: "mount view",
+                    reason: error.to_string(),
+                };
             }
         }
-        if self
-            .administrative
-            .as_mut()
-            .is_some_and(|administrative| administrative.reconcile(host).is_err())
-        {
-            return ReconciliationOutcome::IdentityUnhealthy;
+        if let Some(administrative) = self.administrative.as_mut() {
+            if let Err(error) = administrative.reconcile(host) {
+                return ReconciliationOutcome::IdentityUnhealthy {
+                    owner: "administrative identity",
+                    reason: error.to_string(),
+                };
+            }
         }
         ReconciliationOutcome::Healthy
     }
