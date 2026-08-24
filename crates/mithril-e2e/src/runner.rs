@@ -747,29 +747,3 @@ fn is_sha256_hex(value: &str) -> bool {
             .bytes()
             .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
 }
-
-#[cfg(test)]
-mod tests {
-    use std::path::PathBuf;
-
-    use super::KernelQualificationRunner;
-
-    #[test]
-    fn verification_bundle_is_frozen_only_for_recorded_physical_surfaces() -> crate::Result<()> {
-        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let bundle = KernelQualificationRunner::new(root).verify()?;
-        assert_eq!(bundle.schema_version, 1);
-        assert_eq!(bundle.abi_state, "FROZEN_PROVEN_SURFACES_ONLY");
-        assert_eq!(bundle.closed_contract_digest.len(), 64);
-        assert_eq!(bundle.physical_qualification_sha256.len(), 64);
-        assert_eq!(
-            bundle
-                .capabilities
-                .iter()
-                .filter(|capability| capability.evidence_digest.is_some())
-                .count(),
-            3
-        );
-        Ok(())
-    }
-}

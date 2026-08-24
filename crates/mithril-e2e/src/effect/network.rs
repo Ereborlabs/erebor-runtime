@@ -1436,6 +1436,15 @@ pub fn run_network_peer_server(
     let udp = UdpSocket::bind(SocketAddr::new(bind_address, udp_port)).context(IoSnafu {
         path: Path::new("two-node UDP peer"),
     })?;
+    run_network_peer_server_with_sockets(tcp, udp, denied, ready_path)
+}
+
+fn run_network_peer_server_with_sockets(
+    tcp: TcpListener,
+    udp: UdpSocket,
+    denied: TcpListener,
+    ready_path: &Path,
+) -> Result<NetworkPeerServerResultV1> {
     tcp.set_nonblocking(true).context(IoSnafu {
         path: Path::new("two-node TCP peer"),
     })?;
@@ -2164,14 +2173,14 @@ impl NetworkFixtureProof {
 mod tests {
     use std::collections::BTreeSet;
     use std::io::Write as _;
-    use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream, UdpSocket};
+    use std::net::{SocketAddr, TcpListener, TcpStream, UdpSocket};
     use std::thread;
     use std::time::{Duration, Instant};
 
     use snafu::ResultExt as _;
 
     use super::{
-        build_network_artifact, run_network_peer_server, NetworkFixtureProof,
+        build_network_artifact, run_network_peer_server_with_sockets, NetworkFixtureProof,
         NETWORK_PEER_TCP_PAYLOAD, NETWORK_PEER_UDP_PAYLOAD,
     };
     use crate::error::IoSnafu;
@@ -2256,44 +2265,32 @@ mod tests {
             location: snafu::Location::default(),
         })?;
         let address = SocketAddr::from(([127, 0, 0, 1], 0));
-        let tcp_reservation = UdpSocket::bind(address).context(IoSnafu {
+        let tcp = TcpListener::bind(address).context(IoSnafu {
             path: "temporary TCP peer port",
         })?;
-        let udp_reservation = UdpSocket::bind(address).context(IoSnafu {
+        let udp = UdpSocket::bind(address).context(IoSnafu {
             path: "temporary UDP peer port",
         })?;
-        let denied_reservation = UdpSocket::bind(address).context(IoSnafu {
+        let denied = TcpListener::bind(address).context(IoSnafu {
             path: "temporary denied peer port",
         })?;
-        let tcp_port = tcp_reservation
+        let tcp_port = tcp
             .local_addr()
             .context(IoSnafu {
                 path: "temporary TCP peer port",
             })?
             .port();
-        let udp_port = udp_reservation
+        let udp_port = udp
             .local_addr()
             .context(IoSnafu {
                 path: "temporary UDP peer port",
             })?
             .port();
-        let denied_port = denied_reservation
-            .local_addr()
-            .context(IoSnafu {
-                path: "temporary denied peer port",
-            })?
-            .port();
-        drop((tcp_reservation, udp_reservation, denied_reservation));
         let ready = directory.path().join("ready");
         let ready_for_server = ready.clone();
+        // Transfer the bound listeners to the server. This prevents a port-reuse race.
         let server = thread::spawn(move || {
-            run_network_peer_server(
-                IpAddr::V4(Ipv4Addr::LOCALHOST),
-                tcp_port,
-                udp_port,
-                denied_port,
-                &ready_for_server,
-            )
+            run_network_peer_server_with_sockets(tcp, udp, denied, &ready_for_server)
         });
         let deadline = Instant::now() + Duration::from_secs(5);
         while !ready.is_file() && Instant::now() < deadline {

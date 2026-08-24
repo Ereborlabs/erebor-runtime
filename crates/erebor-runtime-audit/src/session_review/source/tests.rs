@@ -41,14 +41,14 @@ fn source_renderers_resolve_registry_artifacts() -> Result<(), Box<dyn std::erro
     let mut plan = SessionRunPlan::from_config(
         &runtime_config,
         SessionRunnerKind::LinuxHost,
-        SessionId::new("session-registry-source"),
+        SessionId::new("review-1"),
         vec![String::from("sh")],
     )?;
     plan.set_config_path(config.clone());
     let registry = SessionRegistry::new(plan.registry_path().to_path_buf());
     let started = registry.start_session(&runtime_config, &plan)?;
     let record = process_record(
-        "session-registry-source",
+        "review-1",
         "deny-process",
         "sh --remote-debugging-port=9222",
         Decision::Deny {
@@ -79,16 +79,15 @@ fn source_renderers_resolve_registry_artifacts() -> Result<(), Box<dyn std::erro
     fs::write(&record_path, serde_json::to_string(&legacy_record)?)?;
 
     let source = SessionReviewSource::new(registry.root().to_path_buf());
-    let list = source.render_list(SessionReviewOutputFormat::Text)?;
-    let show = source.render_show("session-registry-source", SessionReviewOutputFormat::Text)?;
-    let describe =
-        source.render_describe("session-registry-source", SessionReviewOutputFormat::Json)?;
+    let list = source.render_list(SessionReviewOutputFormat::Json)?;
+    let show = source.render_show("review-1", SessionReviewOutputFormat::Text)?;
+    let describe = source.render_describe("review-1", SessionReviewOutputFormat::Json)?;
 
-    assert!(list.contains("session-registry-source"));
-    assert!(list.contains("succeeded"));
+    assert!(list.contains(r#""session_id": "review-1""#));
+    assert!(list.contains(r#""status": "succeeded""#));
     assert!(show.contains("deny-raw-cdp"));
     assert!(show.contains("Policy sha256:"));
-    assert!(describe.contains(r#""session_id": "session-registry-source""#));
+    assert!(describe.contains(r#""session_id": "review-1""#));
     assert!(describe.contains(r#""controlled_path_backend": "linux_ptrace_process_guard""#));
 
     fs::remove_dir_all(root)?;
