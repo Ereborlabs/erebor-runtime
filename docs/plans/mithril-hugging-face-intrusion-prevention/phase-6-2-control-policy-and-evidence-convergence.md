@@ -157,8 +157,8 @@ Scheduler submits the Pod binding
   -> mithril-node stages, reads back, probes, and activates the exact policy generation
   -> mithril-node publishes the exact cgroup binding as PreparedContainer
   -> the runtime gate releases that process only after policy and binding readback
-  -> BPF recognizes only the exact prepared binding and initial runtime entry
-  -> the trusted runtime entry completes implementation-specific setup
+  -> BPF recognizes only the exact prepared binding and held initial thread group
+  -> the trusted runtime thread group completes implementation-specific setup
   -> runtime-created objects gain no independent or inherited workload authority
   -> a fixed monotonic deadline closes an incomplete prepared state
   -> the first policy-approved application exec atomically changes PreparedContainer to Active
@@ -627,26 +627,45 @@ readback. Publish the exact binding as `PreparedContainer` only after all
 checks succeed. A failed publication or response delivery must remove the new
 binding and prepared state before the runtime can retry.
 
-Bind `PreparedContainer` to the exact binding lifetime and initial runtime
-entry. Use one non-evictable kernel transition with `UNARMED`, `PREPARED`,
+Bind `PreparedContainer` to the exact binding lifetime and held initial thread
+group. The held PID is the kernel thread-group leader and the exact host TGID.
+The leader owns the canonical initial entry. A thread that existed before
+binding publication can have a restricted external-root entry because Mithril
+did not observe its creation. A thread created after publication inherits its
+native identity through `task_alloc`. In both cases, the BPF effect gate must
+resolve the exact kernel group leader and verify its canonical prepared entry.
+A numeric PID or TGID match without that leader identity is insufficient.
+
+Before it returns allow, `WorkloadBindingOwner` runs two bounded task
+reconciliation passes. The first pass establishes the leader. The second pass
+labels a sibling that the iterator saw before the leader. The owner then reads
+the live `/proc/<leader>/task` membership, keeps a pidfd for each member,
+verifies every task label and coordinate, and reads the membership again. The
+group must be stable and contain at most 256 threads. A changed, incomplete, or
+oversized group rejects the runtime request and removes the new binding.
+
+Use one non-evictable kernel transition with `UNARMED`, `PREPARED`,
 `EXEC_PENDING`, `ACTIVE`, `EXPIRED`, and fail-closed `CORRUPT` states and one
-monotonic deadline. `EXEC_PENDING` reserves one task across the multi-pass
-exec path and returns to `PREPARED` only when that exec fails before commit.
-The binding state is a trust-boundary state. It is not a workload policy
+monotonic deadline. Treat every governed effect from the exact prepared thread
+group as trusted node runtime infrastructure until a signed-policy-approved
+application exec commits or the deadline expires. Do not identify the runtime
+by a `runc`, `crun`, or `youki` syscall or operation sequence. Do not record
+anonymous files, pipes, Unix endpoints, root handles, network destinations, or
+other runtime-created objects as independent authority.
+
+`EXEC_PENDING` reserves one exact task across the multi-pass exec path and
+returns to `PREPARED` only when that exec fails before commit. A
+runtime-internal exec that does not satisfy the signed workload policy remains
+in `PREPARED`. It does not activate workload authority. Another TGID, binding,
+container lifetime, node session, or later process cannot use the prepared
+state. The binding state is a trust-boundary state. It is not a workload policy
 permission, exception, or transferable object authority.
 
-Treat the exact prepared entry as trusted node runtime infrastructure until a
-signed-policy-approved application exec commits or the deadline expires. Do
-not identify the runtime by a `runc`, `crun`, or `youki` syscall sequence. Do
-not record anonymous files, pipes, Unix endpoints, root handles, or other
-runtime-created objects as independent authority. Runtime-internal execs that
-do not satisfy the signed workload policy remain in `PREPARED`. They do not
-activate workload authority. A task from another binding, another entry, a
-later external root, or an application task cannot use the prepared state.
-
 When an exact executable candidate satisfies the active signed policy,
-atomically reserve the transition and commit `ACTIVE` with the normal workload
-execution identity. A failed exec restores only its own reservation. After
+atomically reserve the transition from any exact thread-group member and commit
+`ACTIVE` with the normal workload execution identity. This binding transition
+removes prepared authority from the complete thread group. A failed exec
+restores only its own reservation. After
 `ACTIVE`, every file, network, IPC, process, device, privilege, mount, and exec
 effect uses only normal policy and exception authority. Runtime-created
 objects have no residual grant unless normal policy resolves and permits them.
@@ -770,15 +789,15 @@ privileged or unmatched workload floor.
 ## Phase Result
 
 ```text
-State: Not done. The corrected policy and exception implementation, package, automated fixture, and independent manual example are present. The runtime-specific bootstrap model is superseded by the approved PreparedContainer architecture. The replacement implementation and physical procedure are not complete.
-Implemented deliverable scope: D6.2.1 through D6.2.4 are implemented and automated. D6.2.5 has automated intake and WAL proof but lacks the physical failure variants. D6.2.6, D6.2.7, D6.2.9, D6.2.10, D6.2.11, and D6.2.12 have implemented owners and automated or rendered proof, but their required current physical results are not done. D6.2.8 and D6.2.13 require the PreparedContainer implementation and stock-runtime physical acceptance.
-Files and durable owners changed: the branch contains both namespaced CRDs and their Helm package; PolicyDesiredStateOwner; PolicyRolloutOwner; the exception desired-state path; TrustBundleOwner; KubernetesNodeReadinessOwner; KubernetesAdmissionOwner; KubernetesWorkloadInventoryOwner; one append-only ControlStore for policy, exception, node session, trust, rollout, acknowledgement, evidence, coverage, and cursor transactions; generated NodePolicy and ControlHealth services; NodePolicyDeliveryOwner; ExceptionAuthorityOwner; RuntimeAdmissionClient; RuntimeAdmissionServer; ScheduledRuntimeBindingV1; bounded runtime-fact staging in WorkloadBindingOwner; the node activation and cgroup-binding paths; the stateless two-stage OCI adapter; hook ownership and cleanup; the two-node fixture; and the independent manual example. The PreparedContainer BPF ABI and kernel owner remain to be implemented.
+State: Not done. The corrected policy and exception implementation, PreparedContainer boundary, package, automated fixture, and independent manual example are present. The current-source physical procedure is not complete.
+Implemented deliverable scope: D6.2.1 through D6.2.4 are implemented and automated. D6.2.5 has automated intake and WAL proof but lacks the physical failure variants. D6.2.6 through D6.2.13 have implemented owners and automated or rendered proof, but their required current physical results are not done.
+Files and durable owners changed: the branch contains both namespaced CRDs and their Helm package; PolicyDesiredStateOwner; PolicyRolloutOwner; the exception desired-state path; TrustBundleOwner; KubernetesNodeReadinessOwner; KubernetesAdmissionOwner; KubernetesWorkloadInventoryOwner; one append-only ControlStore for policy, exception, node session, trust, rollout, acknowledgement, evidence, coverage, and cursor transactions; generated NodePolicy and ControlHealth services; NodePolicyDeliveryOwner; ExceptionAuthorityOwner; RuntimeAdmissionClient; RuntimeAdmissionServer; ScheduledRuntimeBindingV1; bounded runtime-fact staging in WorkloadBindingOwner; the node activation and cgroup-binding paths; the stateless two-stage OCI adapter; the PreparedContainer binding ABI and BPF transition owner; hook ownership and cleanup; the two-node fixture; and the independent manual example.
 Upstream-adoption dossier IDs used: none.
-Fixture cases and exact physical results: the current physical two-node fixture and manual example are Not run. The prior old-API run passed node readiness, typed RBAC review, admission, scheduler selection, selected-node delivery, policy activation, runtime binding, Control acknowledgement, and durable evidence intake. Protected container start then failed when stock runc used an anonymous file write and IPC access. The application process did not start. The prior cleanup passed.
-Automated verification: the previously recorded API, Control, node, Helm, and fixture tests passed for the superseded runtime-specific model. They do not prove PreparedContainer. The full replacement-source workspace gate and physical procedure are not run yet.
-Platform/kernel/runtime manifests: the Helm package contains both generated closed CRDs, separate writer and Control RBAC, the exact DaemonSet reader Role, the Control Deployment and Service, fail-closed admission webhooks, the node DaemonSet, two atomically owned OCI hook registrations, and bounded uninstall cleanup. The manifests require the new PreparedContainer operation contract. No live current-source platform manifest was recorded.
-Performance/capacity results: no new benchmark. Runtime stages are limited to 128 records and 30 seconds. PreparedContainer is designed for one binding, one initial entry, one application activation, and a 10-second kernel deadline. Evidence gRPC messages are limited to 4 MiB. Policy gRPC messages are limited to 128 KiB. The pending evidence window is limited to 4,096 records. Health reports fixed counts and booleans only.
-Unsupported/degraded paths: PreparedContainer is not implemented or physically qualified. The current physical protected-start, lifecycle, evidence failure, watch-compaction, network-partition, and storage-outage cases are Not run. Phase 7 graph and finding behavior is not present.
-Remaining work in this phase: implement PreparedContainer, replace the runtime-specific physical oracles in both acceptance surfaces, and run the current physical procedure through protected start, application activation, exact target, exception, runtime task, policy terminal cleanup, Node UID replacement, host epoch, watch, evidence failure, restart, uninstall, and cleanup cases.
+Fixture cases and exact physical results: the current physical two-node fixture and manual example are Not run. The prior old-API run passed node readiness, typed RBAC review, admission, scheduler selection, selected-node delivery, policy activation, runtime binding, Control acknowledgement, and durable evidence intake. Protected container start then failed under the superseded runtime boundary. The application process did not start. The prior cleanup passed.
+Automated verification: PreparedContainer ABI, compiled BPF object, node behavior, strict Clippy, Helm verification, VM-harness behavior, independent manual-example behavior, and diff checks passed. The full current-source workspace gate and physical procedure are not run yet.
+Platform/kernel/runtime manifests: the Helm package contains both generated closed CRDs, separate writer and Control RBAC, the exact DaemonSet reader Role, the Control Deployment and Service, fail-closed admission webhooks, the node DaemonSet, two atomically owned `createRuntime` hook registrations, and bounded uninstall cleanup. No live current-source platform manifest was recorded.
+Performance/capacity results: no new benchmark. Runtime stages are limited to 128 records and 30 seconds. PreparedContainer is designed for one binding, one initial thread group of at most 256 threads, one application activation, and a 10-second kernel deadline. Evidence gRPC messages are limited to 4 MiB. Policy gRPC messages are limited to 128 KiB. The pending evidence window is limited to 4,096 records. Health reports fixed counts and booleans only.
+Unsupported/degraded paths: PreparedContainer is not physically qualified. The current physical protected-start, lifecycle, evidence failure, watch-compaction, network-partition, and storage-outage cases are Not run. Phase 7 graph and finding behavior is not present.
+Remaining work in this phase: run the full current-source workspace gate and the physical procedure through protected start, application activation, exact target, exception, runtime task, policy terminal cleanup, Node UID replacement, host epoch, watch, evidence failure, restart, uninstall, and cleanup cases.
 Next phase not authorized: yes.
 ```
