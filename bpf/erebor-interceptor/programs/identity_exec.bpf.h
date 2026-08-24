@@ -33,8 +33,9 @@ static __always_inline int observe_bprm_effect(struct linux_binprm *bprm)
             kernel_effect_operation_v1_execute, 0);
     result = prepared_exec_policy_gate(file);
     if (result != PREPARED_EXEC_POLICY_MISS_V1) {
+        /* The positive value is internal. Never return it from the LSM hook. */
         if (result)
-            return result;
+            return result < 0 ? result : identity_deny(config);
         if (!label || !pending)
             return 0;
         if (task_cgroup(task, &cgroup))
