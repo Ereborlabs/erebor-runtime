@@ -619,6 +619,7 @@ impl NodeChassis {
                 }
             };
             self.trust = trust_candidate;
+            let mut reconnect_immediately = false;
             match connection {
                 Ok(mut connection) => {
                     self.policy_delivery.begin_control_session();
@@ -796,7 +797,10 @@ impl NodeChassis {
                                 {
                                     PolicyControlStepV1::Continue => {}
                                     PolicyControlStepV1::Idle => policy_work.pending = false,
-                                    PolicyControlStepV1::Reconnect => break,
+                                    PolicyControlStepV1::Reconnect => {
+                                        reconnect_immediately = true;
+                                        break;
+                                    }
                                     PolicyControlStepV1::Activated => {
                                         prevention_enabled = self.policy.as_ref().is_some_and(
                                             crate::NodePolicyGenerationOwner::prevention_enabled,
@@ -878,6 +882,7 @@ impl NodeChassis {
                                                 });
                                         }
                                         if recovered {
+                                            reconnect_immediately = true;
                                             break;
                                         }
                                     }
@@ -939,7 +944,11 @@ impl NodeChassis {
                 ),
             });
             control_disconnected_since = tokio::time::Instant::now();
-            let reconnect = tokio::time::sleep(backoff);
+            let reconnect = tokio::time::sleep(if reconnect_immediately {
+                Duration::ZERO
+            } else {
+                backoff
+            });
             tokio::pin!(reconnect);
             loop {
                 tokio::select! {
@@ -976,14 +985,8 @@ impl NodeChassis {
                     } => {
                         match self.reconcile_bindings(false).await {
                             ReconciliationOutcome::Healthy => {
-                                if !evidence_healthy {
-                                    evidence_healthy = true;
-                                    restore_evidence_claims(
-                                        &mut self.registration,
-                                        &healthy_identity_capabilities,
-                                        healthy_effect_prevention_claims,
-                                    );
-                                }
+                                // A disconnected node cannot reopen the Control-backed
+                                // evidence claim. The connected recovery path owns that step.
                                 if !identity_healthy && kernel_healthy {
                                     identity_healthy = true;
                                     restore_identity_claims(
@@ -1017,10 +1020,14 @@ impl NodeChassis {
                     }
                 }
             }
-            backoff = cmp::min(
-                backoff.saturating_mul(2),
-                self.config.control.reconnect_maximum(),
-            );
+            backoff = if reconnect_immediately {
+                self.config.control.reconnect_minimum()
+            } else {
+                cmp::min(
+                    backoff.saturating_mul(2),
+                    self.config.control.reconnect_maximum(),
+                )
+            };
         }
         let _result = self
             .observations
