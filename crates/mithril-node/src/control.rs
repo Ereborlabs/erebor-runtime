@@ -34,6 +34,7 @@ const CONTROL_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const CONTROL_UNARY_TIMEOUT: Duration = Duration::from_secs(1);
 const CONTROL_READINESS_RENEWAL_INTERVAL: Duration = Duration::from_secs(1);
 
+#[derive(Clone)]
 pub struct NodeControlConnector {
     config: NodeControlConfig,
     node_id: String,

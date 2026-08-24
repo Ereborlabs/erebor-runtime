@@ -568,48 +568,57 @@ impl NodeChassis {
                 self.effect_reader.is_some() || self.config.evidence.is_some();
             // A reconnect must not reuse an absence claim from before policy activation.
             self.refresh_registration_authority_state()?;
-            // Continue runtime admission while Control reconnects so held starts fail closed.
-            let connection = tokio::select! {
-                result = self.connector.connect(
+            let mut trust_candidate = self.trust.connection_candidate();
+            let connection = {
+                let connector = self.connector.clone();
+                let connection_attempt = connector.connect(
                     self.registration.clone(),
                     kernel_healthy && identity_healthy && evidence_healthy,
-                    &mut self.trust,
-                ) => result,
-                _instant = tokio::time::sleep_until(evidence_control_deadline),
-                    if evidence_healthy && evidence_configured => {
-                    let _result = self.observations.mark_coverage_gapped(
-                        CoverageGapReasonV1::ControlDelay,
-                    );
-                    evidence_healthy = false;
-                    close_evidence_claims(&mut self.registration);
-                    continue 'running;
-                }
-                changed = shutdown.changed() => {
-                    let _result = changed;
-                    break;
-                }
-                request = next_runtime_admission(&mut self.runtime_admission_requests) => {
-                    self.answer_runtime_admission(request).await?;
-                    continue 'running;
-                }
-                result = effect_reader_finished(&mut effect_task) => {
-                    let _result = self.observations.mark_coverage_gapped(
-                        CoverageGapReasonV1::ReaderStopped,
-                    );
-                    run_error = result.err();
-                    effect_task = None;
-                    break;
-                }
-                result = runtime_admission_finished(&mut runtime_admission_task) => {
-                    runtime_admission_task = None;
-                    run_error = runtime_admission_exit(
-                        &self.readiness,
-                        result,
-                        *shutdown.borrow(),
-                    );
-                    break;
+                    &mut trust_candidate,
+                );
+                tokio::pin!(connection_attempt);
+                // A hook can arrive after registration but before readiness. Keep that one
+                // handshake alive while the held task receives its fail-closed response.
+                loop {
+                    tokio::select! {
+                        result = &mut connection_attempt => break result,
+                        _instant = tokio::time::sleep_until(evidence_control_deadline),
+                            if evidence_healthy && evidence_configured => {
+                            let _result = self.observations.mark_coverage_gapped(
+                                CoverageGapReasonV1::ControlDelay,
+                            );
+                            evidence_healthy = false;
+                            close_evidence_claims(&mut self.registration);
+                            continue 'running;
+                        }
+                        changed = shutdown.changed() => {
+                            let _result = changed;
+                            break 'running;
+                        }
+                        request = next_runtime_admission(&mut self.runtime_admission_requests) => {
+                            self.answer_runtime_admission(request).await?;
+                        }
+                        result = effect_reader_finished(&mut effect_task) => {
+                            let _result = self.observations.mark_coverage_gapped(
+                                CoverageGapReasonV1::ReaderStopped,
+                            );
+                            run_error = result.err();
+                            effect_task = None;
+                            break 'running;
+                        }
+                        result = runtime_admission_finished(&mut runtime_admission_task) => {
+                            runtime_admission_task = None;
+                            run_error = runtime_admission_exit(
+                                &self.readiness,
+                                result,
+                                *shutdown.borrow(),
+                            );
+                            break 'running;
+                        }
+                    }
                 }
             };
+            self.trust = trust_candidate;
             match connection {
                 Ok(mut connection) => {
                     self.policy_delivery.begin_control_session();

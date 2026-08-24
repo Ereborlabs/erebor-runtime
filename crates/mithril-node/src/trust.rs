@@ -69,6 +69,14 @@ impl TrustCache {
         &self.installed
     }
 
+    pub(crate) fn connection_candidate(&self) -> Self {
+        // Keep new trust private to the handshake until Control accepts the session.
+        Self {
+            path: self.path.clone(),
+            installed: self.installed.clone(),
+        }
+    }
+
     pub fn install(
         &mut self,
         generation: u64,
