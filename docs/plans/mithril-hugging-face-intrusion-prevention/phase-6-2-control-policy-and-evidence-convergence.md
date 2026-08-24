@@ -157,8 +157,8 @@ Scheduler submits the Pod binding
   -> mithril-node stages, reads back, probes, and activates the exact policy generation
   -> mithril-node publishes the exact cgroup binding as PreparedContainer
   -> the runtime gate releases that process only after policy and binding readback
-  -> BPF recognizes only the exact prepared binding and held initial thread group
-  -> the trusted runtime thread group completes implementation-specific setup
+  -> BPF recognizes the exact prepared container binding
+  -> every runtime action in that binding can complete implementation-specific setup
   -> runtime-created objects gain no independent or inherited workload authority
   -> a fixed monotonic deadline closes an incomplete prepared state
   -> the first policy-approved application exec atomically changes PreparedContainer to Active
@@ -627,27 +627,24 @@ readback. Publish the exact binding as `PreparedContainer` only after all
 checks succeed. A failed publication or response delivery must remove the new
 binding and prepared state before the runtime can retry.
 
-Bind `PreparedContainer` to the exact binding lifetime and held initial thread
-group. The held PID is the kernel thread-group leader and the exact host TGID.
-The leader owns the canonical initial entry. A thread that existed before
-binding publication can have a restricted external-root entry because Mithril
-did not observe its creation. A thread created after publication inherits its
-native identity through `task_alloc`. In both cases, the BPF effect gate must
-resolve the exact kernel group leader and verify its canonical prepared entry.
-A numeric PID or TGID match without that leader identity is insufficient.
+Bind `PreparedContainer` to the exact container binding lifetime. Do not bind
+it to one runtime binary, syscall set, operation set, thread group, or helper
+process shape. The held PID proves the initial cgroup lifetime and owns the
+canonical initial entry before the node returns allow. It does not define the
+runtime implementation after that point.
 
-Before it returns allow, `WorkloadBindingOwner` runs two bounded task
-reconciliation passes. The first pass establishes the leader. The second pass
-labels a sibling that the iterator saw before the leader. The owner then reads
-the live `/proc/<leader>/task` membership, keeps a pidfd for each member,
-verifies every task label and coordinate, and reads the membership again. The
-group must be stable and contain at most 256 threads. A changed, incomplete, or
-oversized group rejects the runtime request and removes the new binding.
+During `PREPARED`, BPF allows every governed action from a task that resolves
+to the exact binding ID and nonce, node boot and label epoch, execution set,
+profile generation, and live cgroup binding. A task without an identity first
+receives the existing restricted external-root identity for that exact
+binding. The action then uses the same prepared-binding bypass. This rule lets
+`runc`, `crun`, `youki`, or another qualified runtime change its threads,
+helpers, anonymous objects, IPC, or setup operations without a Mithril update.
 
 Use one non-evictable kernel transition with `UNARMED`, `PREPARED`,
 `EXEC_PENDING`, `ACTIVE`, `EXPIRED`, and fail-closed `CORRUPT` states and one
-monotonic deadline. Treat every governed effect from the exact prepared thread
-group as trusted node runtime infrastructure until a signed-policy-approved
+monotonic deadline. Treat every governed effect from the exact prepared
+binding as trusted node runtime infrastructure until a signed-policy-approved
 application exec commits or the deadline expires. Do not identify the runtime
 by a `runc`, `crun`, or `youki` syscall or operation sequence. Do not record
 anonymous files, pipes, Unix endpoints, root handles, network destinations, or
@@ -656,15 +653,15 @@ other runtime-created objects as independent authority.
 `EXEC_PENDING` reserves one exact task across the multi-pass exec path and
 returns to `PREPARED` only when that exec fails before commit. A
 runtime-internal exec that does not satisfy the signed workload policy remains
-in `PREPARED`. It does not activate workload authority. Another TGID, binding,
-container lifetime, node session, or later process cannot use the prepared
+in `PREPARED`. It does not activate workload authority. A task outside the
+exact binding, container lifetime, or node session cannot use the prepared
 state. The binding state is a trust-boundary state. It is not a workload policy
 permission, exception, or transferable object authority.
 
 When an exact executable candidate satisfies the active signed policy,
-atomically reserve the transition from any exact thread-group member and commit
+atomically reserve the transition from any task in the exact binding and commit
 `ACTIVE` with the normal workload execution identity. This binding transition
-removes prepared authority from the complete thread group. A failed exec
+removes prepared authority from every task in that binding. A failed exec
 restores only its own reservation. After
 `ACTIVE`, every file, network, IPC, process, device, privilege, mount, and exec
 effect uses only normal policy and exception authority. Runtime-created
@@ -796,7 +793,7 @@ Upstream-adoption dossier IDs used: none.
 Fixture cases and exact physical results: the current physical two-node fixture and manual example are Not run. The prior old-API run passed node readiness, typed RBAC review, admission, scheduler selection, selected-node delivery, policy activation, runtime binding, Control acknowledgement, and durable evidence intake. Protected container start then failed under the superseded runtime boundary. The application process did not start. The prior cleanup passed.
 Automated verification: PreparedContainer ABI, compiled BPF object, node behavior, strict Clippy, Helm verification, VM-harness behavior, independent manual-example behavior, and diff checks passed. The full current-source workspace gate and physical procedure are not run yet.
 Platform/kernel/runtime manifests: the Helm package contains both generated closed CRDs, separate writer and Control RBAC, the exact DaemonSet reader Role, the Control Deployment and Service, fail-closed admission webhooks, the node DaemonSet, two atomically owned `createRuntime` hook registrations, and bounded uninstall cleanup. No live current-source platform manifest was recorded.
-Performance/capacity results: no new benchmark. Runtime stages are limited to 128 records and 30 seconds. PreparedContainer is designed for one binding, one initial thread group of at most 256 threads, one application activation, and a 10-second kernel deadline. Evidence gRPC messages are limited to 4 MiB. Policy gRPC messages are limited to 128 KiB. The pending evidence window is limited to 4,096 records. Health reports fixed counts and booleans only.
+Performance/capacity results: no new benchmark. Runtime stages are limited to 128 records and 30 seconds. PreparedContainer is designed for one exact binding, one application activation, and a 10-second kernel deadline. Evidence gRPC messages are limited to 4 MiB. Policy gRPC messages are limited to 128 KiB. The pending evidence window is limited to 4,096 records. Health reports fixed counts and booleans only.
 Unsupported/degraded paths: PreparedContainer is not physically qualified. The current physical protected-start, lifecycle, evidence failure, watch-compaction, network-partition, and storage-outage cases are Not run. Phase 7 graph and finding behavior is not present.
 Remaining work in this phase: run the full current-source workspace gate and the physical procedure through protected start, application activation, exact target, exception, runtime task, policy terminal cleanup, Node UID replacement, host epoch, watch, evidence failure, restart, uninstall, and cleanup cases.
 Next phase not authorized: yes.
