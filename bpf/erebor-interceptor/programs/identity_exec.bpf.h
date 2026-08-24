@@ -32,12 +32,15 @@ static __always_inline int observe_bprm_effect(struct linux_binprm *bprm)
             NULL, kernel_effect_family_v1_exec,
             kernel_effect_operation_v1_execute, 0);
     result = prepared_exec_policy_gate(file);
-    if (result != PREPARED_EXEC_POLICY_MISS_V1) {
-        /* The positive value is internal. Never return it from the LSM hook. */
-        if (result)
-            return result < 0 ? result : identity_deny(config);
-        if (!label || !pending)
-            return 0;
+    if (result)
+        return result;
+    if (!label || !pending)
+        return 0;
+    scratch = identity_scratch_record();
+    if (!scratch)
+        return identity_deny(config);
+    if (!(scratch->effect_gate_flags &
+          EFFECT_GATE_PREPARED_EXEC_POLICY_MISS_V1)) {
         if (task_cgroup(task, &cgroup))
             return identity_deny(config);
         binding = binding_for_cgroup(cgroup, &binding_lookup);
@@ -61,7 +64,6 @@ static __always_inline int observe_bprm_effect(struct linux_binprm *bprm)
         return identity_deny(config);
     pending->prepared_runtime_exec = 1;
     pending->transition_version++;
-    scratch = identity_scratch_record();
     return prepared_runtime_effect_result(scratch);
 }
 

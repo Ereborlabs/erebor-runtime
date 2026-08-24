@@ -88,6 +88,16 @@ static __always_inline int emit_effect_observation(
     return result;
 }
 
+/* Keep the internal miss in scratch so each LSM result stays valid. */
+static __always_inline int prepared_exec_policy_miss(
+    identity_runtime_config_v1 *config, struct identity_scratch_v1 *scratch)
+{
+    if (!scratch)
+        return identity_deny(config);
+    scratch->effect_gate_flags |= EFFECT_GATE_PREPARED_EXEC_POLICY_MISS_V1;
+    return 0;
+}
+
 static __always_inline int hard_effect_result(
     identity_runtime_config_v1 *config, struct identity_scratch_v1 *scratch,
     __u8 reason)
@@ -100,7 +110,7 @@ static __always_inline int hard_effect_result(
         (reason == effect_observation_reason_v1_unresolved_object ||
          reason == effect_observation_reason_v1_unsupported_object ||
          reason == effect_observation_reason_v1_exception_unavailable))
-        return PREPARED_EXEC_POLICY_MISS_V1;
+        return prepared_exec_policy_miss(config, scratch);
     if (reason == effect_observation_reason_v1_unresolved_object ||
         reason == effect_observation_reason_v1_unsupported_object) {
         effect_observation_health_v1 *health = effect_health_record();
@@ -147,7 +157,7 @@ static __always_inline int path_tree_effect_result(
     if (scratch &&
         scratch->effect_gate_flags &
             EFFECT_GATE_PREPARED_EXEC_EVALUATION_V1)
-        return PREPARED_EXEC_POLICY_MISS_V1;
+        return prepared_exec_policy_miss(config, scratch);
     scratch->observation.configured_errno = result;
     return emit_effect_observation(
         scratch, result, effect_observation_reason_v1_path_tree_policy_deny,
@@ -275,7 +285,7 @@ static __always_inline int apply_effect_decision(
         generation->mode == policy_generation_mode_v1_protect) {
         if (scratch->effect_gate_flags &
             EFFECT_GATE_PREPARED_EXEC_EVALUATION_V1)
-            return PREPARED_EXEC_POLICY_MISS_V1;
+            return prepared_exec_policy_miss(config, scratch);
         return emit_effect_observation(
             scratch, identity_errno(decision->errno),
             effect_observation_reason_v1_exact_policy_deny,
@@ -738,7 +748,6 @@ static __noinline int identity_effect_actor_gate(
     struct file *file, __u16 effect_family, __u16 operation, int ret)
 {
     struct identity_scratch_v1 *scratch = identity_scratch_record();
-    int result;
 
     if (scratch) {
         scratch->effect_gate_flags = EFFECT_GATE_DEFER_DECISION_V1;
@@ -747,10 +756,8 @@ static __noinline int identity_effect_actor_gate(
     }
     if (!ret)
         prepare_effect_identity();
-    result = dispatch_identity_effect_gate(file, NULL, effect_family,
-                                           operation, ret);
-    /* Internal decision sentinels must not cross an LSM hook boundary. */
-    return result > 0 ? identity_deny(identity_runtime_config()) : result;
+    return dispatch_identity_effect_gate(file, NULL, effect_family, operation,
+                                         ret);
 }
 
 static __noinline int identity_path_effect_gate(const struct path *path,

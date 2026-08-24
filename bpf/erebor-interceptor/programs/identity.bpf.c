@@ -268,7 +268,6 @@ static __noinline int identity_path_effect_gate(const struct path *path,
                                                 __u16 operation, int ret);
 static __noinline int identity_effect_actor_gate(
     struct file *file, __u16 effect_family, __u16 operation, int ret);
-#define PREPARED_EXEC_POLICY_MISS_V1 1
 static __always_inline int prepared_runtime_effect_result(
     struct identity_scratch_v1 *scratch);
 static __noinline int prepared_exec_policy_gate(struct file *file);
