@@ -495,23 +495,27 @@ impl ControlPlane {
         node_id: &str,
         context: &NodeSessionContext,
     ) -> Result<crate::AuthenticatedEvidenceNodeV1, Status> {
-        let enrolled = self.allowed_nodes.get(node_id).ok_or_else(|| {
-            Status::permission_denied("node identity is not enrolled for evidence")
-        })?;
-        let tenant = uuid::Uuid::parse_str(&enrolled.tenant_id)
-            .map_err(|_| Status::failed_precondition("node tenant enrollment is invalid"))?;
         let node_boot_id: [u8; 16] = context
             .node_boot_id
             .as_slice()
             .try_into()
             .map_err(|_| Status::invalid_argument("node boot identity is not Id128"))?;
         Ok(crate::AuthenticatedEvidenceNodeV1 {
-            tenant_id: *tenant.as_bytes(),
+            tenant_id: self.evidence_tenant(node_id)?,
             node_id: node_id.to_owned(),
             node_boot_id,
             label_epoch: self
                 .session_label_epoch(&StreamIdentity::new(node_id.to_owned(), context)?)?,
         })
+    }
+
+    fn evidence_tenant(&self, node_id: &str) -> Result<[u8; 16], Status> {
+        let enrolled = self.allowed_nodes.get(node_id).ok_or_else(|| {
+            Status::permission_denied("node identity is not enrolled for evidence")
+        })?;
+        uuid::Uuid::parse_str(&enrolled.tenant_id)
+            .map(|tenant| *tenant.as_bytes())
+            .map_err(|_| Status::failed_precondition("node tenant enrollment is invalid"))
     }
 
     fn require_current_trust(
@@ -927,7 +931,6 @@ impl NodeEvidence for ControlPlane {
         // A degraded node must upload retained evidence before it can recover readiness.
         self.require_session(&node_id, context)?;
         self.require_current_trust(&node_id, context)?;
-        let authenticated = self.authenticated_evidence_node(&node_id, context)?;
         let batch = request
             .batch
             .as_ref()
@@ -935,6 +938,11 @@ impl NodeEvidence for ControlPlane {
         let evidence = self.evidence.as_ref().ok_or_else(|| {
             Status::failed_precondition("Control has no durable evidence intake owner")
         })?;
+        let authenticated = evidence.authenticate_retained_batch(
+            self.evidence_tenant(&node_id)?,
+            &node_id,
+            batch,
+        )?;
         Ok(Response::new(evidence.receive(&authenticated, batch)?))
     }
 }

@@ -4,6 +4,7 @@
 {{- $runtimeHookConfigDirectory := required "node.runtimeHook.hostConfigDirectory is required" .Values.node.runtimeHook.hostConfigDirectory }}
 {{- $runtimeHookConfigParent := dir $runtimeHookConfigDirectory }}
 {{- $runtimeHookConfigBase := base $runtimeHookConfigDirectory }}
+{{- $runtimeHookInjectorEnabled := and .Values.node.runtimeHook.install .Values.node.runtimeHook.injector.enabled }}
 {{- $legacyRuntimeHookBinaryDirectory := "/opt/mithril/bin" }}
 {{- $migrateLegacyRuntimeHook := ne .Values.node.runtimeHook.hostBinaryDirectory $legacyRuntimeHookBinaryDirectory }}
 {{- if or (ne $runtimeAdmissionSocket $cleanRuntimeAdmissionSocket) (ne (dir $runtimeAdmissionSocket) "/run/mithril") }}
@@ -11,6 +12,9 @@
 {{- end }}
 {{- if or (ne $runtimeHookConfigDirectory (clean $runtimeHookConfigDirectory)) (eq $runtimeHookConfigParent "/") }}
 {{- fail "node.runtimeHook.hostConfigDirectory must be normalized below a non-root parent" }}
+{{- end }}
+{{- if and $runtimeHookInjectorEnabled (not (has $runtimeHookConfigDirectory (list "/etc/containers/oci/hooks.d" "/usr/share/containers/oci/hooks.d" "/usr/libexec/oci/hooks.d"))) }}
+{{- fail "the stock runtime-hook injector requires one supported OCI hook directory" }}
 {{- end }}
 apiVersion: v1
 kind: ServiceAccount
@@ -157,6 +161,34 @@ spec:
             - name: container-runtime
               mountPath: {{ .Values.node.containerRuntimeSocket | quote }}
               readOnly: true
+{{- if $runtimeHookInjectorEnabled }}
+        - name: runtime-hook-injector
+          image: {{ .Values.node.runtimeHook.injector.image | quote }}
+          imagePullPolicy: {{ .Values.node.runtimeHook.injector.imagePullPolicy }}
+          args: ["-idx", {{ .Values.node.runtimeHook.injector.pluginIndex | quote }}]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 2m
+              memory: 5Mi
+          volumeMounts:
+            - name: nri-socket
+              mountPath: /var/run/nri/nri.sock
+            # The stock injector watches the same fixed directories as CRI-O.
+            - name: nri-hooks-etc
+              mountPath: /etc/containers/oci/hooks.d
+              readOnly: true
+            - name: nri-hooks-share
+              mountPath: /usr/share/containers/oci/hooks.d
+              readOnly: true
+            - name: nri-hooks-libexec
+              mountPath: /usr/libexec/oci/hooks.d
+              readOnly: true
+{{- end }}
       volumes:
         - name: node-config
           hostPath:
@@ -211,6 +243,24 @@ spec:
             # outside the NRI-watched directory.
             path: {{ $runtimeHookConfigParent | quote }}
             type: DirectoryOrCreate
+{{- if $runtimeHookInjectorEnabled }}
+        - name: nri-socket
+          hostPath:
+            path: {{ .Values.node.runtimeHook.injector.hostSocketPath | quote }}
+            type: Socket
+        - name: nri-hooks-etc
+          hostPath:
+            path: /etc/containers/oci/hooks.d
+            type: DirectoryOrCreate
+        - name: nri-hooks-share
+          hostPath:
+            path: /usr/share/containers/oci/hooks.d
+            type: DirectoryOrCreate
+        - name: nri-hooks-libexec
+          hostPath:
+            path: /usr/libexec/oci/hooks.d
+            type: DirectoryOrCreate
+{{- end }}
 {{- if $migrateLegacyRuntimeHook }}
         - name: runtime-hook-legacy-bin
           hostPath:

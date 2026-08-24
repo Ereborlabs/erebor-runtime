@@ -517,7 +517,7 @@ static __noinline int resolved_identity_effect_gate(struct file *file,
             effect_observation_reason_v1_corrupt_identity_or_generation);
     if (!(scratch->effect_gate_flags &
           EFFECT_GATE_PREPARED_EXEC_EVALUATION_V1) &&
-        prepared_container_actor_is_exact(binding, label, entry))
+        prepared_container_pre_active_actor_is_exact(binding, label, entry))
         return prepared_runtime_effect_result(scratch);
     if (!(scratch->effect_gate_flags & EFFECT_GATE_PATH_SUPPLIED_V1) &&
         file) {
@@ -1199,7 +1199,7 @@ static __always_inline bool initial_root_is_before_first_exec(void)
         !binding_matches_label(binding, label))
         return false;
     entry = bpf_map_lookup_elem(&entry_states, &label->entry_instance_id);
-    return prepared_container_actor_is_exact(binding, label, entry);
+    return prepared_container_pre_active_actor_is_exact(binding, label, entry);
 }
 
 static __always_inline int mount_mutation_effect(__u16 operation, int ret)

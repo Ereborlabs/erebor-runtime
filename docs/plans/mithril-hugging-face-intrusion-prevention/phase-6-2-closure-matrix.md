@@ -17,11 +17,9 @@ physical procedure.
 
 The earlier physical Kubernetes run remains partial evidence. It reached
 scheduler binding, selected-node delivery, policy activation, runtime binding,
-and durable evidence intake. Stock `runc` container start then failed because
-its bootstrap uses an anonymous file write and IPC access that have no typed
-authority. The approved `RuntimeBootstrap` design is now part of the
-architecture and phase plan. The current source implements it, but no current
-physical result proves it yet.
+and durable evidence intake. Stock `runc` container start then failed under the
+superseded runtime-bootstrap model. The current source implements the approved
+`PreparedContainer` boundary, but no current physical result proves it yet.
 
 The amendment is not closed by custom resource reconciliation alone. A result
 is complete only when a matching Pod can be scheduled by the Kubernetes
@@ -41,8 +39,8 @@ fresh-root checks.
 | Which exception can widen policy | One `WorkloadProtectionException` names a base-policy file grant, exact Pod UID, matching container, bounded duration, and bounded uses. Control resolves the precompiled cells and exact active generation. | A user approval proof, compiled key, policy digest, node target, network or IPC rule, or an exception outside the base grant. |
 | Whether a node can receive a new protected Pod | Control verifies the authenticated node session, current boot, BPF and identity readiness, and DaemonSet eligibility. It projects the result as a ready label and quarantine-taint removal. | A self-applied node label, DaemonSet Pod readiness alone, or stale Node status. |
 | Which node receives policy | The persisted Pod UID and scheduler-selected `spec.nodeName` create one immutable rollout target. | Cluster-wide broadcast, all DaemonSet nodes, or admission-time prediction. |
-| Whether the initial process can start | The selected `mithril-node` verifies the exact OCI prestart request, active policy generation, and cgroup binding before it releases the held process. | Pod admission success, scheduler binding success, Control status, or policy download alone. |
-| Which bootstrap effects can occur | BPF grants the internal `RuntimeBootstrap` identity only to the exact held initial entry, fixed operation classes, and anonymous objects created by that entry before the deadline. | A CRD field, path-backed file, network destination, another entry or container, later external root, or post-handoff process. |
+| Whether the initial process can start | The selected `mithril-node` matches two ordered `createRuntime` calls, verifies CRI `Created` state, active policy, the exact held TGID, and the cgroup binding, then reads back `PreparedContainer`. | Pod admission success, scheduler binding success, Control status, policy download, or the first runtime-fact hook alone. |
+| Which runtime setup can occur | BPF trusts the exact prepared binding and initial runtime entry until one deadline. It does not use a runtime-specific operation list. Runtime-created objects receive no independent authority. | A CRD field, another binding, another entry, a later external root, an expired state, or an object that the active application uses without normal policy authority. |
 
 ## Deliverable Closure
 
@@ -55,12 +53,12 @@ fresh-root checks.
 | `D6.2.5` | **Partial.** | Automated intake failure, duplicate, gap, reorder, replay, storage, restart, and WAL migration tests pass. The required physical evidence variants remain `Not run`. |
 | `D6.2.6` | **Implemented and automated; physical result not done.** | Tests cover policy target shrink, restrictive retirement, terminal closure, exception use, expiry, revocation, target disappearance, restart, reconnect, and physical-session settlement. Run the current physical lifecycle. |
 | `D6.2.7` | **Implemented and automated; physical result not done.** | Both statuses are bounded and contain no authority material. Separate writer roles and Control status-only permissions are rendered and exercised by typed authorization reviews. Run them against the current installed CRDs. |
-| `D6.2.8` | **Implemented; physical protected start not done.** | Run the complete current policy and exception transaction through application start and cleanup with the bounded RuntimeBootstrap owner active. |
+| `D6.2.8` | **Implemented; physical protected start not done.** | Run the complete current policy and exception transaction through application start and cleanup with the `PreparedContainer` boundary active. |
 | `D6.2.9` | **Implemented and scripted; physical result not done.** | Automated tests cover session expiry, reconnect, Node UID rebind, boot and label reset, and startup absence proof. The physical fixture scripts quarantine, UID replacement, selector re-entry, process restart, and host reboot. Run the fixture. |
 | `D6.2.10` | **Implemented and automated; physical result not done.** | Policy and container matching, immutable image pins, Pod mutation, update validation, binding validation, and scheduler choice tests pass. Run the current physical admission flow. |
 | `D6.2.11` | **Implemented and automated; physical result not done.** | Exact selected-node delivery, activation, staged runtime fact equality, cgroup binding, cancellation rollback, runtime lifetime replacement, terminal cleanup, and timeout tests pass. Run the stock-runtime process-release path physically. |
-| `D6.2.12` | **Implemented and rendered; physical result not done.** | The chart packages both CRDs, RBAC, admission, node and Control workloads, atomically owned createContainer and prestart hooks, bounded cleanup, automated fixture, and independent manual example. Run install, full scenario, uninstall, and host-path cleanup physically. |
-| `D6.2.13` | **Implemented and automated; physical result not done.** | Focused behavior tests cover createContainer staging without PID authority, exact prestart matching, missing and expired stages, node arm and recovery transitions, Helm hook ordering, and cleanup. ABI and compiled-object checks cover the bounded BPF binding and anonymous-object state. Prove the BPF effects and complete handoff on the current stock runtime. |
+| `D6.2.12` | **Implemented and rendered; physical result not done.** | The chart packages both CRDs, RBAC, admission, node and Control workloads, two atomically owned `createRuntime` hooks, bounded cleanup, an automated fixture, and an independent manual example. Run install, full scenario, uninstall, and host-path cleanup physically. |
+| `D6.2.13` | **Implemented and automated; physical result not done.** | Behavior tests cover fact-only staging, exact second-hook matching, held-TGID publication, missing and expired stages, recovery, hook ordering, and cleanup. ABI and compiled-object checks cover one non-evictable binding transition with no runtime-object authority map. Prove setup, activation, expiry, and post-activation denial on the current stock runtime. |
 
 ## Automated Proof Matrix
 
@@ -77,8 +75,8 @@ fresh-root checks.
 | Scheduler binding | A binding to an eligible ready node with the current session succeeds. | A binding to another node, UID, boot, or stale session rejects. |
 | Workload target | Persisted Pod UID, selected node, controller, ServiceAccount, container, and digest create one immutable exact target. | Pod deletion, UID reuse, node change, or container change retires the old target. |
 | Policy delivery | Only the selected node can inventory, fetch, verify, and acknowledge the target-bound candidate. | Every other node and boot rejects the candidate even when it has the same signed policy artifact. |
-| Runtime gate | The held OCI initial PID is released after policy activation and exact cgroup binding readback. | Missing candidate, wrong policy annotations, PID or cgroup mismatch, timeout, disconnect, active socket-owner replacement, and restart reject without release. |
-| Runtime bootstrap | The exact initial entry creates and uses only owned anonymous bootstrap objects, then one policy-approved application exec consumes the authority. | Authority before prestart, a path-backed or network object, another entry or binding, an unsealed self-exec, expiry, replay, or any post-handoff use rejects. |
+| Runtime gate | The first `createRuntime` call stages facts only. The second call stays held until the node publishes and reads back the exact cgroup, TGID, binding, policy generation, and `PreparedContainer` state. | Missing candidate, changed stage, wrong policy annotations, TGID or cgroup mismatch, timeout, disconnect, active socket-owner replacement, and restart reject without release. |
+| Prepared container | The exact initial runtime entry is trusted during setup without a runtime-specific operation list. The first exec that the signed policy permits changes the binding to `ACTIVE`. | Another binding, entry, external root, expired state, ambiguous restart, or any post-activation effect without normal policy or exception authority rejects. Runtime-created objects carry no separate grant. |
 | Retirement | A signed restrictive successor replaces the exact active base target. A complete relist retires a durable base source. A signed exception revocation closes only its runtime instance. | A partial relist, historical event, API loss, Control loss, or recreated exception cannot erase the last valid base generation or restore consumed authority. |
 
 ## Physical Proof Matrix
@@ -93,7 +91,7 @@ current CRDs or fixture.
 | --- | --- | --- |
 | New eligible node | **Prior pass; current not run** | The old run observed initial quarantine and ready projection. The current fixture also requires same-name UID replacement and host epoch advance. |
 | Two eligible nodes | **Prior pass; current not run** | The old run observed one scheduler-selected node and selected-node delivery. The current fixture compares the complete typed target with live Node and Pod facts. |
-| Protected start | **Prior fail; current not run** | The old run activated policy and binding. Stock `runc` then used anonymous-file and IPC operations with no typed authority. The application did not run. |
+| Protected start | **Prior fail; current not run** | The old run used the superseded runtime-bootstrap model. The current fixture requires ordered hook readback, exact prepared state, application activation, and post-activation IPC denial. |
 | Runtime and policy lifecycle | **Not run** | The current fixture contains task replacement, exception target retirement, terminal cleanup, restart, no-root replay, and fresh-root checks. |
 | Node lifecycle | **Not run** | The current fixture contains session loss, quarantine, same-name Node UID replacement, DaemonSet exclusion and re-entry, node process restart, and host reboot checks. |
 | Evidence failure variants | **Not run** | Automated tests pass. Physical duplicate, gap, reorder, storage failure, restart, and WAL truncation remain required. |
@@ -117,8 +115,8 @@ example behavior suite passed. `git diff --check` passed.
 
 These automated results prove the current API and source behavior. They do not
 change an unrun physical case to `Pass`. The previous live cluster case used
-the old API, passed through runtime binding and durable evidence intake, and
-then failed stock-runtime protected start.
+the old API and the superseded runtime boundary. It passed through runtime
+binding and durable evidence intake, then failed stock-runtime protected start.
 
 ## Unadvertised Work
 

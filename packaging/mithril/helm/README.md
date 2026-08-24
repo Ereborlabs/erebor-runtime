@@ -83,10 +83,11 @@ hook stages immutable runtime facts. The second hook admits PreparedContainer.
 The default binary
 directory is `/usr/libexec/oci/hooks.d`, which is visible to the stock NRI
 hook-injector. CRI-O can read the default configuration directory directly.
-For containerd, install the stock NRI hook-injector and configure it to read
-`node.runtimeHook.hostConfigDirectory`. The injector must also mount
-`node.runtimeHook.hostBinaryDirectory`. Do this before you create a protected
-Pod. The package does not replace or patch the container runtime.
+For containerd, `mithril-node` runs the pinned stock NRI hook-injector as a
+sidecar in the same DaemonSet Pod. The sidecar has the same node selection and
+lifecycle as the Mithril node owner. Set `node.runtimeHook.injector.enabled` to
+`false` only when the runtime reads OCI hook configuration without NRI. The
+package does not replace or patch the container runtime.
 
 ## Verification
 

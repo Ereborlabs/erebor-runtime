@@ -259,6 +259,112 @@ async fn mtls_evidence_upload_replays_after_disconnect_and_advances_only_on_ack(
     Ok(())
 }
 
+#[tokio::test]
+async fn mtls_retained_evidence_uses_its_original_session_after_boot_and_control_restart(
+) -> Result<(), Box<dyn StdError>> {
+    let directory = tempfile::tempdir()?;
+    let certificates = Certificates::issue(false)?;
+    let files = certificates.write(directory.path())?;
+    let intake_path = directory.path().join("control-evidence");
+    let old_boot_id = [7; 16];
+    let new_boot_id = [8; 16];
+    let trust_generation = TrustGenerationV1 {
+        generation: 1,
+        bundle_digest: "d".repeat(64),
+        policy_issuer_sequence_epoch: 0,
+        policy_signers: Vec::new(),
+    };
+    let allowed = || {
+        vec![AllowedNodeIdentity {
+            node_id: "node-a".to_owned(),
+            certificate_sha256: certificates.node_digest(),
+            tenant_id: "00000000-0000-0001-0000-000000000002".to_owned(),
+        }]
+    };
+
+    let address = free_address()?;
+    let control =
+        ControlPlane::with_evidence_directory(allowed(), trust_generation.clone(), &intake_path)?;
+    let (shutdown, server) = start_server(address, &files, control);
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    let old_connector =
+        NodeControlConnector::new(files.node_config(address), "node-a".to_owned(), old_boot_id);
+    let mut trust = TrustCache::load(&directory.path().join("trust"))?;
+    let old_connection = old_connector
+        .connect(registration_for(old_boot_id, 1), false, &mut trust)
+        .await?;
+    drop(old_connection);
+    let _result = shutdown.send(());
+    server.await??;
+
+    let observations = EffectObservationStore::durable(
+        4,
+        directory.path().join("node-wal"),
+        EvidenceWalLimits::default(),
+        ObservationCanonicalizer::new(
+            EvidenceIdV1::new(1, 2),
+            EvidenceIdV1::new(3, 4),
+            1,
+            EvidenceIdV1::from(old_boot_id),
+        )?,
+    )?;
+    observations.record_bytes(
+        erebor_interceptor_abi::EffectObservationV1 {
+            source_sequence: 1,
+            source_cpu_id: 0,
+            task_cookie: 7,
+            reason: 9,
+            physical_result: 1,
+            ..erebor_interceptor_abi::EffectObservationV1::default()
+        }
+        .as_bytes(),
+    );
+    let retained = observations
+        .next_evidence_batch()
+        .ok_or("missing retained evidence batch")?;
+    let source_id = batch_source_id(&retained)?;
+
+    let control = ControlPlane::with_evidence_directory(allowed(), trust_generation, &intake_path)?;
+    let (shutdown, server) = start_server(address, &files, control);
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    let new_connector =
+        NodeControlConnector::new(files.node_config(address), "node-a".to_owned(), new_boot_id);
+    let mut connection = new_connector
+        .connect(registration_for(new_boot_id, 2), false, &mut trust)
+        .await?;
+    connection.send_evidence_batch(retained.clone()).await?;
+    let NodeControlMessage::EvidenceAck(ack) = connection.next_message().await? else {
+        return Err("Control did not acknowledge retained evidence".into());
+    };
+    observations.acknowledge_evidence(ack.try_into()?)?;
+    assert!(observations.next_evidence_batch().is_none());
+
+    let intake = EvidenceIntakeOwner::open(&intake_path)?;
+    let original_identity = EvidenceIntakeIdentityV1 {
+        tenant_id: EvidenceIdV1::new(1, 2).to_be_bytes(),
+        node_id: "node-a".to_owned(),
+        node_boot_id: old_boot_id,
+        label_epoch: 1,
+        source_id,
+        source_epoch: 1,
+    };
+    assert_eq!(
+        intake
+            .store()
+            .accepted_evidence_records(&original_identity)?,
+        retained
+            .records
+            .iter()
+            .map(|record| record.payload.clone())
+            .collect::<Vec<_>>()
+    );
+
+    drop(connection);
+    let _result = shutdown.send(());
+    server.await??;
+    Ok(())
+}
+
 fn batch_source_id(batch: &mithril_node::EvidenceBatchV1) -> Result<[u8; 16], Box<dyn StdError>> {
     let mut source_id = None;
     for record in &batch.records {
@@ -568,15 +674,23 @@ async fn assert_rejected_identity(
 }
 
 fn registration() -> NodeRegistration {
+    registration_for([7; 16], 1)
+}
+
+fn registration_for(node_boot_id: [u8; 16], label_epoch: u64) -> NodeRegistration {
     NodeRegistration {
         platform_digest: "a".repeat(64),
         program_digest: "b".repeat(64),
-        label_epoch: 1,
+        label_epoch,
         kernel_ready: true,
         effect_prevention_claims_enabled: false,
         kubernetes_node_name: String::new(),
         startup_absence_proof_digest: mithril_control::startup_absence_proof_digest(
-            "node-a", &[7; 16], 1, true, true,
+            "node-a",
+            &node_boot_id,
+            label_epoch,
+            true,
+            true,
         ),
         policy_authority_absent: true,
         exception_authority_absent: true,

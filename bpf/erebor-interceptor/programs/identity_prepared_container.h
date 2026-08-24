@@ -59,12 +59,14 @@ static __always_inline bool prepared_container_actor_is_exact(
            prepared_container_actor_identity_is_exact(binding, label, entry);
 }
 
-static __always_inline bool prepared_container_exec_actor_is_exact(
+static __always_inline bool prepared_container_pre_active_actor_is_exact(
     execution_set_binding_state_v1 *binding, const task_label_v1 *label,
     const entry_security_state_v1 *entry)
 {
     if (prepared_container_actor_is_exact(binding, label, entry))
         return true;
+    /* EXEC_PENDING is not active authority. Only the reserved exec task keeps
+     * the bootstrap bypass until the successful exec commit. */
     if (!binding || !label || !entry ||
         binding->lifecycle_state != binding_lifecycle_state_v1_active ||
         binding->prepared_container_state !=

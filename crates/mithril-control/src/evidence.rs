@@ -142,6 +142,52 @@ impl EvidenceIntakeOwner {
     }
 
     #[allow(clippy::result_large_err)]
+    pub(crate) fn authenticate_retained_batch(
+        &self,
+        tenant_id: [u8; 16],
+        node_id: &str,
+        batch: &EvidenceBatch,
+    ) -> std::result::Result<AuthenticatedEvidenceNodeV1, Status> {
+        let record = batch
+            .records
+            .first()
+            .ok_or_else(|| Status::invalid_argument("evidence batch has no records"))?;
+        let envelope = ObservationEnvelopeV1::from_wire_bytes(&record.payload)
+            .map_err(|_| Status::invalid_argument("evidence payload schema is invalid"))?;
+        let node_boot_id = envelope
+            .node_boot_id
+            .ok_or_else(|| Status::invalid_argument("node evidence has no boot identity"))?
+            .to_be_bytes();
+        if envelope.tenant_id.to_be_bytes() != tenant_id {
+            return Err(Status::permission_denied(
+                "evidence tenant identity is not authenticated",
+            ));
+        }
+        // Current mTLS and trust authenticate the sender. The retained record selects
+        // the exact durable session that originally owned its immutable stream.
+        let session = self
+            .store
+            .evidence_session_for_stream(
+                tenant_id,
+                node_id,
+                node_boot_id,
+                envelope.source_id.to_be_bytes(),
+                envelope.source_epoch,
+            )
+            .map_err(|_| {
+                Status::permission_denied(
+                    "evidence stream does not name one authenticated node session",
+                )
+            })?;
+        Ok(AuthenticatedEvidenceNodeV1 {
+            tenant_id,
+            node_id: node_id.to_owned(),
+            node_boot_id,
+            label_epoch: session.label_epoch,
+        })
+    }
+
+    #[allow(clippy::result_large_err)]
     pub fn receive(
         &self,
         authenticated: &AuthenticatedEvidenceNodeV1,
@@ -790,6 +836,42 @@ mod tests {
                 .accepted_evidence_records(&evidence_identity())?
                 .len(),
             3
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn intake_persists_only_the_new_suffix_of_an_extended_pending_retry(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let intake = EvidenceIntakeOwner::open(directory.path())?;
+        let first = batch(1, 2, [0; 32])?;
+        let previous = first
+            .records
+            .last()
+            .and_then(|record| record.record_sha256.as_slice().try_into().ok())
+            .ok_or("first batch has no final digest")?;
+        let pending = batch(3, 1, previous)?;
+        let extended = batch(3, 3, previous)?;
+
+        for batch in [&pending, &extended, &extended] {
+            let error = intake
+                .receive(&authenticated(), batch)
+                .err()
+                .ok_or("out-of-order evidence did not remain pending")?;
+            assert_eq!(error.code(), tonic::Code::Unavailable);
+        }
+        drop(intake);
+
+        let intake = EvidenceIntakeOwner::open(directory.path())?;
+        assert_eq!(intake.receive(&authenticated(), &first)?.last_cursor, 2);
+        assert_eq!(intake.contiguous_cursor(&evidence_identity())?, 5);
+        assert_eq!(
+            intake
+                .store()
+                .accepted_evidence_records(&evidence_identity())?
+                .len(),
+            5
         );
         Ok(())
     }

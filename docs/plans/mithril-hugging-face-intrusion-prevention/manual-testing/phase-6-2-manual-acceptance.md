@@ -4,10 +4,9 @@ Status: Not done. This procedure now targets the approved
 `WorkloadProtectionPolicy` and `WorkloadProtectionException` resources. The
 branch implements both resources and the current fixture flows. The current
 source is not physically tested. The earlier run used the superseded flattened
-resource and stopped when stock `runc` used bootstrap operations that have no
-typed authority. The bounded internal `RuntimeBootstrap` flow is approved but
-is now implemented in source and focused automated tests. It is not physically
-proved.
+resource and runtime-bootstrap model. The current source implements the
+approved `PreparedContainer` boundary and focused automated tests. It is not
+physically proved.
 
 Phase: [Control Policy And Evidence Convergence](../phase-6-2-control-policy-and-evidence-convergence.md)
 
@@ -31,14 +30,14 @@ provisioned two-node Kubernetes fixture passed readiness, typed
 RBAC review, CRD reconciliation, Pod mutation and bypass rejection, scheduler
 selection, exact selected-node delivery, policy activation, runtime binding,
 Control acknowledgement, and durable evidence intake. The procedure then
-failed protected container start. Stock `runc` used an anonymous file write
-and IPC access after binding. The BPF enforcement path denied both operations
-because they have no typed authority. The application process did not start.
+failed protected container start under the superseded runtime boundary. The
+application process did not start.
 
 The previous result is a product blocker, not test noise. The validated
-architecture forbids a broad `runc`, pipe, or socket exception. Completion
-requires current stock-runtime physical proof of the implemented typed,
-bounded `RuntimeBootstrap` authority.
+architecture forbids a runtime-specific operation list and runtime-object
+authority. Completion requires current stock-runtime physical proof of the
+implemented `PreparedContainer` boundary.
+
 The current automated fixture now contains gate-failure, task lifetime, Pod
 UID, Node UID, host epoch, selector, exception target-retirement, terminal
 cleanup, and fresh-root oracles. These physical cases remain `Not run`. Watch
@@ -180,12 +179,17 @@ run.
     image, and Pod facts without runtime authority. Prove the initial PID
     remains held while the node verifies the same staged facts, CRI `Created`
     state, active policy, and exact binding. Verify map readback before the
-    hook releases the task. Exercise the qualified anonymous-file, pipe,
-    sealed runtime self-exec, and initial namespace operations. Verify the
-    first policy-approved application exec consumes `RuntimeBootstrap` once.
-    Verify another entry, container, external path, network destination,
-    expired identity, replay, and post-handoff use reject. Prove the
-    application marker does not appear before the handoff.
+    hook releases the task. Verify the exact prepared binding and held host
+    TGID. Permit runtime setup without a
+    runtime-specific operation list. Verify that runtime-created files, pipes,
+    sockets, and handles receive no independent authority. Run one
+    runtime-internal exec that the signed policy does not permit. Verify that
+    the state remains `PREPARED`. Run the first exec that the signed policy
+    permits. Verify `PREPARED -> EXEC_PENDING -> ACTIVE`. Verify another entry,
+    container, later external root, expired state, and replay reject. After
+    `ACTIVE`, use one runtime-created pipe or handle. Verify that normal policy
+    denies the use. Prove the application marker does not appear before
+    activation.
 12. Create one `WorkloadProtectionException` for a named file grant, exact Pod
     UID, and matching container. Verify the request cannot exceed the grant
     duration or uses. Verify Control resolves the precompiled file cells and
@@ -271,7 +275,7 @@ run.
 | Ephemeral-container update | A protected Pod cannot add a matching container outside the admitted image-pin contract |
 | Exact delivery | Only the persisted scheduler-selected node receives the Pod target and candidate |
 | Protected start | The initial process remains held until exact policy and cgroup-binding activation |
-| Runtime bootstrap | Only the exact initial entry uses owned anonymous bootstrap objects before one deadline; the first policy-approved application exec consumes the identity |
+| Prepared container | Only the exact binding and initial runtime entry use the prepared state before one deadline. Runtime-created objects receive no authority. The first policy-approved application exec activates normal workload enforcement. |
 | Gate failure | The runtime reports start failure at the bounded hook deadline and no application marker runs |
 | Runtime lifetime | Container restart and Pod UID replacement create new authority and cannot reuse the old binding |
 

@@ -7,6 +7,9 @@ metadata:
     app.kubernetes.io/name: mithril-control
 spec:
   replicas: 1
+  # The commit store has one process owner. Stop the old owner before an upgrade starts the next one.
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app.kubernetes.io/name: mithril-control

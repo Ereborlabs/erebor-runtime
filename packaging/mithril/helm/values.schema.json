@@ -34,6 +34,7 @@
           "additionalProperties": false,
           "required": [
             "install",
+            "injector",
             "cleanupImage",
             "cleanupImagePullPolicy",
             "hostBinaryDirectory",
@@ -44,6 +45,24 @@
           ],
           "properties": {
             "install": {"type": "boolean"},
+            "injector": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "enabled",
+                "image",
+                "imagePullPolicy",
+                "hostSocketPath",
+                "pluginIndex"
+              ],
+              "properties": {
+                "enabled": {"type": "boolean"},
+                "image": {"type": "string", "minLength": 1},
+                "imagePullPolicy": {"enum": ["Always", "IfNotPresent", "Never"]},
+                "hostSocketPath": {"type": "string", "pattern": "^/"},
+                "pluginIndex": {"type": "string", "pattern": "^[0-9]{2}$"}
+              }
+            },
             "cleanupImage": {"type": "string", "minLength": 1},
             "cleanupImagePullPolicy": {"enum": ["Always", "IfNotPresent", "Never"]},
             "hostBinaryDirectory": {"type": "string", "pattern": "^/"},

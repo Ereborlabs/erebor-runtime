@@ -54,7 +54,7 @@ static __always_inline int observe_bprm_effect(struct linux_binprm *bprm)
         return identity_deny(config);
     binding = binding_for_cgroup(cgroup, &binding_lookup);
     entry = bpf_map_lookup_elem(&entry_states, &label->entry_instance_id);
-    if (binding_lookup || !prepared_container_exec_actor_is_exact(
+    if (binding_lookup || !prepared_container_pre_active_actor_is_exact(
                               binding, label, entry))
         return identity_deny(config);
     if (binding->prepared_container_state ==

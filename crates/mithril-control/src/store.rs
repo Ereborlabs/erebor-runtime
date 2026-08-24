@@ -73,6 +73,7 @@ struct ControlStoreState {
     exception_acknowledgements: BTreeMap<String, ExceptionActivationAcknowledgementV1>,
     exception_consumed_uses: BTreeMap<PolicyRolloutKeyV1, u32>,
     node_sessions: BTreeMap<String, DurableNodeSessionV1>,
+    node_session_history: BTreeMap<NodePhysicalEpochV1, DurableNodeSessionV1>,
     trust_generations: BTreeMap<u64, TrustGenerationV1>,
     trust_acknowledgements:
         BTreeMap<(String, u64, [u8; 16], u64), TrustGenerationAcknowledgementV1>,
@@ -572,6 +573,46 @@ impl ControlStore {
             }))
     }
 
+    pub(crate) fn evidence_session_for_stream(
+        &self,
+        tenant_id: [u8; 16],
+        node_id: &str,
+        node_boot_id: [u8; 16],
+        source_id: [u8; 16],
+        source_epoch: u64,
+    ) -> Result<DurableNodeSessionV1> {
+        let inner = self.lock()?;
+        let known_label = inner
+            .state
+            .evidence_source_labels
+            .get(&EvidenceSourceEpochKeyV1 {
+                tenant_id,
+                node_id: node_id.to_owned(),
+                source_id,
+                source_epoch,
+            });
+        let mut matches = inner.state.node_session_history.values().filter(|session| {
+            session.node_id == node_id
+                && session.node_boot_id == node_boot_id
+                && known_label.is_none_or(|label| session.label_epoch == *label)
+        });
+        let session = matches.next().cloned().ok_or_else(|| {
+            ControlStoreSnafu {
+                path: inner.root.clone(),
+                reason: "evidence does not name a durable node session".to_owned(),
+            }
+            .build()
+        })?;
+        if matches.next().is_some() {
+            return ControlStoreSnafu {
+                path: inner.root.clone(),
+                reason: "evidence names an ambiguous node session".to_owned(),
+            }
+            .fail();
+        }
+        Ok(session)
+    }
+
     pub fn accept_compiled_source_revision(
         &self,
         revision: PolicySourceRevisionV1,
@@ -1016,6 +1057,44 @@ impl ControlStore {
             let suffix_records = batch.records.split_off(overlap_count);
             batch = StoredEvidenceBatchV1 {
                 first_cursor: cursor.contiguous_cursor.checked_add(1).ok_or_else(|| {
+                    ControlStoreSnafu {
+                        path: inner.root.clone(),
+                        reason: "the evidence cursor is exhausted".to_owned(),
+                    }
+                    .build()
+                })?,
+                last_cursor: batch.last_cursor,
+                batch_sha256: stored_batch_digest(&suffix_records),
+                records: suffix_records,
+            };
+            validate_stored_batch(&batch, &inner.root)?;
+        }
+        while let Some(existing) = inner
+            .state
+            .pending_evidence_batches
+            .get(&EvidencePendingKeyV1 {
+                identity: identity.clone(),
+                first_cursor: batch.first_cursor,
+            })
+            .cloned()
+        {
+            let shared = batch.records.len().min(existing.records.len());
+            if batch.records[..shared] != existing.records[..shared] {
+                return ControlStoreSnafu {
+                    path: inner.root.clone(),
+                    reason: "pending evidence ranges overlap or conflict".to_owned(),
+                }
+                .fail();
+            }
+            if batch.records.len() <= existing.records.len() {
+                return Ok(EvidenceStoreOutcomeV1::Pending);
+            }
+
+            // The node can extend an unacknowledged WAL batch. Keep the durable
+            // prefix and persist only its new contiguous suffix.
+            let suffix_records = batch.records.split_off(existing.records.len());
+            batch = StoredEvidenceBatchV1 {
+                first_cursor: existing.last_cursor.checked_add(1).ok_or_else(|| {
                     ControlStoreSnafu {
                         path: inner.root.clone(),
                         reason: "the evidence cursor is exhausted".to_owned(),
@@ -2411,6 +2490,9 @@ fn apply_transaction(
                     .insert(key, settlement.consumed_uses);
             }
             state
+                .node_session_history
+                .insert(advance.session.physical_epoch(), advance.session.clone());
+            state
                 .node_sessions
                 .insert(advance.session.node_id.clone(), advance.session.clone());
         }
@@ -2427,6 +2509,9 @@ fn apply_transaction(
                     .build()
                 })?;
             session.kubernetes_node_uid = Some(binding.kubernetes_node_uid.clone());
+            state
+                .node_session_history
+                .insert(session.physical_epoch(), session.clone());
         }
         ControlTransactionV1::SourceAccepted {
             source_revision,
@@ -2655,6 +2740,7 @@ fn apply_transaction(
         ControlTransactionV1::EvidencePending { pending } => {
             validate_evidence_identity(&pending.identity, path)?;
             validate_stored_batch(&pending.batch, path)?;
+            validate_new_pending_evidence(state, pending, path)?;
             bind_source_label(state, &pending.identity, path)?;
             let key = EvidencePendingKeyV1 {
                 identity: pending.identity.clone(),
@@ -2878,6 +2964,45 @@ fn validate_stored_batch(batch: &StoredEvidenceBatchV1, path: &Path) -> Result<(
         return ControlStoreSnafu {
             path: path.to_owned(),
             reason: "stored evidence batch identity or bounds are invalid".to_owned(),
+        }
+        .fail();
+    }
+    Ok(())
+}
+
+fn validate_new_pending_evidence(
+    state: &ControlStoreState,
+    pending: &EvidenceBatchTransactionV1,
+    path: &Path,
+) -> Result<()> {
+    let cursor = state
+        .evidence_cursors
+        .get(&pending.identity)
+        .copied()
+        .unwrap_or_default();
+    let next = checked_store_increment(
+        cursor.contiguous_cursor,
+        path,
+        "the evidence cursor is exhausted",
+    )?;
+    let overlaps = state
+        .pending_evidence_batches
+        .iter()
+        .filter(|(key, _batch)| key.identity == pending.identity)
+        .any(|(key, batch)| {
+            pending.batch.first_cursor <= batch.last_cursor
+                && key.first_cursor <= pending.batch.last_cursor
+        });
+    if pending.batch.first_cursor <= next
+        || pending.batch.last_cursor
+            > cursor
+                .contiguous_cursor
+                .saturating_add(MAX_PENDING_EVIDENCE_RECORDS)
+        || overlaps
+    {
+        return ControlStoreSnafu {
+            path: path.to_owned(),
+            reason: "pending evidence range is not a bounded unoccupied gap".to_owned(),
         }
         .fail();
     }
@@ -4137,8 +4262,13 @@ fn write_commit(path: &Path, commit: &ControlCommitV1) -> Result<()> {
     file.write_all(&bytes)
         .context(IoSnafu { path: &temporary })?;
     file.sync_all().context(IoSnafu { path: &temporary })?;
-    // Rename publishes the complete file; parent fsync makes the directory entry durable.
-    fs::rename(&temporary, path).context(IoSnafu { path })?;
+    // A hard link publishes the synced inode without replacing a commit from another writer.
+    // A stale Control process must stop instead of creating a valid but forked hash chain.
+    if let Err(error) = fs::hard_link(&temporary, path) {
+        let _ = fs::remove_file(&temporary);
+        return Err(error).context(IoSnafu { path });
+    }
+    fs::remove_file(&temporary).context(IoSnafu { path: &temporary })?;
     File::open(parent)
         .context(IoSnafu { path: parent })?
         .sync_all()
@@ -4737,6 +4867,61 @@ mod tests {
             Exception::Revoked,
             Exception::Active
         ));
+    }
+
+    #[test]
+    fn stale_control_writer_cannot_replace_a_published_commit() -> crate::Result<()> {
+        let directory = TempDir::new().map_err(|error| {
+            crate::error::ControlStoreSnafu {
+                path: Path::new("single-writer-test").to_owned(),
+                reason: error.to_string(),
+            }
+            .build()
+        })?;
+        let first = super::ControlStore::open(directory.path())?;
+        let stale = super::ControlStore::open(directory.path())?;
+        let first_proof = super::startup_absence_proof_digest("node-a", &[1; 16], 1, true, true);
+        first.register_node_physical_session(
+            "node-a",
+            &[1; 16],
+            1,
+            Some("worker-a.example"),
+            &first_proof,
+            true,
+            true,
+            1,
+        )?;
+
+        let stale_proof = super::startup_absence_proof_digest("node-b", &[2; 16], 1, true, true);
+        assert!(stale
+            .register_node_physical_session(
+                "node-b",
+                &[2; 16],
+                1,
+                Some("worker-b.example"),
+                &stale_proof,
+                true,
+                true,
+                2,
+            )
+            .is_err());
+
+        let replayed = super::ControlStore::open(directory.path())?;
+        assert_eq!(replayed.commit_index(), 1);
+        assert!(replayed.current_node_session_matches("node-a", &[1; 16], 1)?);
+        assert!(!replayed.current_node_session_matches("node-a", &[2; 16], 1)?);
+        replayed.register_node_physical_session(
+            "node-b",
+            &[2; 16],
+            1,
+            Some("worker-b.example"),
+            &stale_proof,
+            true,
+            true,
+            2,
+        )?;
+        assert_eq!(replayed.commit_index(), 2);
+        Ok(())
     }
 
     #[test]

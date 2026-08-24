@@ -282,6 +282,32 @@ static __always_inline bool effect_controller_may_read_target(
            id128_equal(&binding->node_boot_id, &config->node_boot_id);
 }
 
+static __always_inline bool prepared_container_target_is_exact(
+    const identity_runtime_config_v1 *config, struct task_struct *target,
+    task_label_v1 **target_label_out)
+{
+    execution_set_binding_state_v1 *binding;
+    entry_security_state_v1 *entry;
+    task_label_v1 *label;
+    struct cgroup *cgroup = NULL;
+    int binding_lookup;
+
+    if (!config || !target || task_cgroup(target, &cgroup))
+        return false;
+    binding = binding_for_cgroup(cgroup, &binding_lookup);
+    label = bpf_task_storage_get(&task_labels, target, 0, 0);
+    entry = label
+                ? bpf_map_lookup_elem(&entry_states,
+                                      &label->entry_instance_id)
+                : NULL;
+    if (binding_lookup || !label || !label_matches_runtime(label, config) ||
+        !prepared_container_pre_active_actor_is_exact(binding, label, entry))
+        return false;
+    if (target_label_out)
+        *target_label_out = label;
+    return true;
+}
+
 static __noinline int identity_process_control_effect(
     struct task_struct *target, __u16 operation, __u32 operation_argument)
 {
@@ -444,7 +470,24 @@ static __always_inline int identity_process_control_gate(
     struct task_struct *target, __u16 operation, __u32 operation_argument,
     int ret)
 {
+    identity_runtime_config_v1 *config;
     struct identity_scratch_v1 *scratch;
+    task_label_v1 *target_label = NULL;
+
+    config = identity_runtime_config();
+    if (!ret && config && config->enabled && config->effect_policy_enabled &&
+        prepared_container_target_is_exact(config, target, &target_label)) {
+        /* Stock runtimes inspect and signal the held task from outside its
+         * cgroup. PREPARED therefore follows the exact target, not the caller. */
+        scratch = identity_scratch_record();
+        if (scratch) {
+            begin_effect_observation(
+                scratch, kernel_effect_family_v1_privilege, operation);
+            scratch->observation.target_task_cookie = target_label->task_cookie;
+            scratch->observation.operation_argument = operation_argument;
+        }
+        return prepared_runtime_effect_result(scratch);
+    }
 
     ret = identity_effect_actor_gate(
         NULL, kernel_effect_family_v1_privilege, operation, ret);

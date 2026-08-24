@@ -5,10 +5,9 @@ Status: Current implementation guide. The source implements the separate
 tests cover their closed schemas, lowering, reconciliation, delivery,
 retirement, restart, and node-session boundaries. The current source has not
 passed the complete physical procedure. The last physical run used the old API
-and stopped when stock `runc` used an anonymous file write and interprocess
-communication (IPC) access that had no typed authority. The current source
-implements the bounded internal `RuntimeBootstrap` authority. Its stock-runtime
-physical result is not proved.
+and stopped under the superseded runtime-bootstrap model. The current source
+implements the `PreparedContainer` trust boundary. Its stock-runtime physical
+result is not proved.
 
 Plan: [Control Policy And Evidence Convergence](./phase-6-2-control-policy-and-evidence-convergence.md)
 
@@ -27,8 +26,9 @@ physical generation and Berkeley Packet Filter (BPF) state.
 
 Do not treat the deterministic two-node Control test as a physical two-node
 kernel result. Do not claim that this work creates a Phase 7 graph or finding.
-The BPF ABI and BPF programs add only the internal RuntimeBootstrap binding,
-anonymous-object, and first-exec transition.
+The BPF application binary interface (ABI) and BPF programs add one
+`PreparedContainer` transition to the existing execution-set binding. They add
+no runtime-object authority map or runtime-specific operation list.
 
 ## Recommended Reading Order
 
@@ -64,7 +64,7 @@ anonymous-object, and first-exec transition.
     [CRI identity verification](../../../crates/mithril-node/src/identity/runtime.rs),
     [cgroup binding owner](../../../crates/mithril-node/src/identity/binding.rs),
     [shared identity ABI](../../../crates/erebor-interceptor-abi/src/abi/identity.rs),
-    and [RuntimeBootstrap BPF owner](../../../bpf/erebor-interceptor/programs/identity_runtime_bootstrap.h).
+    and [PreparedContainer BPF owner](../../../bpf/erebor-interceptor/programs/identity_prepared_container.h).
 11. Read the [Control evidence intake](../../../crates/mithril-control/src/evidence.rs)
    and [node observation WAL](../../../crates/mithril-node/src/observation/wal.rs).
 12. Finish with the [Kubernetes API tests](../../../crates/mithril-control/tests/kubernetes_policy_api.rs),
@@ -89,9 +89,9 @@ anonymous-object, and first-exec transition.
 | Node policy, exception, transfer, and cleanup state | `NodePolicyDeliveryOwner` | `NodePolicyDeliveryOwner` | Node state directory | Incremental transfer, exact readback, restart, session retirement, and terminal cleanup tests |
 | Active node generation and BPF maps | `NodePolicyGenerationOwner` and existing activation path | `mithril-node` | Node-local inactive generation and active-pointer compare-and-swap | Readback, probe, pointer, and retained-generation tests |
 | Runtime admission request | `mithril-oci-hook` and `RuntimeAdmissionClient` | `RuntimeAdmissionServer` | Root-owned mode-0600 Unix socket | Stock-state parser, active-owner, unavailable endpoint, convergence hold, and timeout tests |
-| Staged runtime facts | createContainer request and CRI readback | `WorkloadBindingOwner` | Bounded node memory only; no kernel authority | Missing, expiry, changed-head, changed-cgroup, and no-PID-authority tests |
+| Staged runtime facts | First `createRuntime` request | `WorkloadBindingOwner` | Bounded node memory only; no kernel authority | Missing, expiry, changed-head, changed-cgroup, and no-PID-authority tests |
 | Runtime container binding | `ScheduledRuntimeBindingV1` and node binding owner | Node binding owner | BPF cgroup and task maps plus node delivery state | Exact signed target, policy identity, CRI match, distinct lifetime, and reuse-rejection tests |
-| RuntimeBootstrap authority | Node binding owner arms one held binding | BPF RuntimeBootstrap transition | Exact binding, initial entry, bounded anonymous-object keys, deadline, and one exec handoff | ABI, compiled-object, node transition, recovery, and required physical tests |
+| Prepared-container state | Node binding owner publishes one held binding | BPF prepared-container transition | Exact binding, held host TGID, initial entry, deadline, and one exec activation | ABI, compiled-object, node transition, recovery, and required physical tests |
 | Accepted evidence and coverage | `EvidenceIntakeOwner` | `ControlStore` transaction | Immutable records, coverage reports, and contiguous cursors | Duplicate, gap, reorder, backpressure, storage-failure, and restart tests |
 | Node WAL truncation | Node WAL owner | Node WAL owner after durable Control acknowledgement | Node WAL | Durable contiguous acknowledgement and replay tests |
 | Operational health | `ControlPlane` projection | Existing owners supply counts | Authenticated `ControlHealth.Get` response | Generated contract and bounded health snapshot tests |
@@ -121,7 +121,7 @@ The server owns the socket and concurrent request tasks. The receiver gives
 the node event loop one bounded request stream. A merge would couple socket
 I/O to policy convergence without removing state or a handoff.
 
-`WorkloadBindingOwner` owns createContainer stages because it already owns CRI
+`WorkloadBindingOwner` owns first-hook stages because it already owns CRI
 identity, cgroup lifetime, and held-root publication. A second stage owner
 would duplicate the exact comparison and cleanup boundary. The OCI adapter
 remains stateless and cannot grant authority.
@@ -272,12 +272,32 @@ not evict a running Pod or remove its last active local policy.
 
 ## Runtime Admission Flow
 
-The chart installs one stateless Open Container Initiative (OCI) adapter as
-two protected-Pod hooks. The createContainer hook sends the container ID,
-cgroup, and OCI annotations. It sends no PID authority. The prestart hook sends
-the same facts and the held initial PID. Both calls derive the live cgroup from
-`/proc/<pid>/cgroup`, use one bounded stock OCI state object, and have a client
-deadline. Each OCI hook entry has a larger runtime deadline.
+The Node Resource Interface (NRI) hook-injector supplies the Open Container
+Initiative (OCI) hook calls. The node uses the Container Runtime Interface
+(CRI) for live container facts. The host thread group identifier (TGID)
+identifies the held initial process.
+
+[runtime hook configuration](../../../packaging/mithril/helm/templates/runtime-hook-configmap.yaml) NRI CreateContainer injects two ordered Mithril `createRuntime` hooks
+  -> [`request_with_cgroup`](../../../crates/mithril-node/src/bin/mithril_oci_hook.rs) the first hook stages immutable container, cgroup, image, and Pod facts
+  -> [`stage_runtime_admission`](../../../crates/mithril-node/src/identity/binding.rs) the node stores one bounded stage and grants no runtime authority
+
+[`RuntimeAdmissionServer`](../../../crates/mithril-node/src/runtime_admission.rs) The second OCI `createRuntime` hook holds the exact initial task
+  -> [`verify_runtime_preparation`](../../../crates/mithril-node/src/identity/binding.rs) the node matches the staged facts and verifies CRI `Created` state
+  -> [`prepare_runtime_start`](../../../crates/mithril-node/src/node.rs) the node verifies the scheduled Pod binding and active signed policy
+  -> [`publish_held_activated_root`](../../../crates/mithril-node/src/identity/binding.rs) the node publishes `PreparedContainer` for the exact binding and held host TGID
+  -> [`install_late_activation_target`](../../../crates/mithril-node/src/identity/binding.rs) the node reads back the binding and active generation
+  -> [`RuntimeAdmissionEnvelope::deliver`](../../../crates/mithril-node/src/runtime_admission.rs) the hook returns allow
+
+[`prepared_container_actor_is_exact`](../../../bpf/erebor-interceptor/programs/identity_prepared_container.h) Trusted runtime setup uses the exact prepared binding and initial runtime entry
+  -> [`resolved_identity_effect_gate`](../../../bpf/erebor-interceptor/programs/identity_effects.bpf.h) BPF permits runtime implementation details without a runtime-specific operation list
+  -> [`ExecutionSetBindingStateV1`](../../../crates/erebor-interceptor-abi/src/abi/identity.rs) runtime-created files, pipes, sockets, and handles receive no independent authority
+  -> [`prepared_container_binding_is_prepared`](../../../bpf/erebor-interceptor/programs/identity_prepared_container.h) another binding, another entry, a later external root, or an expired state rejects
+
+[`prepared_exec_policy_gate`](../../../bpf/erebor-interceptor/programs/identity_effects.bpf.h) The first application exec resolves through the active signed policy
+  -> [`prepared_container_reserve_activation`](../../../bpf/erebor-interceptor/programs/identity_prepared_container.h) the exact task changes `PREPARED` to `EXEC_PENDING`
+  -> [`prepared_container_commit_activation`](../../../bpf/erebor-interceptor/programs/identity_prepared_container.h) the successful process-exec tracepoint changes `EXEC_PENDING` to `ACTIVE`
+  -> [`complete_failed_exec`](../../../bpf/erebor-interceptor/programs/identity_exec.bpf.h) a failed exec restores only its own reservation
+  -> [`identity_effect_gate`](../../../bpf/erebor-interceptor/programs/identity_effects.bpf.h) every later effect uses normal policy and exception authority
 
 The node socket accepts only root peers. The socket parent is root-owned and
 not group-writable or world-writable. The socket has mode `0600`.
@@ -285,35 +305,28 @@ not group-writable or world-writable. The socket has mode `0600`.
 socket. The server bounds the request size, queue, response size, and request
 time.
 
-The createContainer call resolves one signed scheduled target and checks the
-CRI `Created` record. `WorkloadBindingOwner` keeps the exact container, cgroup,
-image, Pod, sandbox, profile, and current authority-head facts for at most 30
-seconds. The in-memory table holds at most 128 records. This step makes no
-kernel change and creates no durable runtime authority.
+The first call stores the exact container, cgroup, image, Pod, sandbox,
+profile, and current authority-head facts for at most 30 seconds. The in-memory
+table holds at most 128 records. The call makes no kernel or durable state
+change. The second call must match that exact stage. It also verifies the live
+full container ID, generation, working directory, and effective path.
 
-One early valid hook call can stay pending while Control observes the binding
-and the node polls for the candidate. The node event loop continues policy
-delivery during this hold. The node returns `POLICY_CONVERGENCE_PENDING` only
-to its local socket owner. The socket owner retries the same immutable request
-until the candidate becomes active or the request deadline expires.
+The exact prepared entry is part of the node trusted computing base. BPF does
+not infer the runtime from a `runc`, `crun`, or `youki` syscall sequence. A
+runtime-internal exec that does not satisfy the signed policy remains
+`PREPARED`. The binding has one 10-second monotonic deadline. The first exec
+that satisfies the signed policy changes the binding to `ACTIVE` at exec
+commit. No runtime-created object has a separate grant that can survive this
+transition.
 
-After convergence, prestart must match the live createContainer stage and the
-current signed authority head. The node reads CRI again and requires the
-`Created` state, full container ID, sandbox ID, namespace, Pod UID, container
-name, profile ID, image digest, generation, cgroup, working directory, and
-effective path to remain exact. It then publishes the held PID as the sole
-initial root for the exact cgroup. It records the runtime binding in durable
-policy-delivery state before it allows the runtime. A container restart derives
-a new binding ID from the signed scheduling authority and the new runtime
-container ID. It retires the previous binding.
+A canonical request can stay pending while Control observes the binding and
+the node receives the candidate. The node event loop continues policy delivery
+during this hold. The socket retries the same immutable request until the
+candidate becomes active or the absolute request deadline expires.
 
-The held binding arms one 10-second RuntimeBootstrap state. BPF binds it to the
-exact binding nonce and initial entry. It admits only qualified pipe and
-`memfd:` operations, sealed runtime self-exec, same-entry read-only process
-inspection, and the fixed initial namespace transitions. Descriptor passing,
-path-backed files, network effects, another binding, and another entry reject.
-The first policy-approved application exec reserves one task, consumes the
-bootstrap state at exec commit, and activates the normal workload identity.
+A container restart derives a new binding ID from the signed scheduling
+authority and the new runtime container ID. The node retires the prior binding
+before it publishes the replacement.
 
 The runtime gate rejects malformed input, a missing or expired stage, a changed
 stage, and an already-used runtime identity without authority publication. A
@@ -454,8 +467,8 @@ margin. The HTTPS `/healthz` route contains no policy payload.
 
 The node image contains `mithril-node` and `mithril-oci-hook`. A chart-owned
 host installer publishes each path by atomic same-directory rename. It installs
-the binary, the prestart denial gate, and then the createContainer staging hook.
-Cleanup removes staging before prestart and the binary. Adjacent ownership
+the binary and two ordered `createRuntime` hook documents. Cleanup removes the
+fact stage before the preparation hook and the binary. Adjacent ownership
 markers bind the three exact paths to the Helm release. Disable and uninstall
 remove only matching owned paths. A bounded pre-delete cleanup Job waits for
 selected-node cleanup before it deletes the cleanup DaemonSet. Foreign or
@@ -467,11 +480,11 @@ runtime and does not install a custom runtime binary.
 
 ## BPF Boundary
 
-This phase adds the bounded internal RuntimeBootstrap state to the BPF ABI and
-the existing identity BPF object. Userspace arms it through the existing
+This phase adds the bounded `PreparedContainer` state to the BPF ABI and the
+existing identity BPF object. Userspace publishes it through the existing
 [`KernelHost`](../../../crates/erebor-interceptor/src/host.rs). BPF owns the
-entry binding, anonymous-object records, deadline, and application handoff. The
-effect programs remain in the
+initial-entry claim, deadline, exec reservation, and application activation.
+The Linux Security Module (LSM) effect programs remain in the
 [`identity` BPF object](../../../bpf/erebor-interceptor/programs/identity.bpf.c).
 
 ```mermaid
@@ -489,15 +502,19 @@ flowchart LR
 | --- | --- | --- | --- | --- | --- |
 | `active_profile_generations` | `Id128V1 -> u64` | Node policy generation owner | None | Node binding owner and effect gates | Pinned for the current kernel owner; terminal cleanup removes the exact profile pointer |
 | `profile_generation_descriptors` | `u64 -> ProfileGenerationDescriptorV1` | Node policy generation owner | None | Node recovery, binding owner, and effect gates | Pinned until generation retirement and reference readback permit removal |
-| `execution_set_bindings` | `u64 cgroup ID -> ExecutionSetBindingStateV1` | Node binding owner | Task lifecycle and RuntimeBootstrap programs update exact transitions | Node recovery and effect gates | Pinned for the exact runtime cgroup lifetime |
+| `execution_set_bindings` | `u64 cgroup ID -> ExecutionSetBindingStateV1` | Node binding owner | Task lifecycle and prepared-container programs update exact transitions | Node recovery and effect gates | Pinned for the exact runtime cgroup lifetime |
 | `binding_activation_targets` | `BindingActivationTargetKeyV1 -> ExecutionSetBindingStateV1` | Node binding owner | None | Node recovery and runtime gate | Pinned until the exact binding and generation retire |
 | `exception_runtime_states` | `ExceptionRuntimeStateKeyV1 -> ExceptionRuntimeStateV1` | Node exception owner | Effect gate consumes uses under the map value lock | Node recovery and exception gate | Pinned until the instance is terminal and durable receipts permit cleanup |
 | `exception_handle_bindings` | `ExceptionHandleBindingKeyV1 -> ExceptionHandleBindingV1` | Node policy and exception owners | None | Exception gate and recovery | Pinned for the exact compiled handle and active instance |
 | `exception_use_receipts` | Receipt identity -> bounded use receipt | Node exception receipt owner | Effect gate emits use receipts | Node receipt recovery | Pinned until the durable exception WAL records the receipt |
-| `runtime_bootstrap_objects` | LRU hash keyed by filesystem, inode, and generation | 65,536 | RuntimeBootstrap creation and inherited-use gates | RuntimeBootstrap file and exec gates | LRU eviction; binding transition removes authority immediately |
 
-A stale key collision denies the new claim. The BPF program does not overwrite
-an authority record that belongs to another binding.
+| Prepared-container program group | Hook and context | Reads and writes | Physical result |
+| --- | --- | --- | --- |
+| Initial-entry claim | `lsm/task_alloc` and the first protected effect | Reads the cgroup binding and held host TGID. Writes the task, entry, process, and exact prepared-entry identity. | A TGID mismatch or failed state publication returns the configured denial. |
+| Runtime effect gate | Existing file, network, IPC, process, device, privilege, and mount LSM hooks | Reads the exact binding, entry, generation, and deadline. It writes no runtime-object authority. | The exact prepared entry can finish setup. All other protected actors use normal policy or receive the configured denial. |
+| Exec evaluation | `lsm/bprm_check_security` | Reads the active signed policy. Writes the pending exec and reserves the exact task only for a policy-permitted exec. | A runtime-internal policy miss stays `PREPARED`. A policy-permitted exec can continue as `EXEC_PENDING`. |
+| Exec completion | `tracepoint/sched/sched_process_exec` and exec syscall exit tracepoints | Commits `ACTIVE` after a successful exec or restores `PREPARED` after a pre-commit failure. | `ACTIVE` closes prepared-runtime trust. A corrupt or expired transition stays fail-closed. |
+| Binding retirement | `raw_tracepoint/cgroup_release` | Changes a non-active prepared state to `EXPIRED` and clears the exec cookie. | The released cgroup cannot start or continue prepared-runtime work. |
 
 A bpffs pin keeps a map or link alive after the loader process exits. A
 process restart does not remove a pin. `KernelHost` validates and reuses the
@@ -517,14 +534,14 @@ change. Review the exact map declarations and effect-gate lookups in
 
 This implementation adds the Kubernetes source types, Control store records,
 policy delivery messages, one authenticated health method, and the internal
-RuntimeBootstrap ABI states. It uses the generated
+`PreparedContainer` ABI states. It uses the generated
 `erebor.mithril.control.v1` contract. It does not add a public policy field,
 generic envelope, frame protocol, or compatibility dispatcher.
 
-The BPF change reuses existing LSM, lifecycle, and exec hooks. It adds one
-inode-storage map and checked fields to the existing execution-set binding and
-pending-exec values. The evidence record and coverage messages remain the
-Phase 6 types.
+The BPF change reuses existing Linux Security Module (LSM), lifecycle, and
+exec hooks. It adds checked fields to the existing execution-set binding and
+pending-exec values. It does not add a runtime-object map. The evidence record
+and coverage messages remain the Phase 6 types.
 
 ## Failure Boundaries
 
@@ -541,12 +558,13 @@ Phase 6 types.
 | Compile or signature failure | No candidate or rollout is created for that source revision |
 | Partial or corrupt bundle | Node does not create a stageable pending activation |
 | Wrong tenant, target, boot, label, trust, or sequence | Service or node rejects before rollout advancement |
-| createContainer facts do not match CRI or exceed stage bounds | The node records no stage and publishes no kernel authority |
-| Early valid OCI prestart request | The socket holds the request while the exact candidate converges, within the configured deadline |
-| Missing or expired createContainer stage | Prestart rejects before CRI inspection or kernel publication |
+| First `createRuntime` facts exceed stage bounds | The node records no stage and publishes no kernel state |
+| Early valid second `createRuntime` request | The socket holds the request while the exact candidate converges, within the configured deadline |
+| Missing, expired, or changed first stage | The second hook rejects before CRI inspection or kernel publication |
 | Missing candidate, silent node owner, or second socket owner | The bounded socket or OCI deadline returns denial; the runtime does not receive an allow result |
 | Malformed, mismatched, changed, or reused runtime identity | The node rejects without publishing or reusing a binding |
-| RuntimeBootstrap deadline, wrong lineage, descriptor transfer, path-backed file, or network use | BPF denies without normal policy or exception fallback |
+| `PreparedContainer` deadline, held-TGID mismatch, wrong binding, wrong entry, or later external root | BPF denies and does not activate the application |
+| Runtime-created object after `ACTIVE` | The effect resolves through normal policy and exception authority; no prepared-state grant remains |
 | Mixed rollout | Status reports exact per-state counts; it does not claim global activation |
 | Exact target disappears while an exception is active | Control keeps the source accepted and sends an exact signed revocation; it does not refund uses or retarget the request |
 | Runtime admission caller cancels after publication starts | The node removes the exact new binding and restores the prior durable state; an incomplete rollback closes readiness |
@@ -577,8 +595,8 @@ Phase 6 types.
 | mTLS identity, boot session, trust gate, policy chunk, acknowledgement, evidence, and service isolation | [Control TLS tests](../../../crates/mithril-node/tests/control_tls.rs) |
 | Incremental chunk assembly, signature and digest checks, pending recovery, old-session cleanup, terminal cleanup, exact target inspection, and acknowledgement replay | [Node policy delivery tests](../../../crates/mithril-node/src/policy_delivery.rs) |
 | Existing inactive generation, readback, probes, and pointer activation | [Node policy tests](../../../crates/mithril-node/src/policy.rs) |
-| Signed scheduling authority, exact policy and runtime identity, distinct container lifetime, active socket ownership, convergence hold, unavailable endpoint, and timeout denial | [Runtime admission tests](../../../crates/mithril-node/src/runtime_admission.rs) |
-| OCI state parsing and cgroup-v2 path parsing | [OCI adapter tests](../../../crates/mithril-node/src/bin/mithril_oci_hook.rs) |
+| Signed scheduling authority, exact policy and runtime identity, immutable two-hook stage matching, held-TGID publication, distinct container lifetime, active socket ownership, convergence hold, unavailable endpoint, and timeout denial | [Runtime admission and binding tests](../../../crates/mithril-node/src/identity/binding.rs) |
+| OCI state parsing, cgroup-v2 path parsing, fact-only first hook, and held-PID second hook | [OCI adapter tests](../../../crates/mithril-node/src/bin/mithril_oci_hook.rs) |
 | Webhook TLS, rules, deadlines, health probes, DaemonSet identity and hook inputs, and least-privilege RBAC | [Helm render test](../../../packaging/mithril/helm/tests/verify.sh) |
 | Exact two-node target, task lifetime, Node UID replacement, host epoch, selector lifecycle, exception target retirement, terminal cleanup, and no-root replay | [Physical fixture](../../../crates/mithril-e2e/harness/vm/two-node-convergence.sh) |
 | Independent operator flow for exact target, runtime lifetime, exception target retirement, terminal cleanup, restart, and fresh root | [Manual example](../../../examples/mithril-kubernetes-convergence-manual/run.sh) |
@@ -586,17 +604,13 @@ Phase 6 types.
 Current focused checks passed:
 
 ```text
-rtk cargo test -p mithril-node --all-targets
-155 library tests and 9 binary and integration tests passed.
-
-Mithril OCI adapter
-3 passed
+rtk cargo test -p erebor-interceptor-abi -p erebor-interceptor -p mithril-node --all-targets
+203 tests passed in 8 suites.
 
 rtk cargo clippy -p mithril-node --all-targets -- -D warnings
 No issues found.
 
-RuntimeBootstrap ABI and compiled-object tests
-35 tests passed across erebor-interceptor-abi and erebor-interceptor.
+PreparedContainer ABI and compiled-object tests passed.
 
 rtk bash packaging/mithril/helm/tests/verify.sh
 Hook ownership checks passed. One chart linted. The render contract passed.
@@ -624,7 +638,8 @@ DaemonSet exclusion and re-entry, and a host boot and label-epoch change.
 Those scripted cases remain `Not run` until one physical execution records a
 result.
 
-The last physical two-node run used the superseded flattened API. It passed
+The last physical two-node run used the superseded flattened API and runtime
+boundary. It passed
 readiness, typed RBAC review, admission mutation and bypass rejection,
 scheduler selection, selected-node delivery, policy activation, runtime
 binding, Control acknowledgement, and durable evidence intake. Stock `runc`
@@ -633,11 +648,11 @@ BPF denied both operations. The runtime reported start failure. The application
 did not run.
 
 The previous stock-runtime failure remains the required regression oracle. It
-is not test noise. Do not add a broad runtime, pipe, socket, or process
-exemption. The current source has a typed, bounded RuntimeBootstrap authority,
-but completion requires its current physical stock-runtime result. The
-watch-compaction, network-partition, storage-outage, and physical evidence
-failure variants also remain `Not run`. There is no new performance result.
+is not test noise. Do not add a runtime-specific operation list or an object
+authority map. The current source has a bounded `PreparedContainer` boundary,
+but completion requires its current physical stock-runtime result. The watch-
+compaction, network-partition, storage-outage, and physical evidence failure
+variants also remain `Not run`. There is no new performance result.
 
 This work adds no Appendix C fixture ID. Phase 7 graph and finding behavior is
 not present.
@@ -657,6 +672,10 @@ not present.
 - [ ] Trace one candidate through bounded chunks and exact node digest readback.
 - [ ] Trace node activation through inactive state, probes, and one pointer compare-and-swap.
 - [ ] Trace one held OCI PID through CRI verification and exact cgroup publication.
+- [ ] Verify that the binding readback contains the exact held host TGID.
+- [ ] Trace `PREPARED` through a runtime-internal exec that does not satisfy policy.
+- [ ] Trace a policy-approved exec through `EXEC_PENDING` to `ACTIVE`.
+- [ ] Verify that a runtime-created pipe or handle has no grant after `ACTIVE`.
 - [ ] Verify that a missing candidate stays pending only until the runtime deadline.
 - [ ] Verify that a second runtime socket owner cannot replace the live node owner.
 - [ ] Verify that container restart retires the old runtime binding.
