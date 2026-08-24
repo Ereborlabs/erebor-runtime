@@ -188,7 +188,9 @@ impl ContainerRuntimeInventory {
                     reason: format!("CRI returned duplicate container `{}`", container.id),
                 }
             );
-            if runtime_state(container.state).is_none() {
+            if runtime_state_for_reconciliation(container.state, expected.container_generation)
+                .is_none()
+            {
                 continue;
             }
             if let Some(identity) = self.inspect(container, expected).await? {
@@ -434,6 +436,19 @@ const fn runtime_state(raw: i32) -> Option<RuntimeContainerState> {
     }
 }
 
+const fn runtime_state_for_reconciliation(
+    raw: i32,
+    configured_generation: u64,
+) -> Option<RuntimeContainerState> {
+    let state = runtime_state(raw);
+    // The ordered OCI hooks own Created records until preparation binds the generation.
+    if matches!(state, Some(RuntimeContainerState::Created)) && configured_generation == 0 {
+        None
+    } else {
+        state
+    }
+}
+
 struct RuntimeProcessIdentity {
     cgroup_path: PathBuf,
     init_pid: u32,
@@ -653,8 +668,8 @@ mod tests {
     use k8s_cri::v1::ContainerState;
 
     use super::{
-        parse_cgroup_path, runtime_cgroup_source, runtime_state, RuntimeCgroupSource,
-        RuntimeContainerIdentity, RuntimeContainerState,
+        parse_cgroup_path, runtime_cgroup_source, runtime_state, runtime_state_for_reconciliation,
+        RuntimeCgroupSource, RuntimeContainerIdentity, RuntimeContainerState,
     };
     use crate::{ContainerKindV1, WorkloadBindingConfig};
 
@@ -677,7 +692,7 @@ mod tests {
     }
 
     #[test]
-    fn cri_inventory_accepts_only_created_or_running_containers() {
+    fn cri_inventory_separates_admission_owned_created_records() {
         assert_eq!(
             runtime_state(ContainerState::ContainerCreated as i32),
             Some(RuntimeContainerState::Created)
@@ -688,6 +703,18 @@ mod tests {
         );
         assert_eq!(runtime_state(ContainerState::ContainerExited as i32), None);
         assert_eq!(runtime_state(ContainerState::ContainerUnknown as i32), None);
+        assert_eq!(
+            runtime_state_for_reconciliation(ContainerState::ContainerCreated as i32, 0),
+            None
+        );
+        assert_eq!(
+            runtime_state_for_reconciliation(ContainerState::ContainerCreated as i32, 7),
+            Some(RuntimeContainerState::Created)
+        );
+        assert_eq!(
+            runtime_state_for_reconciliation(ContainerState::ContainerRunning as i32, 0),
+            Some(RuntimeContainerState::Running)
+        );
     }
 
     #[test]
