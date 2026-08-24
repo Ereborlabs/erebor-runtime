@@ -184,6 +184,8 @@ struct identity_scratch_v1 {
     __u32 path_mount_namespace_inode;
     struct path effect_path;
     exact_file_object_key_v1 file_object;
+    runtime_bootstrap_object_key_v1 runtime_bootstrap_object_key;
+    runtime_bootstrap_object_state_v1 runtime_bootstrap_object_candidate;
     task_label_v1 target_label;
     task_coordinate_v1 target_coordinate;
     process_security_state_v1 target_process;
@@ -310,9 +312,9 @@ struct {
 } execution_set_bindings SEC(".maps");
 
 struct {
-    __uint(type, BPF_MAP_TYPE_INODE_STORAGE);
-    __uint(map_flags, BPF_F_NO_PREALLOC);
-    __type(key, int);
+    __uint(type, BPF_MAP_TYPE_LRU_HASH);
+    __uint(max_entries, 65536);
+    __type(key, runtime_bootstrap_object_key_v1);
     __type(value, runtime_bootstrap_object_state_v1);
 } runtime_bootstrap_objects SEC(".maps");
 

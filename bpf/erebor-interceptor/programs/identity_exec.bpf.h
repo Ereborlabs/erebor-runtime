@@ -589,12 +589,13 @@ static __noinline int identity_bprm_transition(struct linux_binprm *bprm,
         }
         candidate_from_bprm(&scratch->pending_exec.ordered_candidates[0], bprm);
         if (!scratch->pending_exec.ordered_candidates[0].mount_id) {
-            BPF_CORE_READ_INTO(&bootstrap_file, bprm, file);
+            if (BPF_CORE_READ_INTO(&bootstrap_file, bprm, file))
+                bootstrap_file = NULL;
             if (!config->effect_policy_enabled ||
                 runtime_bootstrap_file_access(
                     bootstrap_file, kernel_effect_family_v1_exec,
                     kernel_effect_operation_v1_execute, binding, label, entry,
-                    true, false)) {
+                    scratch, true, false)) {
                 release_transition_guard(&process->transition_guard);
                 return config->effect_policy_enabled ? BPRM_OBSERVE_EFFECT_V1
                                                      : identity_deny(config);

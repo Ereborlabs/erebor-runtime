@@ -521,29 +521,15 @@ static __always_inline bool io_uring_anon_name(const struct qstr *name)
            observed[9] == ']' && observed[10] == '\0';
 }
 
-SEC("lsm/inode_init_security_anon")
-int BPF_PROG(erebor_identity_inode_init_security_anon, struct inode *inode,
-             const struct qstr *name, const struct inode *context_inode,
-             int ret)
+static __noinline int identity_io_uring_anon_creation_effect(
+    const struct qstr *name, int ret, identity_runtime_config_v1 *config)
 {
-    identity_runtime_config_v1 *config = identity_runtime_config();
     struct task_struct *task;
     io_uring_setup_state_v1 *state;
     io_uring_execution_state_v1 *execution;
     task_label_v1 *label;
-    __u8 bootstrap_kind;
     int result;
 
-    (void)context_inode;
-    if (!config || !config->enabled)
-        return ret;
-    bootstrap_kind = runtime_bootstrap_inode_kind(inode);
-    if (bootstrap_kind != runtime_bootstrap_object_kind_v1_unknown) {
-        result = runtime_bootstrap_anon_creation_effect(
-            inode, bootstrap_kind, ret);
-        if (result != RUNTIME_BOOTSTRAP_NOT_APPLICABLE_V1)
-            return result;
-    }
     if (!io_uring_anon_name(name))
         return ret;
     task = bpf_get_current_task_btf();
@@ -568,6 +554,33 @@ int BPF_PROG(erebor_identity_inode_init_security_anon, struct inode *inode,
         state->task_cookie = label->task_cookie;
     state->state = io_uring_setup_state_kind_v1_authorized;
     return 0;
+}
+
+SEC("lsm/inode_init_security_anon")
+int BPF_PROG(erebor_identity_inode_init_security_anon, struct inode *inode,
+             const struct qstr *name, const struct inode *context_inode,
+             int ret)
+{
+    identity_runtime_config_v1 *config = identity_runtime_config();
+    __u8 bootstrap_kind;
+    int result;
+
+    (void)context_inode;
+    if (!config || !config->enabled)
+        return ret;
+    bootstrap_kind = runtime_bootstrap_inode_kind(inode);
+    if (bootstrap_kind != runtime_bootstrap_object_kind_v1_unknown) {
+        result = runtime_bootstrap_anon_creation_effect(
+            inode, bootstrap_kind, ret);
+        if (result != RUNTIME_BOOTSTRAP_NOT_APPLICABLE_V1)
+            return result;
+        // Normal policy remains the owner after bootstrap is consumed or
+        // when a protected task creates an unowned anonymous object.
+        return identity_effect_actor_gate(
+            NULL, kernel_effect_family_v1_file,
+            kernel_effect_operation_v1_create, ret);
+    }
+    return identity_io_uring_anon_creation_effect(name, ret, config);
 }
 
 SEC("tp_btf/io_uring_create")

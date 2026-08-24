@@ -336,6 +336,27 @@ pub enum RuntimeBootstrapObjectKindV1 {
 
 #[repr(C)]
 #[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    Eq,
+    Hash,
+    Immutable,
+    IntoBytes,
+    KnownLayout,
+    PartialEq,
+    TryFromBytes,
+)]
+pub struct RuntimeBootstrapObjectKeyV1 {
+    pub inode: u64,
+    pub filesystem_magic: u64,
+    pub filesystem_device: u32,
+    pub inode_generation: u32,
+}
+
+#[repr(C)]
+#[derive(
     Clone, Copy, Debug, Default, Eq, Immutable, IntoBytes, KnownLayout, PartialEq, TryFromBytes,
 )]
 pub struct RuntimeBootstrapObjectStateV1 {
@@ -966,6 +987,7 @@ mod tests {
         assert_eq!(size_of::<ExactExecutableCandidateV1>(), 24);
         assert_eq!(size_of::<ProcessExecutionInstanceV1>(), 80);
         assert_eq!(size_of::<ExecutionSetBindingStateV1>(), 224);
+        assert_eq!(size_of::<RuntimeBootstrapObjectKeyV1>(), 24);
         assert_eq!(size_of::<RuntimeBootstrapObjectStateV1>(), 72);
         assert_eq!(size_of::<IdentityRuntimeConfigV1>(), 48);
         assert_eq!(size_of::<ApprovedExecArgumentKeyV1>(), 4_120);

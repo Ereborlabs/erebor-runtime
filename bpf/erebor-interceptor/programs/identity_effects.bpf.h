@@ -486,7 +486,7 @@ static __noinline int resolved_identity_effect_gate(struct file *file,
     if (file) {
         int bootstrap_result = runtime_bootstrap_file_access(
             file, scratch->observation.effect_family,
-            scratch->observation.operation, binding, label, entry,
+            scratch->observation.operation, binding, label, entry, scratch,
             scratch->effect_gate_flags &
                 EFFECT_GATE_RUNTIME_INHERITED_CLAIM_V1,
             scratch->effect_gate_flags & EFFECT_GATE_RUNTIME_RECEIVED_V1);
@@ -768,29 +768,45 @@ static __noinline int runtime_bootstrap_anon_creation_effect(
     struct cgroup *cgroup = NULL;
     int binding_lookup;
 
-    ret = identity_effect_actor_gate(
-        NULL, kernel_effect_family_v1_file,
-        kernel_effect_operation_v1_create, ret);
     if (ret)
         return ret;
     config = identity_runtime_config();
     scratch = identity_scratch_record();
     if (!config || !config->enabled || !config->effect_policy_enabled ||
-        !scratch || id128_is_zero(&scratch->observation.binding_id))
+        !scratch)
         return RUNTIME_BOOTSTRAP_NOT_APPLICABLE_V1;
+    begin_effect_observation(scratch, kernel_effect_family_v1_file,
+                             kernel_effect_operation_v1_create);
     task = bpf_get_current_task_btf();
     label = bpf_task_storage_get(&task_labels, task, 0, 0);
-    if (!label || task_cgroup(task, &cgroup))
+    if (task_cgroup(task, &cgroup))
+        return RUNTIME_BOOTSTRAP_NOT_APPLICABLE_V1;
+    binding = binding_for_cgroup(cgroup, &binding_lookup);
+    if (!binding_lookup && !binding)
+        return RUNTIME_BOOTSTRAP_NOT_APPLICABLE_V1;
+    if (label) {
+        scratch->observation.task_cookie = label->task_cookie;
+        scratch->observation.entry_instance_id = label->entry_instance_id;
+    }
+    if (binding) {
+        scratch->observation.binding_id = binding->binding_id;
+        scratch->observation.execution_set_id = binding->execution_set_id;
+    }
+    if (binding_lookup || !label || !label_matches_runtime(label, config) ||
+        !binding_matches_label(binding, label))
         return hard_effect_result(
             config, scratch,
             effect_observation_reason_v1_corrupt_identity_or_generation);
-    binding = binding_for_cgroup(cgroup, &binding_lookup);
+    if (binding->runtime_bootstrap_state != runtime_bootstrap_state_v1_armed)
+        return RUNTIME_BOOTSTRAP_NOT_APPLICABLE_V1;
     entry = bpf_map_lookup_elem(&entry_states, &label->entry_instance_id);
-    if (binding_lookup || !binding_matches_label(binding, label) || !entry ||
-        runtime_bootstrap_claim_inode(inode, kind, binding, label, entry))
+    if (!entry ||
+        runtime_bootstrap_claim_inode(inode, kind, binding, label, entry,
+                                      scratch))
         return hard_effect_result(
             config, scratch,
             effect_observation_reason_v1_unsupported_object);
+    scratch->observation.entry_kind = entry->entry_kind;
     return runtime_bootstrap_effect_result(scratch);
 }
 

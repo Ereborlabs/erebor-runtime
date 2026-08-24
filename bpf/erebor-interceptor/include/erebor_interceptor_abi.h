@@ -1397,6 +1397,13 @@ typedef struct identity_runtime_config_v1 {
   uint8_t reserved[2];
 } identity_runtime_config_v1;
 
+typedef struct runtime_bootstrap_object_key_v1 {
+  uint64_t inode;
+  uint64_t filesystem_magic;
+  uint32_t filesystem_device;
+  uint32_t inode_generation;
+} runtime_bootstrap_object_key_v1;
+
 typedef struct runtime_bootstrap_object_state_v1 {
   struct id128_v1 binding_id;
   struct id128_v1 binding_nonce;

@@ -91,7 +91,7 @@ anonymous-object, and first-exec transition.
 | Runtime admission request | `mithril-oci-hook` and `RuntimeAdmissionClient` | `RuntimeAdmissionServer` | Root-owned mode-0600 Unix socket | Stock-state parser, active-owner, unavailable endpoint, convergence hold, and timeout tests |
 | Staged runtime facts | createContainer request and CRI readback | `WorkloadBindingOwner` | Bounded node memory only; no kernel authority | Missing, expiry, changed-head, changed-cgroup, and no-PID-authority tests |
 | Runtime container binding | `ScheduledRuntimeBindingV1` and node binding owner | Node binding owner | BPF cgroup and task maps plus node delivery state | Exact signed target, policy identity, CRI match, distinct lifetime, and reuse-rejection tests |
-| RuntimeBootstrap authority | Node binding owner arms one held binding | BPF RuntimeBootstrap transition | Exact binding, initial entry, inode-local objects, deadline, and one exec handoff | ABI, compiled-object, node transition, recovery, and required physical tests |
+| RuntimeBootstrap authority | Node binding owner arms one held binding | BPF RuntimeBootstrap transition | Exact binding, initial entry, bounded anonymous-object keys, deadline, and one exec handoff | ABI, compiled-object, node transition, recovery, and required physical tests |
 | Accepted evidence and coverage | `EvidenceIntakeOwner` | `ControlStore` transaction | Immutable records, coverage reports, and contiguous cursors | Duplicate, gap, reorder, backpressure, storage-failure, and restart tests |
 | Node WAL truncation | Node WAL owner | Node WAL owner after durable Control acknowledgement | Node WAL | Durable contiguous acknowledgement and replay tests |
 | Operational health | `ControlPlane` projection | Existing owners supply counts | Authenticated `ControlHealth.Get` response | Generated contract and bounded health snapshot tests |
@@ -494,7 +494,10 @@ flowchart LR
 | `exception_runtime_states` | `ExceptionRuntimeStateKeyV1 -> ExceptionRuntimeStateV1` | Node exception owner | Effect gate consumes uses under the map value lock | Node recovery and exception gate | Pinned until the instance is terminal and durable receipts permit cleanup |
 | `exception_handle_bindings` | `ExceptionHandleBindingKeyV1 -> ExceptionHandleBindingV1` | Node policy and exception owners | None | Exception gate and recovery | Pinned for the exact compiled handle and active instance |
 | `exception_use_receipts` | Receipt identity -> bounded use receipt | Node exception receipt owner | Effect gate emits use receipts | Node receipt recovery | Pinned until the durable exception WAL records the receipt |
-| `runtime_bootstrap_objects` | inode-local `RuntimeBootstrapObjectStateV1` | None | RuntimeBootstrap creation and inherited-use gates | RuntimeBootstrap file and exec gates | Inode lifetime; binding transition removes its authority immediately |
+| `runtime_bootstrap_objects` | LRU hash keyed by filesystem, inode, and generation | 65,536 | RuntimeBootstrap creation and inherited-use gates | RuntimeBootstrap file and exec gates | LRU eviction; binding transition removes authority immediately |
+
+A stale key collision denies the new claim. The BPF program does not overwrite
+an authority record that belongs to another binding.
 
 A bpffs pin keeps a map or link alive after the loader process exits. A
 process restart does not remove a pin. `KernelHost` validates and reuses the

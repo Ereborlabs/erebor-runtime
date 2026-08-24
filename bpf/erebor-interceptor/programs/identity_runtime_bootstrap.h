@@ -90,35 +90,69 @@ static __always_inline bool runtime_bootstrap_memfd_name(struct file *file)
            observed[3] == 'f' && observed[4] == 'd' && observed[5] == ':';
 }
 
+static __always_inline bool runtime_bootstrap_object_key(
+    runtime_bootstrap_object_key_v1 *key, struct inode *inode)
+{
+    struct super_block *superblock = NULL;
+    dev_t filesystem_device = 0;
+
+    __builtin_memset(key, 0, sizeof(*key));
+    if (!inode || BPF_CORE_READ_INTO(&superblock, inode, i_sb) ||
+        !superblock ||
+        BPF_CORE_READ_INTO(&key->filesystem_magic, superblock, s_magic) ||
+        BPF_CORE_READ_INTO(&filesystem_device, superblock, s_dev) ||
+        BPF_CORE_READ_INTO(&key->inode, inode, i_ino) ||
+        BPF_CORE_READ_INTO(&key->inode_generation, inode, i_generation) ||
+        !key->filesystem_magic || !key->inode) {
+        __builtin_memset(key, 0, sizeof(*key));
+        return false;
+    }
+    key->filesystem_device = encoded_filesystem_device(filesystem_device);
+    return true;
+}
+
 static __always_inline int runtime_bootstrap_claim_inode(
     struct inode *inode, __u8 kind, execution_set_binding_state_v1 *binding,
-    const task_label_v1 *label, const entry_security_state_v1 *entry)
+    const task_label_v1 *label, const entry_security_state_v1 *entry,
+    struct identity_scratch_v1 *scratch)
 {
     runtime_bootstrap_object_state_v1 *object;
 
-    if (!runtime_bootstrap_actor_is_exact(binding, label, entry) ||
+    if (!scratch ||
+        !runtime_bootstrap_actor_is_exact(binding, label, entry) ||
         (kind != runtime_bootstrap_object_kind_v1_pipe &&
-         kind != runtime_bootstrap_object_kind_v1_memfd))
+         kind != runtime_bootstrap_object_kind_v1_memfd) ||
+        !runtime_bootstrap_object_key(&scratch->runtime_bootstrap_object_key,
+                                      inode))
         return -EACCES;
-    object = bpf_inode_storage_get(&runtime_bootstrap_objects, inode, 0, 0);
+    object = bpf_map_lookup_elem(&runtime_bootstrap_objects,
+                                 &scratch->runtime_bootstrap_object_key);
     if (!object) {
-        object = bpf_inode_storage_get(
-            &runtime_bootstrap_objects, inode, 0,
-            BPF_LOCAL_STORAGE_GET_F_CREATE);
-        if (!object)
-            return -EACCES;
-        object->binding_id = binding->binding_id;
-        object->binding_nonce = binding->binding_nonce;
-        object->entry_instance_id = label->entry_instance_id;
-        object->deadline_boottime_ns =
+        // Publish a complete value so concurrent access cannot observe a
+        // partial record. BPF_NOEXIST also makes inode reuse fail closed.
+        __builtin_memset(&scratch->runtime_bootstrap_object_candidate, 0,
+                         sizeof(scratch->runtime_bootstrap_object_candidate));
+        scratch->runtime_bootstrap_object_candidate.binding_id =
+            binding->binding_id;
+        scratch->runtime_bootstrap_object_candidate.binding_nonce =
+            binding->binding_nonce;
+        scratch->runtime_bootstrap_object_candidate.entry_instance_id =
+            label->entry_instance_id;
+        scratch->runtime_bootstrap_object_candidate.deadline_boottime_ns =
             binding->runtime_bootstrap_deadline_boottime_ns;
-        object->transition_version = 1;
-        object->kind = kind;
-#pragma unroll
-        for (int index = 0; index < 7; index++)
-            object->reserved[index] = 0;
+        scratch->runtime_bootstrap_object_candidate.transition_version = 1;
+        scratch->runtime_bootstrap_object_candidate.kind = kind;
+        if (bpf_map_update_elem(
+                &runtime_bootstrap_objects,
+                &scratch->runtime_bootstrap_object_key,
+                &scratch->runtime_bootstrap_object_candidate, BPF_NOEXIST))
+            return -EACCES;
+        object = bpf_map_lookup_elem(
+            &runtime_bootstrap_objects,
+            &scratch->runtime_bootstrap_object_key);
     }
-    return id128_equal(&object->binding_id, &binding->binding_id) &&
+    return object &&
+                   id128_equal(&object->binding_id, &binding->binding_id) &&
                    id128_equal(&object->binding_nonce,
                                &binding->binding_nonce) &&
                    id128_equal(&object->entry_instance_id,
@@ -158,14 +192,16 @@ static __always_inline bool runtime_bootstrap_operation_is_fixed(
 static __always_inline int runtime_bootstrap_file_access(
     struct file *file, __u16 family, __u16 operation,
     execution_set_binding_state_v1 *binding, const task_label_v1 *label,
-    const entry_security_state_v1 *entry, bool may_claim_inherited,
-    bool received)
+    const entry_security_state_v1 *entry, struct identity_scratch_v1 *scratch,
+    bool may_claim_inherited, bool received)
 {
     runtime_bootstrap_object_state_v1 *object;
     struct inode *inode = NULL;
     __u8 kind;
 
-    if (!file || BPF_CORE_READ_INTO(&inode, file, f_inode) || !inode)
+    if (!file)
+        return RUNTIME_BOOTSTRAP_NOT_APPLICABLE_V1;
+    if (BPF_CORE_READ_INTO(&inode, file, f_inode) || !inode)
         return RUNTIME_BOOTSTRAP_NOT_APPLICABLE_V1;
     kind = runtime_bootstrap_inode_kind(inode);
     if (kind == runtime_bootstrap_object_kind_v1_memfd &&
@@ -173,13 +209,20 @@ static __always_inline int runtime_bootstrap_file_access(
         kind = runtime_bootstrap_object_kind_v1_unknown;
     if (kind == runtime_bootstrap_object_kind_v1_unknown)
         return RUNTIME_BOOTSTRAP_NOT_APPLICABLE_V1;
-    if (received || !runtime_bootstrap_actor_is_exact(binding, label, entry))
+    if (!scratch || received ||
+        !runtime_bootstrap_actor_is_exact(binding, label, entry) ||
+        !runtime_bootstrap_object_key(&scratch->runtime_bootstrap_object_key,
+                                      inode))
         return -EACCES;
-    object = bpf_inode_storage_get(&runtime_bootstrap_objects, inode, 0, 0);
+    object = bpf_map_lookup_elem(&runtime_bootstrap_objects,
+                                 &scratch->runtime_bootstrap_object_key);
     if (!object && may_claim_inherited) {
-        if (runtime_bootstrap_claim_inode(inode, kind, binding, label, entry))
+        if (runtime_bootstrap_claim_inode(inode, kind, binding, label, entry,
+                                          scratch))
             return -EACCES;
-        object = bpf_inode_storage_get(&runtime_bootstrap_objects, inode, 0, 0);
+        object = bpf_map_lookup_elem(
+            &runtime_bootstrap_objects,
+            &scratch->runtime_bootstrap_object_key);
     }
     if (!object ||
         !id128_equal(&object->binding_id, &binding->binding_id) ||

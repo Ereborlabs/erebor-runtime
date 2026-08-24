@@ -52,8 +52,8 @@ mod tests {
 
         use erebor_interceptor_abi::{
             BindingActivationTargetKeyV1, EffectObservationHealthV1, ExceptionRuntimeStateKeyV1,
-            ExceptionRuntimeStateV1, ExecutionSetBindingStateV1, RuntimeBootstrapObjectStateV1,
-            TaskEffectAttemptStateV1,
+            ExceptionRuntimeStateV1, ExecutionSetBindingStateV1, RuntimeBootstrapObjectKeyV1,
+            RuntimeBootstrapObjectStateV1, TaskEffectAttemptStateV1,
         };
 
         let object = open_object()?;
@@ -135,11 +135,16 @@ mod tests {
             .ok_or_else(|| {
                 crate::error::InvalidConfigurationSnafu {
                     path: std::path::Path::new("embedded erebor-interceptor.bpf.o"),
-                    reason: "runtime bootstrap inode storage is missing".to_owned(),
+                    reason: "bounded runtime bootstrap object map is missing".to_owned(),
                 }
                 .build()
             })?;
-        assert_eq!(bootstrap_objects.map_type(), MapType::InodeStorage);
+        assert_eq!(bootstrap_objects.map_type(), MapType::LruHash);
+        assert_eq!(bootstrap_objects.max_entries(), 65_536);
+        assert_eq!(
+            bootstrap_objects.key_size() as usize,
+            size_of::<RuntimeBootstrapObjectKeyV1>()
+        );
         assert_eq!(
             bootstrap_objects.value_size() as usize,
             size_of::<RuntimeBootstrapObjectStateV1>()
