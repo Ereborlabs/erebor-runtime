@@ -17,12 +17,12 @@ use erebor_interceptor::{
     KernelObjectLayoutV1, KernelObjectManifestV1, BUNDLED_BPF_OBJECT, REQUIRED_IDENTITY_PROGRAMS,
 };
 use erebor_interceptor_abi::{
-    CreatedByEdgeV1, EntryLifetimeStateV1, EntrySecurityStateV1, ExecGuardStateV1,
-    ExecutionSetBindingStateV1, Id128V1, IdentityRuntimeConfigV1, PendingExecStateV1,
-    PendingExecV1, ProcessExecutionInstanceV1, ProcessExecutionStateV1, ProcessSecurityStateKindV1,
-    ProcessSecurityStateV1, ProcessStateVectorStateV1, ProcessStateVectorV1,
-    ReferenceTombstoneStateV1, TaskCoordinateStateV1, TaskCoordinateV1, TaskReferenceTombstoneV1,
-    TASK_REFERENCE_ALL_V1,
+    BindingLifecycleStateV1, CreatedByEdgeV1, EntryLifetimeStateV1, EntrySecurityStateV1,
+    ExecGuardStateV1, ExecutionSetBindingStateV1, Id128V1, IdentityRuntimeConfigV1,
+    PendingExecStateV1, PendingExecV1, ProcessExecutionInstanceV1, ProcessExecutionStateV1,
+    ProcessSecurityStateKindV1, ProcessSecurityStateV1, ProcessStateVectorStateV1,
+    ProcessStateVectorV1, ReferenceTombstoneStateV1, TaskCoordinateStateV1, TaskCoordinateV1,
+    TaskReferenceTombstoneV1, TASK_REFERENCE_ALL_V1,
 };
 use libbpf_rs::{MapCore as _, MapHandle, MapType};
 use mithril_control::{
@@ -37,7 +37,7 @@ use mithril_node::{
 use rustix::process::{pidfd_open, pidfd_send_signal, Pid, PidfdFlags, Signal};
 use serde::{Deserialize, Serialize};
 use snafu::{ensure, ResultExt as _};
-use zerocopy::{FromBytes as _, KnownLayout, TryFromBytes};
+use zerocopy::{FromBytes as _, IntoBytes as _, KnownLayout, TryFromBytes};
 
 use crate::closure::QualificationRegistry;
 use crate::error::{InterceptorSnafu, InvalidInputSnafu, IoSnafu, JsonSnafu, NodeSnafu};
@@ -584,6 +584,36 @@ impl IdentityTestRunner {
                 reason: "a task present before binding did not reconcile to the fail-closed root",
             }
         );
+        let binding_gap_root_id = fs::metadata(&cgroup_path)
+            .context(IoSnafu { path: &cgroup_path })?
+            .ino();
+        let mut terminating_binding = required_abi_map::<ExecutionSetBindingStateV1>(
+            &host,
+            "execution_set_bindings",
+            &binding_gap_root_id.to_ne_bytes(),
+            "binding-gap execution-set binding",
+        )?;
+        terminating_binding.lifecycle_state = BindingLifecycleStateV1::Terminating;
+        terminating_binding.transition_version += 1;
+        host.update_map(
+            "execution_set_bindings",
+            &binding_gap_root_id.to_ne_bytes(),
+            terminating_binding.as_bytes(),
+        )
+        .context(InterceptorSnafu)?;
+        identity.reconcile(&mut host, false).context(NodeSnafu)?;
+
+        // A terminal binding removes effect authority before its task exits.
+        // Reconciliation must retain that coherent graph without reopening it.
+        terminating_binding.lifecycle_state = BindingLifecycleStateV1::Active;
+        terminating_binding.transition_version += 1;
+        host.update_map(
+            "execution_set_bindings",
+            &binding_gap_root_id.to_ne_bytes(),
+            terminating_binding.as_bytes(),
+        )
+        .context(InterceptorSnafu)?;
+        identity.reconcile(&mut host, false).context(NodeSnafu)?;
         binding_gap_fixture.stop();
 
         let mut external_ambiguity_first = NativeProcessFixture::start()?;

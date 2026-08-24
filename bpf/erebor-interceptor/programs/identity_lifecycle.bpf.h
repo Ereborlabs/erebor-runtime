@@ -157,7 +157,7 @@ int BPF_PROG(erebor_cgroup_attach_task, struct cgroup *cgroup,
         return 0;
     }
     if (label) {
-        if (!binding_matches_label(binding, label)) {
+        if (!binding_retains_label(binding, label)) {
             task_coordinate_v1 *coordinate =
                 bpf_map_lookup_elem(&task_coordinates, &label->task_cookie);
             if (coordinate) {
@@ -291,7 +291,7 @@ int erebor_reconcile_tasks(struct bpf_iter__task *context)
                                           &process->active_profile_generation_ref_id)
                                     : NULL;
         if (binding_lookup || !label_matches_runtime(label, config) ||
-            !binding_matches_label(binding, label) || !coordinate ||
+            !binding_retains_label(binding, label) || !coordinate ||
             coordinate->state != task_coordinate_state_v1_runnable ||
             !parent_interval ||
             parent_interval->child_task_cookie != label->task_cookie ||

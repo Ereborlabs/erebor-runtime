@@ -1247,6 +1247,24 @@ static __always_inline bool binding_matches_label(
            binding->lifecycle_state == binding_lifecycle_state_v1_active;
 }
 
+static __always_inline bool binding_retains_label(
+    const execution_set_binding_state_v1 *binding, const task_label_v1 *label)
+{
+    if (!binding || !label ||
+        !id128_equal(&binding->binding_id,
+                     &label->placement.protected_root_binding_id) ||
+        !id128_equal(&binding->binding_nonce,
+                     &label->placement.protected_root_binding_nonce))
+        return false;
+    /* Terminal bindings deny effects, but their live tasks remain valid graph
+     * holders until exit cleanup retires the task-local identity. */
+    return binding->lifecycle_state == binding_lifecycle_state_v1_active ||
+           binding->lifecycle_state == binding_lifecycle_state_v1_draining ||
+           binding->lifecycle_state ==
+               binding_lifecycle_state_v1_terminating ||
+           binding->lifecycle_state == binding_lifecycle_state_v1_tombstoned;
+}
+
 static __always_inline bool generation_allows_existing_holder(
     const profile_generation_descriptor_v1 *generation)
 {
