@@ -1141,6 +1141,7 @@ dependencies = [
  "erebor-runtime-policy",
  "erebor-runtime-telemetry",
  "futures-util",
+ "reqwest",
  "serde",
  "serde_json",
  "snafu",

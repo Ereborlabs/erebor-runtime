@@ -36,8 +36,8 @@ async fn owned_browser_lifecycle_masks_raw_cdp_and_blocks_denied_script_payload(
     assert!(!endpoint.contains('?'));
 
     let discovery = GovernedDiscoveryClient::from_endpoint(&endpoint)?;
-    let version = discovery.version()?;
-    let targets = discovery.targets()?;
+    let version = discovery.version().await?;
+    let targets = discovery.targets().await?;
     assert_eq!(
         version.pointer("/webSocketDebuggerUrl"),
         Some(&Value::String(endpoint.clone()))

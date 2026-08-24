@@ -1,20 +1,15 @@
-use std::{
-    io::{Read, Write},
-    net::SocketAddr,
-    time::Duration,
-};
+use std::time::Duration;
 
-use erebor_runtime_e2e::{
-    error::{IoSnafu, JsonSnafu},
-    E2eError,
-};
+use erebor_runtime_e2e::E2eError;
 use serde_json::Value;
-use snafu::ResultExt;
 
 use crate::common::external_error;
 
+const DISCOVERY_TIMEOUT: Duration = Duration::from_secs(5);
+
 pub struct GovernedDiscoveryClient {
-    port: u16,
+    base_url: String,
+    client: reqwest::Client,
 }
 
 impl GovernedDiscoveryClient {
@@ -29,82 +24,41 @@ impl GovernedDiscoveryClient {
                 )
             })?;
 
-        Ok(Self { port })
+        let client = reqwest::Client::builder()
+            .timeout(DISCOVERY_TIMEOUT)
+            .build()
+            .map_err(|error| external_error("governed discovery client", error))?;
+
+        Ok(Self {
+            base_url: format!("http://127.0.0.1:{port}"),
+            client,
+        })
     }
 
-    pub fn version(&self) -> Result<Value, E2eError> {
-        self.http_get_json("/json/version")
+    pub async fn version(&self) -> Result<Value, E2eError> {
+        self.http_get_json("/json/version").await
     }
 
-    pub fn targets(&self) -> Result<Value, E2eError> {
-        self.http_get_json("/json/list")
+    pub async fn targets(&self) -> Result<Value, E2eError> {
+        self.http_get_json("/json/list").await
     }
 
-    fn http_get_json(&self, path: &str) -> Result<Value, E2eError> {
-        let mut request = DiscoveryHttpRequest::connect(self.port)?;
-        request.get(path)
-    }
-}
-
-struct DiscoveryHttpRequest {
-    port: u16,
-    stream: std::net::TcpStream,
-}
-
-impl DiscoveryHttpRequest {
-    fn connect(port: u16) -> Result<Self, E2eError> {
-        let address = SocketAddr::from(([127, 0, 0, 1], port));
-        let stream = std::net::TcpStream::connect_timeout(&address, Duration::from_secs(2))
-            .context(IoSnafu)?;
-        stream
-            .set_read_timeout(Some(Duration::from_secs(2)))
-            .context(IoSnafu)?;
-        stream
-            .set_write_timeout(Some(Duration::from_secs(2)))
-            .context(IoSnafu)?;
-
-        Ok(Self { port, stream })
-    }
-
-    fn get(&mut self, path: &str) -> Result<Value, E2eError> {
-        let request = format!(
-            "GET {path} HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nConnection: close\r\n\r\n",
-            self.port
-        );
-        self.stream.write_all(request.as_bytes()).context(IoSnafu)?;
-
-        let mut response = String::new();
-        self.stream.read_to_string(&mut response).context(IoSnafu)?;
-        let response = DiscoveryHttpResponse::parse(&response)?;
-        response.json()
-    }
-}
-
-struct DiscoveryHttpResponse<'a> {
-    status_line: &'a str,
-    body: &'a str,
-}
-
-impl<'a> DiscoveryHttpResponse<'a> {
-    fn parse(source: &'a str) -> Result<Self, E2eError> {
-        let Some((status_line, body)) = source.split_once("\r\n\r\n") else {
-            return Err(external_error(
-                "governed discovery response",
-                std::io::Error::other("missing HTTP response body"),
-            ));
-        };
-
-        Ok(Self { status_line, body })
-    }
-
-    fn json(&self) -> Result<Value, E2eError> {
-        if !self.status_line.starts_with("HTTP/1.1 200 ") {
+    async fn http_get_json(&self, path: &str) -> Result<Value, E2eError> {
+        let response = self
+            .client
+            .get(format!("{}{path}", self.base_url))
+            .send()
+            .await
+            .map_err(|error| external_error("governed discovery request", error))?;
+        if !response.status().is_success() {
             return Err(external_error(
                 "governed discovery status",
-                std::io::Error::other(self.status_line.to_owned()),
+                std::io::Error::other(response.status().to_string()),
             ));
         }
-
-        serde_json::from_str(self.body).context(JsonSnafu)
+        response
+            .json()
+            .await
+            .map_err(|error| external_error("governed discovery response", error))
     }
 }

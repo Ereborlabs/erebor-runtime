@@ -22,7 +22,9 @@ async fn browser_cdp_runtime_masks_owned_browser_discovery_targets() -> Result<(
     client
         .navigate("data:text/html,erebor-discovery-target")
         .await?;
-    let targets = GovernedDiscoveryClient::from_endpoint(&endpoint)?.targets()?;
+    let targets = GovernedDiscoveryClient::from_endpoint(&endpoint)?
+        .targets()
+        .await?;
     let target_list = targets.as_array().ok_or_else(|| {
         external_error(
             "owned browser discovery target list",

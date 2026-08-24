@@ -43,8 +43,8 @@ async fn browser_cdp_runtime_exposes_governed_discovery_endpoints() -> Result<()
     let harness = CdpE2eHarness::start_runtime_with_mini_upstream(allow_all_policy()?).await?;
     let endpoint = harness.endpoint().to_owned();
     let discovery = GovernedDiscoveryClient::from_endpoint(&endpoint)?;
-    let version = discovery.version()?;
-    let targets = discovery.targets()?;
+    let version = discovery.version().await?;
+    let targets = discovery.targets().await?;
 
     assert_eq!(
         version.pointer("/webSocketDebuggerUrl"),
