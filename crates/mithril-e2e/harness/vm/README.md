@@ -222,11 +222,10 @@ crates/mithril-e2e/harness/vm/manual.sh destroy-convergence
 The destroy command checks both retained provider ownership records before it
 removes the VMs and their local work directories.
 
-The current administrative lane reaches draft creation, admission, and slot
-arm. Stock runc `1.4.2` then fails closed before target exec because its sealed
-self-clone and inherited bootstrap channels are unsupported. Treat this as a
-product blocker. Do not add a broad runc, pipe, or socket exception while you
-investigate it.
+The current protected-start path uses two ordered `createRuntime` hooks and
+the `PreparedContainer` kernel state. The first signed-policy-approved exec
+activates workload enforcement. Runtime setup objects do not carry authority
+into the active application. A current-source physical pass is still required.
 
 The host compiles the disposable kernel qualification object with the existing
 repository compiler. The guest loads that exact object. The record command

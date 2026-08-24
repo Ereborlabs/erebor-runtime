@@ -3,13 +3,14 @@
 Status: The case is implemented. The current source has not passed this manual
 case.
 
-The last physical attempt used the old API and stopped after stock `runc` used
-anonymous-file and IPC bootstrap operations that have no typed authority. Do
-not treat this result as test noise. Do not add a broad runtime exception.
+The last physical attempt used the superseded runtime-bootstrap model. The
+current source uses the `PreparedContainer` boundary and has not passed this
+case yet. A pass must use the current source and the stock runtime.
 
 This case uses the production Kubernetes API, admission webhooks, scheduler,
-Control service, node DaemonSet, OCI prestart hook, policy compiler, exception
-authority, and node policy inspector. It does not call an automated test.
+Control service, node DaemonSet, two ordered OCI `createRuntime` hooks, policy
+compiler, exception authority, and node policy inspector. It does not call an
+automated test.
 
 The case creates one namespace, one `WorkloadProtectionPolicy`, one
 `WorkloadProtectionException`, two RuntimeClasses, and two protected Pods. It
@@ -69,9 +70,10 @@ exception, terminal-cleanup, restart, and fresh-root oracles. The command
 returns nonzero if admission sets `spec.nodeName`, accepts the direct-node
 bypass, delivers authority to another Node, fails to enforce the base denial,
 permits more than one exception use, refunds an unused exception after target
-disappearance, releases a container without its exact binding, permits start
+disappearance, releases a container without its exact prepared binding, permits start
 without the runtime gate, reuses the first runtime binding, replays a closed
-root, or gives a recreated policy a predecessor-bound candidate.
+root, carries prepared-runtime IPC into the application, or gives a recreated
+policy a predecessor-bound candidate.
 
 The EXIT trap removes the namespace, both RuntimeClasses, all case marker
 files, and the private temporary directory on success, failure, or

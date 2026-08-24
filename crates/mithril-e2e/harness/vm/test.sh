@@ -112,47 +112,47 @@ PATH="$cleanup_bin:$PATH" TEST_HELM_LOG="$removed_helm_log" \
 grep -q '^--kubeconfig .* uninstall mithril -n mithril-system$' "$removed_helm_log"
 
 hook_root=$test_root/hook-root
-hook_binary=$hook_root/opt/mithril/bin/mithril-oci-hook
-hook_binary_owner=$hook_root/opt/mithril/bin/.mithril-oci-hook.helm-owner
-hook_create_config=$hook_root/usr/share/containers/oci/hooks.d/98-mithril-create-container.json
-hook_create_config_owner=$hook_root/usr/share/containers/oci/hooks.d/.98-mithril-create-container.json.helm-owner
-hook_prestart_config=$hook_root/usr/share/containers/oci/hooks.d/99-mithril-prestart.json
-hook_prestart_config_owner=$hook_root/usr/share/containers/oci/hooks.d/.99-mithril-prestart.json.helm-owner
+hook_binary=$hook_root/usr/libexec/oci/hooks.d/mithril-oci-hook
+hook_binary_owner=$hook_root/usr/libexec/oci/hooks.d/.mithril-oci-hook.helm-owner
+hook_stage_config=$hook_root/usr/share/containers/oci/hooks.d/98-mithril-runtime-stage.json
+hook_stage_config_owner=$hook_root/usr/libexec/oci/hooks.d/.98-mithril-runtime-stage.json.helm-owner
+hook_admission_config=$hook_root/usr/share/containers/oci/hooks.d/99-mithril-runtime-admission.json
+hook_admission_config_owner=$hook_root/usr/libexec/oci/hooks.d/.99-mithril-runtime-admission.json.helm-owner
 hook_socket=$hook_root/run/mithril/runtime-admission.sock
-mkdir -p "$(dirname "$hook_binary")" "$(dirname "$hook_create_config")" \
+mkdir -p "$(dirname "$hook_binary")" "$(dirname "$hook_stage_config")" \
   "$(dirname "$hook_socket")" "$test_root/hook-bin"
 printf '#!/bin/sh\nexit 0\n' >"$hook_binary"
 chmod 755 "$hook_binary"
 printf 'mithril-system/mithril\n' >"$hook_binary_owner"
-printf 'mithril-system/mithril\n' >"$hook_create_config_owner"
-printf 'mithril-system/mithril\n' >"$hook_prestart_config_owner"
-chmod 600 "$hook_binary_owner" "$hook_create_config_owner" \
-  "$hook_prestart_config_owner"
-cat >"$hook_create_config" <<'EOF'
+printf 'mithril-system/mithril\n' >"$hook_stage_config_owner"
+printf 'mithril-system/mithril\n' >"$hook_admission_config_owner"
+chmod 600 "$hook_binary_owner" "$hook_stage_config_owner" \
+  "$hook_admission_config_owner"
+cat >"$hook_stage_config" <<'EOF'
 {
   "version": "1.0.0",
   "hook": {
-    "path": "/opt/mithril/bin/mithril-oci-hook",
-    "args": ["mithril-oci-hook", "--stage", "create-container", "--socket", "/run/mithril/runtime-admission.sock", "--timeout-ms", "4000"],
+    "path": "/usr/libexec/oci/hooks.d/mithril-oci-hook",
+    "args": ["mithril-oci-hook", "--stage", "stage-runtime-facts", "--socket", "/run/mithril/runtime-admission.sock", "--timeout-ms", "4000"],
     "timeout": 5
   },
   "when": {"annotations": {"^mithril\\.erebor\\.dev/profile-id$": ".+"}},
-  "stages": ["createContainer"]
+  "stages": ["createRuntime"]
 }
 EOF
-cat >"$hook_prestart_config" <<'EOF'
+cat >"$hook_admission_config" <<'EOF'
 {
   "version": "1.0.0",
   "hook": {
-    "path": "/opt/mithril/bin/mithril-oci-hook",
-    "args": ["mithril-oci-hook", "--stage", "prestart", "--socket", "/run/mithril/runtime-admission.sock", "--timeout-ms", "4000"],
+    "path": "/usr/libexec/oci/hooks.d/mithril-oci-hook",
+    "args": ["mithril-oci-hook", "--stage", "prepare-container", "--socket", "/run/mithril/runtime-admission.sock", "--timeout-ms", "4000"],
     "timeout": 5
   },
   "when": {"annotations": {"^mithril\\.erebor\\.dev/profile-id$": ".+"}},
-  "stages": ["prestart"]
+  "stages": ["createRuntime"]
 }
 EOF
-chmod 644 "$hook_create_config" "$hook_prestart_config"
+chmod 644 "$hook_stage_config" "$hook_admission_config"
 cat >"$test_root/hook-bin/stat" <<'EOF'
 #!/usr/bin/env bash
 path=${!#}
@@ -195,8 +195,8 @@ if bash "$directory/runtime-hook-oracle.sh" removed "$hook_root" \
   exit 1
 fi
 rm -f -- "$hook_binary" "$hook_binary_owner" \
-  "$hook_create_config" "$hook_create_config_owner" \
-  "$hook_prestart_config" "$hook_prestart_config_owner" "$hook_socket"
+  "$hook_stage_config" "$hook_stage_config_owner" \
+  "$hook_admission_config" "$hook_admission_config_owner" "$hook_socket"
 bash "$directory/runtime-hook-oracle.sh" removed "$hook_root" \
   /run/mithril/runtime-admission.sock
 
@@ -204,11 +204,20 @@ diagnostic_kubectl() {
   printf '%s\n' "$*" >>"$test_root/diagnostic-kubectl.log"
   echo "bounded diagnostic output"
 }
-collect_mithril_diagnostics "$test_root" mithril-system
+collect_mithril_diagnostics "$test_root" mithril-system tenant-a
 [[ -s $test_root/diagnostics/resources.txt ]]
+[[ -s $test_root/diagnostics/nodes.json ]]
 [[ -s $test_root/diagnostics/control.log ]]
 [[ -s $test_root/diagnostics/nodes.log ]]
+[[ -s $test_root/diagnostics/nodes-previous.log ]]
+[[ -s $test_root/diagnostics/nri-hook-injector.log ]]
+[[ -s $test_root/diagnostics/workload.txt ]]
+[[ -s $test_root/diagnostics/workload-events.txt ]]
+[[ -s $test_root/diagnostics/workload.log ]]
+[[ -s $test_root/diagnostics/workload-previous.log ]]
 grep -q -- '--tail=200 --limit-bytes=131072' "$test_root/diagnostic-kubectl.log"
+grep -q -- 'app.kubernetes.io/name=nri-plugin-hook-injector' \
+  "$test_root/diagnostic-kubectl.log"
 
 oracle_bin=$test_root/oracle-bin
 mkdir "$oracle_bin"

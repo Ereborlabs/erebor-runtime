@@ -29,46 +29,46 @@ case ${1:-} in
       echo "invalid runtime-hook oracle input" >&2
       exit 2
     }
-    binary=$(host_path /opt/mithril/bin/mithril-oci-hook)
-    binary_owner=$(host_path /opt/mithril/bin/.mithril-oci-hook.helm-owner)
-    create_config=$(host_path /usr/share/containers/oci/hooks.d/98-mithril-create-container.json)
-    create_config_owner=$(host_path /usr/share/containers/oci/hooks.d/.98-mithril-create-container.json.helm-owner)
-    prestart_config=$(host_path /usr/share/containers/oci/hooks.d/99-mithril-prestart.json)
-    prestart_config_owner=$(host_path /usr/share/containers/oci/hooks.d/.99-mithril-prestart.json.helm-owner)
+    binary=$(host_path /usr/libexec/oci/hooks.d/mithril-oci-hook)
+    binary_owner=$(host_path /usr/libexec/oci/hooks.d/.mithril-oci-hook.helm-owner)
+    stage_config=$(host_path /usr/share/containers/oci/hooks.d/98-mithril-runtime-stage.json)
+    stage_config_owner=$(host_path /usr/libexec/oci/hooks.d/.98-mithril-runtime-stage.json.helm-owner)
+    admission_config=$(host_path /usr/share/containers/oci/hooks.d/99-mithril-runtime-admission.json)
+    admission_config_owner=$(host_path /usr/libexec/oci/hooks.d/.99-mithril-runtime-admission.json.helm-owner)
     runtime_socket=$(host_path "$socket")
 
     [[ -f $binary && ! -L $binary && -x $binary ]]
-    [[ -f $create_config && ! -L $create_config ]]
-    [[ -f $prestart_config && ! -L $prestart_config ]]
+    [[ -f $stage_config && ! -L $stage_config ]]
+    [[ -f $admission_config && ! -L $admission_config ]]
     [[ -f $binary_owner && ! -L $binary_owner && $(<"$binary_owner") == "$owner" ]]
-    [[ -f $create_config_owner && ! -L $create_config_owner && $(<"$create_config_owner") == "$owner" ]]
-    [[ -f $prestart_config_owner && ! -L $prestart_config_owner && $(<"$prestart_config_owner") == "$owner" ]]
+    [[ -f $stage_config_owner && ! -L $stage_config_owner && $(<"$stage_config_owner") == "$owner" ]]
+    [[ -f $admission_config_owner && ! -L $admission_config_owner && $(<"$admission_config_owner") == "$owner" ]]
     [[ $(stat -c '%u:%g:%a' "$binary") == 0:0:755 ]]
-    [[ $(stat -c '%u:%g:%a' "$create_config") == 0:0:644 ]]
-    [[ $(stat -c '%u:%g:%a' "$prestart_config") == 0:0:644 ]]
+    [[ $(stat -c '%u:%g:%a' "$stage_config") == 0:0:644 ]]
+    [[ $(stat -c '%u:%g:%a' "$admission_config") == 0:0:644 ]]
     [[ $(stat -c '%u:%g:%a' "$binary_owner") == 0:0:600 ]]
-    [[ $(stat -c '%u:%g:%a' "$create_config_owner") == 0:0:600 ]]
-    [[ $(stat -c '%u:%g:%a' "$prestart_config_owner") == 0:0:600 ]]
+    [[ $(stat -c '%u:%g:%a' "$stage_config_owner") == 0:0:600 ]]
+    [[ $(stat -c '%u:%g:%a' "$admission_config_owner") == 0:0:600 ]]
     [[ ! -e $(host_path /usr/share/containers/oci/hooks.d/99-mithril.json) ]]
     [[ ! -e $(host_path /usr/share/containers/oci/hooks.d/.99-mithril.json.helm-owner) ]]
     jq -e --arg socket "$socket" --arg timeout_ms "$timeout_ms" \
       --argjson runtime_timeout "$runtime_timeout" '
         .version == "1.0.0" and
-        .hook.path == "/opt/mithril/bin/mithril-oci-hook" and
-        .hook.args == ["mithril-oci-hook", "--stage", "create-container", "--socket", $socket, "--timeout-ms", $timeout_ms] and
+        .hook.path == "/usr/libexec/oci/hooks.d/mithril-oci-hook" and
+        .hook.args == ["mithril-oci-hook", "--stage", "stage-runtime-facts", "--socket", $socket, "--timeout-ms", $timeout_ms] and
         .hook.timeout == $runtime_timeout and
         .when.annotations == {"^mithril\\.erebor\\.dev/profile-id$": ".+"} and
-        .stages == ["createContainer"]
-      ' "$create_config" >/dev/null
+        .stages == ["createRuntime"]
+      ' "$stage_config" >/dev/null
     jq -e --arg socket "$socket" --arg timeout_ms "$timeout_ms" \
       --argjson runtime_timeout "$runtime_timeout" '
         .version == "1.0.0" and
-        .hook.path == "/opt/mithril/bin/mithril-oci-hook" and
-        .hook.args == ["mithril-oci-hook", "--stage", "prestart", "--socket", $socket, "--timeout-ms", $timeout_ms] and
+        .hook.path == "/usr/libexec/oci/hooks.d/mithril-oci-hook" and
+        .hook.args == ["mithril-oci-hook", "--stage", "prepare-container", "--socket", $socket, "--timeout-ms", $timeout_ms] and
         .hook.timeout == $runtime_timeout and
         .when.annotations == {"^mithril\\.erebor\\.dev/profile-id$": ".+"} and
-        .stages == ["prestart"]
-      ' "$prestart_config" >/dev/null
+        .stages == ["createRuntime"]
+      ' "$admission_config" >/dev/null
     [[ $(stat -c '%F' "$runtime_socket") == socket ]]
     [[ $(stat -c '%u:%g:%a' "$runtime_socket") == 0:0:600 ]]
     ;;
@@ -82,19 +82,28 @@ case ${1:-} in
       echo "invalid runtime-hook oracle input" >&2
       exit 2
     }
+    remaining=false
     for path in \
-      /opt/mithril/bin/mithril-oci-hook \
-      /opt/mithril/bin/.mithril-oci-hook.helm-owner \
+      /usr/libexec/oci/hooks.d/mithril-oci-hook \
+      /usr/libexec/oci/hooks.d/.mithril-oci-hook.helm-owner \
+      /usr/share/containers/oci/hooks.d/98-mithril-runtime-stage.json \
+      /usr/libexec/oci/hooks.d/.98-mithril-runtime-stage.json.helm-owner \
+      /usr/share/containers/oci/hooks.d/99-mithril-runtime-admission.json \
+      /usr/libexec/oci/hooks.d/.99-mithril-runtime-admission.json.helm-owner \
       /usr/share/containers/oci/hooks.d/98-mithril-create-container.json \
-      /usr/share/containers/oci/hooks.d/.98-mithril-create-container.json.helm-owner \
+      /usr/libexec/oci/hooks.d/.98-mithril-create-container.json.helm-owner \
       /usr/share/containers/oci/hooks.d/99-mithril-prestart.json \
-      /usr/share/containers/oci/hooks.d/.99-mithril-prestart.json.helm-owner \
+      /usr/libexec/oci/hooks.d/.99-mithril-prestart.json.helm-owner \
       /usr/share/containers/oci/hooks.d/99-mithril.json \
-      /usr/share/containers/oci/hooks.d/.99-mithril.json.helm-owner \
+      /usr/libexec/oci/hooks.d/.99-mithril.json.helm-owner \
       "$socket"; do
       target=$(host_path "$path")
-      [[ ! -e $target && ! -L $target ]]
+      if [[ -e $target || -L $target ]]; then
+        echo "runtime-hook path remains: $path" >&2
+        remaining=true
+      fi
     done
+    [[ $remaining == false ]]
     ;;
   *)
     usage

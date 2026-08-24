@@ -22,6 +22,12 @@ spec:
           rm -f /var/lib/mithril-convergence/MITHRIL_MANUAL_POD.restart;
           touch /var/lib/mithril-convergence/MITHRIL_MANUAL_POD.started;
           if [ MITHRIL_MANUAL_POD = protected ]; then
+          if ( : | : );
+          then echo PREPARED_RUNTIME_LEAKED >
+          /var/lib/mithril-convergence/MITHRIL_MANUAL_POD.prepared-result;
+          else echo PREPARED_RUNTIME_RETIRED >
+          /var/lib/mithril-convergence/MITHRIL_MANUAL_POD.prepared-result;
+          fi;
           if cat /var/lib/mithril-convergence/MITHRIL_MANUAL_POD.exception-target
           >/dev/null 2>&1;
           then echo BASE_ALLOWED >

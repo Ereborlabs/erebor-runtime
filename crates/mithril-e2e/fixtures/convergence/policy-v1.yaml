@@ -69,6 +69,11 @@ spec:
           recursive: false
           operations: [OpenRead, OpenWrite, Read, Write, Create, SetAttributes, Unlink]
           action: Allow
+        - name: allow-prepared-result-marker
+          path: /var/lib/mithril-convergence/protected.prepared-result
+          recursive: false
+          operations: [OpenRead, OpenWrite, Read, Write, Create, SetAttributes, Unlink]
+          action: Allow
         - name: allow-ready-node-start-marker
           path: /var/lib/mithril-convergence/ready-node-only.started
           recursive: false

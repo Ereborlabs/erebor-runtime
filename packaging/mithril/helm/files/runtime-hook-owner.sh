@@ -75,62 +75,70 @@ publish_file() {
 install_hook() {
   hook_owner=$1
   binary_source=$2
-  create_config_source=$3
-  prestart_config_source=$4
+  stage_config_source=$3
+  admission_config_source=$4
   binary_directory=$5
   config_directory=$6
   legacy_binary_directory=${7:-}
   binary_target=$binary_directory/mithril-oci-hook
   binary_marker=$binary_directory/.mithril-oci-hook.helm-owner
-  create_config_target=$config_directory/98-mithril-create-container.json
-  create_config_marker=$binary_directory/.98-mithril-create-container.json.helm-owner
-  prestart_config_target=$config_directory/99-mithril-prestart.json
-  prestart_config_marker=$binary_directory/.99-mithril-prestart.json.helm-owner
+  stage_config_target=$config_directory/98-mithril-runtime-stage.json
+  stage_config_marker=$binary_directory/.98-mithril-runtime-stage.json.helm-owner
+  admission_config_target=$config_directory/99-mithril-runtime-admission.json
+  admission_config_marker=$binary_directory/.99-mithril-runtime-admission.json.helm-owner
+  old_create_config_target=$config_directory/98-mithril-create-container.json
+  old_create_config_marker=$binary_directory/.98-mithril-create-container.json.helm-owner
+  old_prestart_config_target=$config_directory/99-mithril-prestart.json
+  old_prestart_config_marker=$binary_directory/.99-mithril-prestart.json.helm-owner
   legacy_config_target=$config_directory/99-mithril.json
   legacy_config_marker=$binary_directory/.99-mithril.json.helm-owner
 
   [ -d "$binary_directory" ] || fail "binary directory does not exist"
   [ -d "$config_directory" ] || fail "hook configuration directory does not exist"
   [ -f "$binary_source" ] || fail "hook binary source does not exist"
-  [ -f "$create_config_source" ] || fail "createContainer hook source does not exist"
-  [ -f "$prestart_config_source" ] || fail "prestart hook source does not exist"
+  [ -f "$stage_config_source" ] || fail "runtime-fact hook source does not exist"
+  [ -f "$admission_config_source" ] || fail "runtime-admission hook source does not exist"
   # Releases before the NRI-compatible layout kept markers in the watched
   # directory. Move only markers that belong to this exact Helm release.
   migrate_owned_marker \
     "$config_directory/.98-mithril-create-container.json.helm-owner" \
-    "$create_config_marker" "$hook_owner"
+    "$old_create_config_marker" "$hook_owner"
   migrate_owned_marker \
     "$config_directory/.99-mithril-prestart.json.helm-owner" \
-    "$prestart_config_marker" "$hook_owner"
+    "$old_prestart_config_marker" "$hook_owner"
   migrate_owned_marker "$config_directory/.99-mithril.json.helm-owner" \
     "$legacy_config_marker" "$hook_owner"
   if [ -n "$legacy_binary_directory" ]; then
     migrate_owned_marker \
       "$legacy_binary_directory/.98-mithril-create-container.json.helm-owner" \
-      "$create_config_marker" "$hook_owner"
+      "$old_create_config_marker" "$hook_owner"
     migrate_owned_marker \
       "$legacy_binary_directory/.99-mithril-prestart.json.helm-owner" \
-      "$prestart_config_marker" "$hook_owner"
+      "$old_prestart_config_marker" "$hook_owner"
     migrate_owned_marker "$legacy_binary_directory/.99-mithril.json.helm-owner" \
       "$legacy_config_marker" "$hook_owner"
   fi
   require_owned_or_absent "$binary_target" "$binary_marker" "$hook_owner"
-  require_owned_or_absent "$create_config_target" "$create_config_marker" "$hook_owner"
-  require_owned_or_absent "$prestart_config_target" "$prestart_config_marker" "$hook_owner"
+  require_owned_or_absent "$stage_config_target" "$stage_config_marker" "$hook_owner"
+  require_owned_or_absent "$admission_config_target" "$admission_config_marker" "$hook_owner"
+  require_owned_or_absent "$old_create_config_target" "$old_create_config_marker" "$hook_owner"
+  require_owned_or_absent "$old_prestart_config_target" "$old_prestart_config_marker" "$hook_owner"
   require_owned_or_absent "$legacy_config_target" "$legacy_config_marker" "$hook_owner"
 
   # Keep ownership and staging files outside the watched configuration directory.
   # The NRI hook manager must observe only complete hook documents.
   publish_owner "$binary_marker" "$hook_owner"
-  publish_owner "$create_config_marker" "$hook_owner"
-  publish_owner "$prestart_config_marker" "$hook_owner"
+  publish_owner "$stage_config_marker" "$hook_owner"
+  publish_owner "$admission_config_marker" "$hook_owner"
   publish_file "$binary_source" "$binary_target" 0755
-  # Publish the fail-closed prestart gate before staging or legacy removal.
-  publish_file "$prestart_config_source" "$prestart_config_target" 0644 \
+  # Keep the old denial active until both ordered replacements are complete.
+  remove_owned "$old_create_config_target" "$old_create_config_marker" "$hook_owner"
+  publish_file "$stage_config_source" "$stage_config_target" 0644 \
     "${config_directory%/*}"
+  publish_file "$admission_config_source" "$admission_config_target" 0644 \
+    "${config_directory%/*}"
+  remove_owned "$old_prestart_config_target" "$old_prestart_config_marker" "$hook_owner"
   remove_owned "$legacy_config_target" "$legacy_config_marker" "$hook_owner"
-  publish_file "$create_config_source" "$create_config_target" 0644 \
-    "${config_directory%/*}"
   if [ -n "$legacy_binary_directory" ]; then
     remove_owned "$legacy_binary_directory/mithril-oci-hook" \
       "$legacy_binary_directory/.mithril-oci-hook.helm-owner" "$hook_owner"
@@ -154,7 +162,11 @@ cleanup_hook() {
   binary_directory=$2
   config_directory=$3
   legacy_binary_directory=${4:-}
-  # Remove staging first. A concurrent prestart then denies because it has no stage.
+  # Remove staging first. Concurrent admission then denies because it has no stage.
+  remove_owned "$config_directory/98-mithril-runtime-stage.json" \
+    "$binary_directory/.98-mithril-runtime-stage.json.helm-owner" "$hook_owner"
+  remove_owned "$config_directory/99-mithril-runtime-admission.json" \
+    "$binary_directory/.99-mithril-runtime-admission.json.helm-owner" "$hook_owner"
   remove_owned "$config_directory/98-mithril-create-container.json" \
     "$binary_directory/.98-mithril-create-container.json.helm-owner" "$hook_owner"
   remove_owned "$config_directory/99-mithril-prestart.json" \

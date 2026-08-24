@@ -153,7 +153,8 @@ cleanup() {
   trap - EXIT
   set +e
   if ((original_status != 0)) && [[ $cluster_created == true ]]; then
-    collect_mithril_diagnostics "$output_directory" "$system_namespace" || cleanup_failed=true
+    collect_mithril_diagnostics "$output_directory" "$system_namespace" \
+      "$workload_namespace" || cleanup_failed=true
   fi
   remove_mithril_release "$cluster_created" "$keep_vms" \
     "$manual_environment" "$kubeconfig" "$system_namespace" || cleanup_failed=true
@@ -333,6 +334,38 @@ remote_kubectl() {
   "$provider" run "$vm_a" sudo /usr/local/bin/k3s kubectl "$@"
 }
 
+nri_hook_logs() {
+  remote_kubectl -n kube-system logs \
+    -l app.kubernetes.io/name=nri-plugin-hook-injector --all-containers=true \
+    --prefix=true --tail=200 --limit-bytes=131072
+}
+
+assert_nri_hook_loader_healthy() {
+  local logs
+  logs=$(nri_hook_logs)
+  if grep -F 'level=error' <<<"$logs" >/dev/null; then
+    printf '%s\n' "$logs" >&2
+    echo "the stock NRI hook injector reported a loader error" >&2
+    return 1
+  fi
+}
+
+wait_nri_hook_injection() {
+  local pod_name=$1
+  local container_name=$2
+  local logs
+  for _attempt in {1..120}; do
+    logs=$(nri_hook_logs 2>/dev/null || true)
+    if grep -F "$pod_name/$container_name: OCI hooks injected" \
+        <<<"$logs" >/dev/null; then
+      return 0
+    fi
+    sleep 1
+  done
+  echo "the stock NRI plugin did not inject the Mithril hooks" >&2
+  return 1
+}
+
 assert_cluster_access() {
   local expected=$1
   local user=$2
@@ -419,6 +452,11 @@ make_node_config() {
         maximum_retained_records: 10000,
         maximum_batch_records: 256,
         maximum_control_delay_ms: 100
+      },
+      runtime_observation: {
+        socket_path: "/run/mithril/observation.sock",
+        allowed_uid: 0,
+        cgroup_scope: "/"
       },
       runtime_admission: {
         socket_path: "/run/mithril/runtime-admission.sock",
@@ -559,7 +597,7 @@ node:
                 values: [amd64]
   runtimeHook:
     install: true
-    hostBinaryDirectory: /opt/mithril/bin
+    hostBinaryDirectory: /usr/libexec/oci/hooks.d
     hostConfigDirectory: /usr/share/containers/oci/hooks.d
     socketPath: /run/mithril/runtime-admission.sock
     timeoutMs: 4000
@@ -571,6 +609,9 @@ control:
   configSecretName: mithril-control-config
   statePersistentVolumeClaim: mithril-control-state
   grpcPort: 8443
+  # Keep the durable Control owner available while the worker Node UID changes.
+  nodeSelector:
+    kubernetes.io/hostname: $node_a_name
   admission:
     enabled: true
     port: 9443
@@ -604,6 +645,26 @@ wait_node_projection() {
   return 1
 }
 
+assert_ready_projection_stable() {
+  local node_name=$1
+  local node_json
+  # Hold beyond the configured five-second session TTL to reject transient readiness.
+  for _attempt in {1..7}; do
+    node_json=$(remote_kubectl get node "$node_name" -o json)
+    jq -e '
+      .metadata.labels["mithril.erebor.dev/ready"] == "true" and
+      (.metadata.annotations["mithril.erebor.dev/node-id"] | length > 0) and
+      .metadata.annotations["mithril.erebor.dev/node-uid"] == .metadata.uid and
+      (.metadata.annotations["mithril.erebor.dev/node-boot-id"] |
+        test("^[0-9a-f]{32}$")) and
+      (.metadata.annotations["mithril.erebor.dev/label-epoch"] | tonumber) > 0 and
+      all(.spec.taints[]?;
+        .key != "mithril.erebor.dev/not-ready" or .effect != "NoSchedule")
+    ' <<<"$node_json" >/dev/null
+    sleep 1
+  done
+}
+
 wait_replaced_node_uid() {
   local node_name=$1
   local old_uid=$2
@@ -613,14 +674,14 @@ wait_replaced_node_uid() {
     if [[ -n $node_json ]] && jq -e --arg old_uid "$old_uid" '
       .metadata.uid != $old_uid and
       (.metadata.labels["mithril.erebor.dev/ready"] // "") == "" and
-      any(.spec.taints[]?;
-        .key == "mithril.erebor.dev/not-ready" and .effect == "NoSchedule")
+      all(.spec.taints[]?;
+        .key != "mithril.erebor.dev/not-ready" or .effect != "NoSchedule")
     ' <<<"$node_json" >/dev/null; then
       return 0
     fi
     sleep 1
   done
-  echo "Node $node_name did not reappear with a new quarantined UID" >&2
+  echo "Node $node_name did not reappear without inherited Mithril state" >&2
   return 1
 }
 
@@ -664,6 +725,7 @@ wait_node_projection "$node_a_name" true false
 wait_node_projection "$node_b_name" true false
 assert_runtime_hook installed "$vm_a" "$remote_a"
 assert_runtime_hook installed "$vm_b" "$remote_b"
+assert_nri_hook_loader_healthy
 
 # A replacement API object cannot inherit readiness from the old Node UID.
 old_node_b_uid=$(remote_kubectl get node "$node_b_name" -o jsonpath='{.metadata.uid}')
@@ -676,11 +738,17 @@ remote_kubectl -n "$system_namespace" delete pod "$node_b_pod" \
   --wait=true --timeout=120s >/dev/null
 wait_node_projection "$node_b_name" "" true
 remote_kubectl delete node "$node_b_name" --wait=true --timeout=120s >/dev/null
+# Kubelet does not recreate a Node object after deletion until its process restarts.
+"$provider" run "$vm_b" sudo systemctl restart k3s-agent
 wait_replaced_node_uid "$node_b_name" "$old_node_b_uid"
+remote_kubectl label node "$node_b_name" \
+  mithril.erebor.dev/pool=protected --overwrite >/dev/null
+wait_node_projection "$node_b_name" "" true
 "$provider" run "$vm_b" sudo mv /etc/mithril/node.json.held /etc/mithril/node.json
 remote_kubectl -n "$system_namespace" rollout status daemonset/mithril-node \
   --timeout=300s >/dev/null
 wait_node_projection "$node_b_name" true false
+assert_ready_projection_stable "$node_b_name"
 
 if [[ $manual_environment == true ]]; then
   manual_env=$work_a/mithril-convergence-manual.env
@@ -842,7 +910,10 @@ jq -e --arg profile_id "$profile_id" '
 ' <<<"$protected_dry_run" >/dev/null
 
 bypass=$work_a/bypass.json
-jq --arg node "$node_a_name" '.spec.nodeName = $node' <<<"$protected_dry_run" >"$bypass"
+protected_input=$(remote_kubectl create --dry-run=client \
+  -f "$remote_a/protected.yaml" -o json)
+jq --arg node "$node_a_name" '.spec.nodeName = $node' \
+  <<<"$protected_input" >"$bypass"
 "$provider" put "$vm_a" "$bypass" "$remote_a/bypass.json"
 assert_mithril_node_name_denial remote_kubectl create \
   -f "$remote_a/bypass.json"
@@ -852,6 +923,7 @@ for node in "$vm_a" "$vm_b"; do
   "$provider" run "$node" sudo rm -f \
     /var/lib/mithril-convergence/markers/protected.started \
     /var/lib/mithril-convergence/markers/protected.restart \
+    /var/lib/mithril-convergence/markers/protected.prepared-result \
     /var/lib/mithril-convergence/markers/protected.exception-request \
     /var/lib/mithril-convergence/markers/protected.exception-result
   "$provider" run "$node" sudo touch \
@@ -861,6 +933,7 @@ done
 remote_kubectl create -f "$remote_a/protected.yaml" >/dev/null
 remote_kubectl -n "$workload_namespace" wait --for=condition=Ready pod/protected \
   --timeout=300s >/dev/null
+wait_nri_hook_injection protected converter
 selected_node=$(remote_kubectl -n "$workload_namespace" get pod protected \
   -o jsonpath='{.spec.nodeName}')
 [[ $selected_node == "$node_a_name" || $selected_node == "$node_b_name" ]] || {
@@ -932,16 +1005,48 @@ runtime_task_snapshot() {
       task --host-pid "$host_pid"
 }
 
-selected_status=$(node_status "$selected_node")
+assert_prepared_container_activation() {
+  local task_json=$1
+  local runtime_binding_id=$2
+  jq -e --arg runtime_binding_id "$runtime_binding_id" '
+    .runtime_binding.binding_id == ($runtime_binding_id | gsub("-"; "")) and
+    .runtime_binding.root_cgroup_id > 0 and
+    .runtime_binding.prepared_container_state == "active" and
+    .runtime_binding.prepared_container_deadline_boottime_ns > 0 and
+    .runtime_binding.prepared_container_entry_instance_id != "00000000000000000000000000000000" and
+    .entry_instance_id == .runtime_binding.prepared_container_entry_instance_id and
+    .runtime_binding.prepared_container_exec_task_cookie == 0 and
+    .runtime_binding.prepared_container_initial_host_tgid == .host_tgid and
+    .root_class == "initial_container_root" and
+    .installed_role_class == "initial_role"
+  ' <<<"$task_json" >/dev/null
+}
+
+wait_runtime_delivery() {
+  local node_name=$1
+  local profile=$2
+  local status_json
+  for _attempt in {1..180}; do
+    status_json=$(node_status "$node_name" 2>/dev/null || true)
+    if [[ -n $status_json ]] && jq -e --arg profile_id "$profile" '
+      .active_candidate_content_id != null and
+      .active_profile_ids == [$profile_id] and
+      .scheduled_binding_count == 0 and
+      .runtime_binding_count == 1 and
+      .activation_pending == false and
+      .control_acknowledged == true
+    ' <<<"$status_json" >/dev/null; then
+      printf '%s\n' "$status_json"
+      return 0
+    fi
+    sleep 1
+  done
+  echo "selected-node runtime delivery did not converge: $status_json" >&2
+  return 1
+}
+
+selected_status=$(wait_runtime_delivery "$selected_node" "$profile_id")
 other_status=$(node_status "$other_node")
-jq -e --arg profile_id "$profile_id" '
-  .active_candidate_content_id != null and
-  .active_profile_ids == [$profile_id] and
-  .scheduled_binding_count == 0 and
-  .runtime_binding_count == 1 and
-  .activation_pending == false and
-  .control_acknowledged == true
-' <<<"$selected_status" >/dev/null
 assert_live_exact_target "$selected_node" "$profile_id" ACTIVATE
 runtime_binding_before=$(jq -er '.active_targets[0].runtime_binding_id' \
   <<<"$selected_status")
@@ -967,10 +1072,24 @@ container_before_json=$("$provider" run "$selected_vm" sudo \
 host_pid_before=$(jq -er '.info.pid' <<<"$container_before_json")
 task_before=$(runtime_task_snapshot "$selected_node" "$host_pid_before")
 task_cookie_before=$(jq -er '.task_cookie' <<<"$task_before")
+assert_prepared_container_activation "$task_before" "$runtime_binding_before"
 "$provider" run "$selected_vm" sudo test -e \
   /var/lib/mithril-convergence/markers/protected.started
 "$provider" run "$other_vm" sudo test ! -e \
   /var/lib/mithril-convergence/markers/protected.started
+for _attempt in {1..120}; do
+  prepared_result=$("$provider" run "$selected_vm" sudo cat \
+    /var/lib/mithril-convergence/markers/protected.prepared-result \
+    2>/dev/null || true)
+  [[ $prepared_result == PREPARED_RUNTIME_RETIRED ]] && break
+  [[ $_attempt -lt 120 ]] || {
+    echo "application IPC did not prove PreparedContainer retirement" >&2
+    exit 1
+  }
+  sleep 1
+done
+"$provider" run "$other_vm" sudo test ! -e \
+  /var/lib/mithril-convergence/markers/protected.prepared-result
 
 for _attempt in {1..120}; do
   base_result=$("$provider" run "$selected_vm" sudo cat \
@@ -1154,6 +1273,15 @@ container_after_json=$("$provider" run "$selected_vm" sudo \
 host_pid_after=$(jq -er '.info.pid' <<<"$container_after_json")
 task_after=$(runtime_task_snapshot "$selected_node" "$host_pid_after")
 task_cookie_after=$(jq -er '.task_cookie' <<<"$task_after")
+assert_prepared_container_activation "$task_after" "$runtime_binding_after"
+prepared_entry_before=$(jq -er \
+  '.runtime_binding.prepared_container_entry_instance_id' <<<"$task_before")
+prepared_entry_after=$(jq -er \
+  '.runtime_binding.prepared_container_entry_instance_id' <<<"$task_after")
+[[ $prepared_entry_after != "$prepared_entry_before" ]] || {
+  echo "the restarted container retained its old PreparedContainer entry" >&2
+  exit 1
+}
 [[ $task_cookie_after != "$task_cookie_before" ]] || {
   echo "the restarted container retained its old host task identity" >&2
   exit 1
@@ -1399,11 +1527,13 @@ wait_policy_delivery_empty "$selected_node"
 "$provider" run "$vm_a" sudo rm -f \
   /var/lib/mithril-convergence/markers/protected.started \
   /var/lib/mithril-convergence/markers/protected.restart \
+  /var/lib/mithril-convergence/markers/protected.prepared-result \
   /var/lib/mithril-convergence/markers/protected.exception-request \
   /var/lib/mithril-convergence/markers/protected.exception-result
 "$provider" run "$vm_b" sudo rm -f \
   /var/lib/mithril-convergence/markers/protected.started \
   /var/lib/mithril-convergence/markers/protected.restart \
+  /var/lib/mithril-convergence/markers/protected.prepared-result \
   /var/lib/mithril-convergence/markers/protected.exception-request \
   /var/lib/mithril-convergence/markers/protected.exception-result
 make_policy_manifest 3
@@ -1417,6 +1547,7 @@ for node in "$vm_a" "$vm_b"; do
   "$provider" run "$node" sudo rm -f \
     /var/lib/mithril-convergence/markers/protected.started \
     /var/lib/mithril-convergence/markers/protected.restart \
+    /var/lib/mithril-convergence/markers/protected.prepared-result \
     /var/lib/mithril-convergence/markers/protected.exception-request \
     /var/lib/mithril-convergence/markers/protected.exception-result
 done
@@ -1459,7 +1590,9 @@ jq -n \
     scheduler_selected_node: $scheduler_selected,
     exact_node_delivery: true,
     exact_target_proven: true,
-    stock_prestart_release: true,
+    ordered_create_runtime_release: true,
+    prepared_container_active: true,
+    post_activation_ipc_denied: true,
     unavailable_endpoint_denied: true,
     unready_node_quarantined: true,
     replaced_node_uid_quarantined: true,

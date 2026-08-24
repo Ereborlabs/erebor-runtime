@@ -100,6 +100,7 @@ cleanup() {
     for marker in \
       "$protected_pod.started" \
       "$protected_pod.restart" \
+      "$protected_pod.prepared-result" \
       "$failed_pod.started" \
       "$protected_pod.exception-target" \
       "$protected_pod.exception-request" \
@@ -244,6 +245,67 @@ node_status() {
     mithril-inspect policy-delivery --state-directory /var/lib/mithril
 }
 
+runtime_task_snapshot() {
+  local node_name=$1
+  local status_json=$2
+  local pod
+  local container_id
+  local host_pid
+  pod=$(node_pod "$node_name")
+  container_id=$(jq -er '.active_targets[0].runtime_container_id' <<<"$status_json")
+  container_id=${container_id#containerd://}
+  host_pid=$(kubectl -n "$system_namespace" exec -c mithril-node "$pod" -- \
+    sh -ec '
+      target=$1
+      match=
+      for cgroup_file in /proc/[0-9]*/cgroup; do
+        [ -r "$cgroup_file" ] || continue
+        contains_target=false
+        while IFS= read -r cgroup_line; do
+          case $cgroup_line in
+            *"$target"*) contains_target=true ;;
+          esac
+        done <"$cgroup_file" || continue
+        [ "$contains_target" = true ] || continue
+        pid=${cgroup_file#/proc/}
+        pid=${pid%/cgroup}
+        namespace_pid=
+        while IFS=: read -r field value; do
+          if [ "$field" = NSpid ]; then
+            for namespace_pid_value in $value; do
+              namespace_pid=$namespace_pid_value
+            done
+          fi
+        done <"/proc/$pid/status" || continue
+        [ "$namespace_pid" = 1 ] || continue
+        [ -z "$match" ] || exit 42
+        match=$pid
+      done
+      [ -n "$match" ]
+      printf "%s\n" "$match"
+    ' sh "$container_id")
+  kubectl -n "$system_namespace" exec -c mithril-node "$pod" -- \
+    mithril-inspect --pin-root /sys/fs/bpf/mithril-convergence \
+      task --host-pid "$host_pid"
+}
+
+assert_prepared_container_activation() {
+  local task_json=$1
+  local runtime_binding_id=$2
+  jq -e --arg runtime_binding_id "$runtime_binding_id" '
+    .runtime_binding.binding_id == ($runtime_binding_id | gsub("-"; "")) and
+    .runtime_binding.root_cgroup_id > 0 and
+    .runtime_binding.prepared_container_state == "active" and
+    .runtime_binding.prepared_container_deadline_boottime_ns > 0 and
+    .runtime_binding.prepared_container_entry_instance_id != "00000000000000000000000000000000" and
+    .entry_instance_id == .runtime_binding.prepared_container_entry_instance_id and
+    .runtime_binding.prepared_container_exec_task_cookie == 0 and
+    .runtime_binding.prepared_container_initial_host_tgid == .host_tgid and
+    .root_class == "initial_container_root" and
+    .installed_role_class == "initial_role"
+  ' <<<"$task_json" >/dev/null
+}
+
 assert_live_exact_target() {
   local node_name=$1
   local profile_id=$2
@@ -351,6 +413,7 @@ for node_name in "${eligible_nodes[@]}"; do
   ' <<<"$(node_status "$node_name")" >/dev/null
   remove_marker "$node_name" "$protected_pod.started"
   remove_marker "$node_name" "$protected_pod.restart"
+  remove_marker "$node_name" "$protected_pod.prepared-result"
   remove_marker "$node_name" "$failed_pod.started"
   remove_marker "$node_name" "$protected_pod.exception-target"
   remove_marker "$node_name" "$protected_pod.exception-request"
@@ -475,6 +538,9 @@ assert_live_exact_target "$selected_node" "$profile_id" ACTIVATE
 initial_delivery_status=$(node_status "$selected_node")
 runtime_binding_before=$(jq -er '.active_targets[0].runtime_binding_id' \
   <<<"$initial_delivery_status")
+task_before=$(runtime_task_snapshot "$selected_node" "$initial_delivery_status")
+task_cookie_before=$(jq -er '.task_cookie' <<<"$task_before")
+assert_prepared_container_activation "$task_before" "$runtime_binding_before"
 for node_name in "${eligible_nodes[@]}"; do
   # The scheduler-selected node is the only node that can hold this Pod lifetime.
   if [[ $node_name == "$selected_node" ]]; then
@@ -490,6 +556,12 @@ for node_name in "${eligible_nodes[@]}"; do
     kubectl -n "$system_namespace" exec -c mithril-node "$(node_pod "$node_name")" -- \
       test ! -e "/var/lib/mithril/markers/$protected_pod.started"
   fi
+done
+
+wait_marker_value "$selected_node" "$protected_pod.prepared-result" PREPARED_RUNTIME_RETIRED
+for node_name in "${eligible_nodes[@]}"; do
+  [[ $node_name == "$selected_node" ]] && continue
+  marker_is_absent "$node_name" "$protected_pod.prepared-result"
 done
 
 wait_marker_value "$selected_node" "$protected_pod.exception-result" BASE_DENIED
@@ -578,7 +650,7 @@ done
 kubectl -n "$scenario_namespace" delete pod "$failed_pod" \
   --wait=true --timeout=120s >/dev/null
 
-# A restart must replace the exact runtime authority, not reactivate the first binding.
+# A restart must replace the exact prepared binding, not reactivate the first binding.
 container_before=$(kubectl -n "$scenario_namespace" get pod "$protected_pod" \
   -o jsonpath='{.status.containerStatuses[0].containerID}')
 kubectl -n "$system_namespace" exec -c mithril-node "$(node_pod "$selected_node")" -- \
@@ -604,6 +676,20 @@ runtime_binding_after=$(jq -er '.active_targets[0].runtime_binding_id' \
   echo "the restarted container retained its old runtime binding" >&2
   exit 1
 }
+restarted_delivery_status=$(node_status "$selected_node")
+task_after=$(runtime_task_snapshot "$selected_node" "$restarted_delivery_status")
+task_cookie_after=$(jq -er '.task_cookie' <<<"$task_after")
+assert_prepared_container_activation "$task_after" "$runtime_binding_after"
+prepared_entry_before=$(jq -er \
+  '.runtime_binding.prepared_container_entry_instance_id' <<<"$task_before")
+prepared_entry_after=$(jq -er \
+  '.runtime_binding.prepared_container_entry_instance_id' <<<"$task_after")
+[[ $task_cookie_after != "$task_cookie_before" &&
+   $prepared_entry_after != "$prepared_entry_before" ]] || {
+  echo "the restarted container retained old task or PreparedContainer identity" >&2
+  exit 1
+}
+wait_marker_value "$selected_node" "$protected_pod.prepared-result" PREPARED_RUNTIME_RETIRED
 
 # Keep a second grant unused. Pod removal must revoke it without a use refund.
 consumed_before_retirement=$(jq -er '.consumed_exception_count' \
@@ -676,6 +762,7 @@ recreated_profile_id=$(kubectl -n "$scenario_namespace" get \
 for node_name in "${eligible_nodes[@]}"; do
   remove_marker "$node_name" "$protected_pod.started"
   remove_marker "$node_name" "$protected_pod.restart"
+  remove_marker "$node_name" "$protected_pod.prepared-result"
   remove_marker "$node_name" "$protected_pod.exception-request"
   remove_marker "$node_name" "$protected_pod.exception-result"
 done
@@ -710,6 +797,8 @@ jq -n --arg namespace "$scenario_namespace" --arg node "$selected_node" \
     replacement_container_lifetime: $current,
     exact_node_delivery: true,
     exact_target_proven: true,
+    prepared_container_active: true,
+    post_activation_ipc_denied: true,
     crd_desired_state: true,
     writer_rbac_separated: true,
     exception_one_use_consumed: true,

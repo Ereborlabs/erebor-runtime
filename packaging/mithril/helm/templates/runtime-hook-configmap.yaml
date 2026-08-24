@@ -12,7 +12,7 @@ data:
   runtime-hook-owner.sh: |-
 {{ .Files.Get "files/runtime-hook-owner.sh" | indent 4 }}
 {{- if .Values.node.runtimeHook.install }}
-  98-mithril-create-container.json: |-
+  98-mithril-runtime-stage.json: |-
     {
       "version": "1.0.0",
       "hook": {
@@ -20,7 +20,7 @@ data:
         "args": [
           "mithril-oci-hook",
           "--stage",
-          "create-container",
+          "stage-runtime-facts",
           "--socket",
           {{ .Values.node.runtimeHook.socketPath | quote }},
           "--timeout-ms",
@@ -33,9 +33,9 @@ data:
           "^mithril\\.erebor\\.dev/profile-id$": ".+"
         }
       },
-      "stages": ["createContainer"]
+      "stages": ["createRuntime"]
     }
-  99-mithril-prestart.json: |-
+  99-mithril-runtime-admission.json: |-
     {
       "version": "1.0.0",
       "hook": {
@@ -43,7 +43,7 @@ data:
         "args": [
           "mithril-oci-hook",
           "--stage",
-          "prestart",
+          "prepare-container",
           "--socket",
           {{ .Values.node.runtimeHook.socketPath | quote }},
           "--timeout-ms",
@@ -56,6 +56,6 @@ data:
           "^mithril\\.erebor\\.dev/profile-id$": ".+"
         }
       },
-      "stages": ["prestart"]
+      "stages": ["createRuntime"]
     }
 {{- end }}
