@@ -11,6 +11,7 @@ use axum::http::StatusCode;
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use axum_server::tls_rustls::RustlsConfig;
+use erebor_telemetry::{info, warn};
 use k8s_openapi::api::core::v1::{
     Binding, Container, Namespace, Node, NodeSelector, NodeSelectorTerm, Pod, ServiceAccount,
 };
@@ -505,14 +506,17 @@ impl KubernetesWorkloadInventoryOwner {
             match self.reconcile_once().await {
                 Ok(()) => {
                     if self.last_reconcile_error.take().is_some() {
-                        eprintln!("Kubernetes workload inventory reconciliation recovered");
+                        info!("recovered Kubernetes workload inventory reconciliation");
                     }
                 }
                 Err(error) => {
                     let message = error.to_string();
                     // Report a changed failure once. The one-second retry must not flood logs.
                     if self.last_reconcile_error.as_deref() != Some(&message) {
-                        eprintln!("Kubernetes workload inventory reconciliation failed: {message}");
+                        warn!(
+                            "failed to reconcile the Kubernetes workload inventory",
+                            error = %message
+                        );
                     }
                     self.last_reconcile_error = Some(message);
                 }

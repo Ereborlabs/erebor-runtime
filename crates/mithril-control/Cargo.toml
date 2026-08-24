@@ -17,6 +17,7 @@ crossterm.workspace = true
 ed25519-dalek.workspace = true
 erebor-interceptor-abi = { path = "../erebor-interceptor-abi" }
 erebor-runtime-error = { path = "../erebor-runtime-error" }
+erebor-telemetry = { path = "../erebor-telemetry" }
 hex.workspace = true
 k8s-openapi.workspace = true
 kube = { workspace = true, features = ["derive"] }

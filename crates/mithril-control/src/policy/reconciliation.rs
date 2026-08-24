@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use ed25519_dalek::SigningKey;
+use erebor_telemetry::{info, warn};
 use k8s_openapi::api::core::v1::Namespace;
 use kube::api::{ListParams, Patch, PatchParams, WatchEvent, WatchParams};
 use kube::{Api, Client};
@@ -1228,21 +1229,39 @@ async fn reconcile_resource(
         PolicySourceStateV1::Accepted
     };
     // Reconciliation failure changes only status; it does not replace the last valid rollout.
-    let mut status = owner
-        .reconcile_observation(
-            &resource,
-            namespace_uid.as_deref().unwrap_or_default(),
-            &control.kubernetes_workload_inventory(),
-            utc_now_ns(),
-            source_state,
-        )
-        .map_or_else(|_| rejected_status(generation), |result| result.status);
+    let mut status = match owner.reconcile_observation(
+        &resource,
+        namespace_uid.as_deref().unwrap_or_default(),
+        &control.kubernetes_workload_inventory(),
+        utc_now_ns(),
+        source_state,
+    ) {
+        Ok(result) => result.status,
+        Err(error) => {
+            warn!(
+                "rejected workload protection policy reconciliation",
+                error = %error,
+                namespace = %namespace_name,
+                policy = %name,
+                generation = %generation
+            );
+            rejected_status(generation)
+        }
+    };
     if let Some(previous) = resource.status.as_ref() {
         preserve_transition_times(&mut status.conditions, &previous.conditions);
         if previous == &status {
             return;
         }
     }
+    info!(
+        "changed workload protection policy status",
+        namespace = %namespace_name,
+        policy = %name,
+        generation = %generation,
+        desired_targets = %status.rollout.desired,
+        active_targets = %status.rollout.active
+    );
     let patch = Patch::Merge(serde_json::json!({"status": status}));
     if api
         .patch_status(&name, &PatchParams::default(), &patch)

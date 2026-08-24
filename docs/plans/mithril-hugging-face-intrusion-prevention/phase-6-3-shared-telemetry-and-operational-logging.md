@@ -241,10 +241,10 @@ Complete only this phase. Stop before Phase 7.
 
 ```text
 State: Not done.
-Completed deliverables: 1 through 3.
-Changed owners: the shared telemetry crate, its workspace consumers, stderr initialization, repository engineering rules, this plan, and the master phase index.
-Verification: focused telemetry and daemon tests, focused strict Clippy, workspace compilation, formatting, and the diff check passed.
+Completed deliverables: 1 through 4.
+Changed owners: the shared telemetry crate, its workspace consumers, stderr initialization, repository engineering rules, Mithril Control logs, this plan, and the master phase index.
+Verification: focused telemetry and daemon tests, all Mithril Control targets, focused strict Clippy, workspace compilation, formatting, and the diff check passed.
 Physical and manual results: not run.
-Remaining work: implement Deliverables 4 through 7 and run all required proof.
+Remaining work: implement Deliverables 5 through 7 and run all required proof.
 Next phase authorized: no.
 ```

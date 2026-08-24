@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use clap::Parser;
+use erebor_telemetry::{error, info, init_stderr_logging};
 use mithril_control::{
     serve, serve_administrative_http, ControlConfig, ControlRuntimeParts, KubernetesAdmissionOwner,
 };
@@ -14,10 +15,15 @@ struct Cli {
 
 #[tokio::main]
 async fn main() {
-    if let Err(error) = run().await {
-        eprintln!("{error}");
+    if let Err(error) = init_stderr_logging() {
+        eprintln!("Mithril Control logging initialization failed: {error}");
         std::process::exit(1);
     }
+    if let Err(error) = run().await {
+        error!(%error; "Mithril Control stopped with an error");
+        std::process::exit(1);
+    }
+    info!("stopped Mithril Control");
 }
 
 async fn run() -> mithril_control::Result<()> {
@@ -30,6 +36,11 @@ async fn run() -> mithril_control::Result<()> {
         kubernetes_nodes,
         kubernetes_admission,
     } = config.into_parts()?;
+    info!(
+        "starting Mithril Control",
+        listen = %address,
+        allowed_nodes = %control.allowed_nodes().len()
+    );
     // All optional Kubernetes tasks share the owners created from one validated configuration.
     let policy_owner = control.policy_desired_state();
     let admission_policy_owner = policy_owner.clone();

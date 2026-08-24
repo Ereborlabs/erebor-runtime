@@ -145,8 +145,9 @@
 - Do not log policy, exception, evidence, audit, file, command, environment,
   credential, request-body, response-body, or complete Kubernetes metadata
   payloads. Use bounded identifiers, states, reasons, and counts.
-- Use `println!` and `eprintln!` only for CLI user output. Keep service logs out
-  of command stdout.
+- Use `println!` and `eprintln!` only for CLI user output or one logging
+  initialization failure before a subscriber exists. Keep service logs out of
+  command stdout.
 
 ## Change Control And Handoff
 

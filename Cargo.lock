@@ -3178,6 +3178,7 @@ dependencies = [
  "ed25519-dalek 3.0.0",
  "erebor-interceptor-abi",
  "erebor-runtime-error",
+ "erebor-telemetry",
  "hex",
  "json-patch",
  "k8s-openapi",

@@ -6,6 +6,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+use erebor_telemetry::{debug, error, info, trace, warn};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 use tokio::sync::{mpsc, oneshot};
@@ -473,16 +474,27 @@ impl ControlPlane {
             .peer_certs()
             .and_then(|certificates| certificates.first().cloned())
             .map(|certificate| format!("{:x}", Sha256::digest(certificate.as_ref())))
-            .ok_or_else(|| Status::unauthenticated("mTLS client certificate is required"))?;
+            .ok_or_else(|| {
+                warn!(
+                    "rejected a node request without an mTLS certificate",
+                    grpc_code = %tonic::Code::Unauthenticated
+                );
+                Status::unauthenticated("mTLS client certificate is required")
+            })?;
         let mut matching = self
             .allowed_nodes
             .iter()
             .filter(|(_node_id, expected)| expected.certificate_sha256 == digest)
             .map(|(node_id, _expected)| node_id.clone());
-        let node_id = matching
-            .next()
-            .ok_or_else(|| Status::permission_denied("node certificate is not enrolled"))?;
+        let node_id = matching.next().ok_or_else(|| {
+            warn!(
+                "rejected a request from an unenrolled node certificate",
+                grpc_code = %tonic::Code::PermissionDenied
+            );
+            Status::permission_denied("node certificate is not enrolled")
+        })?;
         if matching.next().is_some() {
+            error!("one node certificate is enrolled for multiple node identities");
             return Err(Status::failed_precondition(
                 "node certificate is enrolled for more than one node",
             ));
@@ -641,7 +653,7 @@ impl ControlPlane {
             .pending
             .retain(|_, pending| pending.node_id() != node_id);
         state.sessions.insert(
-            node_id,
+            node_id.clone(),
             NodeSession {
                 identity,
                 kubernetes_node_name,
@@ -653,6 +665,12 @@ impl ControlPlane {
                 last_seen: std::time::Instant::now(),
                 workload_targets,
             },
+        );
+        info!(
+            "authenticated a Mithril node session",
+            node_id = %node_id,
+            node_boot_id = %hex::encode(&context.node_boot_id),
+            label_epoch = %registration.label_epoch
         );
         Ok(())
     }
@@ -721,7 +739,16 @@ impl ControlPlane {
         if session.identity != identity {
             return Err(Status::unauthenticated("node session changed"));
         }
+        let changed = session.admission_ready != report.admission_ready;
         session.admission_ready = report.admission_ready;
+        if changed {
+            info!(
+                "changed Mithril node admission readiness",
+                node_id = %node_id,
+                node_boot_id = %hex::encode(&context.node_boot_id),
+                admission_ready = %report.admission_ready
+            );
+        }
         Ok(())
     }
 
@@ -938,12 +965,32 @@ impl NodeEvidence for ControlPlane {
         let evidence = self.evidence.as_ref().ok_or_else(|| {
             Status::failed_precondition("Control has no durable evidence intake owner")
         })?;
-        let authenticated = evidence.authenticate_retained_batch(
+        let authenticated = match evidence.authenticate_retained_batch(
             self.evidence_tenant(&node_id)?,
             &node_id,
             batch,
-        )?;
-        Ok(Response::new(evidence.receive(&authenticated, batch)?))
+        ) {
+            Ok(authenticated) => authenticated,
+            Err(status) => {
+                warn!(
+                    "rejected a Mithril evidence batch",
+                    node_id = %node_id,
+                    node_boot_id = %hex::encode(&context.node_boot_id),
+                    grpc_code = %status.code()
+                );
+                return Err(status);
+            }
+        };
+        let acknowledgement = evidence.receive(&authenticated, batch)?;
+        debug!(
+            "accepted a Mithril evidence batch",
+            node_id = %node_id,
+            node_boot_id = %hex::encode(&context.node_boot_id),
+            first_cursor = %batch.first_cursor,
+            last_cursor = %batch.last_cursor,
+            count = %batch.records.len()
+        );
+        Ok(Response::new(acknowledgement))
     }
 }
 
@@ -968,9 +1015,15 @@ impl NodeCoverage for ControlPlane {
         let evidence = self.evidence.as_ref().ok_or_else(|| {
             Status::failed_precondition("Control has no durable evidence intake owner")
         })?;
-        Ok(Response::new(
-            evidence.receive_coverage(&authenticated, report)?,
-        ))
+        let acknowledgement = evidence.receive_coverage(&authenticated, report)?;
+        debug!(
+            "accepted a Mithril coverage report",
+            node_id = %node_id,
+            node_boot_id = %hex::encode(&context.node_boot_id),
+            source_epoch = %report.source_epoch,
+            revision = %report.revision
+        );
+        Ok(Response::new(acknowledgement))
     }
 }
 
@@ -1019,6 +1072,13 @@ impl NodePolicy for ControlPlane {
         let chunks = bundle.chunks().map_err(internal_status)?;
         let bundle_bytes = serde_json::to_vec(&bundle)
             .map_err(|error| Status::internal(format!("policy bundle encoding failed: {error}")))?;
+        debug!(
+            "selected a policy candidate for a Mithril node",
+            node_id = %node_id,
+            candidate_id = %bundle.candidate.candidate_content_id,
+            operation = %policy_operation_name(bundle.candidate.operation),
+            chunk_count = %chunks.len()
+        );
         Ok(Response::new(PolicyInventory {
             candidate_available: true,
             candidate_content_id: bundle.candidate.candidate_content_id,
@@ -1070,6 +1130,13 @@ impl NodePolicy for ControlPlane {
             .into_iter()
             .nth(request.chunk_index as usize)
             .ok_or_else(|| Status::out_of_range("the policy chunk index is out of range"))?;
+        trace!(
+            "served a policy bundle chunk",
+            node_id = %node_id,
+            candidate_id = %request.candidate_content_id,
+            chunk_index = %chunk.chunk_index,
+            chunk_count = %chunk.chunk_count
+        );
         Ok(Response::new(PolicyChunk {
             candidate_content_id: request.candidate_content_id,
             bundle_digest: chunk.bundle_digest,
@@ -1102,7 +1169,7 @@ impl NodePolicy for ControlPlane {
         let acknowledgement = crate::PolicyActivationAcknowledgementV1 {
             acknowledgement_content_id: String::new(),
             tenant_id: acknowledgement.tenant_id,
-            node_id,
+            node_id: node_id.clone(),
             node_boot_id: context.node_boot_id.clone(),
             label_epoch,
             candidate_content_id: acknowledgement.candidate_content_id,
@@ -1130,6 +1197,12 @@ impl NodePolicy for ControlPlane {
         let store = self.policy_store.as_ref().ok_or_else(|| {
             Status::failed_precondition("Control has no durable policy rollout store")
         })?;
+        info!(
+            "accepted a policy rollout transition",
+            node_id = %node_id,
+            candidate_id = %result.rollout_state.desired_candidate_content_id,
+            rollout_state = %rollout_state_name(result.rollout_state.state)
+        );
         // Return only after the acknowledgement and rollout transition share one durable commit.
         Ok(Response::new(PolicyAcknowledgementAccepted {
             control_commit_index: store.commit_index(),
@@ -1190,6 +1263,12 @@ impl NodePolicy for ControlPlane {
                 "the exception candidate exceeds the delivery bound",
             ));
         }
+        debug!(
+            "selected an exception candidate for a Mithril node",
+            node_id = %node_id,
+            candidate_id = %candidate.candidate_content_id,
+            operation = %exception_operation_name(candidate.operation)
+        );
         Ok(Response::new(ExceptionInventory {
             candidate_available: true,
             candidate_content_id: candidate.candidate_content_id,
@@ -1219,7 +1298,7 @@ impl NodePolicy for ControlPlane {
         let acknowledgement = crate::ExceptionActivationAcknowledgementV1 {
             acknowledgement_content_id: String::new(),
             tenant_id: acknowledgement.tenant_id,
-            node_id,
+            node_id: node_id.clone(),
             node_boot_id: context.node_boot_id.clone(),
             label_epoch,
             candidate_content_id: acknowledgement.candidate_content_id,
@@ -1243,6 +1322,12 @@ impl NodePolicy for ControlPlane {
         let store = self.policy_store.as_ref().ok_or_else(|| {
             Status::failed_precondition("Control has no durable policy rollout store")
         })?;
+        info!(
+            "accepted an exception rollout transition",
+            node_id = %node_id,
+            candidate_id = %state.candidate_content_id,
+            rollout_state = %exception_rollout_state_name(state.state)
+        );
         Ok(Response::new(PolicyAcknowledgementAccepted {
             control_commit_index: store.commit_index(),
             rollout_state: exception_rollout_state_name(state.state).to_owned(),
@@ -1676,6 +1761,7 @@ mod tests {
         NodeSessionContext, RegisteredWorkloadTarget, TrustGenerationV1,
     };
     use tempfile::TempDir;
+    use tonic::Request;
 
     type TestResult = Result<(), Box<dyn std::error::Error>>;
 
@@ -1735,6 +1821,88 @@ mod tests {
             exception_authority_absent,
         );
         registration
+    }
+
+    #[test]
+    fn node_session_transitions_emit_owned_logs() -> TestResult {
+        let directory = TempDir::new()?;
+        let telemetry = erebor_telemetry::JsonlTelemetry::open(
+            directory.path().join("control-logs"),
+            16 * 1_024,
+        )?;
+        let control = control();
+        let context = NodeSessionContext {
+            node_id: "node-a".to_owned(),
+            node_boot_id: vec![1; 16],
+            connection_nonce: vec![2; 16],
+        };
+        let report = NodeReadinessReport {
+            kernel_ready: true,
+            control_ready: true,
+            admission_ready: true,
+        };
+
+        telemetry.emit(|| -> TestResult {
+            control.register("node-a".to_owned(), &context, &registration())?;
+            let trust = control.trust.current()?;
+            control.trust.acknowledge(
+                "node-a",
+                [1; 16],
+                1,
+                trust.generation,
+                &trust.bundle_digest,
+            )?;
+            control.set_session_readiness("node-a", &context, &report)?;
+            control.set_session_readiness("node-a", &context, &report)?;
+            Ok(())
+        })??;
+
+        let records = telemetry.records_after(0, 16)?;
+        let registration = records
+            .iter()
+            .find(|record| record.message == "authenticated a Mithril node session")
+            .ok_or("the node-session transition log is absent")?;
+        assert_eq!(registration.target, "mithril_control::service");
+        assert_eq!(
+            registration.fields.get("node_id").map(String::as_str),
+            Some("node-a")
+        );
+        assert_eq!(
+            records
+                .iter()
+                .filter(|record| record.message == "changed Mithril node admission readiness")
+                .count(),
+            1
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn missing_node_certificate_emits_one_bounded_warning() -> TestResult {
+        let directory = TempDir::new()?;
+        let telemetry = erebor_telemetry::JsonlTelemetry::open(
+            directory.path().join("control-auth-logs"),
+            16 * 1_024,
+        )?;
+        let control = control();
+
+        telemetry.emit(|| {
+            let error = control
+                .authenticated_node(&Request::new(()))
+                .err()
+                .map(|status| status.code());
+            assert_eq!(error, Some(tonic::Code::Unauthenticated));
+        })?;
+
+        let records = telemetry.records_after(0, 16)?;
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].level, "WARN");
+        assert_eq!(
+            records[0].message,
+            "rejected a node request without an mTLS certificate"
+        );
+        assert!(!records[0].rendered_message().contains("certificate="));
+        Ok(())
     }
 
     fn durable_control(

@@ -4,6 +4,7 @@ use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
 
+use erebor_telemetry::{debug, info};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 use snafu::ResultExt as _;
@@ -390,6 +391,10 @@ impl ControlStore {
             state.commit_index = commit.commit_index;
             state.last_commit_digest = commit.commit_digest;
         }
+        info!(
+            "opened and replayed the Control store",
+            commit_index = %state.commit_index
+        );
         Ok(Self {
             inner: Arc::new(Mutex::new(ControlStoreInner { root, state })),
         })
@@ -2047,6 +2052,10 @@ fn commit(inner: &mut ControlStoreInner, transaction: ControlTransactionV1) -> R
     next_state.commit_index = commit_index;
     next_state.last_commit_digest = record.commit_digest;
     inner.state = next_state;
+    debug!(
+        "committed a Control store transaction",
+        commit_index = %commit_index
+    );
     Ok(commit_index)
 }
 
