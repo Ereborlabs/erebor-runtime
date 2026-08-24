@@ -320,9 +320,7 @@ impl RuntimeAdmissionServer {
                 }
             }
         }
-        fs::remove_file(&self.socket_path).context(IoSnafu {
-            path: &self.socket_path,
-        })
+        remove_owned_socket(&self.socket_path)
     }
 }
 
@@ -630,6 +628,19 @@ fn remove_stale_socket(socket_path: &Path) -> Result<()> {
     }
 }
 
+fn remove_owned_socket(socket_path: &Path) -> Result<()> {
+    match fs::remove_file(socket_path) {
+        Ok(()) => Ok(()),
+        // Packaging can unlink the endpoint first to close admission during termination.
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(source) => Err(crate::Error::Io {
+            path: socket_path.to_path_buf(),
+            source,
+            location: snafu::Location::new(file!(), line!(), column!()),
+        }),
+    }
+}
+
 fn clean_cgroup_path(path: &Path) -> bool {
     path.is_absolute()
         && path.starts_with("/sys/fs/cgroup")
@@ -782,11 +793,12 @@ mod tests {
     use std::time::Duration;
 
     use super::{
-        remove_stale_socket, RuntimeAdmissionClient, RuntimeAdmissionOperationV1,
-        RuntimeAdmissionRequestV1, RuntimeAdmissionResponseV1, RuntimeAdmissionServer,
-        ScheduledRuntimeBindingV1, CONTAINER_NAME_ANNOTATION, IMAGE_NAME_ANNOTATION,
-        POD_NAMESPACE_ANNOTATION, POD_UID_ANNOTATION, POLICY_CONVERGENCE_PENDING,
-        POLICY_SOURCE_REVISION_ANNOTATION, PROFILE_ID_ANNOTATION, SANDBOX_ID_ANNOTATION,
+        remove_owned_socket, remove_stale_socket, RuntimeAdmissionClient,
+        RuntimeAdmissionOperationV1, RuntimeAdmissionRequestV1, RuntimeAdmissionResponseV1,
+        RuntimeAdmissionServer, ScheduledRuntimeBindingV1, CONTAINER_NAME_ANNOTATION,
+        IMAGE_NAME_ANNOTATION, POD_NAMESPACE_ANNOTATION, POD_UID_ANNOTATION,
+        POLICY_CONVERGENCE_PENDING, POLICY_SOURCE_REVISION_ANNOTATION, PROFILE_ID_ANNOTATION,
+        SANDBOX_ID_ANNOTATION,
     };
     use crate::{ContainerKindV1, WorkloadBindingConfig};
 
@@ -899,6 +911,19 @@ mod tests {
         let _listener = std::os::unix::net::UnixListener::bind(&socket)?;
         assert!(remove_stale_socket(&socket).is_err());
         assert!(socket.exists());
+        Ok(())
+    }
+
+    #[test]
+    fn packaging_can_close_the_socket_before_server_shutdown(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let socket = directory.path().join("runtime-admission.sock");
+        let _listener = std::os::unix::net::UnixListener::bind(&socket)?;
+
+        remove_owned_socket(&socket)?;
+        remove_owned_socket(&socket)?;
+        assert!(!socket.exists());
         Ok(())
     }
 

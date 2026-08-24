@@ -1,4 +1,12 @@
 {{- $runtimeHookOwner := printf "%s/%s" .Release.Namespace .Release.Name }}
+{{- $runtimeHookConfigDirectory := required "node.runtimeHook.hostConfigDirectory is required" .Values.node.runtimeHook.hostConfigDirectory }}
+{{- $runtimeHookConfigParent := dir $runtimeHookConfigDirectory }}
+{{- $runtimeHookConfigBase := base $runtimeHookConfigDirectory }}
+{{- $legacyRuntimeHookBinaryDirectory := "/opt/mithril/bin" }}
+{{- $migrateLegacyRuntimeHook := ne .Values.node.runtimeHook.hostBinaryDirectory $legacyRuntimeHookBinaryDirectory }}
+{{- if or (ne $runtimeHookConfigDirectory (clean $runtimeHookConfigDirectory)) (eq $runtimeHookConfigParent "/") }}
+{{- fail "node.runtimeHook.hostConfigDirectory must be normalized below a non-root parent" }}
+{{- end }}
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -73,8 +81,11 @@ spec:
             - cleanup-and-hold
             - {{ $runtimeHookOwner | quote }}
             - /host-hook-bin
-            - /host-hook-config
+            - {{ printf "/host-hook-config-parent/%s" $runtimeHookConfigBase | quote }}
             - /run/mithril-hook-cleanup/complete
+{{- if $migrateLegacyRuntimeHook }}
+            - /host-hook-legacy-bin
+{{- end }}
           readinessProbe:
             exec:
               command: ["/usr/bin/test", "-f", "/run/mithril-hook-cleanup/complete"]
@@ -95,7 +106,11 @@ spec:
             - name: runtime-hook-bin
               mountPath: /host-hook-bin
             - name: runtime-hook-config
-              mountPath: /host-hook-config
+              mountPath: /host-hook-config-parent
+{{- if $migrateLegacyRuntimeHook }}
+            - name: runtime-hook-legacy-bin
+              mountPath: /host-hook-legacy-bin
+{{- end }}
             - name: cleanup-state
               mountPath: /run/mithril-hook-cleanup
       volumes:
@@ -108,8 +123,14 @@ spec:
             type: DirectoryOrCreate
         - name: runtime-hook-config
           hostPath:
-            path: {{ .Values.node.runtimeHook.hostConfigDirectory | quote }}
+            path: {{ $runtimeHookConfigParent | quote }}
             type: DirectoryOrCreate
+{{- if $migrateLegacyRuntimeHook }}
+        - name: runtime-hook-legacy-bin
+          hostPath:
+            path: {{ $legacyRuntimeHookBinaryDirectory | quote }}
+            type: DirectoryOrCreate
+{{- end }}
         - name: cleanup-state
           emptyDir: {}
 ---

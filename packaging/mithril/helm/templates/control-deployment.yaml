@@ -19,6 +19,10 @@ spec:
       serviceAccountName: mithril-control
       automountServiceAccountToken: true
       terminationGracePeriodSeconds: 10
+{{- with .Values.control.nodeSelector }}
+      nodeSelector:
+{{ toYaml . | indent 8 }}
+{{- end }}
       securityContext:
         fsGroup: 65532
         fsGroupChangePolicy: OnRootMismatch

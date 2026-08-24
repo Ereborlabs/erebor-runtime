@@ -19,6 +19,12 @@ printf '{"create":1}\n' >"$create_config_source"
 printf '{"prestart":1}\n' >"$prestart_config_source"
 printf 'legacy-binary\n' >"$binary_directory/mithril-oci-hook"
 printf '%s\n' "$owner" >"$binary_directory/.mithril-oci-hook.helm-owner"
+printf '{"create":0}\n' >"$config_directory/98-mithril-create-container.json"
+printf '%s\n' "$owner" \
+  >"$config_directory/.98-mithril-create-container.json.helm-owner"
+printf '{"prestart":0}\n' >"$config_directory/99-mithril-prestart.json"
+printf '%s\n' "$owner" \
+  >"$config_directory/.99-mithril-prestart.json.helm-owner"
 printf '{"legacy":1}\n' >"$config_directory/99-mithril.json"
 printf '%s\n' "$owner" >"$config_directory/.99-mithril.json.helm-owner"
 
@@ -33,9 +39,9 @@ install_owned_hook() {
 
 assert_configs_absent() {
   [[ ! -e $config_directory/98-mithril-create-container.json ]]
-  [[ ! -e $config_directory/.98-mithril-create-container.json.helm-owner ]]
+  [[ ! -e $binary_directory/.98-mithril-create-container.json.helm-owner ]]
   [[ ! -e $config_directory/99-mithril-prestart.json ]]
-  [[ ! -e $config_directory/.99-mithril-prestart.json.helm-owner ]]
+  [[ ! -e $binary_directory/.99-mithril-prestart.json.helm-owner ]]
 }
 
 install_owned_hook
@@ -43,13 +49,15 @@ cmp "$binary_source" "$binary_directory/mithril-oci-hook"
 cmp "$create_config_source" "$config_directory/98-mithril-create-container.json"
 cmp "$prestart_config_source" "$config_directory/99-mithril-prestart.json"
 [[ $(<"$binary_directory/.mithril-oci-hook.helm-owner") == "$owner" ]]
-[[ $(<"$config_directory/.98-mithril-create-container.json.helm-owner") == "$owner" ]]
-[[ $(<"$config_directory/.99-mithril-prestart.json.helm-owner") == "$owner" ]]
+[[ $(<"$binary_directory/.98-mithril-create-container.json.helm-owner") == "$owner" ]]
+[[ $(<"$binary_directory/.99-mithril-prestart.json.helm-owner") == "$owner" ]]
+[[ ! -e $config_directory/.98-mithril-create-container.json.helm-owner ]]
+[[ ! -e $config_directory/.99-mithril-prestart.json.helm-owner ]]
 [[ $(stat -c %a "$binary_directory/mithril-oci-hook") == 755 ]]
 [[ $(stat -c %a "$config_directory/98-mithril-create-container.json") == 644 ]]
 [[ $(stat -c %a "$config_directory/99-mithril-prestart.json") == 644 ]]
 [[ ! -e $config_directory/99-mithril.json ]]
-[[ ! -e $config_directory/.99-mithril.json.helm-owner ]]
+[[ ! -e $binary_directory/.99-mithril.json.helm-owner ]]
 
 printf 'binary-v2\n' >"$binary_source"
 printf '{"create":2}\n' >"$create_config_source"
@@ -65,6 +73,28 @@ run_owner cleanup "$owner" "$binary_directory" "$config_directory"
 [[ ! -e $binary_directory/.mithril-oci-hook.helm-owner ]]
 assert_configs_absent
 run_owner cleanup "$owner" "$binary_directory" "$config_directory"
+
+legacy_binary_directory=$test_root/legacy-bin
+mkdir "$legacy_binary_directory"
+printf 'legacy-binary\n' >"$legacy_binary_directory/mithril-oci-hook"
+printf '%s\n' "$owner" \
+  >"$legacy_binary_directory/.mithril-oci-hook.helm-owner"
+printf '{"create":0}\n' >"$config_directory/98-mithril-create-container.json"
+printf '%s\n' "$owner" \
+  >"$legacy_binary_directory/.98-mithril-create-container.json.helm-owner"
+printf '{"prestart":0}\n' >"$config_directory/99-mithril-prestart.json"
+printf '%s\n' "$owner" \
+  >"$legacy_binary_directory/.99-mithril-prestart.json.helm-owner"
+run_owner install "$owner" "$binary_source" "$create_config_source" \
+  "$prestart_config_source" "$binary_directory" "$config_directory" \
+  "$legacy_binary_directory"
+[[ ! -e $legacy_binary_directory/mithril-oci-hook ]]
+[[ ! -e $legacy_binary_directory/.mithril-oci-hook.helm-owner ]]
+cmp "$create_config_source" "$config_directory/98-mithril-create-container.json"
+cmp "$prestart_config_source" "$config_directory/99-mithril-prestart.json"
+run_owner cleanup "$owner" "$binary_directory" "$config_directory" \
+  "$legacy_binary_directory"
+assert_configs_absent
 
 install_owned_hook
 

@@ -1068,13 +1068,23 @@ impl NodeChassis {
         &mut self,
         envelope: crate::runtime_admission::RuntimeAdmissionEnvelope,
     ) -> Result<()> {
-        let malformed = envelope.request.kubernetes_identity().is_err();
-        let ready = crate::runtime_admission::ScheduledRuntimeBindingV1::resolve_stage(
-            &self.config.workload_bindings,
-            &envelope.request,
-        )
-        .is_ok();
-        if !malformed && !ready {
+        if envelope.request.kubernetes_identity().is_err() {
+            let _result = envelope
+                .deliver(crate::RuntimeAdmissionResponseV1 {
+                    allowed: false,
+                    reason_code: "RUNTIME_ADMISSION_REJECTED".to_owned(),
+                })
+                .await;
+            return Ok(());
+        }
+        let container_id = envelope.request.container_id.clone();
+        // CreateContainer is inside the CRI callback. Stage only immutable hook
+        // facts here; prestart owns the independent CRI Created-state proof.
+        if self
+            .bindings
+            .stage_runtime_admission(&self.config.workload_bindings, &envelope.request)
+            .is_err()
+        {
             let _result = envelope
                 .deliver(crate::RuntimeAdmissionResponseV1 {
                     allowed: false,
@@ -1083,33 +1093,15 @@ impl NodeChassis {
                 .await;
             return Ok(());
         }
-        let container_id = envelope.request.container_id.clone();
-        match self
-            .bindings
-            .stage_runtime_admission(&self.config.workload_bindings, &envelope.request)
+        if envelope
+            .deliver(crate::RuntimeAdmissionResponseV1 {
+                allowed: true,
+                reason_code: "RUNTIME_FACTS_STAGING".to_owned(),
+            })
             .await
+            .is_err()
         {
-            Ok(staged_new) => {
-                if envelope
-                    .deliver(crate::RuntimeAdmissionResponseV1 {
-                        allowed: true,
-                        reason_code: "RUNTIME_FACTS_STAGED".to_owned(),
-                    })
-                    .await
-                    .is_err()
-                    && staged_new
-                {
-                    self.bindings.discard_runtime_stage(&container_id);
-                }
-            }
-            Err(_error) => {
-                let _result = envelope
-                    .deliver(crate::RuntimeAdmissionResponseV1 {
-                        allowed: false,
-                        reason_code: "RUNTIME_FACT_STAGING_REJECTED".to_owned(),
-                    })
-                    .await;
-            }
+            self.bindings.discard_runtime_stage(&container_id);
         }
         Ok(())
     }

@@ -64,8 +64,10 @@ fields must use this contract:
 }
 ```
 
-Set the server request timeout below the webhook timeout. The chart does not
-define a protected tenant, namespace, or node selector in Control.
+Set the server request timeout below the webhook timeout. The Control
+configuration does not define a protected tenant, namespace, or Mithril node
+selector. `control.nodeSelector` only selects the Node that runs the Control
+Pod. Use it when the Control persistent volume has Node affinity.
 
 The node configuration must enable `container_runtime` and
 `runtime_admission`. Its admission socket must equal
@@ -76,9 +78,12 @@ timeout. The OCI runtime terminates a hook that exceeds this outer limit.
 ## Runtime Hook
 
 The init container installs `mithril-oci-hook` and a protected-Pod-only OCI
-prestart hook on each selected host. CRI-O can read the default hook directory.
+create-container and prestart hook on each selected host. The default binary
+directory is `/usr/libexec/oci/hooks.d`, which is visible to the stock NRI
+hook-injector. CRI-O can read the default configuration directory directly.
 For containerd, install the stock NRI hook-injector and configure it to read
-`node.runtimeHook.hostConfigDirectory`. Do this before you create a protected
+`node.runtimeHook.hostConfigDirectory`. The injector must also mount
+`node.runtimeHook.hostBinaryDirectory`. Do this before you create a protected
 Pod. The package does not replace or patch the container runtime.
 
 ## Verification

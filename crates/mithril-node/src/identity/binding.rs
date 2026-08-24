@@ -235,7 +235,7 @@ struct RuntimeBindingUpdate {
 struct StagedRuntimeAdmissionV1 {
     authority_head_binding_id: String,
     identity: KubernetesRuntimeIdentityV1,
-    runtime: RuntimeContainerIdentity,
+    cgroup_path: PathBuf,
     deadline: Instant,
 }
 
@@ -250,7 +250,7 @@ impl StagedRuntimeAdmissionV1 {
             self.deadline > now
                 && authority_head_binding_id == self.authority_head_binding_id
                 && request.kubernetes_identity()? == self.identity
-                && request.prestart_cgroup_path()? == self.runtime.cgroup_path,
+                && request.prestart_cgroup_path()? == self.cgroup_path,
             IdentityStateSnafu {
                 reason: "OCI prestart differs from its immutable createContainer stage",
             }
@@ -701,7 +701,7 @@ impl WorkloadBindingOwner {
         Ok(())
     }
 
-    pub(crate) async fn stage_runtime_admission(
+    pub(crate) fn stage_runtime_admission(
         &mut self,
         configured: &[WorkloadBindingConfig],
         request: &RuntimeAdmissionRequestV1,
@@ -717,31 +717,19 @@ impl WorkloadBindingOwner {
             .retain(|_container_id, stage| stage.deadline > now);
         let scheduled = ScheduledRuntimeBindingV1::resolve_stage(configured, request)?;
         let authority_head_binding_id = configured[scheduled.binding_index].binding_id.clone();
-        let runtime = self
-            .runtime
-            .as_mut()
-            .context(IdentityStateSnafu {
-                reason: "runtime fact staging has no CRI inventory owner",
-            })?
-            .inspect_created_for_admission(&scheduled.resolved)
-            .await?;
-        ensure!(
-            request.cgroup_path.as_deref() == Some(runtime.cgroup_path.as_path()),
-            IdentityStateSnafu {
-                reason: "OCI createContainer cgroup differs from CRI",
-            }
-        );
         let stage = StagedRuntimeAdmissionV1 {
             authority_head_binding_id,
             identity: request.kubernetes_identity()?,
-            runtime,
+            cgroup_path: request.cgroup_path.clone().context(IdentityStateSnafu {
+                reason: "OCI createContainer stage has no cgroup path",
+            })?,
             deadline: now + RUNTIME_STAGE_LIFETIME,
         };
         if let Some(existing) = self.staged_runtime_admissions.get(&request.container_id) {
             ensure!(
                 existing.authority_head_binding_id == stage.authority_head_binding_id
                     && existing.identity == stage.identity
-                    && existing.runtime == stage.runtime,
+                    && existing.cgroup_path == stage.cgroup_path,
                 IdentityStateSnafu {
                     reason: "OCI createContainer changed an existing runtime stage",
                 }
@@ -791,12 +779,6 @@ impl WorkloadBindingOwner {
         let identity = runtime
             .inspect_created_for_admission(&scheduled.resolved)
             .await?;
-        ensure!(
-            staged.runtime.same_lifetime_as(&identity),
-            IdentityStateSnafu {
-                reason: "CRI identity changed after OCI createContainer staging",
-            }
-        );
         scheduled.resolved.container_generation = identity.generation;
         self.pending_runtime_admission = Some(identity);
         Ok(scheduled)
@@ -1700,6 +1682,7 @@ mod tests {
     };
     use crate::error::{IdentityStateSnafu, IoSnafu};
     use crate::identity::runtime::RuntimeContainerState;
+    use crate::runtime_admission::ScheduledRuntimeBindingV1;
     use crate::{
         RuntimeAdmissionOperationV1, RuntimeAdmissionRequestV1, WorkloadBindingConfig,
         CONTAINER_NAME_ANNOTATION, IMAGE_NAME_ANNOTATION, POD_NAMESPACE_ANNOTATION,
@@ -1770,20 +1753,7 @@ mod tests {
         let stage = StagedRuntimeAdmissionV1 {
             authority_head_binding_id: "authority-head-a".to_owned(),
             identity: request.kubernetes_identity()?,
-            runtime: RuntimeContainerIdentity {
-                full_container_id: request.container_id.clone(),
-                namespace: "default".to_owned(),
-                pod_uid: "pod-uid-a".to_owned(),
-                sandbox_id: "c".repeat(64),
-                container_name: "worker".to_owned(),
-                image_digest: format!("sha256:{}", "b".repeat(64)),
-                generation: 1,
-                cgroup_path: cgroup.clone(),
-                init_pid: 0,
-                working_directory: PathBuf::from("/"),
-                path_entries: vec![PathBuf::from("/bin")],
-                state: RuntimeContainerState::Created,
-            },
+            cgroup_path: cgroup.clone(),
             deadline: Instant::now() + Duration::from_secs(1),
         };
         let now = Instant::now();
@@ -1802,6 +1772,35 @@ mod tests {
         assert!(expired
             .verify_prestart("authority-head-a", &request, now)
             .is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn create_container_stage_does_not_wait_for_cri() -> crate::Result<()> {
+        let temporary = tempfile::tempdir().context(IoSnafu {
+            path: "temporary runtime stage root",
+        })?;
+        let mut owner = WorkloadBindingOwner::at(temporary.path(), Id128V1::new(1, 2), 3)?;
+        let cgroup = PathBuf::from("/sys/fs/cgroup/kubepods/pod-a/container-a");
+        let mut request = prestart_request(&cgroup);
+        request.operation = RuntimeAdmissionOperationV1::CreateContainer;
+        request.initial_pid = None;
+        let authority = ScheduledRuntimeBindingV1::authority_binding_id("pod-uid-a", "worker");
+        let mut scheduled = spec(temporary.path());
+        scheduled.binding_id.clone_from(&authority);
+        scheduled.scheduled_binding_authority_id = Some(authority);
+        scheduled.container_id = "scheduled:pod-uid-a:worker".to_owned();
+        scheduled.image_digest = format!("sha256:{}", "b".repeat(64));
+
+        assert!(owner.stage_runtime_admission(&[scheduled], &request)?);
+        assert!(owner.pending_runtime_admission.is_none());
+        assert_eq!(
+            owner
+                .staged_runtime_admissions
+                .get(&request.container_id)
+                .map(|stage| stage.cgroup_path.as_path()),
+            Some(cgroup.as_path())
+        );
         Ok(())
     }
 

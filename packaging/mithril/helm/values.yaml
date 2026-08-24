@@ -12,7 +12,7 @@ node:
     install: true
     cleanupImage: registry.k8s.io/kubectl:v1.35.5
     cleanupImagePullPolicy: IfNotPresent
-    hostBinaryDirectory: /opt/mithril/bin
+    hostBinaryDirectory: /usr/libexec/oci/hooks.d
     hostConfigDirectory: /usr/share/containers/oci/hooks.d
     socketPath: /run/mithril/runtime-admission.sock
     timeoutMs: 4000
@@ -25,6 +25,7 @@ control:
   configSecretName: mithril-control-config
   statePersistentVolumeClaim: mithril-control-state
   grpcPort: 8443
+  nodeSelector: {}
   admission:
     enabled: true
     port: 9443

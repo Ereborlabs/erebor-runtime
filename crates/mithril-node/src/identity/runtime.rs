@@ -288,8 +288,7 @@ impl ContainerRuntimeInventory {
                 reason: "runtime admission CRI identity differs from signed workload material",
             }
         );
-        // CreateContainer records the CRI cgroup first. Prestart later proves that
-        // the held initial process has the same cgroup.
+        // Prestart verifies the CRI cgroup while the exact initial process is held.
         let process = runtime_process_from_info(
             &response.info,
             &self.cgroup_root,

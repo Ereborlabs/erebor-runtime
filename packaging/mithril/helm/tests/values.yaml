@@ -12,5 +12,7 @@ node:
                 operator: In
                 values: [amd64]
 control:
+  nodeSelector:
+    kubernetes.io/hostname: control-a
   admission:
     caBundle: dGVzdA==
