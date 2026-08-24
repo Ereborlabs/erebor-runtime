@@ -1209,7 +1209,9 @@ impl NodeChassis {
             return Err(error.into());
         }
         dynamic.workload_bindings[scheduled.binding_index] = scheduled.resolved.clone();
-        let Some(host) = self.host.as_ref() else {
+        let policy_authority_present =
+            self.policy.is_some() || self.policy_delivery.terminal_cleanup().is_some();
+        let Some(host) = self.host.as_mut() else {
             self.bindings.cancel_runtime_admission();
             return Err(IdentityStateSnafu {
                 reason: "runtime admission has no live kernel host".to_owned(),
@@ -1240,6 +1242,35 @@ impl NodeChassis {
         ) {
             self.bindings.cancel_runtime_admission();
             return Err(RuntimeAdmissionFailureV1::fatal(error));
+        }
+        // The held task must own the prepared entry before the runtime can
+        // receive an allow response. This closes the publication-to-use gap.
+        let identity_readback = self
+            .identity
+            .reconcile(host, policy_authority_present)
+            .and_then(|_report| {
+                self.bindings.verify_prepared_initial_root(
+                    host,
+                    &scheduled.resolved.binding_id,
+                    request.held_initial_pid()?,
+                )
+            });
+        if let Err(error) = identity_readback {
+            self.bindings.cancel_runtime_admission();
+            let rollback = self
+                .bindings
+                .retire_binding_id(host, &scheduled.resolved.binding_id);
+            return match rollback {
+                Ok(()) => Err(RuntimeAdmissionFailureV1::fatal(error)),
+                Err(rollback) => Err(RuntimeAdmissionFailureV1::fatal(
+                    IdentityStateSnafu {
+                        reason: format!(
+                            "prepared runtime identity readback failed: {error}; kernel rollback failed: {rollback}"
+                        ),
+                    }
+                    .build(),
+                )),
+            };
         }
         if let Err(error) = envelope.ensure_active() {
             let rollback = self

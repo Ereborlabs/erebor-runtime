@@ -5747,6 +5747,14 @@ impl IdentityTestRunner {
                     ),
                     &manifest_path,
                 )?;
+            let held_initial_pids = [
+                entrypoint_first_init_pid,
+                hook_first_init_pid,
+                repeat_init_pid,
+            ];
+            for pid in held_initial_pids {
+                self.stop_host_pid(pid)?;
+            }
             bindings
                 .publish_held_initial_roots(
                     host.as_ref()
@@ -5766,6 +5774,16 @@ impl IdentityTestRunner {
                     false,
                 )
                 .context(NodeSnafu)?;
+            let held_inspector = NativeIdentityInspector::new(pin_root);
+            for pid in held_initial_pids {
+                ensure!(
+                    held_inspector.snapshot(pid).context(NodeSnafu)?.is_none(),
+                    InvalidInputSnafu {
+                        path: pin_root,
+                        reason: "a stopped held task gained identity before reconciliation",
+                    }
+                );
+            }
             let held_reconciliation = identity
                 .reconcile(
                     host.as_mut()
@@ -5782,7 +5800,6 @@ impl IdentityTestRunner {
                     ),
                 }
             );
-            let held_inspector = NativeIdentityInspector::new(pin_root);
             for (pid, binding) in [
                 (entrypoint_first_init_pid, &entrypoint_first_binding),
                 (hook_first_init_pid, &hook_first_binding),
@@ -5808,6 +5825,9 @@ impl IdentityTestRunner {
                         reason: "iterator reconciliation did not preserve the exact prepared root",
                     }
                 );
+            }
+            for pid in held_initial_pids {
+                self.continue_host_pid(pid)?;
             }
             for request in [
                 &entrypoint_first_request,
@@ -8334,6 +8354,20 @@ impl IdentityTestRunner {
             })?;
         pidfd_send_signal(&pidfd, Signal::CONT)
             .map_err(|error| invalid_state(format!("continue host PID {host_pid}: {error}")))
+    }
+
+    fn stop_host_pid(&self, host_pid: u32) -> Result<()> {
+        let raw_pid = i32::try_from(host_pid)
+            .map_err(|error| invalid_state(format!("host PID {host_pid} is invalid: {error}")))?;
+        let pid = Pid::from_raw(raw_pid)
+            .ok_or_else(|| invalid_state("host PID zero cannot identify a task"))?;
+        let pidfd = pidfd_open(pid, PidfdFlags::empty())
+            .map_err(std::io::Error::from)
+            .context(IoSnafu {
+                path: PathBuf::from(format!("/proc/{host_pid}")),
+            })?;
+        pidfd_send_signal(&pidfd, Signal::STOP)
+            .map_err(|error| invalid_state(format!("stop host PID {host_pid}: {error}")))
     }
 
     fn stop_node_process(child: &mut Option<Child>) -> Result<()> {

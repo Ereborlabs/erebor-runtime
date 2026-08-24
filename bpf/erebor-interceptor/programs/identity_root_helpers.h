@@ -269,7 +269,7 @@ static __always_inline int create_external_root(
     __u8 root_class = external_root_class_v1_external_runtime_root;
     __u8 role_class = installed_role_class_v1_runtime_external_restricted;
     __u32 role_id;
-    __u64 pid_tgid;
+    __u32 host_tgid = 0;
     bool initial_root;
 
     activation = binding_activation_for_new_root(binding, config);
@@ -278,11 +278,13 @@ static __always_inline int create_external_root(
     role_id = activation->external_role_id;
     if (binding->prepared_container_state ==
         prepared_container_state_v1_prepared) {
-        pid_tgid = bpf_get_current_pid_tgid();
+        /* Iterator reconciliation runs in the reader's context. Read the
+         * target task so the held-process proof does not depend on the caller. */
+        BPF_CORE_READ_INTO(&host_tgid, task, tgid);
         if (!prepared_container_binding_is_prepared(binding) ||
             !binding->prepared_container_initial_host_tgid ||
             binding->prepared_container_initial_host_tgid !=
-                (__u32)(pid_tgid >> 32))
+                host_tgid)
             return identity_deny(config);
     }
     initial_root = consume_initial_root(binding);

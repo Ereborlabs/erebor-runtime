@@ -10,7 +10,7 @@ use erebor_interceptor::{KernelHost, MapInsertResult};
 use erebor_interceptor_abi::{
     BindingActivationTargetKeyV1, BindingLifecycleStateV1, ExecutionSetBindingStateV1, Id128V1,
     InitialRootStateV1, PolicyGenerationStateV1, PreparedContainerStateV1,
-    ProfileGenerationDescriptorV1, TaskLabelV1,
+    ProfileGenerationDescriptorV1, TaskCoordinateStateV1, TaskCoordinateV1, TaskLabelV1,
 };
 use erebor_runtime_error::{ErrorExt as _, RetryHint};
 use rustix::process::{pidfd_open, Pid, PidfdFlags};
@@ -728,6 +728,98 @@ impl WorkloadBindingOwner {
                 .fail(),
             };
         }
+        Ok(())
+    }
+
+    pub(crate) fn verify_prepared_initial_root(
+        &self,
+        host: &KernelHost,
+        binding_id: &str,
+        initial_pid: u32,
+    ) -> Result<()> {
+        let binding = self
+            .bindings
+            .values()
+            .find(|binding| binding.spec.binding_id == binding_id)
+            .context(IdentityStateSnafu {
+                reason: "prepared runtime binding disappeared before identity readback",
+            })?;
+        let key = binding.root_cgroup_id.to_ne_bytes();
+        let live = host
+            .lookup_map("execution_set_bindings", &key)
+            .context(InterceptorSnafu)?
+            .context(IdentityStateSnafu {
+                reason: "prepared runtime binding is absent from the kernel",
+            })?;
+        let live = execution_set_binding_state(&live)?;
+        ensure!(
+            same_runtime_binding(&binding.state, &live)
+                && live.lifecycle_state == BindingLifecycleStateV1::Active
+                && live.prepared_container_state == PreparedContainerStateV1::Prepared
+                && live.prepared_container_initial_host_tgid == initial_pid
+                && !live.prepared_container_entry_instance_id.is_zero()
+                && current_boottime_ns()? < live.prepared_container_deadline_boottime_ns,
+            IdentityStateSnafu {
+                reason: "prepared runtime binding has no live exact initial entry",
+            }
+        );
+
+        let pid = i32::try_from(initial_pid)
+            .ok()
+            .and_then(Pid::from_raw)
+            .context(IdentityStateSnafu {
+                reason: "prepared runtime binding has an invalid initial PID",
+            })?;
+        let pidfd = pidfd_open(pid, PidfdFlags::empty())
+            .map_err(std::io::Error::from)
+            .context(IoSnafu {
+                path: PathBuf::from(format!("/proc/{initial_pid}")),
+            })?;
+        let label = host
+            .lookup_map("task_labels", &pidfd.as_raw_fd().to_ne_bytes())
+            .context(InterceptorSnafu)?
+            .context(IdentityStateSnafu {
+                reason: "prepared initial task has no kernel identity",
+            })?;
+        let label = TaskLabelV1::read_from_bytes(&label).map_err(|error| {
+            IdentityStateSnafu {
+                reason: format!("prepared initial task label is invalid: {error}"),
+            }
+            .build()
+        })?;
+        ensure!(
+            label.node_boot_id == self.node_boot_id
+                && label.label_epoch == self.label_epoch
+                && label.execution_set_id == live.execution_set_id
+                && label.birth_profile_generation_ref_id == live.active_profile_generation_ref_id
+                && label.placement.protected_root_binding_id == live.binding_id
+                && label.placement.protected_root_binding_nonce == live.binding_nonce
+                && label.entry_instance_id == live.prepared_container_entry_instance_id,
+            IdentityStateSnafu {
+                reason: "prepared initial task does not match its runtime binding",
+            }
+        );
+        let coordinate = host
+            .lookup_map("task_coordinates", &label.task_cookie.to_ne_bytes())
+            .context(InterceptorSnafu)?
+            .context(IdentityStateSnafu {
+                reason: "prepared initial task has no kernel coordinate",
+            })?;
+        let coordinate = TaskCoordinateV1::try_read_from_bytes(&coordinate).map_err(|error| {
+            IdentityStateSnafu {
+                reason: format!("prepared initial task coordinate is invalid: {error}"),
+            }
+            .build()
+        })?;
+        ensure!(
+            coordinate.task_cookie == label.task_cookie
+                && coordinate.host_tid == initial_pid
+                && coordinate.host_tgid == initial_pid
+                && coordinate.state == TaskCoordinateStateV1::Runnable,
+            IdentityStateSnafu {
+                reason: "prepared initial task coordinate is not exact and runnable",
+            }
+        );
         Ok(())
     }
 
