@@ -211,12 +211,16 @@ collect_mithril_diagnostics "$test_root" mithril-system tenant-a
 [[ -s $test_root/diagnostics/nodes.log ]]
 [[ -s $test_root/diagnostics/nodes-previous.log ]]
 [[ -s $test_root/diagnostics/nri-hook-injector.log ]]
+[[ -s $test_root/diagnostics/node-effects-0.log ]]
+[[ -s $test_root/diagnostics/node-policy-delivery-0.json ]]
 [[ -s $test_root/diagnostics/workload.txt ]]
 [[ -s $test_root/diagnostics/workload-events.txt ]]
 [[ -s $test_root/diagnostics/workload.log ]]
 [[ -s $test_root/diagnostics/workload-previous.log ]]
 grep -q -- '--tail=200 --limit-bytes=131072' "$test_root/diagnostic-kubectl.log"
 grep -q -- 'app.kubernetes.io/name=nri-plugin-hook-injector' \
+  "$test_root/diagnostic-kubectl.log"
+grep -q -- 'mithril-inspect effects --socket-path /run/mithril/observation.sock' \
   "$test_root/diagnostic-kubectl.log"
 
 oracle_bin=$test_root/oracle-bin

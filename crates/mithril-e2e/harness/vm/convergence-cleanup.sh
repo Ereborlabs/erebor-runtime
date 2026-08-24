@@ -31,6 +31,19 @@ collect_mithril_diagnostics() {
     -l app.kubernetes.io/name=nri-plugin-hook-injector --all-containers=true \
     --prefix=true --tail=200 --limit-bytes=131072 \
     >"$diagnostics/nri-hook-injector.log" 2>&1
+  local node_pod
+  local node_index=0
+  while read -r node_pod && ((node_index < 16)); do
+    [[ -n $node_pod ]] || continue
+    diagnostic_kubectl -n "$namespace" exec "$node_pod" -c mithril-node -- \
+      mithril-inspect effects --socket-path /run/mithril/observation.sock \
+      --cgroup-scope / >"$diagnostics/node-effects-$node_index.log" 2>&1
+    diagnostic_kubectl -n "$namespace" exec "$node_pod" -c mithril-node -- \
+      mithril-inspect policy-delivery --state-directory /var/lib/mithril \
+      >"$diagnostics/node-policy-delivery-$node_index.json" 2>&1
+    ((node_index += 1))
+  done < <(diagnostic_kubectl -n "$namespace" get pods \
+    -l app.kubernetes.io/name=mithril-node -o name)
   if [[ -n $workload_namespace ]]; then
     {
       diagnostic_kubectl -n "$workload_namespace" get pods -o wide
