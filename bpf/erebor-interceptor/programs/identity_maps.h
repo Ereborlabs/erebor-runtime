@@ -48,6 +48,8 @@ struct exception_runtime_state_bpf_v1 {
 #define EFFECT_GATE_DENY_EXCEPTION_V1 2
 #define EFFECT_GATE_FILE_OPEN_ATTEMPT_V1 4
 #define EFFECT_GATE_PATH_SUPPLIED_V1 8
+#define EFFECT_GATE_RUNTIME_INHERITED_CLAIM_V1 16
+#define EFFECT_GATE_RUNTIME_RECEIVED_V1 32
 #define MAX_CANONICAL_MOUNTS_V1 4096
 #define CANONICAL_MOUNT_CACHE_READY_V1 1
 #define CANONICAL_MOUNT_CACHE_MISS_V1 1
@@ -306,6 +308,13 @@ struct {
     __type(key, __u64);
     __type(value, execution_set_binding_state_v1);
 } execution_set_bindings SEC(".maps");
+
+struct {
+    __uint(type, BPF_MAP_TYPE_INODE_STORAGE);
+    __uint(map_flags, BPF_F_NO_PREALLOC);
+    __type(key, int);
+    __type(value, runtime_bootstrap_object_state_v1);
+} runtime_bootstrap_objects SEC(".maps");
 
 struct {
     __uint(type, BPF_MAP_TYPE_HASH);

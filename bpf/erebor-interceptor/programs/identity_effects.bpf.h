@@ -107,6 +107,15 @@ static __always_inline int hard_effect_result(
         effect_physical_result_v1_denied_before_effect);
 }
 
+static __always_inline int runtime_bootstrap_effect_result(
+    struct identity_scratch_v1 *scratch)
+{
+    return emit_effect_observation(
+        scratch, 0,
+        effect_observation_reason_v1_runtime_bootstrap_authority,
+        effect_physical_result_v1_unknown_after_pre_effect);
+}
+
 static __always_inline bool path_tree_denies(
     const struct identity_scratch_v1 *scratch, __u16 operation)
 {
@@ -474,6 +483,21 @@ static __noinline int resolved_identity_effect_gate(struct file *file,
         return hard_effect_result(
             config, scratch,
             effect_observation_reason_v1_corrupt_identity_or_generation);
+    if (file) {
+        int bootstrap_result = runtime_bootstrap_file_access(
+            file, scratch->observation.effect_family,
+            scratch->observation.operation, binding, label, entry,
+            scratch->effect_gate_flags &
+                EFFECT_GATE_RUNTIME_INHERITED_CLAIM_V1,
+            scratch->effect_gate_flags & EFFECT_GATE_RUNTIME_RECEIVED_V1);
+
+        if (!bootstrap_result)
+            return runtime_bootstrap_effect_result(scratch);
+        if (bootstrap_result != RUNTIME_BOOTSTRAP_NOT_APPLICABLE_V1)
+            return hard_effect_result(
+                config, scratch,
+                effect_observation_reason_v1_unsupported_object);
+    }
     if (!(scratch->effect_gate_flags & EFFECT_GATE_PATH_SUPPLIED_V1) &&
         file) {
         if (BPF_CORE_READ_INTO(&scratch->effect_path, file, f_path))
@@ -698,6 +722,78 @@ static __noinline int identity_effect_actor_gate(
                                          ret);
 }
 
+static __noinline int identity_runtime_bootstrap_inherited_effect_gate(
+    struct file *file, __u16 effect_family, __u16 operation, int ret)
+{
+    struct identity_scratch_v1 *scratch = identity_scratch_record();
+
+    if (scratch) {
+        scratch->effect_gate_flags =
+            EFFECT_GATE_RUNTIME_INHERITED_CLAIM_V1;
+        scratch->effect_gate_operation_argument = 0;
+        scratch->path_mount_namespace_inode = 0;
+    }
+    if (!ret)
+        prepare_effect_identity();
+    return dispatch_identity_effect_gate(file, NULL, effect_family, operation,
+                                         ret);
+}
+
+static __noinline int identity_runtime_bootstrap_received_effect_gate(
+    struct file *file, __u16 effect_family, __u16 operation, int ret)
+{
+    struct identity_scratch_v1 *scratch = identity_scratch_record();
+
+    if (scratch) {
+        scratch->effect_gate_flags = EFFECT_GATE_DENY_EXCEPTION_V1 |
+                                     EFFECT_GATE_RUNTIME_RECEIVED_V1;
+        scratch->effect_gate_operation_argument = 0;
+        scratch->path_mount_namespace_inode = 0;
+    }
+    if (!ret)
+        prepare_effect_identity();
+    return dispatch_identity_effect_gate(file, NULL, effect_family, operation,
+                                         ret);
+}
+
+static __noinline int runtime_bootstrap_anon_creation_effect(
+    struct inode *inode, __u8 kind, int ret)
+{
+    identity_runtime_config_v1 *config;
+    struct identity_scratch_v1 *scratch;
+    struct task_struct *task;
+    task_label_v1 *label;
+    entry_security_state_v1 *entry;
+    execution_set_binding_state_v1 *binding;
+    struct cgroup *cgroup = NULL;
+    int binding_lookup;
+
+    ret = identity_effect_actor_gate(
+        NULL, kernel_effect_family_v1_file,
+        kernel_effect_operation_v1_create, ret);
+    if (ret)
+        return ret;
+    config = identity_runtime_config();
+    scratch = identity_scratch_record();
+    if (!config || !config->enabled || !config->effect_policy_enabled ||
+        !scratch || id128_is_zero(&scratch->observation.binding_id))
+        return RUNTIME_BOOTSTRAP_NOT_APPLICABLE_V1;
+    task = bpf_get_current_task_btf();
+    label = bpf_task_storage_get(&task_labels, task, 0, 0);
+    if (!label || task_cgroup(task, &cgroup))
+        return hard_effect_result(
+            config, scratch,
+            effect_observation_reason_v1_corrupt_identity_or_generation);
+    binding = binding_for_cgroup(cgroup, &binding_lookup);
+    entry = bpf_map_lookup_elem(&entry_states, &label->entry_instance_id);
+    if (binding_lookup || !binding_matches_label(binding, label) || !entry ||
+        runtime_bootstrap_claim_inode(inode, kind, binding, label, entry))
+        return hard_effect_result(
+            config, scratch,
+            effect_observation_reason_v1_unsupported_object);
+    return runtime_bootstrap_effect_result(scratch);
+}
+
 static __noinline int identity_path_effect_gate(const struct path *path,
                                                 __u16 effect_family,
                                                 __u16 operation, int ret)
@@ -867,9 +963,34 @@ int BPF_PROG(erebor_identity_file_open, struct file *file, int ret)
 SEC("lsm/file_receive")
 int BPF_PROG(erebor_identity_file_receive, struct file *file, int ret)
 {
+    fmode_t mode = 0;
+    unsigned int flags = 0;
+
     if (file_is_socket(file))
         return ret;
-    return file_mode_effects(file, false, ret);
+    if (BPF_CORE_READ_INTO(&flags, file, f_flags))
+        return identity_runtime_bootstrap_received_effect_gate(
+            file, kernel_effect_family_v1_file,
+            kernel_effect_operation_v1_unknown, ret);
+    if (flags & __FMODE_EXEC)
+        return identity_runtime_bootstrap_received_effect_gate(
+            file, kernel_effect_family_v1_exec,
+            kernel_effect_operation_v1_execute, ret);
+    if (BPF_CORE_READ_INTO(&mode, file, f_mode))
+        return identity_runtime_bootstrap_received_effect_gate(
+            file, kernel_effect_family_v1_file,
+            kernel_effect_operation_v1_unknown, ret);
+    if (mode & FMODE_READ)
+        ret = identity_runtime_bootstrap_received_effect_gate(
+            file, kernel_effect_family_v1_file,
+            kernel_effect_operation_v1_open_read, ret);
+    if (ret)
+        return ret;
+    if (mode & FMODE_WRITE)
+        ret = identity_runtime_bootstrap_received_effect_gate(
+            file, kernel_effect_family_v1_file,
+            kernel_effect_operation_v1_open_write, ret);
+    return ret;
 }
 
 SEC("lsm/file_permission")
@@ -896,18 +1017,21 @@ int BPF_PROG(erebor_identity_file_permission, struct file *file, int mask,
                                     kernel_effect_operation_v1_execute, ret);
     }
     if (mask & MAY_READ)
-        ret = identity_effect_gate(file, kernel_effect_family_v1_file,
-                                   kernel_effect_operation_v1_read, ret);
+        ret = identity_runtime_bootstrap_inherited_effect_gate(
+            file, kernel_effect_family_v1_file,
+            kernel_effect_operation_v1_read, ret);
     if (ret)
         return ret;
     if (mask & (MAY_WRITE | MAY_APPEND))
-        ret = identity_effect_gate(file, kernel_effect_family_v1_file,
-                                   kernel_effect_operation_v1_write, ret);
+        ret = identity_runtime_bootstrap_inherited_effect_gate(
+            file, kernel_effect_family_v1_file,
+            kernel_effect_operation_v1_write, ret);
     if (ret)
         return ret;
     if (mask & MAY_EXEC)
-        ret = identity_effect_gate(file, kernel_effect_family_v1_exec,
-                                   kernel_effect_operation_v1_execute, ret);
+        ret = identity_runtime_bootstrap_inherited_effect_gate(
+            file, kernel_effect_family_v1_exec,
+            kernel_effect_operation_v1_execute, ret);
     return ret;
 }
 
@@ -1132,7 +1256,9 @@ static __always_inline bool initial_root_is_before_first_exec(void)
         return false;
     label = bpf_task_storage_get(&task_labels, task, 0, 0);
     if (!label)
-        return binding->initial_root_state == initial_root_state_v1_available;
+        return binding->runtime_bootstrap_state ==
+                       runtime_bootstrap_state_v1_unarmed &&
+               binding->initial_root_state == initial_root_state_v1_available;
     if (!label_matches_runtime(label, config) ||
         !binding_matches_label(binding, label))
         return false;
@@ -1146,6 +1272,9 @@ static __always_inline bool initial_root_is_before_first_exec(void)
                                &process_execution_instances,
                                &root_process->active_execution_id)
                          : NULL;
+    if (binding->runtime_bootstrap_state !=
+        runtime_bootstrap_state_v1_unarmed)
+        return runtime_bootstrap_actor_is_exact(binding, label, entry);
     return entry && root_process && root_execution &&
            entry->entry_kind == entry_kind_v1_container_start &&
            entry->admission_state == entry_admission_state_v1_committed &&
@@ -1161,7 +1290,9 @@ static __always_inline bool initial_root_is_before_first_exec(void)
 
 static __always_inline int mount_mutation_effect(__u16 operation, int ret)
 {
-    /* The runtime completes this task's mount setup before its first exec. */
+    if (!ret)
+        prepare_effect_identity();
+    /* Only the initial entry can change its mount view before application handoff. */
     if (ret || initial_root_is_before_first_exec())
         return ret;
     ret = identity_effect_gate(NULL, kernel_effect_family_v1_mount, operation,
@@ -1175,6 +1306,8 @@ SEC("lsm/sb_kern_mount")
 int BPF_PROG(erebor_identity_sb_kern_mount, const struct super_block *superblock,
              int ret)
 {
+    if (!ret)
+        prepare_effect_identity();
     if (ret || initial_root_is_before_first_exec())
         return ret;
     return begin_mount_mutation();

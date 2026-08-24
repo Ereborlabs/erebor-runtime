@@ -347,6 +347,32 @@ static __noinline int identity_process_control_effect(
             config, scratch,
             effect_observation_reason_v1_unresolved_object);
 
+    scratch->observation.controller_process_state_id =
+        controller_label->process_state_id;
+    scratch->observation.controller_transition_version =
+        scratch->process.transition_version;
+    scratch->observation.target_task_cookie = scratch->target_label.task_cookie;
+    scratch->observation.target_profile_generation_ref_id =
+        scratch->target_process.active_profile_generation_ref_id;
+    scratch->observation.target_process_state_id =
+        scratch->target_label.process_state_id;
+    scratch->observation.target_transition_version =
+        scratch->target_process.transition_version;
+    scratch->observation.target_role_id = scratch->target_process.active_role_id;
+    scratch->observation.target_process_state_vector_id =
+        scratch->target_process.process_state_vector_id;
+    scratch->observation.operation_argument = operation_argument;
+    if (ptrace_mode_is_read_only(operation, operation_argument) &&
+        id128_equal(&controller_label->entry_instance_id,
+                    &scratch->target_label.entry_instance_id) &&
+        id128_equal(&binding->binding_id, &target_binding->binding_id) &&
+        id128_equal(&binding->binding_nonce, &target_binding->binding_nonce) &&
+        runtime_bootstrap_actor_is_exact(
+            binding, controller_label,
+            bpf_map_lookup_elem(&entry_states,
+                                &controller_label->entry_instance_id)))
+        return runtime_bootstrap_effect_result(scratch);
+
     __builtin_memset(&scratch->process_control_rule_key, 0,
                      sizeof(scratch->process_control_rule_key));
     scratch->process_control_rule_key.profile_generation_ref_id =
@@ -379,21 +405,6 @@ static __noinline int identity_process_control_effect(
             config, scratch,
             effect_observation_reason_v1_unsupported_object);
 
-    scratch->observation.controller_process_state_id =
-        controller_label->process_state_id;
-    scratch->observation.controller_transition_version =
-        scratch->process.transition_version;
-    scratch->observation.target_task_cookie = scratch->target_label.task_cookie;
-    scratch->observation.target_profile_generation_ref_id =
-        scratch->target_process.active_profile_generation_ref_id;
-    scratch->observation.target_process_state_id =
-        scratch->target_label.process_state_id;
-    scratch->observation.target_transition_version =
-        scratch->target_process.transition_version;
-    scratch->observation.target_role_id = scratch->target_process.active_role_id;
-    scratch->observation.target_process_state_vector_id =
-        scratch->target_process.process_state_vector_id;
-    scratch->observation.operation_argument = operation_argument;
     target_live_label = bpf_task_storage_get(&task_labels, target, 0, 0);
     if (!target_live_label ||
         !label_matches_runtime(target_live_label, config) ||

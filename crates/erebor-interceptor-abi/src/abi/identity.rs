@@ -307,6 +307,47 @@ pub enum InitialRootStateV1 {
     Consumed = 2,
 }
 
+// The kernel reserves one application handoff across the multi-pass exec path.
+// A failed exec can return only its own reservation to ARMED.
+#[repr(u64)]
+#[derive(
+    Clone, Copy, Debug, Default, Eq, Immutable, IntoBytes, KnownLayout, PartialEq, TryFromBytes,
+)]
+pub enum RuntimeBootstrapStateV1 {
+    #[default]
+    Unarmed = 0,
+    Armed = 1,
+    HandoffPending = 2,
+    Consumed = 3,
+    Expired = 4,
+    Corrupt = 5,
+}
+
+#[repr(u8)]
+#[derive(
+    Clone, Copy, Debug, Default, Eq, Immutable, IntoBytes, KnownLayout, PartialEq, TryFromBytes,
+)]
+pub enum RuntimeBootstrapObjectKindV1 {
+    #[default]
+    Unknown = 0,
+    Pipe = 1,
+    Memfd = 2,
+}
+
+#[repr(C)]
+#[derive(
+    Clone, Copy, Debug, Default, Eq, Immutable, IntoBytes, KnownLayout, PartialEq, TryFromBytes,
+)]
+pub struct RuntimeBootstrapObjectStateV1 {
+    pub binding_id: Id128V1,
+    pub binding_nonce: Id128V1,
+    pub entry_instance_id: Id128V1,
+    pub deadline_boottime_ns: u64,
+    pub transition_version: u64,
+    pub kind: RuntimeBootstrapObjectKindV1,
+    pub reserved: [u8; 7],
+}
+
 // BPF compare-and-swap is 64-bit on every supported target. Keep the slot
 // state in that directly atomic representation instead of adding a second
 // lock owner around this one-use transition.
@@ -544,6 +585,10 @@ pub struct ExecutionSetBindingStateV1 {
     pub lifecycle_state: super::BindingLifecycleStateV1,
     pub reserved: [u8; 7],
     pub initial_root_state: InitialRootStateV1,
+    pub runtime_bootstrap_state: RuntimeBootstrapStateV1,
+    pub runtime_bootstrap_deadline_boottime_ns: u64,
+    pub runtime_bootstrap_entry_instance_id: Id128V1,
+    pub runtime_bootstrap_handoff_task_cookie: u64,
 }
 
 #[repr(C)]
@@ -810,7 +855,8 @@ pub struct PendingExecV1 {
     pub source_execution_id: Id128V1,
     pub source_role_id: u32,
     pub candidate_count: u16,
-    pub reserved_0: u16,
+    pub runtime_bootstrap_exec: u8,
+    pub reserved_0: u8,
     pub source_profile_generation_ref_id: u64,
     pub pending_exec_response_set_ref_id: u64,
     pub target_execution_id: Id128V1,
@@ -919,6 +965,8 @@ mod tests {
         );
         assert_eq!(size_of::<ExactExecutableCandidateV1>(), 24);
         assert_eq!(size_of::<ProcessExecutionInstanceV1>(), 80);
+        assert_eq!(size_of::<ExecutionSetBindingStateV1>(), 224);
+        assert_eq!(size_of::<RuntimeBootstrapObjectStateV1>(), 72);
         assert_eq!(size_of::<IdentityRuntimeConfigV1>(), 48);
         assert_eq!(size_of::<ApprovedExecArgumentKeyV1>(), 4_120);
         assert_eq!(size_of::<ApprovedExecSlotV1>(), 4_776);
@@ -939,6 +987,9 @@ mod tests {
         assert_eq!(EntryKindV1::UnknownExternal as u8, 9);
         assert_eq!(InitialRootStateV1::Unarmed as u64, 0);
         assert_eq!(InitialRootStateV1::Consumed as u64, 2);
+        assert_eq!(RuntimeBootstrapStateV1::Unarmed as u64, 0);
+        assert_eq!(RuntimeBootstrapStateV1::Corrupt as u64, 5);
+        assert_eq!(RuntimeBootstrapObjectKindV1::Memfd as u8, 2);
         assert_eq!(TASK_REFERENCE_ALL_V1, 0b111);
     }
 
@@ -947,10 +998,15 @@ mod tests {
         let binding = ExecutionSetBindingStateV1 {
             lifecycle_state: BindingLifecycleStateV1::Active,
             initial_root_state: InitialRootStateV1::Available,
+            runtime_bootstrap_state: RuntimeBootstrapStateV1::Armed,
             ..ExecutionSetBindingStateV1::default()
         };
         let mut binding_bytes = binding.as_bytes().to_vec();
         binding_bytes[offset_of!(ExecutionSetBindingStateV1, lifecycle_state)] = u8::MAX;
+        assert!(ExecutionSetBindingStateV1::try_read_from_bytes(&binding_bytes).is_err());
+        let mut binding_bytes = binding.as_bytes().to_vec();
+        let state_offset = offset_of!(ExecutionSetBindingStateV1, runtime_bootstrap_state);
+        binding_bytes[state_offset..state_offset + size_of::<u64>()].fill(u8::MAX);
         assert!(ExecutionSetBindingStateV1::try_read_from_bytes(&binding_bytes).is_err());
 
         let slot = ApprovedExecSlotV1 {

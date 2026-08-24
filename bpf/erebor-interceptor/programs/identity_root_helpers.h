@@ -284,8 +284,26 @@ static __always_inline int create_external_root(
         role_class = installed_role_class_v1_initial_role;
         role_id = activation->initial_role_id;
     }
-    return create_root(task, config, activation, scratch, root_class, role_class,
-                       role_id);
+    int result = create_root(task, config, activation, scratch, root_class,
+                             role_class, role_id);
+
+    if (result && initial_root &&
+        binding->runtime_bootstrap_state ==
+            runtime_bootstrap_state_v1_armed) {
+        binding->runtime_bootstrap_state = runtime_bootstrap_state_v1_corrupt;
+        binding->transition_version++;
+    }
+    if (result || !initial_root)
+        return result;
+    if (binding->runtime_bootstrap_state ==
+            runtime_bootstrap_state_v1_armed &&
+        runtime_bootstrap_set_initial_entry(
+            binding, &scratch->label.entry_instance_id)) {
+        binding->runtime_bootstrap_state = runtime_bootstrap_state_v1_corrupt;
+        binding->transition_version++;
+        return identity_deny(config);
+    }
+    return 0;
 }
 
 static __always_inline int finalize_task_coordinate(struct task_struct *task,

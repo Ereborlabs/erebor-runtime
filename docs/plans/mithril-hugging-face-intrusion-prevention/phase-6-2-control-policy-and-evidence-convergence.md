@@ -621,9 +621,11 @@ new binding and bootstrap state before the runtime can retry.
 
 Bind `RuntimeBootstrap` to the exact binding lifetime and initial entry
 lineage. Use one non-evictable kernel transition with `UNARMED`, `ARMED`,
-`CONSUMED`, and `EXPIRED` states and one monotonic deadline. Record each
-bootstrap anonymous object against that binding and entry when BPF observes
-its creation. Permit only same-lineage read-only process inspection,
+`HANDOFF_PENDING`, `CONSUMED`, `EXPIRED`, and fail-closed `CORRUPT` states and
+one monotonic deadline. `HANDOFF_PENDING` reserves one task across the
+multi-pass exec path and returns to `ARMED` only when that exec fails before
+commit. Record each bootstrap anonymous object against that binding and entry
+when BPF observes its creation. Permit only same-lineage read-only process inspection,
 bootstrap-owned anonymous-file and pipe access, sealed bootstrap self-exec,
 and the qualified initial namespace mount transitions. Do not grant path-backed
 file, network, another binding, another entry, later external-root, or

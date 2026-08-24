@@ -6,14 +6,38 @@
 static __always_inline int observe_bprm_effect(struct linux_binprm *bprm)
 {
     identity_runtime_config_v1 *config = identity_runtime_config();
+    struct task_struct *task;
+    task_label_v1 *label;
+    pending_exec_v1 *pending;
+    execution_set_binding_state_v1 *binding;
+    struct cgroup *cgroup = NULL;
     struct file *file = NULL;
+    int binding_lookup;
+    int result;
 
     if (!config || !config->effect_policy_enabled)
         return 0;
     if (BPF_CORE_READ_INTO(&file, bprm, file))
         file = NULL;
-    return identity_effect_gate(file, kernel_effect_family_v1_exec,
-                                kernel_effect_operation_v1_execute, 0);
+    result = identity_effect_gate(file, kernel_effect_family_v1_exec,
+                                  kernel_effect_operation_v1_execute, 0);
+    if (result)
+        return result;
+    task = bpf_get_current_task_btf();
+    label = bpf_task_storage_get(&task_labels, task, 0, 0);
+    pending = label
+                  ? bpf_map_lookup_elem(&pending_execs,
+                                        &label->task_cookie)
+                  : NULL;
+    if (!label || !pending || pending->runtime_bootstrap_exec)
+        return 0;
+    if (task_cgroup(task, &cgroup))
+        return identity_deny(config);
+    binding = binding_for_cgroup(cgroup, &binding_lookup);
+    if (binding_lookup || !binding_matches_label(binding, label) ||
+        runtime_bootstrap_reserve_handoff(binding, label))
+        return identity_deny(config);
+    return 0;
 }
 
 static __always_inline void candidate_from_bprm(
@@ -56,6 +80,12 @@ static __always_inline int append_exec_candidate(
     __u32 candidate_count = pending->candidate_count;
     __u64 candidate_index;
 
+    if (pending->runtime_bootstrap_exec)
+        return pending->candidate_count &&
+                       candidate_equal(&pending->ordered_candidates[0],
+                                       candidate)
+                   ? 0
+                   : -EACCES;
     if (!candidate->mount_id)
         return -EACCES;
 #pragma unroll
@@ -444,6 +474,8 @@ static __noinline int identity_bprm_transition(struct linux_binprm *bprm,
     pending_exec_v1 *pending;
     __u64 *profile_task_refs;
     struct cgroup *cgroup = NULL;
+    struct file *bootstrap_file = NULL;
+    bool runtime_bootstrap_exec = false;
     int binding_lookup;
 
     if (ret)
@@ -557,9 +589,17 @@ static __noinline int identity_bprm_transition(struct linux_binprm *bprm,
         }
         candidate_from_bprm(&scratch->pending_exec.ordered_candidates[0], bprm);
         if (!scratch->pending_exec.ordered_candidates[0].mount_id) {
-            release_transition_guard(&process->transition_guard);
-            return config->effect_policy_enabled ? BPRM_OBSERVE_EFFECT_V1
-                                                 : identity_deny(config);
+            BPF_CORE_READ_INTO(&bootstrap_file, bprm, file);
+            if (!config->effect_policy_enabled ||
+                runtime_bootstrap_file_access(
+                    bootstrap_file, kernel_effect_family_v1_exec,
+                    kernel_effect_operation_v1_execute, binding, label, entry,
+                    true, false)) {
+                release_transition_guard(&process->transition_guard);
+                return config->effect_policy_enabled ? BPRM_OBSERVE_EFFECT_V1
+                                                     : identity_deny(config);
+            }
+            runtime_bootstrap_exec = true;
         }
         if (allocate_id(config, &scratch->pending_exec.pending_exec_id) ||
             allocate_id(config, &scratch->pending_exec.target_execution_id) ||
@@ -574,6 +614,8 @@ static __noinline int identity_bprm_transition(struct linux_binprm *bprm,
         scratch->pending_exec.source_execution_id = snapshot->active_execution_id;
         scratch->pending_exec.source_role_id = snapshot->active_role_id;
         scratch->pending_exec.candidate_count = 1;
+        scratch->pending_exec.runtime_bootstrap_exec =
+            runtime_bootstrap_exec;
         scratch->pending_exec.reserved_0 = 0;
         scratch->pending_exec.source_profile_generation_ref_id =
             snapshot->active_profile_generation_ref_id;
@@ -731,6 +773,9 @@ static __always_inline int complete_failed_exec(long result)
     task_label_v1 *label;
     process_security_state_v1 *process;
     pending_exec_v1 *pending;
+    execution_set_binding_state_v1 *binding;
+    struct cgroup *cgroup = NULL;
+    int binding_lookup;
 
     if (result >= 0)
         return 0;
@@ -766,6 +811,12 @@ static __always_inline int complete_failed_exec(long result)
         process->transition_version++;
         release_transition_guard(&process->transition_guard);
         return 0;
+    }
+    if (!task_cgroup(task, &cgroup)) {
+        binding = binding_for_cgroup(cgroup, &binding_lookup);
+        if (!binding_lookup && binding_matches_label(binding, label))
+            runtime_bootstrap_rollback_handoff(binding,
+                                               label->task_cookie);
     }
     pending->state = pending_exec_state_v1_pre_ponr_failed;
     pending->transition_version++;
@@ -823,6 +874,10 @@ int erebor_sched_process_exec(struct trace_event_raw_sched_process_exec *context
     struct mm_struct *mm = NULL;
     struct file *executable = NULL;
     __u64 pid_tgid;
+    execution_set_binding_state_v1 *binding;
+    entry_security_state_v1 *entry;
+    struct cgroup *cgroup = NULL;
+    int binding_lookup;
 
     task = bpf_get_current_task_btf();
     label = bpf_task_storage_get(&task_labels, task, 0, 0);
@@ -840,6 +895,16 @@ int erebor_sched_process_exec(struct trace_event_raw_sched_process_exec *context
         release_transition_guard(&process->transition_guard);
         return 0;
     }
+    if (task_cgroup(task, &cgroup)) {
+        process->exec_guard_state = exec_guard_state_v1_outcome_unknown;
+        process->transition_version++;
+        pending->state = pending_exec_state_v1_outcome_unknown;
+        pending->transition_version++;
+        release_transition_guard(&process->transition_guard);
+        return 0;
+    }
+    binding = binding_for_cgroup(cgroup, &binding_lookup);
+    entry = bpf_map_lookup_elem(&entry_states, &label->entry_instance_id);
     if (process->exec_guard_state != exec_guard_state_v1_commit_pending ||
         pending->state != pending_exec_state_v1_commit_pending ||
         !id128_equal(&pending->pending_exec_id, &process->pending_exec_id)) {
@@ -880,9 +945,16 @@ int erebor_sched_process_exec(struct trace_event_raw_sched_process_exec *context
         target_execution->state != process_execution_state_v1_preparing ||
         !target_image ||
         target_image->state != image_provenance_state_v1_preparing ||
-        !scratch || !scratch->image.ordered_candidates[0].mount_id ||
+        binding_lookup || !binding_matches_label(binding, label) || !entry ||
+        !scratch ||
+        (!scratch->image.ordered_candidates[0].mount_id &&
+         !pending->runtime_bootstrap_exec) ||
         !image_contains_candidate(
             target_image, &scratch->image.ordered_candidates[0]) ||
+        (pending->runtime_bootstrap_exec &&
+         (!candidate_equal(&pending->ordered_candidates[0],
+                           &scratch->image.ordered_candidates[0]) ||
+          !runtime_bootstrap_actor_is_exact(binding, label, entry))) ||
         (process->pending_target_role_id != process->active_role_id &&
          !administrative_match) ||
         (administrative_match &&
@@ -920,6 +992,18 @@ int erebor_sched_process_exec(struct trace_event_raw_sched_process_exec *context
             target_image->state = image_provenance_state_v1_outcome_unknown;
             target_image->transition_version++;
         }
+        release_transition_guard(&process->transition_guard);
+        return 0;
+    }
+    if (!pending->runtime_bootstrap_exec &&
+        binding->runtime_bootstrap_state ==
+            runtime_bootstrap_state_v1_handoff_pending &&
+        !runtime_bootstrap_commit_handoff(binding, label->task_cookie)) {
+        binding->runtime_bootstrap_state = runtime_bootstrap_state_v1_corrupt;
+        process->exec_guard_state = exec_guard_state_v1_outcome_unknown;
+        process->transition_version++;
+        pending->state = pending_exec_state_v1_outcome_unknown;
+        pending->transition_version++;
         release_transition_guard(&process->transition_guard);
         return 0;
     }

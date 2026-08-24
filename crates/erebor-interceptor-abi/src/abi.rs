@@ -1113,6 +1113,7 @@ pub enum EffectObservationReasonV1 {
     ExceptionUnavailable = 10,
     PathTreePolicyDeny = 11,
     NetworkResponseFence = 12,
+    RuntimeBootstrapAuthority = 13,
 }
 
 #[repr(u8)]
@@ -1356,7 +1357,7 @@ mod tests {
         assert_eq!(KernelEffectOperationV1::IoUringCommand as u16, 31);
         assert_eq!(size_of::<IoUringSetupStateV1>(), 32);
         assert_eq!(size_of::<IoUringActorSnapshotV1>(), 232);
-        assert_eq!(size_of::<IoUringRingStateV1>(), 488);
+        assert_eq!(size_of::<IoUringRingStateV1>(), 528);
         assert_eq!(size_of::<IoUringRequestStateV1>(), 344);
         assert_eq!(size_of::<IoUringExecutionStateV1>(), 64);
         assert_eq!(IoUringSetupStateKindV1::Authorized as u8, 2);

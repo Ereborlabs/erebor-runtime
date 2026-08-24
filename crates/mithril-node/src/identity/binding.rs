@@ -8,7 +8,8 @@ use std::path::PathBuf;
 use erebor_interceptor::{KernelHost, MapInsertResult};
 use erebor_interceptor_abi::{
     BindingActivationTargetKeyV1, BindingLifecycleStateV1, ExecutionSetBindingStateV1, Id128V1,
-    InitialRootStateV1, PolicyGenerationStateV1, ProfileGenerationDescriptorV1, TaskLabelV1,
+    InitialRootStateV1, PolicyGenerationStateV1, ProfileGenerationDescriptorV1,
+    RuntimeBootstrapStateV1, TaskLabelV1,
 };
 use erebor_runtime_error::{ErrorExt as _, RetryHint};
 use rustix::process::{pidfd_open, Pid, PidfdFlags};
@@ -18,9 +19,12 @@ use uuid::Uuid;
 use zerocopy::{FromBytes as _, IntoBytes as _, TryFromBytes as _};
 
 use crate::error::{IdentityStateSnafu, InterceptorSnafu, IoSnafu};
+use crate::policy::current_boottime_ns;
 use crate::{ContainerRuntimeConfig, Result, WorkloadBindingConfig};
 
 use super::runtime::{ContainerRuntimeInventory, RuntimeContainerIdentity};
+
+const RUNTIME_BOOTSTRAP_LIFETIME_NS: u64 = 10_000_000_000;
 
 #[derive(Debug)]
 struct PublishedBinding {
@@ -53,6 +57,96 @@ pub struct AdministrativeBindingTargetV1 {
 }
 
 impl PublishedBinding {
+    fn arm_runtime_bootstrap(&mut self, now_boottime_ns: u64) -> Result<()> {
+        ensure!(
+            self.held_initial_pid.is_some()
+                && self.state.runtime_bootstrap_state == RuntimeBootstrapStateV1::Unarmed
+                && self.state.runtime_bootstrap_deadline_boottime_ns == 0
+                && self.state.runtime_bootstrap_entry_instance_id.is_zero()
+                && self.state.runtime_bootstrap_handoff_task_cookie == 0,
+            IdentityStateSnafu {
+                reason: "runtime bootstrap can arm only for one held initial task",
+            }
+        );
+        self.state.runtime_bootstrap_deadline_boottime_ns = now_boottime_ns
+            .checked_add(RUNTIME_BOOTSTRAP_LIFETIME_NS)
+            .context(IdentityStateSnafu {
+                reason: "runtime bootstrap deadline overflowed",
+            })?;
+        self.state.runtime_bootstrap_state = RuntimeBootstrapStateV1::Armed;
+        Ok(())
+    }
+
+    fn reconcile_recovered_runtime_bootstrap(&mut self, now_boottime_ns: u64) -> Result<bool> {
+        let state = &mut self.state;
+        match state.runtime_bootstrap_state {
+            RuntimeBootstrapStateV1::Unarmed => {
+                ensure!(
+                    state.runtime_bootstrap_deadline_boottime_ns == 0
+                        && state.runtime_bootstrap_entry_instance_id.is_zero()
+                        && state.runtime_bootstrap_handoff_task_cookie == 0,
+                    IdentityStateSnafu {
+                        reason: "unarmed runtime bootstrap contains authority fields",
+                    }
+                );
+                Ok(false)
+            }
+            RuntimeBootstrapStateV1::Armed => {
+                ensure!(
+                    state.runtime_bootstrap_deadline_boottime_ns != 0
+                        && state.runtime_bootstrap_handoff_task_cookie == 0,
+                    IdentityStateSnafu {
+                        reason: "armed runtime bootstrap has an invalid deadline or handoff",
+                    }
+                );
+                if now_boottime_ns < state.runtime_bootstrap_deadline_boottime_ns {
+                    return IdentityStateSnafu {
+                        reason: "runtime bootstrap is still active during node recovery".to_owned(),
+                    }
+                    .fail();
+                }
+                state.runtime_bootstrap_state = RuntimeBootstrapStateV1::Expired;
+                state.transition_version =
+                    state
+                        .transition_version
+                        .checked_add(1)
+                        .context(IdentityStateSnafu {
+                            reason: "runtime bootstrap expiry transition overflowed",
+                        })?;
+                Ok(true)
+            }
+            RuntimeBootstrapStateV1::HandoffPending => IdentityStateSnafu {
+                reason: "runtime bootstrap handoff is incomplete during node recovery".to_owned(),
+            }
+            .fail(),
+            RuntimeBootstrapStateV1::Consumed => {
+                ensure!(
+                    state.runtime_bootstrap_deadline_boottime_ns != 0
+                        && !state.runtime_bootstrap_entry_instance_id.is_zero()
+                        && state.runtime_bootstrap_handoff_task_cookie == 0,
+                    IdentityStateSnafu {
+                        reason: "consumed runtime bootstrap has incomplete identity",
+                    }
+                );
+                Ok(false)
+            }
+            RuntimeBootstrapStateV1::Expired => {
+                ensure!(
+                    state.runtime_bootstrap_deadline_boottime_ns != 0
+                        && state.runtime_bootstrap_handoff_task_cookie == 0,
+                    IdentityStateSnafu {
+                        reason: "expired runtime bootstrap has incomplete identity",
+                    }
+                );
+                Ok(false)
+            }
+            RuntimeBootstrapStateV1::Corrupt => IdentityStateSnafu {
+                reason: "runtime bootstrap state is corrupt".to_owned(),
+            }
+            .fail(),
+        }
+    }
+
     fn require_initial_root_admission(&self) -> Result<()> {
         if !self.spec.arm_initial_root {
             return Ok(());
@@ -398,6 +492,8 @@ impl WorkloadBindingOwner {
             ) {
                 binding.lifecycle_state = BindingLifecycleStateV1::Terminating;
                 binding.initial_root_state = InitialRootStateV1::Consumed;
+                binding.runtime_bootstrap_state = RuntimeBootstrapStateV1::Consumed;
+                binding.runtime_bootstrap_handoff_task_cookie = 0;
                 binding.transition_version =
                     binding
                         .transition_version
@@ -707,6 +803,9 @@ impl WorkloadBindingOwner {
                 }
             );
             binding.held_initial_pid = held_initial_pid;
+            if held_initial_pid.is_some() {
+                binding.arm_runtime_bootstrap(current_boottime_ns()?)?;
+            }
             ensure!(
                 !self.bindings.contains_key(&binding.root_cgroup_id)
                     && !self.bindings.values().any(|installed| {
@@ -772,6 +871,19 @@ impl WorkloadBindingOwner {
                     }
                 );
                 binding.state = recovered;
+                if binding.reconcile_recovered_runtime_bootstrap(current_boottime_ns()?)? {
+                    host.update_map("execution_set_bindings", &key, binding.state.as_bytes())
+                        .context(InterceptorSnafu)?;
+                    ensure!(
+                        host.lookup_map("execution_set_bindings", &key)
+                            .context(InterceptorSnafu)?
+                            .as_deref()
+                            == Some(binding.state.as_bytes()),
+                        IdentityStateSnafu {
+                            reason: "expired runtime bootstrap failed kernel readback",
+                        }
+                    );
+                }
             } else {
                 binding.require_initial_root_admission()?;
                 binding.state.lifecycle_state = BindingLifecycleStateV1::Preparing;
@@ -1212,6 +1324,10 @@ impl WorkloadBindingOwner {
                 } else {
                     InitialRootStateV1::Unarmed
                 },
+                runtime_bootstrap_state: RuntimeBootstrapStateV1::Unarmed,
+                runtime_bootstrap_deadline_boottime_ns: 0,
+                runtime_bootstrap_entry_instance_id: Id128V1::ZERO,
+                runtime_bootstrap_handoff_task_cookie: 0,
             },
         };
         binding.validate_live_cgroup()?;
@@ -1238,6 +1354,8 @@ impl WorkloadBindingOwner {
         }
         binding.state.lifecycle_state = BindingLifecycleStateV1::Terminating;
         binding.state.initial_root_state = InitialRootStateV1::Consumed;
+        binding.state.runtime_bootstrap_state = RuntimeBootstrapStateV1::Consumed;
+        binding.state.runtime_bootstrap_handoff_task_cookie = 0;
         binding.state.transition_version += 1;
         host.update_map(
             "execution_set_bindings",
@@ -1303,6 +1421,8 @@ impl WorkloadBindingOwner {
             );
             value.lifecycle_state = BindingLifecycleStateV1::Terminating;
             value.initial_root_state = InitialRootStateV1::Consumed;
+            value.runtime_bootstrap_state = RuntimeBootstrapStateV1::Consumed;
+            value.runtime_bootstrap_handoff_task_cookie = 0;
             value.transition_version =
                 value.transition_version.checked_add(1).ok_or_else(|| {
                     IdentityStateSnafu {
@@ -1417,6 +1537,11 @@ fn same_runtime_binding(
     desired.external_role_id = recovered.external_role_id;
     desired.lifecycle_state = recovered.lifecycle_state;
     desired.initial_root_state = recovered.initial_root_state;
+    desired.runtime_bootstrap_state = recovered.runtime_bootstrap_state;
+    desired.runtime_bootstrap_deadline_boottime_ns =
+        recovered.runtime_bootstrap_deadline_boottime_ns;
+    desired.runtime_bootstrap_entry_instance_id = recovered.runtime_bootstrap_entry_instance_id;
+    desired.runtime_bootstrap_handoff_task_cookie = recovered.runtime_bootstrap_handoff_task_cookie;
     desired == *recovered
 }
 
@@ -1431,6 +1556,10 @@ fn same_activation_identity(
     live.external_role_id = target.external_role_id;
     live.lifecycle_state = target.lifecycle_state;
     live.initial_root_state = target.initial_root_state;
+    live.runtime_bootstrap_state = target.runtime_bootstrap_state;
+    live.runtime_bootstrap_deadline_boottime_ns = target.runtime_bootstrap_deadline_boottime_ns;
+    live.runtime_bootstrap_entry_instance_id = target.runtime_bootstrap_entry_instance_id;
+    live.runtime_bootstrap_handoff_task_cookie = target.runtime_bootstrap_handoff_task_cookie;
     live == *target
 }
 
@@ -1444,12 +1573,12 @@ mod tests {
 
     use super::{
         same_activation_identity, same_runtime_binding, RuntimeContainerIdentity,
-        WorkloadBindingOwner,
+        WorkloadBindingOwner, RUNTIME_BOOTSTRAP_LIFETIME_NS,
     };
     use crate::error::{IdentityStateSnafu, IoSnafu};
     use crate::identity::runtime::RuntimeContainerState;
     use crate::WorkloadBindingConfig;
-    use erebor_interceptor_abi::{Id128V1, InitialRootStateV1};
+    use erebor_interceptor_abi::{Id128V1, InitialRootStateV1, RuntimeBootstrapStateV1};
 
     fn spec(root: &Path) -> WorkloadBindingConfig {
         WorkloadBindingConfig {
@@ -1542,6 +1671,64 @@ mod tests {
         let root_id = binding.root_cgroup_id;
         owner.bindings.insert(root_id, binding);
         assert_eq!(owner.exact_object_binding_targets().count(), 0);
+        Ok(())
+    }
+
+    #[test]
+    fn only_a_held_runtime_root_arms_the_bounded_bootstrap() -> crate::Result<()> {
+        let temporary = tempfile::tempdir().context(IoSnafu {
+            path: "temporary runtime bootstrap cgroup root",
+        })?;
+        let root = temporary.path().join("workload");
+        fs::create_dir(&root).context(IoSnafu { path: &root })?;
+        fs::write(root.join("cgroup.procs"), "42\n").context(IoSnafu { path: &root })?;
+        let owner = WorkloadBindingOwner::at(temporary.path(), Id128V1::new(1, 2), 3)?;
+        let mut binding = owner.prepare(&spec(&root))?;
+        assert_eq!(
+            binding.state.runtime_bootstrap_state,
+            RuntimeBootstrapStateV1::Unarmed
+        );
+        assert_eq!(binding.state.runtime_bootstrap_deadline_boottime_ns, 0);
+
+        binding.held_initial_pid = Some(42);
+        binding.arm_runtime_bootstrap(100)?;
+        assert_eq!(
+            binding.state.runtime_bootstrap_state,
+            RuntimeBootstrapStateV1::Armed
+        );
+        assert_eq!(
+            binding.state.runtime_bootstrap_deadline_boottime_ns,
+            100 + RUNTIME_BOOTSTRAP_LIFETIME_NS
+        );
+        assert!(binding.arm_runtime_bootstrap(101).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn recovery_expires_old_bootstrap_but_refuses_live_or_ambiguous_state() -> crate::Result<()> {
+        let temporary = tempfile::tempdir().context(IoSnafu {
+            path: "temporary runtime bootstrap recovery root",
+        })?;
+        let root = temporary.path().join("workload");
+        fs::create_dir(&root).context(IoSnafu { path: &root })?;
+        fs::write(root.join("cgroup.procs"), "42\n").context(IoSnafu { path: &root })?;
+        let owner = WorkloadBindingOwner::at(temporary.path(), Id128V1::new(1, 2), 3)?;
+        let mut binding = owner.prepare(&spec(&root))?;
+        binding.held_initial_pid = Some(42);
+        binding.arm_runtime_bootstrap(100)?;
+
+        assert!(binding.reconcile_recovered_runtime_bootstrap(101).is_err());
+        assert!(binding.reconcile_recovered_runtime_bootstrap(100 + RUNTIME_BOOTSTRAP_LIFETIME_NS)?);
+        assert_eq!(
+            binding.state.runtime_bootstrap_state,
+            RuntimeBootstrapStateV1::Expired
+        );
+
+        binding.state.runtime_bootstrap_state = RuntimeBootstrapStateV1::HandoffPending;
+        binding.state.runtime_bootstrap_handoff_task_cookie = 42;
+        assert!(binding
+            .reconcile_recovered_runtime_bootstrap(100 + RUNTIME_BOOTSTRAP_LIFETIME_NS)
+            .is_err());
         Ok(())
     }
 

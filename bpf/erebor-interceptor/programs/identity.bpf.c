@@ -68,7 +68,11 @@ _Static_assert(sizeof(io_uring_setup_state_v1) == 32,
                "io_uring setup state ABI size");
 _Static_assert(sizeof(io_uring_actor_snapshot_v1) == 232,
                "io_uring actor snapshot ABI size");
-_Static_assert(sizeof(io_uring_ring_state_v1) == 488,
+_Static_assert(sizeof(execution_set_binding_state_v1) == 224,
+               "execution-set binding ABI size");
+_Static_assert(sizeof(runtime_bootstrap_object_state_v1) == 72,
+               "runtime bootstrap object ABI size");
+_Static_assert(sizeof(io_uring_ring_state_v1) == 528,
                "io_uring ring state ABI size");
 _Static_assert(sizeof(io_uring_request_state_v1) == 344,
                "io_uring request state ABI size");
@@ -112,6 +116,7 @@ _Static_assert(sizeof(mount_mutation_attempt_v1) == 8,
                "mount mutation attempt ABI size");
 
 #include "identity_task_helpers.h"
+#include "identity_runtime_bootstrap.h"
 #include "identity_root_helpers.h"
 #include "identity_path.bpf.h"
 

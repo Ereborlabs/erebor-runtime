@@ -531,11 +531,20 @@ int BPF_PROG(erebor_identity_inode_init_security_anon, struct inode *inode,
     io_uring_setup_state_v1 *state;
     io_uring_execution_state_v1 *execution;
     task_label_v1 *label;
+    __u8 bootstrap_kind;
     int result;
 
-    (void)inode;
     (void)context_inode;
-    if (!config || !config->enabled || !io_uring_anon_name(name))
+    if (!config || !config->enabled)
+        return ret;
+    bootstrap_kind = runtime_bootstrap_inode_kind(inode);
+    if (bootstrap_kind != runtime_bootstrap_object_kind_v1_unknown) {
+        result = runtime_bootstrap_anon_creation_effect(
+            inode, bootstrap_kind, ret);
+        if (result != RUNTIME_BOOTSTRAP_NOT_APPLICABLE_V1)
+            return result;
+    }
+    if (!io_uring_anon_name(name))
         return ret;
     task = bpf_get_current_task_btf();
     execution = bpf_task_storage_get(

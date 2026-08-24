@@ -2539,8 +2539,10 @@ or path-backed file cannot use the authority.
 
 A sealed runtime self-exec keeps the bootstrap identity. The first executable
 that matches the application entry in the active signed policy performs the
-one-use handoff. The kernel transition, not a userspace event, closes the
-bootstrap identity. Expiry closes it without application activation. A node
+one-use handoff. BPF first reserves that task as `HANDOFF_PENDING` across the
+multi-pass exec path. A pre-commit exec failure restores `ARMED`; a successful
+exec commit changes the state to `CONSUMED`. The kernel transition, not a
+userspace event, closes the bootstrap identity. Expiry closes it without application activation. A node
 restart must read back the exact binding, entry, deadline, and transition or
 keep admission readiness closed. An Exact path selector does not participate
 in this internal authority.

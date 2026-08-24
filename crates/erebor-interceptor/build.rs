@@ -30,6 +30,7 @@ fn build_bpf() -> Result<(), Box<dyn std::error::Error>> {
         &source,
         &bpf_root.join("programs/identity_maps.h"),
         &bpf_root.join("programs/identity_task_helpers.h"),
+        &bpf_root.join("programs/identity_runtime_bootstrap.h"),
         &bpf_root.join("programs/identity_root_helpers.h"),
         &bpf_root.join("programs/identity_path.bpf.h"),
         &bpf_root.join("programs/identity_lifecycle.bpf.h"),
