@@ -933,7 +933,7 @@ pub fn lower_kubernetes_policy(
                     .map(move |operation| (operation, rule.action))
             })
             .collect::<BTreeMap<_, _>>();
-        effect_family_defaults.extend(conservative_defaults(&role.name, &socket_actions));
+        effect_family_defaults.extend(socket_control_defaults(&role.name, &socket_actions));
         for destination in &role.network.destinations {
             let mut ipv4_prefixes = destination
                 .cidrs
@@ -1585,67 +1585,21 @@ fn local_rule(
     }
 }
 
-fn conservative_defaults(
+fn socket_control_defaults(
     role_id: &str,
     socket_actions: &BTreeMap<KubernetesSocketControlOperationV1, KubernetesRuleActionV1>,
 ) -> Vec<EffectFamilyDefaultV1> {
-    let mut defaults = vec![
-        default_rule(
-            role_id,
-            EffectFamilyV1::File,
-            &[
-                "OPEN_READ",
-                "OPEN_WRITE",
-                "READ",
-                "WRITE",
-                "MMAP_READ",
-                "MMAP_WRITE",
-                "MPROTECT",
-                "CREATE",
-                "SETATTR",
-                "UNLINK",
-                "LINK",
-                "RENAME",
-            ],
-            KubernetesRuleActionV1::Deny,
-        ),
-        default_rule(
-            role_id,
-            EffectFamilyV1::Exec,
-            &["EXECUTE", "MMAP_EXEC", "MPROTECT"],
-            KubernetesRuleActionV1::Deny,
-        ),
-        default_rule(
-            role_id,
-            EffectFamilyV1::Network,
-            &["BIND", "CONNECT", "SEND", "RECEIVE"],
-            KubernetesRuleActionV1::Deny,
-        ),
-        default_rule(
-            role_id,
-            EffectFamilyV1::Privilege,
-            &["PTRACE", "SIGNAL"],
-            KubernetesRuleActionV1::Deny,
-        ),
-    ];
-    for operation in [
-        KubernetesSocketControlOperationV1::Create,
-        KubernetesSocketControlOperationV1::Listen,
-        KubernetesSocketControlOperationV1::Accept,
-        KubernetesSocketControlOperationV1::Shutdown,
-        KubernetesSocketControlOperationV1::SetSocketOption,
-    ] {
-        defaults.push(default_rule(
-            role_id,
-            EffectFamilyV1::Network,
-            &[operation.internal_name()],
-            socket_actions
-                .get(&operation)
-                .copied()
-                .unwrap_or(KubernetesRuleActionV1::Deny),
-        ));
-    }
-    defaults
+    socket_actions
+        .iter()
+        .map(|(operation, action)| {
+            default_rule(
+                role_id,
+                EffectFamilyV1::Network,
+                &[operation.internal_name()],
+                *action,
+            )
+        })
+        .collect()
 }
 
 fn default_rule(

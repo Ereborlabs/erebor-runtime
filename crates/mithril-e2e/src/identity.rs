@@ -50,7 +50,7 @@ const KUBERNETES_CLEANUP_WAIT_LIMIT: Duration = Duration::from_secs(120);
 const PROFILE_GENERATION_REF_ID: u64 = 7;
 const PRESTART_REQUEST_DIRECTORY: &str = "/run/mithril-identity-prestart";
 
-const REQUIRED_IDENTITY_MAPS: [&str; 65] = [
+const REQUIRED_IDENTITY_MAPS: [&str; 68] = [
     "active_profile_generations",
     "approved_exec_arguments",
     "approved_exec_slots",
@@ -68,7 +68,10 @@ const REQUIRED_IDENTITY_MAPS: [&str; 65] = [
     "entry_states",
     "execution_set_bindings",
     "external_root_classifications",
+    "exact_file_measurements",
     "exact_file_objects",
+    "exact_inode_generation_allocator",
+    "exact_inode_lifetime_generations",
     "task_effect_attempt_states",
     "exception_handle_bindings",
     "exception_runtime_states",

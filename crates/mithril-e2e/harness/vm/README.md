@@ -20,6 +20,18 @@ crates/mithril-e2e/harness/vm/run.sh \
   --output-directory /tmp/mithril-vm-test-evidence
 ```
 
+Run only the stock-runc application-start regression in a fresh disposable
+guest:
+
+```bash
+crates/mithril-e2e/harness/vm/run.sh --stock-runc-only \
+  --output-directory /tmp/mithril-stock-runc-evidence
+```
+
+This lane proves that the approved application entry activates from
+`PREPARED`. It also proves that the dynamic loader and libraries are absent
+from policy and run under the admitted entry's default authority.
+
 Add the optional single-node Kubernetes lane. The harness uses the K3s
 distribution:
 

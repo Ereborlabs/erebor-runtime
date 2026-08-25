@@ -10,11 +10,12 @@ with_k3s=false
 keep_vm=false
 skip_administrative_exec=false
 manual_vm=false
+stock_runc_only=false
 k3s_version=${MITHRIL_VM_K3S_VERSION:-v1.35.5+k3s1}
 source_mount=${MITHRIL_VM_SOURCE_MOUNT:-}
 
 usage() {
-  echo "usage: $0 [--provider PATH] [--output-directory PATH] [--with-k3s] [--skip-administrative-exec] [--keep-vm] [--manual]" >&2
+  echo "usage: $0 [--provider PATH] [--output-directory PATH] [--with-k3s] [--skip-administrative-exec] [--stock-runc-only] [--keep-vm] [--manual]" >&2
 }
 
 while (($#)); do
@@ -35,6 +36,10 @@ while (($#)); do
       ;;
     --skip-administrative-exec)
       skip_administrative_exec=true
+      shift
+      ;;
+    --stock-runc-only)
+      stock_runc_only=true
       shift
       ;;
     --keep-vm)
@@ -61,6 +66,10 @@ done
 
 [[ $skip_administrative_exec == false || $with_k3s == true ]] || {
   echo "--skip-administrative-exec requires --with-k3s" >&2
+  exit 2
+}
+[[ $stock_runc_only == false || ($with_k3s == false && $manual_vm == false) ]] || {
+  echo "--stock-runc-only cannot run with --with-k3s or --manual" >&2
   exit 2
 }
 [[ -x $provider ]] || {
@@ -140,6 +149,14 @@ cleanup() {
   exit "$status"
 }
 trap cleanup EXIT
+
+verify_absent() {
+  local path=$1
+  "$provider" run "$vm_name" sudo test ! -e "$path" || {
+    echo "VM probe left an owned artifact: $path" >&2
+    return 1
+  }
+}
 
 ssh_public_key=${MITHRIL_VM_SSH_PUBLIC_KEY:-$HOME/.ssh/id_rsa.pub}
 [[ -r $ssh_public_key ]] || {
@@ -289,18 +306,20 @@ for fixture in \
     "$remote_source/crates/mithril-e2e/fixtures/hugging-face/$fixture"
 done
 
-"$provider" run "$vm_name" sudo bash "$remote_root/harness/guest.sh" \
-  platform "$remote_bin/mithril-inspect" "$remote_root" \
-  >"$output_directory/platform.txt"
+if [[ $stock_runc_only == false ]]; then
+  "$provider" run "$vm_name" sudo bash "$remote_root/harness/guest.sh" \
+    platform "$remote_bin/mithril-inspect" "$remote_root" \
+    >"$output_directory/platform.txt"
 
-identity_output=$remote_root/identity
-"$provider" run "$vm_name" sudo "$remote_bin/mithril-identity-test" \
-  --repo-root "$remote_source" --output-directory "$identity_output" \
-  physical-probe --pin-root "/sys/fs/bpf/$vm_name-identity" \
-  --lease-path "$identity_output/owner.lock" \
-  --cgroup-path "/sys/fs/cgroup/$vm_name-identity"
-"$provider" get "$vm_name" "$identity_output/identity-physical-probe.json" \
-  "$output_directory/identity-physical-probe.json"
+  identity_output=$remote_root/identity
+  "$provider" run "$vm_name" sudo "$remote_bin/mithril-identity-test" \
+    --repo-root "$remote_source" --output-directory "$identity_output" \
+    physical-probe --pin-root "/sys/fs/bpf/$vm_name-identity" \
+    --lease-path "$identity_output/owner.lock" \
+    --cgroup-path "/sys/fs/cgroup/$vm_name-identity"
+  "$provider" get "$vm_name" "$identity_output/identity-physical-probe.json" \
+    "$output_directory/identity-physical-probe.json"
+fi
 
 prepared_output=$remote_root/stock-runc-prepared
 "$provider" run "$vm_name" sudo "$remote_bin/mithril-effect-test" \
@@ -313,6 +332,29 @@ prepared_output=$remote_root/stock-runc-prepared
   "$remote_source/crates/mithril-e2e/fixtures/identity/oci-prestart-admission-v1.sh"
 "$provider" get "$vm_name" "$prepared_output/runc-prepared-probe.json" \
   "$output_directory/runc-prepared-probe.json"
+
+if [[ $stock_runc_only == true ]]; then
+  jq -e '
+    .schema_version == 3 and
+    .prepared_state_before_exec == "prepared" and
+    .prepared_state_after_exec == "active" and
+    .prepared_runtime_effect_observed and
+    .application_entry_allow_observed and
+    .application_default_file_allow_observed and
+    .executable_observation_has_no_exact_object and
+    (.dynamic_loader_paths | length) > 0 and
+    .dynamic_loader_paths_absent_from_policy and
+    .container_exit_success and
+    .pin_root_removed and
+    .lease_removed and
+    .cgroup_removed and
+    .fixture_root_removed
+  ' "$output_directory/runc-prepared-probe.json" >/dev/null
+  verify_absent "/sys/fs/bpf/$vm_name-stock-runc-prepared"
+  verify_absent "$prepared_output/owner.lock"
+  echo "Stock-runc application startup VM probe passed. Evidence: $output_directory"
+  exit 0
+fi
 
 observation_output=$remote_root/effect-observation
 "$provider" run "$vm_name" sudo "$remote_bin/mithril-effect-test" \
@@ -454,14 +496,6 @@ if [[ $with_k3s == true ]]; then
     "$kubernetes_identity_output/identity-physical-probe.json" \
     "$output_directory/identity-physical-probe.json"
 fi
-
-verify_absent() {
-  local path=$1
-  "$provider" run "$vm_name" sudo test ! -e "$path" || {
-    echo "VM probe left an owned artifact: $path" >&2
-    return 1
-  }
-}
 
 verify_absent "/sys/fs/bpf/$vm_name-identity"
 verify_absent "/sys/fs/bpf/$vm_name-stock-runc-prepared"

@@ -496,6 +496,9 @@ const fn reason_name(reason: u8) -> &'static str {
         value if value == EffectObservationReasonV1::PreparedRuntimeInfrastructure as u8 => {
             "PREPARED_RUNTIME_INFRASTRUCTURE"
         }
+        value if value == EffectObservationReasonV1::ApplicationDefaultAllow as u8 => {
+            "APPLICATION_DEFAULT_ALLOW"
+        }
         _ => "UNKNOWN",
     }
 }
@@ -549,6 +552,10 @@ mod tests {
         assert_eq!(
             reason_name(EffectObservationReasonV1::PreparedRuntimeInfrastructure as u8),
             "PREPARED_RUNTIME_INFRASTRUCTURE"
+        );
+        assert_eq!(
+            reason_name(EffectObservationReasonV1::ApplicationDefaultAllow as u8),
+            "APPLICATION_DEFAULT_ALLOW"
         );
     }
 

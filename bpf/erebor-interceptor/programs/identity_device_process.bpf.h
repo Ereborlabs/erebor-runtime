@@ -69,17 +69,21 @@ static __noinline int identity_device_ioctl_effect(struct file *file,
     scratch->observation.operation_argument = cmd;
     if (exact_device_from_file(&scratch->file_object, file, &device_type,
                                &device_major, &device_minor))
-        return hard_effect_result(
-            config, scratch,
-            effect_observation_reason_v1_unsupported_object);
+        return current_application_actor_is_exact(binding)
+                   ? application_default_effect_result(scratch)
+                   : hard_effect_result(
+                         config, scratch,
+                         effect_observation_reason_v1_unsupported_object);
     scratch->file_object.profile_generation_ref_id =
         scratch->process.active_profile_generation_ref_id;
     if (!exact_file_keys_equal(&scratch->file_object,
                                &scratch->observation.file_object) ||
         !scratch->observation.exact_object_key_id)
-        return hard_effect_result(
-            config, scratch,
-            effect_observation_reason_v1_unresolved_object);
+        return current_application_actor_is_exact(binding)
+                   ? application_default_effect_result(scratch)
+                   : hard_effect_result(
+                         config, scratch,
+                         effect_observation_reason_v1_unresolved_object);
 
     __builtin_memset(&scratch->device_effect_key, 0,
                      sizeof(scratch->device_effect_key));
@@ -124,8 +128,9 @@ static __noinline int identity_device_ioctl_effect(struct file *file,
         return hard_effect_result(
             config, scratch,
             effect_observation_reason_v1_corrupt_identity_or_generation);
-    return apply_effect_decision(config, scratch, generation, decision, true,
-                                 false);
+    return apply_effect_decision(
+        config, scratch, generation, decision,
+        current_application_actor_is_exact(binding), true, false);
 }
 
 static __always_inline int identity_device_ioctl_gate(struct file *file,
@@ -419,8 +424,8 @@ static __noinline int identity_process_control_effect(
         rule = bpf_map_lookup_elem(&process_control_rules,
                                    &scratch->process_control_rule_key);
     }
-    if (!rule || (scratch->process_control_rule_key.argument_wildcard &&
-                  rule->decision != physical_decision_kind_v1_deny))
+    if (rule && scratch->process_control_rule_key.argument_wildcard &&
+        rule->decision != physical_decision_kind_v1_deny)
         return hard_effect_result(
             config, scratch,
             effect_observation_reason_v1_unsupported_object);
@@ -462,8 +467,9 @@ static __noinline int identity_process_control_effect(
         return hard_effect_result(
             config, scratch,
             effect_observation_reason_v1_corrupt_identity_or_generation);
-    return apply_effect_decision(config, scratch, generation, rule, true,
-                                 false);
+    return apply_effect_decision(
+        config, scratch, generation, rule,
+        current_application_actor_is_exact(binding), true, false);
 }
 
 static __always_inline int identity_process_control_gate(

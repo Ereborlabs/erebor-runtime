@@ -1159,6 +1159,7 @@ pub enum EffectObservationReasonV1 {
     PathTreePolicyDeny = 11,
     NetworkResponseFence = 12,
     PreparedRuntimeInfrastructure = 13,
+    ApplicationDefaultAllow = 14,
 }
 
 #[repr(u8)]

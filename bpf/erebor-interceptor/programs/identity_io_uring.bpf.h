@@ -180,6 +180,33 @@ static __always_inline bool io_uring_binding_equal(
            left->lifecycle_state == right->lifecycle_state;
 }
 
+static __always_inline bool io_uring_application_actor_is_exact(
+    const io_uring_actor_snapshot_v1 *actor,
+    const execution_set_binding_state_v1 *binding)
+{
+    return actor && binding &&
+           binding->lifecycle_state == binding_lifecycle_state_v1_active &&
+           binding->prepared_container_state ==
+               prepared_container_state_v1_active &&
+           id128_equal(&binding->prepared_container_entry_instance_id,
+                       &actor->entry_instance_id) &&
+           id128_equal(&binding->binding_id, &actor->binding_id) &&
+           id128_equal(&binding->binding_nonce, &actor->binding_nonce) &&
+           id128_equal(&binding->execution_set_id, &actor->execution_set_id) &&
+           id128_equal(&binding->profile_id, &actor->profile_id) &&
+           binding->active_profile_generation_ref_id ==
+               actor->profile_generation_ref_id;
+}
+
+static __always_inline int io_uring_application_default_or_hard(
+    identity_runtime_config_v1 *config, struct identity_scratch_v1 *scratch,
+    bool application_default_allow, __u8 reason)
+{
+    if (application_default_allow)
+        return application_default_effect_result(scratch);
+    return hard_effect_result(config, scratch, reason);
+}
+
 static __always_inline void populate_io_uring_observation(
     struct identity_scratch_v1 *scratch,
     const io_uring_request_state_v1 *request,
@@ -280,6 +307,7 @@ static __noinline int resolved_io_uring_effect_gate(
     struct path file_path = {};
     __u64 file_cookie;
     __u64 previous_file_cookie;
+    bool application_default_allow;
 
     if (!config || !scratch || !execution)
         return identity_or_prior_effect_result(
@@ -320,6 +348,8 @@ static __noinline int resolved_io_uring_effect_gate(
             config, scratch, ret,
             effect_observation_reason_v1_corrupt_identity_or_generation);
     populate_io_uring_observation(scratch, request, execution);
+    application_default_allow =
+        io_uring_application_actor_is_exact(&request->actor, &ring->binding);
     if (ret)
         return emit_effect_observation(
             scratch, ret, effect_observation_reason_v1_prior_lsm_denial,
@@ -360,20 +390,23 @@ static __noinline int resolved_io_uring_effect_gate(
             config, scratch,
             effect_observation_reason_v1_corrupt_identity_or_generation);
     if (BPF_CORE_READ_INTO(&file_path, file, f_path))
-        return hard_effect_result(
-            config, scratch, effect_observation_reason_v1_unresolved_object);
+        return io_uring_application_default_or_hard(
+            config, scratch, application_default_allow,
+            effect_observation_reason_v1_unresolved_object);
     exact_file_object_from_path(&scratch->file_object, &file_path);
     scratch->file_object.profile_generation_ref_id =
         request->actor.profile_generation_ref_id;
     scratch->observation.file_object = scratch->file_object;
     if (!scratch->file_object.mount_id_unique)
-        return hard_effect_result(
-            config, scratch, effect_observation_reason_v1_unsupported_object);
+        return io_uring_application_default_or_hard(
+            config, scratch, application_default_allow,
+            effect_observation_reason_v1_unsupported_object);
     if (canonical_path_candidate(
             &file_path, &ring->binding,
             request->actor.profile_generation_ref_id, scratch))
-        return hard_effect_result(
-            config, scratch, effect_observation_reason_v1_unresolved_object);
+        return io_uring_application_default_or_hard(
+            config, scratch, application_default_allow,
+            effect_observation_reason_v1_unresolved_object);
     scratch->observation.composite_atom_id =
         scratch->path_terminal.composite_atom_id;
     if (path_tree_denies(scratch, operation)) {
@@ -401,7 +434,7 @@ static __noinline int resolved_io_uring_effect_gate(
         decision =
             bpf_map_lookup_elem(&effect_defaults, &scratch->effect_default);
         return apply_effect_decision(config, scratch, generation, decision,
-                                     false, false);
+                                     application_default_allow, false, false);
     }
     object_binding = configured_file_object_binding(scratch);
     if (!object_binding ||
@@ -411,8 +444,9 @@ static __noinline int resolved_io_uring_effect_gate(
         !object_binding->exact_object_key_id ||
         object_binding->composite_atom_id !=
             scratch->path_terminal.composite_atom_id)
-        return hard_effect_result(
-            config, scratch, effect_observation_reason_v1_unresolved_object);
+        return io_uring_application_default_or_hard(
+            config, scratch, application_default_allow,
+            effect_observation_reason_v1_unresolved_object);
     scratch->observation.exact_object_key_id =
         object_binding->exact_object_key_id;
     __builtin_memset(&scratch->effect_key, 0, sizeof(scratch->effect_key));
@@ -451,8 +485,8 @@ static __noinline int resolved_io_uring_effect_gate(
         decision =
             bpf_map_lookup_elem(&effect_defaults, &scratch->effect_default);
     }
-    return apply_effect_decision(config, scratch, generation, decision, false,
-                                 false);
+    return apply_effect_decision(config, scratch, generation, decision,
+                                 application_default_allow, false, false);
 }
 
 SEC("tracepoint/syscalls/sys_enter_io_uring_setup")

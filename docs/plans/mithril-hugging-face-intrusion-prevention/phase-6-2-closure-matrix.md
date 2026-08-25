@@ -15,11 +15,14 @@ their lowering, their durable Control and node lifecycles, and current
 automated and manual fixture flows. The current source has not passed the
 physical procedure.
 
-The earlier physical Kubernetes run remains partial evidence. It reached
+The direct stock-`runc` application-start lane now passes. It proves the
+`PREPARED` to `ACTIVE` transition and dependency access with libc and the ELF
+loader absent from policy. The earlier physical Kubernetes run remains partial evidence. It reached
 scheduler binding, selected-node delivery, policy activation, runtime binding,
 and durable evidence intake. Stock `runc` container start then failed under the
 superseded runtime-bootstrap model. The current source implements the approved
-`PreparedContainer` boundary, but no current physical result proves it yet.
+`PreparedContainer` boundary. The current protected Kubernetes result is not
+proved yet.
 
 The amendment is not closed by custom resource reconciliation alone. A result
 is complete only when a matching Pod can be scheduled by the Kubernetes
@@ -40,7 +43,8 @@ fresh-root checks.
 | Whether a node can receive a new protected Pod | Control verifies the authenticated node session, current boot, BPF and identity readiness, and DaemonSet eligibility. It projects the result as a ready label and quarantine-taint removal. | A self-applied node label, DaemonSet Pod readiness alone, or stale Node status. |
 | Which node receives policy | The persisted Pod UID and scheduler-selected `spec.nodeName` create one immutable rollout target. | Cluster-wide broadcast, all DaemonSet nodes, or admission-time prediction. |
 | Whether the initial process can start | The selected `mithril-node` matches two ordered `createRuntime` calls, verifies CRI `Created` state, active policy, the exact held TGID, and the cgroup binding, then reads back `PreparedContainer`. | Pod admission success, scheduler binding success, Control status, policy download, or the first runtime-fact hook alone. |
-| Which runtime setup can occur | BPF trusts the exact prepared binding and initial runtime entry until one deadline. It does not use a runtime-specific operation list. Runtime-created objects receive no independent authority. | A CRD field, another binding, another entry, a later external root, an expired state, or an object that the active application uses without normal policy authority. |
+| Which runtime setup can occur | BPF trusts the exact prepared binding and initial runtime entry until one deadline. It does not use a runtime-specific operation list. Runtime-created objects receive no independent authority. | A CRD field, another binding, another entry, a later external root, or an expired state. |
+| Which active application action is allowed | The exact admitted entry lineage checks explicit signed decisions first. A matching Deny blocks unless an applicable exception authorizes it. A missing decision allows. | Cgroup membership alone, an unlabeled task, an external entry, a different entry identity, or a prepared-runtime object grant. |
 
 ## Deliverable Closure
 
@@ -58,7 +62,7 @@ fresh-root checks.
 | `D6.2.10` | **Implemented and automated; physical result not done.** | Policy and container matching, immutable image pins, Pod mutation, update validation, binding validation, and scheduler choice tests pass. Run the current physical admission flow. |
 | `D6.2.11` | **Implemented and automated; physical result not done.** | Exact selected-node delivery, activation, staged runtime fact equality, cgroup binding, cancellation rollback, runtime lifetime replacement, terminal cleanup, and timeout tests pass. Run the stock-runtime process-release path physically. |
 | `D6.2.12` | **Implemented and rendered; physical result not done.** | The chart packages both CRDs, RBAC, admission, node and Control workloads, two atomically owned `createRuntime` hooks, bounded cleanup, an automated fixture, and an independent manual example. Run install, full scenario, uninstall, and host-path cleanup physically. |
-| `D6.2.13` | **Implemented and automated; physical result not done.** | Behavior tests cover fact-only staging, exact second-hook matching, held-TGID publication, missing and expired stages, recovery, hook ordering, and cleanup. ABI and compiled-object checks cover one non-evictable binding transition with no runtime-object authority map. Prove setup, activation, expiry, and post-activation denial on the current stock runtime. |
+| `D6.2.13` | **Implemented and direct stock-runtime start passed; protected Kubernetes result not done.** | Behavior tests cover fact-only staging, exact second-hook matching, held-TGID publication, missing and expired stages, recovery, hook ordering, and cleanup. The direct VM result proves setup, activation, admitted-entry default access without dependency rules, and cleanup. Prove the same boundary through the protected Kubernetes transaction. |
 
 ## Automated Proof Matrix
 
@@ -76,7 +80,7 @@ fresh-root checks.
 | Workload target | Persisted Pod UID, selected node, controller, ServiceAccount, container, and digest create one immutable exact target. | Pod deletion, UID reuse, node change, or container change retires the old target. |
 | Policy delivery | Only the selected node can inventory, fetch, verify, and acknowledge the target-bound candidate. | Every other node and boot rejects the candidate even when it has the same signed policy artifact. |
 | Runtime gate | The first `createRuntime` call stages facts only. The second call stays held until the node publishes and reads back the exact cgroup, TGID, binding, policy generation, and `PreparedContainer` state. | Missing candidate, changed stage, wrong policy annotations, TGID or cgroup mismatch, timeout, disconnect, active socket-owner replacement, and restart reject without release. |
-| Prepared container | The exact initial runtime entry is trusted during setup without a runtime-specific operation list. The first exec that the signed policy permits changes the binding to `ACTIVE`. | Another binding, entry, external root, expired state, ambiguous restart, or any post-activation effect without normal policy or exception authority rejects. Runtime-created objects carry no separate grant. |
+| Prepared container | The exact initial runtime entry is trusted during setup without a runtime-specific operation list. The first exec that the signed policy permits changes the binding to `ACTIVE`. The exact admitted entry then allows actions with no matching decision. | Another binding, entry, external root, expired state, ambiguous restart, or cgroup-only entry rejects. Explicit matching Deny remains effective, and runtime-created objects carry no separate grant. |
 | Retirement | A signed restrictive successor replaces the exact active base target. A complete relist retires a durable base source. A signed exception revocation closes only its runtime instance. | A partial relist, historical event, API loss, Control loss, or recreated exception cannot erase the last valid base generation or restore consumed authority. |
 
 ## Physical Proof Matrix
@@ -89,6 +93,7 @@ current CRDs or fixture.
 
 | Scenario | Result | Observation |
 | --- | --- | --- |
+| Direct stock-runc application start | **Pass** | Stock runc 1.3.4 changed the exact binding from `PREPARED` to `ACTIVE`. The application exited successfully. The evidence recorded libc and the ELF loader as present in the root filesystem and absent from policy. |
 | New eligible node | **Prior pass; current not run** | The old run observed initial quarantine and ready projection. The current fixture also requires same-name UID replacement and host epoch advance. |
 | Two eligible nodes | **Prior pass; current not run** | The old run observed one scheduler-selected node and selected-node delivery. The current fixture compares the complete typed target with live Node and Pod facts. |
 | Protected start | **Prior fail; current not run** | The old run used the superseded runtime-bootstrap model. The current fixture requires ordered hook readback, exact prepared state, application activation, and post-activation IPC denial. |
@@ -104,10 +109,8 @@ accepted the denial evidence before the node truncated the related WAL data.
 ## Current Automated Verification
 
 The repository Rust CI script passed format, workspace check, strict Clippy,
-and the full workspace test gate. The final gate included 89 Mithril Control
-library tests, 28 reconciliation tests, 6 Kubernetes policy API tests, 150
-Mithril node library tests, 2 OCI adapter tests, and 5 node mutual Transport
-Layer Security integration tests.
+and the full workspace test gate on the current source. The exact command was
+`rtk bash .github/scripts/verify-rust-ci.sh`.
 
 The Helm verification passed hook ownership behavior, chart lint, and the
 render contract. The VM harness behavior suite passed. The independent manual

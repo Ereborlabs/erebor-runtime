@@ -347,6 +347,31 @@ pub(super) fn wait_for_path_exec_effect(
     )
 }
 
+pub(super) fn wait_for_application_default_effect(
+    reader: &EffectObservationReader,
+    store: &EffectObservationStore,
+    marker: u64,
+    expected_effect: (KernelEffectFamilyV1, KernelEffectOperationV1),
+) -> Result<()> {
+    const REASON: &str = "APPLICATION_DEFAULT_ALLOW";
+
+    wait_for_effect(reader, store, marker, REASON, expected_effect)?;
+    ensure!(
+        store.recent_since(marker).iter().any(|event| {
+            event.reason == REASON
+                && event.effect_family == u32::from(expected_effect.0 as u16)
+                && event.operation == u32::from(expected_effect.1 as u16)
+                && event.composite_atom_id == 0
+                && event.exact_object_key_id == 0
+        }),
+        InvalidInputSnafu {
+            path: Path::new("effect_observations"),
+            reason: "an application-default decision retained a policy object",
+        }
+    );
+    Ok(())
+}
+
 pub(super) fn wait_for_exact_effect(
     reader: &EffectObservationReader,
     store: &EffectObservationStore,

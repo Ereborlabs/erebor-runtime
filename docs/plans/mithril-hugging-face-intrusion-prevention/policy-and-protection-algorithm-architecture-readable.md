@@ -2532,7 +2532,10 @@ First application exec
   -> require the exact container binding
   -> atomically change PreparedContainer from PREPARED to ACTIVE
   -> activate the normal workload execution identity
-  -> enforce every later effect through normal policy and exception authority
+  -> evaluate explicit matching decisions before the application default
+  -> block only an explicit matching DENY
+  -> let an applicable exception authorize that denied action
+  -> allow an action with no matching decision from the admitted entry lineage
 ```
 
 The runtime is part of the node trusted computing base while the binding is
@@ -2552,17 +2555,24 @@ the executable from the current task root and matches the signed path. The
 match does not require an inode generation. Exact inode identity remains a
 separate filesystem selector and administrative-exec control.
 
-Runtime-created objects receive no durable bootstrap record. An application
-can use such an object only when the normal signed policy resolves and permits
-that use after activation. A runtime-internal exec that does not satisfy the
-signed workload policy stays `PREPARED`. The first exec that does satisfy the
-signed policy reserves `EXEC_PENDING` across the multi-pass exec path. A
-pre-commit failure restores `PREPARED`; a successful commit changes the state
-to `ACTIVE`. The kernel transition, not a userspace event, opens workload
-authority and closes the trusted-runtime boundary. Expiry closes an incomplete
-prepared state without application activation. A node restart must read back
-the exact binding, entry, deadline, and transition or keep admission readiness
-closed. An `EXACT` path selector does not participate in the prepared state.
+Runtime-created objects receive no durable bootstrap record. After activation,
+the exact admitted entry lineage allows an action when no signed decision
+matches. An explicit matching `DENY` blocks the action unless an applicable
+exception authorizes it. The default does not apply to a task that only enters
+the cgroup. That task must carry the exact admitted entry identity. A missing,
+external, or different entry stays fail-closed.
+
+A runtime-internal exec that does not satisfy the signed workload policy stays
+`PREPARED`. The first exec that does satisfy the signed policy reserves
+`EXEC_PENDING` across the multi-pass exec path. A pre-commit failure restores
+`PREPARED`; a successful commit changes the state to `ACTIVE`. The kernel
+transition, not a userspace event, opens workload authority and closes the
+trusted-runtime boundary. Expiry closes an incomplete prepared state without
+application activation. A node restart must read back the exact binding,
+entry, deadline, and transition or keep admission readiness closed. An
+`EXACT` path selector does not participate in the prepared state. After
+activation, exact object resolution runs only for a selector that explicitly
+requests `EXACT`.
 Mithril resolves paths with Meta's bounded canonical-path algorithm:
 reconstruct the path through a verified mount tree, canonicalizing a repeated
 mount-root dentry to its oldest mount before matching components with a

@@ -141,6 +141,42 @@ static __always_inline bool prepared_runtime_effect_was_allowed(
                           effect_observation_reason_v1_prepared_runtime_infrastructure;
 }
 
+static __always_inline int application_default_effect_result(
+    struct identity_scratch_v1 *scratch)
+{
+    return emit_effect_observation(
+        scratch, 0,
+        effect_observation_reason_v1_application_default_allow,
+        effect_physical_result_v1_unknown_after_pre_effect);
+}
+
+static __always_inline bool current_application_actor_is_exact(
+    execution_set_binding_state_v1 *binding)
+{
+    struct task_struct *task = bpf_get_current_task_btf();
+    task_label_v1 *label = task
+                               ? bpf_task_storage_get(&task_labels, task, 0, 0)
+                               : NULL;
+    entry_security_state_v1 *entry = label
+                                         ? bpf_map_lookup_elem(
+                                               &entry_states,
+                                               &label->entry_instance_id)
+                                         : NULL;
+
+    return prepared_container_application_actor_is_exact(binding, label,
+                                                          entry);
+}
+
+static __always_inline int application_default_or_hard_effect_result(
+    identity_runtime_config_v1 *config, struct identity_scratch_v1 *scratch,
+    execution_set_binding_state_v1 *binding, const task_label_v1 *label,
+    const entry_security_state_v1 *entry, __u8 reason)
+{
+    if (prepared_container_application_actor_is_exact(binding, label, entry))
+        return application_default_effect_result(scratch);
+    return hard_effect_result(config, scratch, reason);
+}
+
 static __always_inline bool path_tree_denies(
     const struct identity_scratch_v1 *scratch, __u16 operation)
 {
@@ -274,9 +310,15 @@ static __noinline void prepare_effect_identity(void)
 static __always_inline int apply_effect_decision(
     identity_runtime_config_v1 *config, struct identity_scratch_v1 *scratch,
     const profile_generation_descriptor_v1 *generation,
-    const physical_decision_v1 *decision, bool allow_exception,
-    bool file_open_attempt)
+    const physical_decision_v1 *decision, bool application_default_allow,
+    bool allow_exception, bool file_open_attempt)
 {
+    if (!decision &&
+        scratch->effect_gate_flags &
+            EFFECT_GATE_PREPARED_EXEC_EVALUATION_V1)
+        return prepared_exec_policy_miss(config, scratch);
+    if (!decision && application_default_allow)
+        return application_default_effect_result(scratch);
     if (!decision)
         return hard_effect_result(
             config, scratch,
@@ -538,25 +580,27 @@ static __noinline int resolved_identity_effect_gate(struct file *file,
         decision = effect_base_decision(scratch, &scratch->process,
                                         process_vector, entry, binding);
         return apply_effect_decision(config, scratch, generation, decision,
+                                     prepared_container_application_actor_is_exact(
+                                         binding, label, entry),
                                      !(scratch->effect_gate_flags &
                                        EFFECT_GATE_DENY_EXCEPTION_V1),
                                      scratch->effect_gate_flags &
                                          EFFECT_GATE_FILE_OPEN_ATTEMPT_V1);
     }
     if (path_unlinked(&scratch->effect_path))
-        return hard_effect_result(
-            config, scratch,
+        return application_default_or_hard_effect_result(
+            config, scratch, binding, label, entry,
             effect_observation_reason_v1_unsupported_object);
     visible_path_result = container_visible_path_candidate(
         &scratch->effect_path,
         scratch->process.active_profile_generation_ref_id, scratch);
     if (visible_path_result > 0)
-        return hard_effect_result(
-            config, scratch,
+        return application_default_or_hard_effect_result(
+            config, scratch, binding, label, entry,
             effect_observation_reason_v1_unsupported_object);
     if (visible_path_result < 0)
-        return hard_effect_result(
-            config, scratch,
+        return application_default_or_hard_effect_result(
+            config, scratch, binding, label, entry,
             effect_observation_reason_v1_unresolved_object);
     if (scratch->path_terminal.exact_object_required) {
         path_composite_atom_id = scratch->path_terminal.composite_atom_id;
@@ -573,8 +617,8 @@ static __noinline int resolved_identity_effect_gate(struct file *file,
         scratch->observation.file_object = scratch->file_object;
         if (!scratch->file_object.mount_id_unique &&
             !scratch->file_object.mount_namespace_inode)
-            return hard_effect_result(
-                config, scratch,
+            return application_default_or_hard_effect_result(
+                config, scratch, binding, label, entry,
                 effect_observation_reason_v1_unsupported_object);
         /* Exact selectors also bind the source-aware mount view. Ordinary
          * path policy remains independent of inode-generation support. */
@@ -583,20 +627,20 @@ static __noinline int resolved_identity_effect_gate(struct file *file,
                 scratch->process.active_profile_generation_ref_id, scratch)) {
             if (scratch->path_mount_namespace_inode) {
                 scratch->path_mount_namespace_inode = 0;
-                return hard_effect_result(
-                    config, scratch,
+                return application_default_or_hard_effect_result(
+                    config, scratch, binding, label, entry,
                     effect_observation_reason_v1_unsupported_object);
             }
-            return hard_effect_result(
-                config, scratch,
+            return application_default_or_hard_effect_result(
+                config, scratch, binding, label, entry,
                 effect_observation_reason_v1_unresolved_object);
         }
         if (!scratch->path_terminal.exact_object_required ||
             scratch->path_terminal.composite_atom_id !=
                 path_composite_atom_id) {
             scratch->path_mount_namespace_inode = 0;
-            return hard_effect_result(
-                config, scratch,
+            return application_default_or_hard_effect_result(
+                config, scratch, binding, label, entry,
                 effect_observation_reason_v1_unresolved_object);
         }
         scratch->observation.file_object = scratch->file_object;
@@ -616,26 +660,24 @@ static __noinline int resolved_identity_effect_gate(struct file *file,
             return 0;
         decision = effect_base_decision(scratch, &scratch->process,
                                         process_vector, entry, binding);
-        if (!decision)
-            return hard_effect_result(
-                config, scratch,
-                effect_observation_reason_v1_corrupt_identity_or_generation);
         return apply_effect_decision(
             config, scratch, generation, decision,
+            prepared_container_application_actor_is_exact(binding, label,
+                                                            entry),
             !(scratch->effect_gate_flags & EFFECT_GATE_DENY_EXCEPTION_V1),
             scratch->effect_gate_flags & EFFECT_GATE_FILE_OPEN_ATTEMPT_V1);
     }
     if (!scratch->file_object.inode)
-        return hard_effect_result(
-            config, scratch,
+        return application_default_or_hard_effect_result(
+            config, scratch, binding, label, entry,
             effect_observation_reason_v1_unsupported_object);
     if (exact_mount_view_snapshot(
             scratch->file_object.mount_namespace_inode, 0,
             &scratch->mount_transition_version) ||
         exact_mount_event_snapshot(
             scratch, scratch->mount_transition_version, true))
-        return hard_effect_result(
-            config, scratch,
+        return application_default_or_hard_effect_result(
+            config, scratch, binding, label, entry,
             effect_observation_reason_v1_unresolved_object);
     object_binding = configured_file_object_binding(scratch);
     if (!object_binding ||
@@ -646,8 +688,8 @@ static __noinline int resolved_identity_effect_gate(struct file *file,
         !object_binding->composite_atom_id ||
         object_binding->composite_atom_id !=
             scratch->path_terminal.composite_atom_id)
-        return hard_effect_result(
-            config, scratch,
+        return application_default_or_hard_effect_result(
+            config, scratch, binding, label, entry,
             effect_observation_reason_v1_unresolved_object);
     scratch->observation.exact_object_key_id =
         object_binding->exact_object_key_id;
@@ -655,20 +697,18 @@ static __noinline int resolved_identity_effect_gate(struct file *file,
         return 0;
     decision = effect_base_decision(scratch, &scratch->process,
                                     process_vector, entry, binding);
-    if (!decision)
-        return hard_effect_result(
-            config, scratch,
-            effect_observation_reason_v1_corrupt_identity_or_generation);
     if (exact_mount_view_snapshot(
             scratch->file_object.mount_namespace_inode,
             scratch->mount_transition_version,
             &scratch->mount_transition_version) ||
         exact_mount_event_snapshot(
             scratch, scratch->mount_transition_version, false))
-        return hard_effect_result(
-            config, scratch,
+        return application_default_or_hard_effect_result(
+            config, scratch, binding, label, entry,
             effect_observation_reason_v1_unresolved_object);
     return apply_effect_decision(config, scratch, generation, decision,
+                                 prepared_container_application_actor_is_exact(
+                                     binding, label, entry),
                                  !(scratch->effect_gate_flags &
                                    EFFECT_GATE_DENY_EXCEPTION_V1),
                                  scratch->effect_gate_flags &
@@ -821,6 +861,7 @@ static __noinline int identity_unqualified_effect_gate(
     struct identity_scratch_v1 *scratch;
     struct task_struct *task;
     task_label_v1 *label;
+    execution_set_binding_state_v1 *binding;
 
     ret = identity_effect_actor_gate(NULL, effect_family, operation, ret);
     if (ret)
@@ -839,6 +880,9 @@ static __noinline int identity_unqualified_effect_gate(
         return hard_effect_result(
             config, scratch,
             effect_observation_reason_v1_corrupt_identity_or_generation);
+    binding = ipc_current_binding();
+    if (binding && current_application_actor_is_exact(binding))
+        return application_default_effect_result(scratch);
     return hard_effect_result(
         config, scratch, effect_observation_reason_v1_unsupported_object);
 }

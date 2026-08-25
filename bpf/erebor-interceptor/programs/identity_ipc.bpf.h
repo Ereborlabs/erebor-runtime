@@ -249,6 +249,9 @@ static __always_inline int ipc_apply_relationship(
     scratch->ipc_relationship_key.operation = operation;
     decision = bpf_map_lookup_elem(&ipc_relationship_decisions,
                                    &scratch->ipc_relationship_key);
+    if (!decision && current_application_actor_is_exact(
+                         ipc_current_binding()))
+        return application_default_effect_result(scratch);
     if (!decision) {
         scratch->ipc_relationship_key.peer_role_id = 0;
         decision = bpf_map_lookup_elem(&ipc_relationship_decisions,
@@ -261,8 +264,8 @@ static __always_inline int ipc_apply_relationship(
         return hard_effect_result(
             config, scratch,
             effect_observation_reason_v1_corrupt_identity_or_generation);
-    return apply_effect_decision(config, scratch, generation, decision, true,
-                                 false);
+    return apply_effect_decision(config, scratch, generation, decision, false,
+                                 true, false);
 }
 
 static __noinline int ipc_unsupported(int ret, int status)
@@ -278,6 +281,8 @@ static __noinline int ipc_unsupported(int ret, int status)
     scratch = identity_scratch_record();
     if (!config || !scratch)
         return -EACCES;
+    if (current_application_actor_is_exact(ipc_current_binding()))
+        return application_default_effect_result(scratch);
     return hard_effect_result(config, scratch,
                               effect_observation_reason_v1_unsupported_object);
 }

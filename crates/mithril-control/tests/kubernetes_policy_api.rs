@@ -4,8 +4,8 @@ use std::path::Path;
 use mithril_control::{
     canonical_kubernetes_policy_spec_bytes, exception_custom_resource_definition,
     lower_kubernetes_policy, policy_custom_resource, policy_custom_resource_definition,
-    CompiledPhysicalResultV1, KubernetesRuleActionV1, PolicyCompiler, PolicySourceRevisionV1,
-    PolicySourceStateV1, ProfileModeV1, WorkloadProtectionException,
+    CompiledPhysicalResultV1, EffectFamilyV1, KubernetesRuleActionV1, PolicyCompiler,
+    PolicySourceRevisionV1, PolicySourceStateV1, ProfileModeV1, WorkloadProtectionException,
     WorkloadProtectionExceptionSpec, WorkloadProtectionPolicy, WorkloadProtectionPolicySpec,
     EXCEPTION_KIND, POLICY_KIND,
 };
@@ -112,6 +112,14 @@ fn stored_and_offline_policy_specs_lower_to_the_same_compilable_policy() -> Test
     assert!(!compiled.compiled_cells.is_empty());
     assert!(lowered.exceptions.is_empty());
     assert_eq!(lowered.file_exception_grants.len(), 1);
+    assert_eq!(lowered.effect_family_defaults.len(), 2);
+    assert!(lowered.effect_family_defaults.iter().all(|default| {
+        default.effect_family == EffectFamilyV1::Network
+            && matches!(
+                default.operations.as_slice(),
+                [operation] if operation == "SOCKET_CREATE" || operation == "SHUTDOWN"
+            )
+    }));
     let python_selectors = lowered
         .path_selectors
         .iter()
@@ -157,6 +165,19 @@ fn stored_and_offline_policy_specs_lower_to_the_same_compilable_policy() -> Test
             && cell.physical_result == CompiledPhysicalResultV1::AllowEffect
             && cell.errno.is_none()
     }));
+    Ok(())
+}
+
+#[test]
+fn application_policy_lowering_does_not_create_implicit_denials() -> TestResult {
+    let mut resource = resource()?;
+    resource.spec.roles[0].network.socket_controls.clear();
+    let lowered = lower_kubernetes_policy(&resource, TENANT_ID, CLUSTER_UID, NAMESPACE_UID)?;
+    assert!(lowered.effect_family_defaults.is_empty());
+    assert!(lowered
+        .rules
+        .iter()
+        .any(|rule| rule.rule_id == "deny-service-account-files"));
     Ok(())
 }
 

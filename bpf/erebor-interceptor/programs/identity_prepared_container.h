@@ -76,6 +76,19 @@ static __always_inline bool prepared_container_pre_active_actor_is_exact(
     return prepared_container_actor_identity_is_exact(binding, label, entry);
 }
 
+static __always_inline bool prepared_container_application_actor_is_exact(
+    execution_set_binding_state_v1 *binding, const task_label_v1 *label,
+    const entry_security_state_v1 *entry)
+{
+    return binding && label && entry &&
+           binding->lifecycle_state == binding_lifecycle_state_v1_active &&
+           binding->prepared_container_state ==
+               prepared_container_state_v1_active &&
+           id128_equal(&binding->prepared_container_entry_instance_id,
+                       &label->entry_instance_id) &&
+           prepared_container_actor_identity_is_exact(binding, label, entry);
+}
+
 static __always_inline int prepared_container_set_initial_entry(
     execution_set_binding_state_v1 *binding, const id128_v1 *entry_instance_id)
 {

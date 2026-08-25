@@ -8,7 +8,9 @@ procedure. The earlier physical run used the superseded API and stopped after
 stock `runc` used an anonymous file write and IPC access that have no typed
 authority. The approved correction uses a runtime-independent
 `PreparedContainer` transition instead of a list of `runc` bootstrap effects.
-The replacement has not passed the required physical stock-runtime procedure.
+The direct stock-`runc` application-start regression now passes with the
+dynamic loader and libc absent from policy. The complete protected Kubernetes
+procedure has not passed.
 
 Master: [Mithril Hugging Face Intrusion Prevention](./README.md)
 
@@ -162,7 +164,10 @@ Scheduler submits the Pod binding
   -> runtime-created objects gain no independent or inherited workload authority
   -> PREPARED remains until application activation or exact binding retirement
   -> the first policy-approved application exec atomically changes PreparedContainer to Active
-  -> application effects use only normal policy and exception authority
+  -> explicit matching Deny decisions run before the admitted-entry default
+  -> an applicable exception can authorize an explicitly denied action
+  -> actions with no matching decision are allowed only for the exact admitted entry lineage
+  -> cgroup membership alone does not grant application authority
 
 WorkloadProtectionException CREATE for the running Pod
   -> the API server authenticates and authorizes an exception writer
@@ -666,10 +671,14 @@ When the executable's container-visible path satisfies the active signed
 policy, atomically reserve the transition from any task in the exact binding
 and commit `ACTIVE` with the normal workload execution identity. This binding
 transition removes prepared authority from every task in that binding. A
-failed exec restores only its own reservation. After
-`ACTIVE`, every file, network, IPC, process, device, privilege, mount, and exec
-effect uses only normal policy and exception authority. Runtime-created
-objects have no residual grant unless normal policy resolves and permits them.
+failed exec restores only its own reservation. After `ACTIVE`, every file,
+network, IPC, process, device, privilege, mount, and exec effect checks
+explicit signed decisions first. An explicit matching `DENY` blocks the action
+unless an applicable exception authorizes it. A missing decision allows the
+action only when the actor still has the exact admitted entry identity stored
+in the active binding. A task that enters the cgroup with no identity, an
+external identity, or a different entry remains fail-closed. Runtime-created
+objects have no residual prepared-state grant.
 Expiry, state mismatch, restart ambiguity, or readback failure denies the
 effect and keeps node admission readiness closed until recovery proves one
 exact state.
@@ -678,7 +687,8 @@ Use the same binary-match boundary as the checked Tetragon implementation.
 Resolve the executable path from the current task root and match that signed
 path. Do not require inode generation or an `EXACT` selector for workload
 execution. Keep `EXACT` object identity for filesystem rules and the separate
-administrative-exec approval path.
+administrative-exec approval path. After activation, resolve exact object
+identity only when a signed selector explicitly requests `EXACT`.
 
 ## Checkpoint
 
@@ -796,15 +806,15 @@ privileged or unmatched workload floor.
 ## Phase Result
 
 ```text
-State: Not done. The corrected policy and exception implementation, PreparedContainer boundary, package, automated fixture, and independent manual example are present. The current-source physical procedure is not complete.
+State: Not done. The corrected policy and exception implementation, PreparedContainer boundary, admitted-entry default, package, automated fixture, and independent manual example are present. The direct stock-runc application-start regression passed. The protected Kubernetes physical procedure is not complete.
 Implemented deliverable scope: D6.2.1 through D6.2.4 are implemented and automated. D6.2.5 has automated intake and WAL proof but lacks the physical failure variants. D6.2.6 through D6.2.13 have implemented owners and automated or rendered proof, but their required current physical results are not done.
 Files and durable owners changed: the branch contains both namespaced CRDs and their Helm package; PolicyDesiredStateOwner; PolicyRolloutOwner; the exception desired-state path; TrustBundleOwner; KubernetesNodeReadinessOwner; KubernetesAdmissionOwner; KubernetesWorkloadInventoryOwner; one append-only ControlStore for policy, exception, node session, trust, rollout, acknowledgement, evidence, coverage, and cursor transactions; generated NodePolicy and ControlHealth services; NodePolicyDeliveryOwner; ExceptionAuthorityOwner; RuntimeAdmissionClient; RuntimeAdmissionServer; ScheduledRuntimeBindingV1; bounded runtime-fact staging in WorkloadBindingOwner; the node activation and cgroup-binding paths; the stateless two-stage OCI adapter; the PreparedContainer binding ABI and BPF transition owner; hook ownership and cleanup; the two-node fixture; and the independent manual example.
 Upstream-adoption dossier IDs used: none.
-Fixture cases and exact physical results: the current physical two-node fixture and manual example are Not run. The prior old-API run passed node readiness, typed RBAC review, admission, scheduler selection, selected-node delivery, policy activation, runtime binding, Control acknowledgement, and durable evidence intake. Protected container start then failed under the superseded runtime boundary. The application process did not start. The prior cleanup passed.
-Automated verification: PreparedContainer ABI, compiled BPF object, node behavior, strict Clippy, Helm verification, VM-harness behavior, independent manual-example behavior, and diff checks passed. The full current-source workspace gate and physical procedure are not run yet.
+Fixture cases and exact physical results: the direct stock-runc application-start lane passed with runc 1.3.4. It recorded PREPARED to ACTIVE, the path-approved application entry, an application-default dependency read, no exact executable object, libc and the ELF loader absent from policy, successful exit, and owned-resource cleanup. The current physical two-node fixture and manual example are Not run. The prior old-API Kubernetes run remains partial historical evidence.
+Automated verification: PreparedContainer ABI, application-default ABI, compiled BPF object, Kubernetes lowering, node observation, VM-harness behavior, diff checks, and the full current-source workspace gate passed.
 Platform/kernel/runtime manifests: the Helm package contains both generated closed CRDs, separate writer and Control RBAC, the exact DaemonSet reader Role, the Control Deployment and Service, fail-closed admission webhooks, the node DaemonSet, two atomically owned `createRuntime` hook registrations, and bounded uninstall cleanup. No live current-source platform manifest was recorded.
 Performance/capacity results: no new benchmark. Runtime stages are limited to 128 records and 30 seconds. PreparedContainer is designed for one exact binding and one application activation. Evidence gRPC messages are limited to 4 MiB. Policy gRPC messages are limited to 128 KiB. The pending evidence window is limited to 4,096 records. Health reports fixed counts and booleans only.
-Unsupported/degraded paths: PreparedContainer is not physically qualified. The current physical protected-start, lifecycle, evidence failure, watch-compaction, network-partition, and storage-outage cases are Not run. Phase 7 graph and finding behavior is not present.
-Remaining work in this phase: run the full current-source workspace gate and the physical procedure through protected start, application activation, exact target, exception, runtime task, policy terminal cleanup, Node UID replacement, host epoch, watch, evidence failure, restart, uninstall, and cleanup cases.
+Unsupported/degraded paths: the protected Kubernetes start, lifecycle, evidence failure, watch-compaction, network-partition, and storage-outage cases are Not run. Phase 7 graph and finding behavior is not present.
+Remaining work in this phase: run the protected Kubernetes procedure through application activation, exact target, exception, runtime task, policy terminal cleanup, Node UID replacement, host epoch, watch, evidence failure, restart, uninstall, and cleanup cases.
 Next phase not authorized: yes.
 ```

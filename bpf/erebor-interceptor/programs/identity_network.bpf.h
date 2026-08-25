@@ -148,6 +148,8 @@ static __always_inline int network_unsupported(int ret, int status)
     scratch = identity_scratch_record();
     if (!config || !scratch)
         return -EACCES;
+    if (current_application_actor_is_exact(ipc_current_binding()))
+        return application_default_effect_result(scratch);
     return hard_effect_result(config, scratch,
                               effect_observation_reason_v1_unsupported_object);
 }
@@ -196,10 +198,13 @@ static __always_inline physical_decision_v1 *network_destination_decision(
 
 static __always_inline bool network_decision_allows(
     const physical_decision_v1 *decision,
-    const profile_generation_descriptor_v1 *generation)
+    const profile_generation_descriptor_v1 *generation,
+    bool application_default_allow)
 {
-    if (!decision || !generation)
+    if (!generation)
         return false;
+    if (!decision)
+        return application_default_allow;
     if (decision->decision == physical_decision_kind_v1_allow ||
         decision->decision == physical_decision_kind_v1_audit_allow)
         return true;
@@ -210,14 +215,14 @@ static __always_inline bool network_decision_allows(
 static __always_inline int network_apply_decision(
     identity_runtime_config_v1 *config, struct identity_scratch_v1 *scratch,
     const profile_generation_descriptor_v1 *generation,
-    const physical_decision_v1 *decision)
+    const physical_decision_v1 *decision, bool application_default_allow)
 {
     if (!generation)
         return hard_effect_result(
             config, scratch,
             effect_observation_reason_v1_corrupt_identity_or_generation);
-    return apply_effect_decision(config, scratch, generation, decision, false,
-                                 false);
+    return apply_effect_decision(config, scratch, generation, decision,
+                                 application_default_allow, false, false);
 }
 
 static __always_inline int network_response_result(
@@ -342,6 +347,7 @@ static __noinline int network_apply_control(
     physical_decision_v1 *current;
     physical_decision_v1 *creator;
     struct sock *sock;
+    bool application_default_allow;
     int response;
 
     sock = ipc_socket_sock(socket);
@@ -356,6 +362,7 @@ static __noinline int network_apply_control(
     binding = ipc_current_binding();
     if (!config || !scratch || !binding)
         return -EACCES;
+    application_default_allow = current_application_actor_is_exact(binding);
     response = network_validate_socket(config, scratch, sock, state);
     if (response)
         return response;
@@ -375,11 +382,12 @@ static __noinline int network_apply_control(
         state->creator_role_id, state->creator_process_state_vector_id,
         state->creator_entry_kind, state->creator_binding_lifecycle_state,
         operation);
-    if (!network_decision_allows(creator, creator_generation))
+    if (!network_decision_allows(creator, creator_generation,
+                                 application_default_allow))
         return network_apply_decision(config, scratch, creator_generation,
-                                      creator);
+                                      creator, application_default_allow);
     return network_apply_decision(config, scratch, current_generation,
-                                  current);
+                                  current, application_default_allow);
 }
 
 static __always_inline int network_read_sockaddr(
@@ -513,6 +521,7 @@ static __noinline int network_apply_destination(
     __u16 operation = request & NETWORK_REQUEST_OPERATION_MASK;
     bool connected_peer = request & NETWORK_REQUEST_CONNECTED_PEER;
     bool retain_flow = request & NETWORK_REQUEST_RETAIN_FLOW;
+    bool application_default_allow;
     int response;
     int result;
 
@@ -527,6 +536,7 @@ static __noinline int network_apply_destination(
     binding = ipc_current_binding();
     if (!config || !scratch || !binding)
         return -EACCES;
+    application_default_allow = current_application_actor_is_exact(binding);
     peer_address = scratch->network_socket_state.peer_address;
     peer_port = &scratch->network_socket_state.peer_port;
     flow_authorization_id =
@@ -542,8 +552,9 @@ static __noinline int network_apply_destination(
         if (!state->flow_generation || !state->peer_port ||
             id128_is_zero(&state->flow_authorization_id) ||
             !state->flow_authorizer_profile_generation_ref_id ||
-            !state->destination_policy_handle ||
-            !state->creator_destination_policy_handle)
+            ((!state->destination_policy_handle ||
+              !state->creator_destination_policy_handle) &&
+             !state->application_default_flow))
             return hard_effect_result(
                 config, scratch,
                 effect_observation_reason_v1_unsupported_object);
@@ -552,9 +563,11 @@ static __noinline int network_apply_destination(
     } else if (network_read_sockaddr(address, addrlen,
                                      state->address_family, peer_address,
                                      peer_port)) {
-        return hard_effect_result(
-            config, scratch,
-            effect_observation_reason_v1_unresolved_object);
+        return application_default_allow
+                   ? application_default_effect_result(scratch)
+                   : hard_effect_result(
+                         config, scratch,
+                         effect_observation_reason_v1_unresolved_object);
     }
     current_class = network_classify_destination(
         scratch, scratch->process.active_profile_generation_ref_id,
@@ -562,12 +575,13 @@ static __noinline int network_apply_destination(
     creator_class = network_classify_destination(
         scratch, state->creator_profile_generation_ref_id, state->protocol,
         state->address_family, peer_address, *peer_port);
-    if (!current_class || !creator_class)
+    if ((!current_class || !creator_class) && !application_default_allow)
         return hard_effect_result(
             config, scratch,
             effect_observation_reason_v1_unresolved_object);
-    scratch->observation.network_destination_policy_handle =
-        current_class->destination_policy_handle;
+    if (current_class)
+        scratch->observation.network_destination_policy_handle =
+            current_class->destination_policy_handle;
     scratch->observation.network_peer_port = *peer_port;
     __builtin_memcpy(scratch->observation.network_peer_address, peer_address,
                      16);
@@ -577,23 +591,32 @@ static __noinline int network_apply_destination(
     creator_generation = bpf_map_lookup_elem(
         &profile_generation_descriptors,
         &state->creator_profile_generation_ref_id);
-    current = network_destination_decision(
-        scratch, scratch->process.active_profile_generation_ref_id,
-        current_class->destination_policy_handle,
-        scratch->process.active_role_id,
-        scratch->process.process_state_vector_id,
-        scratch->observation.entry_kind, binding->lifecycle_state, operation,
-        state->protocol);
-    creator = network_destination_decision(
-        scratch, state->creator_profile_generation_ref_id,
-        creator_class->destination_policy_handle, state->creator_role_id,
-        state->creator_process_state_vector_id, state->creator_entry_kind,
-        state->creator_binding_lifecycle_state, operation, state->protocol);
-    if (!network_decision_allows(creator, creator_generation))
+    current = current_class
+                  ? network_destination_decision(
+                        scratch,
+                        scratch->process.active_profile_generation_ref_id,
+                        current_class->destination_policy_handle,
+                        scratch->process.active_role_id,
+                        scratch->process.process_state_vector_id,
+                        scratch->observation.entry_kind,
+                        binding->lifecycle_state, operation, state->protocol)
+                  : NULL;
+    creator = creator_class
+                  ? network_destination_decision(
+                        scratch, state->creator_profile_generation_ref_id,
+                        creator_class->destination_policy_handle,
+                        state->creator_role_id,
+                        state->creator_process_state_vector_id,
+                        state->creator_entry_kind,
+                        state->creator_binding_lifecycle_state, operation,
+                        state->protocol)
+                  : NULL;
+    if (!network_decision_allows(creator, creator_generation,
+                                 application_default_allow))
         return network_apply_decision(config, scratch, creator_generation,
-                                      creator);
+                                      creator, application_default_allow);
     result = network_apply_decision(config, scratch, current_generation,
-                                    current);
+                                    current, application_default_allow);
     if (!result && retain_flow) {
         if (allocate_id(config, flow_authorization_id))
             return hard_effect_result(
@@ -612,9 +635,11 @@ static __noinline int network_apply_destination(
         if (result)
             return result;
         state->destination_policy_handle =
-            current_class->destination_policy_handle;
+            current_class ? current_class->destination_policy_handle : 0;
         state->creator_destination_policy_handle =
-            creator_class->destination_policy_handle;
+            creator_class ? creator_class->destination_policy_handle : 0;
+        state->application_default_flow =
+            application_default_allow && (!current_class || !creator_class);
         state->flow_authorization_id = *flow_authorization_id;
         state->peer_port = *peer_port;
         __builtin_memcpy(state->peer_address, peer_address, 16);
@@ -644,9 +669,11 @@ static __always_inline int network_socket_create_result(
         return -EACCES;
     if (network_family(family) == network_address_family_v1_unknown ||
         network_protocol(type, protocol) == network_protocol_v1_unknown)
-        return hard_effect_result(
-            config, scratch,
-            effect_observation_reason_v1_unsupported_object);
+        return current_application_actor_is_exact(binding)
+                   ? application_default_effect_result(scratch)
+                   : hard_effect_result(
+                         config, scratch,
+                         effect_observation_reason_v1_unsupported_object);
     generation = bpf_map_lookup_elem(
         &profile_generation_descriptors,
         &scratch->process.active_profile_generation_ref_id);
@@ -656,7 +683,9 @@ static __always_inline int network_socket_create_result(
         scratch->process.process_state_vector_id,
         scratch->observation.entry_kind, binding->lifecycle_state,
         kernel_effect_operation_v1_socket_create);
-    return network_apply_decision(config, scratch, generation, decision);
+    return network_apply_decision(
+        config, scratch, generation, decision,
+        current_application_actor_is_exact(binding));
 }
 
 static __noinline int network_socket_post_create_result(
@@ -840,8 +869,9 @@ int erebor_network_final_flow(struct __sk_buff *skb)
     if (state->state != network_socket_state_kind_v1_active ||
         !state->socket_generation || !state->flow_generation ||
         id128_is_zero(&state->flow_authorization_id) ||
-        !state->destination_policy_handle ||
-        !state->creator_destination_policy_handle ||
+        ((!state->destination_policy_handle ||
+          !state->creator_destination_policy_handle) &&
+         !state->application_default_flow) ||
         !network_packet_generation_valid(
             config, state->creator_profile_generation_ref_id) ||
         !network_packet_generation_valid(
@@ -874,26 +904,33 @@ int erebor_network_final_flow(struct __sk_buff *skb)
                 : effect_observation_reason_v1_corrupt_identity_or_generation,
             peer_address, peer_port);
     }
-    destination = network_classify_destination(
-        scratch, state->flow_authorizer_profile_generation_ref_id, protocol,
-        family, peer_address, peer_port);
-    if (!destination)
-        return network_packet_drop(
-            scratch, state, effect_observation_reason_v1_unresolved_object,
-            peer_address, peer_port);
-    destination_handle = destination->destination_policy_handle;
-    if (destination_handle != state->destination_policy_handle)
-        return network_packet_drop(
-            scratch, state, effect_observation_reason_v1_exact_policy_deny,
-            peer_address, peer_port);
-    destination = network_classify_destination(
-        scratch, state->creator_profile_generation_ref_id, protocol, family,
-        peer_address, peer_port);
-    if (!destination || destination->destination_policy_handle !=
-                            state->creator_destination_policy_handle)
-        return network_packet_drop(
-            scratch, state, effect_observation_reason_v1_exact_policy_deny,
-            peer_address, peer_port);
+    if (state->destination_policy_handle) {
+        destination = network_classify_destination(
+            scratch, state->flow_authorizer_profile_generation_ref_id,
+            protocol, family, peer_address, peer_port);
+        if (!destination)
+            return network_packet_drop(
+                scratch, state,
+                effect_observation_reason_v1_unresolved_object, peer_address,
+                peer_port);
+        destination_handle = destination->destination_policy_handle;
+        if (destination_handle != state->destination_policy_handle)
+            return network_packet_drop(
+                scratch, state,
+                effect_observation_reason_v1_exact_policy_deny, peer_address,
+                peer_port);
+    }
+    if (state->creator_destination_policy_handle) {
+        destination = network_classify_destination(
+            scratch, state->creator_profile_generation_ref_id, protocol,
+            family, peer_address, peer_port);
+        if (!destination || destination->destination_policy_handle !=
+                                state->creator_destination_policy_handle)
+            return network_packet_drop(
+                scratch, state,
+                effect_observation_reason_v1_exact_policy_deny, peer_address,
+                peer_port);
+    }
     return 1;
 }
 
@@ -963,6 +1000,7 @@ static __noinline int network_accept_post_result(struct sock *accepted,
     __u16 peer_port = 0;
     id128_v1 socket_generation_id = {};
     id128_v1 flow_authorization_id = {};
+    bool application_default_allow;
     if (!accepted)
         return 0;
     state = bpf_sk_storage_get(&network_socket_states, accepted, 0, 0);
@@ -987,6 +1025,7 @@ static __noinline int network_accept_post_result(struct sock *accepted,
             accepted, scratch->network_socket_state.address_family,
             peer_address, &peer_port))
         return 0;
+    application_default_allow = current_application_actor_is_exact(binding);
     current_class = network_classify_destination(
         scratch, scratch->process.active_profile_generation_ref_id,
         scratch->network_socket_state.protocol,
@@ -998,7 +1037,7 @@ static __noinline int network_accept_post_result(struct sock *accepted,
         scratch->network_socket_state.protocol,
         scratch->network_socket_state.address_family, peer_address,
         peer_port);
-    if (!current_class || !parent_class)
+    if ((!current_class || !parent_class) && !application_default_allow)
         return 0;
     current_generation = bpf_map_lookup_elem(
         &profile_generation_descriptors,
@@ -1006,26 +1045,37 @@ static __noinline int network_accept_post_result(struct sock *accepted,
     parent_generation = bpf_map_lookup_elem(
         &profile_generation_descriptors,
         &scratch->network_socket_state.creator_profile_generation_ref_id);
-    current = network_destination_decision(
-        scratch, scratch->process.active_profile_generation_ref_id,
-        current_class->destination_policy_handle,
-        scratch->process.active_role_id,
-        scratch->process.process_state_vector_id,
-        scratch->observation.entry_kind, binding->lifecycle_state,
-        kernel_effect_operation_v1_accept,
-        scratch->network_socket_state.protocol);
-    parent = network_destination_decision(
-        scratch,
-        scratch->network_socket_state.creator_profile_generation_ref_id,
-        parent_class->destination_policy_handle,
-        scratch->network_socket_state.creator_role_id,
-        scratch->network_socket_state.creator_process_state_vector_id,
-        scratch->network_socket_state.creator_entry_kind,
-        scratch->network_socket_state.creator_binding_lifecycle_state,
-        kernel_effect_operation_v1_accept,
-        scratch->network_socket_state.protocol);
-    if (!network_decision_allows(current, current_generation) ||
-        !network_decision_allows(parent, parent_generation))
+    current = current_class
+                  ? network_destination_decision(
+                        scratch,
+                        scratch->process.active_profile_generation_ref_id,
+                        current_class->destination_policy_handle,
+                        scratch->process.active_role_id,
+                        scratch->process.process_state_vector_id,
+                        scratch->observation.entry_kind,
+                        binding->lifecycle_state,
+                        kernel_effect_operation_v1_accept,
+                        scratch->network_socket_state.protocol)
+                  : NULL;
+    parent = parent_class
+                 ? network_destination_decision(
+                       scratch,
+                       scratch->network_socket_state
+                           .creator_profile_generation_ref_id,
+                       parent_class->destination_policy_handle,
+                       scratch->network_socket_state.creator_role_id,
+                       scratch->network_socket_state
+                           .creator_process_state_vector_id,
+                       scratch->network_socket_state.creator_entry_kind,
+                       scratch->network_socket_state
+                           .creator_binding_lifecycle_state,
+                       kernel_effect_operation_v1_accept,
+                       scratch->network_socket_state.protocol)
+                 : NULL;
+    if (!network_decision_allows(current, current_generation,
+                                 application_default_allow) ||
+        !network_decision_allows(parent, parent_generation,
+                                 application_default_allow))
         return 0;
     socket_refs = bpf_map_lookup_elem(
         &profile_generation_socket_refs,
@@ -1046,9 +1096,9 @@ static __noinline int network_accept_post_result(struct sock *accepted,
     state->flow_generation = 1;
     state->flow_authorization_id = flow_authorization_id;
     state->destination_policy_handle =
-        current_class->destination_policy_handle;
+        current_class ? current_class->destination_policy_handle : 0;
     state->creator_destination_policy_handle =
-        current_class->destination_policy_handle;
+        parent_class ? parent_class->destination_policy_handle : 0;
     state->flow_authorizer_profile_generation_ref_id =
         scratch->process.active_profile_generation_ref_id;
     state->parent_socket_key_id =
@@ -1065,6 +1115,8 @@ static __noinline int network_accept_post_result(struct sock *accepted,
     __builtin_memcpy(state->peer_address, peer_address, 16);
     state->creator_binding_lifecycle_state = binding->lifecycle_state;
     state->state = network_socket_state_kind_v1_active;
+    state->application_default_flow =
+        application_default_allow && (!current_class || !parent_class);
     return 0;
 }
 

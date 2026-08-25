@@ -6,8 +6,9 @@ tests cover their closed schemas, lowering, reconciliation, delivery,
 retirement, restart, and node-session boundaries. The current source has not
 passed the complete physical procedure. The last physical run used the old API
 and stopped under the superseded runtime-bootstrap model. The current source
-implements the `PreparedContainer` trust boundary. Its stock-runtime physical
-result is not proved.
+implements the `PreparedContainer` trust boundary and the exact admitted-entry
+default. The direct stock-runtime application-start result passed. The
+protected Kubernetes physical result is not proved.
 
 Plan: [Control Policy And Evidence Convergence](./phase-6-2-control-policy-and-evidence-convergence.md)
 
@@ -28,7 +29,9 @@ Do not treat the deterministic two-node Control test as a physical two-node
 kernel result. Do not claim that this work creates a Phase 7 graph or finding.
 The BPF application binary interface (ABI) and BPF programs add one
 `PreparedContainer` transition to the existing execution-set binding. They add
-no runtime-object authority map or runtime-specific operation list.
+no runtime-object authority map or runtime-specific operation list. After
+activation, cgroup membership alone grants no authority. The default requires
+the exact admitted entry identity stored in the binding.
 
 ## Recommended Reading Order
 
@@ -64,6 +67,8 @@ no runtime-object authority map or runtime-specific operation list.
     [CRI identity verification](../../../crates/mithril-node/src/identity/runtime.rs),
     [cgroup binding owner](../../../crates/mithril-node/src/identity/binding.rs),
     [shared identity ABI](../../../crates/erebor-interceptor-abi/src/abi/identity.rs),
+    [effect decision owner](../../../bpf/erebor-interceptor/programs/identity_effects.bpf.h),
+    [network decision owner](../../../bpf/erebor-interceptor/programs/identity_network.bpf.h),
     and [PreparedContainer BPF owner](../../../bpf/erebor-interceptor/programs/identity_prepared_container.h).
 11. Read the [Control evidence intake](../../../crates/mithril-control/src/evidence.rs)
    and [node observation WAL](../../../crates/mithril-node/src/observation/wal.rs).
@@ -297,7 +302,8 @@ identifies the held initial process.
   -> [`prepared_container_reserve_activation`](../../../bpf/erebor-interceptor/programs/identity_prepared_container.h) the exact task changes `PREPARED` to `EXEC_PENDING`
   -> [`prepared_container_commit_activation`](../../../bpf/erebor-interceptor/programs/identity_prepared_container.h) the successful process-exec tracepoint changes `EXEC_PENDING` to `ACTIVE`
   -> [`complete_failed_exec`](../../../bpf/erebor-interceptor/programs/identity_exec.bpf.h) a failed exec restores only its own reservation
-  -> [`identity_effect_gate`](../../../bpf/erebor-interceptor/programs/identity_effects.bpf.h) every later effect uses normal policy and exception authority
+  -> [`apply_effect_decision`](../../../bpf/erebor-interceptor/programs/identity_effects.bpf.h) explicit matching decisions run before the admitted-entry default
+  -> [`prepared_container_application_actor_is_exact`](../../../bpf/erebor-interceptor/programs/identity_prepared_container.h) cgroup-only, external, and different entries cannot use the default
 
 The node socket accepts only root peers. The socket parent is root-owned and
 not group-writable or world-writable. The socket has mode `0600`.
@@ -317,7 +323,9 @@ runtime-internal exec that does not satisfy the signed policy remains
 `PREPARED`. The binding has one 10-second monotonic deadline. The first exec
 that satisfies the signed policy changes the binding to `ACTIVE` at exec
 commit. No runtime-created object has a separate grant that can survive this
-transition.
+transition. The active application checks explicit decisions first. A matching
+Deny blocks unless an applicable exception authorizes it. A missing decision
+allows only for the exact admitted entry lineage.
 
 A canonical request can stay pending while Control observes the binding and
 the node receives the candidate. The node event loop continues policy delivery
@@ -514,6 +522,7 @@ flowchart LR
 | Runtime effect gate | Existing file, network, IPC, process, device, privilege, and mount LSM hooks | Reads the exact binding, entry, generation, and deadline. It writes no runtime-object authority. | The exact prepared entry can finish setup. All other protected actors use normal policy or receive the configured denial. |
 | Exec evaluation | `lsm/bprm_check_security` | Reads the active signed policy. Writes the pending exec and reserves the exact task only for a policy-permitted exec. | A runtime-internal policy miss stays `PREPARED`. A policy-permitted exec can continue as `EXEC_PENDING`. |
 | Exec completion | `tracepoint/sched/sched_process_exec` and exec syscall exit tracepoints | Commits `ACTIVE` after a successful exec or restores `PREPARED` after a pre-commit failure. | `ACTIVE` closes prepared-runtime trust. A corrupt or expired transition stays fail-closed. |
+| Active application effect | Existing file, network, IPC, process, device, privilege, mount, exec, and io_uring hooks | Resolves explicit signed decisions and the stored admitted entry identity. | An explicit matching Deny blocks before the default. An applicable exception can authorize that Deny. A missing decision allows only for the exact admitted entry. |
 | Binding retirement | `raw_tracepoint/cgroup_release` | Changes a non-active prepared state to `EXPIRED` and clears the exec cookie. | The released cgroup cannot start or continue prepared-runtime work. |
 
 A bpffs pin keeps a map or link alive after the loader process exits. A
@@ -564,7 +573,7 @@ and coverage messages remain the Phase 6 types.
 | Missing candidate, silent node owner, or second socket owner | The bounded socket or OCI deadline returns denial; the runtime does not receive an allow result |
 | Malformed, mismatched, changed, or reused runtime identity | The node rejects without publishing or reusing a binding |
 | `PreparedContainer` deadline, held-TGID mismatch, wrong binding, wrong entry, or later external root | BPF denies and does not activate the application |
-| Runtime-created object after `ACTIVE` | The effect resolves through normal policy and exception authority; no prepared-state grant remains |
+| Runtime-created object after `ACTIVE` | The effect checks explicit policy and exception authority, then uses the exact admitted-entry default when no decision matches; no prepared-state grant remains |
 | Mixed rollout | Status reports exact per-state counts; it does not claim global activation |
 | Exact target disappears while an exception is active | Control keeps the source accepted and sends an exact signed revocation; it does not refund uses or retarget the request |
 | Runtime admission caller cancels after publication starts | The node removes the exact new binding and restores the prior durable state; an incomplete rollback closes readiness |
@@ -597,6 +606,7 @@ and coverage messages remain the Phase 6 types.
 | Existing inactive generation, readback, probes, and pointer activation | [Node policy tests](../../../crates/mithril-node/src/policy.rs) |
 | Signed scheduling authority, exact policy and runtime identity, immutable two-hook stage matching, held-TGID publication, distinct container lifetime, active socket ownership, convergence hold, unavailable endpoint, and timeout denial | [Runtime admission and binding tests](../../../crates/mithril-node/src/identity/binding.rs) |
 | OCI state parsing, cgroup-v2 path parsing, fact-only first hook, and held-PID second hook | [OCI adapter tests](../../../crates/mithril-node/src/bin/mithril_oci_hook.rs) |
+| Direct stock-runc PREPARED-to-ACTIVE transition, admitted-entry default, absent dependency rules, and cleanup | [Stock-runc VM probe](../../../crates/mithril-e2e/src/effect/runc.rs) |
 | Webhook TLS, rules, deadlines, health probes, DaemonSet identity and hook inputs, and least-privilege RBAC | [Helm render test](../../../packaging/mithril/helm/tests/verify.sh) |
 | Exact two-node target, task lifetime, Node UID replacement, host epoch, selector lifecycle, exception target retirement, terminal cleanup, and no-root replay | [Physical fixture](../../../crates/mithril-e2e/harness/vm/two-node-convergence.sh) |
 | Independent operator flow for exact target, runtime lifetime, exception target retirement, terminal cleanup, restart, and fresh root | [Manual example](../../../examples/mithril-kubernetes-convergence-manual/run.sh) |
@@ -604,13 +614,9 @@ and coverage messages remain the Phase 6 types.
 Current focused checks passed:
 
 ```text
-rtk cargo test -p erebor-interceptor-abi -p erebor-interceptor -p mithril-node --all-targets
-203 tests passed in 8 suites.
-
-rtk cargo clippy -p mithril-node --all-targets -- -D warnings
-No issues found.
-
-PreparedContainer ABI and compiled-object tests passed.
+rtk bash .github/scripts/verify-rust-ci.sh
+The current-source format, workspace check, strict Clippy, and full workspace
+test gate passed.
 
 rtk bash packaging/mithril/helm/tests/verify.sh
 Hook ownership checks passed. One chart linted. The render contract passed.
@@ -622,7 +628,9 @@ rtk bash examples/mithril-kubernetes-convergence-manual/test.sh
 Manual example behavior checks passed.
 ```
 
-The full current-source workspace gate is not run yet.
+The direct stock-runc VM probe also passed with runc 1.3.4. Its result records
+libc and the ELF loader as root-filesystem dependencies that are absent from
+policy.
 
 These checks execute production owners and fixture command paths. The shell
 behavior suites do not parse Rust or shell source as a capability oracle. They
@@ -631,7 +639,8 @@ do not replace the physical fixture or manual run.
 ## Verification Limits
 
 The current source has not passed the physical two-node fixture or the
-independent manual example. Both flows now contain exact target, runtime task,
+independent manual example. The direct stock-runc application-start lane has
+passed. Both Kubernetes flows contain exact target, runtime task,
 exception target-retirement, terminal cleanup, restart, and fresh-root
 oracles. The automated fixture also contains same-name Node UID replacement,
 DaemonSet exclusion and re-entry, and a host boot and label-epoch change.
@@ -647,12 +656,12 @@ then used an anonymous file write and IPC access that have no typed authority.
 BPF denied both operations. The runtime reported start failure. The application
 did not run.
 
-The previous stock-runtime failure remains the required regression oracle. It
-is not test noise. Do not add a runtime-specific operation list or an object
-authority map. The current source has a bounded `PreparedContainer` boundary,
-but completion requires its current physical stock-runtime result. The watch-
-compaction, network-partition, storage-outage, and physical evidence failure
-variants also remain `Not run`. There is no new performance result.
+The previous stock-runtime failure remains the regression oracle. The direct
+lane now closes that regression without a runtime-specific operation list,
+dependency allow rules, or an object-authority map. The protected Kubernetes
+start, watch-compaction, network-partition, storage-outage, and physical
+evidence failure variants remain `Not run`. There is no new performance
+result.
 
 This work adds no Appendix C fixture ID. Phase 7 graph and finding behavior is
 not present.
@@ -675,7 +684,9 @@ not present.
 - [ ] Verify that the binding readback contains the exact held host TGID.
 - [ ] Trace `PREPARED` through a runtime-internal exec that does not satisfy policy.
 - [ ] Trace a policy-approved exec through `EXEC_PENDING` to `ACTIVE`.
-- [ ] Verify that a runtime-created pipe or handle has no grant after `ACTIVE`.
+- [ ] Verify that a runtime-created pipe or handle has no prepared-state grant after `ACTIVE`.
+- [ ] Verify that the exact admitted entry receives default allow when no decision matches.
+- [ ] Move an unlabeled or external task into the cgroup and verify fail-closed denial.
 - [ ] Verify that a missing candidate stays pending only until the runtime deadline.
 - [ ] Verify that a second runtime socket owner cannot replace the live node owner.
 - [ ] Verify that container restart retires the old runtime binding.

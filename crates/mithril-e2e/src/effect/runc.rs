@@ -21,7 +21,7 @@ use sha2::{Digest as _, Sha256};
 use snafu::{ensure, ResultExt as _};
 
 use super::support::{
-    effect_binding_with_identity, effect_node_config, wait_for_path_effect,
+    effect_binding_with_identity, effect_node_config, wait_for_application_default_effect,
     wait_for_path_exec_effect, wait_for_reason,
 };
 use super::{sign_generation_artifact, EffectTestRunner, PROFILE_GENERATION_REF_ID};
@@ -41,10 +41,11 @@ pub struct RuncPreparedProbeV1 {
     pub prepared_state_before_exec: String,
     pub prepared_state_after_exec: String,
     pub prepared_runtime_effect_observed: bool,
-    pub path_exec_allow_observed: bool,
-    pub path_file_allow_observed: bool,
+    pub application_entry_allow_observed: bool,
+    pub application_default_file_allow_observed: bool,
     pub executable_observation_has_no_exact_object: bool,
     pub dynamic_loader_paths: Vec<String>,
+    pub dynamic_loader_paths_absent_from_policy: bool,
     pub container_exit_success: bool,
     pub pin_root_removed: bool,
     pub lease_removed: bool,
@@ -442,13 +443,11 @@ impl EffectTestRunner {
             "EXACT_POLICY_ALLOW",
             KernelEffectOperationV1::Execute,
         )?;
-        wait_for_path_effect(
+        wait_for_application_default_effect(
             &reader,
             &observations,
             marker,
-            "EXACT_POLICY_ALLOW",
-            KernelEffectFamilyV1::File,
-            KernelEffectOperationV1::Read,
+            (KernelEffectFamilyV1::File, KernelEffectOperationV1::Read),
         )?;
 
         let status = wait_for_child(container.child.as_mut().ok_or_else(|| {
@@ -496,16 +495,17 @@ impl EffectTestRunner {
         })?;
 
         Ok(RuncPreparedProbeV1 {
-            schema_version: 2,
+            schema_version: 3,
             runc_version: runc_version.lines().next().unwrap_or_default().to_owned(),
             initial_host_pid: initial_pid,
             prepared_state_before_exec,
             prepared_state_after_exec,
             prepared_runtime_effect_observed: true,
-            path_exec_allow_observed: true,
-            path_file_allow_observed: true,
+            application_entry_allow_observed: true,
+            application_default_file_allow_observed: true,
             executable_observation_has_no_exact_object: true,
             dynamic_loader_paths,
+            dynamic_loader_paths_absent_from_policy: true,
             container_exit_success: true,
             pin_root_removed: !pin_root.exists(),
             lease_removed: !lease_path.exists(),
@@ -541,44 +541,18 @@ impl EffectTestRunner {
             PathSelectorV1::exact("manual-device-zero", "/dev/zero", "MANUAL_DEVICE_DENIED")
                 .with_device_class("ZERO_DEVICE"),
         ];
-        let mut executable_path_selector_ids = vec!["manual-exec-allowed".to_owned()];
-        for (index, path) in dynamic_loader_paths.iter().enumerate() {
-            let path_selector_id = format!("runtime-loader-{index}");
-            document.path_selectors.push(PathSelectorV1::path(
-                path_selector_id.clone(),
-                path,
-                "MANUAL_EXEC_ALLOWED",
-            ));
-            executable_path_selector_ids.push(path_selector_id);
-        }
-        let executable_rule = document
-            .rules
-            .iter_mut()
-            .find(|rule| rule.rule_id == "allow-manual-exec-allowed")
-            .ok_or_else(|| {
-                InvalidInputSnafu {
-                    path: &policy_source,
-                    reason: "the direct runc fixture has no executable allow rule",
-                }
-                .build()
-            })?;
-        let RuleMatchV1::LocalPreEffect(executable_match) = &mut executable_rule.rule_match else {
-            return InvalidInputSnafu {
+        ensure!(
+            dynamic_loader_paths.iter().all(|dependency| {
+                document
+                    .path_selectors
+                    .iter()
+                    .all(|selector| selector.path_expression() != dependency)
+            }),
+            InvalidInputSnafu {
                 path: &policy_source,
-                reason: "the direct runc executable allow rule is not a local effect rule",
+                reason: "the direct runc policy must not list dynamic runtime dependencies",
             }
-            .fail();
-        };
-        let mithril_control::LocalObjectSelectorV1::PathSelectors { path_selector_ids } =
-            &mut executable_match.object
-        else {
-            return InvalidInputSnafu {
-                path: &policy_source,
-                reason: "the direct runc executable allow rule is not path-selected",
-            }
-            .fail();
-        };
-        *path_selector_ids = executable_path_selector_ids;
+        );
         let mut prepared_exec_rule = document
             .rules
             .iter()
@@ -604,29 +578,6 @@ impl EffectTestRunner {
         exec_match.subject.entry_kind_ids = vec![EntryKindV1::ContainerStart];
         exec_match.subject.role_ids = vec!["converter".to_owned()];
         document.rules.push(prepared_exec_rule);
-        let mut prepared_file_rule = document
-            .rules
-            .iter()
-            .find(|rule| rule.rule_id == "allow-manual-exec-allowed-read")
-            .cloned()
-            .ok_or_else(|| {
-                InvalidInputSnafu {
-                    path: &policy_source,
-                    reason: "the direct runc fixture has no loader file allow rule",
-                }
-                .build()
-            })?;
-        prepared_file_rule.rule_id = "allow-prepared-container-loader-read".to_owned();
-        let RuleMatchV1::LocalPreEffect(file_match) = &mut prepared_file_rule.rule_match else {
-            return InvalidInputSnafu {
-                path: &policy_source,
-                reason: "the direct runc loader file allow rule is not a local effect rule",
-            }
-            .fail();
-        };
-        file_match.subject.entry_kind_ids = vec![EntryKindV1::ContainerStart];
-        file_match.subject.role_ids = vec!["converter".to_owned()];
-        document.rules.push(prepared_file_rule);
         sign_generation_artifact(
             document,
             &policy_fixture.join("observe-profile-seal-request.json"),

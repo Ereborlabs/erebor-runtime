@@ -149,6 +149,8 @@ pub struct NetworkSocketStateV1 {
     pub peer_address: [u8; 16],
     pub creator_binding_lifecycle_state: BindingLifecycleStateV1,
     pub state: NetworkSocketStateKindV1,
+    pub application_default_flow: u8,
+    pub reserved: [u8; 7],
 }
 
 #[repr(C)]
@@ -186,11 +188,15 @@ mod tests {
         assert_eq!(size_of::<NetworkIpv6LpmKeyV1>(), 40);
         assert_eq!(size_of::<NetworkDestinationClassV1>(), 48);
         assert_eq!(size_of::<NetworkDestinationDecisionKeyV1>(), 32);
-        assert_eq!(size_of::<NetworkSocketStateV1>(), 136);
+        assert_eq!(size_of::<NetworkSocketStateV1>(), 144);
         assert_eq!(size_of::<NetworkResponseFloorKeyV1>(), 24);
         assert_eq!(size_of::<NetworkResponseFloorV1>(), 8);
         assert_eq!(align_of::<NetworkSocketStateV1>(), 8);
         assert_eq!(offset_of!(NetworkSocketStateV1, socket_key_id), 24);
         assert_eq!(offset_of!(NetworkSocketStateV1, peer_address), 118);
+        assert_eq!(
+            offset_of!(NetworkSocketStateV1, application_default_flow),
+            136
+        );
     }
 }

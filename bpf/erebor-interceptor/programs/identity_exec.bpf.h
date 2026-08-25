@@ -31,6 +31,17 @@ static __always_inline int observe_bprm_effect(struct linux_binprm *bprm)
         return identity_effect_actor_gate(
             NULL, kernel_effect_family_v1_exec,
             kernel_effect_operation_v1_execute, 0);
+    if (pending && label && !task_cgroup(task, &cgroup)) {
+        binding = binding_for_cgroup(cgroup, &binding_lookup);
+        if (!binding_lookup && binding_matches_label(binding, label) &&
+            binding->prepared_container_state ==
+                prepared_container_state_v1_exec_pending &&
+            binding->prepared_container_exec_task_cookie ==
+                label->task_cookie)
+            return identity_effect_actor_gate(
+                NULL, kernel_effect_family_v1_exec,
+                kernel_effect_operation_v1_execute, 0);
+    }
     result = prepared_exec_policy_gate(file);
     if (result)
         return result;

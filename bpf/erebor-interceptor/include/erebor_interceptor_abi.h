@@ -310,6 +310,7 @@ enum effect_observation_reason_v1
   effect_observation_reason_v1_path_tree_policy_deny = 11,
   effect_observation_reason_v1_network_response_fence = 12,
   effect_observation_reason_v1_prepared_runtime_infrastructure = 13,
+  effect_observation_reason_v1_application_default_allow = 14,
 };
 #if __STDC_VERSION__ >= 202311L
 typedef enum effect_observation_reason_v1 effect_observation_reason_v1;
@@ -1623,6 +1624,8 @@ typedef struct network_socket_state_v1 {
   uint8_t peer_address[16];
   binding_lifecycle_state_v1 creator_binding_lifecycle_state;
   network_socket_state_kind_v1 state;
+  uint8_t application_default_flow;
+  uint8_t reserved[7];
 } network_socket_state_v1;
 
 typedef struct mount_mutation_attempt_v1 {
