@@ -513,13 +513,15 @@ fn mark_source_gap(
     counters: CoverageCountersV1,
 ) -> Option<CoverageIntervalV1> {
     if source.current.state == CoverageStateV1::Healthy {
+        let first_unobserved = source
+            .last_observed_sequence
+            .map_or(source.current.first_sequence, |sequence| {
+                sequence.saturating_add(1)
+            });
         Some(rotate_interval(
             source,
             CoverageStateV1::Gapped,
-            source
-                .last_observed_sequence
-                .unwrap_or(counters.next_sequence)
-                .saturating_add(1),
+            first_unobserved,
             counters,
             vec![reason],
         ))
@@ -779,6 +781,29 @@ mod tests {
         owner.observe(2, 4)?;
         owner.sample_health(&[health(4, 1)])?;
         assert!(!owner.snapshot().supports_negative_claim());
+        Ok(())
+    }
+
+    #[test]
+    fn reader_delay_accepts_queued_records_without_reopening_coverage(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let owner = open_owner(&directory.path().join("coverage.json"), 1)?;
+        owner.sample_health(&[health(0, 0)])?;
+
+        // The kernel counters can advance before the ring reader delivers the records.
+        owner.sample_health(&[health(8, 0)])?;
+        for sequence in 1..=8 {
+            let (_, coverage) = owner.observe(2, sequence)?;
+            assert_eq!(coverage, TemporalCoverageV1::Gapped);
+        }
+
+        let current = &owner.snapshot().current_intervals()[0];
+        assert_eq!(current.first_sequence, 1);
+        assert_eq!(current.last_sequence, Some(8));
+        assert!(current
+            .gap_reasons
+            .contains(&CoverageGapReasonV1::ReaderDelay));
         Ok(())
     }
 
