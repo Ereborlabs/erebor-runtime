@@ -56,22 +56,22 @@ impl RuntimeContainerIdentity {
         resolved
     }
 
-    pub(super) fn same_lifetime_as(&self, other: &Self) -> bool {
-        self.full_container_id == other.full_container_id
-            && self.namespace == other.namespace
-            && self.pod_uid == other.pod_uid
-            && self.sandbox_id == other.sandbox_id
-            && self.container_name == other.container_name
-            && self.image_digest == other.image_digest
-            && self.generation == other.generation
-            && self.cgroup_path == other.cgroup_path
-            && (self.init_pid == other.init_pid
+    pub(super) fn accepts_observed_lifetime(&self, observed: &Self) -> bool {
+        self.full_container_id == observed.full_container_id
+            && self.namespace == observed.namespace
+            && self.pod_uid == observed.pod_uid
+            && self.sandbox_id == observed.sandbox_id
+            && self.container_name == observed.container_name
+            && self.image_digest == observed.image_digest
+            && self.generation == observed.generation
+            && self.cgroup_path == observed.cgroup_path
+            && (self.init_pid == observed.init_pid
                 || (self.state == RuntimeContainerState::Created
                     && self.init_pid == 0
-                    && other.state == RuntimeContainerState::Running
-                    && other.init_pid > 0))
-            && self.working_directory == other.working_directory
-            && self.path_entries == other.path_entries
+                    && observed.state == RuntimeContainerState::Running
+                    && observed.init_pid > 0))
+            && self.working_directory == observed.working_directory
+            && self.path_entries == observed.path_entries
     }
 }
 
@@ -790,10 +790,12 @@ mod tests {
         created.state = RuntimeContainerState::Created;
         created.init_pid = 0;
         assert!(created.resolve(&configured).arm_initial_root);
-        assert!(created.same_lifetime_as(&RuntimeContainerIdentity {
-            init_pid: 42,
-            state: RuntimeContainerState::Running,
-            ..created.clone()
-        }));
+        assert!(
+            created.accepts_observed_lifetime(&RuntimeContainerIdentity {
+                init_pid: 42,
+                state: RuntimeContainerState::Running,
+                ..created.clone()
+            })
+        );
     }
 }

@@ -1408,7 +1408,7 @@ impl WorkloadBindingOwner {
             };
             binding.validate_live_cgroup()?;
             ensure!(
-                current.same_lifetime_as(expected),
+                expected.accepts_observed_lifetime(&current),
                 IdentityStateSnafu {
                     reason: format!(
                         "live CRI identity changed for `{}`",
@@ -2172,7 +2172,7 @@ mod tests {
             image_digest: configured.image_digest.clone(),
             generation: configured.container_generation,
             cgroup_path: root,
-            init_pid: std::process::id(),
+            init_pid: 0,
             working_directory: PathBuf::from("/"),
             path_entries: vec![PathBuf::from("/usr/bin")],
             state: RuntimeContainerState::Created,
@@ -2184,6 +2184,7 @@ mod tests {
         assert_eq!(owner.exact_object_binding_targets().count(), 0);
 
         let running = RuntimeContainerIdentity {
+            init_pid: std::process::id(),
             state: RuntimeContainerState::Running,
             ..identity
         };
