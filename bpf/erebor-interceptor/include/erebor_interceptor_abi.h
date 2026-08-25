@@ -139,6 +139,25 @@ typedef enum entry_admission_state_v1 entry_admission_state_v1;
 typedef uint8_t entry_admission_state_v1;
 #endif // __STDC_VERSION__ >= 202311L
 
+enum installed_role_class_v1
+#if __STDC_VERSION__ >= 202311L
+  : uint8_t
+#endif // __STDC_VERSION__ >= 202311L
+ {
+  installed_role_class_v1_unknown = 0,
+  installed_role_class_v1_initial_role = 1,
+  installed_role_class_v1_runtime_external_restricted = 2,
+  installed_role_class_v1_fail_closed_unknown = 3,
+  installed_role_class_v1_qualified_registered_role = 4,
+  installed_role_class_v1_approved_administrative_role = 5,
+  installed_role_class_v1_declared_entry_role = 6,
+};
+#if __STDC_VERSION__ >= 202311L
+typedef enum installed_role_class_v1 installed_role_class_v1;
+#else
+typedef uint8_t installed_role_class_v1;
+#endif // __STDC_VERSION__ >= 202311L
+
 enum entry_kind_v1
 #if __STDC_VERSION__ >= 202311L
   : uint8_t
@@ -263,24 +282,6 @@ typedef enum prepared_container_state_v1 prepared_container_state_v1;
 typedef uint64_t prepared_container_state_v1;
 #endif // __STDC_VERSION__ >= 202311L
 
-enum installed_role_class_v1
-#if __STDC_VERSION__ >= 202311L
-  : uint8_t
-#endif // __STDC_VERSION__ >= 202311L
- {
-  installed_role_class_v1_unknown = 0,
-  installed_role_class_v1_initial_role = 1,
-  installed_role_class_v1_runtime_external_restricted = 2,
-  installed_role_class_v1_fail_closed_unknown = 3,
-  installed_role_class_v1_qualified_registered_role = 4,
-  installed_role_class_v1_approved_administrative_role = 5,
-};
-#if __STDC_VERSION__ >= 202311L
-typedef enum installed_role_class_v1 installed_role_class_v1;
-#else
-typedef uint8_t installed_role_class_v1;
-#endif // __STDC_VERSION__ >= 202311L
-
 enum exact_device_type_v1
 #if __STDC_VERSION__ >= 202311L
   : uint8_t
@@ -316,6 +317,7 @@ enum effect_observation_reason_v1
   effect_observation_reason_v1_network_response_fence = 12,
   effect_observation_reason_v1_prepared_runtime_infrastructure = 13,
   effect_observation_reason_v1_application_default_allow = 14,
+  effect_observation_reason_v1_runtime_entry_infrastructure = 15,
 };
 #if __STDC_VERSION__ >= 202311L
 typedef enum effect_observation_reason_v1 effect_observation_reason_v1;
@@ -1048,7 +1050,7 @@ typedef struct approved_exec_slot_v1 {
   uint8_t reserved_0[3];
   uint64_t profile_generation_ref_id;
   uint32_t exception_numeric_handle;
-  uint32_t reserved_after_exception;
+  uint32_t admitted_entry_rule_id;
   uint64_t deadline_boottime_ns;
   approved_exec_slot_state_v1 state;
   uint64_t transition_version;
@@ -1084,6 +1086,23 @@ typedef struct authority_domain_state_v1 {
   uint8_t reserved[7];
 } authority_domain_state_v1;
 
+typedef struct entry_admission_rule_key_v1 {
+  uint64_t profile_generation_ref_id;
+  struct id128_v1 binding_id;
+  uint64_t composite_atom_id;
+  uint32_t source_role_id;
+  uint32_t reserved;
+} entry_admission_rule_key_v1;
+
+typedef struct entry_admission_rule_v1 {
+  uint32_t target_role_id;
+  uint32_t target_process_state_vector_id;
+  uint32_t admitted_entry_rule_id;
+  uint16_t entry_kind;
+  installed_role_class_v1 installed_role_class;
+  uint8_t reserved;
+} entry_admission_rule_v1;
+
 typedef struct entry_security_state_v1 {
   struct id128_v1 entry_instance_id;
   struct id128_v1 node_boot_id;
@@ -1099,7 +1118,7 @@ typedef struct entry_security_state_v1 {
   entry_admission_state_v1 admission_state;
   entry_lifetime_state_v1 lifetime_state;
   uint8_t terminal_reason;
-  uint8_t reserved_state[4];
+  uint32_t admitted_entry_rule_id;
   uint64_t transition_guard;
 } entry_security_state_v1;
 
@@ -1246,7 +1265,7 @@ typedef struct effect_observation_v1 {
   uint64_t observed_boottime_ns;
   uint64_t source_sequence;
   uint32_t source_cpu_id;
-  uint8_t reserved_source[4];
+  uint32_t admitted_entry_rule_id;
   uint64_t task_cookie;
   uint64_t profile_generation_ref_id;
   struct id128_v1 process_lineage_id;
@@ -1437,9 +1456,10 @@ typedef struct io_uring_actor_snapshot_v1 {
   uint64_t process_transition_version;
   uint32_t active_role_id;
   uint32_t process_state_vector_id;
+  uint32_t admitted_entry_rule_id;
   uint16_t entry_kind;
   binding_lifecycle_state_v1 binding_lifecycle_state;
-  uint8_t reserved[5];
+  uint8_t reserved;
 } io_uring_actor_snapshot_v1;
 
 typedef struct io_uring_execution_state_v1 {
@@ -1671,8 +1691,11 @@ typedef struct pending_exec_v1 {
   struct id128_v1 target_image_provenance_id;
   struct exact_executable_candidate_v1 ordered_candidates[MAX_EXEC_CANDIDATES_V1];
   uint64_t transition_version;
+  uint32_t admitted_entry_rule_id;
   pending_exec_state_v1 state;
-  uint8_t reserved_1[7];
+  entry_kind_v1 pending_entry_kind;
+  installed_role_class_v1 pending_installed_role_class;
+  uint8_t reserved_1;
 } pending_exec_v1;
 
 typedef struct pending_administrative_match_v1 {

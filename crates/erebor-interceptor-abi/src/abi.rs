@@ -771,9 +771,10 @@ pub struct IoUringActorSnapshotV1 {
     pub process_transition_version: u64,
     pub active_role_id: u32,
     pub process_state_vector_id: u32,
+    pub admitted_entry_rule_id: u32,
     pub entry_kind: u16,
     pub binding_lifecycle_state: BindingLifecycleStateV1,
-    pub reserved: [u8; 5],
+    pub reserved: u8,
 }
 
 #[repr(C)]
@@ -1160,6 +1161,7 @@ pub enum EffectObservationReasonV1 {
     NetworkResponseFence = 12,
     PreparedRuntimeInfrastructure = 13,
     ApplicationDefaultAllow = 14,
+    RuntimeEntryInfrastructure = 15,
 }
 
 #[repr(u8)]
@@ -1198,7 +1200,7 @@ pub struct EffectObservationV1 {
     pub observed_boottime_ns: u64,
     pub source_sequence: u64,
     pub source_cpu_id: u32,
-    pub reserved_source: [u8; 4],
+    pub admitted_entry_rule_id: u32,
     pub task_cookie: u64,
     pub profile_generation_ref_id: u64,
     pub process_lineage_id: Id128V1,

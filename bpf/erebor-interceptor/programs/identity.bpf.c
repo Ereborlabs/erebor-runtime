@@ -70,6 +70,10 @@ _Static_assert(sizeof(io_uring_actor_snapshot_v1) == 232,
                "io_uring actor snapshot ABI size");
 _Static_assert(sizeof(execution_set_binding_state_v1) == 224,
                "execution-set binding ABI size");
+_Static_assert(sizeof(entry_admission_rule_key_v1) == 40,
+               "entry admission key ABI size");
+_Static_assert(sizeof(entry_admission_rule_v1) == 16,
+               "entry admission rule ABI size");
 _Static_assert(sizeof(io_uring_ring_state_v1) == 528,
                "io_uring ring state ABI size");
 _Static_assert(sizeof(io_uring_request_state_v1) == 344,
@@ -272,6 +276,11 @@ static __noinline int identity_effect_actor_gate(
     struct file *file, __u16 effect_family, __u16 operation, int ret);
 static __always_inline int prepared_runtime_effect_result(
     struct identity_scratch_v1 *scratch);
+static __always_inline int runtime_entry_infrastructure_effect_result(
+    struct identity_scratch_v1 *scratch);
+static __always_inline int hard_effect_result(
+    identity_runtime_config_v1 *config, struct identity_scratch_v1 *scratch,
+    __u8 reason);
 static __noinline int prepared_exec_policy_gate(struct file *file);
 static __noinline int resolved_io_uring_effect_gate(
     struct file *file, __u16 effect_family, __u16 operation, int ret,

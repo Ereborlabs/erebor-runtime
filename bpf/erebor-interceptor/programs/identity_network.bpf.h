@@ -148,7 +148,7 @@ static __always_inline int network_unsupported(int ret, int status)
     scratch = identity_scratch_record();
     if (!config || !scratch)
         return -EACCES;
-    if (current_application_actor_is_exact(ipc_current_binding()))
+    if (current_admitted_actor_is_exact(ipc_current_binding()))
         return application_default_effect_result(scratch);
     return hard_effect_result(config, scratch,
                               effect_observation_reason_v1_unsupported_object);
@@ -362,7 +362,7 @@ static __noinline int network_apply_control(
     binding = ipc_current_binding();
     if (!config || !scratch || !binding)
         return -EACCES;
-    application_default_allow = current_application_actor_is_exact(binding);
+    application_default_allow = current_admitted_actor_is_exact(binding);
     response = network_validate_socket(config, scratch, sock, state);
     if (response)
         return response;
@@ -536,7 +536,7 @@ static __noinline int network_apply_destination(
     binding = ipc_current_binding();
     if (!config || !scratch || !binding)
         return -EACCES;
-    application_default_allow = current_application_actor_is_exact(binding);
+    application_default_allow = current_admitted_actor_is_exact(binding);
     peer_address = scratch->network_socket_state.peer_address;
     peer_port = &scratch->network_socket_state.peer_port;
     flow_authorization_id =
@@ -669,7 +669,7 @@ static __always_inline int network_socket_create_result(
         return -EACCES;
     if (network_family(family) == network_address_family_v1_unknown ||
         network_protocol(type, protocol) == network_protocol_v1_unknown)
-        return current_application_actor_is_exact(binding)
+        return current_admitted_actor_is_exact(binding)
                    ? application_default_effect_result(scratch)
                    : hard_effect_result(
                          config, scratch,
@@ -685,7 +685,7 @@ static __always_inline int network_socket_create_result(
         kernel_effect_operation_v1_socket_create);
     return network_apply_decision(
         config, scratch, generation, decision,
-        current_application_actor_is_exact(binding));
+        current_admitted_actor_is_exact(binding));
 }
 
 static __noinline int network_socket_post_create_result(
@@ -1025,7 +1025,7 @@ static __noinline int network_accept_post_result(struct sock *accepted,
             accepted, scratch->network_socket_state.address_family,
             peer_address, &peer_port))
         return 0;
-    application_default_allow = current_application_actor_is_exact(binding);
+    application_default_allow = current_admitted_actor_is_exact(binding);
     current_class = network_classify_destination(
         scratch, scratch->process.active_profile_generation_ref_id,
         scratch->network_socket_state.protocol,

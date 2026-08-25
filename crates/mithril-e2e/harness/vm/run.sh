@@ -240,6 +240,7 @@ fi
   "$remote_source/bpf/erebor-interceptor/qualification" \
   "$remote_source/crates/mithril-e2e/fixtures/hugging-face/platforms" \
   "$remote_source/crates/mithril-e2e/fixtures/hugging-face/protected" \
+  "$remote_source/crates/mithril-e2e/fixtures/convergence" \
   "$remote_source/crates/mithril-e2e/fixtures/identity" \
   "$remote_source/crates/mithril-e2e/fixtures/mithril-policy" \
   "$remote_source/crates/mithril-e2e/harness/vm" \
@@ -288,6 +289,9 @@ done
 "$provider" put "$vm_name" \
   "$repo_root/crates/mithril-e2e/fixtures/identity/oci-prestart-admission-v1.sh" \
   "$remote_source/crates/mithril-e2e/fixtures/identity/oci-prestart-admission-v1.sh"
+"$provider" put "$vm_name" \
+  "$repo_root/crates/mithril-e2e/fixtures/convergence/direct-entry-roles-v1.yaml" \
+  "$remote_source/crates/mithril-e2e/fixtures/convergence/direct-entry-roles-v1.yaml"
 for fixture in observe-profile-seal-request.json test-public-key.hex test-signing-key.hex observe-policy-v1.yaml; do
   "$provider" put "$vm_name" \
     "$repo_root/crates/mithril-e2e/fixtures/mithril-policy/$fixture" \
@@ -335,12 +339,25 @@ prepared_output=$remote_root/stock-runc-prepared
 
 if [[ $stock_runc_only == true ]]; then
   jq -e '
-    .schema_version == 3 and
+    .schema_version == 5 and
     .prepared_state_before_exec == "prepared" and
     .prepared_state_after_exec == "active" and
     .prepared_runtime_effect_observed and
     .application_entry_allow_observed and
     .application_default_file_allow_observed and
+    .application_admitted_entry_rule_id > 0 and
+    (.independent_entries | length) == 5 and
+    (.independent_entries | all(
+      .active_role_id > 0 and
+      .admitted_entry_rule_id > 0 and
+      .installed_role_class == "declared_entry_role" and
+      .own_policy_deny_observed and
+      .application_policy_not_inherited
+    )) and
+    .independent_entry_roles_are_distinct and
+    .runtime_entry_infrastructure_observed and
+    .external_entry_denied and
+    .external_cgroup_entering_process_stays_closed and
     .executable_observation_has_no_exact_object and
     (.dynamic_loader_paths | length) > 0 and
     .dynamic_loader_paths_absent_from_policy and

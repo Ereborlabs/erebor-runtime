@@ -69,7 +69,7 @@ static __noinline int identity_device_ioctl_effect(struct file *file,
     scratch->observation.operation_argument = cmd;
     if (exact_device_from_file(&scratch->file_object, file, &device_type,
                                &device_major, &device_minor))
-        return current_application_actor_is_exact(binding)
+        return current_admitted_actor_is_exact(binding)
                    ? application_default_effect_result(scratch)
                    : hard_effect_result(
                          config, scratch,
@@ -79,7 +79,7 @@ static __noinline int identity_device_ioctl_effect(struct file *file,
     if (!exact_file_keys_equal(&scratch->file_object,
                                &scratch->observation.file_object) ||
         !scratch->observation.exact_object_key_id)
-        return current_application_actor_is_exact(binding)
+        return current_admitted_actor_is_exact(binding)
                    ? application_default_effect_result(scratch)
                    : hard_effect_result(
                          config, scratch,
@@ -130,7 +130,7 @@ static __noinline int identity_device_ioctl_effect(struct file *file,
             effect_observation_reason_v1_corrupt_identity_or_generation);
     return apply_effect_decision(
         config, scratch, generation, decision,
-        current_application_actor_is_exact(binding), true, false);
+        current_admitted_actor_is_exact(binding), true, false);
 }
 
 static __always_inline int identity_device_ioctl_gate(struct file *file,
@@ -144,7 +144,7 @@ static __always_inline int identity_device_ioctl_gate(struct file *file,
     if (ret)
         return ret;
     scratch = identity_scratch_record();
-    if (prepared_runtime_effect_was_allowed(scratch))
+    if (runtime_infrastructure_effect_was_allowed(scratch))
         return 0;
     return identity_device_ioctl_effect(file, cmd);
 }
@@ -313,6 +313,68 @@ static __always_inline bool prepared_container_target_is_exact(
     return true;
 }
 
+static __always_inline bool external_entry_may_read_initial_target(
+    const identity_runtime_config_v1 *config, struct task_struct *target,
+    __u16 operation, __u32 operation_argument,
+    task_label_v1 **target_label_out)
+{
+    struct task_struct *current = bpf_get_current_task_btf();
+    task_label_v1 *current_label;
+    task_label_v1 *target_label;
+    entry_security_state_v1 *current_entry;
+    entry_security_state_v1 *target_entry;
+    external_root_classification_v1 *classification;
+    execution_set_binding_state_v1 *binding;
+    struct cgroup *target_cgroup = NULL;
+    int binding_lookup;
+
+    if (!config || !target ||
+        !ptrace_mode_is_read_only(operation, operation_argument) ||
+        task_cgroup(target, &target_cgroup))
+        return false;
+    binding = binding_for_cgroup(target_cgroup, &binding_lookup);
+    target_label = bpf_task_storage_get(&task_labels, target, 0, 0);
+    target_entry = target_label
+                       ? bpf_map_lookup_elem(&entry_states,
+                                             &target_label->entry_instance_id)
+                       : NULL;
+    if (binding_lookup || !binding || !target_label || !target_entry ||
+        binding->prepared_container_state != prepared_container_state_v1_active ||
+        !binding_matches_label(binding, target_label) ||
+        !id128_equal(&binding->prepared_container_entry_instance_id,
+                     &target_label->entry_instance_id) ||
+        target_entry->entry_kind != entry_kind_v1_container_start ||
+        !target_entry->admitted_entry_rule_id)
+        return false;
+    current_label = current
+                        ? bpf_task_storage_get(&task_labels, current, 0, 0)
+                        : NULL;
+    if (!current_label) {
+        if (mark_runtime_entry_bootstrap(current, config, binding,
+                                         target_label))
+            return false;
+        *target_label_out = target_label;
+        return true;
+    }
+    current_entry = bpf_map_lookup_elem(&entry_states,
+                                        &current_label->entry_instance_id);
+    classification = bpf_map_lookup_elem(&external_root_classifications,
+                                         &current_label->task_cookie);
+    if (!current_entry || !classification ||
+        !binding_matches_label(binding, current_label) ||
+        current_entry->entry_kind != entry_kind_v1_unknown_external ||
+        current_entry->admitted_entry_rule_id ||
+        classification->root_class !=
+            external_root_class_v1_external_runtime_root ||
+        classification->installed_role_class !=
+            installed_role_class_v1_runtime_external_restricted)
+        return false;
+    if (mark_runtime_entry_bootstrap(current, config, binding, target_label))
+        return false;
+    *target_label_out = target_label;
+    return true;
+}
+
 static __noinline int identity_process_control_effect(
     struct task_struct *target, __u16 operation, __u32 operation_argument)
 {
@@ -469,7 +531,7 @@ static __noinline int identity_process_control_effect(
             effect_observation_reason_v1_corrupt_identity_or_generation);
     return apply_effect_decision(
         config, scratch, generation, rule,
-        current_application_actor_is_exact(binding), true, false);
+        current_admitted_actor_is_exact(binding), true, false);
 }
 
 static __always_inline int identity_process_control_gate(
@@ -494,13 +556,25 @@ static __always_inline int identity_process_control_gate(
         }
         return prepared_runtime_effect_result(scratch);
     }
+    if (!ret && config && config->enabled && config->effect_policy_enabled &&
+        external_entry_may_read_initial_target(
+            config, target, operation, operation_argument, &target_label)) {
+        scratch = identity_scratch_record();
+        if (scratch) {
+            begin_effect_observation(
+                scratch, kernel_effect_family_v1_privilege, operation);
+            scratch->observation.target_task_cookie = target_label->task_cookie;
+            scratch->observation.operation_argument = operation_argument;
+        }
+        return runtime_entry_infrastructure_effect_result(scratch);
+    }
 
     ret = identity_effect_actor_gate(
         NULL, kernel_effect_family_v1_privilege, operation, ret);
     if (ret)
         return ret;
     scratch = identity_scratch_record();
-    if (prepared_runtime_effect_was_allowed(scratch))
+    if (runtime_infrastructure_effect_was_allowed(scratch))
         return 0;
     return identity_process_control_effect(target, operation,
                                            operation_argument);

@@ -135,4 +135,5 @@ message MithrilEffectObservation {
   uint32 network_current_namespace_inode = 70;
   uint64 source_sequence = 71;
   uint32 source_cpu_id = 72;
+  uint32 admitted_entry_rule_id = 73;
 }

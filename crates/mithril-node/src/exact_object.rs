@@ -53,30 +53,6 @@ pub(crate) struct LiveExactFileObjectV1 {
     pub mount_snapshot_digest_id: u64,
 }
 
-impl LiveExactFileObjectV1 {
-    pub(crate) fn matches(&self, configured: &ExactFileObjectConfig) -> bool {
-        self.mount_namespace_inode == configured.mount_namespace_inode
-            && self.mount_id_unique == configured.mount_id_unique
-            && self.filesystem_device == configured.filesystem_device
-            && self.inode == configured.inode
-            && self.inode_generation == configured.inode_generation
-            && self.canonical_component_hex == configured.canonical_component_hex
-            && self.mount_relative_component_count == configured.mount_relative_component_count
-            && self.mount_root_filesystem_device == configured.mount_root_filesystem_device
-            && self.mount_root_inode == configured.mount_root_inode
-            && self.selected_mount_id_unique == configured.selected_mount_id_unique
-            && match (&configured.device, self.device_type) {
-                (None, None) => true,
-                (Some(device), Some(device_type)) => {
-                    device.device_type == device_type
-                        && device.major == self.device_major
-                        && device.minor == self.device_minor
-                }
-                _ => false,
-            }
-    }
-}
-
 impl ExactFileObjectResolver {
     pub fn resolve(
         root_pid: u32,

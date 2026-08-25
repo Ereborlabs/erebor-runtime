@@ -210,6 +210,7 @@ impl AdministrativeExecOwner {
             expected_root_class: ExternalRootClassV1::ExternalRuntimeRoot,
             profile_generation_ref_id: live_policy.profile_generation_ref_id,
             exception_numeric_handle: live_policy.exception_numeric_handle,
+            admitted_entry_rule_id: live_policy.admitted_entry_rule_id,
             ..ApprovedExecSlotV1::default()
         };
         let receipt = AdministrativeSlotReceiptV1 {

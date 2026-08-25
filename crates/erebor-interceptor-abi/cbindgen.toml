@@ -40,6 +40,8 @@ include = [
   "AuthorityDomainStateKindV1",
   "AuthorityDomainStateV1",
   "EntryAdmissionStateV1",
+  "EntryAdmissionRuleKeyV1",
+  "EntryAdmissionRuleV1",
   "EntryKindV1",
   "EntryLifetimeStateV1",
   "EntryPurposeV1",
@@ -172,6 +174,8 @@ include = [
 "AuthorityDomainStateKindV1" = "authority_domain_state_kind_v1"
 "AuthorityDomainStateV1" = "authority_domain_state_v1"
 "EntryAdmissionStateV1" = "entry_admission_state_v1"
+"EntryAdmissionRuleKeyV1" = "entry_admission_rule_key_v1"
+"EntryAdmissionRuleV1" = "entry_admission_rule_v1"
 "EntryKindV1" = "entry_kind_v1"
 "EntryLifetimeStateV1" = "entry_lifetime_state_v1"
 "EntryPurposeV1" = "entry_purpose_v1"

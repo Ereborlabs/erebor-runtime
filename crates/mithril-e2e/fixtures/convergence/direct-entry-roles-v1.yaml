@@ -1,0 +1,163 @@
+podSelector:
+  matchLabels:
+    app.kubernetes.io/name: direct-runc
+  matchExpressions: []
+mode: Protect
+containers:
+  - names: [direct-runc]
+    kinds: [Application]
+    images:
+      - registry.example/direct-runc@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    applicationEntry:
+      executionRule: application-entry
+      role: application
+    additionalEntries:
+      - name: poststart
+        kind: PostStart
+        executionRule: poststart-entry
+        role: poststart
+      - name: prestop
+        kind: PreStop
+        executionRule: prestop-entry
+        role: prestop
+      - name: startup
+        kind: StartupProbe
+        executionRule: startup-entry
+        role: startup
+      - name: readiness
+        kind: ReadinessProbe
+        executionRule: readiness-entry
+        role: readiness
+      - name: liveness
+        kind: LivenessProbe
+        executionRule: liveness-entry
+        role: liveness
+    administrativeEntry:
+      role: administrator
+    externalRole: runtime-external
+roles:
+  - name: application
+    files:
+      - name: deny-application-file
+        path: /run/mithril-entry-roles/application.denied
+        recursive: false
+        operations: [OpenRead]
+        action: Deny
+    execution:
+      - name: application-entry
+        path: /bin/sh
+        recursive: false
+        operations: [Execute]
+        action: Allow
+    network:
+      socketControls: []
+      destinations: []
+    processControl: []
+    unixStreams: []
+  - name: poststart
+    files:
+      - name: deny-poststart-file
+        path: /run/mithril-entry-roles/poststart.denied
+        recursive: false
+        operations: [OpenRead]
+        action: Deny
+    execution:
+      - name: poststart-entry
+        path: /opt/mithril/entries/poststart
+        recursive: false
+        operations: [Execute]
+        action: Allow
+    network:
+      socketControls: []
+      destinations: []
+    processControl: []
+    unixStreams: []
+  - name: prestop
+    files:
+      - name: deny-prestop-file
+        path: /run/mithril-entry-roles/prestop.denied
+        recursive: false
+        operations: [OpenRead]
+        action: Deny
+    execution:
+      - name: prestop-entry
+        path: /opt/mithril/entries/prestop
+        recursive: false
+        operations: [Execute]
+        action: Allow
+    network:
+      socketControls: []
+      destinations: []
+    processControl: []
+    unixStreams: []
+  - name: startup
+    files:
+      - name: deny-startup-file
+        path: /run/mithril-entry-roles/startup.denied
+        recursive: false
+        operations: [OpenRead]
+        action: Deny
+    execution:
+      - name: startup-entry
+        path: /opt/mithril/entries/startup
+        recursive: false
+        operations: [Execute]
+        action: Allow
+    network:
+      socketControls: []
+      destinations: []
+    processControl: []
+    unixStreams: []
+  - name: readiness
+    files:
+      - name: deny-readiness-file
+        path: /run/mithril-entry-roles/readiness.denied
+        recursive: false
+        operations: [OpenRead]
+        action: Deny
+    execution:
+      - name: readiness-entry
+        path: /opt/mithril/entries/readiness
+        recursive: false
+        operations: [Execute]
+        action: Allow
+    network:
+      socketControls: []
+      destinations: []
+    processControl: []
+    unixStreams: []
+  - name: liveness
+    files:
+      - name: deny-liveness-file
+        path: /run/mithril-entry-roles/liveness.denied
+        recursive: false
+        operations: [OpenRead]
+        action: Deny
+    execution:
+      - name: liveness-entry
+        path: /opt/mithril/entries/liveness
+        recursive: false
+        operations: [Execute]
+        action: Allow
+    network:
+      socketControls: []
+      destinations: []
+    processControl: []
+    unixStreams: []
+  - name: administrator
+    files: []
+    execution: []
+    network:
+      socketControls: []
+      destinations: []
+    processControl: []
+    unixStreams: []
+  - name: runtime-external
+    files: []
+    execution: []
+    network:
+      socketControls: []
+      destinations: []
+    processControl: []
+    unixStreams: []
+exceptionGrants: []

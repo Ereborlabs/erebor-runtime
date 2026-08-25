@@ -10,27 +10,29 @@ use erebor_interceptor_abi::{
     ApprovedExecSlotStateV1, ApprovedExecSlotV1, AuthorityDomainStateV1,
     BindingActivationTargetKeyV1, BindingLifecycleStateV1, CanonicalMountRootKeyV1,
     CanonicalMountRootV1, CanonicalPathComponentV1, EffectDecisionKeyV1, EffectDefaultKeyV1,
-    ExactExecutableCandidateV1, ExactFileObjectKeyV1, ExactObjectBindingStateV1,
-    ExactObjectBindingV1, ExceptionBindingStateV1, ExceptionHandleBindingKeyV1,
-    ExceptionHandleBindingV1, ExceptionRuntimeStateKeyV1, ExceptionRuntimeStateKindV1,
-    ExceptionRuntimeStateV1, ExecutionSetBindingStateV1, Id128V1, IoUringRequestStateV1,
-    IoUringRingStateV1, KernelEffectFamilyV1, MountReconciliationProposalV1,
-    MountSecurityViewStateV1, MountTopologyStateV1, NetworkDestinationDecisionKeyV1,
-    NetworkResponseFloorKeyV1, NetworkResponseFloorV1, NetworkResponseScopeV1, PathGraphStateKeyV1,
-    PathGraphTerminalV1, PathGraphTransitionKeyV1, PathGraphTransitionV1,
-    PendingAdministrativeMatchV1, PendingExecV1, PhysicalDecisionKindV1, PhysicalDecisionV1,
-    PolicyActivationProbeMapKindV1, PolicyActivationProbeV1, PolicyGenerationModeV1,
-    PolicyGenerationStateV1, ProcessSecurityStateKindV1, ProcessSecurityStateV1,
-    ProfileGenerationDescriptorV1, ReferenceTombstoneStateV1, TaskReferenceTombstoneV1,
-    MAX_CANONICAL_COMPONENT_BYTES_V1, MAX_POLICY_ACTIVATION_PROBE_KEY_BYTES_V1,
+    EntryAdmissionRuleKeyV1, EntryAdmissionRuleV1, ExactExecutableCandidateV1,
+    ExactFileObjectKeyV1, ExactObjectBindingStateV1, ExactObjectBindingV1, ExceptionBindingStateV1,
+    ExceptionHandleBindingKeyV1, ExceptionHandleBindingV1, ExceptionRuntimeStateKeyV1,
+    ExceptionRuntimeStateKindV1, ExceptionRuntimeStateV1, ExecutionSetBindingStateV1, Id128V1,
+    InstalledRoleClassV1, IoUringRequestStateV1, IoUringRingStateV1, KernelEffectFamilyV1,
+    MountReconciliationProposalV1, MountSecurityViewStateV1, MountTopologyStateV1,
+    NetworkDestinationDecisionKeyV1, NetworkResponseFloorKeyV1, NetworkResponseFloorV1,
+    NetworkResponseScopeV1, PathGraphStateKeyV1, PathGraphTerminalV1, PathGraphTransitionKeyV1,
+    PathGraphTransitionV1, PendingAdministrativeMatchV1, PendingExecV1, PhysicalDecisionKindV1,
+    PhysicalDecisionV1, PolicyActivationProbeMapKindV1, PolicyActivationProbeV1,
+    PolicyGenerationModeV1, PolicyGenerationStateV1, ProcessSecurityStateKindV1,
+    ProcessSecurityStateV1, ProfileGenerationDescriptorV1, ReferenceTombstoneStateV1,
+    TaskReferenceTombstoneV1, MAX_CANONICAL_COMPONENT_BYTES_V1,
+    MAX_POLICY_ACTIVATION_PROBE_KEY_BYTES_V1,
 };
 use mithril_control::{
     canonical_path_components, AntiRollbackStore, CanonicalPathGraphV1, CompiledOperationV1,
     CompiledPhysicalResultV1, ContainerKindV1 as PolicyContainerKindV1, EntryKindV1,
     ExceptionActivationStateV1, ExceptionDeliveryCandidateV1, ExceptionDeliveryOperationV1,
-    ObjectClassifierSelectorV1, PathPatternV1, PathSelectorTargetV1, PathTreeDenyPatternV1,
-    PendingProfileActivationV1, PolicyArtifactOwner, PolicyDocumentV1, ProfileActivationMetadataV1,
-    ProfileCandidateArtifactV1, ProfileModeV1, StaticDecisionKeyV1, ValidatedProfileCandidateV1,
+    LocalObjectSelectorV1, ObjectClassifierSelectorV1, PathPatternV1, PathSelectorTargetV1,
+    PathTreeDenyPatternV1, PendingProfileActivationV1, PolicyArtifactOwner, PolicyDispositionV1,
+    PolicyDocumentV1, ProfileActivationMetadataV1, ProfileCandidateArtifactV1, ProfileModeV1,
+    RuleMatchV1, StaticDecisionKeyV1, ValidatedProfileCandidateV1,
 };
 use sha2::{Digest as _, Sha256};
 use snafu::{ensure, OptionExt as _, ResultExt as _};
@@ -95,15 +97,15 @@ struct AdministrativePolicyPlanV1 {
     binding_id: Id128V1,
     approved_role_id: String,
     approved_role_numeric_id: u32,
+    admitted_entry_rule_id: u32,
     profile: PortableProfileGenerationIdentityV1,
     profile_generation_ref_id: u64,
-    exception_numeric_handle: u32,
-    executable_object: ExactFileObjectConfig,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct ResolvedAdministrativePolicyV1 {
     pub approved_role_numeric_id: u32,
+    pub admitted_entry_rule_id: u32,
     pub profile_generation_ref_id: u64,
     pub exception_numeric_handle: u32,
     pub profile: PortableProfileGenerationIdentityV1,
@@ -1274,48 +1276,27 @@ impl NodePolicyGenerationOwner {
             })
             .collect::<Vec<_>>();
         ensure!(
-            !plans.is_empty(),
+            plans.len() == 1,
             IdentityStateSnafu {
-                reason: "signed profile has no administrative plan for the exact target and role",
+                reason: "signed profile does not have one administrative entry for the exact target and role",
             }
         );
-        let mount_namespace_inode = plans[0].executable_object.mount_namespace_inode;
+        let plan = plans[0];
+        let view = crate::exact_object::ExactFileObjectView::acquire(target.init_pid)?;
+        let mount_namespace_inode = view.mount_namespace_inode()?;
         ensure!(
-            plans.iter().all(|plan| {
-                plan.executable_object.mount_namespace_inode == mount_namespace_inode
-            }),
+            mount_namespace_inode > 0,
             IdentityStateSnafu {
-                reason: "administrative executable plans span unequal mount views",
+                reason: "administrative target has no stable mount view",
             }
         );
-        let view = self
-            .mount_view_handles
-            .get(&mount_namespace_inode)
-            .ok_or_else(|| {
-                IdentityStateSnafu {
-                    reason: "administrative target has no retained mount view".to_owned(),
-                }
-                .build()
-            })?;
-        ensure!(
-            view.mount_namespace_inode()? == mount_namespace_inode,
-            IdentityStateSnafu {
-                reason: "administrative retained mount view changed identity",
-            }
-        );
-        let view_key = mount_namespace_inode.to_ne_bytes();
-        let view_state = mount_state(host, "mount_security_views", &view_key)?;
         let global_key = 0_u32.to_ne_bytes();
         let global_epoch = mount_epoch_from(host, "mount_global_mutation_epoch", &global_key)?;
         ensure!(
-            view_state.state == MountTopologyStateV1::Clean
-                && view_state.pending_mutations == 0
-                && view_state.topology_generation == global_epoch
-                && mount_epoch(host, &view_key)? == global_epoch
-                && mount_epoch_from(host, "mount_global_clean_epoch", &global_key)? == global_epoch
+            global_epoch > 0
                 && mount_epoch_from(host, "mount_global_pending_mutations", &global_key)? == 0,
             IdentityStateSnafu {
-                reason: "administrative executable mount view is not globally clean",
+                reason: "administrative executable mount view has an active mutation",
             }
         );
         let active = host
@@ -1365,20 +1346,10 @@ impl NodePolicyGenerationOwner {
                     reason: "resolved administrative command is not a regular executable file",
                 }
             );
-            let matching = plans
-                .iter()
-                .filter(|plan| live.matches(&plan.executable_object))
-                .collect::<Vec<_>>();
-            ensure!(
-                matching.len() == 1,
-                IdentityStateSnafu {
-                    reason: "resolved administrative command is absent from or ambiguous in the signed exact plans",
-                }
-            );
-            selected = Some((path, live, matching[0]));
+            selected = Some((path, live));
             break;
         }
-        let (path, live, plan) = selected.ok_or_else(|| {
+        let (path, live) = selected.ok_or_else(|| {
             IdentityStateSnafu {
                 reason: "administrative command did not resolve in the target container view"
                     .to_owned(),
@@ -1386,9 +1357,15 @@ impl NodePolicyGenerationOwner {
             .build()
         })?;
         ensure!(
-            live.mount_snapshot_digest_id == view_state.snapshot_digest_id,
+            live.mount_namespace_inode == mount_namespace_inode
+                && live.mount_snapshot_digest_id > 0
+                && live.inode_generation > 0
+                && view.mount_namespace_inode()? == mount_namespace_inode
+                && mount_epoch_from(host, "mount_global_mutation_epoch", &global_key)?
+                    == global_epoch
+                && mount_epoch_from(host, "mount_global_pending_mutations", &global_key)? == 0,
             IdentityStateSnafu {
-                reason: "administrative command resolution used a stale mount snapshot",
+                reason: "administrative command resolution crossed a mount mutation",
             }
         );
         let mount_namespace_id = derived_id(
@@ -1412,10 +1389,7 @@ impl NodePolicyGenerationOwner {
                 portable_id_bytes(filesystem_instance_id),
                 live.mount_id.to_be_bytes().to_vec(),
                 live.inode.to_be_bytes().to_vec(),
-                plan.executable_object
-                    .inode_generation
-                    .to_be_bytes()
-                    .to_vec(),
+                live.inode_generation.to_be_bytes().to_vec(),
                 global_epoch.to_be_bytes().to_vec(),
             ],
         )?;
@@ -1424,10 +1398,7 @@ impl NodePolicyGenerationOwner {
             &[
                 portable_id_bytes(plan.profile.profile_id),
                 plan.profile_generation_ref_id.to_be_bytes().to_vec(),
-                plan.executable_object
-                    .exact_object_key_id
-                    .to_be_bytes()
-                    .to_vec(),
+                plan.admitted_entry_rule_id.to_be_bytes().to_vec(),
             ],
         )?;
         let live_interval_id = derived_id(
@@ -1460,8 +1431,9 @@ impl NodePolicyGenerationOwner {
         );
         Ok(ResolvedAdministrativePolicyV1 {
             approved_role_numeric_id: plan.approved_role_numeric_id,
+            admitted_entry_rule_id: plan.admitted_entry_rule_id,
             profile_generation_ref_id: plan.profile_generation_ref_id,
-            exception_numeric_handle: plan.exception_numeric_handle,
+            exception_numeric_handle: 0,
             profile: plan.profile.clone(),
             resolved_executable: ResolvedAdministrativeExecutableIdentityV1 {
                 requested_name: requested_name.to_vec(),
@@ -1477,7 +1449,7 @@ impl NodePolicyGenerationOwner {
                     mount_id: live.mount_id,
                     filesystem_instance_id,
                     inode: live.inode,
-                    inode_generation: plan.executable_object.inode_generation,
+                    inode_generation: live.inode_generation,
                     exact_live_object_id,
                     object_kind: 1,
                     backing_identity,
@@ -1489,7 +1461,7 @@ impl NodePolicyGenerationOwner {
                 mount_namespace_inode,
                 mount_id: live.mount_id,
                 filesystem_device: live.filesystem_device,
-                inode_generation: plan.executable_object.inode_generation,
+                inode_generation: live.inode_generation,
                 reserved: 0,
             },
         })
@@ -1896,6 +1868,7 @@ fn validate_mount_view(
 
 struct LoweredGeneration {
     descriptor: ProfileGenerationDescriptorV1,
+    entry_admissions: BTreeMap<Vec<u8>, Vec<u8>>,
     decisions: BTreeMap<Vec<u8>, Vec<u8>>,
     defaults: BTreeMap<Vec<u8>, Vec<u8>>,
     device_decisions: BTreeMap<Vec<u8>, Vec<u8>>,
@@ -2102,6 +2075,13 @@ impl LoweredGeneration {
             );
         }
         validate_binding_roles(artifact, binding, &role_handles, &process_state_handles)?;
+        let entry_admissions = lower_entry_admissions(
+            artifact,
+            binding,
+            &role_handles,
+            &process_state_handles,
+            &composite_handles,
+        )?;
         let mut decisions = BTreeMap::new();
         let mut defaults = BTreeMap::new();
         let mut device_decisions = BTreeMap::new();
@@ -2469,17 +2449,12 @@ impl LoweredGeneration {
             };
             insert_exact(&mut file_objects, key.as_bytes(), value.as_bytes())?;
         }
-        let (administrative_required, administrative_plans) = lower_administrative_plans(
-            artifact,
-            binding,
-            &role_handles,
-            &process_state_handles,
-            &exception_handles,
-            &generation_objects,
-        )?;
+        let (administrative_required, administrative_plans) =
+            lower_administrative_plans(artifact, binding, &role_handles, &process_state_handles)?;
         let path_tables =
             Self::lower_path_tables(artifact, binding, &generation_objects, &composite_handles)?;
         let tables = [
+            ("entry-admission", &entry_admissions),
             ("decision", &decisions),
             ("default", &defaults),
             ("process-control-rule", &process_control_rules),
@@ -2500,7 +2475,8 @@ impl LoweredGeneration {
             owner_generation: artifact.header.profile_version,
             row_count: decisions
                 .len()
-                .checked_add(process_control_rules.len())
+                .checked_add(entry_admissions.len())
+                .and_then(|count| count.checked_add(process_control_rules.len()))
                 .and_then(|count| count.checked_add(ipc_relationships.len()))
                 .and_then(|count| count.checked_add(network.ipv4_classes.len()))
                 .and_then(|count| count.checked_add(network.ipv6_classes.len()))
@@ -2529,6 +2505,7 @@ impl LoweredGeneration {
         };
         Ok(Self {
             descriptor,
+            entry_admissions,
             decisions,
             defaults,
             device_decisions,
@@ -2565,6 +2542,7 @@ impl LoweredGeneration {
                 reason: "one generation handle cannot name different candidate artifacts",
             }
         );
+        merge_rows(&mut self.entry_admissions, other.entry_admissions)?;
         merge_rows(&mut self.decisions, other.decisions)?;
         merge_rows(&mut self.defaults, other.defaults)?;
         merge_rows(&mut self.device_decisions, other.device_decisions)?;
@@ -2599,7 +2577,8 @@ impl LoweredGeneration {
         self.descriptor.row_count = self
             .decisions
             .len()
-            .checked_add(self.process_control_rules.len())
+            .checked_add(self.entry_admissions.len())
+            .and_then(|count| count.checked_add(self.process_control_rules.len()))
             .and_then(|count| count.checked_add(self.ipc_relationships.len()))
             .and_then(|count| count.checked_add(self.network_ipv4_classes.len()))
             .and_then(|count| count.checked_add(self.network_ipv6_classes.len()))
@@ -2613,6 +2592,7 @@ impl LoweredGeneration {
             })?;
         self.descriptor.default_count = self.defaults.len() as u32;
         self.descriptor.table_digest = table_digest(&[
+            ("entry-admission", &self.entry_admissions),
             ("decision", &self.decisions),
             ("default", &self.defaults),
             ("process-control-rule", &self.process_control_rules),
@@ -2629,6 +2609,7 @@ impl LoweredGeneration {
 
     fn planned_rows(&self) -> Vec<PlannedGenerationRow<'_>> {
         vec![
+            ("entry_admission_rules", &self.entry_admissions),
             ("effect_decisions", &self.decisions),
             ("effect_defaults", &self.defaults),
             ("device_effect_decisions", &self.device_decisions),
@@ -2771,6 +2752,7 @@ impl LoweredGeneration {
             )
             .context(InterceptorSnafu)?;
         }
+        install_rows(host, "entry_admission_rules", &self.entry_admissions)?;
         install_rows(host, "effect_decisions", &self.decisions)?;
         install_rows(host, "effect_defaults", &self.defaults)?;
         install_rows(host, "device_effect_decisions", &self.device_decisions)?;
@@ -2862,6 +2844,7 @@ impl LoweredGeneration {
 
     fn verify_immutable_rows(&self, host: &KernelHost) -> Result<()> {
         for (map, rows) in [
+            ("entry_admission_rules", &self.entry_admissions),
             ("effect_decisions", &self.decisions),
             ("effect_defaults", &self.defaults),
             ("process_control_rules", &self.process_control_rules),
@@ -3899,6 +3882,7 @@ fn retire_generation_rows(
 
     // A persisted tombstone resumes deletion here after any earlier process exit.
     for map in [
+        "entry_admission_rules",
         "effect_decisions",
         "effect_defaults",
         "ipc_relationship_decisions",
@@ -4188,6 +4172,164 @@ fn cell_matches_binding(
         && key.execution_set_id == *execution_set_id
 }
 
+fn lower_entry_admissions(
+    artifact: &ProfileCandidateArtifactV1,
+    binding: &WorkloadBindingConfig,
+    role_handles: &BTreeMap<String, u32>,
+    process_state_handles: &BTreeMap<String, u32>,
+    composite_handles: &BTreeMap<String, u64>,
+) -> Result<GenerationRows> {
+    let assignment_handles = handles(
+        artifact
+            .policy_document
+            .entry_role_assignments
+            .iter()
+            .map(|assignment| assignment.assignment_id.as_str()),
+    );
+    let binding_id = parse_id("binding_id", &binding.binding_id)?;
+    let external_role_id = role_handles
+        .iter()
+        .find_map(|(role, handle)| (*handle == binding.external_role_id).then_some(role.as_str()))
+        .context(IdentityStateSnafu {
+            reason: "configured external role has no signed role ID",
+        })?;
+    let mut rows = GenerationRows::new();
+    for assignment in artifact
+        .policy_document
+        .entry_role_assignments
+        .iter()
+        .filter(|assignment| {
+            assignment
+                .workload_selector_ids
+                .contains(&binding.workload_selector_id)
+                && assignment
+                    .container_kinds
+                    .contains(&policy_container_kind(binding.container_kind))
+                && assignment.admission_execution_rule_id.is_some()
+        })
+    {
+        let [policy_entry_kind] = assignment.entry_kinds.as_slice() else {
+            return IdentityStateSnafu {
+                reason: format!(
+                    "entry admission `{}` does not have one entry kind",
+                    assignment.assignment_id
+                ),
+            }
+            .fail();
+        };
+        let (source_role_id, installed_role_class) = match policy_entry_kind {
+            EntryKindV1::ContainerStart => (
+                assignment.resulting_role_id.as_str(),
+                InstalledRoleClassV1::InitialRole,
+            ),
+            EntryKindV1::DeclaredPostStart
+            | EntryKindV1::DeclaredPreStop
+            | EntryKindV1::DeclaredStartupProbe
+            | EntryKindV1::DeclaredReadinessProbe
+            | EntryKindV1::DeclaredLivenessProbe => {
+                (external_role_id, InstalledRoleClassV1::DeclaredEntryRole)
+            }
+            _ => {
+                return IdentityStateSnafu {
+                    reason: format!(
+                        "entry admission `{}` uses an unsupported transition kind",
+                        assignment.assignment_id
+                    ),
+                }
+                .fail()
+            }
+        };
+        let rule_id =
+            assignment
+                .admission_execution_rule_id
+                .as_deref()
+                .context(IdentityStateSnafu {
+                    reason: "entry admission lost its execution rule",
+                })?;
+        let rule = artifact
+            .policy_document
+            .rules
+            .iter()
+            .find(|rule| rule.rule_id == rule_id)
+            .context(IdentityStateSnafu {
+                reason: format!("entry admission rule `{rule_id}` is not signed"),
+            })?;
+        let RuleMatchV1::LocalPreEffect(effect) = &rule.rule_match else {
+            return IdentityStateSnafu {
+                reason: format!("entry admission rule `{rule_id}` is not a local effect"),
+            }
+            .fail();
+        };
+        let LocalObjectSelectorV1::PathSelectors { path_selector_ids } = &effect.object else {
+            return IdentityStateSnafu {
+                reason: format!("entry admission rule `{rule_id}` has no path selector"),
+            }
+            .fail();
+        };
+        let [path_selector_id] = path_selector_ids.as_slice() else {
+            return IdentityStateSnafu {
+                reason: format!("entry admission rule `{rule_id}` is not one exact path match"),
+            }
+            .fail();
+        };
+        let selector = artifact
+            .policy_document
+            .path_selectors
+            .iter()
+            .find(|selector| selector.path_selector_id == *path_selector_id)
+            .context(IdentityStateSnafu {
+                reason: format!("entry admission rule `{rule_id}` has an unknown path selector"),
+            })?;
+        ensure!(
+            rule.enabled
+                && rule.requested_disposition == PolicyDispositionV1::Allow
+                && effect.effect_families == [mithril_control::EffectFamilyV1::Exec]
+                && effect.operation_ids.iter().any(|operation| operation == "EXECUTE")
+                && effect.subject.role_ids == [assignment.resulting_role_id.as_str()]
+                && effect
+                    .subject
+                    .entry_kind_ids
+                    .contains(policy_entry_kind)
+                && !selector.requires_exact_object(),
+            IdentityStateSnafu {
+                reason: format!(
+                    "entry admission rule `{rule_id}` is not one path-based Allow Execute rule for its role and entry kind"
+                ),
+            }
+        );
+        let target_role_id = role_handles[&assignment.resulting_role_id];
+        let target_role = artifact
+            .policy_document
+            .roles
+            .iter()
+            .find(|role| role.role_id == assignment.resulting_role_id)
+            .context(IdentityStateSnafu {
+                reason: format!(
+                    "entry admission `{}` has no signed target role",
+                    assignment.assignment_id
+                ),
+            })?;
+        let key = EntryAdmissionRuleKeyV1 {
+            profile_generation_ref_id: binding.active_profile_generation_ref_id,
+            binding_id,
+            composite_atom_id: composite_handles[&format!("PATH:{path_selector_id}")],
+            source_role_id: role_handles[source_role_id],
+            reserved: 0,
+        };
+        let value = EntryAdmissionRuleV1 {
+            target_role_id,
+            target_process_state_vector_id: process_state_handles
+                [&target_role.default_process_state_id],
+            admitted_entry_rule_id: assignment_handles[&assignment.assignment_id],
+            entry_kind: entry_kind(*policy_entry_kind),
+            installed_role_class,
+            reserved: 0,
+        };
+        insert_exact(&mut rows, key.as_bytes(), value.as_bytes())?;
+    }
+    Ok(rows)
+}
+
 fn validate_binding_roles(
     artifact: &ProfileCandidateArtifactV1,
     binding: &WorkloadBindingConfig,
@@ -4286,8 +4428,6 @@ fn lower_administrative_plans(
     binding: &WorkloadBindingConfig,
     role_handles: &BTreeMap<String, u32>,
     process_state_handles: &BTreeMap<String, u32>,
-    exception_handles: &BTreeMap<String, u32>,
-    generation_objects: &[&ExactFileObjectConfig],
 ) -> Result<(bool, Vec<AdministrativePolicyPlanV1>)> {
     let assignments = artifact
         .policy_document
@@ -4307,15 +4447,19 @@ fn lower_administrative_plans(
     if assignments.is_empty() {
         return Ok((false, Vec::new()));
     }
-    let external_role_id = role_handles
-        .iter()
-        .find_map(|(role_id, handle)| (*handle == binding.external_role_id).then_some(role_id))
-        .ok_or_else(|| {
-            IdentityStateSnafu {
-                reason: "configured external role has no signed role ID".to_owned(),
-            }
-            .build()
-        })?;
+    ensure!(
+        assignments.len() == 1,
+        IdentityStateSnafu {
+            reason: "one container binding must have one administrative entry",
+        }
+    );
+    let assignment_handles = handles(
+        artifact
+            .policy_document
+            .entry_role_assignments
+            .iter()
+            .map(|assignment| assignment.assignment_id.as_str()),
+    );
     let artifact_sha256 = decode_sha256(&artifact.header.policy_document_digest)?;
     let profile = PortableProfileGenerationIdentityV1 {
         profile_id: parse_id("profile_id", &artifact.header.profile_id)?,
@@ -4323,7 +4467,6 @@ fn lower_administrative_plans(
         artifact_sha256,
     };
     let mut plans = Vec::new();
-    let mut plan_keys = BTreeSet::new();
     for assignment in assignments {
         let role = artifact
             .policy_document
@@ -4357,80 +4500,14 @@ fn lower_administrative_plans(
             }
         );
         let approved_role_numeric_id = role_handles[&role.role_id];
-        let mut role_selector_count = 0;
-        for cell in artifact
-            .compiled_profile
-            .compiled_cells
-            .iter()
-            .filter(|cell| {
-                cell_matches_binding(&cell.key, binding, &artifact.policy_document)
-                    && cell.key.entry_kind == EntryKindV1::ExternalRuntimeUnknown
-                    && cell.key.role_id == *external_role_id
-                    && cell.key.effect_family == mithril_control::EffectFamilyV1::Exec
-                    && cell.key.operation_id == "EXECUTE"
-                    && cell.key.binding_lifecycle == mithril_control::BindingLifecycleV1::Active
-                    && matches!(
-                        cell.physical_result,
-                        CompiledPhysicalResultV1::AllowEffect
-                            | CompiledPhysicalResultV1::AuditAllowEffect
-                    )
-            })
-        {
-            let Some(path_selector_id) = cell.key.object_selector.strip_prefix("PATH:") else {
-                continue;
-            };
-            role_selector_count += 1;
-            let exact_object_key_id = artifact
-                .policy_document
-                .path_selectors
-                .iter()
-                .find(|selector| selector.path_selector_id == path_selector_id)
-                .context(IdentityStateSnafu {
-                    reason: format!(
-                        "administrative executable references unknown path selector `{path_selector_id}`"
-                    ),
-                })?
-                .kernel_handle();
-            let Some(executable_object) = generation_objects
-                .iter()
-                .find(|object| object.exact_object_key_id == exact_object_key_id)
-                .copied()
-            else {
-                continue;
-            };
-            ensure!(
-                plan_keys.insert((
-                    parse_id("binding_id", &binding.binding_id)?,
-                    role.role_id.clone(),
-                    exact_object_key_id,
-                )),
-                IdentityStateSnafu {
-                    reason: "administrative role and executable plan is ambiguous",
-                }
-            );
-            plans.push(AdministrativePolicyPlanV1 {
-                binding_id: parse_id("binding_id", &binding.binding_id)?,
-                approved_role_id: role.role_id.clone(),
-                approved_role_numeric_id,
-                profile: profile.clone(),
-                profile_generation_ref_id: binding.active_profile_generation_ref_id,
-                exception_numeric_handle: cell
-                    .consuming_exception_id
-                    .as_ref()
-                    .map(|id| exception_handles[id])
-                    .unwrap_or_default(),
-                executable_object: (*executable_object).clone(),
-            });
-        }
-        ensure!(
-            role_selector_count > 0,
-            IdentityStateSnafu {
-                reason: format!(
-                    "administrative role `{}` has no signed executable selector for the restricted external root",
-                    role.role_id
-                ),
-            }
-        );
+        plans.push(AdministrativePolicyPlanV1 {
+            binding_id: parse_id("binding_id", &binding.binding_id)?,
+            approved_role_id: role.role_id.clone(),
+            approved_role_numeric_id,
+            admitted_entry_rule_id: assignment_handles[&assignment.assignment_id],
+            profile: profile.clone(),
+            profile_generation_ref_id: binding.active_profile_generation_ref_id,
+        });
     }
     Ok((true, plans))
 }
@@ -4960,23 +5037,25 @@ pub(crate) fn current_boottime_ns() -> Result<u64> {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
+    use std::collections::{BTreeMap, BTreeSet};
     use std::mem::offset_of;
     use std::path::{Path, PathBuf};
 
     use ed25519_dalek::SigningKey;
     use erebor_interceptor_abi::{
-        BindingLifecycleStateV1, EffectDecisionKeyV1, EffectDefaultKeyV1,
-        EntryKindV1 as AbiEntryKindV1, ExactFileObjectKeyV1, ExactObjectBindingStateV1,
-        ExactObjectBindingV1, Id128V1, KernelEffectFamilyV1, KernelEffectOperationV1,
-        PathGraphStateKeyV1, PathGraphTerminalV1, PathGraphTransitionKeyV1, PhysicalDecisionKindV1,
-        PhysicalDecisionV1, PolicyGenerationModeV1,
+        BindingLifecycleStateV1, EffectDecisionKeyV1, EffectDefaultKeyV1, EntryAdmissionRuleKeyV1,
+        EntryAdmissionRuleV1, EntryKindV1 as AbiEntryKindV1, ExactFileObjectKeyV1,
+        ExactObjectBindingStateV1, ExactObjectBindingV1, Id128V1, InstalledRoleClassV1,
+        KernelEffectFamilyV1, KernelEffectOperationV1, PathGraphStateKeyV1, PathGraphTerminalV1,
+        PathGraphTransitionKeyV1, PhysicalDecisionKindV1, PhysicalDecisionV1,
+        PolicyGenerationModeV1,
     };
     use mithril_control::{
-        EffectFamilyV1, FileExceptionGrantTemplateV1, LocalObjectSelectorV1,
-        ObjectClassifierSelectorV1, PathSelectorTargetV1, PathSelectorV1, PathTreeDenyFloorV1,
-        PolicyCompiler, PolicyDispositionV1, PolicyDocumentV1, ProfileCandidateArtifactV1,
-        ProfileModeV1, ProfileSealRequestV1, RegistryDigestsV1, RuleMatchV1,
+        lower_kubernetes_policy, policy_custom_resource, EffectFamilyV1,
+        FileExceptionGrantTemplateV1, LocalObjectSelectorV1, ObjectClassifierSelectorV1,
+        PathSelectorTargetV1, PathSelectorV1, PathTreeDenyFloorV1, PolicyCompiler,
+        PolicyDispositionV1, PolicyDocumentV1, ProfileCandidateArtifactV1, ProfileModeV1,
+        ProfileSealRequestV1, RegistryDigestsV1, RuleMatchV1, WorkloadProtectionPolicySpec,
     };
     use zerocopy::{FromBytes as _, IntoBytes as _, TryFromBytes as _};
 
@@ -5247,6 +5326,74 @@ mod tests {
         )?;
 
         assert_eq!(generation.decisions.len(), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn independent_entries_lower_to_distinct_kernel_role_transitions() -> crate::Result<()> {
+        let (artifact, binding) = entry_roles_artifact()?;
+        let generation = LoweredGeneration::for_binding(
+            &artifact,
+            &binding,
+            &[],
+            Id128V1::new(1, 2),
+            Id128V1::new(3, 4),
+            3,
+            1_800_000_000_000_000_000,
+            100,
+        )?;
+        assert_eq!(generation.entry_admissions.len(), 6);
+        let rows = generation
+            .entry_admissions
+            .iter()
+            .map(|(key, value)| {
+                Ok((
+                    EntryAdmissionRuleKeyV1::try_read_from_bytes(key).map_err(|error| {
+                        IdentityStateSnafu {
+                            reason: format!("entry admission key has the wrong ABI: {error}"),
+                        }
+                        .build()
+                    })?,
+                    EntryAdmissionRuleV1::try_read_from_bytes(value).map_err(|error| {
+                        IdentityStateSnafu {
+                            reason: format!("entry admission value has the wrong ABI: {error}"),
+                        }
+                        .build()
+                    })?,
+                ))
+            })
+            .collect::<crate::Result<Vec<_>>>()?;
+        let admitted_ids = rows
+            .iter()
+            .map(|(_, value)| value.admitted_entry_rule_id)
+            .collect::<BTreeSet<_>>();
+        let target_roles = rows
+            .iter()
+            .map(|(_, value)| value.target_role_id)
+            .collect::<BTreeSet<_>>();
+        assert_eq!(admitted_ids.len(), 6);
+        assert_eq!(target_roles.len(), 6);
+        assert_eq!(
+            rows.iter()
+                .filter(|(_, value)| {
+                    value.installed_role_class == InstalledRoleClassV1::InitialRole
+                        && value.entry_kind == AbiEntryKindV1::ContainerStart as u16
+                })
+                .count(),
+            1
+        );
+        assert_eq!(
+            rows.iter()
+                .filter(|(key, value)| {
+                    key.source_role_id == binding.external_role_id
+                        && value.installed_role_class == InstalledRoleClassV1::DeclaredEntryRole
+                })
+                .count(),
+            5
+        );
+        assert_eq!(generation.administrative_plans.len(), 1);
+        assert_ne!(generation.administrative_plans[0].admitted_entry_rule_id, 0);
+        assert!(generation.administrative_required);
         Ok(())
     }
 
@@ -5789,5 +5936,98 @@ mod tests {
             mount_view_root_pid: 1,
         };
         Ok((artifact, binding, object))
+    }
+
+    fn entry_roles_artifact() -> crate::Result<(ProfileCandidateArtifactV1, WorkloadBindingConfig)>
+    {
+        let spec = WorkloadProtectionPolicySpec::parse(
+            Path::new("kubernetes-entry-roles-v1.yaml"),
+            include_bytes!("../../mithril-control/tests/fixtures/kubernetes-entry-roles-v1.yaml"),
+        )
+        .map_err(|source| crate::Error::Policy {
+            source,
+            location: snafu::Location::default(),
+        })?;
+        let mut resource = policy_custom_resource("worker", "default", spec).map_err(|source| {
+            crate::Error::Policy {
+                source,
+                location: snafu::Location::default(),
+            }
+        })?;
+        resource.metadata.uid = Some("30000000-0000-4000-8000-000000000001".to_owned());
+        resource.metadata.generation = Some(7);
+        let document = lower_kubernetes_policy(
+            &resource,
+            "10000000-0000-4000-8000-000000000001",
+            "10000000-0000-4000-8000-000000000002",
+            "10000000-0000-4000-8000-000000000003",
+        )
+        .map_err(|source| crate::Error::Policy {
+            source,
+            location: snafu::Location::default(),
+        })?;
+        let compiled =
+            PolicyCompiler
+                .compile(&document)
+                .map_err(|source| crate::Error::Policy {
+                    source,
+                    location: snafu::Location::default(),
+                })?;
+        let artifact = ProfileCandidateArtifactV1::sign(
+            &document,
+            compiled,
+            ProfileSealRequestV1 {
+                signing_key_id: "test-key".to_owned(),
+                issuer_id: "88888888-8888-4888-8888-888888888888".to_owned(),
+                sequence_epoch: 1,
+                issuer_sequence: 1,
+                rollback_authorization_id: None,
+                registry_digests: RegistryDigestsV1 {
+                    provider_numeric_registry_bundle_digest: "1".repeat(64),
+                    required_capability_schema_digest: "2".repeat(64),
+                    source_selector_registry_digest: "3".repeat(64),
+                    object_classifier_registry_digest: "4".repeat(64),
+                    reason_code_registry_digest: "5".repeat(64),
+                    correlation_package_registry_digest: "6".repeat(64),
+                    provider_vocabulary_registry_digest: "7".repeat(64),
+                },
+            },
+            &SigningKey::from_bytes(&[9; 32]),
+        )
+        .map_err(|source| crate::Error::Policy {
+            source,
+            location: snafu::Location::default(),
+        })?;
+        let role_handles = super::handles(document.roles.iter().map(|role| role.role_id.as_str()));
+        let binding = WorkloadBindingConfig {
+            binding_id: "99999999-9999-4999-8999-999999999999".to_owned(),
+            scheduled_binding_authority_id: None,
+            scheduled_target_digest: None,
+            execution_set_id: document.protected_universe.execution_set_ids[0].clone(),
+            protected_scope_id: document.protected_universe.protected_scope_ids[0].clone(),
+            workload_selector_id: "container-0".to_owned(),
+            profile_id: document.metadata.profile_id.clone(),
+            container_id: "a".repeat(64),
+            namespace: "default".to_owned(),
+            cluster_uid: "10000000-0000-4000-8000-000000000002".to_owned(),
+            namespace_uid: "10000000-0000-4000-8000-000000000003".to_owned(),
+            controller_uid: String::new(),
+            service_account_uid: String::new(),
+            pod_labels: BTreeMap::from([("app".to_owned(), "worker".to_owned())]),
+            pod_uid: "pod".to_owned(),
+            sandbox_id: "sandbox".to_owned(),
+            container_name: "worker".to_owned(),
+            image_digest: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+                .to_owned(),
+            container_kind: ContainerKindV1::Application,
+            container_generation: 1,
+            root_cgroup_path: Some(PathBuf::from("/sys/fs/cgroup/test")),
+            lifecycle_generation: 1,
+            active_profile_generation_ref_id: 1,
+            initial_role_id: role_handles["application"],
+            external_role_id: role_handles["runtime-external"],
+            arm_initial_root: false,
+        };
+        Ok((artifact, binding))
     }
 }

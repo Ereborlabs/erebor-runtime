@@ -42,6 +42,16 @@ struct exception_runtime_state_bpf_v1 {
     __u8 reserved[7];
 };
 
+struct runtime_entry_bootstrap_state_v1 {
+    id128_v1 node_boot_id;
+    id128_v1 binding_id;
+    id128_v1 target_entry_instance_id;
+    __u64 label_epoch;
+    __u64 profile_generation_ref_id;
+    __u8 active;
+    __u8 reserved[7];
+};
+
 #define MAX_CGROUP_ANCESTOR_STEPS_V1 64
 #define EXCEPTION_USE_RECEIPT_CAPACITY_V1 65536
 #define EFFECT_GATE_DEFER_DECISION_V1 1
@@ -162,6 +172,7 @@ struct identity_scratch_v1 {
     process_execution_instance_v1 execution;
     pending_administrative_match_v1 administrative_match;
     approved_exec_slot_key_v1 administrative_slot_key;
+    entry_admission_rule_key_v1 entry_admission_key;
     effect_decision_key_v1 effect_key;
     effect_default_key_v1 effect_default;
     ipc_relationship_decision_key_v1 ipc_relationship_key;
@@ -251,6 +262,13 @@ struct {
     __type(value, task_label_v1);
     __uint(map_flags, BPF_F_NO_PREALLOC);
 } task_labels SEC(".maps");
+
+struct {
+    __uint(type, BPF_MAP_TYPE_TASK_STORAGE);
+    __type(key, int);
+    __type(value, struct runtime_entry_bootstrap_state_v1);
+    __uint(map_flags, BPF_F_NO_PREALLOC);
+} runtime_entry_bootstrap_states SEC(".maps");
 
 struct {
     __uint(type, BPF_MAP_TYPE_HASH);
@@ -392,6 +410,13 @@ struct {
     __type(key, binding_activation_target_key_v1);
     __type(value, execution_set_binding_state_v1);
 } binding_activation_targets SEC(".maps");
+
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, 65536);
+    __type(key, entry_admission_rule_key_v1);
+    __type(value, entry_admission_rule_v1);
+} entry_admission_rules SEC(".maps");
 
 struct {
     __uint(type, BPF_MAP_TYPE_HASH);

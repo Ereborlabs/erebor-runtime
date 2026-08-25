@@ -115,6 +115,7 @@ static __noinline int snapshot_io_uring_actor(
     actor->process_transition_version = process->transition_version;
     actor->active_role_id = process->active_role_id;
     actor->process_state_vector_id = process->process_state_vector_id;
+    actor->admitted_entry_rule_id = entry->admitted_entry_rule_id;
     actor->entry_kind = entry->entry_kind;
     actor->binding_lifecycle_state = binding->lifecycle_state;
     *binding_snapshot = *binding;
@@ -152,6 +153,7 @@ static __always_inline bool io_uring_actor_equal(
            left->active_role_id == right->active_role_id &&
            left->process_state_vector_id ==
                right->process_state_vector_id &&
+           left->admitted_entry_rule_id == right->admitted_entry_rule_id &&
            left->entry_kind == right->entry_kind &&
            left->binding_lifecycle_state ==
                right->binding_lifecycle_state;
@@ -180,7 +182,7 @@ static __always_inline bool io_uring_binding_equal(
            left->lifecycle_state == right->lifecycle_state;
 }
 
-static __always_inline bool io_uring_application_actor_is_exact(
+static __always_inline bool io_uring_admitted_actor_is_exact(
     const io_uring_actor_snapshot_v1 *actor,
     const execution_set_binding_state_v1 *binding)
 {
@@ -188,8 +190,7 @@ static __always_inline bool io_uring_application_actor_is_exact(
            binding->lifecycle_state == binding_lifecycle_state_v1_active &&
            binding->prepared_container_state ==
                prepared_container_state_v1_active &&
-           id128_equal(&binding->prepared_container_entry_instance_id,
-                       &actor->entry_instance_id) &&
+           actor->admitted_entry_rule_id &&
            id128_equal(&binding->binding_id, &actor->binding_id) &&
            id128_equal(&binding->binding_nonce, &actor->binding_nonce) &&
            id128_equal(&binding->execution_set_id, &actor->execution_set_id) &&
@@ -228,6 +229,8 @@ static __always_inline void populate_io_uring_observation(
     scratch->observation.active_role_id = request->actor.active_role_id;
     scratch->observation.process_state_vector_id =
         request->actor.process_state_vector_id;
+    scratch->observation.admitted_entry_rule_id =
+        request->actor.admitted_entry_rule_id;
     scratch->observation.entry_kind = request->actor.entry_kind;
     scratch->observation.io_uring_ring_id = request->ring_id;
     scratch->observation.io_uring_ring_generation = request->ring_generation;
@@ -349,7 +352,7 @@ static __noinline int resolved_io_uring_effect_gate(
             effect_observation_reason_v1_corrupt_identity_or_generation);
     populate_io_uring_observation(scratch, request, execution);
     application_default_allow =
-        io_uring_application_actor_is_exact(&request->actor, &ring->binding);
+        io_uring_admitted_actor_is_exact(&request->actor, &ring->binding);
     if (ret)
         return emit_effect_observation(
             scratch, ret, effect_observation_reason_v1_prior_lsm_denial,
@@ -589,7 +592,7 @@ int BPF_PROG(erebor_identity_inode_init_security_anon, struct inode *inode,
     if (result)
         return result;
     // Setup can finish, but it must not publish authority across activation.
-    if (prepared_runtime_effect_was_allowed(identity_scratch_record())) {
+    if (runtime_infrastructure_effect_was_allowed(identity_scratch_record())) {
         state->state = io_uring_setup_state_kind_v1_invalid;
         return 0;
     }

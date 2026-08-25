@@ -1,7 +1,7 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::os::unix::ffi::OsStrExt as _;
-use std::os::unix::fs::{symlink, PermissionsExt as _};
+use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::thread;
@@ -9,10 +9,12 @@ use std::time::{Duration, Instant};
 
 use erebor_interceptor::{KernelHostConfig, KernelHostOwner};
 use erebor_interceptor_abi::{KernelEffectFamilyV1, KernelEffectOperationV1};
-use mithril_control::{EntryKindV1, PathSelectorV1, PolicyDocumentV1, RuleMatchV1};
+use mithril_control::{
+    lower_kubernetes_policy, policy_custom_resource, WorkloadProtectionPolicySpec,
+};
 use mithril_node::{
     EffectObservationStore, NativeIdentityInspector, NativeSecurityStateOwner,
-    NodePolicyGenerationOwner, WorkloadBindingOwner,
+    NativeTaskSnapshotV1, NodePolicyGenerationOwner, WorkloadBindingOwner,
 };
 use rustix::process::{pidfd_open, pidfd_send_signal, Pid, PidfdFlags, Signal};
 use serde::Serialize;
@@ -43,6 +45,12 @@ pub struct RuncPreparedProbeV1 {
     pub prepared_runtime_effect_observed: bool,
     pub application_entry_allow_observed: bool,
     pub application_default_file_allow_observed: bool,
+    pub application_admitted_entry_rule_id: u32,
+    pub independent_entries: Vec<RuncEntryRoleProbeV1>,
+    pub independent_entry_roles_are_distinct: bool,
+    pub runtime_entry_infrastructure_observed: bool,
+    pub external_entry_denied: bool,
+    pub external_cgroup_entering_process_stays_closed: bool,
     pub executable_observation_has_no_exact_object: bool,
     pub dynamic_loader_paths: Vec<String>,
     pub dynamic_loader_paths_absent_from_policy: bool,
@@ -51,6 +59,28 @@ pub struct RuncPreparedProbeV1 {
     pub lease_removed: bool,
     pub cgroup_removed: bool,
     pub fixture_root_removed: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct RuncEntryRoleProbeV1 {
+    pub name: String,
+    pub host_pid: u32,
+    pub active_role_id: u32,
+    pub admitted_entry_rule_id: u32,
+    pub installed_role_class: String,
+    pub own_policy_deny_observed: bool,
+    pub application_policy_not_inherited: bool,
+}
+
+struct RuncPolicyFixture {
+    artifact_path: PathBuf,
+    profile_id: String,
+    protected_scope_id: String,
+    execution_set_id: String,
+    workload_selector_id: String,
+    initial_role_id: u32,
+    external_role_id: u32,
+    role_ids: BTreeMap<String, u32>,
 }
 
 struct RuncContainer {
@@ -62,6 +92,31 @@ struct RuncContainer {
 }
 
 impl RuncContainer {
+    fn spawn_exec(
+        &self,
+        executable: &str,
+        arguments: &[&str],
+        pid_path: &Path,
+        stdout_path: &Path,
+        stderr_path: &Path,
+    ) -> Result<Child> {
+        let stdout = fs::File::create(stdout_path).context(IoSnafu { path: stdout_path })?;
+        let stderr = fs::File::create(stderr_path).context(IoSnafu { path: stderr_path })?;
+        Command::new(&self.runc_path)
+            .args(["--root", self.state_root.to_string_lossy().as_ref()])
+            .args(["exec", "--pid-file", pid_path.to_string_lossy().as_ref()])
+            .arg(&self.container_id)
+            .arg(executable)
+            .args(arguments)
+            .stdin(Stdio::null())
+            .stdout(Stdio::from(stdout))
+            .stderr(Stdio::from(stderr))
+            .spawn()
+            .context(IoSnafu {
+                path: &self.runc_path,
+            })
+    }
+
     fn cleanup(&mut self) -> Result<()> {
         if let Some(mut child) = self.child.take() {
             if child
@@ -174,7 +229,7 @@ impl EffectTestRunner {
             },
         )?;
         fs::create_dir(&state_root).context(IoSnafu { path: &state_root })?;
-        let dynamic_loader_paths = prepare_dynamic_workload_root(&rootfs, workload_path)?;
+        let dynamic_loader_paths = prepare_entry_role_root(&rootfs, workload_path)?;
 
         run_checked(
             Command::new(runc_path).args(["spec", "--bundle", bundle.to_string_lossy().as_ref()]),
@@ -198,7 +253,11 @@ impl EffectTestRunner {
         config["process"]["terminal"] = json!(false);
         config["process"]["cwd"] = json!("/");
         config["process"]["env"] = json!(["PATH=/bin"]);
-        config["process"]["args"] = json!(["/bin/sleep", "3"]);
+        config["process"]["args"] = json!([
+            "/bin/sh",
+            "-c",
+            "cat /run/mithril-entry-roles/application.denied >/dev/null 2>&1 || true; while [ ! -e /run/mithril-entry-roles/release ]; do /bin/sleep 1; done"
+        ]);
         config["root"]["path"] = json!("rootfs");
         config["root"]["readonly"] = json!(false);
         config["linux"]["cgroupsPath"] = json!(format!("/{cgroup_name}"));
@@ -217,7 +276,7 @@ impl EffectTestRunner {
         )
         .context(IoSnafu { path: &config_path })?;
 
-        let artifact = self.build_runc_artifact(&fixture_root, &dynamic_loader_paths)?;
+        let policy = self.build_runc_artifact(&fixture_root, &dynamic_loader_paths)?;
         let runc_version = command_text(Command::new(runc_path).arg("--version"), runc_path)?;
         let stdout = fs::File::create(&stdout_path).context(IoSnafu { path: &stdout_path })?;
         let stderr = fs::File::create(&stderr_path).context(IoSnafu { path: &stderr_path })?;
@@ -315,13 +374,29 @@ impl EffectTestRunner {
         ))
         .start()
         .context(InterceptorSnafu)?;
-        let binding = effect_binding_with_identity(
+        let mut binding = effect_binding_with_identity(
             &cgroup_path,
             "99999999-9999-4999-8999-999999999996",
             'f',
             "direct-runc",
             true,
         );
+        binding.profile_id = policy.profile_id.clone();
+        binding.protected_scope_id = policy.protected_scope_id.clone();
+        binding.execution_set_id = policy.execution_set_id.clone();
+        binding.workload_selector_id = policy.workload_selector_id.clone();
+        binding.cluster_uid = "10000000-0000-4000-8000-000000000002".to_owned();
+        binding.namespace_uid = "10000000-0000-4000-8000-000000000003".to_owned();
+        binding.pod_labels = [(
+            "app.kubernetes.io/name".to_owned(),
+            "direct-runc".to_owned(),
+        )]
+        .into_iter()
+        .collect();
+        binding.image_digest =
+            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned();
+        binding.initial_role_id = policy.initial_role_id;
+        binding.external_role_id = policy.external_role_id;
         let mut bindings = WorkloadBindingOwner::system(node_boot_id, 1).context(NodeSnafu)?;
         bindings
             .publish_held_initial_roots(&host, &[(binding.clone(), initial_pid)])
@@ -334,8 +409,8 @@ impl EffectTestRunner {
             pin_root,
             lease_path,
             &policy_fixture,
-            artifact,
-            vec![binding],
+            policy.artifact_path.clone(),
+            vec![binding.clone()],
         );
         let _policy =
             NodePolicyGenerationOwner::load_and_install(&node_config, &mut host, node_boot_id, 1)
@@ -450,6 +525,272 @@ impl EffectTestRunner {
             (KernelEffectFamilyV1::File, KernelEffectOperationV1::Read),
         )?;
 
+        ensure!(
+            active.active_role_id == policy.initial_role_id && active.admitted_entry_rule_id > 0,
+            InvalidInputSnafu {
+                path: pin_root,
+                reason: "the application entry did not install its declared role and admission ID",
+            }
+        );
+        let mut independent_entries = Vec::new();
+        for (name, executable) in [
+            ("poststart", "/opt/mithril/entries/poststart"),
+            ("prestop", "/opt/mithril/entries/prestop"),
+            ("startup", "/opt/mithril/entries/startup"),
+            ("readiness", "/opt/mithril/entries/readiness"),
+            ("liveness", "/opt/mithril/entries/liveness"),
+        ] {
+            let entry_marker = observations.cursor();
+            let pid_path = fixture_root.join(format!("{name}.pid"));
+            let entry_stdout = output_directory.join(format!("runc-entry-{name}.stdout"));
+            let entry_stderr = output_directory.join(format!("runc-entry-{name}.stderr"));
+            let command = format!(
+                "cat /run/mithril-entry-roles/{name}.denied >/dev/null 2>&1 || true; cat /run/mithril-entry-roles/application.denied >/dev/null && /bin/sleep 2"
+            );
+            let mut child = container.spawn_exec(
+                executable,
+                &["-c", command.as_str()],
+                &pid_path,
+                &entry_stdout,
+                &entry_stderr,
+            )?;
+            let host_pid = if let Some(host_pid) = wait_for_pid_file(&pid_path, &mut child)? {
+                host_pid
+            } else {
+                reader
+                    .poll(Duration::from_millis(100))
+                    .context(InterceptorSnafu)?;
+                ensure!(
+                    false,
+                    InvalidInputSnafu {
+                        path: &entry_stderr,
+                        reason: format!(
+                            "entry `{name}` exited before publishing its host PID: stderr={}, effects={:?}",
+                            fs::read_to_string(&entry_stderr).unwrap_or_default().trim(),
+                            recent_effect_summary(&observations, entry_marker)
+                        ),
+                    }
+                );
+                unreachable!()
+            };
+            let snapshot = wait_for_task_snapshot(
+                &inspector,
+                host_pid,
+                &mut child,
+                &reader,
+                &observations,
+                entry_marker,
+                &entry_stderr,
+            )?;
+            let status = wait_for_child(&mut child)?;
+            reader
+                .poll(Duration::from_millis(100))
+                .context(InterceptorSnafu)?;
+            let expected_role_id = policy.role_ids[name];
+            let own_policy_deny_observed = wait_for_entry_policy_deny(
+                &reader,
+                &observations,
+                entry_marker,
+                expected_role_id,
+                snapshot.admitted_entry_rule_id,
+            )?;
+            ensure!(
+                status.success()
+                    && snapshot.active_role_id == expected_role_id
+                    && snapshot.admitted_entry_rule_id > 0
+                    && snapshot.installed_role_class.as_deref()
+                        == Some("declared_entry_role")
+                    && own_policy_deny_observed,
+                InvalidInputSnafu {
+                    path: &entry_stderr,
+                    reason: format!(
+                        "entry `{name}` did not keep its independent role: status={status}, snapshot={snapshot:?}, stderr={}",
+                        fs::read_to_string(&entry_stderr).unwrap_or_default().trim()
+                    ),
+                }
+            );
+            independent_entries.push(RuncEntryRoleProbeV1 {
+                name: name.to_owned(),
+                host_pid,
+                active_role_id: snapshot.active_role_id,
+                admitted_entry_rule_id: snapshot.admitted_entry_rule_id,
+                installed_role_class: snapshot.installed_role_class.unwrap_or_default(),
+                own_policy_deny_observed,
+                application_policy_not_inherited: true,
+            });
+        }
+        let role_ids = independent_entries
+            .iter()
+            .map(|entry| entry.active_role_id)
+            .chain(std::iter::once(active.active_role_id))
+            .collect::<BTreeSet<_>>();
+        let admitted_ids = independent_entries
+            .iter()
+            .map(|entry| entry.admitted_entry_rule_id)
+            .chain(std::iter::once(active.admitted_entry_rule_id))
+            .collect::<BTreeSet<_>>();
+        let independent_entry_roles_are_distinct = role_ids.len() == 6 && admitted_ids.len() == 6;
+        ensure!(
+            independent_entry_roles_are_distinct,
+            InvalidInputSnafu {
+                path: pin_root,
+                reason: "application and additional entries did not install six distinct roles and admission IDs",
+            }
+        );
+        let runtime_entry_infrastructure_observed = observations
+            .recent_since(marker)
+            .iter()
+            .any(|event| event.reason == "RUNTIME_ENTRY_INFRASTRUCTURE");
+        ensure!(
+            runtime_entry_infrastructure_observed,
+            InvalidInputSnafu {
+                path: pin_root,
+                reason: "declared entries did not record runtime entry infrastructure",
+            }
+        );
+
+        let external_marker = observations.cursor();
+        let external_output = Command::new(runc_path)
+            .args(["--root", state_root.to_string_lossy().as_ref()])
+            .args(["exec", &container_id, "/bin/sleep", "1"])
+            .output()
+            .context(IoSnafu { path: runc_path })?;
+        ensure!(
+            !external_output.status.success(),
+            InvalidInputSnafu {
+                path: runc_path,
+                reason: "an undeclared external entry entered the protected container",
+            }
+        );
+        wait_for_reason(
+            &reader,
+            &observations,
+            external_marker,
+            "UNSUPPORTED_OBJECT",
+        )?;
+        let external_entry_denied =
+            observations
+                .recent_since(external_marker)
+                .iter()
+                .any(|event| {
+                    event.reason == "UNSUPPORTED_OBJECT"
+                        && event.effect_family == u32::from(KernelEffectFamilyV1::Exec as u16)
+                        && event.operation == u32::from(KernelEffectOperationV1::Execute as u16)
+                        && event.active_role_id == binding.external_role_id
+                        && event.admitted_entry_rule_id == 0
+                        && event.kernel_result == -13
+                });
+        ensure!(
+            external_entry_denied,
+            InvalidInputSnafu {
+                path: runc_path,
+                reason: format!(
+                    "the undeclared external entry did not produce a fail-closed effect: {:?}",
+                    observations
+                        .recent_since(external_marker)
+                        .iter()
+                        .filter(|event| event.kernel_result != 0)
+                        .map(|event| (
+                            event.reason.as_str(),
+                            event.effect_family,
+                            event.operation,
+                            event.active_role_id,
+                            event.admitted_entry_rule_id,
+                            event.kernel_result,
+                        ))
+                        .collect::<Vec<_>>()
+                ),
+            }
+        );
+
+        let cgroup_entry_marker = observations.cursor();
+        let cgroup_entry_stderr = output_directory.join("cgroup-entry.stderr");
+        let mut cgroup_entry = Command::new("/bin/sh")
+            .args(["-c", "/bin/sleep 1; exec /bin/true"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::from(
+                fs::File::create(&cgroup_entry_stderr).context(IoSnafu {
+                    path: &cgroup_entry_stderr,
+                })?,
+            ))
+            .spawn()
+            .context(IoSnafu {
+                path: Path::new("/bin/sh"),
+            })?;
+        let cgroup_entry_pid = cgroup_entry.id();
+        fs::write(
+            cgroup_path.join("cgroup.procs"),
+            cgroup_entry_pid.to_string(),
+        )
+        .context(IoSnafu {
+            path: cgroup_path.join("cgroup.procs"),
+        })?;
+        let cgroup_entry_snapshot = inspector
+            .snapshot(cgroup_entry_pid)
+            .context(NodeSnafu)?
+            .ok_or_else(|| {
+                InvalidInputSnafu {
+                    path: &cgroup_path,
+                    reason: "the external cgroup entrant has no Mithril identity",
+                }
+                .build()
+            })?;
+        ensure!(
+            cgroup_entry_snapshot.active_role_id == binding.external_role_id
+                && cgroup_entry_snapshot.admitted_entry_rule_id == 0
+                && cgroup_entry_snapshot.installed_role_class.as_deref()
+                    == Some("runtime_external_restricted"),
+            InvalidInputSnafu {
+                path: &cgroup_path,
+                reason: format!(
+                    "the external cgroup entrant received an admitted role: {cgroup_entry_snapshot:?}"
+                ),
+            }
+        );
+        let cgroup_entry_status = wait_for_child(&mut cgroup_entry)?;
+        reader
+            .poll(Duration::from_millis(100))
+            .context(InterceptorSnafu)?;
+        let external_cgroup_entering_process_stays_closed =
+            !cgroup_entry_status.success()
+                && observations
+                    .recent_since(cgroup_entry_marker)
+                    .iter()
+                    .any(|event| {
+                        event.task_cookie == cgroup_entry_snapshot.task_cookie
+                            && event.active_role_id == binding.external_role_id
+                            && event.admitted_entry_rule_id == 0
+                            && event.kernel_result == -13
+                    });
+        ensure!(
+            external_cgroup_entering_process_stays_closed,
+            InvalidInputSnafu {
+                path: &cgroup_entry_stderr,
+                reason: format!(
+                    "the external cgroup entrant did not fail closed: status={cgroup_entry_status}, stderr={}, effects={:?}",
+                    fs::read_to_string(&cgroup_entry_stderr)
+                        .unwrap_or_default()
+                        .trim(),
+                    observations
+                        .recent_since(cgroup_entry_marker)
+                        .iter()
+                        .filter(|event| event.task_cookie == cgroup_entry_snapshot.task_cookie)
+                        .map(|event| (
+                            event.reason.as_str(),
+                            event.effect_family,
+                            event.operation,
+                            event.active_role_id,
+                            event.admitted_entry_rule_id,
+                            event.kernel_result,
+                        ))
+                        .collect::<Vec<_>>()
+                ),
+            }
+        );
+        fs::write(rootfs.join("run/mithril-entry-roles/release"), b"release\n")
+            .context(IoSnafu { path: &rootfs })?;
+
         let status = wait_for_child(container.child.as_mut().ok_or_else(|| {
             InvalidInputSnafu {
                 path: runc_path,
@@ -495,7 +836,7 @@ impl EffectTestRunner {
         })?;
 
         Ok(RuncPreparedProbeV1 {
-            schema_version: 3,
+            schema_version: 5,
             runc_version: runc_version.lines().next().unwrap_or_default().to_owned(),
             initial_host_pid: initial_pid,
             prepared_state_before_exec,
@@ -503,6 +844,12 @@ impl EffectTestRunner {
             prepared_runtime_effect_observed: true,
             application_entry_allow_observed: true,
             application_default_file_allow_observed: true,
+            application_admitted_entry_rule_id: active.admitted_entry_rule_id,
+            independent_entries,
+            independent_entry_roles_are_distinct,
+            runtime_entry_infrastructure_observed,
+            external_entry_denied,
+            external_cgroup_entering_process_stays_closed,
             executable_observation_has_no_exact_object: true,
             dynamic_loader_paths,
             dynamic_loader_paths_absent_from_policy: true,
@@ -518,29 +865,31 @@ impl EffectTestRunner {
         &self,
         fixture_root: &Path,
         dynamic_loader_paths: &[String],
-    ) -> Result<PathBuf> {
+    ) -> Result<RuncPolicyFixture> {
         let policy_fixture = self
             .repo_root
             .join("crates/mithril-e2e/fixtures/mithril-policy");
-        let policy_source = policy_fixture.join("protect-policy-v1.yaml");
-        let mut document = PolicyDocumentV1::parse(
+        let policy_source = self
+            .repo_root
+            .join("crates/mithril-e2e/fixtures/convergence/direct-entry-roles-v1.yaml");
+        let spec = WorkloadProtectionPolicySpec::parse(
             &policy_source,
             &fs::read(&policy_source).context(IoSnafu {
                 path: &policy_source,
             })?,
         )
         .context(PolicySnafu)?;
-        document.path_selectors = vec![
-            PathSelectorV1::path("manual-exec-allowed", "/bin/busybox", "MANUAL_EXEC_ALLOWED"),
-            PathSelectorV1::exact(
-                "manual-device-ptmx",
-                "/dev/pts/ptmx",
-                "MANUAL_DEVICE_ALLOWED",
-            )
-            .with_device_class("PTMX_DEVICE"),
-            PathSelectorV1::exact("manual-device-zero", "/dev/zero", "MANUAL_DEVICE_DENIED")
-                .with_device_class("ZERO_DEVICE"),
-        ];
+        let mut resource =
+            policy_custom_resource("direct-entry-roles", "default", spec).context(PolicySnafu)?;
+        resource.metadata.uid = Some("30000000-0000-4000-8000-000000000001".to_owned());
+        resource.metadata.generation = Some(1);
+        let document = lower_kubernetes_policy(
+            &resource,
+            "10000000-0000-4000-8000-000000000001",
+            "10000000-0000-4000-8000-000000000002",
+            "10000000-0000-4000-8000-000000000003",
+        )
+        .context(PolicySnafu)?;
         ensure!(
             dynamic_loader_paths.iter().all(|dependency| {
                 document
@@ -553,65 +902,63 @@ impl EffectTestRunner {
                 reason: "the direct runc policy must not list dynamic runtime dependencies",
             }
         );
-        let mut prepared_exec_rule = document
-            .rules
+        let role_ids = document
+            .roles
             .iter()
-            .find(|rule| rule.rule_id == "allow-manual-exec-allowed")
-            .cloned()
-            .ok_or_else(|| {
-                InvalidInputSnafu {
-                    path: &policy_source,
-                    reason: "the direct runc fixture has no executable allow rule",
-                }
-                .build()
-            })?;
-        prepared_exec_rule.rule_id = "allow-prepared-container-exec".to_owned();
-        let RuleMatchV1::LocalPreEffect(exec_match) = &mut prepared_exec_rule.rule_match else {
-            return InvalidInputSnafu {
-                path: &policy_source,
-                reason: "the direct runc executable allow rule is not a local effect rule",
-            }
-            .fail();
-        };
-        // The first application exec is evaluated against the prepared
-        // container entry. A runtime-external rule cannot authorize it.
-        exec_match.subject.entry_kind_ids = vec![EntryKindV1::ContainerStart];
-        exec_match.subject.role_ids = vec!["converter".to_owned()];
-        document.rules.push(prepared_exec_rule);
-        sign_generation_artifact(
+            .map(|role| role.role_id.as_str())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .enumerate()
+            .map(|(index, role)| (role.to_owned(), index as u32 + 1))
+            .collect::<BTreeMap<_, _>>();
+        let profile_id = document.metadata.profile_id.clone();
+        let protected_scope_id = document.protected_universe.protected_scope_ids[0].clone();
+        let execution_set_id = document.protected_universe.execution_set_ids[0].clone();
+        let artifact_path = sign_generation_artifact(
             document,
             &policy_fixture.join("observe-profile-seal-request.json"),
             &policy_fixture.join("test-signing-key.hex"),
             fixture_root,
             1,
-        )
+        )?;
+        Ok(RuncPolicyFixture {
+            artifact_path,
+            profile_id,
+            protected_scope_id,
+            execution_set_id,
+            workload_selector_id: "container-0".to_owned(),
+            initial_role_id: role_ids["application"],
+            external_role_id: role_ids["runtime-external"],
+            role_ids,
+        })
     }
 }
 
-fn prepare_dynamic_workload_root(rootfs: &Path, workload_path: &Path) -> Result<Vec<String>> {
-    fs::copy(workload_path, rootfs.join("bin/busybox")).context(IoSnafu {
-        path: workload_path,
-    })?;
-    symlink("busybox", rootfs.join("bin/sleep")).context(IoSnafu {
-        path: &rootfs.join("bin/sleep"),
-    })?;
-    let output = Command::new("ldd")
-        .arg(workload_path)
-        .output()
-        .context(IoSnafu {
+fn prepare_entry_role_root(rootfs: &Path, workload_path: &Path) -> Result<Vec<String>> {
+    let executables = [
+        (Path::new("/bin/sh"), rootfs.join("bin/sh")),
+        (Path::new("/usr/bin/cat"), rootfs.join("bin/cat")),
+        (workload_path, rootfs.join("bin/sleep")),
+    ];
+    let mut dependencies = BTreeSet::new();
+    for (source, destination) in &executables {
+        fs::copy(source, destination).context(IoSnafu { path: source })?;
+        let output = Command::new("ldd").arg(source).output().context(IoSnafu {
             path: Path::new("ldd"),
         })?;
-    ensure!(
-        output.status.success(),
-        CommandSnafu {
-            program: "ldd".to_owned(),
-            reason: String::from_utf8_lossy(&output.stderr).trim().to_owned(),
-        }
-    );
-    let dependencies = String::from_utf8_lossy(&output.stdout)
-        .lines()
-        .filter_map(ldd_dependency_path)
-        .collect::<BTreeSet<_>>();
+        ensure!(
+            output.status.success(),
+            CommandSnafu {
+                program: "ldd".to_owned(),
+                reason: String::from_utf8_lossy(&output.stderr).trim().to_owned(),
+            }
+        );
+        dependencies.extend(
+            String::from_utf8_lossy(&output.stdout)
+                .lines()
+                .filter_map(ldd_dependency_path),
+        );
+    }
     ensure!(
         !dependencies.is_empty(),
         InvalidInputSnafu {
@@ -619,6 +966,30 @@ fn prepare_dynamic_workload_root(rootfs: &Path, workload_path: &Path) -> Result<
             reason: "the stock-runc regression workload must use a dynamic loader",
         }
     );
+    let entry_directory = rootfs.join("opt/mithril/entries");
+    fs::create_dir_all(&entry_directory).context(IoSnafu {
+        path: &entry_directory,
+    })?;
+    for entry in ["poststart", "prestop", "startup", "readiness", "liveness"] {
+        let destination = entry_directory.join(entry);
+        fs::hard_link(rootfs.join("bin/sh"), &destination)
+            .context(IoSnafu { path: &destination })?;
+    }
+    let role_directory = rootfs.join("run/mithril-entry-roles");
+    fs::create_dir_all(&role_directory).context(IoSnafu {
+        path: &role_directory,
+    })?;
+    for role in [
+        "application",
+        "poststart",
+        "prestop",
+        "startup",
+        "readiness",
+        "liveness",
+    ] {
+        let path = role_directory.join(format!("{role}.denied"));
+        fs::write(&path, format!("{role}\n")).context(IoSnafu { path: &path })?;
+    }
     for dependency in &dependencies {
         let source = Path::new(dependency);
         let relative = source.strip_prefix("/").map_err(|error| {
@@ -714,6 +1085,135 @@ fn wait_for_path(path: &Path, exists: bool, name: &str) -> Result<()> {
             }
         );
         thread::sleep(Duration::from_millis(25));
+    }
+}
+
+fn recent_effect_summary(
+    observations: &EffectObservationStore,
+    marker: u64,
+) -> Vec<(String, u32, u32, u32, u32, i32)> {
+    observations
+        .recent_since(marker)
+        .iter()
+        .rev()
+        .take(16)
+        .map(|event| {
+            (
+                event.reason.clone(),
+                event.effect_family,
+                event.operation,
+                event.active_role_id,
+                event.admitted_entry_rule_id,
+                event.kernel_result,
+            )
+        })
+        .collect()
+}
+
+fn wait_for_pid_file(path: &Path, child: &mut Child) -> Result<Option<u32>> {
+    let deadline = Instant::now() + WAIT_LIMIT;
+    loop {
+        if let Ok(value) = fs::read_to_string(path) {
+            if let Ok(pid) = value.trim().parse::<u32>() {
+                if pid > 0 {
+                    return Ok(Some(pid));
+                }
+            }
+        }
+        if child
+            .try_wait()
+            .context(IoSnafu {
+                path: Path::new("runc exec child"),
+            })?
+            .is_some()
+        {
+            return Ok(None);
+        }
+        ensure!(
+            Instant::now() < deadline,
+            InvalidInputSnafu {
+                path,
+                reason: "timed out waiting for an entry host PID",
+            }
+        );
+        thread::sleep(Duration::from_millis(10));
+    }
+}
+
+fn wait_for_task_snapshot(
+    inspector: &NativeIdentityInspector,
+    host_pid: u32,
+    child: &mut Child,
+    reader: &erebor_interceptor::EffectObservationReader,
+    observations: &EffectObservationStore,
+    marker: u64,
+    stderr: &Path,
+) -> Result<NativeTaskSnapshotV1> {
+    let deadline = Instant::now() + WAIT_LIMIT;
+    loop {
+        reader
+            .poll(Duration::from_millis(25))
+            .context(InterceptorSnafu)?;
+        if let Some(status) = child.try_wait().context(IoSnafu {
+            path: Path::new("runc exec child"),
+        })? {
+            ensure!(
+                false,
+                InvalidInputSnafu {
+                    path: stderr,
+                    reason: format!(
+                        "entry PID {host_pid} exited before its admitted snapshot: status={status}, stderr={}, effects={:?}",
+                        fs::read_to_string(stderr).unwrap_or_default().trim(),
+                        recent_effect_summary(observations, marker)
+                    ),
+                }
+            );
+        }
+        if let Some(snapshot) = inspector.snapshot(host_pid).context(NodeSnafu)? {
+            if snapshot.admitted_entry_rule_id > 0 {
+                return Ok(snapshot);
+            }
+        }
+        ensure!(
+            Instant::now() < deadline,
+            InvalidInputSnafu {
+                path: stderr,
+                reason: format!("timed out waiting for admitted entry PID {host_pid}"),
+            }
+        );
+        thread::sleep(Duration::from_millis(10));
+    }
+}
+
+fn wait_for_entry_policy_deny(
+    reader: &erebor_interceptor::EffectObservationReader,
+    observations: &EffectObservationStore,
+    marker: u64,
+    active_role_id: u32,
+    admitted_entry_rule_id: u32,
+) -> Result<bool> {
+    let deadline = Instant::now() + WAIT_LIMIT;
+    loop {
+        reader
+            .poll(Duration::from_millis(50))
+            .context(InterceptorSnafu)?;
+        if observations.recent_since(marker).iter().any(|event| {
+            event.reason == "EXACT_POLICY_DENY"
+                && event.effect_family == u32::from(KernelEffectFamilyV1::File as u16)
+                && event.operation == u32::from(KernelEffectOperationV1::OpenRead as u16)
+                && event.active_role_id == active_role_id
+                && event.admitted_entry_rule_id == admitted_entry_rule_id
+                && event.kernel_result == -13
+        }) {
+            return Ok(true);
+        }
+        ensure!(
+            Instant::now() < deadline,
+            InvalidInputSnafu {
+                path: Path::new("effect_observations"),
+                reason: "timed out waiting for the admitted entry policy denial",
+            }
+        );
     }
 }
 

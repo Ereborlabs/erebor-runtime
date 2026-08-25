@@ -388,6 +388,7 @@ fn to_ipc(event: EffectObservationV1) -> MithrilEffectObservation {
         observed_boottime_ns: event.observed_boottime_ns,
         source_sequence: event.source_sequence,
         source_cpu_id: event.source_cpu_id,
+        admitted_entry_rule_id: event.admitted_entry_rule_id,
         task_cookie: event.task_cookie,
         profile_generation_ref_id: event.profile_generation_ref_id,
         process_lineage_id: id_hex(event.process_lineage_id),
@@ -499,6 +500,9 @@ const fn reason_name(reason: u8) -> &'static str {
         value if value == EffectObservationReasonV1::ApplicationDefaultAllow as u8 => {
             "APPLICATION_DEFAULT_ALLOW"
         }
+        value if value == EffectObservationReasonV1::RuntimeEntryInfrastructure as u8 => {
+            "RUNTIME_ENTRY_INFRASTRUCTURE"
+        }
         _ => "UNKNOWN",
     }
 }
@@ -556,6 +560,10 @@ mod tests {
         assert_eq!(
             reason_name(EffectObservationReasonV1::ApplicationDefaultAllow as u8),
             "APPLICATION_DEFAULT_ALLOW"
+        );
+        assert_eq!(
+            reason_name(EffectObservationReasonV1::RuntimeEntryInfrastructure as u8),
+            "RUNTIME_ENTRY_INFRASTRUCTURE"
         );
     }
 

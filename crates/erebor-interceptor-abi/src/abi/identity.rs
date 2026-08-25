@@ -195,7 +195,9 @@ pub enum ProcessExecutionStateV1 {
 }
 
 #[repr(u8)]
-#[derive(Clone, Copy, Debug, Default, Eq, Immutable, IntoBytes, KnownLayout, PartialEq)]
+#[derive(
+    Clone, Copy, Debug, Default, Eq, Immutable, IntoBytes, KnownLayout, PartialEq, TryFromBytes,
+)]
 pub enum EntryAdmissionStateV1 {
     #[default]
     Unknown = 0,
@@ -206,7 +208,9 @@ pub enum EntryAdmissionStateV1 {
 }
 
 #[repr(u8)]
-#[derive(Clone, Copy, Debug, Default, Eq, Immutable, IntoBytes, KnownLayout, PartialEq)]
+#[derive(
+    Clone, Copy, Debug, Default, Eq, Immutable, IntoBytes, KnownLayout, PartialEq, TryFromBytes,
+)]
 pub enum EntryLifetimeStateV1 {
     #[default]
     Inactive = 0,
@@ -254,7 +258,9 @@ pub enum EntryPurposeV1 {
 }
 
 #[repr(u8)]
-#[derive(Clone, Copy, Debug, Default, Eq, Immutable, IntoBytes, KnownLayout, PartialEq)]
+#[derive(
+    Clone, Copy, Debug, Default, Eq, Immutable, IntoBytes, KnownLayout, PartialEq, TryFromBytes,
+)]
 pub enum EntryKindV1 {
     #[default]
     Unknown = 0,
@@ -286,6 +292,7 @@ pub enum InstalledRoleClassV1 {
     FailClosedUnknown = 3,
     QualifiedRegisteredRole = 4,
     ApprovedAdministrativeRole = 5,
+    DeclaredEntryRole = 6,
 }
 
 #[repr(u8)]
@@ -499,7 +506,9 @@ pub struct ProcessStateVectorV1 {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Debug, Default, Eq, Immutable, IntoBytes, KnownLayout, PartialEq)]
+#[derive(
+    Clone, Copy, Debug, Default, Eq, Immutable, IntoBytes, KnownLayout, PartialEq, TryFromBytes,
+)]
 pub struct EntrySecurityStateV1 {
     pub entry_instance_id: Id128V1,
     pub node_boot_id: Id128V1,
@@ -515,8 +524,33 @@ pub struct EntrySecurityStateV1 {
     pub admission_state: EntryAdmissionStateV1,
     pub lifetime_state: EntryLifetimeStateV1,
     pub terminal_reason: u8,
-    pub reserved_state: [u8; 4],
+    pub admitted_entry_rule_id: u32,
     pub transition_guard: u64,
+}
+
+#[repr(C)]
+#[derive(
+    Clone, Copy, Debug, Default, Eq, Immutable, IntoBytes, KnownLayout, PartialEq, TryFromBytes,
+)]
+pub struct EntryAdmissionRuleKeyV1 {
+    pub profile_generation_ref_id: u64,
+    pub binding_id: Id128V1,
+    pub composite_atom_id: u64,
+    pub source_role_id: u32,
+    pub reserved: u32,
+}
+
+#[repr(C)]
+#[derive(
+    Clone, Copy, Debug, Default, Eq, Immutable, IntoBytes, KnownLayout, PartialEq, TryFromBytes,
+)]
+pub struct EntryAdmissionRuleV1 {
+    pub target_role_id: u32,
+    pub target_process_state_vector_id: u32,
+    pub admitted_entry_rule_id: u32,
+    pub entry_kind: u16,
+    pub installed_role_class: InstalledRoleClassV1,
+    pub reserved: u8,
 }
 
 #[repr(C)]
@@ -734,7 +768,7 @@ pub struct ApprovedExecSlotV1 {
     pub reserved_0: [u8; 3],
     pub profile_generation_ref_id: u64,
     pub exception_numeric_handle: u32,
-    pub reserved_after_exception: u32,
+    pub admitted_entry_rule_id: u32,
     pub deadline_boottime_ns: u64,
     pub state: ApprovedExecSlotStateV1,
     pub transition_version: u64,
@@ -756,7 +790,7 @@ impl Default for ApprovedExecSlotV1 {
             reserved_0: [0; 3],
             profile_generation_ref_id: 0,
             exception_numeric_handle: 0,
-            reserved_after_exception: 0,
+            admitted_entry_rule_id: 0,
             deadline_boottime_ns: 0,
             state: ApprovedExecSlotStateV1::Unknown,
             transition_version: 0,
@@ -847,8 +881,11 @@ pub struct PendingExecV1 {
     pub target_image_provenance_id: Id128V1,
     pub ordered_candidates: [ExactExecutableCandidateV1; MAX_EXEC_CANDIDATES_V1],
     pub transition_version: u64,
+    pub admitted_entry_rule_id: u32,
     pub state: PendingExecStateV1,
-    pub reserved_1: [u8; 7],
+    pub pending_entry_kind: EntryKindV1,
+    pub pending_installed_role_class: InstalledRoleClassV1,
+    pub reserved_1: u8,
 }
 
 #[repr(C)]

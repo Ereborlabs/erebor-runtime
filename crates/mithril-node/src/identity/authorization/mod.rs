@@ -295,7 +295,7 @@ impl AuthorizationProofOwner {
                         .inode_generation
                 && slot.approved_role_numeric_id > 0
                 && slot.profile_generation_ref_id > 0
-                && slot.reserved_after_exception == 0
+                && slot.admitted_entry_rule_id > 0
                 && slot.expected_root_class == ExternalRootClassV1::ExternalRuntimeRoot,
             AuthorizationSnafu {
                 reason: "administrative slot is not an exact bounded external-root match",

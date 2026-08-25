@@ -66,7 +66,7 @@ static __noinline int socket_current_actor(__u16 effect_family,
     config = identity_runtime_config();
     scratch = identity_scratch_record();
     // Prepared runtime sockets must not become workload IPC authority.
-    if (prepared_runtime_effect_was_allowed(scratch))
+    if (runtime_infrastructure_effect_was_allowed(scratch))
         return IPC_ACTOR_OUTSIDE_PROTECTED_SCOPE;
     if (!config || !config->enabled || !config->effect_policy_enabled ||
         !scratch || id128_is_zero(&scratch->observation.binding_id))
@@ -249,7 +249,7 @@ static __always_inline int ipc_apply_relationship(
     scratch->ipc_relationship_key.operation = operation;
     decision = bpf_map_lookup_elem(&ipc_relationship_decisions,
                                    &scratch->ipc_relationship_key);
-    if (!decision && current_application_actor_is_exact(
+    if (!decision && current_admitted_actor_is_exact(
                          ipc_current_binding()))
         return application_default_effect_result(scratch);
     if (!decision) {
@@ -281,7 +281,7 @@ static __noinline int ipc_unsupported(int ret, int status)
     scratch = identity_scratch_record();
     if (!config || !scratch)
         return -EACCES;
-    if (current_application_actor_is_exact(ipc_current_binding()))
+    if (current_admitted_actor_is_exact(ipc_current_binding()))
         return application_default_effect_result(scratch);
     return hard_effect_result(config, scratch,
                               effect_observation_reason_v1_unsupported_object);

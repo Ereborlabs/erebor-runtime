@@ -91,9 +91,7 @@ static __always_inline int prepare_root_state(
     scratch->entry.admission_state = entry_admission_state_v1_committed;
     scratch->entry.lifetime_state = entry_lifetime_state_v1_active;
     scratch->entry.terminal_reason = 0;
-#pragma unroll
-    for (int index = 0; index < 4; index++)
-        scratch->entry.reserved_state[index] = 0;
+    scratch->entry.admitted_entry_rule_id = 0;
     scratch->entry.transition_guard = 0;
 
     scratch->domain.authority_domain_id = label->birth_authority_domain_id;

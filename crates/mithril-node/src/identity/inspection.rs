@@ -5,10 +5,11 @@ use std::path::{Path, PathBuf};
 
 use erebor_interceptor::KernelStateReader;
 use erebor_interceptor_abi::{
-    CreatedByEdgeV1, ExecutionSetBindingStateV1, ExternalRootClassV1, ExternalRootClassificationV1,
-    Id128V1, ImageProvenanceV1, InstalledRoleClassV1, KernelRealParentIntervalKeyV1,
-    KernelRealParentIntervalV1, PreparedContainerStateV1, ProcessExecutionInstanceV1,
-    ProcessSecurityStateV1, ProcessStateVectorV1, TaskCoordinateV1, TaskLabelV1,
+    CreatedByEdgeV1, EntrySecurityStateV1, ExecutionSetBindingStateV1, ExternalRootClassV1,
+    ExternalRootClassificationV1, Id128V1, ImageProvenanceV1, InstalledRoleClassV1,
+    KernelRealParentIntervalKeyV1, KernelRealParentIntervalV1, PreparedContainerStateV1,
+    ProcessExecutionInstanceV1, ProcessSecurityStateV1, ProcessStateVectorV1, TaskCoordinateV1,
+    TaskLabelV1,
 };
 use rustix::process::{pidfd_open, Pid, PidfdFlags};
 use serde::{Deserialize, Serialize};
@@ -24,6 +25,8 @@ pub struct NativeTaskSnapshotV1 {
     #[serde(default)]
     pub execution_set_id: Option<String>,
     pub entry_instance_id: String,
+    #[serde(default)]
+    pub admitted_entry_rule_id: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub runtime_binding: Option<NativeRuntimeBindingSnapshotV1>,
     pub creator_task_cookie: Option<u64>,
@@ -98,6 +101,12 @@ impl NativeIdentityInspector {
         let task_cookie = label.task_cookie;
         let process_state_id = label.process_state_id;
         let profile_generation_ref_id = label.birth_profile_generation_ref_id;
+        let entry = self.required(
+            "entry_states",
+            label.entry_instance_id.as_bytes(),
+            "entry state",
+        )?;
+        let entry = read_abi_value::<EntrySecurityStateV1>(&entry, "entry state")?;
         let runtime_binding = self.runtime_binding(host_pid, label.execution_set_id)?.map(
             |(root_cgroup_id, binding)| NativeRuntimeBindingSnapshotV1 {
                 binding_id: id_string(binding.binding_id),
@@ -191,6 +200,7 @@ impl NativeIdentityInspector {
             task_cookie,
             execution_set_id: Some(id_string(label.execution_set_id)),
             entry_instance_id: id_string(label.entry_instance_id),
+            admitted_entry_rule_id: entry.admitted_entry_rule_id,
             runtime_binding,
             creator_task_cookie,
             root_class,
@@ -314,6 +324,7 @@ fn installed_role_class_name(value: InstalledRoleClassV1) -> &'static str {
         InstalledRoleClassV1::FailClosedUnknown => "fail_closed_unknown",
         InstalledRoleClassV1::QualifiedRegisteredRole => "qualified_registered_role",
         InstalledRoleClassV1::ApprovedAdministrativeRole => "approved_administrative_role",
+        InstalledRoleClassV1::DeclaredEntryRole => "declared_entry_role",
         InstalledRoleClassV1::Unknown => "unknown",
     }
 }
