@@ -11,6 +11,7 @@ int erebor_exception_sys_enter(struct bpf_raw_tracepoint_args *context)
     (void)context;
     if (!config || !config->enabled)
         return 0;
+    activate_prepared_container_for_application(bpf_get_current_task_btf());
     begin_task_effect_syscall(bpf_get_current_task_btf());
     return 0;
 }
@@ -360,9 +361,8 @@ static __noinline int resolved_identity_effect_gate(struct file *file,
     pending_exec_v1 *pending;
     __u64 *profile_task_refs;
     struct cgroup *cgroup = NULL;
-    __u64 executable_composite_atom_id = 0;
-    bool executable_path;
-    int executable_path_result;
+    __u64 path_composite_atom_id = 0;
+    int visible_path_result;
     int binding_lookup;
 
     config = identity_runtime_config();
@@ -543,69 +543,23 @@ static __noinline int resolved_identity_effect_gate(struct file *file,
                                      scratch->effect_gate_flags &
                                          EFFECT_GATE_FILE_OPEN_ATTEMPT_V1);
     }
-    executable_path = scratch->observation.effect_family ==
-                      kernel_effect_family_v1_exec;
-    if (executable_path) {
-        if (path_unlinked(&scratch->effect_path))
-            return hard_effect_result(
-                config, scratch,
-                effect_observation_reason_v1_unsupported_object);
-        executable_path_result = container_visible_path_candidate(
-            &scratch->effect_path,
-            scratch->process.active_profile_generation_ref_id, scratch);
-        if (executable_path_result > 0)
-            return hard_effect_result(
-                config, scratch,
-                effect_observation_reason_v1_unsupported_object);
-        if (executable_path_result < 0)
-            return hard_effect_result(
-                config, scratch,
-                effect_observation_reason_v1_unresolved_object);
-        if (scratch->path_terminal.exact_object_required) {
-            executable_composite_atom_id =
-                scratch->path_terminal.composite_atom_id;
-            exact_file_object_from_path(&scratch->file_object,
-                                        &scratch->effect_path);
-            scratch->file_object.profile_generation_ref_id =
-                scratch->process.active_profile_generation_ref_id;
-            if (!scratch->file_object.mount_id_unique &&
-                scratch->path_mount_namespace_inode)
-                scratch->file_object.mount_namespace_inode =
-                    scratch->path_mount_namespace_inode;
-            else
-                scratch->path_mount_namespace_inode = 0;
-            scratch->observation.file_object = scratch->file_object;
-            if (!scratch->file_object.mount_id_unique &&
-                !scratch->file_object.mount_namespace_inode)
-                return hard_effect_result(
-                    config, scratch,
-                    effect_observation_reason_v1_unsupported_object);
-            /* Exact policy also requires the source-aware mount view. */
-            if (canonical_path_candidate(
-                    &scratch->effect_path, binding,
-                    scratch->process.active_profile_generation_ref_id,
-                    scratch)) {
-                if (scratch->path_mount_namespace_inode) {
-                    scratch->path_mount_namespace_inode = 0;
-                    return hard_effect_result(
-                        config, scratch,
-                        effect_observation_reason_v1_unsupported_object);
-                }
-                return hard_effect_result(
-                    config, scratch,
-                    effect_observation_reason_v1_unresolved_object);
-            }
-            if (!scratch->path_terminal.exact_object_required ||
-                scratch->path_terminal.composite_atom_id !=
-                    executable_composite_atom_id) {
-                scratch->path_mount_namespace_inode = 0;
-                return hard_effect_result(
-                    config, scratch,
-                    effect_observation_reason_v1_unresolved_object);
-            }
-            scratch->observation.file_object = scratch->file_object;
-        }
-    } else {
+    if (path_unlinked(&scratch->effect_path))
+        return hard_effect_result(
+            config, scratch,
+            effect_observation_reason_v1_unsupported_object);
+    visible_path_result = container_visible_path_candidate(
+        &scratch->effect_path,
+        scratch->process.active_profile_generation_ref_id, scratch);
+    if (visible_path_result > 0)
+        return hard_effect_result(
+            config, scratch,
+            effect_observation_reason_v1_unsupported_object);
+    if (visible_path_result < 0)
+        return hard_effect_result(
+            config, scratch,
+            effect_observation_reason_v1_unresolved_object);
+    if (scratch->path_terminal.exact_object_required) {
+        path_composite_atom_id = scratch->path_terminal.composite_atom_id;
         exact_file_object_from_path(&scratch->file_object,
                                     &scratch->effect_path);
         scratch->file_object.profile_generation_ref_id =
@@ -622,6 +576,8 @@ static __noinline int resolved_identity_effect_gate(struct file *file,
             return hard_effect_result(
                 config, scratch,
                 effect_observation_reason_v1_unsupported_object);
+        /* Exact selectors also bind the source-aware mount view. Ordinary
+         * path policy remains independent of inode-generation support. */
         if (canonical_path_candidate(
                 &scratch->effect_path, binding,
                 scratch->process.active_profile_generation_ref_id, scratch)) {
@@ -631,6 +587,14 @@ static __noinline int resolved_identity_effect_gate(struct file *file,
                     config, scratch,
                     effect_observation_reason_v1_unsupported_object);
             }
+            return hard_effect_result(
+                config, scratch,
+                effect_observation_reason_v1_unresolved_object);
+        }
+        if (!scratch->path_terminal.exact_object_required ||
+            scratch->path_terminal.composite_atom_id !=
+                path_composite_atom_id) {
+            scratch->path_mount_namespace_inode = 0;
             return hard_effect_result(
                 config, scratch,
                 effect_observation_reason_v1_unresolved_object);

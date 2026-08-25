@@ -308,7 +308,7 @@ prepared_output=$remote_root/stock-runc-prepared
   --output-directory "$prepared_output" \
   --pin-root "/sys/fs/bpf/$vm_name-stock-runc-prepared" \
   --lease-path "$prepared_output/owner.lock" \
-  --runc-path /usr/sbin/runc --busybox-path /usr/bin/busybox \
+  --runc-path /usr/sbin/runc --workload-path /usr/bin/sleep \
   --prestart-hook \
   "$remote_source/crates/mithril-e2e/fixtures/identity/oci-prestart-admission-v1.sh"
 "$provider" get "$vm_name" "$prepared_output/runc-prepared-probe.json" \

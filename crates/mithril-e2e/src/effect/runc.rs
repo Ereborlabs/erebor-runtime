@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::fs;
 use std::os::unix::ffi::OsStrExt as _;
 use std::os::unix::fs::{symlink, PermissionsExt as _};
@@ -7,7 +8,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use erebor_interceptor::{KernelHostConfig, KernelHostOwner};
-use erebor_interceptor_abi::KernelEffectOperationV1;
+use erebor_interceptor_abi::{KernelEffectFamilyV1, KernelEffectOperationV1};
 use mithril_control::{EntryKindV1, PathSelectorV1, PolicyDocumentV1, RuleMatchV1};
 use mithril_node::{
     EffectObservationStore, NativeIdentityInspector, NativeSecurityStateOwner,
@@ -20,7 +21,8 @@ use sha2::{Digest as _, Sha256};
 use snafu::{ensure, ResultExt as _};
 
 use super::support::{
-    effect_binding_with_identity, effect_node_config, wait_for_path_exec_effect, wait_for_reason,
+    effect_binding_with_identity, effect_node_config, wait_for_path_effect,
+    wait_for_path_exec_effect, wait_for_reason,
 };
 use super::{sign_generation_artifact, EffectTestRunner, PROFILE_GENERATION_REF_ID};
 use crate::error::{
@@ -40,7 +42,9 @@ pub struct RuncPreparedProbeV1 {
     pub prepared_state_after_exec: String,
     pub prepared_runtime_effect_observed: bool,
     pub path_exec_allow_observed: bool,
+    pub path_file_allow_observed: bool,
     pub executable_observation_has_no_exact_object: bool,
+    pub dynamic_loader_paths: Vec<String>,
     pub container_exit_success: bool,
     pub pin_root_removed: bool,
     pub lease_removed: bool,
@@ -113,7 +117,7 @@ impl EffectTestRunner {
         pin_root: &Path,
         lease_path: &Path,
         runc_path: &Path,
-        busybox_path: &Path,
+        workload_path: &Path,
         prestart_hook: &Path,
     ) -> Result<RuncPreparedProbeV1> {
         for path in [pin_root, lease_path] {
@@ -125,7 +129,7 @@ impl EffectTestRunner {
                 }
             );
         }
-        for path in [runc_path, busybox_path, prestart_hook] {
+        for path in [runc_path, workload_path, prestart_hook] {
             ensure!(
                 path.is_absolute() && path.exists(),
                 InvalidInputSnafu {
@@ -169,11 +173,7 @@ impl EffectTestRunner {
             },
         )?;
         fs::create_dir(&state_root).context(IoSnafu { path: &state_root })?;
-        fs::copy(busybox_path, rootfs.join("bin/busybox"))
-            .context(IoSnafu { path: busybox_path })?;
-        symlink("busybox", rootfs.join("bin/sleep")).context(IoSnafu {
-            path: &rootfs.join("bin/sleep"),
-        })?;
+        let dynamic_loader_paths = prepare_dynamic_workload_root(&rootfs, workload_path)?;
 
         run_checked(
             Command::new(runc_path).args(["spec", "--bundle", bundle.to_string_lossy().as_ref()]),
@@ -216,7 +216,7 @@ impl EffectTestRunner {
         )
         .context(IoSnafu { path: &config_path })?;
 
-        let artifact = self.build_runc_artifact(&fixture_root)?;
+        let artifact = self.build_runc_artifact(&fixture_root, &dynamic_loader_paths)?;
         let runc_version = command_text(Command::new(runc_path).arg("--version"), runc_path)?;
         let stdout = fs::File::create(&stdout_path).context(IoSnafu { path: &stdout_path })?;
         let stderr = fs::File::create(&stderr_path).context(IoSnafu { path: &stderr_path })?;
@@ -442,6 +442,14 @@ impl EffectTestRunner {
             "EXACT_POLICY_ALLOW",
             KernelEffectOperationV1::Execute,
         )?;
+        wait_for_path_effect(
+            &reader,
+            &observations,
+            marker,
+            "EXACT_POLICY_ALLOW",
+            KernelEffectFamilyV1::File,
+            KernelEffectOperationV1::Read,
+        )?;
 
         let status = wait_for_child(container.child.as_mut().ok_or_else(|| {
             InvalidInputSnafu {
@@ -488,14 +496,16 @@ impl EffectTestRunner {
         })?;
 
         Ok(RuncPreparedProbeV1 {
-            schema_version: 1,
+            schema_version: 2,
             runc_version: runc_version.lines().next().unwrap_or_default().to_owned(),
             initial_host_pid: initial_pid,
             prepared_state_before_exec,
             prepared_state_after_exec,
             prepared_runtime_effect_observed: true,
             path_exec_allow_observed: true,
+            path_file_allow_observed: true,
             executable_observation_has_no_exact_object: true,
+            dynamic_loader_paths,
             container_exit_success: true,
             pin_root_removed: !pin_root.exists(),
             lease_removed: !lease_path.exists(),
@@ -504,7 +514,11 @@ impl EffectTestRunner {
         })
     }
 
-    fn build_runc_artifact(&self, fixture_root: &Path) -> Result<PathBuf> {
+    fn build_runc_artifact(
+        &self,
+        fixture_root: &Path,
+        dynamic_loader_paths: &[String],
+    ) -> Result<PathBuf> {
         let policy_fixture = self
             .repo_root
             .join("crates/mithril-e2e/fixtures/mithril-policy");
@@ -527,6 +541,44 @@ impl EffectTestRunner {
             PathSelectorV1::exact("manual-device-zero", "/dev/zero", "MANUAL_DEVICE_DENIED")
                 .with_device_class("ZERO_DEVICE"),
         ];
+        let mut executable_path_selector_ids = vec!["manual-exec-allowed".to_owned()];
+        for (index, path) in dynamic_loader_paths.iter().enumerate() {
+            let path_selector_id = format!("runtime-loader-{index}");
+            document.path_selectors.push(PathSelectorV1::path(
+                path_selector_id.clone(),
+                path,
+                "MANUAL_EXEC_ALLOWED",
+            ));
+            executable_path_selector_ids.push(path_selector_id);
+        }
+        let executable_rule = document
+            .rules
+            .iter_mut()
+            .find(|rule| rule.rule_id == "allow-manual-exec-allowed")
+            .ok_or_else(|| {
+                InvalidInputSnafu {
+                    path: &policy_source,
+                    reason: "the direct runc fixture has no executable allow rule",
+                }
+                .build()
+            })?;
+        let RuleMatchV1::LocalPreEffect(executable_match) = &mut executable_rule.rule_match else {
+            return InvalidInputSnafu {
+                path: &policy_source,
+                reason: "the direct runc executable allow rule is not a local effect rule",
+            }
+            .fail();
+        };
+        let mithril_control::LocalObjectSelectorV1::PathSelectors { path_selector_ids } =
+            &mut executable_match.object
+        else {
+            return InvalidInputSnafu {
+                path: &policy_source,
+                reason: "the direct runc executable allow rule is not path-selected",
+            }
+            .fail();
+        };
+        *path_selector_ids = executable_path_selector_ids;
         let mut prepared_exec_rule = document
             .rules
             .iter()
@@ -552,6 +604,29 @@ impl EffectTestRunner {
         exec_match.subject.entry_kind_ids = vec![EntryKindV1::ContainerStart];
         exec_match.subject.role_ids = vec!["converter".to_owned()];
         document.rules.push(prepared_exec_rule);
+        let mut prepared_file_rule = document
+            .rules
+            .iter()
+            .find(|rule| rule.rule_id == "allow-manual-exec-allowed-read")
+            .cloned()
+            .ok_or_else(|| {
+                InvalidInputSnafu {
+                    path: &policy_source,
+                    reason: "the direct runc fixture has no loader file allow rule",
+                }
+                .build()
+            })?;
+        prepared_file_rule.rule_id = "allow-prepared-container-loader-read".to_owned();
+        let RuleMatchV1::LocalPreEffect(file_match) = &mut prepared_file_rule.rule_match else {
+            return InvalidInputSnafu {
+                path: &policy_source,
+                reason: "the direct runc loader file allow rule is not a local effect rule",
+            }
+            .fail();
+        };
+        file_match.subject.entry_kind_ids = vec![EntryKindV1::ContainerStart];
+        file_match.subject.role_ids = vec!["converter".to_owned()];
+        document.rules.push(prepared_file_rule);
         sign_generation_artifact(
             document,
             &policy_fixture.join("observe-profile-seal-request.json"),
@@ -560,6 +635,65 @@ impl EffectTestRunner {
             1,
         )
     }
+}
+
+fn prepare_dynamic_workload_root(rootfs: &Path, workload_path: &Path) -> Result<Vec<String>> {
+    fs::copy(workload_path, rootfs.join("bin/busybox")).context(IoSnafu {
+        path: workload_path,
+    })?;
+    symlink("busybox", rootfs.join("bin/sleep")).context(IoSnafu {
+        path: &rootfs.join("bin/sleep"),
+    })?;
+    let output = Command::new("ldd")
+        .arg(workload_path)
+        .output()
+        .context(IoSnafu {
+            path: Path::new("ldd"),
+        })?;
+    ensure!(
+        output.status.success(),
+        CommandSnafu {
+            program: "ldd".to_owned(),
+            reason: String::from_utf8_lossy(&output.stderr).trim().to_owned(),
+        }
+    );
+    let dependencies = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(ldd_dependency_path)
+        .collect::<BTreeSet<_>>();
+    ensure!(
+        !dependencies.is_empty(),
+        InvalidInputSnafu {
+            path: workload_path,
+            reason: "the stock-runc regression workload must use a dynamic loader",
+        }
+    );
+    for dependency in &dependencies {
+        let source = Path::new(dependency);
+        let relative = source.strip_prefix("/").map_err(|error| {
+            InvalidInputSnafu {
+                path: source,
+                reason: format!("dynamic-loader path is not absolute: {error}"),
+            }
+            .build()
+        })?;
+        let destination = rootfs.join(relative);
+        if let Some(parent) = destination.parent() {
+            fs::create_dir_all(parent).context(IoSnafu { path: parent })?;
+        }
+        fs::copy(source, &destination).context(IoSnafu { path: source })?;
+    }
+    Ok(dependencies.into_iter().collect())
+}
+
+fn ldd_dependency_path(line: &str) -> Option<String> {
+    let fields = line.split_whitespace().collect::<Vec<_>>();
+    let candidate = match fields.as_slice() {
+        [_, "=>", path, ..] => *path,
+        [path, ..] => *path,
+        [] => return None,
+    };
+    candidate.starts_with('/').then(|| candidate.to_owned())
 }
 
 fn run_checked(command: &mut Command, program: &Path) -> Result<()> {

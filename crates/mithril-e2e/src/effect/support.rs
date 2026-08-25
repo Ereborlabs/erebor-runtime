@@ -297,11 +297,12 @@ pub(super) fn wait_for_effect(
     )
 }
 
-pub(super) fn wait_for_path_exec_effect(
+pub(super) fn wait_for_path_effect(
     reader: &EffectObservationReader,
     store: &EffectObservationStore,
     marker: u64,
     expected_reason: &str,
+    expected_family: KernelEffectFamilyV1,
     expected_operation: KernelEffectOperationV1,
 ) -> Result<()> {
     wait_for_effect(
@@ -309,12 +310,12 @@ pub(super) fn wait_for_path_exec_effect(
         store,
         marker,
         expected_reason,
-        (KernelEffectFamilyV1::Exec, expected_operation),
+        (expected_family, expected_operation),
     )?;
     ensure!(
         store.recent_since(marker).iter().any(|event| {
             event.reason == expected_reason
-                && event.effect_family == u32::from(KernelEffectFamilyV1::Exec as u16)
+                && event.effect_family == u32::from(expected_family as u16)
                 && event.operation == u32::from(expected_operation as u16)
                 && event.composite_atom_id != 0
                 && event.exact_object_key_id == 0
@@ -323,10 +324,27 @@ pub(super) fn wait_for_path_exec_effect(
         }),
         InvalidInputSnafu {
             path: Path::new("effect_observations"),
-            reason: "an executable path decision incorrectly retained exact file identity",
+            reason: "a path decision incorrectly retained exact file identity",
         }
     );
     Ok(())
+}
+
+pub(super) fn wait_for_path_exec_effect(
+    reader: &EffectObservationReader,
+    store: &EffectObservationStore,
+    marker: u64,
+    expected_reason: &str,
+    expected_operation: KernelEffectOperationV1,
+) -> Result<()> {
+    wait_for_path_effect(
+        reader,
+        store,
+        marker,
+        expected_reason,
+        KernelEffectFamilyV1::Exec,
+        expected_operation,
+    )
 }
 
 pub(super) fn wait_for_exact_effect(

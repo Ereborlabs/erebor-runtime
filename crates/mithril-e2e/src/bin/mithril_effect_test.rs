@@ -42,8 +42,8 @@ enum Command {
         lease_path: PathBuf,
         #[arg(long)]
         runc_path: PathBuf,
-        #[arg(long, default_value = "/usr/bin/busybox")]
-        busybox_path: PathBuf,
+        #[arg(long, default_value = "/usr/bin/sleep")]
+        workload_path: PathBuf,
         #[arg(long)]
         prestart_hook: PathBuf,
     },
@@ -108,7 +108,7 @@ fn run() -> Result<()> {
             pin_root,
             lease_path,
             runc_path,
-            busybox_path,
+            workload_path,
             prestart_hook,
         } => {
             let runner = EffectTestRunner::new(cli.repo_root);
@@ -117,7 +117,7 @@ fn run() -> Result<()> {
                 &pin_root,
                 &lease_path,
                 &runc_path,
-                &busybox_path,
+                &workload_path,
                 &prestart_hook,
             )?;
             runner.write_json(&output_directory.join("runc-prepared-probe.json"), &result)?;

@@ -34,6 +34,31 @@ spec:
           recursive: false
           operations: [OpenRead, Read, MmapRead]
           action: Allow
+        - name: allow-runtime-loader-cache
+          path: /etc/ld.so.cache
+          recursive: false
+          operations: [OpenRead, Read, MmapRead]
+          action: Allow
+        - name: allow-runtime-loader-read
+          path: /lib/ld-linux-x86-64.so.2
+          recursive: false
+          operations: [OpenRead, Read, MmapRead]
+          action: Allow
+        - name: allow-runtime-libc-read
+          path: /lib/libc.so.6
+          recursive: false
+          operations: [OpenRead, Read, MmapRead]
+          action: Allow
+        - name: allow-runtime-libm-read
+          path: /lib/libm.so.6
+          recursive: false
+          operations: [OpenRead, Read, MmapRead]
+          action: Allow
+        - name: allow-runtime-libresolv-read
+          path: /lib/libresolv.so.2
+          recursive: false
+          operations: [OpenRead, Read, MmapRead]
+          action: Allow
         - name: allow-cat-read
           path: /bin/cat
           recursive: false
@@ -119,6 +144,26 @@ spec:
           path: /bin/sleep
           recursive: false
           operations: [Execute, MmapExecute, Mprotect]
+          action: Allow
+        - name: allow-runtime-loader-mapping
+          path: /lib/ld-linux-x86-64.so.2
+          recursive: false
+          operations: [MmapExecute, Mprotect]
+          action: Allow
+        - name: allow-runtime-libc-mapping
+          path: /lib/libc.so.6
+          recursive: false
+          operations: [MmapExecute, Mprotect]
+          action: Allow
+        - name: allow-runtime-libm-mapping
+          path: /lib/libm.so.6
+          recursive: false
+          operations: [MmapExecute, Mprotect]
+          action: Allow
+        - name: allow-runtime-libresolv-mapping
+          path: /lib/libresolv.so.2
+          recursive: false
+          operations: [MmapExecute, Mprotect]
           action: Allow
         - name: allow-cat-execution
           path: /bin/cat
