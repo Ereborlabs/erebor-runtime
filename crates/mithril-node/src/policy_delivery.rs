@@ -588,16 +588,7 @@ impl NodePolicyDeliveryOwner {
                 );
                 continue;
             }
-            config.policy_candidates.retain(|candidate| {
-                candidate.artifact_path != artifact_path
-                    && candidate.public_key_path != public_key_path
-            });
-            config.policy_candidates.push(PolicyCandidateConfig {
-                artifact_path,
-                public_key_path,
-                rollback_authorization_path: None,
-                rollback_public_key_path: None,
-            });
+            self.replace_profile_candidate(config, profile_id, artifact_path, public_key_path)?;
             // Scheduled authority does not survive a node boot or label-epoch change.
             if scheduled_session == Some(true) {
                 config
@@ -649,16 +640,13 @@ impl NodePolicyDeliveryOwner {
                 // Keep durable ownership until post-host readback proves old authority absent.
                 return Ok(());
             }
-            config.policy_candidates.retain(|candidate| {
-                candidate.artifact_path != artifact_path
-                    && candidate.public_key_path != public_key_path
-            });
-            config.policy_candidates.push(PolicyCandidateConfig {
+            // The pending successor owns this profile during crash recovery.
+            self.replace_profile_candidate(
+                config,
+                &pending.profile_id,
                 artifact_path,
                 public_key_path,
-                rollback_authorization_path: None,
-                rollback_public_key_path: None,
-            });
+            )?;
             if scheduled_session == Some(true) {
                 config
                     .workload_bindings
@@ -679,6 +667,53 @@ impl NodePolicyDeliveryOwner {
                 }
             }
         }
+        Ok(())
+    }
+
+    fn replace_profile_candidate(
+        &self,
+        config: &mut NodeConfig,
+        profile_id: &str,
+        artifact_path: PathBuf,
+        public_key_path: PathBuf,
+    ) -> Result<()> {
+        let previous = if let Some(record) = self.state.active_profiles.get(profile_id) {
+            Some((
+                self.checked_bundle_file(&record.artifact_file)?,
+                self.checked_bundle_file(&record.public_key_file)?,
+            ))
+        } else {
+            None
+        };
+        for candidate in &config.policy_candidates {
+            for (artifact, public_key) in previous
+                .iter()
+                .map(|(artifact, public_key)| (artifact, public_key))
+                .chain(std::iter::once((&artifact_path, &public_key_path)))
+            {
+                ensure!(
+                    (candidate.artifact_path == *artifact)
+                        == (candidate.public_key_path == *public_key),
+                    IdentityStateSnafu {
+                        reason: "a cached policy candidate has a partial bundle identity",
+                    }
+                );
+            }
+        }
+        config.policy_candidates.retain(|candidate| {
+            let is_previous = previous.as_ref().is_some_and(|(artifact, public_key)| {
+                candidate.artifact_path == *artifact && candidate.public_key_path == *public_key
+            });
+            let is_replacement = candidate.artifact_path == artifact_path
+                && candidate.public_key_path == public_key_path;
+            !is_previous && !is_replacement
+        });
+        config.policy_candidates.push(PolicyCandidateConfig {
+            artifact_path,
+            public_key_path,
+            rollback_authorization_path: None,
+            rollback_public_key_path: None,
+        });
         Ok(())
     }
 
@@ -1948,15 +1983,7 @@ impl NodePolicyDeliveryOwner {
                     .is_ok_and(|path| path == candidate.artifact_path)
             })
         });
-        dynamic
-            .policy_candidates
-            .retain(|candidate| candidate.artifact_path != artifact_path);
-        dynamic.policy_candidates.push(PolicyCandidateConfig {
-            artifact_path,
-            public_key_path,
-            rollback_authorization_path: None,
-            rollback_public_key_path: None,
-        });
+        self.replace_profile_candidate(&mut dynamic, &profile_id, artifact_path, public_key_path)?;
         let selected = binding_ids.iter().collect::<BTreeSet<_>>();
         for binding in &mut dynamic.workload_bindings {
             if selected.contains(&binding.binding_id) {
@@ -4182,7 +4209,7 @@ mod tests {
             },
         )?;
         let next = bundle(
-            &config,
+            &active_prepared.config,
             &key,
             2,
             2,
@@ -4192,9 +4219,23 @@ mod tests {
             30,
             "node-a",
         )?;
-        let next_prepared =
-            replacement.prepare_activation(&next, &trust, &config, &capabilities(), 3, 23)?;
+        let next_prepared = replacement.prepare_activation(
+            &next,
+            &trust,
+            &active_prepared.config,
+            &capabilities(),
+            3,
+            23,
+        )?;
+        assert_eq!(next_prepared.config.policy_candidates.len(), 1);
         replacement.begin_activation(&next, &next_prepared)?;
+        let mut restored = active_prepared.config.clone();
+        NodePolicyDeliveryOwner::load(directory.path())?.restore_config(&mut restored, &trust)?;
+        assert_eq!(restored.policy_candidates.len(), 1);
+        assert_eq!(
+            restored.policy_candidates[0].artifact_path,
+            next_prepared.config.policy_candidates[0].artifact_path
+        );
         let pending = replacement
             .state
             .pending_activation
