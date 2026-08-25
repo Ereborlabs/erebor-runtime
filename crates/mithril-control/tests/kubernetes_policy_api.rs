@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::path::Path;
 
 use mithril_control::{
@@ -122,6 +123,29 @@ fn stored_and_offline_policy_specs_lower_to_the_same_compilable_policy() -> Test
         .path_selectors
         .iter()
         .all(|selector| !selector.requires_exact_object()));
+    let path_object_classes = lowered
+        .path_selectors
+        .iter()
+        .map(|selector| selector.object_class_id.as_str())
+        .collect::<BTreeSet<_>>();
+    assert_eq!(path_object_classes.len(), lowered.path_selectors.len());
+    assert_eq!(
+        path_object_classes,
+        lowered
+            .protected_universe
+            .object_class_ids
+            .iter()
+            .map(String::as_str)
+            .collect()
+    );
+    assert!(lowered.path_selectors.iter().all(|selector| {
+        lowered.classifier_bindings.iter().any(|binding| {
+            binding.object_class_id == selector.object_class_id
+                && binding.classifier_binding_id
+                    == format!("kubernetes-{}", selector.path_selector_id)
+                && binding.required_capability_ids.is_empty()
+        })
+    }));
     let grant_cells = compiled
         .compiled_cells
         .iter()

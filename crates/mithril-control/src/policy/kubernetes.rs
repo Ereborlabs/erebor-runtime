@@ -1061,6 +1061,28 @@ pub fn lower_kubernetes_policy(
     });
     ipc_relationship_rules
         .sort_by(|left, right| left.relationship_rule_id.cmp(&right.relationship_rule_id));
+    let path_object_class_ids = path_selectors
+        .iter()
+        .map(|selector| selector.object_class_id.clone())
+        .collect::<Vec<_>>();
+    let path_classifier_bindings = path_selectors
+        .iter()
+        .map(|selector| ObjectClassifierBindingV1 {
+            classifier_binding_id: format!("kubernetes-{}", selector.path_selector_id),
+            object_class_id: selector.object_class_id.clone(),
+            // The path graph supplies the selector identity. This classifier only
+            // anchors that identity in the signed object registry.
+            selector: ObjectClassifierSelectorV1::FilesystemObject {
+                workload_selector_ids: all_selector_ids.clone(),
+                mount_source_class_ids: Vec::new(),
+                relative_component_bytes: Vec::new(),
+                filesystem_type_ids: Vec::new(),
+                required_object_type: FilesystemObjectTypeV1::RegularFile,
+            },
+            required_capability_ids: Vec::new(),
+            unknown_result: UnknownClassifierResultV1::Deny,
+        })
+        .collect::<Vec<_>>();
 
     let file_exception_grants = resource
         .spec
@@ -1150,33 +1172,11 @@ pub fn lower_kubernetes_policy(
             execution_set_ids: vec![execution_set_id],
             role_ids,
             entry_kind_ids,
-            object_class_ids: if path_selectors.is_empty() {
-                Vec::new()
-            } else {
-                vec!["KUBERNETES_PATH".to_owned()]
-            },
+            object_class_ids: path_object_class_ids,
             provider_account_ids: Vec::new(),
         },
         workload_selectors,
-        classifier_bindings: if path_selectors.is_empty() {
-            Vec::new()
-        } else {
-            vec![ObjectClassifierBindingV1 {
-                classifier_binding_id: "kubernetes-path".to_owned(),
-                object_class_id: "KUBERNETES_PATH".to_owned(),
-                // Path selectors carry the authority. This classifier only anchors the
-                // internal object registry and does not add volume or content identity.
-                selector: ObjectClassifierSelectorV1::FilesystemObject {
-                    workload_selector_ids: all_selector_ids,
-                    mount_source_class_ids: Vec::new(),
-                    relative_component_bytes: Vec::new(),
-                    filesystem_type_ids: Vec::new(),
-                    required_object_type: FilesystemObjectTypeV1::RegularFile,
-                },
-                required_capability_ids: vec!["EXACT_FILE_OBJECT".to_owned()],
-                unknown_result: UnknownClassifierResultV1::Deny,
-            }]
-        },
+        classifier_bindings: path_classifier_bindings,
         path_selectors,
         network_policy,
         path_tree_deny_floors: Vec::new(),
@@ -1540,10 +1540,11 @@ fn path_selector_id(
         return id.clone();
     }
     let id = format!("path-{}", ids.len());
+    let object_class_id = format!("KUBERNETES_PATH_{}", ids.len());
     selectors.push(if recursive {
-        PathSelectorV1::recursive(&id, path, "KUBERNETES_PATH")
+        PathSelectorV1::recursive(&id, path, object_class_id)
     } else {
-        PathSelectorV1::path(&id, path, "KUBERNETES_PATH")
+        PathSelectorV1::path(&id, path, object_class_id)
     });
     ids.insert(key, id.clone());
     id
