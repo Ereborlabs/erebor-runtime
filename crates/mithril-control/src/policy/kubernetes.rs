@@ -844,7 +844,7 @@ pub fn lower_kubernetes_policy(
         .map(|selector| selector.workload_selector_id.clone())
         .collect::<Vec<_>>();
     let mut path_selectors = Vec::new();
-    let mut path_selector_ids = BTreeMap::<(String, bool, bool), String>::new();
+    let mut path_selector_ids = BTreeMap::<(String, bool), String>::new();
     let mut rules = Vec::new();
     let mut effect_family_defaults = Vec::new();
     let mut destination_policies = Vec::new();
@@ -875,7 +875,6 @@ pub fn lower_kubernetes_policy(
                 &mut path_selector_ids,
                 &file.path,
                 file.recursive,
-                true,
             );
             let operations = sorted_unique(
                 file.operations
@@ -903,7 +902,6 @@ pub fn lower_kubernetes_policy(
                 &mut path_selector_ids,
                 &execution.path,
                 execution.recursive,
-                false,
             );
             rules.push(local_rule(
                 execution.name.clone(),
@@ -1533,20 +1531,17 @@ fn rule_subject(
 
 fn path_selector_id(
     selectors: &mut Vec<PathSelectorV1>,
-    ids: &mut BTreeMap<(String, bool, bool), String>,
+    ids: &mut BTreeMap<(String, bool), String>,
     path: &str,
     recursive: bool,
-    exact_object: bool,
 ) -> String {
-    let key = (path.to_owned(), recursive, exact_object);
+    let key = (path.to_owned(), recursive);
     if let Some(id) = ids.get(&key) {
         return id.clone();
     }
     let id = format!("path-{}", ids.len());
     selectors.push(if recursive {
         PathSelectorV1::recursive(&id, path, "KUBERNETES_PATH")
-    } else if exact_object {
-        PathSelectorV1::exact(&id, path, "KUBERNETES_PATH")
     } else {
         PathSelectorV1::path(&id, path, "KUBERNETES_PATH")
     });

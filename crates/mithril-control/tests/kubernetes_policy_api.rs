@@ -116,21 +116,12 @@ fn stored_and_offline_policy_specs_lower_to_the_same_compilable_policy() -> Test
         .iter()
         .filter(|selector| selector.path_expression() == "/usr/bin/python")
         .collect::<Vec<_>>();
-    assert_eq!(python_selectors.len(), 2);
-    assert_eq!(
-        python_selectors
-            .iter()
-            .filter(|selector| selector.requires_exact_object())
-            .count(),
-        1
-    );
-    assert_eq!(
-        python_selectors
-            .iter()
-            .filter(|selector| !selector.requires_exact_object())
-            .count(),
-        1
-    );
+    assert_eq!(python_selectors.len(), 1);
+    assert!(!python_selectors[0].requires_exact_object());
+    assert!(lowered
+        .path_selectors
+        .iter()
+        .all(|selector| !selector.requires_exact_object()));
     let grant_cells = compiled
         .compiled_cells
         .iter()
