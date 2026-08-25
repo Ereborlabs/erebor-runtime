@@ -163,23 +163,23 @@ impl NativeSecurityStateOwner {
     pub fn activate_held_initial_admission(
         &self,
         host: &mut KernelHost,
-        effect_policy_enabled: bool,
+        effect_policy_required: bool,
     ) -> Result<ReconciliationReportV1> {
-        self.activate_state(host, effect_policy_enabled, false)
+        self.activate_state(host, effect_policy_required, false)
     }
 
     pub fn activate_with_effect_policy(
         &self,
         host: &mut KernelHost,
-        effect_policy_enabled: bool,
+        effect_policy_required: bool,
     ) -> Result<ReconciliationReportV1> {
-        self.activate_state(host, effect_policy_enabled, true)
+        self.activate_state(host, effect_policy_required, true)
     }
 
     pub fn reconcile(
         &self,
         host: &mut KernelHost,
-        effect_policy_enabled: bool,
+        effect_policy_required: bool,
     ) -> Result<ReconciliationReportV1> {
         let key = 0_u32.to_ne_bytes();
         let bytes = host
@@ -203,7 +203,8 @@ impl NativeSecurityStateOwner {
                 && config.next_id > 0
                 && config.effect_controller_cgroup_id == self.effect_controller_cgroup_id
                 && config.enabled == 1
-                && config.effect_policy_enabled == u8::from(effect_policy_enabled)
+                && config.effect_policy_enabled <= 1
+                && config.effect_policy_enabled >= u8::from(effect_policy_required)
                 && config.first_effect_errno == -rustix::io::Errno::ACCESS.raw_os_error(),
             IdentityStateSnafu {
                 reason: "live identity configuration differs from its node owner",
@@ -219,7 +220,7 @@ impl NativeSecurityStateOwner {
     fn activate_state(
         &self,
         host: &mut KernelHost,
-        effect_policy_enabled: bool,
+        effect_policy_required: bool,
         reconcile_tasks: bool,
     ) -> Result<ReconciliationReportV1> {
         let mut config = IdentityRuntimeConfigV1 {
@@ -229,7 +230,7 @@ impl NativeSecurityStateOwner {
             effect_controller_cgroup_id: self.effect_controller_cgroup_id,
             first_effect_errno: -rustix::io::Errno::ACCESS.raw_os_error(),
             enabled: 1,
-            effect_policy_enabled: u8::from(effect_policy_enabled),
+            effect_policy_enabled: u8::from(effect_policy_required),
             reserved: [0; 2],
         };
         let key = 0_u32.to_ne_bytes();
@@ -333,16 +334,24 @@ fn recover_config(
     let mut recovered = *desired;
     recovered.effect_policy_enabled = existing.effect_policy_enabled;
     let enables_policy = recovered.effect_policy_enabled == 0 && desired.effect_policy_enabled == 1;
+    let retains_policy = recovered.effect_policy_enabled == 1 && desired.effect_policy_enabled == 0;
     ensure!(
         desired.next_id > 0
             && recovered.effect_policy_enabled <= 1
             && existing == recovered
-            && (recovered.effect_policy_enabled == desired.effect_policy_enabled || enables_policy),
+            && (recovered.effect_policy_enabled == desired.effect_policy_enabled
+                || enables_policy
+                || retains_policy),
         IdentityStateSnafu {
             reason: "recovered identity allocator has a different boot, epoch, or configuration"
                 .to_owned(),
         }
     );
+    if retains_policy {
+        // The policy gate is monotonic for one boot. Authority cleanup removes
+        // its exact maps but does not reopen the global enforcement bypass.
+        desired.effect_policy_enabled = 1;
+    }
     Ok(enables_policy)
 }
 
@@ -427,7 +436,7 @@ mod tests {
     }
 
     #[test]
-    fn recovery_cannot_disable_policy() {
+    fn recovery_retains_an_enabled_policy_gate() -> crate::Result<()> {
         let existing = IdentityRuntimeConfigV1 {
             next_id: 19,
             effect_policy_enabled: 1,
@@ -437,6 +446,8 @@ mod tests {
         let mut desired = existing;
         desired.effect_policy_enabled = 0;
 
-        assert!(recover_config(existing, &mut desired).is_err());
+        assert!(!recover_config(existing, &mut desired)?);
+        assert_eq!(desired.effect_policy_enabled, 1);
+        Ok(())
     }
 }
