@@ -2,6 +2,7 @@ mod child;
 mod fixture_syscalls;
 mod mailbox;
 mod network;
+mod runc;
 mod support;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -37,8 +38,8 @@ use self::support::{
     effect_binding, effect_node_config, effect_peer_binding, effect_propagation_binding,
     global_mount_view_is_dirty, health_delta, inode_generation, mount_view_is_dirty,
     mount_views_are_clean, sample_observation_health, wait_for_effect, wait_for_exact_effect,
-    wait_for_exact_io_uring_effect, wait_for_reason, wait_for_unsupported_effect,
-    ExternalMountNamespace,
+    wait_for_exact_io_uring_effect, wait_for_path_exec_effect, wait_for_reason,
+    wait_for_unsupported_effect, ExternalMountNamespace,
 };
 use crate::error::{
     InterceptorSnafu, InvalidInputSnafu, IoSnafu, JsonSnafu, NodeSnafu, PolicySnafu,
@@ -54,6 +55,7 @@ pub use network::{
     NetworkPeerTargetV1, NetworkPhysicalProbeBundleV1, NetworkTestRunner, NETWORK_PEER_DENIED_PORT,
     NETWORK_PEER_TCP_PORT, NETWORK_PEER_UDP_PORT,
 };
+pub use runc::RuncPreparedProbeV1;
 
 pub(super) const PROFILE_GENERATION_REF_ID: u64 = 1;
 const NEXT_PROFILE_GENERATION_REF_ID: u64 = 2;
@@ -574,7 +576,14 @@ fn build_generation_artifact(
             }
             .build()
         })?;
-        let selector = PathSelectorV1::exact(path_selector_id, canonical_path, object_class_id);
+        let selector = if matches!(
+            path_selector_id,
+            "manual-exec" | "manual-script" | "manual-exec-allowed"
+        ) {
+            PathSelectorV1::path(path_selector_id, canonical_path, object_class_id)
+        } else {
+            PathSelectorV1::exact(path_selector_id, canonical_path, object_class_id)
+        };
         document.path_selectors.push(match device_class_id {
             Some(device_class_id) => selector.with_device_class(device_class_id),
             None => selector,
@@ -614,6 +623,16 @@ fn build_generation_artifact(
             exception_ids: Vec::new(),
         });
     }
+    sign_generation_artifact(document, seal_source, signing_key, fixture_root, generation)
+}
+
+fn sign_generation_artifact(
+    mut document: PolicyDocumentV1,
+    seal_source: &Path,
+    signing_key: &Path,
+    fixture_root: &Path,
+    generation: u64,
+) -> Result<PathBuf> {
     let generation_delta = generation - 1;
     document.metadata.profile_version = document
         .metadata
@@ -621,7 +640,7 @@ fn build_generation_artifact(
         .checked_add(generation_delta)
         .ok_or_else(|| {
             InvalidInputSnafu {
-                path: policy_source,
+                path: fixture_root,
                 reason: "profile version exhausted",
             }
             .build()
@@ -632,7 +651,7 @@ fn build_generation_artifact(
         .checked_add(generation_delta)
         .ok_or_else(|| {
             InvalidInputSnafu {
-                path: policy_source,
+                path: fixture_root,
                 reason: "rollout generation exhausted",
             }
             .build()
@@ -1253,7 +1272,6 @@ impl EffectTestRunner {
                 path: &paths.deleted_exec_target,
             })?;
         }
-        let exec_inode_generation = inode_generation(fixture.pid(), &paths.exec_target)?;
         ensure!(
             fixture.hard_closed(HardClosedOperation::Exec)?.allowed,
             InvalidInputSnafu {
@@ -1423,47 +1441,13 @@ impl EffectTestRunner {
             None,
         )
         .context(NodeSnafu)?;
-        let exec_object = ExactFileObjectResolver::resolve(
-            fixture.pid(),
-            &paths.exec_target,
-            PROFILE_GENERATION_REF_ID,
-            PathSelectorV1::kernel_handle_for_id("manual-exec"),
-            "MANUAL_EXEC".to_owned(),
-            exec_inode_generation,
-            None,
-        )
-        .context(NodeSnafu)?;
-        let script_object = ExactFileObjectResolver::resolve(
-            fixture.pid(),
-            &paths.script_target,
-            PROFILE_GENERATION_REF_ID,
-            PathSelectorV1::kernel_handle_for_id("manual-script"),
-            "MANUAL_EXEC".to_owned(),
-            inode_generation(fixture.pid(), &paths.script_target)?,
-            None,
-        )
-        .context(NodeSnafu)?;
         let mut exact_objects = vec![
             exact_object.clone(),
             benign_object,
             allowed_bind_object,
             propagation_benign_object,
-            exec_object,
-            script_object,
         ];
         if protect {
-            exact_objects.push(
-                ExactFileObjectResolver::resolve(
-                    fixture.pid(),
-                    &paths.allowed_exec_target,
-                    PROFILE_GENERATION_REF_ID,
-                    PathSelectorV1::kernel_handle_for_id("manual-exec-allowed"),
-                    "MANUAL_EXEC_ALLOWED".to_owned(),
-                    inode_generation(fixture.pid(), &paths.allowed_exec_target)?,
-                    None,
-                )
-                .context(NodeSnafu)?,
-            );
             exact_objects.push(
                 ExactFileObjectResolver::resolve(
                     fixture.pid(),
@@ -2449,31 +2433,14 @@ impl EffectTestRunner {
         }
 
         if protect {
-            for (operation, label, object_key_id) in [
-                (
-                    HardClosedOperation::Execve,
-                    "execve image",
-                    PathSelectorV1::kernel_handle_for_id("manual-exec"),
-                ),
-                (
-                    HardClosedOperation::Execveat,
-                    "execveat image",
-                    PathSelectorV1::kernel_handle_for_id("manual-exec"),
-                ),
-                (
-                    HardClosedOperation::Fexecve,
-                    "fexecve image",
-                    PathSelectorV1::kernel_handle_for_id("manual-exec"),
-                ),
-                (
-                    HardClosedOperation::ScriptExec,
-                    "script image",
-                    PathSelectorV1::kernel_handle_for_id("manual-script"),
-                ),
+            for (operation, label) in [
+                (HardClosedOperation::Execve, "execve image"),
+                (HardClosedOperation::Execveat, "execveat image"),
+                (HardClosedOperation::Fexecve, "fexecve image"),
+                (HardClosedOperation::ScriptExec, "script image"),
                 (
                     HardClosedOperation::NonLeaderExec,
                     "non-leader-thread image",
-                    PathSelectorV1::kernel_handle_for_id("manual-exec"),
                 ),
             ] {
                 let marker = require_hard_close(
@@ -2485,14 +2452,12 @@ impl EffectTestRunner {
                     (KernelEffectFamilyV1::Exec, KernelEffectOperationV1::Execute),
                     label,
                 )?;
-                wait_for_exact_effect(
+                wait_for_path_exec_effect(
                     &reader,
                     &observations,
                     marker,
                     "EXACT_POLICY_DENY",
-                    (KernelEffectFamilyV1::Exec, KernelEffectOperationV1::Execute),
-                    object_key_id,
-                    None,
+                    KernelEffectOperationV1::Execute,
                 )?;
             }
             let deleted_exec_marker = require_hard_close(
@@ -2521,7 +2486,7 @@ impl EffectTestRunner {
                 InvalidInputSnafu {
                     path: &paths.allowed_exec_target,
                     reason: format!(
-                        "the signed exact file-backed executable control did not execute: {approved_exec:?}; observed {:?}",
+                        "the signed executable path control did not execute: {approved_exec:?}; observed {:?}",
                         observations
                             .recent_since(approved_exec_marker)
                             .iter()
@@ -2535,14 +2500,12 @@ impl EffectTestRunner {
                     ),
                 }
             );
-            wait_for_exact_effect(
+            wait_for_path_exec_effect(
                 &reader,
                 &observations,
                 approved_exec_marker,
                 "EXACT_POLICY_ALLOW",
-                (KernelEffectFamilyV1::Exec, KernelEffectOperationV1::Execute),
-                PathSelectorV1::kernel_handle_for_id("manual-exec-allowed"),
-                None,
+                KernelEffectOperationV1::Execute,
             )?;
 
             let proc_marker = observations.cursor();
@@ -2568,14 +2531,12 @@ impl EffectTestRunner {
             // The signed image decision must be observe-only. A later dynamic
             // loader or library can still fail hard as an unclassified image.
             let _physical_result = fixture.hard_closed(HardClosedOperation::Exec)?;
-            wait_for_exact_effect(
+            wait_for_path_exec_effect(
                 &reader,
                 &observations,
                 exec_marker,
                 "WOULD_DENY",
-                (KernelEffectFamilyV1::Exec, KernelEffectOperationV1::Execute),
-                PathSelectorV1::kernel_handle_for_id("manual-exec"),
-                None,
+                KernelEffectOperationV1::Execute,
             )?;
         }
         require_hard_close(

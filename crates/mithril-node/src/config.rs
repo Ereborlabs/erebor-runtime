@@ -162,7 +162,7 @@ pub struct ExactFileObjectConfig {
     pub mount_id_unique: u64,
     pub filesystem_device: u32,
     pub inode: u64,
-    pub inode_generation: u32,
+    pub inode_generation: u64,
     #[serde(default)]
     pub device: Option<ExactDeviceConfig>,
     pub canonical_component_hex: Vec<String>,

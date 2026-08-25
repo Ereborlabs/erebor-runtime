@@ -297,6 +297,38 @@ pub(super) fn wait_for_effect(
     )
 }
 
+pub(super) fn wait_for_path_exec_effect(
+    reader: &EffectObservationReader,
+    store: &EffectObservationStore,
+    marker: u64,
+    expected_reason: &str,
+    expected_operation: KernelEffectOperationV1,
+) -> Result<()> {
+    wait_for_effect(
+        reader,
+        store,
+        marker,
+        expected_reason,
+        (KernelEffectFamilyV1::Exec, expected_operation),
+    )?;
+    ensure!(
+        store.recent_since(marker).iter().any(|event| {
+            event.reason == expected_reason
+                && event.effect_family == u32::from(KernelEffectFamilyV1::Exec as u16)
+                && event.operation == u32::from(expected_operation as u16)
+                && event.composite_atom_id != 0
+                && event.exact_object_key_id == 0
+                && event.inode == 0
+                && event.inode_generation == 0
+        }),
+        InvalidInputSnafu {
+            path: Path::new("effect_observations"),
+            reason: "an executable path decision incorrectly retained exact file identity",
+        }
+    );
+    Ok(())
+}
+
 pub(super) fn wait_for_exact_effect(
     reader: &EffectObservationReader,
     store: &EffectObservationStore,
@@ -479,7 +511,7 @@ fn observation_matches(
         && expected_effect.is_none_or(|expected| expected == (effect_family, operation))
 }
 
-pub(super) fn inode_generation(pid: u32, path: &Path) -> Result<u32> {
+pub(super) fn inode_generation(pid: u32, path: &Path) -> Result<u64> {
     let host_path = PathBuf::from(format!("/proc/{pid}/root")).join(
         path.strip_prefix("/").map_err(|error| {
             InvalidInputSnafu {
@@ -507,7 +539,7 @@ pub(super) fn inode_generation(pid: u32, path: &Path) -> Result<u32> {
     let value = text
         .split_ascii_whitespace()
         .next()
-        .and_then(|value| value.parse::<u32>().ok())
+        .and_then(|value| value.parse::<u64>().ok())
         .unwrap_or_default();
     ensure!(
         value > 0,

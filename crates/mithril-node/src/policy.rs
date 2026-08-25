@@ -1090,6 +1090,7 @@ impl NodePolicyGenerationOwner {
                         })?;
                 let path = PathBuf::from(canonical_path);
                 let Some(object) = view.try_resolve_signed_selector(
+                    host,
                     &path,
                     binding.active_profile_generation_ref_id,
                     selector.kernel_handle(),
@@ -1350,7 +1351,7 @@ impl NodePolicyGenerationOwner {
         };
         let mut selected = None;
         for path in candidates {
-            let Some(live) = view.try_inspect(&path)? else {
+            let Some(live) = view.try_inspect(host, &path)? else {
                 continue;
             };
             let is_regular_executable =
@@ -1489,6 +1490,7 @@ impl NodePolicyGenerationOwner {
                 mount_id: live.mount_id,
                 filesystem_device: live.filesystem_device,
                 inode_generation: plan.executable_object.inode_generation,
+                reserved: 0,
             },
         })
     }
@@ -2447,7 +2449,6 @@ impl LoweredGeneration {
                 filesystem_device: object.filesystem_device,
                 inode: object.inode,
                 inode_generation: object.inode_generation,
-                reserved: 0,
             };
             let value = ExactObjectBindingV1 {
                 profile_generation_ref_id: object.profile_generation_ref_id,
@@ -3259,10 +3260,20 @@ fn activate_profile(
         let previous = host
             .lookup_map("binding_activation_targets", key.as_bytes())
             .context(InterceptorSnafu)?;
+        let previous_target = previous
+            .as_deref()
+            .map(ExecutionSetBindingStateV1::try_read_from_bytes)
+            .transpose()
+            .map_err(|error| {
+                IdentityStateSnafu {
+                    reason: format!("binding activation target is invalid: {error}"),
+                }
+                .build()
+            })?;
         ensure!(
-            previous
-                .as_deref()
-                .is_none_or(|previous| previous == desired.as_bytes()),
+            previous_target.as_ref().is_none_or(|previous| {
+                WorkloadBindingOwner::activation_target_matches_desired(&desired, previous)
+            }),
             IdentityStateSnafu {
                 reason: "generation-keyed binding activation target is immutable",
             }
@@ -3290,11 +3301,21 @@ fn activate_profile(
                     }
                 );
             }
+            let observed = host
+                .lookup_map("binding_activation_targets", &target.key)
+                .context(InterceptorSnafu)?
+                .context(IdentityStateSnafu {
+                    reason: "binding activation target disappeared during staging",
+                })?;
+            let observed =
+                ExecutionSetBindingStateV1::try_read_from_bytes(&observed).map_err(|error| {
+                    IdentityStateSnafu {
+                        reason: format!("binding activation target is invalid: {error}"),
+                    }
+                    .build()
+                })?;
             ensure!(
-                host.lookup_map("binding_activation_targets", &target.key)
-                    .context(InterceptorSnafu)?
-                    .as_deref()
-                    == Some(target.desired.as_bytes()),
+                WorkloadBindingOwner::activation_target_matches_desired(&target.desired, &observed,),
                 IdentityStateSnafu {
                     reason: "binding activation target failed readback",
                 }
@@ -3332,7 +3353,7 @@ fn activate_profile(
             .build()
         })?;
         ensure!(
-            same_activation_identity(current, &target)
+            WorkloadBindingOwner::activation_target_matches_desired(current, &target)
                 && target.active_profile_generation_ref_id == activation.generation,
             IdentityStateSnafu {
                 reason: "binding activation target changed before publication",
@@ -3419,20 +3440,6 @@ fn activate_profile(
         })?;
     ensure_committed_generation(&target, committed.as_deref())?;
     rollback.finalize_pending(&pending).context(PolicySnafu)
-}
-
-fn same_activation_identity(
-    live: &ExecutionSetBindingStateV1,
-    target: &ExecutionSetBindingStateV1,
-) -> bool {
-    let mut live = *live;
-    live.active_profile_generation_ref_id = target.active_profile_generation_ref_id;
-    live.transition_version = target.transition_version;
-    live.initial_role_id = target.initial_role_id;
-    live.external_role_id = target.external_role_id;
-    live.lifecycle_state = target.lifecycle_state;
-    live.initial_root_state = target.initial_root_state;
-    live == *target
 }
 
 fn ensure_generation_reference_row(
@@ -5305,6 +5312,75 @@ mod tests {
             entry_kind: AbiEntryKindV1::ContainerStart as u16,
             effect_family: KernelEffectFamilyV1::File as u16,
             operation: KernelEffectOperationV1::OpenRead as u16,
+            reserved: 0,
+            reserved_alignment: [0; 4],
+            composite_atom_id: terminal.composite_atom_id,
+            process_state_vector_id: 1,
+            binding_lifecycle_state: BindingLifecycleStateV1::Active,
+            reserved_tail: [0; 3],
+        };
+        assert!(generation.defaults.contains_key(expected.as_bytes()));
+        Ok(())
+    }
+
+    #[test]
+    fn execution_path_does_not_inherit_an_exact_file_requirement() -> crate::Result<()> {
+        let (mut artifact, binding, object) = exact_artifact(ProfileModeV1::Protect)?;
+        artifact
+            .policy_document
+            .path_selectors
+            .push(PathSelectorV1::path(
+                "projected-token-exec",
+                "/var/run/token",
+                "PROJECTED_TOKEN",
+            ));
+        let mut execution_rule = artifact.policy_document.rules[0].clone();
+        execution_rule.rule_id = "execute-projected-token".to_owned();
+        let RuleMatchV1::LocalPreEffect(effect) = &mut execution_rule.rule_match else {
+            unreachable!("fixture contains one local rule")
+        };
+        effect.effect_families = vec![EffectFamilyV1::Exec];
+        effect.operation_ids = vec!["EXECUTE".to_owned()];
+        effect.object = LocalObjectSelectorV1::PathSelectors {
+            path_selector_ids: vec!["projected-token-exec".to_owned()],
+        };
+        artifact.policy_document.rules.push(execution_rule);
+        artifact.compiled_profile =
+            PolicyCompiler
+                .compile(&artifact.policy_document)
+                .map_err(|source| crate::Error::Policy {
+                    source,
+                    location: snafu::Location::default(),
+                })?;
+
+        let generation = LoweredGeneration::for_binding(
+            &artifact,
+            &binding,
+            &[object],
+            Id128V1::new(1, 2),
+            Id128V1::new(3, 4),
+            3,
+            1_800_000_000_000_000_000,
+            100,
+        )?;
+        assert_eq!(generation.decisions.len(), 1);
+        assert_eq!(generation.defaults.len(), 1);
+        let terminal = generation
+            .path_terminals
+            .values()
+            .find_map(|value| PathGraphTerminalV1::read_from_bytes(value).ok())
+            .ok_or_else(|| {
+                IdentityStateSnafu {
+                    reason: "test generation has no shared path terminal".to_owned(),
+                }
+                .build()
+            })?;
+        let expected = EffectDefaultKeyV1 {
+            profile_generation_ref_id: 1,
+            active_role_id: 1,
+            entry_kind: AbiEntryKindV1::ContainerStart as u16,
+            effect_family: KernelEffectFamilyV1::Exec as u16,
+            operation: KernelEffectOperationV1::Execute as u16,
             reserved: 0,
             reserved_alignment: [0; 4],
             composite_atom_id: terminal.composite_atom_id,

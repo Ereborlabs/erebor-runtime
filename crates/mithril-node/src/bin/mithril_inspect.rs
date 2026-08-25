@@ -37,7 +37,7 @@ enum Command {
         #[arg(long)]
         object_class: String,
         #[arg(long)]
-        inode_generation: u32,
+        inode_generation: u64,
         #[arg(long)]
         device_class: Option<String>,
     },

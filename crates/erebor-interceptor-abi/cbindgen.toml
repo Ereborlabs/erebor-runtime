@@ -61,6 +61,8 @@ include = [
   "EffectObservationV1",
   "EffectPhysicalResultV1",
   "ExactFileObjectKeyV1",
+  "ExactFileMeasurementStateV1",
+  "ExactFileMeasurementV1",
   "ExactObjectBindingStateV1",
   "ExactObjectBindingV1",
   "EffectAttemptHookV1",
@@ -191,6 +193,8 @@ include = [
 "EffectObservationV1" = "effect_observation_v1"
 "EffectPhysicalResultV1" = "effect_physical_result_v1"
 "ExactFileObjectKeyV1" = "exact_file_object_key_v1"
+"ExactFileMeasurementStateV1" = "exact_file_measurement_state_v1"
+"ExactFileMeasurementV1" = "exact_file_measurement_v1"
 "ExactObjectBindingStateV1" = "exact_object_binding_state_v1"
 "ExactObjectBindingV1" = "exact_object_binding_v1"
 "EffectAttemptHookV1" = "effect_attempt_hook_v1"

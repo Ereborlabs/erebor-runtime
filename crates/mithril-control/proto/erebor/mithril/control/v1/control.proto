@@ -366,7 +366,7 @@ message AdministrativeFileObject {
   uint32 mount_id = 3;
   bytes filesystem_instance_id = 4;
   uint64 inode = 5;
-  uint32 inode_generation = 6;
+  uint64 inode_generation = 6;
   bytes exact_live_object_id = 7;
   uint32 object_kind = 8;
   bytes backing_identity = 9;

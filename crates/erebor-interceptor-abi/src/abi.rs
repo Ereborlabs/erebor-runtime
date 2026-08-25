@@ -220,7 +220,7 @@ pub struct PhysicalDecisionV1 {
     pub exception_numeric_handle: u32,
 }
 
-pub const MAX_POLICY_ACTIVATION_PROBE_KEY_BYTES_V1: usize = 72;
+pub const MAX_POLICY_ACTIVATION_PROBE_KEY_BYTES_V1: usize = 80;
 
 #[repr(u8)]
 #[derive(
@@ -908,11 +908,11 @@ pub struct DeviceEffectKeyV1 {
     pub mount_id_unique: u64,
     pub inode: u64,
     pub exact_object_key_id: u64,
+    pub inode_generation: u64,
     pub active_role_id: u32,
     pub process_state_vector_id: u32,
     pub mount_namespace_inode: u32,
     pub filesystem_device: u32,
-    pub inode_generation: u32,
     pub device_major: u32,
     pub device_minor: u32,
     pub ioctl_command: u32,
@@ -923,6 +923,7 @@ pub struct DeviceEffectKeyV1 {
     /// One only for a policy row that explicitly names all ioctl commands.
     pub command_wildcard: u8,
     pub reserved: u8,
+    pub reserved_tail: [u8; 4],
 }
 
 /// A signed role relationship used to bind one exact controller-target pair.
@@ -1041,10 +1042,54 @@ pub struct ExactFileObjectKeyV1 {
     pub profile_generation_ref_id: u64,
     pub mount_id_unique: u64,
     pub inode: u64,
+    pub inode_generation: u64,
     pub mount_namespace_inode: u32,
     pub filesystem_device: u32,
-    pub inode_generation: u32,
-    pub reserved: u32,
+}
+
+#[repr(u8)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    Eq,
+    PartialEq,
+    zerocopy::Immutable,
+    zerocopy::IntoBytes,
+    zerocopy::KnownLayout,
+    zerocopy::TryFromBytes,
+)]
+pub enum ExactFileMeasurementStateV1 {
+    #[default]
+    Unknown = 0,
+    Requested = 1,
+    Measured = 2,
+    Invalid = 3,
+}
+
+#[repr(C)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    Eq,
+    PartialEq,
+    zerocopy::Immutable,
+    zerocopy::IntoBytes,
+    zerocopy::KnownLayout,
+    zerocopy::TryFromBytes,
+)]
+pub struct ExactFileMeasurementV1 {
+    pub request_nonce: u64,
+    pub mount_id_unique: u64,
+    pub inode: u64,
+    pub inode_generation: u64,
+    pub mount_namespace_inode: u32,
+    pub filesystem_device: u32,
+    pub state: ExactFileMeasurementStateV1,
+    pub reserved: [u8; 7],
 }
 
 #[repr(u8)]
@@ -1284,7 +1329,8 @@ mod tests {
     use super::{
         BindingActivationTargetKeyV1, BindingLifecycleStateV1, DeviceEffectKeyV1,
         EffectAttemptHookV1, EffectDecisionKeyV1, EffectDefaultKeyV1, EffectObservationHealthV1,
-        EffectObservationV1, ExactDeviceTypeV1, ExactFileObjectKeyV1, ExactObjectBindingV1,
+        EffectObservationV1, ExactDeviceTypeV1, ExactFileMeasurementStateV1,
+        ExactFileMeasurementV1, ExactFileObjectKeyV1, ExactObjectBindingV1,
         ExceptionBindingStateV1, ExceptionHandleBindingKeyV1, ExceptionHandleBindingV1,
         ExceptionReceiptStateV1, ExceptionRuntimeStateKeyV1, ExceptionRuntimeStateKindV1,
         ExceptionRuntimeStateV1, ExceptionUseIdentityKindV1, ExceptionUseIdentityV1,
@@ -1296,7 +1342,7 @@ mod tests {
         PolicyActivationProbeMapKindV1, PolicyActivationProbeV1, PolicyGenerationModeV1,
         ProcessControlRuleKeyV1, ProfileGenerationDescriptorV1, TaskEffectAttemptFrameStateV1,
         TaskEffectAttemptFrameV1, TaskEffectAttemptStateKindV1, TaskEffectAttemptStateV1,
-        TaskLabelCandidateV1,
+        TaskLabelCandidateV1, MAX_POLICY_ACTIVATION_PROBE_KEY_BYTES_V1,
     };
 
     #[test]
@@ -1308,14 +1354,15 @@ mod tests {
         assert_eq!(offset_of!(EffectDecisionKeyV1, binding_lifecycle_state), 44);
         assert_eq!(size_of::<PhysicalDecisionV1>(), 16);
         assert_eq!(align_of::<PhysicalDecisionV1>(), 4);
-        assert_eq!(size_of::<PolicyActivationProbeV1>(), 104);
+        assert_eq!(size_of::<PolicyActivationProbeV1>(), 112);
         assert_eq!(align_of::<PolicyActivationProbeV1>(), 4);
         assert_eq!(offset_of!(PolicyActivationProbeV1, key), 16);
-        assert_eq!(offset_of!(PolicyActivationProbeV1, expected), 88);
+        assert_eq!(offset_of!(PolicyActivationProbeV1, expected), 96);
         assert_eq!(PolicyActivationProbeMapKindV1::EffectDecision as u8, 1);
         assert_eq!(PolicyActivationProbeMapKindV1::MountReconciliation as u8, 7);
         assert_eq!(size_of::<EffectDefaultKeyV1>(), 40);
-        assert_eq!(size_of::<DeviceEffectKeyV1>(), 72);
+        assert_eq!(size_of::<DeviceEffectKeyV1>(), 80);
+        assert!(MAX_POLICY_ACTIVATION_PROBE_KEY_BYTES_V1 >= size_of::<DeviceEffectKeyV1>());
         assert_eq!(size_of::<ProcessControlRuleKeyV1>(), 40);
         assert_eq!(size_of::<BindingActivationTargetKeyV1>(), 24);
         assert_eq!(align_of::<BindingActivationTargetKeyV1>(), 8);
@@ -1366,6 +1413,11 @@ mod tests {
         assert_eq!(IoUringRequestStateKindV1::Submitted as u8, 1);
         assert_eq!(IoUringExecutionStateKindV1::FailClosed as u8, 2);
         assert_eq!(size_of::<ExactFileObjectKeyV1>(), 40);
+        assert_eq!(size_of::<ExactFileMeasurementV1>(), 48);
+        assert_eq!(align_of::<ExactFileMeasurementV1>(), 8);
+        assert_eq!(offset_of!(ExactFileMeasurementV1, state), 40);
+        assert_eq!(ExactFileMeasurementStateV1::Requested as u8, 1);
+        assert_eq!(ExactFileMeasurementStateV1::Measured as u8, 2);
         assert_eq!(size_of::<ExactObjectBindingV1>(), 32);
         assert_eq!(size_of::<EffectObservationV1>(), 536);
         assert_eq!(size_of::<EffectObservationHealthV1>(), 64);

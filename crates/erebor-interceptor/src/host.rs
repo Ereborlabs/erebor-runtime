@@ -6,9 +6,9 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use erebor_interceptor_abi::{
-    ApprovedExecSlotKeyV1, Id128V1, PhysicalDecisionKindV1, PhysicalDecisionV1,
-    PolicyActivationProbeMapKindV1, PolicyActivationProbeV1,
-    MAX_POLICY_ACTIVATION_PROBE_KEY_BYTES_V1,
+    ApprovedExecSlotKeyV1, ExactFileMeasurementStateV1, ExactFileMeasurementV1, Id128V1,
+    PhysicalDecisionKindV1, PhysicalDecisionV1, PolicyActivationProbeMapKindV1,
+    PolicyActivationProbeV1, MAX_POLICY_ACTIVATION_PROBE_KEY_BYTES_V1,
 };
 use libbpf_rs::{
     query::{LinkInfoIter, ProgInfoIter, ProgInfoQueryOptions},
@@ -17,7 +17,7 @@ use libbpf_rs::{
 };
 use sha2::{Digest as _, Sha256};
 use snafu::{ensure, OptionExt as _, ResultExt as _};
-use zerocopy::IntoBytes as _;
+use zerocopy::{IntoBytes as _, TryFromBytes as _};
 
 use crate::error::{
     InvalidConfigurationSnafu, IoSnafu, LibbpfSnafu, ManifestMismatchSnafu, RetainedLsmLinkSnafu,
@@ -55,7 +55,7 @@ fn poll_until_complete(mut poll: impl FnMut() -> libbpf_rs::Result<()>) -> libbp
     }
 }
 
-pub const REQUIRED_QUALIFICATION_LSM_PROGRAMS: [&str; 47] = [
+pub const REQUIRED_QUALIFICATION_LSM_PROGRAMS: [&str; 48] = [
     "qualification_task_alloc",
     "qualification_file_open",
     "qualification_bprm_check_security",
@@ -100,12 +100,13 @@ pub const REQUIRED_QUALIFICATION_LSM_PROGRAMS: [&str; 47] = [
     "qualification_capable",
     "qualification_bpf",
     "qualification_inode_init_security_anon",
+    "qualification_inode_free_security",
     "qualification_uring_sqpoll",
     "qualification_uring_override_creds",
     "qualification_uring_cmd",
 ];
 
-pub const REQUIRED_QUALIFICATION_PROGRAMS: [&str; 54] = [
+pub const REQUIRED_QUALIFICATION_PROGRAMS: [&str; 55] = [
     "qualification_task_alloc",
     "qualification_file_open",
     "qualification_bprm_check_security",
@@ -156,13 +157,14 @@ pub const REQUIRED_QUALIFICATION_PROGRAMS: [&str; 54] = [
     "qualification_capable",
     "qualification_bpf",
     "qualification_inode_init_security_anon",
+    "qualification_inode_free_security",
     "qualification_uring_sqpoll",
     "qualification_uring_override_creds",
     "qualification_uring_cmd",
     "qualification_final_flow",
 ];
 
-pub const REQUIRED_IDENTITY_PROGRAMS: [&str; 77] = [
+pub const REQUIRED_IDENTITY_PROGRAMS: [&str; 79] = [
     "erebor_task_alloc",
     "erebor_policy_activation_probe",
     "erebor_cgroup_attach_task",
@@ -178,6 +180,8 @@ pub const REQUIRED_IDENTITY_PROGRAMS: [&str; 77] = [
     "erebor_exception_sys_exit",
     "erebor_mount_mutation_sys_exit",
     "erebor_sched_process_exec",
+    "erebor_identity_measure_file_open",
+    "erebor_identity_inode_free_security",
     "erebor_identity_file_open",
     "erebor_identity_file_receive",
     "erebor_identity_file_permission",
@@ -1244,6 +1248,90 @@ impl KernelHost {
             action: "delete BPF map entry",
             path: Path::new(name),
         })
+    }
+
+    pub fn stage_exact_file_measurement(&self, pid_tgid: u64, request_nonce: u64) -> Result<()> {
+        ensure!(
+            pid_tgid != 0 && request_nonce != 0,
+            ManifestMismatchSnafu {
+                path: Path::new("exact_file_measurements"),
+                reason: "exact file measurement needs a nonzero task and request nonce".to_owned(),
+            }
+        );
+        let request = ExactFileMeasurementV1 {
+            request_nonce,
+            state: ExactFileMeasurementStateV1::Requested,
+            ..Default::default()
+        };
+        let key = pid_tgid.to_ne_bytes();
+        self.update_map("exact_file_measurements", &key, request.as_bytes())?;
+        ensure!(
+            self.lookup_map("exact_file_measurements", &key)?.as_deref()
+                == Some(request.as_bytes()),
+            ManifestMismatchSnafu {
+                path: Path::new("exact_file_measurements"),
+                reason: "exact file measurement request failed readback".to_owned(),
+            }
+        );
+        Ok(())
+    }
+
+    pub fn take_exact_file_measurement(
+        &self,
+        pid_tgid: u64,
+        request_nonce: u64,
+    ) -> Result<ExactFileMeasurementV1> {
+        let key = pid_tgid.to_ne_bytes();
+        let bytes =
+            self.lookup_map("exact_file_measurements", &key)?
+                .context(ManifestMismatchSnafu {
+                    path: Path::new("exact_file_measurements"),
+                    reason: "exact file measurement result is missing".to_owned(),
+                })?;
+        self.delete_map_entry("exact_file_measurements", &key)?;
+        ensure!(
+            self.lookup_map("exact_file_measurements", &key)?.is_none(),
+            ManifestMismatchSnafu {
+                path: Path::new("exact_file_measurements"),
+                reason: "exact file measurement request remained after use".to_owned(),
+            }
+        );
+        let measurement = ExactFileMeasurementV1::try_read_from_bytes(&bytes).map_err(|error| {
+            ManifestMismatchSnafu {
+                path: PathBuf::from("exact_file_measurements"),
+                reason: format!("exact file measurement has an invalid ABI value: {error}"),
+            }
+            .build()
+        })?;
+        ensure!(
+            measurement.request_nonce == request_nonce
+                && measurement.state == ExactFileMeasurementStateV1::Measured
+                && measurement.reserved == [0; 7]
+                && measurement.mount_namespace_inode != 0
+                && measurement.mount_id_unique != 0
+                && measurement.inode != 0,
+            ManifestMismatchSnafu {
+                path: Path::new("exact_file_measurements"),
+                reason: "exact file measurement result is incomplete or belongs to another request"
+                    .to_owned(),
+            }
+        );
+        Ok(measurement)
+    }
+
+    pub fn discard_exact_file_measurement(&self, pid_tgid: u64) -> Result<()> {
+        let key = pid_tgid.to_ne_bytes();
+        if self.lookup_map("exact_file_measurements", &key)?.is_some() {
+            self.delete_map_entry("exact_file_measurements", &key)?;
+        }
+        ensure!(
+            self.lookup_map("exact_file_measurements", &key)?.is_none(),
+            ManifestMismatchSnafu {
+                path: Path::new("exact_file_measurements"),
+                reason: "cancelled exact file measurement request remained installed".to_owned(),
+            }
+        );
+        Ok(())
     }
 
     pub fn map_keys(&self, name: &str) -> Result<Vec<Vec<u8>>> {

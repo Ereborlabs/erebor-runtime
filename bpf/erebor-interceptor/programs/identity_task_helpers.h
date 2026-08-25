@@ -7,6 +7,7 @@
 #define TASK_LABEL_EXIT_COOKIE_V1 (~0ULL - 1)
 /* Linux sets PF_EXITING before the sched_process_exit tracepoint. */
 #define TASK_FLAG_EXITING_V1 0x00000004
+#define SYNTHETIC_INODE_GENERATION_V1 (1ULL << 63)
 
 struct mount___unique {
     __u64 mnt_id_unique;
@@ -39,8 +40,79 @@ static __always_inline bool dentry_unlinked(struct dentry *dentry)
     return !previous && parent != dentry;
 }
 
-static __always_inline void exact_file_object_from_path(
-    exact_file_object_key_v1 *object, const struct path *path)
+static __always_inline bool path_unlinked(const struct path *path)
+{
+    struct dentry *dentry = NULL;
+
+    if (!path || BPF_CORE_READ_INTO(&dentry, path, dentry))
+        return true;
+    return dentry_unlinked(dentry);
+}
+
+static __always_inline int exact_inode_generation(
+    struct inode *inode, __u32 filesystem_device, bool create,
+    __u64 *generation)
+{
+    struct exact_inode_lifetime_key_v1 key = {};
+    __u64 *stored;
+    __u64 *allocator;
+    __u64 allocated;
+    __u64 proposed;
+    __u32 native_generation = 0;
+    __u32 allocator_key = 0;
+
+    if (!inode || !generation ||
+        BPF_CORE_READ_INTO(&native_generation, inode, i_generation))
+        return -EACCES;
+    if (native_generation) {
+        *generation = native_generation;
+        return 0;
+    }
+    if (BPF_CORE_READ_INTO(&key.inode, inode, i_ino) || !key.inode)
+        return -EACCES;
+    key.filesystem_device = filesystem_device;
+    stored = bpf_map_lookup_elem(&exact_inode_lifetime_generations, &key);
+    if (stored && *stored) {
+        *generation = *stored;
+        return 0;
+    }
+    if (!create)
+        return -EACCES;
+    allocator = bpf_map_lookup_elem(&exact_inode_generation_allocator,
+                                    &allocator_key);
+    if (!allocator)
+        return -EACCES;
+    allocated = __sync_fetch_and_add(allocator, 1);
+    if (allocated >= SYNTHETIC_INODE_GENERATION_V1 - 1)
+        return -EACCES;
+    proposed = SYNTHETIC_INODE_GENERATION_V1 | (allocated + 1);
+    bpf_map_update_elem(&exact_inode_lifetime_generations, &key, &proposed,
+                        BPF_NOEXIST);
+    stored = bpf_map_lookup_elem(&exact_inode_lifetime_generations, &key);
+    if (!stored || !*stored)
+        return -EACCES;
+    *generation = *stored;
+    return 0;
+}
+
+static __always_inline int retire_exact_inode_generation(struct inode *inode)
+{
+    struct exact_inode_lifetime_key_v1 key = {};
+    struct super_block *superblock = NULL;
+    dev_t filesystem_device = 0;
+
+    if (!inode || BPF_CORE_READ_INTO(&superblock, inode, i_sb) ||
+        !superblock ||
+        BPF_CORE_READ_INTO(&filesystem_device, superblock, s_dev) ||
+        BPF_CORE_READ_INTO(&key.inode, inode, i_ino) || !key.inode)
+        return -EACCES;
+    key.filesystem_device = encoded_filesystem_device(filesystem_device);
+    return bpf_map_delete_elem(&exact_inode_lifetime_generations, &key);
+}
+
+static __always_inline int measure_exact_file_object_from_path(
+    exact_file_object_key_v1 *object, const struct path *path, umode_t *mode,
+    bool create_generation)
 {
     struct dentry *dentry = NULL;
     struct inode *inode = NULL;
@@ -51,7 +123,7 @@ static __always_inline void exact_file_object_from_path(
     struct mount___unique *unique_mount;
     __u32 mount_namespace_inode = 0;
     dev_t filesystem_device = 0;
-    umode_t mode = 0;
+    umode_t measured_mode = 0;
 
     __builtin_memset(object, 0, sizeof(*object));
     if (!path || BPF_CORE_READ_INTO(&dentry, path, dentry) ||
@@ -59,7 +131,7 @@ static __always_inline void exact_file_object_from_path(
         BPF_CORE_READ_INTO(&inode, dentry, d_inode) || !inode ||
         BPF_CORE_READ_INTO(&superblock, inode, i_sb) || !superblock ||
         BPF_CORE_READ_INTO(&vfsmount, path, mnt) || !vfsmount)
-        return;
+        return -EACCES;
     mount = mount_from_vfsmount(vfsmount);
     unique_mount = (void *)mount;
     if (!bpf_core_field_exists(unique_mount->mnt_id_unique) ||
@@ -70,21 +142,77 @@ static __always_inline void exact_file_object_from_path(
                            mnt_id_unique) ||
         BPF_CORE_READ_INTO(&filesystem_device, superblock, s_dev) ||
         BPF_CORE_READ_INTO(&object->inode, inode, i_ino) ||
-        BPF_CORE_READ_INTO(&object->inode_generation, inode, i_generation) ||
-        BPF_CORE_READ_INTO(&mode, inode, i_mode) ||
+        BPF_CORE_READ_INTO(&measured_mode, inode, i_mode) ||
         !mount_namespace_inode || !object->mount_id_unique ||
-        !object->inode ||
-        (!object->inode_generation &&
-         (mode & S_IFMT) != S_IFCHR && (mode & S_IFMT) != S_IFBLK))
+        !object->inode) {
         __builtin_memset(object, 0, sizeof(*object));
-    else {
-        /* Linux does not expose device-node i_generation to user space. */
-        if ((mode & S_IFMT) == S_IFCHR || (mode & S_IFMT) == S_IFBLK)
-            object->inode_generation = 0;
-        object->mount_namespace_inode = mount_namespace_inode;
-        object->filesystem_device =
-            encoded_filesystem_device(filesystem_device);
+        return -EACCES;
     }
+    object->mount_namespace_inode = mount_namespace_inode;
+    object->filesystem_device = encoded_filesystem_device(filesystem_device);
+    if ((measured_mode & S_IFMT) != S_IFCHR &&
+        (measured_mode & S_IFMT) != S_IFBLK &&
+        exact_inode_generation(inode, object->filesystem_device,
+                               create_generation,
+                               &object->inode_generation)) {
+        __builtin_memset(object, 0, sizeof(*object));
+        return -EACCES;
+    }
+    if (mode)
+        *mode = measured_mode;
+    return 0;
+}
+
+static __always_inline void exact_file_object_from_path(
+    exact_file_object_key_v1 *object, const struct path *path)
+{
+    umode_t mode = 0;
+
+    if (measure_exact_file_object_from_path(object, path, &mode, false) ||
+        (!object->inode_generation &&
+         (mode & S_IFMT) != S_IFCHR && (mode & S_IFMT) != S_IFBLK)) {
+        __builtin_memset(object, 0, sizeof(*object));
+        return;
+    }
+    /* Linux does not expose device-node i_generation to user space. */
+    if ((mode & S_IFMT) == S_IFCHR || (mode & S_IFMT) == S_IFBLK)
+        object->inode_generation = 0;
+}
+
+static __always_inline int measure_exact_file_object_from_file(
+    exact_file_object_key_v1 *object, struct file *file)
+{
+    struct path path = {};
+
+    if (!file || BPF_CORE_READ_INTO(&path, file, f_path)) {
+        __builtin_memset(object, 0, sizeof(*object));
+        return -EACCES;
+    }
+    return measure_exact_file_object_from_path(object, &path, NULL, true);
+}
+
+static __always_inline void complete_exact_file_measurement(struct file *file)
+{
+    __u64 pid_tgid = bpf_get_current_pid_tgid();
+    exact_file_measurement_v1 *request =
+        bpf_map_lookup_elem(&exact_file_measurements, &pid_tgid);
+    struct identity_scratch_v1 *scratch;
+
+    if (!request || !request->request_nonce ||
+        request->state != exact_file_measurement_state_v1_requested)
+        return;
+    request->state = exact_file_measurement_state_v1_invalid;
+    scratch = identity_scratch_record();
+    if (!scratch ||
+        measure_exact_file_object_from_file(&scratch->file_object, file))
+        return;
+    request->mount_id_unique = scratch->file_object.mount_id_unique;
+    request->inode = scratch->file_object.inode;
+    request->mount_namespace_inode =
+        scratch->file_object.mount_namespace_inode;
+    request->filesystem_device = scratch->file_object.filesystem_device;
+    request->inode_generation = scratch->file_object.inode_generation;
+    request->state = exact_file_measurement_state_v1_measured;
 }
 
 static __always_inline void exact_file_object_from_file(
@@ -138,7 +266,7 @@ static __always_inline void candidate_from_file(
     struct mount *mount = NULL;
     struct mnt_namespace *mount_namespace = NULL;
     __u32 mount_namespace_inode = 0;
-    __u32 inode_generation = 0;
+    __u64 inode_generation = 0;
     dev_t filesystem_device = 0;
     int mount_id = 0;
 
@@ -162,13 +290,16 @@ static __always_inline void candidate_from_file(
         !mount_namespace_inode ||
         BPF_CORE_READ_INTO(&filesystem_device, superblock, s_dev) ||
         BPF_CORE_READ_INTO(&candidate->inode, inode, i_ino) ||
-        !candidate->inode ||
-        BPF_CORE_READ_INTO(&inode_generation, inode, i_generation))
+        !candidate->inode)
         return;
     candidate->mount_namespace_inode = mount_namespace_inode;
     candidate->mount_id = mount_id;
     candidate->filesystem_device =
         encoded_filesystem_device(filesystem_device);
+    /* Workload exec policy uses the live signed path graph. Keep an available
+     * inode generation for provenance and exact administrative exec only. */
+    (void)exact_inode_generation(inode, candidate->filesystem_device, false,
+                                 &inode_generation);
     candidate->inode_generation = inode_generation;
 }
 

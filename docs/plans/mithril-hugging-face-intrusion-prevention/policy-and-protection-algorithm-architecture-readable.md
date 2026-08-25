@@ -2527,7 +2527,9 @@ Trusted runtime setup
   -> enforce one kernel monotonic-time deadline
 
 First application exec
-  -> resolve the exact executable through the active signed policy and binding
+  -> resolve the container-visible executable path through the active signed
+     policy
+  -> require the exact container binding
   -> atomically change PreparedContainer from PREPARED to ACTIVE
   -> activate the normal workload execution identity
   -> enforce every later effect through normal policy and exception authority
@@ -2541,6 +2543,14 @@ socket, namespace operation, or internal exec without changing the Mithril
 policy model. This trust is intentionally broad inside that exact boundary.
 It does not extend to another entry, another container, a later external root,
 or a task after application activation.
+
+The initial entry is a boot-scoped task entry identity. It is not an exact
+executable file or inode identity.
+
+The application-exec match follows Tetragon's binary-path boundary. BPF walks
+the executable from the current task root and matches the signed path. The
+match does not require an inode generation. Exact inode identity remains a
+separate filesystem selector and administrative-exec control.
 
 Runtime-created objects receive no durable bootstrap record. An application
 can use such an object only when the normal signed policy resolves and permits

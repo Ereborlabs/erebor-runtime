@@ -4,18 +4,21 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
 use std::fs::File;
 use std::io::{Read as _, Seek as _, SeekFrom};
-use std::os::fd::AsRawFd as _;
 use std::os::unix::ffi::{OsStrExt as _, OsStringExt as _};
 use std::os::unix::fs::MetadataExt as _;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use erebor_interceptor_abi::{MAX_CANONICAL_COMPONENT_BYTES_V1, MAX_CANONICAL_PATH_COMPONENTS_V1};
+use erebor_interceptor::KernelHost;
+use erebor_interceptor_abi::{
+    ExactFileMeasurementV1, MAX_CANONICAL_COMPONENT_BYTES_V1, MAX_CANONICAL_PATH_COMPONENTS_V1,
+};
 use rustix::fs::{openat, openat2, statx, AtFlags, Mode, OFlags, ResolveFlags, StatxFlags};
 use sha2::{Digest as _, Sha256};
 use snafu::{ensure, ResultExt as _};
+use uuid::Uuid;
 
-use crate::error::{IdentityStateSnafu, IoSnafu};
+use crate::error::{IdentityStateSnafu, InterceptorSnafu, IoSnafu};
 use crate::{ExactDeviceConfig, ExactDeviceType, ExactFileObjectConfig, Result};
 
 const STATX_MNT_ID_UNIQUE: u32 = 0x0000_4000;
@@ -37,7 +40,7 @@ pub(crate) struct LiveExactFileObjectV1 {
     pub mount_id_unique: u64,
     pub filesystem_device: u32,
     pub inode: u64,
-    pub inode_generation: u32,
+    pub inode_generation: u64,
     pub mode: u16,
     pub device_type: Option<ExactDeviceType>,
     pub device_major: u32,
@@ -81,7 +84,7 @@ impl ExactFileObjectResolver {
         profile_generation_ref_id: u64,
         exact_object_key_id: u64,
         object_class_id: String,
-        inode_generation: u32,
+        inode_generation: u64,
         device_class_id: Option<String>,
     ) -> Result<ExactFileObjectConfig> {
         ExactFileObjectView::acquire(root_pid)?.resolve(
@@ -162,7 +165,7 @@ impl ExactFileObjectView {
         profile_generation_ref_id: u64,
         exact_object_key_id: u64,
         object_class_id: String,
-        inode_generation: u32,
+        inode_generation: u64,
         device_class_id: Option<String>,
     ) -> Result<ExactFileObjectConfig> {
         let live = self.inspect(path)?;
@@ -208,8 +211,10 @@ impl ExactFileObjectView {
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn try_resolve_signed_selector(
         &self,
+        host: &KernelHost,
         path: &Path,
         profile_generation_ref_id: u64,
         path_selector_handle: u64,
@@ -217,7 +222,7 @@ impl ExactFileObjectView {
         device_class_id: Option<String>,
         mount_topology_generation: u64,
     ) -> Result<Option<ExactFileObjectConfig>> {
-        let Some(live) = self.try_inspect(path)? else {
+        let Some(live) = self.try_inspect(host, path)? else {
             return Ok(None);
         };
         let device = live.device_type.map(|device_type| ExactDeviceConfig {
@@ -265,27 +270,48 @@ impl ExactFileObjectView {
             }
         );
         let file = self.open_path(path)?;
-        self.inspect_file(path, &file, false)
+        self.inspect_file(path, &file, None)
     }
 
-    pub(crate) fn try_inspect(&self, path: &Path) -> Result<Option<LiveExactFileObjectV1>> {
+    pub(crate) fn try_inspect(
+        &self,
+        host: &KernelHost,
+        path: &Path,
+    ) -> Result<Option<LiveExactFileObjectV1>> {
         ensure!(
             path.is_absolute(),
             IdentityStateSnafu {
                 reason: "exact file resolution needs an absolute in-namespace path",
             }
         );
-        let Some(file) = self.try_open_path(path)? else {
-            return Ok(None);
+        let pid_tgid = current_pid_tgid()?;
+        let request_nonce = measurement_nonce();
+        host.stage_exact_file_measurement(pid_tgid, request_nonce)
+            .context(InterceptorSnafu)?;
+        let file = match self.try_open_path(path) {
+            Ok(Some(file)) => file,
+            Ok(None) => {
+                host.discard_exact_file_measurement(pid_tgid)
+                    .context(InterceptorSnafu)?;
+                return Ok(None);
+            }
+            Err(error) => {
+                host.discard_exact_file_measurement(pid_tgid)
+                    .context(InterceptorSnafu)?;
+                return Err(error);
+            }
         };
-        self.inspect_file(path, &file, true).map(Some)
+        let measurement = host
+            .take_exact_file_measurement(pid_tgid, request_nonce)
+            .context(InterceptorSnafu)?;
+        self.inspect_file(path, &file, Some(measurement)).map(Some)
     }
 
     fn inspect_file(
         &self,
         path: &Path,
         file: &File,
-        measure_inode_generation: bool,
+        measurement: Option<ExactFileMeasurementV1>,
     ) -> Result<LiveExactFileObjectV1> {
         let mount_namespace_inode = self.mount_namespace_inode()?;
         let unique_mount = StatxFlags::from_bits_retain(STATX_MNT_ID_UNIQUE);
@@ -310,17 +336,40 @@ impl ExactFileObjectView {
             0o060_000 => Some(ExactDeviceType::Block),
             _ => None,
         };
-        let inode_generation = Self::inode_generation(
-            file,
-            device_type.is_some() || !measure_inode_generation,
-            path,
-        )?;
+        let filesystem_device = encoded_device(status.stx_dev_major, status.stx_dev_minor)?;
+        let inode_generation = match measurement {
+            Some(measurement) => {
+                ensure!(
+                    measurement.mount_namespace_inode == mount_namespace_inode
+                        && measurement.mount_id_unique == status.stx_mnt_id
+                        && measurement.filesystem_device == filesystem_device
+                        && measurement.inode == status.stx_ino
+                        && (measurement.inode_generation > 0 || device_type.is_some()),
+                    IdentityStateSnafu {
+                        reason: format!(
+                            "kernel measurement differs from the exact object opened for `{}`",
+                            path.display()
+                        ),
+                    }
+                );
+                erebor_telemetry::trace!(
+                    "measured an exact file object",
+                    measurement_source = %"bpf_file_open",
+                    mount_namespace_inode = %mount_namespace_inode,
+                    mount_id_unique = %status.stx_mnt_id,
+                    inode = %status.stx_ino,
+                    inode_generation = %measurement.inode_generation
+                );
+                measurement.inode_generation
+            }
+            None => 0,
+        };
         let mount_snapshot = MountInfoSnapshot::read(self, path)?;
         Ok(LiveExactFileObjectV1 {
             mount_namespace_inode,
             mount_id: mount_snapshot.entered_mount_id,
             mount_id_unique: status.stx_mnt_id,
-            filesystem_device: encoded_device(status.stx_dev_major, status.stx_dev_minor)?,
+            filesystem_device,
             inode: status.stx_ino,
             inode_generation,
             mode: status.stx_mode,
@@ -390,39 +439,29 @@ impl ExactFileObjectView {
         })?;
         read_mountinfo_file(&mut file, self.root_pid)
     }
+}
 
-    fn inode_generation(file: &File, skip_measurement: bool, path: &Path) -> Result<u32> {
-        if skip_measurement {
-            return Ok(0);
+fn current_pid_tgid() -> Result<u64> {
+    let pid = u32::try_from(rustix::process::getpid().as_raw_pid()).map_err(|error| {
+        IdentityStateSnafu {
+            reason: format!("process ID exceeds the Linux u32 ABI: {error}"),
         }
-        let mut generation: libc::c_long = 0;
-        // SAFETY: FS_IOC_GETVERSION writes one long to the valid pointer for this open file.
-        let result =
-            unsafe { libc::ioctl(file.as_raw_fd(), libc::FS_IOC_GETVERSION, &mut generation) };
-        let error = std::io::Error::last_os_error();
-        ensure!(
-            result == 0,
-            IdentityStateSnafu {
-                reason: format!(
-                    "filesystem did not return an inode generation for `{}`: {}",
-                    path.display(),
-                    error
-                ),
-            }
-        );
-        u32::try_from(generation)
-            .ok()
-            .filter(|generation| *generation > 0)
-            .ok_or_else(|| {
-                IdentityStateSnafu {
-                    reason: format!(
-                        "filesystem returned an invalid inode generation for `{}`",
-                        path.display()
-                    ),
-                }
-                .build()
-            })
-    }
+        .build()
+    })?;
+    let tid = u32::try_from(rustix::thread::gettid().as_raw_pid()).map_err(|error| {
+        IdentityStateSnafu {
+            reason: format!("thread ID exceeds the Linux u32 ABI: {error}"),
+        }
+        .build()
+    })?;
+    Ok((u64::from(pid) << 32) | u64::from(tid))
+}
+
+fn measurement_nonce() -> u64 {
+    let uuid = Uuid::new_v4();
+    let mut bytes = [0_u8; 8];
+    bytes.copy_from_slice(&uuid.as_bytes()[..8]);
+    u64::from_le_bytes(bytes).max(1)
 }
 
 struct MountInfoSnapshot {
@@ -737,13 +776,28 @@ fn canonicalize_mount_path(
                         .count()
                         .cmp(&right.root.components().count())
                         .then_with(|| right.mount_id_unique.cmp(&left.mount_id_unique))
-                })
-                .ok_or_else(|| {
+                });
+            let Some(source) = source else {
+                // A hostPath bind can be the only view of its source filesystem.
+                // Its source root is still exact and the entered mount ID prevents alias reuse.
+                let mut source_components = path_components(&current.root)?;
+                source_components.append(&mut components);
+                ensure!(
+                    source_components.len() <= MAX_CANONICAL_PATH_COMPONENTS_V1,
                     IdentityStateSnafu {
-                        reason: "source-side mount ancestry is incomplete".to_owned(),
+                        reason: format!(
+                            "canonical mount path exceeds {MAX_CANONICAL_PATH_COMPONENTS_V1} components"
+                        ),
                     }
-                    .build()
-                })?;
+                );
+                if first_selected_mount_id_unique == 0 {
+                    first_selected_mount_id_unique = selected.mount_id_unique;
+                }
+                return Ok(CanonicalMountPath {
+                    components: source_components,
+                    first_selected_mount_id_unique,
+                });
+            };
             let source_relative = current.root.strip_prefix(&source.root).map_err(|error| {
                 IdentityStateSnafu {
                     reason: format!("mount root is outside its source root: {error}"),
@@ -1044,6 +1098,40 @@ mod tests {
             ["mnt", "data", "models", "model.bin"].map(|component| component.as_bytes().to_vec())
         );
         assert_eq!(result.first_selected_mount_id_unique, 41);
+        Ok(())
+    }
+
+    #[test]
+    fn canonical_mount_walk_accepts_an_unrepresented_hostpath_source() -> crate::Result<()> {
+        let mounts = vec![
+            LiveMount {
+                mount_id: 1,
+                parent_mount_id: 1,
+                root: PathBuf::from("/"),
+                mountpoint: PathBuf::from("/"),
+                filesystem_device: 1,
+                inode: 1,
+                mount_id_unique: 1,
+            },
+            LiveMount {
+                mount_id: 9,
+                parent_mount_id: 1,
+                root: PathBuf::from("/var/lib/mithril/markers"),
+                mountpoint: PathBuf::from("/var/lib/mithril/markers"),
+                filesystem_device: 42,
+                inode: 3,
+                mount_id_unique: 92,
+            },
+        ];
+
+        let result = canonicalize_mount_path(9, vec![b"result".to_vec()], &mounts)?;
+
+        assert_eq!(
+            result.components,
+            ["var", "lib", "mithril", "markers", "result"]
+                .map(|component| component.as_bytes().to_vec())
+        );
+        assert_eq!(result.first_selected_mount_id_unique, 92);
         Ok(())
     }
 

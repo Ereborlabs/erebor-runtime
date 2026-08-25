@@ -33,6 +33,20 @@ enum Command {
         #[arg(long)]
         protect: bool,
     },
+    RuncPreparedProbe {
+        #[arg(long)]
+        output_directory: PathBuf,
+        #[arg(long)]
+        pin_root: PathBuf,
+        #[arg(long)]
+        lease_path: PathBuf,
+        #[arg(long)]
+        runc_path: PathBuf,
+        #[arg(long, default_value = "/usr/bin/busybox")]
+        busybox_path: PathBuf,
+        #[arg(long)]
+        prestart_hook: PathBuf,
+    },
     #[command(hide = true)]
     Child {
         #[arg(long)]
@@ -87,6 +101,27 @@ fn run() -> Result<()> {
                 &bundle,
             )?;
             println!("Mithril effect physical probe passed");
+            Ok(())
+        }
+        Command::RuncPreparedProbe {
+            output_directory,
+            pin_root,
+            lease_path,
+            runc_path,
+            busybox_path,
+            prestart_hook,
+        } => {
+            let runner = EffectTestRunner::new(cli.repo_root);
+            let result = runner.runc_prepared_probe(
+                &output_directory,
+                &pin_root,
+                &lease_path,
+                &runc_path,
+                &busybox_path,
+                &prestart_hook,
+            )?;
+            runner.write_json(&output_directory.join("runc-prepared-probe.json"), &result)?;
+            println!("Mithril stock-runc prepared-container probe passed");
             Ok(())
         }
         Command::Child {

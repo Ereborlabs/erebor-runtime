@@ -38,13 +38,13 @@ _Static_assert(sizeof(network_response_floor_key_v1) == 24,
                "network response key ABI size");
 _Static_assert(sizeof(network_response_floor_v1) == 8,
                "network response floor ABI size");
-_Static_assert(sizeof(device_effect_key_v1) == 72,
+_Static_assert(sizeof(device_effect_key_v1) == 80,
                "device effect key ABI size");
 _Static_assert(sizeof(process_control_rule_key_v1) == 40,
                "process-control rule key ABI size");
 _Static_assert(sizeof(physical_decision_v1) == 16,
                "physical decision ABI size");
-_Static_assert(sizeof(policy_activation_probe_v1) == 104,
+_Static_assert(sizeof(policy_activation_probe_v1) == 112,
                "policy activation probe ABI size");
 _Static_assert(sizeof(profile_generation_descriptor_v1) == 112,
                "profile generation descriptor ABI size");
@@ -96,6 +96,8 @@ ASSERT_EXCEPTION_RUNTIME_FIELD_OFFSET(reserved);
 #undef ASSERT_EXCEPTION_RUNTIME_FIELD_OFFSET
 _Static_assert(sizeof(exact_file_object_key_v1) == 40,
                "exact file object ABI size");
+_Static_assert(sizeof(exact_file_measurement_v1) == 48,
+               "exact file measurement ABI size");
 _Static_assert(sizeof(exact_object_binding_v1) == 32,
                "exact object binding ABI size");
 _Static_assert(sizeof(effect_observation_v1) == 536,

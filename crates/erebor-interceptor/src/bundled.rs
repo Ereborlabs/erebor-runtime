@@ -332,16 +332,21 @@ mod tests {
         use std::mem::size_of;
 
         use erebor_interceptor_abi::ExactExecutableCandidateV1;
-        use libbpf_rs::libbpf_sys::{BPF_ALU64, BPF_AND, BPF_K, BPF_MUL};
+        use libbpf_rs::libbpf_sys::{BPF_ALU64, BPF_AND, BPF_K, BPF_LSH, BPF_MUL};
 
-        let candidate_size = size_of::<ExactExecutableCandidateV1>() as i32;
+        let candidate_size = size_of::<ExactExecutableCandidateV1>();
+        let candidate_shift = candidate_size
+            .is_power_of_two()
+            .then(|| candidate_size.ilog2() as i32);
         let instructions = BUNDLED_BPF_OBJECT.chunks_exact(8).collect::<Vec<_>>();
         assert!(instructions.windows(2).any(|pair| {
             pair[0][0] == (BPF_ALU64 | BPF_AND | BPF_K) as u8
                 && bpf_immediate(pair[0]) == Some(7)
-                && pair[1][0] == (BPF_ALU64 | BPF_MUL | BPF_K) as u8
                 && pair[1][1] & 0x0f == pair[0][1] & 0x0f
-                && bpf_immediate(pair[1]) == Some(candidate_size)
+                && ((pair[1][0] == (BPF_ALU64 | BPF_MUL | BPF_K) as u8
+                    && bpf_immediate(pair[1]) == Some(candidate_size as i32))
+                    || (pair[1][0] == (BPF_ALU64 | BPF_LSH | BPF_K) as u8
+                        && bpf_immediate(pair[1]) == candidate_shift))
         }));
     }
 

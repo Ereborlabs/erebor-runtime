@@ -93,7 +93,7 @@ pub struct AdministrativeFileObjectIdentityV1 {
     pub mount_id: u32,
     pub filesystem_instance_id: Id128V1,
     pub inode: u64,
-    pub inode_generation: u32,
+    pub inode_generation: u64,
     pub exact_live_object_id: Id128V1,
     pub object_kind: u8,
     pub backing_identity: Id128V1,
@@ -1083,11 +1083,7 @@ fn validate_file_object(
     expect_key(decoder, 4)?;
     let inode = decode_u64(decoder)?;
     expect_key(decoder, 5)?;
-    let inode_generation = decode_u64(decoder)?.try_into().map_err(|error| {
-        authorization_error(format!(
-            "executable inode generation exceeds its Linux u32 ABI: {error}"
-        ))
-    })?;
+    let inode_generation = decode_u64(decoder)?;
     ensure!(
         mount_id > 0 && inode > 0 && inode_generation > 0,
         AuthorizationSnafu {
@@ -1614,7 +1610,7 @@ mod tests {
         encoder
             .u8(5)
             .map_err(cbor_error)?
-            .u64(2)
+            .u64((1_u64 << 63) | 2)
             .map_err(cbor_error)?;
         encoder.u8(6).map_err(cbor_error)?;
         encode_id(&mut encoder, id(34))?;
@@ -1793,7 +1789,7 @@ mod tests {
                 .resolved_executable
                 .executable_object
                 .inode_generation,
-            2
+            (1_u64 << 63) | 2
         );
         assert_eq!(
             decoded

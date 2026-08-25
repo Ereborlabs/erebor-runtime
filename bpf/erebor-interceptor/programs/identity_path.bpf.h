@@ -582,6 +582,22 @@ static long canonical_mount_path_walk_step(__u32 offset, void *data)
         scratch, mount_namespace, walk->namespace_event,
         walk->namespace_root_mount_id_unique, current);
     if (selected_result == CANONICAL_MOUNT_CACHE_MISS_V1) {
+        if (BPF_CORE_READ_INTO(&source_parent, current, d_parent) ||
+            !source_parent)
+            goto failed;
+        if (source_parent == current) {
+            /* A Kubernetes bind can expose a source filesystem whose root
+             * mount is not represented in this namespace. The complete
+             * source-dentry walk remains bound to the entered unique mount. */
+            if (current == mount_root ||
+                !walk->selected_mount_id_unique)
+                goto failed;
+            if (!walk->first_selected_mount_id_unique)
+                walk->first_selected_mount_id_unique =
+                    walk->selected_mount_id_unique;
+            walk->reached_namespace_root = 1;
+            return 1;
+        }
         if (current == mount_root ||
             record_canonical_dentry_component(scratch, current))
             goto failed;
@@ -679,6 +695,104 @@ static __always_inline int collect_mount_components(
     scratch->file_object.mount_id_unique =
         walk->first_selected_mount_id_unique;
     scratch->mount_topology_generation = global_epoch;
+    *count = walk->component_count;
+    return 0;
+}
+
+struct visible_path_walk_context_v1 {
+    struct identity_scratch_v1 *scratch;
+};
+
+static long visible_path_walk_step(__u32 offset, void *data)
+{
+    struct visible_path_walk_context_v1 *context = data;
+    struct identity_scratch_v1 *scratch = context->scratch;
+    struct canonical_mount_path_walk_state_v1 *walk =
+        &scratch->mount_path_walk;
+    struct mount *current_mount;
+    struct mount *root_mount;
+    struct mount *parent_mount = NULL;
+    struct dentry *current;
+    struct dentry *root_dentry;
+    struct dentry *mount_root = NULL;
+    struct dentry *parent = NULL;
+    struct dentry *mountpoint = NULL;
+
+    (void)offset;
+    if (walk->failed || walk->reached_namespace_root)
+        return 1;
+    current_mount = (struct mount *)walk->current_mount_address;
+    root_mount = (struct mount *)walk->namespace_root_address;
+    current = (struct dentry *)walk->current_dentry_address;
+    root_dentry = (struct dentry *)walk->selected_mount_root_address;
+    if (!current_mount || !root_mount || !current || !root_dentry)
+        goto failed;
+    if (current_mount == root_mount && current == root_dentry) {
+        walk->reached_namespace_root = 1;
+        return 1;
+    }
+    if (BPF_CORE_READ_INTO(&mount_root, current_mount, mnt.mnt_root) ||
+        !mount_root || BPF_CORE_READ_INTO(&parent, current, d_parent) ||
+        !parent)
+        goto failed;
+    if (current == mount_root || parent == current) {
+        if (current_mount == root_mount ||
+            BPF_CORE_READ_INTO(&parent_mount, current_mount, mnt_parent) ||
+            !parent_mount || parent_mount == current_mount ||
+            BPF_CORE_READ_INTO(&mountpoint, current_mount, mnt_mountpoint) ||
+            !mountpoint)
+            goto failed;
+        walk->current_mount_address = (__u64)parent_mount;
+        walk->current_dentry_address = (__u64)mountpoint;
+        return 0;
+    }
+    if (record_canonical_dentry_component(scratch, current))
+        goto failed;
+    return 0;
+
+failed:
+    walk->failed = 1;
+    return 1;
+}
+
+/* Signed paths follow the current task root. Exact file selectors use the
+ * separate source-aware walk for object identity. */
+static __always_inline int collect_visible_path_components(
+    const struct path *path, struct identity_scratch_v1 *scratch, __u32 *count)
+{
+    struct task_struct *task = bpf_get_current_task_btf();
+    struct fs_struct *fs = NULL;
+    struct path root = {};
+    struct dentry *current = NULL;
+    struct vfsmount *vfsmount = NULL;
+    struct mount *current_mount;
+    struct mount *root_mount;
+    struct canonical_mount_path_walk_state_v1 *walk;
+    struct visible_path_walk_context_v1 context = {
+        .scratch = scratch,
+    };
+    long steps;
+
+    if (!task || !path || BPF_CORE_READ_INTO(&fs, task, fs) || !fs ||
+        BPF_CORE_READ_INTO(&root, fs, root) ||
+        BPF_CORE_READ_INTO(&current, path, dentry) || !current ||
+        BPF_CORE_READ_INTO(&vfsmount, path, mnt) || !vfsmount)
+        return -EACCES;
+    current_mount = mount_from_vfsmount(vfsmount);
+    root_mount = mount_from_vfsmount(root.mnt);
+    if (!current_mount || !root_mount || !root.dentry)
+        return -EACCES;
+    walk = &scratch->mount_path_walk;
+    __builtin_memset(walk, 0, sizeof(*walk));
+    walk->namespace_root_address = (__u64)root_mount;
+    walk->selected_mount_root_address = (__u64)root.dentry;
+    walk->current_mount_address = (__u64)current_mount;
+    walk->current_dentry_address = (__u64)current;
+    steps = bpf_loop(MAX_CANONICAL_MOUNTS_V1 +
+                         MAX_CANONICAL_PATH_COMPONENTS_V1,
+                     visible_path_walk_step, &context, 0);
+    if (steps < 0 || walk->failed || !walk->reached_namespace_root)
+        return -EACCES;
     *count = walk->component_count;
     return 0;
 }
@@ -829,21 +943,17 @@ unresolved:
  * The userspace compiler determinizes exact+wildcard pattern subsets. That
  * keeps the kernel hot path to one bounded state instead of an NFA state set.
  */
-static __always_inline int canonical_path_candidate(
-    const struct path *path, const execution_set_binding_state_v1 *binding,
-    __u64 profile_generation_ref_id, struct identity_scratch_v1 *scratch)
+static __always_inline int match_path_components(
+    __u64 profile_generation_ref_id, struct identity_scratch_v1 *scratch,
+    __u32 component_count)
 {
     path_graph_terminal_v1 *terminal;
-    __u32 component_count = 0;
     struct canonical_path_match_state_v1 *match = &scratch->path_match;
     struct canonical_path_match_context_v1 context = {
         .scratch = scratch,
     };
     long steps;
 
-    (void)binding;
-    if (collect_mount_components(path, scratch, &component_count))
-        return -EACCES;
     __builtin_memset(match, 0, sizeof(*match));
     match->profile_generation_ref_id = profile_generation_ref_id;
     match->component_count = component_count;
@@ -866,6 +976,32 @@ static __always_inline int canonical_path_candidate(
         return -EACCES;
     scratch->path_terminal = *terminal;
     return 0;
+}
+
+static __always_inline int canonical_path_candidate(
+    const struct path *path, const execution_set_binding_state_v1 *binding,
+    __u64 profile_generation_ref_id, struct identity_scratch_v1 *scratch)
+{
+    __u32 component_count = 0;
+
+    (void)binding;
+    if (collect_mount_components(path, scratch, &component_count))
+        return -EACCES;
+    return match_path_components(profile_generation_ref_id, scratch,
+                                 component_count);
+}
+
+static __always_inline int container_visible_path_candidate(
+    const struct path *path, __u64 profile_generation_ref_id,
+    struct identity_scratch_v1 *scratch)
+{
+    __u32 component_count = 0;
+
+    /* A positive result means that no task-root path represents the object. */
+    if (collect_visible_path_components(path, scratch, &component_count))
+        return 1;
+    return match_path_components(profile_generation_ref_id, scratch,
+                                 component_count);
 }
 
 SEC("tracepoint/raw_syscalls/sys_exit")

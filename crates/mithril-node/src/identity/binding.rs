@@ -269,6 +269,11 @@ struct RuntimeReconciliationPlan {
     updates: Vec<RuntimeBindingUpdate>,
 }
 
+#[derive(Default)]
+pub(crate) struct RuntimeReconciliationResultV1 {
+    pub retired_binding_ids: Vec<String>,
+}
+
 impl WorkloadBindingOwner {
     pub fn system(node_boot_id: Id128V1, label_epoch: u64) -> Result<Self> {
         Self::at("/sys/fs/cgroup", node_boot_id, label_epoch)
@@ -312,11 +317,11 @@ impl WorkloadBindingOwner {
         })
     }
 
-    pub async fn publish_configured(
+    pub(crate) async fn publish_configured(
         &mut self,
         host: &KernelHost,
         configured: &[WorkloadBindingConfig],
-    ) -> Result<()> {
+    ) -> Result<RuntimeReconciliationResultV1> {
         if self.runtime.is_some() {
             return self.reconcile_runtime(host, configured).await;
         }
@@ -328,7 +333,8 @@ impl WorkloadBindingOwner {
                 .filter(|binding| binding.root_cgroup_path.is_some())
                 .map(|binding| (binding, None)),
         )?;
-        self.retain_only_configured(host)
+        self.retain_only_configured(host)?;
+        Ok(RuntimeReconciliationResultV1::default())
     }
 
     pub fn administrative_target(
@@ -952,10 +958,14 @@ impl WorkloadBindingOwner {
         let previous = host
             .lookup_map("binding_activation_targets", key.as_bytes())
             .context(InterceptorSnafu)?;
+        let previous_target = previous
+            .as_deref()
+            .map(execution_set_binding_state)
+            .transpose()?;
         ensure!(
-            previous
-                .as_deref()
-                .is_none_or(|value| value == binding.state.as_bytes()),
+            previous_target.as_ref().is_none_or(|target| {
+                Self::activation_target_matches_desired(&binding.state, target)
+            }),
             IdentityStateSnafu {
                 reason: "held runtime binding activation target is not immutable",
             }
@@ -975,11 +985,15 @@ impl WorkloadBindingOwner {
                 }
             );
         }
+        let observed = host
+            .lookup_map("binding_activation_targets", key.as_bytes())
+            .context(InterceptorSnafu)?
+            .context(IdentityStateSnafu {
+                reason: "held runtime binding activation target disappeared",
+            })?;
+        let observed = execution_set_binding_state(&observed)?;
         ensure!(
-            host.lookup_map("binding_activation_targets", key.as_bytes())
-                .context(InterceptorSnafu)?
-                .as_deref()
-                == Some(binding.state.as_bytes()),
+            Self::activation_target_matches_desired(&binding.state, &observed),
             IdentityStateSnafu {
                 reason: "held runtime binding activation target failed readback",
             }
@@ -1252,11 +1266,7 @@ impl WorkloadBindingOwner {
                 })?;
             let activated = execution_set_binding_state(&activated)?;
             ensure!(
-                same_activation_identity(&binding.state, &activated)
-                    && activated.lifecycle_state == BindingLifecycleStateV1::Active
-                    && activated.active_profile_generation_ref_id == active
-                    && activated.initial_role_id == spec.initial_role_id
-                    && activated.external_role_id == spec.external_role_id,
+                Self::activation_target_matches_desired(&binding.state, &activated),
                 IdentityStateSnafu {
                     reason: format!(
                         "binding `{}` does not match its active profile",
@@ -1276,26 +1286,27 @@ impl WorkloadBindingOwner {
             .values()
             .filter(|binding| binding.state.lifecycle_state == BindingLifecycleStateV1::Active)
             .filter_map(|binding| {
-                binding
-                    .runtime_identity
-                    .as_ref()
-                    .filter(|runtime| {
-                        runtime.state == super::runtime::RuntimeContainerState::Running
-                    })
-                    .map(|runtime| runtime.init_pid)
-                    .filter(|pid| *pid > 0)
-                    .map(|init_pid| ExactObjectBindingTargetV1 {
-                        binding_id: &binding.spec.binding_id,
-                        init_pid,
-                    })
+                let runtime = binding.runtime_identity.as_ref()?;
+                let init_pid = match runtime.state {
+                    super::runtime::RuntimeContainerState::Created => {
+                        binding.held_initial_pid.filter(|pid| *pid > 0)
+                    }
+                    super::runtime::RuntimeContainerState::Running => {
+                        (runtime.init_pid > 0).then_some(runtime.init_pid)
+                    }
+                }?;
+                Some(ExactObjectBindingTargetV1 {
+                    binding_id: &binding.spec.binding_id,
+                    init_pid,
+                })
             })
     }
 
-    pub async fn reconcile(
+    pub(crate) async fn reconcile(
         &mut self,
         host: &KernelHost,
         configured: &[WorkloadBindingConfig],
-    ) -> Result<()> {
+    ) -> Result<RuntimeReconciliationResultV1> {
         if self.runtime.is_some() {
             return self.reconcile_runtime(host, configured).await;
         }
@@ -1307,16 +1318,16 @@ impl WorkloadBindingOwner {
             self.terminate_all(host)?;
             return Err(error);
         }
-        Ok(())
+        Ok(RuntimeReconciliationResultV1::default())
     }
 
     async fn reconcile_runtime(
         &mut self,
         host: &KernelHost,
         configured: &[WorkloadBindingConfig],
-    ) -> Result<()> {
+    ) -> Result<RuntimeReconciliationResultV1> {
         match self.reconcile_runtime_inner(host, configured).await {
-            Ok(()) => Ok(()),
+            Ok(reconciliation) => Ok(reconciliation),
             Err(source) if source.retry_hint() == RetryHint::Retryable => Err(source),
             Err(source) => {
                 self.terminate_all(host)?;
@@ -1329,7 +1340,7 @@ impl WorkloadBindingOwner {
         &mut self,
         host: &KernelHost,
         configured: &[WorkloadBindingConfig],
-    ) -> Result<()> {
+    ) -> Result<RuntimeReconciliationResultV1> {
         let observed = self
             .runtime
             .as_mut()
@@ -1342,6 +1353,7 @@ impl WorkloadBindingOwner {
             .into_iter()
             .map(|identity| (identity.full_container_id.clone(), identity))
             .collect();
+        let retired_binding_ids = Self::retired_configured_binding_ids(configured, &observed);
         let plan = self.plan_runtime_reconciliation(observed)?;
         for root_id in plan.missing_root_ids {
             self.terminate(host, root_id)?;
@@ -1389,7 +1401,10 @@ impl WorkloadBindingOwner {
                 })?;
             binding.runtime_identity = Some(identity);
         }
-        self.retain_only_configured(host)
+        self.retain_only_configured(host)?;
+        Ok(RuntimeReconciliationResultV1 {
+            retired_binding_ids: retired_binding_ids.into_iter().collect(),
+        })
     }
 
     fn plan_runtime_reconciliation(
@@ -1432,6 +1447,21 @@ impl WorkloadBindingOwner {
         }
         plan.new_identities = observed.into_values().collect();
         Ok(plan)
+    }
+
+    fn retired_configured_binding_ids(
+        configured: &[WorkloadBindingConfig],
+        observed: &BTreeMap<String, RuntimeContainerIdentity>,
+    ) -> BTreeSet<String> {
+        configured
+            .iter()
+            .filter(|binding| {
+                binding.scheduled_binding_authority_id.is_some()
+                    && binding.root_cgroup_path.is_some()
+                    && !observed.contains_key(&binding.container_id)
+            })
+            .map(|binding| binding.binding_id.clone())
+            .collect()
     }
 
     #[must_use]
@@ -1640,6 +1670,37 @@ impl WorkloadBindingOwner {
         }
         Ok(())
     }
+
+    pub(crate) fn same_activation_identity(
+        live: &ExecutionSetBindingStateV1,
+        target: &ExecutionSetBindingStateV1,
+    ) -> bool {
+        let mut live = *live;
+        live.active_profile_generation_ref_id = target.active_profile_generation_ref_id;
+        live.transition_version = target.transition_version;
+        live.initial_role_id = target.initial_role_id;
+        live.external_role_id = target.external_role_id;
+        live.lifecycle_state = target.lifecycle_state;
+        live.initial_root_state = target.initial_root_state;
+        live.prepared_container_state = target.prepared_container_state;
+        live.prepared_container_entry_instance_id = target.prepared_container_entry_instance_id;
+        live.prepared_container_exec_task_cookie = target.prepared_container_exec_task_cookie;
+        live.prepared_container_initial_host_tgid = target.prepared_container_initial_host_tgid;
+        live.prepared_container_reserved = target.prepared_container_reserved;
+        live == *target
+    }
+
+    pub(crate) fn activation_target_matches_desired(
+        desired: &ExecutionSetBindingStateV1,
+        target: &ExecutionSetBindingStateV1,
+    ) -> bool {
+        Self::same_activation_identity(desired, target)
+            && desired.active_profile_generation_ref_id == target.active_profile_generation_ref_id
+            && desired.initial_role_id == target.initial_role_id
+            && desired.external_role_id == target.external_role_id
+            && desired.lifecycle_state == BindingLifecycleStateV1::Active
+            && target.lifecycle_state == BindingLifecycleStateV1::Active
+    }
 }
 
 fn parse_id(field: &str, value: &str) -> Result<Id128V1> {
@@ -1750,28 +1811,9 @@ fn same_runtime_binding(
     desired == *recovered
 }
 
-fn same_activation_identity(
-    live: &ExecutionSetBindingStateV1,
-    target: &ExecutionSetBindingStateV1,
-) -> bool {
-    let mut live = *live;
-    live.active_profile_generation_ref_id = target.active_profile_generation_ref_id;
-    live.transition_version = target.transition_version;
-    live.initial_role_id = target.initial_role_id;
-    live.external_role_id = target.external_role_id;
-    live.lifecycle_state = target.lifecycle_state;
-    live.initial_root_state = target.initial_root_state;
-    live.prepared_container_state = target.prepared_container_state;
-    live.prepared_container_entry_instance_id = target.prepared_container_entry_instance_id;
-    live.prepared_container_exec_task_cookie = target.prepared_container_exec_task_cookie;
-    live.prepared_container_initial_host_tgid = target.prepared_container_initial_host_tgid;
-    live.prepared_container_reserved = target.prepared_container_reserved;
-    live == *target
-}
-
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
+    use std::collections::{BTreeMap, BTreeSet};
     use std::fs;
     use std::path::{Path, PathBuf};
     use std::time::{Duration, Instant};
@@ -1779,8 +1821,8 @@ mod tests {
     use snafu::{OptionExt as _, ResultExt as _};
 
     use super::{
-        same_activation_identity, same_runtime_binding, RuntimeContainerIdentity,
-        StagedRuntimeAdmissionV1, WorkloadBindingOwner,
+        same_runtime_binding, RuntimeContainerIdentity, StagedRuntimeAdmissionV1,
+        WorkloadBindingOwner,
     };
     use crate::error::{IdentityStateSnafu, IoSnafu};
     use crate::identity::runtime::RuntimeContainerState;
@@ -2140,15 +2182,33 @@ mod tests {
         let owner = WorkloadBindingOwner::at(temporary.path(), Id128V1::new(1, 2), 3)?;
         let live = owner.prepare(&spec(&root))?.state;
         let mut target = live;
+        target.transition_version += 1;
+        target.initial_root_state = InitialRootStateV1::Consumed;
+        target.prepared_container_state = PreparedContainerStateV1::Active;
+        target.prepared_container_entry_instance_id = Id128V1::new(11, 12);
+        target.prepared_container_exec_task_cookie = 13;
+        target.prepared_container_initial_host_tgid = 14;
+        assert!(WorkloadBindingOwner::same_activation_identity(
+            &live, &target
+        ));
+        assert!(WorkloadBindingOwner::activation_target_matches_desired(
+            &live, &target
+        ));
+
         target.active_profile_generation_ref_id += 1;
         target.initial_role_id += 1;
         target.external_role_id += 1;
-        target.transition_version += 1;
-        target.initial_root_state = InitialRootStateV1::Consumed;
-        assert!(same_activation_identity(&live, &target));
+        assert!(WorkloadBindingOwner::same_activation_identity(
+            &live, &target
+        ));
+        assert!(!WorkloadBindingOwner::activation_target_matches_desired(
+            &live, &target
+        ));
 
         target.binding_nonce = Id128V1::new(9, 10);
-        assert!(!same_activation_identity(&live, &target));
+        assert!(!WorkloadBindingOwner::same_activation_identity(
+            &live, &target
+        ));
         Ok(())
     }
 
@@ -2183,6 +2243,18 @@ mod tests {
         owner.bindings.insert(root_id, binding);
         assert_eq!(owner.exact_object_binding_targets().count(), 0);
 
+        let binding = owner
+            .bindings
+            .get_mut(&root_id)
+            .context(IdentityStateSnafu {
+                reason: "test binding disappeared before its held transition",
+            })?;
+        binding.held_initial_pid = Some(std::process::id());
+        binding.prepare_container()?;
+        let held = owner.exact_object_binding_targets().collect::<Vec<_>>();
+        assert_eq!(held.len(), 1);
+        assert_eq!(held[0].init_pid, std::process::id());
+
         let running = RuntimeContainerIdentity {
             init_pid: std::process::id(),
             state: RuntimeContainerState::Running,
@@ -2207,6 +2279,18 @@ mod tests {
         assert_eq!(plan.missing_root_ids, vec![root_id]);
         assert!(plan.new_identities.is_empty());
         assert!(plan.updates.is_empty());
+
+        let mut scheduled_runtime = configured;
+        scheduled_runtime.scheduled_binding_authority_id =
+            Some("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa".to_owned());
+        scheduled_runtime.scheduled_target_digest = Some("a".repeat(64));
+        assert_eq!(
+            WorkloadBindingOwner::retired_configured_binding_ids(
+                &[scheduled_runtime.clone()],
+                &BTreeMap::new(),
+            ),
+            BTreeSet::from([scheduled_runtime.binding_id])
+        );
         Ok(())
     }
 }

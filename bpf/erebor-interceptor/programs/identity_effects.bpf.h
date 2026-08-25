@@ -360,6 +360,9 @@ static __noinline int resolved_identity_effect_gate(struct file *file,
     pending_exec_v1 *pending;
     __u64 *profile_task_refs;
     struct cgroup *cgroup = NULL;
+    __u64 executable_composite_atom_id = 0;
+    bool executable_path;
+    int executable_path_result;
     int binding_lookup;
 
     config = identity_runtime_config();
@@ -464,6 +467,24 @@ static __noinline int resolved_identity_effect_gate(struct file *file,
             effect_physical_result_v1_denied_before_effect);
     if (!config->effect_policy_enabled)
         return ret;
+    generation = bpf_map_lookup_elem(
+        &profile_generation_descriptors,
+        &scratch->process.active_profile_generation_ref_id);
+    if (!generation_allows_existing_holder(generation) ||
+        generation->label_epoch != config->label_epoch ||
+        generation->profile_generation_ref_id !=
+            scratch->process.active_profile_generation_ref_id ||
+        !id128_equal(&generation->node_boot_id, &config->node_boot_id) ||
+        !id128_equal(&generation->profile_id, &binding->profile_id))
+        return hard_effect_result(
+            config, scratch,
+            effect_observation_reason_v1_corrupt_identity_or_generation);
+    /* Runtime setup can open anonymous exec objects after bprm state exists.
+     * Keep the exact prepared actor outside normal object-policy resolution. */
+    if (!(scratch->effect_gate_flags &
+          EFFECT_GATE_PREPARED_EXEC_EVALUATION_V1) &&
+        prepared_container_pre_active_actor_is_exact(binding, label, entry))
+        return prepared_runtime_effect_result(scratch);
     if (scratch->process.exec_guard_state != exec_guard_state_v1_none) {
         pending = bpf_map_lookup_elem(&pending_execs, &label->task_cookie);
         if (!pending ||
@@ -492,7 +513,7 @@ static __noinline int resolved_identity_effect_gate(struct file *file,
             if (!scratch->image.ordered_candidates[0].mount_id)
                 return hard_effect_result(
                     config, scratch,
-                    effect_observation_reason_v1_unresolved_object);
+                    effect_observation_reason_v1_unsupported_object);
             if (!pending_contains_candidate(
                     pending, &scratch->image.ordered_candidates[0]) &&
                 !(pending->state == pending_exec_state_v1_preparing &&
@@ -503,22 +524,6 @@ static __noinline int resolved_identity_effect_gate(struct file *file,
                     effect_observation_reason_v1_corrupt_identity_or_generation);
         }
     }
-    generation = bpf_map_lookup_elem(
-        &profile_generation_descriptors,
-        &scratch->process.active_profile_generation_ref_id);
-    if (!generation_allows_existing_holder(generation) ||
-        generation->label_epoch != config->label_epoch ||
-        generation->profile_generation_ref_id !=
-            scratch->process.active_profile_generation_ref_id ||
-        !id128_equal(&generation->node_boot_id, &config->node_boot_id) ||
-        !id128_equal(&generation->profile_id, &binding->profile_id))
-        return hard_effect_result(
-            config, scratch,
-            effect_observation_reason_v1_corrupt_identity_or_generation);
-    if (!(scratch->effect_gate_flags &
-          EFFECT_GATE_PREPARED_EXEC_EVALUATION_V1) &&
-        prepared_container_pre_active_actor_is_exact(binding, label, entry))
-        return prepared_runtime_effect_result(scratch);
     if (!(scratch->effect_gate_flags & EFFECT_GATE_PATH_SUPPLIED_V1) &&
         file) {
         if (BPF_CORE_READ_INTO(&scratch->effect_path, file, f_path))
@@ -538,34 +543,99 @@ static __noinline int resolved_identity_effect_gate(struct file *file,
                                      scratch->effect_gate_flags &
                                          EFFECT_GATE_FILE_OPEN_ATTEMPT_V1);
     }
-    exact_file_object_from_path(&scratch->file_object,
-                                &scratch->effect_path);
-    scratch->file_object.profile_generation_ref_id =
-        scratch->process.active_profile_generation_ref_id;
-    if (!scratch->file_object.mount_id_unique &&
-        scratch->path_mount_namespace_inode)
-        scratch->file_object.mount_namespace_inode =
-            scratch->path_mount_namespace_inode;
-    else
-        scratch->path_mount_namespace_inode = 0;
-    scratch->observation.file_object = scratch->file_object;
-    if (!scratch->file_object.mount_id_unique &&
-        !scratch->file_object.mount_namespace_inode)
-        return hard_effect_result(
-            config, scratch,
-            effect_observation_reason_v1_unsupported_object);
-    if (canonical_path_candidate(
-            &scratch->effect_path, binding,
-            scratch->process.active_profile_generation_ref_id, scratch)) {
-        if (scratch->path_mount_namespace_inode) {
-            scratch->path_mount_namespace_inode = 0;
+    executable_path = scratch->observation.effect_family ==
+                      kernel_effect_family_v1_exec;
+    if (executable_path) {
+        if (path_unlinked(&scratch->effect_path))
             return hard_effect_result(
                 config, scratch,
                 effect_observation_reason_v1_unsupported_object);
+        executable_path_result = container_visible_path_candidate(
+            &scratch->effect_path,
+            scratch->process.active_profile_generation_ref_id, scratch);
+        if (executable_path_result > 0)
+            return hard_effect_result(
+                config, scratch,
+                effect_observation_reason_v1_unsupported_object);
+        if (executable_path_result < 0)
+            return hard_effect_result(
+                config, scratch,
+                effect_observation_reason_v1_unresolved_object);
+        if (scratch->path_terminal.exact_object_required) {
+            executable_composite_atom_id =
+                scratch->path_terminal.composite_atom_id;
+            exact_file_object_from_path(&scratch->file_object,
+                                        &scratch->effect_path);
+            scratch->file_object.profile_generation_ref_id =
+                scratch->process.active_profile_generation_ref_id;
+            if (!scratch->file_object.mount_id_unique &&
+                scratch->path_mount_namespace_inode)
+                scratch->file_object.mount_namespace_inode =
+                    scratch->path_mount_namespace_inode;
+            else
+                scratch->path_mount_namespace_inode = 0;
+            scratch->observation.file_object = scratch->file_object;
+            if (!scratch->file_object.mount_id_unique &&
+                !scratch->file_object.mount_namespace_inode)
+                return hard_effect_result(
+                    config, scratch,
+                    effect_observation_reason_v1_unsupported_object);
+            /* Exact policy also requires the source-aware mount view. */
+            if (canonical_path_candidate(
+                    &scratch->effect_path, binding,
+                    scratch->process.active_profile_generation_ref_id,
+                    scratch)) {
+                if (scratch->path_mount_namespace_inode) {
+                    scratch->path_mount_namespace_inode = 0;
+                    return hard_effect_result(
+                        config, scratch,
+                        effect_observation_reason_v1_unsupported_object);
+                }
+                return hard_effect_result(
+                    config, scratch,
+                    effect_observation_reason_v1_unresolved_object);
+            }
+            if (!scratch->path_terminal.exact_object_required ||
+                scratch->path_terminal.composite_atom_id !=
+                    executable_composite_atom_id) {
+                scratch->path_mount_namespace_inode = 0;
+                return hard_effect_result(
+                    config, scratch,
+                    effect_observation_reason_v1_unresolved_object);
+            }
+            scratch->observation.file_object = scratch->file_object;
         }
-        return hard_effect_result(
-            config, scratch,
-            effect_observation_reason_v1_unresolved_object);
+    } else {
+        exact_file_object_from_path(&scratch->file_object,
+                                    &scratch->effect_path);
+        scratch->file_object.profile_generation_ref_id =
+            scratch->process.active_profile_generation_ref_id;
+        if (!scratch->file_object.mount_id_unique &&
+            scratch->path_mount_namespace_inode)
+            scratch->file_object.mount_namespace_inode =
+                scratch->path_mount_namespace_inode;
+        else
+            scratch->path_mount_namespace_inode = 0;
+        scratch->observation.file_object = scratch->file_object;
+        if (!scratch->file_object.mount_id_unique &&
+            !scratch->file_object.mount_namespace_inode)
+            return hard_effect_result(
+                config, scratch,
+                effect_observation_reason_v1_unsupported_object);
+        if (canonical_path_candidate(
+                &scratch->effect_path, binding,
+                scratch->process.active_profile_generation_ref_id, scratch)) {
+            if (scratch->path_mount_namespace_inode) {
+                scratch->path_mount_namespace_inode = 0;
+                return hard_effect_result(
+                    config, scratch,
+                    effect_observation_reason_v1_unsupported_object);
+            }
+            return hard_effect_result(
+                config, scratch,
+                effect_observation_reason_v1_unresolved_object);
+        }
+        scratch->observation.file_object = scratch->file_object;
     }
     scratch->path_mount_namespace_inode = 0;
     scratch->observation.composite_atom_id =
@@ -920,6 +990,22 @@ static __always_inline bool file_is_socket(struct file *file)
     return file && !BPF_CORE_READ_INTO(&inode, file, f_inode) && inode &&
            !BPF_CORE_READ_INTO(&mode, inode, i_mode) &&
            (mode & S_IFMT) == S_IFSOCK;
+}
+
+SEC("lsm/file_open")
+int BPF_PROG(erebor_identity_measure_file_open, struct file *file, int ret)
+{
+    /* Keep measurement outside the enforcement call stack and preserve the
+     * decision from an earlier Linux Security Module. */
+    complete_exact_file_measurement(file);
+    return ret;
+}
+
+SEC("lsm/inode_free_security")
+int BPF_PROG(erebor_identity_inode_free_security, struct inode *inode)
+{
+    retire_exact_inode_generation(inode);
+    return 0;
 }
 
 SEC("lsm/file_open")

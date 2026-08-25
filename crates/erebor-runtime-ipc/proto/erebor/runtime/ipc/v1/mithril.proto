@@ -76,7 +76,7 @@ message MithrilEffectObservation {
   uint64 mount_id_unique = 11;
   uint32 filesystem_device = 12;
   uint64 inode = 13;
-  uint32 inode_generation = 14;
+  uint64 inode_generation = 14;
   uint64 exact_object_key_id = 15;
   uint64 composite_atom_id = 16;
   uint32 active_role_id = 17;

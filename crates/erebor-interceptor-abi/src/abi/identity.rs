@@ -783,10 +783,11 @@ pub struct PendingAdministrativeMatchV1 {
 )]
 pub struct ExactExecutableCandidateV1 {
     pub inode: u64,
+    pub inode_generation: u64,
     pub mount_namespace_inode: u32,
     pub mount_id: u32,
     pub filesystem_device: u32,
-    pub inode_generation: u32,
+    pub reserved: u32,
 }
 
 #[repr(C)]
@@ -940,17 +941,17 @@ mod tests {
             offset_of!(ProcessSecurityStateV1, exec_check_task_cookie),
             216
         );
-        assert_eq!(size_of::<ExactExecutableCandidateV1>(), 24);
+        assert_eq!(size_of::<ExactExecutableCandidateV1>(), 32);
         assert_eq!(size_of::<ProcessExecutionInstanceV1>(), 80);
         assert_eq!(size_of::<ExecutionSetBindingStateV1>(), 224);
         assert_eq!(size_of::<IdentityRuntimeConfigV1>(), 48);
         assert_eq!(size_of::<ApprovedExecArgumentKeyV1>(), 4_120);
-        assert_eq!(size_of::<ApprovedExecSlotV1>(), 4_776);
+        assert_eq!(size_of::<ApprovedExecSlotV1>(), 4_784);
         assert_eq!(
             offset_of!(ApprovedExecSlotV1, exception_numeric_handle),
-            4_744
+            4_752
         );
-        assert_eq!(offset_of!(ApprovedExecSlotV1, deadline_boottime_ns), 4_752);
+        assert_eq!(offset_of!(ApprovedExecSlotV1, deadline_boottime_ns), 4_760);
     }
 
     #[test]

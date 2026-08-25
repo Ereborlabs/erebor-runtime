@@ -118,6 +118,7 @@ fn lower_device(
             },
             command_wildcard,
             reserved: 0,
+            reserved_tail: [0; 4],
         };
         insert_exact(rows, key.as_bytes(), decision.as_bytes())?;
     }

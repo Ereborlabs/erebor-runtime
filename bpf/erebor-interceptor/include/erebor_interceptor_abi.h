@@ -19,7 +19,7 @@ typedef __s32 int32_t;
 
 #define MAX_IO_URING_ENTRIES_V1 4096
 
-#define MAX_POLICY_ACTIVATION_PROBE_KEY_BYTES_V1 72
+#define MAX_POLICY_ACTIVATION_PROBE_KEY_BYTES_V1 80
 
 #define MAX_ANCESTOR_PROCESS_LINEAGES_V1 8
 
@@ -330,6 +330,22 @@ enum effect_physical_result_v1
 typedef enum effect_physical_result_v1 effect_physical_result_v1;
 #else
 typedef uint8_t effect_physical_result_v1;
+#endif // __STDC_VERSION__ >= 202311L
+
+enum exact_file_measurement_state_v1
+#if __STDC_VERSION__ >= 202311L
+  : uint8_t
+#endif // __STDC_VERSION__ >= 202311L
+ {
+  exact_file_measurement_state_v1_unknown = 0,
+  exact_file_measurement_state_v1_requested = 1,
+  exact_file_measurement_state_v1_measured = 2,
+  exact_file_measurement_state_v1_invalid = 3,
+};
+#if __STDC_VERSION__ >= 202311L
+typedef enum exact_file_measurement_state_v1 exact_file_measurement_state_v1;
+#else
+typedef uint8_t exact_file_measurement_state_v1;
 #endif // __STDC_VERSION__ >= 202311L
 
 enum exact_object_binding_state_v1
@@ -1005,10 +1021,11 @@ typedef struct bounded_administrative_argv_v1 {
 
 typedef struct exact_executable_candidate_v1 {
   uint64_t inode;
+  uint64_t inode_generation;
   uint32_t mount_namespace_inode;
   uint32_t mount_id;
   uint32_t filesystem_device;
-  uint32_t inode_generation;
+  uint32_t reserved;
 } exact_executable_candidate_v1;
 
 typedef struct approved_exec_slot_v1 {
@@ -1176,11 +1193,11 @@ typedef struct device_effect_key_v1 {
   uint64_t mount_id_unique;
   uint64_t inode;
   uint64_t exact_object_key_id;
+  uint64_t inode_generation;
   uint32_t active_role_id;
   uint32_t process_state_vector_id;
   uint32_t mount_namespace_inode;
   uint32_t filesystem_device;
-  uint32_t inode_generation;
   uint32_t device_major;
   uint32_t device_minor;
   uint32_t ioctl_command;
@@ -1190,6 +1207,7 @@ typedef struct device_effect_key_v1 {
   exact_device_type_v1 device_type;
   uint8_t command_wildcard;
   uint8_t reserved;
+  uint8_t reserved_tail[4];
 } device_effect_key_v1;
 
 typedef struct effect_observation_health_v1 {
@@ -1207,10 +1225,9 @@ typedef struct exact_file_object_key_v1 {
   uint64_t profile_generation_ref_id;
   uint64_t mount_id_unique;
   uint64_t inode;
+  uint64_t inode_generation;
   uint32_t mount_namespace_inode;
   uint32_t filesystem_device;
-  uint32_t inode_generation;
-  uint32_t reserved;
 } exact_file_object_key_v1;
 
 typedef struct network_namespace_generation_v1 {
@@ -1289,6 +1306,17 @@ typedef struct effect_observation_v1 {
   uint16_t io_uring_opcode;
   uint8_t reserved_io_uring[6];
 } effect_observation_v1;
+
+typedef struct exact_file_measurement_v1 {
+  uint64_t request_nonce;
+  uint64_t mount_id_unique;
+  uint64_t inode;
+  uint64_t inode_generation;
+  uint32_t mount_namespace_inode;
+  uint32_t filesystem_device;
+  exact_file_measurement_state_v1 state;
+  uint8_t reserved[7];
+} exact_file_measurement_v1;
 
 typedef struct exact_object_binding_v1 {
   uint64_t profile_generation_ref_id;

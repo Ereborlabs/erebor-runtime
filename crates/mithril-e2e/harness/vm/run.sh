@@ -217,7 +217,7 @@ if [[ $manual_vm == true ]]; then
 fi
 
 "$provider" run "$vm_name" \
-  'sudo apt-get update && sudo apt-get install -y --no-install-recommends iproute2 nftables'
+  'sudo apt-get update && sudo apt-get install -y --no-install-recommends iproute2 nftables runc'
 
 "$provider" run "$vm_name" mkdir -p \
   "$remote_source/bpf/erebor-interceptor/qualification" \
@@ -301,6 +301,38 @@ identity_output=$remote_root/identity
   --cgroup-path "/sys/fs/cgroup/$vm_name-identity"
 "$provider" get "$vm_name" "$identity_output/identity-physical-probe.json" \
   "$output_directory/identity-physical-probe.json"
+
+prepared_output=$remote_root/stock-runc-prepared
+"$provider" run "$vm_name" sudo "$remote_bin/mithril-effect-test" \
+  --repo-root "$remote_source" runc-prepared-probe \
+  --output-directory "$prepared_output" \
+  --pin-root "/sys/fs/bpf/$vm_name-stock-runc-prepared" \
+  --lease-path "$prepared_output/owner.lock" \
+  --runc-path /usr/sbin/runc --busybox-path /usr/bin/busybox \
+  --prestart-hook \
+  "$remote_source/crates/mithril-e2e/fixtures/identity/oci-prestart-admission-v1.sh"
+"$provider" get "$vm_name" "$prepared_output/runc-prepared-probe.json" \
+  "$output_directory/runc-prepared-probe.json"
+
+observation_output=$remote_root/effect-observation
+"$provider" run "$vm_name" sudo "$remote_bin/mithril-effect-test" \
+  --repo-root "$remote_source" physical-probe \
+  --output-directory "$observation_output" \
+  --pin-root "/sys/fs/bpf/$vm_name-effect-observation" \
+  --lease-path "$observation_output/owner.lock" \
+  --cgroup-path "/sys/fs/cgroup/$vm_name-effect-observation"
+"$provider" get "$vm_name" "$observation_output/effect-physical-probe.json" \
+  "$output_directory/effect-observation-physical-probe.json"
+
+enforcement_output=$remote_root/local-enforcement
+"$provider" run "$vm_name" sudo "$remote_bin/mithril-effect-test" \
+  --repo-root "$remote_source" physical-probe --protect \
+  --output-directory "$enforcement_output" \
+  --pin-root "/sys/fs/bpf/$vm_name-local-enforcement" \
+  --lease-path "$enforcement_output/owner.lock" \
+  --cgroup-path "/sys/fs/cgroup/$vm_name-local-enforcement"
+"$provider" get "$vm_name" "$enforcement_output/effect-physical-probe.json" \
+  "$output_directory/local-enforcement-physical-probe.json"
 
 if [[ $with_k3s == true ]]; then
   run_k3s_cri_effect() {
@@ -399,26 +431,6 @@ qualification_output=$remote_root/kernel-qualification
   --probe-binary "$repo_root/target/debug/mithril-kernel-qualification" \
   --output "$output_directory/kernel-qualification-x86_64.json"
 
-observation_output=$remote_root/effect-observation
-"$provider" run "$vm_name" sudo "$remote_bin/mithril-effect-test" \
-  --repo-root "$remote_source" physical-probe \
-  --output-directory "$observation_output" \
-  --pin-root "/sys/fs/bpf/$vm_name-effect-observation" \
-  --lease-path "$observation_output/owner.lock" \
-  --cgroup-path "/sys/fs/cgroup/$vm_name-effect-observation"
-"$provider" get "$vm_name" "$observation_output/effect-physical-probe.json" \
-  "$output_directory/effect-observation-physical-probe.json"
-
-enforcement_output=$remote_root/local-enforcement
-"$provider" run "$vm_name" sudo "$remote_bin/mithril-effect-test" \
-  --repo-root "$remote_source" physical-probe --protect \
-  --output-directory "$enforcement_output" \
-  --pin-root "/sys/fs/bpf/$vm_name-local-enforcement" \
-  --lease-path "$enforcement_output/owner.lock" \
-  --cgroup-path "/sys/fs/cgroup/$vm_name-local-enforcement"
-"$provider" get "$vm_name" "$enforcement_output/effect-physical-probe.json" \
-  "$output_directory/local-enforcement-physical-probe.json"
-
 network_output=$remote_root/network-enforcement
 "$provider" run "$vm_name" sudo "$remote_bin/mithril-network-test" \
   --repo-root "$remote_source" physical-probe \
@@ -452,6 +464,7 @@ verify_absent() {
 }
 
 verify_absent "/sys/fs/bpf/$vm_name-identity"
+verify_absent "/sys/fs/bpf/$vm_name-stock-runc-prepared"
 verify_absent "/sys/fs/bpf/$vm_name-effect-observation"
 verify_absent "/sys/fs/bpf/$vm_name-local-enforcement"
 verify_absent "/sys/fs/bpf/$vm_name-network-enforcement"
@@ -460,6 +473,7 @@ verify_absent "/sys/fs/cgroup/$vm_name-effect-observation"
 verify_absent "/sys/fs/cgroup/$vm_name-local-enforcement"
 verify_absent "/sys/fs/cgroup/$vm_name-network-enforcement"
 verify_absent "$identity_output/owner.lock"
+verify_absent "$prepared_output/owner.lock"
 if [[ $with_k3s == true ]]; then
   verify_absent "$remote_root/kubernetes-identity/kubernetes-entry"
   verify_absent "$remote_root/kubernetes-identity/owner.lock"
@@ -476,4 +490,4 @@ if [[ $with_k3s == true ]]; then
     k3s-remove "$remote_root"
 fi
 
-echo "Kernel, identity, effect-observation, local-enforcement, and network-enforcement VM probes passed. Evidence: $output_directory"
+echo "Kernel, identity, stock-runc, effect-observation, local-enforcement, and network-enforcement VM probes passed. Evidence: $output_directory"

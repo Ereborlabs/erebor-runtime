@@ -127,6 +127,7 @@ impl From<crate::Error> for RuntimeAdmissionFailureV1 {
 }
 
 pub struct NodeChassis {
+    base_config: NodeConfig,
     config: NodeConfig,
     effect_reader: Option<EffectObservationReader>,
     host: Option<KernelHost>,
@@ -158,6 +159,7 @@ impl NodeChassis {
         held_initial_pids: &[u32],
     ) -> Result<Self> {
         config.validate()?;
+        let base_config = config.clone();
         // Load trust and delivery state before BPF recovery can accept dynamic policy material.
         let trust = TrustCache::load(&config.state_directory)?;
         let mut policy_delivery =
@@ -225,9 +227,21 @@ impl NodeChassis {
             WorkloadBindingOwner::system(node_boot_id, label_epoch)?
         };
         if held_initial_pids.is_empty() {
-            bindings
+            let runtime_reconciliation = bindings
                 .publish_configured(&host, &config.workload_bindings)
                 .await?;
+            if !runtime_reconciliation.retired_binding_ids.is_empty() {
+                policy_delivery
+                    .retire_runtime_bindings(&runtime_reconciliation.retired_binding_ids)?;
+                config = base_config.clone();
+                policy_delivery.restore_config_for_session(
+                    &mut config,
+                    &trust,
+                    &boot_id,
+                    label_epoch,
+                )?;
+                config.validate()?;
+            }
         } else {
             let created = config
                 .workload_bindings
@@ -487,6 +501,7 @@ impl NodeChassis {
                 (Some(server), Some(requests))
             });
         let mut chassis = Self {
+            base_config,
             config,
             effect_reader,
             host: Some(host),
@@ -824,8 +839,9 @@ impl NodeChassis {
                                     let _instant = policy_poll.tick().await;
                                 }
                             } => {
-                                // Ready-only policy RPCs must wait for local evidence recovery.
-                                if !evidence_healthy {
+                                // Ready-only policy RPCs wait while the same session reports
+                                // a local identity or evidence readiness failure.
+                                if !identity_healthy || !evidence_healthy {
                                     policy_work.pending = false;
                                     continue;
                                 }
@@ -1476,6 +1492,19 @@ impl NodeChassis {
             previous_config,
             durable_rollback,
         };
+        if let Err(error) = self.reconcile_runtime_exact_bindings() {
+            return match self.rollback_runtime_preparation(commit) {
+                Ok(()) => Err(error.into()),
+                Err(rollback) => Err(RuntimeAdmissionFailureV1::fatal(
+                    IdentityStateSnafu {
+                        reason: format!(
+                            "exact filesystem binding failed before runtime release: {error}; rollback failed: {rollback}"
+                        ),
+                    }
+                    .build(),
+                )),
+            };
+        }
         if let Err(error) = envelope.ensure_active() {
             return match self.rollback_runtime_preparation(commit) {
                 Ok(()) => Err(error.into()),
@@ -1496,6 +1525,11 @@ impl NodeChassis {
         &mut self,
         commit: CommittedRuntimePreparationV1,
     ) -> Result<()> {
+        let CommittedRuntimePreparationV1 {
+            runtime_binding_id,
+            previous_config,
+            durable_rollback,
+        } = commit;
         let kernel = self.host.as_ref().map_or_else(
             || {
                 IdentityStateSnafu {
@@ -1503,28 +1537,43 @@ impl NodeChassis {
                 }
                 .fail()
             },
-            |host| {
-                self.bindings
-                    .retire_binding_id(host, &commit.runtime_binding_id)
-            },
+            |host| self.bindings.retire_binding_id(host, &runtime_binding_id),
         );
         let durable = self
             .policy_delivery
-            .rollback_runtime_binding(commit.durable_rollback);
+            .rollback_runtime_binding(durable_rollback);
+        let mut exact = Ok(());
         if durable.is_ok() {
-            self.config = commit.previous_config;
+            self.config = previous_config;
+            if kernel.is_ok() {
+                exact = self.reconcile_runtime_exact_bindings();
+            }
         }
-        match (kernel, durable) {
-            (Ok(()), Ok(())) => Ok(()),
-            (Err(kernel), Ok(())) => Err(kernel),
-            (Ok(()), Err(durable)) => Err(durable),
-            (Err(kernel), Err(durable)) => IdentityStateSnafu {
+        match (kernel, durable, exact) {
+            (Ok(()), Ok(()), Ok(())) => Ok(()),
+            (Err(error), Ok(()), Ok(()))
+            | (Ok(()), Err(error), Ok(()))
+            | (Ok(()), Ok(()), Err(error)) => Err(error),
+            (kernel, durable, exact) => IdentityStateSnafu {
                 reason: format!(
-                    "runtime admission kernel rollback failed: {kernel}; durable rollback failed: {durable}"
+                    "runtime admission rollback is incomplete: kernel={kernel:?}; durable={durable:?}; exact_filesystem={exact:?}"
                 ),
             }
             .fail(),
         }
+    }
+
+    fn reconcile_runtime_exact_bindings(&mut self) -> Result<()> {
+        let Some(policy) = self.policy.as_mut() else {
+            return Ok(());
+        };
+        let host = self.host.as_mut().ok_or_else(|| {
+            IdentityStateSnafu {
+                reason: "exact filesystem reconciliation has no live kernel host".to_owned(),
+            }
+            .build()
+        })?;
+        policy.reconcile_cri_exact_bindings(&self.config, host, &self.bindings)
     }
 
     fn refresh_registration_authority_state(&mut self) -> Result<()> {
@@ -1667,9 +1716,8 @@ impl NodeChassis {
         }
         if policy_authority_present {
             if let Err(error) = sample_effect_health(host, &self.observations, recover_evidence) {
-                let _result = self
-                    .observations
-                    .mark_coverage_gapped(CoverageGapReasonV1::WalFailure);
+                // Coverage sampling records reader delay, loss, and counter gaps itself.
+                // Do not relabel a recoverable backlog as a durable WAL failure.
                 return ReconciliationOutcome::EvidenceUnhealthy(error.to_string());
             }
         }
@@ -1679,15 +1727,42 @@ impl NodeChassis {
                 reason: error.to_string(),
             };
         }
-        if let Err(error) = self
+        let runtime_reconciliation = match self
             .bindings
             .reconcile(host, &self.config.workload_bindings)
             .await
         {
-            return ReconciliationOutcome::IdentityUnhealthy {
-                owner: "runtime binding",
-                reason: error.to_string(),
-            };
+            Ok(reconciliation) => reconciliation,
+            Err(error) => {
+                return ReconciliationOutcome::IdentityUnhealthy {
+                    owner: "runtime binding",
+                    reason: error.to_string(),
+                };
+            }
+        };
+        if !runtime_reconciliation.retired_binding_ids.is_empty() {
+            if let Err(error) = self
+                .policy_delivery
+                .retire_runtime_bindings(&runtime_reconciliation.retired_binding_ids)
+            {
+                return ReconciliationOutcome::IdentityUnhealthy {
+                    owner: "runtime binding delivery",
+                    reason: error.to_string(),
+                };
+            }
+            let mut config = self.base_config.clone();
+            if let Err(error) = self.policy_delivery.restore_config_for_session(
+                &mut config,
+                &self.trust,
+                &self.node_boot_id.to_be_bytes(),
+                self.label_epoch,
+            ) {
+                return ReconciliationOutcome::IdentityUnhealthy {
+                    owner: "runtime binding delivery",
+                    reason: error.to_string(),
+                };
+            }
+            self.config = config;
         }
         if let Some(policy) = self.policy.as_mut() {
             if let Err(error) = self
@@ -2795,6 +2870,7 @@ mod tests {
             location: snafu::Location::default(),
         })?;
         let config = admission_test_config(state.path());
+        let base_config = config.clone();
         let node_boot_id = Id128V1::new(1, 2);
         let connector = NodeControlConnector::new(
             config.control.clone(),
@@ -2814,6 +2890,7 @@ mod tests {
             effect_prevention_claims_enabled: true,
         });
         let mut chassis = NodeChassis {
+            base_config,
             config,
             effect_reader: None,
             host: None,

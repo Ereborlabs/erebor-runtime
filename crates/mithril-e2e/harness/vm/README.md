@@ -1,6 +1,6 @@
 # Runtime Qualification VM Harness
 
-This harness builds and runs the repository-owned kernel, identity,
+This harness builds and runs the repository-owned kernel, identity, stock-runc,
 effect-observation, and local-enforcement physical probes in one disposable VM.
 It copies the JSON evidence to the host. It then destroys the VM on success or
 failure.
@@ -48,6 +48,13 @@ recovery; that read must stay allowed. The hostPath file is only a
 qualification fixture. It does not prove projected-token semantic
 classification. An empty read-only hostPath release file holds the direct CRI
 task until signed recovery. The host writes that file after recovery.
+
+Before K3s installation, the harness runs stock `runc` directly. The initial
+task starts in `PREPARED`, and runtime setup effects remain allowed. The signed
+BusyBox backing path must activate normal policy without an executable inode
+key. The container must exit successfully. The direct observe and protect
+effect probes then verify exact filesystem behavior. Kubernetes starts only
+after these direct probes pass.
 
 The CRI guest lane accepts only `MITHRIL_VM_CRI_EFFECT_MODE=OBSERVE|PROTECT`.
 It uses `PROTECT` by default. The harness sets each mode explicitly and writes
@@ -125,7 +132,9 @@ disposable work directory until checksum validation succeeds. The harness remove
 cloud-init data, guest, BPF pins, cgroups, lease files, and guest test files.
 The selected output directory keeps the platform manifest, the raw physical
 probe and benchmark evidence, the generated kernel qualification record, and
-the identity, effect, and network results. The network result records the
+the identity, stock-runc, effect, and network results. The stock-runc result
+records the `PREPARED` and `ACTIVE` states, path decision, runtime version, and
+owned-resource cleanup. The network result records the
 single-host actor, destination, response-fence, and socket-lifetime oracles.
 With `--with-k3s`, the directory also keeps `k3s.txt`, `k3s-cri-observe.txt`,
 and `k3s-cri-effect.txt`. These files record the Pod

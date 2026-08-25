@@ -633,6 +633,9 @@ process shape. The held PID proves the initial cgroup lifetime and owns the
 canonical initial entry before the node returns allow. It does not define the
 runtime implementation after that point.
 
+Here, `entry` is the boot-scoped task entry identity. It is not an exact
+executable file or inode identity.
+
 During `PREPARED`, BPF allows every governed action from a task that resolves
 to the exact binding ID and nonce, node boot and label epoch, execution set,
 profile generation, and live cgroup binding. A task without an identity first
@@ -659,17 +662,23 @@ exact binding, container lifetime, or node session cannot use the prepared
 state. The binding state is a trust-boundary state. It is not a workload policy
 permission, exception, or transferable object authority.
 
-When an exact executable candidate satisfies the active signed policy,
-atomically reserve the transition from any task in the exact binding and commit
-`ACTIVE` with the normal workload execution identity. This binding transition
-removes prepared authority from every task in that binding. A failed exec
-restores only its own reservation. After
+When the executable's container-visible path satisfies the active signed
+policy, atomically reserve the transition from any task in the exact binding
+and commit `ACTIVE` with the normal workload execution identity. This binding
+transition removes prepared authority from every task in that binding. A
+failed exec restores only its own reservation. After
 `ACTIVE`, every file, network, IPC, process, device, privilege, mount, and exec
 effect uses only normal policy and exception authority. Runtime-created
 objects have no residual grant unless normal policy resolves and permits them.
 Expiry, state mismatch, restart ambiguity, or readback failure denies the
 effect and keeps node admission readiness closed until recovery proves one
 exact state.
+
+Use the same binary-match boundary as the checked Tetragon implementation.
+Resolve the executable path from the current task root and match that signed
+path. Do not require inode generation or an `EXACT` selector for workload
+execution. Keep `EXACT` object identity for filesystem rules and the separate
+administrative-exec approval path.
 
 ## Checkpoint
 

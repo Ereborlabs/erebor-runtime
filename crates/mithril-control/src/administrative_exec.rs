@@ -916,7 +916,7 @@ fn encode_file_object(
         .map_err(cbor_error)?
         .u8(5)
         .map_err(cbor_error)?
-        .u32(object.inode_generation)
+        .u64(object.inode_generation)
         .map_err(cbor_error)?;
     encoder.u8(6).map_err(cbor_error)?;
     encode_id(

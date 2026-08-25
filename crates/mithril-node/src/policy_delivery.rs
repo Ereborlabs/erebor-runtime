@@ -2570,6 +2570,78 @@ impl NodePolicyDeliveryOwner {
         })
     }
 
+    pub(crate) fn retire_runtime_bindings(&mut self, binding_ids: &[String]) -> Result<()> {
+        if binding_ids.is_empty() {
+            return Ok(());
+        }
+        let requested = binding_ids.iter().cloned().collect::<BTreeSet<_>>();
+        ensure!(
+            requested.len() == binding_ids.len(),
+            IdentityStateSnafu {
+                reason: "runtime retirement contains a duplicate binding identity",
+            }
+        );
+        let previous = self.state.clone();
+        let mut retired = BTreeSet::new();
+        for record in self.state.active_profiles.values_mut() {
+            for binding in &mut record.scheduled_bindings {
+                if !requested.contains(&binding.binding_id) {
+                    continue;
+                }
+                let runtime_binding_id = binding.binding_id.clone();
+                let authority =
+                    binding
+                        .scheduled_binding_authority_id
+                        .clone()
+                        .context(IdentityStateSnafu {
+                            reason: "retired runtime binding has no signed scheduled authority",
+                        })?;
+                let digest =
+                    binding
+                        .scheduled_target_digest
+                        .clone()
+                        .context(IdentityStateSnafu {
+                            reason: "retired runtime binding has no signed target digest",
+                        })?;
+                ensure!(
+                    !binding.container_id.starts_with("scheduled:")
+                        && binding.root_cgroup_path.is_some()
+                        && retired.insert(runtime_binding_id.clone()),
+                    IdentityStateSnafu {
+                        reason: "runtime retirement does not name one live runtime lifetime",
+                    }
+                );
+                binding.binding_id.clone_from(&authority);
+                binding.container_id = format!("scheduled:{digest}");
+                binding.sandbox_id = format!("scheduled:{digest}");
+                binding.container_generation = 1;
+                binding.root_cgroup_path = None;
+                binding.lifecycle_generation = 1;
+                let recorded = record
+                    .binding_ids
+                    .iter_mut()
+                    .find(|recorded| **recorded == runtime_binding_id)
+                    .context(IdentityStateSnafu {
+                        reason: "active policy lost its retired runtime binding identity",
+                    })?;
+                recorded.clone_from(&authority);
+            }
+            record.binding_ids.sort();
+        }
+        ensure!(
+            retired == requested,
+            IdentityStateSnafu {
+                reason: "runtime retirement names an unowned or inactive binding",
+            }
+        );
+        if let Err(error) = self.persist_state() {
+            self.state = previous;
+            return Err(error);
+        }
+        self.session_inventory = None;
+        Ok(())
+    }
+
     pub(crate) fn rollback_runtime_binding(
         &mut self,
         rollback: RuntimeBindingRollbackV1,
@@ -4913,7 +4985,7 @@ mod tests {
             runtime_binding.binding_id
         );
 
-        let mut new_boot = config;
+        let mut new_boot = config.clone();
         new_boot.workload_bindings.clear();
         new_boot.policy_candidates.clear();
         NodePolicyDeliveryOwner::load(directory.path())?.restore_config_for_session(
@@ -4930,6 +5002,25 @@ mod tests {
         assert_eq!(rolled_back.active_target_count, 1);
         assert!(rolled_back.active_targets[0].runtime_container_id.is_none());
         assert!(rolled_back.active_targets[0].runtime_binding_id.is_none());
+        owner.record_runtime_binding(&runtime_binding)?;
+        owner.retire_runtime_bindings(std::slice::from_ref(&runtime_binding.binding_id))?;
+        let retired = super::policy_delivery_status(directory.path())?;
+        assert_eq!(retired.scheduled_binding_count, 1);
+        assert_eq!(retired.runtime_binding_count, 0);
+        let mut retired_config = config.clone();
+        retired_config.workload_bindings.clear();
+        retired_config.policy_candidates.clear();
+        NodePolicyDeliveryOwner::load(directory.path())?.restore_config_for_session(
+            &mut retired_config,
+            &trust,
+            &[1; 16],
+            7,
+        )?;
+        assert_eq!(retired_config.workload_bindings.len(), 1);
+        assert_eq!(retired_config.workload_bindings[0].binding_id, authority);
+        assert!(retired_config.workload_bindings[0]
+            .root_cgroup_path
+            .is_none());
         let mut old_boot_active = NodePolicyDeliveryOwner::load(directory.path())?;
         let (profile_id, record) = old_boot_active
             .state

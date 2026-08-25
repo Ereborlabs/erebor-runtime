@@ -402,6 +402,12 @@ int BPF_PROG(qualification_inode_init_security_anon, struct inode *inode,
     return ret;
 }
 
+SEC("lsm/inode_free_security")
+int BPF_PROG(qualification_inode_free_security, struct inode *inode)
+{
+    return 0;
+}
+
 SEC("lsm/uring_sqpoll")
 int BPF_PROG(qualification_uring_sqpoll, int ret)
 {

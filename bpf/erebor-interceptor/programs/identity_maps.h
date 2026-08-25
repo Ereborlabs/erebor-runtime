@@ -211,6 +211,12 @@ struct identity_scratch_v1 {
     __u8 zero_bytes[MAX_ADMINISTRATIVE_ARGUMENT_BYTES_V1];
 };
 
+struct exact_inode_lifetime_key_v1 {
+    __u64 inode;
+    __u32 filesystem_device;
+    __u32 reserved;
+};
+
 struct {
     __uint(type, BPF_MAP_TYPE_ARRAY);
     __uint(max_entries, 1);
@@ -544,6 +550,27 @@ struct {
     __type(key, exact_file_object_key_v1);
     __type(value, exact_object_binding_v1);
 } exact_file_objects SEC(".maps");
+
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, 64);
+    __type(key, __u64);
+    __type(value, exact_file_measurement_v1);
+} exact_file_measurements SEC(".maps");
+
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, 65536);
+    __type(key, struct exact_inode_lifetime_key_v1);
+    __type(value, __u64);
+} exact_inode_lifetime_generations SEC(".maps");
+
+struct {
+    __uint(type, BPF_MAP_TYPE_ARRAY);
+    __uint(max_entries, 1);
+    __type(key, __u32);
+    __type(value, __u64);
+} exact_inode_generation_allocator SEC(".maps");
 
 struct {
     __uint(type, BPF_MAP_TYPE_HASH);
