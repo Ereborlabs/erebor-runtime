@@ -552,9 +552,14 @@ static __noinline int resolved_identity_effect_gate(struct file *file,
                 effect_observation_reason_v1_corrupt_identity_or_generation);
         if (file) {
             candidate_from_file(&scratch->image.ordered_candidates[0], file);
-            if (!scratch->image.ordered_candidates[0].mount_id)
+            if (!scratch->image.ordered_candidates[0].mount_id &&
+                pending->exact_object_required)
                 return hard_effect_result(
                     config, scratch,
+                    effect_observation_reason_v1_unsupported_object);
+            if (!scratch->image.ordered_candidates[0].mount_id)
+                return application_default_or_hard_effect_result(
+                    config, scratch, binding, label, entry,
                     effect_observation_reason_v1_unsupported_object);
             if (!pending_contains_candidate(
                     pending, &scratch->image.ordered_candidates[0]) &&

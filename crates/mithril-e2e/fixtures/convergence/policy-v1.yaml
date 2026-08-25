@@ -19,180 +19,27 @@ spec:
   roles:
     - name: worker
       files:
-        - name: allow-busybox-read
-          path: /bin/busybox
-          recursive: false
-          operations: [OpenRead, Read, MmapRead]
-          action: Allow
-        - name: allow-shell-read
-          path: /bin/sh
-          recursive: false
-          operations: [OpenRead, Read, MmapRead]
-          action: Allow
-        - name: allow-sleep-read
-          path: /bin/sleep
-          recursive: false
-          operations: [OpenRead, Read, MmapRead]
-          action: Allow
-        - name: allow-runtime-loader-cache
-          path: /etc/ld.so.cache
-          recursive: false
-          operations: [OpenRead, Read, MmapRead]
-          action: Allow
-        - name: allow-runtime-loader-read
-          path: /lib/ld-linux-x86-64.so.2
-          recursive: false
-          operations: [OpenRead, Read, MmapRead]
-          action: Allow
-        - name: allow-runtime-libc-read
-          path: /lib/libc.so.6
-          recursive: false
-          operations: [OpenRead, Read, MmapRead]
-          action: Allow
-        - name: allow-runtime-libm-read
-          path: /lib/libm.so.6
-          recursive: false
-          operations: [OpenRead, Read, MmapRead]
-          action: Allow
-        - name: allow-runtime-libresolv-read
-          path: /lib/libresolv.so.2
-          recursive: false
-          operations: [OpenRead, Read, MmapRead]
-          action: Allow
-        - name: allow-cat-read
-          path: /bin/cat
-          recursive: false
-          operations: [OpenRead, Read, MmapRead]
-          action: Allow
-        - name: allow-touch-read
-          path: /bin/touch
-          recursive: false
-          operations: [OpenRead, Read, MmapRead]
-          action: Allow
-        - name: allow-rm-read
-          path: /bin/rm
-          recursive: false
-          operations: [OpenRead, Read, MmapRead]
-          action: Allow
-        - name: allow-start-marker
-          path: /var/lib/mithril-convergence/protected.started
-          recursive: false
-          operations: [OpenRead, OpenWrite, Read, Write, Create, SetAttributes, Unlink]
-          action: Allow
-        - name: allow-restart-marker
-          path: /var/lib/mithril-convergence/protected.restart
-          recursive: false
-          operations: [OpenRead, OpenWrite, Read, Write, Create, SetAttributes, Unlink]
-          action: Allow
-        - name: allow-exception-request-marker
-          path: /var/lib/mithril-convergence/protected.exception-request
-          recursive: false
-          operations: [OpenRead, OpenWrite, Read, Write, Create, SetAttributes, Unlink]
-          action: Allow
-        - name: allow-exception-result-markers
-          path: /var/lib/mithril-convergence/protected.exception-result
-          recursive: false
-          operations: [OpenRead, OpenWrite, Read, Write, Create, SetAttributes, Unlink]
-          action: Allow
-        - name: allow-prepared-result-marker
-          path: /var/lib/mithril-convergence/protected.prepared-result
-          recursive: false
-          operations: [OpenRead, OpenWrite, Read, Write, Create, SetAttributes, Unlink]
-          action: Allow
-        - name: allow-ready-node-start-marker
-          path: /var/lib/mithril-convergence/ready-node-only.started
-          recursive: false
-          operations: [OpenRead, OpenWrite, Read, Write, Create, SetAttributes, Unlink]
-          action: Allow
-        - name: allow-ready-node-restart-marker
-          path: /var/lib/mithril-convergence/ready-node-only.restart
-          recursive: false
-          operations: [OpenRead, OpenWrite, Read, Write, Create, SetAttributes, Unlink]
-          action: Allow
-        - name: allow-selector-start-marker
-          path: /var/lib/mithril-convergence/selector-derived.started
-          recursive: false
-          operations: [OpenRead, OpenWrite, Read, Write, Create, SetAttributes, Unlink]
-          action: Allow
-        - name: allow-selector-restart-marker
-          path: /var/lib/mithril-convergence/selector-derived.restart
-          recursive: false
-          operations: [OpenRead, OpenWrite, Read, Write, Create, SetAttributes, Unlink]
-          action: Allow
         - name: deny-exception-target-open
           path: /var/lib/mithril-convergence/protected.exception-target
           recursive: false
           operations: [OpenRead]
           action: Deny
-        - name: allow-exception-target-read
-          path: /var/lib/mithril-convergence/protected.exception-target
-          recursive: false
-          operations: [Read]
-          action: Allow
       execution:
         - name: allow-busybox-execution
           path: /bin/busybox
           recursive: false
-          operations: [Execute, MmapExecute, Mprotect]
+          operations: [Execute]
           action: Allow
         - name: allow-shell-execution
           path: /bin/sh
           recursive: false
-          operations: [Execute, MmapExecute, Mprotect]
-          action: Allow
-        - name: allow-sleep-execution
-          path: /bin/sleep
-          recursive: false
-          operations: [Execute, MmapExecute, Mprotect]
-          action: Allow
-        - name: allow-runtime-loader-mapping
-          path: /lib/ld-linux-x86-64.so.2
-          recursive: false
-          operations: [MmapExecute, Mprotect]
-          action: Allow
-        - name: allow-runtime-libc-mapping
-          path: /lib/libc.so.6
-          recursive: false
-          operations: [MmapExecute, Mprotect]
-          action: Allow
-        - name: allow-runtime-libm-mapping
-          path: /lib/libm.so.6
-          recursive: false
-          operations: [MmapExecute, Mprotect]
-          action: Allow
-        - name: allow-runtime-libresolv-mapping
-          path: /lib/libresolv.so.2
-          recursive: false
-          operations: [MmapExecute, Mprotect]
-          action: Allow
-        - name: allow-cat-execution
-          path: /bin/cat
-          recursive: false
-          operations: [Execute, MmapExecute, Mprotect]
-          action: Allow
-        - name: allow-touch-execution
-          path: /bin/touch
-          recursive: false
-          operations: [Execute, MmapExecute, Mprotect]
-          action: Allow
-        - name: allow-rm-execution
-          path: /bin/rm
-          recursive: false
-          operations: [Execute, MmapExecute, Mprotect]
+          operations: [Execute]
           action: Allow
       network:
         socketControls: []
         destinations: []
-      processControl:
-        - name: allow-signal-probe
-          targetRole: worker
-          operation: Signal
-          signals: [0]
-          action: Allow
-      unixStreams:
-        - name: worker-loopback
-          peerRoles: [worker]
-          action: Allow
+      processControl: []
+      unixStreams: []
     - name: runtime-external
       files: []
       execution: []

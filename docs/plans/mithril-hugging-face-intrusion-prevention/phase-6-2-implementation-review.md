@@ -7,8 +7,8 @@ retirement, restart, and node-session boundaries. The current source has not
 passed the complete physical procedure. The last physical run used the old API
 and stopped under the superseded runtime-bootstrap model. The current source
 implements the `PreparedContainer` trust boundary and the exact admitted-entry
-default. The direct stock-runtime application-start result passed. The
-protected Kubernetes physical result is not proved.
+default. The direct stock-runtime and focused protected Kubernetes
+application-start results passed. The remaining physical matrix is not proved.
 
 Plan: [Control Policy And Evidence Convergence](./phase-6-2-control-policy-and-evidence-convergence.md)
 
@@ -607,6 +607,7 @@ and coverage messages remain the Phase 6 types.
 | Signed scheduling authority, exact policy and runtime identity, immutable two-hook stage matching, held-TGID publication, distinct container lifetime, active socket ownership, convergence hold, unavailable endpoint, and timeout denial | [Runtime admission and binding tests](../../../crates/mithril-node/src/identity/binding.rs) |
 | OCI state parsing, cgroup-v2 path parsing, fact-only first hook, and held-PID second hook | [OCI adapter tests](../../../crates/mithril-node/src/bin/mithril_oci_hook.rs) |
 | Direct stock-runc PREPARED-to-ACTIVE transition, admitted-entry default, absent dependency rules, and cleanup | [Stock-runc VM probe](../../../crates/mithril-e2e/src/effect/runc.rs) |
+| Fresh protected Pod, exact target and runtime binding, admitted-entry default, explicit matching Deny, and retained-cluster resource replacement | [Protected-start lane](../../../crates/mithril-e2e/harness/vm/two-node-convergence.sh) |
 | Webhook TLS, rules, deadlines, health probes, DaemonSet identity and hook inputs, and least-privilege RBAC | [Helm render test](../../../packaging/mithril/helm/tests/verify.sh) |
 | Exact two-node target, task lifetime, Node UID replacement, host epoch, selector lifecycle, exception target retirement, terminal cleanup, and no-root replay | [Physical fixture](../../../crates/mithril-e2e/harness/vm/two-node-convergence.sh) |
 | Independent operator flow for exact target, runtime lifetime, exception target retirement, terminal cleanup, restart, and fresh root | [Manual example](../../../examples/mithril-kubernetes-convergence-manual/run.sh) |
@@ -632,20 +633,32 @@ The direct stock-runc VM probe also passed with runc 1.3.4. Its result records
 libc and the ELF loader as root-filesystem dependencies that are absent from
 policy.
 
+The focused protected-start lane passed on Kubernetes v1.35.5+k3s1 and
+containerd 2.2.3-k3s1. It reused the two owned VMs and their K3s cluster. It
+removed the prior Mithril and protected-workload resources before it installed
+their replacements. Fresh Pod UID
+`491f2f7d-4ee3-41fc-ac63-d5b5d80b6cd4` activated policy revision
+`320cbb30d5da57262e156cfbb4823009eaec5ba67b40a5ba05b659e67d40449f`.
+The admitted entry received default authority for an unlisted action. The
+explicit matching Deny blocked the protected target. Exact object matching was
+not requested. The result is
+`/tmp/phase-6-2-kubernetes-default-allow-20260825-run10/protected-start-result.json`.
+
 These checks execute production owners and fixture command paths. The shell
 behavior suites do not parse Rust or shell source as a capability oracle. They
 do not replace the physical fixture or manual run.
 
 ## Verification Limits
 
-The current source has not passed the physical two-node fixture or the
-independent manual example. The direct stock-runc application-start lane has
-passed. Both Kubernetes flows contain exact target, runtime task,
-exception target-retirement, terminal cleanup, restart, and fresh-root
-oracles. The automated fixture also contains same-name Node UID replacement,
-DaemonSet exclusion and re-entry, and a host boot and label-epoch change.
-Those scripted cases remain `Not run` until one physical execution records a
-result.
+The current source has not passed the complete physical two-node fixture or
+the independent manual example. The direct stock-runc and focused protected
+Kubernetes application-start lanes have passed. Both complete Kubernetes
+flows contain exact target, runtime task, exception target-retirement,
+terminal cleanup, restart, and fresh-root oracles. The automated fixture also
+contains same-name Node UID replacement, DaemonSet exclusion and re-entry, and
+a host boot and label-epoch change.
+The cases after protected application start remain `Not run` until a physical
+execution records their results.
 
 The last physical two-node run used the superseded flattened API and runtime
 boundary. It passed
@@ -658,10 +671,11 @@ did not run.
 
 The previous stock-runtime failure remains the regression oracle. The direct
 lane now closes that regression without a runtime-specific operation list,
-dependency allow rules, or an object-authority map. The protected Kubernetes
-start, watch-compaction, network-partition, storage-outage, and physical
-evidence failure variants remain `Not run`. There is no new performance
-result.
+dependency allow rules, or an object-authority map. The focused protected
+Kubernetes start also closes the application-start regression through the
+production Kubernetes path. Watch-compaction, network-partition,
+storage-outage, and physical evidence failure variants remain `Not run`. There
+is no new performance result.
 
 This work adds no Appendix C fixture ID. Phase 7 graph and finding behavior is
 not present.

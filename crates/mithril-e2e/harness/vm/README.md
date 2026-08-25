@@ -32,6 +32,39 @@ This lane proves that the approved application entry activates from
 `PREPARED`. It also proves that the dynamic loader and libraries are absent
 from policy and run under the admitted entry's default authority.
 
+Run only the protected Kubernetes application-start transaction in a fresh
+two-node cluster:
+
+```bash
+crates/mithril-e2e/harness/vm/two-node-convergence.sh \
+  --protected-start-only \
+  --output-directory /tmp/mithril-protected-start-evidence
+```
+
+This lane creates fresh repository-owned VMs, a cluster, a namespace, and a
+Pod. It proves application activation, default authority for the admitted
+entry, and one explicit matching denial. The normal exit removes the owned
+resources and records the cleanup result.
+
+Retain a healthy VM and K3s environment when another implementation iteration
+is likely:
+
+```bash
+crates/mithril-e2e/harness/vm/two-node-convergence.sh \
+  --protected-start-only --keep-vms \
+  --output-directory /tmp/mithril-protected-start-evidence
+
+crates/mithril-e2e/harness/vm/two-node-convergence.sh \
+  --protected-start-only \
+  --reuse-environment \
+    /tmp/mithril-protected-start-evidence/retained-environment.json \
+  --output-directory /tmp/mithril-protected-start-retry
+```
+
+The reuse lane validates both VM ownership records. It keeps both VMs and the
+K3s cluster. It replaces the Mithril release, its node state, and the protected
+workload before it runs the next transaction.
+
 Add the optional single-node Kubernetes lane. The harness uses the K3s
 distribution:
 

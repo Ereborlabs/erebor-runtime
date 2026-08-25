@@ -23,6 +23,24 @@ two_node_help=$("$directory/two-node-network.sh" --help 2>&1)
 convergence_help=$("$directory/two-node-convergence.sh" --help 2>&1)
 [[ $convergence_help == *--keep-vms* ]]
 [[ $convergence_help == *--manual-environment* ]]
+[[ $convergence_help == *--protected-start-only* ]]
+[[ $convergence_help == *--reuse-environment* ]]
+
+set +e
+protected_manual=$("$directory/two-node-convergence.sh" \
+  --protected-start-only --manual-environment 2>&1)
+status=$?
+set -e
+[[ $status -eq 2 && $protected_manual == \
+  "--protected-start-only cannot run with --manual-environment" ]]
+
+set +e
+reuse_manual=$("$directory/two-node-convergence.sh" \
+  --reuse-environment /tmp/not-used --manual-environment 2>&1)
+status=$?
+set -e
+[[ $status -eq 2 && $reuse_manual == \
+  "--reuse-environment cannot run with --manual-environment" ]]
 
 set +e
 convergence_without_mount=$("$directory/two-node-convergence.sh" \
@@ -277,7 +295,7 @@ fi
 
 node_json='{"metadata":{"name":"node-a","uid":"node-uid-a","annotations":{"mithril.erebor.dev/node-id":"node-id-a","mithril.erebor.dev/node-uid":"node-uid-a","mithril.erebor.dev/node-boot-id":"boot-a","mithril.erebor.dev/label-epoch":"7"}}}'
 pod_json='{"metadata":{"name":"protected","namespace":"tenant-a","uid":"pod-uid-a","annotations":{"mithril.erebor.dev/policy-source-revision":"source-a"}},"spec":{"nodeName":"node-a","containers":[{"name":"app","image":"busybox@sha256:image-a"}]},"status":{"containerStatuses":[{"name":"app","containerID":"containerd://container-a"}]}}'
-status_json='{"active_candidate_content_id":"candidate-a","active_target_count":1,"active_targets_truncated":false,"active_targets":[{"profile_id":"profile-a","candidate_content_id":"candidate-a","operation":"ACTIVATE","predecessor_candidate_content_id":null,"policy_source_revision_id":"source-a","workload_binding_generation_digest":"binding-generation-a","node_id":"node-id-a","kubernetes_node_name":"node-a","kubernetes_node_uid":"node-uid-a","node_boot_id":"boot-a","label_epoch":7,"namespace_name":"tenant-a","pod_name":"protected","pod_uid":"pod-uid-a","container_name":"app","image_digest":"busybox@sha256:image-a","runtime_container_id":"container-a","runtime_binding_id":"runtime-binding-a","container_generation":1}]}'
+status_json='{"active_candidate_content_id":"candidate-a","active_target_count":1,"active_targets_truncated":false,"active_targets":[{"profile_id":"profile-a","candidate_content_id":"candidate-a","operation":"ACTIVATE","predecessor_candidate_content_id":null,"policy_source_revision_id":"source-a","workload_binding_generation_digest":"binding-generation-a","node_id":"node-id-a","kubernetes_node_name":"node-a","kubernetes_node_uid":"node-uid-a","node_boot_id":"boot-a","label_epoch":7,"namespace_name":"tenant-a","pod_name":"protected","pod_uid":"pod-uid-a","container_name":"app","image_digest":"sha256:image-a","runtime_container_id":"container-a","runtime_binding_id":"runtime-binding-a","container_generation":1}]}'
 assert_exact_policy_target "$status_json" "$node_json" "$pod_json" \
   profile-a app ACTIVATE
 if assert_exact_policy_target "$(jq -c '.active_targets[0].runtime_container_id = "wrong"' \

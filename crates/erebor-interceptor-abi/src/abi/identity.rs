@@ -834,7 +834,8 @@ pub struct PendingExecV1 {
     pub candidate_count: u16,
     /// One trusted-runtime exec that did not satisfy workload policy.
     pub prepared_runtime_exec: u8,
-    pub reserved_0: u8,
+    /// The matching exec policy requires exact object identity.
+    pub exact_object_required: u8,
     pub source_profile_generation_ref_id: u64,
     pub pending_exec_response_set_ref_id: u64,
     pub target_execution_id: Id128V1,

@@ -1659,7 +1659,7 @@ typedef struct pending_exec_v1 {
   uint32_t source_role_id;
   uint16_t candidate_count;
   uint8_t prepared_runtime_exec;
-  uint8_t reserved_0;
+  uint8_t exact_object_required;
   uint64_t source_profile_generation_ref_id;
   uint64_t pending_exec_response_set_ref_id;
   struct id128_v1 target_execution_id;

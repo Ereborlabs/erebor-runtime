@@ -3,6 +3,17 @@
 #ifndef EREBOR_IDENTITY_EXEC_BPF_H
 #define EREBOR_IDENTITY_EXEC_BPF_H
 
+static __always_inline void remember_pending_exec_exact_requirement(
+    pending_exec_v1 *pending, const struct identity_scratch_v1 *scratch)
+{
+    if (!pending || !scratch ||
+        !scratch->path_terminal.exact_object_required ||
+        pending->exact_object_required)
+        return;
+    pending->exact_object_required = 1;
+    pending->transition_version++;
+}
+
 static __always_inline int observe_bprm_effect(struct linux_binprm *bprm)
 {
     identity_runtime_config_v1 *config = identity_runtime_config();
@@ -31,9 +42,20 @@ static __always_inline int observe_bprm_effect(struct linux_binprm *bprm)
         return identity_effect_actor_gate(
             NULL, kernel_effect_family_v1_exec,
             kernel_effect_operation_v1_execute, 0);
-    if (pending && label && !task_cgroup(task, &cgroup)) {
+    if (label && !task_cgroup(task, &cgroup)) {
         binding = binding_for_cgroup(cgroup, &binding_lookup);
-        if (!binding_lookup && binding_matches_label(binding, label) &&
+        entry = bpf_map_lookup_elem(&entry_states, &label->entry_instance_id);
+        if (!binding_lookup &&
+            prepared_container_application_actor_is_exact(binding, label,
+                                                            entry)) {
+            result = identity_effect_gate(
+                file, kernel_effect_family_v1_exec,
+                kernel_effect_operation_v1_execute, 0);
+            remember_pending_exec_exact_requirement(
+                pending, identity_scratch_record());
+            return result;
+        }
+        if (pending && !binding_lookup && binding_matches_label(binding, label) &&
             binding->prepared_container_state ==
                 prepared_container_state_v1_exec_pending &&
             binding->prepared_container_exec_task_cookie ==
@@ -45,9 +67,10 @@ static __always_inline int observe_bprm_effect(struct linux_binprm *bprm)
     result = prepared_exec_policy_gate(file);
     if (result)
         return result;
+    scratch = identity_scratch_record();
+    remember_pending_exec_exact_requirement(pending, scratch);
     if (!label || !pending)
         return 0;
-    scratch = identity_scratch_record();
     if (!scratch)
         return identity_deny(config);
     if (!(scratch->effect_gate_flags &
@@ -141,14 +164,17 @@ static __always_inline int append_exec_candidate(
 
 static __always_inline int append_bprm_auxiliary_candidates(
     struct linux_binprm *bprm, pending_exec_v1 *pending,
-    struct identity_scratch_v1 *scratch)
+    struct identity_scratch_v1 *scratch, bool non_exact_candidate_allowed)
 {
     struct file *file = NULL;
 
     BPF_CORE_READ_INTO(&file, bprm, executable);
     if (file) {
         candidate_from_file(&scratch->image.ordered_candidates[0], file);
-        if (append_exec_candidate(
+        if ((scratch->image.ordered_candidates[0].mount_id ||
+             !non_exact_candidate_allowed ||
+             pending->exact_object_required) &&
+            append_exec_candidate(
                 pending, &scratch->image.ordered_candidates[0]))
             return -EACCES;
     }
@@ -156,7 +182,10 @@ static __always_inline int append_bprm_auxiliary_candidates(
     BPF_CORE_READ_INTO(&file, bprm, interpreter);
     if (file) {
         candidate_from_file(&scratch->image.ordered_candidates[0], file);
-        if (append_exec_candidate(
+        if ((scratch->image.ordered_candidates[0].mount_id ||
+             !non_exact_candidate_allowed ||
+             pending->exact_object_required) &&
+            append_exec_candidate(
                 pending, &scratch->image.ordered_candidates[0]))
             return -EACCES;
     }
@@ -643,7 +672,7 @@ static __noinline int identity_bprm_transition(struct linux_binprm *bprm,
         scratch->pending_exec.source_role_id = snapshot->active_role_id;
         scratch->pending_exec.candidate_count = 1;
         scratch->pending_exec.prepared_runtime_exec = prepared_runtime_exec;
-        scratch->pending_exec.reserved_0 = 0;
+        scratch->pending_exec.exact_object_required = 0;
         scratch->pending_exec.source_profile_generation_ref_id =
             snapshot->active_profile_generation_ref_id;
         scratch->pending_exec.pending_exec_response_set_ref_id =
@@ -751,12 +780,28 @@ int BPF_PROG(erebor_bprm_committing_creds, struct linux_binprm *bprm)
     task_label_v1 *label;
     process_security_state_v1 *process;
     pending_exec_v1 *pending;
+    entry_security_state_v1 *entry;
+    execution_set_binding_state_v1 *binding;
+    struct cgroup *cgroup = NULL;
+    bool non_exact_candidate_allowed = false;
+    int binding_lookup;
 
     label = bpf_task_storage_get(&task_labels, task, 0, 0);
     if (!label)
         return 0;
     process = bpf_map_lookup_elem(&process_states, &label->process_state_id);
     pending = bpf_map_lookup_elem(&pending_execs, &label->task_cookie);
+    if (!task_cgroup(task, &cgroup)) {
+        binding = binding_for_cgroup(cgroup, &binding_lookup);
+        entry = bpf_map_lookup_elem(&entry_states,
+                                    &label->entry_instance_id);
+        non_exact_candidate_allowed =
+            !binding_lookup &&
+            (prepared_container_pre_active_actor_is_exact(
+                 binding, label, entry) ||
+             prepared_container_application_actor_is_exact(
+                 binding, label, entry));
+    }
     if (!process)
         return 0;
     if (__sync_val_compare_and_swap(&process->transition_guard, 0, 1))
@@ -777,7 +822,8 @@ int BPF_PROG(erebor_bprm_committing_creds, struct linux_binprm *bprm)
     }
     scratch = identity_scratch_record();
     if (!scratch ||
-        append_bprm_auxiliary_candidates(bprm, pending, scratch) ||
+        append_bprm_auxiliary_candidates(
+            bprm, pending, scratch, non_exact_candidate_allowed) ||
         prepare_exec_records(scratch, pending, process)) {
         process->exec_guard_state = exec_guard_state_v1_outcome_unknown;
         process->transition_version++;
@@ -929,6 +975,7 @@ int erebor_sched_process_exec(struct trace_event_raw_sched_process_exec *context
     execution_set_binding_state_v1 *binding;
     entry_security_state_v1 *entry;
     struct cgroup *cgroup = NULL;
+    bool non_exact_candidate_allowed;
     int binding_lookup;
 
     task = bpf_get_current_task_btf();
@@ -957,6 +1004,12 @@ int erebor_sched_process_exec(struct trace_event_raw_sched_process_exec *context
     }
     binding = binding_for_cgroup(cgroup, &binding_lookup);
     entry = bpf_map_lookup_elem(&entry_states, &label->entry_instance_id);
+    non_exact_candidate_allowed =
+        !binding_lookup && !pending->exact_object_required &&
+        (prepared_container_pre_active_actor_is_exact(
+             binding, label, entry) ||
+         prepared_container_application_actor_is_exact(
+             binding, label, entry));
     if (process->exec_guard_state != exec_guard_state_v1_commit_pending ||
         pending->state != pending_exec_state_v1_commit_pending ||
         !id128_equal(&pending->pending_exec_id, &process->pending_exec_id)) {
@@ -999,10 +1052,11 @@ int erebor_sched_process_exec(struct trace_event_raw_sched_process_exec *context
         target_image->state != image_provenance_state_v1_preparing ||
         binding_lookup || !binding_matches_label(binding, label) || !entry ||
         !scratch ||
-        (!scratch->image.ordered_candidates[0].mount_id &&
-         !pending->prepared_runtime_exec) ||
-        !image_contains_candidate(
-            target_image, &scratch->image.ordered_candidates[0]) ||
+        (((!scratch->image.ordered_candidates[0].mount_id &&
+           !pending->prepared_runtime_exec) ||
+          !image_contains_candidate(
+              target_image, &scratch->image.ordered_candidates[0])) &&
+         !non_exact_candidate_allowed) ||
         (pending->prepared_runtime_exec &&
          !prepared_container_actor_is_exact(binding, label, entry)) ||
         (process->pending_target_role_id != process->active_role_id &&

@@ -14,6 +14,8 @@ use serde_json::{json, Value};
 type TestResult<T = ()> = Result<T, Box<dyn std::error::Error>>;
 
 const POLICY: &str = include_str!("fixtures/kubernetes-policy-v1.yaml");
+const CONVERGENCE_POLICY: &[u8] =
+    include_bytes!("../../mithril-e2e/fixtures/convergence/policy-v1.yaml");
 const TENANT_ID: &str = "10000000-0000-4000-8000-000000000001";
 const CLUSTER_UID: &str = "10000000-0000-4000-8000-000000000002";
 const NAMESPACE_UID: &str = "10000000-0000-4000-8000-000000000003";
@@ -178,6 +180,40 @@ fn application_policy_lowering_does_not_create_implicit_denials() -> TestResult 
         .rules
         .iter()
         .any(|rule| rule.rule_id == "deny-service-account-files"));
+    Ok(())
+}
+
+#[test]
+fn convergence_policy_has_only_entry_and_explicit_deny_paths() -> TestResult {
+    let mut resource: WorkloadProtectionPolicy = serde_saphyr::from_slice(CONVERGENCE_POLICY)?;
+    resource.metadata.namespace = Some("mithril-convergence".to_owned());
+    resource.metadata.uid = Some(OBJECT_UID.to_owned());
+    resource.metadata.generation = Some(1);
+    let lowered = lower_kubernetes_policy(&resource, TENANT_ID, CLUSTER_UID, NAMESPACE_UID)?;
+    PolicyCompiler.compile(&lowered)?;
+
+    let paths = lowered
+        .path_selectors
+        .iter()
+        .map(|selector| selector.path_expression())
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        paths,
+        BTreeSet::from([
+            "/bin/busybox",
+            "/bin/sh",
+            "/var/lib/mithril-convergence/protected.exception-target",
+        ])
+    );
+    assert!(lowered.effect_family_defaults.is_empty());
+    assert!(lowered
+        .path_selectors
+        .iter()
+        .all(|selector| !selector.requires_exact_object()));
+    assert!(lowered
+        .rules
+        .iter()
+        .any(|rule| rule.rule_id == "deny-exception-target-open"));
     Ok(())
 }
 

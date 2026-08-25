@@ -12,6 +12,8 @@ provider=$directory/providers/libvirt.sh
 output_directory=
 keep_vms=false
 manual_environment=false
+protected_start_only=false
+reuse_environment=
 k3s_version=${MITHRIL_VM_K3S_VERSION:-v1.35.5+k3s1}
 reuse_images=${MITHRIL_VM_REUSE_IMAGES:-false}
 system_namespace=mithril-system
@@ -20,7 +22,7 @@ runtime_hook_owner=$system_namespace/mithril
 runtime_hook_socket=/run/mithril/runtime-admission.sock
 
 usage() {
-  echo "usage: $0 [--provider PATH] [--output-directory PATH] [--keep-vms] [--manual-environment]" >&2
+  echo "usage: $0 [--provider PATH] [--output-directory PATH] [--keep-vms] [--manual-environment] [--protected-start-only] [--reuse-environment PATH]" >&2
 }
 
 while (($#)); do
@@ -44,6 +46,15 @@ while (($#)); do
       keep_vms=true
       shift
       ;;
+    --protected-start-only)
+      protected_start_only=true
+      shift
+      ;;
+    --reuse-environment)
+      (($# >= 2)) || { usage; exit 2; }
+      reuse_environment=$2
+      shift 2
+      ;;
     --help|-h)
       usage
       exit 0
@@ -54,6 +65,15 @@ while (($#)); do
       ;;
   esac
 done
+
+[[ $protected_start_only == false || $manual_environment == false ]] || {
+  echo "--protected-start-only cannot run with --manual-environment" >&2
+  exit 2
+}
+[[ -z $reuse_environment || $manual_environment == false ]] || {
+  echo "--reuse-environment cannot run with --manual-environment" >&2
+  exit 2
+}
 
 for command in base64 cargo docker helm jq openssl sed sha256sum timeout; do
   command -v "$command" >/dev/null || {
@@ -98,11 +118,52 @@ fi
 mkdir -p -- "$output_directory"
 output_directory=$(cd -- "$output_directory" && pwd)
 
-work_a=$(mktemp -d /tmp/mithril-vm-test.XXXXXX)
-work_b=$(mktemp -d /tmp/mithril-vm-test.XXXXXX)
-vm_a=mithril-runtime-qualification-$$1
-vm_b=mithril-runtime-qualification-$$2
-export MITHRIL_VM_KNOWN_HOSTS=$work_a/known_hosts
+reusing_environment=false
+if [[ -n $reuse_environment ]]; then
+  [[ -r $reuse_environment ]] || {
+    echo "retained environment is not readable: $reuse_environment" >&2
+    exit 2
+  }
+  reuse_environment=$(cd -- "$(dirname -- "$reuse_environment")" && pwd)/$(basename -- "$reuse_environment")
+  jq -e '.schema_version == 1' "$reuse_environment" >/dev/null
+  vm_a=$(jq -er '.node_a' "$reuse_environment")
+  vm_b=$(jq -er '.node_b' "$reuse_environment")
+  work_a=$(jq -er '.node_a_work_directory' "$reuse_environment")
+  work_b=$(jq -er '.node_b_work_directory' "$reuse_environment")
+  retained_provider=$(jq -er '.provider' "$reuse_environment")
+  retained_known_hosts=$(jq -er '.known_hosts' "$reuse_environment")
+  [[ $retained_provider == "$provider" ]] || {
+    echo "retained provider does not match --provider: $retained_provider" >&2
+    exit 2
+  }
+  [[ $vm_a == mithril-runtime-qualification-[0-9]* &&
+      $vm_b == mithril-runtime-qualification-[0-9]* && $vm_a != "$vm_b" &&
+      $work_a == /tmp/mithril-vm-test.* &&
+      $work_b == /tmp/mithril-vm-test.* && -d $work_a && -d $work_b &&
+      $retained_known_hosts == "$work_a/known_hosts" ]] || {
+    echo "retained environment does not identify two owned harness VMs" >&2
+    exit 2
+  }
+  mapfile -t owner_a <"$work_a/libvirt-domain-owner"
+  mapfile -t owner_b <"$work_b/libvirt-domain-owner"
+  [[ ${#owner_a[@]} -eq 2 && ${owner_a[0]} == "$vm_a" &&
+      ${owner_a[1]} =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ &&
+      ${#owner_b[@]} -eq 2 && ${owner_b[0]} == "$vm_b" &&
+      ${owner_b[1]} =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ &&
+      -r $work_a/kubeconfig.yaml ]] || {
+    echo "retained environment ownership records are invalid" >&2
+    exit 2
+  }
+  export MITHRIL_VM_KNOWN_HOSTS=$retained_known_hosts
+  keep_vms=true
+  reusing_environment=true
+else
+  work_a=$(mktemp -d /tmp/mithril-vm-test.XXXXXX)
+  work_b=$(mktemp -d /tmp/mithril-vm-test.XXXXXX)
+  vm_a=mithril-runtime-qualification-$$1
+  vm_b=mithril-runtime-qualification-$$2
+  export MITHRIL_VM_KNOWN_HOSTS=$work_a/known_hosts
+fi
 ssh_public_key=${MITHRIL_VM_SSH_PUBLIC_KEY:-$HOME/.ssh/id_rsa.pub}
 created_a=false
 created_b=false
@@ -145,6 +206,8 @@ assert_runtime_hook() {
 cleanup() {
   local original_status=$?
   local cleanup_failed=false
+  local cleanup_result_file
+  local resources_removed
   trap - EXIT
   set +e
   if ((original_status != 0)) && [[ $cluster_created == true ]]; then
@@ -172,6 +235,22 @@ cleanup() {
       printf 'export MITHRIL_VM_KNOWN_HOSTS=%q\n' "$MITHRIL_VM_KNOWN_HOSTS"
       printf 'manual_environment=%q\n' "$manual_environment"
     } >"$output_directory/retained-vms.txt" || cleanup_failed=true
+    jq -n \
+      --arg node_a "$vm_a" \
+      --arg node_a_work_directory "$work_a" \
+      --arg node_b "$vm_b" \
+      --arg node_b_work_directory "$work_b" \
+      --arg provider "$provider" \
+      --arg known_hosts "$MITHRIL_VM_KNOWN_HOSTS" \
+      '{
+        schema_version: 1,
+        node_a: $node_a,
+        node_a_work_directory: $node_a_work_directory,
+        node_b: $node_b,
+        node_b_work_directory: $node_b_work_directory,
+        provider: $provider,
+        known_hosts: $known_hosts
+      }' >"$output_directory/retained-environment.json" || cleanup_failed=true
   else
     if [[ $work_a == /tmp/mithril-vm-test.* ]]; then
       rm -rf -- "$work_a" || cleanup_failed=true
@@ -185,6 +264,22 @@ cleanup() {
     fi
     [[ ! -e $work_a ]] || cleanup_failed=true
     [[ ! -e $work_b ]] || cleanup_failed=true
+  fi
+  if [[ -f $output_directory/protected-start-result.json &&
+        $cleanup_failed == false ]]; then
+    cleanup_result_file=$output_directory/.protected-start-result.$$.json
+    resources_removed=false
+    [[ $keep_vms == true ]] || resources_removed=true
+    jq --argjson resources_removed "$resources_removed" \
+      --argjson environment_retained "$keep_vms" \
+      '.repository_owned_test_resources_removed = $resources_removed |
+       .repository_owned_environment_retained = $environment_retained' \
+      "$output_directory/protected-start-result.json" \
+      >"$cleanup_result_file" || cleanup_failed=true
+    if [[ $cleanup_failed == false ]]; then
+      mv -- "$cleanup_result_file" \
+        "$output_directory/protected-start-result.json" || cleanup_failed=true
+    fi
   fi
   cleanup_result "$original_status" "$cleanup_failed"
   local final_status=$?
@@ -259,10 +354,15 @@ cp -- "$repo_root/crates/mithril-e2e/fixtures/mithril-policy/observe-profile-sea
   --public-key "$repo_root/crates/mithril-e2e/fixtures/mithril-policy/test-public-key.hex" \
   --issuer-epoch 1 --output "$materials/trust.json"
 
-"$provider" create "$vm_a" "$work_a" "$ssh_public_key"
-created_a=true
-"$provider" create "$vm_b" "$work_b" "$ssh_public_key"
-created_b=true
+if [[ $reusing_environment == false ]]; then
+  "$provider" create "$vm_a" "$work_a" "$ssh_public_key"
+  created_a=true
+  "$provider" create "$vm_b" "$work_b" "$ssh_public_key"
+  created_b=true
+else
+  created_a=true
+  created_b=true
+fi
 "$provider" wait "$vm_a"
 "$provider" wait "$vm_b"
 address_a=$("$provider" address "$vm_a")
@@ -288,11 +388,16 @@ for node in "$vm_a" "$vm_b"; do
     'sudo apt-get update && sudo apt-get install -y --no-install-recommends jq openssl'
 done
 
-"$provider" run "$vm_a" sudo bash "$remote_a/harness/guest.sh" \
-  k3s-install "$k3s_version" "$remote_a/harness/k3s-config-v1.yaml" "$remote_a"
-node_token=$("$provider" run "$vm_a" sudo cat /var/lib/rancher/k3s/server/node-token)
-"$provider" run "$vm_b" sudo bash "$remote_b/harness/guest.sh" \
-  k3s-agent-install "$k3s_version" "https://$address_a:6443" "$node_token" "$remote_b"
+if [[ $reusing_environment == false ]]; then
+  "$provider" run "$vm_a" sudo bash "$remote_a/harness/guest.sh" \
+    k3s-install "$k3s_version" "$remote_a/harness/k3s-config-v1.yaml" "$remote_a"
+  node_token=$("$provider" run "$vm_a" sudo cat /var/lib/rancher/k3s/server/node-token)
+  "$provider" run "$vm_b" sudo bash "$remote_b/harness/guest.sh" \
+    k3s-agent-install "$k3s_version" "https://$address_a:6443" "$node_token" "$remote_b"
+else
+  "$provider" run "$vm_a" sudo /usr/local/bin/k3s kubectl wait \
+    --for=condition=Ready "node" --all --timeout=180s >/dev/null
+fi
 cluster_created=true
 
 for node in "$vm_a" "$vm_b"; do
@@ -321,6 +426,57 @@ node_b_name=$(jq -er --arg address "$address_b" '
 remote_kubectl() {
   "$provider" run "$vm_a" sudo /usr/local/bin/k3s kubectl "$@"
 }
+
+replace_retained_test_resources() {
+  local node
+  local path
+
+  echo "Replacing Mithril and the protected workload in the retained K3s cluster"
+  if remote_kubectl get namespace "$workload_namespace" >/dev/null 2>&1; then
+    for node in "$vm_a" "$vm_b"; do
+      if "$provider" run "$node" sudo test -d \
+          /var/lib/mithril-convergence/markers; then
+        "$provider" run "$node" sudo touch \
+          /var/lib/mithril-convergence/markers/protected.exception-request \
+          /var/lib/mithril-convergence/markers/protected.restart
+      fi
+    done
+    remote_kubectl delete namespace "$workload_namespace" \
+      --wait=true --timeout=180s >/dev/null
+  fi
+  if helm --kubeconfig "$kubeconfig" status mithril \
+      --namespace "$system_namespace" >/dev/null 2>&1; then
+    helm --kubeconfig "$kubeconfig" uninstall mithril \
+      --namespace "$system_namespace" --wait --timeout=180s >/dev/null
+  fi
+  if remote_kubectl get namespace "$system_namespace" >/dev/null 2>&1; then
+    remote_kubectl delete namespace "$system_namespace" \
+      --wait=true --timeout=180s >/dev/null
+  fi
+  assert_runtime_hook removed "$vm_a" "$remote_a"
+  assert_runtime_hook removed "$vm_b" "$remote_b"
+  for node in "$vm_a" "$vm_b"; do
+    for path in /var/lib/mithril-convergence /run/mithril \
+        /sys/fs/bpf/mithril-convergence; do
+      if "$provider" run "$node" sudo test -d "$path"; then
+        "$provider" run "$node" sudo find "$path" -mindepth 1 -delete
+      fi
+    done
+    "$provider" run "$node" sudo rm -f \
+      /etc/mithril/node.json /etc/mithril/node.json.held
+  done
+  remote_kubectl label node "$node_a_name" "$node_b_name" \
+    mithril.erebor.dev/ready- --overwrite >/dev/null
+  remote_kubectl annotate node "$node_a_name" "$node_b_name" \
+    mithril.erebor.dev/node-id- \
+    mithril.erebor.dev/node-uid- \
+    mithril.erebor.dev/node-boot-id- \
+    mithril.erebor.dev/label-epoch- --overwrite >/dev/null
+}
+
+if [[ $reusing_environment == true ]]; then
+  replace_retained_test_resources
+fi
 
 nri_hook_logs() {
   remote_kubectl -n "$system_namespace" logs \
@@ -715,28 +871,33 @@ assert_runtime_hook installed "$vm_a" "$remote_a"
 assert_runtime_hook installed "$vm_b" "$remote_b"
 assert_nri_hook_loader_healthy
 
-# A replacement API object cannot inherit readiness from the old Node UID.
-old_node_b_uid=$(remote_kubectl get node "$node_b_name" -o jsonpath='{.metadata.uid}')
-"$provider" run "$vm_b" sudo mv /etc/mithril/node.json /etc/mithril/node.json.held
-node_b_pod=$(remote_kubectl -n "$system_namespace" get pods \
-  -l app.kubernetes.io/name=mithril-node \
-  --field-selector "spec.nodeName=$node_b_name" \
-  -o jsonpath='{.items[0].metadata.name}')
-remote_kubectl -n "$system_namespace" delete pod "$node_b_pod" \
-  --wait=true --timeout=120s >/dev/null
-wait_node_projection "$node_b_name" "" true
-remote_kubectl delete node "$node_b_name" --wait=true --timeout=120s >/dev/null
-# Kubelet does not recreate a Node object after deletion until its process restarts.
-"$provider" run "$vm_b" sudo systemctl restart k3s-agent
-wait_replaced_node_uid "$node_b_name" "$old_node_b_uid"
-remote_kubectl label node "$node_b_name" \
-  mithril.erebor.dev/pool=protected --overwrite >/dev/null
-wait_node_projection "$node_b_name" "" true
-"$provider" run "$vm_b" sudo mv /etc/mithril/node.json.held /etc/mithril/node.json
-remote_kubectl -n "$system_namespace" rollout status daemonset/mithril-node \
-  --timeout=300s >/dev/null
-wait_node_projection "$node_b_name" true false
-assert_ready_projection_stable "$node_b_name"
+if [[ $protected_start_only == false ]]; then
+  # The full suite proves Node UID replacement. The focused startup lane keeps
+  # the retained Kubernetes Nodes stable and replaces only product resources.
+  old_node_b_uid=$(remote_kubectl get node "$node_b_name" -o jsonpath='{.metadata.uid}')
+  "$provider" run "$vm_b" sudo mv \
+    /etc/mithril/node.json /etc/mithril/node.json.held
+  node_b_pod=$(remote_kubectl -n "$system_namespace" get pods \
+    -l app.kubernetes.io/name=mithril-node \
+    --field-selector "spec.nodeName=$node_b_name" \
+    -o jsonpath='{.items[0].metadata.name}')
+  remote_kubectl -n "$system_namespace" delete pod "$node_b_pod" \
+    --wait=true --timeout=120s >/dev/null
+  wait_node_projection "$node_b_name" "" true
+  remote_kubectl delete node "$node_b_name" --wait=true --timeout=120s >/dev/null
+  # Kubelet recreates the Node object only after its process restarts.
+  "$provider" run "$vm_b" sudo systemctl restart k3s-agent
+  wait_replaced_node_uid "$node_b_name" "$old_node_b_uid"
+  remote_kubectl label node "$node_b_name" \
+    mithril.erebor.dev/pool=protected --overwrite >/dev/null
+  wait_node_projection "$node_b_name" "" true
+  "$provider" run "$vm_b" sudo mv \
+    /etc/mithril/node.json.held /etc/mithril/node.json
+  remote_kubectl -n "$system_namespace" rollout status daemonset/mithril-node \
+    --timeout=300s >/dev/null
+  wait_node_projection "$node_b_name" true false
+  assert_ready_projection_stable "$node_b_name"
+fi
 
 if [[ $manual_environment == true ]]; then
   manual_env=$work_a/mithril-convergence-manual.env
@@ -1068,9 +1229,9 @@ for _attempt in {1..120}; do
   prepared_result=$("$provider" run "$selected_vm" sudo cat \
     /var/lib/mithril-convergence/markers/protected.prepared-result \
     2>/dev/null || true)
-  [[ $prepared_result == PREPARED_RUNTIME_RETIRED ]] && break
+  [[ $prepared_result == APPLICATION_DEFAULT_ALLOWED ]] && break
   [[ $_attempt -lt 120 ]] || {
-    echo "application IPC did not prove PreparedContainer retirement" >&2
+    echo "the activated application did not receive its default authority" >&2
     exit 1
   }
   sleep 1
@@ -1091,6 +1252,55 @@ done
 
 protected_uid=$(remote_kubectl -n "$workload_namespace" get pod protected \
   -o jsonpath='{.metadata.uid}')
+if [[ $protected_start_only == true ]]; then
+  kubernetes_version=$(remote_kubectl version -o json | jq -er \
+    '.serverVersion.gitVersion')
+  container_runtime_version=$(remote_kubectl get node "$selected_node" \
+    -o jsonpath='{.status.nodeInfo.containerRuntimeVersion}')
+  policy_source_revision=$(remote_kubectl -n "$workload_namespace" get pod protected \
+    -o json | jq -er \
+    '.metadata.annotations["mithril.erebor.dev/policy-source-revision"]')
+  prepared_state=$(jq -er '.runtime_binding.prepared_container_state' \
+    <<<"$task_before")
+  admitted_entry_instance_id=$(jq -er '.entry_instance_id' <<<"$task_before")
+  jq -n \
+    --arg kubernetes_version "$kubernetes_version" \
+    --arg container_runtime_version "$container_runtime_version" \
+    --arg namespace "$workload_namespace" \
+    --arg pod_name protected \
+    --arg pod_uid "$protected_uid" \
+    --arg container_id "$container_before" \
+    --arg selected_node "$selected_node" \
+    --arg profile_id "$profile_id" \
+    --arg policy_source_revision "$policy_source_revision" \
+    --arg runtime_binding_id "$runtime_binding_before" \
+    --arg task_cookie "$task_cookie_before" \
+    --arg prepared_state "$prepared_state" \
+    --arg admitted_entry_instance_id "$admitted_entry_instance_id" \
+    --arg application_default_marker "$prepared_result" \
+    --arg explicit_deny_marker "$base_result" \
+    '{
+      schema_version: 1,
+      kubernetes_version: $kubernetes_version,
+      container_runtime_version: $container_runtime_version,
+      namespace: $namespace,
+      pod_name: $pod_name,
+      pod_uid: $pod_uid,
+      container_id: $container_id,
+      selected_node: $selected_node,
+      profile_id: $profile_id,
+      policy_source_revision: $policy_source_revision,
+      runtime_binding_id: $runtime_binding_id,
+      task_cookie: $task_cookie,
+      prepared_state: $prepared_state,
+      admitted_entry_instance_id: $admitted_entry_instance_id,
+      application_default_allowed: ($application_default_marker == "APPLICATION_DEFAULT_ALLOWED"),
+      explicit_matching_deny_observed: ($explicit_deny_marker == "BASE_DENIED"),
+      repository_owned_test_resources_removed: false
+    }' >"$output_directory/protected-start-result.json"
+  echo "Protected Kubernetes application startup passed. Evidence: $output_directory"
+  exit 0
+fi
 exception=$work_a/exception-v1.yaml
 sed \
   -e "s/MITHRIL_CONVERGENCE_NAMESPACE/$workload_namespace/g" \
@@ -1544,8 +1754,8 @@ remote_kubectl -n "$workload_namespace" wait --for=condition=Ready pod/protected
 new_pod_uid=$(remote_kubectl -n "$workload_namespace" get pod protected \
   -o jsonpath='{.metadata.uid}')
 [[ -n $new_pod_uid && $new_pod_uid != "$old_pod_uid" ]]
-[[ $(remote_kubectl -n "$workload_namespace" get pod protected \
-  -o jsonpath='{.metadata.annotations.mithril\.erebor\.dev/profile-id}') \
+[[ $(remote_kubectl -n "$workload_namespace" get pod protected -o json | \
+  jq -er '.metadata.annotations["mithril.erebor.dev/profile-id"]') \
   == "$recreated_profile_id" ]]
 recreated_node=$(remote_kubectl -n "$workload_namespace" get pod protected \
   -o jsonpath='{.spec.nodeName}')

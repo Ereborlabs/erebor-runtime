@@ -23,9 +23,9 @@ spec:
           touch /var/lib/mithril-convergence/MITHRIL_CONVERGENCE_POD.started;
           if [ MITHRIL_CONVERGENCE_POD = protected ]; then
           if ( : | : );
-          then echo PREPARED_RUNTIME_LEAKED >
+          then echo APPLICATION_DEFAULT_ALLOWED >
           /var/lib/mithril-convergence/MITHRIL_CONVERGENCE_POD.prepared-result;
-          else echo PREPARED_RUNTIME_RETIRED >
+          else echo APPLICATION_DEFAULT_DENIED >
           /var/lib/mithril-convergence/MITHRIL_CONVERGENCE_POD.prepared-result;
           fi;
           if cat /var/lib/mithril-convergence/MITHRIL_CONVERGENCE_POD.exception-target

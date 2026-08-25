@@ -78,7 +78,7 @@ assert_exact_policy_target() {
       $target.pod_name == $pod.metadata.name and
       $target.pod_uid == $pod.metadata.uid and
       $target.container_name == $container and
-      $target.image_digest == $containers[0].image and
+      $target.image_digest == ($containers[0].image | split("@") | last) and
       $target.runtime_container_id == $runtime_id and
       ($target.runtime_binding_id | length) > 0 and
       $target.container_generation >= 1
