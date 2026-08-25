@@ -783,22 +783,40 @@ int BPF_PROG(erebor_bprm_committing_creds, struct linux_binprm *bprm)
     return 0;
 }
 
-static __always_inline int complete_failed_exec(long result)
+static __always_inline int complete_exec(long result)
 {
     struct task_struct *task;
     task_label_v1 *label;
     process_security_state_v1 *process;
     pending_exec_v1 *pending;
     execution_set_binding_state_v1 *binding;
+    entry_security_state_v1 *entry;
     struct cgroup *cgroup = NULL;
     int binding_lookup;
 
-    if (result >= 0)
-        return 0;
     task = bpf_get_current_task_btf();
     label = bpf_task_storage_get(&task_labels, task, 0, 0);
     if (!label)
         return 0;
+    if (result >= 0) {
+        if (task_cgroup(task, &cgroup))
+            return 0;
+        binding = binding_for_cgroup(cgroup, &binding_lookup);
+        if (binding_lookup || !binding_matches_label(binding, label) ||
+            binding->prepared_container_state !=
+                prepared_container_state_v1_exec_pending)
+            return 0;
+        entry = bpf_map_lookup_elem(&entry_states,
+                                    &label->entry_instance_id);
+        /* Syscall exit follows all in-kernel exec work. Close the prepared
+         * bypass before the new image returns to user space. */
+        if (!prepared_container_pre_active_actor_is_exact(
+                binding, label, entry) ||
+            !prepared_container_commit_activation(binding,
+                                                  label->task_cookie))
+            prepared_container_mark_corrupt(binding);
+        return 0;
+    }
     bpf_map_delete_elem(&pending_administrative_matches,
                         &label->task_cookie);
     process = bpf_map_lookup_elem(&process_states, &label->process_state_id);
@@ -850,7 +868,7 @@ static __always_inline int complete_failed_exec(long result)
 SEC("tracepoint/syscalls/sys_exit_execve")
 int erebor_sys_exit_execve(struct trace_event_raw_sys_exit *context)
 {
-    return complete_failed_exec(context->ret);
+    return complete_exec(context->ret);
 }
 
 SEC("tracepoint/syscalls/sys_exit_execveat")
@@ -869,7 +887,7 @@ int erebor_sys_exit_execveat(struct trace_event_raw_sys_exit *context)
                 label->task_cookie)
             return 0;
     }
-    return complete_failed_exec(context->ret);
+    return complete_exec(context->ret);
 }
 
 SEC("tracepoint/sched/sched_process_exec")
@@ -1009,20 +1027,8 @@ int erebor_sched_process_exec(struct trace_event_raw_sched_process_exec *context
         release_transition_guard(&process->transition_guard);
         return 0;
     }
-    /* A policy-approved exec is the only transition out of preparation. The
-     * sched commit point makes activation atomic with the successful exec. */
-    if (!pending->prepared_runtime_exec &&
-        binding->prepared_container_state ==
-            prepared_container_state_v1_exec_pending &&
-        !prepared_container_commit_activation(binding, label->task_cookie)) {
-        prepared_container_mark_corrupt(binding);
-        process->exec_guard_state = exec_guard_state_v1_outcome_unknown;
-        process->transition_version++;
-        pending->state = pending_exec_state_v1_outcome_unknown;
-        pending->transition_version++;
-        release_transition_guard(&process->transition_guard);
-        return 0;
-    }
+    /* Process identity commits here. The prepared bypass remains reserved to
+     * this exec task until the successful syscall exit. */
     previous_execution->end_boottime_ns = bpf_ktime_get_ns();
     previous_execution->state = process_execution_state_v1_complete;
     previous_execution->transition_version++;
