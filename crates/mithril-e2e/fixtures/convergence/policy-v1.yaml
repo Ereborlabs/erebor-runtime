@@ -25,11 +25,6 @@ spec:
           operations: [OpenRead]
           action: Deny
       execution:
-        - name: allow-busybox-execution
-          path: /bin/busybox
-          recursive: false
-          operations: [Execute]
-          action: Allow
         - name: allow-shell-execution
           path: /bin/sh
           recursive: false

@@ -42,9 +42,11 @@ crates/mithril-e2e/harness/vm/two-node-convergence.sh \
 ```
 
 This lane creates fresh repository-owned VMs, a cluster, a namespace, and a
-Pod. It proves application activation, default authority for the admitted
-entry, and one explicit matching denial. The normal exit removes the owned
-resources and records the cleanup result.
+Pod. The policy has `/bin/sh` as its sole execution selector. The lane proves
+application activation, default authority for later BusyBox applet execs, one
+explicit matching denial, and fail-closed direct CRI entry into the active
+container cgroup. The normal exit removes the owned resources and records the
+cleanup result.
 
 Retain a healthy VM and K3s environment when another implementation iteration
 is likely:
@@ -64,6 +66,15 @@ crates/mithril-e2e/harness/vm/two-node-convergence.sh \
 The reuse lane validates both VM ownership records. It keeps both VMs and the
 K3s cluster. It replaces the Mithril release, its node state, and the protected
 workload before it runs the next transaction.
+
+Use the retained environment from the host with:
+
+```bash
+retained_node_a_work_directory=$(jq -r '.node_a_work_directory' \
+  /tmp/mithril-protected-start-evidence/retained-environment.json)
+kubectl --kubeconfig \
+  "$retained_node_a_work_directory/kubeconfig.yaml" get nodes -o wide
+```
 
 Add the optional single-node Kubernetes lane. The harness uses the K3s
 distribution:

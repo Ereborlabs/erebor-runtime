@@ -1154,6 +1154,18 @@ runtime_task_snapshot() {
       task --host-pid "$host_pid"
 }
 
+node_effects() {
+  local node_name=$1
+  local pod
+  pod=$(remote_kubectl -n "$system_namespace" get pods \
+    -l app.kubernetes.io/name=mithril-node \
+    --field-selector "spec.nodeName=$node_name" \
+    -o jsonpath='{.items[0].metadata.name}')
+  remote_kubectl -n "$system_namespace" exec -c mithril-node "$pod" -- \
+    mithril-inspect effects --socket-path /run/mithril/observation.sock \
+      --cgroup-scope /
+}
+
 assert_prepared_container_activation() {
   local task_json=$1
   local runtime_binding_id=$2
@@ -1250,6 +1262,75 @@ for _attempt in {1..120}; do
   sleep 1
 done
 
+application_effects=$(node_effects "$selected_node")
+printf '%s\n' "$application_effects" \
+  >"$output_directory/application-effects.txt"
+awk '
+  /^observed_boottime_ns=/ &&
+  / family=1 operation=1 / &&
+  / reason=APPLICATION_DEFAULT_ALLOW / &&
+  / exact_object_key_id=0 composite_atom_id=0 / { found = 1 }
+  END { exit !found }
+' <<<"$application_effects" || {
+  echo "a later application exec did not receive default authority" >&2
+  exit 1
+}
+application_exec_default_allowed=true
+effect_marker=$(awk '
+  /^observed_boottime_ns=/ {
+    split($1, field, "=")
+    if (field[2] > marker) {
+      marker = field[2]
+    }
+  }
+  END { print marker + 0 }
+' <<<"$application_effects")
+
+external_marker=/var/lib/mithril-convergence/markers/protected.external-entry
+"$provider" run "$selected_vm" sudo rm -f "$external_marker"
+"$provider" run "$other_vm" sudo rm -f "$external_marker"
+if "$provider" run "$selected_vm" sudo /usr/local/bin/k3s crictl exec \
+    "$container_before_id" /bin/touch "$external_marker" \
+    >"$output_directory/external-cgroup-entry.out" 2>&1; then
+  external_status=0
+else
+  external_status=$?
+fi
+[[ $external_status -ne 0 ]] || {
+  echo "an external process entered the protected container" >&2
+  exit 1
+}
+"$provider" run "$selected_vm" sudo test ! -e "$external_marker"
+"$provider" run "$other_vm" sudo test ! -e "$external_marker"
+
+external_cgroup_entry_denied=false
+for _attempt in {1..40}; do
+  external_effects=$(node_effects "$selected_node")
+  if awk -v marker="$effect_marker" '
+      /^observed_boottime_ns=/ {
+        split($1, field, "=")
+        if (field[2] > marker &&
+            $0 ~ / family=1 operation=1 / &&
+            $0 ~ / reason=UNSUPPORTED_OBJECT / &&
+            $0 ~ / result=DENIED_BEFORE_EFFECT / &&
+            $0 ~ / kernel_result=-13$/) {
+          found = 1
+        }
+      }
+      END { exit !found }
+    ' <<<"$external_effects"; then
+    external_cgroup_entry_denied=true
+    break
+  fi
+  sleep 0.25
+done
+printf '%s\n' "$external_effects" \
+  >"$output_directory/external-cgroup-entry-effects.txt"
+[[ $external_cgroup_entry_denied == true ]] || {
+  echo "the external cgroup entry did not produce a denied exec effect" >&2
+  exit 1
+}
+
 protected_uid=$(remote_kubectl -n "$workload_namespace" get pod protected \
   -o jsonpath='{.metadata.uid}')
 if [[ $protected_start_only == true ]]; then
@@ -1279,6 +1360,10 @@ if [[ $protected_start_only == true ]]; then
     --arg admitted_entry_instance_id "$admitted_entry_instance_id" \
     --arg application_default_marker "$prepared_result" \
     --arg explicit_deny_marker "$base_result" \
+    --argjson later_busybox_applet_exec_default_allowed \
+      "$application_exec_default_allowed" \
+    --argjson external_cgroup_entry_denied \
+      "$external_cgroup_entry_denied" \
     '{
       schema_version: 1,
       kubernetes_version: $kubernetes_version,
@@ -1295,7 +1380,9 @@ if [[ $protected_start_only == true ]]; then
       prepared_state: $prepared_state,
       admitted_entry_instance_id: $admitted_entry_instance_id,
       application_default_allowed: ($application_default_marker == "APPLICATION_DEFAULT_ALLOWED"),
+      later_busybox_applet_exec_default_allowed: $later_busybox_applet_exec_default_allowed,
       explicit_matching_deny_observed: ($explicit_deny_marker == "BASE_DENIED"),
+      external_cgroup_entry_denied: $external_cgroup_entry_denied,
       repository_owned_test_resources_removed: false
     }' >"$output_directory/protected-start-result.json"
   echo "Protected Kubernetes application startup passed. Evidence: $output_directory"

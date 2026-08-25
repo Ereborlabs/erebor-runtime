@@ -197,10 +197,10 @@ fn convergence_policy_has_only_entry_and_explicit_deny_paths() -> TestResult {
         .iter()
         .map(|selector| selector.path_expression())
         .collect::<BTreeSet<_>>();
+    assert_eq!(lowered.path_selectors.len(), 2);
     assert_eq!(
         paths,
         BTreeSet::from([
-            "/bin/busybox",
             "/bin/sh",
             "/var/lib/mithril-convergence/protected.exception-target",
         ])
