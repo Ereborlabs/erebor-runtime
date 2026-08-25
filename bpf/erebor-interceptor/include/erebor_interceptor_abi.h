@@ -154,6 +154,11 @@ enum entry_kind_v1
   entry_kind_v1_qualified_ci_container_action = 7,
   entry_kind_v1_checkpoint_restore_unknown = 8,
   entry_kind_v1_unknown_external = 9,
+  entry_kind_v1_declared_lifecycle_poststart = 10,
+  entry_kind_v1_declared_lifecycle_prestop = 11,
+  entry_kind_v1_declared_startup_probe = 12,
+  entry_kind_v1_declared_readiness_probe = 13,
+  entry_kind_v1_declared_liveness_probe = 14,
 };
 #if __STDC_VERSION__ >= 202311L
 typedef enum entry_kind_v1 entry_kind_v1;

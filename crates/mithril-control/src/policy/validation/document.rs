@@ -241,6 +241,37 @@ impl PolicyDocumentV1 {
                     entry.assignment_id
                 )
             );
+            let valid_admission_rule = entry.admission_execution_rule_id.as_ref().is_none_or(
+                |rule_id| {
+                    self.rules.iter().any(|rule| {
+                        rule.rule_id == *rule_id
+                            && rule.enabled
+                            && rule.requested_disposition == PolicyDispositionV1::Allow
+                            && matches!(
+                                &rule.rule_match,
+                                RuleMatchV1::LocalPreEffect(value)
+                                    if value.effect_families == [EffectFamilyV1::Exec]
+                                        && value.operation_ids.iter().any(|operation| operation == "EXECUTE")
+                                        && value.subject.role_ids == [entry.resulting_role_id.as_str()]
+                                        && entry.entry_kinds.iter().all(|kind| {
+                                            value.subject.entry_kind_ids.contains(kind)
+                                        })
+                                        && matches!(
+                                            &value.object,
+                                            LocalObjectSelectorV1::PathSelectors { .. }
+                                        )
+                            )
+                    })
+                },
+            );
+            require!(
+                valid_admission_rule,
+                "CFG_ENTRY_EXECUTION_RULE",
+                format!(
+                    "entry `{}` has an invalid admission execution rule",
+                    entry.assignment_id
+                )
+            );
         }
         let process_bits = self
             .state_bit_definitions

@@ -16,6 +16,19 @@ impl Validate for EntryRoleAssignmentV1 {
         let administrative_classification = self
             .accepted_classifications
             .contains(&RootClassificationV1::ApprovedAdministrativeNextMatch);
+        let declared_kind = self.entry_kinds.iter().any(|kind| {
+            matches!(
+                kind,
+                EntryKindV1::DeclaredPostStart
+                    | EntryKindV1::DeclaredPreStop
+                    | EntryKindV1::DeclaredStartupProbe
+                    | EntryKindV1::DeclaredReadinessProbe
+                    | EntryKindV1::DeclaredLivenessProbe
+            )
+        });
+        let declared_classification = self
+            .accepted_classifications
+            .contains(&RootClassificationV1::DeclaredAdditionalEntry);
         let complete = !self.workload_selector_ids.is_empty()
             && !self.entry_kinds.is_empty()
             && !self.container_kinds.is_empty()
@@ -41,6 +54,7 @@ impl Validate for EntryRoleAssignmentV1 {
                 == [RootClassificationV1::ApprovedAdministrativeNextMatch]
             && self.required_administrative_exec_approval
             && self.required_purpose_source_capability_id.is_none()
+            && self.admission_execution_rule_id.is_none()
             && self.unknown_restricted_role_id.is_none();
         require!(
             !(self.required_administrative_exec_approval
@@ -50,6 +64,34 @@ impl Validate for EntryRoleAssignmentV1 {
             "CFG_ADMINISTRATIVE_ENTRY",
             format!(
                 "entry `{}` has an invalid administrative binding",
+                self.assignment_id
+            )
+        );
+        let exact_declared_binding = self.entry_kinds.len() == 1
+            && declared_kind
+            && self.accepted_classifications == [RootClassificationV1::DeclaredAdditionalEntry]
+            && !self.required_administrative_exec_approval
+            && self.required_purpose_source_capability_id.is_none()
+            && self.admission_execution_rule_id.is_some()
+            && self.unknown_restricted_role_id.is_some();
+        require!(
+            !(declared_kind || declared_classification) || exact_declared_binding,
+            "CFG_DECLARED_ENTRY",
+            format!(
+                "entry `{}` has an invalid declared-entry binding",
+                self.assignment_id
+            )
+        );
+        let admission_rule_is_scoped = self.admission_execution_rule_id.is_none()
+            || (self.entry_kinds == [EntryKindV1::ContainerStart]
+                && self.accepted_classifications == [RootClassificationV1::ExactInitial]
+                && !self.required_administrative_exec_approval)
+            || exact_declared_binding;
+        require!(
+            admission_rule_is_scoped,
+            "CFG_ENTRY_EXECUTION_RULE",
+            format!(
+                "entry `{}` has an execution-rule reference outside an admitted workload entry",
                 self.assignment_id
             )
         );

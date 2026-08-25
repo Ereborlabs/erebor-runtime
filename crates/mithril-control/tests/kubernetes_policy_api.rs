@@ -4,8 +4,9 @@ use std::path::Path;
 use mithril_control::{
     canonical_kubernetes_policy_spec_bytes, exception_custom_resource_definition,
     lower_kubernetes_policy, policy_custom_resource, policy_custom_resource_definition,
-    CompiledPhysicalResultV1, EffectFamilyV1, KubernetesRuleActionV1, PolicyCompiler,
-    PolicySourceRevisionV1, PolicySourceStateV1, ProfileModeV1, WorkloadProtectionException,
+    CompiledPhysicalResultV1, EffectFamilyV1, EntryKindV1, KubernetesExecutionOperationV1,
+    KubernetesRuleActionV1, PolicyCompiler, PolicySourceRevisionV1, PolicySourceStateV1,
+    ProfileModeV1, RootClassificationV1, WorkloadProtectionException,
     WorkloadProtectionExceptionSpec, WorkloadProtectionPolicy, WorkloadProtectionPolicySpec,
     EXCEPTION_KIND, POLICY_KIND,
 };
@@ -14,6 +15,7 @@ use serde_json::{json, Value};
 type TestResult<T = ()> = Result<T, Box<dyn std::error::Error>>;
 
 const POLICY: &str = include_str!("fixtures/kubernetes-policy-v1.yaml");
+const ENTRY_ROLES_POLICY: &str = include_str!("fixtures/kubernetes-entry-roles-v1.yaml");
 const CONVERGENCE_POLICY: &[u8] =
     include_bytes!("../../mithril-e2e/fixtures/convergence/policy-v1.yaml");
 const TENANT_ID: &str = "10000000-0000-4000-8000-000000000001";
@@ -33,6 +35,17 @@ fn resource() -> TestResult<WorkloadProtectionPolicy> {
     resource.metadata.uid = Some(OBJECT_UID.to_owned());
     resource.metadata.generation = Some(7);
     resource.metadata.resource_version = Some("opaque/watch/97".to_owned());
+    Ok(resource)
+}
+
+fn entry_roles_resource() -> TestResult<WorkloadProtectionPolicy> {
+    let spec = WorkloadProtectionPolicySpec::parse(
+        Path::new("kubernetes-entry-roles-v1.yaml"),
+        ENTRY_ROLES_POLICY.as_bytes(),
+    )?;
+    let mut resource = policy_custom_resource("worker", "tenant-a", spec)?;
+    resource.metadata.uid = Some(OBJECT_UID.to_owned());
+    resource.metadata.generation = Some(7);
     Ok(resource)
 }
 
@@ -63,6 +76,40 @@ fn generated_crds_are_namespaced_structural_and_keep_authority_out_of_status() -
     for forbidden in ["digest", "signature", "receipt", "candidate", "node"] {
         assert!(!serde_json::to_string(policy_status)?.contains(forbidden));
     }
+    let container_properties = policy_json
+        .pointer(
+            "/spec/versions/0/schema/openAPIV3Schema/properties/spec/properties/containers/items/properties",
+        )
+        .and_then(Value::as_object)
+        .ok_or("container policy schema is absent")?;
+    assert_eq!(
+        container_properties
+            .keys()
+            .cloned()
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from([
+            "additionalEntries".to_owned(),
+            "administrativeEntry".to_owned(),
+            "applicationEntry".to_owned(),
+            "externalRole".to_owned(),
+            "images".to_owned(),
+            "kinds".to_owned(),
+            "names".to_owned(),
+        ])
+    );
+    assert!(!container_properties.contains_key("initialRole"));
+    assert_eq!(
+        policy_json.pointer(
+            "/spec/versions/0/schema/openAPIV3Schema/properties/spec/properties/containers/items/properties/additionalEntries/items/properties/kind/enum",
+        ),
+        Some(&json!([
+            "PostStart",
+            "PreStop",
+            "StartupProbe",
+            "ReadinessProbe",
+            "LivenessProbe"
+        ]))
+    );
 
     let exception = exception_custom_resource_definition()?;
     assert_eq!(exception.spec.scope, "Namespaced");
@@ -167,6 +214,173 @@ fn stored_and_offline_policy_specs_lower_to_the_same_compilable_policy() -> Test
             && cell.physical_result == CompiledPhysicalResultV1::AllowEffect
             && cell.errno.is_none()
     }));
+    Ok(())
+}
+
+#[test]
+fn independent_entry_roles_lower_without_application_role_inheritance() -> TestResult {
+    let resource = entry_roles_resource()?;
+    let lowered = lower_kubernetes_policy(&resource, TENANT_ID, CLUSTER_UID, NAMESPACE_UID)?;
+    let compiled = PolicyCompiler.compile(&lowered)?;
+
+    assert_eq!(lowered.entry_role_assignments.len(), 8);
+    let expected = [
+        (
+            "container-0-application",
+            EntryKindV1::ContainerStart,
+            RootClassificationV1::ExactInitial,
+            "application",
+            Some("application-entry"),
+            false,
+        ),
+        (
+            "container-0-additional-initialize-cache",
+            EntryKindV1::DeclaredPostStart,
+            RootClassificationV1::DeclaredAdditionalEntry,
+            "cache-initializer",
+            Some("initialize-cache-entry"),
+            false,
+        ),
+        (
+            "container-0-additional-graceful-drain",
+            EntryKindV1::DeclaredPreStop,
+            RootClassificationV1::DeclaredAdditionalEntry,
+            "connection-drainer",
+            Some("graceful-drain-entry"),
+            false,
+        ),
+        (
+            "container-0-additional-startup-check",
+            EntryKindV1::DeclaredStartupProbe,
+            RootClassificationV1::DeclaredAdditionalEntry,
+            "startup-probe",
+            Some("startup-probe-entry"),
+            false,
+        ),
+        (
+            "container-0-additional-readiness-check",
+            EntryKindV1::DeclaredReadinessProbe,
+            RootClassificationV1::DeclaredAdditionalEntry,
+            "readiness-probe",
+            Some("readiness-probe-entry"),
+            false,
+        ),
+        (
+            "container-0-additional-liveness-check",
+            EntryKindV1::DeclaredLivenessProbe,
+            RootClassificationV1::DeclaredAdditionalEntry,
+            "liveness-probe",
+            Some("liveness-probe-entry"),
+            false,
+        ),
+        (
+            "container-0-administrative",
+            EntryKindV1::ApprovedAdministrativeExec,
+            RootClassificationV1::ApprovedAdministrativeNextMatch,
+            "administrator",
+            None,
+            true,
+        ),
+        (
+            "container-0-external",
+            EntryKindV1::ExternalRuntimeUnknown,
+            RootClassificationV1::ConservativeExternalUnknown,
+            "runtime-external",
+            None,
+            false,
+        ),
+    ];
+    for (id, kind, classification, role, execution_rule, administrative) in expected {
+        let assignment = lowered
+            .entry_role_assignments
+            .iter()
+            .find(|assignment| assignment.assignment_id == id)
+            .ok_or_else(|| format!("missing assignment `{id}`"))?;
+        assert_eq!(assignment.entry_kinds, [kind]);
+        assert_eq!(assignment.accepted_classifications, [classification]);
+        assert_eq!(assignment.resulting_role_id, role);
+        assert_eq!(
+            assignment.admission_execution_rule_id.as_deref(),
+            execution_rule
+        );
+        assert_eq!(
+            assignment.required_administrative_exec_approval,
+            administrative
+        );
+    }
+
+    for role in &lowered.roles {
+        assert_eq!(role.permitted_entry_kinds.len(), 1, "{}", role.role_id);
+    }
+    assert!(compiled.compiled_cells.iter().all(|cell| {
+        lowered.roles.iter().any(|role| {
+            role.role_id == cell.key.role_id
+                && role.permitted_entry_kinds.contains(&cell.key.entry_kind)
+        })
+    }));
+
+    let mut cross_role = lowered.clone();
+    cross_role
+        .entry_role_assignments
+        .iter_mut()
+        .find(|assignment| assignment.assignment_id == "container-0-application")
+        .ok_or("application assignment is absent")?
+        .admission_execution_rule_id = Some("initialize-cache-entry".to_owned());
+    assert!(PolicyCompiler.compile(&cross_role).is_err());
+
+    let mut denied_entry = lowered;
+    denied_entry
+        .rules
+        .iter_mut()
+        .find(|rule| rule.rule_id == "application-entry")
+        .ok_or("application entry rule is absent")?
+        .requested_disposition = mithril_control::PolicyDispositionV1::Deny;
+    assert!(PolicyCompiler.compile(&denied_entry).is_err());
+    Ok(())
+}
+
+#[test]
+fn entry_execution_references_reject_invalid_or_ambiguous_admission() -> TestResult {
+    let valid = entry_roles_resource()?;
+    let mutations: [fn(&mut WorkloadProtectionPolicy); 7] = [
+        |resource| {
+            resource.spec.containers[0].application_entry.execution_rule =
+                "missing-entry".to_owned();
+        },
+        |resource| {
+            resource.spec.containers[0].application_entry.role = "cache-initializer".to_owned();
+        },
+        |resource| {
+            resource.spec.roles[0].execution[0].action = KubernetesRuleActionV1::Deny;
+        },
+        |resource| {
+            resource.spec.roles[0].execution[0].recursive = true;
+        },
+        |resource| {
+            resource.spec.roles[0].execution[0].operations =
+                vec![KubernetesExecutionOperationV1::MmapExecute];
+        },
+        |resource| {
+            resource.spec.roles[1].execution[0].path = "/bin/sh".to_owned();
+        },
+        |resource| {
+            resource.spec.containers[0].additional_entries[0].role = "application".to_owned();
+            resource.spec.containers[0].additional_entries[0].execution_rule =
+                "application-entry".to_owned();
+        },
+    ];
+    for mutate in mutations {
+        let mut invalid = valid.clone();
+        mutate(&mut invalid);
+        assert!(lower_kubernetes_policy(&invalid, TENANT_ID, CLUSTER_UID, NAMESPACE_UID).is_err());
+    }
+
+    let unsupported = ENTRY_ROLES_POLICY.replacen("kind: PostStart", "kind: Exec", 1);
+    assert!(WorkloadProtectionPolicySpec::parse(
+        Path::new("kubernetes-entry-roles-v1.yaml"),
+        unsupported.as_bytes(),
+    )
+    .is_err());
     Ok(())
 }
 

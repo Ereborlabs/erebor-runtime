@@ -4529,6 +4529,11 @@ const fn entry_kind(entry: EntryKindV1) -> u16 {
     match entry {
         EntryKindV1::ContainerStart => Abi::ContainerStart as u16,
         EntryKindV1::ExternalRuntimeUnknown => Abi::UnknownExternal as u16,
+        EntryKindV1::DeclaredPostStart => Abi::DeclaredLifecyclePoststart as u16,
+        EntryKindV1::DeclaredPreStop => Abi::DeclaredLifecyclePrestop as u16,
+        EntryKindV1::DeclaredStartupProbe => Abi::DeclaredStartupProbe as u16,
+        EntryKindV1::DeclaredReadinessProbe => Abi::DeclaredReadinessProbe as u16,
+        EntryKindV1::DeclaredLivenessProbe => Abi::DeclaredLivenessProbe as u16,
         EntryKindV1::QualifiedJoinedPurpose => Abi::QualifiedExecProbe as u16,
         EntryKindV1::ApprovedAdministrativeExec => Abi::ApprovedAdministrativeExecNextMatch as u16,
         EntryKindV1::RestoredUnknown => Abi::CheckpointRestoreUnknown as u16,

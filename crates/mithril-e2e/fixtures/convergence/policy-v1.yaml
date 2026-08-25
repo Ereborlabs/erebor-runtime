@@ -14,7 +14,12 @@ spec:
       kinds: [Application]
       images:
         - docker.io/library/busybox:1.36.1@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662
-      initialRole: worker
+      applicationEntry:
+        executionRule: allow-shell-execution
+        role: worker
+      additionalEntries: []
+      administrativeEntry:
+        role: administrator
       externalRole: runtime-external
   roles:
     - name: worker
@@ -36,6 +41,14 @@ spec:
       processControl: []
       unixStreams: []
     - name: runtime-external
+      files: []
+      execution: []
+      network:
+        socketControls: []
+        destinations: []
+      processControl: []
+      unixStreams: []
+    - name: administrator
       files: []
       execution: []
       network:

@@ -1,0 +1,138 @@
+podSelector:
+  matchLabels:
+    app: worker
+  matchExpressions: []
+mode: Protect
+containers:
+  - names: [worker]
+    kinds: [Application]
+    images:
+      - registry.example/worker@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+    applicationEntry:
+      executionRule: application-entry
+      role: application
+    additionalEntries:
+      - name: initialize-cache
+        kind: PostStart
+        executionRule: initialize-cache-entry
+        role: cache-initializer
+      - name: graceful-drain
+        kind: PreStop
+        executionRule: graceful-drain-entry
+        role: connection-drainer
+      - name: startup-check
+        kind: StartupProbe
+        executionRule: startup-probe-entry
+        role: startup-probe
+      - name: readiness-check
+        kind: ReadinessProbe
+        executionRule: readiness-probe-entry
+        role: readiness-probe
+      - name: liveness-check
+        kind: LivenessProbe
+        executionRule: liveness-probe-entry
+        role: liveness-probe
+    administrativeEntry:
+      role: administrator
+    externalRole: runtime-external
+roles:
+  - name: application
+    files:
+      - name: deny-application-secret
+        path: /run/secrets/application
+        recursive: true
+        operations: [OpenRead]
+        action: Deny
+    execution:
+      - name: application-entry
+        path: /bin/sh
+        recursive: false
+        operations: [Execute]
+        action: Allow
+    network:
+      socketControls: []
+      destinations: []
+    processControl: []
+    unixStreams: []
+  - name: cache-initializer
+    files: []
+    execution:
+      - name: initialize-cache-entry
+        path: /opt/worker/hooks/initialize-cache
+        recursive: false
+        operations: [Execute]
+        action: Allow
+    network:
+      socketControls: []
+      destinations: []
+    processControl: []
+    unixStreams: []
+  - name: connection-drainer
+    files: []
+    execution:
+      - name: graceful-drain-entry
+        path: /opt/worker/hooks/graceful-drain
+        recursive: false
+        operations: [Execute]
+        action: Allow
+    network:
+      socketControls: []
+      destinations: []
+    processControl: []
+    unixStreams: []
+  - name: startup-probe
+    files: []
+    execution:
+      - name: startup-probe-entry
+        path: /opt/worker/probes/startup
+        recursive: false
+        operations: [Execute]
+        action: Allow
+    network:
+      socketControls: []
+      destinations: []
+    processControl: []
+    unixStreams: []
+  - name: readiness-probe
+    files: []
+    execution:
+      - name: readiness-probe-entry
+        path: /opt/worker/probes/readiness
+        recursive: false
+        operations: [Execute]
+        action: Allow
+    network:
+      socketControls: []
+      destinations: []
+    processControl: []
+    unixStreams: []
+  - name: liveness-probe
+    files: []
+    execution:
+      - name: liveness-probe-entry
+        path: /opt/worker/probes/liveness
+        recursive: false
+        operations: [Execute]
+        action: Allow
+    network:
+      socketControls: []
+      destinations: []
+    processControl: []
+    unixStreams: []
+  - name: administrator
+    files: []
+    execution: []
+    network:
+      socketControls: []
+      destinations: []
+    processControl: []
+    unixStreams: []
+  - name: runtime-external
+    files: []
+    execution: []
+    network:
+      socketControls: []
+      destinations: []
+    processControl: []
+    unixStreams: []
+exceptionGrants: []

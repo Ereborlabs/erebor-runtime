@@ -267,6 +267,11 @@ pub enum EntryKindV1 {
     QualifiedCiContainerAction = 7,
     CheckpointRestoreUnknown = 8,
     UnknownExternal = 9,
+    DeclaredLifecyclePoststart = 10,
+    DeclaredLifecyclePrestop = 11,
+    DeclaredStartupProbe = 12,
+    DeclaredReadinessProbe = 13,
+    DeclaredLivenessProbe = 14,
 }
 
 #[repr(u8)]

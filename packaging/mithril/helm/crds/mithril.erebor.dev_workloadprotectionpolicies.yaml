@@ -30,6 +30,76 @@
                     "items": {
                       "maxProperties": 4096,
                       "properties": {
+                        "additionalEntries": {
+                          "items": {
+                            "maxProperties": 4096,
+                            "properties": {
+                              "executionRule": {
+                                "maxLength": 4096,
+                                "type": "string"
+                              },
+                              "kind": {
+                                "enum": [
+                                  "PostStart",
+                                  "PreStop",
+                                  "StartupProbe",
+                                  "ReadinessProbe",
+                                  "LivenessProbe"
+                                ],
+                                "maxLength": 4096,
+                                "type": "string"
+                              },
+                              "name": {
+                                "maxLength": 4096,
+                                "type": "string"
+                              },
+                              "role": {
+                                "maxLength": 4096,
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "executionRule",
+                              "kind",
+                              "name",
+                              "role"
+                            ],
+                            "type": "object"
+                          },
+                          "maxItems": 32,
+                          "type": "array"
+                        },
+                        "administrativeEntry": {
+                          "maxProperties": 4096,
+                          "properties": {
+                            "role": {
+                              "maxLength": 4096,
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "role"
+                          ],
+                          "type": "object"
+                        },
+                        "applicationEntry": {
+                          "maxProperties": 4096,
+                          "properties": {
+                            "executionRule": {
+                              "maxLength": 4096,
+                              "type": "string"
+                            },
+                            "role": {
+                              "maxLength": 4096,
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "executionRule",
+                            "role"
+                          ],
+                          "type": "object"
+                        },
                         "externalRole": {
                           "maxLength": 4096,
                           "type": "string"
@@ -42,10 +112,6 @@
                           "maxItems": 256,
                           "minItems": 1,
                           "type": "array"
-                        },
-                        "initialRole": {
-                          "maxLength": 4096,
-                          "type": "string"
                         },
                         "kinds": {
                           "items": {
@@ -73,9 +139,11 @@
                         }
                       },
                       "required": [
+                        "additionalEntries",
+                        "administrativeEntry",
+                        "applicationEntry",
                         "externalRole",
                         "images",
-                        "initialRole",
                         "kinds",
                         "names"
                       ],

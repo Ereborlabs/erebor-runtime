@@ -543,6 +543,11 @@ pub struct RoleDefinitionV1 {
 pub enum EntryKindV1 {
     ContainerStart,
     ExternalRuntimeUnknown,
+    DeclaredPostStart,
+    DeclaredPreStop,
+    DeclaredStartupProbe,
+    DeclaredReadinessProbe,
+    DeclaredLivenessProbe,
     QualifiedJoinedPurpose,
     ApprovedAdministrativeExec,
     RestoredUnknown,
@@ -559,6 +564,8 @@ pub struct EntryRoleAssignmentV1 {
     pub accepted_classifications: Vec<RootClassificationV1>,
     pub required_purpose_source_capability_id: Option<String>,
     pub required_administrative_exec_approval: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub admission_execution_rule_id: Option<String>,
     pub resulting_role_id: String,
     pub on_missing_or_unequal_ambiguity: AmbiguityDispositionV1,
     pub unknown_restricted_role_id: Option<String>,
@@ -571,6 +578,7 @@ pub struct EntryRoleAssignmentV1 {
 pub enum RootClassificationV1 {
     ExactInitial,
     ConservativeExternalUnknown,
+    DeclaredAdditionalEntry,
     QualifiedJoinedPurpose,
     ApprovedAdministrativeNextMatch,
     UnresolvedProtected,

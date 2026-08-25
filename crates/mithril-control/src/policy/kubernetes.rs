@@ -162,8 +162,44 @@ pub struct ContainerPolicyMatchV1 {
     pub kinds: Vec<KubernetesContainerKindV1>,
     #[schemars(length(min = 1, max = 256))]
     pub images: Vec<String>,
-    pub initial_role: String,
+    pub application_entry: KubernetesApplicationEntryV1,
+    #[schemars(length(max = 32))]
+    pub additional_entries: Vec<KubernetesAdditionalEntryV1>,
+    pub administrative_entry: KubernetesAdministrativeEntryV1,
     pub external_role: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct KubernetesApplicationEntryV1 {
+    pub execution_rule: String,
+    pub role: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct KubernetesAdditionalEntryV1 {
+    pub name: String,
+    pub kind: KubernetesAdditionalEntryKindV1,
+    pub execution_rule: String,
+    pub role: String,
+}
+
+#[derive(
+    Clone, Copy, Debug, Deserialize, Eq, JsonSchema, Ord, PartialEq, PartialOrd, Serialize,
+)]
+pub enum KubernetesAdditionalEntryKindV1 {
+    PostStart,
+    PreStop,
+    StartupProbe,
+    ReadinessProbe,
+    LivenessProbe,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct KubernetesAdministrativeEntryV1 {
+    pub role: String,
 }
 
 #[derive(
@@ -766,7 +802,13 @@ pub fn lower_kubernetes_policy(
     ]);
     let label_requirements = lower_label_selector(&resource.spec.pod_selector);
     let mut workload_selectors = Vec::with_capacity(resource.spec.containers.len());
-    let mut entry_role_assignments = Vec::with_capacity(resource.spec.containers.len() * 2);
+    let entry_capacity = resource
+        .spec
+        .containers
+        .iter()
+        .map(|container| container.additional_entries.len() + 3)
+        .sum();
+    let mut entry_role_assignments = Vec::with_capacity(entry_capacity);
     let mut role_selectors = BTreeMap::<String, BTreeSet<String>>::new();
     let mut role_entry_kinds = BTreeMap::<String, BTreeSet<EntryKindV1>>::new();
     for (index, container) in resource.spec.containers.iter().enumerate() {
@@ -796,24 +838,60 @@ pub fn lower_kubernetes_policy(
                     .collect(),
             ),
         });
-        for (suffix, role, entry_kind, classification, ambiguity, restricted) in [
+        let mut assignments = Vec::with_capacity(container.additional_entries.len() + 3);
+        assignments.push((
+            "application".to_owned(),
+            container.application_entry.role.clone(),
+            EntryKindV1::ContainerStart,
+            RootClassificationV1::ExactInitial,
+            AmbiguityDispositionV1::DenyProtectedEffects,
+            None,
+            Some(container.application_entry.execution_rule.clone()),
+            false,
+        ));
+        assignments.extend(container.additional_entries.iter().map(|entry| {
             (
-                "initial",
-                &container.initial_role,
-                EntryKindV1::ContainerStart,
-                RootClassificationV1::ExactInitial,
-                AmbiguityDispositionV1::DenyProtectedEffects,
-                None,
-            ),
-            (
-                "external",
-                &container.external_role,
-                EntryKindV1::ExternalRuntimeUnknown,
-                RootClassificationV1::ConservativeExternalUnknown,
+                format!("additional-{}", entry.name),
+                entry.role.clone(),
+                EntryKindV1::from(entry.kind),
+                RootClassificationV1::DeclaredAdditionalEntry,
                 AmbiguityDispositionV1::RestrictExternal,
                 Some(container.external_role.clone()),
-            ),
-        ] {
+                Some(entry.execution_rule.clone()),
+                false,
+            )
+        }));
+        assignments.push((
+            "administrative".to_owned(),
+            container.administrative_entry.role.clone(),
+            EntryKindV1::ApprovedAdministrativeExec,
+            RootClassificationV1::ApprovedAdministrativeNextMatch,
+            AmbiguityDispositionV1::DenyProtectedEffects,
+            None,
+            None,
+            true,
+        ));
+        assignments.push((
+            "external".to_owned(),
+            container.external_role.clone(),
+            EntryKindV1::ExternalRuntimeUnknown,
+            RootClassificationV1::ConservativeExternalUnknown,
+            AmbiguityDispositionV1::RestrictExternal,
+            Some(container.external_role.clone()),
+            None,
+            false,
+        ));
+        for (
+            suffix,
+            role,
+            entry_kind,
+            classification,
+            ambiguity,
+            restricted,
+            admission_execution_rule_id,
+            required_administrative_exec_approval,
+        ) in assignments
+        {
             role_selectors
                 .entry(role.clone())
                 .or_default()
@@ -830,8 +908,9 @@ pub fn lower_kubernetes_policy(
                 immutable_definition_digests: Vec::new(),
                 accepted_classifications: vec![classification],
                 required_purpose_source_capability_id: None,
-                required_administrative_exec_approval: false,
-                resulting_role_id: role.clone(),
+                required_administrative_exec_approval,
+                admission_execution_rule_id,
+                resulting_role_id: role,
                 on_missing_or_unequal_ambiguity: ambiguity,
                 unknown_restricted_role_id: restricted,
             });
@@ -1242,24 +1321,32 @@ fn validate_public_policy(spec: &WorkloadProtectionPolicySpec, policy_id: &str) 
         .iter()
         .map(|role| role.name.as_str())
         .collect::<BTreeSet<_>>();
-    let container_roles = spec.containers.iter().flat_map(|container| {
-        [
-            container.initial_role.as_str(),
-            container.external_role.as_str(),
-        ]
-    });
+    let container_roles = spec
+        .containers
+        .iter()
+        .flat_map(|container| {
+            [
+                container.application_entry.role.as_str(),
+                container.administrative_entry.role.as_str(),
+                container.external_role.as_str(),
+            ]
+            .into_iter()
+            .chain(
+                container
+                    .additional_entries
+                    .iter()
+                    .map(|entry| entry.role.as_str()),
+            )
+        })
+        .collect::<Vec<_>>();
     ensure!(
         !spec.containers.is_empty()
             && spec.containers.len() <= 256
             && !spec.roles.is_empty()
             && spec.roles.len() <= 256
             && role_names.len() == spec.roles.len()
-            && container_roles
-                .clone()
-                .all(|role| role_names.contains(role))
-            && role_names
-                .iter()
-                .all(|role| container_roles.clone().any(|used| used == *role)),
+            && container_roles.iter().all(|role| role_names.contains(role))
+            && role_names.iter().all(|role| container_roles.contains(role)),
         PolicyValidationSnafu {
             policy_id,
             code: "CFG_KUBERNETES_POLICY_ROLES",
@@ -1274,6 +1361,14 @@ fn validate_public_policy(spec: &WorkloadProtectionPolicySpec, policy_id: &str) 
                 && all_distinct(&container.names)
                 && all_distinct(&container.kinds)
                 && all_distinct(&container.images)
+                && container.additional_entries.len() <= 32
+                && all_distinct(
+                    &container
+                        .additional_entries
+                        .iter()
+                        .map(|entry| entry.name.as_str())
+                        .collect::<Vec<_>>()
+                )
                 && container.images.iter().all(|image| pinned_image(image)),
             PolicyValidationSnafu {
                 policy_id,
@@ -1410,6 +1505,45 @@ fn validate_public_policy(spec: &WorkloadProtectionPolicySpec, policy_id: &str) 
                     policy_id,
                     code: "CFG_KUBERNETES_UNIX_STREAM",
                     reason: format!("Unix-stream rule `{}` is invalid", rule.name),
+                }
+            );
+        }
+    }
+    for container in &spec.containers {
+        let mut referenced_rules = BTreeSet::new();
+        let mut entry_paths = BTreeSet::new();
+        let entries = std::iter::once((
+            container.application_entry.role.as_str(),
+            container.application_entry.execution_rule.as_str(),
+        ))
+        .chain(
+            container
+                .additional_entries
+                .iter()
+                .map(|entry| (entry.role.as_str(), entry.execution_rule.as_str())),
+        );
+        for (role_name, rule_name) in entries {
+            let rule = spec
+                .roles
+                .iter()
+                .find(|role| role.name == role_name)
+                .and_then(|role| role.execution.iter().find(|rule| rule.name == rule_name));
+            ensure!(
+                referenced_rules.insert(rule_name)
+                    && rule.is_some_and(|rule| {
+                        !rule.recursive
+                            && rule.action == KubernetesRuleActionV1::Allow
+                            && rule
+                                .operations
+                                .contains(&KubernetesExecutionOperationV1::Execute)
+                            && entry_paths.insert(rule.path.as_str())
+                    }),
+                PolicyValidationSnafu {
+                    policy_id,
+                    code: "CFG_KUBERNETES_ENTRY",
+                    reason: format!(
+                        "entry rule `{rule_name}` must be one unique non-recursive Allow Execute rule in role `{role_name}`"
+                    ),
                 }
             );
         }
@@ -1715,6 +1849,18 @@ impl From<KubernetesContainerKindV1> for ContainerKindV1 {
             KubernetesContainerKindV1::Sidecar => Self::Sidecar,
             KubernetesContainerKindV1::Application => Self::Application,
             KubernetesContainerKindV1::Ephemeral => Self::Ephemeral,
+        }
+    }
+}
+
+impl From<KubernetesAdditionalEntryKindV1> for EntryKindV1 {
+    fn from(value: KubernetesAdditionalEntryKindV1) -> Self {
+        match value {
+            KubernetesAdditionalEntryKindV1::PostStart => Self::DeclaredPostStart,
+            KubernetesAdditionalEntryKindV1::PreStop => Self::DeclaredPreStop,
+            KubernetesAdditionalEntryKindV1::StartupProbe => Self::DeclaredStartupProbe,
+            KubernetesAdditionalEntryKindV1::ReadinessProbe => Self::DeclaredReadinessProbe,
+            KubernetesAdditionalEntryKindV1::LivenessProbe => Self::DeclaredLivenessProbe,
         }
     }
 }

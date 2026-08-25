@@ -8,7 +8,12 @@ containers:
     kinds: [Application]
     images:
       - registry.example/converter@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-    initialRole: worker
+    applicationEntry:
+      executionRule: allow-python-execute
+      role: worker
+    additionalEntries: []
+    administrativeEntry:
+      role: worker
     externalRole: worker
 roles:
   - name: worker
