@@ -1243,6 +1243,33 @@ fn rollback_is_exact_signed_and_one_use() -> Result<(), Box<dyn std::error::Erro
 }
 
 #[test]
+fn artifact_revision_can_advance_one_profile_version_without_rollback(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let key = SigningKey::from_bytes(&[9; 32]);
+    let mut document = parse(VALID_POLICY)?;
+    document.metadata.profile_version = 2;
+    let current = signed(&document, seal_request(1, 2, None), &key)?;
+    let directory = tempfile::tempdir()?;
+    let platform = "ab".repeat(32);
+    let mut store = AntiRollbackStore::load(directory.path().join("rollback.json"))?;
+    let accepted = store.validate(&current, None, &platform, 20)?;
+    let pending = store.prepare_activation(&accepted, activation(2), None)?;
+    store.finalize_pending(&pending)?;
+
+    document.rules[0].priority += 1;
+    let next_artifact = signed(&document, seal_request(1, 3, None), &key)?;
+    let accepted = store.validate(&next_artifact, None, &platform, 20)?;
+    let pending = store.prepare_activation(&accepted, activation(3), Some(2))?;
+    store.finalize_pending(&pending)?;
+
+    let mut older = document;
+    older.metadata.profile_version = 1;
+    let older = signed(&older, seal_request(1, 4, None), &key)?;
+    assert!(store.validate(&older, None, &platform, 20).is_err());
+    Ok(())
+}
+
+#[test]
 fn anti_rollback_validation_is_non_mutating_and_legacy_state_is_conservative(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let key = SigningKey::from_bytes(&[7; 32]);

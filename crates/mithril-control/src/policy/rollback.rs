@@ -557,12 +557,13 @@ fn is_current(current: &AcceptedProfileV1, candidate: &impl CandidateIdentity) -
 }
 
 fn strictly_advances(current: &AcceptedProfileV1, candidate: &impl CandidateIdentity) -> bool {
+    // Target and terminal artifacts can advance within one Kubernetes source version.
     (candidate.sequence_epoch(), candidate.issuer_sequence())
         > (
             current.greatest_sequence_epoch,
             current.greatest_issuer_sequence,
         )
-        && candidate.profile_version() > current.greatest_profile_version
+        && candidate.profile_version() >= current.greatest_profile_version
 }
 
 fn is_exact_greatest(current: &AcceptedProfileV1, candidate: &impl CandidateIdentity) -> bool {
