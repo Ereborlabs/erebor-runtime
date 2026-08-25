@@ -22,6 +22,11 @@ spec:
       serviceAccountName: mithril-control
       automountServiceAccountToken: true
       terminationGracePeriodSeconds: 10
+      tolerations:
+        # Control must start before it can remove quarantine from an eligible Node.
+        - key: mithril.erebor.dev/not-ready
+          operator: Exists
+          effect: NoSchedule
 {{- with .Values.control.nodeSelector }}
       nodeSelector:
 {{ toYaml . | indent 8 }}

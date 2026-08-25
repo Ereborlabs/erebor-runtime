@@ -22,6 +22,8 @@ default_control_logs=$(helm template mithril "$chart_directory" \
   --values "$chart_directory/tests/values.yaml" \
   --show-only templates/control-deployment.yaml)
 grep -Fq 'value: "info"' <<<"$default_control_logs"
+grep -Fq 'key: mithril.erebor.dev/not-ready' <<<"$default_control_logs"
+grep -Fq 'effect: NoSchedule' <<<"$default_control_logs"
 
 node_logs=$(helm template mithril "$chart_directory" \
   --namespace mithril-system \
