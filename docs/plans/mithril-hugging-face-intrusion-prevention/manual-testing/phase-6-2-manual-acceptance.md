@@ -1,12 +1,14 @@
 # How To Manually Accept Phase 6.2
 
-Status: Not done. This procedure now targets the approved
+Status: Not done. This procedure targets the approved
 `WorkloadProtectionPolicy` and `WorkloadProtectionException` resources. The
-branch implements both resources and the current fixture flows. The current
-source is not physically tested. The earlier run used the superseded flattened
-resource and runtime-bootstrap model. The current source implements the
-approved `PreparedContainer` boundary and focused automated tests. It is not
-physically proved.
+current manual shell covers `initialRole`, `externalRole`, and one application
+entry. The approved application, additional, and administrative entry
+amendment is not implemented in the CRD, runtime, fixture, or manual shell.
+The target policy shape is in the
+[independent-entry planning example](../phase-6-2-entry-policy-example.yaml).
+Do not apply that planning fragment to the current CRD. The complete current
+physical procedure has not passed.
 
 Phase: [Control Policy And Evidence Convergence](../phase-6-2-control-policy-and-evidence-convergence.md)
 
@@ -25,13 +27,14 @@ reaches the production Control transaction before the node truncates its WAL.
 
 ## Current Physical Result
 
-The current source has not run this physical procedure. The previous
-provisioned two-node Kubernetes fixture passed readiness, typed
-RBAC review, CRD reconciliation, Pod mutation and bypass rejection, scheduler
-selection, exact selected-node delivery, policy activation, runtime binding,
-Control acknowledgement, and durable evidence intake. The procedure then
-failed protected container start under the superseded runtime boundary. The
-application process did not start.
+The current source has not run this complete physical procedure. A focused
+protected-start transaction passed with Kubernetes v1.35.5+k3s1 and containerd
+2.2.3-k3s1. It activated the `/bin/sh` application entry, allowed later
+BusyBox applet execs through that lineage, enforced the explicit file Deny,
+and denied a direct CRI external entry. It did not run the independent-entry
+amendment or the complete procedure. The earlier two-node attempt reached
+durable evidence intake and then failed protected start under the superseded
+runtime boundary.
 
 The previous result is a product blocker, not test noise. The validated
 architecture forbids a runtime-specific operation list and runtime-object
@@ -189,7 +192,16 @@ run.
     container, later external root, expired state, and replay reject. After
     `ACTIVE`, use one runtime-created pipe or handle. Verify that normal policy
     denies the use. Prove the application marker does not appear before
-    activation.
+    activation. After the approved entry amendment is implemented, run a
+    PostStart entry before and after application activation, a PreStop entry,
+    and startup, readiness, and liveness exec-probe entries. Verify that each
+    entry installs only its declared role. Verify that no entry inherits or
+    unions the application role. Run an ordinary `kubectl exec`, direct
+    `crictl exec`, and cgroup-entering task that match no declared entry.
+    Verify that each keeps the external or fail-closed role and is denied. Run
+    one approved administrative exec. Verify that it consumes its one-use
+    slot, installs only the administrative role, and uses only its applicable
+    exception for an explicit Deny.
 12. Create one `WorkloadProtectionException` for a named file grant, exact Pod
     UID, and matching container. Verify the request cannot exceed the grant
     duration or uses. Verify Control resolves the precompiled file cells and
@@ -276,6 +288,9 @@ run.
 | Exact delivery | Only the persisted scheduler-selected node receives the Pod target and candidate |
 | Protected start | The initial process remains held until exact policy and cgroup-binding activation |
 | Prepared container | Only the exact binding and initial runtime entry use the prepared state before one deadline. Runtime-created objects receive no authority. The first policy-approved application exec activates normal workload enforcement. |
+| Independent entry roles | The application, every declared lifecycle or exec-probe entry, and the approved administrative entry install only their referenced roles. No role inherits or unions the application role. |
+| External entry | An unmatched ordinary `kubectl exec`, direct `crictl exec`, or cgroup-entering task keeps the external or fail-closed role and denies before effect. |
+| Administrative entry | Only the signed one-use administrative slot installs the administrative role. An applicable exception can authorize only its exact compiled Deny. |
 | Gate failure | The runtime reports start failure at the bounded hook deadline and no application marker runs |
 | Runtime lifetime | Container restart and Pod UID replacement create new authority and cannot reuse the old binding |
 

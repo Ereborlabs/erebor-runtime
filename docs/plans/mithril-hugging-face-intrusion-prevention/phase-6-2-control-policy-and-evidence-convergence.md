@@ -11,7 +11,12 @@ authority. The approved correction uses a runtime-independent
 The direct stock-`runc` application-start regression now passes with the
 dynamic loader and libc absent from policy. The focused protected Kubernetes
 application-start transaction also passes. The complete physical procedure
-has not passed.
+has not passed. The current public policy has `initialRole` and `externalRole`
+and admits only one application entry. The approved remaining correction
+replaces `initialRole` with an explicit `applicationEntry`, adds a bounded set
+of declared additional entries and one approved administrative entry, and
+retains `externalRole` as the fail-closed fallback. This correction is planned
+but not implemented or tested.
 
 Master: [Mithril Hugging Face Intrusion Prevention](./README.md)
 
@@ -24,6 +29,8 @@ Manual acceptance: [Phase 6.2 runbook](./manual-testing/phase-6-2-manual-accepta
 Implementation review: [Phase 6.2 review guide](./phase-6-2-implementation-review.md)
 
 Environment setup: [shared setup guide](./manual-testing/environment-setup.md)
+
+Policy example: [independent entry roles](./phase-6-2-entry-policy-example.yaml)
 
 ## Purpose
 
@@ -164,11 +171,16 @@ Scheduler submits the Pod binding
   -> every runtime action in that binding can complete implementation-specific setup
   -> runtime-created objects gain no independent or inherited workload authority
   -> PREPARED remains until application activation or exact binding retirement
-  -> the first policy-approved application exec atomically changes PreparedContainer to Active
+  -> the first exec that matches applicationEntry.executionRule atomically changes PreparedContainer to Active
+  -> the application entry installs only applicationEntry.role
+  -> every later independent root starts with externalRole and no admitted-entry default
+  -> an exec that matches exactly one declared additional entry installs only that entry's role
+  -> an approved administrative exec consumes its one-use slot and installs only administrativeEntry.role
+  -> an unmatched or multiply matched external exec remains fail-closed
   -> explicit matching Deny decisions run before the admitted-entry default
   -> an applicable exception can authorize an explicitly denied action
   -> actions with no matching decision are allowed only for the exact admitted entry lineage
-  -> cgroup membership alone does not grant application authority
+  -> cgroup membership alone does not grant entry authority
 
 WorkloadProtectionException CREATE for the running Pod
   -> the API server authenticates and authorizes an exception writer
@@ -239,14 +251,49 @@ one declared storage version. Its structural `.spec` contains only:
 
 - one standard `podSelector`;
 - `mode: Observe | Protect`;
-- container matches by name, kind, digest-pinned immutable image reference,
-  initial role, and conservative external-runtime role;
+- container matches by name, kind, and digest-pinned immutable image reference;
+- one `applicationEntry` with one named execution-rule reference and one role;
+- a bounded `additionalEntries` list with a unique name, closed entry kind,
+  named execution-rule reference, and role for each entry;
+- one `administrativeEntry` role and one conservative `externalRole`;
 - named roles with canonical-path file rules, execution rules, explicit-address
   network rules, process-control rules, and Unix-stream role relationships; and
 - named bounded `exceptionGrants` that refer only to named file rules.
 
-Every Pod container must match exactly one container entry. Reject an unmatched
-or multiply matched container. Control derives cluster, namespace,
+The closed additional-entry kinds are `PostStart`, `PreStop`, `StartupProbe`,
+`ReadinessProbe`, and `LivenessProbe`. Probe entry kinds apply only to an exec
+probe. HTTP, TCP, gRPC, and lifecycle Sleep actions do not create an
+in-container task. OCI prestart and the two qualified `createRuntime` calls are
+runtime bootstrap activity under `PreparedContainer`. OCI poststop is runtime
+cleanup and is not a workload entry.
+
+Each `executionRule` field refers to one existing named rule in the referenced
+role's unchanged `execution` list. The referenced rule must be a
+non-recursive `Allow` rule that contains `Execute`. Only a rule referenced by
+an entry can admit an independent root. Other execution rules remain effect
+rules for an already admitted lineage. Reject a missing rule, a rule in
+another role, a duplicate entry or rule reference, and a configuration in
+which one exec matches more than one declared entry.
+
+Each entry installs only its referenced role. Roles do not inherit, union, or
+fall back to the application role. A native descendant keeps the role of its
+creator entry. The external role is the pre-admission and unmatched-entry
+role. It never receives the admitted-entry default, and its execution rules
+cannot admit an external exec. Only a declared entry match or the approved
+administrative slot can admit that exec. The administrative role is installed
+only after the existing signed one-use administrative slot matches and is
+consumed.
+
+Stock CRI does not prove that a matching exec is a PostStart, PreStop, or
+probe request. The closed `kind` records the policy declaration. Kernel
+evidence keeps the observed purpose as `UNKNOWN` and records the matched entry
+ID separately. An ordinary runtime exec that does not match a declared entry
+remains denied. An ordinary runtime exec with the same observable match as a
+declared entry cannot be distinguished on the no-patch path. Record this
+residual ambiguity and do not claim a purpose-to-task join.
+
+Every Pod container must match exactly one container policy match. Reject an
+unmatched or multiply matched container. Control derives cluster, namespace,
 ServiceAccount, controller, Pod UID, container, selected Node, node UID, and
 boot facts from Kubernetes. None of these derived facts is a user selector.
 
@@ -311,12 +358,12 @@ API-server records. A CRD field, label, annotation, or status cannot select its
 own tenant.
 
 Treat both CRDs, source revisions, policy rollout, policy candidate, exception
-candidate, acknowledgement, evidence batch, and intake-receipt types as an additive
-architecture amendment. Update the exact-type closure and canonical goldens,
-and rerun the affected Phase 0 schema checks. The separately approved
-`PreparedContainer` transition is the only BPF ABI amendment in this phase. Do
-not rewrite a historical phase result. Phase 6.2 and later results bind the
-amended architecture and ABI digest.
+candidate, acknowledgement, evidence batch, and intake-receipt types as an
+additive architecture amendment. Update the exact-type closure and canonical
+goldens, and rerun the affected Phase 0 schema checks. The separately approved
+`PreparedContainer` transition and the per-entry admission state are the BPF
+ABI amendments in this phase. Do not rewrite a historical phase result. Phase
+6.2 and later results bind the amended architecture and ABI digest.
 
 ### D6.2.2 — Desired-state reconciliation and signing
 
@@ -618,9 +665,10 @@ runtime path for the physical manual result.
 
 ### D6.2.13 — Prepared-container runtime boundary
 
-Extend the existing node binding owner. Do not add a policy watcher, public
-CRD field, runtime-selected permission, runtime-specific operation list, or
-generic process exemption. The NRI `CreateContainer` callback injects both
+Extend the existing node binding owner. D6.2.1 owns the approved public entry
+fields. Do not add a policy watcher, runtime-selected permission,
+runtime-specific operation list, or generic process exemption. The NRI
+`CreateContainer` callback injects both
 ordered Mithril `createRuntime` hooks. The first hook sends immutable
 container, cgroup, image, and Pod facts to the node. The node keeps one
 bounded, expiring staged record and grants no workload authority at this step.
@@ -660,26 +708,49 @@ by a `runc`, `crun`, or `youki` syscall or operation sequence. Do not record
 anonymous files, pipes, Unix endpoints, root handles, network destinations, or
 other runtime-created objects as independent authority.
 
-`EXEC_PENDING` reserves one exact task across the multi-pass exec path and
-returns to `PREPARED` only when that exec fails before commit. A
-runtime-internal exec that does not satisfy the signed workload policy remains
-in `PREPARED`. It does not activate workload authority. A task outside the
-exact binding, container lifetime, or node session cannot use the prepared
-state. The binding state is a trust-boundary state. It is not a workload policy
+`EXEC_PENDING` reserves one exact task across the application exec path and
+returns to `PREPARED` only when that exec fails before commit. The existing
+identity lifecycle owner also keeps bounded per-task pending state for a
+declared additional entry and the approved administrative path. A
+runtime-internal exec that does not satisfy an entry match remains in
+`PREPARED`. It does not activate workload authority. A task outside the exact
+binding, container lifetime, or node session cannot use the prepared state.
+The binding state is a trust-boundary state. It is not a workload policy
 permission, exception, or transferable object authority.
 
-When the executable's container-visible path satisfies the active signed
-policy, atomically reserve the transition from any task in the exact binding
-and commit `ACTIVE` with the normal workload execution identity. This binding
-transition removes prepared authority from every task in that binding. A
-failed exec restores only its own reservation. After `ACTIVE`, every file,
-network, IPC, process, device, privilege, mount, and exec effect checks
-explicit signed decisions first. An explicit matching `DENY` blocks the action
-unless an applicable exception authorizes it. A missing decision allows the
-action only when the actor still has the exact admitted entry identity stored
-in the active binding. A task that enters the cgroup with no identity, an
-external identity, or a different entry remains fail-closed. Runtime-created
-objects have no residual prepared-state grant.
+When the executable's container-visible path satisfies
+`applicationEntry.executionRule`, atomically reserve the transition from any
+task in the exact binding and commit `ACTIVE` with the application entry's
+role. This binding transition removes prepared authority from every task in
+that binding. A failed exec restores only its own reservation.
+
+A PostStart exec can occur before or after application activation. If it
+matches one declared additional entry during `PREPARED`, record its exact
+entry identity and independent role before exec commit. Prepared authority
+still controls its effects until the binding becomes `ACTIVE`. If the task is
+still live after activation, it uses only its declared role. A PreStop or exec
+probe that starts after activation first receives `externalRole`. At the exec
+boundary, an exact match to one additional entry can reserve the task. A
+successful exec commits that entry and installs only its role. A failed exec
+restores the restricted external state. No match or more than one match
+denies.
+
+The approved administrative path remains separate. The external root first
+receives `externalRole`. Only the existing signed, bounded, one-use next-match
+slot can reserve it as the administrative entry. Successful exec installs
+`administrativeEntry.role`. An applicable compiled exception can authorize
+the exact denied action. An ordinary `kubectl exec` or direct `crictl exec`
+cannot install the administrative role.
+
+After `ACTIVE`, every file, network, IPC, process, device, privilege, mount,
+and exec effect checks explicit signed decisions first. An explicit matching
+`DENY` blocks the action unless an applicable exception authorizes it. A
+missing decision allows the action only when the actor has one committed
+application, declared additional, or approved administrative entry identity.
+The actor uses only that entry's installed role. A task that enters the cgroup
+with no identity, an unmatched external identity, or an unresolved identity
+remains fail-closed. Runtime-created objects have no residual prepared-state
+grant.
 Expiry, state mismatch, restart ambiguity, or readback failure denies the
 effect and keeps node admission readiness closed until recovery proves one
 exact state.
@@ -706,6 +777,13 @@ created in this phase.
 - Both CRD structural schemas, strict field validation, version, unknown-field,
   size, count, namespace, immutability, cross-reference, and RBAC behavior
   tests.
+- Application, additional-entry, administrative-entry, and external-role
+  schema tests. Cover missing roles and rules, cross-role references,
+  duplicate names and references, unsupported kinds, non-`Allow` entry rules,
+  recursive entry rules, missing `Execute`, and multiply matched entries.
+- Lowering tests must prove that each entry receives only its named role and
+  that no role inherits or unions the application role. Native descendants
+  must retain the role of their creator entry.
 - Policy-spec-to-internal-policy golden equality and deterministic
   compile/sign tests. The public schema must contain no internal-only field.
 - Policy create, update, duplicate event, stale UID, delete/recreate, forced
@@ -758,6 +836,15 @@ created in this phase.
   expired state cannot use the prepared boundary. Tests must also show that
   the first signed-policy-approved exec activates normal enforcement and that
   no runtime-created object carries authority across that transition.
+- PostStart-before-application, PostStart-after-application, PreStop, startup
+  probe, readiness probe, and liveness probe exec tests. Each successful match
+  must install only its declared role. An unmatched ordinary `kubectl exec`,
+  direct `crictl exec`, cgroup-entering task, failed exec, and ambiguous entry
+  match must remain fail-closed.
+- Approved administrative exec tests must prove one-use slot consumption,
+  installation of only `administrativeEntry.role`, explicit Deny precedence,
+  applicable exception authorization, and denial of an ordinary exec without
+  the slot.
 - Phase 6.2 owns no new Appendix C fixture ID. These named phase tests remain
   mandatory and Phase 11 must run them for each advertised Kubernetes mode.
 
@@ -784,6 +871,11 @@ created in this phase.
   does not choose the scheduler's exact Node.
 - A matching protected Pod cannot start its initial process until the selected
   node has activated its exact candidate and cgroup binding.
+- The application entry, every declared additional entry, and the approved
+  administrative entry install independent roles. No entry inherits or unions
+  the application role.
+- `externalRole` remains the role for an unmatched independent root and never
+  receives the admitted-entry default.
 
 ## Excluded
 
@@ -807,15 +899,15 @@ privileged or unmatched workload floor.
 ## Phase Result
 
 ```text
-State: Not done. The corrected policy and exception implementation, PreparedContainer boundary, admitted-entry default, package, automated fixture, and independent manual example are present. The direct stock-runc and protected Kubernetes application-start transactions passed. The remaining protected Kubernetes physical procedure is not complete.
-Implemented deliverable scope: D6.2.1 through D6.2.4 are implemented and automated. D6.2.5 has automated intake and WAL proof but lacks the physical failure variants. D6.2.6 through D6.2.13 have implemented owners and automated or rendered proof, but their required current physical results are not done.
+State: Not done. The current policy and exception implementation, PreparedContainer boundary, single application-entry default, package, automated fixture, and independent manual example are present. The direct stock-runc and protected Kubernetes application-start transactions passed. The approved independent-entry CRD and runtime amendment is documented with a planning example. It is not implemented or tested. The remaining protected Kubernetes physical procedure is not complete.
+Implemented deliverable scope: D6.2.1 through D6.2.4 are implemented and automated for the current `initialRole` and `externalRole` API. The approved `applicationEntry`, `additionalEntries`, and `administrativeEntry` amendment is not implemented. D6.2.5 has automated intake and WAL proof but lacks the physical failure variants. D6.2.6 through D6.2.13 have implemented owners for the current single-application-entry behavior and automated or rendered proof, but their required current physical results and the new per-entry behavior are not done.
 Files and durable owners changed: the branch contains both namespaced CRDs and their Helm package; PolicyDesiredStateOwner; PolicyRolloutOwner; the exception desired-state path; TrustBundleOwner; KubernetesNodeReadinessOwner; KubernetesAdmissionOwner; KubernetesWorkloadInventoryOwner; one append-only ControlStore for policy, exception, node session, trust, rollout, acknowledgement, evidence, coverage, and cursor transactions; generated NodePolicy and ControlHealth services; NodePolicyDeliveryOwner; ExceptionAuthorityOwner; RuntimeAdmissionClient; RuntimeAdmissionServer; ScheduledRuntimeBindingV1; bounded runtime-fact staging in WorkloadBindingOwner; the node activation and cgroup-binding paths; the stateless two-stage OCI adapter; the PreparedContainer binding ABI and BPF transition owner; hook ownership and cleanup; the two-node fixture; and the independent manual example.
 Upstream-adoption dossier IDs used: none.
-Fixture cases and exact physical results: the direct stock-runc application-start lane passed with runc 1.3.4. It recorded PREPARED to ACTIVE, the path-approved application entry, an application-default dependency read, no exact executable object, libc and the ELF loader absent from policy, successful exit, and owned-resource cleanup. The focused protected-start lane passed with Kubernetes v1.35.5+k3s1 and containerd 2.2.3-k3s1. It replaced Mithril and the protected Pod in the retained two-VM cluster. The policy contained `/bin/sh` as its sole execution selector. Fresh Pod UID `078ffde6-6ef9-4268-a7da-3a398e2f205e` ran as container `05bb1cc19d8b5bed04ae9058053cd907effcb18956ab65162f67f75e2daa707e` on `ubuntu-b1bfec97`. Policy revision `5c8ab1236e1d26a7bb8ec0b9bed7bda91bdabfebd669c41533c244da957afb5d` activated binding `0044aed1-8c6e-877a-a0e6-84fffdaf54c9`. The exact admitted entry reached ACTIVE. Later BusyBox applet execs received `APPLICATION_DEFAULT_ALLOW` without an exact object key or composite atom. The explicit matching file Deny blocked its target. A direct CRI exec into the same container cgroup failed with `UNSUPPORTED_OBJECT`, `DENIED_BEFORE_EFFECT`, and kernel result `-13`. It did not create its marker. The result is `/tmp/phase-6-2-shell-only-entry-20260825-run13/protected-start-result.json`. The remaining two-node fixture and manual example cases are Not run. The prior old-API Kubernetes run remains partial historical evidence.
-Automated verification: PreparedContainer ABI, application-default ABI, compiled BPF object, Kubernetes lowering, node observation, VM-harness behavior, diff checks, and the full current-source workspace gate passed.
+Fixture cases and exact physical results: the direct stock-runc application-start lane passed with runc 1.3.4. It recorded PREPARED to ACTIVE, the path-approved application entry, an application-default dependency read, no exact executable object, libc and the ELF loader absent from policy, successful exit, and owned-resource cleanup. The focused protected-start lane passed with Kubernetes v1.35.5+k3s1 and containerd 2.2.3-k3s1. It replaced Mithril and the protected Pod in the retained two-VM cluster. The policy contained `/bin/sh` as its sole execution selector. Fresh Pod UID `078ffde6-6ef9-4268-a7da-3a398e2f205e` ran as container `05bb1cc19d8b5bed04ae9058053cd907effcb18956ab65162f67f75e2daa707e` on `ubuntu-b1bfec97`. Policy revision `5c8ab1236e1d26a7bb8ec0b9bed7bda91bdabfebd669c41533c244da957afb5d` activated binding `0044aed1-8c6e-877a-a0e6-84fffdaf54c9`. The exact admitted entry reached ACTIVE. Later BusyBox applet execs received `APPLICATION_DEFAULT_ALLOW` without an exact object key or composite atom. The explicit matching file Deny blocked its target. A direct CRI exec into the same container cgroup failed with `UNSUPPORTED_OBJECT`, `DENIED_BEFORE_EFFECT`, and kernel result `-13`. It did not create its marker. The result is `/tmp/phase-6-2-shell-only-entry-20260825-run13/protected-start-result.json`. These results do not prove declared additional entries or the administrative entry. The remaining two-node fixture and manual example cases are Not run. The prior old-API Kubernetes run remains partial historical evidence.
+Automated verification: PreparedContainer ABI, application-default ABI, compiled BPF object, Kubernetes lowering, node observation, VM-harness behavior, diff checks, and the full current-source workspace gate passed for the current single-application-entry source. The new entry schema and runtime behavior have no implementation proof.
 Platform/kernel/runtime manifests: the Helm package contains both generated closed CRDs, separate writer and Control RBAC, the exact DaemonSet reader Role, the Control Deployment and Service, fail-closed admission webhooks, the node DaemonSet, two atomically owned `createRuntime` hook registrations, and bounded uninstall cleanup. The protected-start result records Kubernetes v1.35.5+k3s1, containerd 2.2.3-k3s1, the exact live Pod, container, node, policy, binding, task, state, and entry identities, the later application exec result, and the external-entry denial. The VMs and K3s cluster remain available. The successful run keeps its current Mithril release and Pod; the next reuse run replaces them.
 Performance/capacity results: no new benchmark. Runtime stages are limited to 128 records and 30 seconds. PreparedContainer is designed for one exact binding and one application activation. Evidence gRPC messages are limited to 4 MiB. Policy gRPC messages are limited to 128 KiB. The pending evidence window is limited to 4,096 records. Health reports fixed counts and booleans only.
-Unsupported/degraded paths: the remaining protected Kubernetes lifecycle, evidence failure, watch-compaction, network-partition, and storage-outage cases are Not run. Phase 7 graph and finding behavior is not present.
-Remaining work in this phase: run the protected Kubernetes procedure through exception authorization, policy terminal cleanup, Node UID replacement, host epoch, watch, evidence failure, restart, uninstall, and final cleanup cases.
+Unsupported/degraded paths: declared PostStart, PreStop, exec-probe, and approved administrative entry roles are not implemented. The remaining protected Kubernetes lifecycle, evidence failure, watch-compaction, network-partition, and storage-outage cases are Not run. Phase 7 graph and finding behavior is not present.
+Remaining work in this phase: implement and test the approved entry schema, independent role lowering, per-entry admission state, lifecycle entry transitions, administrative role transition, and external-entry denial. Then run the protected Kubernetes procedure through those entry cases, exception authorization, policy terminal cleanup, Node UID replacement, host epoch, watch, evidence failure, restart, uninstall, and final cleanup cases.
 Next phase not authorized: yes.
 ```
