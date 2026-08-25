@@ -85,7 +85,6 @@ struct PolicyControlWorkV1 {
     pending: bool,
     phase: PolicyControlPhaseV1,
     rejected_acknowledgement: Option<PolicyActivationAcknowledgement>,
-    reconnect_after_acknowledgement: bool,
     exception_observed: bool,
     rejected_candidate: Option<String>,
 }
@@ -558,7 +557,6 @@ impl NodeChassis {
             .is_none_or(|capability| capability.state != "UNHEALTHY");
         let mut control_disconnected_since = tokio::time::Instant::now();
         let mut run_error = None;
-        let mut evidence_error_reported = false;
         let mut control_failure_reported = false;
         let mut healthy_identity_capabilities = self.registration.capabilities.clone();
         let mut healthy_effect_prevention_claims =
@@ -626,7 +624,6 @@ impl NodeChassis {
                 }
             };
             self.trust = trust_candidate;
-            let mut reconnect_immediately = false;
             match connection {
                 Ok(mut connection) => {
                     erebor_telemetry::info!(
@@ -718,7 +715,7 @@ impl NodeChassis {
                             }
                             _instant = evidence_upload.tick() => {
                                 if self.observations.evidence_errors() > 0 {
-                                    if !evidence_error_reported {
+                                    if evidence_healthy {
                                         erebor_telemetry::warn!(
                                             "durable evidence became unhealthy",
                                             node_id = %self.config.node_id,
@@ -727,15 +724,28 @@ impl NodeChassis {
                                                 .unwrap_or_else(|| "the exact error is unavailable".to_owned()),
                                             retry = %"after_reconciliation"
                                         );
-                                        evidence_error_reported = true;
+                                        evidence_healthy = false;
+                                        close_evidence_claims(&mut self.registration);
+                                        self.readiness.send_modify(|readiness| {
+                                            readiness.admission_ready = false;
+                                            readiness.effect_prevention_claims_enabled = false;
+                                        });
+                                        if let Err(error) = self
+                                            .await_control_rpc(
+                                                connection.report_readiness(kernel_healthy, false),
+                                            )
+                                            .await
+                                        {
+                                            erebor_telemetry::warn!(
+                                                error;
+                                                "failed to close Mithril node readiness",
+                                                node_id = %self.config.node_id,
+                                                retry = %"reconnect"
+                                            );
+                                            break;
+                                        }
                                     }
-                                    evidence_healthy = false;
-                                    close_evidence_claims(&mut self.registration);
-                                    self.readiness.send_modify(|readiness| {
-                                        readiness.admission_ready = false;
-                                        readiness.effect_prevention_claims_enabled = false;
-                                    });
-                                    break;
+                                    continue;
                                 }
                                 if !evidence_in_flight {
                                     if let Some(batch) = self.observations.next_evidence_batch() {
@@ -831,7 +841,6 @@ impl NodeChassis {
                                     PolicyControlStepV1::Continue => {}
                                     PolicyControlStepV1::Idle => policy_work.pending = false,
                                     PolicyControlStepV1::Reconnect => {
-                                        reconnect_immediately = true;
                                         break;
                                     }
                                     PolicyControlStepV1::Activated => {
@@ -921,43 +930,88 @@ impl NodeChassis {
                                                 evidence_ready = %evidence_healthy,
                                                 identity_ready = %identity_healthy
                                             );
-                                            reconnect_immediately = true;
-                                            break;
+                                            if let Err(error) = self
+                                                .await_control_rpc(connection.report_readiness(
+                                                    kernel_healthy,
+                                                    kernel_healthy
+                                                        && identity_healthy
+                                                        && evidence_healthy,
+                                                ))
+                                                .await
+                                            {
+                                                erebor_telemetry::warn!(
+                                                    error;
+                                                    "failed to restore Mithril node readiness",
+                                                    node_id = %self.config.node_id,
+                                                    retry = %"reconnect"
+                                                );
+                                                break;
+                                            }
                                         }
                                     }
                                     ReconciliationOutcome::EvidenceUnhealthy(reason) => {
-                                        erebor_telemetry::warn!(
-                                            "evidence reconciliation became unhealthy",
-                                            node_id = %self.config.node_id,
-                                            error = %reason,
-                                            retry = %"after_reconciliation"
-                                        );
-                                        evidence_healthy = false;
-                                        close_evidence_claims(&mut self.registration);
-                                        self.readiness.send_modify(|readiness| {
-                                            readiness.admission_ready = false;
-                                            readiness.effect_prevention_claims_enabled = false;
-                                        });
-                                        break;
+                                        if evidence_healthy {
+                                            erebor_telemetry::warn!(
+                                                "evidence reconciliation became unhealthy",
+                                                node_id = %self.config.node_id,
+                                                error = %reason,
+                                                retry = %"after_reconciliation"
+                                            );
+                                            evidence_healthy = false;
+                                            close_evidence_claims(&mut self.registration);
+                                            self.readiness.send_modify(|readiness| {
+                                                readiness.admission_ready = false;
+                                                readiness.effect_prevention_claims_enabled = false;
+                                            });
+                                            if let Err(error) = self
+                                                .await_control_rpc(
+                                                    connection.report_readiness(kernel_healthy, false),
+                                                )
+                                                .await
+                                            {
+                                                erebor_telemetry::warn!(
+                                                    error;
+                                                    "failed to close Mithril node readiness",
+                                                    node_id = %self.config.node_id,
+                                                    retry = %"reconnect"
+                                                );
+                                                break;
+                                            }
+                                        }
                                     }
                                     ReconciliationOutcome::IdentityUnhealthy { owner, reason } => {
-                                        erebor_telemetry::warn!(
-                                            "identity reconciliation became unhealthy",
-                                            node_id = %self.config.node_id,
-                                            owner = %owner,
-                                            error = %reason,
-                                            retry = %"after_reconciliation"
-                                        );
-                                        identity_healthy = false;
-                                        close_identity_claims(&mut self.registration);
-                                        self.readiness.send_replace(NodeReadinessV1 {
-                                            kernel_ready: kernel_healthy,
-                                            identity_ready: false,
-                                            control_ready: true,
-                                            admission_ready: false,
-                                            effect_prevention_claims_enabled: false,
-                                        });
-                                        break;
+                                        if identity_healthy {
+                                            erebor_telemetry::warn!(
+                                                "identity reconciliation became unhealthy",
+                                                node_id = %self.config.node_id,
+                                                owner = %owner,
+                                                error = %reason,
+                                                retry = %"after_reconciliation"
+                                            );
+                                            identity_healthy = false;
+                                            close_identity_claims(&mut self.registration);
+                                            self.readiness.send_replace(NodeReadinessV1 {
+                                                kernel_ready: kernel_healthy,
+                                                identity_ready: false,
+                                                control_ready: true,
+                                                admission_ready: false,
+                                                effect_prevention_claims_enabled: false,
+                                            });
+                                            if let Err(error) = self
+                                                .await_control_rpc(
+                                                    connection.report_readiness(kernel_healthy, false),
+                                                )
+                                                .await
+                                            {
+                                                erebor_telemetry::warn!(
+                                                    error;
+                                                    "failed to close Mithril node readiness",
+                                                    node_id = %self.config.node_id,
+                                                    retry = %"reconnect"
+                                                );
+                                                break;
+                                            }
+                                        }
                                     }
                                     ReconciliationOutcome::KernelUnhealthy(reason) => {
                                         erebor_telemetry::error!(
@@ -992,12 +1046,6 @@ impl NodeChassis {
                     control_failure_reported = true;
                 }
             }
-            if reconnect_immediately {
-                erebor_telemetry::debug!(
-                    "reconnecting to Mithril Control after a durable transition",
-                    node_id = %self.config.node_id
-                );
-            }
             if let (Some(administrative), Some(host)) =
                 (self.administrative.as_mut(), self.host.as_mut())
             {
@@ -1019,11 +1067,7 @@ impl NodeChassis {
                 ),
             });
             control_disconnected_since = tokio::time::Instant::now();
-            let reconnect = tokio::time::sleep(if reconnect_immediately {
-                Duration::ZERO
-            } else {
-                backoff
-            });
+            let reconnect = tokio::time::sleep(backoff);
             tokio::pin!(reconnect);
             loop {
                 tokio::select! {
@@ -1095,14 +1139,10 @@ impl NodeChassis {
                     }
                 }
             }
-            backoff = if reconnect_immediately {
-                self.config.control.reconnect_minimum()
-            } else {
-                cmp::min(
-                    backoff.saturating_mul(2),
-                    self.config.control.reconnect_maximum(),
-                )
-            };
+            backoff = cmp::min(
+                backoff.saturating_mul(2),
+                self.config.control.reconnect_maximum(),
+            );
         }
         let _result = self
             .observations
@@ -1763,7 +1803,9 @@ impl NodeChassis {
             };
             self.policy_delivery
                 .acknowledge_control(&acknowledgement, &accepted)?;
-            return Ok(PolicyControlStepV1::Idle);
+            self.policy_delivery.begin_control_session();
+            work.rejected_candidate = None;
+            return Ok(PolicyControlStepV1::Continue);
         }
         if work.phase == PolicyControlPhaseV1::Transfer {
             if let Some(acknowledgement) = self.policy_delivery.pending_acknowledgement() {
@@ -1779,9 +1821,7 @@ impl NodeChassis {
                 {
                     self.reconcile_terminal_policy_cleanup()?;
                 }
-                if work.reconnect_after_acknowledgement {
-                    return Ok(PolicyControlStepV1::Reconnect);
-                }
+                self.policy_delivery.begin_control_session();
                 work.phase = PolicyControlPhaseV1::Exception;
                 return Ok(PolicyControlStepV1::Continue);
             }
@@ -1840,7 +1880,6 @@ impl NodeChassis {
                     };
                     // Local readback completes before a later step sends the ACTIVE ACK.
                     self.activate_control_policy(&bundle, prepared, evidence_healthy)?;
-                    work.reconnect_after_acknowledgement = true;
                     return Ok(PolicyControlStepV1::Activated);
                 }
             }
@@ -1873,7 +1912,10 @@ impl NodeChassis {
             };
             self.policy_delivery
                 .acknowledge_exception_control(&candidate_content_id)?;
-            return Ok(PolicyControlStepV1::Reconnect);
+            work.phase = PolicyControlPhaseV1::Transfer;
+            work.exception_observed = false;
+            self.policy_delivery.begin_control_session();
+            return Ok(PolicyControlStepV1::Continue);
         }
         let node_boot_id = self.node_boot_id.to_be_bytes();
         let host = self.host.as_ref().ok_or_else(|| {

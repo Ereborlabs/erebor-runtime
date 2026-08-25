@@ -19,7 +19,7 @@ use mithril_control::{
 use prost::Message as _;
 use sha2::{Digest as _, Sha256};
 use snafu::ResultExt as _;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::{
     transport::{Certificate, Channel, ClientTlsConfig, Endpoint, Identity},
@@ -50,11 +50,23 @@ pub struct ControlConnection {
     evidence: NodeEvidenceClient<Channel>,
     coverage: NodeCoverageClient<Channel>,
     policy: NodePolicyClient<Channel>,
+    readiness_updates: mpsc::Sender<ReadinessUpdate>,
     readiness_failure: mpsc::Receiver<crate::Error>,
     readiness_renewal: tokio::task::JoinHandle<()>,
     queued: std::collections::VecDeque<NodeControlMessage>,
     resolution_closed: bool,
     arm_closed: bool,
+}
+
+#[derive(Clone, Copy)]
+struct ControlReadinessV1 {
+    kernel_ready: bool,
+    admission_ready: bool,
+}
+
+struct ReadinessUpdate {
+    readiness: ControlReadinessV1,
+    result: oneshot::Sender<Result<()>>,
 }
 
 pub enum AdministrativeControlRequest {
@@ -138,16 +150,27 @@ impl NodeControlConnector {
         )
         .await?;
         bounded_response(NodeRegistryClient::new(channel.clone()).report_readiness(
-            bounded_request(readiness_request(&identity, kernel_ready, admission_ready)),
+            bounded_request(readiness_request(
+                &identity,
+                ControlReadinessV1 {
+                    kernel_ready,
+                    admission_ready,
+                },
+            )),
         ))
         .await?;
 
+        let readiness = ControlReadinessV1 {
+            kernel_ready,
+            admission_ready,
+        };
+        let (readiness_updates, readiness_update_input) = mpsc::channel(1);
         let (readiness_failure_output, readiness_failure) = mpsc::channel(1);
         let readiness_renewal = tokio::spawn(renew_readiness(
             NodeRegistryClient::new(channel.clone()),
             identity.clone(),
-            kernel_ready,
-            admission_ready,
+            readiness,
+            readiness_update_input,
             readiness_failure_output,
         ));
 
@@ -204,6 +227,7 @@ impl NodeControlConnector {
             policy: NodePolicyClient::new(channel)
                 .max_decoding_message_size(MAX_POLICY_GRPC_MESSAGE_BYTES)
                 .max_encoding_message_size(MAX_POLICY_GRPC_MESSAGE_BYTES),
+            readiness_updates,
             readiness_failure,
             readiness_renewal,
             queued: std::collections::VecDeque::new(),
@@ -235,6 +259,31 @@ impl NodeControlConnector {
 }
 
 impl ControlConnection {
+    pub async fn report_readiness(&self, kernel_ready: bool, admission_ready: bool) -> Result<()> {
+        let (result, accepted) = oneshot::channel();
+        self.readiness_updates
+            .send(ReadinessUpdate {
+                readiness: ControlReadinessV1 {
+                    kernel_ready,
+                    admission_ready,
+                },
+                result,
+            })
+            .await
+            .map_err(|_closed| {
+                ControlProtocolSnafu {
+                    reason: String::from("Control readiness owner stopped"),
+                }
+                .build()
+            })?;
+        accepted.await.map_err(|_closed| {
+            ControlProtocolSnafu {
+                reason: String::from("Control readiness update was not acknowledged"),
+            }
+            .build()
+        })?
+    }
+
     pub async fn policy_inventory(
         &mut self,
         active_candidate_content_id: Option<&str>,
@@ -494,15 +543,14 @@ impl Drop for ControlConnection {
 
 fn readiness_request(
     identity: &NodeSessionContext,
-    kernel_ready: bool,
-    admission_ready: bool,
+    readiness: ControlReadinessV1,
 ) -> NodeReadinessRequest {
     NodeReadinessRequest {
         session: Some(identity.clone()),
         report: Some(NodeReadinessReport {
-            kernel_ready,
+            kernel_ready: readiness.kernel_ready,
             control_ready: true,
-            admission_ready,
+            admission_ready: readiness.admission_ready,
         }),
     }
 }
@@ -510,8 +558,8 @@ fn readiness_request(
 async fn renew_readiness(
     mut registry: NodeRegistryClient<Channel>,
     identity: NodeSessionContext,
-    kernel_ready: bool,
-    admission_ready: bool,
+    mut readiness: ControlReadinessV1,
+    mut updates: mpsc::Receiver<ReadinessUpdate>,
     failure: mpsc::Sender<crate::Error>,
 ) {
     let mut interval = tokio::time::interval(CONTROL_READINESS_RENEWAL_INTERVAL);
@@ -519,16 +567,39 @@ async fn renew_readiness(
     // The connection setup sent the first report. Do not send a duplicate immediately.
     interval.tick().await;
     loop {
-        interval.tick().await;
-        let result = bounded_response(registry.report_readiness(bounded_request(
-            readiness_request(&identity, kernel_ready, admission_ready),
-        )))
-        .await;
-        if let Err(error) = result {
-            let _result = failure.send(error).await;
-            return;
+        tokio::select! {
+            update = updates.recv() => {
+                let Some(update) = update else {
+                    return;
+                };
+                // One owner serializes transition reports and lease renewals. An old
+                // periodic report cannot race a newer local readiness transition.
+                readiness = update.readiness;
+                let result = report_readiness(&mut registry, &identity, readiness).await;
+                if let Err(Err(error)) = update.result.send(result) {
+                    let _result = failure.send(error).await;
+                }
+            }
+            _instant = interval.tick() => {
+                if let Err(error) = report_readiness(&mut registry, &identity, readiness).await {
+                    let _result = failure.send(error).await;
+                    return;
+                }
+            }
         }
     }
+}
+
+async fn report_readiness(
+    registry: &mut NodeRegistryClient<Channel>,
+    identity: &NodeSessionContext,
+    readiness: ControlReadinessV1,
+) -> Result<()> {
+    bounded_response(
+        registry.report_readiness(bounded_request(readiness_request(identity, readiness))),
+    )
+    .await
+    .map(|_response| ())
 }
 
 fn coverage_counters(counters: crate::CoverageCountersV1) -> CoverageCounters {
