@@ -275,6 +275,16 @@ rules for an already admitted lineage. Reject a missing rule, a rule in
 another role, a duplicate entry or rule reference, and a configuration in
 which one exec matches more than one declared entry.
 
+Define entry ambiguity only with facts that enforcement can observe. Control
+rejects ambiguity that is visible in the policy. Node rederives the admission
+keys for the exact container and rejects ambiguity or a required proof that is
+missing in that container. A failed update keeps the previous active
+generation. A new binding stays `PREPARED`. Physical aliasing does not merge
+different canonical request-path keys unless the policy requests exact-object
+matching. When it does, an unresolved object or conflicting object binding
+prevents activation. BPF receives one complete, collision-free entry table. It
+does not select by order, merge roles, or resolve an ambiguous entry.
+
 Each entry installs only its referenced role. Roles do not inherit, union, or
 fall back to the application role. A native descendant keeps the role of its
 creator entry. The external role is the pre-admission and unmatched-entry
