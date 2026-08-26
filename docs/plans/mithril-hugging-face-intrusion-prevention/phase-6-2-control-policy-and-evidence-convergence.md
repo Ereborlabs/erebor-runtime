@@ -734,6 +734,13 @@ already installed. A failed or unmatched next exec remains fail-closed. Do
 not match a runtime binary, helper path, file descriptor path, process name,
 or lifecycle kind in BPF.
 
+After activation, the runtime can inspect and then signal the exact initial
+task to stop the container. A permitted read-only inspection prepares one
+runtime-controller lineage for the exact binding and initial entry. Only that
+lineage can signal that exact task. This authority does not install a role,
+permit an exec, or supply admitted-entry default allow. It ends with the
+runtime-controller lineage and cannot move to another binding or entry.
+
 When the executable's container-visible path satisfies
 `applicationEntry.executionRule`, atomically reserve the transition from any
 task in the exact binding and commit `ACTIVE` with the application entry's

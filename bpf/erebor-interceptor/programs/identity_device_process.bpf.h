@@ -312,12 +312,13 @@ static __always_inline bool prepared_container_target_is_exact(
     return true;
 }
 
-static __noinline bool external_entry_may_read_initial_target(
+static __noinline bool runtime_entry_may_control_initial_target(
     const identity_runtime_config_v1 *config, struct task_struct *target,
     __u16 operation, __u32 operation_argument,
     task_label_v1 **target_label_out)
 {
     struct task_struct *current = bpf_get_current_task_btf();
+    struct runtime_entry_bootstrap_state_v1 *bootstrap;
     task_label_v1 *current_label;
     task_label_v1 *target_label;
     entry_security_state_v1 *current_entry;
@@ -325,10 +326,13 @@ static __noinline bool external_entry_may_read_initial_target(
     external_root_classification_v1 *classification;
     execution_set_binding_state_v1 *binding;
     struct cgroup *target_cgroup = NULL;
+    bool prepares_runtime;
+    bool signals_target;
     int binding_lookup;
 
-    if (!config || !target ||
-        !ptrace_mode_is_read_only(operation, operation_argument) ||
+    prepares_runtime = ptrace_mode_is_read_only(operation, operation_argument);
+    signals_target = operation == kernel_effect_operation_v1_signal;
+    if (!config || !target || (!prepares_runtime && !signals_target) ||
         task_cgroup(target, &target_cgroup))
         return false;
     binding = binding_for_cgroup(target_cgroup, &binding_lookup);
@@ -344,6 +348,18 @@ static __noinline bool external_entry_may_read_initial_target(
                      &target_label->entry_instance_id) ||
         !target_entry->admitted_entry_rule_id)
         return false;
+    if (signals_target) {
+        bootstrap = runtime_entry_bootstrap_for_task(current);
+        if (!runtime_entry_bootstrap_state_valid(bootstrap, config) ||
+            bootstrap->profile_generation_ref_id !=
+                binding->active_profile_generation_ref_id ||
+            !id128_equal(&bootstrap->binding_id, &binding->binding_id) ||
+            !id128_equal(&bootstrap->target_entry_instance_id,
+                         &target_label->entry_instance_id))
+            return false;
+        *target_label_out = target_label;
+        return true;
+    }
     current_label = current
                         ? bpf_task_storage_get(&task_labels, current, 0, 0)
                         : NULL;
@@ -551,7 +567,7 @@ static __always_inline int identity_process_control_gate(
         return prepared_runtime_effect_result(scratch);
     }
     if (!ret && config && config->enabled && config->effect_policy_enabled &&
-        external_entry_may_read_initial_target(
+        runtime_entry_may_control_initial_target(
             config, target, operation, operation_argument, &target_label)) {
         scratch = identity_scratch_record();
         if (scratch) {

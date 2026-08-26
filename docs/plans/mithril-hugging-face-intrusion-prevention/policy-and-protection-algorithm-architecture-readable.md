@@ -2560,6 +2560,13 @@ and process identity, a new prepared association, and a new exec transaction.
 The static declaration remains installed. An administrative approval remains
 one-use. Cgroup membership alone does not supply an admitted-entry identity.
 
+After activation, the runtime can inspect and then signal the exact initial
+task to stop the container. A permitted read-only inspection prepares one
+runtime-controller lineage for the exact binding and initial entry. Only that
+lineage can signal that exact task. This authority does not install a role,
+permit an exec, or supply admitted-entry default allow. It ends with the
+runtime-controller lineage and cannot move to another binding or entry.
+
 The runtime is part of the node trusted computing base while the binding is
 `PREPARED`. Mithril does not infer runtime identity from a `runc`, `crun`, or
 `youki` syscall sequence. The exact binding and initial entry define the
