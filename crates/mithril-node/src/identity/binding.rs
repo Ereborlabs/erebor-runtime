@@ -41,6 +41,7 @@ struct PublishedBinding {
     spec: WorkloadBindingConfig,
     runtime_identity: Option<RuntimeContainerIdentity>,
     held_initial_pid: Option<u32>,
+    admission_peer_pid: Option<u32>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -178,14 +179,22 @@ impl PublishedBinding {
                 })
             })
             .collect::<Result<Vec<_>>>()?;
-        let admitted = self
-            .held_initial_pid
-            .map_or_else(|| live_pids.is_empty(), |pid| live_pids.as_slice() == [pid]);
+        let admitted = self.held_initial_pid.map_or_else(
+            || live_pids.is_empty(),
+            |initial_pid| {
+                live_pids.as_slice() == [initial_pid]
+                    || self.admission_peer_pid.is_some_and(|peer_pid| {
+                        live_pids.len() == 2
+                            && live_pids.contains(&initial_pid)
+                            && live_pids.contains(&peer_pid)
+                    })
+            },
+        );
         ensure!(
             admitted,
             IdentityStateSnafu {
                 reason: format!(
-                    "initial-root admission for `{}` requires an empty cgroup or its one held PID",
+                    "initial-root admission for `{}` requires an empty cgroup or only its held PID and authenticated admission peer",
                     self.root_cgroup_path.display(),
                 ),
             }
@@ -331,7 +340,7 @@ impl WorkloadBindingOwner {
             configured
                 .iter()
                 .filter(|binding| binding.root_cgroup_path.is_some())
-                .map(|binding| (binding, None)),
+                .map(|binding| (binding, None, None)),
         )?;
         self.retain_only_configured(host)?;
         Ok(RuntimeReconciliationResultV1::default())
@@ -433,7 +442,7 @@ impl WorkloadBindingOwner {
         host: &KernelHost,
         configured: &[WorkloadBindingConfig],
     ) -> Result<()> {
-        self.publish(host, configured.iter().map(|spec| (spec, None)))
+        self.publish(host, configured.iter().map(|spec| (spec, None, None)))
     }
 
     pub fn publish_held_initial_roots(
@@ -443,7 +452,9 @@ impl WorkloadBindingOwner {
     ) -> Result<()> {
         self.publish(
             host,
-            configured.iter().map(|(spec, pid)| (spec, Some(*pid))),
+            configured
+                .iter()
+                .map(|(spec, pid)| (spec, Some(*pid), None)),
         )
     }
 
@@ -667,8 +678,12 @@ impl WorkloadBindingOwner {
         host: &KernelHost,
         spec: &WorkloadBindingConfig,
         initial_pid: u32,
+        admission_peer_pid: u32,
     ) -> Result<()> {
-        if let Err(error) = self.publish_held_initial_roots(host, &[(spec.clone(), initial_pid)]) {
+        if let Err(error) = self.publish(
+            host,
+            std::iter::once((spec, Some(initial_pid), Some(admission_peer_pid))),
+        ) {
             self.pending_runtime_admission = None;
             return Err(error);
         }
@@ -1141,9 +1156,9 @@ impl WorkloadBindingOwner {
     fn publish<'a>(
         &mut self,
         host: &KernelHost,
-        configured: impl IntoIterator<Item = (&'a WorkloadBindingConfig, Option<u32>)>,
+        configured: impl IntoIterator<Item = (&'a WorkloadBindingConfig, Option<u32>, Option<u32>)>,
     ) -> Result<()> {
-        for (spec, held_initial_pid) in configured {
+        for (spec, held_initial_pid, admission_peer_pid) in configured {
             let mut binding = self.prepare(spec)?;
             ensure!(
                 held_initial_pid.is_none() || spec.arm_initial_root,
@@ -1151,7 +1166,17 @@ impl WorkloadBindingOwner {
                     reason: "runtime admission requires an armed initial root",
                 }
             );
+            ensure!(
+                admission_peer_pid.is_none_or(|peer_pid| {
+                    held_initial_pid
+                        .is_some_and(|initial_pid| peer_pid > 0 && peer_pid != initial_pid)
+                }),
+                IdentityStateSnafu {
+                    reason: "runtime admission peer must differ from its held initial task",
+                }
+            );
             binding.held_initial_pid = held_initial_pid;
+            binding.admission_peer_pid = admission_peer_pid;
             if held_initial_pid.is_some() {
                 binding.prepare_container()?;
             }
@@ -1665,6 +1690,7 @@ impl WorkloadBindingOwner {
             spec: spec.clone(),
             runtime_identity: None,
             held_initial_pid: None,
+            admission_peer_pid: None,
             state: ExecutionSetBindingStateV1 {
                 binding_id,
                 binding_nonce,
@@ -2166,6 +2192,13 @@ mod tests {
         assert!(binding.require_initial_root_admission().is_err());
         fs::write(root.join("cgroup.procs"), "42\n43\n").context(IoSnafu { path: &root })?;
         binding.held_initial_pid = Some(42);
+        assert!(binding.require_initial_root_admission().is_err());
+
+        binding.admission_peer_pid = Some(43);
+        binding.require_initial_root_admission()?;
+        fs::write(root.join("cgroup.procs"), "43\n42\n").context(IoSnafu { path: &root })?;
+        binding.require_initial_root_admission()?;
+        fs::write(root.join("cgroup.procs"), "42\n43\n44\n").context(IoSnafu { path: &root })?;
         assert!(binding.require_initial_root_admission().is_err());
 
         fs::write(root.join("cgroup.procs"), "42\n").context(IoSnafu { path: &root })?;

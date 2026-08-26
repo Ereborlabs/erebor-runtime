@@ -1413,6 +1413,7 @@ impl NodeChassis {
             host,
             &scheduled.resolved,
             request.held_initial_pid()?,
+            envelope.peer_pid(),
         ) {
             self.bindings.cancel_runtime_admission();
             return Err(RuntimeAdmissionFailureV1::fatal(error));

@@ -67,6 +67,7 @@ pub(crate) struct ScheduledRuntimeBindingV1 {
 
 pub(crate) struct RuntimeAdmissionEnvelope {
     pub(crate) request: RuntimeAdmissionRequestV1,
+    peer_pid: u32,
     deadline: Instant,
     response: oneshot::Sender<RuntimeAdmissionResponseV1>,
     delivered: oneshot::Receiver<()>,
@@ -181,6 +182,10 @@ impl RuntimeAdmissionRequestV1 {
 }
 
 impl RuntimeAdmissionEnvelope {
+    pub(crate) fn peer_pid(&self) -> u32 {
+        self.peer_pid
+    }
+
     pub(crate) fn ensure_active(&self) -> Result<()> {
         ensure!(
             Instant::now() < self.deadline && !self.response.is_closed(),
@@ -296,6 +301,7 @@ impl RuntimeAdmissionReceiver {
             requests
                 .send(RuntimeAdmissionEnvelope {
                     request,
+                    peer_pid: std::process::id(),
                     deadline,
                     response,
                     delivered: delivery,
@@ -583,17 +589,21 @@ impl RuntimeAdmissionServer {
     ) -> Result<()> {
         let deadline = Instant::now() + timeout;
         let result = tokio::time::timeout_at(deadline, async {
-            // SO_PEERCRED prevents an unprivileged local process from invoking the gate.
+            // SO_PEERCRED authenticates the local caller and identifies its host process.
+            let credentials = stream.peer_cred().context(IoSnafu { path: socket_path })?;
             ensure!(
-                stream
-                    .peer_cred()
-                    .context(IoSnafu { path: socket_path })?
-                    .uid()
-                    == 0,
+                credentials.uid() == 0,
                 IdentityStateSnafu {
                     reason: "runtime admission peer is not root",
                 }
             );
+            let peer_pid = credentials
+                .pid()
+                .and_then(|pid| u32::try_from(pid).ok())
+                .filter(|pid| *pid > 0)
+                .context(IdentityStateSnafu {
+                    reason: "runtime admission peer has no valid process identity",
+                })?;
             let maximum = u64::try_from(maximum_request_bytes).map_err(|_| {
                 IdentityStateSnafu {
                     reason: "runtime admission request limit is invalid".to_owned(),
@@ -618,7 +628,7 @@ impl RuntimeAdmissionServer {
             })?;
             let mut trailing = [0_u8; 1];
             let dispatched = tokio::select! {
-                result = Self::dispatch(request, requests, deadline) => result?,
+                result = Self::dispatch(request, peer_pid, requests, deadline) => result?,
                 read = stream.read(&mut trailing) => {
                     let count = read.context(IoSnafu { path: socket_path })?;
                     let reason = if count == 0 {
@@ -680,6 +690,7 @@ impl RuntimeAdmissionServer {
 
     async fn dispatch(
         request: RuntimeAdmissionRequestV1,
+        peer_pid: u32,
         requests: mpsc::Sender<RuntimeAdmissionEnvelope>,
         deadline: Instant,
     ) -> Result<RuntimeAdmissionDispatch> {
@@ -689,6 +700,7 @@ impl RuntimeAdmissionServer {
             requests
                 .send(RuntimeAdmissionEnvelope {
                     request: request.clone(),
+                    peer_pid,
                     deadline,
                     response,
                     delivered: delivery,
@@ -915,6 +927,7 @@ mod tests {
         let deadline = tokio::time::Instant::now() + Duration::from_secs(1);
         let task = tokio::spawn(RuntimeAdmissionServer::dispatch(
             request(),
+            std::process::id(),
             sender,
             deadline,
         ));
@@ -970,6 +983,7 @@ mod tests {
         let deadline = tokio::time::Instant::now() + Duration::from_millis(20);
         let task = tokio::spawn(RuntimeAdmissionServer::dispatch(
             request(),
+            std::process::id(),
             sender,
             deadline,
         ));
