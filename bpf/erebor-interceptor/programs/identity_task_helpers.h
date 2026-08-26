@@ -378,6 +378,19 @@ static __always_inline void exact_file_object_from_path(
         object->inode_generation = 0;
 }
 
+static __always_inline bool exact_file_keys_equal(
+    const exact_file_object_key_v1 *left,
+    const exact_file_object_key_v1 *right)
+{
+    return left->profile_generation_ref_id ==
+               right->profile_generation_ref_id &&
+           left->mount_id_unique == right->mount_id_unique &&
+           left->inode == right->inode &&
+           left->mount_namespace_inode == right->mount_namespace_inode &&
+           left->filesystem_device == right->filesystem_device &&
+           left->inode_generation == right->inode_generation;
+}
+
 static __always_inline int measure_exact_file_object_from_file(
     exact_file_object_key_v1 *object, struct file *file)
 {

@@ -134,6 +134,19 @@ impl ExactFileObjectView {
             })
     }
 
+    pub(crate) fn has_host_root(&self) -> Result<bool> {
+        let host_root = File::open("/").context(IoSnafu {
+            path: Path::new("/"),
+        })?;
+        let held = self.root.metadata().context(IoSnafu {
+            path: Path::new("held task root"),
+        })?;
+        let host = host_root.metadata().context(IoSnafu {
+            path: Path::new("/"),
+        })?;
+        Ok(held.dev() == host.dev() && held.ino() == host.ino())
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn resolve(
         &self,

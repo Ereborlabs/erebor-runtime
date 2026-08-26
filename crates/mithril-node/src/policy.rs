@@ -9,8 +9,8 @@ use erebor_interceptor::{KernelHost, MapInsertResult};
 use erebor_interceptor_abi::{
     ApprovedExecSlotStateV1, ApprovedExecSlotV1, AuthorityDomainStateV1,
     BindingActivationTargetKeyV1, BindingLifecycleStateV1, CanonicalMountRootKeyV1,
-    CanonicalMountRootV1, CanonicalPathComponentV1, EffectDecisionKeyV1, EffectDefaultKeyV1,
-    EntryAdmissionRuleKeyV1, EntryAdmissionRuleV1, ExactExecutableCandidateV1,
+    CanonicalMountRootV1, CanonicalPathComponentV1, DeclaredEntryRequestV1, EffectDecisionKeyV1,
+    EffectDefaultKeyV1, EntryAdmissionRuleKeyV1, EntryAdmissionRuleV1, ExactExecutableCandidateV1,
     ExactFileObjectKeyV1, ExactObjectBindingStateV1, ExactObjectBindingV1, ExceptionBindingStateV1,
     ExceptionHandleBindingKeyV1, ExceptionHandleBindingV1, ExceptionRuntimeStateKeyV1,
     ExceptionRuntimeStateKindV1, ExceptionRuntimeStateV1, ExecutionSetBindingStateV1, Id128V1,
@@ -28,10 +28,10 @@ use mithril_control::{
     canonical_path_components, AntiRollbackStore, CanonicalPathGraphV1, CompiledOperationV1,
     CompiledPhysicalResultV1, ContainerKindV1 as PolicyContainerKindV1, EntryKindV1,
     ExceptionActivationStateV1, ExceptionDeliveryCandidateV1, ExceptionDeliveryOperationV1,
-    LocalObjectSelectorV1, ObjectClassifierSelectorV1, PathPatternV1, PathSelectorTargetV1,
-    PathTreeDenyPatternV1, PendingProfileActivationV1, PolicyArtifactOwner, PolicyDispositionV1,
-    PolicyDocumentV1, ProfileActivationMetadataV1, ProfileCandidateArtifactV1, ProfileModeV1,
-    RuleMatchV1, StaticDecisionKeyV1, ValidatedProfileCandidateV1,
+    LocalObjectSelectorV1, ObjectClassifierSelectorV1, PathPatternComponentV1, PathPatternV1,
+    PathSelectorTargetV1, PathTreeDenyPatternV1, PendingProfileActivationV1, PolicyArtifactOwner,
+    PolicyDispositionV1, PolicyDocumentV1, ProfileActivationMetadataV1, ProfileCandidateArtifactV1,
+    ProfileModeV1, RuleMatchV1, StaticDecisionKeyV1, ValidatedProfileCandidateV1,
 };
 use sha2::{Digest as _, Sha256};
 use snafu::{ensure, OptionExt as _, ResultExt as _};
@@ -637,7 +637,7 @@ impl NodePolicyGenerationOwner {
         )
     }
 
-    pub(crate) fn load_and_install_for_bindings(
+    pub fn load_and_install_for_bindings(
         config: &NodeConfig,
         host: &mut KernelHost,
         bindings: &WorkloadBindingOwner,
@@ -780,6 +780,7 @@ impl NodePolicyGenerationOwner {
         let mut generations = BTreeMap::<u64, LoweredGeneration>::new();
         let mut activations = BTreeMap::<Id128V1, ProfileActivation>::new();
         let mut validated = BTreeMap::<Id128V1, ValidatedProfileCandidateV1>::new();
+        let mut declared_entry_requests = BTreeSet::new();
         let node_id = stable_node_id(&config.node_id)?;
         for binding in &config.workload_bindings {
             let (artifact, rollback_authorization) =
@@ -809,6 +810,22 @@ impl NodePolicyGenerationOwner {
             }
             let binding_id = parse_id("binding_id", &binding.binding_id)?;
             add_binding_activation(&mut activations, profile_id, binding_id, binding)?;
+            for selector_id in entry_admission_path_selector_ids(artifact, binding)? {
+                let selector = artifact
+                    .policy_document
+                    .path_selectors
+                    .iter()
+                    .find(|selector| selector.path_selector_id == selector_id)
+                    .context(IdentityStateSnafu {
+                        reason: "entry admission lost its declared request path",
+                    })?;
+                let request =
+                    DeclaredEntryRequestV1::from_path(selector.path_expression().as_bytes())
+                        .context(IdentityStateSnafu {
+                            reason: "entry admission request path exceeds the kernel bound",
+                        })?;
+                declared_entry_requests.insert(request.as_bytes().to_vec());
+            }
             let measured_for_binding = measured_exact_objects
                 .iter()
                 .filter(|measured| measured.binding_id == binding.binding_id)
@@ -841,6 +858,7 @@ impl NodePolicyGenerationOwner {
             generation_allocator.reserve(&generation.descriptor)?;
         }
         preflight_policy_map_capacity(host, &generations, &activations)?;
+        prepare_declared_entry_requests(host, &declared_entry_requests)?;
         let mut exception_authority =
             ExceptionAuthorityOwner::load(&config.state_directory, node_id, node_boot_id)?;
         exception_authority.restore_receipts(host)?;
@@ -911,6 +929,7 @@ impl NodePolicyGenerationOwner {
         }
         exception_authority.reconcile(host, now_utc_ns)?;
         reconcile_generation_retirement(host, node_boot_id, label_epoch)?;
+        retire_undeclared_entry_requests(host, &declared_entry_requests)?;
         let administrative_plans = generations
             .values()
             .flat_map(|generation| generation.administrative_plans.iter().cloned())
@@ -947,7 +966,7 @@ impl NodePolicyGenerationOwner {
         self.administrative_required
     }
 
-    pub(crate) fn reconcile_cri_exact_bindings(
+    pub fn reconcile_cri_exact_bindings(
         &mut self,
         config: &NodeConfig,
         host: &mut KernelHost,
@@ -984,6 +1003,7 @@ impl NodePolicyGenerationOwner {
 
     fn revoke_dynamic_path_authority(&mut self, host: &KernelHost) -> Result<()> {
         for map in [
+            "entry_admission_rules",
             "device_effect_decisions",
             "exact_file_objects",
             "canonical_mount_roots",
@@ -1076,19 +1096,21 @@ impl NodePolicyGenerationOwner {
                         binding.binding_id
                     ),
                 })?;
+            let entry_selector_ids = entry_admission_path_selector_ids(artifact, binding)?;
             let selectors = artifact
                 .policy_document
                 .path_selectors
                 .iter()
-                .filter(|selector| selector.requires_exact_object());
+                .filter(|selector| {
+                    selector.requires_exact_object()
+                        || entry_selector_ids.contains(&selector.path_selector_id)
+                });
             let view = crate::exact_object::ExactFileObjectView::acquire(target.init_pid)?;
+            if binding.arm_initial_root && view.has_host_root()? {
+                continue;
+            }
             for selector in selectors {
-                let canonical_path =
-                    selector
-                        .exact_canonical_path()
-                        .context(IdentityStateSnafu {
-                            reason: "exact path selector lost its canonical path",
-                        })?;
+                let canonical_path = selector.path_expression();
                 let path = PathBuf::from(canonical_path);
                 let Some(object) = view.try_resolve_signed_selector(
                     host,
@@ -1102,13 +1124,9 @@ impl NodePolicyGenerationOwner {
                 else {
                     continue;
                 };
-                let expected_components = selector
-                    .target
-                    .exact_components(artifact.header.profile_id.as_str())
-                    .context(PolicySnafu)?
-                    .context(IdentityStateSnafu {
-                        reason: "exact path selector lost its literal components",
-                    })?;
+                let expected_components =
+                    canonical_path_components(artifact.header.profile_id.as_str(), canonical_path)
+                        .context(PolicySnafu)?;
                 ensure!(
                     object.canonical_component_hex
                         == expected_components
@@ -1168,12 +1186,14 @@ impl NodePolicyGenerationOwner {
                 let artifact = artifacts.get(&binding.profile_id).context(IdentityStateSnafu {
                     reason: format!("test object binding `{binding_id}` has no verified policy"),
                 })?;
+                let entry_selector_ids = entry_admission_path_selector_ids(artifact, binding)?;
                 let mut selectors = artifact
                     .policy_document
                     .path_selectors
                     .iter()
                     .filter(|selector| {
-                        if !selector.requires_exact_object()
+                        if !(selector.requires_exact_object()
+                            || entry_selector_ids.contains(&selector.path_selector_id))
                             || selector.object_class_id != object.object_class_id
                             || selector.device_class_id.as_deref()
                                 != object
@@ -1183,13 +1203,14 @@ impl NodePolicyGenerationOwner {
                         {
                             return false;
                         }
-                        selector
-                            .target
-                            .exact_components(artifact.header.profile_id.as_str())
-                            .is_ok_and(|components| components.is_some_and(|components| {
+                        canonical_path_components(
+                            artifact.header.profile_id.as_str(),
+                            selector.path_expression(),
+                        )
+                        .is_ok_and(|components| {
                             object.canonical_component_hex
                                 == components.iter().map(hex::encode).collect::<Vec<_>>()
-                            }))
+                        })
                     });
                 let selector = selectors.next().context(IdentityStateSnafu {
                     reason: format!(
@@ -1234,6 +1255,7 @@ impl NodePolicyGenerationOwner {
         let mut rows = BTreeMap::<&'static str, BTreeSet<Vec<u8>>>::new();
         for generation in generations.values() {
             for (map, generation_rows) in [
+                ("entry_admission_rules", &generation.entry_admissions),
                 ("device_effect_decisions", &generation.device_decisions),
                 ("exact_file_objects", &generation.file_objects),
                 ("mount_security_views", &generation.mount_views),
@@ -1976,6 +1998,10 @@ impl LoweredGeneration {
                 object.profile_generation_ref_id == binding.active_profile_generation_ref_id
             })
             .collect::<Vec<_>>();
+        let entry_selector_ids = entry_admission_path_selector_ids(artifact, binding)?;
+        let defer_entry_admissions = binding.arm_initial_root
+            && !entry_selector_ids.is_empty()
+            && generation_objects.is_empty();
         let mut exact_object_handles = BTreeMap::new();
         for selector in artifact
             .policy_document
@@ -2012,7 +2038,8 @@ impl LoweredGeneration {
                 .path_selectors
                 .iter()
                 .find(|selector| {
-                    selector.requires_exact_object()
+                    (selector.requires_exact_object()
+                        || entry_selector_ids.contains(&selector.path_selector_id))
                         && selector.kernel_handle() == object.exact_object_key_id
                 })
                 .ok_or_else(|| {
@@ -2024,14 +2051,12 @@ impl LoweredGeneration {
                     }
                     .build()
                 })?;
-            let (handle, composite_atom_id) = exact_object_handles[&selector.path_selector_id];
-            let signed_components = selector
-                .target
-                .exact_components(artifact.header.profile_id.as_str())
-                .context(PolicySnafu)?
-                .context(IdentityStateSnafu {
-                    reason: "measured exact object selector has no literal path",
-                })?;
+            let handle = selector.kernel_handle();
+            let signed_components = canonical_path_components(
+                artifact.header.profile_id.as_str(),
+                selector.path_expression(),
+            )
+            .context(PolicySnafu)?;
             ensure!(
                 handle == object.exact_object_key_id
                     && selector.object_class_id == object.object_class_id
@@ -2066,13 +2091,51 @@ impl LoweredGeneration {
                     }
                 );
             }
+        }
+        for (selector_id, (handle, _)) in &exact_object_handles {
             ensure!(
-                composite_atom_id > 0,
+                generation_objects
+                    .iter()
+                    .any(|object| object.exact_object_key_id == *handle),
                 IdentityStateSnafu {
-                    reason: "signed path selector has no composite object class",
+                    reason: format!(
+                        "exact selector `{selector_id}` has no proven object in the container"
+                    ),
                 }
             );
         }
+        for selector_id in entry_selector_ids
+            .iter()
+            .filter(|_| !defer_entry_admissions)
+        {
+            let selector = artifact
+                .policy_document
+                .path_selectors
+                .iter()
+                .find(|selector| selector.path_selector_id == *selector_id)
+                .context(IdentityStateSnafu {
+                    reason: "entry admission lost its signed path selector",
+                })?;
+            ensure!(
+                generation_objects
+                    .iter()
+                    .any(|object| object.exact_object_key_id == selector.kernel_handle()),
+                IdentityStateSnafu {
+                    reason: format!(
+                        "entry selector `{selector_id}` has no proven object in the container"
+                    ),
+                }
+            );
+        }
+        let exact_handles = exact_object_handles
+            .values()
+            .map(|(handle, _)| *handle)
+            .collect::<BTreeSet<_>>();
+        let policy_exact_objects = generation_objects
+            .iter()
+            .copied()
+            .filter(|object| exact_handles.contains(&object.exact_object_key_id))
+            .collect::<Vec<_>>();
         validate_binding_roles(artifact, binding, &role_handles, &process_state_handles)?;
         let entry_admissions = lower_entry_admissions(
             artifact,
@@ -2080,7 +2143,10 @@ impl LoweredGeneration {
             &role_handles,
             &process_state_handles,
             &composite_handles,
+            &generation_objects,
+            defer_entry_admissions,
         )?;
+        let entry_admission_authority = entry_admission_authority_rows(&entry_admissions)?;
         let mut decisions = BTreeMap::new();
         let mut defaults = BTreeMap::new();
         let mut device_decisions = BTreeMap::new();
@@ -2187,7 +2253,7 @@ impl LoweredGeneration {
                     actor_role_id: role,
                     actor_process_state_vector_id: process_state,
                     binding_lifecycle_state: lifecycle(cell.key.binding_lifecycle),
-                    exact_objects: &generation_objects,
+                    exact_objects: &policy_exact_objects,
                     signed_device_classes: &signed_device_classes,
                     role_states: &role_states,
                 },
@@ -2409,7 +2475,7 @@ impl LoweredGeneration {
             )?;
         }
         let mut file_objects = BTreeMap::new();
-        for object in &generation_objects {
+        for object in &policy_exact_objects {
             let key = ExactFileObjectKeyV1 {
                 profile_generation_ref_id: object.profile_generation_ref_id,
                 mount_namespace_inode: object.mount_namespace_inode,
@@ -2440,9 +2506,9 @@ impl LoweredGeneration {
         let (administrative_required, administrative_plans) =
             lower_administrative_plans(artifact, binding, &role_handles, &process_state_handles)?;
         let path_tables =
-            Self::lower_path_tables(artifact, binding, &generation_objects, &composite_handles)?;
+            Self::lower_path_tables(artifact, binding, &policy_exact_objects, &composite_handles)?;
         let tables = [
-            ("entry-admission", &entry_admissions),
+            ("entry-admission", &entry_admission_authority),
             ("decision", &decisions),
             ("default", &defaults),
             ("process-control-rule", &process_control_rules),
@@ -2716,6 +2782,7 @@ impl LoweredGeneration {
             );
             if existing == active.as_bytes() {
                 self.verify_immutable_rows(host)?;
+                install_rows(host, "entry_admission_rules", &self.entry_admissions)?;
                 install_rows(host, "device_effect_decisions", &self.device_decisions)?;
                 install_exception_rows(
                     host,
@@ -2832,7 +2899,6 @@ impl LoweredGeneration {
 
     fn verify_immutable_rows(&self, host: &KernelHost) -> Result<()> {
         for (map, rows) in [
-            ("entry_admission_rules", &self.entry_admissions),
             ("effect_decisions", &self.decisions),
             ("effect_defaults", &self.defaults),
             ("process_control_rules", &self.process_control_rules),
@@ -2857,6 +2923,7 @@ impl LoweredGeneration {
 
     fn verify_dynamic_authority_rows(&self, host: &KernelHost) -> Result<()> {
         for (map, rows) in [
+            ("entry_admission_rules", &self.entry_admissions),
             ("device_effect_decisions", &self.device_decisions),
             ("exact_file_objects", &self.file_objects),
             ("canonical_mount_roots", &self.mount_roots),
@@ -2969,6 +3036,57 @@ fn ensure_map_capacity(
             ),
         }
     );
+    Ok(())
+}
+
+fn prepare_declared_entry_requests(host: &KernelHost, desired: &BTreeSet<Vec<u8>>) -> Result<()> {
+    let map = "declared_entry_requests";
+    let capacity = host
+        .manifest()
+        .maps
+        .iter()
+        .find(|candidate| candidate.name == map)
+        .map(|candidate| u64::from(candidate.max_entries))
+        .context(IdentityStateSnafu {
+            reason: "the declared-entry request map has no manifest capacity",
+        })?;
+    ensure_map_capacity(
+        map,
+        capacity,
+        host.map_keys(map).context(InterceptorSnafu)?,
+        desired.iter().cloned(),
+    )?;
+    for key in desired {
+        host.update_map(map, key, &[1]).context(InterceptorSnafu)?;
+        ensure!(
+            host.lookup_map(map, key)
+                .context(InterceptorSnafu)?
+                .as_deref()
+                == Some([1].as_slice()),
+            IdentityStateSnafu {
+                reason: "a declared-entry request failed exact readback",
+            }
+        );
+    }
+    Ok(())
+}
+
+fn retire_undeclared_entry_requests(host: &KernelHost, desired: &BTreeSet<Vec<u8>>) -> Result<()> {
+    let map = "declared_entry_requests";
+    for key in host.map_keys(map).context(InterceptorSnafu)? {
+        if desired.contains(&key) {
+            continue;
+        }
+        host.delete_map_entry(map, &key).context(InterceptorSnafu)?;
+        ensure!(
+            host.lookup_map(map, &key)
+                .context(InterceptorSnafu)?
+                .is_none(),
+            IdentityStateSnafu {
+                reason: "an undeclared entry request remained after retirement",
+            }
+        );
+    }
     Ok(())
 }
 
@@ -4160,12 +4278,94 @@ fn cell_matches_binding(
         && key.execution_set_id == *execution_set_id
 }
 
+fn entry_admission_path_selector_ids(
+    artifact: &ProfileCandidateArtifactV1,
+    binding: &WorkloadBindingConfig,
+) -> Result<BTreeSet<String>> {
+    let mut selector_ids = BTreeSet::new();
+    for assignment in artifact
+        .policy_document
+        .entry_role_assignments
+        .iter()
+        .filter(|assignment| {
+            assignment
+                .workload_selector_ids
+                .contains(&binding.workload_selector_id)
+                && assignment
+                    .container_kinds
+                    .contains(&policy_container_kind(binding.container_kind))
+                && assignment.admission_execution_rule_id.is_some()
+        })
+    {
+        let rule_id =
+            assignment
+                .admission_execution_rule_id
+                .as_deref()
+                .context(IdentityStateSnafu {
+                    reason: "entry admission lost its execution rule",
+                })?;
+        let rule = artifact
+            .policy_document
+            .rules
+            .iter()
+            .find(|rule| rule.rule_id == rule_id)
+            .context(IdentityStateSnafu {
+                reason: format!("entry admission rule `{rule_id}` is not signed"),
+            })?;
+        let RuleMatchV1::LocalPreEffect(effect) = &rule.rule_match else {
+            return IdentityStateSnafu {
+                reason: format!("entry admission rule `{rule_id}` is not a local effect"),
+            }
+            .fail();
+        };
+        let LocalObjectSelectorV1::PathSelectors { path_selector_ids } = &effect.object else {
+            return IdentityStateSnafu {
+                reason: format!("entry admission rule `{rule_id}` has no path selector"),
+            }
+            .fail();
+        };
+        let [selector_id] = path_selector_ids.as_slice() else {
+            return IdentityStateSnafu {
+                reason: format!("entry admission rule `{rule_id}` is not one exact path match"),
+            }
+            .fail();
+        };
+        let selector = artifact
+            .policy_document
+            .path_selectors
+            .iter()
+            .find(|selector| selector.path_selector_id == *selector_id)
+            .context(IdentityStateSnafu {
+                reason: format!("entry admission rule `{rule_id}` has an unknown path selector"),
+            })?;
+        let components = selector
+            .target
+            .pattern_components(artifact.header.profile_id.as_str())
+            .context(PolicySnafu)?;
+        ensure!(
+            !selector.requires_exact_object()
+                && components
+                    .iter()
+                    .all(|component| matches!(component, PathPatternComponentV1::Exact(_))),
+            IdentityStateSnafu {
+                reason: format!(
+                    "entry admission rule `{rule_id}` does not use one literal request path"
+                ),
+            }
+        );
+        selector_ids.insert(selector_id.clone());
+    }
+    Ok(selector_ids)
+}
+
 fn lower_entry_admissions(
     artifact: &ProfileCandidateArtifactV1,
     binding: &WorkloadBindingConfig,
     role_handles: &BTreeMap<String, u32>,
     process_state_handles: &BTreeMap<String, u32>,
     composite_handles: &BTreeMap<String, u64>,
+    measured_objects: &[&ExactFileObjectConfig],
+    defer_non_initial_entries: bool,
 ) -> Result<GenerationRows> {
     let assignment_handles = handles(
         artifact
@@ -4276,7 +4476,7 @@ fn lower_entry_admissions(
                 && !selector.requires_exact_object(),
             IdentityStateSnafu {
                 reason: format!(
-                    "entry admission rule `{rule_id}` is not one path-based Allow Execute rule for its role and entry kind"
+                    "entry admission rule `{rule_id}` is not one literal-path Allow Execute rule for its role and entry kind"
                 ),
             }
         );
@@ -4299,16 +4499,64 @@ fn lower_entry_admissions(
             source_role_id: role_handles[source_role_id],
             reserved: 0,
         };
+        let mut objects = measured_objects
+            .iter()
+            .copied()
+            .filter(|object| object.exact_object_key_id == selector.kernel_handle());
+        let object = objects.next();
+        ensure!(
+            object.is_some() || defer_non_initial_entries,
+            IdentityStateSnafu {
+                reason: format!("entry admission rule `{rule_id}` has no proven executable object"),
+            }
+        );
+        ensure!(
+            objects.next().is_none(),
+            IdentityStateSnafu {
+                reason: format!(
+                    "entry admission rule `{rule_id}` has more than one executable object"
+                ),
+            }
+        );
+        let (exact_object_key_id, executable_object) = object.map_or_else(
+            || (0, ExactFileObjectKeyV1::default()),
+            |object| {
+                (
+                    selector.kernel_handle(),
+                    ExactFileObjectKeyV1 {
+                        profile_generation_ref_id: object.profile_generation_ref_id,
+                        mount_id_unique: object.mount_id_unique,
+                        inode: object.inode,
+                        inode_generation: object.inode_generation,
+                        mount_namespace_inode: object.mount_namespace_inode,
+                        filesystem_device: object.filesystem_device,
+                    },
+                )
+            },
+        );
         let value = EntryAdmissionRuleV1 {
             target_role_id,
             target_process_state_vector_id: process_state_handles
                 [&target_role.default_process_state_id],
             admitted_entry_rule_id: assignment_handles[&assignment.assignment_id],
             reserved: 0,
+            exact_object_key_id,
+            executable_object,
         };
         insert_exact(&mut rows, key.as_bytes(), value.as_bytes())?;
     }
     Ok(rows)
+}
+
+fn entry_admission_authority_rows(rows: &GenerationRows) -> Result<GenerationRows> {
+    let mut authority = GenerationRows::new();
+    for (key, value) in rows {
+        let mut rule: EntryAdmissionRuleV1 = read_abi_value(value, "entry admission rule")?;
+        rule.exact_object_key_id = 0;
+        rule.executable_object = ExactFileObjectKeyV1::default();
+        insert_exact(&mut authority, key, rule.as_bytes())?;
+    }
+    Ok(authority)
 }
 
 fn validate_binding_roles(
@@ -5025,7 +5273,7 @@ mod tests {
 
     use super::{
         add_binding_activation, ensure_active_generation_unchanged, ensure_committed_generation,
-        ensure_map_capacity, exception_counter_is_consistent,
+        ensure_map_capacity, entry_admission_path_selector_ids, exception_counter_is_consistent,
         generation_retirement_needs_tombstone, parse_id, same_exact_file, LoweredGeneration,
         ProfileActivation,
     };
@@ -5156,7 +5404,7 @@ mod tests {
             .values()
             .any(|binding| binding == expected_binding.as_bytes()));
 
-        let unresolved = LoweredGeneration::for_binding(
+        assert!(LoweredGeneration::for_binding(
             &artifact,
             &binding,
             &[],
@@ -5165,9 +5413,8 @@ mod tests {
             3,
             1_800_000_000_000_000_000,
             100,
-        )?;
-        assert!(unresolved.file_objects.is_empty());
-        assert_eq!(unresolved.decisions, generation.decisions);
+        )
+        .is_err());
         let mut swapped_roles = binding;
         std::mem::swap(
             &mut swapped_roles.initial_role_id,
@@ -5293,10 +5540,11 @@ mod tests {
     #[test]
     fn independent_entries_lower_to_distinct_kernel_role_transitions() -> crate::Result<()> {
         let (artifact, binding) = entry_roles_artifact()?;
+        let objects = entry_role_objects(&artifact, &binding)?;
         let generation = LoweredGeneration::for_binding(
             &artifact,
             &binding,
-            &[],
+            &objects,
             Id128V1::new(1, 2),
             Id128V1::new(3, 4),
             3,
@@ -5349,6 +5597,116 @@ mod tests {
         assert_eq!(generation.administrative_plans.len(), 1);
         assert_ne!(generation.administrative_plans[0].admitted_entry_rule_id, 0);
         assert!(generation.administrative_required);
+        Ok(())
+    }
+
+    #[test]
+    fn entry_admission_allows_physical_aliases_but_rejects_missing_objects() -> crate::Result<()> {
+        let (artifact, binding) = entry_roles_artifact()?;
+        let objects = entry_role_objects(&artifact, &binding)?;
+        assert!(objects.len() > 1);
+        assert!(LoweredGeneration::for_binding(
+            &artifact,
+            &binding,
+            &objects[..objects.len() - 1],
+            Id128V1::new(1, 2),
+            Id128V1::new(3, 4),
+            3,
+            1_800_000_000_000_000_000,
+            100,
+        )
+        .is_err());
+
+        let mut aliased = objects;
+        aliased[1].mount_namespace_inode = aliased[0].mount_namespace_inode;
+        aliased[1].mount_id_unique = aliased[0].mount_id_unique;
+        aliased[1].selected_mount_id_unique = aliased[0].selected_mount_id_unique;
+        aliased[1].filesystem_device = aliased[0].filesystem_device;
+        aliased[1].inode = aliased[0].inode;
+        aliased[1].inode_generation = aliased[0].inode_generation;
+        let generation = LoweredGeneration::for_binding(
+            &artifact,
+            &binding,
+            &aliased,
+            Id128V1::new(1, 2),
+            Id128V1::new(3, 4),
+            3,
+            1_800_000_000_000_000_000,
+            100,
+        )?;
+        assert!(generation.file_objects.is_empty());
+        let executable_objects = generation
+            .entry_admissions
+            .values()
+            .map(|value| {
+                EntryAdmissionRuleV1::try_read_from_bytes(value)
+                    .map(|rule| rule.executable_object)
+                    .map_err(|error| {
+                        IdentityStateSnafu {
+                            reason: format!("entry admission value has the wrong ABI: {error}"),
+                        }
+                        .build()
+                    })
+            })
+            .collect::<crate::Result<Vec<_>>>()?;
+        assert!(executable_objects.iter().enumerate().any(|(index, left)| {
+            executable_objects[index + 1..]
+                .iter()
+                .any(|right| left == right)
+        }));
+        Ok(())
+    }
+
+    #[test]
+    fn prepared_entry_rows_keep_logical_authority_while_exact_proof_is_deferred(
+    ) -> crate::Result<()> {
+        let (artifact, mut binding) = entry_roles_artifact()?;
+        binding.arm_initial_root = true;
+        let staged = LoweredGeneration::for_binding(
+            &artifact,
+            &binding,
+            &[],
+            Id128V1::new(1, 2),
+            Id128V1::new(3, 4),
+            3,
+            1_800_000_000_000_000_000,
+            100,
+        )?;
+        assert_eq!(staged.entry_admissions.len(), 6);
+        assert!(staged.entry_admissions.values().all(|value| {
+            EntryAdmissionRuleV1::try_read_from_bytes(value)
+                .is_ok_and(|rule| rule.exact_object_key_id == 0)
+        }));
+
+        let mut objects = entry_role_objects(&artifact, &binding)?;
+        let shared = objects[0].clone();
+        for object in &mut objects[1..] {
+            object.mount_namespace_inode = shared.mount_namespace_inode;
+            object.mount_id_unique = shared.mount_id_unique;
+            object.selected_mount_id_unique = shared.selected_mount_id_unique;
+            object.filesystem_device = shared.filesystem_device;
+            object.inode = shared.inode;
+            object.inode_generation = shared.inode_generation;
+        }
+        let active = LoweredGeneration::for_binding(
+            &artifact,
+            &binding,
+            &objects,
+            Id128V1::new(1, 2),
+            Id128V1::new(3, 4),
+            3,
+            1_800_000_000_000_000_000,
+            100,
+        )?;
+        assert_eq!(
+            staged.descriptor.table_digest,
+            active.descriptor.table_digest
+        );
+        assert_eq!(staged.descriptor.row_count, active.descriptor.row_count);
+        assert!(active.entry_admissions.values().all(|value| {
+            EntryAdmissionRuleV1::try_read_from_bytes(value)
+                .is_ok_and(|rule| rule.exact_object_key_id > 0)
+        }));
         Ok(())
     }
 
@@ -5601,14 +5959,14 @@ mod tests {
 
     #[test]
     fn default_cell_lowers_to_the_objectless_kernel_key() -> crate::Result<()> {
-        let (mut artifact, binding, _) = exact_artifact(ProfileModeV1::Protect)?;
+        let (mut artifact, binding, object) = exact_artifact(ProfileModeV1::Protect)?;
         artifact.compiled_profile.compiled_cells[0]
             .key
             .object_selector = "DEFAULT".to_owned();
         let generation = LoweredGeneration::for_binding(
             &artifact,
             &binding,
-            &[],
+            &[object],
             Id128V1::new(1, 2),
             Id128V1::new(3, 4),
             3,
@@ -5978,5 +6336,53 @@ mod tests {
             arm_initial_root: false,
         };
         Ok((artifact, binding))
+    }
+
+    fn entry_role_objects(
+        artifact: &ProfileCandidateArtifactV1,
+        binding: &WorkloadBindingConfig,
+    ) -> crate::Result<Vec<ExactFileObjectConfig>> {
+        let selector_ids = entry_admission_path_selector_ids(artifact, binding)?;
+        artifact
+            .policy_document
+            .path_selectors
+            .iter()
+            .filter(|selector| selector_ids.contains(&selector.path_selector_id))
+            .enumerate()
+            .map(|(index, selector)| {
+                let path = selector.path_expression();
+                let components = path
+                    .strip_prefix('/')
+                    .filter(|path| !path.is_empty())
+                    .ok_or_else(|| {
+                        IdentityStateSnafu {
+                            reason: "entry test selector path is not canonical".to_owned(),
+                        }
+                        .build()
+                    })?
+                    .split('/')
+                    .map(|component| hex::encode(component.as_bytes()))
+                    .collect::<Vec<_>>();
+                Ok(ExactFileObjectConfig {
+                    profile_generation_ref_id: 1,
+                    exact_object_key_id: selector.kernel_handle(),
+                    object_class_id: selector.object_class_id.clone(),
+                    mount_namespace_inode: 10,
+                    mount_id_unique: 20,
+                    filesystem_device: 30,
+                    inode: 100 + index as u64,
+                    inode_generation: 1,
+                    device: None,
+                    mount_relative_component_count: components.len() as u16,
+                    canonical_component_hex: components,
+                    mount_root_filesystem_device: 30,
+                    mount_root_inode: 2,
+                    selected_mount_id_unique: 20,
+                    mount_snapshot_digest_id: 60,
+                    mount_topology_generation: 1,
+                    mount_view_root_pid: 1,
+                })
+            })
+            .collect()
     }
 }

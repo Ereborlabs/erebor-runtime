@@ -52,12 +52,6 @@ struct runtime_entry_bootstrap_state_v1 {
     __u8 reserved[7];
 };
 
-struct pending_exec_request_path_v1 {
-    __u32 path_length;
-    __u32 reserved;
-    __u8 path[MAX_ADMINISTRATIVE_ARGUMENT_BYTES_V1 + 1];
-};
-
 #define MAX_CGROUP_ANCESTOR_STEPS_V1 64
 #define EXCEPTION_USE_RECEIPT_CAPACITY_V1 65536
 #define EFFECT_GATE_DEFER_DECISION_V1 1
@@ -234,6 +228,7 @@ struct identity_scratch_v1 {
     struct canonical_path_view_v1
         path_component_views[MAX_CANONICAL_PATH_COMPONENTS_V1 + 1];
     effect_observation_v1 observation;
+    declared_entry_request_v1 declared_entry_request;
     __u8 exec_argument[MAX_ADMINISTRATIVE_ARGUMENT_BYTES_V1 + 1];
     approved_exec_argument_key_v1 administrative_argument_key;
     __u8 zero_bytes[MAX_ADMINISTRATIVE_ARGUMENT_BYTES_V1];
@@ -283,16 +278,24 @@ struct {
 struct {
     __uint(type, BPF_MAP_TYPE_TASK_STORAGE);
     __type(key, int);
-    __type(value, struct runtime_entry_bootstrap_state_v1);
+    __type(value, declared_entry_request_v1);
     __uint(map_flags, BPF_F_NO_PREALLOC);
-} runtime_entry_bootstrap_states SEC(".maps");
+} pending_exec_request_paths SEC(".maps");
+
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, 65536);
+    __uint(map_flags, BPF_F_NO_PREALLOC);
+    __type(key, declared_entry_request_v1);
+    __type(value, __u8);
+} declared_entry_requests SEC(".maps");
 
 struct {
     __uint(type, BPF_MAP_TYPE_TASK_STORAGE);
     __type(key, int);
-    __type(value, struct pending_exec_request_path_v1);
+    __type(value, struct runtime_entry_bootstrap_state_v1);
     __uint(map_flags, BPF_F_NO_PREALLOC);
-} pending_exec_request_paths SEC(".maps");
+} runtime_entry_bootstrap_states SEC(".maps");
 
 struct {
     __uint(type, BPF_MAP_TYPE_HASH);

@@ -50,7 +50,7 @@ const KUBERNETES_CLEANUP_WAIT_LIMIT: Duration = Duration::from_secs(120);
 const PROFILE_GENERATION_REF_ID: u64 = 7;
 const PRESTART_REQUEST_DIRECTORY: &str = "/run/mithril-identity-prestart";
 
-const REQUIRED_IDENTITY_MAPS: [&str; 71] = [
+const REQUIRED_IDENTITY_MAPS: [&str; 72] = [
     "active_profile_generations",
     "approved_exec_arguments",
     "approved_exec_slots",
@@ -60,6 +60,7 @@ const REQUIRED_IDENTITY_MAPS: [&str; 71] = [
     "canonical_mount_cache_states",
     "exact_mount_events",
     "created_by_edges",
+    "declared_entry_requests",
     "device_effect_decisions",
     "effect_decisions",
     "effect_defaults",

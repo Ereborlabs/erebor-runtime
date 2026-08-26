@@ -1421,15 +1421,15 @@ impl WorkloadBindingOwner {
             .values()
             .filter(|binding| binding.state.lifecycle_state == BindingLifecycleStateV1::Active)
             .filter_map(|binding| {
-                let runtime = binding.runtime_identity.as_ref()?;
-                let init_pid = match runtime.state {
-                    super::runtime::RuntimeContainerState::Created => {
-                        binding.held_initial_pid.filter(|pid| *pid > 0)
-                    }
-                    super::runtime::RuntimeContainerState::Running => {
-                        (runtime.init_pid > 0).then_some(runtime.init_pid)
-                    }
-                }?;
+                let init_pid = binding
+                    .held_initial_pid
+                    .filter(|pid| *pid > 0)
+                    .or_else(|| {
+                        let runtime = binding.runtime_identity.as_ref()?;
+                        (runtime.state == super::runtime::RuntimeContainerState::Running
+                            && runtime.init_pid > 0)
+                            .then_some(runtime.init_pid)
+                    })?;
                 Some(ExactObjectBindingTargetV1 {
                     binding_id: &binding.spec.binding_id,
                     init_pid,
@@ -2169,7 +2169,13 @@ mod tests {
         binding.held_initial_pid = Some(42);
         let root_id = binding.root_cgroup_id;
         owner.bindings.insert(root_id, binding);
-        assert_eq!(owner.exact_object_binding_targets().count(), 0);
+        let targets = owner.exact_object_binding_targets().collect::<Vec<_>>();
+        assert_eq!(targets.len(), 1);
+        assert_eq!(
+            targets[0].binding_id,
+            "11111111-1111-4111-8111-111111111111"
+        );
+        assert_eq!(targets[0].init_pid, 42);
         Ok(())
     }
 

@@ -339,7 +339,7 @@ prepared_output=$remote_root/stock-runc-prepared
 
 if [[ $stock_runc_only == true ]]; then
   jq -e '
-    .schema_version == 6 and
+    .schema_version == 7 and
     .prepared_state_before_exec == "prepared" and
     .prepared_state_after_exec == "active" and
     .prepared_runtime_effect_observed and
@@ -350,6 +350,7 @@ if [[ $stock_runc_only == true ]]; then
     (.independent_entries | all(
       .active_role_id > 0 and
       .admitted_entry_rule_id > 0 and
+      .exact_executable_object_enforced and
       .own_policy_deny_observed and
       .application_policy_not_inherited
     )) and
@@ -358,7 +359,7 @@ if [[ $stock_runc_only == true ]]; then
     .runtime_entry_infrastructure_observed and
     .external_entry_denied and
     .external_cgroup_entering_process_stays_closed and
-    .executable_observation_has_no_exact_object and
+    .entry_executable_exact_objects_enforced and
     (.dynamic_loader_paths | length) > 0 and
     .dynamic_loader_paths_absent_from_policy and
     .container_exit_success and

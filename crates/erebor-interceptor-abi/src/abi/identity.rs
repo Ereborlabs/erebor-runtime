@@ -525,6 +525,44 @@ pub struct EntryAdmissionRuleV1 {
     pub target_process_state_vector_id: u32,
     pub admitted_entry_rule_id: u32,
     pub reserved: u32,
+    pub exact_object_key_id: u64,
+    pub executable_object: super::ExactFileObjectKeyV1,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Eq, Immutable, IntoBytes, KnownLayout, PartialEq, TryFromBytes)]
+pub struct DeclaredEntryRequestV1 {
+    pub path_length: u32,
+    pub reserved: u32,
+    pub path: [u8; MAX_ADMINISTRATIVE_ARGUMENT_BYTES_V1],
+}
+
+impl Default for DeclaredEntryRequestV1 {
+    fn default() -> Self {
+        Self {
+            path_length: 0,
+            reserved: 0,
+            path: [0; MAX_ADMINISTRATIVE_ARGUMENT_BYTES_V1],
+        }
+    }
+}
+
+impl DeclaredEntryRequestV1 {
+    #[must_use]
+    pub fn from_path(path: &[u8]) -> Option<Self> {
+        if path.is_empty()
+            || path.len() >= MAX_ADMINISTRATIVE_ARGUMENT_BYTES_V1
+            || path.contains(&0)
+        {
+            return None;
+        }
+        let mut request = Self {
+            path_length: u32::try_from(path.len()).ok()?,
+            ..Self::default()
+        };
+        request.path[..path.len()].copy_from_slice(path);
+        Some(request)
+    }
 }
 
 #[repr(C)]
@@ -960,6 +998,8 @@ mod tests {
         assert_eq!(size_of::<ProcessExecutionInstanceV1>(), 80);
         assert_eq!(size_of::<ExecutionSetBindingStateV1>(), 224);
         assert_eq!(size_of::<IdentityRuntimeConfigV1>(), 48);
+        assert_eq!(size_of::<EntryAdmissionRuleV1>(), 64);
+        assert_eq!(size_of::<DeclaredEntryRequestV1>(), 4_104);
         assert_eq!(size_of::<ApprovedExecArgumentKeyV1>(), 4_120);
         assert_eq!(size_of::<ApprovedExecSlotV1>(), 4_784);
         assert_eq!(

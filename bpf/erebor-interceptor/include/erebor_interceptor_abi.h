@@ -1066,12 +1066,29 @@ typedef struct entry_admission_rule_key_v1 {
   uint32_t reserved;
 } entry_admission_rule_key_v1;
 
+typedef struct exact_file_object_key_v1 {
+  uint64_t profile_generation_ref_id;
+  uint64_t mount_id_unique;
+  uint64_t inode;
+  uint64_t inode_generation;
+  uint32_t mount_namespace_inode;
+  uint32_t filesystem_device;
+} exact_file_object_key_v1;
+
 typedef struct entry_admission_rule_v1 {
   uint32_t target_role_id;
   uint32_t target_process_state_vector_id;
   uint32_t admitted_entry_rule_id;
   uint32_t reserved;
+  uint64_t exact_object_key_id;
+  struct exact_file_object_key_v1 executable_object;
 } entry_admission_rule_v1;
+
+typedef struct declared_entry_request_v1 {
+  uint32_t path_length;
+  uint32_t reserved;
+  uint8_t path[MAX_ADMINISTRATIVE_ARGUMENT_BYTES_V1];
+} declared_entry_request_v1;
 
 typedef struct entry_security_state_v1 {
   struct id128_v1 entry_instance_id;
@@ -1207,15 +1224,6 @@ typedef struct effect_observation_health_v1 {
   uint64_t unresolved;
   uint64_t next_sequence;
 } effect_observation_health_v1;
-
-typedef struct exact_file_object_key_v1 {
-  uint64_t profile_generation_ref_id;
-  uint64_t mount_id_unique;
-  uint64_t inode;
-  uint64_t inode_generation;
-  uint32_t mount_namespace_inode;
-  uint32_t filesystem_device;
-} exact_file_object_key_v1;
 
 typedef struct network_namespace_generation_v1 {
   uint64_t network_namespace_address;

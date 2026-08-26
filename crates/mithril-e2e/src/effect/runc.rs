@@ -8,7 +8,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use erebor_interceptor::{KernelHostConfig, KernelHostOwner};
-use erebor_interceptor_abi::{KernelEffectFamilyV1, KernelEffectOperationV1};
+use erebor_interceptor_abi::{EntryAdmissionRuleV1, KernelEffectFamilyV1, KernelEffectOperationV1};
 use mithril_control::{
     lower_kubernetes_policy, policy_custom_resource, WorkloadProtectionPolicySpec,
 };
@@ -21,6 +21,7 @@ use serde::Serialize;
 use serde_json::json;
 use sha2::{Digest as _, Sha256};
 use snafu::{ensure, ResultExt as _};
+use zerocopy::TryFromBytes as _;
 
 use super::support::{
     effect_binding_with_identity, effect_node_config, wait_for_application_default_effect,
@@ -52,7 +53,7 @@ pub struct RuncPreparedProbeV1 {
     pub runtime_entry_infrastructure_observed: bool,
     pub external_entry_denied: bool,
     pub external_cgroup_entering_process_stays_closed: bool,
-    pub executable_observation_has_no_exact_object: bool,
+    pub entry_executable_exact_objects_enforced: bool,
     pub dynamic_loader_paths: Vec<String>,
     pub dynamic_loader_paths_absent_from_policy: bool,
     pub container_exit_success: bool,
@@ -72,6 +73,7 @@ pub struct RuncEntryRoleProbeV1 {
     pub active_execution_id: String,
     pub active_role_id: u32,
     pub admitted_entry_rule_id: u32,
+    pub exact_executable_object_enforced: bool,
     pub own_policy_deny_observed: bool,
     pub application_policy_not_inherited: bool,
 }
@@ -416,9 +418,46 @@ impl EffectTestRunner {
             policy.artifact_path.clone(),
             vec![binding.clone()],
         );
-        let _policy =
-            NodePolicyGenerationOwner::load_and_install(&node_config, &mut host, node_boot_id, 1)
-                .context(NodeSnafu)?;
+        let mut policy_owner = NodePolicyGenerationOwner::load_and_install_for_bindings(
+            &node_config,
+            &mut host,
+            &bindings,
+            node_boot_id,
+            1,
+        )
+        .context(NodeSnafu)?;
+        let staged_entry_rules = host
+            .map_keys("entry_admission_rules")
+            .context(InterceptorSnafu)?
+            .into_iter()
+            .map(|key| {
+                host.lookup_map("entry_admission_rules", &key)
+                    .context(InterceptorSnafu)?
+                    .and_then(|value| EntryAdmissionRuleV1::try_read_from_bytes(&value).ok())
+                    .ok_or_else(|| {
+                        InvalidInputSnafu {
+                            path: pin_root,
+                            reason: "the prepared application entry rule has invalid ABI",
+                        }
+                        .build()
+                    })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        ensure!(
+            staged_entry_rules.len() == 6
+                && staged_entry_rules
+                    .iter()
+                    .any(|rule| rule.target_role_id == policy.initial_role_id)
+                && staged_entry_rules
+                    .iter()
+                    .all(|rule| rule.exact_object_key_id == 0),
+            InvalidInputSnafu {
+                path: pin_root,
+                reason: format!(
+                    "prepared application entry staging is invalid: {staged_entry_rules:?}"
+                ),
+            }
+        );
         let identity = NativeSecurityStateOwner::new(node_boot_id, 1);
         identity
             .activate_held_initial_admission(&mut host, true)
@@ -508,6 +547,58 @@ impl EffectTestRunner {
                 reason: "the first configured executable did not activate normal policy",
             }
         );
+        policy_owner
+            .reconcile_cri_exact_bindings(&node_config, &mut host, &bindings)
+            .context(NodeSnafu)?;
+        let entry_admission_proofs = host
+            .map_keys("entry_admission_rules")
+            .context(InterceptorSnafu)?
+            .into_iter()
+            .map(|key| {
+                let value = host
+                    .lookup_map("entry_admission_rules", &key)
+                    .context(InterceptorSnafu)?
+                    .ok_or_else(|| {
+                        InvalidInputSnafu {
+                            path: pin_root,
+                            reason: "an entry admission rule disappeared before readback",
+                        }
+                        .build()
+                    })?;
+                EntryAdmissionRuleV1::try_read_from_bytes(&value).map_err(|error| {
+                    InvalidInputSnafu {
+                        path: pin_root,
+                        reason: format!("an entry admission rule has invalid ABI: {error}"),
+                    }
+                    .build()
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let exact_entry_rule_ids = entry_admission_proofs
+            .iter()
+            .map(|rule| rule.admitted_entry_rule_id)
+            .collect::<BTreeSet<_>>();
+        ensure!(
+            entry_admission_proofs.len() == 6
+                && exact_entry_rule_ids.len() == 6
+                && entry_admission_proofs.iter().all(|rule| {
+                    rule.exact_object_key_id > 0
+                        && rule.executable_object.profile_generation_ref_id
+                            == PROFILE_GENERATION_REF_ID
+                        && rule.executable_object.mount_id_unique > 0
+                        && rule.executable_object.inode > 0
+                        && rule.executable_object.inode_generation > 0
+                })
+                && entry_admission_proofs[1..].iter().all(|rule| {
+                    rule.executable_object == entry_admission_proofs[0].executable_object
+                }),
+            InvalidInputSnafu {
+                path: pin_root,
+                reason: format!(
+                    "entry admission did not retain six calls over one proven BusyBox object: {entry_admission_proofs:?}"
+                ),
+            }
+        );
 
         wait_for_reason(
             &reader,
@@ -522,6 +613,15 @@ impl EffectTestRunner {
             "EXACT_POLICY_ALLOW",
             KernelEffectOperationV1::Execute,
         )?;
+        let application_entry_exact_object_enforced =
+            exact_entry_rule_ids.contains(&active.admitted_entry_rule_id);
+        ensure!(
+            application_entry_exact_object_enforced,
+            InvalidInputSnafu {
+                path: pin_root,
+                reason: "the application entry did not commit its exact-object admission proof",
+            }
+        );
         wait_for_application_default_effect(
             &reader,
             &observations,
@@ -599,10 +699,13 @@ impl EffectTestRunner {
                 expected_role_id,
                 snapshot.admitted_entry_rule_id,
             )?;
+            let exact_executable_object_enforced =
+                exact_entry_rule_ids.contains(&snapshot.admitted_entry_rule_id);
             ensure!(
                 status.success()
                     && snapshot.active_role_id == expected_role_id
                     && snapshot.admitted_entry_rule_id > 0
+                    && exact_executable_object_enforced
                     && own_policy_deny_observed,
                 InvalidInputSnafu {
                     path: &entry_stderr,
@@ -621,6 +724,7 @@ impl EffectTestRunner {
                 active_execution_id: snapshot.active_execution_id,
                 active_role_id: snapshot.active_role_id,
                 admitted_entry_rule_id: snapshot.admitted_entry_rule_id,
+                exact_executable_object_enforced,
                 own_policy_deny_observed,
                 application_policy_not_inherited: true,
             });
@@ -643,6 +747,10 @@ impl EffectTestRunner {
                 reason: "application and additional entries did not install six distinct roles and admission IDs",
             }
         );
+        let entry_executable_exact_objects_enforced = application_entry_exact_object_enforced
+            && independent_entries
+                .iter()
+                .all(|entry| entry.exact_executable_object_enforced);
         let poststart = &independent_entries[0];
         let repeated_poststart = &independent_entries[1];
         let reusable_entry_reinvocation_isolated = poststart.declaration_name
@@ -873,7 +981,7 @@ impl EffectTestRunner {
         })?;
 
         Ok(RuncPreparedProbeV1 {
-            schema_version: 6,
+            schema_version: 7,
             runc_version: runc_version.lines().next().unwrap_or_default().to_owned(),
             initial_host_pid: initial_pid,
             prepared_state_before_exec,
@@ -888,7 +996,7 @@ impl EffectTestRunner {
             runtime_entry_infrastructure_observed,
             external_entry_denied,
             external_cgroup_entering_process_stays_closed,
-            executable_observation_has_no_exact_object: true,
+            entry_executable_exact_objects_enforced,
             dynamic_loader_paths,
             dynamic_loader_paths_absent_from_policy: true,
             container_exit_success: true,
@@ -949,6 +1057,16 @@ impl EffectTestRunner {
             .enumerate()
             .map(|(index, role)| (role.to_owned(), index as u32 + 1))
             .collect::<BTreeMap<_, _>>();
+        ensure!(
+            document
+                .path_selectors
+                .iter()
+                .all(|selector| !selector.requires_exact_object()),
+            InvalidInputSnafu {
+                path: &policy_source,
+                reason: "the direct runc policy must keep action selectors path-based",
+            }
+        );
         let profile_id = document.metadata.profile_id.clone();
         let protected_scope_id = document.protected_universe.protected_scope_ids[0].clone();
         let execution_set_id = document.protected_universe.execution_set_ids[0].clone();
