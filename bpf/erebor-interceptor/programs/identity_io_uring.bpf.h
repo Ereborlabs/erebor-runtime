@@ -66,7 +66,7 @@ static __noinline int snapshot_io_uring_actor(
     if (process->state != process_security_state_kind_v1_active ||
         !process->live_thread_refs ||
         process->exec_guard_state != exec_guard_state_v1_none ||
-        process->exec_check_task_cookie ||
+        process->exec_without_transition_task_cookie ||
         !id128_equal(&process->process_state_id, &label->process_state_id) ||
         !id128_equal(&process->process_lineage_id,
                      &label->process_lineage_id) ||

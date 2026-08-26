@@ -48,6 +48,7 @@ pub struct RuncPreparedProbeV1 {
     pub application_admitted_entry_rule_id: u32,
     pub independent_entries: Vec<RuncEntryRoleProbeV1>,
     pub independent_entry_roles_are_distinct: bool,
+    pub reusable_entry_reinvocation_isolated: bool,
     pub runtime_entry_infrastructure_observed: bool,
     pub external_entry_denied: bool,
     pub external_cgroup_entering_process_stays_closed: bool,
@@ -64,7 +65,11 @@ pub struct RuncPreparedProbeV1 {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct RuncEntryRoleProbeV1 {
     pub name: String,
+    pub declaration_name: String,
     pub host_pid: u32,
+    pub task_cookie: u64,
+    pub process_state_id: String,
+    pub active_execution_id: String,
     pub active_role_id: u32,
     pub admitted_entry_rule_id: u32,
     pub own_policy_deny_observed: bool,
@@ -255,7 +260,7 @@ impl EffectTestRunner {
         config["process"]["args"] = json!([
             "/bin/sh",
             "-c",
-            "cat /run/mithril-entry-roles/application.denied >/dev/null 2>&1 || true; while [ ! -e /run/mithril-entry-roles/release ]; do /bin/sleep 1; done"
+            "true 2>/dev/null </run/mithril-entry-roles/application.denied || true; while [ ! -e /run/mithril-entry-roles/release ]; do /bin/sleep 1; done"
         ]);
         config["root"]["path"] = json!("rootfs");
         config["root"]["readonly"] = json!(false);
@@ -532,19 +537,20 @@ impl EffectTestRunner {
             }
         );
         let mut independent_entries = Vec::new();
-        for (name, executable) in [
-            ("poststart", "/opt/mithril/entries/poststart"),
-            ("prestop", "/opt/mithril/entries/prestop"),
-            ("startup", "/opt/mithril/entries/startup"),
-            ("readiness", "/opt/mithril/entries/readiness"),
-            ("liveness", "/opt/mithril/entries/liveness"),
+        for (name, declaration_name, executable) in [
+            ("poststart", "poststart", "/bin/cp"),
+            ("poststart-repeat", "poststart", "/bin/cp"),
+            ("prestop", "prestop", "/bin/dd"),
+            ("startup", "startup", "/bin/cat"),
+            ("readiness", "readiness", "/bin/grep"),
+            ("liveness", "liveness", "/bin/wc"),
         ] {
             let entry_marker = observations.cursor();
             let pid_path = fixture_root.join(format!("{name}.pid"));
             let entry_stdout = output_directory.join(format!("runc-entry-{name}.stdout"));
             let entry_stderr = output_directory.join(format!("runc-entry-{name}.stderr"));
             let command = format!(
-                "cat /run/mithril-entry-roles/{name}.denied >/dev/null 2>&1 || true; cat /run/mithril-entry-roles/application.denied >/dev/null && /bin/sleep 2"
+                "true 2>/dev/null </run/mithril-entry-roles/{declaration_name}.denied || true; true </run/mithril-entry-roles/application.denied && /bin/sleep 2"
             );
             let mut child = container.spawn_exec(
                 executable,
@@ -585,7 +591,7 @@ impl EffectTestRunner {
             reader
                 .poll(Duration::from_millis(100))
                 .context(InterceptorSnafu)?;
-            let expected_role_id = policy.role_ids[name];
+            let expected_role_id = policy.role_ids[declaration_name];
             let own_policy_deny_observed = wait_for_entry_policy_deny(
                 &reader,
                 &observations,
@@ -608,7 +614,11 @@ impl EffectTestRunner {
             );
             independent_entries.push(RuncEntryRoleProbeV1 {
                 name: name.to_owned(),
+                declaration_name: declaration_name.to_owned(),
                 host_pid,
+                task_cookie: snapshot.task_cookie,
+                process_state_id: snapshot.process_state_id,
+                active_execution_id: snapshot.active_execution_id,
                 active_role_id: snapshot.active_role_id,
                 admitted_entry_rule_id: snapshot.admitted_entry_rule_id,
                 own_policy_deny_observed,
@@ -631,6 +641,23 @@ impl EffectTestRunner {
             InvalidInputSnafu {
                 path: pin_root,
                 reason: "application and additional entries did not install six distinct roles and admission IDs",
+            }
+        );
+        let poststart = &independent_entries[0];
+        let repeated_poststart = &independent_entries[1];
+        let reusable_entry_reinvocation_isolated = poststart.declaration_name
+            == repeated_poststart.declaration_name
+            && poststart.active_role_id == repeated_poststart.active_role_id
+            && poststart.admitted_entry_rule_id == repeated_poststart.admitted_entry_rule_id
+            && poststart.host_pid != repeated_poststart.host_pid
+            && poststart.task_cookie != repeated_poststart.task_cookie
+            && poststart.process_state_id != repeated_poststart.process_state_id
+            && poststart.active_execution_id != repeated_poststart.active_execution_id;
+        ensure!(
+            reusable_entry_reinvocation_isolated,
+            InvalidInputSnafu {
+                path: pin_root,
+                reason: "a reusable declared entry did not create an independent invocation",
             }
         );
         let runtime_entry_infrastructure_observed = observations
@@ -846,7 +873,7 @@ impl EffectTestRunner {
         })?;
 
         Ok(RuncPreparedProbeV1 {
-            schema_version: 5,
+            schema_version: 6,
             runc_version: runc_version.lines().next().unwrap_or_default().to_owned(),
             initial_host_pid: initial_pid,
             prepared_state_before_exec,
@@ -857,6 +884,7 @@ impl EffectTestRunner {
             application_admitted_entry_rule_id: active.admitted_entry_rule_id,
             independent_entries,
             independent_entry_roles_are_distinct,
+            reusable_entry_reinvocation_isolated,
             runtime_entry_infrastructure_observed,
             external_entry_denied,
             external_cgroup_entering_process_stays_closed,
@@ -947,7 +975,6 @@ impl EffectTestRunner {
 fn prepare_entry_role_root(rootfs: &Path, workload_path: &Path) -> Result<Vec<String>> {
     let executables = [
         (Path::new("/bin/sh"), rootfs.join("bin/sh")),
-        (Path::new("/usr/bin/cat"), rootfs.join("bin/cat")),
         (workload_path, rootfs.join("bin/sleep")),
     ];
     let mut dependencies = BTreeSet::new();
@@ -976,12 +1003,8 @@ fn prepare_entry_role_root(rootfs: &Path, workload_path: &Path) -> Result<Vec<St
             reason: "the stock-runc regression workload must use a dynamic loader",
         }
     );
-    let entry_directory = rootfs.join("opt/mithril/entries");
-    fs::create_dir_all(&entry_directory).context(IoSnafu {
-        path: &entry_directory,
-    })?;
-    for entry in ["poststart", "prestop", "startup", "readiness", "liveness"] {
-        let destination = entry_directory.join(entry);
+    for entry in ["cp", "dd", "cat", "grep", "wc"] {
+        let destination = rootfs.join("bin").join(entry);
         fs::hard_link(rootfs.join("bin/sh"), &destination)
             .context(IoSnafu { path: &destination })?;
     }

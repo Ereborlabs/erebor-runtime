@@ -8,9 +8,10 @@ use std::time::{Duration, Instant};
 
 use erebor_interceptor::{KernelHost, MapInsertResult};
 use erebor_interceptor_abi::{
-    BindingActivationTargetKeyV1, BindingLifecycleStateV1, ExecutionSetBindingStateV1, Id128V1,
-    InitialRootStateV1, PolicyGenerationStateV1, PreparedContainerStateV1,
-    ProfileGenerationDescriptorV1, TaskCoordinateStateV1, TaskCoordinateV1, TaskLabelV1,
+    BindingActivationTargetKeyV1, BindingLifecycleStateV1, EntryAdmissionRuleKeyV1,
+    ExecutionSetBindingStateV1, Id128V1, InitialRootStateV1, PolicyGenerationStateV1,
+    PreparedContainerStateV1, ProfileGenerationDescriptorV1, TaskCoordinateStateV1,
+    TaskCoordinateV1, TaskLabelV1,
 };
 use erebor_runtime_error::{ErrorExt as _, RetryHint};
 use rustix::process::{pidfd_open, Pid, PidfdFlags};
@@ -462,8 +463,7 @@ impl WorkloadBindingOwner {
         );
         // Remove kernel authority before the local owner forgets the cgroup binding.
         if let Some(root) = roots.first().copied() {
-            self.terminate(host, root)?;
-            self.bindings.remove(&root);
+            self.retire_owned_root(host, root)?;
         }
         Ok(())
     }
@@ -500,8 +500,7 @@ impl WorkloadBindingOwner {
                     reason: "terminal cleanup binding belongs to another profile generation",
                 }
             );
-            self.terminate(host, root)?;
-            self.bindings.remove(&root);
+            self.retire_owned_root(host, root)?;
         }
 
         let mut observed = BTreeSet::new();
@@ -697,8 +696,7 @@ impl WorkloadBindingOwner {
         }
         // Roll back the new binding if it cannot join the already active generation.
         if let Err(error) = self.install_late_activation_target(host, root, spec) {
-            let rollback = self.terminate(host, root);
-            self.bindings.remove(&root);
+            let rollback = self.retire_owned_root(host, root);
             return match rollback {
                 Ok(()) => Err(error),
                 Err(rollback) => IdentityStateSnafu {
@@ -894,6 +892,142 @@ impl WorkloadBindingOwner {
         self.staged_runtime_admissions.remove(container_id);
     }
 
+    fn install_runtime_entry_admissions(
+        host: &KernelHost,
+        binding: &PublishedBinding,
+    ) -> Result<()> {
+        let Some(authority_binding_id) = binding.spec.scheduled_binding_authority_id.as_deref()
+        else {
+            return Ok(());
+        };
+        let authority_binding_id =
+            parse_id("scheduled_binding_authority_id", authority_binding_id)?;
+        let mut rows = Vec::new();
+        for source_key in host
+            .map_keys("entry_admission_rules")
+            .context(InterceptorSnafu)?
+        {
+            let source =
+                EntryAdmissionRuleKeyV1::try_read_from_bytes(&source_key).map_err(|error| {
+                    IdentityStateSnafu {
+                        reason: format!("entry admission key has the wrong ABI: {error}"),
+                    }
+                    .build()
+                })?;
+            if source.profile_generation_ref_id != binding.state.active_profile_generation_ref_id
+                || source.binding_id != authority_binding_id
+            {
+                continue;
+            }
+            let value = host
+                .lookup_map("entry_admission_rules", &source_key)
+                .context(InterceptorSnafu)?
+                .context(IdentityStateSnafu {
+                    reason: "scheduled entry admission disappeared during runtime publication",
+                })?;
+            let mut target = source;
+            target.binding_id = binding.state.binding_id;
+            rows.push((target.as_bytes().to_vec(), value));
+        }
+        ensure!(
+            !rows.is_empty(),
+            IdentityStateSnafu {
+                reason: "scheduled runtime binding has no entry admission rows",
+            }
+        );
+
+        let mut inserted = Vec::new();
+        let result = (|| {
+            for (key, value) in &rows {
+                match host
+                    .lookup_map("entry_admission_rules", key)
+                    .context(InterceptorSnafu)?
+                {
+                    Some(existing) => ensure!(
+                        existing == *value,
+                        IdentityStateSnafu {
+                            reason: "runtime entry admission changed during publication",
+                        }
+                    ),
+                    None => {
+                        ensure!(
+                            host.insert_map("entry_admission_rules", key, value)
+                                .context(InterceptorSnafu)?
+                                == MapInsertResult::Inserted,
+                            IdentityStateSnafu {
+                                reason: "runtime entry admission changed during insertion",
+                            }
+                        );
+                        inserted.push(key.clone());
+                    }
+                }
+                ensure!(
+                    host.lookup_map("entry_admission_rules", key)
+                        .context(InterceptorSnafu)?
+                        .as_deref()
+                        == Some(value.as_slice()),
+                    IdentityStateSnafu {
+                        reason: "runtime entry admission failed readback",
+                    }
+                );
+            }
+            Ok(())
+        })();
+        if let Err(error) = result {
+            let rollback = inserted.iter().try_for_each(|key| {
+                host.delete_map_entry("entry_admission_rules", key)
+                    .context(InterceptorSnafu)
+            });
+            return match rollback {
+                Ok(()) => Err(error),
+                Err(rollback) => IdentityStateSnafu {
+                    reason: format!(
+                        "runtime entry admission publication failed: {error}; rollback failed: {rollback}"
+                    ),
+                }
+                .fail(),
+            };
+        }
+        Ok(())
+    }
+
+    fn remove_runtime_entry_admissions(
+        host: &KernelHost,
+        binding: &PublishedBinding,
+    ) -> Result<()> {
+        if binding.spec.scheduled_binding_authority_id.is_none() {
+            return Ok(());
+        }
+        let keys = host
+            .map_keys("entry_admission_rules")
+            .context(InterceptorSnafu)?;
+        for key in keys {
+            let admission =
+                EntryAdmissionRuleKeyV1::try_read_from_bytes(&key).map_err(|error| {
+                    IdentityStateSnafu {
+                        reason: format!("entry admission key has the wrong ABI: {error}"),
+                    }
+                    .build()
+                })?;
+            if admission.profile_generation_ref_id != binding.state.active_profile_generation_ref_id
+                || admission.binding_id != binding.state.binding_id
+            {
+                continue;
+            }
+            host.delete_map_entry("entry_admission_rules", &key)
+                .context(InterceptorSnafu)?;
+            ensure!(
+                host.lookup_map("entry_admission_rules", &key)
+                    .context(InterceptorSnafu)?
+                    .is_none(),
+                IdentityStateSnafu {
+                    reason: "retired runtime entry admission survived deletion",
+                }
+            );
+        }
+        Ok(())
+    }
+
     fn install_late_activation_target(
         &mut self,
         host: &KernelHost,
@@ -998,6 +1132,7 @@ impl WorkloadBindingOwner {
                 reason: "held runtime binding activation target failed readback",
             }
         );
+        Self::install_runtime_entry_admissions(host, binding)?;
         self.profile_handles
             .insert(active, binding.state.profile_id);
         Ok(())
@@ -1356,8 +1491,7 @@ impl WorkloadBindingOwner {
         let retired_binding_ids = Self::retired_configured_binding_ids(configured, &observed);
         let plan = self.plan_runtime_reconciliation(observed)?;
         for root_id in plan.missing_root_ids {
-            self.terminate(host, root_id)?;
-            self.bindings.remove(&root_id);
+            self.retire_owned_root(host, root_id)?;
         }
         for update in plan.updates {
             let binding = self
@@ -1570,6 +1704,16 @@ impl WorkloadBindingOwner {
         for root_id in root_ids {
             self.terminate(host, root_id)?;
         }
+        Ok(())
+    }
+
+    fn retire_owned_root(&mut self, host: &KernelHost, root_id: u64) -> Result<()> {
+        self.terminate(host, root_id)?;
+        let binding = self.bindings.get(&root_id).context(IdentityStateSnafu {
+            reason: "retired runtime binding disappeared before entry cleanup",
+        })?;
+        Self::remove_runtime_entry_admissions(host, binding)?;
+        self.bindings.remove(&root_id);
         Ok(())
     }
 

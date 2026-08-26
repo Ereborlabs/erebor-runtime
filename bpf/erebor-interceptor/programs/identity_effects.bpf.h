@@ -524,7 +524,9 @@ static __noinline int resolved_identity_effect_gate(struct file *file,
         return hard_effect_result(
             config, scratch,
             effect_observation_reason_v1_corrupt_identity_or_generation);
-    if (runtime_entry_bootstrap_actor_is_exact(
+    if (!(scratch->effect_gate_flags &
+          EFFECT_GATE_PREPARED_EXEC_EVALUATION_V1) &&
+        runtime_entry_bootstrap_actor_is_exact(
             config, binding, label, &scratch->process, entry))
         return runtime_entry_infrastructure_effect_result(scratch);
     /* Runtime setup can open anonymous exec objects after bprm state exists.
@@ -788,7 +790,7 @@ static __always_inline int identity_effect_gate(struct file *file,
     if (!ret)
         prepare_effect_identity();
     return dispatch_identity_effect_gate(file, NULL, effect_family, operation,
-                                         ret);
+                                           ret);
 }
 
 static __noinline int prepared_exec_policy_gate(struct file *file)
@@ -821,7 +823,7 @@ static __noinline int identity_effect_gate_without_exception(
     if (!ret)
         prepare_effect_identity();
     return dispatch_identity_effect_gate(file, NULL, effect_family, operation,
-                                         ret);
+                                           ret);
 }
 
 static __noinline int identity_file_open_effect_gate(
@@ -837,7 +839,7 @@ static __noinline int identity_file_open_effect_gate(
     if (!ret)
         prepare_effect_identity();
     return dispatch_identity_effect_gate(file, NULL, effect_family, operation,
-                                         ret);
+                                           ret);
 }
 
 static __noinline int identity_effect_actor_gate(
@@ -853,7 +855,7 @@ static __noinline int identity_effect_actor_gate(
     if (!ret)
         prepare_effect_identity();
     return dispatch_identity_effect_gate(file, NULL, effect_family, operation,
-                                         ret);
+                                           ret);
 }
 
 static __noinline int identity_path_effect_gate(const struct path *path,
@@ -870,7 +872,7 @@ static __noinline int identity_path_effect_gate(const struct path *path,
     if (!ret)
         prepare_effect_identity();
     return dispatch_identity_effect_gate(NULL, path, effect_family, operation,
-                                         ret);
+                                           ret);
 }
 
 #include "identity_device_process.bpf.h"

@@ -282,7 +282,7 @@ mod tests {
                             == libbpf_rs::libbpf_sys::BPF_FUNC_task_storage_get as i32
                 })
                 .count();
-            assert_eq!(calls, 7);
+            assert_eq!(calls, 12);
         }
         assert!(found);
         Ok(())

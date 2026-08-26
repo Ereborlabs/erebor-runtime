@@ -82,12 +82,13 @@ int BPF_PROG(erebor_task_alloc, struct task_struct *task,
         return identity_deny(config);
     __builtin_memset(io_uring_execution, 0, sizeof(*io_uring_execution));
     creator = bpf_get_current_task_btf();
-    if (inherit_runtime_entry_bootstrap(creator, task, config)) {
+    parent_label = bpf_task_storage_get(&task_labels, creator, 0, 0);
+    if (!parent_label &&
+        inherit_runtime_entry_bootstrap(creator, task, config)) {
         if (health)
             health->allocation_failures++;
         return identity_deny(config);
     }
-    parent_label = bpf_task_storage_get(&task_labels, creator, 0, 0);
     if (task_cgroup(creator, &creator_cgroup)) {
         if (health)
             health->placement_mismatches++;

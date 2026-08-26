@@ -455,10 +455,10 @@ pub struct ProcessSecurityStateV1 {
     pub pending_exec_id: Id128V1,
     pub pending_target_execution_id: Id128V1,
     pub pending_target_role_id: u32,
-    pub reserved_pending_role: u32,
+    pub runtime_entry_bootstrap_prepared: u32,
     pub transition_guard: u64,
     pub pending_exec_response_set_ref_id: u64,
-    pub exec_check_task_cookie: u64,
+    pub exec_without_transition_task_cookie: u64,
     pub transition_version: u64,
     pub live_thread_refs: u64,
     pub exec_guard_state: ExecGuardStateV1,
@@ -953,7 +953,7 @@ mod tests {
         assert_eq!(align_of::<ProcessSecurityStateV1>(), 8);
         assert_eq!(size_of::<ProcessSecurityStateV1>(), 248);
         assert_eq!(
-            offset_of!(ProcessSecurityStateV1, exec_check_task_cookie),
+            offset_of!(ProcessSecurityStateV1, exec_without_transition_task_cookie),
             216
         );
         assert_eq!(size_of::<ExactExecutableCandidateV1>(), 32);

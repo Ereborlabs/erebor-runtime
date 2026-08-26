@@ -63,11 +63,9 @@ static __noinline int reserve_entry_admission(
             prepared_container_reserve_activation(binding, label))
             return -EACCES;
     } else {
-        classification = bpf_map_lookup_elem(
-            &external_root_classifications, &label->task_cookie);
+        classification = entry_root_classification(label, entry);
         if (pending->source_role_id != binding->external_role_id ||
             !classification ||
-            classification->task_cookie != label->task_cookie ||
             classification->root_class !=
                 external_root_class_v1_external_runtime_root ||
             classification->purpose != entry_purpose_v1_unknown ||
@@ -110,8 +108,7 @@ static __noinline int commit_entry_admission_metadata(
     if (!pending->admitted_entry_rule_id)
         return 0;
     entry = bpf_map_lookup_elem(&entry_states, &label->entry_instance_id);
-    classification = bpf_map_lookup_elem(&external_root_classifications,
-                                         &label->task_cookie);
+    classification = entry_root_classification(label, entry);
     if (!entry || !classification)
         return -EACCES;
     administrative_match = bpf_map_lookup_elem(
@@ -173,13 +170,9 @@ static __noinline bool entry_admission_matches_live_state(
                pending->source_role_id == binding->initial_role_id &&
                id128_equal(&binding->prepared_container_entry_instance_id,
                            &label->entry_instance_id);
-    classification = bpf_map_lookup_elem(
-        &external_root_classifications, &label->task_cookie);
+    classification = entry_root_classification(label, entry);
     if (!classification ||
         pending->source_role_id != binding->external_role_id ||
-        classification->task_cookie != label->task_cookie ||
-        !id128_equal(&classification->process_state_id,
-                     &label->process_state_id) ||
         classification->root_class !=
             external_root_class_v1_external_runtime_root ||
         classification->purpose != entry_purpose_v1_unknown ||
@@ -224,9 +217,11 @@ static __always_inline int observe_bprm_effect(struct linux_binprm *bprm)
                   ? bpf_map_lookup_elem(&pending_execs,
                                         &label->task_cookie)
                   : NULL;
-    if (pending && pending->admitted_entry_rule_id)
+    if (pending && pending->task_cookie == label->task_cookie &&
+        pending->admitted_entry_rule_id)
         return 0;
-    if (pending && pending->prepared_runtime_exec)
+    if (pending && pending->task_cookie == label->task_cookie &&
+        pending->prepared_runtime_exec)
         return identity_effect_actor_gate(
             NULL, kernel_effect_family_v1_exec,
             kernel_effect_operation_v1_execute, 0);
@@ -270,14 +265,14 @@ static __always_inline int observe_bprm_effect(struct linux_binprm *bprm)
     admission = reserve_entry_admission(config, label, binding, entry,
                                         pending, scratch);
     if (admission < 0) {
-        bpf_task_storage_delete(&runtime_entry_bootstrap_states, task);
+        clear_runtime_entry_bootstrap(task);
         return identity_deny(config);
     }
     if (admission > 0)
         return 0;
 
     if (!prepared_container_pre_active_actor_is_exact(binding, label, entry)) {
-        bpf_task_storage_delete(&runtime_entry_bootstrap_states, task);
+        clear_runtime_entry_bootstrap(task);
         if (pending->source_role_id != binding->external_role_id)
             return 0;
         scratch->effect_gate_flags = 0;
@@ -290,7 +285,7 @@ static __always_inline int observe_bprm_effect(struct linux_binprm *bprm)
             prepared_container_state_v1_exec_pending)
             prepared_container_rollback_activation(binding,
                                                    label->task_cookie);
-        bpf_task_storage_delete(&runtime_entry_bootstrap_states, task);
+        clear_runtime_entry_bootstrap(task);
         scratch->effect_gate_flags = 0;
         return hard_effect_result(
             config, scratch,
@@ -559,6 +554,7 @@ static __always_inline int prepare_administrative_match(
     struct identity_scratch_v1 *scratch;
     task_label_v1 *label;
     process_security_state_v1 *process;
+    entry_security_state_v1 *entry;
     external_root_classification_v1 *classification;
     execution_set_binding_state_v1 *binding;
     approved_exec_slot_key_v1 key;
@@ -585,8 +581,8 @@ static __always_inline int prepare_administrative_match(
     bpf_map_delete_elem(&pending_administrative_matches,
                         &label->task_cookie);
     process = bpf_map_lookup_elem(&process_states, &label->process_state_id);
-    classification = bpf_map_lookup_elem(&external_root_classifications,
-                                         &label->task_cookie);
+    entry = bpf_map_lookup_elem(&entry_states, &label->entry_instance_id);
+    classification = entry_root_classification(label, entry);
     if (!label_matches_runtime(label, config) ||
         !binding_matches_label(binding, label) || !process ||
         process->state != process_security_state_kind_v1_active ||
@@ -658,8 +654,9 @@ int erebor_sys_enter_execveat(struct trace_event_raw_sys_enter *context)
         process = bpf_map_lookup_elem(&process_states,
                                       &label->process_state_id);
         if (process)
-            __sync_val_compare_and_swap(&process->exec_check_task_cookie, 0,
-                                        label->task_cookie);
+            __sync_val_compare_and_swap(
+                &process->exec_without_transition_task_cookie, 0,
+                label->task_cookie);
         return 0;
     }
     return prepare_administrative_match(
@@ -741,7 +738,6 @@ static __noinline int identity_bprm_transition(struct linux_binprm *bprm,
     pending_exec_v1 *pending;
     __u64 *profile_task_refs;
     struct cgroup *cgroup = NULL;
-    bool prepared_runtime_exec = false;
     int binding_lookup;
 
     if (ret)
@@ -834,8 +830,9 @@ static __noinline int identity_bprm_transition(struct linux_binprm *bprm,
         !profile_task_refs ||
         __sync_fetch_and_add(profile_task_refs, 0) == 0)
         return identity_deny(config);
-    if (snapshot->exec_check_task_cookie)
-        return snapshot->exec_check_task_cookie == label->task_cookie
+    if (snapshot->exec_without_transition_task_cookie)
+        return snapshot->exec_without_transition_task_cookie ==
+                       label->task_cookie
                    ? 0
                    : identity_deny(config);
     pending = bpf_map_lookup_elem(&pending_execs, &label->task_cookie);
@@ -854,6 +851,14 @@ static __noinline int identity_bprm_transition(struct linux_binprm *bprm,
             return identity_deny(config);
         }
         candidate_from_bprm(&scratch->pending_exec.ordered_candidates[0], bprm);
+        scratch->pending_exec.prepared_runtime_exec = 0;
+        /* A runtime can re-exec its current image while it prepares an entry.
+         * A different image must match a declared entry before exec commits. */
+        if (runtime_entry_bootstrap_actor_is_exact(
+                config, binding, label, snapshot, entry) &&
+            image_contains_candidate(
+                active_image, &scratch->pending_exec.ordered_candidates[0]))
+            scratch->pending_exec.prepared_runtime_exec = 1;
         if (!scratch->pending_exec.ordered_candidates[0].mount_id) {
             /* The prepared runtime can use anonymous executable objects. The
              * policy gate still decides whether this exec activates the app. */
@@ -862,7 +867,7 @@ static __noinline int identity_bprm_transition(struct linux_binprm *bprm,
                 return config->effect_policy_enabled ? BPRM_OBSERVE_EFFECT_V1
                                                      : identity_deny(config);
             }
-            prepared_runtime_exec = true;
+            scratch->pending_exec.prepared_runtime_exec = 1;
         }
         if (allocate_id(config, &scratch->pending_exec.pending_exec_id) ||
             allocate_id(config, &scratch->pending_exec.target_execution_id) ||
@@ -877,7 +882,6 @@ static __noinline int identity_bprm_transition(struct linux_binprm *bprm,
         scratch->pending_exec.source_execution_id = snapshot->active_execution_id;
         scratch->pending_exec.source_role_id = snapshot->active_role_id;
         scratch->pending_exec.candidate_count = 1;
-        scratch->pending_exec.prepared_runtime_exec = prepared_runtime_exec;
         scratch->pending_exec.exact_object_required = 0;
         scratch->pending_exec.source_profile_generation_ref_id =
             snapshot->active_profile_generation_ref_id;
@@ -926,7 +930,8 @@ static __noinline int identity_bprm_transition(struct linux_binprm *bprm,
             return identity_deny(config);
         return BPRM_OBSERVE_EFFECT_V1;
     }
-    if (!id128_equal(&pending->process_state_id, &label->process_state_id) ||
+    if (pending->task_cookie != label->task_cookie ||
+        !id128_equal(&pending->process_state_id, &label->process_state_id) ||
         pending->state != pending_exec_state_v1_preparing ||
         snapshot->exec_guard_state != exec_guard_state_v1_preparing)
         return identity_deny(config);
@@ -988,16 +993,17 @@ static __always_inline int prepare_exec_records(
 SEC("fentry/security_bprm_committing_creds")
 int BPF_PROG(erebor_bprm_committing_creds, struct linux_binprm *bprm)
 {
+    identity_runtime_config_v1 *config = identity_runtime_config();
     struct task_struct *task = bpf_get_current_task_btf();
     struct identity_scratch_v1 *scratch;
     task_label_v1 *label;
     process_security_state_v1 *process;
     pending_exec_v1 *pending;
-    entry_security_state_v1 *entry;
-    execution_set_binding_state_v1 *binding;
+    entry_security_state_v1 *entry = NULL;
+    execution_set_binding_state_v1 *binding = NULL;
     struct cgroup *cgroup = NULL;
     bool non_exact_candidate_allowed = false;
-    int binding_lookup;
+    int binding_lookup = -1;
 
     label = bpf_task_storage_get(&task_labels, task, 0, 0);
     if (!label)
@@ -1014,20 +1020,36 @@ int BPF_PROG(erebor_bprm_committing_creds, struct linux_binprm *bprm)
                  binding, label, entry) ||
              prepared_container_admitted_actor_is_exact(
                  binding, label, entry) ||
-             (pending && pending->admitted_entry_rule_id &&
-              !pending->exact_object_required));
+             (pending &&
+              (pending->prepared_runtime_exec ||
+               (pending->admitted_entry_rule_id &&
+                !pending->exact_object_required))));
     }
     if (!process)
         return 0;
     if (__sync_val_compare_and_swap(&process->transition_guard, 0, 1))
         return 0;
     if (!pending) {
+        /* Cgroup attachment can make a prepared entry visible after the
+         * bprm check. Mark that in-flight bootstrap exec for completion. */
+        if (!binding_lookup && binding && entry &&
+            process->exec_guard_state == exec_guard_state_v1_none &&
+            !process->exec_without_transition_task_cookie &&
+            runtime_entry_bootstrap_actor_is_exact(
+                config, binding, label, process, entry)) {
+            process->exec_without_transition_task_cookie =
+                label->task_cookie;
+            process->transition_version++;
+            release_transition_guard(&process->transition_guard);
+            return 0;
+        }
         process->exec_guard_state = exec_guard_state_v1_outcome_unknown;
         process->transition_version++;
         release_transition_guard(&process->transition_guard);
         return 0;
     }
-    if (process->exec_guard_state != exec_guard_state_v1_preparing ||
+    if (pending->task_cookie != label->task_cookie ||
+        process->exec_guard_state != exec_guard_state_v1_preparing ||
         pending->state != pending_exec_state_v1_preparing ||
         !id128_equal(&pending->pending_exec_id, &process->pending_exec_id)) {
         process->exec_guard_state = exec_guard_state_v1_outcome_unknown;
@@ -1059,8 +1081,8 @@ static __always_inline void activate_prepared_container_for_application(
     struct task_struct *task)
 {
     task_label_v1 *label;
-    execution_set_binding_state_v1 *binding;
-    entry_security_state_v1 *entry;
+    execution_set_binding_state_v1 *binding = NULL;
+    entry_security_state_v1 *entry = NULL;
     struct cgroup *cgroup = NULL;
     int binding_lookup;
 
@@ -1097,7 +1119,7 @@ static __always_inline int complete_failed_exec(long result)
     if (result >= 0)
         return 0;
     task = bpf_get_current_task_btf();
-    bpf_task_storage_delete(&runtime_entry_bootstrap_states, task);
+    clear_runtime_entry_bootstrap(task);
     label = bpf_task_storage_get(&task_labels, task, 0, 0);
     if (!label)
         return 0;
@@ -1105,7 +1127,13 @@ static __always_inline int complete_failed_exec(long result)
                         &label->task_cookie);
     process = bpf_map_lookup_elem(&process_states, &label->process_state_id);
     pending = bpf_map_lookup_elem(&pending_execs, &label->task_cookie);
-    if (!process || !pending ||
+    if (process && !pending) {
+        __sync_val_compare_and_swap(
+            &process->exec_without_transition_task_cookie,
+            label->task_cookie, 0);
+        return 0;
+    }
+    if (!process || !pending || pending->task_cookie != label->task_cookie ||
         __sync_val_compare_and_swap(&process->transition_guard, 0, 1))
         return 0;
     if (process->exec_guard_state != exec_guard_state_v1_preparing ||
@@ -1167,7 +1195,8 @@ int erebor_sys_exit_execveat(struct trace_event_raw_sys_exit *context)
                                       &label->process_state_id);
         if (process &&
             __sync_val_compare_and_swap(
-                &process->exec_check_task_cookie, label->task_cookie, 0) ==
+                &process->exec_without_transition_task_cookie,
+                label->task_cookie, 0) ==
                 label->task_cookie)
             return 0;
     }
@@ -1177,6 +1206,7 @@ int erebor_sys_exit_execveat(struct trace_event_raw_sys_exit *context)
 SEC("tracepoint/sched/sched_process_exec")
 int erebor_sched_process_exec(struct trace_event_raw_sched_process_exec *context)
 {
+    identity_runtime_config_v1 *config;
     struct task_struct *task;
     task_label_v1 *label;
     process_security_state_v1 *process;
@@ -1195,23 +1225,48 @@ int erebor_sched_process_exec(struct trace_event_raw_sched_process_exec *context
     struct cgroup *cgroup = NULL;
     bool non_exact_candidate_allowed;
     bool entry_admission;
-    int binding_lookup;
+    int binding_lookup = -1;
 
+    config = identity_runtime_config();
     task = bpf_get_current_task_btf();
-    bpf_task_storage_delete(&runtime_entry_bootstrap_states, task);
     label = bpf_task_storage_get(&task_labels, task, 0, 0);
-    if (!label)
+    if (!label) {
+        clear_runtime_entry_bootstrap(task);
         return 0;
+    }
     process = bpf_map_lookup_elem(&process_states, &label->process_state_id);
     pending = bpf_map_lookup_elem(&pending_execs, &label->task_cookie);
-    if (!process)
+    if (!process) {
+        clear_runtime_entry_bootstrap(task);
         return 0;
-    if (__sync_val_compare_and_swap(&process->transition_guard, 0, 1))
+    }
+    if (!task_cgroup(task, &cgroup)) {
+        binding = binding_for_cgroup(cgroup, &binding_lookup);
+        entry = bpf_map_lookup_elem(&entry_states,
+                                    &label->entry_instance_id);
+    }
+    if (__sync_val_compare_and_swap(&process->transition_guard, 0, 1)) {
+        clear_runtime_entry_bootstrap(task);
         return 0;
+    }
     if (!pending) {
+        /* This marker proves that the credential hook accepted this exact
+         * task as an in-flight prepared bootstrap exec. */
+        if (!binding_lookup && binding && entry &&
+            process->exec_guard_state == exec_guard_state_v1_none &&
+            process->exec_without_transition_task_cookie ==
+                label->task_cookie &&
+            runtime_entry_bootstrap_actor_is_exact(
+                config, binding, label, process, entry)) {
+            process->exec_without_transition_task_cookie = 0;
+            process->transition_version++;
+            release_transition_guard(&process->transition_guard);
+            return 0;
+        }
         process->exec_guard_state = exec_guard_state_v1_outcome_unknown;
         process->transition_version++;
         release_transition_guard(&process->transition_guard);
+        clear_runtime_entry_bootstrap(task);
         return 0;
     }
     if (task_cgroup(task, &cgroup)) {
@@ -1220,6 +1275,7 @@ int erebor_sched_process_exec(struct trace_event_raw_sched_process_exec *context
         pending->state = pending_exec_state_v1_outcome_unknown;
         pending->transition_version++;
         release_transition_guard(&process->transition_guard);
+        clear_runtime_entry_bootstrap(task);
         return 0;
     }
     binding = binding_for_cgroup(cgroup, &binding_lookup);
@@ -1230,8 +1286,10 @@ int erebor_sched_process_exec(struct trace_event_raw_sched_process_exec *context
              binding, label, entry) ||
          prepared_container_admitted_actor_is_exact(
              binding, label, entry) ||
+         pending->prepared_runtime_exec ||
          pending->admitted_entry_rule_id);
-    if (process->exec_guard_state != exec_guard_state_v1_commit_pending ||
+    if (pending->task_cookie != label->task_cookie ||
+        process->exec_guard_state != exec_guard_state_v1_commit_pending ||
         pending->state != pending_exec_state_v1_commit_pending ||
         !id128_equal(&pending->pending_exec_id, &process->pending_exec_id)) {
         process->exec_guard_state = exec_guard_state_v1_outcome_unknown;
@@ -1239,6 +1297,7 @@ int erebor_sched_process_exec(struct trace_event_raw_sched_process_exec *context
         process->transition_version++;
         pending->transition_version++;
         release_transition_guard(&process->transition_guard);
+        clear_runtime_entry_bootstrap(task);
         return 0;
     }
     previous_execution = bpf_map_lookup_elem(
@@ -1273,6 +1332,7 @@ int erebor_sched_process_exec(struct trace_event_raw_sched_process_exec *context
             target_image->transition_version++;
         }
         release_transition_guard(&process->transition_guard);
+        clear_runtime_entry_bootstrap(task);
         return 0;
     }
     if (!previous_execution ||
@@ -1289,7 +1349,9 @@ int erebor_sched_process_exec(struct trace_event_raw_sched_process_exec *context
               target_image, &scratch->image.ordered_candidates[0])) &&
          !non_exact_candidate_allowed) ||
         (pending->prepared_runtime_exec &&
-         !prepared_container_actor_is_exact(binding, label, entry)) ||
+         !prepared_container_actor_is_exact(binding, label, entry) &&
+         !runtime_entry_bootstrap_actor_is_exact(
+             config, binding, label, process, entry)) ||
         (process->pending_target_role_id != process->active_role_id &&
          !entry_admission) ||
         (entry_admission && !process->pending_target_role_id) ||
@@ -1311,10 +1373,11 @@ int erebor_sched_process_exec(struct trace_event_raw_sched_process_exec *context
             target_image->transition_version++;
         }
         release_transition_guard(&process->transition_guard);
+        clear_runtime_entry_bootstrap(task);
         return 0;
     }
-    /* Process identity commits here. The prepared bypass remains reserved to
-     * this exec task until the successful syscall exit. */
+    /* Keep entry preparation across successful runtime-internal execs. A
+     * declared entry consumes it when that entry's role becomes active. */
     previous_execution->end_boottime_ns = bpf_ktime_get_ns();
     previous_execution->state = process_execution_state_v1_complete;
     previous_execution->transition_version++;
@@ -1327,6 +1390,8 @@ int erebor_sched_process_exec(struct trace_event_raw_sched_process_exec *context
     process->active_role_id = process->pending_target_role_id;
     process->effective_response_set_ref_id =
         process->pending_exec_response_set_ref_id;
+    if (entry_admission)
+        process->runtime_entry_bootstrap_prepared = 0;
     zero_id(&process->pending_exec_id);
     zero_id(&process->pending_target_execution_id);
     process->pending_target_role_id = 0;
@@ -1344,6 +1409,8 @@ int erebor_sched_process_exec(struct trace_event_raw_sched_process_exec *context
         coordinate->state = task_coordinate_state_v1_runnable;
     }
     release_transition_guard(&process->transition_guard);
+    if (entry_admission)
+        clear_runtime_entry_bootstrap(task);
     bpf_map_delete_elem(&pending_administrative_matches,
                         &label->task_cookie);
     bpf_map_delete_elem(&pending_execs, &label->task_cookie);

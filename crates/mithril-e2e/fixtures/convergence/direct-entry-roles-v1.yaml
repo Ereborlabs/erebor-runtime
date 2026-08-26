@@ -63,7 +63,7 @@ roles:
         action: Deny
     execution:
       - name: poststart-entry
-        path: /opt/mithril/entries/poststart
+        path: /bin/cp
         recursive: false
         operations: [Execute]
         action: Allow
@@ -81,7 +81,7 @@ roles:
         action: Deny
     execution:
       - name: prestop-entry
-        path: /opt/mithril/entries/prestop
+        path: /bin/dd
         recursive: false
         operations: [Execute]
         action: Allow
@@ -99,7 +99,7 @@ roles:
         action: Deny
     execution:
       - name: startup-entry
-        path: /opt/mithril/entries/startup
+        path: /bin/cat
         recursive: false
         operations: [Execute]
         action: Allow
@@ -117,7 +117,7 @@ roles:
         action: Deny
     execution:
       - name: readiness-entry
-        path: /opt/mithril/entries/readiness
+        path: /bin/grep
         recursive: false
         operations: [Execute]
         action: Allow
@@ -135,7 +135,7 @@ roles:
         action: Deny
     execution:
       - name: liveness-entry
-        path: /opt/mithril/entries/liveness
+        path: /bin/wc
         recursive: false
         operations: [Execute]
         action: Allow

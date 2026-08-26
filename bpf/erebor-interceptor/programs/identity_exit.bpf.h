@@ -56,7 +56,7 @@ int erebor_sched_process_exit(struct trace_event_raw_sched_process_template *con
                         &label->task_cookie);
     process = bpf_map_lookup_elem(&process_states, &label->process_state_id);
     if (process)
-        __sync_val_compare_and_swap(&process->exec_check_task_cookie,
+        __sync_val_compare_and_swap(&process->exec_without_transition_task_cookie,
                                     label->task_cookie, 0);
     coordinate = bpf_map_lookup_elem(&task_coordinates, &label->task_cookie);
     if (coordinate) {

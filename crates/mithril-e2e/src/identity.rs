@@ -1139,6 +1139,7 @@ impl IdentityTestRunner {
                 reason: "the post-PONR child did not start with the inherited restricted identity",
             }
         );
+        let post_ponr_task_key = post_ponr_before.task_cookie.to_ne_bytes();
         let post_ponr_process_key = id_key(&post_ponr_before.process_state_id)?;
         post_ponr_fixture.release_exec(post_ponr_pid)?;
         post_ponr_fixture.wait_for_post_ponr_fatal(post_ponr_pid)?;
@@ -1153,7 +1154,7 @@ impl IdentityTestRunner {
             let Some(pending) = optional_abi_map::<PendingExecV1>(
                 &host,
                 "pending_execs",
-                &post_ponr_before.task_cookie.to_ne_bytes(),
+                &post_ponr_task_key,
                 "post-PONR pending exec",
             )?
             else {

@@ -59,10 +59,10 @@ static __always_inline int prepare_root_state(
     zero_id(&scratch->process.pending_exec_id);
     zero_id(&scratch->process.pending_target_execution_id);
     scratch->process.pending_target_role_id = 0;
-    scratch->process.reserved_pending_role = 0;
+    scratch->process.runtime_entry_bootstrap_prepared = 0;
     scratch->process.transition_guard = 0;
     scratch->process.pending_exec_response_set_ref_id = 0;
-    scratch->process.exec_check_task_cookie = 0;
+    scratch->process.exec_without_transition_task_cookie = 0;
     scratch->process.transition_version = 1;
     scratch->process.live_thread_refs = 1;
     scratch->process.exec_guard_state = exec_guard_state_v1_none;
@@ -261,6 +261,8 @@ static __always_inline int create_external_root(
     execution_set_binding_state_v1 *binding, struct identity_scratch_v1 *scratch)
 {
     execution_set_binding_state_v1 *activation;
+    struct runtime_entry_bootstrap_state_v1 *bootstrap;
+    process_security_state_v1 *process;
     __u8 root_class = external_root_class_v1_external_runtime_root;
     __u8 role_class = installed_role_class_v1_runtime_external_restricted;
     __u32 role_id;
@@ -297,6 +299,21 @@ static __always_inline int create_external_root(
     int result = create_root(task, config, activation, scratch, root_class,
                              role_class, role_id);
 
+    bootstrap = runtime_entry_bootstrap_for_task(task);
+    if (!result && !initial_root &&
+        runtime_entry_bootstrap_state_valid(bootstrap, config) &&
+        bootstrap->profile_generation_ref_id ==
+            binding->active_profile_generation_ref_id &&
+        id128_equal(&bootstrap->binding_id, &binding->binding_id) &&
+        id128_equal(&bootstrap->target_entry_instance_id,
+                    &binding->prepared_container_entry_instance_id)) {
+        process = bpf_map_lookup_elem(&process_states,
+                                      &scratch->label.process_state_id);
+        if (!process)
+            return identity_deny(config);
+        process->runtime_entry_bootstrap_prepared = 1;
+        process->transition_version++;
+    }
     if (result && initial_root &&
         binding->prepared_container_state ==
             prepared_container_state_v1_prepared)

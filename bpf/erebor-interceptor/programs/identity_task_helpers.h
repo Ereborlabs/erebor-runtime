@@ -15,16 +15,60 @@ static __always_inline bool runtime_entry_bootstrap_state_valid(
            id128_equal(&state->node_boot_id, &config->node_boot_id);
 }
 
+static __always_inline struct task_struct *runtime_entry_bootstrap_owner(
+    struct task_struct *task)
+{
+    struct task_struct *leader = NULL;
+
+    if (!task)
+        return NULL;
+    leader = task->group_leader;
+    return leader ? leader : task;
+}
+
+static __noinline void clear_runtime_entry_bootstrap(
+    struct task_struct *task)
+{
+    struct task_struct *owner = runtime_entry_bootstrap_owner(task);
+
+    if (owner)
+        bpf_task_storage_delete(&runtime_entry_bootstrap_states, owner);
+}
+
+static __always_inline struct runtime_entry_bootstrap_state_v1 *
+runtime_entry_bootstrap_for_task(struct task_struct *task)
+{
+    struct runtime_entry_bootstrap_state_v1 *state;
+    struct task_struct *owner;
+    struct task_struct *parent;
+
+    owner = runtime_entry_bootstrap_owner(task);
+    state = owner ? bpf_task_storage_get(&runtime_entry_bootstrap_states,
+                                         owner, 0, 0)
+                  : NULL;
+    if (state)
+        return state;
+    parent = task ? task->real_parent : NULL;
+    owner = runtime_entry_bootstrap_owner(parent);
+    return owner ? bpf_task_storage_get(&runtime_entry_bootstrap_states,
+                                        owner, 0, 0)
+                 : NULL;
+}
+
 static __always_inline int mark_runtime_entry_bootstrap(
     struct task_struct *task, const identity_runtime_config_v1 *config,
     const execution_set_binding_state_v1 *binding,
     const task_label_v1 *target_label)
 {
     struct runtime_entry_bootstrap_state_v1 *state;
+    struct task_struct *owner;
+    task_label_v1 *label;
+    process_security_state_v1 *process;
 
     if (!task || !config || !binding || !target_label)
         return -EACCES;
-    state = bpf_task_storage_get(&runtime_entry_bootstrap_states, task, 0,
+    owner = runtime_entry_bootstrap_owner(task);
+    state = bpf_task_storage_get(&runtime_entry_bootstrap_states, owner, 0,
                                  BPF_LOCAL_STORAGE_GET_F_CREATE);
     if (!state)
         return -EACCES;
@@ -36,6 +80,27 @@ static __always_inline int mark_runtime_entry_bootstrap(
     state->profile_generation_ref_id =
         binding->active_profile_generation_ref_id;
     state->active = 1;
+    label = bpf_task_storage_get(&task_labels, task, 0, 0);
+    if (!label)
+        return 0;
+    process = bpf_map_lookup_elem(&process_states, &label->process_state_id);
+    if (!process || !binding_matches_label(binding, label) ||
+        __sync_val_compare_and_swap(&process->transition_guard, 0, 1)) {
+        state->active = 0;
+        return -EACCES;
+    }
+    if (process->state != process_security_state_kind_v1_active ||
+        process->exec_guard_state != exec_guard_state_v1_none ||
+        process->active_role_id != binding->external_role_id) {
+        release_transition_guard(&process->transition_guard);
+        state->active = 0;
+        return -EACCES;
+    }
+    if (process->runtime_entry_bootstrap_prepared != 1) {
+        process->runtime_entry_bootstrap_prepared = 1;
+        process->transition_version++;
+    }
+    release_transition_guard(&process->transition_guard);
     return 0;
 }
 
@@ -45,15 +110,18 @@ static __always_inline int inherit_runtime_entry_bootstrap(
 {
     struct runtime_entry_bootstrap_state_v1 *source;
     struct runtime_entry_bootstrap_state_v1 *target;
+    struct task_struct *child_owner;
 
-    source = creator ? bpf_task_storage_get(
-                           &runtime_entry_bootstrap_states, creator, 0, 0)
-                     : NULL;
+    child_owner = runtime_entry_bootstrap_owner(child);
+    if (!child_owner)
+        return -EACCES;
+    source = runtime_entry_bootstrap_for_task(creator);
     if (!source)
         return 0;
     if (!runtime_entry_bootstrap_state_valid(source, config))
         return -EACCES;
-    target = bpf_task_storage_get(&runtime_entry_bootstrap_states, child, 0,
+    target = bpf_task_storage_get(&runtime_entry_bootstrap_states,
+                                  child_owner, 0,
                                   BPF_LOCAL_STORAGE_GET_F_CREATE);
     if (!target)
         return -EACCES;
@@ -61,37 +129,48 @@ static __always_inline int inherit_runtime_entry_bootstrap(
     return 0;
 }
 
-static __always_inline bool runtime_entry_bootstrap_actor_is_exact(
+static __always_inline external_root_classification_v1 *
+entry_root_classification(const task_label_v1 *label,
+                          const entry_security_state_v1 *entry)
+{
+    external_root_classification_v1 *classification;
+
+    if (!label || !entry || !entry->root_task_cookie)
+        return NULL;
+    classification = bpf_map_lookup_elem(&external_root_classifications,
+                                         &entry->root_task_cookie);
+    if (!classification ||
+        classification->task_cookie != entry->root_task_cookie ||
+        !id128_equal(&classification->process_state_id,
+                     &entry->root_process_state_id) ||
+        !id128_equal(&classification->entry_instance_id,
+                     &label->entry_instance_id) ||
+        !id128_equal(&classification->execution_set_id,
+                     &label->execution_set_id) ||
+        classification->label_epoch != label->label_epoch ||
+        !id128_equal(&classification->node_boot_id, &label->node_boot_id))
+        return NULL;
+    return classification;
+}
+
+static __noinline bool runtime_entry_bootstrap_actor_is_exact(
     const identity_runtime_config_v1 *config,
     const execution_set_binding_state_v1 *binding, const task_label_v1 *label,
     const process_security_state_v1 *process,
     const entry_security_state_v1 *entry)
 {
-    struct task_struct *task = bpf_get_current_task_btf();
-    struct runtime_entry_bootstrap_state_v1 *state;
     external_root_classification_v1 *classification;
     pending_exec_v1 *pending;
     bool valid_exec_state;
 
-    state = task ? bpf_task_storage_get(&runtime_entry_bootstrap_states,
-                                        task, 0, 0)
-                 : NULL;
-    classification = label
-                         ? bpf_map_lookup_elem(
-                               &external_root_classifications,
-                               &label->task_cookie)
-                         : NULL;
-    if (!runtime_entry_bootstrap_state_valid(state, config) || !binding ||
-        !label || !process || !entry || !classification ||
+    classification = entry_root_classification(label, entry);
+    if (!config || !binding || !label || !process || !entry ||
+        !classification ||
         binding->prepared_container_state !=
             prepared_container_state_v1_active ||
-        binding->active_profile_generation_ref_id !=
-            state->profile_generation_ref_id ||
-        !id128_equal(&binding->binding_id, &state->binding_id) ||
-        !id128_equal(&binding->prepared_container_entry_instance_id,
-                     &state->target_entry_instance_id) ||
         !binding_matches_label(binding, label) ||
         process->active_role_id != binding->external_role_id ||
+        process->runtime_entry_bootstrap_prepared != 1 ||
         entry->admitted_entry_rule_id ||
         classification->root_class !=
             external_root_class_v1_external_runtime_root ||
@@ -102,15 +181,21 @@ static __always_inline bool runtime_entry_bootstrap_actor_is_exact(
     if (process->exec_guard_state == exec_guard_state_v1_none)
         return true;
     pending = bpf_map_lookup_elem(&pending_execs, &label->task_cookie);
+    /* The pending exec belongs to one thread. Sibling threads keep the
+     * active runtime bootstrap identity until the exec commits. */
+    if (!pending)
+        return true;
     valid_exec_state =
         (process->exec_guard_state == exec_guard_state_v1_preparing &&
          pending && pending->state == pending_exec_state_v1_preparing) ||
         (process->exec_guard_state == exec_guard_state_v1_commit_pending &&
          pending && pending->state == pending_exec_state_v1_commit_pending);
-    return valid_exec_state && pending->admitted_entry_rule_id &&
+    return valid_exec_state &&
+           (pending->admitted_entry_rule_id ||
+            pending->prepared_runtime_exec) &&
            pending->source_role_id == binding->external_role_id &&
            pending->source_profile_generation_ref_id ==
-               state->profile_generation_ref_id &&
+               binding->active_profile_generation_ref_id &&
            id128_equal(&pending->process_state_id,
                        &label->process_state_id) &&
            id128_equal(&pending->pending_exec_id,
@@ -695,10 +780,11 @@ static __always_inline void prepare_child_process(
     zero_id(&target->pending_exec_id);
     zero_id(&target->pending_target_execution_id);
     target->pending_target_role_id = 0;
-    target->reserved_pending_role = 0;
+    target->runtime_entry_bootstrap_prepared =
+        parent->runtime_entry_bootstrap_prepared;
     target->transition_guard = 0;
     target->pending_exec_response_set_ref_id = 0;
-    target->exec_check_task_cookie = 0;
+    target->exec_without_transition_task_cookie = 0;
     target->transition_version = 1;
     target->live_thread_refs = 1;
     target->exec_guard_state = exec_guard_state_v1_none;
@@ -771,7 +857,7 @@ static __always_inline int create_native_child(
     if (__sync_val_compare_and_swap(&parent_process->transition_guard, 0, 1))
         return identity_deny(config);
     if (parent_process->exec_guard_state != exec_guard_state_v1_none ||
-        parent_process->exec_check_task_cookie ||
+        parent_process->exec_without_transition_task_cookie ||
         parent_process->state != process_security_state_kind_v1_active)
         goto fail_locked;
     parent_execution = bpf_map_lookup_elem(

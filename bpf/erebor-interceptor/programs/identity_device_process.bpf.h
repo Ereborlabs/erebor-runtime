@@ -312,7 +312,7 @@ static __always_inline bool prepared_container_target_is_exact(
     return true;
 }
 
-static __always_inline bool external_entry_may_read_initial_target(
+static __noinline bool external_entry_may_read_initial_target(
     const identity_runtime_config_v1 *config, struct task_struct *target,
     __u16 operation, __u32 operation_argument,
     task_label_v1 **target_label_out)
@@ -356,8 +356,7 @@ static __always_inline bool external_entry_may_read_initial_target(
     }
     current_entry = bpf_map_lookup_elem(&entry_states,
                                         &current_label->entry_instance_id);
-    classification = bpf_map_lookup_elem(&external_root_classifications,
-                                         &current_label->task_cookie);
+    classification = entry_root_classification(current_label, current_entry);
     if (!current_entry || !classification ||
         !binding_matches_label(binding, current_label) ||
         current_entry->admitted_entry_rule_id ||

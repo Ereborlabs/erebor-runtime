@@ -1745,10 +1745,10 @@ typedef struct process_security_state_v1 {
   struct id128_v1 pending_exec_id;
   struct id128_v1 pending_target_execution_id;
   uint32_t pending_target_role_id;
-  uint32_t reserved_pending_role;
+  uint32_t runtime_entry_bootstrap_prepared;
   uint64_t transition_guard;
   uint64_t pending_exec_response_set_ref_id;
-  uint64_t exec_check_task_cookie;
+  uint64_t exec_without_transition_task_cookie;
   uint64_t transition_version;
   uint64_t live_thread_refs;
   exec_guard_state_v1 exec_guard_state;
