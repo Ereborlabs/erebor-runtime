@@ -2529,7 +2529,7 @@ impl LoweredGeneration {
             owner_generation: artifact.header.profile_version,
             row_count: decisions
                 .len()
-                .checked_add(entry_admissions.len())
+                .checked_add(entry_admission_authority.len())
                 .and_then(|count| count.checked_add(process_control_rules.len()))
                 .and_then(|count| count.checked_add(ipc_relationships.len()))
                 .and_then(|count| count.checked_add(network.ipv4_classes.len()))
@@ -2628,10 +2628,11 @@ impl LoweredGeneration {
         self.administrative_required |= other.administrative_required;
         self.administrative_plans.extend(other.administrative_plans);
         self.mount_reconciliation.extend(other.mount_reconciliation);
+        let entry_admission_authority = entry_admission_authority_rows(&self.entry_admissions)?;
         self.descriptor.row_count = self
             .decisions
             .len()
-            .checked_add(self.entry_admissions.len())
+            .checked_add(entry_admission_authority.len())
             .and_then(|count| count.checked_add(self.process_control_rules.len()))
             .and_then(|count| count.checked_add(self.ipc_relationships.len()))
             .and_then(|count| count.checked_add(self.network_ipv4_classes.len()))
@@ -2646,7 +2647,7 @@ impl LoweredGeneration {
             })?;
         self.descriptor.default_count = self.defaults.len() as u32;
         self.descriptor.table_digest = table_digest(&[
-            ("entry-admission", &self.entry_admissions),
+            ("entry-admission", &entry_admission_authority),
             ("decision", &self.decisions),
             ("default", &self.defaults),
             ("process-control-rule", &self.process_control_rules),
@@ -4551,10 +4552,12 @@ fn lower_entry_admissions(
 fn entry_admission_authority_rows(rows: &GenerationRows) -> Result<GenerationRows> {
     let mut authority = GenerationRows::new();
     for (key, value) in rows {
+        let mut key: EntryAdmissionRuleKeyV1 = read_abi_value(key, "entry admission rule key")?;
+        key.binding_id = Id128V1::default();
         let mut rule: EntryAdmissionRuleV1 = read_abi_value(value, "entry admission rule")?;
         rule.exact_object_key_id = 0;
         rule.executable_object = ExactFileObjectKeyV1::default();
-        insert_exact(&mut authority, key, rule.as_bytes())?;
+        insert_exact(&mut authority, key.as_bytes(), rule.as_bytes())?;
     }
     Ok(authority)
 }
@@ -5707,6 +5710,27 @@ mod tests {
             EntryAdmissionRuleV1::try_read_from_bytes(value)
                 .is_ok_and(|rule| rule.exact_object_key_id > 0)
         }));
+
+        let retry_binding = WorkloadBindingConfig {
+            binding_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa".to_owned(),
+            container_id: "b".repeat(64),
+            ..binding
+        };
+        let retry = LoweredGeneration::for_binding(
+            &artifact,
+            &retry_binding,
+            &objects,
+            Id128V1::new(1, 2),
+            Id128V1::new(3, 4),
+            3,
+            1_800_000_000_000_000_000,
+            100,
+        )?;
+        assert_eq!(
+            staged.descriptor.table_digest,
+            retry.descriptor.table_digest
+        );
+        assert_eq!(staged.descriptor.row_count, retry.descriptor.row_count);
         Ok(())
     }
 
