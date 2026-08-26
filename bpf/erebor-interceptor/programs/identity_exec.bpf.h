@@ -49,6 +49,9 @@ static __noinline int reserve_entry_admission(
     if (!rule)
         return 0;
     application = rule->entry_kind == entry_kind_v1_container_start;
+    if (application && binding->prepared_container_state ==
+                           prepared_container_state_v1_unarmed)
+        return 0;
     if (!rule->target_role_id || !rule->target_process_state_vector_id ||
         !rule->admitted_entry_rule_id || rule->reserved ||
         (application && rule->installed_role_class !=
@@ -259,6 +262,19 @@ static __always_inline int observe_bprm_effect(struct linux_binprm *bprm)
         return 0;
 
     if (!prepared_container_pre_active_actor_is_exact(binding, label, entry)) {
+        bpf_task_storage_delete(&runtime_entry_bootstrap_states, task);
+        if (pending->source_role_id != binding->external_role_id)
+            return 0;
+        scratch->effect_gate_flags = 0;
+        return hard_effect_result(
+            config, scratch,
+            effect_observation_reason_v1_unsupported_object);
+    }
+    if (!pending->prepared_runtime_exec) {
+        if (binding->prepared_container_state ==
+            prepared_container_state_v1_exec_pending)
+            prepared_container_rollback_activation(binding,
+                                                   label->task_cookie);
         bpf_task_storage_delete(&runtime_entry_bootstrap_states, task);
         scratch->effect_gate_flags = 0;
         return hard_effect_result(

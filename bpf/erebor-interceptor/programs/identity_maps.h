@@ -195,6 +195,7 @@ struct identity_scratch_v1 {
     __u32 path_mount_namespace_inode;
     struct path effect_path;
     exact_file_object_key_v1 file_object;
+    exact_file_object_key_v1 live_file_object;
     task_label_v1 target_label;
     task_coordinate_v1 target_coordinate;
     process_security_state_v1 target_process;

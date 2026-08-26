@@ -3336,7 +3336,7 @@ fn activate_profile(
             .build()
         })?;
         ensure!(
-            WorkloadBindingOwner::activation_target_matches_desired(current, &target)
+            WorkloadBindingOwner::same_activation_identity(current, &target)
                 && target.active_profile_generation_ref_id == activation.generation,
             IdentityStateSnafu {
                 reason: "binding activation target changed before publication",

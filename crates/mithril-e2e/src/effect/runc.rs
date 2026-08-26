@@ -752,17 +752,16 @@ impl EffectTestRunner {
         reader
             .poll(Duration::from_millis(100))
             .context(InterceptorSnafu)?;
-        let external_cgroup_entering_process_stays_closed =
-            !cgroup_entry_status.success()
-                && observations
-                    .recent_since(cgroup_entry_marker)
-                    .iter()
-                    .any(|event| {
-                        event.task_cookie == cgroup_entry_snapshot.task_cookie
-                            && event.active_role_id == binding.external_role_id
-                            && event.admitted_entry_rule_id == 0
-                            && event.kernel_result == -13
-                    });
+        let external_cgroup_entering_process_stays_closed = !cgroup_entry_status.success()
+            && observations
+                .recent_since(cgroup_entry_marker)
+                .iter()
+                .any(|event| {
+                    event.task_cookie == cgroup_entry_snapshot.task_cookie
+                        && event.active_role_id == binding.external_role_id
+                        && event.admitted_entry_rule_id == 0
+                        && event.kernel_result == -13
+                });
         ensure!(
             external_cgroup_entering_process_stays_closed,
             InvalidInputSnafu {

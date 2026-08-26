@@ -389,7 +389,7 @@ pub struct EffectPhysicalProbeBundleV1 {
     pub script_exec_denied: bool,
     pub deleted_exec_denied: bool,
     pub non_leader_exec_denied: bool,
-    pub exact_file_exec_control_allowed: bool,
+    pub external_exec_allow_cannot_admit: bool,
     pub memfd_exec_failed_closed: bool,
     pub anonymous_exec_hard_closed: bool,
     pub anonymous_executable_mmap_hard_closed: bool,
@@ -2476,19 +2476,19 @@ impl EffectTestRunner {
                 "UNSUPPORTED_OBJECT",
                 (KernelEffectFamilyV1::Exec, KernelEffectOperationV1::Execute),
             )?;
-            let approved_exec_marker = observations.cursor();
-            let approved_exec = fixture.run_prepared(HardClosedOperation::AllowedExec)?;
+            let external_exec_marker = observations.cursor();
+            let external_exec = fixture.run_prepared(HardClosedOperation::AllowedExec)?;
             reader
                 .poll(Duration::from_millis(100))
                 .context(InterceptorSnafu)?;
             ensure!(
-                approved_exec.allowed,
+                external_exec.denied(),
                 InvalidInputSnafu {
                     path: &paths.allowed_exec_target,
                     reason: format!(
-                        "the signed executable path control did not execute: {approved_exec:?}; observed {:?}",
+                        "an action-level executable Allow admitted an external entry: {external_exec:?}; observed {:?}",
                         observations
-                            .recent_since(approved_exec_marker)
+                            .recent_since(external_exec_marker)
                             .iter()
                             .map(|event| (
                                 event.reason.as_str(),
@@ -2503,9 +2503,16 @@ impl EffectTestRunner {
             wait_for_path_exec_effect(
                 &reader,
                 &observations,
-                approved_exec_marker,
+                external_exec_marker,
                 "EXACT_POLICY_ALLOW",
                 KernelEffectOperationV1::Execute,
+            )?;
+            wait_for_effect(
+                &reader,
+                &observations,
+                external_exec_marker,
+                "UNSUPPORTED_OBJECT",
+                (KernelEffectFamilyV1::Exec, KernelEffectOperationV1::Execute),
             )?;
 
             let proc_marker = observations.cursor();
@@ -2520,7 +2527,7 @@ impl EffectTestRunner {
                 &reader,
                 &observations,
                 proc_marker,
-                "UNSUPPORTED_OBJECT",
+                "UNRESOLVED_OBJECT",
                 (
                     KernelEffectFamilyV1::File,
                     KernelEffectOperationV1::OpenRead,
@@ -2715,7 +2722,7 @@ impl EffectTestRunner {
             HardClosedOperation::Create {
                 path: create_target.clone(),
             },
-            "UNSUPPORTED_OBJECT",
+            "UNRESOLVED_OBJECT",
             (KernelEffectFamilyV1::File, KernelEffectOperationV1::Create),
             "file creation",
         )?;
@@ -3199,7 +3206,7 @@ impl EffectTestRunner {
             HardClosedOperation::SelfProtect {
                 path: protected_link.clone(),
             },
-            "UNSUPPORTED_OBJECT",
+            "UNRESOLVED_OBJECT",
             (KernelEffectFamilyV1::File, KernelEffectOperationV1::Unlink),
             "Mithril BPF-link removal",
         )?;
@@ -3420,11 +3427,31 @@ impl EffectTestRunner {
         ] {
             let bind_marker = observations.cursor();
             let bind_alias_outcome = fixture.open(bind_alias)?;
+            if bind_alias_outcome.allowed == protect {
+                reader
+                    .poll(Duration::from_millis(100))
+                    .context(InterceptorSnafu)?;
+            }
             ensure!(
                 bind_alias_outcome.allowed != protect,
                 InvalidInputSnafu {
                     path: bind_alias,
-                    reason: "pre-existing bind alias did not preserve the exact policy result",
+                    reason: format!(
+                        "pre-existing bind alias did not preserve the exact policy result: {:?}",
+                        observations
+                            .recent_since(bind_marker)
+                            .iter()
+                            .map(|event| (
+                                event.reason.as_str(),
+                                event.active_role_id,
+                                event.entry_kind,
+                                event.admitted_entry_rule_id,
+                                event.exact_object_key_id,
+                                event.composite_atom_id,
+                                event.kernel_result,
+                            ))
+                            .collect::<Vec<_>>()
+                    ),
                 }
             );
             if protect {
@@ -4269,7 +4296,7 @@ impl EffectTestRunner {
             script_exec_denied: protect,
             deleted_exec_denied: protect,
             non_leader_exec_denied: protect,
-            exact_file_exec_control_allowed: protect,
+            external_exec_allow_cannot_admit: protect,
             memfd_exec_failed_closed: protect,
             anonymous_exec_hard_closed: true,
             anonymous_executable_mmap_hard_closed: true,

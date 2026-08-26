@@ -601,41 +601,51 @@ static __noinline int resolved_identity_effect_gate(struct file *file,
                                      scratch->effect_gate_flags &
                                          EFFECT_GATE_FILE_OPEN_ATTEMPT_V1);
     }
-    if (path_unlinked(&scratch->effect_path))
+    /* A create target is an unhashed dentry before the VFS creates it. Its
+     * complete path can still match an explicit recursive path rule. */
+    if (scratch->observation.operation != kernel_effect_operation_v1_create &&
+        path_unlinked(&scratch->effect_path))
         return admitted_default_or_hard_effect_result(
             config, scratch, binding, label, entry,
             effect_observation_reason_v1_unsupported_object);
     visible_path_result = container_visible_path_candidate(
         &scratch->effect_path,
         scratch->process.active_profile_generation_ref_id, scratch);
-    if (visible_path_result > 0)
-        return admitted_default_or_hard_effect_result(
-            config, scratch, binding, label, entry,
-            effect_observation_reason_v1_unsupported_object);
-    if (visible_path_result < 0)
-        return admitted_default_or_hard_effect_result(
-            config, scratch, binding, label, entry,
-            effect_observation_reason_v1_unresolved_object);
+    if (visible_path_result) {
+        __u8 reason = visible_path_result > 0
+                          ? effect_observation_reason_v1_unsupported_object
+                          : effect_observation_reason_v1_unresolved_object;
+
+        if (canonical_path_candidate(
+                &scratch->effect_path, binding,
+                scratch->process.active_profile_generation_ref_id, scratch) ||
+            (!scratch->path_terminal.exact_object_required &&
+             !path_tree_denies(scratch,
+                               scratch->observation.operation)))
+            return admitted_default_or_hard_effect_result(
+                config, scratch, binding, label, entry, reason);
+    }
     if (scratch->path_terminal.exact_object_required) {
         path_composite_atom_id = scratch->path_terminal.composite_atom_id;
-        exact_file_object_from_path(&scratch->file_object,
+        exact_file_object_from_path(&scratch->live_file_object,
                                     &scratch->effect_path);
-        scratch->file_object.profile_generation_ref_id =
+        scratch->live_file_object.profile_generation_ref_id =
             scratch->process.active_profile_generation_ref_id;
-        if (!scratch->file_object.mount_id_unique &&
+        if (!scratch->live_file_object.mount_id_unique &&
             scratch->path_mount_namespace_inode)
-            scratch->file_object.mount_namespace_inode =
+            scratch->live_file_object.mount_namespace_inode =
                 scratch->path_mount_namespace_inode;
         else
             scratch->path_mount_namespace_inode = 0;
-        scratch->observation.file_object = scratch->file_object;
-        if (!scratch->file_object.mount_id_unique &&
-            !scratch->file_object.mount_namespace_inode)
+        scratch->observation.file_object = scratch->live_file_object;
+        if (!scratch->live_file_object.mount_id_unique &&
+            !scratch->live_file_object.mount_namespace_inode)
             return admitted_default_or_hard_effect_result(
                 config, scratch, binding, label, entry,
                 effect_observation_reason_v1_unsupported_object);
         /* Exact selectors also bind the source-aware mount view. Ordinary
          * path policy remains independent of inode-generation support. */
+        scratch->file_object = scratch->live_file_object;
         if (canonical_path_candidate(
                 &scratch->effect_path, binding,
                 scratch->process.active_profile_generation_ref_id, scratch)) {
@@ -657,7 +667,7 @@ static __noinline int resolved_identity_effect_gate(struct file *file,
                 config, scratch, binding, label, entry,
                 effect_observation_reason_v1_unresolved_object);
         }
-        scratch->observation.file_object = scratch->file_object;
+        scratch->observation.file_object = scratch->live_file_object;
     }
     scratch->path_mount_namespace_inode = 0;
     scratch->observation.composite_atom_id =
