@@ -673,6 +673,13 @@ ordered Mithril `createRuntime` hooks. The first hook sends immutable
 container, cgroup, image, and Pod facts to the node. The node keeps one
 bounded, expiring staged record and grants no workload authority at this step.
 
+`CreateContainer` also installs all authority that later entries can use for
+the exact binding and policy generation. This authority contains the
+application entry, every additional-entry declaration and role, the
+administrative role, and the external role. It does not contain future task
+identities. A PostStart, PreStop, or probe process does not exist when this
+hook runs.
+
 In the second hook, keep the exact initial task held. Require an exact
 staged-record match, live PID and cgroup proof, CRI `Created` state,
 scheduler-selected Pod
@@ -718,6 +725,15 @@ binding, container lifetime, or node session cannot use the prepared state.
 The binding state is a trust-boundary state. It is not a workload policy
 permission, exception, or transferable object authority.
 
+A later runtime-created process gets a new restricted external identity when
+it becomes visible in the exact binding. If one runtime bootstrap exec crossed
+the cgroup attachment boundary, BPF can let only that exact task finish that
+in-flight exec. This completion does not install an entry role. The task stays
+prepared. Its next exec must match a declaration that `CreateContainer`
+already installed. A failed or unmatched next exec remains fail-closed. Do
+not match a runtime binary, helper path, file descriptor path, process name,
+or lifecycle kind in BPF.
+
 When the executable's container-visible path satisfies
 `applicationEntry.executionRule`, atomically reserve the transition from any
 task in the exact binding and commit `ACTIVE` with the application entry's
@@ -733,7 +749,9 @@ probe that starts after activation first receives `externalRole`. At the exec
 boundary, an exact match to one additional entry can reserve the task. A
 successful exec commits that entry and installs only its role. A failed exec
 restores the restricted external state. No match or more than one match
-denies.
+denies. An additional-entry declaration stays installed and can authorize
+multiple invocations. Each invocation gets a new task identity, process
+identity, prepared association, and exec transaction.
 
 The approved administrative path remains separate. The external root first
 receives `externalRole`. Only the existing signed, bounded, one-use next-match
@@ -838,9 +856,11 @@ created in this phase.
   no runtime-created object carries authority across that transition.
 - PostStart-before-application, PostStart-after-application, PreStop, startup
   probe, readiness probe, and liveness probe exec tests. Each successful match
-  must install only its declared role. An unmatched ordinary `kubectl exec`,
-  direct `crictl exec`, cgroup-entering task, failed exec, and ambiguous entry
-  match must remain fail-closed.
+  must install only its declared role. Invoke at least one additional entry
+  twice and prove that the declaration is reusable while both process
+  identities and exec transactions are distinct. An unmatched ordinary
+  `kubectl exec`, direct `crictl exec`, cgroup-entering task, failed exec, and
+  ambiguous entry match must remain fail-closed.
 - Approved administrative exec tests must prove one-use slot consumption,
   installation of only `administrativeEntry.role`, explicit Deny precedence,
   applicable exception authorization, and denial of an ordinary exec without

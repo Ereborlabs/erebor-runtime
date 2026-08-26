@@ -145,9 +145,11 @@ Stock kubelet and CRI do not tell a node security product why every such
 process was created. In particular, stock `ExecSyncRequest` does not say
 whether it came from readiness, liveness, `PostStart`, or `PreStop`. Mithril
 therefore does not invent a signed kubelet intent. It proves that the task is
-an independent root, identifies its container, and applies a restricted
-external-root role. A configured, supported hook may add only the facts that
-its real interface provides.
+an independent root and identifies its container. The root starts with the
+restricted external role. Its next exec can install one declared entry role
+only when the executable matches that entry's signed execution rule. A
+configured, supported hook may add only the facts that its real interface
+provides.
 
 #### 2.3 The process that reads authority may not be the process that uses it
 
@@ -2537,6 +2539,26 @@ First application exec
   -> let an applicable exception authorize that denied action
   -> allow an action with no matching decision from the admitted entry lineage
 ```
+
+`CreateContainer` prepares all authority for the container binding. The node
+publishes the application entry, every additional-entry declaration and role,
+the administrative role, the external role, and the active policy generation
+before it releases the held initial task. These declarations remain fixed for
+that binding and generation. The hook cannot create identities for later
+entry processes because those processes do not exist yet.
+
+BPF associates each later process with the prepared authority when the
+runtime bootstrap relationship to the exact binding becomes visible. One
+runtime exec can already be in progress when the task enters the container
+cgroup. BPF lets only that exact task finish that in-flight bootstrap exec. It
+does not install an entry role. The task remains restricted and prepared. Its
+next exec must match one declared entry. A successful exec installs only that
+entry's role. A failed or unmatched exec does not install workload authority.
+
+An additional-entry declaration is reusable. Each invocation gets a new task
+and process identity, a new prepared association, and a new exec transaction.
+The static declaration remains installed. An administrative approval remains
+one-use. Cgroup membership alone does not supply an admitted-entry identity.
 
 The runtime is part of the node trusted computing base while the binding is
 `PREPARED`. Mithril does not infer runtime identity from a `runc`, `crun`, or
