@@ -750,6 +750,8 @@ static __always_inline int dispatch_identity_effect_gate(
         begin_effect_observation(scratch, effect_family, operation);
         __builtin_memset(&scratch->effect_path, 0,
                          sizeof(scratch->effect_path));
+        __builtin_memset(&scratch->path_terminal, 0,
+                         sizeof(scratch->path_terminal));
         if (path) {
             scratch->effect_gate_flags |= EFFECT_GATE_PATH_SUPPLIED_V1;
             (void)bpf_probe_read_kernel(&scratch->effect_path,
