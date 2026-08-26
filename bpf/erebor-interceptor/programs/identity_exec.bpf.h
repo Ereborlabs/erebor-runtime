@@ -23,18 +23,20 @@ static __noinline int reserve_entry_admission(
     entry_admission_rule_v1 *rule;
     process_security_state_v1 *process;
     external_root_classification_v1 *classification;
+    __u64 admission_composite_atom_id;
     bool application;
 
     if (!config || !label || !binding || !entry || !pending || !scratch ||
-        !scratch->path_terminal.composite_atom_id ||
+        !scratch->entry_admission_key.composite_atom_id ||
         pending->admitted_entry_rule_id || entry->admitted_entry_rule_id)
         return 0;
     key = &scratch->entry_admission_key;
+    admission_composite_atom_id = key->composite_atom_id;
     __builtin_memset(key, 0, sizeof(*key));
     key->profile_generation_ref_id =
         pending->source_profile_generation_ref_id;
     key->binding_id = binding->binding_id;
-    key->composite_atom_id = scratch->path_terminal.composite_atom_id;
+    key->composite_atom_id = admission_composite_atom_id;
     key->source_role_id = pending->source_role_id;
     rule = bpf_map_lookup_elem(&entry_admission_rules, key);
     if (!rule)
@@ -256,12 +258,18 @@ static __always_inline int observe_bprm_effect(struct linux_binprm *bprm)
         return 0;
     if (!scratch)
         return identity_deny(config);
+    scratch->entry_admission_key.composite_atom_id =
+        logical_bprm_path_atom(
+            bprm, pending->source_profile_generation_ref_id, scratch);
     if (task_cgroup(task, &cgroup))
         return identity_deny(config);
     binding = binding_for_cgroup(cgroup, &binding_lookup);
     entry = bpf_map_lookup_elem(&entry_states, &label->entry_instance_id);
     if (binding_lookup || !binding_matches_label(binding, label) || !entry)
         return identity_deny(config);
+    if (pending->source_role_id != binding->external_role_id)
+        scratch->entry_admission_key.composite_atom_id =
+            scratch->path_terminal.composite_atom_id;
     admission = reserve_entry_admission(config, label, binding, entry,
                                         pending, scratch);
     if (admission < 0) {
@@ -469,9 +477,9 @@ static long administrative_argv_match_step(__u32 step, void *data)
         !argument)
         goto mismatch;
     length = bpf_probe_read_user_str(
-        match->scratch->administrative_argument,
-        sizeof(match->scratch->administrative_argument), argument);
-    if (length <= 0 || length > sizeof(match->scratch->administrative_argument))
+        match->scratch->exec_argument,
+        sizeof(match->scratch->exec_argument), argument);
+    if (length <= 0 || length > sizeof(match->scratch->exec_argument))
         goto mismatch;
     argument_length = (__u32)length - 1;
     if (argument_length != expected_length ||
@@ -480,7 +488,7 @@ static long administrative_argv_match_step(__u32 step, void *data)
                               match->scratch->zero_bytes) ||
         (argument_length &&
          bpf_probe_read_kernel(key->argument_bytes, argument_length,
-                               match->scratch->administrative_argument)))
+                               match->scratch->exec_argument)))
         goto mismatch;
     key->argument_index = argument_index;
     key->argument_length = argument_length;

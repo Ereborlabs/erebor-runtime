@@ -2555,6 +2555,18 @@ does not install an entry role. The task remains restricted and prepared. Its
 next exec must match one declared entry. A successful exec installs only that
 entry's role. A failed or unmatched exec does not install workload authority.
 
+The declared-entry match uses two facts from the same kernel exec request.
+The kernel-copied `linux_binprm.filename` supplies the logical invocation
+path. The opened `linux_binprm.file` supplies the executable backing object.
+BPF accepts only a canonical absolute invocation path and walks only exact
+signed path transitions for entry admission. The normal opened-file policy
+gate still runs first. Thus, `/bin/sh` and `/bin/cp` can select different
+declared entries when both resolve to BusyBox. The policy does not need to
+name `/bin/busybox`. A relative, noncanonical, or unmatched invocation path
+does not install a declared role. The application-start path keeps the
+container-visible opened-file match because a runtime can use an internal
+file-descriptor path for its held initial task.
+
 An additional-entry declaration is reusable. Each invocation gets a new task
 and process identity, a new prepared association, and a new exec transaction.
 The static declaration remains installed. An administrative approval remains

@@ -156,6 +156,15 @@ struct canonical_path_match_state_v1 {
     __u32 reserved;
 };
 
+struct logical_path_match_state_v1 {
+    __u32 path_length;
+    __u32 component_length;
+    __u32 component_count;
+    __u32 state_id;
+    __u32 failed;
+    __u32 reserved;
+};
+
 struct identity_scratch_v1 {
     task_label_v1 label;
     task_coordinate_v1 coordinate;
@@ -215,10 +224,11 @@ struct identity_scratch_v1 {
     __u64 mount_scan_stack[MAX_CANONICAL_MOUNT_SCAN_DEPTH_V1 + 1];
     struct canonical_mount_path_walk_state_v1 mount_path_walk;
     struct canonical_path_match_state_v1 path_match;
+    struct logical_path_match_state_v1 logical_path_match;
     struct canonical_path_view_v1
         path_component_views[MAX_CANONICAL_PATH_COMPONENTS_V1 + 1];
     effect_observation_v1 observation;
-    __u8 administrative_argument[MAX_ADMINISTRATIVE_ARGUMENT_BYTES_V1 + 1];
+    __u8 exec_argument[MAX_ADMINISTRATIVE_ARGUMENT_BYTES_V1 + 1];
     approved_exec_argument_key_v1 administrative_argument_key;
     __u8 zero_bytes[MAX_ADMINISTRATIVE_ARGUMENT_BYTES_V1];
 };

@@ -870,6 +870,137 @@ static __always_inline int commit_mount_reconciliation_proposal(
     return 0;
 }
 
+static __always_inline int advance_logical_path_component(
+    struct identity_scratch_v1 *scratch)
+{
+    struct logical_path_match_state_v1 *match =
+        &scratch->logical_path_match;
+    path_graph_transition_key_v1 *key = &scratch->path_transition_key;
+    canonical_path_component_v1 *component = &key->component;
+    path_graph_transition_v1 *transition;
+    __u32 length = match->component_length;
+
+    if (!length || length > MAX_CANONICAL_COMPONENT_BYTES_V1 ||
+        match->component_count >= MAX_CANONICAL_PATH_COMPONENTS_V1 ||
+        (length == 1 && component->bytes[0] == '.') ||
+        (length == 2 && component->bytes[0] == '.' &&
+         component->bytes[1] == '.'))
+        return -EACCES;
+    key->current_state_id = match->state_id;
+    component->length = length;
+    transition = bpf_map_lookup_elem(&path_graph_exact_transitions, key);
+    if (!transition || !transition->next_state_id)
+        return -EACCES;
+    match->state_id = transition->next_state_id;
+    match->component_count++;
+    match->component_length = 0;
+    if (bpf_probe_read_kernel(component->bytes, sizeof(component->bytes),
+                              scratch->zero_bytes))
+        return -EACCES;
+    return 0;
+}
+
+struct logical_path_match_context_v1 {
+    struct identity_scratch_v1 *scratch;
+};
+
+static long logical_path_match_step(__u32 offset, void *data)
+{
+    struct logical_path_match_context_v1 *context = data;
+    struct identity_scratch_v1 *scratch = context->scratch;
+    struct logical_path_match_state_v1 *match =
+        &scratch->logical_path_match;
+    canonical_path_component_v1 *component =
+        &scratch->path_transition_key.component;
+    __u32 raw_index = offset + 1;
+    __u64 index;
+    __u64 component_index;
+    __u8 byte;
+
+    if (raw_index >= match->path_length)
+        return 1;
+    asm volatile("%[bounded] = %[raw] ;\n"
+                 "%[bounded] &= %2 ;\n"
+                 : [bounded] "=&r"(index)
+                 : [raw] "r"((__u64)raw_index),
+                   "i"(MAX_ADMINISTRATIVE_ARGUMENT_BYTES_V1 - 1));
+    byte = scratch->exec_argument[index];
+    if (byte == '/') {
+        if (advance_logical_path_component(scratch)) {
+            match->failed = 1;
+            return 1;
+        }
+        return 0;
+    }
+    if (!byte ||
+        match->component_length >= MAX_CANONICAL_COMPONENT_BYTES_V1) {
+        match->failed = 1;
+        return 1;
+    }
+    asm volatile("%[bounded] = %[raw] ;\n"
+                 "%[bounded] &= 0xff ;\n"
+                 : [bounded] "=&r"(component_index)
+                 : [raw] "r"((__u64)match->component_length));
+    component->bytes[component_index] = byte;
+    match->component_length++;
+    return 0;
+}
+
+static __noinline __u64 logical_bprm_path_atom(
+    struct linux_binprm *bprm, __u64 profile_generation_ref_id,
+    struct identity_scratch_v1 *scratch)
+{
+    struct logical_path_match_state_v1 *match;
+    path_graph_terminal_v1 *terminal;
+    const char *filename = NULL;
+    struct logical_path_match_context_v1 context = {
+        .scratch = scratch,
+    };
+    __u64 last_index;
+    long length;
+    long steps;
+
+    if (!bprm || !profile_generation_ref_id || !scratch ||
+        BPF_CORE_READ_INTO(&filename, bprm, filename) || !filename)
+        return 0;
+    length = bpf_probe_read_kernel_str(scratch->exec_argument,
+                                       sizeof(scratch->exec_argument),
+                                       filename);
+    if (length <= 2 || length > MAX_ADMINISTRATIVE_ARGUMENT_BYTES_V1)
+        return 0;
+    match = &scratch->logical_path_match;
+    __builtin_memset(match, 0, sizeof(*match));
+    match->path_length = (__u32)length - 1;
+    asm volatile("%[bounded] = %[raw] ;\n"
+                 "%[bounded] &= %2 ;\n"
+                 : [bounded] "=&r"(last_index)
+                 : [raw] "r"((__u64)match->path_length - 1),
+                   "i"(MAX_ADMINISTRATIVE_ARGUMENT_BYTES_V1 - 1));
+    if (scratch->exec_argument[0] != '/' ||
+        scratch->exec_argument[last_index] == '/')
+        return 0;
+    __builtin_memset(&scratch->path_transition_key, 0,
+                     sizeof(scratch->path_transition_key));
+    scratch->path_transition_key.profile_generation_ref_id =
+        profile_generation_ref_id;
+    steps = bpf_loop(MAX_ADMINISTRATIVE_ARGUMENT_BYTES_V1,
+                     logical_path_match_step, &context, 0);
+    if (steps < 0 || match->failed ||
+        advance_logical_path_component(scratch))
+        return 0;
+    __builtin_memset(&scratch->path_state_key, 0,
+                     sizeof(scratch->path_state_key));
+    scratch->path_state_key.profile_generation_ref_id =
+        profile_generation_ref_id;
+    scratch->path_state_key.state_id = match->state_id;
+    terminal = bpf_map_lookup_elem(&path_graph_terminals,
+                                   &scratch->path_state_key);
+    if (!terminal || !terminal->composite_atom_id ||
+        !terminal->rule_numeric_id)
+        return 0;
+    return terminal->composite_atom_id;
+}
+
 struct canonical_path_match_context_v1 {
     struct identity_scratch_v1 *scratch;
 };
