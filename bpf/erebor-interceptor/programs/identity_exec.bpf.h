@@ -258,18 +258,24 @@ static __always_inline int observe_bprm_effect(struct linux_binprm *bprm)
         return 0;
     if (!scratch)
         return identity_deny(config);
-    scratch->entry_admission_key.composite_atom_id =
-        logical_bprm_path_atom(
-            bprm, pending->source_profile_generation_ref_id, scratch);
     if (task_cgroup(task, &cgroup))
         return identity_deny(config);
     binding = binding_for_cgroup(cgroup, &binding_lookup);
     entry = bpf_map_lookup_elem(&entry_states, &label->entry_instance_id);
     if (binding_lookup || !binding_matches_label(binding, label) || !entry)
         return identity_deny(config);
-    if (pending->source_role_id != binding->external_role_id)
+    if (pending->source_role_id == binding->external_role_id) {
+        struct pending_exec_request_path_v1 *request =
+            bpf_task_storage_get(&pending_exec_request_paths, task, 0, 0);
+
+        scratch->entry_admission_key.composite_atom_id =
+            logical_exec_request_atom(
+                request, pending->source_profile_generation_ref_id,
+                scratch);
+    } else {
         scratch->entry_admission_key.composite_atom_id =
             scratch->path_terminal.composite_atom_id;
+    }
     admission = reserve_entry_admission(config, label, binding, entry,
                                         pending, scratch);
     if (admission < 0) {
@@ -554,7 +560,34 @@ static __always_inline bool task_has_exclusive_mm(struct task_struct *task)
     return users == 1;
 }
 
-static __always_inline int prepare_administrative_match(
+static __noinline void capture_exec_request_path(
+    struct task_struct *task, const char *const *argv)
+{
+    struct pending_exec_request_path_v1 *request;
+    const char *argument = NULL;
+    long length;
+
+    bpf_task_storage_delete(&pending_exec_request_paths, task);
+    if (!argv ||
+        bpf_probe_read_user(&argument, sizeof(argument), &argv[0]) ||
+        !argument)
+        return;
+    request = bpf_task_storage_get(
+        &pending_exec_request_paths, task, 0,
+        BPF_LOCAL_STORAGE_GET_F_CREATE);
+    if (!request)
+        return;
+    length = bpf_probe_read_user_str(request->path, sizeof(request->path),
+                                     argument);
+    if (length <= 2 || length > MAX_ADMINISTRATIVE_ARGUMENT_BYTES_V1) {
+        bpf_task_storage_delete(&pending_exec_request_paths, task);
+        return;
+    }
+    request->path_length = (__u32)length - 1;
+    request->reserved = 0;
+}
+
+static __always_inline int prepare_external_exec_matches(
     const char *const *argv)
 {
     identity_runtime_config_v1 *config = identity_runtime_config();
@@ -573,6 +606,7 @@ static __always_inline int prepare_administrative_match(
     if (!config || !config->enabled)
         return 0;
     task = bpf_get_current_task_btf();
+    capture_exec_request_path(task, argv);
     if (task_cgroup(task, &cgroup))
         return 0;
     binding = binding_for_cgroup(cgroup, &binding_lookup);
@@ -603,12 +637,13 @@ static __always_inline int prepare_administrative_match(
         classification->purpose != entry_purpose_v1_unknown ||
         classification->installed_role_numeric_id != process->active_role_id)
         return 0;
+    scratch = identity_scratch_record();
+    if (!scratch)
+        return 0;
     key.node_boot_id = config->node_boot_id;
     key.cgroup_binding_id = binding->binding_id;
     slot = bpf_map_lookup_elem(&approved_exec_slots, &key);
-    scratch = identity_scratch_record();
-    if (!scratch ||
-        !administrative_slot_matches_binding(
+    if (!administrative_slot_matches_binding(
             slot, binding, process->active_profile_generation_ref_id) ||
         administrative_argv_matches(slot, argv, scratch))
         return 0;
@@ -639,7 +674,7 @@ static __always_inline int prepare_administrative_match(
 SEC("tracepoint/syscalls/sys_enter_execve")
 int erebor_sys_enter_execve(struct trace_event_raw_sys_enter *context)
 {
-    return prepare_administrative_match(
+    return prepare_external_exec_matches(
         (const char *const *)context->args[1]);
 }
 
@@ -667,7 +702,7 @@ int erebor_sys_enter_execveat(struct trace_event_raw_sys_enter *context)
                 label->task_cookie);
         return 0;
     }
-    return prepare_administrative_match(
+    return prepare_external_exec_matches(
         (const char *const *)context->args[2]);
 }
 
@@ -1013,6 +1048,7 @@ int BPF_PROG(erebor_bprm_committing_creds, struct linux_binprm *bprm)
     bool non_exact_candidate_allowed = false;
     int binding_lookup = -1;
 
+    bpf_task_storage_delete(&pending_exec_request_paths, task);
     label = bpf_task_storage_get(&task_labels, task, 0, 0);
     if (!label)
         return 0;
@@ -1127,6 +1163,7 @@ static __always_inline int complete_failed_exec(long result)
     if (result >= 0)
         return 0;
     task = bpf_get_current_task_btf();
+    bpf_task_storage_delete(&pending_exec_request_paths, task);
     clear_runtime_entry_bootstrap(task);
     label = bpf_task_storage_get(&task_labels, task, 0, 0);
     if (!label)

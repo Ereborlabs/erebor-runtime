@@ -52,6 +52,12 @@ struct runtime_entry_bootstrap_state_v1 {
     __u8 reserved[7];
 };
 
+struct pending_exec_request_path_v1 {
+    __u32 path_length;
+    __u32 reserved;
+    __u8 path[MAX_ADMINISTRATIVE_ARGUMENT_BYTES_V1 + 1];
+};
+
 #define MAX_CGROUP_ANCESTOR_STEPS_V1 64
 #define EXCEPTION_USE_RECEIPT_CAPACITY_V1 65536
 #define EFFECT_GATE_DEFER_DECISION_V1 1
@@ -280,6 +286,13 @@ struct {
     __type(value, struct runtime_entry_bootstrap_state_v1);
     __uint(map_flags, BPF_F_NO_PREALLOC);
 } runtime_entry_bootstrap_states SEC(".maps");
+
+struct {
+    __uint(type, BPF_MAP_TYPE_TASK_STORAGE);
+    __type(key, int);
+    __type(value, struct pending_exec_request_path_v1);
+    __uint(map_flags, BPF_F_NO_PREALLOC);
+} pending_exec_request_paths SEC(".maps");
 
 struct {
     __uint(type, BPF_MAP_TYPE_HASH);

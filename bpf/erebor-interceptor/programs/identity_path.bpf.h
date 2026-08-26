@@ -946,31 +946,29 @@ static long logical_path_match_step(__u32 offset, void *data)
     return 0;
 }
 
-static __noinline __u64 logical_bprm_path_atom(
-    struct linux_binprm *bprm, __u64 profile_generation_ref_id,
+static __noinline __u64 logical_exec_request_atom(
+    const struct pending_exec_request_path_v1 *request,
+    __u64 profile_generation_ref_id,
     struct identity_scratch_v1 *scratch)
 {
     struct logical_path_match_state_v1 *match;
     path_graph_terminal_v1 *terminal;
-    const char *filename = NULL;
     struct logical_path_match_context_v1 context = {
         .scratch = scratch,
     };
     __u64 last_index;
-    long length;
     long steps;
 
-    if (!bprm || !profile_generation_ref_id || !scratch ||
-        BPF_CORE_READ_INTO(&filename, bprm, filename) || !filename)
-        return 0;
-    length = bpf_probe_read_kernel_str(scratch->exec_argument,
-                                       sizeof(scratch->exec_argument),
-                                       filename);
-    if (length <= 2 || length > MAX_ADMINISTRATIVE_ARGUMENT_BYTES_V1)
+    if (!request || !request->path_length ||
+        request->path_length >= MAX_ADMINISTRATIVE_ARGUMENT_BYTES_V1 ||
+        !profile_generation_ref_id || !scratch ||
+        bpf_probe_read_kernel(scratch->exec_argument,
+                              sizeof(scratch->exec_argument),
+                              request->path))
         return 0;
     match = &scratch->logical_path_match;
     __builtin_memset(match, 0, sizeof(*match));
-    match->path_length = (__u32)length - 1;
+    match->path_length = request->path_length;
     asm volatile("%[bounded] = %[raw] ;\n"
                  "%[bounded] &= %2 ;\n"
                  : [bounded] "=&r"(last_index)

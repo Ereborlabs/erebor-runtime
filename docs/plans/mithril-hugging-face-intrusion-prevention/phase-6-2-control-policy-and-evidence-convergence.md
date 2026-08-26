@@ -744,17 +744,20 @@ already installed. A failed or unmatched next exec remains fail-closed. Do
 not match a runtime binary, helper path, file descriptor path, process name,
 or lifecycle kind in BPF.
 
-Match a declared entry with two facts from the same kernel exec request. Use
-the kernel-copied `linux_binprm.filename` as the logical invocation path. Use
-the opened `linux_binprm.file` as the executable backing object. Accept only a
-canonical absolute invocation path, and walk only exact signed path
-transitions for entry admission. Run the normal opened-file policy gate first.
-This split lets `/bin/sh` and another BusyBox applet select different declared
-roles even when both paths resolve to the same backing executable. Do not add
-`/bin/busybox` to the policy for this case. A relative, noncanonical, or
-unmatched invocation path cannot install a declared role. Keep the
-container-visible opened-file match for the initial application start because
-a runtime can use an internal file-descriptor path for its held initial task.
+Match a declared entry with two facts from the same kernel exec request. At
+exec syscall entry, copy bounded `argv[0]` into task-local pending request
+state before a cgroup membership check. Retain it across an in-flight cgroup
+attachment, and remove it when that exec commits or fails. Use this value as
+the logical invocation path. Use the opened `linux_binprm.file` as the
+executable backing object. Accept only a canonical absolute invocation path,
+and walk only exact signed path transitions for entry admission. Run the
+normal opened-file policy gate first. This split lets `/bin/sh` and another
+BusyBox applet select different declared roles even when both paths resolve to
+the same backing executable. Do not add `/bin/busybox` to the policy for this
+case. A relative, noncanonical, or unmatched invocation path cannot install a
+declared role. Keep the container-visible opened-file match for the initial
+application start because a runtime can use an internal file-descriptor path
+for its held initial task.
 
 After activation, the runtime can inspect and then signal the exact initial
 task to stop the container. A permitted read-only inspection prepares one
