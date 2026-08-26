@@ -84,13 +84,10 @@ static __always_inline int prepare_root_state(
     scratch->entry.committed_execution_id = label->birth_execution_id;
     scratch->entry.live_task_refs = 1;
     scratch->entry.transition_version = 1;
-    scratch->entry.entry_kind =
-        root_class == external_root_class_v1_initial_container_root
-            ? entry_kind_v1_container_start
-            : entry_kind_v1_unknown_external;
     scratch->entry.admission_state = entry_admission_state_v1_committed;
     scratch->entry.lifetime_state = entry_lifetime_state_v1_active;
     scratch->entry.terminal_reason = 0;
+    scratch->entry.reserved = 0;
     scratch->entry.admitted_entry_rule_id = 0;
     scratch->entry.transition_guard = 0;
 

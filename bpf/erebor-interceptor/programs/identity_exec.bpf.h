@@ -14,15 +14,6 @@ static __always_inline void remember_pending_exec_exact_requirement(
     pending->transition_version++;
 }
 
-static __always_inline bool declared_entry_kind(__u16 entry_kind)
-{
-    return entry_kind == entry_kind_v1_declared_lifecycle_poststart ||
-           entry_kind == entry_kind_v1_declared_lifecycle_prestop ||
-           entry_kind == entry_kind_v1_declared_startup_probe ||
-           entry_kind == entry_kind_v1_declared_readiness_probe ||
-           entry_kind == entry_kind_v1_declared_liveness_probe;
-}
-
 static __noinline int reserve_entry_admission(
     identity_runtime_config_v1 *config, const task_label_v1 *label,
     execution_set_binding_state_v1 *binding, entry_security_state_v1 *entry,
@@ -36,7 +27,7 @@ static __noinline int reserve_entry_admission(
 
     if (!config || !label || !binding || !entry || !pending || !scratch ||
         !scratch->path_terminal.composite_atom_id ||
-        pending->admitted_entry_rule_id)
+        pending->admitted_entry_rule_id || entry->admitted_entry_rule_id)
         return 0;
     key = &scratch->entry_admission_key;
     __builtin_memset(key, 0, sizeof(*key));
@@ -48,19 +39,15 @@ static __noinline int reserve_entry_admission(
     rule = bpf_map_lookup_elem(&entry_admission_rules, key);
     if (!rule)
         return 0;
-    application = rule->entry_kind == entry_kind_v1_container_start;
-    if (application && binding->prepared_container_state ==
-                           prepared_container_state_v1_unarmed)
-        return 0;
+    application = pending->source_role_id == binding->initial_role_id &&
+                  id128_equal(&binding->prepared_container_entry_instance_id,
+                              &label->entry_instance_id) &&
+                  (binding->prepared_container_state ==
+                       prepared_container_state_v1_prepared ||
+                   binding->prepared_container_state ==
+                       prepared_container_state_v1_exec_pending);
     if (!rule->target_role_id || !rule->target_process_state_vector_id ||
-        !rule->admitted_entry_rule_id || rule->reserved ||
-        (application && rule->installed_role_class !=
-                            installed_role_class_v1_initial_role) ||
-        (!application &&
-         (!declared_entry_kind(rule->entry_kind) ||
-          rule->installed_role_class !=
-              installed_role_class_v1_declared_entry_role)) ||
-        entry->admitted_entry_rule_id)
+        !rule->admitted_entry_rule_id || rule->reserved)
         return -EACCES;
     process = bpf_map_lookup_elem(&process_states,
                                   &label->process_state_id);
@@ -72,7 +59,6 @@ static __noinline int reserve_entry_admission(
         return -EACCES;
     if (application) {
         if (pending->source_role_id != binding->initial_role_id ||
-            entry->entry_kind != entry_kind_v1_container_start ||
             !prepared_container_actor_is_exact(binding, label, entry) ||
             prepared_container_reserve_activation(binding, label))
             return -EACCES;
@@ -80,14 +66,13 @@ static __noinline int reserve_entry_admission(
         classification = bpf_map_lookup_elem(
             &external_root_classifications, &label->task_cookie);
         if (pending->source_role_id != binding->external_role_id ||
-            entry->entry_kind != entry_kind_v1_unknown_external ||
             !classification ||
             classification->task_cookie != label->task_cookie ||
             classification->root_class !=
                 external_root_class_v1_external_runtime_root ||
             classification->purpose != entry_purpose_v1_unknown ||
-            classification->installed_role_class !=
-                installed_role_class_v1_runtime_external_restricted)
+            classification->installed_role_numeric_id !=
+                binding->external_role_id)
             return -EACCES;
     }
     if (__sync_val_compare_and_swap(&process->transition_guard, 0, 1)) {
@@ -109,8 +94,6 @@ static __noinline int reserve_entry_admission(
     process->pending_target_role_id = rule->target_role_id;
     process->transition_version++;
     pending->admitted_entry_rule_id = rule->admitted_entry_rule_id;
-    pending->pending_entry_kind = rule->entry_kind;
-    pending->pending_installed_role_class = rule->installed_role_class;
     pending->transition_version++;
     release_transition_guard(&process->transition_guard);
     return 1;
@@ -131,47 +114,25 @@ static __noinline int commit_entry_admission_metadata(
                                          &label->task_cookie);
     if (!entry || !classification)
         return -EACCES;
-    if (pending->pending_installed_role_class ==
-        installed_role_class_v1_initial_role) {
-        if (pending->pending_entry_kind != entry_kind_v1_container_start)
-            return -EACCES;
-    } else if (pending->pending_installed_role_class ==
-               installed_role_class_v1_declared_entry_role) {
-        if (!declared_entry_kind(pending->pending_entry_kind))
-            return -EACCES;
-    } else if (pending->pending_installed_role_class ==
-               installed_role_class_v1_approved_administrative_role) {
-        administrative_match = bpf_map_lookup_elem(
-            &pending_administrative_matches, &label->task_cookie);
-        if (pending->pending_entry_kind !=
-                entry_kind_v1_approved_administrative_exec_next_match ||
-            !administrative_match ||
-            administrative_match->state !=
+    administrative_match = bpf_map_lookup_elem(
+        &pending_administrative_matches, &label->task_cookie);
+    if (administrative_match) {
+        if (administrative_match->state !=
                 pending_administrative_match_state_v1_slot_consumed ||
             administrative_match->exec_attempt_sequence !=
                 pending->exec_attempt_sequence ||
             administrative_match->approved_role_numeric_id !=
                 process->pending_target_role_id)
             return -EACCES;
-    } else {
-        return -EACCES;
     }
     entry->admitted_entry_rule_id = pending->admitted_entry_rule_id;
-    entry->entry_kind = pending->pending_entry_kind;
     entry->committed_execution_id = pending->target_execution_id;
     entry->transition_version++;
-    if (pending->pending_installed_role_class ==
-        installed_role_class_v1_declared_entry_role) {
-        classification->purpose = entry_purpose_v1_unknown;
-        classification->installed_role_class =
-            installed_role_class_v1_declared_entry_role;
-        classification->installed_role_numeric_id =
-            process->pending_target_role_id;
-    } else if (administrative_match) {
+    classification->installed_role_numeric_id =
+        process->pending_target_role_id;
+    if (administrative_match) {
         classification->purpose =
             entry_purpose_v1_approved_administrative_next_match;
-        classification->installed_role_class =
-            installed_role_class_v1_approved_administrative_role;
         classification->installed_role_numeric_id =
             administrative_match->approved_role_numeric_id;
         classification->administrative_approval_proof_id =
@@ -180,8 +141,62 @@ static __noinline int commit_entry_admission_metadata(
             administrative_match->claim_slot_id;
         entry->claim_slot_id = administrative_match->claim_slot_id;
         entry->transition_version++;
+    } else if (classification->root_class ==
+               external_root_class_v1_external_runtime_root) {
+        classification->installed_role_class =
+            installed_role_class_v1_qualified_registered_role;
     }
     return 0;
+}
+
+static __noinline bool entry_admission_matches_live_state(
+    const task_label_v1 *label, const pending_exec_v1 *pending,
+    const execution_set_binding_state_v1 *binding,
+    const process_security_state_v1 *process,
+    const pending_administrative_match_v1 *administrative_match)
+{
+    external_root_classification_v1 *classification;
+    entry_security_state_v1 *entry;
+    bool application;
+
+    if (!label || !pending || !binding || !process)
+        return false;
+    entry = bpf_map_lookup_elem(&entry_states, &label->entry_instance_id);
+    if (!entry)
+        return false;
+    application =
+        binding->prepared_container_state ==
+            prepared_container_state_v1_exec_pending &&
+        binding->prepared_container_exec_task_cookie == label->task_cookie;
+    if (application)
+        return !administrative_match &&
+               pending->source_role_id == binding->initial_role_id &&
+               id128_equal(&binding->prepared_container_entry_instance_id,
+                           &label->entry_instance_id);
+    classification = bpf_map_lookup_elem(
+        &external_root_classifications, &label->task_cookie);
+    if (!classification ||
+        pending->source_role_id != binding->external_role_id ||
+        classification->task_cookie != label->task_cookie ||
+        !id128_equal(&classification->process_state_id,
+                     &label->process_state_id) ||
+        classification->root_class !=
+            external_root_class_v1_external_runtime_root ||
+        classification->purpose != entry_purpose_v1_unknown ||
+        classification->installed_role_numeric_id !=
+            binding->external_role_id ||
+        entry->admission_state != entry_admission_state_v1_committed ||
+        entry->lifetime_state != entry_lifetime_state_v1_active)
+        return false;
+    return !administrative_match ||
+           (administrative_match->state ==
+                pending_administrative_match_state_v1_slot_consumed &&
+            administrative_match->exec_attempt_sequence ==
+                pending->exec_attempt_sequence &&
+            administrative_match->approved_role_numeric_id ==
+                process->pending_target_role_id &&
+            administrative_match->profile_generation_ref_id ==
+                process->active_profile_generation_ref_id);
 }
 
 static __always_inline int observe_bprm_effect(struct linux_binprm *bprm)
@@ -544,8 +559,8 @@ static __always_inline int prepare_administrative_match(
     struct identity_scratch_v1 *scratch;
     task_label_v1 *label;
     process_security_state_v1 *process;
-    execution_set_binding_state_v1 *binding;
     external_root_classification_v1 *classification;
+    execution_set_binding_state_v1 *binding;
     approved_exec_slot_key_v1 key;
     approved_exec_slot_v1 *slot;
     struct cgroup *cgroup = NULL;
@@ -582,8 +597,6 @@ static __always_inline int prepare_administrative_match(
         classification->root_class !=
             external_root_class_v1_external_runtime_root ||
         classification->purpose != entry_purpose_v1_unknown ||
-        classification->installed_role_class !=
-            installed_role_class_v1_runtime_external_restricted ||
         classification->installed_role_numeric_id != process->active_role_id)
         return 0;
     key.node_boot_id = config->node_boot_id;
@@ -697,10 +710,6 @@ static __always_inline int consume_administrative_match(
         return -EACCES;
     process->pending_target_role_id = match->approved_role_numeric_id;
     pending->admitted_entry_rule_id = slot->admitted_entry_rule_id;
-    pending->pending_entry_kind =
-        entry_kind_v1_approved_administrative_exec_next_match;
-    pending->pending_installed_role_class =
-        installed_role_class_v1_approved_administrative_role;
     pending->transition_version++;
     return 0;
 
@@ -887,10 +896,9 @@ static __noinline int identity_bprm_transition(struct linux_binprm *bprm,
         scratch->pending_exec.transition_version = 1;
         scratch->pending_exec.admitted_entry_rule_id = 0;
         scratch->pending_exec.state = pending_exec_state_v1_preparing;
-        scratch->pending_exec.pending_entry_kind = entry_kind_v1_unknown;
-        scratch->pending_exec.pending_installed_role_class =
-            installed_role_class_v1_unknown;
-        scratch->pending_exec.reserved_1 = 0;
+#pragma unroll
+        for (int index = 0; index < 3; index++)
+            scratch->pending_exec.reserved_1[index] = 0;
         if (bpf_map_update_elem(&pending_execs, &label->task_cookie,
                                 &scratch->pending_exec, BPF_NOEXIST)) {
             release_transition_guard(&process->transition_guard);
@@ -1072,7 +1080,6 @@ static __always_inline void activate_prepared_container_for_application(
      * Keep kernel exec-finalization work inside the prepared boundary. */
     if (!prepared_container_pre_active_actor_is_exact(binding, label, entry) ||
         !entry->admitted_entry_rule_id ||
-        entry->entry_kind != entry_kind_v1_container_start ||
         !prepared_container_commit_activation(binding, label->task_cookie))
         prepared_container_mark_corrupt(binding);
 }
@@ -1178,8 +1185,6 @@ int erebor_sched_process_exec(struct trace_event_raw_sched_process_exec *context
     process_execution_instance_v1 *target_execution;
     image_provenance_v1 *target_image;
     pending_administrative_match_v1 *administrative_match;
-    external_root_classification_v1 *classification;
-    entry_security_state_v1 *admitted_entry;
     task_coordinate_v1 *coordinate;
     struct identity_scratch_v1 *scratch;
     struct mm_struct *mm = NULL;
@@ -1190,8 +1195,6 @@ int erebor_sched_process_exec(struct trace_event_raw_sched_process_exec *context
     struct cgroup *cgroup = NULL;
     bool non_exact_candidate_allowed;
     bool entry_admission;
-    bool application_admission;
-    bool additional_admission;
     int binding_lookup;
 
     task = bpf_get_current_task_btf();
@@ -1254,37 +1257,23 @@ int erebor_sched_process_exec(struct trace_event_raw_sched_process_exec *context
     }
     administrative_match = bpf_map_lookup_elem(
         &pending_administrative_matches, &label->task_cookie);
-    classification = NULL;
-    admitted_entry = NULL;
     entry_admission = pending->admitted_entry_rule_id != 0;
-    application_admission =
-        entry_admission &&
-        pending->pending_entry_kind == entry_kind_v1_container_start;
-    additional_admission =
-        entry_admission &&
-        declared_entry_kind(pending->pending_entry_kind);
-    if (entry_admission) {
-        classification = bpf_map_lookup_elem(
-            &external_root_classifications, &label->task_cookie);
-        admitted_entry = bpf_map_lookup_elem(
-            &entry_states, &label->entry_instance_id);
-        if (!classification || !admitted_entry) {
-            process->exec_guard_state = exec_guard_state_v1_outcome_unknown;
-            process->transition_version++;
-            pending->state = pending_exec_state_v1_outcome_unknown;
-            pending->transition_version++;
-            if (target_execution) {
-                target_execution->state =
-                    process_execution_state_v1_outcome_unknown;
-                target_execution->transition_version++;
-            }
-            if (target_image) {
-                target_image->state = image_provenance_state_v1_outcome_unknown;
-                target_image->transition_version++;
-            }
-            release_transition_guard(&process->transition_guard);
-            return 0;
+    if (!entry) {
+        process->exec_guard_state = exec_guard_state_v1_outcome_unknown;
+        process->transition_version++;
+        pending->state = pending_exec_state_v1_outcome_unknown;
+        pending->transition_version++;
+        if (target_execution) {
+            target_execution->state =
+                process_execution_state_v1_outcome_unknown;
+            target_execution->transition_version++;
         }
+        if (target_image) {
+            target_image->state = image_provenance_state_v1_outcome_unknown;
+            target_image->transition_version++;
+        }
+        release_transition_guard(&process->transition_guard);
+        return 0;
     }
     if (!previous_execution ||
         previous_execution->state != process_execution_state_v1_active ||
@@ -1292,7 +1281,7 @@ int erebor_sched_process_exec(struct trace_event_raw_sched_process_exec *context
         target_execution->state != process_execution_state_v1_preparing ||
         !target_image ||
         target_image->state != image_provenance_state_v1_preparing ||
-        binding_lookup || !binding_matches_label(binding, label) || !entry ||
+        binding_lookup || !binding_matches_label(binding, label) ||
         !scratch ||
         (((!scratch->image.ordered_candidates[0].mount_id &&
            !pending->prepared_runtime_exec) ||
@@ -1303,62 +1292,11 @@ int erebor_sched_process_exec(struct trace_event_raw_sched_process_exec *context
          !prepared_container_actor_is_exact(binding, label, entry)) ||
         (process->pending_target_role_id != process->active_role_id &&
          !entry_admission) ||
-        (!entry_admission &&
-         (pending->pending_entry_kind != entry_kind_v1_unknown ||
-          pending->pending_installed_role_class !=
-              installed_role_class_v1_unknown)) ||
+        (entry_admission && !process->pending_target_role_id) ||
         (entry_admission &&
-         (!process->pending_target_role_id ||
-          pending->pending_installed_role_class ==
-              installed_role_class_v1_unknown ||
-          (!application_admission && !additional_admission &&
-           !administrative_match))) ||
-        (application_admission &&
-         (administrative_match ||
-          pending->pending_installed_role_class !=
-              installed_role_class_v1_initial_role ||
-          binding->prepared_container_state !=
-              prepared_container_state_v1_exec_pending ||
-          binding->prepared_container_exec_task_cookie !=
-              label->task_cookie ||
-          !id128_equal(&binding->prepared_container_entry_instance_id,
-                       &label->entry_instance_id))) ||
-        (additional_admission &&
-         (administrative_match ||
-          pending->pending_installed_role_class !=
-              installed_role_class_v1_declared_entry_role ||
-          classification->root_class !=
-              external_root_class_v1_external_runtime_root ||
-          classification->purpose != entry_purpose_v1_unknown ||
-          classification->installed_role_class !=
-              installed_role_class_v1_runtime_external_restricted)) ||
-        (administrative_match &&
-         (!entry_admission || application_admission ||
-          additional_admission ||
-          pending->pending_entry_kind !=
-              entry_kind_v1_approved_administrative_exec_next_match ||
-          pending->pending_installed_role_class !=
-              installed_role_class_v1_approved_administrative_role ||
-          administrative_match->state !=
-              pending_administrative_match_state_v1_slot_consumed ||
-          administrative_match->exec_attempt_sequence !=
-              pending->exec_attempt_sequence ||
-          administrative_match->approved_role_numeric_id !=
-              process->pending_target_role_id ||
-          administrative_match->profile_generation_ref_id !=
-              process->active_profile_generation_ref_id ||
-          classification->task_cookie != label->task_cookie ||
-          !id128_equal(&classification->process_state_id,
-                       &label->process_state_id) ||
-          classification->root_class !=
-              external_root_class_v1_external_runtime_root ||
-          classification->purpose != entry_purpose_v1_unknown ||
-          classification->installed_role_class !=
-              installed_role_class_v1_runtime_external_restricted ||
-          admitted_entry->admission_state !=
-              entry_admission_state_v1_committed ||
-          admitted_entry->lifetime_state !=
-              entry_lifetime_state_v1_active)) ||
+         !entry_admission_matches_live_state(
+             label, pending, binding, process,
+             administrative_match)) ||
         commit_entry_admission_metadata(label, pending, process)) {
         process->exec_guard_state = exec_guard_state_v1_outcome_unknown;
         process->transition_version++;

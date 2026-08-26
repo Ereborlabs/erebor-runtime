@@ -116,7 +116,6 @@ static __noinline int snapshot_io_uring_actor(
     actor->active_role_id = process->active_role_id;
     actor->process_state_vector_id = process->process_state_vector_id;
     actor->admitted_entry_rule_id = entry->admitted_entry_rule_id;
-    actor->entry_kind = entry->entry_kind;
     actor->binding_lifecycle_state = binding->lifecycle_state;
     *binding_snapshot = *binding;
     return 0;
@@ -154,7 +153,6 @@ static __always_inline bool io_uring_actor_equal(
            left->process_state_vector_id ==
                right->process_state_vector_id &&
            left->admitted_entry_rule_id == right->admitted_entry_rule_id &&
-           left->entry_kind == right->entry_kind &&
            left->binding_lifecycle_state ==
                right->binding_lifecycle_state;
 }
@@ -231,7 +229,6 @@ static __always_inline void populate_io_uring_observation(
         request->actor.process_state_vector_id;
     scratch->observation.admitted_entry_rule_id =
         request->actor.admitted_entry_rule_id;
-    scratch->observation.entry_kind = request->actor.entry_kind;
     scratch->observation.io_uring_ring_id = request->ring_id;
     scratch->observation.io_uring_ring_generation = request->ring_generation;
     scratch->observation.io_uring_submission_sequence =
@@ -425,7 +422,6 @@ static __noinline int resolved_io_uring_effect_gate(
         scratch->effect_default.profile_generation_ref_id =
             request->actor.profile_generation_ref_id;
         scratch->effect_default.active_role_id = request->actor.active_role_id;
-        scratch->effect_default.entry_kind = request->actor.entry_kind;
         scratch->effect_default.effect_family = effect_family;
         scratch->effect_default.operation = operation;
         scratch->effect_default.composite_atom_id =
@@ -456,7 +452,6 @@ static __noinline int resolved_io_uring_effect_gate(
     scratch->effect_key.profile_generation_ref_id =
         request->actor.profile_generation_ref_id;
     scratch->effect_key.active_role_id = request->actor.active_role_id;
-    scratch->effect_key.entry_kind = request->actor.entry_kind;
     scratch->effect_key.effect_family = effect_family;
     scratch->effect_key.operation = operation;
     scratch->effect_key.composite_atom_id =
@@ -475,7 +470,6 @@ static __noinline int resolved_io_uring_effect_gate(
             scratch->effect_key.profile_generation_ref_id;
         scratch->effect_default.active_role_id =
             scratch->effect_key.active_role_id;
-        scratch->effect_default.entry_kind = scratch->effect_key.entry_kind;
         scratch->effect_default.effect_family =
             scratch->effect_key.effect_family;
         scratch->effect_default.operation = scratch->effect_key.operation;

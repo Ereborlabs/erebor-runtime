@@ -181,11 +181,8 @@ mod tests {
         let key = EffectDecisionKeyV1 {
             profile_generation_ref_id: 1,
             active_role_id: 2,
-            entry_kind: 3,
             effect_family: 4,
             operation: 5,
-            reserved: 0,
-            reserved_alignment: [0; 4],
             composite_atom_id: 6,
             exact_object_key_id: 7,
             process_state_vector_id: 8,

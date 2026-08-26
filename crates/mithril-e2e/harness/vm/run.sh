@@ -350,7 +350,6 @@ if [[ $stock_runc_only == true ]]; then
     (.independent_entries | all(
       .active_role_id > 0 and
       .admitted_entry_rule_id > 0 and
-      .installed_role_class == "declared_entry_role" and
       .own_policy_deny_observed and
       .application_policy_not_inherited
     )) and

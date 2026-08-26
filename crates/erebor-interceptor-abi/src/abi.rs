@@ -187,11 +187,8 @@ pub struct FileOpenEventV1 {
 pub struct EffectDecisionKeyV1 {
     pub profile_generation_ref_id: u64,
     pub active_role_id: u32,
-    pub entry_kind: u16,
     pub effect_family: u16,
     pub operation: u16,
-    pub reserved: u16,
-    pub reserved_alignment: [u8; 4],
     pub composite_atom_id: u64,
     pub exact_object_key_id: u64,
     pub process_state_vector_id: u32,
@@ -772,9 +769,8 @@ pub struct IoUringActorSnapshotV1 {
     pub active_role_id: u32,
     pub process_state_vector_id: u32,
     pub admitted_entry_rule_id: u32,
-    pub entry_kind: u16,
     pub binding_lifecycle_state: BindingLifecycleStateV1,
-    pub reserved: u8,
+    pub reserved: [u8; 3],
 }
 
 #[repr(C)]
@@ -880,11 +876,8 @@ pub struct IoUringExecutionStateV1 {
 pub struct EffectDefaultKeyV1 {
     pub profile_generation_ref_id: u64,
     pub active_role_id: u32,
-    pub entry_kind: u16,
     pub effect_family: u16,
     pub operation: u16,
-    pub reserved: u16,
-    pub reserved_alignment: [u8; 4],
     pub composite_atom_id: u64,
     pub process_state_vector_id: u32,
     pub binding_lifecycle_state: BindingLifecycleStateV1,
@@ -917,14 +910,12 @@ pub struct DeviceEffectKeyV1 {
     pub device_major: u32,
     pub device_minor: u32,
     pub ioctl_command: u32,
-    pub entry_kind: u16,
     pub operation: u16,
     pub binding_lifecycle_state: BindingLifecycleStateV1,
     pub device_type: ExactDeviceTypeV1,
     /// One only for a policy row that explicitly names all ioctl commands.
     pub command_wildcard: u8,
-    pub reserved: u8,
-    pub reserved_tail: [u8; 4],
+    pub reserved: [u8; 7],
 }
 
 /// A signed role relationship used to bind one exact controller-target pair.
@@ -947,11 +938,9 @@ pub struct ProcessControlRuleKeyV1 {
     pub target_role_id: u32,
     pub target_process_state_vector_id: u32,
     pub operation_argument: u32,
-    pub entry_kind: u16,
     pub operation: u16,
     pub binding_lifecycle_state: BindingLifecycleStateV1,
     pub argument_wildcard: u8,
-    pub reserved: [u8; 6],
 }
 
 #[repr(u8)]
@@ -1214,10 +1203,10 @@ pub struct EffectObservationV1 {
     pub composite_atom_id: u64,
     pub active_role_id: u32,
     pub process_state_vector_id: u32,
-    pub entry_kind: u16,
     pub effect_family: u16,
     pub operation: u16,
     pub configured_errno: i16,
+    pub reserved_effect: [u8; 2],
     pub kernel_result: i32,
     pub reason: u8,
     pub physical_result: u8,
@@ -1293,20 +1282,17 @@ pub struct EffectObservationHealthV1 {
 
 impl EffectDecisionKeyV1 {
     #[must_use]
-    pub fn encode_le(self) -> [u8; 48] {
-        let mut bytes = [0_u8; 48];
+    pub fn encode_le(self) -> [u8; 40] {
+        let mut bytes = [0_u8; 40];
         bytes[0..8].copy_from_slice(&self.profile_generation_ref_id.to_le_bytes());
         bytes[8..12].copy_from_slice(&self.active_role_id.to_le_bytes());
-        bytes[12..14].copy_from_slice(&self.entry_kind.to_le_bytes());
-        bytes[14..16].copy_from_slice(&self.effect_family.to_le_bytes());
-        bytes[16..18].copy_from_slice(&self.operation.to_le_bytes());
-        bytes[18..20].copy_from_slice(&self.reserved.to_le_bytes());
-        bytes[20..24].copy_from_slice(&self.reserved_alignment);
-        bytes[24..32].copy_from_slice(&self.composite_atom_id.to_le_bytes());
-        bytes[32..40].copy_from_slice(&self.exact_object_key_id.to_le_bytes());
-        bytes[40..44].copy_from_slice(&self.process_state_vector_id.to_le_bytes());
-        bytes[44] = self.binding_lifecycle_state as u8;
-        bytes[45..48].copy_from_slice(&self.reserved_tail);
+        bytes[12..14].copy_from_slice(&self.effect_family.to_le_bytes());
+        bytes[14..16].copy_from_slice(&self.operation.to_le_bytes());
+        bytes[16..24].copy_from_slice(&self.composite_atom_id.to_le_bytes());
+        bytes[24..32].copy_from_slice(&self.exact_object_key_id.to_le_bytes());
+        bytes[32..36].copy_from_slice(&self.process_state_vector_id.to_le_bytes());
+        bytes[36] = self.binding_lifecycle_state as u8;
+        bytes[37..40].copy_from_slice(&self.reserved_tail);
         bytes
     }
 }
@@ -1350,11 +1336,11 @@ mod tests {
 
     #[test]
     fn decision_abi_layout_and_values_are_closed() {
-        assert_eq!(size_of::<EffectDecisionKeyV1>(), 48);
+        assert_eq!(size_of::<EffectDecisionKeyV1>(), 40);
         assert_eq!(align_of::<EffectDecisionKeyV1>(), 8);
-        assert_eq!(offset_of!(EffectDecisionKeyV1, composite_atom_id), 24);
-        assert_eq!(offset_of!(EffectDecisionKeyV1, exact_object_key_id), 32);
-        assert_eq!(offset_of!(EffectDecisionKeyV1, binding_lifecycle_state), 44);
+        assert_eq!(offset_of!(EffectDecisionKeyV1, composite_atom_id), 16);
+        assert_eq!(offset_of!(EffectDecisionKeyV1, exact_object_key_id), 24);
+        assert_eq!(offset_of!(EffectDecisionKeyV1, binding_lifecycle_state), 36);
         assert_eq!(size_of::<PhysicalDecisionV1>(), 16);
         assert_eq!(align_of::<PhysicalDecisionV1>(), 4);
         assert_eq!(size_of::<PolicyActivationProbeV1>(), 112);
@@ -1363,14 +1349,14 @@ mod tests {
         assert_eq!(offset_of!(PolicyActivationProbeV1, expected), 96);
         assert_eq!(PolicyActivationProbeMapKindV1::EffectDecision as u8, 1);
         assert_eq!(PolicyActivationProbeMapKindV1::MountReconciliation as u8, 7);
-        assert_eq!(size_of::<EffectDefaultKeyV1>(), 40);
+        assert_eq!(size_of::<EffectDefaultKeyV1>(), 32);
         assert_eq!(size_of::<DeviceEffectKeyV1>(), 80);
         assert!(MAX_POLICY_ACTIVATION_PROBE_KEY_BYTES_V1 >= size_of::<DeviceEffectKeyV1>());
-        assert_eq!(size_of::<ProcessControlRuleKeyV1>(), 40);
+        assert_eq!(size_of::<ProcessControlRuleKeyV1>(), 32);
         assert_eq!(size_of::<BindingActivationTargetKeyV1>(), 24);
         assert_eq!(align_of::<BindingActivationTargetKeyV1>(), 8);
         assert_eq!(offset_of!(ProcessControlRuleKeyV1, operation_argument), 24);
-        assert_eq!(offset_of!(ProcessControlRuleKeyV1, argument_wildcard), 33);
+        assert_eq!(offset_of!(ProcessControlRuleKeyV1, argument_wildcard), 31);
         assert_eq!(size_of::<ProfileGenerationDescriptorV1>(), 112);
         assert_eq!(offset_of!(ProfileGenerationDescriptorV1, mode), 65);
         assert_eq!(size_of::<ExceptionRuntimeStateKeyV1>(), 32);
@@ -1451,11 +1437,8 @@ mod tests {
         let key = EffectDecisionKeyV1 {
             profile_generation_ref_id: 1,
             active_role_id: 2,
-            entry_kind: 3,
             effect_family: 4,
             operation: 5,
-            reserved: 0,
-            reserved_alignment: [0; 4],
             composite_atom_id: 6,
             exact_object_key_id: 7,
             process_state_vector_id: 8,
@@ -1465,8 +1448,8 @@ mod tests {
         assert_eq!(
             key.encode_le(),
             [
-                1, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 3, 0, 4, 0, 5, 0, 0, 0, 0, 0, 0, 0, 6, 0, 0, 0,
-                0, 0, 0, 0, 7, 0, 0, 0, 0, 0, 0, 0, 8, 0, 0, 0, 2, 0, 0, 0,
+                1, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 4, 0, 5, 0, 6, 0, 0, 0, 0, 0, 0, 0, 7, 0, 0, 0,
+                0, 0, 0, 0, 8, 0, 0, 0, 2, 0, 0, 0,
             ]
         );
         let missing_state = PhysicalDecisionV1 {

@@ -67,7 +67,6 @@ pub struct RuncEntryRoleProbeV1 {
     pub host_pid: u32,
     pub active_role_id: u32,
     pub admitted_entry_rule_id: u32,
-    pub installed_role_class: String,
     pub own_policy_deny_observed: bool,
     pub application_policy_not_inherited: bool,
 }
@@ -598,8 +597,6 @@ impl EffectTestRunner {
                 status.success()
                     && snapshot.active_role_id == expected_role_id
                     && snapshot.admitted_entry_rule_id > 0
-                    && snapshot.installed_role_class.as_deref()
-                        == Some("declared_entry_role")
                     && own_policy_deny_observed,
                 InvalidInputSnafu {
                     path: &entry_stderr,
@@ -614,7 +611,6 @@ impl EffectTestRunner {
                 host_pid,
                 active_role_id: snapshot.active_role_id,
                 admitted_entry_rule_id: snapshot.admitted_entry_rule_id,
-                installed_role_class: snapshot.installed_role_class.unwrap_or_default(),
                 own_policy_deny_observed,
                 application_policy_not_inherited: true,
             });
@@ -650,16 +646,31 @@ impl EffectTestRunner {
         );
 
         let external_marker = observations.cursor();
-        let external_output = Command::new(runc_path)
-            .args(["--root", state_root.to_string_lossy().as_ref()])
-            .args(["exec", &container_id, "/bin/sleep", "1"])
-            .output()
-            .context(IoSnafu { path: runc_path })?;
+        let external_pid_path = fixture_root.join("external.pid");
+        let external_stdout = output_directory.join("runc-entry-external.stdout");
+        let external_stderr = output_directory.join("runc-entry-external.stderr");
+        let mut external_child = container.spawn_exec(
+            "/bin/sleep",
+            &["5"],
+            &external_pid_path,
+            &external_stdout,
+            &external_stderr,
+        )?;
+        let external_pid = wait_for_pid_file(&external_pid_path, &mut external_child)?;
+        let external_snapshot = external_pid.and_then(|pid| inspector.snapshot(pid).ok().flatten());
+        let external_status = wait_for_child(&mut external_child)?;
+        reader
+            .poll(Duration::from_millis(100))
+            .context(InterceptorSnafu)?;
         ensure!(
-            !external_output.status.success(),
+            !external_status.success(),
             InvalidInputSnafu {
                 path: runc_path,
-                reason: "an undeclared external entry entered the protected container",
+                reason: format!(
+                    "an undeclared external entry entered the protected container: snapshot={external_snapshot:?}, stderr={}, effects={:?}",
+                    fs::read_to_string(&external_stderr).unwrap_or_default().trim(),
+                    recent_effect_summary(&observations, external_marker)
+                ),
             }
         );
         wait_for_reason(

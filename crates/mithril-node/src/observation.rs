@@ -406,7 +406,6 @@ fn to_ipc(event: EffectObservationV1) -> MithrilEffectObservation {
         composite_atom_id: event.composite_atom_id,
         active_role_id: event.active_role_id,
         process_state_vector_id: event.process_state_vector_id,
-        entry_kind: u32::from(event.entry_kind),
         effect_family: u32::from(event.effect_family),
         operation: u32::from(event.operation),
         configured_errno: i32::from(event.configured_errno),

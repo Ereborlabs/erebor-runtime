@@ -324,7 +324,6 @@ fn installed_role_class_name(value: InstalledRoleClassV1) -> &'static str {
         InstalledRoleClassV1::FailClosedUnknown => "fail_closed_unknown",
         InstalledRoleClassV1::QualifiedRegisteredRole => "qualified_registered_role",
         InstalledRoleClassV1::ApprovedAdministrativeRole => "approved_administrative_role",
-        InstalledRoleClassV1::DeclaredEntryRole => "declared_entry_role",
         InstalledRoleClassV1::Unknown => "unknown",
     }
 }

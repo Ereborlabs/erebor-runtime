@@ -81,7 +81,7 @@ message MithrilEffectObservation {
   uint64 composite_atom_id = 16;
   uint32 active_role_id = 17;
   uint32 process_state_vector_id = 18;
-  uint32 entry_kind = 19;
+  reserved 19;
   uint32 effect_family = 20;
   uint32 operation = 21;
   sint32 configured_errno = 22;

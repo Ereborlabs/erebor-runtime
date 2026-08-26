@@ -238,7 +238,6 @@ static __always_inline void populate_effect_actor(
         process->process_state_vector_id;
     scratch->observation.admitted_entry_rule_id =
         entry->admitted_entry_rule_id;
-    scratch->observation.entry_kind = entry->entry_kind;
     if (domain)
         scratch->observation.authority_domain_id = domain->authority_domain_id;
 }
@@ -256,7 +255,6 @@ static __always_inline physical_decision_v1 *effect_base_decision(
     scratch->effect_key.profile_generation_ref_id =
         process->active_profile_generation_ref_id;
     scratch->effect_key.active_role_id = process->active_role_id;
-    scratch->effect_key.entry_kind = entry->entry_kind;
     scratch->effect_key.effect_family = scratch->observation.effect_family;
     scratch->effect_key.operation = scratch->observation.operation;
     scratch->effect_key.composite_atom_id =
@@ -278,7 +276,6 @@ static __always_inline physical_decision_v1 *effect_base_decision(
         scratch->effect_key.profile_generation_ref_id;
     scratch->effect_default.active_role_id =
         scratch->effect_key.active_role_id;
-    scratch->effect_default.entry_kind = scratch->effect_key.entry_kind;
     scratch->effect_default.effect_family = scratch->effect_key.effect_family;
     scratch->effect_default.operation = scratch->effect_key.operation;
     scratch->effect_default.composite_atom_id =

@@ -92,13 +92,12 @@ static __always_inline bool runtime_entry_bootstrap_actor_is_exact(
                      &state->target_entry_instance_id) ||
         !binding_matches_label(binding, label) ||
         process->active_role_id != binding->external_role_id ||
-        entry->entry_kind != entry_kind_v1_unknown_external ||
         entry->admitted_entry_rule_id ||
         classification->root_class !=
             external_root_class_v1_external_runtime_root ||
         classification->purpose != entry_purpose_v1_unknown ||
-        classification->installed_role_class !=
-            installed_role_class_v1_runtime_external_restricted)
+        classification->installed_role_numeric_id !=
+            binding->external_role_id)
         return false;
     if (process->exec_guard_state == exec_guard_state_v1_none)
         return true;
@@ -112,18 +111,6 @@ static __always_inline bool runtime_entry_bootstrap_actor_is_exact(
            pending->source_role_id == binding->external_role_id &&
            pending->source_profile_generation_ref_id ==
                state->profile_generation_ref_id &&
-           (pending->pending_entry_kind ==
-                entry_kind_v1_declared_lifecycle_poststart ||
-            pending->pending_entry_kind ==
-                entry_kind_v1_declared_lifecycle_prestop ||
-            pending->pending_entry_kind ==
-                entry_kind_v1_declared_startup_probe ||
-            pending->pending_entry_kind ==
-                entry_kind_v1_declared_readiness_probe ||
-            pending->pending_entry_kind ==
-                entry_kind_v1_declared_liveness_probe) &&
-           pending->pending_installed_role_class ==
-               installed_role_class_v1_declared_entry_role &&
            id128_equal(&pending->process_state_id,
                        &label->process_state_id) &&
            id128_equal(&pending->pending_exec_id,

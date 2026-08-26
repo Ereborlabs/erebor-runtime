@@ -107,7 +107,6 @@ static __noinline int identity_device_ioctl_effect(struct file *file,
     scratch->device_effect_key.device_major = device_major;
     scratch->device_effect_key.device_minor = device_minor;
     scratch->device_effect_key.ioctl_command = cmd;
-    scratch->device_effect_key.entry_kind = scratch->observation.entry_kind;
     scratch->device_effect_key.operation =
         kernel_effect_operation_v1_ioctl;
     scratch->device_effect_key.binding_lifecycle_state =
@@ -343,7 +342,6 @@ static __always_inline bool external_entry_may_read_initial_target(
         !binding_matches_label(binding, target_label) ||
         !id128_equal(&binding->prepared_container_entry_instance_id,
                      &target_label->entry_instance_id) ||
-        target_entry->entry_kind != entry_kind_v1_container_start ||
         !target_entry->admitted_entry_rule_id)
         return false;
     current_label = current
@@ -362,7 +360,6 @@ static __always_inline bool external_entry_may_read_initial_target(
                                          &current_label->task_cookie);
     if (!current_entry || !classification ||
         !binding_matches_label(binding, current_label) ||
-        current_entry->entry_kind != entry_kind_v1_unknown_external ||
         current_entry->admitted_entry_rule_id ||
         classification->root_class !=
             external_root_class_v1_external_runtime_root ||
@@ -473,8 +470,6 @@ static __noinline int identity_process_control_effect(
     scratch->process_control_rule_key.target_process_state_vector_id =
         scratch->target_process.process_state_vector_id;
     scratch->process_control_rule_key.operation_argument = operation_argument;
-    scratch->process_control_rule_key.entry_kind =
-        scratch->observation.entry_kind;
     scratch->process_control_rule_key.operation = operation;
     scratch->process_control_rule_key.binding_lifecycle_state =
         binding->lifecycle_state;

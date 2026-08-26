@@ -3115,11 +3115,7 @@ impl EffectTestRunner {
                                         event.exact_object_key_id,
                                         event.composite_atom_id,
                                     ),
-                                    (
-                                        event.active_role_id,
-                                        event.process_state_vector_id,
-                                        event.entry_kind,
-                                    ),
+                                    (event.active_role_id, event.process_state_vector_id),
                                 )
                             })
                             .collect::<Vec<_>>()
@@ -3444,7 +3440,6 @@ impl EffectTestRunner {
                             .map(|event| (
                                 event.reason.as_str(),
                                 event.active_role_id,
-                                event.entry_kind,
                                 event.admitted_entry_rule_id,
                                 event.exact_object_key_id,
                                 event.composite_atom_id,

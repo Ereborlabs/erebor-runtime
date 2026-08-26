@@ -117,11 +117,10 @@ pub struct NetworkDestinationDecisionKeyV1 {
     pub destination_policy_handle: u64,
     pub active_role_id: u32,
     pub process_state_vector_id: u32,
-    pub entry_kind: u16,
     pub operation: u16,
     pub protocol: NetworkProtocolV1,
     pub binding_lifecycle_state: BindingLifecycleStateV1,
-    pub reserved: [u8; 2],
+    pub reserved: [u8; 4],
 }
 
 #[repr(C)]
@@ -142,7 +141,6 @@ pub struct NetworkSocketStateV1 {
     pub parent_socket_generation: u64,
     pub creator_role_id: u32,
     pub creator_process_state_vector_id: u32,
-    pub creator_entry_kind: u16,
     pub address_family: NetworkAddressFamilyV1,
     pub protocol: NetworkProtocolV1,
     pub peer_port: u16,
@@ -150,7 +148,7 @@ pub struct NetworkSocketStateV1 {
     pub creator_binding_lifecycle_state: BindingLifecycleStateV1,
     pub state: NetworkSocketStateKindV1,
     pub application_default_flow: u8,
-    pub reserved: [u8; 7],
+    pub reserved: [u8; 9],
 }
 
 #[repr(C)]
@@ -193,10 +191,10 @@ mod tests {
         assert_eq!(size_of::<NetworkResponseFloorV1>(), 8);
         assert_eq!(align_of::<NetworkSocketStateV1>(), 8);
         assert_eq!(offset_of!(NetworkSocketStateV1, socket_key_id), 24);
-        assert_eq!(offset_of!(NetworkSocketStateV1, peer_address), 118);
+        assert_eq!(offset_of!(NetworkSocketStateV1, peer_address), 116);
         assert_eq!(
             offset_of!(NetworkSocketStateV1, application_default_flow),
-            136
+            134
         );
     }
 }

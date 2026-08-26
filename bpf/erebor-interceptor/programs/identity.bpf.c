@@ -16,9 +16,9 @@ _Static_assert(sizeof(identity_runtime_config_v1) == 48,
                "identity runtime config ABI size");
 _Static_assert(__builtin_offsetof(task_label_v1, process_state_id) == 64,
                "task process-state offset");
-_Static_assert(sizeof(effect_decision_key_v1) == 48,
+_Static_assert(sizeof(effect_decision_key_v1) == 40,
                "effect decision key ABI size");
-_Static_assert(sizeof(effect_default_key_v1) == 40,
+_Static_assert(sizeof(effect_default_key_v1) == 32,
                "effect default key ABI size");
 _Static_assert(sizeof(ipc_relationship_decision_key_v1) == 24,
                "IPC relationship key ABI size");
@@ -40,7 +40,7 @@ _Static_assert(sizeof(network_response_floor_v1) == 8,
                "network response floor ABI size");
 _Static_assert(sizeof(device_effect_key_v1) == 80,
                "device effect key ABI size");
-_Static_assert(sizeof(process_control_rule_key_v1) == 40,
+_Static_assert(sizeof(process_control_rule_key_v1) == 32,
                "process-control rule key ABI size");
 _Static_assert(sizeof(physical_decision_v1) == 16,
                "physical decision ABI size");

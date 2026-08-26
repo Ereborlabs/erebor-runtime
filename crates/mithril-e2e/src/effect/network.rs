@@ -502,7 +502,6 @@ impl NetworkTestRunner {
                             event.effect_family,
                             event.operation,
                             event.active_role_id,
-                            event.entry_kind,
                             event.exact_object_key_id,
                         ))
                         .collect::<Vec<_>>()
@@ -976,7 +975,6 @@ impl NetworkTestRunner {
                         .map(|event| (
                             event.reason,
                             event.active_role_id,
-                            event.entry_kind,
                             event.operation,
                             event.network_destination_policy_handle,
                             event.network_peer_port,

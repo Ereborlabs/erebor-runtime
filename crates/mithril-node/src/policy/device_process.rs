@@ -17,7 +17,6 @@ pub(super) struct TypedEffectContext<'a> {
     pub profile_generation_ref_id: u64,
     pub actor_role_id: u32,
     pub actor_process_state_vector_id: u32,
-    pub entry_kind: u16,
     pub binding_lifecycle_state: BindingLifecycleStateV1,
     pub exact_objects: &'a [&'a ExactFileObjectConfig],
     pub signed_device_classes: &'a BTreeSet<String>,
@@ -109,7 +108,6 @@ fn lower_device(
             device_major: device.major,
             device_minor: device.minor,
             ioctl_command,
-            entry_kind: context.entry_kind,
             operation: KernelEffectOperationV1::Ioctl as u16,
             binding_lifecycle_state: context.binding_lifecycle_state,
             device_type: match device.device_type {
@@ -117,8 +115,7 @@ fn lower_device(
                 ExactDeviceType::Block => ExactDeviceTypeV1::Block,
             },
             command_wildcard,
-            reserved: 0,
-            reserved_tail: [0; 4],
+            reserved: [0; 7],
         };
         insert_exact(rows, key.as_bytes(), decision.as_bytes())?;
     }
@@ -180,11 +177,9 @@ fn lower_process(
         target_role_id,
         target_process_state_vector_id,
         operation_argument: operation.argument,
-        entry_kind: context.entry_kind,
         operation: operation.kernel_id as u16,
         binding_lifecycle_state: context.binding_lifecycle_state,
         argument_wildcard: u8::from(operation.argument_wildcard),
-        reserved: [0; 6],
     };
     insert_exact(rows, key.as_bytes(), decision.as_bytes())
 }
@@ -340,7 +335,6 @@ mod tests {
             profile_generation_ref_id: 7,
             actor_role_id,
             actor_process_state_vector_id,
-            entry_kind: 1,
             binding_lifecycle_state: BindingLifecycleStateV1::Active,
             exact_objects,
             signed_device_classes: &SIGNED_DEVICE_CLASSES,

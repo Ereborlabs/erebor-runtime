@@ -261,29 +261,6 @@ pub enum EntryPurposeV1 {
 #[derive(
     Clone, Copy, Debug, Default, Eq, Immutable, IntoBytes, KnownLayout, PartialEq, TryFromBytes,
 )]
-pub enum EntryKindV1 {
-    #[default]
-    Unknown = 0,
-    ContainerStart = 1,
-    QualifiedExecProbe = 2,
-    QualifiedLifecyclePoststart = 3,
-    QualifiedLifecyclePrestop = 4,
-    ApprovedAdministrativeExecNextMatch = 5,
-    EphemeralContainer = 6,
-    QualifiedCiContainerAction = 7,
-    CheckpointRestoreUnknown = 8,
-    UnknownExternal = 9,
-    DeclaredLifecyclePoststart = 10,
-    DeclaredLifecyclePrestop = 11,
-    DeclaredStartupProbe = 12,
-    DeclaredReadinessProbe = 13,
-    DeclaredLivenessProbe = 14,
-}
-
-#[repr(u8)]
-#[derive(
-    Clone, Copy, Debug, Default, Eq, Immutable, IntoBytes, KnownLayout, PartialEq, TryFromBytes,
-)]
 pub enum InstalledRoleClassV1 {
     #[default]
     Unknown = 0,
@@ -292,7 +269,6 @@ pub enum InstalledRoleClassV1 {
     FailClosedUnknown = 3,
     QualifiedRegisteredRole = 4,
     ApprovedAdministrativeRole = 5,
-    DeclaredEntryRole = 6,
 }
 
 #[repr(u8)]
@@ -520,10 +496,10 @@ pub struct EntrySecurityStateV1 {
     pub committed_execution_id: Id128V1,
     pub live_task_refs: u64,
     pub transition_version: u64,
-    pub entry_kind: EntryKindV1,
     pub admission_state: EntryAdmissionStateV1,
     pub lifetime_state: EntryLifetimeStateV1,
     pub terminal_reason: u8,
+    pub reserved: u8,
     pub admitted_entry_rule_id: u32,
     pub transition_guard: u64,
 }
@@ -548,9 +524,7 @@ pub struct EntryAdmissionRuleV1 {
     pub target_role_id: u32,
     pub target_process_state_vector_id: u32,
     pub admitted_entry_rule_id: u32,
-    pub entry_kind: u16,
-    pub installed_role_class: InstalledRoleClassV1,
-    pub reserved: u8,
+    pub reserved: u32,
 }
 
 #[repr(C)]
@@ -883,9 +857,7 @@ pub struct PendingExecV1 {
     pub transition_version: u64,
     pub admitted_entry_rule_id: u32,
     pub state: PendingExecStateV1,
-    pub pending_entry_kind: EntryKindV1,
-    pub pending_installed_role_class: InstalledRoleClassV1,
-    pub reserved_1: u8,
+    pub reserved_1: [u8; 3],
 }
 
 #[repr(C)]
@@ -1004,7 +976,6 @@ mod tests {
         assert_eq!(ExecGuardStateV1::OutcomeUnknown as u8, 3);
         assert_eq!(PendingExecStateV1::Success as u8, 5);
         assert_eq!(InstalledRoleClassV1::ApprovedAdministrativeRole as u8, 5);
-        assert_eq!(EntryKindV1::UnknownExternal as u8, 9);
         assert_eq!(InitialRootStateV1::Unarmed as u64, 0);
         assert_eq!(InitialRootStateV1::Consumed as u64, 2);
         assert_eq!(PreparedContainerStateV1::Unarmed as u64, 0);

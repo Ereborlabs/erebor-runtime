@@ -14,16 +14,15 @@ use erebor_interceptor_abi::{
     ExactFileObjectKeyV1, ExactObjectBindingStateV1, ExactObjectBindingV1, ExceptionBindingStateV1,
     ExceptionHandleBindingKeyV1, ExceptionHandleBindingV1, ExceptionRuntimeStateKeyV1,
     ExceptionRuntimeStateKindV1, ExceptionRuntimeStateV1, ExecutionSetBindingStateV1, Id128V1,
-    InstalledRoleClassV1, IoUringRequestStateV1, IoUringRingStateV1, KernelEffectFamilyV1,
-    MountReconciliationProposalV1, MountSecurityViewStateV1, MountTopologyStateV1,
-    NetworkDestinationDecisionKeyV1, NetworkResponseFloorKeyV1, NetworkResponseFloorV1,
-    NetworkResponseScopeV1, PathGraphStateKeyV1, PathGraphTerminalV1, PathGraphTransitionKeyV1,
-    PathGraphTransitionV1, PendingAdministrativeMatchV1, PendingExecV1, PhysicalDecisionKindV1,
-    PhysicalDecisionV1, PolicyActivationProbeMapKindV1, PolicyActivationProbeV1,
-    PolicyGenerationModeV1, PolicyGenerationStateV1, ProcessSecurityStateKindV1,
-    ProcessSecurityStateV1, ProfileGenerationDescriptorV1, ReferenceTombstoneStateV1,
-    TaskReferenceTombstoneV1, MAX_CANONICAL_COMPONENT_BYTES_V1,
-    MAX_POLICY_ACTIVATION_PROBE_KEY_BYTES_V1,
+    IoUringRequestStateV1, IoUringRingStateV1, KernelEffectFamilyV1, MountReconciliationProposalV1,
+    MountSecurityViewStateV1, MountTopologyStateV1, NetworkDestinationDecisionKeyV1,
+    NetworkResponseFloorKeyV1, NetworkResponseFloorV1, NetworkResponseScopeV1, PathGraphStateKeyV1,
+    PathGraphTerminalV1, PathGraphTransitionKeyV1, PathGraphTransitionV1,
+    PendingAdministrativeMatchV1, PendingExecV1, PhysicalDecisionKindV1, PhysicalDecisionV1,
+    PolicyActivationProbeMapKindV1, PolicyActivationProbeV1, PolicyGenerationModeV1,
+    PolicyGenerationStateV1, ProcessSecurityStateKindV1, ProcessSecurityStateV1,
+    ProfileGenerationDescriptorV1, ReferenceTombstoneStateV1, TaskReferenceTombstoneV1,
+    MAX_CANONICAL_COMPONENT_BYTES_V1, MAX_POLICY_ACTIVATION_PROBE_KEY_BYTES_V1,
 };
 use mithril_control::{
     canonical_path_components, AntiRollbackStore, CanonicalPathGraphV1, CompiledOperationV1,
@@ -2171,11 +2170,10 @@ impl LoweredGeneration {
                         destination_policy_handle,
                         active_role_id: role,
                         process_state_vector_id: process_state,
-                        entry_kind: entry_kind(cell.key.entry_kind),
                         operation,
                         protocol: Default::default(),
                         binding_lifecycle_state: lifecycle(cell.key.binding_lifecycle),
-                        reserved: [0; 2],
+                        reserved: [0; 4],
                     },
                     &destination.protocols,
                     physical,
@@ -2188,7 +2186,6 @@ impl LoweredGeneration {
                     profile_generation_ref_id: binding.active_profile_generation_ref_id,
                     actor_role_id: role,
                     actor_process_state_vector_id: process_state,
-                    entry_kind: entry_kind(cell.key.entry_kind),
                     binding_lifecycle_state: lifecycle(cell.key.binding_lifecycle),
                     exact_objects: &generation_objects,
                     signed_device_classes: &signed_device_classes,
@@ -2216,11 +2213,8 @@ impl LoweredGeneration {
                         let key = EffectDefaultKeyV1 {
                             profile_generation_ref_id: binding.active_profile_generation_ref_id,
                             active_role_id: role,
-                            entry_kind: entry_kind(cell.key.entry_kind),
                             effect_family: family,
                             operation,
-                            reserved: 0,
-                            reserved_alignment: [0; 4],
                             composite_atom_id: composite_handles[&cell.key.object_selector],
                             process_state_vector_id: process_state,
                             binding_lifecycle_state: lifecycle(cell.key.binding_lifecycle),
@@ -2240,11 +2234,8 @@ impl LoweredGeneration {
                         let key = EffectDecisionKeyV1 {
                             profile_generation_ref_id: binding.active_profile_generation_ref_id,
                             active_role_id: role,
-                            entry_kind: entry_kind(cell.key.entry_kind),
                             effect_family: family,
                             operation,
-                            reserved: 0,
-                            reserved_alignment: [0; 4],
                             composite_atom_id,
                             exact_object_key_id,
                             process_state_vector_id: process_state,
@@ -2258,11 +2249,8 @@ impl LoweredGeneration {
                 let key = EffectDefaultKeyV1 {
                     profile_generation_ref_id: binding.active_profile_generation_ref_id,
                     active_role_id: role,
-                    entry_kind: entry_kind(cell.key.entry_kind),
                     effect_family: family,
                     operation,
-                    reserved: 0,
-                    reserved_alignment: [0; 4],
                     composite_atom_id: if cell.key.object_selector == "DEFAULT" {
                         0
                     } else {
@@ -4217,18 +4205,13 @@ fn lower_entry_admissions(
             }
             .fail();
         };
-        let (source_role_id, installed_role_class) = match policy_entry_kind {
-            EntryKindV1::ContainerStart => (
-                assignment.resulting_role_id.as_str(),
-                InstalledRoleClassV1::InitialRole,
-            ),
+        let source_role_id = match policy_entry_kind {
+            EntryKindV1::ContainerStart => assignment.resulting_role_id.as_str(),
             EntryKindV1::DeclaredPostStart
             | EntryKindV1::DeclaredPreStop
             | EntryKindV1::DeclaredStartupProbe
             | EntryKindV1::DeclaredReadinessProbe
-            | EntryKindV1::DeclaredLivenessProbe => {
-                (external_role_id, InstalledRoleClassV1::DeclaredEntryRole)
-            }
+            | EntryKindV1::DeclaredLivenessProbe => external_role_id,
             _ => {
                 return IdentityStateSnafu {
                     reason: format!(
@@ -4321,8 +4304,6 @@ fn lower_entry_admissions(
             target_process_state_vector_id: process_state_handles
                 [&target_role.default_process_state_id],
             admitted_entry_rule_id: assignment_handles[&assignment.assignment_id],
-            entry_kind: entry_kind(*policy_entry_kind),
-            installed_role_class,
             reserved: 0,
         };
         insert_exact(&mut rows, key.as_bytes(), value.as_bytes())?;
@@ -4598,22 +4579,6 @@ fn physical_decision(
         evidence_class_id: 1,
         transition_id: 0,
         exception_numeric_handle,
-    }
-}
-
-const fn entry_kind(entry: EntryKindV1) -> u16 {
-    use erebor_interceptor_abi::EntryKindV1 as Abi;
-    match entry {
-        EntryKindV1::ContainerStart => Abi::ContainerStart as u16,
-        EntryKindV1::ExternalRuntimeUnknown => Abi::UnknownExternal as u16,
-        EntryKindV1::DeclaredPostStart => Abi::DeclaredLifecyclePoststart as u16,
-        EntryKindV1::DeclaredPreStop => Abi::DeclaredLifecyclePrestop as u16,
-        EntryKindV1::DeclaredStartupProbe => Abi::DeclaredStartupProbe as u16,
-        EntryKindV1::DeclaredReadinessProbe => Abi::DeclaredReadinessProbe as u16,
-        EntryKindV1::DeclaredLivenessProbe => Abi::DeclaredLivenessProbe as u16,
-        EntryKindV1::QualifiedJoinedPurpose => Abi::QualifiedExecProbe as u16,
-        EntryKindV1::ApprovedAdministrativeExec => Abi::ApprovedAdministrativeExecNextMatch as u16,
-        EntryKindV1::RestoredUnknown => Abi::CheckpointRestoreUnknown as u16,
     }
 }
 
@@ -5044,11 +5009,10 @@ mod tests {
     use ed25519_dalek::SigningKey;
     use erebor_interceptor_abi::{
         BindingLifecycleStateV1, EffectDecisionKeyV1, EffectDefaultKeyV1, EntryAdmissionRuleKeyV1,
-        EntryAdmissionRuleV1, EntryKindV1 as AbiEntryKindV1, ExactFileObjectKeyV1,
-        ExactObjectBindingStateV1, ExactObjectBindingV1, Id128V1, InstalledRoleClassV1,
-        KernelEffectFamilyV1, KernelEffectOperationV1, PathGraphStateKeyV1, PathGraphTerminalV1,
-        PathGraphTransitionKeyV1, PhysicalDecisionKindV1, PhysicalDecisionV1,
-        PolicyGenerationModeV1,
+        EntryAdmissionRuleV1, ExactFileObjectKeyV1, ExactObjectBindingStateV1,
+        ExactObjectBindingV1, Id128V1, KernelEffectFamilyV1, KernelEffectOperationV1,
+        PathGraphStateKeyV1, PathGraphTerminalV1, PathGraphTransitionKeyV1, PhysicalDecisionKindV1,
+        PhysicalDecisionV1, PolicyGenerationModeV1,
     };
     use mithril_control::{
         lower_kubernetes_policy, policy_custom_resource, EffectFamilyV1,
@@ -5147,11 +5111,8 @@ mod tests {
         let expected = EffectDecisionKeyV1 {
             profile_generation_ref_id: 1,
             active_role_id: 1,
-            entry_kind: AbiEntryKindV1::ContainerStart as u16,
             effect_family: KernelEffectFamilyV1::File as u16,
             operation: KernelEffectOperationV1::OpenRead as u16,
-            reserved: 0,
-            reserved_alignment: [0; 4],
             composite_atom_id: terminal.composite_atom_id,
             exact_object_key_id: object.exact_object_key_id,
             process_state_vector_id: 1,
@@ -5375,19 +5336,13 @@ mod tests {
         assert_eq!(target_roles.len(), 6);
         assert_eq!(
             rows.iter()
-                .filter(|(_, value)| {
-                    value.installed_role_class == InstalledRoleClassV1::InitialRole
-                        && value.entry_kind == AbiEntryKindV1::ContainerStart as u16
-                })
+                .filter(|(key, _)| key.source_role_id == binding.initial_role_id)
                 .count(),
             1
         );
         assert_eq!(
             rows.iter()
-                .filter(|(key, value)| {
-                    key.source_role_id == binding.external_role_id
-                        && value.installed_role_class == InstalledRoleClassV1::DeclaredEntryRole
-                })
+                .filter(|(key, _)| key.source_role_id == binding.external_role_id)
                 .count(),
             5
         );
@@ -5461,11 +5416,8 @@ mod tests {
         let expected = EffectDefaultKeyV1 {
             profile_generation_ref_id: 1,
             active_role_id: 1,
-            entry_kind: AbiEntryKindV1::ContainerStart as u16,
             effect_family: KernelEffectFamilyV1::File as u16,
             operation: KernelEffectOperationV1::OpenRead as u16,
-            reserved: 0,
-            reserved_alignment: [0; 4],
             composite_atom_id: terminal.composite_atom_id,
             process_state_vector_id: 1,
             binding_lifecycle_state: BindingLifecycleStateV1::Active,
@@ -5530,11 +5482,8 @@ mod tests {
         let expected = EffectDefaultKeyV1 {
             profile_generation_ref_id: 1,
             active_role_id: 1,
-            entry_kind: AbiEntryKindV1::ContainerStart as u16,
             effect_family: KernelEffectFamilyV1::Exec as u16,
             operation: KernelEffectOperationV1::Execute as u16,
-            reserved: 0,
-            reserved_alignment: [0; 4],
             composite_atom_id: terminal.composite_atom_id,
             process_state_vector_id: 1,
             binding_lifecycle_state: BindingLifecycleStateV1::Active,

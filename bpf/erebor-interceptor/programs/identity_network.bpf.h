@@ -156,7 +156,7 @@ static __always_inline int network_unsupported(int ret, int status)
 
 static __always_inline physical_decision_v1 *network_control_decision(
     struct identity_scratch_v1 *scratch, __u64 profile_generation_ref_id,
-    __u32 role_id, __u32 process_state_vector_id, __u16 entry_kind,
+    __u32 role_id, __u32 process_state_vector_id,
     binding_lifecycle_state_v1 lifecycle, __u16 operation)
 {
     __builtin_memset(&scratch->effect_default, 0,
@@ -164,7 +164,6 @@ static __always_inline physical_decision_v1 *network_control_decision(
     scratch->effect_default.profile_generation_ref_id =
         profile_generation_ref_id;
     scratch->effect_default.active_role_id = role_id;
-    scratch->effect_default.entry_kind = entry_kind;
     scratch->effect_default.effect_family = kernel_effect_family_v1_network;
     scratch->effect_default.operation = operation;
     scratch->effect_default.process_state_vector_id = process_state_vector_id;
@@ -175,7 +174,7 @@ static __always_inline physical_decision_v1 *network_control_decision(
 static __always_inline physical_decision_v1 *network_destination_decision(
     struct identity_scratch_v1 *scratch, __u64 profile_generation_ref_id,
     __u64 destination_policy_handle, __u32 role_id,
-    __u32 process_state_vector_id, __u16 entry_kind,
+    __u32 process_state_vector_id,
     binding_lifecycle_state_v1 lifecycle, __u16 operation,
     network_protocol_v1 protocol)
 {
@@ -188,7 +187,6 @@ static __always_inline physical_decision_v1 *network_destination_decision(
     scratch->network_destination_key.active_role_id = role_id;
     scratch->network_destination_key.process_state_vector_id =
         process_state_vector_id;
-    scratch->network_destination_key.entry_kind = entry_kind;
     scratch->network_destination_key.operation = operation;
     scratch->network_destination_key.protocol = protocol;
     scratch->network_destination_key.binding_lifecycle_state = lifecycle;
@@ -376,12 +374,11 @@ static __noinline int network_apply_control(
         scratch, scratch->process.active_profile_generation_ref_id,
         scratch->process.active_role_id,
         scratch->process.process_state_vector_id,
-        scratch->observation.entry_kind, binding->lifecycle_state, operation);
+        binding->lifecycle_state, operation);
     creator = network_control_decision(
         scratch, state->creator_profile_generation_ref_id,
         state->creator_role_id, state->creator_process_state_vector_id,
-        state->creator_entry_kind, state->creator_binding_lifecycle_state,
-        operation);
+        state->creator_binding_lifecycle_state, operation);
     if (!network_decision_allows(creator, creator_generation,
                                  application_default_allow))
         return network_apply_decision(config, scratch, creator_generation,
@@ -598,7 +595,6 @@ static __noinline int network_apply_destination(
                         current_class->destination_policy_handle,
                         scratch->process.active_role_id,
                         scratch->process.process_state_vector_id,
-                        scratch->observation.entry_kind,
                         binding->lifecycle_state, operation, state->protocol)
                   : NULL;
     creator = creator_class
@@ -607,7 +603,6 @@ static __noinline int network_apply_destination(
                         creator_class->destination_policy_handle,
                         state->creator_role_id,
                         state->creator_process_state_vector_id,
-                        state->creator_entry_kind,
                         state->creator_binding_lifecycle_state, operation,
                         state->protocol)
                   : NULL;
@@ -681,8 +676,7 @@ static __always_inline int network_socket_create_result(
         scratch, scratch->process.active_profile_generation_ref_id,
         scratch->process.active_role_id,
         scratch->process.process_state_vector_id,
-        scratch->observation.entry_kind, binding->lifecycle_state,
-        kernel_effect_operation_v1_socket_create);
+        binding->lifecycle_state, kernel_effect_operation_v1_socket_create);
     return network_apply_decision(
         config, scratch, generation, decision,
         current_admitted_actor_is_exact(binding));
@@ -738,7 +732,6 @@ static __noinline int network_socket_post_create_result(
     state->creator_role_id = scratch->process.active_role_id;
     state->creator_process_state_vector_id =
         scratch->process.process_state_vector_id;
-    state->creator_entry_kind = scratch->observation.entry_kind;
     state->creator_binding_lifecycle_state = binding->lifecycle_state;
     state->address_family = network_family(family);
     state->protocol = network_protocol(type, protocol);
@@ -1052,7 +1045,6 @@ static __noinline int network_accept_post_result(struct sock *accepted,
                         current_class->destination_policy_handle,
                         scratch->process.active_role_id,
                         scratch->process.process_state_vector_id,
-                        scratch->observation.entry_kind,
                         binding->lifecycle_state,
                         kernel_effect_operation_v1_accept,
                         scratch->network_socket_state.protocol)
@@ -1066,7 +1058,6 @@ static __noinline int network_accept_post_result(struct sock *accepted,
                        scratch->network_socket_state.creator_role_id,
                        scratch->network_socket_state
                            .creator_process_state_vector_id,
-                       scratch->network_socket_state.creator_entry_kind,
                        scratch->network_socket_state
                            .creator_binding_lifecycle_state,
                        kernel_effect_operation_v1_accept,
@@ -1108,7 +1099,6 @@ static __noinline int network_accept_post_result(struct sock *accepted,
     state->creator_role_id = scratch->process.active_role_id;
     state->creator_process_state_vector_id =
         scratch->process.process_state_vector_id;
-    state->creator_entry_kind = scratch->observation.entry_kind;
     state->address_family = scratch->network_socket_state.address_family;
     state->protocol = scratch->network_socket_state.protocol;
     state->peer_port = peer_port;

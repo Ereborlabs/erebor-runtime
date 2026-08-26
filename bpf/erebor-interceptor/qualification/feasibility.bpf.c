@@ -8,8 +8,8 @@
 _Static_assert(sizeof(task_label_candidate_v1) == 8, "task label ABI size");
 _Static_assert(sizeof(file_open_target_v1) == 8, "file target ABI size");
 _Static_assert(sizeof(file_open_event_v1) == 16, "file event ABI size");
-_Static_assert(sizeof(effect_decision_key_v1) == 48, "decision key ABI size");
-_Static_assert(__builtin_offsetof(effect_decision_key_v1, composite_atom_id) == 24,
+_Static_assert(sizeof(effect_decision_key_v1) == 40, "decision key ABI size");
+_Static_assert(__builtin_offsetof(effect_decision_key_v1, composite_atom_id) == 16,
                "decision atom ABI offset");
 _Static_assert(sizeof(physical_decision_v1) == 16, "decision value ABI size");
 

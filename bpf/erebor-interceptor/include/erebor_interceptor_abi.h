@@ -139,52 +139,6 @@ typedef enum entry_admission_state_v1 entry_admission_state_v1;
 typedef uint8_t entry_admission_state_v1;
 #endif // __STDC_VERSION__ >= 202311L
 
-enum installed_role_class_v1
-#if __STDC_VERSION__ >= 202311L
-  : uint8_t
-#endif // __STDC_VERSION__ >= 202311L
- {
-  installed_role_class_v1_unknown = 0,
-  installed_role_class_v1_initial_role = 1,
-  installed_role_class_v1_runtime_external_restricted = 2,
-  installed_role_class_v1_fail_closed_unknown = 3,
-  installed_role_class_v1_qualified_registered_role = 4,
-  installed_role_class_v1_approved_administrative_role = 5,
-  installed_role_class_v1_declared_entry_role = 6,
-};
-#if __STDC_VERSION__ >= 202311L
-typedef enum installed_role_class_v1 installed_role_class_v1;
-#else
-typedef uint8_t installed_role_class_v1;
-#endif // __STDC_VERSION__ >= 202311L
-
-enum entry_kind_v1
-#if __STDC_VERSION__ >= 202311L
-  : uint8_t
-#endif // __STDC_VERSION__ >= 202311L
- {
-  entry_kind_v1_unknown = 0,
-  entry_kind_v1_container_start = 1,
-  entry_kind_v1_qualified_exec_probe = 2,
-  entry_kind_v1_qualified_lifecycle_poststart = 3,
-  entry_kind_v1_qualified_lifecycle_prestop = 4,
-  entry_kind_v1_approved_administrative_exec_next_match = 5,
-  entry_kind_v1_ephemeral_container = 6,
-  entry_kind_v1_qualified_ci_container_action = 7,
-  entry_kind_v1_checkpoint_restore_unknown = 8,
-  entry_kind_v1_unknown_external = 9,
-  entry_kind_v1_declared_lifecycle_poststart = 10,
-  entry_kind_v1_declared_lifecycle_prestop = 11,
-  entry_kind_v1_declared_startup_probe = 12,
-  entry_kind_v1_declared_readiness_probe = 13,
-  entry_kind_v1_declared_liveness_probe = 14,
-};
-#if __STDC_VERSION__ >= 202311L
-typedef enum entry_kind_v1 entry_kind_v1;
-#else
-typedef uint8_t entry_kind_v1;
-#endif // __STDC_VERSION__ >= 202311L
-
 enum entry_lifetime_state_v1
 #if __STDC_VERSION__ >= 202311L
   : uint8_t
@@ -280,6 +234,24 @@ enum prepared_container_state_v1
 typedef enum prepared_container_state_v1 prepared_container_state_v1;
 #else
 typedef uint64_t prepared_container_state_v1;
+#endif // __STDC_VERSION__ >= 202311L
+
+enum installed_role_class_v1
+#if __STDC_VERSION__ >= 202311L
+  : uint8_t
+#endif // __STDC_VERSION__ >= 202311L
+ {
+  installed_role_class_v1_unknown = 0,
+  installed_role_class_v1_initial_role = 1,
+  installed_role_class_v1_runtime_external_restricted = 2,
+  installed_role_class_v1_fail_closed_unknown = 3,
+  installed_role_class_v1_qualified_registered_role = 4,
+  installed_role_class_v1_approved_administrative_role = 5,
+};
+#if __STDC_VERSION__ >= 202311L
+typedef enum installed_role_class_v1 installed_role_class_v1;
+#else
+typedef uint8_t installed_role_class_v1;
 #endif // __STDC_VERSION__ >= 202311L
 
 enum exact_device_type_v1
@@ -1098,9 +1070,7 @@ typedef struct entry_admission_rule_v1 {
   uint32_t target_role_id;
   uint32_t target_process_state_vector_id;
   uint32_t admitted_entry_rule_id;
-  uint16_t entry_kind;
-  installed_role_class_v1 installed_role_class;
-  uint8_t reserved;
+  uint32_t reserved;
 } entry_admission_rule_v1;
 
 typedef struct entry_security_state_v1 {
@@ -1114,10 +1084,10 @@ typedef struct entry_security_state_v1 {
   struct id128_v1 committed_execution_id;
   uint64_t live_task_refs;
   uint64_t transition_version;
-  entry_kind_v1 entry_kind;
   entry_admission_state_v1 admission_state;
   entry_lifetime_state_v1 lifetime_state;
   uint8_t terminal_reason;
+  uint8_t reserved;
   uint32_t admitted_entry_rule_id;
   uint64_t transition_guard;
 } entry_security_state_v1;
@@ -1187,11 +1157,8 @@ typedef struct external_root_classification_v1 {
 typedef struct effect_decision_key_v1 {
   uint64_t profile_generation_ref_id;
   uint32_t active_role_id;
-  uint16_t entry_kind;
   uint16_t effect_family;
   uint16_t operation;
-  uint16_t reserved;
-  uint8_t reserved_alignment[4];
   uint64_t composite_atom_id;
   uint64_t exact_object_key_id;
   uint32_t process_state_vector_id;
@@ -1202,11 +1169,8 @@ typedef struct effect_decision_key_v1 {
 typedef struct effect_default_key_v1 {
   uint64_t profile_generation_ref_id;
   uint32_t active_role_id;
-  uint16_t entry_kind;
   uint16_t effect_family;
   uint16_t operation;
-  uint16_t reserved;
-  uint8_t reserved_alignment[4];
   uint64_t composite_atom_id;
   uint32_t process_state_vector_id;
   binding_lifecycle_state_v1 binding_lifecycle_state;
@@ -1226,13 +1190,11 @@ typedef struct device_effect_key_v1 {
   uint32_t device_major;
   uint32_t device_minor;
   uint32_t ioctl_command;
-  uint16_t entry_kind;
   uint16_t operation;
   binding_lifecycle_state_v1 binding_lifecycle_state;
   exact_device_type_v1 device_type;
   uint8_t command_wildcard;
-  uint8_t reserved;
-  uint8_t reserved_tail[4];
+  uint8_t reserved[7];
 } device_effect_key_v1;
 
 typedef struct effect_observation_health_v1 {
@@ -1279,10 +1241,10 @@ typedef struct effect_observation_v1 {
   uint64_t composite_atom_id;
   uint32_t active_role_id;
   uint32_t process_state_vector_id;
-  uint16_t entry_kind;
   uint16_t effect_family;
   uint16_t operation;
   int16_t configured_errno;
+  uint8_t reserved_effect[2];
   int32_t kernel_result;
   uint8_t reason;
   uint8_t physical_result;
@@ -1457,9 +1419,8 @@ typedef struct io_uring_actor_snapshot_v1 {
   uint32_t active_role_id;
   uint32_t process_state_vector_id;
   uint32_t admitted_entry_rule_id;
-  uint16_t entry_kind;
   binding_lifecycle_state_v1 binding_lifecycle_state;
-  uint8_t reserved;
+  uint8_t reserved[3];
 } io_uring_actor_snapshot_v1;
 
 typedef struct io_uring_execution_state_v1 {
@@ -1591,11 +1552,10 @@ typedef struct network_destination_decision_key_v1 {
   uint64_t destination_policy_handle;
   uint32_t active_role_id;
   uint32_t process_state_vector_id;
-  uint16_t entry_kind;
   uint16_t operation;
   network_protocol_v1 protocol;
   binding_lifecycle_state_v1 binding_lifecycle_state;
-  uint8_t reserved[2];
+  uint8_t reserved[4];
 } network_destination_decision_key_v1;
 
 typedef struct network_ipv4_lpm_key_v1 {
@@ -1642,7 +1602,6 @@ typedef struct network_socket_state_v1 {
   uint64_t parent_socket_generation;
   uint32_t creator_role_id;
   uint32_t creator_process_state_vector_id;
-  uint16_t creator_entry_kind;
   network_address_family_v1 address_family;
   network_protocol_v1 protocol;
   uint16_t peer_port;
@@ -1650,7 +1609,7 @@ typedef struct network_socket_state_v1 {
   binding_lifecycle_state_v1 creator_binding_lifecycle_state;
   network_socket_state_kind_v1 state;
   uint8_t application_default_flow;
-  uint8_t reserved[7];
+  uint8_t reserved[9];
 } network_socket_state_v1;
 
 typedef struct mount_mutation_attempt_v1 {
@@ -1693,9 +1652,7 @@ typedef struct pending_exec_v1 {
   uint64_t transition_version;
   uint32_t admitted_entry_rule_id;
   pending_exec_state_v1 state;
-  entry_kind_v1 pending_entry_kind;
-  installed_role_class_v1 pending_installed_role_class;
-  uint8_t reserved_1;
+  uint8_t reserved_1[3];
 } pending_exec_v1;
 
 typedef struct pending_administrative_match_v1 {
@@ -1806,11 +1763,9 @@ typedef struct process_control_rule_key_v1 {
   uint32_t target_role_id;
   uint32_t target_process_state_vector_id;
   uint32_t operation_argument;
-  uint16_t entry_kind;
   uint16_t operation;
   binding_lifecycle_state_v1 binding_lifecycle_state;
   uint8_t argument_wildcard;
-  uint8_t reserved[6];
 } process_control_rule_key_v1;
 
 typedef struct process_state_vector_v1 {
