@@ -2991,7 +2991,7 @@ mod tests {
             operation: crate::RuntimeAdmissionOperationV1::PrepareContainer,
             container_id: "a".repeat(64),
             initial_pid: Some(1),
-            cgroup_path: Some(PathBuf::from("/sys/fs/cgroup/kubepods/pod-a/container-a")),
+            cgroup_path: None,
             annotations: BTreeMap::from([
                 (POD_NAMESPACE_ANNOTATION.to_owned(), "default".to_owned()),
                 (POD_UID_ANNOTATION.to_owned(), "pod-a".to_owned()),

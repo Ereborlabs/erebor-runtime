@@ -155,7 +155,7 @@ cat >"$hook_stage_config" <<'EOF'
     "timeout": 5
   },
   "when": {"annotations": {"^mithril\\.erebor\\.dev/profile-id$": ".+"}},
-"stages": ["createRuntime"]
+  "stages": ["createRuntime"]
 }
 EOF
 cat >"$hook_admission_config" <<'EOF'
