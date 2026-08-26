@@ -58,6 +58,6 @@ data:
           "^mithril\\.erebor\\.dev/profile-id$": ".+"
         }
       },
-      "stages": ["createRuntime"]
+      "stages": ["createContainer"]
     }
 {{- end }}

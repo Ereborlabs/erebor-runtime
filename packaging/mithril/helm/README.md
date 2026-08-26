@@ -78,8 +78,9 @@ timeout. The OCI runtime terminates a hook that exceeds this outer limit.
 ## Runtime Hook
 
 The init container installs `mithril-oci-hook` and two ordered,
-protected-Pod-only OCI `createRuntime` hooks on each selected host. The first
-hook stages immutable runtime facts. The second hook admits PreparedContainer.
+protected-Pod-only OCI hooks on each selected host. The `createRuntime` hook
+stages immutable runtime facts. The `createContainer` hook admits
+PreparedContainer after the runtime constructs the container filesystem.
 The default binary
 directory is `/usr/libexec/oci/hooks.d`, which is visible to the stock NRI
 hook-injector. CRI-O can read the default configuration directory directly.

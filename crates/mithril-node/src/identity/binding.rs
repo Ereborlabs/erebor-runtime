@@ -253,8 +253,7 @@ impl StagedRuntimeAdmissionV1 {
         ensure!(
             self.deadline > now
                 && authority_head_binding_id == self.authority_head_binding_id
-                && request.kubernetes_identity()? == self.identity
-                && request.held_cgroup_path()? == self.cgroup_path,
+                && request.kubernetes_identity()? == self.identity,
             IdentityStateSnafu {
                 reason: "the second OCI hook differs from its immutable first stage",
             }
@@ -872,6 +871,7 @@ impl WorkloadBindingOwner {
             request,
             now,
         )?;
+        scheduled.resolved.root_cgroup_path = Some(staged.cgroup_path);
         let runtime = self.runtime.as_mut().context(IdentityStateSnafu {
             reason: "runtime admission has no CRI inventory owner",
         })?;
@@ -2010,12 +2010,12 @@ mod tests {
         }
     }
 
-    fn authorization_request(cgroup_path: &Path) -> RuntimeAdmissionRequestV1 {
+    fn authorization_request(_cgroup_path: &Path) -> RuntimeAdmissionRequestV1 {
         RuntimeAdmissionRequestV1 {
             operation: RuntimeAdmissionOperationV1::PrepareContainer,
             container_id: "a".repeat(64),
             initial_pid: Some(42),
-            cgroup_path: Some(cgroup_path.to_path_buf()),
+            cgroup_path: None,
             annotations: BTreeMap::from([
                 (POD_NAMESPACE_ANNOTATION.to_owned(), "default".to_owned()),
                 (POD_UID_ANNOTATION.to_owned(), "pod-uid-a".to_owned()),
@@ -2050,10 +2050,12 @@ mod tests {
         assert!(stage
             .verify_preparation("authority-head-b", &request, now)
             .is_err());
-        let wrong_cgroup =
-            authorization_request(Path::new("/sys/fs/cgroup/kubepods/pod-a/another-container"));
+        let mut wrong_identity = authorization_request(&cgroup);
+        wrong_identity
+            .annotations
+            .insert(POD_UID_ANNOTATION.to_owned(), "pod-uid-b".to_owned());
         assert!(stage
-            .verify_preparation("authority-head-a", &wrong_cgroup, now)
+            .verify_preparation("authority-head-a", &wrong_identity, now)
             .is_err());
         let mut expired = stage;
         expired.deadline = now;
@@ -2073,6 +2075,7 @@ mod tests {
         let mut request = authorization_request(&cgroup);
         request.operation = RuntimeAdmissionOperationV1::StageRuntimeFacts;
         request.initial_pid = None;
+        request.cgroup_path = Some(cgroup.clone());
         let authority = ScheduledRuntimeBindingV1::authority_binding_id("pod-uid-a", "worker");
         let mut scheduled = spec(temporary.path());
         scheduled.binding_id.clone_from(&authority);

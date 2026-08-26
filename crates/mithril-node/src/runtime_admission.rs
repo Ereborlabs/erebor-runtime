@@ -106,8 +106,7 @@ impl RuntimeAdmissionRequestV1 {
                     && self.cgroup_path.as_deref().is_some_and(clean_cgroup_path)
             }
             RuntimeAdmissionOperationV1::PrepareContainer => {
-                self.initial_pid.is_some_and(|pid| pid > 0)
-                    && self.cgroup_path.as_deref().is_some_and(clean_cgroup_path)
+                self.initial_pid.is_some_and(|pid| pid > 0) && self.cgroup_path.is_none()
             }
         };
         ensure!(
@@ -177,18 +176,6 @@ impl RuntimeAdmissionRequestV1 {
         );
         self.initial_pid.context(IdentityStateSnafu {
             reason: "OCI runtime admission has no initial process",
-        })
-    }
-
-    pub(crate) fn held_cgroup_path(&self) -> Result<&Path> {
-        ensure!(
-            self.operation == RuntimeAdmissionOperationV1::PrepareContainer,
-            IdentityStateSnafu {
-                reason: "container preparation requires the second ordered OCI hook",
-            }
-        );
-        self.cgroup_path.as_deref().context(IdentityStateSnafu {
-            reason: "OCI runtime admission has no cgroup path",
         })
     }
 }
@@ -434,7 +421,7 @@ impl ScheduledRuntimeBindingV1 {
                 reason: "scheduled runtime activation requires the second ordered OCI hook",
             }
         );
-        Self::resolve_request(configured, request, Some(request.held_cgroup_path()?))
+        Self::resolve_request(configured, request, None)
     }
 
     pub(crate) fn resolve_stage(
@@ -752,7 +739,7 @@ mod tests {
             operation: RuntimeAdmissionOperationV1::PrepareContainer,
             container_id: "a".repeat(64),
             initial_pid: Some(42),
-            cgroup_path: Some(PathBuf::from("/sys/fs/cgroup/kubepods/pod-a/container-a")),
+            cgroup_path: None,
             annotations: BTreeMap::from([
                 (POD_NAMESPACE_ANNOTATION.to_owned(), "tenant-a".to_owned()),
                 (POD_UID_ANNOTATION.to_owned(), "pod-a".to_owned()),
@@ -817,6 +804,7 @@ mod tests {
         let mut stage = request();
         stage.operation = RuntimeAdmissionOperationV1::StageRuntimeFacts;
         stage.initial_pid = None;
+        stage.cgroup_path = Some(PathBuf::from("/sys/fs/cgroup/kubepods/pod-a/container-a"));
         let scheduled = scheduled_binding();
         let resolved = ScheduledRuntimeBindingV1::resolve_stage(&[scheduled], &stage)?;
         assert_eq!(resolved.resolved.root_cgroup_path, None);
@@ -868,10 +856,7 @@ mod tests {
         let resolved = ScheduledRuntimeBindingV1::resolve(&[scheduled], &request)?;
         assert_eq!(resolved.binding_index, 0);
         assert_eq!(resolved.resolved.container_id, request.container_id);
-        assert_eq!(
-            resolved.resolved.root_cgroup_path.as_deref(),
-            request.cgroup_path.as_deref()
-        );
+        assert_eq!(resolved.resolved.root_cgroup_path.as_deref(), None);
         assert!(resolved.previous_binding_id.is_none());
         Ok(())
     }

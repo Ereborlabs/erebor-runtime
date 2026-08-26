@@ -92,20 +92,23 @@ fn request_for_stage(
     if state.pid == 0 {
         return Err(invalid_data("OCI hook has no initial process"));
     }
-    let cgroup_path = process_cgroup_path(state.pid, cgroup_root)?;
+    let cgroup_path = match stage {
+        HookStageV1::StageRuntimeFacts => Some(process_cgroup_path(state.pid, cgroup_root)?),
+        HookStageV1::PrepareContainer => None,
+    };
     request_with_cgroup(stage, state, cgroup_path)
 }
 
 fn request_with_cgroup(
     stage: HookStageV1,
     state: OciStateV1,
-    cgroup_path: PathBuf,
+    cgroup_path: Option<PathBuf>,
 ) -> io::Result<RuntimeAdmissionRequestV1> {
     let (operation, initial_pid, cgroup_path) = match stage {
         HookStageV1::StageRuntimeFacts => (
             RuntimeAdmissionOperationV1::StageRuntimeFacts,
             None,
-            Some(cgroup_path),
+            cgroup_path,
         ),
         HookStageV1::PrepareContainer => {
             if state.pid == 0 {
@@ -115,7 +118,7 @@ fn request_with_cgroup(
             (
                 RuntimeAdmissionOperationV1::PrepareContainer,
                 Some(state.pid),
-                Some(cgroup_path),
+                None,
             )
         }
     };
@@ -207,7 +210,7 @@ mod tests {
         let request = request_with_cgroup(
             HookStageV1::StageRuntimeFacts,
             state,
-            Path::new("/sys/fs/cgroup/kubepods/pod-a/container-a").to_path_buf(),
+            Some(Path::new("/sys/fs/cgroup/kubepods/pod-a/container-a").to_path_buf()),
         )?;
         assert_eq!(
             request.operation,
@@ -228,17 +231,13 @@ mod tests {
             "bundle": "/run/containerd/io.containerd.runtime.v2.task/k8s.io/container-a",
             "annotations": {}
         }))?;
-        let request = request_with_cgroup(
-            HookStageV1::PrepareContainer,
-            state,
-            Path::new("/sys/fs/cgroup/kubepods/pod-a/container-a").to_path_buf(),
-        )?;
+        let request = request_with_cgroup(HookStageV1::PrepareContainer, state, None)?;
         assert_eq!(
             request.operation,
             RuntimeAdmissionOperationV1::PrepareContainer
         );
         assert_eq!(request.initial_pid, Some(42));
-        assert!(request.cgroup_path.is_some());
+        assert!(request.cgroup_path.is_none());
         Ok(())
     }
 }

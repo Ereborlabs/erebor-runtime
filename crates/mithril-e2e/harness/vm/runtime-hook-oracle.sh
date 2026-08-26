@@ -67,7 +67,7 @@ case ${1:-} in
         .hook.args == ["mithril-oci-hook", "--stage", "prepare-container", "--socket", $socket, "--timeout-ms", $timeout_ms] and
         .hook.timeout == $runtime_timeout and
         .when.annotations == {"^mithril\\.erebor\\.dev/profile-id$": ".+"} and
-        .stages == ["createRuntime"]
+        .stages == ["createContainer"]
       ' "$admission_config" >/dev/null
     [[ $(stat -c '%F' "$runtime_socket") == socket ]]
     [[ $(stat -c '%u:%g:%a' "$runtime_socket") == 0:0:600 ]]
