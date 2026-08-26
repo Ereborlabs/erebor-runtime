@@ -7,7 +7,7 @@ use mithril_control::{
 };
 use serde::Serialize;
 use sha2::{Digest as _, Sha256};
-use snafu::ResultExt as _;
+use snafu::{OptionExt as _, ResultExt as _};
 use std::cmp;
 use std::collections::VecDeque;
 use std::future::Future;
@@ -1208,6 +1208,9 @@ impl NodeChassis {
             crate::runtime_admission::RuntimeAdmissionOperationV1::PrepareContainer => {
                 self.answer_runtime_preparation(envelope).await
             }
+            crate::runtime_admission::RuntimeAdmissionOperationV1::PrepareDeclaredEntries => {
+                self.answer_runtime_entry_preparation(envelope).await
+            }
         }
     }
 
@@ -1316,7 +1319,6 @@ impl NodeChassis {
         match self.prepare_runtime_start(&envelope).await {
             Ok(commit) => {
                 let request = envelope.request.clone();
-                let container_id = envelope.request.container_id.clone();
                 let delivered = envelope
                     .deliver(crate::RuntimeAdmissionResponseV1 {
                         allowed: true,
@@ -1326,7 +1328,6 @@ impl NodeChassis {
                 if delivered.is_err() {
                     self.rollback_runtime_preparation(commit)?;
                 } else {
-                    self.bindings.discard_runtime_stage(&container_id);
                     // Log allow only after the hook receives it and no rollback is required.
                     log_runtime_admission_decision(
                         &request,
@@ -1354,6 +1355,60 @@ impl NodeChassis {
                     );
                 }
             }
+        }
+        Ok(())
+    }
+
+    async fn answer_runtime_entry_preparation(
+        &mut self,
+        envelope: crate::runtime_admission::RuntimeAdmissionEnvelope,
+    ) -> Result<()> {
+        let request = envelope.request.clone();
+        let prepared = (|| {
+            envelope.ensure_active()?;
+            let (binding_id, held_initial_pid) = self
+                .bindings
+                .verify_runtime_entry_preparation(&self.config.workload_bindings, &request)?;
+            let bundle = request.oci_bundle.as_deref().context(IdentityStateSnafu {
+                reason: "declared-entry preparation has no OCI bundle",
+            })?;
+            let policy = self.policy.as_mut().context(IdentityStateSnafu {
+                reason: "declared-entry preparation has no active policy owner",
+            })?;
+            let host = self.host.as_mut().ok_or_else(|| {
+                IdentityStateSnafu {
+                    reason: "declared-entry preparation has no live kernel host".to_owned(),
+                }
+                .build()
+            })?;
+            policy.reconcile_cri_exact_bindings_for_oci_entries(
+                &self.config,
+                host,
+                &self.bindings,
+                &binding_id,
+                held_initial_pid,
+                bundle,
+            )?;
+            self.bindings
+                .verify_runtime_entry_admissions(host, &binding_id)?;
+            envelope.ensure_active()?;
+            Ok(())
+        })();
+        let (allowed, reason_code) = match &prepared {
+            Ok(()) => (true, "DECLARED_ENTRY_TABLE_VERIFIED"),
+            Err(_error) => (false, "RUNTIME_ADMISSION_REJECTED"),
+        };
+        let delivered = envelope
+            .deliver(crate::RuntimeAdmissionResponseV1 {
+                allowed,
+                reason_code: reason_code.to_owned(),
+            })
+            .await;
+        if delivered.is_ok() {
+            log_runtime_admission_decision(&request, allowed, reason_code, prepared.as_ref().err());
+        }
+        if allowed && delivered.is_ok() {
+            self.bindings.discard_runtime_stage(&request.container_id);
         }
         Ok(())
     }
@@ -1413,7 +1468,6 @@ impl NodeChassis {
             host,
             &scheduled.resolved,
             request.held_initial_pid()?,
-            envelope.peer_pid(),
         ) {
             self.bindings.cancel_runtime_admission();
             return Err(RuntimeAdmissionFailureV1::fatal(error));
@@ -2993,6 +3047,7 @@ mod tests {
             container_id: "a".repeat(64),
             initial_pid: Some(1),
             cgroup_path: None,
+            oci_bundle: None,
             annotations: BTreeMap::from([
                 (POD_NAMESPACE_ANNOTATION.to_owned(), "default".to_owned()),
                 (POD_UID_ANNOTATION.to_owned(), "pod-a".to_owned()),

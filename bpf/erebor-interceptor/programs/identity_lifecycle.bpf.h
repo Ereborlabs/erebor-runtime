@@ -203,6 +203,8 @@ int erebor_cgroup_release(struct bpf_raw_tracepoint_args *context)
             binding->prepared_container_state =
                 prepared_container_state_v1_expired;
         binding->prepared_container_exec_task_cookie = 0;
+        binding->prepared_container_bootstrap_state =
+            PREPARED_CONTAINER_BOOTSTRAP_AVAILABLE_V1;
         binding->transition_version++;
     }
     return 0;

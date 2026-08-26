@@ -25,6 +25,12 @@ convergence_help=$("$directory/two-node-convergence.sh" --help 2>&1)
 [[ $convergence_help == *--manual-environment* ]]
 [[ $convergence_help == *--protected-start-only* ]]
 [[ $convergence_help == *--reuse-environment* ]]
+grep -q -- '--samples 6000 --sample-interval-ms 10' \
+  "$directory/two-node-convergence.sh"
+grep -q -- 'start_entry_effect_capture.*entry_prestop_capture' \
+  "$directory/two-node-convergence.sh"
+grep -Fq -- 'entry_role_effects_after=$(node_effects "$entry_roles_node" 2>/dev/null || true)' \
+  "$directory/two-node-convergence.sh"
 
 set +e
 protected_manual=$("$directory/two-node-convergence.sh" \
@@ -136,6 +142,8 @@ hook_stage_config=$hook_root/usr/share/containers/oci/hooks.d/98-mithril-runtime
 hook_stage_config_owner=$hook_root/usr/libexec/oci/hooks.d/.98-mithril-runtime-stage.json.helm-owner
 hook_admission_config=$hook_root/usr/share/containers/oci/hooks.d/99-mithril-runtime-admission.json
 hook_admission_config_owner=$hook_root/usr/libexec/oci/hooks.d/.99-mithril-runtime-admission.json.helm-owner
+hook_entry_config=$hook_root/usr/share/containers/oci/hooks.d/99-mithril-runtime-entry-preparation.json
+hook_entry_config_owner=$hook_root/usr/libexec/oci/hooks.d/.99-mithril-runtime-entry-preparation.json.helm-owner
 hook_socket=$hook_root/run/mithril/runtime-admission.sock
 mkdir -p "$(dirname "$hook_binary")" "$(dirname "$hook_stage_config")" \
   "$(dirname "$hook_socket")" "$test_root/hook-bin"
@@ -144,8 +152,9 @@ chmod 755 "$hook_binary"
 printf 'mithril-system/mithril\n' >"$hook_binary_owner"
 printf 'mithril-system/mithril\n' >"$hook_stage_config_owner"
 printf 'mithril-system/mithril\n' >"$hook_admission_config_owner"
+printf 'mithril-system/mithril\n' >"$hook_entry_config_owner"
 chmod 600 "$hook_binary_owner" "$hook_stage_config_owner" \
-  "$hook_admission_config_owner"
+  "$hook_admission_config_owner" "$hook_entry_config_owner"
 cat >"$hook_stage_config" <<'EOF'
 {
   "version": "1.0.0",
@@ -167,10 +176,22 @@ cat >"$hook_admission_config" <<'EOF'
     "timeout": 5
   },
   "when": {"annotations": {"^mithril\\.erebor\\.dev/profile-id$": ".+"}},
+  "stages": ["createRuntime"]
+}
+EOF
+cat >"$hook_entry_config" <<'EOF'
+{
+  "version": "1.0.0",
+  "hook": {
+    "path": "/usr/libexec/oci/hooks.d/mithril-oci-hook",
+    "args": ["mithril-oci-hook", "--stage", "prepare-declared-entries", "--socket", "/run/mithril/runtime-admission.sock", "--timeout-ms", "4000"],
+    "timeout": 5
+  },
+  "when": {"annotations": {"^mithril\\.erebor\\.dev/profile-id$": ".+"}},
   "stages": ["createContainer"]
 }
 EOF
-chmod 644 "$hook_stage_config" "$hook_admission_config"
+chmod 644 "$hook_stage_config" "$hook_admission_config" "$hook_entry_config"
 cat >"$test_root/hook-bin/stat" <<'EOF'
 #!/usr/bin/env bash
 path=${!#}
@@ -214,7 +235,8 @@ if bash "$directory/runtime-hook-oracle.sh" removed "$hook_root" \
 fi
 rm -f -- "$hook_binary" "$hook_binary_owner" \
   "$hook_stage_config" "$hook_stage_config_owner" \
-  "$hook_admission_config" "$hook_admission_config_owner" "$hook_socket"
+  "$hook_admission_config" "$hook_admission_config_owner" \
+  "$hook_entry_config" "$hook_entry_config_owner" "$hook_socket"
 bash "$directory/runtime-hook-oracle.sh" removed "$hook_root" \
   /run/mithril/runtime-admission.sock
 

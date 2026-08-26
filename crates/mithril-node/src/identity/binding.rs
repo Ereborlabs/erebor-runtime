@@ -9,9 +9,9 @@ use std::time::{Duration, Instant};
 use erebor_interceptor::{KernelHost, MapInsertResult};
 use erebor_interceptor_abi::{
     BindingActivationTargetKeyV1, BindingLifecycleStateV1, EntryAdmissionRuleKeyV1,
-    ExecutionSetBindingStateV1, Id128V1, InitialRootStateV1, PolicyGenerationStateV1,
-    PreparedContainerStateV1, ProfileGenerationDescriptorV1, TaskCoordinateStateV1,
-    TaskCoordinateV1, TaskLabelV1,
+    EntryAdmissionRuleV1, ExactFileObjectKeyV1, ExecutionSetBindingStateV1, Id128V1,
+    InitialRootStateV1, PolicyGenerationStateV1, PreparedContainerStateV1,
+    ProfileGenerationDescriptorV1, TaskCoordinateStateV1, TaskCoordinateV1, TaskLabelV1,
 };
 use erebor_runtime_error::{ErrorExt as _, RetryHint};
 use rustix::process::{pidfd_open, Pid, PidfdFlags};
@@ -41,7 +41,6 @@ struct PublishedBinding {
     spec: WorkloadBindingConfig,
     runtime_identity: Option<RuntimeContainerIdentity>,
     held_initial_pid: Option<u32>,
-    admission_peer_pid: Option<u32>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -71,7 +70,7 @@ impl PublishedBinding {
                 && self.state.prepared_container_entry_instance_id.is_zero()
                 && self.state.prepared_container_exec_task_cookie == 0
                 && self.state.prepared_container_initial_host_tgid == 0
-                && self.state.prepared_container_reserved == 0,
+                && self.state.prepared_container_bootstrap_state == 0,
             IdentityStateSnafu {
                 reason: "a container can be prepared only for one held initial task",
             }
@@ -92,7 +91,7 @@ impl PublishedBinding {
                     state.prepared_container_entry_instance_id.is_zero()
                         && state.prepared_container_exec_task_cookie == 0
                         && state.prepared_container_initial_host_tgid == 0
-                        && state.prepared_container_reserved == 0,
+                        && state.prepared_container_bootstrap_state == 0,
                     IdentityStateSnafu {
                         reason: "an unarmed container has prepared-state fields",
                     }
@@ -101,9 +100,10 @@ impl PublishedBinding {
             }
             PreparedContainerStateV1::Prepared => {
                 ensure!(
-                    state.prepared_container_exec_task_cookie == 0
-                        && state.prepared_container_initial_host_tgid != 0
-                        && state.prepared_container_reserved == 0,
+                    state.prepared_container_initial_host_tgid != 0
+                        && state.prepared_container_bootstrap_state <= 2
+                        && (state.prepared_container_bootstrap_state == 1)
+                            == (state.prepared_container_exec_task_cookie != 0),
                     IdentityStateSnafu {
                         reason: "prepared container has an invalid exec reservation",
                     }
@@ -121,7 +121,7 @@ impl PublishedBinding {
                 ensure!(
                     !state.prepared_container_entry_instance_id.is_zero()
                         && state.prepared_container_initial_host_tgid != 0
-                        && state.prepared_container_reserved == 0,
+                        && state.prepared_container_bootstrap_state == 0,
                     IdentityStateSnafu {
                         reason: "active container has incomplete prepared identity",
                     }
@@ -145,7 +145,7 @@ impl PublishedBinding {
                 ensure!(
                     state.prepared_container_exec_task_cookie == 0
                         && state.prepared_container_initial_host_tgid != 0
-                        && state.prepared_container_reserved == 0,
+                        && state.prepared_container_bootstrap_state == 0,
                     IdentityStateSnafu {
                         reason: "expired prepared container has an exec reservation",
                     }
@@ -179,22 +179,14 @@ impl PublishedBinding {
                 })
             })
             .collect::<Result<Vec<_>>>()?;
-        let admitted = self.held_initial_pid.map_or_else(
-            || live_pids.is_empty(),
-            |initial_pid| {
-                live_pids.as_slice() == [initial_pid]
-                    || self.admission_peer_pid.is_some_and(|peer_pid| {
-                        live_pids.len() == 2
-                            && live_pids.contains(&initial_pid)
-                            && live_pids.contains(&peer_pid)
-                    })
-            },
-        );
+        let admitted = self
+            .held_initial_pid
+            .map_or_else(|| live_pids.is_empty(), |pid| live_pids.as_slice() == [pid]);
         ensure!(
             admitted,
             IdentityStateSnafu {
                 reason: format!(
-                    "initial-root admission for `{}` requires an empty cgroup or only its held PID and authenticated admission peer",
+                    "initial-root admission for `{}` requires an empty cgroup or its one held PID",
                     self.root_cgroup_path.display(),
                 ),
             }
@@ -265,6 +257,23 @@ impl StagedRuntimeAdmissionV1 {
                 && request.kubernetes_identity()? == self.identity,
             IdentityStateSnafu {
                 reason: "the second OCI hook differs from its immutable first stage",
+            }
+        );
+        Ok(())
+    }
+
+    fn verify_declared_entries(
+        &self,
+        authority_head_binding_id: &str,
+        request: &RuntimeAdmissionRequestV1,
+        now: Instant,
+    ) -> Result<()> {
+        ensure!(
+            self.deadline > now
+                && authority_head_binding_id == self.authority_head_binding_id
+                && request.kubernetes_identity()? == self.identity,
+            IdentityStateSnafu {
+                reason: "declared-entry preparation differs from its immutable runtime stage",
             }
         );
         Ok(())
@@ -340,7 +349,7 @@ impl WorkloadBindingOwner {
             configured
                 .iter()
                 .filter(|binding| binding.root_cgroup_path.is_some())
-                .map(|binding| (binding, None, None)),
+                .map(|binding| (binding, None)),
         )?;
         self.retain_only_configured(host)?;
         Ok(RuntimeReconciliationResultV1::default())
@@ -442,7 +451,7 @@ impl WorkloadBindingOwner {
         host: &KernelHost,
         configured: &[WorkloadBindingConfig],
     ) -> Result<()> {
-        self.publish(host, configured.iter().map(|spec| (spec, None, None)))
+        self.publish(host, configured.iter().map(|spec| (spec, None)))
     }
 
     pub fn publish_held_initial_roots(
@@ -452,9 +461,7 @@ impl WorkloadBindingOwner {
     ) -> Result<()> {
         self.publish(
             host,
-            configured
-                .iter()
-                .map(|(spec, pid)| (spec, Some(*pid), None)),
+            configured.iter().map(|(spec, pid)| (spec, Some(*pid))),
         )
     }
 
@@ -678,12 +685,8 @@ impl WorkloadBindingOwner {
         host: &KernelHost,
         spec: &WorkloadBindingConfig,
         initial_pid: u32,
-        admission_peer_pid: u32,
     ) -> Result<()> {
-        if let Err(error) = self.publish(
-            host,
-            std::iter::once((spec, Some(initial_pid), Some(admission_peer_pid))),
-        ) {
+        if let Err(error) = self.publish_held_initial_roots(host, &[(spec.clone(), initial_pid)]) {
             self.pending_runtime_admission = None;
             return Err(error);
         }
@@ -897,6 +900,142 @@ impl WorkloadBindingOwner {
         scheduled.resolved.container_generation = identity.generation;
         self.pending_runtime_admission = Some(identity);
         Ok(scheduled)
+    }
+
+    pub(crate) fn verify_runtime_entry_preparation(
+        &self,
+        configured: &[WorkloadBindingConfig],
+        request: &RuntimeAdmissionRequestV1,
+    ) -> Result<(String, u32)> {
+        ensure!(
+            request.operation == RuntimeAdmissionOperationV1::PrepareDeclaredEntries,
+            IdentityStateSnafu {
+                reason: "declared-entry preparation requires the post-root OCI hook",
+            }
+        );
+        let staged = self
+            .staged_runtime_admissions
+            .get(&request.container_id)
+            .context(IdentityStateSnafu {
+                reason: "declared-entry preparation has no live runtime stage",
+            })?;
+        let identity = request.kubernetes_identity()?;
+        let matches = configured
+            .iter()
+            .filter(|binding| {
+                binding.scheduled_binding_authority_id.is_some()
+                    && binding.container_id == request.container_id
+                    && binding.profile_id == identity.profile_id
+                    && binding.namespace == identity.namespace
+                    && binding.pod_uid == identity.pod_uid
+                    && binding.container_name == identity.container_name
+                    && binding.image_digest == identity.image_digest
+            })
+            .collect::<Vec<_>>();
+        ensure!(
+            matches.len() == 1,
+            IdentityStateSnafu {
+                reason: "declared-entry preparation does not resolve to one runtime binding",
+            }
+        );
+        let spec = matches[0];
+        let authority_binding_id =
+            spec.scheduled_binding_authority_id
+                .as_deref()
+                .context(IdentityStateSnafu {
+                    reason: "runtime binding lost its scheduled authority",
+                })?;
+        staged.verify_declared_entries(authority_binding_id, request, Instant::now())?;
+        ensure!(
+            spec.binding_id
+                == ScheduledRuntimeBindingV1::runtime_binding_id(
+                    authority_binding_id,
+                    &request.container_id,
+                )
+                && spec.root_cgroup_path.as_ref() == Some(&staged.cgroup_path),
+            IdentityStateSnafu {
+                reason: "declared-entry preparation does not match its concrete runtime binding",
+            }
+        );
+        let binding = self
+            .bindings
+            .values()
+            .find(|binding| binding.spec.binding_id == spec.binding_id)
+            .context(IdentityStateSnafu {
+                reason: "declared-entry preparation has no published runtime binding",
+            })?;
+        binding.validate_live_cgroup()?;
+        let held_initial_pid = binding.held_initial_pid.context(IdentityStateSnafu {
+            reason: "declared-entry preparation has no held initial task",
+        })?;
+        ensure!(
+            held_initial_pid > 0
+                && binding.state.prepared_container_state == PreparedContainerStateV1::Prepared,
+            IdentityStateSnafu {
+                reason: "declared-entry preparation has no prepared initial task",
+            }
+        );
+        Ok((spec.binding_id.clone(), held_initial_pid))
+    }
+
+    pub(crate) fn verify_runtime_entry_admissions(
+        &self,
+        host: &KernelHost,
+        binding_id: &str,
+    ) -> Result<()> {
+        let binding = self
+            .bindings
+            .values()
+            .find(|binding| binding.spec.binding_id == binding_id)
+            .context(IdentityStateSnafu {
+                reason: "declared-entry readback has no published runtime binding",
+            })?;
+        let mut count = 0_usize;
+        let mut admitted_rules = BTreeSet::new();
+        for key in host
+            .map_keys("entry_admission_rules")
+            .context(InterceptorSnafu)?
+        {
+            let key = EntryAdmissionRuleKeyV1::try_read_from_bytes(&key).map_err(|error| {
+                IdentityStateSnafu {
+                    reason: format!("entry admission key has the wrong ABI: {error}"),
+                }
+                .build()
+            })?;
+            if key.profile_generation_ref_id != binding.state.active_profile_generation_ref_id
+                || key.binding_id != binding.state.binding_id
+            {
+                continue;
+            }
+            let value = host
+                .lookup_map("entry_admission_rules", key.as_bytes())
+                .context(InterceptorSnafu)?
+                .context(IdentityStateSnafu {
+                    reason: "declared entry disappeared during exact readback",
+                })?;
+            let value = EntryAdmissionRuleV1::try_read_from_bytes(&value).map_err(|error| {
+                IdentityStateSnafu {
+                    reason: format!("entry admission value has the wrong ABI: {error}"),
+                }
+                .build()
+            })?;
+            ensure!(
+                value.exact_object_key_id != 0
+                    && value.executable_object != ExactFileObjectKeyV1::default()
+                    && admitted_rules.insert(value.admitted_entry_rule_id),
+                IdentityStateSnafu {
+                    reason: "declared-entry table has deferred or colliding executable proof",
+                }
+            );
+            count += 1;
+        }
+        ensure!(
+            count > 0,
+            IdentityStateSnafu {
+                reason: "declared-entry table has no exact executable proof",
+            }
+        );
+        Ok(())
     }
 
     pub(crate) fn cancel_runtime_admission(&mut self) {
@@ -1156,9 +1295,9 @@ impl WorkloadBindingOwner {
     fn publish<'a>(
         &mut self,
         host: &KernelHost,
-        configured: impl IntoIterator<Item = (&'a WorkloadBindingConfig, Option<u32>, Option<u32>)>,
+        configured: impl IntoIterator<Item = (&'a WorkloadBindingConfig, Option<u32>)>,
     ) -> Result<()> {
-        for (spec, held_initial_pid, admission_peer_pid) in configured {
+        for (spec, held_initial_pid) in configured {
             let mut binding = self.prepare(spec)?;
             ensure!(
                 held_initial_pid.is_none() || spec.arm_initial_root,
@@ -1166,17 +1305,7 @@ impl WorkloadBindingOwner {
                     reason: "runtime admission requires an armed initial root",
                 }
             );
-            ensure!(
-                admission_peer_pid.is_none_or(|peer_pid| {
-                    held_initial_pid
-                        .is_some_and(|initial_pid| peer_pid > 0 && peer_pid != initial_pid)
-                }),
-                IdentityStateSnafu {
-                    reason: "runtime admission peer must differ from its held initial task",
-                }
-            );
             binding.held_initial_pid = held_initial_pid;
-            binding.admission_peer_pid = admission_peer_pid;
             if held_initial_pid.is_some() {
                 binding.prepare_container()?;
             }
@@ -1690,7 +1819,6 @@ impl WorkloadBindingOwner {
             spec: spec.clone(),
             runtime_identity: None,
             held_initial_pid: None,
-            admission_peer_pid: None,
             state: ExecutionSetBindingStateV1 {
                 binding_id,
                 binding_nonce,
@@ -1718,7 +1846,7 @@ impl WorkloadBindingOwner {
                 prepared_container_entry_instance_id: Id128V1::ZERO,
                 prepared_container_exec_task_cookie: 0,
                 prepared_container_initial_host_tgid: 0,
-                prepared_container_reserved: 0,
+                prepared_container_bootstrap_state: 0,
             },
         };
         binding.validate_live_cgroup()?;
@@ -1856,7 +1984,7 @@ impl WorkloadBindingOwner {
         live.prepared_container_entry_instance_id = target.prepared_container_entry_instance_id;
         live.prepared_container_exec_task_cookie = target.prepared_container_exec_task_cookie;
         live.prepared_container_initial_host_tgid = target.prepared_container_initial_host_tgid;
-        live.prepared_container_reserved = target.prepared_container_reserved;
+        live.prepared_container_bootstrap_state = target.prepared_container_bootstrap_state;
         live == *target
     }
 
@@ -1977,7 +2105,7 @@ fn same_runtime_binding(
     desired.prepared_container_entry_instance_id = recovered.prepared_container_entry_instance_id;
     desired.prepared_container_exec_task_cookie = recovered.prepared_container_exec_task_cookie;
     desired.prepared_container_initial_host_tgid = recovered.prepared_container_initial_host_tgid;
-    desired.prepared_container_reserved = recovered.prepared_container_reserved;
+    desired.prepared_container_bootstrap_state = recovered.prepared_container_bootstrap_state;
     desired == *recovered
 }
 
@@ -2042,6 +2170,7 @@ mod tests {
             container_id: "a".repeat(64),
             initial_pid: Some(42),
             cgroup_path: None,
+            oci_bundle: None,
             annotations: BTreeMap::from([
                 (POD_NAMESPACE_ANNOTATION.to_owned(), "default".to_owned()),
                 (POD_UID_ANNOTATION.to_owned(), "pod-uid-a".to_owned()),
@@ -2072,6 +2201,11 @@ mod tests {
         };
         let now = Instant::now();
         stage.verify_preparation("authority-head-a", &request, now)?;
+        let mut entries = request.clone();
+        entries.operation = RuntimeAdmissionOperationV1::PrepareDeclaredEntries;
+        entries.initial_pid = None;
+        entries.oci_bundle = Some(PathBuf::from("/run/oci/container-a"));
+        stage.verify_declared_entries("authority-head-a", &entries, now)?;
 
         assert!(stage
             .verify_preparation("authority-head-b", &request, now)
@@ -2082,6 +2216,9 @@ mod tests {
             .insert(POD_UID_ANNOTATION.to_owned(), "pod-uid-b".to_owned());
         assert!(stage
             .verify_preparation("authority-head-a", &wrong_identity, now)
+            .is_err());
+        assert!(stage
+            .verify_declared_entries("authority-head-a", &wrong_identity, now)
             .is_err());
         let mut expired = stage;
         expired.deadline = now;
@@ -2192,13 +2329,6 @@ mod tests {
         assert!(binding.require_initial_root_admission().is_err());
         fs::write(root.join("cgroup.procs"), "42\n43\n").context(IoSnafu { path: &root })?;
         binding.held_initial_pid = Some(42);
-        assert!(binding.require_initial_root_admission().is_err());
-
-        binding.admission_peer_pid = Some(43);
-        binding.require_initial_root_admission()?;
-        fs::write(root.join("cgroup.procs"), "43\n42\n").context(IoSnafu { path: &root })?;
-        binding.require_initial_root_admission()?;
-        fs::write(root.join("cgroup.procs"), "42\n43\n44\n").context(IoSnafu { path: &root })?;
         assert!(binding.require_initial_root_admission().is_err());
 
         fs::write(root.join("cgroup.procs"), "42\n").context(IoSnafu { path: &root })?;

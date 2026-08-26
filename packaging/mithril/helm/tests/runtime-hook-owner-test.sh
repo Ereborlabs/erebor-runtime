@@ -10,6 +10,7 @@ trap 'rm -rf -- "$test_root"' EXIT
 binary_source=$test_root/mithril-oci-hook
 stage_config_source=$test_root/98-mithril-runtime-stage.json
 admission_config_source=$test_root/99-mithril-runtime-admission.json
+entry_config_source=$test_root/99-mithril-runtime-entry-preparation.json
 binary_directory=$test_root/bin
 config_directory=$test_root/hooks
 owner=mithril-system/mithril
@@ -17,6 +18,7 @@ mkdir "$binary_directory" "$config_directory"
 printf 'binary-v1\n' >"$binary_source"
 printf '{"stage":1}\n' >"$stage_config_source"
 printf '{"admission":1}\n' >"$admission_config_source"
+printf '{"entries":1}\n' >"$entry_config_source"
 printf 'legacy-binary\n' >"$binary_directory/mithril-oci-hook"
 printf '%s\n' "$owner" >"$binary_directory/.mithril-oci-hook.helm-owner"
 printf '{"create":0}\n' >"$config_directory/98-mithril-create-container.json"
@@ -34,7 +36,8 @@ run_owner() {
 
 install_owned_hook() {
   run_owner install "$owner" "$binary_source" "$stage_config_source" \
-    "$admission_config_source" "$binary_directory" "$config_directory"
+    "$admission_config_source" "$entry_config_source" "$binary_directory" \
+    "$config_directory"
 }
 
 assert_configs_absent() {
@@ -42,6 +45,8 @@ assert_configs_absent() {
   [[ ! -e $binary_directory/.98-mithril-runtime-stage.json.helm-owner ]]
   [[ ! -e $config_directory/99-mithril-runtime-admission.json ]]
   [[ ! -e $binary_directory/.99-mithril-runtime-admission.json.helm-owner ]]
+  [[ ! -e $config_directory/99-mithril-runtime-entry-preparation.json ]]
+  [[ ! -e $binary_directory/.99-mithril-runtime-entry-preparation.json.helm-owner ]]
   [[ ! -e $config_directory/98-mithril-create-container.json ]]
   [[ ! -e $binary_directory/.98-mithril-create-container.json.helm-owner ]]
   [[ ! -e $config_directory/99-mithril-prestart.json ]]
@@ -52,14 +57,17 @@ install_owned_hook
 cmp "$binary_source" "$binary_directory/mithril-oci-hook"
 cmp "$stage_config_source" "$config_directory/98-mithril-runtime-stage.json"
 cmp "$admission_config_source" "$config_directory/99-mithril-runtime-admission.json"
+cmp "$entry_config_source" "$config_directory/99-mithril-runtime-entry-preparation.json"
 [[ $(<"$binary_directory/.mithril-oci-hook.helm-owner") == "$owner" ]]
 [[ $(<"$binary_directory/.98-mithril-runtime-stage.json.helm-owner") == "$owner" ]]
 [[ $(<"$binary_directory/.99-mithril-runtime-admission.json.helm-owner") == "$owner" ]]
+[[ $(<"$binary_directory/.99-mithril-runtime-entry-preparation.json.helm-owner") == "$owner" ]]
 [[ ! -e $config_directory/.98-mithril-create-container.json.helm-owner ]]
 [[ ! -e $config_directory/.99-mithril-prestart.json.helm-owner ]]
 [[ $(stat -c %a "$binary_directory/mithril-oci-hook") == 755 ]]
 [[ $(stat -c %a "$config_directory/98-mithril-runtime-stage.json") == 644 ]]
 [[ $(stat -c %a "$config_directory/99-mithril-runtime-admission.json") == 644 ]]
+[[ $(stat -c %a "$config_directory/99-mithril-runtime-entry-preparation.json") == 644 ]]
 [[ ! -e $config_directory/98-mithril-create-container.json ]]
 [[ ! -e $config_directory/99-mithril-prestart.json ]]
 [[ ! -e $config_directory/99-mithril.json ]]
@@ -68,10 +76,12 @@ cmp "$admission_config_source" "$config_directory/99-mithril-runtime-admission.j
 printf 'binary-v2\n' >"$binary_source"
 printf '{"stage":2}\n' >"$stage_config_source"
 printf '{"admission":2}\n' >"$admission_config_source"
+printf '{"entries":2}\n' >"$entry_config_source"
 install_owned_hook
 cmp "$binary_source" "$binary_directory/mithril-oci-hook"
 cmp "$stage_config_source" "$config_directory/98-mithril-runtime-stage.json"
 cmp "$admission_config_source" "$config_directory/99-mithril-runtime-admission.json"
+cmp "$entry_config_source" "$config_directory/99-mithril-runtime-entry-preparation.json"
 [[ -z $(find "$binary_directory" "$config_directory" -name '*.tmp.*' -print -quit) ]]
 
 run_owner cleanup "$owner" "$binary_directory" "$config_directory"
@@ -92,12 +102,13 @@ printf '{"prestart":0}\n' >"$config_directory/99-mithril-prestart.json"
 printf '%s\n' "$owner" \
   >"$legacy_binary_directory/.99-mithril-prestart.json.helm-owner"
 run_owner install "$owner" "$binary_source" "$stage_config_source" \
-  "$admission_config_source" "$binary_directory" "$config_directory" \
-  "$legacy_binary_directory"
+  "$admission_config_source" "$entry_config_source" "$binary_directory" \
+  "$config_directory" "$legacy_binary_directory"
 [[ ! -e $legacy_binary_directory/mithril-oci-hook ]]
 [[ ! -e $legacy_binary_directory/.mithril-oci-hook.helm-owner ]]
 cmp "$stage_config_source" "$config_directory/98-mithril-runtime-stage.json"
 cmp "$admission_config_source" "$config_directory/99-mithril-runtime-admission.json"
+cmp "$entry_config_source" "$config_directory/99-mithril-runtime-entry-preparation.json"
 run_owner cleanup "$owner" "$binary_directory" "$config_directory" \
   "$legacy_binary_directory"
 assert_configs_absent

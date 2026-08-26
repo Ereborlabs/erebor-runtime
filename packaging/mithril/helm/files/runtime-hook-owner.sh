@@ -77,15 +77,18 @@ install_hook() {
   binary_source=$2
   stage_config_source=$3
   admission_config_source=$4
-  binary_directory=$5
-  config_directory=$6
-  legacy_binary_directory=${7:-}
+  entry_config_source=$5
+  binary_directory=$6
+  config_directory=$7
+  legacy_binary_directory=${8:-}
   binary_target=$binary_directory/mithril-oci-hook
   binary_marker=$binary_directory/.mithril-oci-hook.helm-owner
   stage_config_target=$config_directory/98-mithril-runtime-stage.json
   stage_config_marker=$binary_directory/.98-mithril-runtime-stage.json.helm-owner
   admission_config_target=$config_directory/99-mithril-runtime-admission.json
   admission_config_marker=$binary_directory/.99-mithril-runtime-admission.json.helm-owner
+  entry_config_target=$config_directory/99-mithril-runtime-entry-preparation.json
+  entry_config_marker=$binary_directory/.99-mithril-runtime-entry-preparation.json.helm-owner
   old_create_config_target=$config_directory/98-mithril-create-container.json
   old_create_config_marker=$binary_directory/.98-mithril-create-container.json.helm-owner
   old_prestart_config_target=$config_directory/99-mithril-prestart.json
@@ -98,6 +101,7 @@ install_hook() {
   [ -f "$binary_source" ] || fail "hook binary source does not exist"
   [ -f "$stage_config_source" ] || fail "runtime-fact hook source does not exist"
   [ -f "$admission_config_source" ] || fail "runtime-admission hook source does not exist"
+  [ -f "$entry_config_source" ] || fail "entry-preparation hook source does not exist"
   # Releases before the NRI-compatible layout kept markers in the watched
   # directory. Move only markers that belong to this exact Helm release.
   migrate_owned_marker \
@@ -121,6 +125,7 @@ install_hook() {
   require_owned_or_absent "$binary_target" "$binary_marker" "$hook_owner"
   require_owned_or_absent "$stage_config_target" "$stage_config_marker" "$hook_owner"
   require_owned_or_absent "$admission_config_target" "$admission_config_marker" "$hook_owner"
+  require_owned_or_absent "$entry_config_target" "$entry_config_marker" "$hook_owner"
   require_owned_or_absent "$old_create_config_target" "$old_create_config_marker" "$hook_owner"
   require_owned_or_absent "$old_prestart_config_target" "$old_prestart_config_marker" "$hook_owner"
   require_owned_or_absent "$legacy_config_target" "$legacy_config_marker" "$hook_owner"
@@ -130,12 +135,15 @@ install_hook() {
   publish_owner "$binary_marker" "$hook_owner"
   publish_owner "$stage_config_marker" "$hook_owner"
   publish_owner "$admission_config_marker" "$hook_owner"
+  publish_owner "$entry_config_marker" "$hook_owner"
   publish_file "$binary_source" "$binary_target" 0755
   # Keep the old denial active until both ordered replacements are complete.
   remove_owned "$old_create_config_target" "$old_create_config_marker" "$hook_owner"
   publish_file "$stage_config_source" "$stage_config_target" 0644 \
     "${config_directory%/*}"
   publish_file "$admission_config_source" "$admission_config_target" 0644 \
+    "${config_directory%/*}"
+  publish_file "$entry_config_source" "$entry_config_target" 0644 \
     "${config_directory%/*}"
   remove_owned "$old_prestart_config_target" "$old_prestart_config_marker" "$hook_owner"
   remove_owned "$legacy_config_target" "$legacy_config_marker" "$hook_owner"
@@ -167,6 +175,8 @@ cleanup_hook() {
     "$binary_directory/.98-mithril-runtime-stage.json.helm-owner" "$hook_owner"
   remove_owned "$config_directory/99-mithril-runtime-admission.json" \
     "$binary_directory/.99-mithril-runtime-admission.json.helm-owner" "$hook_owner"
+  remove_owned "$config_directory/99-mithril-runtime-entry-preparation.json" \
+    "$binary_directory/.99-mithril-runtime-entry-preparation.json.helm-owner" "$hook_owner"
   remove_owned "$config_directory/98-mithril-create-container.json" \
     "$binary_directory/.98-mithril-create-container.json.helm-owner" "$hook_owner"
   remove_owned "$config_directory/99-mithril-prestart.json" \
@@ -190,9 +200,9 @@ esac
 
 case $action in
   install)
-    { [ "$#" -eq 7 ] || [ "$#" -eq 8 ]; } ||
+    { [ "$#" -eq 8 ] || [ "$#" -eq 9 ]; } ||
       fail "install requires owner, sources, and target directories"
-    install_hook "$owner" "$3" "$4" "$5" "$6" "$7" "${8:-}"
+    install_hook "$owner" "$3" "$4" "$5" "$6" "$7" "$8" "${9:-}"
     ;;
   cleanup)
     { [ "$#" -eq 4 ] || [ "$#" -eq 5 ]; } ||

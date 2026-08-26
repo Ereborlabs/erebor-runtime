@@ -615,7 +615,8 @@ pub struct ExecutionSetBindingStateV1 {
     pub prepared_container_entry_instance_id: Id128V1,
     pub prepared_container_exec_task_cookie: u64,
     pub prepared_container_initial_host_tgid: u32,
-    pub prepared_container_reserved: u32,
+    /// Zero, pending, or complete for the one post-mount bootstrap exec.
+    pub prepared_container_bootstrap_state: u32,
 }
 
 #[repr(C)]

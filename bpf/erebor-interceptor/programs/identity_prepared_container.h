@@ -4,6 +4,12 @@
 #define EREBOR_IDENTITY_PREPARED_CONTAINER_H
 
 #define PREPARED_CONTAINER_IDENTITY_DEFER_V1 1
+#define PREPARED_RUNTIME_EXEC_NONE_V1 0
+#define PREPARED_RUNTIME_EXEC_ENTRY_V1 1
+#define PREPARED_RUNTIME_EXEC_CONTAINER_BOOTSTRAP_V1 2
+#define PREPARED_CONTAINER_BOOTSTRAP_AVAILABLE_V1 0
+#define PREPARED_CONTAINER_BOOTSTRAP_PENDING_V1 1
+#define PREPARED_CONTAINER_BOOTSTRAP_COMPLETE_V1 2
 
 static __always_inline void prepared_container_mark_corrupt(
     execution_set_binding_state_v1 *binding)
@@ -57,6 +63,98 @@ static __always_inline bool prepared_container_actor_is_exact(
 {
     return prepared_container_binding_is_prepared(binding) &&
            prepared_container_actor_identity_is_exact(binding, label, entry);
+}
+
+static __always_inline bool prepared_container_bootstrap_exec_is_exact(
+    execution_set_binding_state_v1 *binding, const task_label_v1 *label,
+    const entry_security_state_v1 *entry,
+    const task_coordinate_v1 *coordinate,
+    const process_execution_instance_v1 *active_execution)
+{
+    return prepared_container_actor_is_exact(binding, label, entry) &&
+           coordinate && active_execution && label->lineage_depth > 0 &&
+           binding->prepared_container_bootstrap_state ==
+               PREPARED_CONTAINER_BOOTSTRAP_AVAILABLE_V1 &&
+           !binding->prepared_container_exec_task_cookie &&
+           id128_equal(&label->entry_instance_id,
+                       &binding->prepared_container_entry_instance_id) &&
+           coordinate->host_tgid !=
+               binding->prepared_container_initial_host_tgid &&
+           active_execution->started_by ==
+               process_execution_started_by_v1_process_birth;
+}
+
+static __always_inline int prepared_container_reserve_bootstrap_exec(
+    execution_set_binding_state_v1 *binding, const task_label_v1 *label)
+{
+    if (!binding || !label ||
+        binding->prepared_container_bootstrap_state !=
+            PREPARED_CONTAINER_BOOTSTRAP_AVAILABLE_V1 ||
+        __sync_val_compare_and_swap(
+            &binding->prepared_container_exec_task_cookie, 0,
+            label->task_cookie))
+        return -EACCES;
+    if (!prepared_container_binding_is_prepared(binding) ||
+        binding->prepared_container_bootstrap_state !=
+            PREPARED_CONTAINER_BOOTSTRAP_AVAILABLE_V1) {
+        __sync_val_compare_and_swap(
+            &binding->prepared_container_exec_task_cookie,
+            label->task_cookie, 0);
+        return -EACCES;
+    }
+    binding->prepared_container_bootstrap_state =
+        PREPARED_CONTAINER_BOOTSTRAP_PENDING_V1;
+    __sync_fetch_and_add(&binding->transition_version, 1);
+    return 0;
+}
+
+static __always_inline bool prepared_container_bootstrap_exec_is_pending(
+    execution_set_binding_state_v1 *binding, const task_label_v1 *label)
+{
+    return prepared_container_binding_is_prepared(binding) && label &&
+           binding->prepared_container_bootstrap_state ==
+               PREPARED_CONTAINER_BOOTSTRAP_PENDING_V1 &&
+           binding->prepared_container_exec_task_cookie ==
+               label->task_cookie;
+}
+
+static __always_inline void prepared_container_rollback_bootstrap_exec(
+    execution_set_binding_state_v1 *binding, __u64 task_cookie)
+{
+    if (!binding ||
+        binding->prepared_container_bootstrap_state !=
+            PREPARED_CONTAINER_BOOTSTRAP_PENDING_V1 ||
+        binding->prepared_container_exec_task_cookie != task_cookie)
+        return;
+    binding->prepared_container_bootstrap_state =
+        PREPARED_CONTAINER_BOOTSTRAP_AVAILABLE_V1;
+    if (__sync_val_compare_and_swap(
+            &binding->prepared_container_exec_task_cookie,
+            task_cookie, 0) != task_cookie) {
+        prepared_container_mark_corrupt(binding);
+        return;
+    }
+    __sync_fetch_and_add(&binding->transition_version, 1);
+}
+
+static __always_inline int prepared_container_commit_bootstrap_exec(
+    execution_set_binding_state_v1 *binding, __u64 task_cookie)
+{
+    if (!binding ||
+        binding->prepared_container_bootstrap_state !=
+            PREPARED_CONTAINER_BOOTSTRAP_PENDING_V1 ||
+        binding->prepared_container_exec_task_cookie != task_cookie)
+        return -EACCES;
+    binding->prepared_container_bootstrap_state =
+        PREPARED_CONTAINER_BOOTSTRAP_COMPLETE_V1;
+    if (__sync_val_compare_and_swap(
+            &binding->prepared_container_exec_task_cookie,
+            task_cookie, 0) != task_cookie) {
+        prepared_container_mark_corrupt(binding);
+        return -EACCES;
+    }
+    __sync_fetch_and_add(&binding->transition_version, 1);
+    return 0;
 }
 
 static __always_inline bool prepared_container_pre_active_actor_is_exact(
@@ -122,6 +220,10 @@ static __always_inline int prepared_container_reserve_activation(
         binding->prepared_container_state ==
             prepared_container_state_v1_active)
         return 0;
+    if (binding->prepared_container_bootstrap_state ==
+            PREPARED_CONTAINER_BOOTSTRAP_PENDING_V1 ||
+        binding->prepared_container_exec_task_cookie)
+        return -EACCES;
     if (!prepared_container_actor_is_exact(
             binding, label,
             bpf_map_lookup_elem(&entry_states, &label->entry_instance_id)))
@@ -178,6 +280,8 @@ static __always_inline bool prepared_container_commit_activation(
             prepared_container_state_v1_exec_pending)
         return false;
     binding->prepared_container_exec_task_cookie = 0;
+    binding->prepared_container_bootstrap_state =
+        PREPARED_CONTAINER_BOOTSTRAP_AVAILABLE_V1;
     __sync_fetch_and_add(&binding->transition_version, 1);
     return true;
 }

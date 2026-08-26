@@ -13,7 +13,7 @@ use serde::Deserialize;
 const MAXIMUM_OCI_STATE_BYTES: u64 = 1_048_576;
 
 #[derive(Parser)]
-#[command(about = "Run one ordered OCI runtime-fact or container-preparation step")]
+#[command(about = "Run one ordered OCI runtime admission step")]
 struct Cli {
     #[arg(long, value_enum)]
     stage: HookStageV1,
@@ -29,6 +29,7 @@ struct Cli {
 enum HookStageV1 {
     StageRuntimeFacts,
     PrepareContainer,
+    PrepareDeclaredEntries,
 }
 
 #[derive(Deserialize)]
@@ -36,6 +37,8 @@ struct OciStateV1 {
     id: String,
     #[serde(default)]
     pid: u32,
+    #[serde(default)]
+    bundle: PathBuf,
     #[serde(default)]
     annotations: BTreeMap<String, String>,
 }
@@ -94,7 +97,7 @@ fn request_for_stage(
     }
     let cgroup_path = match stage {
         HookStageV1::StageRuntimeFacts => Some(process_cgroup_path(state.pid, cgroup_root)?),
-        HookStageV1::PrepareContainer => None,
+        HookStageV1::PrepareContainer | HookStageV1::PrepareDeclaredEntries => None,
     };
     request_with_cgroup(stage, state, cgroup_path)
 }
@@ -104,11 +107,12 @@ fn request_with_cgroup(
     state: OciStateV1,
     cgroup_path: Option<PathBuf>,
 ) -> io::Result<RuntimeAdmissionRequestV1> {
-    let (operation, initial_pid, cgroup_path) = match stage {
+    let (operation, initial_pid, cgroup_path, oci_bundle) = match stage {
         HookStageV1::StageRuntimeFacts => (
             RuntimeAdmissionOperationV1::StageRuntimeFacts,
             None,
             cgroup_path,
+            None,
         ),
         HookStageV1::PrepareContainer => {
             if state.pid == 0 {
@@ -119,6 +123,18 @@ fn request_with_cgroup(
                 RuntimeAdmissionOperationV1::PrepareContainer,
                 Some(state.pid),
                 None,
+                None,
+            )
+        }
+        HookStageV1::PrepareDeclaredEntries => {
+            if !state.bundle.is_absolute() {
+                return Err(invalid_data("OCI state has no absolute bundle path"));
+            }
+            (
+                RuntimeAdmissionOperationV1::PrepareDeclaredEntries,
+                None,
+                None,
+                Some(state.bundle),
             )
         }
     };
@@ -127,6 +143,7 @@ fn request_with_cgroup(
         container_id: state.id,
         initial_pid,
         cgroup_path,
+        oci_bundle,
         annotations: state.annotations,
     })
 }
@@ -218,6 +235,7 @@ mod tests {
         );
         assert_eq!(request.initial_pid, None);
         assert!(request.cgroup_path.is_some());
+        assert!(request.oci_bundle.is_none());
         Ok(())
     }
 
@@ -238,6 +256,34 @@ mod tests {
         );
         assert_eq!(request.initial_pid, Some(42));
         assert!(request.cgroup_path.is_none());
+        assert!(request.oci_bundle.is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn post_root_hook_does_not_restate_the_initial_task() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let state: OciStateV1 = serde_json::from_value(serde_json::json!({
+            "ociVersion": "1.0.2",
+            "id": "a".repeat(64),
+            "status": "creating",
+            "pid": 1,
+            "bundle": "/run/containerd/io.containerd.runtime.v2.task/k8s.io/container-a",
+            "annotations": {}
+        }))?;
+        let request = request_with_cgroup(HookStageV1::PrepareDeclaredEntries, state, None)?;
+        assert_eq!(
+            request.operation,
+            RuntimeAdmissionOperationV1::PrepareDeclaredEntries
+        );
+        assert_eq!(request.initial_pid, None);
+        assert!(request.cgroup_path.is_none());
+        assert_eq!(
+            request.oci_bundle.as_deref(),
+            Some(Path::new(
+                "/run/containerd/io.containerd.runtime.v2.task/k8s.io/container-a"
+            ))
+        );
         Ok(())
     }
 }

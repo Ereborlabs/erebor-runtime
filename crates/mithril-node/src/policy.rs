@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::{OsStr, OsString};
 use std::mem::size_of;
 use std::os::unix::ffi::{OsStrExt as _, OsStringExt as _};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use erebor_interceptor::{KernelHost, MapInsertResult};
@@ -644,8 +644,12 @@ impl NodePolicyGenerationOwner {
         node_boot_id: Id128V1,
         label_epoch: u64,
     ) -> Result<Self> {
-        let measured_exact_objects =
-            Self::resolve_cri_exact_objects(config, host, bindings.exact_object_binding_targets())?;
+        let measured_exact_objects = Self::resolve_cri_exact_objects(
+            config,
+            host,
+            bindings.exact_object_binding_targets(),
+            None,
+        )?;
         Self::install(
             config,
             host,
@@ -972,10 +976,39 @@ impl NodePolicyGenerationOwner {
         host: &mut KernelHost,
         bindings: &WorkloadBindingOwner,
     ) -> Result<()> {
+        self.reconcile_cri_exact_bindings_inner(config, host, bindings, None)
+    }
+
+    pub(crate) fn reconcile_cri_exact_bindings_for_oci_entries(
+        &mut self,
+        config: &NodeConfig,
+        host: &mut KernelHost,
+        bindings: &WorkloadBindingOwner,
+        binding_id: &str,
+        held_initial_pid: u32,
+        bundle: &Path,
+    ) -> Result<()> {
+        let view = crate::exact_object::OciEntryFileObjectView::acquire(held_initial_pid, bundle)?;
+        self.reconcile_cri_exact_bindings_inner(
+            config,
+            host,
+            bindings,
+            Some((binding_id, held_initial_pid, &view)),
+        )
+    }
+
+    fn reconcile_cri_exact_bindings_inner(
+        &mut self,
+        config: &NodeConfig,
+        host: &mut KernelHost,
+        bindings: &WorkloadBindingOwner,
+        oci_entry_view: Option<(&str, u32, &crate::exact_object::OciEntryFileObjectView)>,
+    ) -> Result<()> {
         let measured_exact_objects = match Self::resolve_cri_exact_objects(
             config,
             host,
             bindings.exact_object_binding_targets(),
+            oci_entry_view,
         ) {
             Ok(measured) => measured,
             Err(error) => {
@@ -1044,6 +1077,7 @@ impl NodePolicyGenerationOwner {
         config: &NodeConfig,
         host: &KernelHost,
         bindings: impl IntoIterator<Item = ExactObjectBindingTargetV1<'a>>,
+        oci_entry_view: Option<(&str, u32, &crate::exact_object::OciEntryFileObjectView)>,
     ) -> Result<Vec<MeasuredExactObjectV1>> {
         let now_utc_ns = current_utc_ns()?;
         let artifact_owner = PolicyArtifactOwner::default();
@@ -1068,6 +1102,7 @@ impl NodePolicyGenerationOwner {
         let topology_generation = Self::current_mount_topology_generation(host)?;
         let mut measured = Vec::new();
         let mut target_bindings = BTreeSet::new();
+        let mut oci_entry_view_used = false;
         for target in bindings {
             ensure!(
                 target_bindings.insert(target.binding_id),
@@ -1106,22 +1141,58 @@ impl NodePolicyGenerationOwner {
                         || entry_selector_ids.contains(&selector.path_selector_id)
                 });
             let view = crate::exact_object::ExactFileObjectView::acquire(target.init_pid)?;
-            if binding.arm_initial_root && view.has_host_root()? {
-                continue;
+            let process_root_is_container = !binding.arm_initial_root || !view.has_host_root()?;
+            let target_oci_entry_view =
+                oci_entry_view.filter(|(binding_id, _, _)| *binding_id == target.binding_id);
+            if let Some((_, held_initial_pid, _)) = target_oci_entry_view {
+                ensure!(
+                    held_initial_pid == target.init_pid,
+                    IdentityStateSnafu {
+                        reason: "OCI entry view differs from the held initial task",
+                    }
+                );
+                oci_entry_view_used = true;
             }
             for selector in selectors {
                 let canonical_path = selector.path_expression();
                 let path = PathBuf::from(canonical_path);
-                let Some(object) = view.try_resolve_signed_selector(
-                    host,
-                    &path,
-                    binding.active_profile_generation_ref_id,
-                    selector.kernel_handle(),
-                    selector.object_class_id.clone(),
-                    selector.device_class_id.clone(),
-                    topology_generation,
-                )?
-                else {
+                let object = if !selector.requires_exact_object()
+                    && entry_selector_ids.contains(&selector.path_selector_id)
+                {
+                    match target_oci_entry_view {
+                        Some((_, _, oci_view)) => oci_view.try_resolve_declared_entry(
+                            host,
+                            &path,
+                            binding.active_profile_generation_ref_id,
+                            selector.kernel_handle(),
+                            selector.object_class_id.clone(),
+                            topology_generation,
+                        )?,
+                        None if process_root_is_container => view.try_resolve_signed_selector(
+                            host,
+                            &path,
+                            binding.active_profile_generation_ref_id,
+                            selector.kernel_handle(),
+                            selector.object_class_id.clone(),
+                            selector.device_class_id.clone(),
+                            topology_generation,
+                        )?,
+                        None => None,
+                    }
+                } else if process_root_is_container {
+                    view.try_resolve_signed_selector(
+                        host,
+                        &path,
+                        binding.active_profile_generation_ref_id,
+                        selector.kernel_handle(),
+                        selector.object_class_id.clone(),
+                        selector.device_class_id.clone(),
+                        topology_generation,
+                    )?
+                } else {
+                    None
+                };
+                let Some(object) = object else {
                     continue;
                 };
                 let expected_components =
@@ -1146,6 +1217,12 @@ impl NodePolicyGenerationOwner {
                 });
             }
         }
+        ensure!(
+            oci_entry_view.is_none() || oci_entry_view_used,
+            IdentityStateSnafu {
+                reason: "OCI entry view has no authenticated exact-object target",
+            }
+        );
         Ok(measured)
     }
 

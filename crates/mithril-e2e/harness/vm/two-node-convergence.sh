@@ -20,6 +20,7 @@ system_namespace=mithril-system
 workload_namespace=mithril-convergence
 runtime_hook_owner=$system_namespace/mithril
 runtime_hook_socket=/run/mithril/runtime-admission.sock
+entry_effect_capture_pids=()
 
 usage() {
   echo "usage: $0 [--provider PATH] [--output-directory PATH] [--keep-vms] [--manual-environment] [--protected-start-only] [--reuse-environment PATH]" >&2
@@ -203,6 +204,17 @@ assert_runtime_hook() {
   return 1
 }
 
+stop_entry_effect_capture() {
+  local pid
+  for pid in "${entry_effect_capture_pids[@]}"; do
+    kill "$pid" >/dev/null 2>&1 || true
+  done
+  for pid in "${entry_effect_capture_pids[@]}"; do
+    wait "$pid" >/dev/null 2>&1 || true
+  done
+  entry_effect_capture_pids=()
+}
+
 cleanup() {
   local original_status=$?
   local cleanup_failed=false
@@ -210,6 +222,7 @@ cleanup() {
   local resources_removed
   trap - EXIT
   set +e
+  stop_entry_effect_capture
   if ((original_status != 0)) && [[ $cluster_created == true ]]; then
     collect_mithril_diagnostics "$output_directory" "$system_namespace" \
       "$workload_namespace" || cleanup_failed=true
@@ -1170,6 +1183,21 @@ node_effects() {
       --cgroup-scope /
 }
 
+start_entry_effect_capture() {
+  local node_name=$1
+  local output=$2
+  local pod
+  pod=$(remote_kubectl -n "$system_namespace" get pods \
+    -l app.kubernetes.io/name=mithril-node \
+    --field-selector "spec.nodeName=$node_name" \
+    -o jsonpath='{.items[0].metadata.name}')
+  remote_kubectl -n "$system_namespace" exec -c mithril-node "$pod" -- \
+    mithril-inspect effects --socket-path /run/mithril/observation.sock \
+      --cgroup-scope / --samples 6000 --sample-interval-ms 10 \
+      >"$output" 2>/dev/null &
+  entry_effect_capture_pids+=("$!")
+}
+
 prepare_pod_markers() {
   local pod_name=$1
   local node
@@ -1219,6 +1247,11 @@ admitted_entry_counts() {
 }
 
 prepare_pod_markers entry-roles
+entry_role_capture_a=$output_directory/declared-entry-role-capture-node-a.txt
+entry_role_capture_b=$output_directory/declared-entry-role-capture-node-b.txt
+start_entry_effect_capture "$node_a_name" "$entry_role_capture_a"
+start_entry_effect_capture "$node_b_name" "$entry_role_capture_b"
+sleep 1
 remote_kubectl create -f "$remote_a/entry-roles.yaml" >/dev/null
 remote_kubectl -n "$workload_namespace" wait \
   --for=condition=Ready pod/entry-roles --timeout=300s >/dev/null
@@ -1240,10 +1273,18 @@ fi
   /var/lib/mithril-convergence/markers/entry-roles.poststart-observed
 "$provider" run "$entry_roles_other_vm" sudo test ! -e \
   /var/lib/mithril-convergence/markers/entry-roles.poststart-observed
+sleep 0.1
+stop_entry_effect_capture
+
+entry_role_capture=$entry_role_capture_a
+if [[ $entry_roles_node == "$node_b_name" ]]; then
+  entry_role_capture=$entry_role_capture_b
+fi
 
 entry_role_effects_before=
 for _attempt in {1..120}; do
-  entry_role_effects_before=$(node_effects "$entry_roles_node")
+  entry_role_effects_before=$(printf '%s\n%s\n' \
+    "$(<"$entry_role_capture")" "$(node_effects "$entry_roles_node")")
   read -r entry_role_count entry_admission_count entry_pair_count \
     <<<"$(admitted_entry_counts <<<"$entry_role_effects_before")"
   if [[ $entry_role_count -eq 5 && $entry_admission_count -eq 5 &&
@@ -1257,8 +1298,13 @@ for _attempt in {1..120}; do
   sleep 1
 done
 
+entry_prestop_capture=$output_directory/declared-entry-role-capture-prestop.txt
+start_entry_effect_capture "$entry_roles_node" "$entry_prestop_capture"
+sleep 0.1
 remote_kubectl -n "$workload_namespace" delete pod entry-roles \
   --wait=true --timeout=120s >/dev/null
+sleep 0.1
+stop_entry_effect_capture
 "$provider" run "$entry_roles_vm" sudo cmp -s \
   /var/lib/mithril-convergence/markers/entry-roles.lifecycle-ready \
   /var/lib/mithril-convergence/markers/entry-roles.prestop-observed
@@ -1267,9 +1313,10 @@ remote_kubectl -n "$workload_namespace" delete pod entry-roles \
 
 entry_role_effects=
 for _attempt in {1..120}; do
-  entry_role_effects_after=$(node_effects "$entry_roles_node")
-  entry_role_effects=$(printf '%s\n%s\n' \
-    "$entry_role_effects_before" "$entry_role_effects_after")
+  entry_role_effects_after=$(node_effects "$entry_roles_node" 2>/dev/null || true)
+  entry_role_effects=$(printf '%s\n%s\n%s\n' \
+    "$entry_role_effects_before" "$(<"$entry_prestop_capture")" \
+    "$entry_role_effects_after")
   read -r entry_role_count entry_admission_count entry_pair_count \
     <<<"$(admitted_entry_counts <<<"$entry_role_effects")"
   if [[ $entry_role_count -eq 6 && $entry_admission_count -eq 6 &&

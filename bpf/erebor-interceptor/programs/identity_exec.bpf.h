@@ -291,8 +291,6 @@ static __noinline int observe_declared_entry_admission(
                                                label->task_cookie);
     if (!prepared_container_actor_is_exact(binding, label, entry))
         return identity_deny(config);
-    pending->prepared_runtime_exec = 1;
-    pending->transition_version++;
     return prepared_runtime_effect_result(scratch);
 }
 
@@ -946,14 +944,23 @@ static __noinline int identity_bprm_transition(struct linux_binprm *bprm,
             return identity_deny(config);
         }
         candidate_from_bprm(&scratch->pending_exec.ordered_candidates[0], bprm);
-        scratch->pending_exec.prepared_runtime_exec = 0;
+        scratch->pending_exec.prepared_runtime_exec =
+            PREPARED_RUNTIME_EXEC_NONE_V1;
+        /* A post-mount runtime hook is a child of the held initial entry.
+         * Permit its process-birth exec, but keep the initial task and every
+         * later exec on the declared-entry path. */
+        if (prepared_container_bootstrap_exec_is_exact(
+                binding, label, entry, coordinate, active_execution))
+            scratch->pending_exec.prepared_runtime_exec =
+                PREPARED_RUNTIME_EXEC_CONTAINER_BOOTSTRAP_V1;
         /* A runtime can re-exec its current image while it prepares an entry.
          * A different image must match a declared entry before exec commits. */
         if (runtime_entry_bootstrap_actor_is_exact(
                 config, binding, label, snapshot, entry) &&
             image_contains_candidate(
                 active_image, &scratch->pending_exec.ordered_candidates[0]))
-            scratch->pending_exec.prepared_runtime_exec = 1;
+            scratch->pending_exec.prepared_runtime_exec =
+                PREPARED_RUNTIME_EXEC_ENTRY_V1;
         if (!scratch->pending_exec.ordered_candidates[0].mount_id) {
             /* The prepared runtime can use anonymous executable objects. The
              * policy gate still decides whether this exec activates the app. */
@@ -962,7 +969,8 @@ static __noinline int identity_bprm_transition(struct linux_binprm *bprm,
                 return config->effect_policy_enabled ? BPRM_OBSERVE_EFFECT_V1
                                                      : identity_deny(config);
             }
-            scratch->pending_exec.prepared_runtime_exec = 1;
+            scratch->pending_exec.prepared_runtime_exec =
+                PREPARED_RUNTIME_EXEC_ENTRY_V1;
         }
         if (allocate_id(config, &scratch->pending_exec.pending_exec_id) ||
             allocate_id(config, &scratch->pending_exec.target_execution_id) ||
@@ -1000,6 +1008,13 @@ static __noinline int identity_bprm_transition(struct linux_binprm *bprm,
             scratch->pending_exec.reserved_1[index] = 0;
         if (bpf_map_update_elem(&pending_execs, &label->task_cookie,
                                 &scratch->pending_exec, BPF_NOEXIST)) {
+            release_transition_guard(&process->transition_guard);
+            return identity_deny(config);
+        }
+        if (scratch->pending_exec.prepared_runtime_exec ==
+                PREPARED_RUNTIME_EXEC_CONTAINER_BOOTSTRAP_V1 &&
+            prepared_container_reserve_bootstrap_exec(binding, label)) {
+            bpf_map_delete_elem(&pending_execs, &label->task_cookie);
             release_transition_guard(&process->transition_guard);
             return identity_deny(config);
         }
@@ -1155,6 +1170,10 @@ int BPF_PROG(erebor_bprm_committing_creds, struct linux_binprm *bprm)
     }
     scratch = identity_scratch_record();
     if (!scratch ||
+        (pending->prepared_runtime_exec ==
+             PREPARED_RUNTIME_EXEC_CONTAINER_BOOTSTRAP_V1 &&
+         !prepared_container_bootstrap_exec_is_pending(
+             binding, label)) ||
         append_bprm_auxiliary_candidates(
             bprm, pending, scratch, non_exact_candidate_allowed) ||
         prepare_exec_records(scratch, pending, process)) {
@@ -1255,11 +1274,17 @@ static __always_inline int complete_failed_exec(long result)
         release_transition_guard(&process->transition_guard);
         return 0;
     }
-    if (!pending->prepared_runtime_exec && !task_cgroup(task, &cgroup)) {
+    if (!task_cgroup(task, &cgroup)) {
         binding = binding_for_cgroup(cgroup, &binding_lookup);
-        if (!binding_lookup && binding_matches_label(binding, label))
-            prepared_container_rollback_activation(binding,
-                                                   label->task_cookie);
+        if (!binding_lookup && binding_matches_label(binding, label)) {
+            if (pending->prepared_runtime_exec ==
+                PREPARED_RUNTIME_EXEC_CONTAINER_BOOTSTRAP_V1)
+                prepared_container_rollback_bootstrap_exec(
+                    binding, label->task_cookie);
+            else if (!pending->prepared_runtime_exec)
+                prepared_container_rollback_activation(binding,
+                                                       label->task_cookie);
+        }
     }
     pending->state = pending_exec_state_v1_pre_ponr_failed;
     pending->transition_version++;
@@ -1445,10 +1470,13 @@ int erebor_sched_process_exec(struct trace_event_raw_sched_process_exec *context
           !image_contains_candidate(
               target_image, &scratch->image.ordered_candidates[0])) &&
          !non_exact_candidate_allowed) ||
-        (pending->prepared_runtime_exec &&
-         !prepared_container_actor_is_exact(binding, label, entry) &&
-         !runtime_entry_bootstrap_actor_is_exact(
-             config, binding, label, process, entry)) ||
+        (pending->prepared_runtime_exec ==
+             PREPARED_RUNTIME_EXEC_CONTAINER_BOOTSTRAP_V1
+             ? !prepared_container_bootstrap_exec_is_pending(binding, label)
+             : (pending->prepared_runtime_exec &&
+                !prepared_container_actor_is_exact(binding, label, entry) &&
+                !runtime_entry_bootstrap_actor_is_exact(
+                    config, binding, label, process, entry))) ||
         (process->pending_target_role_id != process->active_role_id &&
          !entry_admission) ||
         (entry_admission && !process->pending_target_role_id) ||
@@ -1456,7 +1484,11 @@ int erebor_sched_process_exec(struct trace_event_raw_sched_process_exec *context
          !entry_admission_matches_live_state(
              label, pending, binding, process,
              administrative_match)) ||
-        commit_entry_admission_metadata(label, pending, process)) {
+        commit_entry_admission_metadata(label, pending, process) ||
+        (pending->prepared_runtime_exec ==
+             PREPARED_RUNTIME_EXEC_CONTAINER_BOOTSTRAP_V1 &&
+         prepared_container_commit_bootstrap_exec(
+             binding, label->task_cookie))) {
         process->exec_guard_state = exec_guard_state_v1_outcome_unknown;
         process->transition_version++;
         pending->state = pending_exec_state_v1_outcome_unknown;

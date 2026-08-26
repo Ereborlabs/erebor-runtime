@@ -14,14 +14,16 @@ use erebor_interceptor_abi::{
     ExactFileMeasurementV1, MAX_CANONICAL_COMPONENT_BYTES_V1, MAX_CANONICAL_PATH_COMPONENTS_V1,
 };
 use rustix::fs::{openat, openat2, statx, AtFlags, Mode, OFlags, ResolveFlags, StatxFlags};
+use serde::Deserialize;
 use sha2::{Digest as _, Sha256};
 use snafu::{ensure, ResultExt as _};
 use uuid::Uuid;
 
-use crate::error::{IdentityStateSnafu, InterceptorSnafu, IoSnafu};
+use crate::error::{IdentityStateSnafu, InterceptorSnafu, IoSnafu, JsonSnafu};
 use crate::{ExactDeviceConfig, ExactDeviceType, ExactFileObjectConfig, Result};
 
 const STATX_MNT_ID_UNIQUE: u32 = 0x0000_4000;
+const MAXIMUM_OCI_CONFIG_BYTES: u64 = 1_048_576;
 
 pub struct ExactFileObjectResolver;
 
@@ -31,6 +33,23 @@ pub(crate) struct ExactFileObjectView {
     mount_namespace: File,
     root: File,
     mountinfo: Mutex<File>,
+}
+
+pub(crate) struct OciEntryFileObjectView {
+    root_pid: u32,
+    _process: File,
+    mount_namespace: File,
+    root: File,
+}
+
+#[derive(Deserialize)]
+struct OciRuntimeConfigV1 {
+    root: OciRuntimeRootV1,
+}
+
+#[derive(Deserialize)]
+struct OciRuntimeRootV1 {
+    path: PathBuf,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -428,6 +447,280 @@ impl ExactFileObjectView {
         })?;
         read_mountinfo_file(&mut file, self.root_pid)
     }
+}
+
+impl OciEntryFileObjectView {
+    pub(crate) fn acquire(root_pid: u32, bundle: &Path) -> Result<Self> {
+        ensure!(
+            root_pid > 0 && clean_absolute_path(bundle),
+            IdentityStateSnafu {
+                reason: "OCI entry resolution needs a live root PID and a clean absolute bundle",
+            }
+        );
+        let process_path = PathBuf::from(format!("/proc/{root_pid}"));
+        let process = File::open(&process_path).context(IoSnafu {
+            path: &process_path,
+        })?;
+        let mount_namespace = open_process_file(&process, root_pid, "ns/mnt")?;
+        let process_root = open_process_file(&process, root_pid, "root")?;
+        let bundle_directory = openat2(
+            &process_root,
+            bundle,
+            OFlags::RDONLY | OFlags::CLOEXEC | OFlags::DIRECTORY,
+            Mode::empty(),
+            ResolveFlags::IN_ROOT | ResolveFlags::NO_MAGICLINKS,
+        )
+        .map(File::from)
+        .map_err(std::io::Error::from)
+        .context(IoSnafu { path: bundle })?;
+        let config_path = bundle.join("config.json");
+        let config_file = openat2(
+            &bundle_directory,
+            "config.json",
+            OFlags::RDONLY | OFlags::CLOEXEC,
+            Mode::empty(),
+            ResolveFlags::BENEATH | ResolveFlags::NO_MAGICLINKS,
+        )
+        .map(File::from)
+        .map_err(std::io::Error::from)
+        .context(IoSnafu { path: &config_path })?;
+        let mut bytes = Vec::new();
+        config_file
+            .take(MAXIMUM_OCI_CONFIG_BYTES + 1)
+            .read_to_end(&mut bytes)
+            .context(IoSnafu { path: &config_path })?;
+        ensure!(
+            !bytes.is_empty() && bytes.len() <= MAXIMUM_OCI_CONFIG_BYTES as usize,
+            IdentityStateSnafu {
+                reason: "OCI runtime config exceeds its byte limit",
+            }
+        );
+        let config: OciRuntimeConfigV1 =
+            serde_json::from_slice(&bytes).context(JsonSnafu { path: &config_path })?;
+        ensure!(
+            clean_oci_root_path(&config.root.path),
+            IdentityStateSnafu {
+                reason: "OCI runtime root path is not clean and bounded",
+            }
+        );
+        let open_root = || {
+            let (directory, flags) = if config.root.path.is_absolute() {
+                (
+                    &process_root,
+                    ResolveFlags::IN_ROOT | ResolveFlags::NO_MAGICLINKS,
+                )
+            } else {
+                (
+                    &bundle_directory,
+                    ResolveFlags::BENEATH | ResolveFlags::NO_MAGICLINKS,
+                )
+            };
+            openat2(
+                directory,
+                &config.root.path,
+                OFlags::RDONLY | OFlags::CLOEXEC | OFlags::DIRECTORY,
+                Mode::empty(),
+                flags,
+            )
+            .map(File::from)
+            .map_err(std::io::Error::from)
+            .context(IoSnafu {
+                path: &config.root.path,
+            })
+        };
+        let root = open_root()?;
+        let final_mount_namespace = open_process_file(&process, root_pid, "ns/mnt")?;
+        let final_process_root = open_process_file(&process, root_pid, "root")?;
+        let final_root = open_root()?;
+        ensure!(
+            mount_namespace
+                .metadata()
+                .context(IoSnafu {
+                    path: Path::new("held mount namespace"),
+                })?
+                .ino()
+                == final_mount_namespace
+                    .metadata()
+                    .context(IoSnafu {
+                        path: Path::new("rechecked mount namespace"),
+                    })?
+                    .ino()
+                && same_root(&process_root, &final_process_root)?
+                && same_root(&root, &final_root)?,
+            IdentityStateSnafu {
+                reason: "task mount namespace, process root, or OCI root changed while its view was acquired",
+            }
+        );
+        let host_root = File::open("/").context(IoSnafu {
+            path: Path::new("/"),
+        })?;
+        ensure!(
+            !same_root(&root, &host_root)?,
+            IdentityStateSnafu {
+                reason: "OCI runtime config selected the host root",
+            }
+        );
+        Ok(Self {
+            root_pid,
+            _process: process,
+            mount_namespace,
+            root,
+        })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn try_resolve_declared_entry(
+        &self,
+        host: &KernelHost,
+        path: &Path,
+        profile_generation_ref_id: u64,
+        path_selector_handle: u64,
+        object_class_id: String,
+        mount_topology_generation: u64,
+    ) -> Result<Option<ExactFileObjectConfig>> {
+        ensure!(
+            path.is_absolute(),
+            IdentityStateSnafu {
+                reason: "declared entry resolution needs an absolute container path",
+            }
+        );
+        let pid_tgid = current_pid_tgid()?;
+        let request_nonce = measurement_nonce();
+        host.stage_exact_file_measurement(pid_tgid, request_nonce)
+            .context(InterceptorSnafu)?;
+        let file = match openat2(
+            &self.root,
+            path,
+            OFlags::RDONLY | OFlags::CLOEXEC,
+            Mode::empty(),
+            ResolveFlags::IN_ROOT,
+        ) {
+            Ok(file) => File::from(file),
+            Err(rustix::io::Errno::NOENT | rustix::io::Errno::NOTDIR) => {
+                host.discard_exact_file_measurement(pid_tgid)
+                    .context(InterceptorSnafu)?;
+                return Ok(None);
+            }
+            Err(error) => {
+                host.discard_exact_file_measurement(pid_tgid)
+                    .context(InterceptorSnafu)?;
+                return Err(error.into()).context(IoSnafu { path });
+            }
+        };
+        let measurement = host
+            .take_exact_file_measurement(pid_tgid, request_nonce)
+            .context(InterceptorSnafu)?;
+        let unique_mount = StatxFlags::from_bits_retain(STATX_MNT_ID_UNIQUE);
+        let status = statx(
+            &file,
+            "",
+            AtFlags::EMPTY_PATH,
+            StatxFlags::BASIC_STATS | unique_mount,
+        )
+        .map_err(std::io::Error::from)
+        .context(IoSnafu { path })?;
+        let filesystem_device = encoded_device(status.stx_dev_major, status.stx_dev_minor)?;
+        let mount_namespace_inode = self.mount_namespace_inode()?;
+        let mode = u32::from(status.stx_mode);
+        ensure!(
+            status.stx_mask & STATX_MNT_ID_UNIQUE != 0
+                && status.stx_mnt_id > 0
+                && status.stx_ino > 0
+                && mode & 0o170_000 == 0o100_000
+                && mode & 0o111 != 0
+                && measurement.mount_namespace_inode == mount_namespace_inode
+                && measurement.mount_id_unique == status.stx_mnt_id
+                && measurement.filesystem_device == filesystem_device
+                && measurement.inode == status.stx_ino
+                && measurement.inode_generation > 0,
+            IdentityStateSnafu {
+                reason: format!(
+                    "declared entry `{}` is not one measured executable object in the container root",
+                    path.display()
+                ),
+            }
+        );
+        let root_status = statx(
+            &self.root,
+            "",
+            AtFlags::EMPTY_PATH,
+            StatxFlags::BASIC_STATS | unique_mount,
+        )
+        .map_err(std::io::Error::from)
+        .context(IoSnafu {
+            path: Path::new("held OCI root"),
+        })?;
+        let components = path_components(path)?;
+        ensure!(
+            !components.is_empty()
+                && components.len() <= MAX_CANONICAL_PATH_COMPONENTS_V1
+                && path_selector_handle > 0
+                && profile_generation_ref_id > 0
+                && mount_topology_generation > 0,
+            IdentityStateSnafu {
+                reason: "declared entry proof is not canonical and bounded",
+            }
+        );
+        Ok(Some(ExactFileObjectConfig {
+            profile_generation_ref_id,
+            exact_object_key_id: path_selector_handle,
+            object_class_id,
+            mount_namespace_inode,
+            mount_id_unique: status.stx_mnt_id,
+            filesystem_device,
+            inode: status.stx_ino,
+            inode_generation: measurement.inode_generation,
+            device: None,
+            canonical_component_hex: components.iter().map(hex::encode).collect(),
+            mount_relative_component_count: components.len() as u16,
+            mount_root_filesystem_device: encoded_device(
+                root_status.stx_dev_major,
+                root_status.stx_dev_minor,
+            )?,
+            mount_root_inode: root_status.stx_ino,
+            selected_mount_id_unique: root_status.stx_mnt_id,
+            mount_snapshot_digest_id: 0,
+            mount_topology_generation,
+            mount_view_root_pid: self.root_pid,
+        }))
+    }
+
+    fn mount_namespace_inode(&self) -> Result<u32> {
+        self.mount_namespace
+            .metadata()
+            .context(IoSnafu {
+                path: Path::new("held OCI mount namespace"),
+            })?
+            .ino()
+            .try_into()
+            .map_err(|error| {
+                IdentityStateSnafu {
+                    reason: format!("mount namespace inode exceeds its Linux u32 ABI: {error}"),
+                }
+                .build()
+            })
+    }
+}
+
+fn clean_absolute_path(path: &Path) -> bool {
+    path.is_absolute()
+        && (1..=4_096).contains(&path.as_os_str().as_bytes().len())
+        && path.components().all(|component| {
+            matches!(
+                component,
+                std::path::Component::RootDir | std::path::Component::Normal(_)
+            )
+        })
+}
+
+fn clean_oci_root_path(path: &Path) -> bool {
+    (1..=4_096).contains(&path.as_os_str().as_bytes().len())
+        && path.components().all(|component| {
+            matches!(
+                component,
+                std::path::Component::RootDir | std::path::Component::Normal(_)
+            )
+        })
 }
 
 fn current_pid_tgid() -> Result<u64> {
@@ -961,12 +1254,42 @@ fn path_components(path: &Path) -> Result<Vec<Vec<u8>>> {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
     use std::path::{Path, PathBuf};
 
     use super::{
         canonicalize_mount_path, parse_mountinfo, relevant_mount_entries, unescape_mountinfo,
-        ExactFileObjectView, LiveMount,
+        ExactFileObjectView, LiveMount, OciEntryFileObjectView,
     };
+
+    #[test]
+    fn oci_entry_view_uses_the_standard_relative_runtime_root() -> crate::Result<()> {
+        let bundle = tempfile::tempdir().expect("temporary OCI bundle");
+        fs::create_dir(bundle.path().join("rootfs")).expect("create OCI root");
+        fs::write(
+            bundle.path().join("config.json"),
+            br#"{"root":{"path":"rootfs"}}"#,
+        )
+        .expect("write OCI config");
+
+        let view = OciEntryFileObjectView::acquire(std::process::id(), bundle.path())?;
+
+        assert!(view.mount_namespace_inode()? > 0);
+        assert!(view.root.metadata().is_ok_and(|metadata| metadata.is_dir()));
+        Ok(())
+    }
+
+    #[test]
+    fn oci_entry_view_rejects_a_root_that_escapes_the_bundle() {
+        let bundle = tempfile::tempdir().expect("temporary OCI bundle");
+        fs::write(
+            bundle.path().join("config.json"),
+            br#"{"root":{"path":"../rootfs"}}"#,
+        )
+        .expect("write OCI config");
+
+        assert!(OciEntryFileObjectView::acquire(std::process::id(), bundle.path()).is_err());
+    }
 
     #[test]
     fn retained_mount_view_owns_live_namespace_inputs() -> crate::Result<()> {

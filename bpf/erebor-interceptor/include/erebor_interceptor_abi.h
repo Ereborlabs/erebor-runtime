@@ -1147,7 +1147,7 @@ typedef struct execution_set_binding_state_v1 {
   struct id128_v1 prepared_container_entry_instance_id;
   uint64_t prepared_container_exec_task_cookie;
   uint32_t prepared_container_initial_host_tgid;
-  uint32_t prepared_container_reserved;
+  uint32_t prepared_container_bootstrap_state;
 } execution_set_binding_state_v1;
 
 typedef struct external_root_classification_v1 {

@@ -44,7 +44,7 @@ hook_logs=$(helm template mithril "$chart_directory" \
   --values "$chart_directory/tests/values.yaml" \
   --show-only templates/runtime-hook-configmap.yaml \
   --set-string 'node.logFilter=mithril_oci_hook=debug')
-[[ $(grep -Fc '"env": ["RUST_LOG=mithril_oci_hook=debug"]' <<<"$hook_logs") -eq 2 ]]
+[[ $(grep -Fc '"env": ["RUST_LOG=mithril_oci_hook=debug"]' <<<"$hook_logs") -eq 3 ]]
 
 if helm template mithril "$chart_directory" \
   --namespace mithril-system \
