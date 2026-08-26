@@ -347,6 +347,8 @@ chmod 600 "$materials"/*-key.pem "$server_key"
 
 cp -- "$repo_root/crates/mithril-e2e/fixtures/mithril-policy/test-signing-key.hex" \
   "$materials/policy-signing-key"
+cp -- "$repo_root/crates/mithril-e2e/fixtures/mithril-policy/test-public-key.hex" \
+  "$materials/administrative-public-key.hex"
 cp -- "$repo_root/crates/mithril-e2e/fixtures/mithril-policy/observe-profile-seal-request.json" \
   "$materials/profile-seal-request.json"
 "$repo_root/target/debug/mithril-policy" print-trust-generation \
@@ -477,6 +479,17 @@ replace_retained_test_resources() {
 if [[ $reusing_environment == true ]]; then
   replace_retained_test_resources
 fi
+
+for crd in "$repo_root"/packaging/mithril/helm/crds/*.yaml; do
+  crd_name=$(basename -- "$crd")
+  "$provider" put "$vm_a" "$crd" "$remote_a/$crd_name"
+  remote_kubectl apply --server-side --force-conflicts \
+    --field-manager=mithril-convergence -f "$remote_a/$crd_name" >/dev/null
+done
+remote_kubectl wait --for=condition=Established \
+  customresourcedefinition/workloadprotectionpolicies.mithril.erebor.dev \
+  customresourcedefinition/workloadprotectionexceptions.mithril.erebor.dev \
+  --timeout=120s >/dev/null
 
 nri_hook_logs() {
   remote_kubectl -n "$system_namespace" logs \
@@ -612,6 +625,18 @@ make_node_config() {
         effect_controller_cgroup_path: "/sys/fs/cgroup/mithril-placeholder",
         reconciliation_interval_ms: 100
       },
+      administrative_authorization: {
+        tenant_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        cluster_uid: "55555555-5555-4555-8555-555555555555",
+        trust_domain_id: "22222222-2222-4222-8222-222222222222",
+        issuer_id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+        key_id: "mithril-convergence-administrative-key-v1",
+        public_key_path: "/etc/mithril/identity/administrative-public-key.hex",
+        sequence_epoch: 1,
+        valid_from_utc_ns: 1767225600000000000,
+        valid_until_utc_ns: 1893456000000000000,
+        maximum_clock_skew_ns: 300000000000
+      },
       workload_bindings: [],
       policy_candidates: []
     }' >"$output"
@@ -677,13 +702,16 @@ for index in 0 1; do
     "$remote/materials/node.pem"
   "$provider" put "$node" "$materials/${node_ids[$index]}-key.pem" \
     "$remote/materials/node-key.pem"
+  "$provider" put "$node" "$materials/administrative-public-key.hex" \
+    "$remote/materials/administrative-public-key.hex"
   "$provider" put "$node" "$materials/node-$label.json" \
     "$remote/materials/node.json"
   "$provider" run "$node" \
     "sudo install -d -m 0700 /etc/mithril/identity /var/lib/mithril-convergence/markers /run/mithril && \
      sudo install -m 0444 '$remote/materials/ca.pem' /etc/mithril/identity/ca.pem && \
      sudo install -m 0444 '$remote/materials/node.pem' /etc/mithril/identity/node.pem && \
-     sudo install -m 0400 '$remote/materials/node-key.pem' /etc/mithril/identity/node-key.pem"
+     sudo install -m 0400 '$remote/materials/node-key.pem' /etc/mithril/identity/node-key.pem && \
+     sudo install -m 0444 '$remote/materials/administrative-public-key.hex' /etc/mithril/identity/administrative-public-key.hex"
 done
 
 remote_kubectl create namespace "$system_namespace" >/dev/null
@@ -1033,6 +1061,7 @@ render_pod() {
 }
 render_pod protected mithril
 render_pod gate-failure mithril-fail
+render_pod entry-roles mithril
 
 unprotected=$work_a/unprotected.yaml
 sed "s/MITHRIL_CONVERGENCE_NAMESPACE/$workload_namespace/g" \
@@ -1066,31 +1095,6 @@ jq --arg node "$node_a_name" '.spec.nodeName = $node' \
 "$provider" put "$vm_a" "$bypass" "$remote_a/bypass.json"
 assert_mithril_node_name_denial remote_kubectl create \
   -f "$remote_a/bypass.json"
-
-# Both possible scheduler targets receive the same inert test file, not policy authority.
-for node in "$vm_a" "$vm_b"; do
-  "$provider" run "$node" sudo rm -f \
-    /var/lib/mithril-convergence/markers/protected.started \
-    /var/lib/mithril-convergence/markers/protected.restart \
-    /var/lib/mithril-convergence/markers/protected.prepared-result \
-    /var/lib/mithril-convergence/markers/protected.exception-request \
-    /var/lib/mithril-convergence/markers/protected.exception-result
-  "$provider" run "$node" sudo touch \
-    /var/lib/mithril-convergence/markers/protected.exception-target
-done
-
-remote_kubectl create -f "$remote_a/protected.yaml" >/dev/null
-remote_kubectl -n "$workload_namespace" wait --for=condition=Ready pod/protected \
-  --timeout=300s >/dev/null
-wait_nri_hook_injection protected converter
-selected_node=$(remote_kubectl -n "$workload_namespace" get pod protected \
-  -o jsonpath='{.spec.nodeName}')
-[[ $selected_node == "$node_a_name" || $selected_node == "$node_b_name" ]] || {
-  echo "the scheduler selected a Node outside the DaemonSet-derived set" >&2
-  exit 1
-}
-other_node=$node_a_name
-[[ $selected_node == "$node_b_name" ]] || other_node=$node_b_name
 
 node_status() {
   local node_name=$1
@@ -1165,6 +1169,141 @@ node_effects() {
     mithril-inspect effects --socket-path /run/mithril/observation.sock \
       --cgroup-scope /
 }
+
+prepare_pod_markers() {
+  local pod_name=$1
+  local node
+  local marker_root=/var/lib/mithril-convergence/markers
+  for node in "$vm_a" "$vm_b"; do
+    "$provider" run "$node" sudo rm -f \
+      "$marker_root/$pod_name.started" \
+      "$marker_root/$pod_name.restart" \
+      "$marker_root/$pod_name.prepared-result" \
+      "$marker_root/$pod_name.exception-request" \
+      "$marker_root/$pod_name.exception-result" \
+      "$marker_root/$pod_name.poststart-observed" \
+      "$marker_root/$pod_name.prestop-observed"
+    "$provider" run "$node" sudo touch \
+      "$marker_root/$pod_name.exception-target"
+    "$provider" run "$node" \
+      "printf '%s\\n' READY | sudo tee '$marker_root/$pod_name.lifecycle-ready' >/dev/null"
+  done
+}
+
+admitted_entry_counts() {
+  awk '
+    /^observed_boottime_ns=/ && / reason=APPLICATION_DEFAULT_ALLOW / {
+      role = 0
+      admission = 0
+      for (field_index = 1; field_index <= NF; field_index++) {
+        split($field_index, field, "=")
+        if (field[1] == "active_role_id") {
+          role = field[2]
+        } else if (field[1] == "admitted_entry_rule_id") {
+          admission = field[2]
+        }
+      }
+      if (role > 0 && admission > 0) {
+        roles[role] = 1
+        admissions[admission] = 1
+        pairs[role ":" admission] = 1
+      }
+    }
+    END {
+      for (role_key in roles) role_count++
+      for (admission_key in admissions) admission_count++
+      for (pair_key in pairs) pair_count++
+      print role_count + 0, admission_count + 0, pair_count + 0
+    }
+  '
+}
+
+prepare_pod_markers entry-roles
+remote_kubectl create -f "$remote_a/entry-roles.yaml" >/dev/null
+remote_kubectl -n "$workload_namespace" wait \
+  --for=condition=Ready pod/entry-roles --timeout=300s >/dev/null
+wait_nri_hook_injection entry-roles converter
+entry_roles_node=$(remote_kubectl -n "$workload_namespace" get pod entry-roles \
+  -o jsonpath='{.spec.nodeName}')
+[[ $entry_roles_node == "$node_a_name" || $entry_roles_node == "$node_b_name" ]] || {
+  echo "the entry-role Pod scheduled outside the protected Node set" >&2
+  exit 1
+}
+entry_roles_vm=$vm_a
+entry_roles_other_vm=$vm_b
+if [[ $entry_roles_node == "$node_b_name" ]]; then
+  entry_roles_vm=$vm_b
+  entry_roles_other_vm=$vm_a
+fi
+"$provider" run "$entry_roles_vm" sudo cmp -s \
+  /var/lib/mithril-convergence/markers/entry-roles.lifecycle-ready \
+  /var/lib/mithril-convergence/markers/entry-roles.poststart-observed
+"$provider" run "$entry_roles_other_vm" sudo test ! -e \
+  /var/lib/mithril-convergence/markers/entry-roles.poststart-observed
+
+entry_role_effects_before=
+for _attempt in {1..120}; do
+  entry_role_effects_before=$(node_effects "$entry_roles_node")
+  read -r entry_role_count entry_admission_count entry_pair_count \
+    <<<"$(admitted_entry_counts <<<"$entry_role_effects_before")"
+  if [[ $entry_role_count -eq 5 && $entry_admission_count -eq 5 &&
+        $entry_pair_count -eq 5 ]]; then
+    break
+  fi
+  [[ $_attempt -lt 120 ]] || {
+    echo "the application, PostStart, and probe entries did not install five independent roles" >&2
+    exit 1
+  }
+  sleep 1
+done
+
+remote_kubectl -n "$workload_namespace" delete pod entry-roles \
+  --wait=true --timeout=120s >/dev/null
+"$provider" run "$entry_roles_vm" sudo cmp -s \
+  /var/lib/mithril-convergence/markers/entry-roles.lifecycle-ready \
+  /var/lib/mithril-convergence/markers/entry-roles.prestop-observed
+"$provider" run "$entry_roles_other_vm" sudo test ! -e \
+  /var/lib/mithril-convergence/markers/entry-roles.prestop-observed
+
+entry_role_effects=
+for _attempt in {1..120}; do
+  entry_role_effects_after=$(node_effects "$entry_roles_node")
+  entry_role_effects=$(printf '%s\n%s\n' \
+    "$entry_role_effects_before" "$entry_role_effects_after")
+  read -r entry_role_count entry_admission_count entry_pair_count \
+    <<<"$(admitted_entry_counts <<<"$entry_role_effects")"
+  if [[ $entry_role_count -eq 6 && $entry_admission_count -eq 6 &&
+        $entry_pair_count -eq 6 ]]; then
+    break
+  fi
+  [[ $_attempt -lt 120 ]] || {
+    echo "PreStop did not install its independent admitted role" >&2
+    exit 1
+  }
+  sleep 0.25
+done
+printf '%s\n' "$entry_role_effects" \
+  >"$output_directory/declared-entry-role-effects.txt"
+install -m 0600 "$work_a/entry-roles.yaml" \
+  "$output_directory/declared-entry-role-pod.yaml"
+install -m 0600 "$work_a/policy-v1.yaml" \
+  "$output_directory/declared-entry-role-policy.yaml"
+wait_policy_delivery_empty "$entry_roles_node"
+
+# Both possible scheduler targets receive the same inert files, not policy authority.
+prepare_pod_markers protected
+remote_kubectl create -f "$remote_a/protected.yaml" >/dev/null
+remote_kubectl -n "$workload_namespace" wait --for=condition=Ready pod/protected \
+  --timeout=300s >/dev/null
+wait_nri_hook_injection protected converter
+selected_node=$(remote_kubectl -n "$workload_namespace" get pod protected \
+  -o jsonpath='{.spec.nodeName}')
+[[ $selected_node == "$node_a_name" || $selected_node == "$node_b_name" ]] || {
+  echo "the scheduler selected a Node outside the DaemonSet-derived set" >&2
+  exit 1
+}
+other_node=$node_a_name
+[[ $selected_node == "$node_b_name" ]] || other_node=$node_b_name
 
 assert_prepared_container_activation() {
   local task_json=$1
@@ -1364,6 +1503,7 @@ if [[ $protected_start_only == true ]]; then
       "$application_exec_default_allowed" \
     --argjson external_cgroup_entry_denied \
       "$external_cgroup_entry_denied" \
+    --argjson declared_entry_role_count "$entry_role_count" \
     '{
       schema_version: 1,
       kubernetes_version: $kubernetes_version,
@@ -1383,8 +1523,16 @@ if [[ $protected_start_only == true ]]; then
       later_busybox_applet_exec_default_allowed: $later_busybox_applet_exec_default_allowed,
       explicit_matching_deny_observed: ($explicit_deny_marker == "BASE_DENIED"),
       external_cgroup_entry_denied: $external_cgroup_entry_denied,
+      poststart_entry_allowed: true,
+      prestop_entry_allowed: true,
+      startup_probe_entry_allowed: true,
+      readiness_probe_entry_allowed: true,
+      liveness_probe_entry_allowed: true,
+      declared_entry_roles_independent: ($declared_entry_role_count == 6),
+      declared_entry_role_count: $declared_entry_role_count,
       repository_owned_test_resources_removed: false
     }' >"$output_directory/protected-start-result.json"
+  install -m 0600 "$kubeconfig" "$output_directory/kubeconfig.yaml"
   echo "Protected Kubernetes application startup passed. Evidence: $output_directory"
   exit 0
 fi

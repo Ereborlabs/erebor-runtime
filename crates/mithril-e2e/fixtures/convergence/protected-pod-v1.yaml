@@ -53,6 +53,46 @@ spec:
           while [ ! -e /var/lib/mithril-convergence/MITHRIL_CONVERGENCE_POD.restart ];
           do sleep 1; done;
           exit 42
+      lifecycle:
+        postStart:
+          exec:
+            command:
+              - /bin/cp
+              - /var/lib/mithril-convergence/MITHRIL_CONVERGENCE_POD.lifecycle-ready
+              - /var/lib/mithril-convergence/MITHRIL_CONVERGENCE_POD.poststart-observed
+        preStop:
+          exec:
+            command:
+              - /bin/dd
+              - if=/var/lib/mithril-convergence/MITHRIL_CONVERGENCE_POD.lifecycle-ready
+              - of=/var/lib/mithril-convergence/MITHRIL_CONVERGENCE_POD.prestop-observed
+      startupProbe:
+        exec:
+          command:
+            - /bin/cat
+            - /var/lib/mithril-convergence/MITHRIL_CONVERGENCE_POD.lifecycle-ready
+        periodSeconds: 10
+        timeoutSeconds: 1
+        failureThreshold: 30
+      readinessProbe:
+        exec:
+          command:
+            - /bin/grep
+            - -q
+            - READY
+            - /var/lib/mithril-convergence/MITHRIL_CONVERGENCE_POD.lifecycle-ready
+        periodSeconds: 10
+        timeoutSeconds: 1
+        failureThreshold: 30
+      livenessProbe:
+        exec:
+          command:
+            - /bin/wc
+            - -c
+            - /var/lib/mithril-convergence/MITHRIL_CONVERGENCE_POD.lifecycle-ready
+        periodSeconds: 10
+        timeoutSeconds: 1
+        failureThreshold: 30
       volumeMounts:
         - name: fixture
           mountPath: /var/lib/mithril-convergence

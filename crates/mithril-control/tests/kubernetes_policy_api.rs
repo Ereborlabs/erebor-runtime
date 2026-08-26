@@ -398,7 +398,7 @@ fn application_policy_lowering_does_not_create_implicit_denials() -> TestResult 
 }
 
 #[test]
-fn convergence_policy_has_only_entry_and_explicit_deny_paths() -> TestResult {
+fn convergence_policy_has_only_declared_entry_and_explicit_deny_paths() -> TestResult {
     let mut resource: WorkloadProtectionPolicy = serde_saphyr::from_slice(CONVERGENCE_POLICY)?;
     resource.metadata.namespace = Some("mithril-convergence".to_owned());
     resource.metadata.uid = Some(OBJECT_UID.to_owned());
@@ -411,14 +411,25 @@ fn convergence_policy_has_only_entry_and_explicit_deny_paths() -> TestResult {
         .iter()
         .map(|selector| selector.path_expression())
         .collect::<BTreeSet<_>>();
-    assert_eq!(lowered.path_selectors.len(), 2);
+    assert_eq!(lowered.path_selectors.len(), 12);
     assert_eq!(
         paths,
         BTreeSet::from([
             "/bin/sh",
+            "/bin/cat",
+            "/bin/cp",
+            "/bin/dd",
+            "/bin/grep",
+            "/bin/wc",
+            "/var/lib/mithril-convergence/liveness-probe.denied",
+            "/var/lib/mithril-convergence/poststart.denied",
+            "/var/lib/mithril-convergence/prestop.denied",
             "/var/lib/mithril-convergence/protected.exception-target",
+            "/var/lib/mithril-convergence/readiness-probe.denied",
+            "/var/lib/mithril-convergence/startup-probe.denied",
         ])
     );
+    assert!(!paths.contains("/bin/busybox"));
     assert!(lowered.effect_family_defaults.is_empty());
     assert!(lowered
         .path_selectors

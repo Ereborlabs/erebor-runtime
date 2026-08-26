@@ -17,7 +17,27 @@ spec:
       applicationEntry:
         executionRule: allow-shell-execution
         role: worker
-      additionalEntries: []
+      additionalEntries:
+        - name: poststart
+          kind: PostStart
+          executionRule: poststart-entry
+          role: poststart
+        - name: prestop
+          kind: PreStop
+          executionRule: prestop-entry
+          role: prestop
+        - name: startup-probe
+          kind: StartupProbe
+          executionRule: startup-probe-entry
+          role: startup-probe
+        - name: readiness-probe
+          kind: ReadinessProbe
+          executionRule: readiness-probe-entry
+          role: readiness-probe
+        - name: liveness-probe
+          kind: LivenessProbe
+          executionRule: liveness-probe-entry
+          role: liveness-probe
       administrativeEntry:
         role: administrator
       externalRole: runtime-external
@@ -43,6 +63,96 @@ spec:
     - name: runtime-external
       files: []
       execution: []
+      network:
+        socketControls: []
+        destinations: []
+      processControl: []
+      unixStreams: []
+    - name: poststart
+      files:
+        - name: deny-poststart-file
+          path: /var/lib/mithril-convergence/poststart.denied
+          recursive: false
+          operations: [OpenRead]
+          action: Deny
+      execution:
+        - name: poststart-entry
+          path: /bin/cp
+          recursive: false
+          operations: [Execute]
+          action: Allow
+      network:
+        socketControls: []
+        destinations: []
+      processControl: []
+      unixStreams: []
+    - name: prestop
+      files:
+        - name: deny-prestop-file
+          path: /var/lib/mithril-convergence/prestop.denied
+          recursive: false
+          operations: [OpenRead]
+          action: Deny
+      execution:
+        - name: prestop-entry
+          path: /bin/dd
+          recursive: false
+          operations: [Execute]
+          action: Allow
+      network:
+        socketControls: []
+        destinations: []
+      processControl: []
+      unixStreams: []
+    - name: startup-probe
+      files:
+        - name: deny-startup-probe-file
+          path: /var/lib/mithril-convergence/startup-probe.denied
+          recursive: false
+          operations: [OpenRead]
+          action: Deny
+      execution:
+        - name: startup-probe-entry
+          path: /bin/cat
+          recursive: false
+          operations: [Execute]
+          action: Allow
+      network:
+        socketControls: []
+        destinations: []
+      processControl: []
+      unixStreams: []
+    - name: readiness-probe
+      files:
+        - name: deny-readiness-probe-file
+          path: /var/lib/mithril-convergence/readiness-probe.denied
+          recursive: false
+          operations: [OpenRead]
+          action: Deny
+      execution:
+        - name: readiness-probe-entry
+          path: /bin/grep
+          recursive: false
+          operations: [Execute]
+          action: Allow
+      network:
+        socketControls: []
+        destinations: []
+      processControl: []
+      unixStreams: []
+    - name: liveness-probe
+      files:
+        - name: deny-liveness-probe-file
+          path: /var/lib/mithril-convergence/liveness-probe.denied
+          recursive: false
+          operations: [OpenRead]
+          action: Deny
+      execution:
+        - name: liveness-probe-entry
+          path: /bin/wc
+          recursive: false
+          operations: [Execute]
+          action: Allow
       network:
         socketControls: []
         destinations: []
