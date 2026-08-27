@@ -490,17 +490,18 @@ impl WorkloadBindingOwner {
         host: &KernelHost,
         profile_id: &str,
         profile_generation_ref_id: u64,
-        binding_ids: &[String],
     ) -> Result<()> {
         let profile_id = parse_id("profile_id", profile_id)?;
-        let binding_ids = binding_ids
-            .iter()
-            .map(|binding_id| parse_id("binding_id", binding_id))
-            .collect::<Result<BTreeSet<_>>>()?;
         let roots = self
             .bindings
             .iter()
-            .filter(|(_root, binding)| binding_ids.contains(&binding.state.binding_id))
+            .filter(|(_root, binding)| {
+                self.terminal_binding_matches_session(
+                    &binding.state,
+                    profile_id,
+                    profile_generation_ref_id,
+                )
+            })
             .map(|(root, _binding)| *root)
             .collect::<Vec<_>>();
         for root in roots {
@@ -532,19 +533,17 @@ impl WorkloadBindingOwner {
                 continue;
             };
             let mut binding = execution_set_binding_state(&bytes)?;
-            if !binding_ids.contains(&binding.binding_id) {
+            if !self.terminal_binding_matches_session(
+                &binding,
+                profile_id,
+                profile_generation_ref_id,
+            ) {
                 continue;
             }
             ensure!(
-                observed.insert(binding.binding_id)
-                    && self.terminal_binding_matches_session(
-                        &binding,
-                        profile_id,
-                        profile_generation_ref_id,
-                    ),
+                observed.insert(binding.binding_id),
                 IdentityStateSnafu {
-                    reason:
-                        "stale policy retirement found a duplicate or mismatched workload binding",
+                    reason: "stale policy retirement found a duplicate workload binding",
                 }
             );
             if matches!(
@@ -597,13 +596,8 @@ impl WorkloadBindingOwner {
         host: &KernelHost,
         profile_id: &str,
         profile_generation_ref_id: u64,
-        binding_ids: &[String],
     ) -> Result<()> {
         let profile_id = parse_id("profile_id", profile_id)?;
-        let binding_ids = binding_ids
-            .iter()
-            .map(|binding_id| parse_id("binding_id", binding_id))
-            .collect::<Result<BTreeSet<_>>>()?;
         let mut observed = BTreeSet::new();
         for key in host
             .map_keys("execution_set_bindings")
@@ -616,16 +610,15 @@ impl WorkloadBindingOwner {
                 continue;
             };
             let mut binding = execution_set_binding_state(&bytes)?;
-            if !binding_ids.contains(&binding.binding_id) {
+            if !self.terminal_binding_matches_session(
+                &binding,
+                profile_id,
+                profile_generation_ref_id,
+            ) {
                 continue;
             }
             ensure!(
                 observed.insert(binding.binding_id)
-                    && self.terminal_binding_matches_session(
-                        &binding,
-                        profile_id,
-                        profile_generation_ref_id,
-                    )
                     && matches!(
                         binding.lifecycle_state,
                         BindingLifecycleStateV1::Terminating | BindingLifecycleStateV1::Tombstoned
@@ -2480,6 +2473,29 @@ mod tests {
         binding.node_boot_id = Id128V1::new(1, 2);
         binding.label_epoch = 4;
         assert!(!owner.terminal_binding_matches_session(
+            &binding,
+            binding.profile_id,
+            binding.active_profile_generation_ref_id,
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn stale_policy_retirement_uses_the_profile_generation_not_the_runtime_alias(
+    ) -> crate::Result<()> {
+        let temporary = tempfile::tempdir().context(IoSnafu {
+            path: "temporary stale policy runtime alias directory",
+        })?;
+        let root = temporary.path().join("workload");
+        fs::create_dir(&root).context(IoSnafu { path: &root })?;
+        fs::write(root.join("cgroup.procs"), "").context(IoSnafu { path: &root })?;
+        let owner = WorkloadBindingOwner::at(temporary.path(), Id128V1::new(1, 2), 3)?;
+        let mut binding = owner.prepare(&spec(&root))?.state;
+        let authority_binding_id = binding.binding_id;
+        binding.binding_id = Id128V1::new(9, 10);
+
+        assert_ne!(binding.binding_id, authority_binding_id);
+        assert!(owner.terminal_binding_matches_session(
             &binding,
             binding.profile_id,
             binding.active_profile_generation_ref_id,

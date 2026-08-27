@@ -402,7 +402,7 @@ directory. A corrupt chain or incompatible record blocks store open.
   -> [NodePolicyDeliveryOwner](../../../crates/mithril-node/src/policy_delivery.rs) the node compares durable active bundle digests with the complete desired inventory
   -> [WorkloadBindingOwner](../../../crates/mithril-node/src/identity/binding.rs) runtime inventory keeps the profile while a matching concrete container lifetime exists
   -> [NodeChassis](../../../crates/mithril-node/src/node.rs) the node records one stale profile after runtime absence
-  -> [NodePolicyGenerationOwner](../../../crates/mithril-node/src/policy.rs) the node removes known bindings and generation state after reference readback permits removal
+  -> [NodePolicyGenerationOwner](../../../crates/mithril-node/src/policy.rs) the node removes bindings owned by the exact profile generation and node session, then removes generation state after reference readback permits removal
 
 ```mermaid
 sequenceDiagram
@@ -417,7 +417,7 @@ sequenceDiagram
     Store-->>Node: Return complete desired bundle digests
     Node->>Runtime: Read current container lifetimes
     Runtime-->>Node: Matching lifetime absent
-    Node->>Kernel: Retire known binding and generation
+    Node->>Kernel: Retire owner-matched bindings and generation
 ```
 
 CRD deletion and exact-target disappearance remove the affected bundles from
@@ -431,8 +431,10 @@ does not retire a source.
 The node compares its durable bundle digests with the complete inventory for
 its authenticated boot and label epoch. It retains a stale profile while a
 matching runtime container lifetime exists. After runtime inventory proves
-that lifetime is absent, the node records the retirement, removes the stored
-bindings, waits for generation-reference readback, and removes the generation.
+that lifetime is absent, the node records the retirement and removes bindings
+that match the stored profile, generation, node boot, and label epoch. This
+match does not depend on the mutable runtime binding alias. The node waits for
+generation-reference readback and removes the generation.
 A crash restores the retained generation and repeats reconciliation. Cleanup
 uses stored binding identities. It does not inspect the deleted container
 root. A recreated policy object receives a higher issuer sequence and a new
@@ -607,7 +609,7 @@ and coverage messages remain the Phase 6 types.
 | Watch closure or compaction | Control completes every list page, retires absent durable sources, and starts a new watch. A partial relist retires nothing |
 | Control restart | The store replays the commit chain; in-memory watch state is rebuilt |
 | CRD deletion or forced object removal | A Deleted event or complete relist removes the profile from complete desired inventory. The node retains live runtime protection and removes stale membership after runtime absence |
-| Complete desired inventory omits a local profile | The node waits for matching runtime lifetimes to end, records one stale profile, removes known bindings and generation state, and retries after a crash |
+| Complete desired inventory omits a local profile | The node waits for matching runtime lifetimes to end, records one stale profile, removes owner-matched bindings and generation state, and retries after a crash. A changed runtime binding alias cannot hide an owned kernel row |
 | Evidence gap within the bound | Batch stays pending; the contiguous acknowledgement does not advance |
 | Evidence storage failure | No acknowledgement returns; the node keeps its WAL records |
 | Conflicting evidence duplicate | Intake rejects and preserves the first immutable record |

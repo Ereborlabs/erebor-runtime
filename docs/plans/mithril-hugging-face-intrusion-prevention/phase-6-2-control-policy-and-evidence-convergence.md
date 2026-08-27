@@ -203,9 +203,10 @@ Pod or container terminates
   -> Control returns a complete authenticated desired-bundle inventory to the selected node session
   -> mithril-node keeps the last valid policy while runtime inventory still reports a matching container lifetime
   -> mithril-node retires the exact cgroup binding after runtime inventory proves that lifetime is absent
-  -> mithril-node records the stale profile and removes its known bindings and generation after reference readback permits removal
+  -> mithril-node records the stale profile and removes each binding owned by the exact profile generation and node session after reference readback permits removal
   -> a node restart restores retained enforcement before it reconciles the complete desired inventory again
-  -> cleanup uses stored target and binding identities and does not inspect a deleted container root
+  -> cleanup uses the stored profile, generation, node boot, and label epoch; a changed runtime binding alias cannot hide an owned kernel row
+  -> cleanup does not inspect a deleted container root
   -> another Pod, container, Node, or boot cannot reuse the retired authority
 
 WorkloadProtectionException target disappears or the request deletes
@@ -505,16 +506,19 @@ Policy deletion removes the policy from Control's complete desired-bundle
 inventory. It does not create or deliver a restrictive policy candidate. A
 node keeps the last valid local generation while a matching runtime lifetime
 exists or Control is unavailable. Runtime inventory proves when the concrete
-container lifetime is absent. The node then uses its stored binding and
-generation identities to remove local membership. It does not rediscover an
-entry point or inspect a deleted container root.
+container lifetime is absent. The node then removes kernel bindings that match
+the stored profile, generation, node boot, and label epoch. It does not depend
+on the mutable runtime binding alias. It does not rediscover an entry point or
+inspect a deleted container root.
 
 This lifecycle adapts the checked Tetragon pattern. Tetragon keeps pinned
 enforcement during a daemon outage, rebuilds current desired policy, and
 removes replaced pinned state only after the rebuild succeeds. Its Pod cleanup
-uses stored Pod, container, and cgroup identities. Mithril keeps its signed
-activation and anti-rollback checks for desired policy changes, but it does not
-model local stale-membership removal as a new policy. See
+uses stored Pod, container, and cgroup identities. Mithril uses its stored
+profile-generation owner tuple to find equivalent pinned membership, including
+rows whose runtime alias replaced the scheduled authority alias. Mithril keeps
+its signed activation and anti-rollback checks for desired policy changes, but
+it does not model local stale-membership removal as a new policy. See
 [persistent enforcement](https://tetragon.io/docs/concepts/enforcement/persistent-enforcement/),
 [persistent gRPC policies](https://tetragon.io/docs/concepts/enforcement/persistent-grpc-policies/),
 and [policy-filter state cleanup](https://github.com/cilium/tetragon/blob/main/pkg/policyfilter/state.go).

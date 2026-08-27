@@ -2186,8 +2186,10 @@ Base-policy deletion removes the policy from Control's complete desired-bundle
 inventory. It does not create another policy candidate. The node keeps the
 last valid generation while its runtime inventory still reports a matching
 container lifetime or Control is unavailable. After runtime inventory proves
-that lifetime is absent, the node removes the stored binding and generation
-when reference readback permits removal. Exception deletion, expiry,
+that lifetime is absent, the node removes each kernel binding owned by the
+stored profile generation and node session. The mutable runtime binding alias
+is not the cleanup key. Reference readback must permit generation removal.
+Exception deletion, expiry,
 exhaustion, or revocation still sends a signed close operation to the exact
 runtime instance. A Kubernetes finalizer reports reconciliation progress only;
 removal of the finalizer is not node authority.
@@ -2195,9 +2197,12 @@ removal of the finalizer is not node authority.
 This is the Mithril form of Tetragon's retain, rebuild, and replace lifecycle.
 Tetragon keeps pinned enforcement across daemon loss, rebuilds current desired
 policy, and removes replaced pinned state after successful reconstruction. Its
-Pod cleanup uses stored Pod, container, and cgroup identities. Mithril keeps
-its signed activation and anti-rollback boundary for desired changes. Local
-stale-membership removal is not a new policy. See
+Pod cleanup uses stored Pod, container, and cgroup identities. Mithril uses the
+stored profile, generation, node boot, and label epoch as its equivalent pinned
+membership key. This key still matches when the runtime binding alias differs
+from the scheduled authority alias. Mithril keeps its signed activation and
+anti-rollback boundary for desired changes. Local stale-membership removal is
+not a new policy. See
 [persistent enforcement](https://tetragon.io/docs/concepts/enforcement/persistent-enforcement/),
 [persistent gRPC policies](https://tetragon.io/docs/concepts/enforcement/persistent-grpc-policies/),
 and [policy-filter state cleanup](https://github.com/cilium/tetragon/blob/main/pkg/policyfilter/state.go).

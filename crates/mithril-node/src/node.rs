@@ -1673,7 +1673,6 @@ impl NodeChassis {
             host,
             &cleanup.profile_id,
             cleanup.profile_generation_ref_id,
-            &cleanup.binding_ids,
         )?;
         let generation_retired = crate::NodePolicyGenerationOwner::retire_profile_generation(
             host,
@@ -1724,7 +1723,6 @@ impl NodeChassis {
             host,
             &cleanup.profile_id,
             cleanup.profile_generation_ref_id,
-            &cleanup.binding_ids,
         )?;
         snafu::ensure!(
             crate::NodePolicyGenerationOwner::profile_generation_is_absent(
