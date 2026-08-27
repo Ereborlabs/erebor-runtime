@@ -225,10 +225,14 @@ impl PublishedBinding {
     }
 
     fn validate_live_cgroup(&self) -> Result<()> {
-        let handle = self.root_handle.metadata().context(IoSnafu {
+        let path = fs::metadata(&self.root_cgroup_path).context(IoSnafu {
             path: &self.root_cgroup_path,
         })?;
-        let path = fs::metadata(&self.root_cgroup_path).context(IoSnafu {
+        self.validate_live_cgroup_metadata(&path)
+    }
+
+    fn validate_live_cgroup_metadata(&self, path: &fs::Metadata) -> Result<()> {
+        let handle = self.root_handle.metadata().context(IoSnafu {
             path: &self.root_cgroup_path,
         })?;
         ensure!(
@@ -240,6 +244,19 @@ impl PublishedBinding {
             }
         );
         Ok(())
+    }
+
+    fn live_runtime_cgroup_exists(&self) -> Result<bool> {
+        match fs::metadata(&self.root_cgroup_path) {
+            Ok(path) => {
+                self.validate_live_cgroup_metadata(&path)?;
+                Ok(true)
+            }
+            Err(source) if source.kind() == std::io::ErrorKind::NotFound => Ok(false),
+            Err(source) => Err(source).context(IoSnafu {
+                path: &self.root_cgroup_path,
+            }),
+        }
     }
 }
 
@@ -314,7 +331,20 @@ impl StagedRuntimeAdmissionV1 {
 struct RuntimeReconciliationPlan {
     missing_root_ids: Vec<u64>,
     new_identities: Vec<RuntimeContainerIdentity>,
+    retired_binding_ids: BTreeSet<String>,
     updates: Vec<RuntimeBindingUpdate>,
+}
+
+impl RuntimeReconciliationPlan {
+    fn retire_binding(&mut self, root_id: u64, binding: &PublishedBinding) {
+        self.missing_root_ids.push(root_id);
+        if binding.spec.scheduled_binding_authority_id.is_some()
+            && binding.spec.root_cgroup_path.is_some()
+        {
+            self.retired_binding_ids
+                .insert(binding.spec.binding_id.clone());
+        }
+    }
 }
 
 #[derive(Default)]
@@ -1680,8 +1710,9 @@ impl WorkloadBindingOwner {
             .into_iter()
             .map(|identity| (identity.full_container_id.clone(), identity))
             .collect();
-        let retired_binding_ids = Self::retired_configured_binding_ids(configured, &observed);
+        let mut retired_binding_ids = Self::retired_configured_binding_ids(configured, &observed);
         let plan = self.plan_runtime_reconciliation(observed)?;
+        retired_binding_ids.extend(plan.retired_binding_ids.iter().cloned());
         for root_id in plan.missing_root_ids {
             self.retire_owned_root(host, root_id)?;
         }
@@ -1744,10 +1775,13 @@ impl WorkloadBindingOwner {
                 continue;
             };
             let Some(current) = observed.remove(&binding.spec.container_id) else {
-                plan.missing_root_ids.push(root_id);
+                plan.retire_binding(root_id, binding);
                 continue;
             };
-            binding.validate_live_cgroup()?;
+            if !binding.live_runtime_cgroup_exists()? {
+                plan.retire_binding(root_id, binding);
+                continue;
+            }
             ensure!(
                 expected.accepts_observed_lifetime(&current),
                 IdentityStateSnafu {
@@ -2633,7 +2667,10 @@ mod tests {
         fs::create_dir(&root).context(IoSnafu { path: &root })?;
         fs::write(root.join("cgroup.procs"), "").context(IoSnafu { path: &root })?;
         let mut owner = WorkloadBindingOwner::at(temporary.path(), Id128V1::new(1, 2), 3)?;
-        let configured = spec(&root);
+        let mut configured = spec(&root);
+        configured.scheduled_binding_authority_id =
+            Some("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa".to_owned());
+        configured.scheduled_target_digest = Some("a".repeat(64));
         let identity = RuntimeContainerIdentity {
             full_container_id: configured.container_id.clone(),
             namespace: configured.namespace.clone(),
@@ -2642,7 +2679,7 @@ mod tests {
             container_name: configured.container_name.clone(),
             image_digest: configured.image_digest.clone(),
             generation: configured.container_generation,
-            cgroup_path: root,
+            cgroup_path: root.clone(),
             init_pid: 0,
             working_directory: PathBuf::from("/"),
             path_entries: vec![PathBuf::from("/usr/bin")],
@@ -2683,24 +2720,32 @@ mod tests {
             .context(IdentityStateSnafu {
                 reason: "test binding disappeared before its running transition",
             })?
-            .runtime_identity = Some(running);
+            .runtime_identity = Some(running.clone());
         assert_eq!(owner.exact_object_binding_targets().count(), 1);
+
+        fs::remove_file(root.join("cgroup.procs")).context(IoSnafu { path: &root })?;
+        fs::remove_dir(&root).context(IoSnafu { path: &root })?;
+        let stale_observed = BTreeMap::from([(running.full_container_id.clone(), running.clone())]);
+        let plan = owner.plan_runtime_reconciliation(stale_observed)?;
+        assert_eq!(plan.missing_root_ids, vec![root_id]);
+        assert!(plan.new_identities.is_empty());
+        assert_eq!(
+            plan.retired_binding_ids,
+            BTreeSet::from([configured.binding_id.clone()])
+        );
+        assert!(plan.updates.is_empty());
 
         let plan = owner.plan_runtime_reconciliation(BTreeMap::new())?;
         assert_eq!(plan.missing_root_ids, vec![root_id]);
         assert!(plan.new_identities.is_empty());
         assert!(plan.updates.is_empty());
 
-        let mut scheduled_runtime = configured;
-        scheduled_runtime.scheduled_binding_authority_id =
-            Some("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa".to_owned());
-        scheduled_runtime.scheduled_target_digest = Some("a".repeat(64));
         assert_eq!(
             WorkloadBindingOwner::retired_configured_binding_ids(
-                &[scheduled_runtime.clone()],
+                &[configured.clone()],
                 &BTreeMap::new(),
             ),
-            BTreeSet::from([scheduled_runtime.binding_id])
+            BTreeSet::from([configured.binding_id])
         );
         Ok(())
     }

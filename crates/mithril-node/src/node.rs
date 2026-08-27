@@ -73,6 +73,9 @@ enum ReconciliationOutcome {
     KernelUnhealthy(String),
 }
 
+const EFFECT_READER_SETTLE_ATTEMPTS: usize = 350;
+const EFFECT_READER_SETTLE_INTERVAL: Duration = Duration::from_millis(10);
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 enum PolicyControlPhaseV1 {
     #[default]
@@ -961,9 +964,10 @@ impl NodeChassis {
                                             evidence_healthy = true;
                                             restore_evidence_claims(
                                                 &mut self.registration,
-                                                &healthy_identity_capabilities,
-                                                healthy_effect_prevention_claims,
+                                                &mut healthy_identity_capabilities,
+                                                prevention_enabled,
                                             );
+                                            healthy_effect_prevention_claims = prevention_enabled;
                                             self.readiness.send_modify(|readiness| {
                                                 readiness.admission_ready =
                                                     kernel_healthy && identity_healthy;
@@ -1833,7 +1837,10 @@ impl NodeChassis {
             }
         }
         if policy_authority_present {
-            if let Err(error) = sample_effect_health(host, &self.observations, recover_evidence) {
+            if let Err(error) =
+                sample_effect_health_after_reader_drain(host, &self.observations, recover_evidence)
+                    .await
+            {
                 // Coverage sampling records reader delay, loss, and counter gaps itself.
                 // Do not relabel a recoverable backlog as a durable WAL failure.
                 return ReconciliationOutcome::EvidenceUnhealthy(error.to_string());
@@ -2422,6 +2429,28 @@ fn sample_effect_health(
     Ok(())
 }
 
+async fn sample_effect_health_after_reader_drain(
+    host: &KernelHost,
+    observations: &crate::EffectObservationStore,
+    recover: bool,
+) -> Result<()> {
+    for attempt in 0..=EFFECT_READER_SETTLE_ATTEMPTS {
+        match sample_effect_health(host, observations, recover || attempt > 0) {
+            Ok(()) => return Ok(()),
+            Err(_error)
+                if attempt < EFFECT_READER_SETTLE_ATTEMPTS
+                    && observations
+                        .coverage_snapshot()
+                        .is_some_and(|snapshot| snapshot.waits_only_for_reader_delivery()) =>
+            {
+                tokio::time::sleep(EFFECT_READER_SETTLE_INTERVAL).await;
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    unreachable!("the bounded effect reader settlement loop always returns")
+}
+
 fn close_kernel_claims(
     registration: &mut NodeRegistration,
     readiness: &watch::Sender<NodeReadinessV1>,
@@ -2480,21 +2509,27 @@ fn close_evidence_claims(registration: &mut NodeRegistration) {
 
 fn restore_evidence_claims(
     registration: &mut NodeRegistration,
-    healthy_capabilities: &[CapabilityRecord],
+    healthy_capabilities: &mut [CapabilityRecord],
     effect_prevention_claims_enabled: bool,
 ) {
     registration.effect_prevention_claims_enabled = effect_prevention_claims_enabled;
-    if let Some(healthy) = healthy_capabilities
-        .iter()
-        .find(|capability| capability.capability_id == "LOCAL_EFFECT_OBSERVATION")
+    let recovered = CapabilityRecord {
+        capability_id: "LOCAL_EFFECT_OBSERVATION".to_owned(),
+        state: "SUPPORTED".to_owned(),
+        reason_code: "DURABLE_LOSS_AWARE_KERNEL_COVERAGE".to_owned(),
+    };
+    if let Some(capability) = registration
+        .capabilities
+        .iter_mut()
+        .find(|capability| capability.capability_id == recovered.capability_id)
     {
-        if let Some(capability) = registration
-            .capabilities
-            .iter_mut()
-            .find(|capability| capability.capability_id == "LOCAL_EFFECT_OBSERVATION")
-        {
-            capability.clone_from(healthy);
-        }
+        capability.clone_from(&recovered);
+    }
+    if let Some(capability) = healthy_capabilities
+        .iter_mut()
+        .find(|capability| capability.capability_id == recovered.capability_id)
+    {
+        capability.clone_from(&recovered);
     }
 }
 
@@ -2761,8 +2796,8 @@ mod tests {
 
     use super::{
         close_identity_claims, close_kernel_claims, effect_reader_finished,
-        restore_identity_claims, runtime_admission_exit, runtime_admission_finished, NodeChassis,
-        NodeReadinessV1,
+        restore_evidence_claims, restore_identity_claims, runtime_admission_exit,
+        runtime_admission_finished, NodeChassis, NodeReadinessV1,
     };
     use erebor_interceptor_abi::Id128V1;
     use mithril_control::{CapabilityRecord, NodeRegistration};
@@ -2870,6 +2905,47 @@ mod tests {
                 && capability.reason_code == "LIVE_IDENTITY_RECONCILIATION_FAILED"
         }));
         assert_eq!(registration.capabilities[2].state, "SUPPORTED");
+    }
+
+    #[test]
+    fn evidence_recovery_reopens_a_capability_closed_during_startup() {
+        let unhealthy_observation = CapabilityRecord {
+            capability_id: "LOCAL_EFFECT_OBSERVATION".to_owned(),
+            state: "UNHEALTHY".to_owned(),
+            reason_code: "DURABLE_EVIDENCE_COVERAGE_GAPPED".to_owned(),
+        };
+        let mut healthy_capabilities = vec![
+            CapabilityRecord {
+                capability_id: "EXACT_NATIVE_IDENTITY".to_owned(),
+                state: "SUPPORTED".to_owned(),
+                reason_code: "EXACT_ATTACH_AND_RECONCILIATION".to_owned(),
+            },
+            unhealthy_observation.clone(),
+        ];
+        let mut registration = NodeRegistration {
+            platform_digest: "a".repeat(64),
+            program_digest: "b".repeat(64),
+            label_epoch: 1,
+            kernel_ready: true,
+            effect_prevention_claims_enabled: false,
+            kubernetes_node_name: String::new(),
+            startup_absence_proof_digest: "c".repeat(64),
+            policy_authority_absent: false,
+            exception_authority_absent: true,
+            capabilities: healthy_capabilities.clone(),
+            workload_targets: Vec::new(),
+        };
+
+        restore_evidence_claims(&mut registration, &mut healthy_capabilities, true);
+
+        assert!(registration.effect_prevention_claims_enabled);
+        for capabilities in [&registration.capabilities, &healthy_capabilities] {
+            assert!(capabilities.iter().any(|capability| {
+                capability.capability_id == "LOCAL_EFFECT_OBSERVATION"
+                    && capability.state == "SUPPORTED"
+                    && capability.reason_code == "DURABLE_LOSS_AWARE_KERNEL_COVERAGE"
+            }));
+        }
     }
 
     #[test]

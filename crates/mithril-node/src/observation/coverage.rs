@@ -117,6 +117,27 @@ impl CoverageSnapshotV1 {
                 .values()
                 .all(|source| source.current.supports_negative_claim())
     }
+
+    pub(crate) fn waits_only_for_reader_delivery(&self) -> bool {
+        let mut waiting = false;
+        for source in self.sources.values() {
+            match source.current.state {
+                CoverageStateV1::Healthy if source.current.gap_reasons.is_empty() => {}
+                CoverageStateV1::Gapped
+                    if !source.current.gap_reasons.is_empty()
+                        && source
+                            .current
+                            .gap_reasons
+                            .iter()
+                            .all(|reason| *reason == CoverageGapReasonV1::ReaderDelay) =>
+                {
+                    waiting = true;
+                }
+                _ => return false,
+            }
+        }
+        waiting
+    }
 }
 
 #[derive(Clone)]
@@ -911,6 +932,7 @@ mod tests {
 
         // The kernel counters can advance before the ring reader delivers the records.
         owner.sample_health(&[health(8, 0)])?;
+        assert!(owner.snapshot().waits_only_for_reader_delivery());
         for sequence in 1..=8 {
             let (_, coverage) = owner.observe(2, sequence)?;
             assert_eq!(coverage, TemporalCoverageV1::Gapped);
@@ -949,6 +971,7 @@ mod tests {
         );
 
         let snapshot = owner.snapshot();
+        assert!(!snapshot.waits_only_for_reader_delivery());
         assert!(snapshot.supports_negative_claim());
         assert_eq!(snapshot.current_intervals()[0].first_sequence, 9);
         Ok(())
