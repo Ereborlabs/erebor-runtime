@@ -28,6 +28,8 @@ enum Command {
         samples: u32,
         #[arg(long, default_value_t = 10)]
         sample_interval_ms: u64,
+        #[arg(long = "reason")]
+        reasons: Vec<String>,
     },
     FileObject {
         #[arg(long)]
@@ -76,11 +78,19 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             cgroup_scope,
             samples,
             sample_interval_ms,
+            reasons,
         } => {
             if !(1..=6_000).contains(&samples) || !(1..=1_000).contains(&sample_interval_ms) {
                 return Err(
                     "effect samples or sample interval is outside the bounded range".into(),
                 );
+            }
+            if reasons.len() > 16
+                || reasons
+                    .iter()
+                    .any(|reason| reason.is_empty() || reason.len() > 64)
+            {
+                return Err("effect reason filters are outside the bounded range".into());
             }
             let client = MithrilObservationClient::new(socket_path, cgroup_scope);
             let mut seen = BTreeSet::new();
@@ -104,6 +114,9 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
                 for effect in snapshot.recent_effects {
+                    if !effect_reason_selected(&reasons, &effect.reason) {
+                        continue;
+                    }
                     let line = format!(
                     "observed_boottime_ns={} task_cookie={} target_task_cookie={} admitted_entry_rule_id={} active_role_id={} family={} operation={} operation_argument={} reason={} result={} object={}:{}:{}:{}:{} exact_object_key_id={} composite_atom_id={} kernel_result={}",
                     effect.observed_boottime_ns,
@@ -160,4 +173,26 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         ),
     }
     Ok(())
+}
+
+fn effect_reason_selected(reasons: &[String], observed: &str) -> bool {
+    reasons.is_empty() || reasons.iter().any(|reason| reason == observed)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::effect_reason_selected;
+
+    #[test]
+    fn effect_reason_filter_keeps_only_requested_reasons() {
+        assert!(effect_reason_selected(&[], "UNSUPPORTED_OBJECT"));
+        assert!(effect_reason_selected(
+            &["APPLICATION_DEFAULT_ALLOW".to_owned()],
+            "APPLICATION_DEFAULT_ALLOW"
+        ));
+        assert!(!effect_reason_selected(
+            &["APPLICATION_DEFAULT_ALLOW".to_owned()],
+            "UNSUPPORTED_OBJECT"
+        ));
+    }
 }
