@@ -187,7 +187,7 @@ async fn mtls_rejects_wrong_node_binding_and_expired_client_identity(
 }
 
 #[tokio::test]
-async fn mtls_evidence_upload_replays_after_disconnect_and_advances_only_on_ack(
+async fn mtls_evidence_stream_replays_after_disconnect_and_reuses_one_registered_session(
 ) -> Result<(), Box<dyn StdError>> {
     let directory = tempfile::tempdir()?;
     let certificates = Certificates::issue(false)?;
@@ -293,6 +293,7 @@ async fn mtls_evidence_upload_replays_after_disconnect_and_advances_only_on_ack(
         return Err("Control did not acknowledge the second evidence source".into());
     };
     observations.acknowledge_evidence(ack.try_into()?)?;
+    assert_eq!(control.registered_nonce_count(), 2);
     assert!(observations.next_evidence_batch().is_none());
     let intake = EvidenceIntakeOwner::open(&intake_path)?;
     for (source_id, batch) in [(first_source, first_batch), (second_source, second_batch)] {

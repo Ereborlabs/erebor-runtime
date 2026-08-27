@@ -47,7 +47,8 @@ pub struct ControlConnection {
     resolution_input: Streaming<ResolveAdministrativeExec>,
     arm_output: mpsc::Sender<AdministrativeExecArmStreamRequest>,
     arm_input: Streaming<ArmAdministrativeExec>,
-    evidence: NodeEvidenceClient<Channel>,
+    evidence_output: mpsc::Sender<EvidenceBatchRequest>,
+    evidence_input: Streaming<EvidenceAck>,
     coverage: NodeCoverageClient<Channel>,
     policy: NodePolicyClient<Channel>,
     readiness_updates: mpsc::Sender<ReadinessUpdate>,
@@ -212,15 +213,23 @@ impl NodeControlConnector {
             .context(ControlRpcSnafu)?
             .into_inner();
 
+        let (evidence_output, evidence_receiver) = mpsc::channel(8);
+        let evidence_input = NodeEvidenceClient::new(channel.clone())
+            .max_decoding_message_size(MAX_EVIDENCE_GRPC_MESSAGE_BYTES)
+            .max_encoding_message_size(MAX_EVIDENCE_GRPC_MESSAGE_BYTES)
+            .open(Request::new(ReceiverStream::new(evidence_receiver)))
+            .await
+            .context(ControlRpcSnafu)?
+            .into_inner();
+
         Ok(ControlConnection {
             identity,
             resolution_output,
             resolution_input,
             arm_output,
             arm_input,
-            evidence: NodeEvidenceClient::new(channel.clone())
-                .max_decoding_message_size(MAX_EVIDENCE_GRPC_MESSAGE_BYTES)
-                .max_encoding_message_size(MAX_EVIDENCE_GRPC_MESSAGE_BYTES),
+            evidence_output,
+            evidence_input,
             coverage: NodeCoverageClient::new(channel.clone())
                 .max_decoding_message_size(MAX_EVIDENCE_GRPC_MESSAGE_BYTES)
                 .max_encoding_message_size(MAX_EVIDENCE_GRPC_MESSAGE_BYTES),
@@ -400,6 +409,17 @@ impl ControlConnection {
                         None => self.arm_closed = true,
                     }
                 }
+                message = self.evidence_input.message() => {
+                    return match message.context(ControlRpcSnafu)? {
+                        Some(acknowledgement) => {
+                            Ok(NodeControlMessage::EvidenceAck(acknowledgement))
+                        }
+                        None => ControlProtocolSnafu {
+                            reason: String::from("Control closed the evidence stream"),
+                        }
+                        .fail(),
+                    };
+                }
             }
         }
     }
@@ -423,16 +443,18 @@ impl ControlConnection {
     }
 
     pub async fn send_evidence_batch(&mut self, batch: crate::EvidenceBatchV1) -> Result<()> {
-        let response =
-            bounded_response(self.evidence.upload(bounded_request(EvidenceBatchRequest {
+        self.evidence_output
+            .send(EvidenceBatchRequest {
                 session: Some(self.identity.clone()),
                 batch: Some(batch.into()),
-            })))
-            .await?
-            .into_inner();
-        self.queued
-            .push_back(NodeControlMessage::EvidenceAck(response));
-        Ok(())
+            })
+            .await
+            .map_err(|_closed| {
+                ControlProtocolSnafu {
+                    reason: String::from("Control closed the evidence stream"),
+                }
+                .build()
+            })
     }
 
     pub async fn send_coverage_report(

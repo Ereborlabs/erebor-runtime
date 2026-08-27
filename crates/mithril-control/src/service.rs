@@ -945,19 +945,59 @@ impl NodeTrust for ControlPlane {
 
 #[tonic::async_trait]
 impl NodeEvidence for ControlPlane {
+    type OpenStream = Pin<Box<dyn Stream<Item = Result<EvidenceAck, Status>> + Send>>;
+
     async fn upload(
         &self,
         request: Request<EvidenceBatchRequest>,
     ) -> Result<Response<EvidenceAck>, Status> {
         let node_id = self.authenticated_node(&request)?;
-        let request = request.into_inner();
+        let acknowledgement = self.receive_evidence_batch(&node_id, request.into_inner())?;
+        Ok(Response::new(acknowledgement))
+    }
+
+    async fn open(
+        &self,
+        request: Request<Streaming<EvidenceBatchRequest>>,
+    ) -> Result<Response<Self::OpenStream>, Status> {
+        let node_id = self.authenticated_node(&request)?;
+        let mut input = request.into_inner();
+        let (output, receiver) = mpsc::channel(8);
+        let control = self.clone();
+        tokio::spawn(async move {
+            while let Some(message) = input.next().await {
+                let result =
+                    message.and_then(|request| control.receive_evidence_batch(&node_id, request));
+                match result {
+                    Ok(acknowledgement) => {
+                        if output.send(Ok(acknowledgement)).await.is_err() {
+                            return;
+                        }
+                    }
+                    Err(status) => {
+                        let _result = output.send(Err(status)).await;
+                        return;
+                    }
+                }
+            }
+        });
+        Ok(Response::new(Box::pin(ReceiverStream::new(receiver))))
+    }
+}
+
+impl ControlPlane {
+    fn receive_evidence_batch(
+        &self,
+        node_id: &str,
+        request: EvidenceBatchRequest,
+    ) -> Result<EvidenceAck, Status> {
         let context = request
             .session
             .as_ref()
             .ok_or_else(|| Status::invalid_argument("node session context is required"))?;
         // A degraded node must upload retained evidence before it can recover readiness.
-        self.require_session(&node_id, context)?;
-        self.require_current_trust(&node_id, context)?;
+        self.require_session(node_id, context)?;
+        self.require_current_trust(node_id, context)?;
         let batch = request
             .batch
             .as_ref()
@@ -966,8 +1006,8 @@ impl NodeEvidence for ControlPlane {
             Status::failed_precondition("Control has no durable evidence intake owner")
         })?;
         let authenticated = match evidence.authenticate_retained_batch(
-            self.evidence_tenant(&node_id)?,
-            &node_id,
+            self.evidence_tenant(node_id)?,
+            node_id,
             batch,
         ) {
             Ok(authenticated) => authenticated,
@@ -990,7 +1030,7 @@ impl NodeEvidence for ControlPlane {
             last_cursor = %batch.last_cursor,
             count = %batch.records.len()
         );
-        Ok(Response::new(acknowledgement))
+        Ok(acknowledgement)
     }
 }
 
