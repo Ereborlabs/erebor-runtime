@@ -1832,14 +1832,14 @@ impl NodeChassis {
                 .mark_coverage_gapped(CoverageGapReasonV1::KernelStateMismatch);
             return ReconciliationOutcome::KernelUnhealthy(error.to_string());
         }
-        if policy_authority_present && self.observations.evidence_errors() > 0 {
-            let _result = self
-                .observations
-                .mark_coverage_gapped(CoverageGapReasonV1::WalFailure);
-            return ReconciliationOutcome::EvidenceUnhealthy(format!(
-                "the evidence owner recorded {} durable errors",
-                self.observations.evidence_errors()
-            ));
+        if policy_authority_present {
+            if let Some(reason) = self.observations.evidence_failure_gap_reason() {
+                let _result = self.observations.mark_coverage_gapped(reason);
+                return ReconciliationOutcome::EvidenceUnhealthy(format!(
+                    "the evidence owner recorded {} durable errors",
+                    self.observations.evidence_errors()
+                ));
+            }
         }
         if policy_authority_present {
             if let Err(error) = sample_effect_health(host, &self.observations, recover_evidence) {

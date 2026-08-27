@@ -882,6 +882,25 @@ impl NodePolicyDeliveryOwner {
         label_epoch: u64,
     ) -> Result<Option<PreparedExceptionDeliveryV1>> {
         let now_utc_ns = crate::policy::current_utc_ns()?;
+        self.accept_exception_inventory_at(
+            inventory,
+            trust,
+            config,
+            node_boot_id,
+            label_epoch,
+            now_utc_ns,
+        )
+    }
+
+    fn accept_exception_inventory_at(
+        &mut self,
+        inventory: ExceptionInventory,
+        trust: &TrustCache,
+        config: &NodeConfig,
+        node_boot_id: &[u8],
+        label_epoch: u64,
+        now_utc_ns: i64,
+    ) -> Result<Option<PreparedExceptionDeliveryV1>> {
         if !inventory.candidate_available {
             return Ok(None);
         }
@@ -914,6 +933,17 @@ impl NodePolicyDeliveryOwner {
             now_utc_ns,
         )?;
         self.stage_exception_delivery(&prepared, &inventory.candidate_json, now_utc_ns)?;
+        if prepared.candidate.operation == ExceptionDeliveryOperationV1::Activate
+            && prepared.candidate.valid_until_utc_ns <= now_utc_ns
+        {
+            self.commit_exception_result(
+                &prepared.candidate,
+                ExceptionActivationStateV1::Expired,
+                0,
+                now_utc_ns,
+            )?;
+            return Ok(None);
+        }
         Ok(Some(prepared))
     }
 
@@ -1438,9 +1468,8 @@ impl NodePolicyDeliveryOwner {
                 && identity.policy_source_revision_id == candidate.base_policy_source_revision_id
                 && candidate.maximum_uses <= grant.maximum_uses
                 && (candidate.operation == ExceptionDeliveryOperationV1::Revoke
-                    || (now_utc_ns < candidate.valid_until_utc_ns
-                        && u64::try_from(requested_duration)
-                            .is_ok_and(|duration| duration <= grant.maximum_duration_ns)))
+                    || u64::try_from(requested_duration)
+                        .is_ok_and(|duration| duration <= grant.maximum_duration_ns))
                 && operation_is_valid
                 && sequence_is_valid,
             ControlProtocolSnafu {
@@ -3988,12 +4017,12 @@ mod tests {
     use ed25519_dalek::SigningKey;
     use mithril_control::{
         CapabilityRecord, ExceptionActivationStateV1, ExceptionDeliveryCandidateV1,
-        ExceptionDeliveryOperationV1, ExceptionSourceRevisionV1, ExceptionSourceStateV1,
-        FileExceptionGrantTemplateV1, KubernetesWorkloadIdentityV1, PolicyAcknowledgementAccepted,
-        PolicyChunk, PolicyCompiler, PolicyDeliveryCandidateV1, PolicyDocumentV1, PolicyInventory,
-        PolicySignerTrust, PolicyTargetSnapshotV1, PolicyTargetV1, ProfileCandidateArtifactV1,
-        ProfileModeV1, ProfileSealRequestV1, RegistryDigestsV1, WorkloadProtectionException,
-        WorkloadTargetFactV1,
+        ExceptionDeliveryOperationV1, ExceptionInventory, ExceptionSourceRevisionV1,
+        ExceptionSourceStateV1, FileExceptionGrantTemplateV1, KubernetesWorkloadIdentityV1,
+        PolicyAcknowledgementAccepted, PolicyChunk, PolicyCompiler, PolicyDeliveryCandidateV1,
+        PolicyDocumentV1, PolicyInventory, PolicySignerTrust, PolicyTargetSnapshotV1,
+        PolicyTargetV1, ProfileCandidateArtifactV1, ProfileModeV1, ProfileSealRequestV1,
+        RegistryDigestsV1, WorkloadProtectionException, WorkloadTargetFactV1,
     };
     use sha2::{Digest as _, Sha256};
     use snafu::ResultExt as _;
@@ -5106,6 +5135,51 @@ mod tests {
             .state
             .policy_candidate_bundles
             .contains_key(&record.candidate_content_id));
+        Ok(())
+    }
+
+    #[test]
+    fn expired_exception_inventory_becomes_terminal_without_kernel_work() -> crate::Result<()> {
+        let directory = tempfile::tempdir().context(IoSnafu {
+            path: "temporary expired exception delivery directory",
+        })?;
+        let PendingExceptionFixture {
+            config,
+            trust,
+            activation,
+            mut owner,
+            ..
+        } = pending_exception_fixture(directory.path())?;
+        owner.state.exception_records.clear();
+        owner.state.exception_distribution_high_water.clear();
+        owner.persist_state()?;
+        let candidate_json = serde_json::to_vec(&activation).context(super::JsonSnafu {
+            path: "in-memory expired exception candidate",
+        })?;
+        let prepared = owner.accept_exception_inventory_at(
+            ExceptionInventory {
+                candidate_available: true,
+                candidate_content_id: activation.candidate_content_id.clone(),
+                operation: "ACTIVATE".to_owned(),
+                candidate_json,
+            },
+            &trust,
+            &config,
+            &[1; 16],
+            7,
+            activation.valid_until_utc_ns,
+        )?;
+        assert!(prepared.is_none());
+        assert_eq!(owner.status().pending_exception_count, 0);
+        assert_eq!(owner.status().expired_exception_count, 1);
+        let acknowledgement = owner.pending_exception_acknowledgement()?.ok_or_else(|| {
+            super::IdentityStateSnafu {
+                reason: "the expired exception has no acknowledgement".to_owned(),
+            }
+            .build()
+        })?;
+        assert_eq!(acknowledgement.state, "EXPIRED");
+        assert_eq!(acknowledgement.consumed_uses, 0);
         Ok(())
     }
 

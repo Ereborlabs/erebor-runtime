@@ -1,7 +1,7 @@
 use std::collections::VecDeque;
 use std::mem;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -49,6 +49,8 @@ struct Inner {
     decoder_errors: AtomicU64,
     evidence_errors: AtomicU64,
     first_evidence_error: Mutex<Option<String>>,
+    wal_capacity_error: AtomicBool,
+    first_wal_capacity_error: Mutex<Option<String>>,
     durable: Option<Mutex<DurableEvidence>>,
 }
 
@@ -95,6 +97,8 @@ impl EffectObservationStore {
                 decoder_errors: AtomicU64::new(0),
                 evidence_errors: AtomicU64::new(0),
                 first_evidence_error: Mutex::new(None),
+                wal_capacity_error: AtomicBool::new(false),
+                first_wal_capacity_error: Mutex::new(None),
                 durable: None,
             }),
         }
@@ -120,6 +124,8 @@ impl EffectObservationStore {
                 decoder_errors: AtomicU64::new(0),
                 evidence_errors: AtomicU64::new(0),
                 first_evidence_error: Mutex::new(None),
+                wal_capacity_error: AtomicBool::new(false),
+                first_wal_capacity_error: Mutex::new(None),
                 durable: Some(Mutex::new(DurableEvidence {
                     canonicalizer,
                     wal: EvidenceWalOwner::open(&wal_root, limits)?,
@@ -153,25 +159,30 @@ impl EffectObservationStore {
             }
         }
         if let Some(durable) = &self.inner.durable {
-            let result = (|| {
+            let result: std::result::Result<(), (crate::Error, bool)> = (|| {
                 let mut durable = durable.lock().unwrap_or_else(PoisonError::into_inner);
                 let (coverage_interval_id, temporal_coverage) = durable
                     .coverage
-                    .observe(event.source_cpu_id, event.source_sequence)?;
-                let observation = durable.canonicalizer.normalize_kernel(
-                    event,
-                    coverage_interval_id,
-                    temporal_coverage,
-                    utc_now_ns(),
-                )?;
+                    .observe(event.source_cpu_id, event.source_sequence)
+                    .map_err(|error| (error, false))?;
+                let observation = durable
+                    .canonicalizer
+                    .normalize_kernel(event, coverage_interval_id, temporal_coverage, utc_now_ns())
+                    .map_err(|error| (error, false))?;
                 if let Err(failure) = durable.wal.append_classified(&observation) {
-                    let _result = durable.coverage.mark_all_gapped(failure.gap_reason);
-                    return Err(failure.error);
+                    durable
+                        .coverage
+                        .mark_all_gapped(failure.gap_reason)
+                        .map_err(|error| (error, false))?;
+                    let capacity = failure.gap_reason == CoverageGapReasonV1::WalCapacity;
+                    return Err((failure.error, capacity));
                 }
-                crate::Result::Ok(())
+                Ok(())
             })();
-            if let Err(error) = result {
-                self.record_evidence_error(error.to_string());
+            match result {
+                Ok(()) => self.clear_wal_capacity_error(),
+                Err((error, true)) => self.record_wal_capacity_error(error.to_string()),
+                Err((error, false)) => self.record_evidence_error(error.to_string()),
             }
         }
     }
@@ -206,15 +217,35 @@ impl EffectObservationStore {
     #[must_use]
     pub fn evidence_errors(&self) -> u64 {
         self.inner.evidence_errors.load(Ordering::Relaxed)
+            + u64::from(self.inner.wal_capacity_error.load(Ordering::Relaxed))
     }
 
     #[must_use]
     pub fn first_evidence_error(&self) -> Option<String> {
-        self.inner
+        let permanent = self
+            .inner
             .first_evidence_error
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .clone()
+            .clone();
+        permanent.or_else(|| {
+            self.inner
+                .first_wal_capacity_error
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .clone()
+        })
+    }
+
+    #[must_use]
+    pub fn evidence_failure_gap_reason(&self) -> Option<CoverageGapReasonV1> {
+        if self.inner.evidence_errors.load(Ordering::Relaxed) > 0 {
+            Some(CoverageGapReasonV1::WalFailure)
+        } else if self.inner.wal_capacity_error.load(Ordering::Relaxed) {
+            Some(CoverageGapReasonV1::WalCapacity)
+        } else {
+            None
+        }
     }
 
     pub fn sample_coverage_health(&self, per_cpu_bytes: &[u8]) -> crate::Result<()> {
@@ -250,7 +281,16 @@ impl EffectObservationStore {
     }
 
     pub fn mark_coverage_gapped(&self, reason: CoverageGapReasonV1) -> crate::Result<()> {
-        self.lock_durable()?.coverage.mark_all_gapped(reason)?;
+        let durable = self.lock_durable()?;
+        let current = durable.coverage.snapshot().current_intervals();
+        if !current.is_empty()
+            && current.iter().all(|interval| {
+                interval.state == CoverageStateV1::Gapped && interval.gap_reasons.contains(&reason)
+            })
+        {
+            return Ok(());
+        }
+        durable.coverage.mark_all_gapped(reason)?;
         if reason == CoverageGapReasonV1::ReaderStopped {
             erebor_telemetry::debug!(
                 "marked evidence coverage as gapped",
@@ -300,7 +340,7 @@ impl EffectObservationStore {
     pub fn health(&self, per_cpu_bytes: Option<&[u8]>) -> EffectObservationHealth {
         let mut health = EffectObservationHealth {
             decoder_errors: self.inner.decoder_errors.load(Ordering::Relaxed),
-            evidence_errors: self.inner.evidence_errors.load(Ordering::Relaxed),
+            evidence_errors: self.evidence_errors(),
             ..EffectObservationHealth::default()
         };
         let Some(bytes) = per_cpu_bytes else {
@@ -355,6 +395,28 @@ impl EffectObservationStore {
         if first.is_none() {
             *first = Some(error.into());
         }
+    }
+
+    fn record_wal_capacity_error(&self, error: impl Into<String>) {
+        if self.inner.wal_capacity_error.swap(true, Ordering::Relaxed) {
+            return;
+        }
+        *self
+            .inner
+            .first_wal_capacity_error
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(error.into());
+    }
+
+    fn clear_wal_capacity_error(&self) {
+        if !self.inner.wal_capacity_error.swap(false, Ordering::Relaxed) {
+            return;
+        }
+        *self
+            .inner
+            .first_wal_capacity_error
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = None;
     }
 }
 
@@ -548,8 +610,8 @@ mod tests {
     use zerocopy::IntoBytes as _;
 
     use super::{
-        reason_name, CoverageGapReasonV1, EffectObservationStore, EvidenceIdV1, EvidenceWalLimits,
-        ObservationCanonicalizer,
+        reason_name, CoverageGapReasonV1, EffectObservationStore, EvidenceAckV1, EvidenceIdV1,
+        EvidenceWalLimits, ObservationCanonicalizer,
     };
 
     #[test]
@@ -787,6 +849,40 @@ mod tests {
         assert!(snapshot.current_intervals()[0]
             .gap_reasons
             .contains(&CoverageGapReasonV1::WalCapacity));
+
+        let batch = store
+            .next_evidence_batch()
+            .ok_or("evidence batch missing")?;
+        store.acknowledge_evidence(EvidenceAckV1 {
+            first_cursor: batch.first_cursor,
+            last_cursor: batch.last_cursor,
+            batch_sha256: batch.batch_sha256,
+        })?;
+        store.record_bytes(
+            EffectObservationV1 {
+                source_sequence: 3,
+                reason: EffectObservationReasonV1::ExactPolicyDeny as u8,
+                physical_result: EffectPhysicalResultV1::DeniedBeforeEffect as u8,
+                kernel_result: -13,
+                ..EffectObservationV1::default()
+            }
+            .as_bytes(),
+        );
+        assert_eq!(store.evidence_errors(), 0);
+        assert_eq!(store.first_evidence_error(), None);
+        assert!(store.recover_coverage_after_prior_probe(
+            EffectObservationHealthV1 {
+                attempted: 3,
+                requested: 3,
+                emitted: 3,
+                next_sequence: 3,
+                ..EffectObservationHealthV1::default()
+            }
+            .as_bytes(),
+        )?);
+        assert!(store
+            .coverage_snapshot()
+            .is_some_and(|snapshot| snapshot.supports_negative_claim()));
         Ok(())
     }
 
@@ -810,6 +906,7 @@ mod tests {
             16 * 1_024,
         )?;
 
+        telemetry.emit(|| store.mark_coverage_gapped(CoverageGapReasonV1::ControlDelay))??;
         telemetry.emit(|| store.mark_coverage_gapped(CoverageGapReasonV1::ControlDelay))??;
 
         let records = telemetry.records_after(0, 4)?;
