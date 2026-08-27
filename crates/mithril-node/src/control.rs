@@ -582,6 +582,14 @@ async fn renew_readiness(
             }
             _instant = interval.tick() => {
                 if let Err(error) = report_readiness(&mut registry, &identity, readiness).await {
+                    if error.control_rpc_can_reuse_session() {
+                        erebor_telemetry::debug!(
+                            "Control readiness renewal failed",
+                            node_id = %identity.node_id,
+                            retry = %"same_session"
+                        );
+                        continue;
+                    }
                     let _result = failure.send(error).await;
                     return;
                 }

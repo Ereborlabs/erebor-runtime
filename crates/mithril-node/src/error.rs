@@ -119,6 +119,23 @@ pub enum Error {
 
 pub type Result<T> = std::result::Result<T, Error>;
 
+impl Error {
+    pub(crate) fn control_rpc_can_reuse_session(&self) -> bool {
+        matches!(
+            self,
+            Self::ControlRpc { source, .. }
+                if matches!(
+                    source.code(),
+                    tonic::Code::Aborted
+                        | tonic::Code::Cancelled
+                        | tonic::Code::DeadlineExceeded
+                        | tonic::Code::ResourceExhausted
+                        | tonic::Code::Unavailable
+                )
+        )
+    }
+}
+
 impl From<mithril_control::EvidenceModelError> for Error {
     fn from(source: mithril_control::EvidenceModelError) -> Self {
         Self::EvidenceModel {
@@ -175,5 +192,31 @@ impl ErrorExt for Error {
 
     fn as_any(&self) -> &dyn Any {
         self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Error;
+
+    #[test]
+    fn transient_control_failures_reuse_the_registered_session() {
+        for status in [
+            tonic::Status::cancelled("request deadline elapsed"),
+            tonic::Status::deadline_exceeded("local deadline elapsed"),
+            tonic::Status::unavailable("transport is recovering"),
+        ] {
+            let error = Error::ControlRpc {
+                source: Box::new(status),
+                location: snafu::Location::default(),
+            };
+            assert!(error.control_rpc_can_reuse_session());
+        }
+
+        let stale_session = Error::ControlRpc {
+            source: Box::new(tonic::Status::unauthenticated("session changed")),
+            location: snafu::Location::default(),
+        };
+        assert!(!stale_session.control_rpc_can_reuse_session());
     }
 }

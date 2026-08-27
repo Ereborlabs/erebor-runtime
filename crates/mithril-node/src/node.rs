@@ -97,6 +97,22 @@ enum PolicyControlStepV1 {
     Reconnect,
 }
 
+enum PolicyControlRpcV1<T> {
+    Accepted(T),
+    Retry,
+    Reconnect,
+}
+
+impl<T> PolicyControlRpcV1<T> {
+    fn into_response(self) -> std::result::Result<T, PolicyControlStepV1> {
+        match self {
+            Self::Accepted(response) => Ok(response),
+            Self::Retry => Err(PolicyControlStepV1::Idle),
+            Self::Reconnect => Err(PolicyControlStepV1::Reconnect),
+        }
+    }
+}
+
 struct CommittedRuntimePreparationV1 {
     runtime_binding_id: String,
     previous_config: NodeConfig,
@@ -691,21 +707,48 @@ impl NodeChassis {
                                 match message {
                                     NodeControlMessage::Administrative(AdministrativeControlRequest::Resolve(request)) => {
                                         let response = self.resolve_administrative(request);
-                                        if connection.send_resolution(response).await.is_err() {
+                                        if let Err(error) = connection.send_resolution(response).await {
+                                            erebor_telemetry::warn!(
+                                                error;
+                                                "failed to return an administrative resolution",
+                                                node_id = %self.config.node_id,
+                                                retry = %"reconnect"
+                                            );
                                             break;
                                         }
                                     }
                                     NodeControlMessage::Administrative(AdministrativeControlRequest::Arm(request)) => {
                                         let response = self.arm_administrative(request);
-                                        if connection.send_arm_result(response).await.is_err() {
+                                        if let Err(error) = connection.send_arm_result(response).await {
+                                            erebor_telemetry::warn!(
+                                                error;
+                                                "failed to return an administrative arm result",
+                                                node_id = %self.config.node_id,
+                                                retry = %"reconnect"
+                                            );
                                             break;
                                         }
                                     }
                                     NodeControlMessage::EvidenceAck(ack) => {
-                                        let Ok(ack) = ack.try_into() else {
-                                            break;
+                                        let ack = match ack.try_into() {
+                                            Ok(ack) => ack,
+                                            Err(error) => {
+                                                erebor_telemetry::warn!(
+                                                    error;
+                                                    "Control returned an invalid evidence acknowledgement",
+                                                    node_id = %self.config.node_id,
+                                                    retry = %"reconnect"
+                                                );
+                                                break;
+                                            }
                                         };
-                                        if self.observations.acknowledge_evidence(ack).is_err() {
+                                        if let Err(error) = self.observations.acknowledge_evidence(ack) {
+                                            erebor_telemetry::warn!(
+                                                error;
+                                                "Control returned a stale evidence acknowledgement",
+                                                node_id = %self.config.node_id,
+                                                retry = %"reconnect"
+                                            );
                                             break;
                                         }
                                         evidence_in_flight = false;
@@ -715,6 +758,13 @@ impl NodeChassis {
                                             .iter()
                                             .position(|expected| expected == &ack)
                                         else {
+                                            erebor_telemetry::warn!(
+                                                "Control returned a stale coverage acknowledgement",
+                                                node_id = %self.config.node_id,
+                                                source_epoch = %ack.source_epoch,
+                                                revision = %ack.revision,
+                                                retry = %"reconnect"
+                                            );
                                             break;
                                         };
                                         coverage_in_flight.swap_remove(position);
@@ -751,13 +801,17 @@ impl NodeChassis {
                                             )
                                             .await
                                         {
+                                            let reuse_session =
+                                                error.control_rpc_can_reuse_session();
                                             erebor_telemetry::warn!(
                                                 error;
                                                 "failed to close Mithril node readiness",
                                                 node_id = %self.config.node_id,
-                                                retry = %"reconnect"
+                                                retry = %if reuse_session { "same_session" } else { "reconnect" }
                                             );
-                                            break;
+                                            if !reuse_session {
+                                                break;
+                                            }
                                         }
                                     }
                                     continue;
@@ -772,13 +826,17 @@ impl NodeChassis {
                                         {
                                             Ok(()) => evidence_in_flight = true,
                                             Err(error) => {
+                                                let reuse_session =
+                                                    error.control_rpc_can_reuse_session();
                                                 erebor_telemetry::warn!(
                                                     error;
                                                     "failed to upload an evidence batch",
                                                     node_id = %self.config.node_id,
-                                                    retry = %"after_registration"
+                                                    retry = %if reuse_session { "same_session" } else { "after_registration" }
                                                 );
-                                                break;
+                                                if !reuse_session {
+                                                    break;
+                                                }
                                             }
                                         }
                                         continue;
@@ -820,13 +878,17 @@ impl NodeChassis {
                                                 coverage_pending.pop_front();
                                             }
                                             Err(error) => {
+                                                let reuse_session =
+                                                    error.control_rpc_can_reuse_session();
                                                 erebor_telemetry::warn!(
                                                     error;
                                                     "failed to report evidence coverage",
                                                     node_id = %self.config.node_id,
-                                                    retry = %"after_registration"
+                                                    retry = %if reuse_session { "same_session" } else { "after_registration" }
                                                 );
-                                                break;
+                                                if !reuse_session {
+                                                    break;
+                                                }
                                             }
                                         }
                                     }
@@ -955,13 +1017,17 @@ impl NodeChassis {
                                                 ))
                                                 .await
                                             {
+                                                let reuse_session =
+                                                    error.control_rpc_can_reuse_session();
                                                 erebor_telemetry::warn!(
                                                     error;
                                                     "failed to restore Mithril node readiness",
                                                     node_id = %self.config.node_id,
-                                                    retry = %"reconnect"
+                                                    retry = %if reuse_session { "same_session" } else { "reconnect" }
                                                 );
-                                                break;
+                                                if !reuse_session {
+                                                    break;
+                                                }
                                             }
                                         }
                                     }
@@ -985,13 +1051,17 @@ impl NodeChassis {
                                                 )
                                                 .await
                                             {
+                                                let reuse_session =
+                                                    error.control_rpc_can_reuse_session();
                                                 erebor_telemetry::warn!(
                                                     error;
                                                     "failed to close Mithril node readiness",
                                                     node_id = %self.config.node_id,
-                                                    retry = %"reconnect"
+                                                    retry = %if reuse_session { "same_session" } else { "reconnect" }
                                                 );
-                                                break;
+                                                if !reuse_session {
+                                                    break;
+                                                }
                                             }
                                         }
                                     }
@@ -1019,13 +1089,17 @@ impl NodeChassis {
                                                 )
                                                 .await
                                             {
+                                                let reuse_session =
+                                                    error.control_rpc_can_reuse_session();
                                                 erebor_telemetry::warn!(
                                                     error;
                                                     "failed to close Mithril node readiness",
                                                     node_id = %self.config.node_id,
-                                                    retry = %"reconnect"
+                                                    retry = %if reuse_session { "same_session" } else { "reconnect" }
                                                 );
-                                                break;
+                                                if !reuse_session {
+                                                    break;
+                                                }
                                             }
                                         }
                                     }
@@ -1898,19 +1972,24 @@ impl NodeChassis {
     async fn await_policy_rpc<T>(
         &mut self,
         rpc: impl Future<Output = Result<T>>,
-    ) -> Result<Option<T>> {
+    ) -> Result<PolicyControlRpcV1<T>> {
         match self.await_control_rpc(rpc).await {
-            Ok(response) => Ok(Some(response)),
+            Ok(response) => Ok(PolicyControlRpcV1::Accepted(response)),
             Err(
                 error @ (crate::Error::ControlRpc { .. } | crate::Error::ControlTransport { .. }),
             ) => {
+                let reuse_session = error.control_rpc_can_reuse_session();
                 erebor_telemetry::debug!(
                     "policy Control RPC failed",
                     node_id = %self.config.node_id,
                     error = %error,
-                    retry = %"reconnect"
+                    retry = %if reuse_session { "same_session" } else { "reconnect" }
                 );
-                Ok(None)
+                Ok(if reuse_session {
+                    PolicyControlRpcV1::Retry
+                } else {
+                    PolicyControlRpcV1::Reconnect
+                })
             }
             Err(error) => Err(error),
         }
@@ -1923,11 +2002,13 @@ impl NodeChassis {
         evidence_healthy: bool,
     ) -> Result<PolicyControlStepV1> {
         if let Some(acknowledgement) = work.rejected_acknowledgement.take() {
-            let Some(accepted) = self
+            let accepted = match self
                 .await_policy_rpc(connection.acknowledge_policy(acknowledgement.clone()))
                 .await?
-            else {
-                return Ok(PolicyControlStepV1::Reconnect);
+                .into_response()
+            {
+                Ok(accepted) => accepted,
+                Err(step) => return Ok(step),
             };
             self.policy_delivery
                 .acknowledge_control(&acknowledgement, &accepted)?;
@@ -1937,11 +2018,13 @@ impl NodeChassis {
         }
         if work.phase == PolicyControlPhaseV1::Transfer {
             if let Some(acknowledgement) = self.policy_delivery.pending_acknowledgement() {
-                let Some(accepted) = self
+                let accepted = match self
                     .await_policy_rpc(connection.acknowledge_policy(acknowledgement.clone()))
                     .await?
-                else {
-                    return Ok(PolicyControlStepV1::Reconnect);
+                    .into_response()
+                {
+                    Ok(accepted) => accepted,
+                    Err(step) => return Ok(step),
                 };
                 self.policy_delivery
                     .acknowledge_control(&acknowledgement, &accepted)?;
@@ -1954,14 +2037,16 @@ impl NodeChassis {
                     active_candidate_content_id,
                     durable_bundle_digests,
                 } => {
-                    let Some(inventory) = self
+                    let inventory = match self
                         .await_policy_rpc(connection.policy_inventory(
                             active_candidate_content_id.as_deref(),
                             durable_bundle_digests,
                         ))
                         .await?
-                    else {
-                        return Ok(PolicyControlStepV1::Reconnect);
+                        .into_response()
+                    {
+                        Ok(inventory) => inventory,
+                        Err(step) => return Ok(step),
                     };
                     if !self.policy_delivery.accept_inventory(inventory)? {
                         self.reconcile_inventory_policy_retirement()?;
@@ -1974,15 +2059,17 @@ impl NodeChassis {
                     bundle_digest,
                     chunk_index,
                 } => {
-                    let Some(chunk) = self
+                    let chunk = match self
                         .await_policy_rpc(connection.fetch_policy_chunk(
                             candidate_content_id,
                             bundle_digest,
                             chunk_index,
                         ))
                         .await?
-                    else {
-                        return Ok(PolicyControlStepV1::Reconnect);
+                        .into_response()
+                    {
+                        Ok(chunk) => chunk,
+                        Err(step) => return Ok(step),
                     };
                     self.policy_delivery.accept_chunk(chunk)?;
                     return Ok(PolicyControlStepV1::Continue);
@@ -2029,11 +2116,13 @@ impl NodeChassis {
         }
         if let Some(acknowledgement) = self.policy_delivery.pending_exception_acknowledgement()? {
             let candidate_content_id = acknowledgement.candidate_content_id.clone();
-            let Some(_accepted) = self
+            let _accepted = match self
                 .await_policy_rpc(connection.acknowledge_exception(acknowledgement))
                 .await?
-            else {
-                return Ok(PolicyControlStepV1::Reconnect);
+                .into_response()
+            {
+                Ok(accepted) => accepted,
+                Err(step) => return Ok(step),
             };
             self.policy_delivery
                 .acknowledge_exception_control(&candidate_content_id)?;
@@ -2060,11 +2149,13 @@ impl NodeChassis {
             return Ok(PolicyControlStepV1::Continue);
         }
         let candidate_ids = self.policy_delivery.exception_inventory_candidate_ids();
-        let Some(inventory) = self
+        let inventory = match self
             .await_policy_rpc(connection.exception_inventory(candidate_ids))
             .await?
-        else {
-            return Ok(PolicyControlStepV1::Reconnect);
+            .into_response()
+        {
+            Ok(inventory) => inventory,
+            Err(step) => return Ok(step),
         };
         if let Some(prepared) = self.policy_delivery.accept_exception_inventory(
             inventory,

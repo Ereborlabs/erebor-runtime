@@ -246,7 +246,7 @@ pub(super) struct EvidenceWalOwner {
     limits: EvidenceWalLimits,
     streams: BTreeMap<[u8; 16], EvidenceWal>,
     unbound_legacy: Option<EvidenceWal>,
-    in_flight_source: Option<[u8; 16]>,
+    in_flight: Option<([u8; 16], EvidenceBatchV1)>,
     last_acknowledged_source: Option<[u8; 16]>,
 }
 
@@ -311,7 +311,7 @@ impl EvidenceWalOwner {
             limits,
             streams,
             unbound_legacy,
-            in_flight_source: None,
+            in_flight: None,
             last_acknowledged_source: None,
         };
         owner.validate_retention()?;
@@ -620,8 +620,8 @@ impl EvidenceWalOwner {
     }
 
     pub(super) fn next_batch(&mut self) -> Option<EvidenceBatchV1> {
-        if let Some(source_id) = self.in_flight_source {
-            return self.streams.get(&source_id)?.next_batch();
+        if let Some((_source_id, batch)) = &self.in_flight {
+            return Some(batch.clone());
         }
         let source_id = self
             .streams
@@ -637,27 +637,29 @@ impl EvidenceWalOwner {
                     .get(source_id)
                     .is_some_and(|wal| wal.pending_records() > 0)
             })?;
-        self.in_flight_source = Some(source_id);
-        self.streams.get(&source_id)?.next_batch()
+        let batch = self.streams.get(&source_id)?.next_batch()?;
+        self.in_flight = Some((source_id, batch.clone()));
+        Some(batch)
     }
 
     pub(super) fn acknowledge(&mut self, ack: EvidenceAckV1) -> Result<()> {
-        let source_id = self.in_flight_source.ok_or_else(|| {
+        let (source_id, batch) = self.in_flight.as_ref().ok_or_else(|| {
             EvidenceStateSnafu {
                 reason: "evidence acknowledgement has no in-flight source batch".to_owned(),
             }
             .build()
         })?;
         self.streams
-            .get_mut(&source_id)
+            .get_mut(source_id)
             .ok_or_else(|| {
                 EvidenceStateSnafu {
                     reason: "evidence acknowledgement source is not retained".to_owned(),
                 }
                 .build()
             })?
-            .acknowledge(ack)?;
-        self.in_flight_source = None;
+            .acknowledge_batch(ack, batch)?;
+        let source_id = *source_id;
+        self.in_flight = None;
         self.last_acknowledged_source = Some(source_id);
         Ok(())
     }
@@ -979,6 +981,10 @@ impl EvidenceWal {
             }
             .fail();
         };
+        self.acknowledge_batch(ack, &batch)
+    }
+
+    fn acknowledge_batch(&mut self, ack: EvidenceAckV1, batch: &EvidenceBatchV1) -> Result<()> {
         if ack.first_cursor != batch.first_cursor
             || ack.last_cursor != batch.last_cursor
             || ack.batch_sha256 != batch.batch_sha256
@@ -986,6 +992,12 @@ impl EvidenceWal {
             return EvidenceStateSnafu {
                 reason: "evidence acknowledgement does not match the pending contiguous batch"
                     .to_owned(),
+            }
+            .fail();
+        }
+        if self.records.get(..batch.records.len()) != Some(batch.records.as_slice()) {
+            return EvidenceStateSnafu {
+                reason: "the in-flight evidence batch is not a retained WAL prefix".to_owned(),
             }
             .fail();
         }
@@ -1356,6 +1368,48 @@ mod tests {
             batch_sha256: second.batch_sha256,
         })?;
         assert!(owner.next_batch().is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn wal_owner_reuses_the_exact_in_flight_batch_until_acknowledgement(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let mut owner = EvidenceWalOwner::open(directory.path(), limits())?;
+        owner
+            .append_classified(&kernel_observation_for_cpu(1, 0)?)
+            .map_err(|failure| failure.error)?;
+        let first = owner.next_batch().ok_or("first batch is missing")?;
+
+        owner
+            .append_classified(&kernel_observation_for_cpu(2, 0)?)
+            .map_err(|failure| failure.error)?;
+
+        assert_eq!(owner.next_batch(), Some(first.clone()));
+        owner.acknowledge(EvidenceAckV1 {
+            first_cursor: first.first_cursor,
+            last_cursor: first.last_cursor,
+            batch_sha256: first.batch_sha256,
+        })?;
+        assert_eq!(
+            owner
+                .next_batch()
+                .map(|batch| (batch.first_cursor, batch.last_cursor)),
+            Some((2, 2))
+        );
+        assert!(owner
+            .acknowledge(EvidenceAckV1 {
+                first_cursor: first.first_cursor,
+                last_cursor: first.last_cursor,
+                batch_sha256: first.batch_sha256,
+            })
+            .is_err());
+        assert_eq!(
+            owner
+                .next_batch()
+                .map(|batch| (batch.first_cursor, batch.last_cursor)),
+            Some((2, 2))
+        );
         Ok(())
     }
 
