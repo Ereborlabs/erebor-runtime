@@ -38,6 +38,13 @@ pub struct EffectObservationCpuHealth {
     pub counters: CoverageCountersV1,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum RecoveryProbeStatus {
+    Pending,
+    Recovered,
+    Resample,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct CoverageIntervalV1 {
@@ -446,6 +453,116 @@ impl CoverageHealthOwner {
         })
     }
 
+    pub(super) fn recover_after_prior_probe(
+        &self,
+        samples: &[EffectObservationCpuHealth],
+    ) -> Result<RecoveryProbeStatus> {
+        let mut inner = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
+        if inner.snapshot.sources.is_empty() {
+            return Ok(RecoveryProbeStatus::Resample);
+        }
+        let sample_count = samples.len();
+        let samples = samples
+            .iter()
+            .map(|sample| (sample.cpu_id, sample.counters))
+            .collect::<BTreeMap<_, _>>();
+        if samples.len() != sample_count || samples.len() != inner.snapshot.sources.len() {
+            return EvidenceStateSnafu {
+                reason: "coverage recovery requires one probe for every source".to_owned(),
+            }
+            .fail();
+        }
+
+        let mut pending = false;
+        for (cpu_id, source) in &inner.snapshot.sources {
+            let current = samples.get(cpu_id).ok_or_else(|| {
+                EvidenceStateSnafu {
+                    reason: "coverage recovery is missing a source probe".to_owned(),
+                }
+                .build()
+            })?;
+            let Some(prior) = source.last_health else {
+                return Ok(RecoveryProbeStatus::Resample);
+            };
+            if !counters_are_valid(*current)
+                || current.attempted < prior.attempted
+                || current.suppressed < prior.suppressed
+                || current.requested < prior.requested
+                || current.emitted < prior.emitted
+                || current.lost < prior.lost
+                || current.classifier_miss_count < prior.classifier_miss_count
+                || current.unresolved < prior.unresolved
+                || current.next_sequence < prior.next_sequence
+                || current.lost > prior.lost
+                || current.classifier_miss_count > prior.classifier_miss_count
+                || current.unresolved > prior.unresolved
+            {
+                return Ok(RecoveryProbeStatus::Resample);
+            }
+            if source.current.state == CoverageStateV1::Gapped
+                && source
+                    .current
+                    .gap_reasons
+                    .contains(&CoverageGapReasonV1::CounterRegression)
+            {
+                return EvidenceStateSnafu {
+                    reason: "coverage cannot recover after a counter regression".to_owned(),
+                }
+                .fail();
+            }
+            if source.last_observed_sequence.unwrap_or(0) < prior.next_sequence {
+                pending = true;
+            }
+        }
+        if pending {
+            return Ok(RecoveryProbeStatus::Pending);
+        }
+
+        let recovering = inner
+            .snapshot
+            .sources
+            .values()
+            .filter(|source| source.current.state == CoverageStateV1::Gapped)
+            .count();
+        if inner.snapshot.history.len().saturating_add(recovering) > MAX_COVERAGE_HISTORY {
+            return EvidenceStateSnafu {
+                reason: "coverage history capacity is exhausted".to_owned(),
+            }
+            .fail();
+        }
+
+        inner.commit(|inner| {
+            let mut completed = Vec::with_capacity(recovering);
+            for source in inner.snapshot.sources.values_mut() {
+                let counters = samples[&source.cpu_id];
+                source.last_health = Some(counters);
+                source.current.closing_counters = Some(counters);
+                if source.current.state != CoverageStateV1::Gapped {
+                    continue;
+                }
+                let first_sequence = source
+                    .last_observed_sequence
+                    .unwrap_or(0)
+                    .checked_add(1)
+                    .ok_or_else(|| {
+                        EvidenceStateSnafu {
+                            reason: "coverage recovery sequence is exhausted".to_owned(),
+                        }
+                        .build()
+                    })?;
+                completed.push(rotate_interval(
+                    source,
+                    CoverageStateV1::Healthy,
+                    first_sequence,
+                    counters,
+                    Vec::new(),
+                ));
+            }
+            inner.snapshot.history.extend(completed);
+            Ok(RecoveryProbeStatus::Recovered)
+        })
+    }
+
     pub fn snapshot(&self) -> CoverageSnapshotV1 {
         self.inner
             .lock()
@@ -727,6 +844,7 @@ fn persist_snapshot(path: &Path, snapshot: &CoverageSnapshotV1) -> Result<()> {
 mod tests {
     use super::{
         CoverageCountersV1, CoverageGapReasonV1, CoverageHealthOwner, EffectObservationCpuHealth,
+        RecoveryProbeStatus,
     };
     use crate::{EvidenceIdV1, ObservationCanonicalizer, TemporalCoverageV1};
 
@@ -804,6 +922,35 @@ mod tests {
         assert!(current
             .gap_reasons
             .contains(&CoverageGapReasonV1::ReaderDelay));
+        Ok(())
+    }
+
+    #[test]
+    fn recovery_waits_for_the_original_reader_delay_probe() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let directory = tempfile::tempdir()?;
+        let owner = open_owner(&directory.path().join("coverage.json"), 1)?;
+        owner.sample_health(&[health(0, 0)])?;
+        owner.sample_health(&[health(8, 0)])?;
+        for sequence in 1..=4 {
+            owner.observe(2, sequence)?;
+        }
+
+        assert_eq!(
+            owner.recover_after_prior_probe(&[health(10, 0)])?,
+            RecoveryProbeStatus::Pending
+        );
+        for sequence in 5..=8 {
+            owner.observe(2, sequence)?;
+        }
+        assert_eq!(
+            owner.recover_after_prior_probe(&[health(12, 0)])?,
+            RecoveryProbeStatus::Recovered
+        );
+
+        let snapshot = owner.snapshot();
+        assert!(snapshot.supports_negative_claim());
+        assert_eq!(snapshot.current_intervals()[0].first_sequence, 9);
         Ok(())
     }
 

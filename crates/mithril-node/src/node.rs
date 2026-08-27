@@ -2304,23 +2304,38 @@ fn sample_effect_health(
             }
             .build()
         })?;
+    let coverage = observations.coverage_snapshot();
+    if recover
+        && coverage
+            .as_ref()
+            .is_some_and(|snapshot| !snapshot.current_intervals().is_empty())
+        && !coverage.is_some_and(|snapshot| snapshot.supports_negative_claim())
+    {
+        if observations.recover_coverage_after_prior_probe(&bytes)?
+            && observations
+                .coverage_snapshot()
+                .is_some_and(|snapshot| snapshot.supports_negative_claim())
+        {
+            return Ok(());
+        }
+        return EvidenceStateSnafu {
+            reason: "effect observation recovery probe is not yet durable".to_owned(),
+        }
+        .fail();
+    }
     observations.sample_coverage_health(&bytes)?;
     if !observations
         .coverage_snapshot()
         .is_some_and(|snapshot| snapshot.supports_negative_claim())
     {
-        if recover {
-            observations.recover_coverage_after_probe(&bytes)?;
+        return EvidenceStateSnafu {
+            reason: if recover {
+                "effect observation recovery probe is not yet durable".to_owned()
+            } else {
+                "effect observation coverage cannot support a negative claim".to_owned()
+            },
         }
-        if !observations
-            .coverage_snapshot()
-            .is_some_and(|snapshot| snapshot.supports_negative_claim())
-        {
-            return EvidenceStateSnafu {
-                reason: "effect observation coverage cannot support a negative claim".to_owned(),
-            }
-            .fail();
-        }
+        .fail();
     }
     Ok(())
 }

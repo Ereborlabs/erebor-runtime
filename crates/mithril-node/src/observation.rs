@@ -226,17 +226,27 @@ impl EffectObservationStore {
         self.lock_durable()?.coverage.sample_health(&samples)
     }
 
-    pub fn recover_coverage_after_probe(&self, per_cpu_bytes: &[u8]) -> crate::Result<()> {
+    pub fn recover_coverage_after_prior_probe(&self, per_cpu_bytes: &[u8]) -> crate::Result<bool> {
         let samples =
             decode_cpu_health(per_cpu_bytes).ok_or_else(|| crate::Error::EvidenceState {
                 reason: "effect observation health bytes are invalid".to_owned(),
                 location: snafu::Location::new(file!(), line!(), column!()),
             })?;
-        self.lock_durable()?
-            .coverage
-            .recover_after_probe(&samples)?;
-        erebor_telemetry::info!("recovered evidence coverage", count = %samples.len());
-        Ok(())
+        let durable = self.lock_durable()?;
+        match durable.coverage.recover_after_prior_probe(&samples)? {
+            coverage::RecoveryProbeStatus::Pending => Ok(false),
+            coverage::RecoveryProbeStatus::Recovered => {
+                erebor_telemetry::info!(
+                    "recovered evidence coverage",
+                    count = %samples.len()
+                );
+                Ok(true)
+            }
+            coverage::RecoveryProbeStatus::Resample => {
+                durable.coverage.sample_health(&samples)?;
+                Ok(false)
+            }
+        }
     }
 
     pub fn mark_coverage_gapped(&self, reason: CoverageGapReasonV1) -> crate::Result<()> {
