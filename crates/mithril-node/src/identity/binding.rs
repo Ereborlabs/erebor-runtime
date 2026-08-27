@@ -63,6 +63,36 @@ pub struct AdministrativeBindingTargetV1 {
 }
 
 impl PublishedBinding {
+    fn verify_activated_profile(
+        &self,
+        spec: &WorkloadBindingConfig,
+        activated: &ExecutionSetBindingStateV1,
+    ) -> Result<()> {
+        let mut desired = self.state;
+        desired.active_profile_generation_ref_id = spec.active_profile_generation_ref_id;
+        desired.initial_role_id = spec.initial_role_id;
+        desired.external_role_id = spec.external_role_id;
+        ensure!(
+            WorkloadBindingOwner::activation_target_matches_desired(&desired, activated),
+            IdentityStateSnafu {
+                reason: format!(
+                    "binding `{}` does not match its active profile",
+                    spec.binding_id
+                ),
+            }
+        );
+        Ok(())
+    }
+
+    fn adopt_activated_profile(
+        &mut self,
+        spec: WorkloadBindingConfig,
+        activated: ExecutionSetBindingStateV1,
+    ) {
+        self.spec = spec;
+        self.state = activated;
+    }
+
     fn prepare_container(&mut self) -> Result<()> {
         ensure!(
             self.held_initial_pid.is_some()
@@ -1469,7 +1499,9 @@ impl WorkloadBindingOwner {
         host: &KernelHost,
         configured: &[WorkloadBindingConfig],
     ) -> Result<()> {
-        for binding in self.bindings.values_mut() {
+        let mut adopted = Vec::with_capacity(self.bindings.len());
+        let mut profile_handles = BTreeMap::new();
+        for (&root_cgroup_id, binding) in &self.bindings {
             let spec = configured
                 .iter()
                 .find(|spec| spec.binding_id == binding.spec.binding_id)
@@ -1548,17 +1580,29 @@ impl WorkloadBindingOwner {
                     ),
                 })?;
             let activated = execution_set_binding_state(&activated)?;
+            binding.verify_activated_profile(spec, &activated)?;
             ensure!(
-                Self::activation_target_matches_desired(&binding.state, &activated),
+                profile_handles
+                    .insert(active, activated.profile_id)
+                    .is_none_or(|profile_id| profile_id == activated.profile_id),
                 IdentityStateSnafu {
                     reason: format!(
-                        "binding `{}` does not match its active profile",
-                        spec.binding_id
+                        "profile-generation handle {active} is assigned to more than one profile"
                     ),
                 }
             );
-            self.profile_handles.insert(active, activated.profile_id);
+            adopted.push((root_cgroup_id, spec.clone(), activated));
         }
+        for (root_cgroup_id, spec, activated) in adopted {
+            let binding = self
+                .bindings
+                .get_mut(&root_cgroup_id)
+                .context(IdentityStateSnafu {
+                    reason: "verified activated binding disappeared before adoption",
+                })?;
+            binding.adopt_activated_profile(spec, activated);
+        }
+        self.profile_handles = profile_handles;
         Ok(())
     }
 
@@ -2542,6 +2586,40 @@ mod tests {
         assert!(!WorkloadBindingOwner::same_activation_identity(
             &live, &target
         ));
+        Ok(())
+    }
+
+    #[test]
+    fn live_binding_adopts_a_replacement_profile_generation() -> crate::Result<()> {
+        let temporary = tempfile::tempdir().context(IoSnafu {
+            path: "temporary replacement profile root",
+        })?;
+        let root = temporary.path().join("workload");
+        fs::create_dir(&root).context(IoSnafu { path: &root })?;
+        fs::write(root.join("cgroup.procs"), "").context(IoSnafu { path: &root })?;
+        let owner = WorkloadBindingOwner::at(temporary.path(), Id128V1::new(1, 2), 3)?;
+        let mut binding = owner.prepare(&spec(&root))?;
+        let previous = binding.state;
+        let mut replacement = binding.spec.clone();
+        replacement.active_profile_generation_ref_id += 1;
+        replacement.initial_role_id += 2;
+        replacement.external_role_id += 2;
+        let mut activated = previous;
+        activated.active_profile_generation_ref_id = replacement.active_profile_generation_ref_id;
+        activated.initial_role_id = replacement.initial_role_id;
+        activated.external_role_id = replacement.external_role_id;
+        activated.initial_root_state = InitialRootStateV1::Consumed;
+        activated.transition_version += 1;
+
+        binding.verify_activated_profile(&replacement, &activated)?;
+        binding.adopt_activated_profile(replacement.clone(), activated);
+
+        assert_eq!(binding.spec, replacement);
+        assert_eq!(binding.state, activated);
+        assert_ne!(
+            binding.state.active_profile_generation_ref_id,
+            previous.active_profile_generation_ref_id
+        );
         Ok(())
     }
 
