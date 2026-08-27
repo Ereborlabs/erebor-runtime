@@ -1257,20 +1257,23 @@ mod tests {
     use std::fs;
     use std::path::{Path, PathBuf};
 
+    use snafu::ResultExt as _;
+
     use super::{
         canonicalize_mount_path, parse_mountinfo, relevant_mount_entries, unescape_mountinfo,
         ExactFileObjectView, LiveMount, OciEntryFileObjectView,
     };
+    use crate::error::IoSnafu;
 
     #[test]
     fn oci_entry_view_uses_the_standard_relative_runtime_root() -> crate::Result<()> {
-        let bundle = tempfile::tempdir().expect("temporary OCI bundle");
-        fs::create_dir(bundle.path().join("rootfs")).expect("create OCI root");
-        fs::write(
-            bundle.path().join("config.json"),
-            br#"{"root":{"path":"rootfs"}}"#,
-        )
-        .expect("write OCI config");
+        let bundle = tempfile::tempdir().context(IoSnafu {
+            path: "temporary OCI bundle",
+        })?;
+        let root = bundle.path().join("rootfs");
+        fs::create_dir(&root).context(IoSnafu { path: &root })?;
+        let config = bundle.path().join("config.json");
+        fs::write(&config, br#"{"root":{"path":"rootfs"}}"#).context(IoSnafu { path: &config })?;
 
         let view = OciEntryFileObjectView::acquire(std::process::id(), bundle.path())?;
 
@@ -1280,15 +1283,16 @@ mod tests {
     }
 
     #[test]
-    fn oci_entry_view_rejects_a_root_that_escapes_the_bundle() {
-        let bundle = tempfile::tempdir().expect("temporary OCI bundle");
-        fs::write(
-            bundle.path().join("config.json"),
-            br#"{"root":{"path":"../rootfs"}}"#,
-        )
-        .expect("write OCI config");
+    fn oci_entry_view_rejects_a_root_that_escapes_the_bundle() -> crate::Result<()> {
+        let bundle = tempfile::tempdir().context(IoSnafu {
+            path: "temporary OCI bundle",
+        })?;
+        let config = bundle.path().join("config.json");
+        fs::write(&config, br#"{"root":{"path":"../rootfs"}}"#)
+            .context(IoSnafu { path: &config })?;
 
         assert!(OciEntryFileObjectView::acquire(std::process::id(), bundle.path()).is_err());
+        Ok(())
     }
 
     #[test]

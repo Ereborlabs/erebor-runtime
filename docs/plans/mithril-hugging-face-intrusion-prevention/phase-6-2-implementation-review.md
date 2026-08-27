@@ -91,7 +91,7 @@ the exact admitted entry identity stored in the binding.
 | Bound workload inventory | `KubernetesWorkloadInventoryOwner` | `ControlPlane` API-only inventory | Exact Pod, container, image, Node, and node-session facts | API-only authority and inventory drift tests |
 | Target snapshot and node candidate | `PolicyRolloutOwner` | `ControlStore` transaction | Immutable snapshot, bundle, and rollout records | Target conflict, exact-node, mixed rollout, restart, and stale acknowledgement tests |
 | Trust generation and acknowledgement | `TrustBundleOwner` | `ControlStore` transaction | Trust generation and boot-bound acknowledgement records | Rotation, revocation, restart, and current-trust gating tests |
-| Node policy, exception, transfer, and cleanup state | `NodePolicyDeliveryOwner` | `NodePolicyDeliveryOwner` | Node state directory | Incremental transfer, exact readback, restart, session retirement, and terminal cleanup tests |
+| Node policy, exception, transfer, and cleanup state | `NodePolicyDeliveryOwner` | `NodePolicyDeliveryOwner` | Node state directory | Incremental transfer, complete desired inventory, exact readback, restart, session retirement, and stale-profile cleanup tests |
 | Active node generation and BPF maps | `NodePolicyGenerationOwner` and existing activation path | `mithril-node` | Node-local inactive generation and active-pointer compare-and-swap | Readback, probe, pointer, and retained-generation tests |
 | Runtime admission request | `mithril-oci-hook` and `RuntimeAdmissionClient` | `RuntimeAdmissionServer` | Root-owned mode-0600 Unix socket | Stock-state parser, active-owner, unavailable endpoint, convergence hold, and timeout tests |
 | Staged runtime facts | First `createRuntime` request | `WorkloadBindingOwner` | Bounded node memory only; no kernel authority | Missing, expiry, changed-head, changed-cgroup, and no-PID-authority tests |
@@ -396,23 +396,47 @@ commit binds its index, predecessor digest, transaction, and digest. Control
 writes the file, calls `fsync`, renames it, and calls `fsync` on the parent
 directory. A corrupt chain or incompatible record blocks store open.
 
-CRD deletion and exact-target disappearance create signed restrictive-terminal
-candidates. Each terminal candidate names the exact viable predecessor and
-uses the normal node stage, readback, probe, and pointer path. Deletion alone
-does not erase a node generation. Kubernetes deletion can keep the same object
-generation. The store accepts only the exact accepted-to-deleting transition
-at that generation. A complete relist retires a durable live source that is
-absent from the API snapshot. A partial relist does not retire a source.
+[PolicyDesiredStateOwner](../../../crates/mithril-control/src/policy/reconciliation.rs) A policy target disappears or an accepted policy source is deleted
+  -> [ControlStore](../../../crates/mithril-control/src/store.rs) Control commits the next complete desired target snapshot
+  -> [NodePolicy inventory](../../../crates/mithril-control/src/service.rs) Control returns the complete desired bundle digests for the authenticated node session
+  -> [NodePolicyDeliveryOwner](../../../crates/mithril-node/src/policy_delivery.rs) the node compares durable active bundle digests with the complete desired inventory
+  -> [WorkloadBindingOwner](../../../crates/mithril-node/src/identity/binding.rs) runtime inventory keeps the profile while a matching concrete container lifetime exists
+  -> [NodeChassis](../../../crates/mithril-node/src/node.rs) the node records one stale profile after runtime absence
+  -> [NodePolicyGenerationOwner](../../../crates/mithril-node/src/policy.rs) the node removes known bindings and generation state after reference readback permits removal
 
-An active terminal acknowledgement can authorize chain cleanup only when no
-later viable candidate depends on that terminal. Control stores this decision
-in the acknowledgement transaction. The node stores the authorization before
-it removes the terminal bundle, transfer state, active pointer, and generation.
-Control then suppresses the closed chain from later inventory. A recreated
-policy object receives a higher issuer sequence and a new root `ACTIVATE`.
-If a successor already depends on the terminal, cleanup stays denied and the
-node continues that predecessor chain. Rejected and stale descendants do not
-become viable heads.
+```mermaid
+sequenceDiagram
+    participant API as Kubernetes API
+    participant Control as Control desired state
+    participant Store as Control store
+    participant Node as Node delivery
+    participant Runtime as Runtime inventory
+    participant Kernel as BPF state
+    API->>Control: Target absent or source deleted
+    Control->>Store: Commit complete desired snapshot
+    Store-->>Node: Return complete desired bundle digests
+    Node->>Runtime: Read current container lifetimes
+    Runtime-->>Node: Matching lifetime absent
+    Node->>Kernel: Retire known binding and generation
+```
+
+CRD deletion and exact-target disappearance remove the affected bundles from
+Control's complete desired inventory. They create no policy candidate.
+Deletion alone does not erase a node generation. Kubernetes deletion can keep
+the same object generation. The store accepts only the exact
+accepted-to-deleting transition at that generation. A complete relist retires
+a durable live source that is absent from the API snapshot. A partial relist
+does not retire a source.
+
+The node compares its durable bundle digests with the complete inventory for
+its authenticated boot and label epoch. It retains a stale profile while a
+matching runtime container lifetime exists. After runtime inventory proves
+that lifetime is absent, the node records the retirement, removes the stored
+bindings, waits for generation-reference readback, and removes the generation.
+A crash restores the retained generation and repeats reconciliation. Cleanup
+uses stored binding identities. It does not inspect the deleted container
+root. A recreated policy object receives a higher issuer sequence and a new
+root `ACTIVATE`.
 
 ## Kubernetes And Tenancy Boundary
 
@@ -508,7 +532,7 @@ flowchart LR
 
 | Map | Key and value ABI | Userspace writer | BPF writer | Readers | Lifetime |
 | --- | --- | --- | --- | --- | --- |
-| `active_profile_generations` | `Id128V1 -> u64` | Node policy generation owner | None | Node binding owner and effect gates | Pinned for the current kernel owner; terminal cleanup removes the exact profile pointer |
+| `active_profile_generations` | `Id128V1 -> u64` | Node policy generation owner | None | Node binding owner and effect gates | Pinned for the current kernel owner; stale-profile retirement removes the exact profile pointer after runtime absence |
 | `profile_generation_descriptors` | `u64 -> ProfileGenerationDescriptorV1` | Node policy generation owner | None | Node recovery, binding owner, and effect gates | Pinned until generation retirement and reference readback permit removal |
 | `execution_set_bindings` | `u64 cgroup ID -> ExecutionSetBindingStateV1` | Node binding owner | Task lifecycle and prepared-container programs update exact transitions | Node recovery and effect gates | Pinned for the exact runtime cgroup lifetime |
 | `binding_activation_targets` | `BindingActivationTargetKeyV1 -> ExecutionSetBindingStateV1` | Node binding owner | None | Node recovery and runtime gate | Pinned until the exact binding and generation retire |
@@ -582,8 +606,8 @@ and coverage messages remain the Phase 6 types.
 | Higher label epoch after proved map loss | Control stales the old session and permits a higher-sequence root; old-epoch delivery and acknowledgements reject |
 | Watch closure or compaction | Control completes every list page, retires absent durable sources, and starts a new watch. A partial relist retires nothing |
 | Control restart | The store replays the commit chain; in-memory watch state is rebuilt |
-| CRD deletion or forced object removal | A Deleted event or complete relist creates retirement. No direct BPF removal occurs; only a valid signed retirement can change node policy |
-| Active terminal has no viable successor | The acknowledgement authorizes durable node cleanup and Control suppresses the closed chain from inventory |
+| CRD deletion or forced object removal | A Deleted event or complete relist removes the profile from complete desired inventory. The node retains live runtime protection and removes stale membership after runtime absence |
+| Complete desired inventory omits a local profile | The node waits for matching runtime lifetimes to end, records one stale profile, removes known bindings and generation state, and retries after a crash |
 | Evidence gap within the bound | Batch stays pending; the contiguous acknowledgement does not advance |
 | Evidence storage failure | No acknowledgement returns; the node keeps its WAL records |
 | Conflicting evidence duplicate | Intake rejects and preserves the first immutable record |
@@ -596,21 +620,21 @@ and coverage messages remain the Phase 6 types.
 | Closed CRD, generated manifest equality, canonical source equality, silent-prune rejection, and status bound | [Kubernetes policy API tests](../../../crates/mithril-control/tests/kubernetes_policy_api.rs) |
 | DaemonSet derivation, complete Node snapshot, scheduler choice, quarantine, exact Node UID readiness, empty constraints, and selector change | [Kubernetes node tests](../../../crates/mithril-control/src/policy/kubernetes_nodes.rs) |
 | Policy match, additive and bounded Pod constraints, reserved annotations, Pod update bypass rejection, selector-consistent image pinning, admission patch, and health | [Kubernetes workload tests](../../../crates/mithril-control/src/policy/kubernetes_workloads.rs) |
-| Policy and exception create, update, conflict, stale state, target disappearance, chain order, node UID rebind, physical epoch reset, terminal cleanup, restart, and tamper rejection | [Control reconciliation tests](../../../crates/mithril-control/tests/control_policy_reconciliation.rs) |
+| Policy and exception create, update, conflict, stale state, target disappearance, current desired selection, node UID rebind, physical epoch reset, restart, and tamper rejection | [Control reconciliation tests](../../../crates/mithril-control/tests/control_policy_reconciliation.rs) |
 | Exact generated gRPC inventory, including `ControlHealth.Get` | [Control contract test](../../../crates/mithril-control/tests/contract.rs) |
 | Commit chain, compare-and-swap transitions, evidence atomicity, pending bounds, restart replay, and trust persistence | [Control store tests](../../../crates/mithril-control/src/store.rs) |
 | Evidence identity, duplicate, reorder, cursor, coverage, and stable Phase 7 query | [Evidence intake tests](../../../crates/mithril-control/src/evidence.rs) |
 | Trust install, acknowledgement, revocation, anti-rollback, and restart | [Trust owner tests](../../../crates/mithril-control/src/trust.rs) |
 | mTLS identity, boot session, trust gate, policy chunk, acknowledgement, evidence, and service isolation | [Control TLS tests](../../../crates/mithril-node/tests/control_tls.rs) |
-| Incremental chunk assembly, signature and digest checks, pending recovery, old-session cleanup, terminal cleanup, exact target inspection, and acknowledgement replay | [Node policy delivery tests](../../../crates/mithril-node/src/policy_delivery.rs) |
+| Incremental chunk assembly, complete desired inventory, signature and digest checks, pending recovery, old-session cleanup, stale-profile cleanup, exact target inspection, and acknowledgement replay | [Node policy delivery tests](../../../crates/mithril-node/src/policy_delivery.rs) |
 | Existing inactive generation, readback, probes, and pointer activation | [Node policy tests](../../../crates/mithril-node/src/policy.rs) |
 | Signed scheduling authority, exact policy and runtime identity, immutable two-hook stage matching, held-TGID publication, distinct container lifetime, active socket ownership, convergence hold, unavailable endpoint, and timeout denial | [Runtime admission and binding tests](../../../crates/mithril-node/src/identity/binding.rs) |
 | OCI state parsing, cgroup-v2 path parsing, fact-only first hook, and held-PID second hook | [OCI adapter tests](../../../crates/mithril-node/src/bin/mithril_oci_hook.rs) |
 | Direct stock-runc PREPARED-to-ACTIVE transition, admitted-entry default, absent dependency rules, and cleanup | [Stock-runc VM probe](../../../crates/mithril-e2e/src/effect/runc.rs) |
 | Fresh protected Pod, exact target and runtime binding, sole shell entry selector, later BusyBox applet default, explicit matching Deny, direct CRI external-entry denial, and retained-cluster resource replacement | [Protected-start lane](../../../crates/mithril-e2e/harness/vm/two-node-convergence.sh) |
 | Webhook TLS, rules, deadlines, health probes, DaemonSet identity and hook inputs, and least-privilege RBAC | [Helm render test](../../../packaging/mithril/helm/tests/verify.sh) |
-| Exact two-node target, task lifetime, Node UID replacement, host epoch, selector lifecycle, exception target retirement, terminal cleanup, and no-root replay | [Physical fixture](../../../crates/mithril-e2e/harness/vm/two-node-convergence.sh) |
-| Independent operator flow for exact target, runtime lifetime, exception target retirement, terminal cleanup, restart, and fresh root | [Manual example](../../../examples/mithril-kubernetes-convergence-manual/run.sh) |
+| Exact two-node target, task lifetime, Node UID replacement, host epoch, selector lifecycle, exception target retirement, desired-inventory cleanup, and no-root inspection | [Physical fixture](../../../crates/mithril-e2e/harness/vm/two-node-convergence.sh) |
+| Independent operator flow for exact target, runtime lifetime, exception target retirement, desired-inventory cleanup, restart, and fresh root | [Manual example](../../../examples/mithril-kubernetes-convergence-manual/run.sh) |
 
 Current focused checks passed:
 
@@ -660,9 +684,9 @@ The current source has not passed the complete physical two-node fixture or
 the independent manual example. The direct stock-runc and focused protected
 Kubernetes application-start lanes have passed. Both complete Kubernetes
 flows contain exact target, runtime task, exception target-retirement,
-terminal cleanup, restart, and fresh-root oracles. The automated fixture also
-contains same-name Node UID replacement, DaemonSet exclusion and re-entry, and
-a host boot and label-epoch change.
+desired-inventory cleanup, restart, and fresh-root oracles. The automated
+fixture also contains same-name Node UID replacement, DaemonSet exclusion and
+re-entry, and a host boot and label-epoch change.
 The cases after protected application start remain `Not run` until a physical
 execution records their results.
 
@@ -714,8 +738,8 @@ not present.
 - [ ] Trace one evidence retry from the node WAL to a durable contiguous acknowledgement.
 - [ ] Verify that an out-of-order evidence batch does not advance the acknowledgement.
 - [ ] Restart Control and compare the rebuilt source, rollout, trust, evidence, and cursor state.
-- [ ] Trace terminal acknowledgement, cleanup authorization, empty inventory,
-      restart, no closed-root replay, and fresh-root recreation.
+- [ ] Trace complete desired inventory, runtime absence, stale-profile cleanup,
+      restart, no deleted-root inspection, and fresh-root recreation.
 - [ ] Remove an exception target and verify exact revocation without use refund.
 - [ ] Verify that a complete relist retires a missing source and a partial relist does not.
 - [ ] Inspect the health reply and confirm that it contains no policy, evidence, or secret payload.

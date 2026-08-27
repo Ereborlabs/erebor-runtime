@@ -2,13 +2,12 @@
 
 Status: Not done. This procedure targets the approved
 `WorkloadProtectionPolicy` and `WorkloadProtectionException` resources. The
-current manual shell covers `initialRole`, `externalRole`, and one application
-entry. The approved application, additional, and administrative entry
-amendment is not implemented in the CRD, runtime, fixture, or manual shell.
-The target policy shape is in the
-[independent-entry planning example](../phase-6-2-entry-policy-example.yaml).
-Do not apply that planning fragment to the current CRD. The complete current
-physical procedure has not passed.
+CRD, lowering, node runtime, and automated tests implement the application,
+additional, administrative, and external entry roles. The current Kubernetes
+fixture and manual shell still need the same schema update and physical run.
+Use the [independent-entry example](../phase-6-2-entry-policy-example.yaml) as
+the entry and role fragment for that update. The complete current physical
+procedure has not passed.
 
 Phase: [Control Policy And Evidence Convergence](../phase-6-2-control-policy-and-evidence-convergence.md)
 
@@ -42,8 +41,9 @@ authority. Completion requires current stock-runtime physical proof of the
 implemented `PreparedContainer` boundary.
 
 The current automated fixture now contains gate-failure, task lifetime, Pod
-UID, Node UID, host epoch, selector, exception target-retirement, terminal
-cleanup, and fresh-root oracles. These physical cases remain `Not run`. Watch
+UID, Node UID, host epoch, selector, exception target-retirement,
+desired-inventory cleanup, and fresh-root oracles. These physical cases remain
+`Not run`. Watch
 compaction, network partition, and storage outage also remain `Not run`. The
 previous scenario cleanup removed the test namespace and runtime classes.
 
@@ -232,19 +232,20 @@ run.
    and current candidates. Prove that only the current valid candidate can
    advance rollout state.
 18. Submit an invalid update, stop Control, stop the Kubernetes API, and force
-   object deletion without a retirement acknowledgement. Prove that none of
+   object deletion. Keep the protected container running. Prove that none of
    these actions remove the last valid node generation.
 19. Restore Control and the API, force watch compaction and relist, then delete
    and recreate the policy CRD. Verify that deletion retires the last accepted
-   generation even though Kubernetes does not increment it. Wait for terminal
-   activation, acknowledgement, cleanup authorization, empty node inventory,
-   and exact local generation removal. Restart Control and the node. Verify
-   that the closed root does not replay. Recreate the policy and Pod. Verify
-   that the new policy uses a higher-sequence root `ACTIVATE` with no
+   source even though Kubernetes does not increment its generation. Verify
+   that complete desired node inventory omits the deleted policy. Delete the
+   protected Pod. Wait for runtime absence, stale-profile cleanup, empty node
+   inventory, and exact local generation removal. Restart Control and the node.
+   Verify that the stale bundle does not replay. Recreate the policy and Pod.
+   Verify that the new policy uses a higher-sequence root `ACTIVATE` with no
    predecessor. Interrupt the watch so that Control misses one deletion event.
    Verify that a complete relist retires the missing durable source. Interrupt
    a paginated relist before it completes and verify that it retires no source.
-   Verify UID, generation, retirement, and replacement behavior without
+   Verify UID, generation, desired-inventory, and replacement behavior without
    historical-state reuse.
 20. Upload a Phase 6 evidence window with duplicates, delay, reordering, a gap,
    and one conflicting duplicate. Stop storage before acknowledgement, restart
@@ -268,12 +269,12 @@ run.
 | Invalid or exhausted exception | Wrong reference, target, family, duration, uses, overlap, stale state, replay, or excess use denies without refund |
 | Partial rollout | Per-node state and mixed generation are explicit; no global-active claim |
 | Stale node message | Old boot, target, source, or candidate cannot advance current state |
-| Policy deletion | Disappearance creates signed retirement; it does not directly erase a local generation |
+| Policy deletion | A complete desired inventory omits the deleted policy. The node retains live runtime protection and removes stale local membership only after runtime absence. Control creates no cleanup candidate. |
 | Exception removal | Target disappearance, deletion, or explicit revocation creates an exact signed revocation. Expiry and exhaustion settle from the installed bounds. All paths preserve consumption history. |
 | Control/API outage | Installed local policy continues; new Control-owned work is unavailable |
 | Watch relist | Same source revision and target state reconstruct without duplicate authority |
-| Complete relist deletion | A durable source that is absent from the complete snapshot enters signed retirement |
-| Partial relist | No source retires from an incomplete snapshot |
+| Complete relist deletion | A durable source that is absent from the complete snapshot is absent from the next complete desired inventory |
+| Partial relist | No desired membership changes from an incomplete snapshot |
 | Evidence retry | Duplicate is idempotent; conflicting duplicate rejects |
 | Storage failure | No durable acknowledgement and no node WAL truncation |
 | Tenant/RBAC violation | Cross-tenant policy, evidence, acknowledgement, and status access reject |
@@ -315,5 +316,5 @@ automated suite cannot change an unrun physical step to `Pass`.
   readback before accepting activation.
 - If one node is unreachable, expect a mixed rollout. Do not repair the report
   by marking the policy globally active.
-- If Control cannot create and sign a valid retirement candidate, the last
-  valid node generation must remain active.
+- If Control cannot return a complete authenticated desired inventory, the
+  last valid node generation must remain active.

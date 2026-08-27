@@ -17,7 +17,8 @@ automated and manual fixture flows. The current source has not passed the
 physical procedure. The approved policy amendment replaces `initialRole` with
 an explicit application entry, adds declared additional entries and one
 approved administrative entry, and retains `externalRole`. The amendment is
-documented but not implemented or tested.
+implemented and covered by automated and non-Kubernetes VM tests. The current
+Kubernetes fixture and manual example do not yet use the amended schema.
 
 The direct stock-`runc` application-start lane now passes. It proves the
 `PREPARED` to `ACTIVE` transition and dependency access with libc and the ELF
@@ -57,19 +58,19 @@ fresh-root checks.
 
 | Deliverable | Current result | Evidence required to close |
 | --- | --- | --- |
-| `D6.2.1` | **Partial.** The current `initialRole` and `externalRole` API is implemented. The approved application, additional, and administrative entry fields are planned only. | Implement the structural schema, reference validation, independent-role lowering, offline-policy golden, and internal-field rejection tests. Then run physical API installation. |
+| `D6.2.1` | **Implemented and automated; physical result not done.** | Structural schema, reference validation, independent-role lowering, offline-policy golden equality, and internal-field rejection tests pass. Install and exercise the current CRD physically. |
 | `D6.2.2` | **Implemented and automated.** | One desired-state owner reconciles both source kinds. The store proves atomic source and artifact acceptance, restart, complete relist retirement, partial relist safety, and separate exception retirement. |
 | `D6.2.3` | **Implemented and automated.** | API-only workload inventory binds exact scheduler, Pod, container, Node, Node UID, boot, and label facts. Node claims cannot create a Kubernetes target. |
-| `D6.2.4` | **Implemented and automated.** | Policy and exception candidates use bounded chain-ordered delivery, resumable transfer, exact acknowledgements, rejection recovery, and terminal cleanup authorization. |
+| `D6.2.4` | **Implemented and automated.** | Policy inventory returns the complete authenticated desired bundle set and skips superseded candidates. Policy transfer is resumable. Activation acknowledgements are exact. Exception candidates keep their bounded activation and revocation order. |
 | `D6.2.5` | **Partial.** | Automated intake failure, duplicate, gap, reorder, replay, storage, restart, and WAL migration tests pass. The required physical evidence variants remain `Not run`. |
-| `D6.2.6` | **Implemented and automated; physical result not done.** | Tests cover policy target shrink, restrictive retirement, terminal closure, exception use, expiry, revocation, target disappearance, restart, reconnect, and physical-session settlement. Run the current physical lifecycle. |
+| `D6.2.6` | **Implemented and automated; physical result not done.** | Tests cover target withdrawal, complete desired inventory, stale local binding and generation removal, live-runtime retention, exception use, expiry, revocation, restart, reconnect, and physical-session settlement. Run the current physical lifecycle. |
 | `D6.2.7` | **Implemented and automated; physical result not done.** | Both statuses are bounded and contain no authority material. Separate writer roles and Control status-only permissions are rendered and exercised by typed authorization reviews. Run them against the current installed CRDs. |
-| `D6.2.8` | **Partial.** The current single-application-entry transaction is implemented. Independent additional and administrative entry transitions are not implemented. | Run the complete policy, entry, and exception transaction through application start, PostStart, PreStop, exec probes, approved administrative exec, external-entry denial, and cleanup. |
+| `D6.2.8` | **Implemented and automated; physical result not done.** The non-Kubernetes VM procedure proves independent and reusable additional-entry roles. | Run the complete Kubernetes policy, entry, and exception transaction through application start, PostStart, PreStop, exec probes, approved administrative exec, external-entry denial, and cleanup. |
 | `D6.2.9` | **Implemented and scripted; physical result not done.** | Automated tests cover session expiry, reconnect, Node UID rebind, boot and label reset, and startup absence proof. The physical fixture scripts quarantine, UID replacement, selector re-entry, process restart, and host reboot. Run the fixture. |
 | `D6.2.10` | **Implemented and automated; physical result not done.** | Policy and container matching, immutable image pins, Pod mutation, update validation, binding validation, and scheduler choice tests pass. Run the current physical admission flow. |
-| `D6.2.11` | **Implemented and automated; physical result not done.** | Exact selected-node delivery, activation, staged runtime fact equality, cgroup binding, cancellation rollback, runtime lifetime replacement, terminal cleanup, and timeout tests pass. Run the stock-runtime process-release path physically. |
+| `D6.2.11` | **Implemented and automated; physical result not done.** | Exact selected-node delivery, activation, staged runtime fact equality, cgroup binding, cancellation rollback, runtime lifetime replacement, desired-inventory cleanup, and timeout tests pass. Run the stock-runtime process-release path physically. |
 | `D6.2.12` | **Partial.** The current chart and manual case are implemented. The approved policy example is present, but the production CRD and runnable examples do not accept it. | Implement and package the amended CRD. Update the automated fixture and independent manual case. Run install, full scenario, uninstall, and host-path cleanup physically. |
-| `D6.2.13` | **Partial.** PreparedContainer and one application activation are implemented and passed direct stock-runtime and focused Kubernetes starts. Per-entry admission state is not implemented. | Prove application activation, independent role installation for every declared entry, approved administrative role installation, unmatched external denial, and no role inheritance through the protected Kubernetes transaction. |
+| `D6.2.13` | **Implemented and automated; physical Kubernetes result not done.** PreparedContainer, application activation, independent entry-role installation, reusable declarations, and external denial pass automated and non-Kubernetes VM tests. | Prove every declared entry, the approved administrative entry, unmatched external denial, and no role inheritance through the protected Kubernetes transaction. |
 
 ## Automated Proof Matrix
 
@@ -89,7 +90,7 @@ fresh-root checks.
 | Policy delivery | Only the selected node can inventory, fetch, verify, and acknowledge the target-bound candidate. | Every other node and boot rejects the candidate even when it has the same signed policy artifact. |
 | Runtime gate | The first `createRuntime` call stages facts only. The second call stays held until the node publishes and reads back the exact cgroup, TGID, binding, policy generation, and `PreparedContainer` state. | Missing candidate, changed stage, wrong policy annotations, TGID or cgroup mismatch, timeout, disconnect, active socket-owner replacement, and restart reject without release. |
 | Prepared container and entries | The exact prepared binding permits runtime setup. The application entry activates the binding. A declared PostStart can commit before or after activation. Later declared entries and an approved administrative entry install only their own roles. | Another binding, unmatched external root, ordinary administrative exec, failed or ambiguous entry match, expired state, or cgroup-only entry rejects. Explicit matching Deny remains effective, and runtime-created objects carry no separate grant. |
-| Retirement | A signed restrictive successor replaces the exact active base target. A complete relist retires a durable base source. A signed exception revocation closes only its runtime instance. | A partial relist, historical event, API loss, Control loss, or recreated exception cannot erase the last valid base generation or restore consumed authority. |
+| Retirement | A complete relist or target snapshot removes stale bundles from complete desired node inventory. The node retains live runtime protection and removes known local membership after runtime absence. A signed exception revocation closes only its runtime instance. | A partial relist, historical event, API loss, Control loss, or recreated exception cannot erase live base protection or restore consumed authority. |
 
 ## Physical Proof Matrix
 
@@ -105,8 +106,8 @@ current CRDs or fixture.
 | New eligible node | **Prior pass; current not run** | The old run observed initial quarantine and ready projection. The current fixture also requires same-name UID replacement and host epoch advance. |
 | Two eligible nodes | **Prior pass; current not run** | The old run observed one scheduler-selected node and selected-node delivery. The current fixture compares the complete typed target with live Node and Pod facts. |
 | Focused protected start | **Pass** | Kubernetes v1.35.5+k3s1 and containerd 2.2.3-k3s1 activated the `/bin/sh` application entry, allowed later BusyBox applet execs through the admitted lineage, enforced the explicit file Deny, and denied a direct CRI external entry. This does not prove the approved additional or administrative entries. |
-| Independent entry roles | **Not run** | The approved schema and runtime transitions are not implemented. The required result covers PostStart before and after application activation, PreStop, all three exec-probe kinds, approved administrative exec, role isolation, and unmatched external denial. |
-| Runtime and policy lifecycle | **Not run** | The current fixture contains task replacement, exception target retirement, terminal cleanup, restart, no-root replay, and fresh-root checks. |
+| Independent entry roles | **VM pass; Kubernetes not run** | The stock-runc VM procedure proved five independent additional-entry roles, one repeated PostStart declaration, role isolation, and unmatched external denial. The Kubernetes result must also cover PostStart before and after application activation, PreStop, all three exec-probe kinds, approved administrative exec, role isolation, and unmatched external denial. |
+| Runtime and policy lifecycle | **Not run** | The current fixture contains task replacement, exception target retirement, desired-inventory cleanup, restart, no-root inspection, and fresh-root checks. |
 | Node lifecycle | **Not run** | The current fixture contains session loss, quarantine, same-name Node UID replacement, DaemonSet exclusion and re-entry, node process restart, and host reboot checks. |
 | Evidence failure variants | **Not run** | Automated tests pass. Physical duplicate, gap, reorder, storage failure, restart, and WAL truncation remain required. |
 | Watch and outage variants | **Not run** | Physical complete and partial relist, Control outage, API outage, and mixed rollout remain required. |
@@ -125,12 +126,11 @@ The Helm verification passed hook ownership behavior, chart lint, and the
 render contract. The VM harness behavior suite passed. The independent manual
 example behavior suite passed. `git diff --check` passed.
 
-These automated results prove the current `initialRole`, `externalRole`, and
-single-application-entry source behavior. They do not prove the approved
-per-entry amendment and do not change an unrun physical case to `Pass`. The
-previous live cluster case used the old API and the superseded runtime
-boundary. It passed through runtime binding and durable evidence intake, then
-failed stock-runtime protected start.
+These automated results prove the application, additional, administrative,
+and external entry schema and runtime transitions. They also prove complete
+desired-inventory validation, live-runtime retention, and crash-safe stale
+profile cleanup. They do not change an unrun physical Kubernetes case to
+`Pass`.
 
 ## Unadvertised Work
 

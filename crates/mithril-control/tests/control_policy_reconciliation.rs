@@ -4,11 +4,11 @@ use std::path::{Path, PathBuf};
 use ed25519_dalek::SigningKey;
 use mithril_control::{
     canonical_kubernetes_policy_spec_digest, lower_kubernetes_policy, workload_target_fact_digest,
-    CompiledPhysicalResultV1, ContainerKindV1, ControlPlane, ControlStore,
-    ExceptionActivationAcknowledgementV1, ExceptionActivationStateV1, ExceptionDeliveryOperationV1,
-    ExceptionReconcileResultV1, ExceptionSourceStateV1, KubernetesConditionStatusV1,
-    KubernetesWorkloadIdentityV1, PolicyActivationAcknowledgementV1, PolicyActivationStateV1,
-    PolicyBundleV1, PolicyDeliveryOperationV1, PolicyDesiredStateConfigV1, PolicyDesiredStateOwner,
+    ContainerKindV1, ControlPlane, ControlStore, ExceptionActivationAcknowledgementV1,
+    ExceptionActivationStateV1, ExceptionDeliveryOperationV1, ExceptionReconcileResultV1,
+    ExceptionSourceStateV1, KubernetesConditionStatusV1, KubernetesWorkloadIdentityV1,
+    PolicyActivationAcknowledgementV1, PolicyActivationStateV1, PolicyBundleV1,
+    PolicyDeliveryOperationV1, PolicyDesiredStateConfigV1, PolicyDesiredStateOwner,
     PolicySignerConfigV1, PolicySourceRevisionV1, PolicySourceStateV1, ProfileSealRequestV1,
     RegistryDigestsV1, TrustGenerationV1, WorkloadProtectionException,
     WorkloadProtectionExceptionStateV1, WorkloadProtectionPolicy, WorkloadProtectionPolicySpec,
@@ -20,6 +20,7 @@ use tempfile::TempDir;
 type TestResult<T = ()> = Result<T, Box<dyn std::error::Error>>;
 
 const POLICY: &str = include_str!("fixtures/kubernetes-policy-v1.yaml");
+const ENTRY_ROLES_POLICY: &str = include_str!("fixtures/kubernetes-entry-roles-v1.yaml");
 const TENANT_ID: &str = "10000000-0000-4000-8000-000000000001";
 const CLUSTER_UID: &str = "55555555-5555-4555-8555-555555555555";
 const NAMESPACE_UID: &str = "66666666-6666-4666-8666-666666666666";
@@ -911,7 +912,7 @@ fn create_update_duplicate_and_restart_preserve_one_monotonic_rollout() -> TestR
 }
 
 #[test]
-fn policy_delivery_walks_each_predecessor_created_before_node_poll() -> TestResult {
+fn policy_delivery_skips_superseded_candidates_before_node_poll() -> TestResult {
     let directory = TempDir::new()?;
     let store = ControlStore::open(directory.path())?;
     let owner = make_owner(store.clone());
@@ -955,22 +956,20 @@ fn policy_delivery_walks_each_predecessor_created_before_node_poll() -> TestResu
         Some(second_bundle.candidate.candidate_content_id.as_str())
     );
 
-    let recovered_root = store
+    let current = store
         .next_bundle_for_node("node-a", &[])?
-        .ok_or("the root activation is not recoverable")?;
-    assert_eq!(recovered_root, *first_bundle);
+        .ok_or("the current desired candidate is not recoverable")?;
+    assert_eq!(current, *third_bundle);
     let next = store
         .next_bundle_for_node("node-a", std::slice::from_ref(&first_bundle.bundle_digest))?
-        .ok_or("the first replacement is not deliverable")?;
-    assert_eq!(next, *second_bundle);
+        .ok_or("the current desired replacement is not deliverable")?;
+    assert_eq!(next, *third_bundle);
 
-    // The later desired candidate must not invalidate an in-flight predecessor ACK.
     owner.rollout_owner().acknowledge(acknowledgement(
-        second_bundle,
+        third_bundle,
         PolicyActivationStateV1::Active,
         NOW + 4,
     )?)?;
-    // An active successor closes the bounded retry window for older acknowledgements.
     assert!(owner
         .rollout_owner()
         .acknowledge(acknowledgement(
@@ -979,10 +978,9 @@ fn policy_delivery_walks_each_predecessor_created_before_node_poll() -> TestResu
             NOW + 5,
         )?)
         .is_err());
-    let last = store
-        .next_bundle_for_node("node-a", std::slice::from_ref(&second_bundle.bundle_digest))?
-        .ok_or("the second replacement is not deliverable")?;
-    assert_eq!(last, *third_bundle);
+    assert!(store
+        .next_bundle_for_node("node-a", std::slice::from_ref(&third_bundle.bundle_digest))?
+        .is_none());
     Ok(())
 }
 
@@ -1087,7 +1085,7 @@ fn kubernetes_node_uid_rebind_keeps_the_exact_physical_predecessor() -> TestResu
 }
 
 #[test]
-fn removed_node_gets_one_atomic_restrictive_retirement() -> TestResult {
+fn removed_node_is_withdrawn_without_a_terminal_candidate() -> TestResult {
     let directory = TempDir::new()?;
     let store = ControlStore::open(directory.path())?;
     let owner = make_owner(store.clone());
@@ -1095,12 +1093,12 @@ fn removed_node_gets_one_atomic_restrictive_retirement() -> TestResult {
     let resource = resource(&policy, "profile", OBJECT_UID, 1, false)?;
     let inventory = two_node_inventory_for_resource(&resource)?;
     let first = owner.reconcile(&resource, NAMESPACE_UID, &inventory, NOW)?;
-    let first_by_node = first
+    let removed = first
         .bundles
         .iter()
-        .map(|bundle| (bundle.candidate.exact_target.node_id.as_str(), bundle))
-        .collect::<BTreeMap<_, _>>();
-    let commit_before_shrink = store.commit_index();
+        .find(|bundle| bundle.candidate.exact_target.node_id == "node-b")
+        .ok_or("the initial rollout has no node-b bundle")?
+        .clone();
 
     let shrunk = owner.reconcile(
         &resource,
@@ -1109,43 +1107,50 @@ fn removed_node_gets_one_atomic_restrictive_retirement() -> TestResult {
         NOW + 1,
     )?;
 
-    assert_eq!(store.commit_index(), commit_before_shrink + 1);
-    assert_eq!(shrunk.source_revision.state, PolicySourceStateV1::Accepted);
     assert_eq!(shrunk.target_snapshot.targets.len(), 1);
     assert_eq!(shrunk.bundles.len(), 1);
-    assert_eq!(shrunk.retirement_bundles.len(), 1);
-    assert_eq!(shrunk.retirement_rollout_states.len(), 1);
-    let retirement = &shrunk.retirement_bundles[0];
-    let prior = first_by_node
-        .get("node-b")
-        .ok_or("the initial rollout has no node-b bundle")?;
+    assert!(shrunk.retirement_bundles.is_empty());
+    assert!(shrunk.retirement_rollout_states.is_empty());
+    assert!(store
+        .next_bundle_for_node("node-b", std::slice::from_ref(&removed.bundle_digest))?
+        .is_none());
+    assert!(store.next_bundle_for_node("node-b", &[])?.is_none());
+    Ok(())
+}
+
+#[test]
+fn removed_declared_entry_target_is_withdrawn_without_recompilation() -> TestResult {
+    let directory = TempDir::new()?;
+    let store = ControlStore::open(directory.path())?;
+    let owner = make_owner(store.clone());
+    let policy = WorkloadProtectionPolicySpec::parse(
+        Path::new("kubernetes-entry-roles-v1.yaml"),
+        ENTRY_ROLES_POLICY.as_bytes(),
+    )?;
+    let resource = resource(&policy, "profile", OBJECT_UID, 1, false)?;
+    let mut target = inventory_for_resource(&resource, &"1".repeat(64))?.remove(0);
+    target.container_name = "worker".to_owned();
+    target.image_digest = format!("sha256:{}", "b".repeat(64));
+    target.pod_labels = BTreeMap::from([("app".to_owned(), "worker".to_owned())]);
+    target.workload_binding_generation_digest = workload_target_fact_digest(&target)?;
+
+    let active = owner.reconcile(&resource, NAMESPACE_UID, &[target], NOW)?;
+    let active_bundle = active.bundles[0].clone();
+    let withdrawn = owner.reconcile(&resource, NAMESPACE_UID, &[], NOW + 1)?;
+
+    assert!(withdrawn.bundles.is_empty());
+    assert!(withdrawn.retirement_bundles.is_empty());
     assert_eq!(
-        retirement.candidate.operation,
-        PolicyDeliveryOperationV1::RetireToRestrictiveTerminal
+        owner
+            .store()
+            .compiled_artifact(&withdrawn.source_revision.policy_source_revision_id)?
+            .ok_or("the accepted source has no compiled artifact")?
+            .policy_document,
+        active_bundle.profile_artifact.policy_document
     );
-    assert_eq!(
-        retirement.candidate.exact_target,
-        prior.candidate.exact_target
-    );
-    assert_eq!(
-        retirement
-            .candidate
-            .predecessor_candidate_content_id
-            .as_deref(),
-        Some(prior.candidate.candidate_content_id.as_str())
-    );
-    assert_eq!(retirement.candidate.expires_utc_ns, i64::MAX);
-    assert!(retirement
-        .profile_artifact
-        .policy_document
-        .file_exception_grants
-        .is_empty());
-    assert_eq!(shrunk.status.rollout.desired, 2);
-    assert_eq!(shrunk.status.rollout.updating, 2);
-    let delivered = store
-        .next_bundle_for_node("node-b", std::slice::from_ref(&prior.bundle_digest))?
-        .ok_or("the removed node has no retirement candidate")?;
-    assert_eq!(delivered, *retirement);
+    assert!(store
+        .next_bundle_for_node("node-a", std::slice::from_ref(&active_bundle.bundle_digest),)?
+        .is_none());
     Ok(())
 }
 
@@ -1195,7 +1200,7 @@ fn same_node_partial_removal_uses_one_exact_replacement() -> TestResult {
 }
 
 #[test]
-fn empty_target_retirement_replays_idempotently_and_readd_advances_issuer() -> TestResult {
+fn empty_desired_inventory_replays_and_readd_accepts_present_or_absent_predecessor() -> TestResult {
     let directory = TempDir::new()?;
     let store = ControlStore::open(directory.path())?;
     let owner = make_owner(store.clone());
@@ -1208,8 +1213,10 @@ fn empty_target_retirement_replays_idempotently_and_readd_advances_issuer() -> T
     let emptied = owner.reconcile(&resource, NAMESPACE_UID, &[], NOW + 1)?;
     assert!(emptied.target_snapshot.targets.is_empty());
     assert!(emptied.bundles.is_empty());
-    assert_eq!(emptied.retirement_bundles.len(), 1);
-    let retirement = emptied.retirement_bundles[0].clone();
+    assert!(emptied.retirement_bundles.is_empty());
+    assert!(store
+        .next_bundle_for_node("node-a", std::slice::from_ref(&first_bundle.bundle_digest),)?
+        .is_none());
     let committed = store.commit_index();
     drop(owner);
     drop(store);
@@ -1219,258 +1226,37 @@ fn empty_target_retirement_replays_idempotently_and_readd_advances_issuer() -> T
     let replayed = restarted.reconcile(&resource, NAMESPACE_UID, &[], NOW + 2)?;
     assert_eq!(reopened.commit_index(), committed);
     assert_eq!(replayed.target_snapshot, emptied.target_snapshot);
-    assert_eq!(replayed.retirement_bundles, vec![retirement.clone()]);
-    assert_eq!(
-        reopened
-            .next_bundle_for_node("node-a", std::slice::from_ref(&first_bundle.bundle_digest),)?,
-        Some(retirement.clone())
-    );
 
-    let retirement_acknowledgement =
-        acknowledgement(&retirement, PolicyActivationStateV1::Active, NOW + 3)?;
-    let accepted = restarted
-        .rollout_owner()
-        .acknowledge(retirement_acknowledgement.clone())?;
-    assert!(accepted.terminal_chain_closure_authorized);
-    let acknowledged_commit = reopened.commit_index();
-    drop(restarted);
-    drop(reopened);
-    let reopened = ControlStore::open(directory.path())?;
-    let restarted = make_owner(reopened.clone());
-    let duplicate = restarted
-        .rollout_owner()
-        .acknowledge(retirement_acknowledgement)?;
-    assert_eq!(duplicate, accepted);
-    assert_eq!(reopened.commit_index(), acknowledged_commit);
-    // Empty node inventory after cleanup must not reopen any member of the closed chain.
-    assert!(reopened.next_bundle_for_node("node-a", &[])?.is_none());
-    let settled = restarted.reconcile(&resource, NAMESPACE_UID, &[], NOW + 4)?;
-    assert!(settled.retirement_bundles.is_empty());
-    assert_eq!(settled.status.rollout.total(), 0);
-    assert!(settled.status.conditions.iter().any(|condition| {
-        condition.condition_type == "Available"
-            && condition.status == KubernetesConditionStatusV1::True
-    }));
-
-    let readded = restarted.reconcile(&resource, NAMESPACE_UID, &inventory, NOW + 5)?;
-    assert!(readded.retirement_bundles.is_empty());
-    assert_eq!(readded.bundles.len(), 1);
-    let active = &readded.bundles[0];
+    let readded = restarted.reconcile(&resource, NAMESPACE_UID, &inventory, NOW + 3)?;
+    let replacement = readded.bundles[0].clone();
     assert_eq!(
-        active.candidate.operation,
-        PolicyDeliveryOperationV1::Activate
-    );
-    assert!(active.candidate.predecessor_candidate_content_id.is_none());
-    assert!(active.candidate.distribution_sequence > retirement.candidate.distribution_sequence);
-    assert!(
-        active.profile_artifact.header.issuer_sequence
-            > retirement.profile_artifact.header.issuer_sequence
-    );
-    assert_eq!(
-        active.profile_artifact.policy_document,
-        lower_kubernetes_policy(&resource, TENANT_ID, CLUSTER_UID, NAMESPACE_UID,)?
-    );
-    assert!(reopened
-        .next_bundle_for_node("node-a", std::slice::from_ref(&retirement.bundle_digest))?
-        .is_none());
-    assert_eq!(
-        reopened.next_bundle_for_node("node-a", &[])?,
-        Some(active.clone())
-    );
-    Ok(())
-}
-
-#[test]
-fn terminal_acknowledgement_with_a_prebuilt_successor_cannot_close_the_chain() -> TestResult {
-    let directory = TempDir::new()?;
-    let store = ControlStore::open(directory.path())?;
-    let owner = make_owner(store);
-    let policy = policy()?;
-    let resource = resource(&policy, "profile", OBJECT_UID, 1, false)?;
-    let inventory = inventory_for_resource(&resource, &"1".repeat(64))?;
-    let initial = owner.reconcile(&resource, NAMESPACE_UID, &inventory, NOW)?;
-    owner.rollout_owner().acknowledge(acknowledgement(
-        &initial.bundles[0],
-        PolicyActivationStateV1::Active,
-        NOW + 1,
-    )?)?;
-
-    let emptied = owner.reconcile(&resource, NAMESPACE_UID, &[], NOW + 2)?;
-    let terminal = &emptied.retirement_bundles[0];
-    let readded = owner.reconcile(&resource, NAMESPACE_UID, &inventory, NOW + 3)?;
-    let successor = &readded.bundles[0];
-    assert_eq!(
-        successor.candidate.operation,
+        replacement.candidate.operation,
         PolicyDeliveryOperationV1::Replace
     );
     assert_eq!(
-        successor
+        replacement
             .candidate
             .predecessor_candidate_content_id
             .as_deref(),
-        Some(terminal.candidate.candidate_content_id.as_str())
+        Some(first_bundle.candidate.candidate_content_id.as_str())
     );
-
-    let accepted = owner.rollout_owner().acknowledge(acknowledgement(
-        terminal,
-        PolicyActivationStateV1::Active,
-        NOW + 4,
-    )?)?;
-    assert!(!accepted.terminal_chain_closure_authorized);
+    assert_eq!(
+        reopened
+            .next_bundle_for_node("node-a", std::slice::from_ref(&first_bundle.bundle_digest),)?,
+        Some(replacement.clone())
+    );
+    assert_eq!(
+        reopened.next_bundle_for_node("node-a", &[])?,
+        Some(replacement)
+    );
     Ok(())
 }
 
-fn abandoned_successor_branch_recovers_after_restart(
-    abandoned_state: PolicyActivationStateV1,
-) -> TestResult {
+#[test]
+fn deletion_withdraws_the_profile_after_a_rejected_successor() -> TestResult {
     let directory = TempDir::new()?;
     let store = ControlStore::open(directory.path())?;
     let owner = make_owner(store.clone());
-    let first_policy = policy()?;
-    let first_resource = resource(&first_policy, "profile", OBJECT_UID, 1, false)?;
-    let first_inventory = inventory_for_resource(&first_resource, &"1".repeat(64))?;
-    let first = owner.reconcile(&first_resource, NAMESPACE_UID, &first_inventory, NOW)?;
-    owner.rollout_owner().acknowledge(acknowledgement(
-        &first.bundles[0],
-        PolicyActivationStateV1::Active,
-        NOW + 1,
-    )?)?;
-
-    let emptied = owner.reconcile(&first_resource, NAMESPACE_UID, &[], NOW + 2)?;
-    let terminal = emptied.retirement_bundles[0].clone();
-    let readded = owner.reconcile(&first_resource, NAMESPACE_UID, &first_inventory, NOW + 3)?;
-    let abandoned = readded.bundles[0].clone();
-
-    let mut second_policy = first_policy;
-    second_policy.roles[0].files[0].operations.reverse();
-    let second_resource = resource(&second_policy, "profile", OBJECT_UID, 2, false)?;
-    let second_inventory = inventory_for_resource(&second_resource, &"1".repeat(64))?;
-    let dependent = owner.reconcile(&second_resource, NAMESPACE_UID, &second_inventory, NOW + 4)?;
-    assert_eq!(
-        dependent.bundles[0]
-            .candidate
-            .predecessor_candidate_content_id
-            .as_deref(),
-        Some(abandoned.candidate.candidate_content_id.as_str())
-    );
-
-    let terminal_acknowledgement =
-        acknowledgement(&terminal, PolicyActivationStateV1::Active, NOW + 5)?;
-    let first_terminal_result = owner
-        .rollout_owner()
-        .acknowledge(terminal_acknowledgement)?;
-    assert!(!first_terminal_result.terminal_chain_closure_authorized);
-    owner
-        .rollout_owner()
-        .acknowledge(acknowledgement(&abandoned, abandoned_state, NOW + 6)?)?;
-
-    second_policy.roles[0].files[0].operations.rotate_left(1);
-    let recovered_resource = resource(&second_policy, "profile", OBJECT_UID, 3, false)?;
-    let recovered_inventory = inventory_for_resource(&recovered_resource, &"1".repeat(64))?;
-    let recovered = owner.reconcile(
-        &recovered_resource,
-        NAMESPACE_UID,
-        &recovered_inventory,
-        NOW + 7,
-    )?;
-    let recovered_bundle = recovered.bundles[0].clone();
-    assert_eq!(
-        recovered_bundle
-            .candidate
-            .predecessor_candidate_content_id
-            .as_deref(),
-        Some(terminal.candidate.candidate_content_id.as_str())
-    );
-    assert!(
-        recovered_bundle.candidate.distribution_sequence
-            > dependent.bundles[0].candidate.distribution_sequence
-    );
-    assert_eq!(
-        store.next_bundle_for_node("node-a", std::slice::from_ref(&terminal.bundle_digest),)?,
-        Some(recovered_bundle.clone())
-    );
-
-    drop(owner);
-    drop(store);
-    let reopened = ControlStore::open(directory.path())?;
-    assert_eq!(
-        reopened.next_bundle_for_node("node-a", std::slice::from_ref(&terminal.bundle_digest),)?,
-        Some(recovered_bundle)
-    );
-    Ok(())
-}
-
-#[test]
-fn rejected_successor_invalidates_its_branch_and_recovers_after_restart() -> TestResult {
-    abandoned_successor_branch_recovers_after_restart(PolicyActivationStateV1::Rejected)
-}
-
-#[test]
-fn stale_successor_invalidates_its_branch_and_recovers_after_restart() -> TestResult {
-    abandoned_successor_branch_recovers_after_restart(PolicyActivationStateV1::Stale)
-}
-
-#[test]
-fn removal_after_rejected_successor_mints_a_fresh_closable_terminal() -> TestResult {
-    let directory = TempDir::new()?;
-    let store = ControlStore::open(directory.path())?;
-    let owner = make_owner(store);
-    let policy = policy()?;
-    let resource = resource(&policy, "profile", OBJECT_UID, 1, false)?;
-    let inventory = inventory_for_resource(&resource, &"1".repeat(64))?;
-    let initial = owner.reconcile(&resource, NAMESPACE_UID, &inventory, NOW)?;
-    owner.rollout_owner().acknowledge(acknowledgement(
-        &initial.bundles[0],
-        PolicyActivationStateV1::Active,
-        NOW + 1,
-    )?)?;
-
-    let emptied = owner.reconcile(&resource, NAMESPACE_UID, &[], NOW + 2)?;
-    let terminal = emptied.retirement_bundles[0].clone();
-    let readded = owner.reconcile(&resource, NAMESPACE_UID, &inventory, NOW + 3)?;
-    let rejected = readded.bundles[0].clone();
-    let terminal_acknowledgement =
-        acknowledgement(&terminal, PolicyActivationStateV1::Active, NOW + 4)?;
-    let denied_closure = owner
-        .rollout_owner()
-        .acknowledge(terminal_acknowledgement.clone())?;
-    assert!(!denied_closure.terminal_chain_closure_authorized);
-    owner.rollout_owner().acknowledge(acknowledgement(
-        &rejected,
-        PolicyActivationStateV1::Rejected,
-        NOW + 5,
-    )?)?;
-
-    let removed = owner.reconcile(&resource, NAMESPACE_UID, &[], NOW + 6)?;
-    let fresh_terminal = &removed.retirement_bundles[0];
-    assert_eq!(
-        fresh_terminal
-            .candidate
-            .predecessor_candidate_content_id
-            .as_deref(),
-        Some(terminal.candidate.candidate_content_id.as_str())
-    );
-    assert!(
-        fresh_terminal.candidate.distribution_sequence > rejected.candidate.distribution_sequence
-    );
-    let duplicate = owner
-        .rollout_owner()
-        .acknowledge(terminal_acknowledgement)?;
-    assert_eq!(duplicate, denied_closure);
-    let authorized = owner.rollout_owner().acknowledge(acknowledgement(
-        fresh_terminal,
-        PolicyActivationStateV1::Active,
-        NOW + 7,
-    )?)?;
-    assert!(authorized.terminal_chain_closure_authorized);
-    Ok(())
-}
-
-#[test]
-fn deletion_after_rejected_successor_retires_the_viable_active_head() -> TestResult {
-    let directory = TempDir::new()?;
-    let store = ControlStore::open(directory.path())?;
-    let owner = make_owner(store);
     let first_policy = policy()?;
     let first_resource = resource(&first_policy, "profile", OBJECT_UID, 1, false)?;
     let first_inventory = inventory_for_resource(&first_resource, &"1".repeat(64))?;
@@ -1495,18 +1281,15 @@ fn deletion_after_rejected_successor_retires_the_viable_active_head() -> TestRes
     )?)?;
 
     let deleting = resource(&second_policy, "profile", OBJECT_UID, 2, true)?;
-    let retired = owner.reconcile(&deleting, NAMESPACE_UID, &[], NOW + 4)?;
-    assert_eq!(
-        retired.bundles[0]
-            .candidate
-            .predecessor_candidate_content_id
-            .as_deref(),
-        Some(active.candidate.candidate_content_id.as_str())
-    );
-    assert!(
-        retired.bundles[0].candidate.distribution_sequence
-            > rejected.candidate.distribution_sequence
-    );
+    let withdrawn = owner.reconcile(&deleting, NAMESPACE_UID, &[], NOW + 4)?;
+    assert!(withdrawn.bundles.is_empty());
+    assert!(withdrawn.retirement_bundles.is_empty());
+    assert!(store
+        .next_bundle_for_node("node-a", std::slice::from_ref(&active.bundle_digest))?
+        .is_none());
+    assert!(store
+        .next_bundle_for_node("node-a", std::slice::from_ref(&rejected.bundle_digest))?
+        .is_none());
     Ok(())
 }
 
@@ -1688,7 +1471,7 @@ fn rejected_candidate_stops_redelivery_and_projects_degraded_status() -> TestRes
 }
 
 #[test]
-fn deletion_names_exact_predecessor_and_recreate_gets_a_new_source_identity() -> TestResult {
+fn deletion_withdraws_desired_policy_and_recreate_gets_a_new_source_identity() -> TestResult {
     let directory = TempDir::new()?;
     let store = ControlStore::open(directory.path())?;
     let owner = make_owner(store);
@@ -1705,29 +1488,8 @@ fn deletion_names_exact_predecessor_and_recreate_gets_a_new_source_identity() ->
         &[],
         NOW + 1,
     )?;
-    assert_eq!(retiring.bundles.len(), 1);
-    assert_eq!(
-        retiring.bundles[0].candidate.operation,
-        PolicyDeliveryOperationV1::RetireToRestrictiveTerminal
-    );
-    assert_eq!(
-        retiring.bundles[0]
-            .candidate
-            .predecessor_candidate_content_id
-            .as_deref(),
-        Some(first.bundles[0].candidate.candidate_content_id.as_str())
-    );
-    let terminal = &retiring.bundles[0].profile_artifact;
-    assert!(terminal.policy_document.file_exception_grants.is_empty());
-    assert!(terminal.policy_document.exceptions.is_empty());
-    assert!(terminal
-        .compiled_profile
-        .compiled_cells
-        .iter()
-        .all(|cell| matches!(
-            cell.physical_result,
-            CompiledPhysicalResultV1::DenyEffect | CompiledPhysicalResultV1::SimulatablePolicyDeny
-        ) && cell.consuming_exception_id.is_none()));
+    assert!(retiring.bundles.is_empty());
+    assert!(retiring.retirement_bundles.is_empty());
     assert!(owner
         .reconcile(
             &resource(&policy, "profile", OBJECT_UID, 1, false)?,
@@ -1797,22 +1559,15 @@ fn invalid_update_does_not_replace_or_block_retirement_of_the_last_compiled_sour
     let deleting_invalid = resource(&invalid_policy, "profile", OBJECT_UID, 2, true)?;
     let retired = owner.reconcile(&deleting_invalid, NAMESPACE_UID, &[], NOW + 2)?;
     assert_eq!(retired.source_revision.object_generation, 1);
+    assert!(retired.bundles.is_empty());
+    assert!(retired.retirement_bundles.is_empty());
     assert_eq!(
-        retired.bundles[0]
-            .candidate
-            .predecessor_candidate_content_id
-            .as_deref(),
-        Some(first.bundles[0].candidate.candidate_content_id.as_str())
+        store
+            .compiled_artifact(&retired.source_revision.policy_source_revision_id)?
+            .ok_or("the deleted source has no retained artifact")?
+            .policy_document,
+        first.bundles[0].profile_artifact.policy_document
     );
-    assert!(retired.bundles[0]
-        .profile_artifact
-        .compiled_profile
-        .compiled_cells
-        .iter()
-        .all(|cell| !matches!(
-            cell.physical_result,
-            CompiledPhysicalResultV1::AllowEffect | CompiledPhysicalResultV1::AuditAllowEffect
-        )));
     Ok(())
 }
 
@@ -1821,7 +1576,7 @@ fn completed_relist_retires_a_source_that_is_absent_from_the_snapshot() -> TestR
     let directory = TempDir::new()?;
     let store = ControlStore::open(directory.path())?;
     let owner = make_owner(store);
-    let accepted = owner.reconcile(
+    owner.reconcile(
         &resource(&policy()?, "profile", OBJECT_UID, 1, false)?,
         NAMESPACE_UID,
         &inventory(&"1".repeat(64))?,
@@ -1830,17 +1585,8 @@ fn completed_relist_retires_a_source_that_is_absent_from_the_snapshot() -> TestR
 
     let retired = owner.retire_missing_sources(&BTreeSet::new(), &[], NOW + 1)?;
     assert_eq!(retired.len(), 1);
-    assert_eq!(
-        retired[0].bundles[0].candidate.operation,
-        PolicyDeliveryOperationV1::RetireToRestrictiveTerminal
-    );
-    assert_eq!(
-        retired[0].bundles[0]
-            .candidate
-            .predecessor_candidate_content_id
-            .as_deref(),
-        Some(accepted.bundles[0].candidate.candidate_content_id.as_str())
-    );
+    assert!(retired[0].bundles.is_empty());
+    assert!(retired[0].retirement_bundles.is_empty());
     assert!(owner
         .retire_missing_sources(&BTreeSet::new(), &[], NOW + 2)?
         .is_empty());
@@ -1961,25 +1707,8 @@ fn two_node_create_update_restart_delete_and_recreate_preserve_provenance() -> T
 
     let deleting_resource = resource(&first_policy, "profile", OBJECT_UID, 2, true)?;
     let retiring = restarted_owner.reconcile(&deleting_resource, NAMESPACE_UID, &[], NOW + 7)?;
-    assert_eq!(retiring.bundles.len(), 2);
-    assert!(retiring.bundles.iter().all(|bundle| {
-        bundle.candidate.operation == PolicyDeliveryOperationV1::RetireToRestrictiveTerminal
-    }));
-    let retiring_by_node = retiring
-        .bundles
-        .iter()
-        .map(|bundle| (bundle.candidate.exact_target.node_id.as_str(), bundle))
-        .collect::<BTreeMap<_, _>>();
-    for node_id in ["node-a", "node-b"] {
-        assert_eq!(
-            retiring_by_node
-                .get(node_id)
-                .and_then(|bundle| bundle.candidate.predecessor_candidate_content_id.as_deref()),
-            second_by_node
-                .get(node_id)
-                .map(|bundle| bundle.candidate.candidate_content_id.as_str())
-        );
-    }
+    assert!(retiring.bundles.is_empty());
+    assert!(retiring.retirement_bundles.is_empty());
 
     // A new Kubernetes object UID starts a separate source and cannot reuse old authority.
     let recreated_resource = resource(

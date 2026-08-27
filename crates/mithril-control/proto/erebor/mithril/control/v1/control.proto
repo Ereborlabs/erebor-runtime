@@ -233,6 +233,8 @@ message PolicyInventory {
   uint64 bundle_bytes = 6;
   uint32 chunk_count = 7;
   string operation = 8;
+  repeated string desired_bundle_digests = 9;
+  bool desired_inventory_complete = 10;
 }
 
 // Carries one content-addressed part of the complete policy bundle.

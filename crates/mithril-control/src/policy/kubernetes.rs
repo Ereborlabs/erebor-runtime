@@ -546,6 +546,7 @@ pub struct PolicyTargetSnapshotV1 {
 pub enum PolicyDeliveryOperationV1 {
     Activate,
     Replace,
+    // This value supports replay of terminal candidates written by older Control versions.
     RetireToRestrictiveTerminal,
 }
 

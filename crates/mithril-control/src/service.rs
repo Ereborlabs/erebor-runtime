@@ -1058,16 +1058,20 @@ impl NodePolicy for ControlPlane {
             Status::failed_precondition("Control has no durable policy rollout store")
         })?;
         // Durable bundle digests identify the active candidate for each profile on this mTLS node.
-        let Some(bundle) = store
-            .next_bundle_for_node_session(
+        let (bundle, desired_bundle_digests) = store
+            .policy_inventory_for_node_session(
                 &node_id,
                 &context.node_boot_id,
                 label_epoch,
                 &request.durable_bundle_digests,
             )
-            .map_err(internal_status)?
-        else {
-            return Ok(Response::new(PolicyInventory::default()));
+            .map_err(internal_status)?;
+        let Some(bundle) = bundle else {
+            return Ok(Response::new(PolicyInventory {
+                desired_bundle_digests,
+                desired_inventory_complete: true,
+                ..PolicyInventory::default()
+            }));
         };
         let chunks = bundle.chunks().map_err(internal_status)?;
         let bundle_bytes = serde_json::to_vec(&bundle)
@@ -1088,6 +1092,8 @@ impl NodePolicy for ControlPlane {
             bundle_bytes: u64::try_from(bundle_bytes.len()).unwrap_or(u64::MAX),
             chunk_count: u32::try_from(chunks.len()).unwrap_or(u32::MAX),
             operation: policy_operation_name(bundle.candidate.operation).to_owned(),
+            desired_bundle_digests,
+            desired_inventory_complete: true,
         }))
     }
 

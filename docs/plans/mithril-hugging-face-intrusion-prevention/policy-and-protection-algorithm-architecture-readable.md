@@ -1834,7 +1834,20 @@ spec:
     - names: [worker]
       kinds: [Application]
       images: [immutable-image-reference]
-      initialRole: worker
+
+      applicationEntry:
+        executionRule: application-entry
+        role: worker
+
+      additionalEntries:
+        - name: initialize-cache
+          kind: PostStart
+          executionRule: initialize-cache-entry
+          role: cache-initializer
+
+      administrativeEntry:
+        role: administrator
+
       externalRole: runtime-external
 
   roles:
@@ -1854,6 +1867,12 @@ spec:
           action: Deny
 
       execution:
+        - name: application-entry
+          path: /usr/bin/conversion-worker
+          recursive: false
+          operations: [Execute]
+          action: Allow
+
         - name: allow-worker-binaries
           path: /usr/bin
           recursive: true
@@ -1887,6 +1906,39 @@ spec:
           peerRoles: [helper]
           action: Allow
 
+    - name: cache-initializer
+      files:
+        - name: deny-cache-secrets
+          path: /var/run/secrets
+          recursive: true
+          operations: [OpenRead]
+          action: Deny
+      execution:
+        - name: initialize-cache-entry
+          path: /opt/worker/hooks/initialize-cache
+          recursive: false
+          operations: [Execute]
+          action: Allow
+      network:
+        socketControls: []
+        destinations: []
+      processControl: []
+      unixStreams: []
+
+    - name: administrator
+      files:
+        - name: deny-administrator-sensitive-file
+          path: /run/restricted
+          recursive: true
+          operations: [OpenRead]
+          action: Deny
+      execution: []
+      network:
+        socketControls: []
+        destinations: []
+      processControl: []
+      unixStreams: []
+
     - name: runtime-external
       files: []
       execution: []
@@ -1908,12 +1960,18 @@ multiply matched container rejects admission. `images` contains digest-pinned
 immutable image references, and admission preserves that match on updates.
 Container kinds are `Init`, `Sidecar`, `Application`, and `Ephemeral`.
 
-A role is a static authority label. An exact initial container receives
-`initialRole`. A later runtime-created root whose purpose is not proven receives
-`externalRole`. Forked processes inherit the current role. Ordinary exec keeps
-the current role. The CRD has no native role transition, process-state bit,
-state transition, maximum native depth, or fork-role field because the node
-does not lower those fields into active policy.
+A role is a static authority label. The application entry references one exact
+non-recursive `Execute` rule in its role. Each additional entry references one
+such rule in its own role and declares one fixed lifecycle or exec-probe kind.
+The kind documents and validates the Kubernetes use. BPF receives only the
+validated entry table and does not distinguish Kubernetes lifecycle kinds. An
+approved administrative entry uses the existing signed one-use admission
+slot. A later root that does not match one admitted entry receives
+`externalRole` and remains fail-closed. Each admitted entry installs only its
+referenced role. Forked processes inherit that role. No entry inherits or
+unions the application role. The CRD has no native role transition,
+process-state bit, state transition, maximum native depth, or fork-role field
+because the node does not lower those fields into active policy.
 
 File rules and execution rules use canonical paths. Version 1 supports a
 non-recursive allow or deny and a recursive deny. A recursive allow is accepted
@@ -2124,14 +2182,25 @@ approval. There is no cluster-wide atomic activation. Each node reports its
 exact candidate and generation state. A partial rollout stays visible and
 limits later findings and policy claims.
 
-Base-policy deletion starts a monotonic retirement transaction. Exception
-deletion, expiry, exhaustion, or revocation sends a signed close operation to
-the exact runtime instance. Neither action erases a node generation. A base
-retirement candidate names the exact current candidate and an approved
-successor or restrictive terminal state. If no valid
-retirement candidate can activate, the last valid local generation remains
-active. A Kubernetes finalizer reports reconciliation progress only; removal
-of the finalizer is not node authority.
+Base-policy deletion removes the policy from Control's complete desired-bundle
+inventory. It does not create another policy candidate. The node keeps the
+last valid generation while its runtime inventory still reports a matching
+container lifetime or Control is unavailable. After runtime inventory proves
+that lifetime is absent, the node removes the stored binding and generation
+when reference readback permits removal. Exception deletion, expiry,
+exhaustion, or revocation still sends a signed close operation to the exact
+runtime instance. A Kubernetes finalizer reports reconciliation progress only;
+removal of the finalizer is not node authority.
+
+This is the Mithril form of Tetragon's retain, rebuild, and replace lifecycle.
+Tetragon keeps pinned enforcement across daemon loss, rebuilds current desired
+policy, and removes replaced pinned state after successful reconstruction. Its
+Pod cleanup uses stored Pod, container, and cgroup identities. Mithril keeps
+its signed activation and anti-rollback boundary for desired changes. Local
+stale-membership removal is not a new policy. See
+[persistent enforcement](https://tetragon.io/docs/concepts/enforcement/persistent-enforcement/),
+[persistent gRPC policies](https://tetragon.io/docs/concepts/enforcement/persistent-grpc-policies/),
+and [policy-filter state cleanup](https://github.com/cilium/tetragon/blob/main/pkg/policyfilter/state.go).
 
 Compilation rejects ambiguous unequal-budget entries, escalation cycles,
 unreachable roles, unsupported deny hooks, path-only objects marked immutable,
@@ -4815,7 +4884,7 @@ ready” is not enough.
 | Required map is replaced/lost | Mark link/map integrity failed | Reject strict new admission; independently freeze/fence if authorized | Affected prevention family unknown |
 | New policy fails compile/readback/probe | Keep previous generation | Reject update; keep previous generation | No partial activation |
 | Kubernetes policy watch closes, compacts, reorders, or loses API access | Relist from the durable object identity and report source delay | Keep every installed local generation; block an unproved new desired revision | No claim that CRD state converged until source and rollout readback recover |
-| CRD is deleted or recreated while Control or a node is unavailable | Record `RETIRING`, UID change, and unreachable targets | Keep the last valid generation until an exact signed successor or restrictive retirement activates | Object disappearance or finalizer removal never proves policy removal |
+| CRD is deleted or recreated while Control or a node is unavailable | Record the deletion, UID change, complete desired inventory, and unreachable nodes | Keep the last valid generation while the runtime lifetime exists or desired inventory is unavailable; remove stale membership after runtime absence | Object disappearance or finalizer removal never proves local runtime absence |
 | Policy rollout is partial or an acknowledgement is stale | Report exact per-node candidate and generation state | Each node keeps its last valid complete generation; stale boot/target/candidate acknowledgement rejects | No cluster-wide active claim |
 | WAL fills | Apply configured retention/backpressure before overwrite and expose gap | Local enforcement continues; evidence-dependent conclusions stop | No safe/contained claim across loss |
 | Control evidence storage or intake acknowledgement fails | Retry the bounded batch and expose intake delay | Local enforcement and WAL retention continue | No WAL truncation or graph input beyond the durable contiguous acknowledgement |
@@ -5172,7 +5241,7 @@ amendment.
 | Several logical jobs in one process | Exact native process only; logical job remains unknown when the existing platform exposes no boundary | Apply process-wide policy and disclose the blast radius; Mithril does not require application instrumentation. |
 | Learning | Observations create review-only candidates | Auto-authorizing observed behavior is rejected because compromise trains it. |
 | Production policy source | Stored typed `WorkloadProtectionPolicy` `.spec` plus applicable bounded `WorkloadProtectionException` objects; offline restricted base-policy YAML is review/import input | The public API cannot embed the internal policy document. Node-side watches, free-form YAML in a CRD string, and CRD status as authority are rejected. |
-| CRD deletion | Signed monotonic retirement to an approved successor or restrictive terminal state; otherwise keep the last valid local generation | Object disappearance, namespace deletion, or finalizer removal cannot erase protection. |
+| CRD deletion | Remove the profile from complete desired node inventory; retain local protection until runtime inventory proves the matching lifetime is absent | Object disappearance, namespace deletion, finalizer removal, or Control outage cannot erase live protection. |
 | Partial rollout | Report the exact candidate and active generation for each target; stop on signed rollout conditions | A Kubernetes `Available` condition or aggregate count cannot mean cluster-wide atomic activation. |
 | Overlapping base policies | At most one policy can match one Pod; reject conflicts and keep the previous valid generation for existing targets | Name, namespace, creation time, priority, source order, and “deny wins” cannot compose policies. A bounded exception can change only a grant named by that one base policy. |
 | Upstream code | Reuse ideas/code only after Phase 0 license/provenance review; keep Mithril Rust chassis | A fork must replace, not duplicate, the single owner. |
@@ -5859,7 +5928,7 @@ The remaining intentionally non-struct names have explicit status:
 | `KubernetesDesiredSourceRevisionV1` | Immutable tenant, cluster, CRD kind and identity, generation, canonical public spec, and deletion state for one policy or exception source |
 | `PolicyExceptionCandidateV1` / `PolicyExceptionAcknowledgementV1` | One signed, exact-target activation or revocation for a precompiled base-policy file grant and its authenticated node result |
 | `PolicyTargetV1` / `PolicyTargetSnapshotV1` | Exact immutable node/workload target set for one rollout revision |
-| `PolicyDeliveryCandidateV1` | Signed target-bound activation or retirement candidate sent by Control to one node |
+| `PolicyDeliveryCandidateV1` | Signed target-bound activation or replacement candidate sent by Control to one node |
 | `PolicyActivationAcknowledgementV1` | Authenticated node receipt that binds candidate, boot/label epoch, node-bound generation, readback, probe, and state |
 | `PolicyRolloutStateV1` | Durable per-target Control projection of delivery and activation truth; never node authority |
 | `PolicyLocalIdV1` | Bounded ID that is meaningful only inside one signed profile; never a global object identity |
@@ -8830,7 +8899,7 @@ PolicyDeliveryCandidateV1 {
   signed_profile_digest: DigestV1
   target_snapshot_digest: DigestV1
   exact_target: PolicyTargetV1
-  operation: ACTIVATE | REPLACE | RETIRE_TO_RESTRICTIVE_TERMINAL
+  operation: ACTIVATE | REPLACE
   predecessor_candidate_content_id?: ArtifactContentIdV1
   distribution_sequence_epoch, distribution_sequence: nonzero u64
   issued_utc_ns, expires_utc_ns: i64
@@ -8901,14 +8970,15 @@ state. Source and candidate digests, signatures, receipts, counters, and
 per-target inventory stay in the Control store. Status cannot authorize any
 transition.
 
-Base-policy deletion creates `DELETION_REQUESTED` source state and a signed
-`REPLACE` or `RETIRE_TO_RESTRICTIVE_TERMINAL` candidate. Exception deletion,
-expiry, exhaustion, or revocation creates a signed `REVOKE` operation for the
-exact exception instance and keeps the consumption record. Every restrictive
-operation names the exact predecessor. A node never removes a generation
-merely because a CRD, namespace, or finalizer disappeared. If no valid policy
-successor activates, the last valid base generation remains available
-according to its signed validity and local failure posture.
+Base-policy deletion creates `DELETION_REQUESTED` source state and removes its
+bundles from complete desired node inventory. It creates no policy candidate.
+Exception deletion, expiry, exhaustion, or revocation creates a signed
+`REVOKE` operation for the exact exception instance and keeps the consumption
+record. A node never removes a generation merely because a CRD, namespace, or
+finalizer disappeared. It waits for runtime inventory to prove that the
+matching container lifetime is absent. If Control is unavailable, the last
+valid base generation remains available according to its signed validity and
+local failure posture.
 
 #### A.11.8 Required goldens and stable failures
 
@@ -11352,7 +11422,7 @@ accidentally revive them. They are history, not a second normative contract.
 | Flatten the internal policy document into a CRD or put YAML in one string | The API would expose unqualified capabilities, and schema, conversion, field ownership, and typed rejection could not preserve the public boundary | Structural `WorkloadProtectionPolicy` and bounded `WorkloadProtectionException` resources lower through one Control owner into internal `PolicyDocumentV1` (Ch. 11-12, Appendix A.11) |
 | Every node watches policy CRDs | It creates many policy-source owners and bypasses Control compilation, signing, targeting, and rollout truth | Control alone reconciles CRDs and sends signed target-bound candidates; node alone activates them (Ch. 5, §12, §34) |
 | CRD status or finalizer grants node authority | Status is mutable reporting state and finalizers can be removed | Authenticated signed candidate plus node readback/probe/CAS; status is a bounded projection only (§12, Appendix A.11.7) |
-| CRD deletion erases active node policy | API or Control outage could remove protection without a safe node transaction | Signed exact retirement or successor through normal activation; otherwise keep the last valid generation (§12, §32) |
+| CRD deletion erases active node policy | API or Control outage could remove protection without runtime-lifetime proof | Publish complete desired inventory, retain live local protection, and remove stored membership only after runtime inventory proves the lifetime is absent (§12, §32) |
 | Compose overlapping base-policy CRDs by priority, creation order, or “deny wins” | The result depends on mutable metadata or an incomplete conflict rule and can create two policy owners for one workload | Version 1 rejects more than one policy match for one Pod. A bounded exception can change only a named file grant in that one base policy. A later composition model must define one closed exact-cell compiler (§11-12). |
 | Two independent transition authorities | Role shorthand and explicit transition could disagree | Compiler lowers both to one table and rejects conflicts (§11-12) |
 | Cgroup lookup before existing task label | Moving a task can escape policy | Task-first lookup everywhere (§13) |

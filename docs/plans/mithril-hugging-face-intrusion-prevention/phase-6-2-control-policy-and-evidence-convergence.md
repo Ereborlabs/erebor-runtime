@@ -199,12 +199,13 @@ Pod changes Node, UID, container identity, or policy match
   -> the runtime gate remains closed until the selected Node activates that target
 
 Pod or container terminates
-  -> mithril-node retires the exact cgroup binding after the runtime lifetime ends
   -> Control removes the exact target from the next desired snapshot
-  -> Control sends a restrictive terminal candidate to each removed node-profile target
-  -> the node activates and acknowledges the exact terminal candidate
-  -> Control authorizes cleanup only when no viable successor depends on the terminal
-  -> the node durably records the authorization and removes the closed local chain
+  -> Control returns a complete authenticated desired-bundle inventory to the selected node session
+  -> mithril-node keeps the last valid policy while runtime inventory still reports a matching container lifetime
+  -> mithril-node retires the exact cgroup binding after runtime inventory proves that lifetime is absent
+  -> mithril-node records the stale profile and removes its known bindings and generation after reference readback permits removal
+  -> a node restart restores retained enforcement before it reconciles the complete desired inventory again
+  -> cleanup uses stored target and binding identities and does not inspect a deleted container root
   -> another Pod, container, Node, or boot cannot reuse the retired authority
 
 WorkloadProtectionException target disappears or the request deletes
@@ -222,10 +223,10 @@ WorkloadProtectionException expires or consumes its uses
 WorkloadProtectionPolicy deletion
   -> a Deleted event or a complete relist detects the missing object UID
   -> deletion uses the last accepted generation because Kubernetes does not increment generation
-  -> Control enters RETIRING for every exact current target
-  -> each selected Node receives a signed restrictive replacement
-  -> removal completes through normal stage, readback, probe, and activation
-  -> terminal acknowledgement and dependency checks close the candidate chain
+  -> Control removes the policy bundles from each complete desired node inventory
+  -> Control sends no restrictive policy candidate and does not inspect a deleted container root
+  -> each node keeps its last valid local policy while a matching runtime lifetime exists or Control is unavailable
+  -> runtime inventory absence permits local binding and generation removal
   -> a recreated policy UID starts with a higher-sequence root candidate
   -> deletion or Control loss cannot erase the last valid local protection
 ```
@@ -500,12 +501,23 @@ Control's sole durable copy immediately eligible for deletion.
 
 ### D6.2.6 — Deletion, restart, and outage behavior
 
-Policy deletion enters `RETIRING`. It does not tell a node to erase its active
-generation. Control produces a signed restrictive-terminal candidate that
-names the exact viable predecessor. A node applies retirement through the
-normal stage, readback, probe, and activation path. Control can authorize
-local chain cleanup only after the terminal is active and no viable successor
-depends on it. Until then, the last valid local generation stays active.
+Policy deletion removes the policy from Control's complete desired-bundle
+inventory. It does not create or deliver a restrictive policy candidate. A
+node keeps the last valid local generation while a matching runtime lifetime
+exists or Control is unavailable. Runtime inventory proves when the concrete
+container lifetime is absent. The node then uses its stored binding and
+generation identities to remove local membership. It does not rediscover an
+entry point or inspect a deleted container root.
+
+This lifecycle adapts the checked Tetragon pattern. Tetragon keeps pinned
+enforcement during a daemon outage, rebuilds current desired policy, and
+removes replaced pinned state only after the rebuild succeeds. Its Pod cleanup
+uses stored Pod, container, and cgroup identities. Mithril keeps its signed
+activation and anti-rollback checks for desired policy changes, but it does not
+model local stale-membership removal as a new policy. See
+[persistent enforcement](https://tetragon.io/docs/concepts/enforcement/persistent-enforcement/),
+[persistent gRPC policies](https://tetragon.io/docs/concepts/enforcement/persistent-grpc-policies/),
+and [policy-filter state cleanup](https://github.com/cilium/tetragon/blob/main/pkg/policyfilter/state.go).
 
 Exception deletion, target disappearance, or explicit revocation closes the
 exact runtime instance through a signed revocation candidate. Expiry and
@@ -957,10 +969,10 @@ Files and durable owners changed: the branch contains both namespaced CRDs and t
 Upstream-adoption dossier IDs used: none.
 Fixture cases and exact physical results: the complete non-Kubernetes VM procedure passed with stock runc 1.3.4. It recorded PREPARED to ACTIVE, the declared application entry, five additional-entry roles, role-specific Deny decisions, and external-entry denial. It invoked the PostStart declaration twice. Both invocations used the same role and rule. They had distinct host PIDs, task cookies, process-state IDs, and execution IDs. The policy did not list libc or the ELF loader. Identity, observe-mode effect, protect-mode effect, kernel, and network probes also passed. The evidence is `/tmp/phase-6-2-full-vm-20260826-run1`.
 Earlier fixture cases and exact physical results: the direct stock-runc application-start lane passed with runc 1.3.4. It recorded PREPARED to ACTIVE, the path-approved application entry, an application-default dependency read, no exact executable object, libc and the ELF loader absent from policy, successful exit, and owned-resource cleanup. The focused protected-start lane passed with Kubernetes v1.35.5+k3s1 and containerd 2.2.3-k3s1. It replaced Mithril and the protected Pod in the retained two-VM cluster. The policy contained `/bin/sh` as its sole execution selector. Fresh Pod UID `078ffde6-6ef9-4268-a7da-3a398e2f205e` ran as container `05bb1cc19d8b5bed04ae9058053cd907effcb18956ab65162f67f75e2daa707e` on `ubuntu-b1bfec97`. Policy revision `5c8ab1236e1d26a7bb8ec0b9bed7bda91bdabfebd669c41533c244da957afb5d` activated binding `0044aed1-8c6e-877a-a0e6-84fffdaf54c9`. The exact admitted entry reached ACTIVE. Later BusyBox applet execs received `APPLICATION_DEFAULT_ALLOW` without an exact object key or composite atom. The explicit matching file Deny blocked its target. A direct CRI exec into the same container cgroup failed with `UNSUPPORTED_OBJECT`, `DENIED_BEFORE_EFFECT`, and kernel result `-13`. It did not create its marker. The result is `/tmp/phase-6-2-shell-only-entry-20260825-run13/protected-start-result.json`. These results do not prove declared additional entries or the administrative entry. The remaining two-node fixture and manual example cases are Not run. The prior old-API Kubernetes run remains partial historical evidence.
-Automated verification: PreparedContainer ABI, application-default ABI, compiled BPF object, independent entry roles, repeated entry admission, node observation, VM-harness behavior, diff checks, and the complete non-Kubernetes VM procedure passed for the current source.
+Automated verification: PreparedContainer ABI, application-default ABI, compiled BPF object, independent entry roles, repeated entry admission, complete desired-inventory validation, live-runtime retention, crash-safe stale-profile cleanup, node observation, VM-harness behavior, diff checks, and the complete non-Kubernetes VM procedure passed for the current source. The repository Rust CI script passed format, workspace check, strict Clippy, and the full workspace test gate.
 Platform/kernel/runtime manifests: the Helm package contains both generated closed CRDs, separate writer and Control RBAC, the exact DaemonSet reader Role, the Control Deployment and Service, fail-closed admission webhooks, the node DaemonSet, two atomically owned `createRuntime` hook registrations, and bounded uninstall cleanup. The protected-start result records Kubernetes v1.35.5+k3s1, containerd 2.2.3-k3s1, the exact live Pod, container, node, policy, binding, task, state, and entry identities, the later application exec result, and the external-entry denial. The VMs and K3s cluster remain available. The successful run keeps its current Mithril release and Pod; the next reuse run replaces them.
 Performance/capacity results: no new benchmark. Runtime stages are limited to 128 records and 30 seconds. PreparedContainer is designed for one exact binding and one application activation. Evidence gRPC messages are limited to 4 MiB. Policy gRPC messages are limited to 128 KiB. The pending evidence window is limited to 4,096 records. Health reports fixed counts and booleans only.
 Unsupported/degraded paths: the new lifecycle and probe entry roles have no protected Kubernetes proof. The approved administrative role has no new physical proof. The remaining evidence failure, watch-compaction, network-partition, and storage-outage cases are Not run. Phase 7 graph and finding behavior is not present.
-Remaining work in this phase: run the protected Kubernetes procedure through the additional-entry cases, administrative entry, exception authorization, policy terminal cleanup, Node UID replacement, host epoch, watch, evidence failure, restart, uninstall, and final cleanup cases.
+Remaining work in this phase: run the protected Kubernetes procedure through the additional-entry cases, administrative entry, exception authorization, desired-inventory cleanup, Node UID replacement, host epoch, watch, evidence failure, restart, uninstall, and final cleanup cases.
 Next phase not authorized: yes.
 ```

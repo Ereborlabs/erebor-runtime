@@ -423,23 +423,11 @@ impl PolicyDesiredStateOwner {
         self.claim(&source, policy, &targets)?;
 
         if source.state == PolicySourceStateV1::DeletionRequested {
-            // Retirement follows the last delivered targets, not the now-empty live inventory.
-            targets = self
-                .store
-                .latest_bundles_for_object(&source.object_uid)?
-                .into_iter()
-                .map(|bundle| bundle.candidate.exact_target)
-                .collect();
-            targets.sort();
-            targets.dedup();
+            targets.clear();
         }
 
-        let artifact_document = if source.state == PolicySourceStateV1::DeletionRequested {
-            restrictive_terminal_document(policy)
-        } else {
-            policy.clone()
-        };
-        // Reuse the immutable artifact on restart. Upgrade only a legacy nonrestrictive retirement.
+        let artifact_document = policy.clone();
+        // Reuse the immutable artifact on restart.
         let artifact = if let Some(artifact) = self
             .store
             .compiled_artifact(&source.policy_source_revision_id)?
@@ -548,23 +536,6 @@ impl PolicyDesiredStateOwner {
             policy.rollout.rollout_generation,
             targets,
         )?;
-        let desired_nodes = desired_snapshot
-            .targets
-            .iter()
-            .map(|target| target.node_id.as_str())
-            .collect::<BTreeSet<_>>();
-        let previous_heads = self.store.latest_bundles_for_object(&source.object_uid)?;
-        let mut retirement_targets = Vec::new();
-        for bundle in &previous_heads {
-            if !desired_nodes.contains(bundle.candidate.exact_target.node_id.as_str())
-                && self.store.bundle_requires_retirement(bundle)?
-            {
-                retirement_targets.push(bundle.candidate.exact_target.clone());
-            }
-        }
-        retirement_targets.sort();
-        retirement_targets.dedup();
-
         let desired_is_current = previous_snapshot.as_ref() == Some(&desired_snapshot);
         let (desired_bundles, desired_states) = if desired_is_current {
             (
@@ -580,82 +551,26 @@ impl PolicyDesiredStateOwner {
                 active_artifact,
                 &self.signing_key.verifying_key().to_bytes(),
                 now_utc_ns,
-                false,
             )?
         };
 
-        if !desired_is_current || !retirement_targets.is_empty() {
-            let retirement = if retirement_targets.is_empty() {
-                None
-            } else {
-                let terminal_document = restrictive_terminal_document(policy);
-                let terminal_artifact =
-                    self.compile_artifact_after(&terminal_document, Some(active_artifact))?;
-                let terminal_digest =
-                    sha256(&serde_json::to_vec(&terminal_artifact).map_err(|error| {
-                        PolicyValidationSnafu {
-                            policy_id: policy.profile_id(),
-                            code: "CFG_POLICY_ARTIFACT",
-                            reason: format!("the restrictive artifact cannot be encoded: {error}"),
-                        }
-                        .build()
-                    })?);
-                let snapshot = PolicyTargetSnapshotV1::new(
-                    source.policy_source_revision_id.clone(),
-                    terminal_digest,
-                    policy.rollout.rollout_generation,
-                    retirement_targets,
-                )?;
-                let (bundles, states) = self.rollout.build(
-                    &source,
-                    &snapshot,
-                    &terminal_artifact,
-                    &self.signing_key.verifying_key().to_bytes(),
-                    now_utc_ns,
-                    true,
-                )?;
-                Some((snapshot, bundles, states))
-            };
+        if !desired_is_current {
             self.store.reconcile_target_set(
                 desired_snapshot.clone(),
                 desired_bundles.clone(),
                 desired_states.clone(),
-                retirement,
                 refreshed_active_artifact,
             )?;
         }
 
-        let mut retirement_bundles = Vec::new();
-        let mut retirement_states = Vec::new();
-        for bundle in self.store.latest_bundles_for_object(&source.object_uid)? {
-            if desired_nodes.contains(bundle.candidate.exact_target.node_id.as_str())
-                || bundle.candidate.operation
-                    != PolicyDeliveryOperationV1::RetireToRestrictiveTerminal
-            {
-                continue;
-            }
-            let Some(state) = self.store.rollout_state(
-                &bundle.candidate.candidate_content_id,
-                &bundle.candidate.exact_target.node_id,
-            )?
-            else {
-                continue;
-            };
-            if state.state != PolicyRolloutStatusV1::Active {
-                retirement_bundles.push(bundle);
-                retirement_states.push(state);
-            }
-        }
-        let mut status_states = desired_states.clone();
-        status_states.extend(retirement_states.iter().cloned());
-        let status = status_for(&source, &status_states, None, now_utc_ns);
+        let status = status_for(&source, &desired_states, None, now_utc_ns);
         let result = PolicyReconcileResultV1 {
             source_revision: source,
             target_snapshot: desired_snapshot,
             bundles: desired_bundles,
             rollout_states: desired_states,
-            retirement_bundles,
-            retirement_rollout_states: retirement_states,
+            retirement_bundles: Vec::new(),
+            retirement_rollout_states: Vec::new(),
             status,
         };
         self.state()?.reconciled.insert(
@@ -883,14 +798,7 @@ impl PolicyRolloutOwner {
         public_key: Vec<u8>,
         now_utc_ns: i64,
     ) -> Result<(Vec<PolicyBundleV1>, Vec<PolicyRolloutStateV1>)> {
-        let result = self.build(
-            source,
-            &snapshot,
-            &artifact,
-            &public_key,
-            now_utc_ns,
-            source.state == PolicySourceStateV1::DeletionRequested,
-        )?;
+        let result = self.build(source, &snapshot, &artifact, &public_key, now_utc_ns)?;
         self.store
             .create_rollout(snapshot, result.0.clone(), result.1.clone())?;
         Ok(result)
@@ -903,26 +811,20 @@ impl PolicyRolloutOwner {
         artifact: &ProfileCandidateArtifactV1,
         public_key: &[u8],
         now_utc_ns: i64,
-        retirement: bool,
     ) -> Result<(Vec<PolicyBundleV1>, Vec<PolicyRolloutStateV1>)> {
         let mut bundles = Vec::with_capacity(snapshot.targets.len());
         let mut rollout_states = Vec::with_capacity(snapshot.targets.len());
-        let valid_until_utc_ns = if retirement {
-            // A restrictive terminal remains safe and deliverable while its old node is offline.
-            i64::MAX
-        } else {
-            now_utc_ns
-                .checked_add(self.candidate_validity_ns)
-                .ok_or_else(|| {
-                    PolicyValidationSnafu {
-                        policy_id: &source.policy_source_revision_id,
-                        code: "CFG_POLICY_CANDIDATE_VALIDITY",
-                        reason: "the candidate validity interval exceeds the signed time range"
-                            .to_owned(),
-                    }
-                    .build()
-                })?
-        };
+        let valid_until_utc_ns = now_utc_ns
+            .checked_add(self.candidate_validity_ns)
+            .ok_or_else(|| {
+                PolicyValidationSnafu {
+                    policy_id: &source.policy_source_revision_id,
+                    code: "CFG_POLICY_CANDIDATE_VALIDITY",
+                    reason: "the candidate validity interval exceeds the signed time range"
+                        .to_owned(),
+                }
+                .build()
+            })?;
         for target in &snapshot.targets {
             // Distribution ordering is per node and profile, separate from issuer ordering.
             let sequence = self.store.next_distribution_sequence(
@@ -942,9 +844,7 @@ impl PolicyRolloutOwner {
                     &artifact.policy_document.metadata.profile_id,
                 )?
                 .map(|bundle| bundle.candidate.candidate_content_id);
-            let operation = if retirement {
-                PolicyDeliveryOperationV1::RetireToRestrictiveTerminal
-            } else if predecessor.is_some() {
+            let operation = if predecessor.is_some() {
                 PolicyDeliveryOperationV1::Replace
             } else {
                 PolicyDeliveryOperationV1::Activate
@@ -1311,6 +1211,7 @@ pub(super) fn preserve_transition_times(
     }
 }
 
+/// Rebuilds terminal policy bytes for legacy WAL validation only.
 pub(crate) fn restrictive_terminal_document(policy: &PolicyDocumentV1) -> PolicyDocumentV1 {
     let mut terminal = policy.clone();
     terminal.file_exception_grants.clear();

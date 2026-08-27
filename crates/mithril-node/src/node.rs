@@ -354,7 +354,7 @@ impl NodeChassis {
         if let Some(administrative) = administrative.as_mut() {
             administrative.reconcile(&host)?;
         }
-        let policy_loaded = policy.is_some() || policy_delivery.terminal_cleanup().is_some();
+        let policy_loaded = policy.is_some() || policy_delivery.inventory_retirement().is_some();
         // Start loss-aware evidence before the first dynamically delivered policy can activate.
         let policy_observation_enabled = policy_loaded || dynamic_policy_capable;
         let prevention_enabled = policy
@@ -521,8 +521,8 @@ impl NodeChassis {
             node_boot_id,
             label_epoch,
         };
-        // Bound sockets do not serve until authorized cleanup completes.
-        chassis.reconcile_terminal_policy_cleanup()?;
+        // Bound sockets do not serve until durable stale-policy retirement completes.
+        chassis.reconcile_inventory_policy_retirement()?;
         chassis.refresh_registration_authority_state()?;
         erebor_telemetry::info!(
             "initialized Mithril Node",
@@ -1439,7 +1439,7 @@ impl NodeChassis {
         }
         dynamic.workload_bindings[scheduled.binding_index] = scheduled.resolved.clone();
         let policy_authority_present =
-            self.policy.is_some() || self.policy_delivery.terminal_cleanup().is_some();
+            self.policy.is_some() || self.policy_delivery.inventory_retirement().is_some();
         let Some(host) = self.host.as_mut() else {
             self.bindings.cancel_runtime_admission();
             return Err(IdentityStateSnafu {
@@ -1654,15 +1654,15 @@ impl NodeChassis {
         Ok(())
     }
 
-    fn reconcile_terminal_policy_cleanup(&mut self) -> Result<bool> {
-        let Some(cleanup) = self.policy_delivery.terminal_cleanup() else {
+    fn reconcile_inventory_policy_retirement(&mut self) -> Result<bool> {
+        let Some(cleanup) = self.policy_delivery.inventory_retirement() else {
             return Ok(false);
         };
         self.policy_delivery
-            .omit_terminal_cleanup_from_config(&mut self.config)?;
+            .omit_inventory_retirement_from_config(&mut self.config)?;
         let host = self.host.as_mut().ok_or_else(|| {
             IdentityStateSnafu {
-                reason: "terminal policy cleanup has no live kernel host".to_owned(),
+                reason: "stale policy retirement has no live kernel host".to_owned(),
             }
             .build()
         })?;
@@ -1727,23 +1727,23 @@ impl NodeChassis {
             &cleanup.binding_ids,
         )?;
         snafu::ensure!(
-            crate::NodePolicyGenerationOwner::terminal_profile_generation_is_absent(
+            crate::NodePolicyGenerationOwner::profile_generation_is_absent(
                 host,
                 &cleanup.profile_id,
                 cleanup.profile_generation_ref_id,
             )?,
             IdentityStateSnafu {
-                reason: "terminal policy cleanup lacks exact kernel absence proof",
+                reason: "stale policy retirement lacks exact kernel absence proof",
             }
         );
-        self.policy_delivery.finish_terminal_cleanup()?;
+        self.policy_delivery.finish_inventory_retirement()?;
         Ok(true)
     }
 
     async fn reconcile_bindings(&mut self, recover_evidence: bool) -> ReconciliationOutcome {
-        if let Err(error) = self.reconcile_terminal_policy_cleanup() {
+        if let Err(error) = self.reconcile_inventory_policy_retirement() {
             return ReconciliationOutcome::IdentityUnhealthy {
-                owner: "terminal policy cleanup",
+                owner: "stale policy retirement",
                 reason: error.to_string(),
             };
         }
@@ -1753,7 +1753,7 @@ impl NodeChassis {
             );
         };
         let policy_authority_present =
-            self.policy.is_some() || self.policy_delivery.terminal_cleanup().is_some();
+            self.policy.is_some() || self.policy_delivery.inventory_retirement().is_some();
         if let Err(error) = host.verify_live_manifest() {
             let _result = self
                 .observations
@@ -1945,12 +1945,8 @@ impl NodeChassis {
                 else {
                     return Ok(PolicyControlStepV1::Reconnect);
                 };
-                if self
-                    .policy_delivery
-                    .acknowledge_control(&acknowledgement, &accepted)?
-                {
-                    self.reconcile_terminal_policy_cleanup()?;
-                }
+                self.policy_delivery
+                    .acknowledge_control(&acknowledgement, &accepted)?;
                 self.policy_delivery.begin_control_session();
                 work.phase = PolicyControlPhaseV1::Exception;
                 return Ok(PolicyControlStepV1::Continue);
@@ -1970,6 +1966,7 @@ impl NodeChassis {
                         return Ok(PolicyControlStepV1::Reconnect);
                     };
                     if !self.policy_delivery.accept_inventory(inventory)? {
+                        self.reconcile_inventory_policy_retirement()?;
                         work.phase = PolicyControlPhaseV1::Exception;
                     }
                     return Ok(PolicyControlStepV1::Continue);

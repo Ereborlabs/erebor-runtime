@@ -164,7 +164,7 @@ impl NodePolicyGenerationOwner {
         ensure!(
             observed.is_none_or(|generation| generation == profile_generation_ref_id),
             IdentityStateSnafu {
-                reason: "terminal cleanup found a different active profile generation",
+                reason: "stale policy retirement found a different active profile generation",
             }
         );
         if observed.is_some() {
@@ -174,7 +174,7 @@ impl NodePolicyGenerationOwner {
         ensure!(
             read_active_generation(host, &profile_id)?.is_none(),
             IdentityStateSnafu {
-                reason: "terminal cleanup active profile pointer survived deletion",
+                reason: "stale policy retirement active profile pointer survived deletion",
             }
         );
         reconcile_generation_retirement(host, node_boot_id, label_epoch)?;
@@ -187,7 +187,7 @@ impl NodePolicyGenerationOwner {
             .is_none())
     }
 
-    pub(crate) fn terminal_profile_generation_is_absent(
+    pub(crate) fn profile_generation_is_absent(
         host: &KernelHost,
         profile_id: &str,
         profile_generation_ref_id: u64,

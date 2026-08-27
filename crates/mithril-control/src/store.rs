@@ -766,11 +766,6 @@ impl ControlStore {
         desired_snapshot: PolicyTargetSnapshotV1,
         desired_bundles: Vec<PolicyBundleV1>,
         desired_states: Vec<PolicyRolloutStateV1>,
-        retirement: Option<(
-            PolicyTargetSnapshotV1,
-            Vec<PolicyBundleV1>,
-            Vec<PolicyRolloutStateV1>,
-        )>,
         refreshed_active_artifact: Option<ProfileCandidateArtifactV1>,
     ) -> Result<u64> {
         let mut inner = self.lock()?;
@@ -779,16 +774,9 @@ impl ControlStore {
             bundles: desired_bundles,
             rollout_states: desired_states,
         };
-        let retirement = retirement.map(|(target_snapshot, bundles, rollout_states)| {
-            PolicyRolloutTransactionV1 {
-                target_snapshot,
-                bundles,
-                rollout_states,
-            }
-        });
         let reconciliation = PolicyTargetSetTransactionV1 {
             desired,
-            retirement,
+            retirement: None,
             refreshed_active_artifact,
         };
         validate_target_set_reconciliation(&inner.state, &reconciliation, &inner.root)?;
@@ -1657,11 +1645,6 @@ impl ControlStore {
             .collect())
     }
 
-    pub(crate) fn bundle_requires_retirement(&self, bundle: &PolicyBundleV1) -> Result<bool> {
-        let inner = self.lock()?;
-        Ok(bundle_requires_retirement(&inner.state, bundle))
-    }
-
     pub fn latest_source(
         &self,
         tenant_id: &str,
@@ -1707,13 +1690,13 @@ impl ControlStore {
         Ok(next_policy_bundle(&inner.state, node_id, durable_bundle_digests, None).cloned())
     }
 
-    pub(crate) fn next_bundle_for_node_session(
+    pub(crate) fn policy_inventory_for_node_session(
         &self,
         node_id: &str,
         node_boot_id: &[u8],
         label_epoch: u64,
         durable_bundle_digests: &[String],
-    ) -> Result<Option<PolicyBundleV1>> {
+    ) -> Result<(Option<PolicyBundleV1>, Vec<String>)> {
         let inner = self.lock()?;
         let session = current_physical_epoch(&inner.state, node_id, node_boot_id, label_epoch)
             .ok_or_else(|| {
@@ -1724,13 +1707,34 @@ impl ControlStore {
                 }
                 .build()
             })?;
-        Ok(next_policy_bundle(
+        let candidate = next_policy_bundle(
             &inner.state,
             node_id,
             durable_bundle_digests,
             Some(&session),
         )
-        .cloned())
+        .cloned();
+        let mut desired_bundle_digests = inner
+            .state
+            .bundles
+            .values()
+            .filter(|bundle| {
+                bundle.candidate.exact_target.node_id == node_id
+                    && policy_target_matches_epoch(&bundle.candidate.exact_target, &session)
+                    && bundle_is_current_desired(&inner.state, bundle)
+            })
+            .map(|bundle| bundle.bundle_digest.clone())
+            .collect::<Vec<_>>();
+        desired_bundle_digests.sort();
+        desired_bundle_digests.dedup();
+        if desired_bundle_digests.len() > 256 {
+            return ControlStoreSnafu {
+                path: inner.root.clone(),
+                reason: "the desired policy inventory exceeds the node profile bound".to_owned(),
+            }
+            .fail();
+        }
+        Ok((candidate, desired_bundle_digests))
     }
 
     pub fn candidate_is_current_or_unsettled_predecessor(
@@ -1914,6 +1918,7 @@ fn next_policy_bundle<'a>(
         .filter_map(|bundle| {
             if bundle.candidate.exact_target.node_id != node_id
                 || !matches_session(bundle)
+                || !bundle_is_current_desired(state, bundle)
                 || bundle_is_in_closed_terminal_chain(state, bundle)
             {
                 return None;
@@ -1942,8 +1947,10 @@ fn next_policy_bundle<'a>(
                     active_candidate.is_none()
                         && bundle.candidate.predecessor_candidate_content_id.is_none()
                 }
-                crate::PolicyDeliveryOperationV1::Replace
-                | crate::PolicyDeliveryOperationV1::RetireToRestrictiveTerminal => {
+                crate::PolicyDeliveryOperationV1::Replace => {
+                    bundle.candidate.predecessor_candidate_content_id.is_some()
+                }
+                crate::PolicyDeliveryOperationV1::RetireToRestrictiveTerminal => {
                     bundle.candidate.predecessor_candidate_content_id.as_deref() == active_candidate
                 }
             };
@@ -1956,6 +1963,50 @@ fn next_policy_bundle<'a>(
                 bundle.candidate.candidate_content_id.as_str(),
             )
         })
+}
+
+fn bundle_is_current_desired(state: &ControlStoreState, bundle: &PolicyBundleV1) -> bool {
+    let Some(source) = state
+        .source_revisions
+        .get(&bundle.candidate.policy_source_revision_id)
+    else {
+        return false;
+    };
+    current_desired_snapshot_for_object(state, source).is_some_and(|(source_id, digest)| {
+        source_id == &bundle.candidate.policy_source_revision_id
+            && digest == &bundle.candidate.target_snapshot_digest
+    })
+}
+
+fn current_desired_snapshot_for_object<'a>(
+    state: &'a ControlStoreState,
+    source: &PolicySourceRevisionV1,
+) -> Option<(&'a String, &'a String)> {
+    let key = PolicyObjectKeyV1::from(source);
+    let latest_id = state.latest_sources.get(&key)?;
+    let latest = state.source_revisions.get(latest_id)?;
+    if latest.state != PolicySourceStateV1::Accepted {
+        return None;
+    }
+    if let Some(digest) = state.latest_desired_snapshots.get(latest_id) {
+        return Some((latest_id, digest));
+    }
+    state
+        .source_revisions
+        .values()
+        .filter(|revision| {
+            revision.state == PolicySourceStateV1::Accepted
+                && PolicyObjectKeyV1::from(*revision) == key
+                && revision.policy_source_revision_id != *latest_id
+        })
+        .filter_map(|revision| {
+            state
+                .latest_desired_snapshots
+                .get(&revision.policy_source_revision_id)
+                .map(|digest| (revision, digest))
+        })
+        .max_by_key(|(revision, _)| revision.object_generation)
+        .map(|(revision, digest)| (&revision.policy_source_revision_id, digest))
 }
 
 fn next_exception_candidate<'a>(
@@ -2363,6 +2414,9 @@ fn validate_source_acceptance(
         }
         .build()
     })?;
+    if current == revision {
+        return Ok(());
+    }
     if current.object_uid != revision.object_uid {
         if current.state == PolicySourceStateV1::Accepted {
             return ControlStoreSnafu {
@@ -2404,19 +2458,16 @@ fn validate_compiled_artifact(
     artifact: &ProfileCandidateArtifactV1,
     path: &Path,
 ) -> Result<()> {
-    let expected_document = match source.state {
-        PolicySourceStateV1::Accepted => policy_document.clone(),
-        PolicySourceStateV1::DeletionRequested => {
-            crate::restrictive_terminal_document(policy_document)
-        }
-    };
+    let document_is_valid = artifact.policy_document == *policy_document
+        || (source.state == PolicySourceStateV1::DeletionRequested
+            && artifact.policy_document == crate::restrictive_terminal_document(policy_document));
     let issuer_order_is_valid = state.compiled_artifacts.values().all(|existing| {
         existing.signed_profile.signing_key_id != artifact.signed_profile.signing_key_id
             || existing.header.sequence_epoch < artifact.header.sequence_epoch
             || (existing.header.sequence_epoch == artifact.header.sequence_epoch
                 && existing.header.issuer_sequence < artifact.header.issuer_sequence)
     });
-    if artifact.policy_document != expected_document || !issuer_order_is_valid {
+    if !document_is_valid || !issuer_order_is_valid {
         return ControlStoreSnafu {
             path: path.to_owned(),
             reason: "the compiled artifact differs from its source or violates issuer ordering"
@@ -2457,8 +2508,8 @@ fn legacy_deletion_artifact_upgrade(
     replacement: &ProfileCandidateArtifactV1,
 ) -> bool {
     source.state == PolicySourceStateV1::DeletionRequested
-        && current.policy_document == *policy_document
-        && replacement.policy_document == crate::restrictive_terminal_document(policy_document)
+        && current.policy_document == crate::restrictive_terminal_document(policy_document)
+        && replacement.policy_document == *policy_document
         && (
             replacement.header.sequence_epoch,
             replacement.header.issuer_sequence,
@@ -3728,7 +3779,7 @@ fn validate_target_set_reconciliation(
         validate_new_artifact_sequence(state, refreshed, path)?;
     }
 
-    // Derive the complete retirement set from durable heads so callers cannot omit offline nodes.
+    // Replay validates terminal retirement transactions written by older versions.
     let mut required_retirement_targets = latest_object_bundles(state, &source.object_uid)
         .into_iter()
         .filter(|bundle| {
@@ -3740,15 +3791,7 @@ fn validate_target_set_reconciliation(
     required_retirement_targets.sort();
     required_retirement_targets.dedup();
     let Some(retirement) = &reconciliation.retirement else {
-        if required_retirement_targets.is_empty() {
-            return Ok(());
-        }
-        return ControlStoreSnafu {
-            path: path.to_owned(),
-            reason: "a target-set reconciliation omits required removed-node retirements"
-                .to_owned(),
-        }
-        .fail();
+        return Ok(());
     };
     if retirement.target_snapshot.targets != required_retirement_targets {
         return ControlStoreSnafu {
@@ -5083,7 +5126,7 @@ mod tests {
             .acknowledge_policy(initial_ack.acknowledgement, initial_ack.rollout_state)
             .is_err());
         assert!(store
-            .next_bundle_for_node_session(
+            .policy_inventory_for_node_session(
                 "node-a",
                 &[2; 16],
                 2,
@@ -5092,6 +5135,7 @@ mod tests {
                     rebound_bundle.bundle_digest
                 ],
             )?
+            .0
             .is_none());
 
         store.bind_kubernetes_node_session(
@@ -5129,21 +5173,24 @@ mod tests {
             .candidate
             .predecessor_candidate_content_id
             .is_none());
-        assert_eq!(
-            store.next_bundle_for_node_session("node-a", &[2; 16], 2, &[])?,
-            Some(restarted_bundle.clone())
-        );
+        let (candidate, desired) =
+            store.policy_inventory_for_node_session("node-a", &[2; 16], 2, &[])?;
+        assert_eq!(candidate, Some(restarted_bundle.clone()));
+        assert_eq!(desired, vec![restarted_bundle.bundle_digest.clone()]);
         let committed = store.commit_index();
         drop(store);
 
         let replayed = super::ControlStore::open(directory.path())?;
         assert_eq!(replayed.commit_index(), committed);
         assert_eq!(
-            replayed.next_bundle_for_node_session("node-a", &[2; 16], 2, &[])?,
-            Some(restarted_bundle)
+            replayed.policy_inventory_for_node_session("node-a", &[2; 16], 2, &[])?,
+            (
+                Some(restarted_bundle.clone()),
+                vec![restarted_bundle.bundle_digest]
+            )
         );
         assert!(replayed
-            .next_bundle_for_node_session("node-a", &[1; 16], 1, &[])
+            .policy_inventory_for_node_session("node-a", &[1; 16], 1, &[])
             .is_err());
         Ok(())
     }
@@ -5563,7 +5610,8 @@ mod tests {
     }
 
     #[test]
-    fn target_set_reconciliation_rejects_omitted_or_subset_retirements() -> crate::Result<()> {
+    fn target_set_reconciliation_accepts_withdrawal_and_rejects_legacy_subset() -> crate::Result<()>
+    {
         let (state, reconciliation) = target_set_validation_fixture()?;
         super::validate_target_set_reconciliation(
             &state,
@@ -5573,17 +5621,13 @@ mod tests {
 
         let mut omitted = reconciliation.clone();
         omitted.retirement = None;
-        let omitted_error = required_rejection(
-            super::apply_transaction(
-                &mut state.clone(),
-                &super::ControlTransactionV1::TargetSetReconciled {
-                    reconciliation: Box::new(omitted),
-                },
-                Path::new("omitted-retirement"),
-            ),
-            "an absent node must have a retirement",
+        super::apply_transaction(
+            &mut state.clone(),
+            &super::ControlTransactionV1::TargetSetReconciled {
+                reconciliation: Box::new(omitted),
+            },
+            Path::new("desired-withdrawal"),
         )?;
-        assert!(omitted_error.to_string().contains("omits required"));
 
         let mut subset = reconciliation;
         let subset_retirement = subset.retirement.as_mut().ok_or_else(|| {
@@ -5711,16 +5755,15 @@ mod tests {
     }
 
     #[test]
-    fn legacy_split_retirement_replays_and_upgrades_to_a_restrictive_artifact() -> crate::Result<()>
-    {
+    fn legacy_restrictive_artifact_upgrades_to_the_source_policy() -> crate::Result<()> {
         let document = PolicyDocumentV1::parse(
             Path::new("policy-v1.yaml"),
             include_bytes!("../tests/fixtures/policy-v1.yaml"),
         )?;
         let source = source_revision(&document, PolicySourceStateV1::DeletionRequested, 1, '5')?;
-        let legacy_artifact = signed_artifact(&document, 1)?;
         let terminal_document = crate::restrictive_terminal_document(&document);
-        let terminal_artifact = signed_artifact(&terminal_document, 2)?;
+        let terminal_artifact = signed_artifact(&terminal_document, 1)?;
+        let active_artifact = signed_artifact(&document, 2)?;
         let mut state = super::ControlStoreState::default();
 
         super::apply_transaction(
@@ -5728,33 +5771,25 @@ mod tests {
             &super::ControlTransactionV1::SourceAccepted {
                 source_revision: Box::new(source.clone()),
                 policy_document: Box::new(document.clone()),
-                artifact: None,
+                artifact: Some(Box::new(terminal_artifact)),
             },
-            Path::new("legacy-source"),
-        )?;
-        super::apply_transaction(
-            &mut state,
-            &super::ControlTransactionV1::Compiled {
-                policy_source_revision_id: source.policy_source_revision_id.clone(),
-                artifact: Box::new(legacy_artifact),
-            },
-            Path::new("legacy-artifact"),
+            Path::new("legacy-terminal-source"),
         )?;
         super::apply_transaction(
             &mut state,
             &super::ControlTransactionV1::SourceAccepted {
                 source_revision: Box::new(source.clone()),
                 policy_document: Box::new(document),
-                artifact: Some(Box::new(terminal_artifact.clone())),
+                artifact: Some(Box::new(active_artifact.clone())),
             },
-            Path::new("terminal-upgrade"),
+            Path::new("desired-inventory-upgrade"),
         )?;
 
         assert_eq!(
             state
                 .compiled_artifacts
                 .get(&source.policy_source_revision_id),
-            Some(&terminal_artifact)
+            Some(&active_artifact)
         );
         Ok(())
     }

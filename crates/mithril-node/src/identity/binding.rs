@@ -505,7 +505,7 @@ impl WorkloadBindingOwner {
             .collect::<Vec<_>>();
         for root in roots {
             let binding = self.bindings.get(&root).context(IdentityStateSnafu {
-                reason: "terminal cleanup lost an owned workload binding",
+                reason: "stale policy retirement lost an owned workload binding",
             })?;
             ensure!(
                 self.terminal_binding_matches_session(
@@ -514,7 +514,7 @@ impl WorkloadBindingOwner {
                     profile_generation_ref_id,
                 ),
                 IdentityStateSnafu {
-                    reason: "terminal cleanup binding belongs to another profile generation",
+                    reason: "stale policy retirement binding belongs to another profile generation",
                 }
             );
             self.retire_owned_root(host, root)?;
@@ -543,7 +543,8 @@ impl WorkloadBindingOwner {
                         profile_generation_ref_id,
                     ),
                 IdentityStateSnafu {
-                    reason: "terminal cleanup found a duplicate or mismatched workload binding",
+                    reason:
+                        "stale policy retirement found a duplicate or mismatched workload binding",
                 }
             );
             if matches!(
@@ -563,7 +564,7 @@ impl WorkloadBindingOwner {
                         .transition_version
                         .checked_add(1)
                         .context(IdentityStateSnafu {
-                            reason: "terminal cleanup binding transition version exhausted",
+                            reason: "stale policy retirement binding transition version exhausted",
                         })?;
                 host.update_map("execution_set_bindings", &key, binding.as_bytes())
                     .context(InterceptorSnafu)?;
@@ -573,7 +574,7 @@ impl WorkloadBindingOwner {
                         .as_deref()
                         == Some(binding.as_bytes()),
                     IdentityStateSnafu {
-                        reason: "terminal cleanup binding failed terminating readback",
+                        reason: "stale policy retirement binding failed terminating readback",
                     }
                 );
             } else {
@@ -583,7 +584,7 @@ impl WorkloadBindingOwner {
                         BindingLifecycleStateV1::Terminating | BindingLifecycleStateV1::Tombstoned
                     ),
                     IdentityStateSnafu {
-                        reason: "terminal cleanup binding has an invalid lifecycle state",
+                        reason: "stale policy retirement binding has an invalid lifecycle state",
                     }
                 );
             }
@@ -630,7 +631,7 @@ impl WorkloadBindingOwner {
                         BindingLifecycleStateV1::Terminating | BindingLifecycleStateV1::Tombstoned
                     ),
                 IdentityStateSnafu {
-                    reason: "terminal cleanup cannot finalize a live or mismatched binding",
+                    reason: "stale policy retirement cannot finalize a live or mismatched binding",
                 }
             );
             if binding.lifecycle_state == BindingLifecycleStateV1::Terminating {
@@ -640,7 +641,7 @@ impl WorkloadBindingOwner {
                         .transition_version
                         .checked_add(1)
                         .context(IdentityStateSnafu {
-                            reason: "terminal cleanup binding transition version exhausted",
+                            reason: "stale policy retirement binding transition version exhausted",
                         })?;
                 host.update_map("execution_set_bindings", &key, binding.as_bytes())
                     .context(InterceptorSnafu)?;
@@ -650,7 +651,7 @@ impl WorkloadBindingOwner {
                         .as_deref()
                         == Some(binding.as_bytes()),
                     IdentityStateSnafu {
-                        reason: "terminal cleanup binding failed tombstone readback",
+                        reason: "stale policy retirement binding failed tombstone readback",
                     }
                 );
             }
@@ -661,7 +662,7 @@ impl WorkloadBindingOwner {
                     .context(InterceptorSnafu)?
                     .is_none(),
                 IdentityStateSnafu {
-                    reason: "terminal cleanup binding survived deletion",
+                    reason: "stale policy retirement binding survived deletion",
                 }
             );
         }
@@ -2456,7 +2457,7 @@ mod tests {
     }
 
     #[test]
-    fn terminal_cleanup_rejects_a_binding_from_another_node_session() -> crate::Result<()> {
+    fn stale_policy_retirement_rejects_a_binding_from_another_node_session() -> crate::Result<()> {
         let temporary = tempfile::tempdir().context(IoSnafu {
             path: "temporary terminal binding session directory",
         })?;
