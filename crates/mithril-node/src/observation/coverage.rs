@@ -330,7 +330,7 @@ impl CoverageHealthOwner {
         &self,
         cpu_id: u32,
         sequence: u64,
-    ) -> Result<(EvidenceIdV1, TemporalCoverageV1)> {
+    ) -> Result<Option<(EvidenceIdV1, TemporalCoverageV1)>> {
         if sequence == 0 {
             return EvidenceStateSnafu {
                 reason: "coverage observation sequence must be nonzero".to_owned(),
@@ -348,6 +348,12 @@ impl CoverageHealthOwner {
             };
             let (completed, interval_id, coverage) = {
                 let source = ensure_source(inner, baseline)?;
+                if source
+                    .last_observed_sequence
+                    .is_some_and(|last| sequence <= last)
+                {
+                    return Ok(None);
+                }
                 let expected = source
                     .last_observed_sequence
                     .unwrap_or(source.current.opening_counters.next_sequence)
@@ -372,7 +378,7 @@ impl CoverageHealthOwner {
                 (completed, interval_id, coverage)
             };
             append_history(inner, completed)?;
-            Ok((interval_id, coverage))
+            Ok(Some((interval_id, coverage)))
         })
     }
 
@@ -901,16 +907,22 @@ mod tests {
         let directory = tempfile::tempdir()?;
         let skipped = open_owner(&directory.path().join("skipped.json"), 1)?;
         skipped.sample_health(&[health(0, 0)])?;
-        let (_, coverage) = skipped.observe(2, 2)?;
+        let (_, coverage) = skipped
+            .observe(2, 2)?
+            .ok_or("new sequence was not recorded")?;
         assert_eq!(coverage, TemporalCoverageV1::Gapped);
 
         let path = directory.path().join("coverage.json");
         let owner = open_owner(&path, 1)?;
         owner.sample_health(&[health(0, 0)])?;
-        let (_, coverage) = owner.observe(2, 1)?;
+        let (_, coverage) = owner
+            .observe(2, 1)?
+            .ok_or("new sequence was not recorded")?;
         assert_eq!(coverage, TemporalCoverageV1::Complete);
         owner.sample_health(&[health(1, 0)])?;
-        let (_, coverage) = owner.observe(2, 3)?;
+        let (_, coverage) = owner
+            .observe(2, 3)?
+            .ok_or("new sequence was not recorded")?;
         assert_eq!(coverage, TemporalCoverageV1::Gapped);
         assert!(!owner.snapshot().supports_negative_claim());
         owner.sample_health(&[health(4, 1)])?;
@@ -934,7 +946,9 @@ mod tests {
         owner.sample_health(&[health(8, 0)])?;
         assert!(owner.snapshot().waits_only_for_reader_delivery());
         for sequence in 1..=8 {
-            let (_, coverage) = owner.observe(2, sequence)?;
+            let (_, coverage) = owner
+                .observe(2, sequence)?
+                .ok_or("new sequence was not recorded")?;
             assert_eq!(coverage, TemporalCoverageV1::Gapped);
         }
 
@@ -974,6 +988,36 @@ mod tests {
         assert!(!snapshot.waits_only_for_reader_delivery());
         assert!(snapshot.supports_negative_claim());
         assert_eq!(snapshot.current_intervals()[0].first_sequence, 9);
+        Ok(())
+    }
+
+    #[test]
+    fn restart_ignores_ring_records_that_are_already_durable(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("coverage.json");
+        let owner = open_owner(&path, 1)?;
+        owner.sample_health(&[health(0, 0)])?;
+        for sequence in 1..=4 {
+            assert!(owner.observe(2, sequence)?.is_some());
+        }
+        owner.sample_health(&[health(4, 0)])?;
+        drop(owner);
+
+        let restarted = open_owner(&path, 1)?;
+        assert_eq!(
+            restarted.recover_after_prior_probe(&[health(6, 0)])?,
+            RecoveryProbeStatus::Recovered
+        );
+        assert_eq!(restarted.observe(2, 4)?, None);
+        assert!(restarted.observe(2, 5)?.is_some());
+        assert!(restarted.observe(2, 6)?.is_some());
+
+        let snapshot = restarted.snapshot();
+        assert!(snapshot.supports_negative_claim());
+        let current = &snapshot.current_intervals()[0];
+        assert_eq!(current.first_sequence, 5);
+        assert_eq!(current.last_sequence, Some(6));
         Ok(())
     }
 

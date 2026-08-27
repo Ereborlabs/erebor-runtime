@@ -176,14 +176,22 @@ impl EffectObservationStore {
         }
         if let Some(durable) = &self.inner.durable {
             let result: std::result::Result<
-                EvidenceWalAppendV1,
+                Option<EvidenceWalAppendV1>,
                 (Box<crate::Error>, bool, EvidenceWalRewriteV1),
             > = (|| {
                 let mut durable = durable.lock().unwrap_or_else(PoisonError::into_inner);
-                let (coverage_interval_id, temporal_coverage) = durable
+                let Some((coverage_interval_id, temporal_coverage)) = durable
                     .coverage
                     .observe(event.source_cpu_id, event.source_sequence)
-                    .map_err(|error| (Box::new(error), false, EvidenceWalRewriteV1::default()))?;
+                    .map_err(|error| (Box::new(error), false, EvidenceWalRewriteV1::default()))?
+                else {
+                    erebor_telemetry::debug!(
+                        "ignored a replayed effect observation",
+                        cpu_id = %event.source_cpu_id,
+                        source_sequence = %event.source_sequence
+                    );
+                    return Ok(None);
+                };
                 let observation = durable
                     .canonicalizer
                     .normalize_kernel(event, coverage_interval_id, temporal_coverage, utc_now_ns())
@@ -196,7 +204,7 @@ impl EffectObservationStore {
                                 .mark_all_gapped(CoverageGapReasonV1::WalCapacity)
                                 .map_err(|error| (Box::new(error), false, appended.rewrite))?;
                         }
-                        Ok(appended)
+                        Ok(Some(appended))
                     }
                     Err(failure) => {
                         let rewrite = failure.rewrite;
@@ -210,7 +218,8 @@ impl EffectObservationStore {
                 }
             })();
             let rewrite = match &result {
-                Ok(appended) => appended.rewrite,
+                Ok(Some(appended)) => appended.rewrite,
+                Ok(None) => EvidenceWalRewriteV1::default(),
                 Err((_error, _capacity, rewrite)) => *rewrite,
             };
             if rewrite.discarded_records > 0 {
@@ -485,7 +494,12 @@ impl EffectObservationStore {
             .unwrap_or_else(PoisonError::into_inner);
         // Keep the first failure because it identifies the stage that closed evidence claims.
         if first.is_none() {
-            *first = Some(error.into());
+            let error = error.into();
+            erebor_telemetry::error!(
+                "durable evidence operation failed",
+                error = %error
+            );
+            *first = Some(error);
         }
     }
 
@@ -1024,6 +1038,81 @@ mod tests {
                     .gap_reasons
                     .contains(&CoverageGapReasonV1::WalCapacity)
         }));
+        Ok(())
+    }
+
+    #[test]
+    fn durable_store_does_not_append_ring_replays_after_restart(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let wal_root = directory.path().join("wal");
+        let canonicalizer = || {
+            ObservationCanonicalizer::new(
+                EvidenceIdV1::new(1, 2),
+                EvidenceIdV1::new(3, 4),
+                1,
+                EvidenceIdV1::new(5, 6),
+            )
+        };
+        let store = EffectObservationStore::durable(
+            8,
+            wal_root.clone(),
+            EvidenceWalLimits::default(),
+            canonicalizer()?,
+        )?;
+        store.sample_coverage_health(EffectObservationHealthV1::default().as_bytes())?;
+        for source_sequence in 1..=4 {
+            store.record_bytes(
+                EffectObservationV1 {
+                    source_sequence,
+                    ..EffectObservationV1::default()
+                }
+                .as_bytes(),
+            );
+        }
+        store.sample_coverage_health(
+            EffectObservationHealthV1 {
+                next_sequence: 4,
+                ..EffectObservationHealthV1::default()
+            }
+            .as_bytes(),
+        )?;
+        drop(store);
+
+        let restarted = EffectObservationStore::durable(
+            8,
+            wal_root,
+            EvidenceWalLimits::default(),
+            canonicalizer()?,
+        )?;
+        assert!(restarted.recover_coverage_after_prior_probe(
+            EffectObservationHealthV1 {
+                next_sequence: 6,
+                ..EffectObservationHealthV1::default()
+            }
+            .as_bytes(),
+        )?);
+        let before_replay = restarted
+            .next_evidence_batch()
+            .ok_or("evidence batch missing before replay")?;
+        restarted.record_bytes(
+            EffectObservationV1 {
+                source_sequence: 4,
+                ..EffectObservationV1::default()
+            }
+            .as_bytes(),
+        );
+        let after_replay = restarted
+            .next_evidence_batch()
+            .ok_or("evidence batch missing after replay")?;
+
+        assert_eq!(after_replay.records.len(), 4);
+        assert_eq!(after_replay.last_cursor, before_replay.last_cursor);
+        assert_eq!(after_replay.batch_sha256, before_replay.batch_sha256);
+        assert_eq!(restarted.evidence_errors(), 0);
+        assert!(restarted
+            .coverage_snapshot()
+            .is_some_and(|snapshot| snapshot.supports_negative_claim()));
         Ok(())
     }
 

@@ -20,8 +20,10 @@ const WAL_FRAME_HEADER_BYTES: usize = 52;
 const WAL_FRAME_RECORD: u8 = 1;
 const WAL_FRAME_ACK: u8 = 2;
 const WAL_FRAME_GAP: u8 = 3;
+const WAL_FRAME_STREAM: u8 = 4;
 const ACK_FILE: &str = "acknowledged.bin";
 const GAP_FILE: &str = "gap.bin";
+const STREAM_FILE: &str = "stream.bin";
 const LEGACY_ACK_FILE: &str = "acknowledged.json";
 const LEGACY_GAP_FILE: &str = "gap.json";
 const LEGACY_SOURCE_FILE: &str = "source-id";
@@ -139,10 +141,54 @@ impl EvidenceRecordV1 {
         Ok(())
     }
 
-    fn source_id(&self) -> Result<[u8; 16]> {
-        Ok(ObservationEnvelopeV1::from_wire_bytes(&self.payload)?
-            .source_id
-            .to_be_bytes())
+    fn stream_identity(&self) -> Result<EvidenceWalStreamIdentityV1> {
+        EvidenceWalStreamIdentityV1::from_observation(&ObservationEnvelopeV1::from_wire_bytes(
+            &self.payload,
+        )?)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+struct EvidenceWalStreamIdentityV1 {
+    node_boot_id: [u8; 16],
+    source_id: [u8; 16],
+    source_epoch: u64,
+}
+
+impl EvidenceWalStreamIdentityV1 {
+    fn from_observation(observation: &ObservationEnvelopeV1) -> Result<Self> {
+        let node_boot_id = observation.node_boot_id.ok_or_else(|| {
+            EvidenceStateSnafu {
+                reason: "evidence WAL observation has no node boot identity".to_owned(),
+            }
+            .build()
+        })?;
+        let identity = Self {
+            node_boot_id: node_boot_id.to_be_bytes(),
+            source_id: observation.source_id.to_be_bytes(),
+            source_epoch: observation.source_epoch,
+        };
+        identity.validate()?;
+        Ok(identity)
+    }
+
+    fn validate(self) -> Result<()> {
+        if self.node_boot_id == [0; 16] || self.source_id == [0; 16] || self.source_epoch == 0 {
+            return EvidenceStateSnafu {
+                reason: "evidence WAL stream identity is invalid".to_owned(),
+            }
+            .fail();
+        }
+        Ok(())
+    }
+
+    fn directory_name(self) -> String {
+        format!(
+            "{}-{:020}-{}",
+            hex::encode(self.source_id),
+            self.source_epoch,
+            hex::encode(self.node_boot_id)
+        )
     }
 }
 
@@ -214,6 +260,16 @@ impl EvidenceBatchV1 {
 }
 
 impl EvidenceGapV1 {
+    fn stream_identity(&self) -> Result<EvidenceWalStreamIdentityV1> {
+        let identity = EvidenceWalStreamIdentityV1 {
+            node_boot_id: self.node_boot_id,
+            source_id: self.source_id,
+            source_epoch: self.source_epoch,
+        };
+        identity.validate()?;
+        Ok(identity)
+    }
+
     fn from_record(record: &EvidenceRecordV1, discarded_bytes: u64) -> Result<Self> {
         let observation = ObservationEnvelopeV1::from_wire_bytes(&record.payload)?;
         let mut gap = Self {
@@ -623,6 +679,27 @@ impl EvidenceWalCodecV1 {
         Self::finish_binary(payload, name)?;
         Ok(gap)
     }
+
+    fn encode_stream(identity: EvidenceWalStreamIdentityV1) -> Result<Vec<u8>> {
+        let mut payload = Vec::with_capacity(40);
+        payload.extend_from_slice(&identity.node_boot_id);
+        payload.extend_from_slice(&identity.source_id);
+        payload.extend_from_slice(&identity.source_epoch.to_be_bytes());
+        Self::encode_frame(WAL_FRAME_STREAM, &payload)
+    }
+
+    fn decode_stream(bytes: &[u8]) -> Result<EvidenceWalStreamIdentityV1> {
+        let name = "evidence WAL stream identity";
+        let mut payload = Self::decode_frame(bytes, WAL_FRAME_STREAM, name)?;
+        let identity = EvidenceWalStreamIdentityV1 {
+            node_boot_id: Self::take_binary_array(&mut payload, name)?,
+            source_id: Self::take_binary_array(&mut payload, name)?,
+            source_epoch: Self::take_binary_u64(&mut payload, name)?,
+        };
+        Self::finish_binary(payload, name)?;
+        identity.validate()?;
+        Ok(identity)
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -642,6 +719,7 @@ struct LegacyMigrationStreamV1 {
 pub struct EvidenceWal {
     root: PathBuf,
     limits: EvidenceWalLimits,
+    stream_identity: Option<EvidenceWalStreamIdentityV1>,
     records: Vec<EvidenceRecordV1>,
     retained_bytes: u64,
     acknowledged: AckStateV1,
@@ -668,10 +746,9 @@ impl From<crate::Error> for EvidenceWalAppendFailure {
 pub(super) struct EvidenceWalOwner {
     root: PathBuf,
     limits: EvidenceWalLimits,
-    streams: BTreeMap<[u8; 16], EvidenceWal>,
-    unbound_legacy: Option<EvidenceWal>,
-    in_flight: Option<([u8; 16], EvidenceUploadV1)>,
-    last_acknowledged_source: Option<[u8; 16]>,
+    streams: BTreeMap<EvidenceWalStreamIdentityV1, EvidenceWal>,
+    in_flight: Option<(EvidenceWalStreamIdentityV1, EvidenceUploadV1)>,
+    last_acknowledged_stream: Option<EvidenceWalStreamIdentityV1>,
 }
 
 impl EvidenceWalOwner {
@@ -682,16 +759,18 @@ impl EvidenceWalOwner {
         Self::migrate_legacy_streams(&root, limits)?;
         let mut streams = BTreeMap::new();
         let legacy = EvidenceWal::open(&root, limits)?;
-        let legacy_source = legacy_source_id(&legacy, &root)?;
         let legacy_is_populated = !legacy.records.is_empty()
             || legacy.acknowledged != AckStateV1::default()
             || legacy.gap.is_some()
-            || legacy_source.is_some();
-        let mut unbound_legacy = None;
-        if let Some(source_id) = legacy_source {
-            streams.insert(source_id, legacy);
+            || legacy.stream_identity.is_some();
+        if let Some(identity) = legacy.stream_identity {
+            streams.insert(identity, legacy);
         } else if legacy_is_populated {
-            unbound_legacy = Some(legacy);
+            return EvidenceStateSnafu {
+                reason: "a populated flat evidence WAL has no recoverable stream identity"
+                    .to_owned(),
+            }
+            .fail();
         }
         for entry in fs::read_dir(&root)
             .context(IoSnafu { path: &root })?
@@ -702,6 +781,7 @@ impl EvidenceWalOwner {
             if !path.is_dir()
                 && (path.file_name().and_then(|name| name.to_str()) == Some(ACK_FILE)
                     || path.file_name().and_then(|name| name.to_str()) == Some(GAP_FILE)
+                    || path.file_name().and_then(|name| name.to_str()) == Some(STREAM_FILE)
                     || path.file_name().and_then(|name| name.to_str()) == Some(LEGACY_ACK_FILE)
                     || path.file_name().and_then(|name| name.to_str()) == Some(LEGACY_GAP_FILE)
                     || path.file_name().and_then(|name| name.to_str()) == Some(LEGACY_SOURCE_FILE)
@@ -709,30 +789,39 @@ impl EvidenceWalOwner {
             {
                 continue;
             }
-            let source_id = stream_source_id(&path)?;
-            let wal = EvidenceWal::open(&path, limits)?;
-            if wal
-                .records
-                .iter()
-                .any(|record| record.source_id().ok() != Some(source_id))
-                || wal
-                    .gap
-                    .as_ref()
-                    .is_some_and(|gap| gap.source_id != source_id)
-            {
+            if !path.is_dir() {
                 return EvidenceStateSnafu {
                     reason: format!(
-                        "evidence WAL stream `{}` contains a different source identity",
+                        "evidence WAL entry `{}` is not an owned stream file or directory",
                         path.display()
                     ),
                 }
                 .fail();
             }
-            if streams.insert(source_id, wal).is_some() {
+            let wal = EvidenceWal::open(&path, limits)?;
+            let identity = wal.stream_identity.ok_or_else(|| {
+                EvidenceStateSnafu {
+                    reason: format!(
+                        "evidence WAL stream `{}` has no durable identity",
+                        path.display()
+                    ),
+                }
+                .build()
+            })?;
+            if !stream_directory_matches(&path, identity) {
                 return EvidenceStateSnafu {
                     reason: format!(
-                        "evidence WAL source `{}` has more than one stream directory",
-                        hex::encode(source_id)
+                        "evidence WAL stream `{}` has an invalid identity name",
+                        path.display()
+                    ),
+                }
+                .fail();
+            }
+            if streams.insert(identity, wal).is_some() {
+                return EvidenceStateSnafu {
+                    reason: format!(
+                        "evidence WAL stream `{}` has more than one directory",
+                        identity.directory_name()
                     ),
                 }
                 .fail();
@@ -742,9 +831,8 @@ impl EvidenceWalOwner {
             root,
             limits,
             streams,
-            unbound_legacy,
             in_flight: None,
-            last_acknowledged_source: None,
+            last_acknowledged_stream: None,
         };
         owner.validate_retention()?;
         Ok(owner)
@@ -754,8 +842,9 @@ impl EvidenceWalOwner {
         if let Some(migration) = Self::read_legacy_migration(root)? {
             return Self::complete_legacy_migration(root, limits, &migration);
         }
-        let legacy = EvidenceWal::open(root, limits)?;
-        let mut observations = BTreeMap::<[u8; 16], Vec<ObservationEnvelopeV1>>::new();
+        let legacy = EvidenceWal::open_unbound(root, limits)?;
+        let mut observations =
+            BTreeMap::<EvidenceWalStreamIdentityV1, Vec<ObservationEnvelopeV1>>::new();
         let mut observation_ids = BTreeSet::new();
         for record in &legacy.records {
             let observation = ObservationEnvelopeV1::from_wire_bytes(&record.payload)?;
@@ -766,7 +855,7 @@ impl EvidenceWalOwner {
                 .fail();
             }
             observations
-                .entry(observation.source_id.to_be_bytes())
+                .entry(EvidenceWalStreamIdentityV1::from_observation(&observation)?)
                 .or_default()
                 .push(observation);
         }
@@ -775,7 +864,7 @@ impl EvidenceWalOwner {
         }
         if legacy.gap.is_some() {
             return EvidenceStateSnafu {
-                reason: "a multi-source flat evidence WAL cannot migrate across a rewrite gap"
+                reason: "a multi-stream flat evidence WAL cannot migrate across a rewrite gap"
                     .to_owned(),
             }
             .fail();
@@ -788,15 +877,15 @@ impl EvidenceWalOwner {
             })?
         {
             return EvidenceStateSnafu {
-                reason: "the multi-source flat evidence WAL has a single-source marker".to_owned(),
+                reason: "the multi-stream flat evidence WAL has a single-source marker".to_owned(),
             }
             .fail();
         }
 
         let mut streams = BTreeMap::new();
-        for (source_id, source_observations) in observations {
-            let state = Self::publish_legacy_stream(root, limits, source_id, &source_observations)?;
-            streams.insert(hex::encode(source_id), state);
+        for (identity, source_observations) in observations {
+            let state = Self::publish_legacy_stream(root, limits, identity, &source_observations)?;
+            streams.insert(identity.directory_name(), state);
         }
         let migration = LegacyMigrationV1 {
             format_version: LEGACY_MIGRATION_FORMAT_VERSION,
@@ -817,12 +906,12 @@ impl EvidenceWalOwner {
     fn publish_legacy_stream(
         root: &Path,
         limits: EvidenceWalLimits,
-        source_id: [u8; 16],
+        identity: EvidenceWalStreamIdentityV1,
         observations: &[ObservationEnvelopeV1],
     ) -> Result<LegacyMigrationStreamV1> {
-        let source = hex::encode(source_id);
-        let final_path = root.join(&source);
-        let staging_path = root.join(format!(".legacy-migration-{source}"));
+        let stream = identity.directory_name();
+        let final_path = root.join(&stream);
+        let staging_path = root.join(format!(".legacy-migration-{stream}"));
         let final_exists = match fs::symlink_metadata(&final_path) {
             Ok(_) => true,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
@@ -849,7 +938,7 @@ impl EvidenceWalOwner {
             if staging_exists {
                 return EvidenceStateSnafu {
                     reason: format!(
-                        "legacy evidence WAL migration has both staged and published stream `{source}`"
+                        "legacy evidence WAL migration has both staged and published stream `{stream}`"
                     ),
                 }
                 .fail();
@@ -961,16 +1050,17 @@ impl EvidenceWalOwner {
             .fail();
         }
         let mut observation_ids = BTreeSet::new();
-        for (source, expected) in &migration.streams {
-            let path = root.join(source);
-            let source_id = parse_source_id(source, &path)?;
+        for (stream, expected) in &migration.streams {
+            let path = root.join(stream);
+            let identity = parse_stream_directory_name(stream, &path)?;
             let wal = EvidenceWal::open(&path, limits)?;
             if wal.acknowledged != AckStateV1::default()
                 || Self::legacy_migration_stream_state(&wal)? != *expected
+                || wal.stream_identity != Some(identity)
                 || wal
                     .records
                     .iter()
-                    .any(|record| record.source_id().ok() != Some(source_id))
+                    .any(|record| record.stream_identity().ok() != Some(identity))
                 || wal
                     .records
                     .iter()
@@ -978,7 +1068,7 @@ impl EvidenceWalOwner {
             {
                 return EvidenceStateSnafu {
                     reason: format!(
-                        "legacy evidence WAL migration stream `{source}` is incomplete or inconsistent"
+                        "legacy evidence WAL migration stream `{stream}` is incomplete or inconsistent"
                     ),
                 }
                 .fail();
@@ -994,6 +1084,7 @@ impl EvidenceWalOwner {
             let name = path.file_name().and_then(|name| name.to_str());
             if name == Some(ACK_FILE)
                 || name == Some(GAP_FILE)
+                || name == Some(STREAM_FILE)
                 || name == Some(LEGACY_ACK_FILE)
                 || name == Some(LEGACY_GAP_FILE)
                 || name == Some(LEGACY_SOURCE_FILE)
@@ -1016,38 +1107,23 @@ impl EvidenceWalOwner {
         &mut self,
         observation: &ObservationEnvelopeV1,
     ) -> std::result::Result<EvidenceWalAppendV1, EvidenceWalAppendFailure> {
-        let source_id = observation.source_id.to_be_bytes();
-        if !self.streams.contains_key(&source_id) && self.unbound_legacy.is_some() {
-            // A flat legacy WAL can continue only after its first source is bound durably.
-            atomic_write(
-                &self.root.join(LEGACY_SOURCE_FILE),
-                hex::encode(source_id).as_bytes(),
-            )
+        let identity = EvidenceWalStreamIdentityV1::from_observation(observation)
             .map_err(EvidenceWalAppendFailure::from)?;
-            let Some(legacy) = self.unbound_legacy.take() else {
-                return Err(EvidenceStateSnafu {
-                    reason: "the flat evidence WAL disappeared before source binding".to_owned(),
-                }
-                .build()
-                .into());
-            };
-            self.streams.insert(source_id, legacy);
-        }
-        if !self.streams.contains_key(&source_id) {
-            let path = self.root.join(hex::encode(source_id));
+        if !self.streams.contains_key(&identity) {
+            let path = self.root.join(identity.directory_name());
             let wal =
                 EvidenceWal::open(path, self.limits).map_err(EvidenceWalAppendFailure::from)?;
-            self.streams.insert(source_id, wal);
+            self.streams.insert(identity, wal);
         }
         let mut rewrite = EvidenceWalRewriteV1::default();
         loop {
             let (retained_records, retained_bytes) =
                 self.retention().map_err(EvidenceWalAppendFailure::from)?;
             let result = {
-                let wal = self.streams.get_mut(&source_id).ok_or_else(|| {
+                let wal = self.streams.get_mut(&identity).ok_or_else(|| {
                     EvidenceWalAppendFailure::from(
                         EvidenceStateSnafu {
-                            reason: "the evidence source WAL is missing after source selection"
+                            reason: "the evidence WAL stream is missing after identity selection"
                                 .to_owned(),
                         }
                         .build(),
@@ -1097,42 +1173,42 @@ impl EvidenceWalOwner {
     }
 
     pub(super) fn next_batch(&mut self) -> Option<EvidenceBatchV1> {
-        if let Some((_source_id, upload)) = &self.in_flight {
+        if let Some((_identity, upload)) = &self.in_flight {
             return match upload {
                 EvidenceUploadV1::Batch(batch) => Some(batch.clone()),
                 EvidenceUploadV1::Gap(_) => None,
             };
         }
-        let source_id = self.streams.keys().copied().find(|source_id| {
+        let identity = self.streams.keys().copied().find(|identity| {
             self.streams
-                .get(source_id)
+                .get(identity)
                 .is_some_and(|wal| wal.next_batch().is_some())
         })?;
-        let batch = self.streams.get(&source_id)?.next_batch()?;
-        self.in_flight = Some((source_id, EvidenceUploadV1::Batch(batch.clone())));
+        let batch = self.streams.get(&identity)?.next_batch()?;
+        self.in_flight = Some((identity, EvidenceUploadV1::Batch(batch.clone())));
         Some(batch)
     }
 
     pub(super) fn next_upload(&mut self) -> Option<EvidenceUploadV1> {
-        if let Some((_source_id, upload)) = &self.in_flight {
+        if let Some((_identity, upload)) = &self.in_flight {
             return Some(upload.clone());
         }
-        let source_id = self
+        let identity = self
             .streams
             .keys()
             .copied()
-            .filter(|source_id| {
-                self.last_acknowledged_source
-                    .is_none_or(|last| source_id > &last)
+            .filter(|identity| {
+                self.last_acknowledged_stream
+                    .is_none_or(|last| identity > &last)
             })
             .chain(self.streams.keys().copied())
-            .find(|source_id| {
+            .find(|identity| {
                 self.streams
-                    .get(source_id)
+                    .get(identity)
                     .is_some_and(EvidenceWal::has_pending_upload)
             })?;
-        let upload = self.streams.get(&source_id)?.next_upload()?;
-        self.in_flight = Some((source_id, upload.clone()));
+        let upload = self.streams.get(&identity)?.next_upload()?;
+        self.in_flight = Some((identity, upload.clone()));
         Some(upload)
     }
 
@@ -1141,13 +1217,13 @@ impl EvidenceWalOwner {
     }
 
     pub(super) fn acknowledge_upload(&mut self, ack: EvidenceUploadAckV1) -> Result<()> {
-        let (source_id, upload) = self.in_flight.as_ref().ok_or_else(|| {
+        let (identity, upload) = self.in_flight.as_ref().ok_or_else(|| {
             EvidenceStateSnafu {
                 reason: "evidence acknowledgement has no in-flight source item".to_owned(),
             }
             .build()
         })?;
-        let wal = self.streams.get_mut(source_id).ok_or_else(|| {
+        let wal = self.streams.get_mut(identity).ok_or_else(|| {
             EvidenceStateSnafu {
                 reason: "evidence acknowledgement source is not retained".to_owned(),
             }
@@ -1168,9 +1244,9 @@ impl EvidenceWalOwner {
                 .fail();
             }
         }
-        let source_id = *source_id;
+        let identity = *identity;
         self.in_flight = None;
-        self.last_acknowledged_source = Some(source_id);
+        self.last_acknowledged_stream = Some(identity);
         Ok(())
     }
 
@@ -1212,7 +1288,6 @@ impl EvidenceWalOwner {
     fn retention(&self) -> Result<(usize, u64)> {
         self.streams
             .values()
-            .chain(self.unbound_legacy.iter())
             .try_fold((0_usize, 0_u64), |(records, bytes), wal| {
                 Ok((
                     records.checked_add(wal.pending_records()).ok_or_else(|| {
@@ -1245,101 +1320,94 @@ impl EvidenceWalOwner {
     }
 }
 
-fn legacy_source_id(wal: &EvidenceWal, root: &Path) -> Result<Option<[u8; 16]>> {
-    let marker_path = root.join(LEGACY_SOURCE_FILE);
-    let marker = match fs::read_to_string(&marker_path) {
-        Ok(value) => Some(parse_source_id(value.trim(), &marker_path)?),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
-        Err(source) => {
-            return Err(crate::Error::Io {
-                path: marker_path,
-                source,
-                location: snafu::Location::default(),
-            });
-        }
-    };
-    let mut record_source = None;
-    for record in &wal.records {
-        let source_id = record.source_id()?;
-        if record_source.is_some_and(|current| current != source_id) {
-            return EvidenceStateSnafu {
-                reason: "the flat evidence WAL contains more than one source identity".to_owned(),
-            }
-            .fail();
-        }
-        record_source = Some(source_id);
-    }
-    if let Some(gap) = &wal.gap {
-        if record_source.is_some_and(|current| current != gap.source_id) {
-            return EvidenceStateSnafu {
-                reason: "the flat evidence WAL gap has a different source identity".to_owned(),
-            }
-            .fail();
-        }
-        record_source = Some(gap.source_id);
-    }
-    if marker.is_some() && record_source.is_some() && marker != record_source {
-        return EvidenceStateSnafu {
-            reason: "the flat evidence WAL source marker does not match its records".to_owned(),
-        }
-        .fail();
-    }
-    if marker.is_none() {
-        if let Some(record_source) = record_source {
-            atomic_write(&marker_path, hex::encode(record_source).as_bytes())?;
-        }
-    }
-    Ok(marker.or(record_source))
-}
-
-fn stream_source_id(path: &Path) -> Result<[u8; 16]> {
+fn stream_directory_matches(path: &Path, identity: EvidenceWalStreamIdentityV1) -> bool {
     let name = path
         .file_name()
         .and_then(|name| name.to_str())
         .unwrap_or_default();
-    let source_id = parse_source_id(name, path);
-    if !path.is_dir() || source_id.is_err() {
+    name == identity.directory_name() || name == hex::encode(identity.source_id)
+}
+
+fn parse_stream_directory_name(value: &str, path: &Path) -> Result<EvidenceWalStreamIdentityV1> {
+    let mut fields = value.split('-');
+    let source = fields.next().unwrap_or_default();
+    let epoch = fields.next().unwrap_or_default();
+    let boot = fields.next().unwrap_or_default();
+    if fields.next().is_some()
+        || epoch.len() != 20
+        || !epoch.bytes().all(|byte| byte.is_ascii_digit())
+    {
         return EvidenceStateSnafu {
             reason: format!(
-                "evidence WAL entry `{}` is not a source stream directory",
+                "evidence WAL stream identity `{}` is invalid",
                 path.display()
             ),
         }
         .fail();
     }
-    source_id
+    let identity = EvidenceWalStreamIdentityV1 {
+        node_boot_id: parse_id128(boot, path, "boot")?,
+        source_id: parse_source_id(source, path)?,
+        source_epoch: epoch.parse().map_err(|error| {
+            EvidenceStateSnafu {
+                reason: format!(
+                    "evidence WAL stream epoch `{}` is invalid: {error}",
+                    path.display()
+                ),
+            }
+            .build()
+        })?,
+    };
+    identity.validate()?;
+    Ok(identity)
 }
 
 fn parse_source_id(value: &str, path: &Path) -> Result<[u8; 16]> {
-    let source_id: Option<[u8; 16]> = hex::decode(value)
+    parse_id128(value, path, "source")
+}
+
+fn parse_id128(value: &str, path: &Path, name: &str) -> Result<[u8; 16]> {
+    let identity: Option<[u8; 16]> = hex::decode(value)
         .ok()
-        .and_then(|value| value.try_into().ok());
-    let Some(source_id) = source_id else {
+        .and_then(|decoded| decoded.try_into().ok());
+    let Some(identity) = identity else {
         return EvidenceStateSnafu {
             reason: format!(
-                "evidence WAL source identity `{}` is invalid",
+                "evidence WAL {name} identity `{}` is invalid",
                 path.display()
             ),
         }
         .fail();
     };
-    if value.len() != 32 || hex::encode(source_id) != value {
+    if value.len() != 32 || hex::encode(identity) != value {
         return EvidenceStateSnafu {
             reason: format!(
-                "evidence WAL source identity `{}` is invalid",
+                "evidence WAL {name} identity `{}` is invalid",
                 path.display()
             ),
         }
         .fail();
     }
-    Ok(source_id)
+    Ok(identity)
 }
 
 impl EvidenceWal {
     pub fn open(root: impl Into<PathBuf>, limits: EvidenceWalLimits) -> Result<Self> {
+        Self::open_inner(root.into(), limits, true)
+    }
+
+    fn open_unbound(root: impl Into<PathBuf>, limits: EvidenceWalLimits) -> Result<Self> {
+        Self::open_inner(root.into(), limits, false)
+    }
+
+    fn open_inner(
+        root: PathBuf,
+        limits: EvidenceWalLimits,
+        enforce_stream_identity: bool,
+    ) -> Result<Self> {
         limits.validate()?;
-        let root = root.into();
         fs::create_dir_all(&root).context(IoSnafu { path: &root })?;
+        let persisted_stream_identity = read_stream_identity(&root)?;
         let acknowledged = read_ack(&root)?;
         let gap = read_gap(&root, acknowledged)?;
         let mut paths = recover_directory(&root, acknowledged, gap.as_ref())?;
@@ -1448,9 +1516,34 @@ impl EvidenceWal {
             }
             .fail();
         }
+        let derived_stream_identity = enforce_stream_identity
+            .then(|| derive_stream_identity(&records, gap.as_ref()))
+            .transpose()?
+            .flatten();
+        let stream_identity = match (persisted_stream_identity, derived_stream_identity) {
+            (Some(persisted), Some(derived)) if persisted != derived => {
+                return EvidenceStateSnafu {
+                    reason: "evidence WAL records do not match their durable stream identity"
+                        .to_owned(),
+                }
+                .fail();
+            }
+            (Some(persisted), _) => Some(persisted),
+            (None, derived) if enforce_stream_identity => {
+                if let Some(identity) = derived {
+                    atomic_write(
+                        &root.join(STREAM_FILE),
+                        &EvidenceWalCodecV1::encode_stream(identity)?,
+                    )?;
+                }
+                derived
+            }
+            (None, _derived) => None,
+        };
         Ok(Self {
             root,
             limits,
+            stream_identity,
             records,
             retained_bytes,
             acknowledged,
@@ -1464,10 +1557,54 @@ impl EvidenceWal {
             .map_err(|failure| *failure.error)
     }
 
+    #[cfg(test)]
+    fn append_legacy_unbound(&mut self, observation: &ObservationEnvelopeV1) -> Result<u64> {
+        self.append_classified_inner(observation, false)
+            .map_err(|failure| *failure.error)
+    }
+
     pub(super) fn append_classified(
         &mut self,
         observation: &ObservationEnvelopeV1,
     ) -> std::result::Result<u64, EvidenceWalAppendFailure> {
+        self.append_classified_inner(observation, true)
+    }
+
+    fn append_classified_inner(
+        &mut self,
+        observation: &ObservationEnvelopeV1,
+        enforce_stream_identity: bool,
+    ) -> std::result::Result<u64, EvidenceWalAppendFailure> {
+        if enforce_stream_identity {
+            let identity = EvidenceWalStreamIdentityV1::from_observation(observation)?;
+            match self.stream_identity {
+                Some(current) if current != identity => {
+                    return Err(EvidenceStateSnafu {
+                        reason:
+                            "evidence WAL append crossed a boot, source, or source-epoch boundary"
+                                .to_owned(),
+                    }
+                    .build()
+                    .into());
+                }
+                Some(_) => {}
+                None if self.acknowledged != AckStateV1::default() => {
+                    return Err(EvidenceStateSnafu {
+                        reason: "acknowledged legacy evidence WAL has no durable stream identity"
+                            .to_owned(),
+                    }
+                    .build()
+                    .into());
+                }
+                None => {
+                    atomic_write(
+                        &self.root.join(STREAM_FILE),
+                        &EvidenceWalCodecV1::encode_stream(identity)?,
+                    )?;
+                    self.stream_identity = Some(identity);
+                }
+            }
+        }
         let record_tail = self
             .records
             .last()
@@ -1832,6 +1969,30 @@ impl EvidenceWal {
     }
 }
 
+fn derive_stream_identity(
+    records: &[EvidenceRecordV1],
+    gap: Option<&EvidenceGapV1>,
+) -> Result<Option<EvidenceWalStreamIdentityV1>> {
+    let mut identity = gap.map(EvidenceGapV1::stream_identity).transpose()?;
+    for record in records {
+        let record_identity = record.stream_identity()?;
+        if identity.is_some_and(|current| current != record_identity) {
+            return EvidenceStateSnafu {
+                reason: "one evidence WAL contains more than one stream identity".to_owned(),
+            }
+            .fail();
+        }
+        identity = Some(record_identity);
+    }
+    Ok(identity)
+}
+
+fn read_stream_identity(root: &Path) -> Result<Option<EvidenceWalStreamIdentityV1>> {
+    read_optional_file(&root.join(STREAM_FILE))?
+        .map(|bytes| EvidenceWalCodecV1::decode_stream(&bytes))
+        .transpose()
+}
+
 fn read_ack(root: &Path) -> Result<AckStateV1> {
     let path = root.join(ACK_FILE);
     let legacy_path = root.join(LEGACY_ACK_FILE);
@@ -2050,6 +2211,7 @@ fn is_owned_temporary(path: &Path) -> bool {
         .unwrap_or_default();
     stem == "acknowledged"
         || stem == "gap"
+        || stem == "stream"
         || (stem.len() == 20 && stem.bytes().all(|byte| byte.is_ascii_digit()))
 }
 
@@ -2064,8 +2226,8 @@ mod tests {
     use super::{
         segment_path, AckStateV1, EvidenceAckV1, EvidenceGapAckV1, EvidenceRecordV1,
         EvidenceUploadAckV1, EvidenceUploadV1, EvidenceWal, EvidenceWalCapacityPolicyV1,
-        EvidenceWalLimits, EvidenceWalOwner, ACK_FILE, GAP_FILE, LEGACY_ACK_FILE, LEGACY_GAP_FILE,
-        WAL_FORMAT_VERSION, WAL_FRAME_MAGIC,
+        EvidenceWalLimits, EvidenceWalOwner, EvidenceWalStreamIdentityV1, ACK_FILE, GAP_FILE,
+        LEGACY_ACK_FILE, LEGACY_GAP_FILE, STREAM_FILE, WAL_FORMAT_VERSION, WAL_FRAME_MAGIC,
     };
     use crate::{EvidenceIdV1, ObservationCanonicalizer, TemporalCoverageV1};
 
@@ -2077,11 +2239,20 @@ mod tests {
         sequence: u64,
         cpu_id: u32,
     ) -> crate::Result<crate::ObservationEnvelopeV1> {
+        kernel_observation_for_stream(sequence, cpu_id, 5, EvidenceIdV1::new(6, 7))
+    }
+
+    fn kernel_observation_for_stream(
+        sequence: u64,
+        cpu_id: u32,
+        source_epoch: u64,
+        node_boot_id: EvidenceIdV1,
+    ) -> crate::Result<crate::ObservationEnvelopeV1> {
         let canonicalizer = ObservationCanonicalizer::new(
             EvidenceIdV1::new(1, 2),
             EvidenceIdV1::new(3, 4),
-            5,
-            EvidenceIdV1::new(6, 7),
+            source_epoch,
+            node_boot_id,
         )?;
         canonicalizer.normalize_kernel(
             erebor_interceptor_abi::EffectObservationV1 {
@@ -2188,6 +2359,7 @@ mod tests {
             second_path,
             directory.path().join(ACK_FILE),
             directory.path().join(GAP_FILE),
+            directory.path().join(STREAM_FILE),
         ] {
             let bytes = std::fs::read(path)?;
             assert!(bytes.starts_with(&WAL_FRAME_MAGIC));
@@ -2228,10 +2400,10 @@ mod tests {
             .append_classified(&kernel_observation(4)?)
             .map_err(|failure| failure.error)?;
         assert_eq!(appended.rewrite.discarded_records, 1);
-        let source_id = kernel_observation(1)?.source_id.to_be_bytes();
+        let identity = EvidenceWalStreamIdentityV1::from_observation(&kernel_observation(1)?)?;
         let stream = owner
             .streams
-            .get(&source_id)
+            .get(&identity)
             .ok_or("rewritten source stream missing")?
             .root
             .clone();
@@ -2355,11 +2527,12 @@ mod tests {
             .map_err(|failure| failure.error)?;
 
         let first = owner.next_batch().ok_or("first source batch is missing")?;
-        let first_source = first.records[0].source_id()?;
-        assert!(first
-            .records
-            .iter()
-            .all(|record| record.source_id().ok() == Some(first_source)));
+        let first_source = first.records[0].stream_identity()?.source_id;
+        assert!(first.records.iter().all(|record| record
+            .stream_identity()
+            .map(|value| value.source_id)
+            .ok()
+            == Some(first_source)));
         drop(owner);
 
         let mut owner = EvidenceWalOwner::open(directory.path(), limits())?;
@@ -2370,18 +2543,66 @@ mod tests {
             batch_sha256: first.batch_sha256,
         })?;
         let second = owner.next_batch().ok_or("second source batch is missing")?;
-        let second_source = second.records[0].source_id()?;
+        let second_source = second.records[0].stream_identity()?.source_id;
         assert_ne!(second_source, first_source);
-        assert!(second
-            .records
-            .iter()
-            .all(|record| record.source_id().ok() == Some(second_source)));
+        assert!(second.records.iter().all(|record| record
+            .stream_identity()
+            .map(|value| value.source_id)
+            .ok()
+            == Some(second_source)));
         owner.acknowledge(EvidenceAckV1 {
             first_cursor: second.first_cursor,
             last_cursor: second.last_cursor,
             batch_sha256: second.batch_sha256,
         })?;
         assert!(owner.next_batch().is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn wal_owner_starts_a_new_cursor_chain_for_a_new_physical_epoch(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let mut owner = EvidenceWalOwner::open(directory.path(), limits())?;
+        let prior = kernel_observation_for_stream(1, 0, 5, EvidenceIdV1::new(6, 7))?;
+        let current = kernel_observation_for_stream(1, 0, 6, EvidenceIdV1::new(6, 8))?;
+        assert_eq!(
+            owner
+                .append_classified(&prior)
+                .map_err(|failure| failure.error)?
+                .cursor,
+            1
+        );
+        assert_eq!(
+            owner
+                .append_classified(&current)
+                .map_err(|failure| failure.error)?
+                .cursor,
+            1
+        );
+        assert_eq!(owner.streams.len(), 2);
+        drop(owner);
+
+        let mut reopened = EvidenceWalOwner::open(directory.path(), limits())?;
+        let first = reopened
+            .next_batch()
+            .ok_or("prior stream batch is missing")?;
+        assert_eq!((first.first_cursor, first.last_cursor), (1, 1));
+        assert_eq!(first.records[0].previous_record_sha256, [0; 32]);
+        reopened.acknowledge(EvidenceAckV1 {
+            first_cursor: first.first_cursor,
+            last_cursor: first.last_cursor,
+            batch_sha256: first.batch_sha256,
+        })?;
+        let second = reopened
+            .next_batch()
+            .ok_or("current stream batch is missing")?;
+        assert_eq!((second.first_cursor, second.last_cursor), (1, 1));
+        assert_eq!(second.records[0].previous_record_sha256, [0; 32]);
+        assert_ne!(
+            first.records[0].stream_identity()?,
+            second.records[0].stream_identity()?
+        );
         Ok(())
     }
 
@@ -2451,8 +2672,8 @@ mod tests {
         let continued = owner.next_batch().ok_or("continued batch is missing")?;
         assert_eq!((continued.first_cursor, continued.last_cursor), (2, 2));
         assert_eq!(
-            continued.records[0].source_id()?,
-            expected.records[0].source_id()?
+            continued.records[0].stream_identity()?.source_id,
+            expected.records[0].stream_identity()?.source_id
         );
         Ok(())
     }
@@ -2472,8 +2693,8 @@ mod tests {
             .map(|observation| observation.observation_id)
             .collect::<std::collections::BTreeSet<_>>();
         let mut legacy = EvidenceWal::open(directory.path(), limits())?;
-        legacy.append(&kernel_observation_for_cpu(1, 2)?)?;
-        legacy.append(&kernel_observation_for_cpu(2, 2)?)?;
+        legacy.append_legacy_unbound(&kernel_observation_for_cpu(1, 2)?)?;
+        legacy.append_legacy_unbound(&kernel_observation_for_cpu(2, 2)?)?;
         let acknowledged = legacy
             .next_batch()
             .ok_or("legacy acknowledged batch is missing")?;
@@ -2483,16 +2704,14 @@ mod tests {
             batch_sha256: acknowledged.batch_sha256,
         })?;
         for observation in &observations {
-            legacy.append(observation)?;
+            legacy.append_legacy_unbound(observation)?;
         }
         drop(legacy);
 
         // This is the durable state after one stream rename and before the marker write.
-        let published_source = observations[0].source_id;
+        let published_stream = EvidenceWalStreamIdentityV1::from_observation(&observations[0])?;
         let mut published = EvidenceWal::open(
-            directory
-                .path()
-                .join(hex::encode(published_source.to_be_bytes())),
+            directory.path().join(published_stream.directory_name()),
             limits(),
         )?;
         published.append(&observations[0])?;
@@ -2509,11 +2728,12 @@ mod tests {
         let first = owner
             .next_batch()
             .ok_or("first migrated batch is missing")?;
-        let first_source = first.records[0].source_id()?;
-        assert!(first
-            .records
-            .iter()
-            .all(|record| record.source_id().ok() == Some(first_source)));
+        let first_source = first.records[0].stream_identity()?.source_id;
+        assert!(first.records.iter().all(|record| record
+            .stream_identity()
+            .map(|value| value.source_id)
+            .ok()
+            == Some(first_source)));
         drop(owner);
 
         let mut owner = EvidenceWalOwner::open(directory.path(), limits())?;
@@ -2529,12 +2749,13 @@ mod tests {
         let second = owner
             .next_batch()
             .ok_or("second migrated batch is missing")?;
-        let second_source = second.records[0].source_id()?;
+        let second_source = second.records[0].stream_identity()?.source_id;
         assert_ne!(second_source, first_source);
-        assert!(second
-            .records
-            .iter()
-            .all(|record| record.source_id().ok() == Some(second_source)));
+        assert!(second.records.iter().all(|record| record
+            .stream_identity()
+            .map(|value| value.source_id)
+            .ok()
+            == Some(second_source)));
         owner.acknowledge(EvidenceAckV1 {
             first_cursor: second.first_cursor,
             last_cursor: second.last_cursor,
@@ -2581,6 +2802,7 @@ mod tests {
                 maximum_retained_records: records.len(),
                 ..EvidenceWalLimits::default()
             },
+            stream_identity: None,
             records,
             retained_bytes: 0,
             acknowledged: AckStateV1::default(),

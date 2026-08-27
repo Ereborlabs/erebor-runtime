@@ -400,7 +400,9 @@ mod tests {
         coverage.sample_health(&[health(0)])?;
         let mut observations = Vec::new();
         for sequence in 1..=4 {
-            let (coverage_id, temporal) = coverage.observe(0, sequence)?;
+            let (coverage_id, temporal) = coverage
+                .observe(0, sequence)?
+                .ok_or("new sequence was not recorded")?;
             observations.push(canonicalizer.normalize_kernel(
                 EffectObservationV1 {
                     source_sequence: sequence,
@@ -448,7 +450,9 @@ mod tests {
         let coverage =
             CoverageHealthOwner::open(directory.path().join("coverage.json"), canonicalizer)?;
         coverage.sample_health(&[health(0)])?;
-        let (first_coverage, first_temporal) = coverage.observe(0, 1)?;
+        let (first_coverage, first_temporal) = coverage
+            .observe(0, 1)?
+            .ok_or("new sequence was not recorded")?;
         let first = canonicalizer.normalize_kernel(
             EffectObservationV1 {
                 source_sequence: 1,
@@ -462,7 +466,9 @@ mod tests {
             first_temporal,
             1,
         )?;
-        let (third_coverage, third_temporal) = coverage.observe(0, 3)?;
+        let (third_coverage, third_temporal) = coverage
+            .observe(0, 3)?
+            .ok_or("new sequence was not recorded")?;
         let third = canonicalizer.normalize_kernel(
             EffectObservationV1 {
                 source_sequence: 3,
