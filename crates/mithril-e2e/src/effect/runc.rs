@@ -37,7 +37,7 @@ use crate::Result;
 const WAIT_LIMIT: Duration = Duration::from_secs(15);
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-pub struct RuncPreparedProbeV1 {
+pub struct RuncEntryRoleRuntimeProbeV1 {
     pub schema_version: u32,
     pub runc_version: String,
     pub initial_host_pid: u32,
@@ -173,7 +173,7 @@ impl Drop for RuncContainer {
 
 impl EffectTestRunner {
     #[allow(clippy::too_many_arguments)]
-    pub fn runc_prepared_probe(
+    pub fn runc_entry_role_runtime_probe(
         &self,
         output_directory: &Path,
         pin_root: &Path,
@@ -181,7 +181,7 @@ impl EffectTestRunner {
         runc_path: &Path,
         workload_path: &Path,
         prestart_hook: &Path,
-    ) -> Result<RuncPreparedProbeV1> {
+    ) -> Result<RuncEntryRoleRuntimeProbeV1> {
         for path in [pin_root, lease_path] {
             ensure!(
                 !path.exists(),
@@ -204,7 +204,7 @@ impl EffectTestRunner {
         fs::create_dir_all(output_directory).context(IoSnafu {
             path: output_directory,
         })?;
-        let fixture_root = output_directory.join("runc-prepared-fixture");
+        let fixture_root = output_directory.join("runc-entry-role-fixture");
         ensure!(
             !fixture_root.exists(),
             InvalidInputSnafu {
@@ -223,8 +223,8 @@ impl EffectTestRunner {
         let request_directory = fixture_root.join("prestart-requests");
         let state_root = fixture_root.join("runc-state");
         // Keep the runtime streams outside the disposable bundle so a failed probe is diagnosable.
-        let stdout_path = output_directory.join("runc-prepared.stdout");
-        let stderr_path = output_directory.join("runc-prepared.stderr");
+        let stdout_path = output_directory.join("runc-entry-role.stdout");
+        let stderr_path = output_directory.join("runc-entry-role.stderr");
         fs::create_dir_all(rootfs.join("bin")).context(IoSnafu { path: &rootfs })?;
         fs::create_dir(&request_directory).context(IoSnafu {
             path: &request_directory,
@@ -304,7 +304,7 @@ impl EffectTestRunner {
         };
 
         let request_path = request_directory.join(format!("{container_id}.json"));
-        wait_for_path(&request_path, true, "the stock runc prestart request")?;
+        wait_for_path(&request_path, true, "the direct runc prestart request")?;
         let request: serde_json::Value =
             serde_json::from_slice(&fs::read(&request_path).context(IoSnafu {
                 path: &request_path,
@@ -314,7 +314,7 @@ impl EffectTestRunner {
             })?;
         fs::copy(
             &request_path,
-            output_directory.join("runc-prepared-request.json"),
+            output_directory.join("runc-entry-role-request.json"),
         )
         .context(IoSnafu {
             path: &request_path,
@@ -327,7 +327,7 @@ impl EffectTestRunner {
             .ok_or_else(|| {
                 InvalidInputSnafu {
                     path: &request_path,
-                    reason: "the stock runc prestart request has no valid PID",
+                    reason: "the direct runc prestart request has no valid PID",
                 }
                 .build()
             })?;
@@ -345,7 +345,7 @@ impl EffectTestRunner {
             })
             .unwrap_or_else(|error| format!("unavailable: {error}"));
         fs::write(
-            output_directory.join("runc-prepared-root.txt"),
+            output_directory.join("runc-entry-role-root.txt"),
             format!("root={root_target}\nwork={work_state}\n"),
         )
         .context(IoSnafu {
@@ -357,7 +357,7 @@ impl EffectTestRunner {
             .ok_or_else(|| {
                 InvalidInputSnafu {
                     path: &request_path,
-                    reason: "the stock runc prestart request has no cgroup",
+                    reason: "the direct runc prestart request has no cgroup",
                 }
                 .build()
             })?;
@@ -365,7 +365,7 @@ impl EffectTestRunner {
             observed_cgroup == format!("/{cgroup_name}"),
             InvalidInputSnafu {
                 path: &request_path,
-                reason: format!("stock runc used unexpected cgroup `{observed_cgroup}`"),
+                reason: format!("direct runc used unexpected cgroup `{observed_cgroup}`"),
             }
         );
         signal_process(initial_pid, Signal::STOP)?;
@@ -468,7 +468,7 @@ impl EffectTestRunner {
             InvalidInputSnafu {
                 path: pin_root,
                 reason: format!(
-                    "the held stock runc task failed prepared reconciliation: {reconciliation:?}"
+                    "the held direct runc task failed prepared reconciliation: {reconciliation:?}"
                 ),
             }
         );
@@ -479,7 +479,7 @@ impl EffectTestRunner {
             .ok_or_else(|| {
                 InvalidInputSnafu {
                     path: pin_root,
-                    reason: "the held stock runc task has no prepared identity",
+                    reason: "the held direct runc task has no prepared identity",
                 }
                 .build()
             })?;
@@ -492,7 +492,7 @@ impl EffectTestRunner {
             prepared_state_before_exec == "prepared",
             InvalidInputSnafu {
                 path: pin_root,
-                reason: "the held stock runc task is not in PREPARED state",
+                reason: "the held direct runc task is not in PREPARED state",
             }
         );
         let observations = EffectObservationStore::default();
@@ -530,7 +530,7 @@ impl EffectTestRunner {
             .ok_or_else(|| {
                 InvalidInputSnafu {
                     path: pin_root,
-                    reason: "the stock runc task lost identity after its first exec",
+                    reason: "the direct runc task lost identity after its first exec",
                 }
                 .build()
             })?;
@@ -939,7 +939,7 @@ impl EffectTestRunner {
         let status = wait_for_child(container.child.as_mut().ok_or_else(|| {
             InvalidInputSnafu {
                 path: runc_path,
-                reason: "the stock runc child disappeared",
+                reason: "the direct runc child disappeared",
             }
             .build()
         })?)?;
@@ -973,14 +973,14 @@ impl EffectTestRunner {
             cgroup_removed,
             InvalidInputSnafu {
                 path: &cgroup_path,
-                reason: "the stock runc cgroup survived container deletion",
+                reason: "the direct runc cgroup survived container deletion",
             }
         );
         fs::remove_dir_all(&fixture_root).context(IoSnafu {
             path: &fixture_root,
         })?;
 
-        Ok(RuncPreparedProbeV1 {
+        Ok(RuncEntryRoleRuntimeProbeV1 {
             schema_version: 7,
             runc_version: runc_version.lines().next().unwrap_or_default().to_owned(),
             initial_host_pid: initial_pid,
@@ -1118,7 +1118,7 @@ fn prepare_entry_role_root(rootfs: &Path, workload_path: &Path) -> Result<Vec<St
         !dependencies.is_empty(),
         InvalidInputSnafu {
             path: workload_path,
-            reason: "the stock-runc regression workload must use a dynamic loader",
+            reason: "the direct runc entry-role workload must use a dynamic loader",
         }
     );
     for entry in ["cp", "dd", "cat", "grep", "wc"] {
@@ -1400,18 +1400,20 @@ fn wait_for_runtime_active(
                 })
                 .collect::<Vec<_>>()
                 .join("\n");
-            fs::write(output_directory.join("runc-prepared-process.txt"), process).context(
-                IoSnafu {
-                    path: output_directory,
-                },
-            )?;
+            fs::write(
+                output_directory.join("runc-entry-role-process.txt"),
+                process,
+            )
+            .context(IoSnafu {
+                path: output_directory,
+            })?;
         }
         ensure!(
             Instant::now() < deadline,
             InvalidInputSnafu {
                 path: Path::new("prepared_container_state"),
                 reason: format!(
-                    "stock runc did not activate normal policy; observations={:?}",
+                    "direct runc did not activate normal policy; observations={:?}",
                     observations
                         .recent_since(marker)
                         .iter()
@@ -1440,7 +1442,7 @@ fn wait_for_child(child: &mut Child) -> Result<std::process::ExitStatus> {
             Instant::now() < deadline,
             InvalidInputSnafu {
                 path: Path::new("runc child"),
-                reason: "stock runc did not exit after the workload release",
+                reason: "direct runc did not exit after the workload release",
             }
         );
         thread::sleep(Duration::from_millis(25));

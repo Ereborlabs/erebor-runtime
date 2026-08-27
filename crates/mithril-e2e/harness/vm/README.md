@@ -1,7 +1,8 @@
 # Runtime Qualification VM Harness
 
-This harness builds and runs the repository-owned kernel, identity, stock-runc,
-effect-observation, and local-enforcement physical probes in one disposable VM.
+This harness builds and runs the repository-owned kernel, identity, direct-runc
+entry-role, effect-observation, and local-enforcement physical probes in one
+disposable VM.
 It copies the JSON evidence to the host. It then destroys the VM on success or
 failure.
 
@@ -20,17 +21,19 @@ crates/mithril-e2e/harness/vm/run.sh \
   --output-directory /tmp/mithril-vm-test-evidence
 ```
 
-Run only the stock-runc application-start regression in a fresh disposable
-guest:
+Run only the direct-runc entry-role regression in a fresh disposable guest:
 
 ```bash
-crates/mithril-e2e/harness/vm/run.sh --stock-runc-only \
-  --output-directory /tmp/mithril-stock-runc-evidence
+crates/mithril-e2e/harness/vm/run.sh --entry-role-runtime-only \
+  --output-directory /tmp/mithril-runc-entry-role-evidence
 ```
 
-This lane proves that the approved application entry activates from
-`PREPARED`. It also proves that the dynamic loader and libraries are absent
-from policy and run under the admitted entry's default authority.
+This lane applies the multi-entry policy to a normal runc container. It proves
+that the approved application entry activates from `PREPARED`. It also proves
+independent additional-entry roles, reusable entry invocation, administrative
+entry admission, unmatched external-entry denial, and role-policy isolation.
+The dynamic loader and libraries are absent from policy and run under the
+admitted entry's default authority.
 
 Run only the protected Kubernetes application-start transaction in a fresh
 two-node cluster:
@@ -105,7 +108,7 @@ qualification fixture. It does not prove projected-token semantic
 classification. An empty read-only hostPath release file holds the direct CRI
 task until signed recovery. The host writes that file after recovery.
 
-Before K3s installation, the harness runs stock `runc` directly. The initial
+Before K3s installation, the harness runs `runc` directly. The initial
 task starts in `PREPARED`, and runtime setup effects remain allowed. The signed
 BusyBox backing path must activate normal policy without an executable inode
 key. The container must exit successfully. The direct observe and protect
@@ -188,9 +191,10 @@ disposable work directory until checksum validation succeeds. The harness remove
 cloud-init data, guest, BPF pins, cgroups, lease files, and guest test files.
 The selected output directory keeps the platform manifest, the raw physical
 probe and benchmark evidence, the generated kernel qualification record, and
-the identity, stock-runc, effect, and network results. The stock-runc result
-records the `PREPARED` and `ACTIVE` states, path decision, runtime version, and
-owned-resource cleanup. The network result records the
+the identity, direct-runc entry-role, effect, and network results. The direct
+runc result records the `PREPARED` and `ACTIVE` states, independent role
+decisions, external-entry denial, runtime version, and owned-resource cleanup.
+The network result records the
 single-host actor, destination, response-fence, and socket-lifetime oracles.
 With `--with-k3s`, the directory also keeps `k3s.txt`, `k3s-cri-observe.txt`,
 and `k3s-cri-effect.txt`. These files record the Pod

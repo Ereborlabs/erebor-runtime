@@ -26,8 +26,8 @@ pub use effect::{
     EffectPhysicalProbeBundleV1, EffectTestRunner, HfStaticEffectClassificationCaseV1,
     HfStaticEffectClassificationV1, LocalEnforcementFixtureResultV1, NetworkFixtureResultV1,
     NetworkPeerServerResultV1, NetworkPeerTargetV1, NetworkPhysicalProbeBundleV1,
-    NetworkTestRunner, RuncPreparedProbeV1, NETWORK_PEER_DENIED_PORT, NETWORK_PEER_TCP_PORT,
-    NETWORK_PEER_UDP_PORT,
+    NetworkTestRunner, RuncEntryRoleRuntimeProbeV1, NETWORK_PEER_DENIED_PORT,
+    NETWORK_PEER_TCP_PORT, NETWORK_PEER_UDP_PORT,
 };
 pub use error::{Error, Result};
 pub use fixture::FixtureBaselineRecordV1;

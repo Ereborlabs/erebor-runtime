@@ -10,12 +10,12 @@ with_k3s=false
 keep_vm=false
 skip_administrative_exec=false
 manual_vm=false
-stock_runc_only=false
+entry_role_runtime_only=false
 k3s_version=${MITHRIL_VM_K3S_VERSION:-v1.35.5+k3s1}
 source_mount=${MITHRIL_VM_SOURCE_MOUNT:-}
 
 usage() {
-  echo "usage: $0 [--provider PATH] [--output-directory PATH] [--with-k3s] [--skip-administrative-exec] [--stock-runc-only] [--keep-vm] [--manual]" >&2
+  echo "usage: $0 [--provider PATH] [--output-directory PATH] [--with-k3s] [--skip-administrative-exec] [--entry-role-runtime-only] [--keep-vm] [--manual]" >&2
 }
 
 while (($#)); do
@@ -38,8 +38,8 @@ while (($#)); do
       skip_administrative_exec=true
       shift
       ;;
-    --stock-runc-only)
-      stock_runc_only=true
+    --entry-role-runtime-only)
+      entry_role_runtime_only=true
       shift
       ;;
     --keep-vm)
@@ -68,8 +68,8 @@ done
   echo "--skip-administrative-exec requires --with-k3s" >&2
   exit 2
 }
-[[ $stock_runc_only == false || ($with_k3s == false && $manual_vm == false) ]] || {
-  echo "--stock-runc-only cannot run with --with-k3s or --manual" >&2
+[[ $entry_role_runtime_only == false || ($with_k3s == false && $manual_vm == false) ]] || {
+  echo "--entry-role-runtime-only cannot run with --with-k3s or --manual" >&2
   exit 2
 }
 [[ -x $provider ]] || {
@@ -310,7 +310,7 @@ for fixture in \
     "$remote_source/crates/mithril-e2e/fixtures/hugging-face/$fixture"
 done
 
-if [[ $stock_runc_only == false ]]; then
+if [[ $entry_role_runtime_only == false ]]; then
   "$provider" run "$vm_name" sudo bash "$remote_root/harness/guest.sh" \
     platform "$remote_bin/mithril-inspect" "$remote_root" \
     >"$output_directory/platform.txt"
@@ -325,19 +325,20 @@ if [[ $stock_runc_only == false ]]; then
     "$output_directory/identity-physical-probe.json"
 fi
 
-prepared_output=$remote_root/stock-runc-prepared
+entry_role_output=$remote_root/runc-entry-roles
 "$provider" run "$vm_name" sudo "$remote_bin/mithril-effect-test" \
-  --repo-root "$remote_source" runc-prepared-probe \
-  --output-directory "$prepared_output" \
-  --pin-root "/sys/fs/bpf/$vm_name-stock-runc-prepared" \
-  --lease-path "$prepared_output/owner.lock" \
+  --repo-root "$remote_source" runc-entry-role-runtime-probe \
+  --output-directory "$entry_role_output" \
+  --pin-root "/sys/fs/bpf/$vm_name-runc-entry-roles" \
+  --lease-path "$entry_role_output/owner.lock" \
   --runc-path /usr/sbin/runc --workload-path /usr/bin/sleep \
   --prestart-hook \
   "$remote_source/crates/mithril-e2e/fixtures/identity/oci-prestart-admission-v1.sh"
-"$provider" get "$vm_name" "$prepared_output/runc-prepared-probe.json" \
-  "$output_directory/runc-prepared-probe.json"
+"$provider" get "$vm_name" \
+  "$entry_role_output/runc-entry-role-runtime-probe.json" \
+  "$output_directory/runc-entry-role-runtime-probe.json"
 
-if [[ $stock_runc_only == true ]]; then
+if [[ $entry_role_runtime_only == true ]]; then
   jq -e '
     .schema_version == 7 and
     .prepared_state_before_exec == "prepared" and
@@ -367,10 +368,10 @@ if [[ $stock_runc_only == true ]]; then
     .lease_removed and
     .cgroup_removed and
     .fixture_root_removed
-  ' "$output_directory/runc-prepared-probe.json" >/dev/null
-  verify_absent "/sys/fs/bpf/$vm_name-stock-runc-prepared"
-  verify_absent "$prepared_output/owner.lock"
-  echo "Stock-runc application startup VM probe passed. Evidence: $output_directory"
+  ' "$output_directory/runc-entry-role-runtime-probe.json" >/dev/null
+  verify_absent "/sys/fs/bpf/$vm_name-runc-entry-roles"
+  verify_absent "$entry_role_output/owner.lock"
+  echo "Direct runc entry-role VM probe passed. Evidence: $output_directory"
   exit 0
 fi
 
@@ -516,7 +517,7 @@ if [[ $with_k3s == true ]]; then
 fi
 
 verify_absent "/sys/fs/bpf/$vm_name-identity"
-verify_absent "/sys/fs/bpf/$vm_name-stock-runc-prepared"
+verify_absent "/sys/fs/bpf/$vm_name-runc-entry-roles"
 verify_absent "/sys/fs/bpf/$vm_name-effect-observation"
 verify_absent "/sys/fs/bpf/$vm_name-local-enforcement"
 verify_absent "/sys/fs/bpf/$vm_name-network-enforcement"
@@ -525,7 +526,7 @@ verify_absent "/sys/fs/cgroup/$vm_name-effect-observation"
 verify_absent "/sys/fs/cgroup/$vm_name-local-enforcement"
 verify_absent "/sys/fs/cgroup/$vm_name-network-enforcement"
 verify_absent "$identity_output/owner.lock"
-verify_absent "$prepared_output/owner.lock"
+verify_absent "$entry_role_output/owner.lock"
 if [[ $with_k3s == true ]]; then
   verify_absent "$remote_root/kubernetes-identity/kubernetes-entry"
   verify_absent "$remote_root/kubernetes-identity/owner.lock"
@@ -542,4 +543,4 @@ if [[ $with_k3s == true ]]; then
     k3s-remove "$remote_root"
 fi
 
-echo "Kernel, identity, stock-runc, effect-observation, local-enforcement, and network-enforcement VM probes passed. Evidence: $output_directory"
+echo "Kernel, identity, direct-runc entry-role, effect-observation, local-enforcement, and network-enforcement VM probes passed. Evidence: $output_directory"

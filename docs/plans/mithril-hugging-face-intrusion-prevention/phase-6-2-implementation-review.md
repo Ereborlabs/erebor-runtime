@@ -632,7 +632,7 @@ and coverage messages remain the Phase 6 types.
 | Existing inactive generation, readback, probes, and pointer activation | [Node policy tests](../../../crates/mithril-node/src/policy.rs) |
 | Signed scheduling authority, exact policy and runtime identity, immutable two-hook stage matching, held-TGID publication, distinct container lifetime, active socket ownership, convergence hold, unavailable endpoint, and timeout denial | [Runtime admission and binding tests](../../../crates/mithril-node/src/identity/binding.rs) |
 | OCI state parsing, cgroup-v2 path parsing, fact-only first hook, and held-PID second hook | [OCI adapter tests](../../../crates/mithril-node/src/bin/mithril_oci_hook.rs) |
-| Direct stock-runc PREPARED-to-ACTIVE transition, admitted-entry default, absent dependency rules, and cleanup | [Stock-runc VM probe](../../../crates/mithril-e2e/src/effect/runc.rs) |
+| Direct-runc PREPARED-to-ACTIVE transition, independent roles, admitted-entry default, external-entry denial, absent dependency rules, and cleanup | [Runc entry-role VM probe](../../../crates/mithril-e2e/src/effect/runc.rs) |
 | Fresh protected Pod, exact target and runtime binding, sole shell entry selector, later BusyBox applet default, explicit matching Deny, direct CRI external-entry denial, and retained-cluster resource replacement | [Protected-start lane](../../../crates/mithril-e2e/harness/vm/two-node-convergence.sh) |
 | Webhook TLS, rules, deadlines, health probes, DaemonSet identity and hook inputs, and least-privilege RBAC | [Helm render test](../../../packaging/mithril/helm/tests/verify.sh) |
 | Exact two-node target, task lifetime, Node UID replacement, host epoch, selector lifecycle, exception target retirement, desired-inventory cleanup, and no-root inspection | [Physical fixture](../../../crates/mithril-e2e/harness/vm/two-node-convergence.sh) |
@@ -655,7 +655,7 @@ rtk bash examples/mithril-kubernetes-convergence-manual/test.sh
 Manual example behavior checks passed.
 ```
 
-The direct stock-runc VM probe also passed with runc 1.3.4. Its result records
+The direct-runc entry-role VM probe also passed with runc 1.3.4. Its result records
 libc and the ELF loader as root-filesystem dependencies that are absent from
 policy.
 
@@ -683,7 +683,7 @@ do not replace the physical fixture or manual run.
 ## Verification Limits
 
 The current source has not passed the complete physical two-node fixture or
-the independent manual example. The direct stock-runc and focused protected
+the independent manual example. The direct-runc entry-role and focused protected
 Kubernetes application-start lanes have passed. Both complete Kubernetes
 flows contain exact target, runtime task, exception target-retirement,
 desired-inventory cleanup, restart, and fresh-root oracles. The automated

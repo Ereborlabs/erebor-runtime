@@ -33,7 +33,7 @@ enum Command {
         #[arg(long)]
         protect: bool,
     },
-    RuncPreparedProbe {
+    RuncEntryRoleRuntimeProbe {
         #[arg(long)]
         output_directory: PathBuf,
         #[arg(long)]
@@ -103,7 +103,7 @@ fn run() -> Result<()> {
             println!("Mithril effect physical probe passed");
             Ok(())
         }
-        Command::RuncPreparedProbe {
+        Command::RuncEntryRoleRuntimeProbe {
             output_directory,
             pin_root,
             lease_path,
@@ -112,7 +112,7 @@ fn run() -> Result<()> {
             prestart_hook,
         } => {
             let runner = EffectTestRunner::new(cli.repo_root);
-            let result = runner.runc_prepared_probe(
+            let result = runner.runc_entry_role_runtime_probe(
                 &output_directory,
                 &pin_root,
                 &lease_path,
@@ -120,8 +120,11 @@ fn run() -> Result<()> {
                 &workload_path,
                 &prestart_hook,
             )?;
-            runner.write_json(&output_directory.join("runc-prepared-probe.json"), &result)?;
-            println!("Mithril stock-runc prepared-container probe passed");
+            runner.write_json(
+                &output_directory.join("runc-entry-role-runtime-probe.json"),
+                &result,
+            )?;
+            println!("Mithril direct runc entry-role probe passed");
             Ok(())
         }
         Command::Child {
