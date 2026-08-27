@@ -1020,11 +1020,11 @@ pub(super) async fn reconcile_exception_cluster(
     control: crate::ControlPlane,
 ) {
     let api = Api::<WorkloadProtectionException>::all(client.clone());
-    let namespaces = Api::<Namespace>::all(client);
+    let namespaces = Api::<Namespace>::all(client.clone());
     loop {
         owner.record_watch_state("exceptions/*", false);
         let Some(resource_version) =
-            relist_exception_cluster(&api, &namespaces, &owner, &control).await
+            relist_exception_cluster(&client, &api, &namespaces, &owner, &control).await
         else {
             tokio::time::sleep(std::time::Duration::from_secs(2)).await;
             continue;
@@ -1043,7 +1043,7 @@ pub(super) async fn reconcile_exception_cluster(
             match event {
                 Ok(WatchEvent::Added(resource) | WatchEvent::Modified(resource)) => {
                     reconcile_exception_resource(
-                        &api,
+                        &client,
                         &namespaces,
                         &owner,
                         &control,
@@ -1054,7 +1054,7 @@ pub(super) async fn reconcile_exception_cluster(
                 }
                 Ok(WatchEvent::Deleted(resource)) => {
                     reconcile_exception_resource(
-                        &api,
+                        &client,
                         &namespaces,
                         &owner,
                         &control,
@@ -1074,6 +1074,7 @@ pub(super) async fn reconcile_exception_cluster(
 }
 
 async fn relist_exception_cluster(
+    client: &Client,
     api: &Api<WorkloadProtectionException>,
     namespaces: &Api<Namespace>,
     owner: &PolicyDesiredStateOwner,
@@ -1098,7 +1099,7 @@ async fn relist_exception_cluster(
             if let Some(object_uid) = &resource.metadata.uid {
                 seen_object_uids.insert(object_uid.clone());
             }
-            reconcile_exception_resource(api, namespaces, owner, control, resource, false).await;
+            reconcile_exception_resource(client, namespaces, owner, control, resource, false).await;
         }
         resource_version = page.metadata.resource_version.or(resource_version);
         continuation = match super::kubernetes::next_continuation_token(
@@ -1127,7 +1128,7 @@ async fn relist_exception_cluster(
 }
 
 async fn reconcile_exception_resource(
-    api: &Api<WorkloadProtectionException>,
+    client: &Client,
     namespaces: &Api<Namespace>,
     owner: &PolicyDesiredStateOwner,
     control: &crate::ControlPlane,
@@ -1172,14 +1173,25 @@ async fn reconcile_exception_resource(
             return;
         }
     }
-    let patch = Patch::Merge(serde_json::json!({"status": status}));
-    if api
-        .patch_status(&name, &PatchParams::default(), &patch)
+    if patch_exception_status(client, namespace_name, &name, &status)
         .await
         .is_err()
     {
         owner.record_watch_failure();
     }
+}
+
+async fn patch_exception_status(
+    client: &Client,
+    namespace: &str,
+    name: &str,
+    status: &WorkloadProtectionExceptionStatusV1,
+) -> std::result::Result<(), kube::Error> {
+    let api = Api::<WorkloadProtectionException>::namespaced(client.clone(), namespace);
+    let patch = Patch::Merge(serde_json::json!({"status": status}));
+    api.patch_status(name, &PatchParams::default(), &patch)
+        .await
+        .map(|_| ())
 }
 
 fn rejected_exception_status(generation: u64) -> WorkloadProtectionExceptionStatusV1 {
@@ -1243,4 +1255,76 @@ fn domain_digest(domain: &[u8], bytes: &[u8]) -> String {
     digest.update(domain);
     digest.update(bytes);
     format!("{:x}", digest.finalize())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::convert::Infallible;
+    use std::sync::Arc;
+
+    use axum::body::Body;
+    use axum::http::{header, HeaderValue, Request, Response, StatusCode};
+    use kube::client::Body as KubeBody;
+    use kube::Client;
+    use serde_json::json;
+    use tokio::sync::Mutex;
+    use tower::service_fn;
+
+    use super::{patch_exception_status, rejected_exception_status};
+
+    #[tokio::test]
+    async fn rejected_exception_status_uses_its_namespace_subresource(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let service_requests = requests.clone();
+        let service = service_fn(move |request: Request<KubeBody>| {
+            let service_requests = service_requests.clone();
+            async move {
+                service_requests
+                    .lock()
+                    .await
+                    .push(request.uri().to_string());
+                let value = json!({
+                    "apiVersion": "mithril.erebor.dev/v1alpha1",
+                    "kind": "WorkloadProtectionException",
+                    "metadata": {"name": "overlap", "namespace": "tenant-a"},
+                    "spec": {
+                        "policyRef": {"name": "policy-a"},
+                        "grant": "grant-a",
+                        "target": {
+                            "pod": {
+                                "name": "pod-a",
+                                "uid": "30000000-0000-4000-8000-000000000001"
+                            },
+                            "containerName": "converter"
+                        },
+                        "requestedDuration": "1m",
+                        "requestedUses": 1
+                    }
+                });
+                let mut response = Response::new(Body::from(value.to_string()));
+                *response.status_mut() = StatusCode::OK;
+                response.headers_mut().insert(
+                    header::CONTENT_TYPE,
+                    HeaderValue::from_static("application/json"),
+                );
+                Ok::<_, Infallible>(response)
+            }
+        });
+        let client = Client::new(service, "default");
+
+        patch_exception_status(
+            &client,
+            "tenant-a",
+            "overlap",
+            &rejected_exception_status(7),
+        )
+        .await?;
+
+        assert_eq!(
+            requests.lock().await.as_slice(),
+            ["/apis/mithril.erebor.dev/v1alpha1/namespaces/tenant-a/workloadprotectionexceptions/overlap/status?"]
+        );
+        Ok(())
+    }
 }

@@ -1001,11 +1001,12 @@ async fn reconcile_cluster(
     control: crate::ControlPlane,
 ) {
     let api = Api::<WorkloadProtectionPolicy>::all(client.clone());
-    let namespaces = Api::<Namespace>::all(client);
+    let namespaces = Api::<Namespace>::all(client.clone());
     // Each watch starts from a complete relist cursor and restarts after any stream error.
     loop {
         owner.record_watch_state("policies/*", false);
-        let Some(resource_version) = relist_cluster(&api, &namespaces, &owner, &control).await
+        let Some(resource_version) =
+            relist_cluster(&client, &api, &namespaces, &owner, &control).await
         else {
             tokio::time::sleep(std::time::Duration::from_secs(2)).await;
             continue;
@@ -1023,10 +1024,12 @@ async fn reconcile_cluster(
         while let Some(event) = stream.next().await {
             match event {
                 Ok(WatchEvent::Added(resource) | WatchEvent::Modified(resource)) => {
-                    reconcile_resource(&api, &namespaces, &owner, &control, resource, false).await;
+                    reconcile_resource(&client, &namespaces, &owner, &control, resource, false)
+                        .await;
                 }
                 Ok(WatchEvent::Deleted(resource)) => {
-                    reconcile_resource(&api, &namespaces, &owner, &control, resource, true).await;
+                    reconcile_resource(&client, &namespaces, &owner, &control, resource, true)
+                        .await;
                 }
                 Ok(WatchEvent::Bookmark(_)) => {}
                 Ok(WatchEvent::Error(_)) | Err(_) => {
@@ -1039,6 +1042,7 @@ async fn reconcile_cluster(
 }
 
 async fn relist_cluster(
+    client: &Client,
     api: &Api<WorkloadProtectionPolicy>,
     namespaces: &Api<Namespace>,
     owner: &PolicyDesiredStateOwner,
@@ -1064,7 +1068,7 @@ async fn relist_cluster(
             if let Some(object_uid) = &resource.metadata.uid {
                 seen_object_uids.insert(object_uid.clone());
             }
-            reconcile_resource(api, namespaces, owner, control, resource, false).await;
+            reconcile_resource(client, namespaces, owner, control, resource, false).await;
         }
         resource_version = page.metadata.resource_version.or(resource_version);
         continuation = match super::kubernetes::next_continuation_token(
@@ -1101,7 +1105,7 @@ async fn relist_cluster(
 }
 
 async fn reconcile_resource(
-    api: &Api<WorkloadProtectionPolicy>,
+    client: &Client,
     namespaces: &Api<Namespace>,
     owner: &PolicyDesiredStateOwner,
     control: &crate::ControlPlane,
@@ -1162,14 +1166,25 @@ async fn reconcile_resource(
         desired_targets = %status.rollout.desired,
         active_targets = %status.rollout.active
     );
-    let patch = Patch::Merge(serde_json::json!({"status": status}));
-    if api
-        .patch_status(&name, &PatchParams::default(), &patch)
+    if patch_policy_status(client, namespace_name, &name, &status)
         .await
         .is_err()
     {
         owner.record_watch_failure();
     }
+}
+
+async fn patch_policy_status(
+    client: &Client,
+    namespace: &str,
+    name: &str,
+    status: &WorkloadProtectionPolicyStatusV1,
+) -> std::result::Result<(), kube::Error> {
+    let api = Api::<WorkloadProtectionPolicy>::namespaced(client.clone(), namespace);
+    let patch = Patch::Merge(serde_json::json!({"status": status}));
+    api.patch_status(name, &PatchParams::default(), &patch)
+        .await
+        .map(|_| ())
 }
 
 fn rejected_status(generation: u64) -> WorkloadProtectionPolicyStatusV1 {
@@ -1570,7 +1585,62 @@ fn read_json<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T> {
 
 #[cfg(test)]
 mod tests {
-    use super::{kubernetes_condition, preserve_transition_times};
+    use std::convert::Infallible;
+    use std::sync::Arc;
+
+    use axum::body::Body;
+    use axum::http::{header, HeaderValue, Request, Response, StatusCode};
+    use kube::client::Body as KubeBody;
+    use kube::Client;
+    use serde_json::json;
+    use tokio::sync::Mutex;
+    use tower::service_fn;
+
+    use super::{
+        kubernetes_condition, patch_policy_status, preserve_transition_times, rejected_status,
+    };
+
+    #[tokio::test]
+    async fn rejected_policy_status_uses_its_namespace_subresource(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let service_requests = requests.clone();
+        let service = service_fn(move |request: Request<KubeBody>| {
+            let service_requests = service_requests.clone();
+            async move {
+                service_requests
+                    .lock()
+                    .await
+                    .push(request.uri().to_string());
+                let value = json!({
+                    "apiVersion": "v1",
+                    "kind": "Status",
+                    "status": "Failure",
+                    "reason": "NotFound",
+                    "code": 404
+                });
+                let mut response = Response::new(Body::from(value.to_string()));
+                *response.status_mut() = StatusCode::NOT_FOUND;
+                response.headers_mut().insert(
+                    header::CONTENT_TYPE,
+                    HeaderValue::from_static("application/json"),
+                );
+                Ok::<_, Infallible>(response)
+            }
+        });
+        let client = Client::new(service, "default");
+
+        assert!(
+            patch_policy_status(&client, "tenant-a", "policy-a", &rejected_status(7))
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            requests.lock().await.as_slice(),
+            ["/apis/mithril.erebor.dev/v1alpha1/namespaces/tenant-a/workloadprotectionpolicies/policy-a/status?"]
+        );
+        Ok(())
+    }
 
     #[test]
     fn unchanged_condition_keeps_its_transition_time() {
