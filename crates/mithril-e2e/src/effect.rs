@@ -116,6 +116,9 @@ pub struct EffectHealthV1 {
     pub unresolved: u64,
     pub decoder_errors: u64,
     pub evidence_errors: u64,
+    pub wal_capacity_blocked: u64,
+    pub wal_rewritten_records: u64,
+    pub wal_rewritten_bytes: u64,
 }
 
 impl From<EffectObservationHealth> for EffectHealthV1 {
@@ -130,6 +133,9 @@ impl From<EffectObservationHealth> for EffectHealthV1 {
             unresolved: value.unresolved,
             decoder_errors: value.decoder_errors,
             evidence_errors: value.evidence_errors,
+            wal_capacity_blocked: value.wal_capacity_blocked,
+            wal_rewritten_records: value.wal_rewritten_records,
+            wal_rewritten_bytes: value.wal_rewritten_bytes,
         }
     }
 }

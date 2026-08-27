@@ -21,8 +21,9 @@ use crate::{
     node_trust_server::NodeTrust, AdministrativeExecArmResult, AdministrativeExecArmStreamRequest,
     AdministrativeExecResolution, AdministrativeExecResolutionStreamRequest, ArmAdministrativeExec,
     ControlConvergenceHealth, CoverageAck, CoverageReportRequest, EvidenceAck,
-    EvidenceBatchRequest, ExceptionAcknowledgementRequest, ExceptionInventory,
-    ExceptionInventoryRequest, NodeReadinessRequest, NodeRegistrationRequest, NodeSessionContext,
+    EvidenceBatchRequest, EvidenceStreamAck, EvidenceStreamRequest,
+    ExceptionAcknowledgementRequest, ExceptionInventory, ExceptionInventoryRequest,
+    NodeReadinessRequest, NodeRegistrationRequest, NodeSessionContext,
     PolicyAcknowledgementAccepted, PolicyAcknowledgementRequest, PolicyChunk, PolicyChunkRequest,
     PolicyInventory, PolicyInventoryRequest, RegistrationAccepted, ResolveAdministrativeExec,
     TrustGeneration, TrustGenerationAckRequest, IDENTITY_BYTES,
@@ -396,6 +397,7 @@ impl ControlPlane {
             connected_nodes,
             ready_nodes,
             evidence_cursors: store.evidence_cursors,
+            evidence_gap_ranges: store.evidence_gap_ranges,
             pending_evidence_batches: store.pending_evidence_batches,
             pending_evidence_records: store.pending_evidence_records,
             coverage_cursors: store.coverage_cursors,
@@ -945,7 +947,7 @@ impl NodeTrust for ControlPlane {
 
 #[tonic::async_trait]
 impl NodeEvidence for ControlPlane {
-    type OpenStream = Pin<Box<dyn Stream<Item = Result<EvidenceAck, Status>> + Send>>;
+    type OpenStream = Pin<Box<dyn Stream<Item = Result<EvidenceStreamAck, Status>> + Send>>;
 
     async fn upload(
         &self,
@@ -958,7 +960,7 @@ impl NodeEvidence for ControlPlane {
 
     async fn open(
         &self,
-        request: Request<Streaming<EvidenceBatchRequest>>,
+        request: Request<Streaming<EvidenceStreamRequest>>,
     ) -> Result<Response<Self::OpenStream>, Status> {
         let node_id = self.authenticated_node(&request)?;
         let mut input = request.into_inner();
@@ -966,8 +968,8 @@ impl NodeEvidence for ControlPlane {
         let control = self.clone();
         tokio::spawn(async move {
             while let Some(message) = input.next().await {
-                let result =
-                    message.and_then(|request| control.receive_evidence_batch(&node_id, request));
+                let result = message
+                    .and_then(|request| control.receive_evidence_stream_item(&node_id, request));
                 match result {
                     Ok(acknowledgement) => {
                         if output.send(Ok(acknowledgement)).await.is_err() {
@@ -986,6 +988,59 @@ impl NodeEvidence for ControlPlane {
 }
 
 impl ControlPlane {
+    fn receive_evidence_stream_item(
+        &self,
+        node_id: &str,
+        request: EvidenceStreamRequest,
+    ) -> Result<EvidenceStreamAck, Status> {
+        let session = request
+            .session
+            .ok_or_else(|| Status::invalid_argument("node session context is required"))?;
+        match request
+            .item
+            .ok_or_else(|| Status::invalid_argument("evidence stream item is required"))?
+        {
+            crate::evidence_stream_request::Item::Batch(batch) => {
+                let acknowledgement = self.receive_evidence_batch(
+                    node_id,
+                    EvidenceBatchRequest {
+                        session: Some(session),
+                        batch: Some(batch),
+                    },
+                )?;
+                Ok(EvidenceStreamAck {
+                    acknowledgement: Some(crate::evidence_stream_ack::Acknowledgement::Batch(
+                        acknowledgement,
+                    )),
+                })
+            }
+            crate::evidence_stream_request::Item::Gap(gap) => {
+                self.require_session(node_id, &session)?;
+                self.require_current_trust(node_id, &session)?;
+                let evidence = self.evidence.as_ref().ok_or_else(|| {
+                    Status::failed_precondition("Control has no durable evidence intake owner")
+                })?;
+                let acknowledgement =
+                    evidence.receive_gap(self.evidence_tenant(node_id)?, node_id, &gap)?;
+                warn!(
+                    "accepted a durable Mithril evidence gap",
+                    node_id = %node_id,
+                    node_boot_id = %hex::encode(&gap.node_boot_id),
+                    source_id = %hex::encode(&gap.source_id),
+                    first_cursor = %gap.first_cursor,
+                    last_cursor = %gap.last_cursor,
+                    discarded_records = %gap.discarded_records,
+                    discarded_bytes = %gap.discarded_bytes
+                );
+                Ok(EvidenceStreamAck {
+                    acknowledgement: Some(crate::evidence_stream_ack::Acknowledgement::Gap(
+                        acknowledgement,
+                    )),
+                })
+            }
+        }
+    }
+
     fn receive_evidence_batch(
         &self,
         node_id: &str,

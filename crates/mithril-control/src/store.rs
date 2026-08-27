@@ -18,8 +18,8 @@ use crate::{
     PolicyActivationAcknowledgementV1, PolicyActivationStateV1, PolicyBundleV1, PolicyDocumentV1,
     PolicyRolloutStateV1, PolicyRolloutStatusV1, PolicySourceRevisionV1, PolicySourceStateV1,
     PolicyTargetSnapshotV1, ProfileCandidateArtifactV1, Result, StoredCoverageReportV1,
-    StoredEvidenceBatchV1, StoredRecordV1, TrustGenerationAcknowledgementV1, TrustGenerationV1,
-    MAX_PENDING_EVIDENCE_RECORDS,
+    StoredEvidenceBatchV1, StoredEvidenceGapV1, StoredRecordV1, TrustGenerationAcknowledgementV1,
+    TrustGenerationV1, MAX_PENDING_EVIDENCE_RECORDS,
 };
 
 const STORE_SCHEMA_VERSION: u32 = 1;
@@ -42,6 +42,7 @@ pub struct ControlStoreHealthV1 {
     pub exception_candidates: u64,
     pub unsettled_exception_candidates: u64,
     pub evidence_cursors: u64,
+    pub evidence_gap_ranges: u64,
     pub pending_evidence_batches: u64,
     pub pending_evidence_records: u64,
     pub coverage_cursors: u64,
@@ -81,6 +82,7 @@ struct ControlStoreState {
     evidence_cursors: BTreeMap<EvidenceIntakeIdentityV1, IntakeStateV1>,
     evidence_records: BTreeMap<EvidenceRecordKeyV1, StoredRecordV1>,
     evidence_batch_receipts: BTreeMap<EvidenceBatchKeyV1, [u8; 32]>,
+    evidence_gaps: BTreeMap<EvidenceGapKeyV1, StoredEvidenceGapV1>,
     pending_evidence_batches: BTreeMap<EvidencePendingKeyV1, StoredEvidenceBatchV1>,
     coverage_cursors: BTreeMap<EvidenceIntakeIdentityV1, CoverageIntakeStateV1>,
     coverage_reports: BTreeMap<CoverageReportKeyV1, StoredCoverageReportV1>,
@@ -117,6 +119,13 @@ struct EvidenceBatchKeyV1 {
 struct EvidencePendingKeyV1 {
     identity: EvidenceIntakeIdentityV1,
     first_cursor: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+struct EvidenceGapKeyV1 {
+    identity: EvidenceIntakeIdentityV1,
+    first_cursor: u64,
+    last_cursor: u64,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
@@ -311,6 +320,8 @@ struct EvidenceBatchTransactionV1 {
 #[serde(deny_unknown_fields)]
 struct EvidenceAcceptedTransactionV1 {
     identity: EvidenceIntakeIdentityV1,
+    #[serde(default)]
+    gap: Option<StoredEvidenceGapV1>,
     batches: Vec<StoredEvidenceBatchV1>,
 }
 
@@ -437,6 +448,7 @@ impl ControlStore {
                     .count(),
             ),
             evidence_cursors: count(inner.state.evidence_cursors.len()),
+            evidence_gap_ranges: count(inner.state.evidence_gaps.len()),
             pending_evidence_batches: count(inner.state.pending_evidence_batches.len()),
             pending_evidence_records: inner
                 .state
@@ -1167,10 +1179,89 @@ impl ControlStore {
         commit(
             &mut inner,
             ControlTransactionV1::EvidenceAccepted {
-                accepted: Box::new(EvidenceAcceptedTransactionV1 { identity, batches }),
+                accepted: Box::new(EvidenceAcceptedTransactionV1 {
+                    identity,
+                    gap: None,
+                    batches,
+                }),
             },
         )?;
         Ok(EvidenceStoreOutcomeV1::Accepted)
+    }
+
+    pub(crate) fn accept_evidence_gap(
+        &self,
+        identity: EvidenceIntakeIdentityV1,
+        gap: StoredEvidenceGapV1,
+    ) -> Result<()> {
+        let mut inner = self.lock()?;
+        validate_evidence_identity(&identity, &inner.root)?;
+        validate_stored_gap(&identity, &gap, &inner.root)?;
+        validate_source_label(&inner.state, &identity, &inner.root)?;
+        let key = EvidenceGapKeyV1 {
+            identity: identity.clone(),
+            first_cursor: gap.first_cursor,
+            last_cursor: gap.last_cursor,
+        };
+        if let Some(existing) = inner.state.evidence_gaps.get(&key) {
+            if existing == &gap {
+                return Ok(());
+            }
+            return ControlStoreSnafu {
+                path: inner.root.clone(),
+                reason: "an accepted evidence gap has conflicting content".to_owned(),
+            }
+            .fail();
+        }
+        let cursor = inner
+            .state
+            .evidence_cursors
+            .get(&identity)
+            .copied()
+            .unwrap_or_default();
+        if gap.first_cursor
+            != checked_store_increment(
+                cursor.contiguous_cursor,
+                &inner.root,
+                "the evidence cursor is exhausted",
+            )?
+            || gap.previous_record_sha256 != cursor.last_record_sha256
+        {
+            return ControlStoreSnafu {
+                path: inner.root.clone(),
+                reason: "an evidence gap is not contiguous with its durable cursor".to_owned(),
+            }
+            .fail();
+        }
+
+        let mut batches = Vec::new();
+        let mut next = gap.last_cursor.checked_add(1);
+        while let Some(first_cursor) = next {
+            let Some(pending) = inner
+                .state
+                .pending_evidence_batches
+                .get(&EvidencePendingKeyV1 {
+                    identity: identity.clone(),
+                    first_cursor,
+                })
+                .cloned()
+            else {
+                break;
+            };
+            next = pending.last_cursor.checked_add(1);
+            batches.push(pending);
+        }
+        commit(
+            &mut inner,
+            ControlTransactionV1::EvidenceAccepted {
+                accepted: Box::new(EvidenceAcceptedTransactionV1 {
+                    identity,
+                    gap: Some(gap),
+                    batches,
+                }),
+            },
+        )?;
+        Ok(())
     }
 
     pub fn install_trust_generation(&self, generation: TrustGenerationV1) -> Result<u64> {
@@ -3030,6 +3121,42 @@ fn validate_stored_batch(batch: &StoredEvidenceBatchV1, path: &Path) -> Result<(
     Ok(())
 }
 
+fn validate_stored_gap(
+    identity: &EvidenceIntakeIdentityV1,
+    gap: &StoredEvidenceGapV1,
+    path: &Path,
+) -> Result<()> {
+    let wire = crate::EvidenceGap {
+        node_boot_id: identity.node_boot_id.to_vec(),
+        source_id: identity.source_id.to_vec(),
+        source_epoch: identity.source_epoch,
+        first_cursor: gap.first_cursor,
+        last_cursor: gap.last_cursor,
+        previous_record_sha256: gap.previous_record_sha256.to_vec(),
+        last_record_sha256: gap.last_record_sha256.to_vec(),
+        discarded_records: gap.discarded_records,
+        discarded_bytes: gap.discarded_bytes,
+        gap_sha256: Vec::new(),
+    };
+    let cursor_count = gap
+        .last_cursor
+        .checked_sub(gap.first_cursor)
+        .and_then(|span| span.checked_add(1));
+    if gap.first_cursor == 0
+        || cursor_count != Some(gap.discarded_records)
+        || gap.discarded_bytes == 0
+        || gap.last_record_sha256 == [0; 32]
+        || gap.gap_sha256 != crate::evidence_gap_digest(&wire)
+    {
+        return ControlStoreSnafu {
+            path: path.to_owned(),
+            reason: "stored evidence gap identity, range, count, or digest is invalid".to_owned(),
+        }
+        .fail();
+    }
+    Ok(())
+}
+
 fn validate_new_pending_evidence(
     state: &ControlStoreState,
     pending: &EvidenceBatchTransactionV1,
@@ -3126,10 +3253,10 @@ fn apply_accepted_evidence(
 ) -> Result<()> {
     validate_evidence_identity(&accepted.identity, path)?;
     bind_source_label(state, &accepted.identity, path)?;
-    if accepted.batches.is_empty() {
+    if accepted.batches.is_empty() && accepted.gap.is_none() {
         return ControlStoreSnafu {
             path: path.to_owned(),
-            reason: "an accepted evidence transaction has no batches".to_owned(),
+            reason: "an accepted evidence transaction has no range".to_owned(),
         }
         .fail();
     }
@@ -3138,6 +3265,42 @@ fn apply_accepted_evidence(
         .get(&accepted.identity)
         .copied()
         .unwrap_or_default();
+    if let Some(gap) = &accepted.gap {
+        validate_stored_gap(&accepted.identity, gap, path)?;
+        if gap.first_cursor
+            != checked_store_increment(
+                cursor.contiguous_cursor,
+                path,
+                "the evidence cursor is exhausted",
+            )?
+            || gap.previous_record_sha256 != cursor.last_record_sha256
+        {
+            return ControlStoreSnafu {
+                path: path.to_owned(),
+                reason: "accepted evidence gap is not contiguous with its durable cursor"
+                    .to_owned(),
+            }
+            .fail();
+        }
+        let key = EvidenceGapKeyV1 {
+            identity: accepted.identity.clone(),
+            first_cursor: gap.first_cursor,
+            last_cursor: gap.last_cursor,
+        };
+        if state.evidence_gaps.insert(key, gap.clone()).is_some() {
+            return ControlStoreSnafu {
+                path: path.to_owned(),
+                reason: "an immutable evidence gap was committed more than once".to_owned(),
+            }
+            .fail();
+        }
+        cursor = IntakeStateV1 {
+            contiguous_cursor: gap.last_cursor,
+            last_first_cursor: gap.first_cursor,
+            last_batch_sha256: gap.gap_sha256,
+            last_record_sha256: gap.last_record_sha256,
+        };
+    }
     // Records, receipts, and the contiguous cursor advance in this one transaction.
     for batch in &accepted.batches {
         validate_stored_batch(batch, path)?;

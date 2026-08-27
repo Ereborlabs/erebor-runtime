@@ -11,9 +11,9 @@ use mithril_control::{
     TrustGenerationV1,
 };
 use mithril_node::{
-    AdministrativeControlRequest, EffectObservationStore, EvidenceIdV1, EvidenceWalLimits,
-    NodeControlConfig, NodeControlConnector, NodeControlMessage, ObservationCanonicalizer,
-    ObservationEnvelopeV1, TrustCache,
+    AdministrativeControlRequest, EffectObservationStore, EvidenceIdV1,
+    EvidenceWalCapacityPolicyV1, EvidenceWalLimits, NodeControlConfig, NodeControlConnector,
+    NodeControlMessage, ObservationCanonicalizer, ObservationEnvelopeV1, TrustCache,
 };
 use rcgen::{
     date_time_ymd, BasicConstraints, Certificate, CertificateParams, ExtendedKeyUsagePurpose, IsCa,
@@ -282,7 +282,7 @@ async fn mtls_evidence_stream_replays_after_disconnect_and_reuses_one_registered
     let NodeControlMessage::EvidenceAck(ack) = second.next_message().await? else {
         return Err("Control did not acknowledge evidence".into());
     };
-    observations.acknowledge_evidence(ack.try_into()?)?;
+    observations.acknowledge_evidence_upload(ack)?;
     let second_batch = observations
         .next_evidence_batch()
         .ok_or("missing second source batch")?;
@@ -292,7 +292,7 @@ async fn mtls_evidence_stream_replays_after_disconnect_and_reuses_one_registered
     let NodeControlMessage::EvidenceAck(ack) = second.next_message().await? else {
         return Err("Control did not acknowledge the second evidence source".into());
     };
-    observations.acknowledge_evidence(ack.try_into()?)?;
+    observations.acknowledge_evidence_upload(ack)?;
     assert_eq!(control.registered_nonce_count(), 2);
     assert!(observations.next_evidence_batch().is_none());
     let intake = EvidenceIntakeOwner::open(&intake_path)?;
@@ -395,7 +395,7 @@ async fn mtls_retained_evidence_uses_its_original_session_after_boot_and_control
     let NodeControlMessage::EvidenceAck(ack) = connection.next_message().await? else {
         return Err("Control did not acknowledge retained evidence".into());
     };
-    observations.acknowledge_evidence(ack.try_into()?)?;
+    observations.acknowledge_evidence_upload(ack)?;
     assert!(observations.next_evidence_batch().is_none());
 
     let intake = EvidenceIntakeOwner::open(&intake_path)?;
@@ -417,6 +417,104 @@ async fn mtls_retained_evidence_uses_its_original_session_after_boot_and_control
             .map(|record| record.payload.clone())
             .collect::<Vec<_>>()
     );
+
+    drop(connection);
+    let _result = shutdown.send(());
+    server.await??;
+    Ok(())
+}
+
+#[tokio::test]
+async fn mtls_evidence_stream_commits_a_rewrite_gap_before_later_records(
+) -> Result<(), Box<dyn StdError>> {
+    let directory = tempfile::tempdir()?;
+    let certificates = Certificates::issue(false)?;
+    let files = certificates.write(directory.path())?;
+    let address = free_address()?;
+    let intake_path = directory.path().join("control-evidence");
+    let control = ControlPlane::with_evidence_directory(
+        vec![AllowedNodeIdentity {
+            node_id: "node-a".to_owned(),
+            certificate_sha256: certificates.node_digest(),
+            tenant_id: "00000000-0000-0001-0000-000000000002".to_owned(),
+        }],
+        TrustGenerationV1 {
+            generation: 1,
+            bundle_digest: "d".repeat(64),
+            policy_issuer_sequence_epoch: 0,
+            policy_signers: Vec::new(),
+        },
+        &intake_path,
+    )?;
+    let (shutdown, server) = start_server(address, &files, control.clone());
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    let observations = EffectObservationStore::durable(
+        4,
+        directory.path().join("node-wal"),
+        EvidenceWalLimits {
+            maximum_retained_records: 3,
+            maximum_batch_records: 1,
+            capacity_policy: EvidenceWalCapacityPolicyV1::Rewrite,
+            ..EvidenceWalLimits::default()
+        },
+        ObservationCanonicalizer::new(
+            EvidenceIdV1::new(1, 2),
+            EvidenceIdV1::new(3, 4),
+            1,
+            EvidenceIdV1::from([7; 16]),
+        )?,
+    )?;
+    for source_sequence in 1..=4 {
+        observations.record_bytes(
+            erebor_interceptor_abi::EffectObservationV1 {
+                source_sequence,
+                source_cpu_id: 0,
+                task_cookie: source_sequence,
+                reason: 9,
+                physical_result: 1,
+                ..erebor_interceptor_abi::EffectObservationV1::default()
+            }
+            .as_bytes(),
+        );
+    }
+    assert_eq!(observations.health(None).wal_rewritten_records, 1);
+
+    let connector =
+        NodeControlConnector::new(files.node_config(address), "node-a".to_owned(), [7; 16]);
+    let mut trust = TrustCache::load(directory.path())?;
+    let mut connection = connector.connect(registration(), false, &mut trust).await?;
+    let mut upload_count = 0;
+    let mut delivered_source = None;
+    while let Some(upload) = observations.next_evidence_upload() {
+        if let mithril_node::EvidenceUploadV1::Batch(batch) = &upload {
+            delivered_source = delivered_source.or(Some(batch_source_id(batch)?));
+        }
+        connection.send_evidence_upload(upload).await?;
+        let NodeControlMessage::EvidenceAck(acknowledgement) = connection.next_message().await?
+        else {
+            return Err("Control did not acknowledge the evidence stream item".into());
+        };
+        observations.acknowledge_evidence_upload(acknowledgement)?;
+        upload_count += 1;
+    }
+    assert_eq!(upload_count, 4);
+    assert_eq!(control.registered_nonce_count(), 1);
+
+    let intake = EvidenceIntakeOwner::open(&intake_path)?;
+    let identity = EvidenceIntakeIdentityV1 {
+        tenant_id: EvidenceIdV1::new(1, 2).to_be_bytes(),
+        node_id: "node-a".to_owned(),
+        node_boot_id: [7; 16],
+        label_epoch: 1,
+        source_id: delivered_source.ok_or("the evidence stream had no source identity")?,
+        source_epoch: 1,
+    };
+    assert_eq!(intake.contiguous_cursor(&identity)?, 4);
+    assert_eq!(
+        intake.store().accepted_evidence_records(&identity)?.len(),
+        3
+    );
+    assert_eq!(intake.store().health()?.evidence_gap_ranges, 1);
 
     drop(connection);
     let _result = shutdown.send(());

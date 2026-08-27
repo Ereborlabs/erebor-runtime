@@ -7,8 +7,8 @@ use tonic::Status;
 
 use crate::error::EvidenceStateSnafu;
 use crate::{
-    CoverageAck, CoverageCounters, CoverageReport, EvidenceAck, EvidenceBatch, EvidenceRecord,
-    Result,
+    CoverageAck, CoverageCounters, CoverageReport, EvidenceAck, EvidenceBatch, EvidenceGap,
+    EvidenceGapAck, EvidenceRecord, Result,
 };
 
 mod model;
@@ -84,6 +84,18 @@ pub(crate) struct StoredEvidenceBatchV1 {
     pub last_cursor: u64,
     pub batch_sha256: [u8; 32],
     pub records: Vec<StoredRecordV1>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct StoredEvidenceGapV1 {
+    pub first_cursor: u64,
+    pub last_cursor: u64,
+    pub previous_record_sha256: [u8; 32],
+    pub last_record_sha256: [u8; 32],
+    pub discarded_records: u64,
+    pub discarded_bytes: u64,
+    pub gap_sha256: [u8; 32],
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -292,6 +304,98 @@ impl EvidenceIntakeOwner {
         })
     }
 
+    #[allow(clippy::result_large_err)]
+    pub fn receive_gap(
+        &self,
+        tenant_id: [u8; 16],
+        node_id: &str,
+        gap: &EvidenceGap,
+    ) -> std::result::Result<EvidenceGapAck, Status> {
+        let node_boot_id: [u8; 16] = gap
+            .node_boot_id
+            .as_slice()
+            .try_into()
+            .map_err(|_| Status::invalid_argument("evidence gap boot identity is not Id128"))?;
+        let source_id: [u8; 16] =
+            gap.source_id.as_slice().try_into().map_err(|_| {
+                Status::invalid_argument("evidence gap source identity is not Id128")
+            })?;
+        let previous_record_sha256: [u8; 32] = gap
+            .previous_record_sha256
+            .as_slice()
+            .try_into()
+            .map_err(|_| Status::invalid_argument("evidence gap previous digest is not SHA-256"))?;
+        let last_record_sha256: [u8; 32] =
+            gap.last_record_sha256.as_slice().try_into().map_err(|_| {
+                Status::invalid_argument("evidence gap final digest is not SHA-256")
+            })?;
+        let gap_sha256: [u8; 32] = gap
+            .gap_sha256
+            .as_slice()
+            .try_into()
+            .map_err(|_| Status::invalid_argument("evidence gap digest is not SHA-256"))?;
+        let cursor_count = gap
+            .last_cursor
+            .checked_sub(gap.first_cursor)
+            .and_then(|span| span.checked_add(1));
+        if tenant_id == [0; 16]
+            || !crate::node_id_is_valid(node_id)
+            || node_boot_id == [0; 16]
+            || source_id == [0; 16]
+            || gap.source_epoch == 0
+            || gap.first_cursor == 0
+            || cursor_count != Some(gap.discarded_records)
+            || gap.discarded_bytes == 0
+            || last_record_sha256 == [0; 32]
+            || gap_sha256 != evidence_gap_digest(gap)
+        {
+            return Err(Status::invalid_argument(
+                "evidence gap identity, range, count, or digest is invalid",
+            ));
+        }
+        let session = self
+            .store
+            .evidence_session_for_stream(
+                tenant_id,
+                node_id,
+                node_boot_id,
+                source_id,
+                gap.source_epoch,
+            )
+            .map_err(|_| {
+                Status::permission_denied(
+                    "evidence gap does not name one authenticated node session",
+                )
+            })?;
+        let identity = EvidenceIntakeIdentityV1 {
+            tenant_id,
+            node_id: node_id.to_owned(),
+            node_boot_id,
+            label_epoch: session.label_epoch,
+            source_id,
+            source_epoch: gap.source_epoch,
+        };
+        self.store
+            .accept_evidence_gap(
+                identity,
+                StoredEvidenceGapV1 {
+                    first_cursor: gap.first_cursor,
+                    last_cursor: gap.last_cursor,
+                    previous_record_sha256,
+                    last_record_sha256,
+                    discarded_records: gap.discarded_records,
+                    discarded_bytes: gap.discarded_bytes,
+                    gap_sha256,
+                },
+            )
+            .map_err(internal_status)?;
+        Ok(EvidenceGapAck {
+            first_cursor: gap.first_cursor,
+            last_cursor: gap.last_cursor,
+            gap_sha256: gap.gap_sha256.clone(),
+        })
+    }
+
     pub fn contiguous_cursor(&self, identity: &EvidenceIntakeIdentityV1) -> Result<u64> {
         self.store.evidence_cursor(identity)
     }
@@ -373,6 +477,22 @@ impl EvidenceIntakeOwner {
             })
             .transpose()
     }
+}
+
+#[must_use]
+pub fn evidence_gap_digest(gap: &EvidenceGap) -> [u8; 32] {
+    let mut digest = Sha256::new();
+    digest.update(b"MITHRIL-EVIDENCE-GAP-V1\0");
+    digest.update(&gap.node_boot_id);
+    digest.update(&gap.source_id);
+    digest.update(gap.source_epoch.to_be_bytes());
+    digest.update(gap.first_cursor.to_be_bytes());
+    digest.update(gap.last_cursor.to_be_bytes());
+    digest.update(&gap.previous_record_sha256);
+    digest.update(&gap.last_record_sha256);
+    digest.update(gap.discarded_records.to_be_bytes());
+    digest.update(gap.discarded_bytes.to_be_bytes());
+    digest.finalize().into()
 }
 
 #[allow(clippy::result_large_err)]
@@ -575,8 +695,9 @@ mod tests {
     use super::EvidenceIntakeOwner;
     use crate::{
         CoverageCounters, CoverageInterval, CoverageReport, EvidenceBatch, EvidenceFieldKeyV1,
-        EvidenceFieldV1, EvidenceIdV1, EvidencePayloadV1, EvidenceRecord, EvidenceSensitivityV1,
-        EvidenceValueV1, ObservationEnvelopeV1, ProofQualityV1, TemporalCoverageV1,
+        EvidenceFieldV1, EvidenceGap, EvidenceIdV1, EvidencePayloadV1, EvidenceRecord,
+        EvidenceSensitivityV1, EvidenceValueV1, ObservationEnvelopeV1, ProofQualityV1,
+        StoredEvidenceGapV1, TemporalCoverageV1,
     };
     use prost::Message as _;
     use sha2::{Digest as _, Sha256};
@@ -799,6 +920,50 @@ mod tests {
                 .len(),
             3
         );
+        Ok(())
+    }
+
+    #[test]
+    fn durable_gap_advances_the_hash_chain_and_survives_replay(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let intake = EvidenceIntakeOwner::open(directory.path())?;
+        let first = batch(1, 1, [0; 32])?;
+        let previous: [u8; 32] = first.records[0].record_sha256.as_slice().try_into()?;
+        intake.receive(&authenticated(), &first)?;
+
+        let mut wire_gap = EvidenceGap {
+            node_boot_id: evidence_identity().node_boot_id.to_vec(),
+            source_id: evidence_identity().source_id.to_vec(),
+            source_epoch: evidence_identity().source_epoch,
+            first_cursor: 2,
+            last_cursor: 3,
+            previous_record_sha256: previous.to_vec(),
+            last_record_sha256: vec![17; 32],
+            discarded_records: 2,
+            discarded_bytes: 4_096,
+            gap_sha256: Vec::new(),
+        };
+        wire_gap.gap_sha256 = super::evidence_gap_digest(&wire_gap).to_vec();
+        intake.store().accept_evidence_gap(
+            evidence_identity(),
+            StoredEvidenceGapV1 {
+                first_cursor: wire_gap.first_cursor,
+                last_cursor: wire_gap.last_cursor,
+                previous_record_sha256: previous,
+                last_record_sha256: [17; 32],
+                discarded_records: wire_gap.discarded_records,
+                discarded_bytes: wire_gap.discarded_bytes,
+                gap_sha256: wire_gap.gap_sha256.as_slice().try_into()?,
+            },
+        )?;
+        let fourth = batch(4, 1, [17; 32])?;
+        intake.receive(&authenticated(), &fourth)?;
+        drop(intake);
+
+        let replayed = EvidenceIntakeOwner::open(directory.path())?;
+        assert_eq!(replayed.contiguous_cursor(&evidence_identity())?, 4);
+        assert_eq!(replayed.store().health()?.evidence_gap_ranges, 1);
         Ok(())
     }
 

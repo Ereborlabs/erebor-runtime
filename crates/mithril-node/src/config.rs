@@ -64,6 +64,8 @@ pub struct EvidenceConfig {
     pub maximum_batch_records: usize,
     #[serde(default = "default_evidence_control_delay_ms")]
     pub maximum_control_delay_ms: u64,
+    #[serde(default)]
+    pub capacity_policy: crate::EvidenceWalCapacityPolicyV1,
 }
 
 impl From<&EvidenceConfig> for crate::EvidenceWalLimits {
@@ -73,6 +75,7 @@ impl From<&EvidenceConfig> for crate::EvidenceWalLimits {
             maximum_retained_bytes: config.maximum_retained_bytes,
             maximum_retained_records: config.maximum_retained_records,
             maximum_batch_records: config.maximum_batch_records,
+            capacity_policy: config.capacity_policy,
         }
     }
 }
@@ -647,6 +650,29 @@ mod tests {
         NodeControlConfig, PolicyCandidateConfig, WorkloadBindingConfig,
     };
 
+    #[test]
+    fn evidence_capacity_policy_defaults_to_block_and_accepts_rewrite(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let base = serde_json::json!({
+            "tenant_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+            "source_id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+        });
+        let block: EvidenceConfig = serde_json::from_value(base.clone())?;
+        assert_eq!(
+            block.capacity_policy,
+            crate::EvidenceWalCapacityPolicyV1::Block
+        );
+
+        let mut rewrite = base;
+        rewrite["capacity_policy"] = serde_json::json!("REWRITE");
+        let rewrite: EvidenceConfig = serde_json::from_value(rewrite)?;
+        assert_eq!(
+            rewrite.capacity_policy,
+            crate::EvidenceWalCapacityPolicyV1::Rewrite
+        );
+        Ok(())
+    }
+
     fn config() -> NodeConfig {
         NodeConfig {
             node_id: "node-a".to_owned(),
@@ -674,6 +700,7 @@ mod tests {
                 maximum_retained_records: 10_000,
                 maximum_batch_records: 256,
                 maximum_control_delay_ms: 30_000,
+                capacity_policy: crate::EvidenceWalCapacityPolicyV1::Block,
             }),
             runtime_observation: None,
             runtime_admission: None,

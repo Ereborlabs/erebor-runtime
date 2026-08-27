@@ -8,8 +8,8 @@ use mithril_control::{
     node_trust_client::NodeTrustClient, AdministrativeExecArmResult,
     AdministrativeExecArmStreamRequest, AdministrativeExecResolution,
     AdministrativeExecResolutionStreamRequest, ArmAdministrativeExec, CoverageAck,
-    CoverageCounters, CoverageInterval, CoverageReport, CoverageReportRequest, EvidenceAck,
-    EvidenceBatchRequest, ExceptionAcknowledgementRequest, ExceptionActivationAcknowledgement,
+    CoverageCounters, CoverageInterval, CoverageReport, CoverageReportRequest, EvidenceStreamAck,
+    EvidenceStreamRequest, ExceptionAcknowledgementRequest, ExceptionActivationAcknowledgement,
     ExceptionInventory, ExceptionInventoryRequest, NodeReadinessReport, NodeReadinessRequest,
     NodeRegistration, NodeRegistrationRequest, NodeSessionContext, PolicyAcknowledgementAccepted,
     PolicyAcknowledgementRequest, PolicyActivationAcknowledgement, PolicyChunkRequest,
@@ -47,8 +47,8 @@ pub struct ControlConnection {
     resolution_input: Streaming<ResolveAdministrativeExec>,
     arm_output: mpsc::Sender<AdministrativeExecArmStreamRequest>,
     arm_input: Streaming<ArmAdministrativeExec>,
-    evidence_output: mpsc::Sender<EvidenceBatchRequest>,
-    evidence_input: Streaming<EvidenceAck>,
+    evidence_output: mpsc::Sender<EvidenceStreamRequest>,
+    evidence_input: Streaming<EvidenceStreamAck>,
     coverage: NodeCoverageClient<Channel>,
     policy: NodePolicyClient<Channel>,
     readiness_updates: mpsc::Sender<ReadinessUpdate>,
@@ -77,7 +77,7 @@ pub enum AdministrativeControlRequest {
 
 pub enum NodeControlMessage {
     Administrative(AdministrativeControlRequest),
-    EvidenceAck(EvidenceAck),
+    EvidenceAck(crate::EvidenceUploadAckV1),
     CoverageAck(CoverageAck),
 }
 
@@ -411,9 +411,22 @@ impl ControlConnection {
                 }
                 message = self.evidence_input.message() => {
                     return match message.context(ControlRpcSnafu)? {
-                        Some(acknowledgement) => {
-                            Ok(NodeControlMessage::EvidenceAck(acknowledgement))
-                        }
+                        Some(acknowledgement) => match acknowledgement.acknowledgement {
+                            Some(mithril_control::evidence_stream_ack::Acknowledgement::Batch(ack)) => {
+                                Ok(NodeControlMessage::EvidenceAck(
+                                    crate::EvidenceUploadAckV1::Batch(ack.try_into()?),
+                                ))
+                            }
+                            Some(mithril_control::evidence_stream_ack::Acknowledgement::Gap(ack)) => {
+                                Ok(NodeControlMessage::EvidenceAck(
+                                    crate::EvidenceUploadAckV1::Gap(ack.try_into()?),
+                                ))
+                            }
+                            None => ControlProtocolSnafu {
+                                reason: String::from("Control returned an empty evidence acknowledgement"),
+                            }
+                            .fail(),
+                        },
                         None => ControlProtocolSnafu {
                             reason: String::from("Control closed the evidence stream"),
                         }
@@ -442,11 +455,19 @@ impl ControlConnection {
         }
     }
 
-    pub async fn send_evidence_batch(&mut self, batch: crate::EvidenceBatchV1) -> Result<()> {
+    pub async fn send_evidence_upload(&mut self, upload: crate::EvidenceUploadV1) -> Result<()> {
+        let item = match upload {
+            crate::EvidenceUploadV1::Batch(batch) => {
+                mithril_control::evidence_stream_request::Item::Batch(batch.into())
+            }
+            crate::EvidenceUploadV1::Gap(gap) => {
+                mithril_control::evidence_stream_request::Item::Gap(gap.into())
+            }
+        };
         self.evidence_output
-            .send(EvidenceBatchRequest {
+            .send(EvidenceStreamRequest {
                 session: Some(self.identity.clone()),
-                batch: Some(batch.into()),
+                item: Some(item),
             })
             .await
             .map_err(|_closed| {
@@ -455,6 +476,11 @@ impl ControlConnection {
                 }
                 .build()
             })
+    }
+
+    pub async fn send_evidence_batch(&mut self, batch: crate::EvidenceBatchV1) -> Result<()> {
+        self.send_evidence_upload(crate::EvidenceUploadV1::Batch(batch))
+            .await
     }
 
     pub async fn send_coverage_report(

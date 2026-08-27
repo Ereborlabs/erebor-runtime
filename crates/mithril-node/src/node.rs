@@ -730,19 +730,10 @@ impl NodeChassis {
                                         }
                                     }
                                     NodeControlMessage::EvidenceAck(ack) => {
-                                        let ack = match ack.try_into() {
-                                            Ok(ack) => ack,
-                                            Err(error) => {
-                                                erebor_telemetry::warn!(
-                                                    error;
-                                                    "Control returned an invalid evidence acknowledgement",
-                                                    node_id = %self.config.node_id,
-                                                    retry = %"reconnect"
-                                                );
-                                                break;
-                                            }
-                                        };
-                                        if let Err(error) = self.observations.acknowledge_evidence(ack) {
+                                        if let Err(error) = self
+                                            .observations
+                                            .acknowledge_evidence_upload(ack)
+                                        {
                                             erebor_telemetry::warn!(
                                                 error;
                                                 "Control returned a stale evidence acknowledgement",
@@ -817,10 +808,10 @@ impl NodeChassis {
                                     continue;
                                 }
                                 if !evidence_in_flight {
-                                    if let Some(batch) = self.observations.next_evidence_batch() {
+                                    if let Some(upload) = self.observations.next_evidence_upload() {
                                         match self
                                             .await_control_rpc(
-                                                connection.send_evidence_batch(batch),
+                                                connection.send_evidence_upload(upload),
                                             )
                                             .await
                                         {

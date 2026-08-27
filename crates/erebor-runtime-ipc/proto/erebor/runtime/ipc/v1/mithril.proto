@@ -33,6 +33,9 @@ message MithrilObservationSnapshot {
   repeated MithrilCoverageInterval coverage_intervals = 14;
   bool negative_claim_eligible = 15;
   uint64 evidence_errors = 16;
+  uint64 wal_capacity_blocked = 17;
+  uint64 wal_rewritten_records = 18;
+  uint64 wal_rewritten_bytes = 19;
 }
 
 message MithrilCoverageInterval {

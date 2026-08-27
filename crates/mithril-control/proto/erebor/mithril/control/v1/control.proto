@@ -14,7 +14,7 @@ service NodeTrust {
 
 service NodeEvidence {
   rpc Upload(EvidenceBatchRequest) returns (EvidenceAck);
-  rpc Open(stream EvidenceBatchRequest) returns (stream EvidenceAck);
+  rpc Open(stream EvidenceStreamRequest) returns (stream EvidenceStreamAck);
 }
 
 service NodeCoverage {
@@ -68,6 +68,14 @@ message TrustGenerationAckRequest {
 message EvidenceBatchRequest {
   NodeSessionContext session = 1;
   EvidenceBatch batch = 2;
+}
+
+message EvidenceStreamRequest {
+  NodeSessionContext session = 1;
+  oneof item {
+    EvidenceBatch batch = 2;
+    EvidenceGap gap = 3;
+  }
 }
 
 message CoverageReportRequest {
@@ -182,6 +190,33 @@ message EvidenceAck {
   uint64 first_cursor = 1;
   uint64 last_cursor = 2;
   bytes batch_sha256 = 3;
+}
+
+// Advances a stream across records that the configured WAL rewrite policy removed.
+message EvidenceGap {
+  bytes node_boot_id = 1;
+  bytes source_id = 2;
+  uint64 source_epoch = 3;
+  uint64 first_cursor = 4;
+  uint64 last_cursor = 5;
+  bytes previous_record_sha256 = 6;
+  bytes last_record_sha256 = 7;
+  uint64 discarded_records = 8;
+  uint64 discarded_bytes = 9;
+  bytes gap_sha256 = 10;
+}
+
+message EvidenceGapAck {
+  uint64 first_cursor = 1;
+  uint64 last_cursor = 2;
+  bytes gap_sha256 = 3;
+}
+
+message EvidenceStreamAck {
+  oneof acknowledgement {
+    EvidenceAck batch = 1;
+    EvidenceGapAck gap = 2;
+  }
 }
 
 message CoverageCounters {
@@ -319,6 +354,7 @@ message ControlConvergenceHealth {
   uint64 coverage_cursors = 25;
   uint64 exception_candidates = 26;
   uint64 unsettled_exception_candidates = 27;
+  uint64 evidence_gap_ranges = 28;
 }
 
 message ResolveAdministrativeExec {

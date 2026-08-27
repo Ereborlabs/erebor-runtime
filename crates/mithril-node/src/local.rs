@@ -100,6 +100,9 @@ impl RuntimeObservationServer {
             coverage_intervals: Vec::new(),
             negative_claim_eligible: false,
             evidence_errors: 0,
+            wal_capacity_blocked: 0,
+            wal_rewritten_records: 0,
+            wal_rewritten_bytes: 0,
         };
         Ok(Self {
             config,
@@ -274,6 +277,9 @@ fn update_effect_health(
     snapshot.unresolved_effects = health.unresolved;
     snapshot.decoder_errors = health.decoder_errors;
     snapshot.evidence_errors = health.evidence_errors;
+    snapshot.wal_capacity_blocked = health.wal_capacity_blocked;
+    snapshot.wal_rewritten_records = health.wal_rewritten_records;
+    snapshot.wal_rewritten_bytes = health.wal_rewritten_bytes;
     snapshot.effect_health_available = health_bytes.is_some();
 }
 

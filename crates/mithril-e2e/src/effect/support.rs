@@ -56,6 +56,7 @@ pub(super) fn effect_node_config(
             maximum_retained_records: 10_000,
             maximum_batch_records: 256,
             maximum_control_delay_ms: 30_000,
+            capacity_policy: mithril_node::EvidenceWalCapacityPolicyV1::Block,
         }),
         runtime_observation: None,
         runtime_admission: None,
@@ -174,6 +175,15 @@ pub(super) fn health_delta(
         evidence_errors: later
             .evidence_errors
             .saturating_sub(earlier.evidence_errors),
+        wal_capacity_blocked: later
+            .wal_capacity_blocked
+            .saturating_sub(earlier.wal_capacity_blocked),
+        wal_rewritten_records: later
+            .wal_rewritten_records
+            .saturating_sub(earlier.wal_rewritten_records),
+        wal_rewritten_bytes: later
+            .wal_rewritten_bytes
+            .saturating_sub(earlier.wal_rewritten_bytes),
     }
 }
 
@@ -835,6 +845,7 @@ mod tests {
             unresolved: 1,
             decoder_errors: 0,
             evidence_errors: 0,
+            ..EffectObservationHealth::default()
         };
         let after = EffectObservationHealth {
             attempted: 25,
@@ -846,6 +857,7 @@ mod tests {
             unresolved: 3,
             decoder_errors: 0,
             evidence_errors: 0,
+            ..EffectObservationHealth::default()
         };
         let delta = health_delta(after, before);
         assert_eq!(delta.attempted, delta.suppressed + delta.requested);
