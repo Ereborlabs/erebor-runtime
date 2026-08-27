@@ -400,224 +400,229 @@ struct AckStateV1 {
     last_record_sha256: EvidenceDigestV1,
 }
 
-fn encode_frame(kind: u8, payload: &[u8]) -> Result<Vec<u8>> {
-    let payload_len = u64::try_from(payload.len()).map_err(|_| {
-        EvidenceStateSnafu {
-            reason: "evidence WAL binary payload size is not representable".to_owned(),
-        }
-        .build()
-    })?;
-    let capacity = WAL_FRAME_HEADER_BYTES
-        .checked_add(payload.len())
-        .ok_or_else(|| {
+struct EvidenceWalCodecV1;
+
+impl EvidenceWalCodecV1 {
+    fn encode_frame(kind: u8, payload: &[u8]) -> Result<Vec<u8>> {
+        let payload_len = u64::try_from(payload.len()).map_err(|_| {
             EvidenceStateSnafu {
-                reason: "evidence WAL binary frame size overflowed".to_owned(),
+                reason: "evidence WAL binary payload size is not representable".to_owned(),
             }
             .build()
         })?;
-    let mut frame = Vec::with_capacity(capacity);
-    frame.extend_from_slice(&WAL_FRAME_MAGIC);
-    frame.extend_from_slice(&WAL_FRAME_VERSION.to_be_bytes());
-    frame.push(kind);
-    frame.push(0);
-    frame.extend_from_slice(&payload_len.to_be_bytes());
-    let mut digest = Sha256::new();
-    digest.update(&frame[WAL_FRAME_MAGIC.len()..]);
-    digest.update(payload);
-    frame.extend_from_slice(&digest.finalize());
-    frame.extend_from_slice(payload);
-    Ok(frame)
-}
-
-fn decode_frame<'a>(bytes: &'a [u8], expected_kind: u8, name: &str) -> Result<&'a [u8]> {
-    if bytes.len() < WAL_FRAME_HEADER_BYTES || bytes[..8] != WAL_FRAME_MAGIC {
-        return EvidenceStateSnafu {
-            reason: format!("{name} has an invalid binary frame header"),
-        }
-        .fail();
+        let capacity = WAL_FRAME_HEADER_BYTES
+            .checked_add(payload.len())
+            .ok_or_else(|| {
+                EvidenceStateSnafu {
+                    reason: "evidence WAL binary frame size overflowed".to_owned(),
+                }
+                .build()
+            })?;
+        let mut frame = Vec::with_capacity(capacity);
+        frame.extend_from_slice(&WAL_FRAME_MAGIC);
+        frame.extend_from_slice(&WAL_FRAME_VERSION.to_be_bytes());
+        frame.push(kind);
+        frame.push(0);
+        frame.extend_from_slice(&payload_len.to_be_bytes());
+        let mut digest = Sha256::new();
+        digest.update(&frame[WAL_FRAME_MAGIC.len()..]);
+        digest.update(payload);
+        frame.extend_from_slice(&digest.finalize());
+        frame.extend_from_slice(payload);
+        Ok(frame)
     }
-    let version = u16::from_be_bytes(bytes[8..10].try_into().unwrap_or_default());
-    let kind = bytes[10];
-    let flags = bytes[11];
-    let payload_len = u64::from_be_bytes(bytes[12..20].try_into().unwrap_or_default());
-    let payload_len = usize::try_from(payload_len).map_err(|_| {
-        EvidenceStateSnafu {
-            reason: format!("{name} binary payload size is not representable"),
+
+    fn decode_frame<'a>(bytes: &'a [u8], expected_kind: u8, name: &str) -> Result<&'a [u8]> {
+        if bytes.len() < WAL_FRAME_HEADER_BYTES || bytes[..8] != WAL_FRAME_MAGIC {
+            return EvidenceStateSnafu {
+                reason: format!("{name} has an invalid binary frame header"),
+            }
+            .fail();
         }
-        .build()
-    })?;
-    let expected_len = WAL_FRAME_HEADER_BYTES
-        .checked_add(payload_len)
-        .ok_or_else(|| {
+        let version = u16::from_be_bytes(bytes[8..10].try_into().unwrap_or_default());
+        let kind = bytes[10];
+        let flags = bytes[11];
+        let payload_len = u64::from_be_bytes(bytes[12..20].try_into().unwrap_or_default());
+        let payload_len = usize::try_from(payload_len).map_err(|_| {
             EvidenceStateSnafu {
-                reason: format!("{name} binary frame size overflowed"),
+                reason: format!("{name} binary payload size is not representable"),
             }
             .build()
         })?;
-    if version != WAL_FRAME_VERSION
-        || kind != expected_kind
-        || flags != 0
-        || bytes.len() != expected_len
-    {
-        return EvidenceStateSnafu {
-            reason: format!("{name} has an invalid binary frame version, kind, flags, or size"),
+        let expected_len = WAL_FRAME_HEADER_BYTES
+            .checked_add(payload_len)
+            .ok_or_else(|| {
+                EvidenceStateSnafu {
+                    reason: format!("{name} binary frame size overflowed"),
+                }
+                .build()
+            })?;
+        if version != WAL_FRAME_VERSION
+            || kind != expected_kind
+            || flags != 0
+            || bytes.len() != expected_len
+        {
+            return EvidenceStateSnafu {
+                reason: format!("{name} has an invalid binary frame version, kind, flags, or size"),
+            }
+            .fail();
         }
-        .fail();
+        let payload = &bytes[WAL_FRAME_HEADER_BYTES..];
+        let mut digest = Sha256::new();
+        digest.update(&bytes[WAL_FRAME_MAGIC.len()..20]);
+        digest.update(payload);
+        let actual: EvidenceDigestV1 = digest.finalize().into();
+        if bytes[20..WAL_FRAME_HEADER_BYTES] != actual {
+            return EvidenceStateSnafu {
+                reason: format!("{name} binary frame checksum does not match"),
+            }
+            .fail();
+        }
+        Ok(payload)
     }
-    let payload = &bytes[WAL_FRAME_HEADER_BYTES..];
-    let mut digest = Sha256::new();
-    digest.update(&bytes[WAL_FRAME_MAGIC.len()..20]);
-    digest.update(payload);
-    let actual: EvidenceDigestV1 = digest.finalize().into();
-    if bytes[20..WAL_FRAME_HEADER_BYTES] != actual {
-        return EvidenceStateSnafu {
-            reason: format!("{name} binary frame checksum does not match"),
+
+    fn take_binary<'a>(bytes: &mut &'a [u8], count: usize, name: &str) -> Result<&'a [u8]> {
+        if bytes.len() < count {
+            return EvidenceStateSnafu {
+                reason: format!("{name} binary payload is truncated"),
+            }
+            .fail();
         }
-        .fail();
+        let (value, remaining) = bytes.split_at(count);
+        *bytes = remaining;
+        Ok(value)
     }
-    Ok(payload)
-}
 
-fn take_binary<'a>(bytes: &mut &'a [u8], count: usize, name: &str) -> Result<&'a [u8]> {
-    if bytes.len() < count {
-        return EvidenceStateSnafu {
-            reason: format!("{name} binary payload is truncated"),
-        }
-        .fail();
+    fn take_binary_array<const N: usize>(bytes: &mut &[u8], name: &str) -> Result<[u8; N]> {
+        Self::take_binary(bytes, N, name)?.try_into().map_err(|_| {
+            EvidenceStateSnafu {
+                reason: format!("{name} binary field has an invalid size"),
+            }
+            .build()
+        })
     }
-    let (value, remaining) = bytes.split_at(count);
-    *bytes = remaining;
-    Ok(value)
-}
 
-fn take_binary_array<const N: usize>(bytes: &mut &[u8], name: &str) -> Result<[u8; N]> {
-    take_binary(bytes, N, name)?.try_into().map_err(|_| {
-        EvidenceStateSnafu {
-            reason: format!("{name} binary field has an invalid size"),
-        }
-        .build()
-    })
-}
-
-fn take_binary_u32(bytes: &mut &[u8], name: &str) -> Result<u32> {
-    Ok(u32::from_be_bytes(take_binary_array(bytes, name)?))
-}
-
-fn take_binary_u64(bytes: &mut &[u8], name: &str) -> Result<u64> {
-    Ok(u64::from_be_bytes(take_binary_array(bytes, name)?))
-}
-
-fn finish_binary(bytes: &[u8], name: &str) -> Result<()> {
-    if !bytes.is_empty() {
-        return EvidenceStateSnafu {
-            reason: format!("{name} binary payload has trailing bytes"),
-        }
-        .fail();
+    fn take_binary_u32(bytes: &mut &[u8], name: &str) -> Result<u32> {
+        Ok(u32::from_be_bytes(Self::take_binary_array(bytes, name)?))
     }
-    Ok(())
-}
 
-fn encode_record(record: &EvidenceRecordV1) -> Result<Vec<u8>> {
-    let payload_len = u64::try_from(record.payload.len()).map_err(|_| {
-        EvidenceStateSnafu {
-            reason: "evidence WAL record payload size is not representable".to_owned(),
+    fn take_binary_u64(bytes: &mut &[u8], name: &str) -> Result<u64> {
+        Ok(u64::from_be_bytes(Self::take_binary_array(bytes, name)?))
+    }
+
+    fn finish_binary(bytes: &[u8], name: &str) -> Result<()> {
+        if !bytes.is_empty() {
+            return EvidenceStateSnafu {
+                reason: format!("{name} binary payload has trailing bytes"),
+            }
+            .fail();
         }
-        .build()
-    })?;
-    let mut payload = Vec::with_capacity(148_usize.saturating_add(record.payload.len()));
-    payload.extend_from_slice(&record.format_version.to_be_bytes());
-    payload.extend_from_slice(&record.cursor.to_be_bytes());
-    payload.extend_from_slice(&record.observation_id);
-    payload.extend_from_slice(&payload_len.to_be_bytes());
-    payload.extend_from_slice(&record.payload);
-    payload.extend_from_slice(&record.payload_sha256);
-    payload.extend_from_slice(&record.previous_record_sha256);
-    payload.extend_from_slice(&record.record_sha256);
-    encode_frame(WAL_FRAME_RECORD, &payload)
-}
+        Ok(())
+    }
 
-fn decode_record(bytes: &[u8]) -> Result<EvidenceRecordV1> {
-    let name = "evidence WAL record";
-    let mut payload = decode_frame(bytes, WAL_FRAME_RECORD, name)?;
-    let format_version = take_binary_u32(&mut payload, name)?;
-    let cursor = take_binary_u64(&mut payload, name)?;
-    let observation_id = take_binary_array(&mut payload, name)?;
-    let content_len = usize::try_from(take_binary_u64(&mut payload, name)?).map_err(|_| {
-        EvidenceStateSnafu {
-            reason: "evidence WAL record content size is not representable".to_owned(),
-        }
-        .build()
-    })?;
-    let content = take_binary(&mut payload, content_len, name)?.to_vec();
-    let payload_sha256 = take_binary_array(&mut payload, name)?;
-    let previous_record_sha256 = take_binary_array(&mut payload, name)?;
-    let record_sha256 = take_binary_array(&mut payload, name)?;
-    finish_binary(payload, name)?;
-    Ok(EvidenceRecordV1 {
-        format_version,
-        cursor,
-        observation_id,
-        payload: content,
-        payload_sha256,
-        previous_record_sha256,
-        record_sha256,
-    })
-}
+    fn encode_record(record: &EvidenceRecordV1) -> Result<Vec<u8>> {
+        let payload_len = u64::try_from(record.payload.len()).map_err(|_| {
+            EvidenceStateSnafu {
+                reason: "evidence WAL record payload size is not representable".to_owned(),
+            }
+            .build()
+        })?;
+        let mut payload = Vec::with_capacity(148_usize.saturating_add(record.payload.len()));
+        payload.extend_from_slice(&record.format_version.to_be_bytes());
+        payload.extend_from_slice(&record.cursor.to_be_bytes());
+        payload.extend_from_slice(&record.observation_id);
+        payload.extend_from_slice(&payload_len.to_be_bytes());
+        payload.extend_from_slice(&record.payload);
+        payload.extend_from_slice(&record.payload_sha256);
+        payload.extend_from_slice(&record.previous_record_sha256);
+        payload.extend_from_slice(&record.record_sha256);
+        Self::encode_frame(WAL_FRAME_RECORD, &payload)
+    }
 
-fn encode_ack(state: &AckStateV1) -> Result<Vec<u8>> {
-    let mut payload = Vec::with_capacity(80);
-    payload.extend_from_slice(&state.contiguous_cursor.to_be_bytes());
-    payload.extend_from_slice(&state.last_first_cursor.to_be_bytes());
-    payload.extend_from_slice(&state.last_batch_sha256);
-    payload.extend_from_slice(&state.last_record_sha256);
-    encode_frame(WAL_FRAME_ACK, &payload)
-}
+    fn decode_record(bytes: &[u8]) -> Result<EvidenceRecordV1> {
+        let name = "evidence WAL record";
+        let mut payload = Self::decode_frame(bytes, WAL_FRAME_RECORD, name)?;
+        let format_version = Self::take_binary_u32(&mut payload, name)?;
+        let cursor = Self::take_binary_u64(&mut payload, name)?;
+        let observation_id = Self::take_binary_array(&mut payload, name)?;
+        let content_len =
+            usize::try_from(Self::take_binary_u64(&mut payload, name)?).map_err(|_| {
+                EvidenceStateSnafu {
+                    reason: "evidence WAL record content size is not representable".to_owned(),
+                }
+                .build()
+            })?;
+        let content = Self::take_binary(&mut payload, content_len, name)?.to_vec();
+        let payload_sha256 = Self::take_binary_array(&mut payload, name)?;
+        let previous_record_sha256 = Self::take_binary_array(&mut payload, name)?;
+        let record_sha256 = Self::take_binary_array(&mut payload, name)?;
+        Self::finish_binary(payload, name)?;
+        Ok(EvidenceRecordV1 {
+            format_version,
+            cursor,
+            observation_id,
+            payload: content,
+            payload_sha256,
+            previous_record_sha256,
+            record_sha256,
+        })
+    }
 
-fn decode_ack(bytes: &[u8]) -> Result<AckStateV1> {
-    let name = "evidence acknowledgement state";
-    let mut payload = decode_frame(bytes, WAL_FRAME_ACK, name)?;
-    let state = AckStateV1 {
-        contiguous_cursor: take_binary_u64(&mut payload, name)?,
-        last_first_cursor: take_binary_u64(&mut payload, name)?,
-        last_batch_sha256: take_binary_array(&mut payload, name)?,
-        last_record_sha256: take_binary_array(&mut payload, name)?,
-    };
-    finish_binary(payload, name)?;
-    Ok(state)
-}
+    fn encode_ack(state: &AckStateV1) -> Result<Vec<u8>> {
+        let mut payload = Vec::with_capacity(80);
+        payload.extend_from_slice(&state.contiguous_cursor.to_be_bytes());
+        payload.extend_from_slice(&state.last_first_cursor.to_be_bytes());
+        payload.extend_from_slice(&state.last_batch_sha256);
+        payload.extend_from_slice(&state.last_record_sha256);
+        Self::encode_frame(WAL_FRAME_ACK, &payload)
+    }
 
-fn encode_gap(gap: &EvidenceGapV1) -> Result<Vec<u8>> {
-    let mut payload = Vec::with_capacity(168);
-    payload.extend_from_slice(&gap.node_boot_id);
-    payload.extend_from_slice(&gap.source_id);
-    payload.extend_from_slice(&gap.source_epoch.to_be_bytes());
-    payload.extend_from_slice(&gap.first_cursor.to_be_bytes());
-    payload.extend_from_slice(&gap.last_cursor.to_be_bytes());
-    payload.extend_from_slice(&gap.previous_record_sha256);
-    payload.extend_from_slice(&gap.last_record_sha256);
-    payload.extend_from_slice(&gap.discarded_records.to_be_bytes());
-    payload.extend_from_slice(&gap.discarded_bytes.to_be_bytes());
-    payload.extend_from_slice(&gap.gap_sha256);
-    encode_frame(WAL_FRAME_GAP, &payload)
-}
+    fn decode_ack(bytes: &[u8]) -> Result<AckStateV1> {
+        let name = "evidence acknowledgement state";
+        let mut payload = Self::decode_frame(bytes, WAL_FRAME_ACK, name)?;
+        let state = AckStateV1 {
+            contiguous_cursor: Self::take_binary_u64(&mut payload, name)?,
+            last_first_cursor: Self::take_binary_u64(&mut payload, name)?,
+            last_batch_sha256: Self::take_binary_array(&mut payload, name)?,
+            last_record_sha256: Self::take_binary_array(&mut payload, name)?,
+        };
+        Self::finish_binary(payload, name)?;
+        Ok(state)
+    }
 
-fn decode_gap(bytes: &[u8]) -> Result<EvidenceGapV1> {
-    let name = "evidence WAL gap";
-    let mut payload = decode_frame(bytes, WAL_FRAME_GAP, name)?;
-    let gap = EvidenceGapV1 {
-        node_boot_id: take_binary_array(&mut payload, name)?,
-        source_id: take_binary_array(&mut payload, name)?,
-        source_epoch: take_binary_u64(&mut payload, name)?,
-        first_cursor: take_binary_u64(&mut payload, name)?,
-        last_cursor: take_binary_u64(&mut payload, name)?,
-        previous_record_sha256: take_binary_array(&mut payload, name)?,
-        last_record_sha256: take_binary_array(&mut payload, name)?,
-        discarded_records: take_binary_u64(&mut payload, name)?,
-        discarded_bytes: take_binary_u64(&mut payload, name)?,
-        gap_sha256: take_binary_array(&mut payload, name)?,
-    };
-    finish_binary(payload, name)?;
-    Ok(gap)
+    fn encode_gap(gap: &EvidenceGapV1) -> Result<Vec<u8>> {
+        let mut payload = Vec::with_capacity(168);
+        payload.extend_from_slice(&gap.node_boot_id);
+        payload.extend_from_slice(&gap.source_id);
+        payload.extend_from_slice(&gap.source_epoch.to_be_bytes());
+        payload.extend_from_slice(&gap.first_cursor.to_be_bytes());
+        payload.extend_from_slice(&gap.last_cursor.to_be_bytes());
+        payload.extend_from_slice(&gap.previous_record_sha256);
+        payload.extend_from_slice(&gap.last_record_sha256);
+        payload.extend_from_slice(&gap.discarded_records.to_be_bytes());
+        payload.extend_from_slice(&gap.discarded_bytes.to_be_bytes());
+        payload.extend_from_slice(&gap.gap_sha256);
+        Self::encode_frame(WAL_FRAME_GAP, &payload)
+    }
+
+    fn decode_gap(bytes: &[u8]) -> Result<EvidenceGapV1> {
+        let name = "evidence WAL gap";
+        let mut payload = Self::decode_frame(bytes, WAL_FRAME_GAP, name)?;
+        let gap = EvidenceGapV1 {
+            node_boot_id: Self::take_binary_array(&mut payload, name)?,
+            source_id: Self::take_binary_array(&mut payload, name)?,
+            source_epoch: Self::take_binary_u64(&mut payload, name)?,
+            first_cursor: Self::take_binary_u64(&mut payload, name)?,
+            last_cursor: Self::take_binary_u64(&mut payload, name)?,
+            previous_record_sha256: Self::take_binary_array(&mut payload, name)?,
+            last_record_sha256: Self::take_binary_array(&mut payload, name)?,
+            discarded_records: Self::take_binary_u64(&mut payload, name)?,
+            discarded_bytes: Self::take_binary_u64(&mut payload, name)?,
+            gap_sha256: Self::take_binary_array(&mut payload, name)?,
+        };
+        Self::finish_binary(payload, name)?;
+        Ok(gap)
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -1365,7 +1370,7 @@ impl EvidenceWal {
                 .fail();
             }
             let (record, migrated_bytes) = if bytes.starts_with(&WAL_FRAME_MAGIC) {
-                (decode_record(&bytes)?, None)
+                (EvidenceWalCodecV1::decode_record(&bytes)?, None)
             } else {
                 let record = serde_json::from_slice(&bytes).map_err(|error| {
                     EvidenceStateSnafu {
@@ -1376,7 +1381,7 @@ impl EvidenceWal {
                     }
                     .build()
                 })?;
-                let encoded = encode_record(&record)?;
+                let encoded = EvidenceWalCodecV1::encode_record(&record)?;
                 if encoded.len() as u64 > limits.maximum_record_bytes {
                     return EvidenceStateSnafu {
                         reason: format!(
@@ -1426,7 +1431,7 @@ impl EvidenceWal {
         }
         let gap_bytes = gap
             .as_ref()
-            .map(encode_gap)
+            .map(EvidenceWalCodecV1::encode_gap)
             .transpose()?
             .map_or(0, |bytes| bytes.len() as u64);
         retained_bytes = retained_bytes.checked_add(gap_bytes).ok_or_else(|| {
@@ -1486,7 +1491,7 @@ impl EvidenceWal {
             .build()
         })?;
         let record = EvidenceRecordV1::new(cursor, observation, previous)?;
-        let bytes = encode_record(&record)?;
+        let bytes = EvidenceWalCodecV1::encode_record(&record)?;
         let bytes_len = u64::try_from(bytes.len()).map_err(|_| {
             EvidenceStateSnafu {
                 reason: "evidence WAL segment size is not representable".to_owned(),
@@ -1622,13 +1627,13 @@ impl EvidenceWal {
                 .build()
             })?;
         let record = &self.records[position];
-        let record_bytes = encode_record(record)?;
+        let record_bytes = EvidenceWalCodecV1::encode_record(record)?;
         let discarded_bytes = record_bytes.len() as u64;
         let gap = match &self.gap {
             Some(gap) => gap.extend(record, discarded_bytes)?,
             None => EvidenceGapV1::from_record(record, discarded_bytes)?,
         };
-        let gap_bytes = encode_gap(&gap)?;
+        let gap_bytes = EvidenceWalCodecV1::encode_gap(&gap)?;
         atomic_write(&self.root.join(GAP_FILE), &gap_bytes)?;
         let path = segment_path(&self.root, cursor);
         match fs::remove_file(&path) {
@@ -1708,7 +1713,7 @@ impl EvidenceWal {
                     record.record_sha256
                 }),
         };
-        let bytes = encode_ack(&state)?;
+        let bytes = EvidenceWalCodecV1::encode_ack(&state)?;
         atomic_write(&self.root.join(ACK_FILE), &bytes)?;
         let acknowledged_count = batch.records.len();
         let remaining_bytes = self
@@ -1716,7 +1721,7 @@ impl EvidenceWal {
             .iter()
             .skip(acknowledged_count)
             .try_fold(0_u64, |total, record| {
-                let bytes = encode_record(record)?;
+                let bytes = EvidenceWalCodecV1::encode_record(record)?;
                 total.checked_add(bytes.len() as u64).ok_or_else(|| {
                     EvidenceStateSnafu {
                         reason: "evidence WAL retained byte count overflowed".to_owned(),
@@ -1781,7 +1786,7 @@ impl EvidenceWal {
             last_batch_sha256: gap.gap_sha256,
             last_record_sha256: gap.last_record_sha256,
         };
-        let bytes = encode_ack(&state)?;
+        let bytes = EvidenceWalCodecV1::encode_ack(&state)?;
         atomic_write(&self.root.join(ACK_FILE), &bytes)?;
         let path = self.root.join(GAP_FILE);
         match fs::remove_file(&path) {
@@ -1831,7 +1836,7 @@ fn read_ack(root: &Path) -> Result<AckStateV1> {
     let path = root.join(ACK_FILE);
     let legacy_path = root.join(LEGACY_ACK_FILE);
     let binary = read_optional_file(&path)?
-        .map(|bytes| decode_ack(&bytes))
+        .map(|bytes| EvidenceWalCodecV1::decode_ack(&bytes))
         .transpose()?;
     let legacy = read_optional_file(&legacy_path)?
         .map(|bytes| {
@@ -1852,7 +1857,7 @@ fn read_ack(root: &Path) -> Result<AckStateV1> {
     let state = binary.or(legacy).unwrap_or_default();
     validate_ack(&state)?;
     if binary.is_none() && legacy.is_some() {
-        atomic_write(&path, &encode_ack(&state)?)?;
+        atomic_write(&path, &EvidenceWalCodecV1::encode_ack(&state)?)?;
     }
     if legacy.is_some() {
         fs::remove_file(&legacy_path).context(IoSnafu { path: &legacy_path })?;
@@ -1920,7 +1925,7 @@ fn read_gap(root: &Path, acknowledged: AckStateV1) -> Result<Option<EvidenceGapV
     let path = root.join(GAP_FILE);
     let legacy_path = root.join(LEGACY_GAP_FILE);
     let binary = read_optional_file(&path)?
-        .map(|bytes| decode_gap(&bytes))
+        .map(|bytes| EvidenceWalCodecV1::decode_gap(&bytes))
         .transpose()?;
     let legacy = read_optional_file(&legacy_path)?
         .map(|bytes| {
@@ -1955,7 +1960,7 @@ fn read_gap(root: &Path, acknowledged: AckStateV1) -> Result<Option<EvidenceGapV
         .fail();
     }
     if binary.is_none() {
-        atomic_write(&path, &encode_gap(&gap)?)?;
+        atomic_write(&path, &EvidenceWalCodecV1::encode_gap(&gap)?)?;
     }
     if legacy.is_some() {
         fs::remove_file(&legacy_path).context(IoSnafu { path: &legacy_path })?;
