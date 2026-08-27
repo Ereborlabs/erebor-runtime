@@ -467,6 +467,20 @@ impl ExceptionActivationAcknowledgementV1 {
         Ok(self)
     }
 
+    pub(crate) fn repeats_transition(&self, other: &Self) -> bool {
+        self.tenant_id == other.tenant_id
+            && self.node_id == other.node_id
+            && self.node_boot_id == other.node_boot_id
+            && self.label_epoch == other.label_epoch
+            && self.candidate_content_id == other.candidate_content_id
+            && self.exception_source_revision_id == other.exception_source_revision_id
+            && self.state == other.state
+            && self.consumed_uses == other.consumed_uses
+            && self.transition_version == other.transition_version
+            && self.observed_utc_ns == other.observed_utc_ns
+            && self.reason_code == other.reason_code
+    }
+
     pub fn validate(&self) -> Result<()> {
         let rejected = matches!(
             self.state,
@@ -908,6 +922,7 @@ impl PolicyRolloutOwner {
         &self,
         acknowledgement: ExceptionActivationAcknowledgementV1,
     ) -> Result<ExceptionRolloutStateV1> {
+        acknowledgement.validate()?;
         ensure!(
             self.store.current_node_session_matches(
                 &acknowledgement.node_id,
@@ -920,6 +935,12 @@ impl PolicyRolloutOwner {
                 reason: "the exception acknowledgement physical node session is stale",
             }
         );
+        if let Some(current) = self
+            .store
+            .exception_acknowledgement_result(&acknowledgement)?
+        {
+            return Ok(current);
+        }
         let current = self
             .store
             .exception_rollout_state(

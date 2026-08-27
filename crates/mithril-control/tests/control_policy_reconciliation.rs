@@ -501,6 +501,60 @@ fn exception_is_bounded_to_one_active_container_and_replays_revocation() -> Test
 }
 
 #[test]
+fn exception_acknowledgement_reuses_a_durable_transition_after_response_loss() -> TestResult {
+    let directory = TempDir::new()?;
+    let store = ControlStore::open(directory.path())?;
+    let prepared = prepare_exception(&store)?;
+    let acknowledgement = exception_acknowledgement(
+        &prepared.activation.candidate,
+        ExceptionActivationStateV1::Active,
+        1,
+        NOW + 4,
+    )?;
+    let accepted = prepared
+        .owner
+        .rollout_owner()
+        .acknowledge_exception(acknowledgement.clone())?;
+    let committed = store.commit_index();
+    let replay = ExceptionActivationAcknowledgementV1 {
+        acknowledgement_content_id: String::new(),
+        authenticated_channel_receipt_digest: "6".repeat(64),
+        ..acknowledgement.clone()
+    }
+    .finalize()?;
+
+    assert_ne!(
+        replay.acknowledgement_content_id,
+        accepted
+            .latest_acknowledgement_content_id
+            .clone()
+            .unwrap_or_default()
+    );
+    assert_eq!(
+        prepared
+            .owner
+            .rollout_owner()
+            .acknowledge_exception(replay)?,
+        accepted
+    );
+    assert_eq!(store.commit_index(), committed);
+    let conflicting_replay = ExceptionActivationAcknowledgementV1 {
+        acknowledgement_content_id: String::new(),
+        authenticated_channel_receipt_digest: "7".repeat(64),
+        observed_utc_ns: NOW + 5,
+        ..acknowledgement
+    }
+    .finalize()?;
+    assert!(prepared
+        .owner
+        .rollout_owner()
+        .acknowledge_exception(conflicting_replay)
+        .is_err());
+    assert_eq!(store.commit_index(), committed);
+    Ok(())
+}
+
+#[test]
 fn missing_exact_target_revokes_the_accepted_exception_once() -> TestResult {
     let directory = TempDir::new()?;
     let store = ControlStore::open(directory.path())?;

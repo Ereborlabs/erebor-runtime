@@ -958,6 +958,29 @@ impl ControlStore {
         )
     }
 
+    pub(crate) fn exception_acknowledgement_result(
+        &self,
+        acknowledgement: &ExceptionActivationAcknowledgementV1,
+    ) -> Result<Option<ExceptionRolloutStateV1>> {
+        let inner = self.lock()?;
+        let rollout = inner
+            .state
+            .exception_rollout_states
+            .get(&PolicyRolloutKeyV1 {
+                candidate_content_id: acknowledgement.candidate_content_id.clone(),
+                node_id: acknowledgement.node_id.clone(),
+            });
+        Ok(rollout.and_then(|rollout| {
+            let accepted = rollout
+                .latest_acknowledgement_content_id
+                .as_ref()
+                .and_then(|id| inner.state.exception_acknowledgements.get(id));
+            accepted
+                .is_some_and(|accepted| accepted.repeats_transition(acknowledgement))
+                .then(|| rollout.clone())
+        }))
+    }
+
     pub fn next_exception_distribution_sequence(
         &self,
         node_id: &str,
