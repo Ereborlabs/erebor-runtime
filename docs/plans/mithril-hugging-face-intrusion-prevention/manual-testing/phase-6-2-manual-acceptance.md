@@ -3,11 +3,9 @@
 Status: Not done. This procedure targets the approved
 `WorkloadProtectionPolicy` and `WorkloadProtectionException` resources. The
 CRD, lowering, node runtime, and automated tests implement the application,
-additional, administrative, and external entry roles. The current Kubernetes
-fixture and manual shell still need the same schema update and physical run.
-Use the [independent-entry example](../phase-6-2-entry-policy-example.yaml) as
-the entry and role fragment for that update. The complete current physical
-procedure has not passed.
+additional, administrative, and external entry roles. The complete automated
+two-node Kubernetes fixture passed with the current schema. The independent
+manual procedure and its failure and outage variants remain `Not run`.
 
 Phase: [Control Policy And Evidence Convergence](../phase-6-2-control-policy-and-evidence-convergence.md)
 
@@ -26,26 +24,21 @@ reaches the production Control transaction before the node truncates its WAL.
 
 ## Current Physical Result
 
-The current source has not run this complete physical procedure. A focused
-protected-start transaction passed with Kubernetes v1.35.5+k3s1 and containerd
-2.2.3-k3s1. It activated the `/bin/sh` application entry, allowed later
-BusyBox applet execs through that lineage, enforced the explicit file Deny,
-and denied a direct CRI external entry. It did not run the independent-entry
-amendment or the complete procedure. The earlier two-node attempt reached
-durable evidence intake and then failed protected start under the superseded
-runtime boundary.
+The complete automated fixture passed with Kubernetes v1.35.5+k3s1 and
+containerd v2.2.3-k3s1. It proved scheduler-selected exact delivery,
+`PreparedContainer` activation, independent entry roles, bounded exception use
+and retirement, task and Pod lifetime replacement, Control and Node restart
+recovery, same-name Node UID replacement, host epoch advance,
+desired-inventory cleanup, and fresh root activation. The healthy evidence
+stream had no lost events, reader-queue drops, WAL capacity block, WAL rewrite,
+or repeated Control connection. The result is
+`/tmp/mithril-phase-6-2-full-convergence-reuse46-20260828`.
 
-The previous result is a product blocker, not test noise. The validated
-architecture forbids a runtime-specific operation list and runtime-object
-authority. Completion requires current stock-runtime physical proof of the
-implemented `PreparedContainer` boundary.
-
-The current automated fixture now contains gate-failure, task lifetime, Pod
-UID, Node UID, host epoch, selector, exception target-retirement,
-desired-inventory cleanup, and fresh-root oracles. These physical cases remain
-`Not run`. Watch
-compaction, network partition, and storage outage also remain `Not run`. The
-previous scenario cleanup removed the test namespace and runtime classes.
+The scenario removed its workload namespace, policy, exception, Pods, and
+marker state. It retained the two owned VMs, K3s cluster, and installed Mithril
+release. The independent manual procedure, watch compaction, network
+partition, storage outage, physical evidence-failure variants, and final
+uninstall cleanup remain `Not run`.
 
 ## Automated Companion
 

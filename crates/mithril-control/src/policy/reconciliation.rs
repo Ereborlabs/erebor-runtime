@@ -838,7 +838,7 @@ impl PolicyRolloutOwner {
             let predecessor = self
                 .store
                 .latest_open_bundle_for_profile_node(
-                    &target.node_id,
+                    target,
                     &source.tenant_id,
                     &artifact.policy_document.metadata.trust_domain_id,
                     &artifact.policy_document.metadata.profile_id,

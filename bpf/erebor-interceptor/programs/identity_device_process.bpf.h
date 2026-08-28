@@ -306,6 +306,7 @@ static __noinline bool runtime_entry_may_control_initial_target(
 {
     struct task_struct *current = bpf_get_current_task_btf();
     struct runtime_entry_bootstrap_state_v1 *bootstrap;
+    execution_set_binding_state_v1 *activation;
     task_label_v1 *current_label;
     task_label_v1 *target_label;
     entry_security_state_v1 *current_entry;
@@ -336,11 +337,13 @@ static __noinline bool runtime_entry_may_control_initial_target(
         !target_entry->admitted_entry_rule_id)
         return false;
     if (signals_target) {
+        activation = binding_activation_for_new_root(binding, config);
         bootstrap = runtime_entry_bootstrap_for_task(current);
-        if (!runtime_entry_bootstrap_state_valid(bootstrap, config) ||
+        if (!activation ||
+            !runtime_entry_bootstrap_state_valid(bootstrap, config) ||
             bootstrap->profile_generation_ref_id !=
-                binding->active_profile_generation_ref_id ||
-            !id128_equal(&bootstrap->binding_id, &binding->binding_id) ||
+                activation->active_profile_generation_ref_id ||
+            !id128_equal(&bootstrap->binding_id, &activation->binding_id) ||
             !id128_equal(&bootstrap->target_entry_instance_id,
                          &target_label->entry_instance_id))
             return false;

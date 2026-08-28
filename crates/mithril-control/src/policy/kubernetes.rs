@@ -15,9 +15,9 @@ use super::{
     DestinationPolicyRecordV1, DetectionDispositionRuleV1, DnsPolicyModeV1, EffectFamilyDefaultV1,
     EffectFamilyV1, EntryKindV1, EntryRoleAssignmentV1, ErrnoV1, EvaluationStageV1,
     EvidenceLevelV1, FileExceptionGrantTemplateV1, FilesystemObjectTypeV1, FindingSpecV1,
-    IpcRelationshipRuleV1, LabelOperatorV1, LabelRequirementV1, LocalEffectMatchV1,
-    LocalObjectSelectorV1, LocalSubjectBindingV1, NetworkPolicyV1, NetworkPortRangeV1,
-    NetworkProtocolV1, ObjectClassifierBindingV1, ObjectClassifierSelectorV1,
+    IpcRelationshipRuleV1, KubernetesWorkloadIdentityV1, LabelOperatorV1, LabelRequirementV1,
+    LocalEffectMatchV1, LocalObjectSelectorV1, LocalSubjectBindingV1, NetworkPolicyV1,
+    NetworkPortRangeV1, NetworkProtocolV1, ObjectClassifierBindingV1, ObjectClassifierSelectorV1,
     OperationResultAuthorityV1, PathSelectorV1, PolicyDispositionV1, PolicyDocumentV1,
     PolicyMetadataV1, ProcessStateDefinitionV1, ProfileCandidateArtifactV1, ProfileModeV1,
     ProofIntegrityV1, ProofQualityPredicateV1, ProtectedUniverseV1, RemoteSubjectBindingV1,
@@ -2127,6 +2127,35 @@ impl PolicyTargetSnapshotV1 {
 }
 
 impl PolicyTargetV1 {
+    pub(crate) fn is_same_physical_node_epoch(&self, other: &Self) -> bool {
+        if self.node_id != other.node_id || self.cluster_uid != other.cluster_uid {
+            return false;
+        }
+        match (self.physical_node_epoch(), other.physical_node_epoch()) {
+            (Some(current), Some(previous)) => {
+                current.kubernetes_node_name == previous.kubernetes_node_name
+                    && current.node_boot_id == previous.node_boot_id
+                    && current.label_epoch == previous.label_epoch
+            }
+            (None, None) => self.workload_targets.is_empty() && other.workload_targets.is_empty(),
+            _ => false,
+        }
+    }
+
+    fn physical_node_epoch(&self) -> Option<&KubernetesWorkloadIdentityV1> {
+        let first = self.workload_targets.first()?.kubernetes.as_ref()?;
+        self.workload_targets
+            .iter()
+            .all(|target| {
+                target.kubernetes.as_ref().is_some_and(|identity| {
+                    identity.kubernetes_node_name == first.kubernetes_node_name
+                        && identity.node_boot_id == first.node_boot_id
+                        && identity.label_epoch == first.label_epoch
+                })
+            })
+            .then_some(first)
+    }
+
     fn is_valid(&self) -> bool {
         canonical_uuid(&self.tenant_id)
             && canonical_uuid(&self.cluster_uid)
@@ -2142,7 +2171,9 @@ impl PolicyTargetV1 {
                 .windows(2)
                 .all(|pair| pair[0] < pair[1])
             && (self.workload_targets.is_empty()
-                || (self.workload_targets.len() <= self.workload_binding_generation_digests.len()
+                || (self.physical_node_epoch().is_some()
+                    && self.workload_targets.len()
+                        <= self.workload_binding_generation_digests.len()
                     && self.workload_targets.iter().all(|target| {
                         target.kubernetes.is_some()
                             && target.node_id == self.node_id

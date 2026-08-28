@@ -210,12 +210,22 @@ fn acknowledgement(
     observed_utc_ns: i64,
 ) -> TestResult<PolicyActivationAcknowledgementV1> {
     let active = state == PolicyActivationStateV1::Active;
+    let target = bundle
+        .candidate
+        .exact_target
+        .workload_targets
+        .first()
+        .ok_or("the policy bundle has no workload target")?;
+    let identity = target
+        .kubernetes
+        .as_ref()
+        .ok_or("the policy target has no Kubernetes identity")?;
     Ok(PolicyActivationAcknowledgementV1 {
         acknowledgement_content_id: String::new(),
         tenant_id: TENANT_ID.to_owned(),
         node_id: bundle.candidate.exact_target.node_id.clone(),
-        node_boot_id: vec![1; 16],
-        label_epoch: 1,
+        node_boot_id: hex::decode(&identity.node_boot_id)?,
+        label_epoch: identity.label_epoch,
         candidate_content_id: bundle.candidate.candidate_content_id.clone(),
         policy_source_revision_id: bundle.candidate.policy_source_revision_id.clone(),
         target_snapshot_digest: bundle.candidate.target_snapshot_digest.clone(),
@@ -287,12 +297,17 @@ fn exception_acknowledgement(
         state,
         ExceptionActivationStateV1::Rejected | ExceptionActivationStateV1::Stale
     );
+    let identity = candidate
+        .exact_target
+        .kubernetes
+        .as_ref()
+        .ok_or("the exception target has no Kubernetes identity")?;
     Ok(ExceptionActivationAcknowledgementV1 {
         acknowledgement_content_id: String::new(),
         tenant_id: TENANT_ID.to_owned(),
         node_id: candidate.exact_target.node_id.clone(),
-        node_boot_id: vec![1; 16],
-        label_epoch: 1,
+        node_boot_id: hex::decode(&identity.node_boot_id)?,
+        label_epoch: identity.label_epoch,
         candidate_content_id: candidate.candidate_content_id.clone(),
         exception_source_revision_id: candidate.exception_source_revision_id.clone(),
         state,
@@ -359,6 +374,7 @@ fn exception_is_bounded_to_one_active_container_and_replays_revocation() -> Test
     let owner = make_owner(store.clone());
     let policy = policy()?;
     let policy_resource = resource(&policy, "profile", OBJECT_UID, 1, false)?;
+    let policy_resource_v2 = resource(&policy, "profile", OBJECT_UID, 2, false)?;
     let initial = owner.reconcile(
         &policy_resource,
         NAMESPACE_UID,
@@ -477,25 +493,112 @@ fn exception_is_bounded_to_one_active_container_and_replays_revocation() -> Test
             NOW + 120_000_000_002,
         )?)?;
     assert_eq!(reopened.health()?.unsettled_exception_candidates, 0);
-    let recreated_resource = exception_resource("30000000-0000-4000-8000-000000000009", false)?;
+
+    let policy_v2_inventory = inventory_for_resource(&policy_resource_v2, "")?;
+    let policy_v2 = restarted.reconcile(
+        &policy_resource_v2,
+        NAMESPACE_UID,
+        &policy_v2_inventory,
+        NOW + 120_000_000_003,
+    )?;
+    restarted.rollout_owner().acknowledge(acknowledgement(
+        &policy_v2.bundles[0],
+        PolicyActivationStateV1::Active,
+        NOW + 120_000_000_004,
+    )?)?;
+
+    let mut replacement_inventory = policy_v2_inventory;
+    replacement_inventory[0].execution_set_id = "44444444-4444-4444-8444-444444444445".to_owned();
+    replacement_inventory[0].pod_uid = "99999999-9999-4999-8999-999999999998".to_owned();
+    replacement_inventory[0].container_id = "containerd://converter-recreated".to_owned();
+    if let Some(identity) = replacement_inventory[0].kubernetes.as_mut() {
+        identity.binding_id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaab".to_owned();
+        identity.node_boot_id = "02".repeat(16);
+        identity.label_epoch = 2;
+    }
+    replacement_inventory[0].workload_binding_generation_digest =
+        workload_target_fact_digest(&replacement_inventory[0])?;
+    let replacement = restarted.reconcile(
+        &policy_resource_v2,
+        NAMESPACE_UID,
+        &replacement_inventory,
+        NOW + 120_000_000_005,
+    )?;
+    restarted.rollout_owner().acknowledge(acknowledgement(
+        &replacement.bundles[0],
+        PolicyActivationStateV1::Active,
+        NOW + 120_000_000_006,
+    )?)?;
+    drop(restarted);
+    drop(reopened);
+    let recovered_store = ControlStore::open(directory.path())?;
+    let recovered_owner = make_owner(recovered_store.clone());
+    let empty = recovered_owner.reconcile(
+        &policy_resource_v2,
+        NAMESPACE_UID,
+        &[],
+        NOW + 120_000_000_007,
+    )?;
+    assert!(empty.bundles.is_empty());
+    let recovered = recovered_owner.reconcile(
+        &policy_resource_v2,
+        NAMESPACE_UID,
+        &replacement_inventory,
+        NOW + 120_000_000_008,
+    )?;
+    assert_ne!(
+        recovered.bundles[0].candidate.candidate_content_id,
+        replacement.bundles[0].candidate.candidate_content_id
+    );
+    let mut recreated_resource = exception_resource("30000000-0000-4000-8000-000000000009", false)?;
+    recreated_resource.spec.target.pod.uid = replacement_inventory[0].pod_uid.clone();
+    assert!(recovered_owner
+        .reconcile_exception(
+            &recreated_resource,
+            NAMESPACE_UID,
+            &replacement_inventory,
+            NOW + 120_000_000_009,
+        )
+        .is_err());
+    recovered_owner
+        .rollout_owner()
+        .acknowledge(acknowledgement(
+            &recovered.bundles[0],
+            PolicyActivationStateV1::Active,
+            NOW + 120_000_000_010,
+        )?)?;
+    drop(recovered_owner);
+    drop(recovered_store);
+    let restarted = make_owner(ControlStore::open(directory.path())?);
+
     let recreated = restarted.reconcile_exception(
         &recreated_resource,
         NAMESPACE_UID,
-        &inventory,
-        NOW + 120_000_000_003,
+        &replacement_inventory,
+        NOW + 120_000_000_011,
     )?;
-    let relist_revocations =
-        restarted.retire_missing_exceptions(&BTreeSet::new(), NOW + 120_000_000_004)?;
-    assert_eq!(relist_revocations.len(), 1);
+    assert_eq!(recreated.candidate.exact_target, replacement_inventory[0]);
+    let retired_policy_target = restarted.reconcile(
+        &policy_resource_v2,
+        NAMESPACE_UID,
+        &[],
+        NOW + 120_000_000_012,
+    )?;
+    assert!(retired_policy_target.bundles.is_empty());
+    let target_retirement = restarted.reconcile_exception(
+        &recreated_resource,
+        NAMESPACE_UID,
+        &[],
+        NOW + 120_000_000_013,
+    )?;
     assert_eq!(
-        relist_revocations[0]
+        target_retirement
             .candidate
             .predecessor_candidate_content_id
             .as_deref(),
         Some(recreated.candidate.candidate_content_id.as_str())
     );
     drop(restarted);
-    drop(reopened);
     assert!(ControlStore::open(directory.path()).is_ok());
     Ok(())
 }
@@ -1791,6 +1894,50 @@ fn two_node_create_update_restart_delete_and_recreate_preserve_provenance() -> T
     assert_ne!(
         recreated.source_revision.policy_source_revision_id,
         retiring.source_revision.policy_source_revision_id
+    );
+    Ok(())
+}
+
+#[test]
+fn new_physical_node_epoch_starts_a_new_activation_chain() -> TestResult {
+    let directory = TempDir::new()?;
+    let owner = make_owner(ControlStore::open(directory.path())?);
+    let policy_resource = resource(&policy()?, "profile", OBJECT_UID, 1, false)?;
+    let first_inventory = inventory_for_resource(&policy_resource, &"1".repeat(64))?;
+    let first = owner.reconcile(&policy_resource, NAMESPACE_UID, &first_inventory, NOW)?;
+    assert_eq!(first.bundles.len(), 1);
+    assert_eq!(
+        first.bundles[0].candidate.operation,
+        PolicyDeliveryOperationV1::Activate
+    );
+
+    let mut next_inventory = first_inventory;
+    let target = &mut next_inventory[0];
+    target.execution_set_id = "44444444-4444-4444-8444-444444444446".to_owned();
+    target.pod_uid = "99999999-9999-4999-8999-999999999997".to_owned();
+    target.container_id = "containerd://converter-after-reboot".to_owned();
+    let identity = target
+        .kubernetes
+        .as_mut()
+        .ok_or("the Kubernetes target fixture has no provenance")?;
+    identity.binding_id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaac".to_owned();
+    identity.node_boot_id = "02".repeat(16);
+    identity.label_epoch = 2;
+    target.workload_binding_generation_digest = workload_target_fact_digest(target)?;
+
+    let next = owner.reconcile(&policy_resource, NAMESPACE_UID, &next_inventory, NOW + 1)?;
+    assert_eq!(next.bundles.len(), 1);
+    assert_eq!(
+        next.bundles[0].candidate.operation,
+        PolicyDeliveryOperationV1::Activate
+    );
+    assert!(next.bundles[0]
+        .candidate
+        .predecessor_candidate_content_id
+        .is_none());
+    assert!(
+        next.bundles[0].candidate.distribution_sequence
+            > first.bundles[0].candidate.distribution_sequence
     );
     Ok(())
 }

@@ -22,10 +22,10 @@ spec:
           rm -f /var/lib/mithril-convergence/MITHRIL_MANUAL_POD.restart;
           touch /var/lib/mithril-convergence/MITHRIL_MANUAL_POD.started;
           if [ MITHRIL_MANUAL_POD = protected ]; then
-          if ( : | : );
-          then echo PREPARED_RUNTIME_LEAKED >
+          if ( /usr/bin/env /bin/sleep 0 );
+          then echo APPLICATION_DEFAULT_ALLOWED >
           /var/lib/mithril-convergence/MITHRIL_MANUAL_POD.prepared-result;
-          else echo PREPARED_RUNTIME_RETIRED >
+          else echo APPLICATION_DEFAULT_DENIED >
           /var/lib/mithril-convergence/MITHRIL_MANUAL_POD.prepared-result;
           fi;
           if cat /var/lib/mithril-convergence/MITHRIL_MANUAL_POD.exception-target
@@ -37,7 +37,16 @@ spec:
           fi;
           while [ ! -e
           /var/lib/mithril-convergence/MITHRIL_MANUAL_POD.exception-request ];
-          do sleep 1; done;
+          do if [ -e
+          /var/lib/mithril-convergence/MITHRIL_MANUAL_POD.application-request ]
+          && [ ! -e
+          /var/lib/mithril-convergence/MITHRIL_MANUAL_POD.application-result ];
+          then if ( /usr/bin/env /bin/sleep 1 );
+          then echo APPLICATION_DEFAULT_ALLOWED >
+          /var/lib/mithril-convergence/MITHRIL_MANUAL_POD.application-result;
+          else echo APPLICATION_DEFAULT_DENIED >
+          /var/lib/mithril-convergence/MITHRIL_MANUAL_POD.application-result;
+          fi; fi; sleep 1; done;
           if cat /var/lib/mithril-convergence/MITHRIL_MANUAL_POD.exception-target
           >/dev/null 2>&1;
           then if cat /var/lib/mithril-convergence/MITHRIL_MANUAL_POD.exception-target
@@ -53,6 +62,46 @@ spec:
           while [ ! -e /var/lib/mithril-convergence/MITHRIL_MANUAL_POD.restart ];
           do sleep 1; done;
           exit 42
+      lifecycle:
+        postStart:
+          exec:
+            command:
+              - /bin/cp
+              - /var/lib/mithril-convergence/MITHRIL_MANUAL_POD.lifecycle-ready
+              - /var/lib/mithril-convergence/MITHRIL_MANUAL_POD.poststart-observed
+        preStop:
+          exec:
+            command:
+              - /bin/dd
+              - if=/var/lib/mithril-convergence/MITHRIL_MANUAL_POD.lifecycle-ready
+              - of=/var/lib/mithril-convergence/MITHRIL_MANUAL_POD.prestop-observed
+      startupProbe:
+        exec:
+          command:
+            - /bin/cat
+            - /var/lib/mithril-convergence/MITHRIL_MANUAL_POD.lifecycle-ready
+        periodSeconds: 10
+        timeoutSeconds: 1
+        failureThreshold: 30
+      readinessProbe:
+        exec:
+          command:
+            - /bin/grep
+            - -q
+            - READY
+            - /var/lib/mithril-convergence/MITHRIL_MANUAL_POD.lifecycle-ready
+        periodSeconds: 60
+        timeoutSeconds: 1
+        failureThreshold: 30
+      livenessProbe:
+        exec:
+          command:
+            - /bin/wc
+            - -c
+            - /var/lib/mithril-convergence/MITHRIL_MANUAL_POD.lifecycle-ready
+        periodSeconds: 60
+        timeoutSeconds: 1
+        failureThreshold: 30
       volumeMounts:
         - name: fixture
           mountPath: /var/lib/mithril-convergence

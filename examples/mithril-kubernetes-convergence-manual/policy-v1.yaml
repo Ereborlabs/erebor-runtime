@@ -14,121 +14,151 @@ spec:
       kinds: [Application]
       images:
         - docker.io/library/busybox:1.36.1@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662
-      initialRole: worker
+      applicationEntry:
+        executionRule: allow-shell-execution
+        role: worker
+      additionalEntries:
+        - name: poststart
+          kind: PostStart
+          executionRule: poststart-entry
+          role: poststart
+        - name: prestop
+          kind: PreStop
+          executionRule: prestop-entry
+          role: prestop
+        - name: startup-probe
+          kind: StartupProbe
+          executionRule: startup-probe-entry
+          role: startup-probe
+        - name: readiness-probe
+          kind: ReadinessProbe
+          executionRule: readiness-probe-entry
+          role: readiness-probe
+        - name: liveness-probe
+          kind: LivenessProbe
+          executionRule: liveness-probe-entry
+          role: liveness-probe
+      administrativeEntry:
+        role: administrator
       externalRole: runtime-external
   roles:
     - name: worker
       files:
-        - name: allow-busybox-read
-          path: /bin/busybox
-          recursive: false
-          operations: [OpenRead, Read, MmapRead]
-          action: Allow
-        - name: allow-shell-read
-          path: /bin/sh
-          recursive: false
-          operations: [OpenRead, Read, MmapRead]
-          action: Allow
-        - name: allow-sleep-read
-          path: /bin/sleep
-          recursive: false
-          operations: [OpenRead, Read, MmapRead]
-          action: Allow
-        - name: allow-cat-read
-          path: /bin/cat
-          recursive: false
-          operations: [OpenRead, Read, MmapRead]
-          action: Allow
-        - name: allow-touch-read
-          path: /bin/touch
-          recursive: false
-          operations: [OpenRead, Read, MmapRead]
-          action: Allow
-        - name: allow-rm-read
-          path: /bin/rm
-          recursive: false
-          operations: [OpenRead, Read, MmapRead]
-          action: Allow
-        - name: allow-start-marker
-          path: /var/lib/mithril-convergence/protected.started
-          recursive: false
-          operations: [OpenRead, OpenWrite, Read, Write, Create, SetAttributes, Unlink]
-          action: Allow
-        - name: allow-restart-marker
-          path: /var/lib/mithril-convergence/protected.restart
-          recursive: false
-          operations: [OpenRead, OpenWrite, Read, Write, Create, SetAttributes, Unlink]
-          action: Allow
-        - name: allow-exception-request-marker
-          path: /var/lib/mithril-convergence/protected.exception-request
-          recursive: false
-          operations: [OpenRead, OpenWrite, Read, Write, Create, SetAttributes, Unlink]
-          action: Allow
-        - name: allow-exception-result-marker
-          path: /var/lib/mithril-convergence/protected.exception-result
-          recursive: false
-          operations: [OpenRead, OpenWrite, Read, Write, Create, SetAttributes, Unlink]
-          action: Allow
-        - name: allow-prepared-result-marker
-          path: /var/lib/mithril-convergence/protected.prepared-result
-          recursive: false
-          operations: [OpenRead, OpenWrite, Read, Write, Create, SetAttributes, Unlink]
-          action: Allow
         - name: deny-exception-target-open
           path: /var/lib/mithril-convergence/protected.exception-target
           recursive: false
           operations: [OpenRead]
           action: Deny
-        - name: allow-exception-target-read
-          path: /var/lib/mithril-convergence/protected.exception-target
-          recursive: false
-          operations: [Read]
-          action: Allow
       execution:
-        - name: allow-busybox-execution
-          path: /bin/busybox
-          recursive: false
-          operations: [Execute, MmapExecute, Mprotect]
-          action: Allow
         - name: allow-shell-execution
           path: /bin/sh
           recursive: false
-          operations: [Execute, MmapExecute, Mprotect]
-          action: Allow
-        - name: allow-sleep-execution
-          path: /bin/sleep
-          recursive: false
-          operations: [Execute, MmapExecute, Mprotect]
-          action: Allow
-        - name: allow-cat-execution
-          path: /bin/cat
-          recursive: false
-          operations: [Execute, MmapExecute, Mprotect]
-          action: Allow
-        - name: allow-touch-execution
-          path: /bin/touch
-          recursive: false
-          operations: [Execute, MmapExecute, Mprotect]
-          action: Allow
-        - name: allow-rm-execution
-          path: /bin/rm
-          recursive: false
-          operations: [Execute, MmapExecute, Mprotect]
+          operations: [Execute]
           action: Allow
       network:
         socketControls: []
         destinations: []
-      processControl:
-        - name: allow-signal-probe
-          targetRole: worker
-          operation: Signal
-          signals: [0]
-          action: Allow
-      unixStreams:
-        - name: worker-loopback
-          peerRoles: [worker]
-          action: Allow
+      processControl: []
+      unixStreams: []
     - name: runtime-external
+      files: []
+      execution: []
+      network:
+        socketControls: []
+        destinations: []
+      processControl: []
+      unixStreams: []
+    - name: poststart
+      files:
+        - name: deny-poststart-file
+          path: /var/lib/mithril-convergence/poststart.denied
+          recursive: false
+          operations: [OpenRead]
+          action: Deny
+      execution:
+        - name: poststart-entry
+          path: /bin/cp
+          recursive: false
+          operations: [Execute]
+          action: Allow
+      network:
+        socketControls: []
+        destinations: []
+      processControl: []
+      unixStreams: []
+    - name: prestop
+      files:
+        - name: deny-prestop-file
+          path: /var/lib/mithril-convergence/prestop.denied
+          recursive: false
+          operations: [OpenRead]
+          action: Deny
+      execution:
+        - name: prestop-entry
+          path: /bin/dd
+          recursive: false
+          operations: [Execute]
+          action: Allow
+      network:
+        socketControls: []
+        destinations: []
+      processControl: []
+      unixStreams: []
+    - name: startup-probe
+      files:
+        - name: deny-startup-probe-file
+          path: /var/lib/mithril-convergence/startup-probe.denied
+          recursive: false
+          operations: [OpenRead]
+          action: Deny
+      execution:
+        - name: startup-probe-entry
+          path: /bin/cat
+          recursive: false
+          operations: [Execute]
+          action: Allow
+      network:
+        socketControls: []
+        destinations: []
+      processControl: []
+      unixStreams: []
+    - name: readiness-probe
+      files:
+        - name: deny-readiness-probe-file
+          path: /var/lib/mithril-convergence/readiness-probe.denied
+          recursive: false
+          operations: [OpenRead]
+          action: Deny
+      execution:
+        - name: readiness-probe-entry
+          path: /bin/grep
+          recursive: false
+          operations: [Execute]
+          action: Allow
+      network:
+        socketControls: []
+        destinations: []
+      processControl: []
+      unixStreams: []
+    - name: liveness-probe
+      files:
+        - name: deny-liveness-probe-file
+          path: /var/lib/mithril-convergence/liveness-probe.denied
+          recursive: false
+          operations: [OpenRead]
+          action: Deny
+      execution:
+        - name: liveness-probe-entry
+          path: /bin/wc
+          recursive: false
+          operations: [Execute]
+          action: Allow
+      network:
+        socketControls: []
+        destinations: []
+      processControl: []
+      unixStreams: []
+    - name: administrator
       files: []
       execution: []
       network:

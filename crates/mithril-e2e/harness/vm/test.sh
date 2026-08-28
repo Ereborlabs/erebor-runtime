@@ -27,10 +27,114 @@ convergence_help=$("$directory/two-node-convergence.sh" --help 2>&1)
 [[ $convergence_help == *--reuse-environment* ]]
 grep -q -- '--samples 6000 --sample-interval-ms 10' \
   "$directory/two-node-convergence.sh"
+grep -q -- '--reason APPLICATION_DEFAULT_ALLOW' \
+  "$directory/two-node-convergence.sh"
+grep -q -- '--reason UNSUPPORTED_OBJECT' \
+  "$directory/two-node-convergence.sh"
 grep -q -- 'start_entry_effect_capture.*entry_prestop_capture' \
+  "$directory/two-node-convergence.sh"
+grep -q -- 'start_entry_effect_capture.*application_effect_capture' \
   "$directory/two-node-convergence.sh"
 grep -Fq -- 'entry_role_effects_after=$(node_effects "$entry_roles_node" 2>/dev/null || true)' \
   "$directory/two-node-convergence.sh"
+retained_cleanup_line=$(grep -n '^  remove_retained_kubernetes_resources$' \
+  "$directory/two-node-convergence.sh" | cut -d: -f1)
+agent_runtime_restart_line=$(grep -n 'k3s-product-runtime "$remote_b"' \
+  "$directory/two-node-convergence.sh" | cut -d: -f1)
+[[ $retained_cleanup_line =~ ^[0-9]+$ && $agent_runtime_restart_line =~ ^[0-9]+$ ]]
+((retained_cleanup_line < agent_runtime_restart_line))
+gate_delivery_line=$(grep -n '^gate_status=$(wait_runtime_delivery' \
+  "$directory/two-node-convergence.sh" | cut -d: -f1)
+gate_delete_line=$(grep -n 'delete pod gate-failure' \
+  "$directory/two-node-convergence.sh" | cut -d: -f1)
+restart_baseline_line=$(grep -n '^restart_baseline=$(wait_runtime_delivery' \
+  "$directory/two-node-convergence.sh" | cut -d: -f1)
+container_restart_line=$(grep -n '^container_before=$(remote_kubectl' \
+  "$directory/two-node-convergence.sh" | cut -d: -f1 | tail -n 1)
+[[ $gate_delivery_line =~ ^[0-9]+$ && $gate_delete_line =~ ^[0-9]+$ &&
+   $restart_baseline_line =~ ^[0-9]+$ && $container_restart_line =~ ^[0-9]+$ ]]
+((gate_delivery_line < gate_delete_line &&
+  gate_delete_line < restart_baseline_line &&
+  restart_baseline_line < container_restart_line))
+ready_markers_line=$(grep -n '^prepare_pod_markers ready-node-only$' \
+  "$directory/two-node-convergence.sh" | cut -d: -f1)
+ready_create_line=$(grep -n '^remote_kubectl create -f .*ready-node-only.yaml' \
+  "$directory/two-node-convergence.sh" | cut -d: -f1)
+selector_markers_line=$(grep -n '^prepare_pod_markers selector-derived$' \
+  "$directory/two-node-convergence.sh" | cut -d: -f1)
+selector_create_line=$(grep -n '^remote_kubectl create -f .*selector-derived.yaml' \
+  "$directory/two-node-convergence.sh" | cut -d: -f1)
+selector_render_line=$(grep -n '^render_pod selector-derived mithril$' \
+  "$directory/two-node-convergence.sh" | cut -d: -f1)
+selector_dry_run_line=$(grep -n '^selector_dry_run=$(remote_kubectl create --dry-run=server' \
+  "$directory/two-node-convergence.sh" | cut -d: -f1)
+[[ $ready_markers_line =~ ^[0-9]+$ && $ready_create_line =~ ^[0-9]+$ &&
+   $selector_render_line =~ ^[0-9]+$ && $selector_dry_run_line =~ ^[0-9]+$ &&
+   $selector_markers_line =~ ^[0-9]+$ && $selector_create_line =~ ^[0-9]+$ ]]
+((ready_markers_line < ready_create_line &&
+  selector_render_line < selector_dry_run_line &&
+  selector_dry_run_line < selector_markers_line &&
+  selector_markers_line < selector_create_line))
+grep -Fq -- 'assert_ready_projection_stable "$selected_node"' \
+  "$directory/two-node-convergence.sh"
+grep -Fq -- 'if ((stable_observations >= 7)); then' \
+  "$directory/two-node-convergence.sh"
+grep -Fq -- 'stable_observations=0' \
+  "$directory/two-node-convergence.sh"
+grep -Fq -- 'assert_live_exact_target "$selected_node" "$profile_id"' \
+  "$directory/two-node-convergence.sh"
+grep -Fq -- 'candidate_after=$(wait_stable_live_replacement \' \
+  "$directory/two-node-convergence.sh"
+grep -Fq -- '"$selected_node" "$profile_id" "$candidate_before" "$source_revision_before")' \
+  "$directory/two-node-convergence.sh"
+pre_reboot_uid_line=$(grep -n '^pre_reboot_pod_uid=$(remote_kubectl' \
+  "$directory/two-node-convergence.sh" | cut -d: -f1)
+epoch_advance_line=$(grep -n '^wait_node_epoch_advance \\' \
+  "$directory/two-node-convergence.sh" | cut -d: -f1)
+reboot_delete_line=$(grep -n '^remote_kubectl -n "$workload_namespace" delete pod protected \\' \
+  "$directory/two-node-convergence.sh" | cut -d: -f1 | head -n 1)
+reboot_create_line=$(grep -n '^remote_kubectl create -f "$remote_a/protected-after-reboot.json"' \
+  "$directory/two-node-convergence.sh" | cut -d: -f1)
+[[ $pre_reboot_uid_line =~ ^[0-9]+$ && $epoch_advance_line =~ ^[0-9]+$ &&
+   $reboot_delete_line =~ ^[0-9]+$ && $reboot_create_line =~ ^[0-9]+$ ]]
+((pre_reboot_uid_line < epoch_advance_line &&
+  epoch_advance_line < reboot_delete_line &&
+  reboot_delete_line < reboot_create_line))
+grep -Fq -- 'post_reboot_pod_uid != "$pre_reboot_pod_uid"' \
+  "$directory/two-node-convergence.sh"
+grep -Fq -- 'timeout --kill-after=5s 20s "$provider" run "$vm"' \
+  "$directory/two-node-convergence.sh"
+grep -Fq -- 'if ! "$provider" wait "$vm"; then' \
+  "$directory/two-node-convergence.sh"
+grep -Fq -- 'timeout --kill-after=2s 10s ssh "${options[@]}"' \
+  "$directory/providers/libvirt.sh"
+grep -Fq -- "awk '/Version:/ && !found {print \$2; found = 1}'" \
+  "$directory/two-node-convergence.sh"
+grep -Fq -- 'request_vm_reboot "$selected_vm"' \
+  "$directory/two-node-convergence.sh"
+grep -Fq -- 'assert_node_evidence_health_clean "$selected_node"' \
+  "$directory/two-node-convergence.sh"
+grep -Fq -- 'assert_node_evidence_health_clean "$other_node"' \
+  "$directory/two-node-convergence.sh"
+grep -Fq -- "'reader_queue_dropped_events=0'" \
+  "$directory/two-node-convergence.sh"
+grep -Fq -- "'connected to Mithril Control'" \
+  "$directory/two-node-convergence.sh"
+grep -Fq -- '-f "$remote_a/selector-derived.yaml" -o json)' \
+  "$directory/two-node-convergence.sh"
+grep -Fq -- 'label node "$selected_node" mithril.erebor.dev/fixture=selected' \
+  "$directory/two-node-convergence.sh"
+grep -Fq -- 'label node "$node_a_name" "$node_b_name"' \
+  "$directory/two-node-convergence.sh"
+grep -Fq -- 'mithril.erebor.dev/fixture- >/dev/null' \
+  "$directory/two-node-convergence.sh"
+grep -Fq -- "-o jsonpath='{.spec.nodeName}') == \"\$selected_node\" ]]" \
+  "$directory/two-node-convergence.sh"
+grep -Fq -- "printf -v command '%q ' sudo /usr/local/bin/k3s kubectl \"\$@\"" \
+  "$directory/two-node-convergence.sh"
+patch_payload='{"spec":{"template":{"spec":{"nodeSelector":{"mithril.erebor.dev/fixture":"selected"}}}}}'
+printf -v quoted_patch_command 'printf %%s %q' "$patch_payload"
+[[ $(bash -c "$quoted_patch_command") == "$patch_payload" ]]
 
 set +e
 protected_manual=$("$directory/two-node-convergence.sh" \
@@ -236,7 +340,15 @@ fi
 rm -f -- "$hook_binary" "$hook_binary_owner" \
   "$hook_stage_config" "$hook_stage_config_owner" \
   "$hook_admission_config" "$hook_admission_config_owner" \
-  "$hook_entry_config" "$hook_entry_config_owner" "$hook_socket"
+  "$hook_entry_config" "$hook_entry_config_owner"
+bash "$directory/runtime-hook-oracle.sh" hooks-removed "$hook_root" \
+  /run/mithril/runtime-admission.sock
+if bash "$directory/runtime-hook-oracle.sh" removed "$hook_root" \
+    /run/mithril/runtime-admission.sock >/dev/null 2>&1; then
+  echo "a stale runtime socket satisfied the complete removal oracle" >&2
+  exit 1
+fi
+rm -f -- "$hook_socket"
 bash "$directory/runtime-hook-oracle.sh" removed "$hook_root" \
   /run/mithril/runtime-admission.sock
 
@@ -328,6 +440,39 @@ fi
 if assert_exact_policy_target "$status_json" "$node_json" "$pod_json" \
     profile-a app REPLACE candidate-before; then
   echo "a root activation satisfied a predecessor-bound replacement oracle" >&2
+  exit 1
+fi
+restarted_pod_json=$(jq -c \
+  '.status.containerStatuses[0].containerID = "containerd://container-b"' \
+  <<<"$pod_json")
+replacement_status_json=$(jq -c '
+  .active_candidate_content_id = "candidate-b" |
+  .active_targets[0].candidate_content_id = "candidate-b" |
+  .active_targets[0].operation = "REPLACE" |
+  .active_targets[0].predecessor_candidate_content_id = "candidate-a" |
+  .active_targets[0].policy_source_revision_id = "source-b"
+' <<<"$status_json")
+assert_exact_policy_target "$replacement_status_json" "$node_json" \
+  "$pod_json" profile-a app REPLACE candidate-a source-b
+if assert_exact_policy_target "$replacement_status_json" "$node_json" \
+    "$pod_json" profile-a app REPLACE candidate-a; then
+  echo "a live policy revision satisfied the admission-source oracle" >&2
+  exit 1
+fi
+restarted_status_json=$(jq -c '
+  .active_targets[0].runtime_container_id = "container-b" |
+  .active_targets[0].runtime_binding_id = "runtime-binding-b" |
+  .active_targets[0].container_generation = 2
+' <<<"$replacement_status_json")
+assert_exact_policy_target "$restarted_status_json" "$node_json" \
+  "$restarted_pod_json" profile-a app REPLACE candidate-a source-b
+[[ $(jq -er '.active_candidate_content_id' <<<"$restarted_status_json") == \
+   $(jq -er '.active_candidate_content_id' <<<"$replacement_status_json") ]]
+if assert_exact_policy_target "$(jq -c \
+    '.active_targets[0].predecessor_candidate_content_id = "candidate-b"' \
+    <<<"$restarted_status_json")" "$node_json" \
+    "$restarted_pod_json" profile-a app REPLACE candidate-a source-b; then
+  echo "a runtime restart changed the signed candidate predecessor" >&2
   exit 1
 fi
 

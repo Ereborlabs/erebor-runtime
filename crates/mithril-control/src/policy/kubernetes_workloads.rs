@@ -693,6 +693,9 @@ impl KubernetesWorkloadInventoryOwner {
         namespaces: &BTreeMap<String, String>,
         service_accounts: &BTreeMap<(String, String), String>,
     ) -> Result<Vec<WorkloadTargetFactV1>> {
+        if Self::pod_is_terminal(pod) {
+            return Ok(Vec::new());
+        }
         let annotations = pod.metadata.annotations.as_ref();
         let Some(profile_id) =
             annotations.and_then(|values| values.get(KUBERNETES_PROFILE_ANNOTATION))
@@ -846,6 +849,15 @@ impl KubernetesWorkloadInventoryOwner {
             targets.push(target);
         }
         Ok(targets)
+    }
+
+    fn pod_is_terminal(pod: &Pod) -> bool {
+        matches!(
+            pod.status
+                .as_ref()
+                .and_then(|status| status.phase.as_deref()),
+            Some("Failed" | "Succeeded")
+        )
     }
 }
 
@@ -1400,7 +1412,7 @@ mod tests {
     use ed25519_dalek::SigningKey;
     use k8s_openapi::api::core::v1::{
         Affinity, Container, Node, NodeAffinity, NodeSelector, NodeSelectorRequirement,
-        NodeSelectorTerm, NodeSpec, Pod, PodSpec, Toleration,
+        NodeSelectorTerm, NodeSpec, Pod, PodSpec, PodStatus, Toleration,
     };
     use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
     use kube::client::Body as KubeBody;
@@ -1761,7 +1773,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn pending_protected_pod_does_not_block_bound_pod_inventory(
+    async fn pending_and_terminal_protected_pods_do_not_enter_live_inventory(
     ) -> Result<(), Box<dyn std::error::Error>> {
         let directory = TempDir::new()?;
         let policies = test_policy_owner(directory.path())?;
@@ -1844,9 +1856,20 @@ mod tests {
         if let Some(spec) = pending.spec.as_mut() {
             spec.node_name = None;
         }
+        let mut failed = bound.clone();
+        failed.status = Some(PodStatus {
+            phase: Some("Failed".to_owned()),
+            reason: Some("NodeAffinity".to_owned()),
+            ..PodStatus::default()
+        });
+        let mut succeeded = bound.clone();
+        succeeded.status = Some(PodStatus {
+            phase: Some("Succeeded".to_owned()),
+            ..PodStatus::default()
+        });
 
         let targets = owner.targets_for_pods(
-            &[pending, bound],
+            &[pending, failed, succeeded, bound],
             &BTreeMap::from([("worker-a".to_owned(), node)]),
             &BTreeMap::from([("tenant-a".to_owned(), NAMESPACE_UID.to_owned())]),
             &BTreeMap::from([(

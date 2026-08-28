@@ -61,11 +61,15 @@ static __always_inline int mark_runtime_entry_bootstrap(
     const task_label_v1 *target_label)
 {
     struct runtime_entry_bootstrap_state_v1 *state;
+    execution_set_binding_state_v1 *activation;
     struct task_struct *owner;
     task_label_v1 *label;
     process_security_state_v1 *process;
 
     if (!task || !config || !binding || !target_label)
+        return -EACCES;
+    activation = binding_activation_for_new_root(binding, config);
+    if (!activation)
         return -EACCES;
     owner = runtime_entry_bootstrap_owner(task);
     state = bpf_task_storage_get(&runtime_entry_bootstrap_states, owner, 0,
@@ -74,24 +78,24 @@ static __always_inline int mark_runtime_entry_bootstrap(
         return -EACCES;
     __builtin_memset(state, 0, sizeof(*state));
     state->node_boot_id = config->node_boot_id;
-    state->binding_id = binding->binding_id;
+    state->binding_id = activation->binding_id;
     state->target_entry_instance_id = target_label->entry_instance_id;
     state->label_epoch = config->label_epoch;
     state->profile_generation_ref_id =
-        binding->active_profile_generation_ref_id;
+        activation->active_profile_generation_ref_id;
     state->active = 1;
     label = bpf_task_storage_get(&task_labels, task, 0, 0);
     if (!label)
         return 0;
     process = bpf_map_lookup_elem(&process_states, &label->process_state_id);
-    if (!process || !binding_matches_label(binding, label) ||
+    if (!process || !binding_matches_label(activation, label) ||
         __sync_val_compare_and_swap(&process->transition_guard, 0, 1)) {
         state->active = 0;
         return -EACCES;
     }
     if (process->state != process_security_state_kind_v1_active ||
         process->exec_guard_state != exec_guard_state_v1_none ||
-        process->active_role_id != binding->external_role_id) {
+        process->active_role_id != activation->external_role_id) {
         release_transition_guard(&process->transition_guard);
         state->active = 0;
         return -EACCES;
@@ -169,14 +173,15 @@ static __noinline bool runtime_entry_bootstrap_actor_is_exact(
         binding->prepared_container_state !=
             prepared_container_state_v1_active ||
         !binding_matches_label(binding, label) ||
-        process->active_role_id != binding->external_role_id ||
         process->runtime_entry_bootstrap_prepared != 1 ||
         entry->admitted_entry_rule_id ||
         classification->root_class !=
             external_root_class_v1_external_runtime_root ||
         classification->purpose != entry_purpose_v1_unknown ||
         classification->installed_role_numeric_id !=
-            binding->external_role_id)
+            process->active_role_id ||
+        classification->profile_generation_ref_id !=
+            process->active_profile_generation_ref_id)
         return false;
     if (process->exec_guard_state == exec_guard_state_v1_none)
         return true;
@@ -193,9 +198,9 @@ static __noinline bool runtime_entry_bootstrap_actor_is_exact(
     return valid_exec_state &&
            (pending->admitted_entry_rule_id ||
             pending->prepared_runtime_exec) &&
-           pending->source_role_id == binding->external_role_id &&
+           pending->source_role_id == process->active_role_id &&
            pending->source_profile_generation_ref_id ==
-               binding->active_profile_generation_ref_id &&
+               process->active_profile_generation_ref_id &&
            id128_equal(&pending->process_state_id,
                        &label->process_state_id) &&
            id128_equal(&pending->pending_exec_id,

@@ -8,7 +8,9 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use erebor_interceptor::{KernelHostConfig, KernelHostOwner};
-use erebor_interceptor_abi::{EntryAdmissionRuleV1, KernelEffectFamilyV1, KernelEffectOperationV1};
+use erebor_interceptor_abi::{
+    EntryAdmissionRuleKeyV1, EntryAdmissionRuleV1, KernelEffectFamilyV1, KernelEffectOperationV1,
+};
 use mithril_control::{
     lower_kubernetes_policy, policy_custom_resource, WorkloadProtectionPolicySpec,
 };
@@ -27,7 +29,10 @@ use super::support::{
     effect_binding_with_identity, effect_node_config, wait_for_application_default_effect,
     wait_for_path_exec_effect, wait_for_reason,
 };
-use super::{sign_generation_artifact, EffectTestRunner, PROFILE_GENERATION_REF_ID};
+use super::{
+    sign_generation_artifact, EffectTestRunner, NEXT_PROFILE_GENERATION_REF_ID,
+    PROFILE_GENERATION_REF_ID,
+};
 use crate::error::{
     CommandSnafu, InterceptorSnafu, InvalidInputSnafu, IoSnafu, JsonSnafu, NodeSnafu, PolicySnafu,
 };
@@ -46,11 +51,14 @@ pub struct RuncEntryRoleRuntimeProbeV1 {
     pub prepared_runtime_effect_observed: bool,
     pub application_entry_allow_observed: bool,
     pub application_default_file_allow_observed: bool,
+    pub application_descendant_default_exec_role_preserved: bool,
     pub application_admitted_entry_rule_id: u32,
     pub independent_entries: Vec<RuncEntryRoleProbeV1>,
     pub independent_entry_roles_are_distinct: bool,
     pub reusable_entry_reinvocation_isolated: bool,
     pub runtime_entry_infrastructure_observed: bool,
+    pub live_replacement_preserved_running_application: bool,
+    pub live_replacement_entries_use_new_generation: bool,
     pub external_entry_denied: bool,
     pub external_cgroup_entering_process_stays_closed: bool,
     pub entry_executable_exact_objects_enforced: bool,
@@ -71,6 +79,7 @@ pub struct RuncEntryRoleProbeV1 {
     pub task_cookie: u64,
     pub process_state_id: String,
     pub active_execution_id: String,
+    pub profile_generation_ref_id: u64,
     pub active_role_id: u32,
     pub admitted_entry_rule_id: u32,
     pub exact_executable_object_enforced: bool,
@@ -80,6 +89,7 @@ pub struct RuncEntryRoleProbeV1 {
 
 struct RuncPolicyFixture {
     artifact_path: PathBuf,
+    replacement_artifact_path: PathBuf,
     profile_id: String,
     protected_scope_id: String,
     execution_set_id: String,
@@ -628,12 +638,136 @@ impl EffectTestRunner {
             marker,
             (KernelEffectFamilyV1::File, KernelEffectOperationV1::Read),
         )?;
+        wait_for_application_default_effect(
+            &reader,
+            &observations,
+            marker,
+            (KernelEffectFamilyV1::Exec, KernelEffectOperationV1::Execute),
+        )?;
+        let application_descendant_default_exec_role_preserved =
+            observations.recent_since(marker).iter().any(|event| {
+                event.reason == "APPLICATION_DEFAULT_ALLOW"
+                    && event.effect_family == u32::from(KernelEffectFamilyV1::Exec as u16)
+                    && event.operation == u32::from(KernelEffectOperationV1::Execute as u16)
+                    && event.task_cookie != active.task_cookie
+                    && event.active_role_id == active.active_role_id
+                    && event.admitted_entry_rule_id == active.admitted_entry_rule_id
+                    && event.composite_atom_id == 0
+                    && event.exact_object_key_id == 0
+            });
+        ensure!(
+            application_descendant_default_exec_role_preserved,
+            InvalidInputSnafu {
+                path: pin_root,
+                reason:
+                    "an application descendant did not retain its application role and admission ID",
+            }
+        );
 
         ensure!(
             active.active_role_id == policy.initial_role_id && active.admitted_entry_rule_id > 0,
             InvalidInputSnafu {
                 path: pin_root,
                 reason: "the application entry did not install its declared role and admission ID",
+            }
+        );
+
+        let mut replacement_binding = binding.clone();
+        replacement_binding.active_profile_generation_ref_id = NEXT_PROFILE_GENERATION_REF_ID;
+        let replacement_config = effect_node_config(
+            &fixture_root,
+            pin_root,
+            lease_path,
+            &policy_fixture,
+            policy.replacement_artifact_path.clone(),
+            vec![replacement_binding],
+        );
+        policy_owner = NodePolicyGenerationOwner::load_and_install_for_bindings(
+            &replacement_config,
+            &mut host,
+            &bindings,
+            node_boot_id,
+            1,
+        )
+        .context(NodeSnafu)?;
+        bindings
+            .adopt_activated_profiles(&host, &replacement_config.workload_bindings)
+            .context(NodeSnafu)?;
+        policy_owner
+            .reconcile_cri_exact_bindings(&replacement_config, &mut host, &bindings)
+            .context(NodeSnafu)?;
+        let active_after_replacement = inspector
+            .snapshot(initial_pid)
+            .context(NodeSnafu)?
+            .ok_or_else(|| {
+                InvalidInputSnafu {
+                    path: pin_root,
+                    reason: "the running application lost identity during policy replacement",
+                }
+                .build()
+            })?;
+        let live_replacement_preserved_running_application =
+            active_after_replacement.profile_generation_ref_id == PROFILE_GENERATION_REF_ID
+                && active_after_replacement.task_cookie == active.task_cookie
+                && active_after_replacement.active_role_id == active.active_role_id
+                && active_after_replacement.admitted_entry_rule_id == active.admitted_entry_rule_id;
+        ensure!(
+            live_replacement_preserved_running_application,
+            InvalidInputSnafu {
+                path: pin_root,
+                reason: "policy replacement changed the running application identity",
+            }
+        );
+        let replacement_entry_rules = host
+            .map_keys("entry_admission_rules")
+            .context(InterceptorSnafu)?
+            .into_iter()
+            .map(|key| {
+                let parsed_key =
+                    EntryAdmissionRuleKeyV1::try_read_from_bytes(&key).map_err(|error| {
+                        InvalidInputSnafu {
+                            path: pin_root,
+                            reason: format!(
+                                "a replacement entry admission key has invalid ABI: {error}"
+                            ),
+                        }
+                        .build()
+                    })?;
+                let value = host
+                    .lookup_map("entry_admission_rules", &key)
+                    .context(InterceptorSnafu)?
+                    .ok_or_else(|| {
+                        InvalidInputSnafu {
+                            path: pin_root,
+                            reason:
+                                "a replacement entry admission rule disappeared before readback",
+                        }
+                        .build()
+                    })?;
+                let rule = EntryAdmissionRuleV1::try_read_from_bytes(&value).map_err(|error| {
+                    InvalidInputSnafu {
+                        path: pin_root,
+                        reason: format!(
+                            "a replacement entry admission rule has invalid ABI: {error}"
+                        ),
+                    }
+                    .build()
+                })?;
+                Ok((parsed_key, rule))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let replacement_exact_entry_rule_ids = replacement_entry_rules
+            .iter()
+            .filter(|(_, rule)| {
+                rule.executable_object.profile_generation_ref_id == NEXT_PROFILE_GENERATION_REF_ID
+            })
+            .map(|(_, rule)| rule.admitted_entry_rule_id)
+            .collect::<BTreeSet<_>>();
+        ensure!(
+            replacement_exact_entry_rule_ids.len() == 6,
+            InvalidInputSnafu {
+                path: pin_root,
+                reason: "policy replacement did not install six exact declared entries",
             }
         );
         let mut independent_entries = Vec::new();
@@ -700,9 +834,10 @@ impl EffectTestRunner {
                 snapshot.admitted_entry_rule_id,
             )?;
             let exact_executable_object_enforced =
-                exact_entry_rule_ids.contains(&snapshot.admitted_entry_rule_id);
+                replacement_exact_entry_rule_ids.contains(&snapshot.admitted_entry_rule_id);
             ensure!(
                 status.success()
+                    && snapshot.profile_generation_ref_id == NEXT_PROFILE_GENERATION_REF_ID
                     && snapshot.active_role_id == expected_role_id
                     && snapshot.admitted_entry_rule_id > 0
                     && exact_executable_object_enforced
@@ -722,6 +857,7 @@ impl EffectTestRunner {
                 task_cookie: snapshot.task_cookie,
                 process_state_id: snapshot.process_state_id,
                 active_execution_id: snapshot.active_execution_id,
+                profile_generation_ref_id: snapshot.profile_generation_ref_id,
                 active_role_id: snapshot.active_role_id,
                 admitted_entry_rule_id: snapshot.admitted_entry_rule_id,
                 exact_executable_object_enforced,
@@ -751,6 +887,9 @@ impl EffectTestRunner {
             && independent_entries
                 .iter()
                 .all(|entry| entry.exact_executable_object_enforced);
+        let live_replacement_entries_use_new_generation = independent_entries
+            .iter()
+            .all(|entry| entry.profile_generation_ref_id == NEXT_PROFILE_GENERATION_REF_ID);
         let poststart = &independent_entries[0];
         let repeated_poststart = &independent_entries[1];
         let reusable_entry_reinvocation_isolated = poststart.declaration_name
@@ -981,7 +1120,7 @@ impl EffectTestRunner {
         })?;
 
         Ok(RuncEntryRoleRuntimeProbeV1 {
-            schema_version: 7,
+            schema_version: 9,
             runc_version: runc_version.lines().next().unwrap_or_default().to_owned(),
             initial_host_pid: initial_pid,
             prepared_state_before_exec,
@@ -989,11 +1128,14 @@ impl EffectTestRunner {
             prepared_runtime_effect_observed: true,
             application_entry_allow_observed: true,
             application_default_file_allow_observed: true,
+            application_descendant_default_exec_role_preserved,
             application_admitted_entry_rule_id: active.admitted_entry_rule_id,
             independent_entries,
             independent_entry_roles_are_distinct,
             reusable_entry_reinvocation_isolated,
             runtime_entry_infrastructure_observed,
+            live_replacement_preserved_running_application,
+            live_replacement_entries_use_new_generation,
             external_entry_denied,
             external_cgroup_entering_process_stays_closed,
             entry_executable_exact_objects_enforced,
@@ -1071,14 +1213,22 @@ impl EffectTestRunner {
         let protected_scope_id = document.protected_universe.protected_scope_ids[0].clone();
         let execution_set_id = document.protected_universe.execution_set_ids[0].clone();
         let artifact_path = sign_generation_artifact(
-            document,
+            document.clone(),
             &policy_fixture.join("observe-profile-seal-request.json"),
             &policy_fixture.join("test-signing-key.hex"),
             fixture_root,
             1,
         )?;
+        let replacement_artifact_path = sign_generation_artifact(
+            document,
+            &policy_fixture.join("observe-profile-seal-request.json"),
+            &policy_fixture.join("test-signing-key.hex"),
+            fixture_root,
+            2,
+        )?;
         Ok(RuncPolicyFixture {
             artifact_path,
+            replacement_artifact_path,
             profile_id,
             protected_scope_id,
             execution_set_id,
@@ -1239,22 +1389,30 @@ fn wait_for_path(path: &Path, exists: bool, name: &str) -> Result<()> {
     }
 }
 
-fn recent_effect_summary(
-    observations: &EffectObservationStore,
-    marker: u64,
-) -> Vec<(String, u32, u32, u32, u32, i32)> {
+fn recent_effect_summary(observations: &EffectObservationStore, marker: u64) -> Vec<String> {
     observations
         .recent_since(marker)
         .iter()
         .rev()
         .take(16)
         .map(|event| {
-            (
-                event.reason.clone(),
+            format!(
+                "reason={} family={} operation={} generation={} binding={} role={} vector={} admission={} atom={} object={} file=({},{},{},{},{}) result={}",
+                event.reason,
                 event.effect_family,
                 event.operation,
+                event.profile_generation_ref_id,
+                event.binding_id,
                 event.active_role_id,
+                event.process_state_vector_id,
                 event.admitted_entry_rule_id,
+                event.composite_atom_id,
+                event.exact_object_key_id,
+                event.mount_namespace_inode,
+                event.mount_id_unique,
+                event.filesystem_device,
+                event.inode,
+                event.inode_generation,
                 event.kernel_result,
             )
         })

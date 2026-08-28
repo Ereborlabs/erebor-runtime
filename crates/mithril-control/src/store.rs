@@ -17,9 +17,9 @@ use crate::{
     ExceptionSourceRevisionV1, ExceptionSourceStateV1, IntakeStateV1,
     PolicyActivationAcknowledgementV1, PolicyActivationStateV1, PolicyBundleV1, PolicyDocumentV1,
     PolicyRolloutStateV1, PolicyRolloutStatusV1, PolicySourceRevisionV1, PolicySourceStateV1,
-    PolicyTargetSnapshotV1, ProfileCandidateArtifactV1, Result, StoredCoverageReportV1,
-    StoredEvidenceBatchV1, StoredEvidenceGapV1, StoredRecordV1, TrustGenerationAcknowledgementV1,
-    TrustGenerationV1, MAX_PENDING_EVIDENCE_RECORDS,
+    PolicyTargetSnapshotV1, PolicyTargetV1, ProfileCandidateArtifactV1, Result,
+    StoredCoverageReportV1, StoredEvidenceBatchV1, StoredEvidenceGapV1, StoredRecordV1,
+    TrustGenerationAcknowledgementV1, TrustGenerationV1, MAX_PENDING_EVIDENCE_RECORDS,
 };
 
 const STORE_SCHEMA_VERSION: u32 = 1;
@@ -1506,6 +1506,11 @@ impl ControlStore {
                     .state
                     .bundles
                     .get(&rollout.desired_candidate_content_id)?;
+                if !latest_profile_bundle(&inner.state, bundle).is_some_and(|current| {
+                    current.candidate.candidate_content_id == bundle.candidate.candidate_content_id
+                }) {
+                    return None;
+                }
                 let acknowledgement = rollout
                     .latest_acknowledgement_content_id
                     .as_ref()
@@ -1735,7 +1740,7 @@ impl ControlStore {
 
     pub(crate) fn latest_open_bundle_for_profile_node(
         &self,
-        node_id: &str,
+        target: &PolicyTargetV1,
         tenant_id: &str,
         trust_domain_id: &str,
         profile_id: &str,
@@ -1744,7 +1749,10 @@ impl ControlStore {
         Ok(latest_viable_bundle(
             &inner.state,
             inner.state.bundles.values().filter(|bundle| {
-                bundle.candidate.exact_target.node_id == node_id
+                bundle
+                    .candidate
+                    .exact_target
+                    .is_same_physical_node_epoch(target)
                     && bundle_matches_profile(bundle, tenant_id, trust_domain_id, profile_id)
             }),
         )
@@ -3634,10 +3642,21 @@ fn validate_exception_desired(
         || !rollout_is_valid
         || overlaps_live_grant
     {
+        let failed_checks = [
+            (!source_transition_is_valid).then_some("source transition"),
+            (!operation_is_valid).then_some("operation"),
+            (!active_base_is_valid).then_some("active base policy"),
+            (!candidate_binding_is_valid).then_some("candidate binding"),
+            (!rollout_is_valid).then_some("rollout"),
+            overlaps_live_grant.then_some("overlapping live grant"),
+        ]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>()
+        .join(", ");
         return ControlStoreSnafu {
             path: path.to_owned(),
-            reason: "the exception source, active base policy, grant, target, or rollout is inconsistent"
-                .to_owned(),
+            reason: format!("the exception desired transaction failed: {failed_checks}"),
         }
         .fail();
     }
@@ -4192,7 +4211,15 @@ fn validate_rollout_ordering(
             })
         };
         let latest_sequence = profile_bundles().map(bundle_sequence).max();
-        let previous = latest_viable_bundle(state, profile_bundles());
+        let previous = latest_viable_bundle(
+            state,
+            profile_bundles().filter(|existing| {
+                existing
+                    .candidate
+                    .exact_target
+                    .is_same_physical_node_epoch(&candidate.exact_target)
+            }),
+        );
         // Abandoned branches still reserve their distribution sequence numbers.
         let ordering_is_valid = latest_sequence.is_none_or(|previous| {
             (

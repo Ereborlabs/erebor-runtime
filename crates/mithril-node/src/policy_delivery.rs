@@ -146,6 +146,7 @@ enum LocalExceptionStateV1 {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum PendingExceptionPhysicalV1 {
     Absent,
+    Retired { consumed_uses: u32 },
     Active { consumed_uses: u32 },
     Consumed { consumed_uses: u32 },
     Expired { consumed_uses: u32 },
@@ -1166,7 +1167,16 @@ impl NodePolicyDeliveryOwner {
         let binding = host
             .lookup_map("exception_handle_bindings", binding_key.as_bytes())
             .context(InterceptorSnafu)?;
-        let definition: [u8; 32] = hex::decode(&record.candidate_content_id)
+        let physical_definition_id = match candidate.operation {
+            ExceptionDeliveryOperationV1::Activate => candidate.candidate_content_id.as_str(),
+            ExceptionDeliveryOperationV1::Revoke => candidate
+                .predecessor_candidate_content_id
+                .as_deref()
+                .context(IdentityStateSnafu {
+                    reason: "the pending exception revocation has no activation predecessor",
+                })?,
+        };
+        let definition: [u8; 32] = hex::decode(physical_definition_id)
             .ok()
             .and_then(|bytes| bytes.try_into().ok())
             .context(IdentityStateSnafu {
@@ -1175,6 +1185,7 @@ impl NodePolicyDeliveryOwner {
         Self::pending_exception_physical_state(
             runtime.as_deref(),
             binding.as_deref(),
+            candidate.operation,
             runtime_key,
             definition,
             candidate.maximum_uses,
@@ -1185,14 +1196,19 @@ impl NodePolicyDeliveryOwner {
     fn pending_exception_physical_state(
         runtime: Option<&[u8]>,
         binding: Option<&[u8]>,
+        operation: ExceptionDeliveryOperationV1,
         runtime_key: ExceptionRuntimeStateKeyV1,
         definition: [u8; 32],
         maximum_uses: u32,
         now_boottime_ns: u64,
     ) -> Result<PendingExceptionPhysicalV1> {
-        let (runtime, binding) = match (runtime, binding) {
+        let retired = runtime.is_some()
+            && binding.is_none()
+            && operation == ExceptionDeliveryOperationV1::Revoke;
+        let runtime = match (runtime, binding) {
             (None, None) => return Ok(PendingExceptionPhysicalV1::Absent),
-            (Some(runtime), Some(binding)) => (runtime, binding),
+            (Some(runtime), None) if operation == ExceptionDeliveryOperationV1::Revoke => runtime,
+            (Some(runtime), Some(_)) => runtime,
             _ => {
                 return IdentityStateSnafu {
                     reason: "the pending exception has an incomplete physical publication"
@@ -1207,16 +1223,8 @@ impl NodePolicyDeliveryOwner {
             }
             .build()
         })?;
-        let binding = ExceptionHandleBindingV1::try_read_from_bytes(binding).map_err(|error| {
-            IdentityStateSnafu {
-                reason: format!("the pending exception binding is invalid: {error}"),
-            }
-            .build()
-        })?;
         ensure!(
-            binding.runtime_state_key == runtime_key
-                && binding.state == ExceptionBindingStateV1::Active
-                && runtime.exception_definition_sha256 == definition
+            runtime.exception_definition_sha256 == definition
                 && runtime.maximum_uses == maximum_uses
                 && runtime.consumed_uses <= runtime.maximum_uses
                 && runtime.bound_profile_generation_refs > 0,
@@ -1224,7 +1232,29 @@ impl NodePolicyDeliveryOwner {
                 reason: "the pending exception physical state differs from its durable identity",
             }
         );
+        if let Some(binding) = binding {
+            let binding =
+                ExceptionHandleBindingV1::try_read_from_bytes(binding).map_err(|error| {
+                    IdentityStateSnafu {
+                        reason: format!("the pending exception binding is invalid: {error}"),
+                    }
+                    .build()
+                })?;
+            ensure!(
+                binding.runtime_state_key == runtime_key
+                    && (binding.state == ExceptionBindingStateV1::Active
+                        || (operation == ExceptionDeliveryOperationV1::Revoke
+                            && binding.state == ExceptionBindingStateV1::Retiring)),
+                IdentityStateSnafu {
+                    reason:
+                        "the pending exception physical state differs from its durable identity",
+                }
+            );
+        }
         let consumed_uses = runtime.consumed_uses;
+        if retired {
+            return Ok(PendingExceptionPhysicalV1::Retired { consumed_uses });
+        }
         match runtime.state {
             ExceptionRuntimeStateKindV1::Active
                 if now_boottime_ns >= runtime.deadline_boottime_ns =>
@@ -1303,12 +1333,31 @@ impl NodePolicyDeliveryOwner {
                 )?;
                 Ok(None)
             }
+            (
+                ExceptionDeliveryOperationV1::Activate,
+                PendingExceptionPhysicalV1::Retired { .. },
+            ) => IdentityStateSnafu {
+                reason: "an exception activation cannot recover as retired".to_owned(),
+            }
+            .fail(),
             (ExceptionDeliveryOperationV1::Revoke, PendingExceptionPhysicalV1::Absent) => {
                 let consumed_uses = self
                     .state
                     .exception_records
                     .get(instance_id)
                     .map_or(0, |record| record.consumed_uses);
+                self.commit_recovered_exception(
+                    instance_id,
+                    LocalExceptionStateV1::Revoked,
+                    consumed_uses,
+                    now_utc_ns,
+                )?;
+                Ok(None)
+            }
+            (
+                ExceptionDeliveryOperationV1::Revoke,
+                PendingExceptionPhysicalV1::Retired { consumed_uses },
+            ) => {
                 self.commit_recovered_exception(
                     instance_id,
                     LocalExceptionStateV1::Revoked,
@@ -5092,6 +5141,39 @@ mod tests {
         assert!(rolled_back.active_targets[0].runtime_binding_id.is_none());
         owner.record_runtime_binding(&runtime_binding)?;
         owner.retire_runtime_bindings(std::slice::from_ref(&runtime_binding.binding_id))?;
+        let mut restarted_runtime = runtime_binding.clone();
+        restarted_runtime.container_id = "f".repeat(64);
+        restarted_runtime.binding_id =
+            crate::runtime_admission::ScheduledRuntimeBindingV1::runtime_binding_id(
+                &authority,
+                &restarted_runtime.container_id,
+            );
+        restarted_runtime.sandbox_id = "1".repeat(64);
+        restarted_runtime.root_cgroup_path = Some(directory.path().join("restarted-pod-cgroup"));
+        restarted_runtime.container_generation = 43;
+        owner.record_runtime_binding(&restarted_runtime)?;
+        let restarted = super::policy_delivery_status(directory.path())?;
+        assert_eq!(
+            restarted.active_candidate_content_id.as_deref(),
+            Some(scheduled.candidate.candidate_content_id.as_str())
+        );
+        assert_eq!(
+            restarted.active_targets[0].operation,
+            PolicyDeliveryOperationV1::Activate
+        );
+        assert!(restarted.active_targets[0]
+            .predecessor_candidate_content_id
+            .is_none());
+        assert_eq!(
+            restarted.active_targets[0].runtime_container_id.as_deref(),
+            Some(restarted_runtime.container_id.as_str())
+        );
+        assert_eq!(
+            restarted.active_targets[0].runtime_binding_id.as_deref(),
+            Some(restarted_runtime.binding_id.as_str())
+        );
+        assert_eq!(restarted.active_targets[0].container_generation, Some(43));
+        owner.retire_runtime_bindings(std::slice::from_ref(&restarted_runtime.binding_id))?;
         let retired = super::policy_delivery_status(directory.path())?;
         assert_eq!(retired.scheduled_binding_count, 1);
         assert_eq!(retired.runtime_binding_count, 0);
@@ -5348,6 +5430,29 @@ mod tests {
                 &config,
                 (&[1; 16], 7),
                 63,
+                |_, _, _| { Ok(super::PendingExceptionPhysicalV1::Retired { consumed_uses: 1 }) },
+            )?
+            .is_none());
+        let recovered_retirement =
+            restarted
+                .pending_exception_acknowledgement()?
+                .ok_or_else(|| {
+                    super::IdentityStateSnafu {
+                        reason: "the recovered target retirement has no acknowledgement".to_owned(),
+                    }
+                    .build()
+                })?;
+        assert_eq!(recovered_retirement.state, "REVOKED");
+        assert_eq!(recovered_retirement.consumed_uses, 1);
+
+        restarted.state = pending_revocation_state.clone();
+        restarted.persist_state()?;
+        assert!(restarted
+            .reconcile_pending_exception_with_readback(
+                &trust,
+                &config,
+                (&[1; 16], 7),
+                63,
                 |_, _, _| Ok(super::PendingExceptionPhysicalV1::Absent),
             )?
             .is_none());
@@ -5535,6 +5640,7 @@ mod tests {
                     NodePolicyDeliveryOwner::pending_exception_physical_state(
                         Some(&partial_runtime),
                         None,
+                        ExceptionDeliveryOperationV1::Activate,
                         super::ExceptionRuntimeStateKeyV1 {
                             node_id: erebor_interceptor_abi::Id128V1::new(1, 2),
                             exception_instance_id: erebor_interceptor_abi::Id128V1::new(3, 4),
@@ -5705,6 +5811,7 @@ mod tests {
             NodePolicyDeliveryOwner::pending_exception_physical_state(
                 Some(runtime.as_bytes()),
                 Some(binding.as_bytes()),
+                ExceptionDeliveryOperationV1::Activate,
                 runtime_key,
                 definition,
                 2,
@@ -5716,6 +5823,7 @@ mod tests {
             NodePolicyDeliveryOwner::pending_exception_physical_state(
                 Some(runtime.as_bytes()),
                 Some(binding.as_bytes()),
+                ExceptionDeliveryOperationV1::Activate,
                 runtime_key,
                 definition,
                 2,
@@ -5727,6 +5835,7 @@ mod tests {
             NodePolicyDeliveryOwner::pending_exception_physical_state(
                 None,
                 None,
+                ExceptionDeliveryOperationV1::Activate,
                 runtime_key,
                 definition,
                 2,
@@ -5737,12 +5846,41 @@ mod tests {
         assert!(NodePolicyDeliveryOwner::pending_exception_physical_state(
             Some(runtime.as_bytes()),
             None,
+            ExceptionDeliveryOperationV1::Activate,
             runtime_key,
             definition,
             2,
             100,
         )
         .is_err());
+        assert_eq!(
+            NodePolicyDeliveryOwner::pending_exception_physical_state(
+                Some(runtime.as_bytes()),
+                None,
+                ExceptionDeliveryOperationV1::Revoke,
+                runtime_key,
+                definition,
+                2,
+                99,
+            )?,
+            super::PendingExceptionPhysicalV1::Retired { consumed_uses: 1 }
+        );
+        let retiring_binding = super::ExceptionHandleBindingV1 {
+            state: super::ExceptionBindingStateV1::Retiring,
+            ..binding
+        };
+        assert_eq!(
+            NodePolicyDeliveryOwner::pending_exception_physical_state(
+                Some(runtime.as_bytes()),
+                Some(retiring_binding.as_bytes()),
+                ExceptionDeliveryOperationV1::Revoke,
+                runtime_key,
+                definition,
+                2,
+                99,
+            )?,
+            super::PendingExceptionPhysicalV1::Active { consumed_uses: 1 }
+        );
         Ok(())
     }
 

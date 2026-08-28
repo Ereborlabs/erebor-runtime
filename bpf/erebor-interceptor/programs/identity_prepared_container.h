@@ -186,8 +186,16 @@ static __always_inline bool prepared_container_admitted_actor_is_exact(
                 prepared_container_state_v1_exec_pending ||
             binding->prepared_container_state ==
                 prepared_container_state_v1_active) &&
+           binding_matches_label(binding, label) &&
+           id128_equal(&binding->execution_set_id,
+                       &label->execution_set_id) &&
+           id128_equal(&entry->entry_instance_id,
+                       &label->entry_instance_id) &&
+           entry->admission_state == entry_admission_state_v1_committed &&
+           entry->lifetime_state == entry_lifetime_state_v1_active &&
+           entry->live_task_refs && entry->root_task_cookie &&
            entry->admitted_entry_rule_id &&
-           prepared_container_actor_identity_is_exact(binding, label, entry);
+           !id128_is_zero(&entry->committed_execution_id);
 }
 
 static __always_inline int prepared_container_set_initial_entry(

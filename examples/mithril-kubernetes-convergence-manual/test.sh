@@ -188,7 +188,7 @@ grep -q '^delete runtimeclass mithril-convergence-manual-fail ' "$cleanup_log"
 [[ $(grep -c '^get namespace mithril-convergence-manual$' "$cleanup_log") -eq 2 ]]
 [[ $(grep -c '^get runtimeclass mithril-convergence-manual$' "$cleanup_log") -eq 2 ]]
 [[ $(grep -c '^get runtimeclass mithril-convergence-manual-fail$' "$cleanup_log") -eq 2 ]]
-[[ $(grep -c ' exec .* rm -f /var/lib/mithril/markers/' "$cleanup_log") -eq 28 ]]
-[[ $(grep -c ' exec .* test ! -e /var/lib/mithril/markers/' "$cleanup_log") -eq 14 ]]
+[[ $(grep -c ' exec .* rm -f /var/lib/mithril/markers/' "$cleanup_log") -eq 48 ]]
+[[ $(grep -c ' exec .* test ! -e /var/lib/mithril/markers/' "$cleanup_log") -eq 24 ]]
 
 echo "Manual convergence example behavior checks passed"

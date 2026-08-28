@@ -3,12 +3,12 @@
 Status: Current implementation guide. The source implements the separate
 `WorkloadProtectionPolicy` and `WorkloadProtectionException` APIs. Automated
 tests cover their closed schemas, lowering, reconciliation, delivery,
-retirement, restart, and node-session boundaries. The current source has not
-passed the complete physical procedure. It implements the `PreparedContainer`
-trust boundary and the exact admitted-entry default. The direct stock-runtime
-and focused protected Kubernetes application-start results passed. The latest
-focused result includes a later application exec and an external-entry denial.
-The remaining physical matrix is not proved.
+retirement, restart, and node-session boundaries. The complete automated
+two-node physical fixture passed on the current source. It proves the
+`PreparedContainer` trust boundary, exact admitted-entry default, independent
+entry roles, bounded exception lifecycle, restart recovery, and physical Node
+epoch changes. The independent manual and failure and outage matrices remain
+unproved.
 
 Plan: [Control Policy And Evidence Convergence](./phase-6-2-control-policy-and-evidence-convergence.md)
 
@@ -653,6 +653,9 @@ VM harness behavior checks passed.
 
 rtk bash examples/mithril-kubernetes-convergence-manual/test.sh
 Manual example behavior checks passed.
+
+rtk proxy env MITHRIL_VM_REUSE_IMAGES=true crates/mithril-e2e/harness/vm/two-node-convergence.sh --output-directory /tmp/mithril-phase-6-2-full-convergence-reuse46-20260828 --keep-vms --reuse-environment /tmp/mithril-phase-6-2-full-convergence-reuse45-20260828/retained-environment.json
+Two-node Kubernetes policy convergence passed.
 ```
 
 The direct-runc entry-role VM probe also passed with runc 1.3.4. Its result records
@@ -682,32 +685,18 @@ do not replace the physical fixture or manual run.
 
 ## Verification Limits
 
-The current source has not passed the complete physical two-node fixture or
-the independent manual example. The direct-runc entry-role and focused protected
-Kubernetes application-start lanes have passed. Both complete Kubernetes
-flows contain exact target, runtime task, exception target-retirement,
-desired-inventory cleanup, restart, and fresh-root oracles. The automated
-fixture also contains same-name Node UID replacement, DaemonSet exclusion and
-re-entry, and a host boot and label-epoch change.
-The cases after protected application start remain `Not run` until a physical
-execution records their results.
+The complete automated two-node fixture passed. It covered exact target,
+runtime task, exception target retirement, desired-inventory cleanup, restart,
+fresh-root activation, same-name Node UID replacement, DaemonSet exclusion and
+re-entry, and a host boot and label-epoch change. The result is
+`/tmp/mithril-phase-6-2-full-convergence-reuse46-20260828`.
 
-The last physical two-node run used the superseded flattened API and runtime
-boundary. It passed
-readiness, typed RBAC review, admission mutation and bypass rejection,
-scheduler selection, selected-node delivery, policy activation, runtime
-binding, Control acknowledgement, and durable evidence intake. Stock `runc`
-then used an anonymous file write and IPC access that have no typed authority.
-BPF denied both operations. The runtime reported start failure. The application
-did not run.
-
-The previous stock-runtime failure remains the regression oracle. The direct
-lane now closes that regression without a runtime-specific operation list,
-dependency allow rules, or an object-authority map. The focused protected
-Kubernetes start also closes the application-start regression through the
-production Kubernetes path. Watch-compaction, network-partition,
-storage-outage, and physical evidence failure variants remain `Not run`. There
-is no new performance result.
+The direct lane and Kubernetes fixture close the previous stock-runtime
+regression without a runtime-specific operation list, dependency allow rules,
+or an object-authority map. The independent manual example,
+watch-compaction, network-partition, storage-outage, physical evidence-failure,
+and final-uninstall variants remain `Not run`. There is no new performance
+result.
 
 This work adds no Appendix C fixture ID. Phase 7 graph and finding behavior is
 not present.

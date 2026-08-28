@@ -12,5 +12,5 @@ spec:
       name: protected
       uid: MITHRIL_CONVERGENCE_POD_UID
     containerName: converter
-  requestedDuration: 2m
+  requestedDuration: 4m
   requestedUses: 1

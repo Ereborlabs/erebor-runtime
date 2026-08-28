@@ -20,9 +20,10 @@ rejection, scheduler-selected placement, selected-node-only policy delivery,
 base-policy denial, exact-node exception activation, one-use consumption,
 exception revocation, unused-exception retirement after Pod disappearance, a
 held protected start, fail-closed hook failure, and a new binding for a
-restarted container. It then closes the terminal policy chain, restarts
-Control and the selected node process, proves that the old root does not
-replay, and proves that a recreated policy starts from a new root activation.
+restarted container. It then removes the Pod, waits for runtime absence and
+desired-inventory cleanup, restarts Control and the selected node process,
+proves that stale policy does not replay, and proves that a recreated policy
+starts from a new root activation.
 
 ## Start The Environment
 
@@ -66,14 +67,15 @@ examples/mithril-kubernetes-convergence-manual/run.sh
 The command must print one JSON object with `"result": "PASS"`. The object
 names the scheduler-selected Nodes and two different container lifetime IDs.
 It also records the custom resource, writer separation, exact-target,
-exception, terminal-cleanup, restart, and fresh-root oracles. The command
+entry-role, exception, desired-inventory cleanup, restart, and fresh-root
+oracles. The command
 returns nonzero if admission sets `spec.nodeName`, accepts the direct-node
 bypass, delivers authority to another Node, fails to enforce the base denial,
 permits more than one exception use, refunds an unused exception after target
-disappearance, releases a container without its exact prepared binding, permits start
-without the runtime gate, reuses the first runtime binding, replays a closed
-root, carries prepared-runtime IPC into the application, or gives a recreated
-policy a predecessor-bound candidate.
+disappearance, releases a container without its exact prepared binding,
+permits start without the runtime gate, reuses the first runtime binding,
+replays stale policy after runtime absence, carries prepared-runtime IPC into
+the application, or gives a recreated policy a predecessor-bound candidate.
 
 The EXIT trap removes the namespace, both RuntimeClasses, all case marker
 files, and the private temporary directory on success, failure, or

@@ -340,16 +340,18 @@ entry_role_output=$remote_root/runc-entry-roles
 
 if [[ $entry_role_runtime_only == true ]]; then
   jq -e '
-    .schema_version == 7 and
+    .schema_version == 9 and
     .prepared_state_before_exec == "prepared" and
     .prepared_state_after_exec == "active" and
     .prepared_runtime_effect_observed and
     .application_entry_allow_observed and
     .application_default_file_allow_observed and
+    .application_descendant_default_exec_role_preserved and
     .application_admitted_entry_rule_id > 0 and
     (.independent_entries | length) == 6 and
     (.independent_entries | all(
       .active_role_id > 0 and
+      .profile_generation_ref_id == 2 and
       .admitted_entry_rule_id > 0 and
       .exact_executable_object_enforced and
       .own_policy_deny_observed and
@@ -358,6 +360,8 @@ if [[ $entry_role_runtime_only == true ]]; then
     .independent_entry_roles_are_distinct and
     .reusable_entry_reinvocation_isolated and
     .runtime_entry_infrastructure_observed and
+    .live_replacement_preserved_running_application and
+    .live_replacement_entries_use_new_generation and
     .external_entry_denied and
     .external_cgroup_entering_process_stays_closed and
     .entry_executable_exact_objects_enforced and

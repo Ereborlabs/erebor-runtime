@@ -3,7 +3,7 @@
 set -euo pipefail
 
 usage() {
-  echo "usage: $0 {installed ROOT OWNER SOCKET TIMEOUT_MS RUNTIME_TIMEOUT_SECONDS|removed ROOT SOCKET}" >&2
+  echo "usage: $0 {installed ROOT OWNER SOCKET TIMEOUT_MS RUNTIME_TIMEOUT_SECONDS|hooks-removed ROOT SOCKET|removed ROOT SOCKET}" >&2
 }
 
 host_path() {
@@ -87,7 +87,8 @@ case ${1:-} in
     [[ $(stat -c '%F' "$runtime_socket") == socket ]]
     [[ $(stat -c '%u:%g:%a' "$runtime_socket") == 0:0:600 ]]
     ;;
-  removed)
+  hooks-removed|removed)
+    state=$1
     (($# == 3)) || { usage; exit 2; }
     root=${2%/}
     [[ -n $root ]] || root=/
@@ -114,6 +115,9 @@ case ${1:-} in
       /usr/share/containers/oci/hooks.d/99-mithril.json \
       /usr/libexec/oci/hooks.d/.99-mithril.json.helm-owner \
       "$socket"; do
+      if [[ $state == hooks-removed && $path == "$socket" ]]; then
+        continue
+      fi
       target=$(host_path "$path")
       if [[ -e $target || -L $target ]]; then
         echo "runtime-hook path remains: $path" >&2

@@ -147,6 +147,7 @@ case ${1:-} in
     (($# == 2)) || { echo "usage: $0 wait NAME" >&2; exit 2; }
     name=$2
     require_command ssh
+    require_command timeout
     require_command virsh
     [[ -r $ssh_private_key ]] || {
       echo "SSH private key is not readable: $ssh_private_key" >&2
@@ -159,7 +160,7 @@ case ${1:-} in
       ip=$(address "$name" || true)
       if [[ -n $ip ]]; then
         mapfile -t options < <(ssh_options)
-        if ssh "${options[@]}" "$ssh_user@$ip" \
+        if timeout --kill-after=2s 10s ssh "${options[@]}" "$ssh_user@$ip" \
           'test -r /sys/kernel/btf/vmlinux && test "$(stat -fc %T /sys/fs/cgroup)" = cgroup2fs && test "$(stat -fc %T /sys/fs/bpf)" = bpf_fs && grep -qw bpf /sys/kernel/security/lsm' \
           >/dev/null 2>&1; then
           if [[ -n $source_mount ]] && ! ssh "${options[@]}" "$ssh_user@$ip" \

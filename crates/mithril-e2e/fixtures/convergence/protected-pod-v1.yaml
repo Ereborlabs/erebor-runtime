@@ -22,7 +22,7 @@ spec:
           rm -f /var/lib/mithril-convergence/MITHRIL_CONVERGENCE_POD.restart;
           touch /var/lib/mithril-convergence/MITHRIL_CONVERGENCE_POD.started;
           if [ MITHRIL_CONVERGENCE_POD = protected ]; then
-          if ( : | : );
+          if ( /usr/bin/env /bin/sleep 0 );
           then echo APPLICATION_DEFAULT_ALLOWED >
           /var/lib/mithril-convergence/MITHRIL_CONVERGENCE_POD.prepared-result;
           else echo APPLICATION_DEFAULT_DENIED >
@@ -37,7 +37,16 @@ spec:
           fi;
           while [ ! -e
           /var/lib/mithril-convergence/MITHRIL_CONVERGENCE_POD.exception-request ];
-          do sleep 1; done;
+          do if [ -e
+          /var/lib/mithril-convergence/MITHRIL_CONVERGENCE_POD.application-request ]
+          && [ ! -e
+          /var/lib/mithril-convergence/MITHRIL_CONVERGENCE_POD.application-result ];
+          then if ( /usr/bin/env /bin/sleep 1 );
+          then echo APPLICATION_DEFAULT_ALLOWED >
+          /var/lib/mithril-convergence/MITHRIL_CONVERGENCE_POD.application-result;
+          else echo APPLICATION_DEFAULT_DENIED >
+          /var/lib/mithril-convergence/MITHRIL_CONVERGENCE_POD.application-result;
+          fi; fi; sleep 1; done;
           if cat /var/lib/mithril-convergence/MITHRIL_CONVERGENCE_POD.exception-target
           >/dev/null 2>&1;
           then if cat /var/lib/mithril-convergence/MITHRIL_CONVERGENCE_POD.exception-target
@@ -81,7 +90,7 @@ spec:
             - -q
             - READY
             - /var/lib/mithril-convergence/MITHRIL_CONVERGENCE_POD.lifecycle-ready
-        periodSeconds: 10
+        periodSeconds: 60
         timeoutSeconds: 1
         failureThreshold: 30
       livenessProbe:
@@ -90,7 +99,7 @@ spec:
             - /bin/wc
             - -c
             - /var/lib/mithril-convergence/MITHRIL_CONVERGENCE_POD.lifecycle-ready
-        periodSeconds: 10
+        periodSeconds: 60
         timeoutSeconds: 1
         failureThreshold: 30
       volumeMounts:

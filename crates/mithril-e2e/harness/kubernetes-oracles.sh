@@ -40,11 +40,19 @@ assert_exact_policy_target() {
   local container_name=$5
   local expected_operation=$6
   local expected_predecessor=${7:-}
+  local expected_source_revision=${8:-}
+
+  if [[ -z $expected_source_revision ]]; then
+    expected_source_revision=$(jq -er \
+      '.metadata.annotations["mithril.erebor.dev/policy-source-revision"]' \
+      <<<"$pod_json")
+  fi
 
   jq -e -n --argjson status "$status_json" --argjson node "$node_json" \
     --argjson pod "$pod_json" --arg profile "$profile_id" \
     --arg container "$container_name" --arg operation "$expected_operation" \
-    --arg predecessor "$expected_predecessor" '
+    --arg predecessor "$expected_predecessor" \
+    --arg source_revision "$expected_source_revision" '
       [$pod.spec.containers[] | select(.name == $container)] as $containers |
       [$pod.status.containerStatuses[] | select(.name == $container)] as $runtimes |
       ($status.active_targets[0]) as $target |
@@ -62,8 +70,7 @@ assert_exact_policy_target() {
        else
          $target.predecessor_candidate_content_id == $predecessor
        end) and
-      $target.policy_source_revision_id ==
-        $pod.metadata.annotations["mithril.erebor.dev/policy-source-revision"] and
+      $target.policy_source_revision_id == $source_revision and
       $target.node_id == $node.metadata.annotations["mithril.erebor.dev/node-id"] and
       $target.kubernetes_node_name == $pod.spec.nodeName and
       $target.kubernetes_node_name == $node.metadata.name and

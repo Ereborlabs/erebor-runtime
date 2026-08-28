@@ -1,6 +1,7 @@
 use std::collections::BTreeSet;
 
 use ed25519_dalek::{Signature, Signer as _, SigningKey, Verifier as _, VerifyingKey};
+use erebor_telemetry::warn;
 use k8s_openapi::api::core::v1::Namespace;
 use kube::api::{ListParams, Patch, PatchParams, WatchEvent, WatchParams};
 use kube::{Api, Client};
@@ -1176,18 +1177,25 @@ async fn reconcile_exception_resource(
     } else {
         ExceptionSourceStateV1::Accepted
     };
-    let mut status = owner
-        .reconcile_exception_observation(
-            &resource,
-            namespace_uid.as_deref().unwrap_or_default(),
-            &control.kubernetes_workload_inventory(),
-            utc_now_ns(),
-            source_state,
-        )
-        .map_or_else(
-            |_| rejected_exception_status(generation),
-            |result| result.status,
-        );
+    let mut status = match owner.reconcile_exception_observation(
+        &resource,
+        namespace_uid.as_deref().unwrap_or_default(),
+        &control.kubernetes_workload_inventory(),
+        utc_now_ns(),
+        source_state,
+    ) {
+        Ok(result) => result.status,
+        Err(error) => {
+            warn!(
+                "rejected workload protection exception reconciliation",
+                error = %error,
+                namespace = %namespace_name,
+                exception = %name,
+                generation = %generation
+            );
+            rejected_exception_status(generation)
+        }
+    };
     if let Some(previous) = resource.status.as_ref() {
         preserve_transition_times(&mut status.conditions, &previous.conditions);
         if previous == &status {

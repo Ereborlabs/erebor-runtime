@@ -303,8 +303,8 @@ static __always_inline int create_external_root(
     if (!result && !initial_root &&
         runtime_entry_bootstrap_state_valid(bootstrap, config) &&
         bootstrap->profile_generation_ref_id ==
-            binding->active_profile_generation_ref_id &&
-        id128_equal(&bootstrap->binding_id, &binding->binding_id) &&
+            activation->active_profile_generation_ref_id &&
+        id128_equal(&bootstrap->binding_id, &activation->binding_id) &&
         id128_equal(&bootstrap->target_entry_instance_id,
                     &binding->prepared_container_entry_instance_id)) {
         process = bpf_map_lookup_elem(&process_states,

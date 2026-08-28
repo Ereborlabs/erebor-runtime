@@ -50,6 +50,17 @@ write_marker() {
     touch "/var/lib/mithril/markers/$marker"
 }
 
+write_marker_value() {
+  local node_name=$1
+  local marker=$2
+  local value=$3
+  local pod
+  pod=$(node_pod "$node_name")
+  kubectl -n "$system_namespace" exec -c mithril-node "$pod" -- \
+    sh -c 'printf "%s\n" "$2" >"$1"' sh \
+    "/var/lib/mithril/markers/$marker" "$value"
+}
+
 read_marker() {
   local node_name=$1
   local marker=$2
@@ -101,10 +112,15 @@ cleanup() {
       "$protected_pod.started" \
       "$protected_pod.restart" \
       "$protected_pod.prepared-result" \
+      "$protected_pod.application-request" \
+      "$protected_pod.application-result" \
       "$failed_pod.started" \
       "$protected_pod.exception-target" \
       "$protected_pod.exception-request" \
-      "$protected_pod.exception-result"; do
+      "$protected_pod.exception-result" \
+      "$protected_pod.lifecycle-ready" \
+      "$protected_pod.poststart-observed" \
+      "$protected_pod.prestop-observed"; do
       remove_marker "$node_name" "$marker" >/dev/null 2>&1 || cleanup_failed=true
       marker_is_absent "$node_name" "$marker" >/dev/null 2>&1 || cleanup_failed=true
     done
@@ -413,12 +429,18 @@ for node_name in "${eligible_nodes[@]}"; do
   remove_marker "$node_name" "$protected_pod.started"
   remove_marker "$node_name" "$protected_pod.restart"
   remove_marker "$node_name" "$protected_pod.prepared-result"
+  remove_marker "$node_name" "$protected_pod.application-request"
+  remove_marker "$node_name" "$protected_pod.application-result"
   remove_marker "$node_name" "$failed_pod.started"
   remove_marker "$node_name" "$protected_pod.exception-target"
   remove_marker "$node_name" "$protected_pod.exception-request"
   remove_marker "$node_name" "$protected_pod.exception-result"
+  remove_marker "$node_name" "$protected_pod.lifecycle-ready"
+  remove_marker "$node_name" "$protected_pod.poststart-observed"
+  remove_marker "$node_name" "$protected_pod.prestop-observed"
   # The host creates the denied object before a protected process can open it.
   write_marker "$node_name" "$protected_pod.exception-target"
+  write_marker_value "$node_name" "$protected_pod.lifecycle-ready" READY
 done
 
 control_subject=system:serviceaccount:$system_namespace:mithril-control
@@ -557,13 +579,17 @@ for node_name in "${eligible_nodes[@]}"; do
   fi
 done
 
-wait_marker_value "$selected_node" "$protected_pod.prepared-result" PREPARED_RUNTIME_RETIRED
+wait_marker_value "$selected_node" "$protected_pod.prepared-result" APPLICATION_DEFAULT_ALLOWED
+wait_marker_value "$selected_node" "$protected_pod.poststart-observed" READY
 for node_name in "${eligible_nodes[@]}"; do
   [[ $node_name == "$selected_node" ]] && continue
   marker_is_absent "$node_name" "$protected_pod.prepared-result"
 done
 
 wait_marker_value "$selected_node" "$protected_pod.exception-result" BASE_DENIED
+write_marker "$selected_node" "$protected_pod.application-request"
+wait_marker_value "$selected_node" "$protected_pod.application-result" \
+  APPLICATION_DEFAULT_ALLOWED
 protected_uid=$(kubectl -n "$scenario_namespace" get pod "$protected_pod" \
   -o jsonpath='{.metadata.uid}')
 sed \
@@ -688,7 +714,7 @@ prepared_entry_after=$(jq -er \
   echo "the restarted container retained old task or PreparedContainer identity" >&2
   exit 1
 }
-wait_marker_value "$selected_node" "$protected_pod.prepared-result" PREPARED_RUNTIME_RETIRED
+wait_marker_value "$selected_node" "$protected_pod.prepared-result" APPLICATION_DEFAULT_ALLOWED
 
 # Keep a second grant unused. Pod removal must revoke it without a use refund.
 consumed_before_retirement=$(jq -er '.consumed_exception_count' \
@@ -712,6 +738,7 @@ done
 
 kubectl -n "$scenario_namespace" delete pod "$protected_pod" \
   --wait=true --timeout=120s >/dev/null
+wait_marker_value "$selected_node" "$protected_pod.prestop-observed" READY
 wait_exception_state Revoked
 for _attempt in {1..120}; do
   exception_status=$(node_status "$selected_node")
@@ -736,7 +763,7 @@ kubectl --as="$policy_subject" -n "$scenario_namespace" delete \
   workloadprotectionpolicy "$profile_name" \
   --wait=true --timeout=120s >/dev/null
 
-# Restarts after terminal cleanup must not replay an old root candidate.
+# Restarts after desired-inventory cleanup must not replay stale policy.
 old_node_pod=$(node_pod "$selected_node")
 kubectl -n "$system_namespace" rollout restart deployment/mithril-control >/dev/null
 kubectl -n "$system_namespace" rollout status deployment/mithril-control \
@@ -762,6 +789,8 @@ for node_name in "${eligible_nodes[@]}"; do
   remove_marker "$node_name" "$protected_pod.started"
   remove_marker "$node_name" "$protected_pod.restart"
   remove_marker "$node_name" "$protected_pod.prepared-result"
+  remove_marker "$node_name" "$protected_pod.application-request"
+  remove_marker "$node_name" "$protected_pod.application-result"
   remove_marker "$node_name" "$protected_pod.exception-request"
   remove_marker "$node_name" "$protected_pod.exception-result"
 done
@@ -803,7 +832,8 @@ jq -n --arg namespace "$scenario_namespace" --arg node "$selected_node" \
     exception_one_use_consumed: true,
     exception_revoked: true,
     exception_target_retired: true,
-    terminal_chain_cleaned: true,
+    desired_inventory_cleaned: true,
+    deleted_root_not_inspected: true,
     old_root_replay_refused: true,
     fresh_policy_uses_root_activation: true,
     runtime_gate_failure_closed: true,

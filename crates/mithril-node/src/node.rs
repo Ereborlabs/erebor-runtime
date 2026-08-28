@@ -2496,21 +2496,11 @@ fn sample_effect_health_bytes_without_reader_wait(
     probe: &[u8],
 ) -> Result<()> {
     if observations.transient_coverage_reader_delivery_pending(probe)? {
-        if observations
-            .coverage_snapshot()
-            .is_some_and(|snapshot| snapshot.supports_negative_claim())
-        {
-            erebor_telemetry::debug!(
-                "deferred evidence health sampling while the bounded reader queue drains",
-                pending_records = %observations.reader_queue_pending_records()
-            );
-            return Ok(());
-        }
-        return EvidenceStateSnafu {
-            reason: "effect observation recovery is waiting for the bounded reader queue"
-                .to_owned(),
-        }
-        .fail();
+        erebor_telemetry::debug!(
+            "deferred evidence health sampling while the bounded reader queue drains",
+            pending_records = %observations.reader_queue_pending_records()
+        );
+        return Ok(());
     }
     sample_effect_health_bytes(observations, recover, probe)
 }
@@ -2905,6 +2895,37 @@ mod tests {
             )?,
         )?;
         store.sample_coverage_health(EffectObservationHealthV1::default().as_bytes())?;
+        let before = store.coverage_snapshot();
+        let producer_ahead = EffectObservationHealthV1 {
+            attempted: 8,
+            requested: 8,
+            emitted: 8,
+            next_sequence: 8,
+            ..EffectObservationHealthV1::default()
+        };
+
+        sample_effect_health_bytes_without_reader_wait(&store, true, producer_ahead.as_bytes())?;
+
+        assert_eq!(store.coverage_snapshot(), before);
+        assert_eq!(store.health(None).reader_queue_dropped_events, 0);
+        Ok(())
+    }
+
+    #[test]
+    fn bounded_boot_backlog_does_not_close_evidence_health(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let store = EffectObservationStore::durable(
+            2,
+            directory.path().join("wal"),
+            EvidenceWalLimits::default(),
+            ObservationCanonicalizer::new(
+                EvidenceIdV1::new(1, 2),
+                EvidenceIdV1::new(3, 4),
+                1,
+                EvidenceIdV1::new(5, 6),
+            )?,
+        )?;
         let before = store.coverage_snapshot();
         let producer_ahead = EffectObservationHealthV1 {
             attempted: 8,
