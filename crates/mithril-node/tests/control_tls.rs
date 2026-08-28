@@ -319,7 +319,7 @@ async fn mtls_evidence_stream_replays_after_disconnect_and_reuses_one_registered
 }
 
 #[tokio::test]
-async fn mtls_retained_evidence_uses_its_original_session_after_boot_and_control_restart(
+async fn mtls_fresh_node_session_drains_retained_evidence_without_reconnect(
 ) -> Result<(), Box<dyn StdError>> {
     let directory = tempfile::tempdir()?;
     let certificates = Certificates::issue(false)?;
@@ -384,7 +384,7 @@ async fn mtls_retained_evidence_uses_its_original_session_after_boot_and_control
     let source_id = batch_source_id(&retained)?;
 
     let control = ControlPlane::with_evidence_directory(allowed(), trust_generation, &intake_path)?;
-    let (shutdown, server) = start_server(address, &files, control);
+    let (shutdown, server) = start_server(address, &files, control.clone());
     tokio::time::sleep(Duration::from_millis(20)).await;
     let new_connector =
         NodeControlConnector::new(files.node_config(address), "node-a".to_owned(), new_boot_id);
@@ -407,6 +407,7 @@ async fn mtls_retained_evidence_uses_its_original_session_after_boot_and_control
         source_id,
         source_epoch: 1,
     };
+    assert_eq!(control.registered_nonce_count(), 1);
     assert_eq!(
         intake
             .store()

@@ -39,3 +39,8 @@ jobs:
 
       - name: Verify Rust workspace
         run: bash .github/scripts/verify-rust-ci.sh
+
+      - name: Verify Mithril lightweight harness behavior
+        run: |
+          bash crates/mithril-e2e/harness/vm/test.sh
+          bash examples/mithril-kubernetes-convergence-manual/test.sh
