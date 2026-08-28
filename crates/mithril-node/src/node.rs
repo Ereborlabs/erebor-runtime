@@ -2497,7 +2497,7 @@ fn sample_effect_health_bytes_without_reader_wait(
 ) -> Result<()> {
     if observations.transient_coverage_reader_delivery_pending(probe)? {
         erebor_telemetry::debug!(
-            "deferred evidence health sampling while the bounded reader queue drains",
+            "deferred evidence health sampling while producer or reader delivery completes",
             pending_records = %observations.reader_queue_pending_records()
         );
         return Ok(());
@@ -2865,7 +2865,7 @@ mod tests {
         runtime_admission_finished, sample_effect_health_bytes_without_reader_wait, NodeChassis,
         NodeReadinessV1,
     };
-    use erebor_interceptor_abi::{EffectObservationHealthV1, Id128V1};
+    use erebor_interceptor_abi::{EffectObservationHealthV1, EffectObservationV1, Id128V1};
     use mithril_control::{CapabilityRecord, NodeRegistration};
     use tokio::sync::watch;
     use zerocopy::IntoBytes as _;
@@ -2908,6 +2908,75 @@ mod tests {
 
         assert_eq!(store.coverage_snapshot(), before);
         assert_eq!(store.health(None).reader_queue_dropped_events, 0);
+        Ok(())
+    }
+
+    #[test]
+    fn in_progress_kernel_health_sample_defers_without_counter_regression(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let store = EffectObservationStore::durable(
+            2,
+            directory.path().join("wal"),
+            EvidenceWalLimits::default(),
+            ObservationCanonicalizer::new(
+                EvidenceIdV1::new(1, 2),
+                EvidenceIdV1::new(3, 4),
+                1,
+                EvidenceIdV1::new(5, 6),
+            )?,
+        )?;
+        store.sample_coverage_health(EffectObservationHealthV1::default().as_bytes())?;
+        let before = store.coverage_snapshot();
+        let attempted_only = EffectObservationHealthV1 {
+            attempted: 1,
+            ..EffectObservationHealthV1::default()
+        };
+        let in_progress = EffectObservationHealthV1 {
+            attempted: 1,
+            requested: 1,
+            next_sequence: 1,
+            ..EffectObservationHealthV1::default()
+        };
+
+        sample_effect_health_bytes_without_reader_wait(&store, true, attempted_only.as_bytes())?;
+        sample_effect_health_bytes_without_reader_wait(&store, true, in_progress.as_bytes())?;
+        assert_eq!(store.coverage_snapshot(), before);
+
+        store.record_bytes(
+            EffectObservationV1 {
+                source_sequence: 1,
+                ..EffectObservationV1::default()
+            }
+            .as_bytes(),
+        );
+        let completed = EffectObservationHealthV1 {
+            attempted: 1,
+            requested: 1,
+            emitted: 1,
+            classifier_miss_count: 1,
+            unresolved: 1,
+            next_sequence: 1,
+            ..EffectObservationHealthV1::default()
+        };
+        assert!(
+            sample_effect_health_bytes_without_reader_wait(&store, true, completed.as_bytes())
+                .is_err()
+        );
+        let gapped = store
+            .coverage_snapshot()
+            .ok_or("coverage snapshot missing")?;
+        assert!(gapped.current_intervals()[0]
+            .gap_reasons
+            .contains(&crate::CoverageGapReasonV1::UnresolvedEffect));
+        assert!(!gapped.current_intervals()[0]
+            .gap_reasons
+            .contains(&crate::CoverageGapReasonV1::CounterRegression));
+
+        sample_effect_health_bytes_without_reader_wait(&store, true, completed.as_bytes())?;
+        assert!(store
+            .coverage_snapshot()
+            .is_some_and(|snapshot| snapshot.supports_negative_claim()));
         Ok(())
     }
 

@@ -357,10 +357,29 @@ impl CoverageHealthOwner {
             return false;
         }
         for (cpu_id, counters) in samples {
+            let source = inner.snapshot.sources.get(&cpu_id);
+            if source
+                .and_then(|source| source.last_health)
+                .is_some_and(|previous| {
+                    counters.attempted < previous.attempted
+                        || counters.suppressed < previous.suppressed
+                        || counters.requested < previous.requested
+                        || counters.emitted < previous.emitted
+                        || counters.lost < previous.lost
+                        || counters.classifier_miss_count < previous.classifier_miss_count
+                        || counters.unresolved < previous.unresolved
+                        || counters.next_sequence < previous.next_sequence
+                })
+            {
+                return false;
+            }
+            if kernel_emission_in_progress(counters) {
+                return true;
+            }
             if !counters_are_valid(counters) {
                 return false;
             }
-            let Some(source) = inner.snapshot.sources.get(&cpu_id) else {
+            let Some(source) = source else {
                 if counters.lost > 0
                     || counters.classifier_miss_count > 0
                     || counters.unresolved > 0
@@ -381,14 +400,9 @@ impl CoverageHealthOwner {
                 return false;
             }
             if let Some(previous) = source.last_health {
-                if counters.attempted < previous.attempted
-                    || counters.suppressed < previous.suppressed
-                    || counters.requested < previous.requested
-                    || counters.emitted < previous.emitted
-                    || counters.lost != previous.lost
+                if counters.lost != previous.lost
                     || counters.classifier_miss_count != previous.classifier_miss_count
                     || counters.unresolved != previous.unresolved
-                    || counters.next_sequence < previous.next_sequence
                 {
                     return false;
                 }
@@ -728,6 +742,15 @@ fn ensure_source(
 fn counters_are_valid(counters: CoverageCountersV1) -> bool {
     counters.attempted == counters.suppressed.saturating_add(counters.requested)
         && counters.requested == counters.emitted.saturating_add(counters.lost)
+}
+
+fn kernel_emission_in_progress(counters: CoverageCountersV1) -> bool {
+    let classified = counters.suppressed.checked_add(counters.requested);
+    let completed = counters.emitted.checked_add(counters.lost);
+    (classified.and_then(|classified| classified.checked_add(1)) == Some(counters.attempted)
+        && completed == Some(counters.requested))
+        || (classified == Some(counters.attempted)
+            && completed.and_then(|completed| completed.checked_add(1)) == Some(counters.requested))
 }
 
 fn mark_source_gap(
