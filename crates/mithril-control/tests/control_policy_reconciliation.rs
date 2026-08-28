@@ -1687,6 +1687,63 @@ fn deletion_withdraws_desired_policy_and_recreate_gets_a_new_source_identity() -
 }
 
 #[test]
+fn active_recreated_source_retires_when_its_workload_disappears() -> TestResult {
+    let directory = TempDir::new()?;
+    let store = ControlStore::open(directory.path())?;
+    let owner = make_owner(store.clone());
+    let policy = policy()?;
+    let first_resource = resource(&policy, "profile", OBJECT_UID, 1, false)?;
+    owner.reconcile(
+        &first_resource,
+        NAMESPACE_UID,
+        &inventory_for_resource(&first_resource, &"1".repeat(64))?,
+        NOW,
+    )?;
+    owner.reconcile(
+        &resource(&policy, "profile", OBJECT_UID, 1, true)?,
+        NAMESPACE_UID,
+        &[],
+        NOW + 1,
+    )?;
+    drop(owner);
+    drop(store);
+
+    let reopened = ControlStore::open(directory.path())?;
+    let restarted = make_owner(reopened.clone());
+    let recreated_resource = resource(
+        &policy,
+        "profile",
+        "30000000-0000-4000-8000-000000000004",
+        1,
+        false,
+    )?;
+    let recreated_inventory = inventory_for_resource(&recreated_resource, &"2".repeat(64))?;
+    let activated = restarted.reconcile(
+        &recreated_resource,
+        NAMESPACE_UID,
+        &recreated_inventory,
+        NOW + 2,
+    )?;
+    restarted.rollout_owner().acknowledge(acknowledgement(
+        &activated.bundles[0],
+        PolicyActivationStateV1::Active,
+        NOW + 3,
+    )?)?;
+    let active_bundle_digest = activated.bundles[0].bundle_digest.clone();
+    let commit_before_retirement = reopened.commit_index();
+
+    let retired = restarted.reconcile(&recreated_resource, NAMESPACE_UID, &[], NOW + 4)?;
+
+    assert!(retired.target_snapshot.targets.is_empty());
+    assert!(retired.bundles.is_empty());
+    assert!(reopened.commit_index() > commit_before_retirement);
+    assert!(reopened
+        .next_bundle_for_node("node-a", &[active_bundle_digest])?
+        .is_none());
+    Ok(())
+}
+
+#[test]
 fn invalid_update_does_not_replace_or_block_retirement_of_the_last_compiled_source() -> TestResult {
     let directory = TempDir::new()?;
     let store = ControlStore::open(directory.path())?;

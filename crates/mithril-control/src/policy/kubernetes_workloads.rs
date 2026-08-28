@@ -558,10 +558,7 @@ impl KubernetesWorkloadInventoryOwner {
             })
             .collect::<BTreeMap<_, _>>();
         let targets = self.targets_for_pods(&pods, &nodes, &namespaces, &service_accounts)?;
-        let inventory_changed = self
-            .control
-            .replace_kubernetes_workload_inventory(targets)
-            .map_err(|error| admission_error(error.to_string()))?;
+        let inventory_changed = self.replace_inventory(targets)?;
         let observed_commit_index = self.policies.store().commit_index();
         if !inventory_changed
             && status_projection_is_current(
@@ -578,6 +575,7 @@ impl KubernetesWorkloadInventoryOwner {
         )
         .await?;
         let mut projection_complete = true;
+        let mut reconcile_failure = None;
         for resource in resources {
             let Some(namespace_name) = resource.namespace() else {
                 projection_complete = false;
@@ -587,14 +585,23 @@ impl KubernetesWorkloadInventoryOwner {
                 projection_complete = false;
                 continue;
             };
-            let Ok(result) = self.policies.reconcile(
+            let result = match self.policies.reconcile(
                 &resource,
                 namespace_uid,
                 &self.control.kubernetes_workload_inventory(),
                 utc_now_ns(),
-            ) else {
-                projection_complete = false;
-                continue;
+            ) {
+                Ok(result) => result,
+                Err(error) => {
+                    projection_complete = false;
+                    reconcile_failure.get_or_insert_with(|| {
+                        admission_error(format!(
+                            "reconcile policy {namespace_name}/{}: {error}",
+                            resource.name_any()
+                        ))
+                    });
+                    continue;
+                }
             };
             let Some(name) = resource.metadata.name.as_deref() else {
                 projection_complete = false;
@@ -633,14 +640,23 @@ impl KubernetesWorkloadInventoryOwner {
                 projection_complete = false;
                 continue;
             };
-            let Ok(result) = self.policies.reconcile_exception(
+            let result = match self.policies.reconcile_exception(
                 &resource,
                 namespace_uid,
                 &self.control.kubernetes_workload_inventory(),
                 utc_now_ns(),
-            ) else {
-                projection_complete = false;
-                continue;
+            ) {
+                Ok(result) => result,
+                Err(error) => {
+                    projection_complete = false;
+                    reconcile_failure.get_or_insert_with(|| {
+                        admission_error(format!(
+                            "reconcile exception {namespace_name}/{}: {error}",
+                            resource.name_any()
+                        ))
+                    });
+                    continue;
+                }
             };
             let Some(name) = resource.metadata.name.as_deref() else {
                 projection_complete = false;
@@ -669,7 +685,19 @@ impl KubernetesWorkloadInventoryOwner {
             // A concurrent later commit remains greater and triggers the next projection cycle.
             self.projected_control_commit_index = Some(observed_commit_index);
         }
-        Ok(())
+        reconcile_failure.map_or(Ok(()), Err)
+    }
+
+    fn replace_inventory(&mut self, targets: Vec<WorkloadTargetFactV1>) -> Result<bool> {
+        let changed = self
+            .control
+            .replace_kubernetes_workload_inventory(targets)
+            .map_err(|error| admission_error(error.to_string()))?;
+        if changed {
+            // The old cursor does not cover targets from the new API snapshot.
+            self.projected_control_commit_index = None;
+        }
+        Ok(changed)
     }
 
     fn targets_for_pods(
@@ -1802,7 +1830,7 @@ mod tests {
         let service = service_fn(|_request: Request<KubeBody>| async move {
             Ok::<_, Infallible>(Response::new(Body::empty()))
         });
-        let owner = KubernetesWorkloadInventoryOwner::new(
+        let mut owner = KubernetesWorkloadInventoryOwner::new(
             Client::new(service, "default"),
             policies,
             ControlPlane::new(
@@ -1885,6 +1913,10 @@ mod tests {
             .control
             .replace_kubernetes_workload_inventory(targets.clone())?);
         assert_eq!(owner.control.kubernetes_workload_inventory(), targets);
+        owner.projected_control_commit_index = Some(owner.policies.store().commit_index());
+        assert!(owner.replace_inventory(Vec::new())?);
+        assert_eq!(owner.projected_control_commit_index, None);
+        assert!(owner.control.kubernetes_workload_inventory().is_empty());
         Ok(())
     }
 
