@@ -98,7 +98,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 let snapshot = client.snapshot().await?;
                 if sample == 0 {
                     println!(
-                        "attempted={} emitted={} lost={} unresolved={} decoder_errors={} evidence_errors={} wal_capacity_blocked={} wal_rewritten_records={} wal_rewritten_bytes={} health_available={}",
+                        "attempted={} emitted={} lost={} unresolved={} decoder_errors={} evidence_errors={} wal_capacity_blocked={} wal_rewritten_records={} wal_rewritten_bytes={} reader_settle_timeouts={} health_available={}",
                         snapshot.attempted_effects,
                         snapshot.emitted_effects,
                         snapshot.lost_effects,
@@ -108,6 +108,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                         snapshot.wal_capacity_blocked,
                         snapshot.wal_rewritten_records,
                         snapshot.wal_rewritten_bytes,
+                        snapshot.reader_settle_timeouts,
                         snapshot.effect_health_available
                     );
                     for capability in snapshot.capabilities {

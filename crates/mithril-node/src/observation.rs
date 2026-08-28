@@ -58,6 +58,7 @@ struct Inner {
     wal_capacity_blocked: AtomicU64,
     wal_rewritten_records: AtomicU64,
     wal_rewritten_bytes: AtomicU64,
+    reader_settle_timeouts: AtomicU64,
     durable: Option<Mutex<DurableEvidence>>,
 }
 
@@ -86,6 +87,7 @@ pub struct EffectObservationHealth {
     pub wal_capacity_blocked: u64,
     pub wal_rewritten_records: u64,
     pub wal_rewritten_bytes: u64,
+    pub reader_settle_timeouts: u64,
 }
 
 impl Default for EffectObservationStore {
@@ -112,6 +114,7 @@ impl EffectObservationStore {
                 wal_capacity_blocked: AtomicU64::new(0),
                 wal_rewritten_records: AtomicU64::new(0),
                 wal_rewritten_bytes: AtomicU64::new(0),
+                reader_settle_timeouts: AtomicU64::new(0),
                 durable: None,
             }),
         }
@@ -142,6 +145,7 @@ impl EffectObservationStore {
                 wal_capacity_blocked: AtomicU64::new(0),
                 wal_rewritten_records: AtomicU64::new(0),
                 wal_rewritten_bytes: AtomicU64::new(0),
+                reader_settle_timeouts: AtomicU64::new(0),
                 durable: Some(Mutex::new(DurableEvidence {
                     canonicalizer,
                     wal: EvidenceWalOwner::open(&wal_root, limits)?,
@@ -355,6 +359,27 @@ impl EffectObservationStore {
         self.lock_durable()?.coverage.sample_health(&samples)
     }
 
+    pub fn transient_coverage_reader_delivery_pending(
+        &self,
+        per_cpu_bytes: &[u8],
+    ) -> crate::Result<bool> {
+        let samples =
+            decode_cpu_health(per_cpu_bytes).ok_or_else(|| crate::Error::EvidenceState {
+                reason: "effect observation health bytes are invalid".to_owned(),
+                location: snafu::Location::new(file!(), line!(), column!()),
+            })?;
+        Ok(self
+            .lock_durable()?
+            .coverage
+            .transient_reader_delivery_pending(&samples))
+    }
+
+    pub fn record_coverage_reader_settle_timeout(&self) {
+        self.inner
+            .reader_settle_timeouts
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
     pub fn recover_coverage_after_prior_probe(&self, per_cpu_bytes: &[u8]) -> crate::Result<bool> {
         let samples =
             decode_cpu_health(per_cpu_bytes).ok_or_else(|| crate::Error::EvidenceState {
@@ -442,6 +467,7 @@ impl EffectObservationStore {
             wal_capacity_blocked: self.inner.wal_capacity_blocked.load(Ordering::Relaxed),
             wal_rewritten_records: self.inner.wal_rewritten_records.load(Ordering::Relaxed),
             wal_rewritten_bytes: self.inner.wal_rewritten_bytes.load(Ordering::Relaxed),
+            reader_settle_timeouts: self.inner.reader_settle_timeouts.load(Ordering::Relaxed),
             ..EffectObservationHealth::default()
         };
         let Some(bytes) = per_cpu_bytes else {

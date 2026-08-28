@@ -36,6 +36,7 @@ message MithrilObservationSnapshot {
   uint64 wal_capacity_blocked = 17;
   uint64 wal_rewritten_records = 18;
   uint64 wal_rewritten_bytes = 19;
+  uint64 reader_settle_timeouts = 20;
 }
 
 message MithrilCoverageInterval {

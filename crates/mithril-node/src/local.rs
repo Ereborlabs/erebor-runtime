@@ -103,6 +103,7 @@ impl RuntimeObservationServer {
             wal_capacity_blocked: 0,
             wal_rewritten_records: 0,
             wal_rewritten_bytes: 0,
+            reader_settle_timeouts: 0,
         };
         Ok(Self {
             config,
@@ -280,6 +281,7 @@ fn update_effect_health(
     snapshot.wal_capacity_blocked = health.wal_capacity_blocked;
     snapshot.wal_rewritten_records = health.wal_rewritten_records;
     snapshot.wal_rewritten_bytes = health.wal_rewritten_bytes;
+    snapshot.reader_settle_timeouts = health.reader_settle_timeouts;
     snapshot.effect_health_available = health_bytes.is_some();
 }
 

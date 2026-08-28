@@ -73,7 +73,6 @@ enum ReconciliationOutcome {
     KernelUnhealthy(String),
 }
 
-const EFFECT_READER_SETTLE_ATTEMPTS: usize = 350;
 const EFFECT_READER_SETTLE_INTERVAL: Duration = Duration::from_millis(10);
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -1814,6 +1813,7 @@ impl NodeChassis {
                 reason: error.to_string(),
             };
         }
+        let reader_settle_timeout = self.evidence_reader_settle_timeout();
         let Some(host) = self.host.as_mut() else {
             return ReconciliationOutcome::KernelUnhealthy(
                 "the kernel host is not open".to_owned(),
@@ -1837,9 +1837,13 @@ impl NodeChassis {
             }
         }
         if policy_authority_present {
-            if let Err(error) =
-                sample_effect_health_after_reader_drain(host, &self.observations, recover_evidence)
-                    .await
+            if let Err(error) = sample_effect_health_after_reader_drain(
+                host,
+                &self.observations,
+                recover_evidence,
+                reader_settle_timeout,
+            )
+            .await
             {
                 // Coverage sampling records reader delay, loss, and counter gaps itself.
                 // Do not relabel a recoverable backlog as a durable WAL failure.
@@ -2353,6 +2357,15 @@ impl NodeChassis {
                 .map_or(30_000, |evidence| evidence.maximum_control_delay_ms),
         )
     }
+
+    fn evidence_reader_settle_timeout(&self) -> Duration {
+        Duration::from_millis(
+            self.config
+                .evidence
+                .as_ref()
+                .map_or(3_500, |evidence| evidence.reader_settle_timeout_ms),
+        )
+    }
 }
 
 fn rejected_policy_acknowledgement(
@@ -2378,21 +2391,37 @@ fn sample_effect_health(
     observations: &crate::EffectObservationStore,
     recover: bool,
 ) -> Result<()> {
+    ensure_evidence_owner_healthy(observations)?;
+    let bytes = effect_health_bytes(host)?;
+    sample_effect_health_bytes(observations, recover, &bytes)
+}
+
+fn ensure_evidence_owner_healthy(observations: &crate::EffectObservationStore) -> Result<()> {
     if observations.evidence_errors() > 0 {
         return EvidenceStateSnafu {
             reason: "durable effect evidence has a prior write failure".to_owned(),
         }
         .fail();
     }
-    let bytes = host
-        .lookup_map("effect_observation_health", &0_u32.to_ne_bytes())
+    Ok(())
+}
+
+fn effect_health_bytes(host: &KernelHost) -> Result<Vec<u8>> {
+    host.lookup_map("effect_observation_health", &0_u32.to_ne_bytes())
         .context(InterceptorSnafu)?
         .ok_or_else(|| {
             IdentityStateSnafu {
                 reason: "effect observation health map has no per-CPU state".to_owned(),
             }
             .build()
-        })?;
+        })
+}
+
+fn sample_effect_health_bytes(
+    observations: &crate::EffectObservationStore,
+    recover: bool,
+    bytes: &[u8],
+) -> Result<()> {
     let coverage = observations.coverage_snapshot();
     if recover
         && coverage
@@ -2400,7 +2429,7 @@ fn sample_effect_health(
             .is_some_and(|snapshot| !snapshot.current_intervals().is_empty())
         && !coverage.is_some_and(|snapshot| snapshot.supports_negative_claim())
     {
-        if observations.recover_coverage_after_prior_probe(&bytes)?
+        if observations.recover_coverage_after_prior_probe(bytes)?
             && observations
                 .coverage_snapshot()
                 .is_some_and(|snapshot| snapshot.supports_negative_claim())
@@ -2412,7 +2441,7 @@ fn sample_effect_health(
         }
         .fail();
     }
-    observations.sample_coverage_health(&bytes)?;
+    observations.sample_coverage_health(bytes)?;
     if !observations
         .coverage_snapshot()
         .is_some_and(|snapshot| snapshot.supports_negative_claim())
@@ -2433,22 +2462,22 @@ async fn sample_effect_health_after_reader_drain(
     host: &KernelHost,
     observations: &crate::EffectObservationStore,
     recover: bool,
+    settle_timeout: Duration,
 ) -> Result<()> {
-    for attempt in 0..=EFFECT_READER_SETTLE_ATTEMPTS {
-        match sample_effect_health(host, observations, recover || attempt > 0) {
-            Ok(()) => return Ok(()),
-            Err(_error)
-                if attempt < EFFECT_READER_SETTLE_ATTEMPTS
-                    && observations
-                        .coverage_snapshot()
-                        .is_some_and(|snapshot| snapshot.waits_only_for_reader_delivery()) =>
-            {
-                tokio::time::sleep(EFFECT_READER_SETTLE_INTERVAL).await;
-            }
-            Err(error) => return Err(error),
+    let deadline = tokio::time::Instant::now() + settle_timeout;
+    loop {
+        ensure_evidence_owner_healthy(observations)?;
+        let bytes = effect_health_bytes(host)?;
+        if !observations.transient_coverage_reader_delivery_pending(&bytes)? {
+            return sample_effect_health_bytes(observations, recover, &bytes);
         }
+        let now = tokio::time::Instant::now();
+        if now >= deadline {
+            observations.record_coverage_reader_settle_timeout();
+            return sample_effect_health_bytes(observations, recover, &bytes);
+        }
+        tokio::time::sleep(EFFECT_READER_SETTLE_INTERVAL.min(deadline - now)).await;
     }
-    unreachable!("the bounded effect reader settlement loop always returns")
 }
 
 fn close_kernel_claims(

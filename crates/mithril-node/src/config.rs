@@ -64,6 +64,8 @@ pub struct EvidenceConfig {
     pub maximum_batch_records: usize,
     #[serde(default = "default_evidence_control_delay_ms")]
     pub maximum_control_delay_ms: u64,
+    #[serde(default = "default_evidence_reader_settle_timeout_ms")]
+    pub reader_settle_timeout_ms: u64,
     #[serde(default)]
     pub capacity_policy: crate::EvidenceWalCapacityPolicyV1,
 }
@@ -319,10 +321,11 @@ impl NodeConfig {
                 canonical_uuid(&evidence.tenant_id)
                     && canonical_uuid(&evidence.source_id)
                     && limits.validate().is_ok()
-                    && evidence.maximum_control_delay_ms > 0,
+                    && evidence.maximum_control_delay_ms > 0
+                    && (10..=30_000).contains(&evidence.reader_settle_timeout_ms),
                 InvalidConfigurationSnafu {
                     reason:
-                        "evidence requires canonical identities and consistent nonzero WAL bounds",
+                        "evidence requires canonical identities, consistent WAL bounds, and a reader settle timeout from 10 to 30000 milliseconds",
                 }
             );
         }
@@ -634,6 +637,10 @@ const fn default_evidence_control_delay_ms() -> u64 {
     30_000
 }
 
+const fn default_evidence_reader_settle_timeout_ms() -> u64 {
+    3_500
+}
+
 fn canonical_uuid(value: &str) -> bool {
     uuid::Uuid::parse_str(value).is_ok_and(|uuid| uuid.hyphenated().to_string() == value)
 }
@@ -662,14 +669,17 @@ mod tests {
             block.capacity_policy,
             crate::EvidenceWalCapacityPolicyV1::Block
         );
+        assert_eq!(block.reader_settle_timeout_ms, 3_500);
 
         let mut rewrite = base;
         rewrite["capacity_policy"] = serde_json::json!("REWRITE");
+        rewrite["reader_settle_timeout_ms"] = serde_json::json!(250);
         let rewrite: EvidenceConfig = serde_json::from_value(rewrite)?;
         assert_eq!(
             rewrite.capacity_policy,
             crate::EvidenceWalCapacityPolicyV1::Rewrite
         );
+        assert_eq!(rewrite.reader_settle_timeout_ms, 250);
         Ok(())
     }
 
@@ -700,6 +710,7 @@ mod tests {
                 maximum_retained_records: 10_000,
                 maximum_batch_records: 256,
                 maximum_control_delay_ms: 30_000,
+                reader_settle_timeout_ms: 3_500,
                 capacity_policy: crate::EvidenceWalCapacityPolicyV1::Block,
             }),
             runtime_observation: None,

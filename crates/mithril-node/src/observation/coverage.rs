@@ -118,7 +118,8 @@ impl CoverageSnapshotV1 {
                 .all(|source| source.current.supports_negative_claim())
     }
 
-    pub(crate) fn waits_only_for_reader_delivery(&self) -> bool {
+    #[cfg(test)]
+    fn waits_only_for_reader_delivery(&self) -> bool {
         let mut waiting = false;
         for source in self.sources.values() {
             match source.current.state {
@@ -293,6 +294,16 @@ impl CoverageHealthOwner {
                         }
                     } else if !accounting_valid {
                         gaps.push(CoverageGapReasonV1::CounterRegression);
+                    } else {
+                        if counters.lost > 0 {
+                            gaps.push(CoverageGapReasonV1::RingLoss);
+                        }
+                        if counters.classifier_miss_count > 0 {
+                            gaps.push(CoverageGapReasonV1::ClassifierMiss);
+                        }
+                        if counters.unresolved > 0 {
+                            gaps.push(CoverageGapReasonV1::UnresolvedEffect);
+                        }
                     }
                     source.last_health = Some(counters);
                     let mut completed = mark_source_gaps(source, gaps, counters);
@@ -324,6 +335,73 @@ impl CoverageHealthOwner {
             }
             Ok(())
         })
+    }
+
+    pub(super) fn transient_reader_delivery_pending(
+        &self,
+        samples: &[EffectObservationCpuHealth],
+    ) -> bool {
+        let inner = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
+        let sample_count = samples.len();
+        let samples = samples
+            .iter()
+            .map(|sample| (sample.cpu_id, sample.counters))
+            .collect::<BTreeMap<_, _>>();
+        if samples.len() != sample_count
+            || inner
+                .snapshot
+                .sources
+                .keys()
+                .any(|cpu_id| !samples.contains_key(cpu_id))
+        {
+            return false;
+        }
+        let mut pending = false;
+        for (cpu_id, counters) in samples {
+            if !counters_are_valid(counters) {
+                return false;
+            }
+            let Some(source) = inner.snapshot.sources.get(&cpu_id) else {
+                if counters.lost > 0
+                    || counters.classifier_miss_count > 0
+                    || counters.unresolved > 0
+                {
+                    return false;
+                }
+                pending |= counters.next_sequence > 0;
+                continue;
+            };
+            if source.current.state == CoverageStateV1::Gapped
+                && source.current.gap_reasons.iter().any(|reason| {
+                    !matches!(
+                        reason,
+                        CoverageGapReasonV1::ReaderDelay | CoverageGapReasonV1::UncleanRestart
+                    )
+                })
+            {
+                return false;
+            }
+            if let Some(previous) = source.last_health {
+                if counters.attempted < previous.attempted
+                    || counters.suppressed < previous.suppressed
+                    || counters.requested < previous.requested
+                    || counters.emitted < previous.emitted
+                    || counters.lost != previous.lost
+                    || counters.classifier_miss_count != previous.classifier_miss_count
+                    || counters.unresolved != previous.unresolved
+                    || counters.next_sequence < previous.next_sequence
+                {
+                    return false;
+                }
+            } else if counters.lost > 0
+                || counters.classifier_miss_count > 0
+                || counters.unresolved > 0
+            {
+                return false;
+            }
+            pending |= source.last_observed_sequence.unwrap_or(0) < counters.next_sequence;
+        }
+        pending
     }
 
     pub fn observe(
@@ -936,13 +1014,60 @@ mod tests {
     }
 
     #[test]
-    fn reader_delay_accepts_queued_records_without_reopening_coverage(
+    fn transient_reader_delay_settles_without_rotating_coverage(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let owner = open_owner(&directory.path().join("coverage.json"), 1)?;
+        owner.sample_health(&[health(0, 0)])?;
+        let before = owner.snapshot();
+
+        assert!(owner.transient_reader_delivery_pending(&[health(8, 0)]));
+        assert_eq!(owner.snapshot(), before);
+        for sequence in 1..=8 {
+            let (_, coverage) = owner
+                .observe(2, sequence)?
+                .ok_or("new sequence was not recorded")?;
+            assert_eq!(coverage, TemporalCoverageV1::Complete);
+        }
+        assert!(!owner.transient_reader_delivery_pending(&[health(8, 0)]));
+        owner.sample_health(&[health(8, 0)])?;
+
+        let after = owner.snapshot();
+        assert!(after.supports_negative_claim());
+        assert_eq!(after.history, before.history);
+        assert_eq!(
+            after.current_intervals()[0].interval_id,
+            before.current_intervals()[0].interval_id
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn existing_ring_loss_bypasses_reader_settlement() -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let owner = open_owner(&directory.path().join("coverage.json"), 1)?;
+        let lost = health(1, 1);
+
+        assert!(!owner.transient_reader_delivery_pending(&[lost]));
+        owner.sample_health(&[lost])?;
+
+        let snapshot = owner.snapshot();
+        assert!(!snapshot.supports_negative_claim());
+        assert!(snapshot.current_intervals()[0]
+            .gap_reasons
+            .contains(&CoverageGapReasonV1::RingLoss));
+        Ok(())
+    }
+
+    #[test]
+    fn expired_reader_delay_accepts_queued_records_without_reopening_coverage(
     ) -> Result<(), Box<dyn std::error::Error>> {
         let directory = tempfile::tempdir()?;
         let owner = open_owner(&directory.path().join("coverage.json"), 1)?;
         owner.sample_health(&[health(0, 0)])?;
 
         // The kernel counters can advance before the ring reader delivers the records.
+        assert!(owner.transient_reader_delivery_pending(&[health(8, 0)]));
         owner.sample_health(&[health(8, 0)])?;
         assert!(owner.snapshot().waits_only_for_reader_delivery());
         for sequence in 1..=8 {
