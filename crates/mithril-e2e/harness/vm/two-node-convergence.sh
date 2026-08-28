@@ -1366,12 +1366,24 @@ effect_health_value() {
 assert_node_evidence_health_clean() {
   local node_name=$1
   local pod
+  local pod_json
+  local restart_count
   local health
   local logs
-  pod=$(remote_kubectl -n "$system_namespace" get pods \
+  pod_json=$(remote_kubectl -n "$system_namespace" get pods \
     -l app.kubernetes.io/name=mithril-node \
     --field-selector "spec.nodeName=$node_name" \
-    -o jsonpath='{.items[0].metadata.name}')
+    -o json)
+  pod=$(jq -er '.items[0].metadata.name' <<<"$pod_json")
+  restart_count=$(jq -er '
+    .items[0].status.containerStatuses[] |
+    select(.name == "mithril-node") |
+    .restartCount
+  ' <<<"$pod_json")
+  if ((restart_count != 0)); then
+    echo "node $node_name restarted $restart_count times in its current Pod" >&2
+    return 1
+  fi
   health=$(remote_kubectl -n "$system_namespace" exec -c mithril-node "$pod" -- \
     mithril-inspect effects --socket-path /run/mithril/observation.sock \
       --cgroup-scope /)
@@ -1398,7 +1410,7 @@ assert_node_evidence_health_clean() {
   logs=$(remote_kubectl -n "$system_namespace" logs "$pod" -c mithril-node)
   if [[ $(grep -Fc 'connected to Mithril Control' <<<"$logs") -ne 1 ]] ||
     grep -Eq \
-      'lost the Mithril Control stream|WAL_FAILURE|out-of-order evidence|durable evidence operation failed|evidence reconciliation became unhealthy' \
+      'lost the Mithril Control stream|Mithril Node stopped with an error|Mithril node control protocol failed|WAL_FAILURE|out-of-order evidence|durable evidence operation failed|evidence reconciliation became unhealthy' \
       <<<"$logs"; then
     printf '%s\n' "$logs" >&2
     echo "node $node_name did not retain one healthy Control evidence stream" >&2
@@ -2436,6 +2448,16 @@ remote_kubectl --as="$policy_subject" -n "$workload_namespace" delete \
   --wait=true --timeout=120s >/dev/null
 remote_kubectl delete namespace "$workload_namespace" \
   --wait=true --timeout=120s >/dev/null
+
+# Use fresh Node Pods to prove that durable cleanup does not replay a stale close.
+remote_kubectl -n "$system_namespace" rollout restart daemonset/mithril-node >/dev/null
+remote_kubectl -n "$system_namespace" rollout status daemonset/mithril-node \
+  --timeout=300s >/dev/null
+for node_name in "$node_a_name" "$node_b_name"; do
+  wait_node_projection "$node_name" true false
+  assert_ready_projection_stable "$node_name"
+  assert_node_evidence_health_clean "$node_name"
+done
 
 jq -n \
   --arg kubernetes_version "$(remote_kubectl version -o json | jq -r '.serverVersion.gitVersion')" \

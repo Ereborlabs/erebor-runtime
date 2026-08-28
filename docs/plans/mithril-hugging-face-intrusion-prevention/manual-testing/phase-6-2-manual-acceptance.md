@@ -31,8 +31,9 @@ and retirement, task and Pod lifetime replacement, Control and Node restart
 recovery, same-name Node UID replacement, host epoch advance,
 desired-inventory cleanup, and fresh root activation. The healthy evidence
 stream had no lost events, reader-queue drops, WAL capacity block, WAL rewrite,
-or repeated Control connection. The result is
-`/tmp/mithril-phase-6-2-full-convergence-reuse46-20260828`.
+or repeated Control connection. The final fresh Node Pods were ready with zero
+container restarts and one Control connection each. The result is
+`/tmp/mithril-phase-6-2-full-convergence-reuse49-20260828`.
 
 The scenario removed its workload namespace, policy, exception, Pods, and
 marker state. It retained the two owned VMs, K3s cluster, and installed Mithril

@@ -1031,8 +1031,15 @@ impl NodePolicyDeliveryOwner {
             config,
             (node_boot_id, label_epoch),
             now_utc_ns,
-            |instance_id, record, candidate| {
-                Self::observe_pending_exception(host, config, instance_id, record, candidate)
+            |instance_id, record, candidate, physical_definition_id| {
+                Self::observe_pending_exception(
+                    host,
+                    config,
+                    instance_id,
+                    record,
+                    candidate,
+                    physical_definition_id,
+                )
             },
         )
     }
@@ -1050,6 +1057,7 @@ impl NodePolicyDeliveryOwner {
             &str,
             &ExceptionDeliveryRecordV1,
             &ExceptionDeliveryCandidateV1,
+            &str,
         ) -> Result<PendingExceptionPhysicalV1>,
     {
         let Some((instance_id, candidate, prepared)) =
@@ -1065,7 +1073,8 @@ impl NodePolicyDeliveryOwner {
                 reason: "the verified pending exception disappeared during recovery",
             })?
             .clone();
-        let physical = readback(&instance_id, &record, &candidate)?;
+        let physical_definition_id = self.exception_activation_candidate_content_id(&candidate)?;
+        let physical = readback(&instance_id, &record, &candidate, &physical_definition_id)?;
         self.resolve_pending_exception(&instance_id, &candidate, prepared, physical, now_utc_ns)
     }
 
@@ -1151,6 +1160,7 @@ impl NodePolicyDeliveryOwner {
         instance_id: &str,
         record: &ExceptionDeliveryRecordV1,
         candidate: &ExceptionDeliveryCandidateV1,
+        physical_definition_id: &str,
     ) -> Result<PendingExceptionPhysicalV1> {
         let runtime_key = ExceptionRuntimeStateKeyV1 {
             node_id: crate::policy::stable_node_id(&config.node_id)?,
@@ -1167,15 +1177,6 @@ impl NodePolicyDeliveryOwner {
         let binding = host
             .lookup_map("exception_handle_bindings", binding_key.as_bytes())
             .context(InterceptorSnafu)?;
-        let physical_definition_id = match candidate.operation {
-            ExceptionDeliveryOperationV1::Activate => candidate.candidate_content_id.as_str(),
-            ExceptionDeliveryOperationV1::Revoke => candidate
-                .predecessor_candidate_content_id
-                .as_deref()
-                .context(IdentityStateSnafu {
-                    reason: "the pending exception revocation has no activation predecessor",
-                })?,
-        };
         let definition: [u8; 32] = hex::decode(physical_definition_id)
             .ok()
             .and_then(|bytes| bytes.try_into().ok())
@@ -1470,7 +1471,9 @@ impl NodePolicyDeliveryOwner {
                 candidate.operation == ExceptionDeliveryOperationV1::Revoke
                     && candidate.predecessor_candidate_content_id.as_deref()
                         == Some(record.candidate_content_id.as_str())
-                    && record.operation == ExceptionDeliveryOperationV1::Activate
+                    && (record.operation == ExceptionDeliveryOperationV1::Activate
+                        || (record.operation == ExceptionDeliveryOperationV1::Revoke
+                            && record.control_acknowledged))
             },
         );
         let distribution = SequenceV1 {
@@ -1551,6 +1554,12 @@ impl NodePolicyDeliveryOwner {
                 }
                 .build()
             })?;
+        // A later restrictive close can arrive after the first close removed the BPF state.
+        let consumed_uses = if candidate.operation == ExceptionDeliveryOperationV1::Revoke {
+            consumed_uses.max(record.consumed_uses)
+        } else {
+            consumed_uses
+        };
         ensure!(
             record.candidate_content_id == candidate.candidate_content_id
                 && record.state == LocalExceptionStateV1::Pending
@@ -3188,6 +3197,95 @@ impl NodePolicyDeliveryOwner {
             }
         );
         Ok(candidate)
+    }
+
+    fn read_exception_candidate_by_content_id(
+        &self,
+        candidate_content_id: &str,
+    ) -> Result<ExceptionDeliveryCandidateV1> {
+        ensure!(
+            is_sha256(candidate_content_id),
+            IdentityStateSnafu {
+                reason: "the exception predecessor content ID is invalid",
+            }
+        );
+        let relative = format!("exceptions/{candidate_content_id}.json");
+        let path = self.checked_bundle_file(&relative)?;
+        let candidate: ExceptionDeliveryCandidateV1 =
+            serde_json::from_slice(&fs::read(&path).context(IoSnafu { path: &path })?)
+                .context(JsonSnafu { path: &path })?;
+        candidate.validate_content().context(PolicySnafu)?;
+        ensure!(
+            candidate.candidate_content_id == candidate_content_id,
+            IdentityStateSnafu {
+                reason: "the durable exception predecessor has a different content ID",
+            }
+        );
+        Ok(candidate)
+    }
+
+    fn exception_activation_candidate_content_id(
+        &self,
+        candidate: &ExceptionDeliveryCandidateV1,
+    ) -> Result<String> {
+        let mut current = candidate.clone();
+        let mut visited = BTreeSet::new();
+        loop {
+            ensure!(
+                visited.insert(current.candidate_content_id.clone()),
+                IdentityStateSnafu {
+                    reason: "the durable exception predecessor chain contains a cycle",
+                }
+            );
+            ensure!(
+                current.exception_instance_id == candidate.exception_instance_id
+                    && current.base_candidate_content_id == candidate.base_candidate_content_id
+                    && current.base_policy_source_revision_id
+                        == candidate.base_policy_source_revision_id
+                    && current.profile_id == candidate.profile_id
+                    && current.profile_generation_ref_id == candidate.profile_generation_ref_id
+                    && current.grant_id == candidate.grant_id
+                    && current.exact_target == candidate.exact_target
+                    && current.maximum_uses == candidate.maximum_uses
+                    && current.valid_until_utc_ns == candidate.valid_until_utc_ns,
+                IdentityStateSnafu {
+                    reason: "the durable exception predecessor changes physical identity",
+                }
+            );
+            match current.operation {
+                ExceptionDeliveryOperationV1::Activate => {
+                    ensure!(
+                        current.predecessor_candidate_content_id.is_none(),
+                        IdentityStateSnafu {
+                            reason: "the exception activation has a predecessor",
+                        }
+                    );
+                    return Ok(current.candidate_content_id);
+                }
+                ExceptionDeliveryOperationV1::Revoke => {
+                    let predecessor = current
+                        .predecessor_candidate_content_id
+                        .as_deref()
+                        .context(IdentityStateSnafu {
+                            reason: "the exception revocation has no predecessor",
+                        })?;
+                    let predecessor = self.read_exception_candidate_by_content_id(predecessor)?;
+                    ensure!(
+                        (
+                            predecessor.distribution_sequence_epoch,
+                            predecessor.distribution_sequence,
+                        ) < (
+                            current.distribution_sequence_epoch,
+                            current.distribution_sequence,
+                        ),
+                        IdentityStateSnafu {
+                            reason: "the exception predecessor sequence is not earlier",
+                        }
+                    );
+                    current = predecessor;
+                }
+            }
+        }
     }
 
     fn hydrate_pending_policy_ack_identity(
@@ -5400,6 +5498,94 @@ mod tests {
             .prepare_exception_delivery(activation.clone(), &trust, &config, &[1; 16], 7, 63)
             .is_err());
 
+        restarted.acknowledge_exception_control(&revocation.candidate_content_id)?;
+        let later_revocation = ExceptionDeliveryCandidateV1::sign(
+            &deletion,
+            scheduled.candidate.candidate_content_id.clone(),
+            scheduled
+                .profile_artifact
+                .policy_document
+                .profile_id()
+                .to_owned(),
+            2,
+            revocation.exact_target.clone(),
+            ExceptionDeliveryOperationV1::Revoke,
+            1,
+            50,
+            Some(revocation.candidate_content_id.clone()),
+            1,
+            3,
+            64,
+            110,
+            "test-key".to_owned(),
+            &key,
+        )
+        .context(PolicySnafu)?;
+        let prepared_later_revocation = restarted.prepare_exception_delivery(
+            later_revocation.clone(),
+            &trust,
+            &config,
+            &[1; 16],
+            7,
+            65,
+        )?;
+        restarted.stage_exception_delivery(
+            &prepared_later_revocation,
+            &serde_json::to_vec(&later_revocation).context(super::JsonSnafu {
+                path: "in-memory later exception revocation",
+            })?,
+            65,
+        )?;
+        let pending_later_revocation_state = restarted.state.clone();
+        let mut later_restart = NodePolicyDeliveryOwner::load(directory.path())?;
+        assert!(later_restart
+            .reconcile_pending_exception_with_readback(
+                &trust,
+                &config,
+                (&[1; 16], 7),
+                66,
+                |_, _, _, physical_definition_id| {
+                    assert_eq!(physical_definition_id, activation.candidate_content_id);
+                    Ok(super::PendingExceptionPhysicalV1::Absent)
+                },
+            )?
+            .is_none());
+        let recovered_later_ack = later_restart
+            .pending_exception_acknowledgement()?
+            .ok_or_else(|| {
+                super::IdentityStateSnafu {
+                    reason: "the recovered later close has no acknowledgement".to_owned(),
+                }
+                .build()
+            })?;
+        assert_eq!(recovered_later_ack.state, "REVOKED");
+        assert_eq!(recovered_later_ack.consumed_uses, 1);
+        drop(later_restart);
+
+        restarted.state = pending_later_revocation_state;
+        restarted.persist_state()?;
+        // The first close removed the physical state. Keep its durable use count.
+        restarted.commit_exception_result(
+            &later_revocation,
+            ExceptionActivationStateV1::Revoked,
+            0,
+            66,
+        )?;
+        let later_ack = restarted
+            .pending_exception_acknowledgement()?
+            .ok_or_else(|| {
+                super::IdentityStateSnafu {
+                    reason: "the later restrictive close has no acknowledgement".to_owned(),
+                }
+                .build()
+            })?;
+        assert_eq!(
+            later_ack.candidate_content_id,
+            later_revocation.candidate_content_id
+        );
+        assert_eq!(later_ack.state, "REVOKED");
+        assert_eq!(later_ack.consumed_uses, 1);
+
         restarted.state = pending_revocation_state.clone();
         restarted.persist_state()?;
         let startup_revocation = restarted
@@ -5408,7 +5594,7 @@ mod tests {
                 &config,
                 (&[1; 16], 7),
                 63,
-                |_, _, _| Ok(super::PendingExceptionPhysicalV1::Active { consumed_uses: 1 }),
+                |_, _, _, _| Ok(super::PendingExceptionPhysicalV1::Active { consumed_uses: 1 }),
             )?
             .ok_or_else(|| {
                 super::IdentityStateSnafu {
@@ -5430,7 +5616,9 @@ mod tests {
                 &config,
                 (&[1; 16], 7),
                 63,
-                |_, _, _| { Ok(super::PendingExceptionPhysicalV1::Retired { consumed_uses: 1 }) },
+                |_, _, _, _| {
+                    Ok(super::PendingExceptionPhysicalV1::Retired { consumed_uses: 1 })
+                },
             )?
             .is_none());
         let recovered_retirement =
@@ -5453,7 +5641,7 @@ mod tests {
                 &config,
                 (&[1; 16], 7),
                 63,
-                |_, _, _| Ok(super::PendingExceptionPhysicalV1::Absent),
+                |_, _, _, _| Ok(super::PendingExceptionPhysicalV1::Absent),
             )?
             .is_none());
         let recovered_revocation =
@@ -5622,7 +5810,7 @@ mod tests {
                 &config,
                 (&[1; 16], 7),
                 24,
-                |_, _, _| Ok(super::PendingExceptionPhysicalV1::Absent),
+                |_, _, _, _| Ok(super::PendingExceptionPhysicalV1::Absent),
             )?
             .is_some());
         assert_eq!(owner.status().pending_exception_count, 1);
@@ -5636,7 +5824,7 @@ mod tests {
                 &config,
                 (&[1; 16], 7),
                 24,
-                |_, _, _| {
+                |_, _, _, _| {
                     NodePolicyDeliveryOwner::pending_exception_physical_state(
                         Some(&partial_runtime),
                         None,
@@ -5773,7 +5961,7 @@ mod tests {
                 &config,
                 (&[1; 16], 7),
                 24,
-                |_, _, _| {
+                |_, _, _, _| {
                     readback_called = true;
                     Ok(super::PendingExceptionPhysicalV1::Absent)
                 },

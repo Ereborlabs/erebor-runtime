@@ -94,7 +94,7 @@ and cgroup binding.
 The physical result uses the current stock Kubernetes and OCI runtime
 extension points. The complete automated fixture passed with Kubernetes
 v1.35.5+k3s1 and containerd v2.2.3-k3s1. The result is
-`/tmp/mithril-phase-6-2-full-convergence-reuse46-20260828`.
+`/tmp/mithril-phase-6-2-full-convergence-reuse49-20260828`.
 
 | Scenario | Result | Observation |
 | --- | --- | --- |
@@ -130,12 +130,13 @@ profile cleanup.
 The retained physical command passed:
 
 ```text
-rtk proxy env MITHRIL_VM_REUSE_IMAGES=true crates/mithril-e2e/harness/vm/two-node-convergence.sh --output-directory /tmp/mithril-phase-6-2-full-convergence-reuse46-20260828 --keep-vms --reuse-environment /tmp/mithril-phase-6-2-full-convergence-reuse45-20260828/retained-environment.json
+rtk proxy crates/mithril-e2e/harness/vm/two-node-convergence.sh --output-directory /tmp/mithril-phase-6-2-full-convergence-reuse49-20260828 --keep-vms --reuse-environment /tmp/mithril-phase-6-2-full-convergence-reuse48-20260828/retained-environment.json
 ```
 
 The scenario removed its workload namespace, policy, exception, Pods, and
-marker state. It retained the two owned VMs, K3s cluster, and installed Mithril
-release for the next failure-variant run.
+marker state. Its final fresh Node Pods were ready with zero container restarts
+and one Control connection each. It retained the two owned VMs, K3s cluster,
+and installed Mithril release for the next failure-variant run.
 
 ## Unadvertised Work
 

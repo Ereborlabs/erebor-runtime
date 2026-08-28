@@ -654,7 +654,7 @@ VM harness behavior checks passed.
 rtk bash examples/mithril-kubernetes-convergence-manual/test.sh
 Manual example behavior checks passed.
 
-rtk proxy env MITHRIL_VM_REUSE_IMAGES=true crates/mithril-e2e/harness/vm/two-node-convergence.sh --output-directory /tmp/mithril-phase-6-2-full-convergence-reuse46-20260828 --keep-vms --reuse-environment /tmp/mithril-phase-6-2-full-convergence-reuse45-20260828/retained-environment.json
+rtk proxy crates/mithril-e2e/harness/vm/two-node-convergence.sh --output-directory /tmp/mithril-phase-6-2-full-convergence-reuse49-20260828 --keep-vms --reuse-environment /tmp/mithril-phase-6-2-full-convergence-reuse48-20260828/retained-environment.json
 Two-node Kubernetes policy convergence passed.
 ```
 
@@ -688,8 +688,9 @@ do not replace the physical fixture or manual run.
 The complete automated two-node fixture passed. It covered exact target,
 runtime task, exception target retirement, desired-inventory cleanup, restart,
 fresh-root activation, same-name Node UID replacement, DaemonSet exclusion and
-re-entry, and a host boot and label-epoch change. The result is
-`/tmp/mithril-phase-6-2-full-convergence-reuse46-20260828`.
+re-entry, and a host boot and label-epoch change. Its final fresh Node Pods were
+ready with zero container restarts and one Control connection each. The result
+is `/tmp/mithril-phase-6-2-full-convergence-reuse49-20260828`.
 
 The direct lane and Kubernetes fixture close the previous stock-runtime
 regression without a runtime-specific operation list, dependency allow rules,
