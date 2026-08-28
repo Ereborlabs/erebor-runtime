@@ -73,8 +73,6 @@ enum ReconciliationOutcome {
     KernelUnhealthy(String),
 }
 
-const EFFECT_READER_SETTLE_INTERVAL: Duration = Duration::from_millis(10);
-
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 enum PolicyControlPhaseV1 {
     #[default]
@@ -148,6 +146,7 @@ pub struct NodeChassis {
     base_config: NodeConfig,
     config: NodeConfig,
     effect_reader: Option<EffectObservationReader>,
+    effect_worker: Option<crate::observation::EffectObservationWorker>,
     host: Option<KernelHost>,
     connector: NodeControlConnector,
     registration: NodeRegistration,
@@ -403,16 +402,22 @@ impl NodeChassis {
         } else {
             crate::EffectObservationStore::default()
         };
-        let effect_reader = policy_observation_enabled
-            .then(|| {
-                let sink = observations.clone();
-                host.effect_observation_reader(move |bytes| {
-                    sink.record_bytes(bytes);
+        let (effect_reader, effect_worker) = if policy_observation_enabled {
+            let queue_capacity = config
+                .evidence
+                .as_ref()
+                .map_or(65_535, |evidence| evidence.maximum_reader_queue_records);
+            let (ingress, worker) = observations.bounded_ingestion_queue(queue_capacity)?;
+            let reader = host
+                .effect_observation_reader(move |bytes| {
+                    ingress.record_bytes(bytes);
                     0
                 })
-            })
-            .transpose()
-            .context(InterceptorSnafu)?;
+                .context(InterceptorSnafu)?;
+            (Some(reader), Some(worker))
+        } else {
+            (None, None)
+        };
         let evidence_healthy =
             !policy_observation_enabled || sample_effect_health(&host, &observations, true).is_ok();
         let manifest = host.manifest();
@@ -522,6 +527,7 @@ impl NodeChassis {
             base_config,
             config,
             effect_reader,
+            effect_worker,
             host: Some(host),
             connector,
             registration,
@@ -569,6 +575,11 @@ impl NodeChassis {
                     reader.poll(Duration::from_millis(100))?;
                 }
                 Ok(())
+            })
+        });
+        let mut effect_worker_task = self.effect_worker.take().map(|worker| {
+            tokio::task::spawn_blocking(move || {
+                worker.run();
             })
         });
         let mut local_task = self.local_server.take().map(|server| {
@@ -642,6 +653,14 @@ impl NodeChassis {
                             );
                             run_error = result.err();
                             effect_task = None;
+                            break 'running;
+                        }
+                        result = effect_worker_finished(&mut effect_worker_task) => {
+                            let _result = self.observations.mark_coverage_gapped(
+                                CoverageGapReasonV1::ReaderStopped,
+                            );
+                            run_error = result.err();
+                            effect_worker_task = None;
                             break 'running;
                         }
                         result = runtime_admission_finished(&mut runtime_admission_task) => {
@@ -940,6 +959,14 @@ impl NodeChassis {
                                 effect_task = None;
                                 break 'running;
                             }
+                            result = effect_worker_finished(&mut effect_worker_task) => {
+                                let _result = self.observations.mark_coverage_gapped(
+                                    CoverageGapReasonV1::ReaderStopped,
+                                );
+                                run_error = result.err();
+                                effect_worker_task = None;
+                                break 'running;
+                            }
                             result = runtime_admission_finished(&mut runtime_admission_task) => {
                                 runtime_admission_task = None;
                                 run_error = runtime_admission_exit(
@@ -1171,6 +1198,14 @@ impl NodeChassis {
                         effect_task = None;
                         break 'running;
                     }
+                    result = effect_worker_finished(&mut effect_worker_task) => {
+                        let _result = self.observations.mark_coverage_gapped(
+                            CoverageGapReasonV1::ReaderStopped,
+                        );
+                        run_error = result.err();
+                        effect_worker_task = None;
+                        break 'running;
+                    }
                     result = runtime_admission_finished(&mut runtime_admission_task) => {
                         runtime_admission_task = None;
                         run_error = runtime_admission_exit(
@@ -1236,6 +1271,9 @@ impl NodeChassis {
             task.await
                 .context(LocalTaskSnafu)?
                 .context(InterceptorSnafu)?;
+        }
+        if let Some(task) = effect_worker_task {
+            task.await.context(LocalTaskSnafu)?;
         }
         if let Some(host) = self.host.take() {
             host.shutdown().context(InterceptorSnafu)?;
@@ -1813,7 +1851,6 @@ impl NodeChassis {
                 reason: error.to_string(),
             };
         }
-        let reader_settle_timeout = self.evidence_reader_settle_timeout();
         let Some(host) = self.host.as_mut() else {
             return ReconciliationOutcome::KernelUnhealthy(
                 "the kernel host is not open".to_owned(),
@@ -1837,16 +1874,10 @@ impl NodeChassis {
             }
         }
         if policy_authority_present {
-            if let Err(error) = sample_effect_health_after_reader_drain(
-                host,
-                &self.observations,
-                recover_evidence,
-                reader_settle_timeout,
-            )
-            .await
+            if let Err(error) =
+                sample_effect_health_without_reader_wait(host, &self.observations, recover_evidence)
             {
-                // Coverage sampling records reader delay, loss, and counter gaps itself.
-                // Do not relabel a recoverable backlog as a durable WAL failure.
+                // Coverage sampling records queue overflow, ring loss, and counter gaps itself.
                 return ReconciliationOutcome::EvidenceUnhealthy(error.to_string());
             }
         }
@@ -2357,15 +2388,6 @@ impl NodeChassis {
                 .map_or(30_000, |evidence| evidence.maximum_control_delay_ms),
         )
     }
-
-    fn evidence_reader_settle_timeout(&self) -> Duration {
-        Duration::from_millis(
-            self.config
-                .evidence
-                .as_ref()
-                .map_or(3_500, |evidence| evidence.reader_settle_timeout_ms),
-        )
-    }
 }
 
 fn rejected_policy_acknowledgement(
@@ -2458,34 +2480,39 @@ fn sample_effect_health_bytes(
     Ok(())
 }
 
-async fn sample_effect_health_after_reader_drain(
+fn sample_effect_health_without_reader_wait(
     host: &KernelHost,
     observations: &crate::EffectObservationStore,
     recover: bool,
-    settle_timeout: Duration,
 ) -> Result<()> {
     ensure_evidence_owner_healthy(observations)?;
     let probe = effect_health_bytes(host)?;
-    if !observations.transient_coverage_reader_delivery_pending(&probe)? {
-        return sample_effect_health_bytes(observations, recover, &probe);
+    sample_effect_health_bytes_without_reader_wait(observations, recover, &probe)
+}
+
+fn sample_effect_health_bytes_without_reader_wait(
+    observations: &crate::EffectObservationStore,
+    recover: bool,
+    probe: &[u8],
+) -> Result<()> {
+    if observations.transient_coverage_reader_delivery_pending(probe)? {
+        if observations
+            .coverage_snapshot()
+            .is_some_and(|snapshot| snapshot.supports_negative_claim())
+        {
+            erebor_telemetry::debug!(
+                "deferred evidence health sampling while the bounded reader queue drains",
+                pending_records = %observations.reader_queue_pending_records()
+            );
+            return Ok(());
+        }
+        return EvidenceStateSnafu {
+            reason: "effect observation recovery is waiting for the bounded reader queue"
+                .to_owned(),
+        }
+        .fail();
     }
-    let deadline = tokio::time::Instant::now() + settle_timeout;
-    loop {
-        ensure_evidence_owner_healthy(observations)?;
-        let current = effect_health_bytes(host)?;
-        if !observations.transient_coverage_reader_delivery_pending(&current)? {
-            return sample_effect_health_bytes(observations, recover, &current);
-        }
-        if !observations.transient_coverage_reader_delivery_pending(&probe)? {
-            return sample_effect_health_bytes(observations, recover, &probe);
-        }
-        let now = tokio::time::Instant::now();
-        if now >= deadline {
-            observations.record_coverage_reader_settle_timeout();
-            return sample_effect_health_bytes(observations, recover, &current);
-        }
-        tokio::time::sleep(EFFECT_READER_SETTLE_INTERVAL.min(deadline - now)).await;
-    }
+    sample_effect_health_bytes(observations, recover, probe)
 }
 
 fn close_kernel_claims(
@@ -2615,6 +2642,17 @@ async fn effect_reader_finished(
     outcome.context(InterceptorSnafu)?;
     IdentityStateSnafu {
         reason: "effect observation reader stopped before node shutdown",
+    }
+    .fail()
+}
+
+async fn effect_worker_finished(task: &mut Option<tokio::task::JoinHandle<()>>) -> Result<()> {
+    match task.as_mut() {
+        Some(task) => task.await.context(LocalTaskSnafu)?,
+        None => std::future::pending().await,
+    }
+    IdentityStateSnafu {
+        reason: "effect observation worker stopped before node shutdown",
     }
     .fail()
 }
@@ -2832,21 +2870,56 @@ mod tests {
     use std::time::Duration;
 
     use super::{
-        close_identity_claims, close_kernel_claims, effect_reader_finished,
+        close_identity_claims, close_kernel_claims, effect_reader_finished, effect_worker_finished,
         restore_evidence_claims, restore_identity_claims, runtime_admission_exit,
-        runtime_admission_finished, NodeChassis, NodeReadinessV1,
+        runtime_admission_finished, sample_effect_health_bytes_without_reader_wait, NodeChassis,
+        NodeReadinessV1,
     };
-    use erebor_interceptor_abi::Id128V1;
+    use erebor_interceptor_abi::{EffectObservationHealthV1, Id128V1};
     use mithril_control::{CapabilityRecord, NodeRegistration};
     use tokio::sync::watch;
+    use zerocopy::IntoBytes as _;
 
     use crate::{
-        EffectObservationStore, InterceptorConfig, NativeSecurityStateOwner, NodeConfig,
-        NodeControlConfig, NodeControlConnector, RuntimeAdmissionRequestV1, TrustCache,
-        WorkloadBindingOwner, CONTAINER_NAME_ANNOTATION, IMAGE_NAME_ANNOTATION,
-        POD_NAMESPACE_ANNOTATION, POD_UID_ANNOTATION, POLICY_SOURCE_REVISION_ANNOTATION,
-        PROFILE_ID_ANNOTATION, SANDBOX_ID_ANNOTATION,
+        EffectObservationStore, EvidenceIdV1, EvidenceWalLimits, InterceptorConfig,
+        NativeSecurityStateOwner, NodeConfig, NodeControlConfig, NodeControlConnector,
+        ObservationCanonicalizer, RuntimeAdmissionRequestV1, TrustCache, WorkloadBindingOwner,
+        CONTAINER_NAME_ANNOTATION, IMAGE_NAME_ANNOTATION, POD_NAMESPACE_ANNOTATION,
+        POD_UID_ANNOTATION, POLICY_SOURCE_REVISION_ANNOTATION, PROFILE_ID_ANNOTATION,
+        SANDBOX_ID_ANNOTATION,
     };
+
+    #[test]
+    fn transient_reader_lag_defers_without_coverage_churn() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let directory = tempfile::tempdir()?;
+        let store = EffectObservationStore::durable(
+            2,
+            directory.path().join("wal"),
+            EvidenceWalLimits::default(),
+            ObservationCanonicalizer::new(
+                EvidenceIdV1::new(1, 2),
+                EvidenceIdV1::new(3, 4),
+                1,
+                EvidenceIdV1::new(5, 6),
+            )?,
+        )?;
+        store.sample_coverage_health(EffectObservationHealthV1::default().as_bytes())?;
+        let before = store.coverage_snapshot();
+        let producer_ahead = EffectObservationHealthV1 {
+            attempted: 8,
+            requested: 8,
+            emitted: 8,
+            next_sequence: 8,
+            ..EffectObservationHealthV1::default()
+        };
+
+        sample_effect_health_bytes_without_reader_wait(&store, true, producer_ahead.as_bytes())?;
+
+        assert_eq!(store.coverage_snapshot(), before);
+        assert_eq!(store.health(None).reader_queue_dropped_events, 0);
+        Ok(())
+    }
 
     #[test]
     fn boot_admission_requires_complete_chassis_readiness_in_both_policy_modes() {
@@ -3103,6 +3176,14 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn an_effect_worker_exit_is_a_node_failure() {
+        let mut task = Some(tokio::spawn(async {}));
+        assert!(effect_worker_finished(&mut task)
+            .await
+            .is_err_and(|error| error.to_string().contains("stopped before node shutdown")));
+    }
+
+    #[tokio::test]
     async fn a_runtime_admission_listener_exit_closes_admission_readiness() {
         let (readiness, receiver) = watch::channel(NodeReadinessV1 {
             kernel_ready: true,
@@ -3153,6 +3234,7 @@ mod tests {
             base_config,
             config,
             effect_reader: None,
+            effect_worker: None,
             host: None,
             connector,
             registration: NodeRegistration {

@@ -2,6 +2,7 @@ use std::collections::VecDeque;
 use std::mem;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::mpsc::{self, Receiver, SyncSender, TrySendError};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -58,7 +59,9 @@ struct Inner {
     wal_capacity_blocked: AtomicU64,
     wal_rewritten_records: AtomicU64,
     wal_rewritten_bytes: AtomicU64,
-    reader_settle_timeouts: AtomicU64,
+    reader_queue_pending_records: AtomicU64,
+    reader_queue_dropped_events: AtomicU64,
+    persisted_reader_queue_dropped_events: AtomicU64,
     durable: Option<Mutex<DurableEvidence>>,
 }
 
@@ -87,7 +90,53 @@ pub struct EffectObservationHealth {
     pub wal_capacity_blocked: u64,
     pub wal_rewritten_records: u64,
     pub wal_rewritten_bytes: u64,
-    pub reader_settle_timeouts: u64,
+    pub reader_queue_dropped_events: u64,
+}
+
+pub(crate) struct EffectObservationIngress {
+    sender: SyncSender<Box<[u8]>>,
+    observations: EffectObservationStore,
+}
+
+pub(crate) struct EffectObservationWorker {
+    receiver: Receiver<Box<[u8]>>,
+    observations: EffectObservationStore,
+}
+
+impl EffectObservationIngress {
+    pub(crate) fn record_bytes(&self, bytes: &[u8]) {
+        self.observations
+            .inner
+            .reader_queue_pending_records
+            .fetch_add(1, Ordering::Relaxed);
+        match self.sender.try_send(bytes.to_vec().into_boxed_slice()) {
+            Ok(()) => {}
+            Err(TrySendError::Full(_) | TrySendError::Disconnected(_)) => {
+                self.observations
+                    .inner
+                    .reader_queue_pending_records
+                    .fetch_sub(1, Ordering::Relaxed);
+                self.observations
+                    .inner
+                    .reader_queue_dropped_events
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+        }
+    }
+}
+
+impl EffectObservationWorker {
+    pub(crate) fn run(self) {
+        while let Ok(bytes) = self.receiver.recv() {
+            self.observations.record_bytes(&bytes);
+            self.observations
+                .inner
+                .reader_queue_pending_records
+                .fetch_sub(1, Ordering::Relaxed);
+            self.observations.persist_reader_queue_loss();
+        }
+        self.observations.persist_reader_queue_loss();
+    }
 }
 
 impl Default for EffectObservationStore {
@@ -114,7 +163,9 @@ impl EffectObservationStore {
                 wal_capacity_blocked: AtomicU64::new(0),
                 wal_rewritten_records: AtomicU64::new(0),
                 wal_rewritten_bytes: AtomicU64::new(0),
-                reader_settle_timeouts: AtomicU64::new(0),
+                reader_queue_pending_records: AtomicU64::new(0),
+                reader_queue_dropped_events: AtomicU64::new(0),
+                persisted_reader_queue_dropped_events: AtomicU64::new(0),
                 durable: None,
             }),
         }
@@ -145,7 +196,9 @@ impl EffectObservationStore {
                 wal_capacity_blocked: AtomicU64::new(0),
                 wal_rewritten_records: AtomicU64::new(0),
                 wal_rewritten_bytes: AtomicU64::new(0),
-                reader_settle_timeouts: AtomicU64::new(0),
+                reader_queue_pending_records: AtomicU64::new(0),
+                reader_queue_dropped_events: AtomicU64::new(0),
+                persisted_reader_queue_dropped_events: AtomicU64::new(0),
                 durable: Some(Mutex::new(DurableEvidence {
                     canonicalizer,
                     wal: EvidenceWalOwner::open(&wal_root, limits)?,
@@ -245,6 +298,29 @@ impl EffectObservationStore {
                 Err((error, false, _rewrite)) => self.record_evidence_error(error.to_string()),
             }
         }
+    }
+
+    pub(crate) fn bounded_ingestion_queue(
+        &self,
+        capacity: usize,
+    ) -> crate::Result<(EffectObservationIngress, EffectObservationWorker)> {
+        if capacity == 0 {
+            return Err(crate::Error::EvidenceState {
+                reason: "effect observation reader queue capacity must be nonzero".to_owned(),
+                location: snafu::Location::new(file!(), line!(), column!()),
+            });
+        }
+        let (sender, receiver) = mpsc::sync_channel(capacity);
+        Ok((
+            EffectObservationIngress {
+                sender,
+                observations: self.clone(),
+            },
+            EffectObservationWorker {
+                receiver,
+                observations: self.clone(),
+            },
+        ))
     }
 
     pub fn next_evidence_batch(&self) -> Option<EvidenceBatchV1> {
@@ -374,10 +450,11 @@ impl EffectObservationStore {
             .transient_reader_delivery_pending(&samples))
     }
 
-    pub fn record_coverage_reader_settle_timeout(&self) {
+    #[must_use]
+    pub fn reader_queue_pending_records(&self) -> u64 {
         self.inner
-            .reader_settle_timeouts
-            .fetch_add(1, Ordering::Relaxed);
+            .reader_queue_pending_records
+            .load(Ordering::Relaxed)
     }
 
     pub fn recover_coverage_after_prior_probe(&self, per_cpu_bytes: &[u8]) -> crate::Result<bool> {
@@ -467,7 +544,10 @@ impl EffectObservationStore {
             wal_capacity_blocked: self.inner.wal_capacity_blocked.load(Ordering::Relaxed),
             wal_rewritten_records: self.inner.wal_rewritten_records.load(Ordering::Relaxed),
             wal_rewritten_bytes: self.inner.wal_rewritten_bytes.load(Ordering::Relaxed),
-            reader_settle_timeouts: self.inner.reader_settle_timeouts.load(Ordering::Relaxed),
+            reader_queue_dropped_events: self
+                .inner
+                .reader_queue_dropped_events
+                .load(Ordering::Relaxed),
             ..EffectObservationHealth::default()
         };
         let Some(bytes) = per_cpu_bytes else {
@@ -526,6 +606,29 @@ impl EffectObservationStore {
                 error = %error
             );
             *first = Some(error);
+        }
+    }
+
+    fn persist_reader_queue_loss(&self) {
+        let dropped = self
+            .inner
+            .reader_queue_dropped_events
+            .load(Ordering::Relaxed);
+        if dropped
+            <= self
+                .inner
+                .persisted_reader_queue_dropped_events
+                .load(Ordering::Relaxed)
+            || self.inner.durable.is_none()
+        {
+            return;
+        }
+        match self.mark_coverage_gapped(CoverageGapReasonV1::ReaderQueueOverflow) {
+            Ok(()) => self
+                .inner
+                .persisted_reader_queue_dropped_events
+                .store(dropped, Ordering::Relaxed),
+            Err(error) => self.record_evidence_error(error.to_string()),
         }
     }
 
@@ -862,6 +965,79 @@ mod tests {
         assert_eq!(recent[0].io_uring_request_flags, 25);
         assert_eq!(recent[0].io_uring_rw_flags, 26);
         assert_eq!(recent[0].io_uring_opcode, 27);
+    }
+
+    #[test]
+    fn bounded_reader_queue_drops_only_after_capacity() -> crate::Result<()> {
+        let store = EffectObservationStore::new(2);
+        let (ingress, worker) = store.bounded_ingestion_queue(1)?;
+        ingress.record_bytes(
+            EffectObservationV1 {
+                source_sequence: 1,
+                ..EffectObservationV1::default()
+            }
+            .as_bytes(),
+        );
+        assert_eq!(store.reader_queue_pending_records(), 1);
+        assert_eq!(store.health(None).reader_queue_dropped_events, 0);
+
+        ingress.record_bytes(
+            EffectObservationV1 {
+                source_sequence: 2,
+                ..EffectObservationV1::default()
+            }
+            .as_bytes(),
+        );
+        assert_eq!(store.reader_queue_pending_records(), 1);
+        assert_eq!(store.health(None).reader_queue_dropped_events, 1);
+
+        drop(ingress);
+        worker.run();
+        assert_eq!(store.reader_queue_pending_records(), 0);
+        assert_eq!(store.recent().len(), 1);
+        assert_eq!(store.recent()[0].source_sequence, 1);
+        Ok(())
+    }
+
+    #[test]
+    fn reader_queue_overflow_is_a_durable_coverage_gap() -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let store = EffectObservationStore::durable(
+            2,
+            directory.path().join("wal"),
+            EvidenceWalLimits::default(),
+            ObservationCanonicalizer::new(
+                EvidenceIdV1::new(1, 2),
+                EvidenceIdV1::new(3, 4),
+                1,
+                EvidenceIdV1::new(5, 6),
+            )?,
+        )?;
+        store.sample_coverage_health(EffectObservationHealthV1::default().as_bytes())?;
+        let (ingress, worker) = store.bounded_ingestion_queue(1)?;
+        for source_sequence in [1, 2] {
+            ingress.record_bytes(
+                EffectObservationV1 {
+                    source_sequence,
+                    reason: EffectObservationReasonV1::ExactPolicyDeny as u8,
+                    physical_result: EffectPhysicalResultV1::DeniedBeforeEffect as u8,
+                    kernel_result: -13,
+                    ..EffectObservationV1::default()
+                }
+                .as_bytes(),
+            );
+        }
+        drop(ingress);
+        worker.run();
+
+        assert_eq!(store.health(None).reader_queue_dropped_events, 1);
+        assert!(store.coverage_snapshot().is_some_and(|snapshot| {
+            !snapshot.supports_negative_claim()
+                && snapshot.current_intervals()[0]
+                    .gap_reasons
+                    .contains(&CoverageGapReasonV1::ReaderQueueOverflow)
+        }));
+        Ok(())
     }
 
     #[test]

@@ -119,7 +119,7 @@ pub struct EffectHealthV1 {
     pub wal_capacity_blocked: u64,
     pub wal_rewritten_records: u64,
     pub wal_rewritten_bytes: u64,
-    pub reader_settle_timeouts: u64,
+    pub reader_queue_dropped_events: u64,
 }
 
 impl From<EffectObservationHealth> for EffectHealthV1 {
@@ -137,7 +137,7 @@ impl From<EffectObservationHealth> for EffectHealthV1 {
             wal_capacity_blocked: value.wal_capacity_blocked,
             wal_rewritten_records: value.wal_rewritten_records,
             wal_rewritten_bytes: value.wal_rewritten_bytes,
-            reader_settle_timeouts: value.reader_settle_timeouts,
+            reader_queue_dropped_events: value.reader_queue_dropped_events,
         }
     }
 }

@@ -356,7 +356,6 @@ impl CoverageHealthOwner {
         {
             return false;
         }
-        let mut pending = false;
         for (cpu_id, counters) in samples {
             if !counters_are_valid(counters) {
                 return false;
@@ -368,16 +367,16 @@ impl CoverageHealthOwner {
                 {
                     return false;
                 }
-                pending |= counters.next_sequence > 0;
+                if counters.next_sequence > 0 {
+                    return true;
+                }
                 continue;
             };
             if source.current.state == CoverageStateV1::Gapped
-                && source.current.gap_reasons.iter().any(|reason| {
-                    !matches!(
-                        reason,
-                        CoverageGapReasonV1::ReaderDelay | CoverageGapReasonV1::UncleanRestart
-                    )
-                })
+                && source
+                    .current
+                    .gap_reasons
+                    .contains(&CoverageGapReasonV1::CounterRegression)
             {
                 return false;
             }
@@ -399,9 +398,11 @@ impl CoverageHealthOwner {
             {
                 return false;
             }
-            pending |= source.last_observed_sequence.unwrap_or(0) < counters.next_sequence;
+            if source.last_observed_sequence.unwrap_or(0) < counters.next_sequence {
+                return true;
+            }
         }
-        pending
+        false
     }
 
     pub fn observe(
@@ -1043,36 +1044,8 @@ mod tests {
     }
 
     #[test]
-    fn reader_reaches_a_fixed_probe_while_the_producer_advances(
+    fn existing_ring_loss_bypasses_reader_delivery_deferral(
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let directory = tempfile::tempdir()?;
-        let owner = open_owner(&directory.path().join("coverage.json"), 1)?;
-        owner.sample_health(&[health(0, 0)])?;
-        let before = owner.snapshot();
-        let probe = health(8, 0);
-
-        assert!(owner.transient_reader_delivery_pending(&[probe]));
-        for sequence in 1..=8 {
-            owner.observe(2, sequence)?;
-        }
-
-        let current = health(12, 0);
-        assert!(owner.transient_reader_delivery_pending(&[current]));
-        assert!(!owner.transient_reader_delivery_pending(&[probe]));
-        owner.sample_health(&[probe])?;
-
-        let after = owner.snapshot();
-        assert!(after.supports_negative_claim());
-        assert_eq!(after.history, before.history);
-        assert_eq!(
-            after.current_intervals()[0].interval_id,
-            before.current_intervals()[0].interval_id
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn existing_ring_loss_bypasses_reader_settlement() -> Result<(), Box<dyn std::error::Error>> {
         let directory = tempfile::tempdir()?;
         let owner = open_owner(&directory.path().join("coverage.json"), 1)?;
         let lost = health(1, 1);

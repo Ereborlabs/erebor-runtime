@@ -56,7 +56,7 @@ pub(super) fn effect_node_config(
             maximum_retained_records: 10_000,
             maximum_batch_records: 256,
             maximum_control_delay_ms: 30_000,
-            reader_settle_timeout_ms: 3_500,
+            maximum_reader_queue_records: 65_535,
             capacity_policy: mithril_node::EvidenceWalCapacityPolicyV1::Block,
         }),
         runtime_observation: None,
@@ -185,9 +185,9 @@ pub(super) fn health_delta(
         wal_rewritten_bytes: later
             .wal_rewritten_bytes
             .saturating_sub(earlier.wal_rewritten_bytes),
-        reader_settle_timeouts: later
-            .reader_settle_timeouts
-            .saturating_sub(earlier.reader_settle_timeouts),
+        reader_queue_dropped_events: later
+            .reader_queue_dropped_events
+            .saturating_sub(earlier.reader_queue_dropped_events),
     }
 }
 
