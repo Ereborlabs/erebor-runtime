@@ -59,7 +59,7 @@ and cgroup binding.
 | `D6.2.2` | **Implemented and automated.** | One desired-state owner reconciles both source kinds. The store proves atomic source and artifact acceptance, restart, complete relist retirement, partial relist safety, and separate exception retirement. |
 | `D6.2.3` | **Implemented and automated.** | API-only workload inventory binds exact scheduler, Pod, container, Node, Node UID, boot, and label facts. Node claims cannot create a Kubernetes target. |
 | `D6.2.4` | **Implemented, automated, and physically exercised.** | Policy inventory returns the complete authenticated desired bundle set and skips superseded candidates. Policy transfer is resumable. Activation acknowledgements are exact. Exception candidates keep their bounded activation and revocation order. The selected-node transaction passed physically. |
-| `D6.2.5` | **Partial.** | Automated intake failure, duplicate, gap, reorder, replay, storage, restart, WAL migration, and capacity tests pass. The healthy physical stream passed with no lost events, queue drops, WAL rewrite, or repeated Control connection. The physical failure variants remain `Not run`. |
+| `D6.2.5` | **Partial.** | Automated intake failure, duplicate, gap, reorder, replay, storage, restart, binary WAL migration, capacity policy, and connection-reuse tests pass. The healthy physical stream passed with no lost events, queue drops, WAL rewrite, or repeated Control connection. The physical failure variants remain `Not run`. |
 | `D6.2.6` | **Implemented, automated, and physically exercised.** | The current fixture passed target withdrawal, complete desired inventory, live-runtime retention, exception use, expiry, revocation, target retirement, restart, reconnect, and physical-session settlement. |
 | `D6.2.7` | **Implemented, automated, and physically exercised.** | Both statuses are bounded and contain no authority material. Separate writer roles and Control status-only permissions passed typed authorization reviews against the installed CRDs. |
 | `D6.2.8` | **Implemented, automated, and physically exercised.** | The non-Kubernetes VM and complete Kubernetes fixtures proved independent and reusable entry roles, application start, PostStart, PreStop, exec probes, approved administrative exec, external-entry denial, and scenario cleanup. |
@@ -94,11 +94,11 @@ and cgroup binding.
 The physical result uses the current stock Kubernetes and OCI runtime
 extension points. The complete automated fixture passed with Kubernetes
 v1.35.5+k3s1 and containerd v2.2.3-k3s1. The result is
-`/tmp/mithril-phase-6-2-full-convergence-reuse49-20260828`.
+`/tmp/mithril-phase-6-2-full-convergence-reuse52-terminal-retirement-20260828`.
 
 | Scenario | Result | Observation |
 | --- | --- | --- |
-| Direct-runc entry roles | **Pass** | Runc 1.3.4 changed the exact binding from `PREPARED` to `ACTIVE`. The procedure proved six independent declared roles, repeated entry invocation, role isolation, and external-entry denial. The evidence also recorded libc and the ELF loader as present in the root filesystem and absent from policy. |
+| Direct-runc entry roles | **Pass** | Runc 1.3.4 changed the exact binding from `PREPARED` to `ACTIVE`. The procedure proved six independent declared roles, repeated entry invocation, role isolation, and external-entry denial. It restarted node owners over pinned state. It preserved terminal `PostPonrFatal` evidence while it retired the inactive generation and owned resources. The evidence also recorded libc and the ELF loader as present in the root filesystem and absent from policy. |
 | New eligible node | **Pass** | The run observed initial quarantine, ready projection, same-name UID replacement, and host epoch advance. |
 | Two eligible nodes | **Pass** | The scheduler selected `ubuntu-d6fecdb3`. The fixture compared the complete typed target with live Node and Pod facts. |
 | Focused protected start | **Pass** | Kubernetes v1.35.5+k3s1 and containerd 2.2.3-k3s1 activated the `/bin/sh` application entry, allowed later BusyBox applet execs through the admitted lineage, enforced the explicit file Deny, and denied a direct CRI external entry. This does not prove the approved additional or administrative entries. |
@@ -122,6 +122,10 @@ The Helm verification passed hook ownership behavior, chart lint, and the
 render contract. The VM harness behavior suite passed. The independent manual
 example behavior suite passed. `git diff --check` passed.
 
+The lightweight suites execute Rust owners and fixture commands. They do not
+read source text as a capability oracle. The unchanged real Kubernetes fixture
+remains the physical acceptance owner.
+
 These automated results prove the application, additional, administrative,
 and external entry schema and runtime transitions. They also prove complete
 desired-inventory validation, live-runtime retention, and crash-safe stale
@@ -130,7 +134,7 @@ profile cleanup.
 The retained physical command passed:
 
 ```text
-rtk proxy crates/mithril-e2e/harness/vm/two-node-convergence.sh --output-directory /tmp/mithril-phase-6-2-full-convergence-reuse49-20260828 --keep-vms --reuse-environment /tmp/mithril-phase-6-2-full-convergence-reuse48-20260828/retained-environment.json
+rtk env MITHRIL_VM_REUSE_IMAGES=false crates/mithril-e2e/harness/vm/two-node-convergence.sh --reuse-environment /tmp/mithril-phase-6-2-full-convergence-reuse51-inventory-retry-20260828/retained-environment.json --output-directory /tmp/mithril-phase-6-2-full-convergence-reuse52-terminal-retirement-20260828
 ```
 
 The scenario removed its workload namespace, policy, exception, Pods, and

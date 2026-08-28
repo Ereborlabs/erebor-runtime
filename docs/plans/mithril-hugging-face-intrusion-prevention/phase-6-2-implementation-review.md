@@ -70,7 +70,8 @@ the exact admitted entry identity stored in the binding.
     [effect decision owner](../../../bpf/erebor-interceptor/programs/identity_effects.bpf.h),
     [network decision owner](../../../bpf/erebor-interceptor/programs/identity_network.bpf.h),
     and [PreparedContainer BPF owner](../../../bpf/erebor-interceptor/programs/identity_prepared_container.h).
-11. Read the [Control evidence intake](../../../crates/mithril-control/src/evidence.rs)
+11. Read the [Control evidence intake](../../../crates/mithril-control/src/evidence.rs),
+   [node observation ingress](../../../crates/mithril-node/src/observation.rs),
    and [node observation WAL](../../../crates/mithril-node/src/observation/wal.rs).
 12. Finish with the [Kubernetes API tests](../../../crates/mithril-control/tests/kubernetes_policy_api.rs),
    [reconciliation tests](../../../crates/mithril-control/tests/control_policy_reconciliation.rs),
@@ -98,7 +99,8 @@ the exact admitted entry identity stored in the binding.
 | Runtime container binding | `ScheduledRuntimeBindingV1` and node binding owner | Node binding owner | BPF cgroup and task maps plus node delivery state | Exact signed target, policy identity, CRI match, distinct lifetime, and reuse-rejection tests |
 | Prepared-container state | Node binding owner publishes one held binding | BPF prepared-container transition | Exact binding, held host TGID, initial entry, deadline, and one exec activation | ABI, compiled-object, node transition, recovery, and required physical tests |
 | Accepted evidence and coverage | `EvidenceIntakeOwner` | `ControlStore` transaction | Immutable records, coverage reports, and contiguous cursors | Duplicate, gap, reorder, backpressure, storage-failure, and restart tests |
-| Node WAL truncation | Node WAL owner | Node WAL owner after durable Control acknowledgement | Node WAL | Durable contiguous acknowledgement and replay tests |
+| Node reader queue | Effect reader | `EffectObservationWorker` | Bounded 65,535-record in-memory queue by default | Capacity, queue-loss metric, durable gap, and transient-lag tests |
+| Node WAL records and truncation | Node WAL owner | Node WAL owner after durable Control acknowledgement | Checksummed binary frames with Protocol Buffers payloads; 10,000 retained records by default | Migration, capacity policy, exact acknowledgement, replay, and corruption tests |
 | Operational health | `ControlPlane` projection | Existing owners supply counts | Authenticated `ControlHealth.Get` response | Generated contract and bounded health snapshot tests |
 
 The custom resource definition (CRD) stores desired state. It does not store a
@@ -359,13 +361,24 @@ do not use the unary deadline.
 
 ## Evidence Transaction Flow
 
+[EffectObservationIngress](../../../crates/mithril-node/src/observation.rs) The effect reader submits one kernel event without waiting for durable storage
+  -> [EffectObservationWorker](../../../crates/mithril-node/src/observation.rs) the bounded queue drains events into the durable observation owner
+  -> [EvidenceWal](../../../crates/mithril-node/src/observation/wal.rs) the node appends one checksummed binary frame with the original Protocol Buffers payload
+  -> [NodeControlConnection](../../../crates/mithril-node/src/control.rs) the node sends a bounded batch on the existing registered Control connection
+  -> [EvidenceIntakeOwner](../../../crates/mithril-control/src/evidence.rs) Control validates and commits records with the contiguous cursor
+  -> [EvidenceWal](../../../crates/mithril-node/src/observation/wal.rs) the node deletes only the exact acknowledged prefix
+
 ```mermaid
 sequenceDiagram
+    participant Kernel as BPF ring buffer
+    participant Queue as Node reader queue
     participant WAL as Node observation WAL
     participant RPC as mTLS evidence RPC
     participant Intake as EvidenceIntakeOwner
     participant Store as ControlStore
     participant Next as Phase 7 reader
+    Kernel->>Queue: Effect record
+    Queue->>WAL: Durable observation
     WAL->>RPC: Bounded evidence or coverage batch
     RPC->>Intake: Authenticated tenant, node, boot, label, source, and epoch
     Intake->>Intake: Check digests, cursors, duplicates, and pending-window bound
@@ -376,6 +389,21 @@ sequenceDiagram
     WAL->>WAL: Truncate only the acknowledged contiguous range
     Next->>Store: Read immutable accepted records and provenance
 ```
+
+The reader queue retains 65,535 records by default. A queue overflow increments
+the dropped-event metric and records a durable `ReaderQueueOverflow` gap. The
+durable write-ahead log (WAL) retains 10,000 records by default. Both bounds
+are configurable. The `BLOCK` capacity policy preserves all unacknowledged
+records and closes evidence health when capacity is exhausted. The `REWRITE`
+policy removes the oldest unacknowledged record that is not in the in-flight
+batch. It records the exact loss as a durable `WalCapacity` gap. It increments
+rewritten-record and byte metrics. The WAL uses versioned checksummed binary
+frames. Evidence payloads keep the Protocol Buffers bytes used by the Control
+service.
+
+The evidence RPC shares the registered node connection with policy and health
+work. A healthy drain does not register a second node session. A disconnect
+replays the exact in-flight WAL batch after reconnection.
 
 The pending window contains at most 4,096 evidence records for one identity.
 An out-of-order batch can become durable without advancing the contiguous
@@ -435,6 +463,10 @@ that lifetime is absent, the node records the retirement and removes bindings
 that match the stored profile, generation, node boot, and label epoch. This
 match does not depend on the mutable runtime binding alias. The node waits for
 generation-reference readback and removes the generation.
+A pending exec retains generation authority only while its state is `Unknown`,
+`Preparing`, or `CommitPending`. A terminal `PrePonrFailed`, `PostPonrFatal`,
+`Success`, or `OutcomeUnknown` row remains durable evidence. The terminal row
+does not retain policy authority after all live references are absent.
 A crash restores the retained generation and repeats reconciliation. Cleanup
 uses stored binding identities. It does not inspect the deleted container
 root. A recreated policy object receives a higher issuer sequence and a new
@@ -538,6 +570,7 @@ flowchart LR
 | `profile_generation_descriptors` | `u64 -> ProfileGenerationDescriptorV1` | Node policy generation owner | None | Node recovery, binding owner, and effect gates | Pinned until generation retirement and reference readback permit removal |
 | `execution_set_bindings` | `u64 cgroup ID -> ExecutionSetBindingStateV1` | Node binding owner | Task lifecycle and prepared-container programs update exact transitions | Node recovery and effect gates | Pinned for the exact runtime cgroup lifetime |
 | `binding_activation_targets` | `BindingActivationTargetKeyV1 -> ExecutionSetBindingStateV1` | Node binding owner | None | Node recovery and runtime gate | Pinned until the exact binding and generation retire |
+| `pending_execs` | `u64 task cookie -> PendingExecV1` | None | Exec LSM and tracepoint programs update exact exec states | BPF effect and exec programs, node generation retirement, and node inspection | Pinned terminal evidence can outlive policy authority; only an in-flight state retains generation authority |
 | `exception_runtime_states` | `ExceptionRuntimeStateKeyV1 -> ExceptionRuntimeStateV1` | Node exception owner | Effect gate consumes uses under the map value lock | Node recovery and exception gate | Pinned until the instance is terminal and durable receipts permit cleanup |
 | `exception_handle_bindings` | `ExceptionHandleBindingKeyV1 -> ExceptionHandleBindingV1` | Node policy and exception owners | None | Exception gate and recovery | Pinned for the exact compiled handle and active instance |
 | `exception_use_receipts` | Receipt identity -> bounded use receipt | Node exception receipt owner | Effect gate emits use receipts | Node receipt recovery | Pinned until the durable exception WAL records the receipt |
@@ -610,6 +643,9 @@ and coverage messages remain the Phase 6 types.
 | Control restart | The store replays the commit chain; in-memory watch state is rebuilt |
 | CRD deletion or forced object removal | A Deleted event or complete relist removes the profile from complete desired inventory. The node retains live runtime protection and removes stale membership after runtime absence |
 | Complete desired inventory omits a local profile | The node waits for matching runtime lifetimes to end, records one stale profile, removes owner-matched bindings and generation state, and retries after a crash. A changed runtime binding alias cannot hide an owned kernel row |
+| Reader queue reaches its configured record capacity | The reader increments the dropped-event metric and persists a coverage gap. It does not wait for exact reader synchronization |
+| WAL reaches its configured byte or record capacity under `BLOCK` | The node preserves unacknowledged records, increments the capacity-block metric, records a durable gap, and closes evidence health |
+| WAL reaches capacity under `REWRITE` | The node removes the oldest non-in-flight unacknowledged record, increments rewrite metrics, and sends the durable loss gap before later records |
 | Evidence gap within the bound | Batch stays pending; the contiguous acknowledgement does not advance |
 | Evidence storage failure | No acknowledgement returns; the node keeps its WAL records |
 | Conflicting evidence duplicate | Intake rejects and preserves the first immutable record |
@@ -627,12 +663,13 @@ and coverage messages remain the Phase 6 types.
 | Commit chain, compare-and-swap transitions, evidence atomicity, pending bounds, restart replay, and trust persistence | [Control store tests](../../../crates/mithril-control/src/store.rs) |
 | Evidence identity, duplicate, reorder, cursor, coverage, and stable Phase 7 query | [Evidence intake tests](../../../crates/mithril-control/src/evidence.rs) |
 | Trust install, acknowledgement, revocation, anti-rollback, and restart | [Trust owner tests](../../../crates/mithril-control/src/trust.rs) |
-| mTLS identity, boot session, trust gate, policy chunk, acknowledgement, evidence, and service isolation | [Control TLS tests](../../../crates/mithril-node/tests/control_tls.rs) |
+| mTLS identity, boot session, trust gate, policy chunk, acknowledgement, evidence replay, connection reuse, and service isolation | [Control TLS tests](../../../crates/mithril-node/tests/control_tls.rs) |
+| Reader queue capacity, transient lag, durable queue gap, WAL capacity policies, binary migration, acknowledgement reuse, and capacity metrics | [Node observation tests](../../../crates/mithril-node/src/observation.rs) and [WAL tests](../../../crates/mithril-node/src/observation/wal.rs) |
 | Incremental chunk assembly, complete desired inventory, signature and digest checks, pending recovery, old-session cleanup, stale-profile cleanup, exact target inspection, and acknowledgement replay | [Node policy delivery tests](../../../crates/mithril-node/src/policy_delivery.rs) |
-| Existing inactive generation, readback, probes, and pointer activation | [Node policy tests](../../../crates/mithril-node/src/policy.rs) |
+| Existing inactive generation, readback, probes, pointer activation, and terminal pending-exec retirement | [Node policy tests](../../../crates/mithril-node/src/policy.rs) |
 | Signed scheduling authority, exact policy and runtime identity, immutable two-hook stage matching, held-TGID publication, distinct container lifetime, active socket ownership, convergence hold, unavailable endpoint, and timeout denial | [Runtime admission and binding tests](../../../crates/mithril-node/src/identity/binding.rs) |
 | OCI state parsing, cgroup-v2 path parsing, fact-only first hook, and held-PID second hook | [OCI adapter tests](../../../crates/mithril-node/src/bin/mithril_oci_hook.rs) |
-| Direct-runc PREPARED-to-ACTIVE transition, independent roles, admitted-entry default, external-entry denial, absent dependency rules, and cleanup | [Runc entry-role VM probe](../../../crates/mithril-e2e/src/effect/runc.rs) |
+| Direct-runc PREPARED-to-ACTIVE transition, owner restart, terminal exec-failure evidence, generation retirement, independent roles, external-entry denial, and cleanup | [Runc entry-role VM probe](../../../crates/mithril-e2e/src/effect/runc.rs) |
 | Fresh protected Pod, exact target and runtime binding, sole shell entry selector, later BusyBox applet default, explicit matching Deny, direct CRI external-entry denial, and retained-cluster resource replacement | [Protected-start lane](../../../crates/mithril-e2e/harness/vm/two-node-convergence.sh) |
 | Webhook TLS, rules, deadlines, health probes, DaemonSet identity and hook inputs, and least-privilege RBAC | [Helm render test](../../../packaging/mithril/helm/tests/verify.sh) |
 | Exact two-node target, task lifetime, Node UID replacement, host epoch, selector lifecycle, exception target retirement, desired-inventory cleanup, and no-root inspection | [Physical fixture](../../../crates/mithril-e2e/harness/vm/two-node-convergence.sh) |
@@ -654,13 +691,17 @@ VM harness behavior checks passed.
 rtk bash examples/mithril-kubernetes-convergence-manual/test.sh
 Manual example behavior checks passed.
 
-rtk proxy crates/mithril-e2e/harness/vm/two-node-convergence.sh --output-directory /tmp/mithril-phase-6-2-full-convergence-reuse49-20260828 --keep-vms --reuse-environment /tmp/mithril-phase-6-2-full-convergence-reuse48-20260828/retained-environment.json
+rtk env MITHRIL_VM_REUSE_IMAGES=false crates/mithril-e2e/harness/vm/two-node-convergence.sh --reuse-environment /tmp/mithril-phase-6-2-full-convergence-reuse51-inventory-retry-20260828/retained-environment.json --output-directory /tmp/mithril-phase-6-2-full-convergence-reuse52-terminal-retirement-20260828
 Two-node Kubernetes policy convergence passed.
 ```
 
-The direct-runc entry-role VM probe also passed with runc 1.3.4. Its result records
-libc and the ELF loader as root-filesystem dependencies that are absent from
-policy.
+The direct-runc entry-role VM probe also passed with runc 1.3.4. Its result
+records libc and the ELF loader as root-filesystem dependencies that are absent
+from policy. The same probe restarted the node owners over pinned state. It
+then caused a real post-point-of-no-return exec failure. The terminal evidence
+remained readable while the inactive generation, cgroup, pin root, fixture
+root, and lease retired. The result is
+`/tmp/mithril-runc-terminal-regression-20260828/runc-entry-role-runtime-probe.json`.
 
 The focused protected-start lane passed on Kubernetes v1.35.5+k3s1 and
 containerd 2.2.3-k3s1. It reused the two owned VMs and their K3s cluster. It
@@ -690,7 +731,8 @@ runtime task, exception target retirement, desired-inventory cleanup, restart,
 fresh-root activation, same-name Node UID replacement, DaemonSet exclusion and
 re-entry, and a host boot and label-epoch change. Its final fresh Node Pods were
 ready with zero container restarts and one Control connection each. The result
-is `/tmp/mithril-phase-6-2-full-convergence-reuse49-20260828`.
+is
+`/tmp/mithril-phase-6-2-full-convergence-reuse52-terminal-retirement-20260828`.
 
 The direct lane and Kubernetes fixture close the previous stock-runtime
 regression without a runtime-specific operation list, dependency allow rules,
@@ -741,9 +783,10 @@ not present.
 
 ## Source State
 
-This guide covers the current phase branch after the policy API, exception,
-rollout, node-session, node cleanup, Helm hook, automated fixture, and manual
-example deliverables. Reviewers must compare the guide with the checked-out
+This guide covers source commits `1168593`, `28bfd85`, `8f0dc33`, and
+`aa3d2e5` on the current phase branch. These commits add executable lightweight
+checks, direct-runc owner-restart proof, changed-inventory retry, and terminal
+pending-exec retirement. Reviewers must compare the guide with the checked-out
 source. The physical verification limits above remain part of the result.
 
 Completion of this work does not authorize the next phase.
