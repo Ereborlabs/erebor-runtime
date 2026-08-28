@@ -498,7 +498,7 @@ impl IdentityTestRunner {
         let cgroup_escape_sentinel_cleanup = ProbeFile::new(&cgroup_escape_sentinel_path);
         let authorization_state_cleanup = ProbeDirectory::new(&authorization_state_directory);
         self.materialize_execfail(&execfail_path)?;
-        self.materialize_post_ponr_execfail(&post_ponr_execfail_path)?;
+        Self::materialize_post_ponr_execfail(&post_ponr_execfail_path)?;
         fs::write(
             &cgroup_escape_sentinel_path,
             b"identity cgroup escape sentinel\n",
@@ -3167,7 +3167,7 @@ impl IdentityTestRunner {
         fs::set_permissions(path, permissions).context(IoSnafu { path })
     }
 
-    fn materialize_post_ponr_execfail(&self, path: &Path) -> Result<()> {
+    pub(crate) fn materialize_post_ponr_execfail(path: &Path) -> Result<()> {
         const PT_LOAD: u32 = 1;
 
         let source = Path::new("/bin/true");
@@ -10180,12 +10180,11 @@ mod tests {
 
     #[test]
     fn post_ponr_fixture_terminates_the_exec_process() -> crate::Result<()> {
-        let runner = IdentityTestRunner::new(".");
         let temporary = tempfile::tempdir().map_err(|error| {
             super::invalid_state(format!("create post-PONR test directory: {error}"))
         })?;
         let executable = temporary.path().join("post-ponr-execfail");
-        runner.materialize_post_ponr_execfail(&executable)?;
+        IdentityTestRunner::materialize_post_ponr_execfail(&executable)?;
         let status = Command::new(&executable)
             .status()
             .map_err(|error| super::invalid_state(format!("execute post-PONR fixture: {error}")))?;

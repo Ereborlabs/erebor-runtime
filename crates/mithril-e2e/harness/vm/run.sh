@@ -340,7 +340,7 @@ entry_role_output=$remote_root/runc-entry-roles
 
 if [[ $entry_role_runtime_only == true ]]; then
   jq -e '
-    .schema_version == 10 and
+    .schema_version == 11 and
     .prepared_state_before_exec == "prepared" and
     .prepared_state_after_exec == "active" and
     .prepared_runtime_effect_observed and
@@ -363,6 +363,9 @@ if [[ $entry_role_runtime_only == true ]]; then
     .live_replacement_preserved_running_application and
     .live_replacement_entries_use_new_generation and
     .node_owner_restart_preserved_running_application and
+    .post_ponr_terminal_evidence_observed and
+    .post_ponr_terminal_evidence_preserved and
+    .inactive_generation_retired and
     .external_entry_denied and
     .external_cgroup_entering_process_stays_closed and
     .entry_executable_exact_objects_enforced and

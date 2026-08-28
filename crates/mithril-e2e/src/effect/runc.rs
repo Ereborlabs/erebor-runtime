@@ -7,9 +7,10 @@ use std::process::{Child, Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use erebor_interceptor::{KernelHostConfig, KernelHostOwner};
+use erebor_interceptor::{KernelHost, KernelHostConfig, KernelHostOwner};
 use erebor_interceptor_abi::{
     EntryAdmissionRuleKeyV1, EntryAdmissionRuleV1, KernelEffectFamilyV1, KernelEffectOperationV1,
+    PendingExecStateV1, PendingExecV1,
 };
 use mithril_control::{
     lower_kubernetes_policy, policy_custom_resource, WorkloadProtectionPolicySpec,
@@ -36,6 +37,7 @@ use super::{
 use crate::error::{
     CommandSnafu, InterceptorSnafu, InvalidInputSnafu, IoSnafu, JsonSnafu, NodeSnafu, PolicySnafu,
 };
+use crate::identity::IdentityTestRunner;
 use crate::physical::{boot_identity, ProbeDirectory, ProbeFile};
 use crate::Result;
 
@@ -60,6 +62,9 @@ pub struct RuncEntryRoleRuntimeProbeV1 {
     pub live_replacement_preserved_running_application: bool,
     pub live_replacement_entries_use_new_generation: bool,
     pub node_owner_restart_preserved_running_application: bool,
+    pub post_ponr_terminal_evidence_observed: bool,
+    pub post_ponr_terminal_evidence_preserved: bool,
+    pub inactive_generation_retired: bool,
     pub external_entry_denied: bool,
     pub external_cgroup_entering_process_stays_closed: bool,
     pub entry_executable_exact_objects_enforced: bool,
@@ -455,7 +460,7 @@ impl EffectTestRunner {
             })
             .collect::<Result<Vec<_>>>()?;
         ensure!(
-            staged_entry_rules.len() == 6
+            staged_entry_rules.len() == 7
                 && staged_entry_rules
                     .iter()
                     .any(|rule| rule.target_role_id == policy.initial_role_id)
@@ -589,9 +594,18 @@ impl EffectTestRunner {
             .iter()
             .map(|rule| rule.admitted_entry_rule_id)
             .collect::<BTreeSet<_>>();
+        let termination_role_id = policy.role_ids["termination-failure"];
+        let ordinary_entry_proofs = entry_admission_proofs
+            .iter()
+            .filter(|rule| rule.target_role_id != termination_role_id)
+            .collect::<Vec<_>>();
+        let terminal_entry_proofs = entry_admission_proofs
+            .iter()
+            .filter(|rule| rule.target_role_id == termination_role_id)
+            .collect::<Vec<_>>();
         ensure!(
-            entry_admission_proofs.len() == 6
-                && exact_entry_rule_ids.len() == 6
+            entry_admission_proofs.len() == 7
+                && exact_entry_rule_ids.len() == 7
                 && entry_admission_proofs.iter().all(|rule| {
                     rule.exact_object_key_id > 0
                         && rule.executable_object.profile_generation_ref_id
@@ -600,13 +614,17 @@ impl EffectTestRunner {
                         && rule.executable_object.inode > 0
                         && rule.executable_object.inode_generation > 0
                 })
-                && entry_admission_proofs[1..].iter().all(|rule| {
-                    rule.executable_object == entry_admission_proofs[0].executable_object
-                }),
+                && ordinary_entry_proofs.len() == 6
+                && ordinary_entry_proofs[1..].iter().all(|rule| {
+                    rule.executable_object == ordinary_entry_proofs[0].executable_object
+                })
+                && terminal_entry_proofs.len() == 1
+                && terminal_entry_proofs[0].executable_object
+                    != ordinary_entry_proofs[0].executable_object,
             InvalidInputSnafu {
                 path: pin_root,
                 reason: format!(
-                    "entry admission did not retain six calls over one proven BusyBox object: {entry_admission_proofs:?}"
+                    "entry admission did not retain six BusyBox entries and one terminal-exec fixture: {entry_admission_proofs:?}"
                 ),
             }
         );
@@ -764,11 +782,20 @@ impl EffectTestRunner {
             })
             .map(|(_, rule)| rule.admitted_entry_rule_id)
             .collect::<BTreeSet<_>>();
+        let replacement_terminal_entry_rule_ids = replacement_entry_rules
+            .iter()
+            .filter(|(_, rule)| {
+                rule.executable_object.profile_generation_ref_id == NEXT_PROFILE_GENERATION_REF_ID
+                    && rule.target_role_id == termination_role_id
+            })
+            .map(|(_, rule)| rule.admitted_entry_rule_id)
+            .collect::<BTreeSet<_>>();
         ensure!(
-            replacement_exact_entry_rule_ids.len() == 6,
+            replacement_exact_entry_rule_ids.len() == 7
+                && replacement_terminal_entry_rule_ids.len() == 1,
             InvalidInputSnafu {
                 path: pin_root,
-                reason: "policy replacement did not install six exact declared entries",
+                reason: "policy replacement did not install seven exact declared entries",
             }
         );
 
@@ -825,8 +852,6 @@ impl EffectTestRunner {
                 reason: "node-owner restart changed the running application identity",
             }
         );
-        let _restarted_owners = (restarted_policy_owner, restarted_bindings);
-
         let mut independent_entries = Vec::new();
         for (name, declaration_name, executable) in [
             ("poststart", "poststart", "/bin/cp"),
@@ -973,6 +998,38 @@ impl EffectTestRunner {
             InvalidInputSnafu {
                 path: pin_root,
                 reason: "declared entries did not record runtime entry infrastructure",
+            }
+        );
+
+        let post_ponr_pid_path = fixture_root.join("post-ponr-terminal.pid");
+        let post_ponr_stdout = output_directory.join("runc-entry-post-ponr.stdout");
+        let post_ponr_stderr = output_directory.join("runc-entry-post-ponr.stderr");
+        let mut post_ponr_child = container.spawn_exec(
+            "/bin/post-ponr-execfail",
+            &[],
+            &post_ponr_pid_path,
+            &post_ponr_stdout,
+            &post_ponr_stderr,
+        )?;
+        let post_ponr_status = wait_for_child(&mut post_ponr_child)?;
+        let post_ponr_pending = wait_for_post_ponr_terminal_exec(
+            &host,
+            NEXT_PROFILE_GENERATION_REF_ID,
+            &post_ponr_stderr,
+        )?;
+        let post_ponr_terminal_evidence_observed = !post_ponr_status.success()
+            && replacement_terminal_entry_rule_ids
+                .contains(&post_ponr_pending.admitted_entry_rule_id);
+        ensure!(
+            post_ponr_terminal_evidence_observed,
+            InvalidInputSnafu {
+                path: &post_ponr_stderr,
+                reason: format!(
+                    "the declared terminal exec did not leave post-PONR evidence: status={post_ponr_status}, pending={post_ponr_pending:?}, stderr={}",
+                    fs::read_to_string(&post_ponr_stderr)
+                        .unwrap_or_default()
+                        .trim()
+                ),
             }
         );
 
@@ -1160,6 +1217,72 @@ impl EffectTestRunner {
             }
         );
         container.cleanup()?;
+        drop(restarted_policy_owner);
+        restarted_bindings
+            .retire_profile_bindings_for_test(
+                &host,
+                &policy.profile_id,
+                NEXT_PROFILE_GENERATION_REF_ID,
+            )
+            .context(NodeSnafu)?;
+        let retirement_deadline = Instant::now() + WAIT_LIMIT;
+        let inactive_generation_retired = loop {
+            if NodePolicyGenerationOwner::retire_profile_generation_for_test(
+                &host,
+                &policy.profile_id,
+                NEXT_PROFILE_GENERATION_REF_ID,
+                node_boot_id,
+                1,
+            )
+            .context(NodeSnafu)?
+            {
+                break true;
+            }
+            ensure!(
+                Instant::now() < retirement_deadline,
+                InvalidInputSnafu {
+                    path: pin_root,
+                    reason: "terminal exec evidence blocked inactive policy-generation retirement",
+                }
+            );
+            thread::sleep(Duration::from_millis(25));
+        };
+        let post_ponr_terminal_evidence_preserved = host
+            .lookup_map(
+                "pending_execs",
+                &post_ponr_pending.task_cookie.to_ne_bytes(),
+            )
+            .context(InterceptorSnafu)?
+            .and_then(|value| PendingExecV1::try_read_from_bytes(&value).ok())
+            .is_some_and(|pending| {
+                pending == post_ponr_pending && pending.state == PendingExecStateV1::PostPonrFatal
+            });
+        ensure!(
+            post_ponr_terminal_evidence_preserved,
+            InvalidInputSnafu {
+                path: pin_root,
+                reason: "policy retirement removed the terminal exec evidence row",
+            }
+        );
+        restarted_bindings
+            .finalize_retired_profile_bindings_for_test(
+                &host,
+                &policy.profile_id,
+                NEXT_PROFILE_GENERATION_REF_ID,
+            )
+            .context(NodeSnafu)?;
+        ensure!(
+            NodePolicyGenerationOwner::profile_generation_is_absent_for_test(
+                &host,
+                &policy.profile_id,
+                NEXT_PROFILE_GENERATION_REF_ID,
+            )
+            .context(NodeSnafu)?,
+            InvalidInputSnafu {
+                path: pin_root,
+                reason: "inactive policy generation lacks exact kernel absence proof",
+            }
+        );
         drop(reader);
         host.shutdown().context(InterceptorSnafu)?;
         pin_cleanup.cleanup()?;
@@ -1177,7 +1300,7 @@ impl EffectTestRunner {
         })?;
 
         Ok(RuncEntryRoleRuntimeProbeV1 {
-            schema_version: 10,
+            schema_version: 11,
             runc_version: runc_version.lines().next().unwrap_or_default().to_owned(),
             initial_host_pid: initial_pid,
             prepared_state_before_exec,
@@ -1194,6 +1317,9 @@ impl EffectTestRunner {
             live_replacement_preserved_running_application,
             live_replacement_entries_use_new_generation,
             node_owner_restart_preserved_running_application,
+            post_ponr_terminal_evidence_observed,
+            post_ponr_terminal_evidence_preserved,
+            inactive_generation_retired,
             external_entry_denied,
             external_cgroup_entering_process_stays_closed,
             entry_executable_exact_objects_enforced,
@@ -1334,6 +1460,7 @@ fn prepare_entry_role_root(rootfs: &Path, workload_path: &Path) -> Result<Vec<St
         fs::hard_link(rootfs.join("bin/sh"), &destination)
             .context(IoSnafu { path: &destination })?;
     }
+    IdentityTestRunner::materialize_post_ponr_execfail(&rootfs.join("bin/post-ponr-execfail"))?;
     let role_directory = rootfs.join("run/mithril-entry-roles");
     fs::create_dir_all(&role_directory).context(IoSnafu {
         path: &role_directory,
@@ -1441,6 +1568,44 @@ fn wait_for_path(path: &Path, exists: bool, name: &str) -> Result<()> {
             InvalidInputSnafu {
                 path,
                 reason: format!("timed out waiting for {name}"),
+            }
+        );
+        thread::sleep(Duration::from_millis(25));
+    }
+}
+
+fn wait_for_post_ponr_terminal_exec(
+    host: &KernelHost,
+    profile_generation_ref_id: u64,
+    diagnostic_path: &Path,
+) -> Result<PendingExecV1> {
+    let deadline = Instant::now() + WAIT_LIMIT;
+    loop {
+        for key in host.map_keys("pending_execs").context(InterceptorSnafu)? {
+            let Some(value) = host
+                .lookup_map("pending_execs", &key)
+                .context(InterceptorSnafu)?
+            else {
+                continue;
+            };
+            let pending = PendingExecV1::try_read_from_bytes(&value).map_err(|error| {
+                InvalidInputSnafu {
+                    path: diagnostic_path,
+                    reason: format!("a pending exec has invalid ABI: {error}"),
+                }
+                .build()
+            })?;
+            if pending.source_profile_generation_ref_id == profile_generation_ref_id
+                && pending.state == PendingExecStateV1::PostPonrFatal
+            {
+                return Ok(pending);
+            }
+        }
+        ensure!(
+            Instant::now() < deadline,
+            InvalidInputSnafu {
+                path: diagnostic_path,
+                reason: "timed out waiting for terminal post-PONR exec evidence",
             }
         );
         thread::sleep(Duration::from_millis(25));

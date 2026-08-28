@@ -32,6 +32,10 @@ containers:
         kind: LivenessProbe
         executionRule: liveness-entry
         role: liveness
+      - name: termination-failure
+        kind: PreStop
+        executionRule: termination-failure-entry
+        role: termination-failure
     administrativeEntry:
       role: administrator
     externalRole: runtime-external
@@ -136,6 +140,19 @@ roles:
     execution:
       - name: liveness-entry
         path: /bin/wc
+        recursive: false
+        operations: [Execute]
+        action: Allow
+    network:
+      socketControls: []
+      destinations: []
+    processControl: []
+    unixStreams: []
+  - name: termination-failure
+    files: []
+    execution:
+      - name: termination-failure-entry
+        path: /bin/post-ponr-execfail
         recursive: false
         operations: [Execute]
         action: Allow

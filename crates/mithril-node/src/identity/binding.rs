@@ -651,6 +651,16 @@ impl WorkloadBindingOwner {
         Ok(())
     }
 
+    #[cfg(feature = "test-support")]
+    pub fn retire_profile_bindings_for_test(
+        &mut self,
+        host: &KernelHost,
+        profile_id: &str,
+        profile_generation_ref_id: u64,
+    ) -> Result<()> {
+        self.retire_profile_bindings(host, profile_id, profile_generation_ref_id)
+    }
+
     pub(crate) fn finalize_retired_profile_bindings(
         &self,
         host: &KernelHost,
@@ -720,6 +730,16 @@ impl WorkloadBindingOwner {
             );
         }
         Ok(())
+    }
+
+    #[cfg(feature = "test-support")]
+    pub fn finalize_retired_profile_bindings_for_test(
+        &self,
+        host: &KernelHost,
+        profile_id: &str,
+        profile_generation_ref_id: u64,
+    ) -> Result<()> {
+        self.finalize_retired_profile_bindings(host, profile_id, profile_generation_ref_id)
     }
 
     fn terminal_binding_matches_session(

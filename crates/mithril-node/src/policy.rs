@@ -18,11 +18,12 @@ use erebor_interceptor_abi::{
     MountSecurityViewStateV1, MountTopologyStateV1, NetworkDestinationDecisionKeyV1,
     NetworkResponseFloorKeyV1, NetworkResponseFloorV1, NetworkResponseScopeV1, PathGraphStateKeyV1,
     PathGraphTerminalV1, PathGraphTransitionKeyV1, PathGraphTransitionV1,
-    PendingAdministrativeMatchV1, PendingExecV1, PhysicalDecisionKindV1, PhysicalDecisionV1,
-    PolicyActivationProbeMapKindV1, PolicyActivationProbeV1, PolicyGenerationModeV1,
-    PolicyGenerationStateV1, ProcessSecurityStateKindV1, ProcessSecurityStateV1,
-    ProfileGenerationDescriptorV1, ReferenceTombstoneStateV1, TaskReferenceTombstoneV1,
-    MAX_CANONICAL_COMPONENT_BYTES_V1, MAX_POLICY_ACTIVATION_PROBE_KEY_BYTES_V1,
+    PendingAdministrativeMatchV1, PendingExecStateV1, PendingExecV1, PhysicalDecisionKindV1,
+    PhysicalDecisionV1, PolicyActivationProbeMapKindV1, PolicyActivationProbeV1,
+    PolicyGenerationModeV1, PolicyGenerationStateV1, ProcessSecurityStateKindV1,
+    ProcessSecurityStateV1, ProfileGenerationDescriptorV1, ReferenceTombstoneStateV1,
+    TaskReferenceTombstoneV1, MAX_CANONICAL_COMPONENT_BYTES_V1,
+    MAX_POLICY_ACTIVATION_PROBE_KEY_BYTES_V1,
 };
 use mithril_control::{
     canonical_path_components, AntiRollbackStore, CanonicalPathGraphV1, CompiledOperationV1,
@@ -187,6 +188,23 @@ impl NodePolicyGenerationOwner {
             .is_none())
     }
 
+    #[cfg(feature = "test-support")]
+    pub fn retire_profile_generation_for_test(
+        host: &KernelHost,
+        profile_id: &str,
+        profile_generation_ref_id: u64,
+        node_boot_id: Id128V1,
+        label_epoch: u64,
+    ) -> Result<bool> {
+        Self::retire_profile_generation(
+            host,
+            profile_id,
+            profile_generation_ref_id,
+            node_boot_id,
+            label_epoch,
+        )
+    }
+
     pub(crate) fn profile_generation_is_absent(
         host: &KernelHost,
         profile_id: &str,
@@ -195,6 +213,15 @@ impl NodePolicyGenerationOwner {
         let profile_id = parse_id("profile_id", profile_id)?;
         Ok(read_active_generation(host, &profile_id)?.is_none()
             && generation_publication_is_absent(host, profile_generation_ref_id)?)
+    }
+
+    #[cfg(feature = "test-support")]
+    pub fn profile_generation_is_absent_for_test(
+        host: &KernelHost,
+        profile_id: &str,
+        profile_generation_ref_id: u64,
+    ) -> Result<bool> {
+        Self::profile_generation_is_absent(host, profile_id, profile_generation_ref_id)
     }
 
     pub(crate) fn activation_receipt(
@@ -3938,8 +3965,9 @@ fn generation_has_retained_authority(host: &KernelHost, generation: u64) -> Resu
         else {
             continue;
         };
-        if read_abi_value::<PendingExecV1>(&value, "pending exec")?.source_profile_generation_ref_id
-            == generation
+        let pending = read_abi_value::<PendingExecV1>(&value, "pending exec")?;
+        if pending.source_profile_generation_ref_id == generation
+            && pending_exec_retains_generation_authority(pending.state)
         {
             return Ok(true);
         }
@@ -3979,6 +4007,15 @@ fn generation_has_retained_authority(host: &KernelHost, generation: u64) -> Resu
         }
     }
     Ok(false)
+}
+
+fn pending_exec_retains_generation_authority(state: PendingExecStateV1) -> bool {
+    matches!(
+        state,
+        PendingExecStateV1::Unknown
+            | PendingExecStateV1::Preparing
+            | PendingExecStateV1::CommitPending
+    )
 }
 
 pub(crate) fn generation_publication_is_absent(host: &KernelHost, generation: u64) -> Result<bool> {
@@ -5339,8 +5376,8 @@ mod tests {
         BindingLifecycleStateV1, EffectDecisionKeyV1, EffectDefaultKeyV1, EntryAdmissionRuleKeyV1,
         EntryAdmissionRuleV1, ExactFileObjectKeyV1, ExactObjectBindingStateV1,
         ExactObjectBindingV1, Id128V1, KernelEffectFamilyV1, KernelEffectOperationV1,
-        PathGraphStateKeyV1, PathGraphTerminalV1, PathGraphTransitionKeyV1, PhysicalDecisionKindV1,
-        PhysicalDecisionV1, PolicyGenerationModeV1,
+        PathGraphStateKeyV1, PathGraphTerminalV1, PathGraphTransitionKeyV1, PendingExecStateV1,
+        PhysicalDecisionKindV1, PhysicalDecisionV1, PolicyGenerationModeV1,
     };
     use mithril_control::{
         lower_kubernetes_policy, policy_custom_resource, EffectFamilyV1,
@@ -5354,8 +5391,8 @@ mod tests {
     use super::{
         add_binding_activation, ensure_active_generation_unchanged, ensure_committed_generation,
         ensure_map_capacity, entry_admission_path_selector_ids, exception_counter_is_consistent,
-        generation_retirement_needs_tombstone, parse_id, same_exact_file, LoweredGeneration,
-        ProfileActivation,
+        generation_retirement_needs_tombstone, parse_id, pending_exec_retains_generation_authority,
+        same_exact_file, LoweredGeneration, ProfileActivation,
     };
     use crate::error::IdentityStateSnafu;
     use crate::{
@@ -5377,6 +5414,25 @@ mod tests {
         )
         .is_err());
         Ok(())
+    }
+
+    #[test]
+    fn only_in_flight_execs_retain_generation_authority() {
+        for state in [
+            PendingExecStateV1::Unknown,
+            PendingExecStateV1::Preparing,
+            PendingExecStateV1::CommitPending,
+        ] {
+            assert!(pending_exec_retains_generation_authority(state));
+        }
+        for state in [
+            PendingExecStateV1::PrePonrFailed,
+            PendingExecStateV1::PostPonrFatal,
+            PendingExecStateV1::Success,
+            PendingExecStateV1::OutcomeUnknown,
+        ] {
+            assert!(!pending_exec_retains_generation_authority(state));
+        }
     }
 
     #[test]
