@@ -59,6 +59,7 @@ pub struct RuncEntryRoleRuntimeProbeV1 {
     pub runtime_entry_infrastructure_observed: bool,
     pub live_replacement_preserved_running_application: bool,
     pub live_replacement_entries_use_new_generation: bool,
+    pub node_owner_restart_preserved_running_application: bool,
     pub external_entry_denied: bool,
     pub external_cgroup_entering_process_stays_closed: bool,
     pub entry_executable_exact_objects_enforced: bool,
@@ -680,7 +681,7 @@ impl EffectTestRunner {
             lease_path,
             &policy_fixture,
             policy.replacement_artifact_path.clone(),
-            vec![replacement_binding],
+            vec![replacement_binding.clone()],
         );
         policy_owner = NodePolicyGenerationOwner::load_and_install_for_bindings(
             &replacement_config,
@@ -770,6 +771,62 @@ impl EffectTestRunner {
                 reason: "policy replacement did not install six exact declared entries",
             }
         );
+
+        drop(policy_owner);
+        drop(bindings);
+        let mut restarted_bindings =
+            WorkloadBindingOwner::system(node_boot_id, 1).context(NodeSnafu)?;
+        restarted_bindings
+            .publish_held_initial_roots(&host, &[(replacement_binding.clone(), initial_pid)])
+            .context(NodeSnafu)?;
+        restarted_bindings
+            .adopt_activated_profiles(&host, &replacement_config.workload_bindings)
+            .context(NodeSnafu)?;
+        let mut restarted_policy_owner = NodePolicyGenerationOwner::load_and_install_for_bindings(
+            &replacement_config,
+            &mut host,
+            &restarted_bindings,
+            node_boot_id,
+            1,
+        )
+        .context(NodeSnafu)?;
+        restarted_policy_owner
+            .reconcile_cri_exact_bindings(&replacement_config, &mut host, &restarted_bindings)
+            .context(NodeSnafu)?;
+        let restarted_identity = NativeSecurityStateOwner::new(node_boot_id, 1);
+        let restart_reconciliation = restarted_identity
+            .reconcile(&mut host, true)
+            .context(NodeSnafu)?;
+        ensure!(
+            restart_reconciliation == Default::default(),
+            InvalidInputSnafu {
+                path: pin_root,
+                reason: format!(
+                    "node-owner restart changed pinned identity state: {restart_reconciliation:?}"
+                ),
+            }
+        );
+        let active_after_node_owner_restart = inspector
+            .snapshot(initial_pid)
+            .context(NodeSnafu)?
+            .ok_or_else(|| {
+            InvalidInputSnafu {
+                path: pin_root,
+                reason: "node-owner restart lost the running application identity",
+            }
+            .build()
+        })?;
+        let node_owner_restart_preserved_running_application =
+            active_after_node_owner_restart == active_after_replacement;
+        ensure!(
+            node_owner_restart_preserved_running_application,
+            InvalidInputSnafu {
+                path: pin_root,
+                reason: "node-owner restart changed the running application identity",
+            }
+        );
+        let _restarted_owners = (restarted_policy_owner, restarted_bindings);
+
         let mut independent_entries = Vec::new();
         for (name, declaration_name, executable) in [
             ("poststart", "poststart", "/bin/cp"),
@@ -1120,7 +1177,7 @@ impl EffectTestRunner {
         })?;
 
         Ok(RuncEntryRoleRuntimeProbeV1 {
-            schema_version: 9,
+            schema_version: 10,
             runc_version: runc_version.lines().next().unwrap_or_default().to_owned(),
             initial_host_pid: initial_pid,
             prepared_state_before_exec,
@@ -1136,6 +1193,7 @@ impl EffectTestRunner {
             runtime_entry_infrastructure_observed,
             live_replacement_preserved_running_application,
             live_replacement_entries_use_new_generation,
+            node_owner_restart_preserved_running_application,
             external_entry_denied,
             external_cgroup_entering_process_stays_closed,
             entry_executable_exact_objects_enforced,
