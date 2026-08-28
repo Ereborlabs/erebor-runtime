@@ -2464,17 +2464,25 @@ async fn sample_effect_health_after_reader_drain(
     recover: bool,
     settle_timeout: Duration,
 ) -> Result<()> {
+    ensure_evidence_owner_healthy(observations)?;
+    let probe = effect_health_bytes(host)?;
+    if !observations.transient_coverage_reader_delivery_pending(&probe)? {
+        return sample_effect_health_bytes(observations, recover, &probe);
+    }
     let deadline = tokio::time::Instant::now() + settle_timeout;
     loop {
         ensure_evidence_owner_healthy(observations)?;
-        let bytes = effect_health_bytes(host)?;
-        if !observations.transient_coverage_reader_delivery_pending(&bytes)? {
-            return sample_effect_health_bytes(observations, recover, &bytes);
+        let current = effect_health_bytes(host)?;
+        if !observations.transient_coverage_reader_delivery_pending(&current)? {
+            return sample_effect_health_bytes(observations, recover, &current);
+        }
+        if !observations.transient_coverage_reader_delivery_pending(&probe)? {
+            return sample_effect_health_bytes(observations, recover, &probe);
         }
         let now = tokio::time::Instant::now();
         if now >= deadline {
             observations.record_coverage_reader_settle_timeout();
-            return sample_effect_health_bytes(observations, recover, &bytes);
+            return sample_effect_health_bytes(observations, recover, &current);
         }
         tokio::time::sleep(EFFECT_READER_SETTLE_INTERVAL.min(deadline - now)).await;
     }

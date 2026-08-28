@@ -1043,6 +1043,35 @@ mod tests {
     }
 
     #[test]
+    fn reader_reaches_a_fixed_probe_while_the_producer_advances(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let owner = open_owner(&directory.path().join("coverage.json"), 1)?;
+        owner.sample_health(&[health(0, 0)])?;
+        let before = owner.snapshot();
+        let probe = health(8, 0);
+
+        assert!(owner.transient_reader_delivery_pending(&[probe]));
+        for sequence in 1..=8 {
+            owner.observe(2, sequence)?;
+        }
+
+        let current = health(12, 0);
+        assert!(owner.transient_reader_delivery_pending(&[current]));
+        assert!(!owner.transient_reader_delivery_pending(&[probe]));
+        owner.sample_health(&[probe])?;
+
+        let after = owner.snapshot();
+        assert!(after.supports_negative_claim());
+        assert_eq!(after.history, before.history);
+        assert_eq!(
+            after.current_intervals()[0].interval_id,
+            before.current_intervals()[0].interval_id
+        );
+        Ok(())
+    }
+
+    #[test]
     fn existing_ring_loss_bypasses_reader_settlement() -> Result<(), Box<dyn std::error::Error>> {
         let directory = tempfile::tempdir()?;
         let owner = open_owner(&directory.path().join("coverage.json"), 1)?;
