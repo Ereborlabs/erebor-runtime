@@ -17,7 +17,7 @@ type Filter = 'all' | 'direct' | 'contextual' | 'denied';
 type Selection = { type: 'operation' | 'edge'; id: string } | null;
 
 const finalStep = Math.max(...sessionGraph.operations.map((operation) => operation.step));
-const consoleRoutes = new Set<ConsoleRoute>(['operations', 'sessions', 'findings', 'policies', 'evidence', 'response', 'release']);
+const consoleRoutes = new Set<ConsoleRoute>(['operations', 'sessions', 'findings', 'policies', 'evidence', 'response', 'agent', 'release']);
 
 function prefersReducedMotion(): boolean {
   return window.matchMedia('(prefers-reduced-motion: reduce)').matches;

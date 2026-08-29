@@ -78,5 +78,5 @@ export const consoleData = {
   },
 } as const;
 
-export type ConsoleRoute = 'operations' | 'sessions' | 'findings' | 'policies' | 'evidence' | 'response' | 'release';
+export type ConsoleRoute = 'operations' | 'sessions' | 'findings' | 'policies' | 'evidence' | 'response' | 'release' | 'agent';
 export type ConsoleFinding = (typeof consoleData.findings)[number];
