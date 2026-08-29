@@ -271,7 +271,9 @@ test('mobile keeps the protection and response decisions inside the viewport', a
   await page.goto('/');
   const workload = page.locator('.workload-row', { hasText: 'datasets-server' });
   await expect(workload.getByRole('button', { name: /Protect 4 policies/ })).toBeInViewport();
-  await workload.getByRole('button', { name: 'Show policies for datasets-server' }).click();
+  await workload.getByRole('button', { name: /Protect 4 policies/ }).click();
+  await expect(workload.getByRole('region', { name: 'Confirm protection for datasets-server' })).toBeInViewport();
+  await workload.getByRole('button', { name: 'Keep observing' }).click();
   await expect(workload.getByRole('region', { name: 'Suggested policies' })).toBeVisible();
   expect(await workload.evaluate((element) => element.scrollWidth - element.clientWidth)).toBe(0);
 

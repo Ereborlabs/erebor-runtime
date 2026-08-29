@@ -1,4 +1,4 @@
-import { useMemo, useState, type FormEvent, type ReactNode } from 'react';
+import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react';
 import { consoleData as data, type ConsoleFinding, type ConsoleRoute } from './consoleData';
 
 interface ConsoleActions {
@@ -150,6 +150,14 @@ function OperationsView({ navigate, openSession, showToast }: ConsoleActions) {
   const [removingRuleId, setRemovingRuleId] = useState<string | null>(null);
   const [protectingId, setProtectingId] = useState<string | null>(null);
 
+  useEffect(() => {
+    if (!protectingId || !window.matchMedia('(max-width: 640px)').matches) return;
+    requestAnimationFrame(() => document.getElementById(`protect-confirmation-${protectingId}`)?.scrollIntoView({
+      block: 'center',
+      behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth',
+    }));
+  }, [protectingId]);
+
   function toggleWorkload(workloadId: string) {
     setExpandedId((current) => current === workloadId ? null : workloadId);
     setEditingRuleId(null);
@@ -270,7 +278,7 @@ function OperationsView({ navigate, openSession, showToast }: ConsoleActions) {
               {expandedId === workload.id ? (
                 <section className="workload-policy-review" id={`workload-policies-${workload.id}`} aria-label={`Policies for ${workload.name}`}>
                   <header><div><span className="eyebrow">{workload.namespace} / {workload.name}</span><h3>Current and suggested policies</h3><p>Add, edit, or remove policies in this local set. No change reaches a workload.</p></div><div className="workload-review-actions"><button type="button" className="add-workload-policy" onClick={() => startAddingPolicy(workload.id)}>+ Add policy</button><button type="button" onClick={() => navigate('policies')}>Open rollout details <span>→</span></button></div></header>
-                  {protectingId === workload.id ? <section className="protect-confirmation" aria-label={`Confirm protection for ${workload.name}`}>
+                  {protectingId === workload.id ? <section className="protect-confirmation" id={`protect-confirmation-${workload.id}`} aria-label={`Confirm protection for ${workload.name}`}>
                     <div><span className="eyebrow">Protection review</span><strong>Apply {suggestionCount} suggested {suggestionCount === 1 ? 'policy' : 'policies'} to {workload.name}?</strong><p>Review the New suggestions list below. This fixture changes browser memory only.</p></div>
                     <button type="button" onClick={() => setProtectingId(null)}>Keep observing</button>
                     <button type="button" className="confirm-protection" disabled={!suggestionCount} onClick={() => applyProtection(workload)}>Apply {suggestionCount} {suggestionCount === 1 ? 'suggestion' : 'suggestions'} to {workload.name}</button>
