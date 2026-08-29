@@ -4,7 +4,7 @@ This package is an isolated design fixture for the Mithril console. It does not 
 
 The console contains Workload protection, Sessions, Findings, Policy rollout, Evidence, Response, Agent, and Release workspaces. The Sessions workspace opens the causal replay for one immutable graph revision.
 
-Workload protection starts with observed deployments, stateful workloads, and service workloads. Each workload shows its coverage, observed effects, footprint, mode, and suggested-policy count. Select a workload to show its current policies and new suggestions. Each rule supports an inline local edit.
+Workload protection starts with observed deployments, stateful workloads, and service workloads. Each workload shows its coverage, observed effects, footprint, mode, and suggested-policy count. Select a workload to show its current policies and new suggestions. The local policy-set editor can add, edit, and remove policies. Removal requires an in-row confirmation.
 
 Protect applies all current suggestions for one workload to the browser fixture. The action changes the workload to Protected and moves the suggestions into its current policy set. The action does not compile, sign, deliver, probe, or activate a Mithril policy.
 
