@@ -165,11 +165,13 @@ test('the graph marks the stop and keeps counterfactual review outside evidence'
   await expect(page.locator('.edge-inspect')).toHaveCount(recordedEdgeCount);
 
   await page.getByRole('button', { name: 'Review incorrect stop' }).click();
-  const review = page.getByRole('dialog', { name: 'Was this stop incorrect?' });
+  const review = page.getByRole('dialog', { name: 'Review this denied access' });
+  await expect(review).toContainText('The access stays denied.');
+  await review.getByText('Show evidence identifiers').click();
   await expect(review).toContainText('DENIED_BEFORE_EFFECT');
-  await review.getByLabel('Why was this stop incorrect?').fill('The admitted repair job needs one read of this exact object.');
-  await review.getByRole('button', { name: 'Create bounded exception review' }).click();
-  await expect(review.getByRole('status')).toContainText('graph revision remain unchanged');
+  await review.getByLabel('What should this workload have been allowed to do?').fill('The admitted repair job needs one read of this exact object.');
+  await review.getByRole('button', { name: 'Submit exception for approval' }).click();
+  await expect(review.getByRole('status')).toContainText('graph revision remains unchanged');
   await expect(stop).toHaveClass(/outcome-denied/);
 });
 
@@ -230,6 +232,17 @@ test('mobile graph navigation reaches the stopped effect and the outline fits', 
   })).toBe(true);
   await page.getByRole('button', { name: 'Ledger' }).click();
   expect(await page.locator('.ledger').evaluate((element) => element.scrollWidth - element.clientWidth)).toBe(0);
+});
+
+test('mobile incorrect-stop review keeps the decision controls in view', async ({ page }) => {
+  await page.setViewportSize({ width: 375, height: 812 });
+  await page.goto(sessionUrl(13));
+  await page.getByRole('button', { name: 'Review incorrect stop' }).click();
+  const review = page.getByRole('dialog', { name: 'Review this denied access' });
+  await expect(review).toBeVisible();
+  await expect(review.getByLabel('What should this workload have been allowed to do?')).toBeInViewport();
+  await expect(review.getByRole('button', { name: 'Submit exception for approval' })).toBeInViewport();
+  expect(await review.evaluate((element) => element.scrollWidth - element.clientWidth)).toBe(0);
 });
 
 for (const viewport of [
