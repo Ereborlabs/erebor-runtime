@@ -282,14 +282,30 @@ test('mobile keeps the protection and response decisions inside the viewport', a
   expect(await page.locator('.response-workbench').evaluate((element) => element.scrollWidth - element.clientWidth)).toBe(0);
 });
 
-test('map and ledger have no critical accessibility violations', async ({ page }) => {
-  await page.goto('/');
-  const operations = await new AxeBuilder({ page }).analyze();
-  expect(operations.violations.filter((violation) => violation.impact === 'critical')).toEqual([]);
-  await page.goto(sessionUrl(0));
-  const map = await new AxeBuilder({ page }).disableRules(['scrollable-region-focusable']).analyze();
-  expect(map.violations.filter((violation) => violation.impact === 'critical')).toEqual([]);
+test('every console workspace has no serious or critical accessibility violations', async ({ page }) => {
+  test.setTimeout(60_000);
+  const violations: string[] = [];
+  for (const [workspace, url] of [
+    ['operations', '/'],
+    ['sessions', '/#/sessions'],
+    ['findings', '/#/findings'],
+    ['policies', '/#/policies'],
+    ['evidence', '/#/evidence'],
+    ['response', '/#/response'],
+    ['agent', '/#/agent'],
+    ['release', '/#/release'],
+    ['session map', sessionUrl(0)],
+  ] as const) {
+    await page.goto(url);
+    const audit = await new AxeBuilder({ page }).disableRules(['scrollable-region-focusable']).analyze();
+    violations.push(...audit.violations
+      .filter((violation) => violation.impact === 'serious' || violation.impact === 'critical')
+      .flatMap((violation) => violation.nodes.map((node) => `${workspace}: ${violation.id} ${node.target.join(' ')}`)));
+  }
   await page.getByRole('button', { name: 'Ledger' }).click();
   const ledger = await new AxeBuilder({ page }).analyze();
-  expect(ledger.violations.filter((violation) => violation.impact === 'critical')).toEqual([]);
+  violations.push(...ledger.violations
+    .filter((violation) => violation.impact === 'serious' || violation.impact === 'critical')
+    .flatMap((violation) => violation.nodes.map((node) => `session ledger: ${violation.id} ${node.target.join(' ')}`)));
+  expect(violations).toEqual([]);
 });
