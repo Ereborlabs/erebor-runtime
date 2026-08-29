@@ -41,6 +41,16 @@ test('a selected policy can be edited and saved as a local draft', async ({ page
   await expect(page.getByRole('status')).toContainText('Policy draft saved locally');
 });
 
+test('Observe mode exposes evidence-backed suggestions that apply to the draft', async ({ page }) => {
+  await page.goto('/#/policies');
+  await page.getByRole('button', { name: /research research-observe/ }).click();
+  await expect(page.getByRole('heading', { name: 'Policy suggestions' })).toBeVisible();
+  await page.getByRole('button', { name: 'Apply suggestion' }).first().click();
+  await expect(page.getByLabel('Rules')).toHaveValue(/allow file\.read datasets\/cache\/\*\*/);
+  await expect(page.getByRole('button', { name: 'Applied to draft' })).toBeDisabled();
+  await expect(page.getByRole('status')).toContainText('Suggestion applied to the local research-observe draft');
+});
+
 test('replays the causal front instead of showing the complete graph at once', async ({ page }) => {
   await page.goto(sessionUrl(1));
   await expect(page.getByTestId('operation-session-open')).toBeVisible();

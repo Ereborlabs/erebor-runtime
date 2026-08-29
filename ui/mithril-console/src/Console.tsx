@@ -224,6 +224,7 @@ function PoliciesView({ showToast }: Pick<ConsoleActions, 'showToast'>) {
   const [selectedName, setSelectedName] = useState<string>(data.policies[0].name);
   const [editing, setEditing] = useState(false);
   const [error, setError] = useState('');
+  const [appliedSuggestions, setAppliedSuggestions] = useState<ReadonlySet<string>>(() => new Set());
   const selected = policies.find((policy) => policy.name === selectedName) ?? policies[0];
   const [draft, setDraft] = useState<EditablePolicy>(() => ({ ...selected }));
 
@@ -245,6 +246,14 @@ function PoliciesView({ showToast }: Pick<ConsoleActions, 'showToast'>) {
     setEditing(false);
     setError('');
     showToast('Policy draft saved locally. No control-plane write occurred.');
+  }
+
+  function applySuggestion(suggestion: (typeof data.observeSuggestions)[number]) {
+    const appendRule = (rules: string) => rules.split('\n').includes(suggestion.rule) ? rules : `${rules.trim()}\n${suggestion.rule}`;
+    setPolicies((current) => current.map((policy) => policy.name === selected.name ? { ...policy, rules: appendRule(policy.rules) } : policy));
+    setDraft((current) => current.name === selected.name ? { ...current, rules: appendRule(current.rules) } : current);
+    setAppliedSuggestions((current) => new Set([...current, suggestion.id]));
+    showToast(`Suggestion applied to the local ${selected.name} draft.`);
   }
 
   const changedFields = ['mode', 'defaultAction', 'selector', 'rules'].filter((field) => draft[field as keyof EditablePolicy] !== selected[field as keyof EditablePolicy]).length;
@@ -273,6 +282,16 @@ function PoliciesView({ showToast }: Pick<ConsoleActions, 'showToast'>) {
           {editing ? <div className="editor-actions"><button type="button" className="secondary-action" onClick={() => { setDraft({ ...selected }); setEditing(false); setError(''); }}>Cancel</button><button type="submit" className="primary-action">Save draft</button></div> : null}
         </form>
       </section>
+      {selected.mode === 'Observe' ? (
+        <section className="observe-suggestions" aria-labelledby="observe-suggestions-title">
+          <header><div><span className="eyebrow">Observed behavior · no automatic enforcement</span><h2 id="observe-suggestions-title">Policy suggestions</h2><p>Each suggestion comes from retained evidence. Apply adds one rule to the local draft.</p></div><span>{data.observeSuggestions.filter((suggestion) => suggestion.policy === selected.name).length} suggestions</span></header>
+          <div>{data.observeSuggestions.filter((suggestion) => suggestion.policy === selected.name).map((suggestion) => {
+            const applied = appliedSuggestions.has(suggestion.id);
+            return <article key={suggestion.id}><div className="suggestion-proof"><span>{suggestion.confidence} confidence</span><small>{suggestion.evidence}</small></div><h3>{suggestion.title}</h3><code>{suggestion.rule}</code><p>{suggestion.effect}</p><button type="button" className={applied ? 'applied' : ''} disabled={applied} onClick={() => applySuggestion(suggestion)}>{applied ? 'Applied to draft' : 'Apply suggestion'}</button></article>;
+          })}</div>
+          <p className="observe-boundary"><strong>Apply is not activation.</strong> Review the draft, switch mode deliberately, and use a qualified policy write path when backend integration exists.</p>
+        </section>
+      ) : null}
       <div className="console-two-column policy-lower">
         <section className="console-panel"><header className="panel-heading"><div><span className="eyebrow">{selected.namespace} / {selected.name}</span><h2>Exact node inventory</h2></div><em className={`policy-${selected.state.toLowerCase()}`}>{selected.state}</em></header><p className="panel-intro">{selected.detail}</p><div className="node-inventory"><div className="node-inventory-head"><span>Node</span><span>Exact identity</span><span>Generation</span><span>State</span></div>{data.rolloutNodes.map((node) => <div key={node.name}><strong>{node.name}</strong><code>{node.identity}</code><code>{node.generation}</code><span><b className={`node-${node.state.toLowerCase()}`}>{node.state}</b><small>{node.detail}</small></span></div>)}</div></section>
         <section className="console-panel"><header className="panel-heading"><div><span className="eyebrow">Bounded authority</span><h2>Exceptions</h2></div><span>2 records</span></header><div className="exception-card"><span className="eyebrow">payments-api-6f8 / app</span><h3>diagnostic-read</h3><p>One read of the diagnostics object. Expires in 8 minutes.</p><b>Pending approval</b></div><div className="exception-card"><span className="eyebrow">publisher-2bd / app</span><h3>recovery-marker</h3><p>One write. The exact grant is consumed.</p><b className="consumed">Consumed</b></div></section>
