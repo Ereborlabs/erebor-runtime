@@ -22,6 +22,7 @@ test('the surrounding product workspaces remain interactive', async ({ page }) =
     ['Policies', 'Policy rollout'],
     ['Evidence', 'Evidence'],
     ['Response', 'Response'],
+    ['Agent', 'Agent mode'],
     ['Release', 'Release claim'],
   ] as const) {
     await page.getByRole('navigation', { name: 'Console sections' }).getByRole('button', { name: new RegExp(`^${workspace[0]}`) }).click();
@@ -49,6 +50,15 @@ test('Observe mode exposes evidence-backed suggestions that apply to the draft',
   await expect(page.getByLabel('Rules')).toHaveValue(/allow file\.read datasets\/cache\/\*\*/);
   await expect(page.getByRole('button', { name: 'Applied to draft' })).toBeDisabled();
   await expect(page.getByRole('status')).toContainText('Suggestion applied to the local research-observe draft');
+});
+
+test('Agent mode explains system state and routes to supporting evidence', async ({ page }) => {
+  await page.goto('/#/agent');
+  await expect(page.getByRole('heading', { name: 'Agent mode' })).toBeVisible();
+  await page.getByRole('button', { name: 'Why is the release blocked?' }).click();
+  await expect(page.getByText(/active fixture equality is 131 of 133/)).toBeVisible();
+  await page.getByRole('button', { name: 'Review release blockers' }).click();
+  await expect(page.getByRole('heading', { name: 'Release claim' })).toBeVisible();
 });
 
 test('replays the causal front instead of showing the complete graph at once', async ({ page }) => {
