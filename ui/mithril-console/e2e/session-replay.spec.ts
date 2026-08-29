@@ -161,6 +161,7 @@ test('the graph marks the stop and keeps counterfactual review outside evidence'
   const counterfactual = page.getByTestId('counterfactual-path');
   await expect(counterfactual).toContainText('COUNTERFACTUAL · INCIDENT-GROUNDED · NOT EVIDENCE');
   await expect(counterfactual).toContainText('Privileged host Pod');
+  await expect(counterfactual).toBeInViewport();
   await expect(page.locator('.edge-inspect')).toHaveCount(recordedEdgeCount);
 
   await page.getByRole('button', { name: 'Review incorrect stop' }).click();
@@ -181,6 +182,9 @@ test('clicking an edge exposes its exact join without replacing the graph', asyn
   await expect(detail).toBeVisible();
   await expect(detail.getByText('task b812')).toBeVisible();
   await expect(detail.getByText('object cloud-token')).toBeVisible();
+  expect(await detail.evaluate((element) => getComputedStyle(element).right)).toBe('18px');
+  await page.locator('.graph-viewport').evaluate((element) => { element.scrollLeft += 400; });
+  expect(await detail.evaluate((element) => getComputedStyle(element).right)).toBe('18px');
   await expect(page.getByTestId('operation-secret-open')).toBeVisible();
 });
 
@@ -201,7 +205,7 @@ test('scrubbing and node focus preserve one synchronized investigation state', a
 
   await page.getByRole('button', { name: 'worker-a', exact: true }).first().click();
   await expect(page.getByTestId('operation-api-send')).not.toHaveClass(/dimmed/);
-  await page.getByRole('button', { name: 'Reveal all' }).click();
+  await page.getByRole('button', { name: 'All events' }).click();
   await expect(page.getByTestId('operation-secret-open')).toBeVisible();
 });
 
@@ -212,6 +216,20 @@ test('map and ledger use the same operation selection', async ({ page }) => {
   const row = page.locator('.ledger-row.expanded');
   await expect(row.getByText('Cross-node finding confirmed')).toBeVisible();
   await expect(row.getByText('GraphAndFindingOwner')).toBeVisible();
+});
+
+test('mobile graph navigation reaches the stopped effect and the outline fits', async ({ page }) => {
+  await page.setViewportSize({ width: 375, height: 812 });
+  await page.goto(sessionUrl(0));
+  await page.getByRole('button', { name: 'Stopped effect' }).click();
+  await expect.poll(() => page.getByTestId('operation-secret-open').evaluate((element) => {
+    const operation = element.getBoundingClientRect();
+    const viewport = element.closest('.graph-viewport')!.getBoundingClientRect();
+    return operation.left >= viewport.left && operation.right <= viewport.right
+      && operation.top >= viewport.top && operation.bottom <= viewport.bottom;
+  })).toBe(true);
+  await page.getByRole('button', { name: 'Ledger' }).click();
+  expect(await page.locator('.ledger').evaluate((element) => element.scrollWidth - element.clientWidth)).toBe(0);
 });
 
 for (const viewport of [
