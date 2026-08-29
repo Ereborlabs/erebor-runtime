@@ -362,13 +362,13 @@ function SessionReplay() {
 
       {reviewingStop ? (
         <aside className="incorrect-stop-review" role="dialog" aria-modal="true" aria-labelledby="incorrect-stop-title">
-          <header><div><span className="eyebrow">False-positive review · local fixture</span><h2 id="incorrect-stop-title">Was this stop incorrect?</h2></div><button type="button" aria-label="Close incorrect-stop review" onClick={() => setReviewingStop(false)}>×</button></header>
-          <p>This review does not allow the operation or change the evidence. It can prepare a narrow exception for separate authorization.</p>
-          <dl><div><dt>Actor</dt><dd>task b812 · payments-debug</dd></div><div><dt>Object</dt><dd>cloud-token</dd></div><div><dt>Decision</dt><dd>DENIED_BEFORE_EFFECT</dd></div><div><dt>Policy</dt><dd>cloud-token-deny · generation 7f4c</dd></div></dl>
-          <label>Why was this stop incorrect?<textarea rows={4} value={reviewReason} onChange={(event) => setReviewReason(event.target.value)} placeholder="State the expected workload action and the smallest required scope." /></label>
-          <div className="incorrect-review-boundary"><strong>Proposed scope</strong><span>One actor · one object · one operation · expiring grant</span></div>
-          {reviewSubmitted ? <p className="incorrect-review-result" role="status">Bounded exception review created locally. The denial and graph revision remain unchanged.</p> : null}
-          <footer><button type="button" onClick={() => setReviewingStop(false)}>Cancel</button><button type="button" disabled={!reviewReason.trim() || reviewSubmitted} onClick={() => setReviewSubmitted(true)}>{reviewSubmitted ? 'Review created' : 'Create bounded exception review'}</button></footer>
+          <header><div><span className="eyebrow">Incorrect stop · local review</span><h2 id="incorrect-stop-title">Review this denied access</h2></div><button type="button" aria-label="Close incorrect-stop review" onClick={() => setReviewingStop(false)}>×</button></header>
+          <p><strong>The access stays denied.</strong> Explain what this workload should have been allowed to do. Mithril can prepare a narrow exception for separate approval, but it cannot change the recorded evidence.</p>
+          <label>What should this workload have been allowed to do?<textarea autoFocus rows={4} value={reviewReason} onChange={(event) => setReviewReason(event.target.value)} placeholder="Example: Let the admitted repair job read this secret once during the approved maintenance window." /></label>
+          <div className="incorrect-review-boundary"><strong>Maximum proposed scope</strong><span>One workload · one object · one operation · expires automatically</span></div>
+          <details className="incorrect-review-evidence"><summary>Show evidence identifiers</summary><dl><div><dt>Workload</dt><dd>task b812 · payments-debug</dd></div><div><dt>Object</dt><dd>cloud-token</dd></div><div><dt>Decision</dt><dd>DENIED_BEFORE_EFFECT</dd></div><div><dt>Policy</dt><dd>cloud-token-deny · generation 7f4c</dd></div></dl></details>
+          {reviewSubmitted ? <p className="incorrect-review-result" role="status">Exception review created locally. The access remains denied, and the graph revision remains unchanged.</p> : null}
+          <footer><button type="button" onClick={() => setReviewingStop(false)}>Cancel</button><button type="button" disabled={!reviewReason.trim() || reviewSubmitted} onClick={() => setReviewSubmitted(true)}>{reviewSubmitted ? 'Review submitted' : 'Submit exception for approval'}</button></footer>
         </aside>
       ) : null}
 
