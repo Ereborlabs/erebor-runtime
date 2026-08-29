@@ -22,6 +22,10 @@ The production end state requires durable graph, finding, and response APIs. Tho
 
 -> [OperationsView](src/Console.tsx) An inline edit changes one browser-memory policy rule.
 
+-> [OperationsView](src/Console.tsx) Add policy creates one operator-authored policy in the current browser-memory set.
+
+-> [OperationsView](src/Console.tsx) Remove policy requires confirmation and removes one current or suggested policy from browser memory.
+
 -> [OperationsView](src/Console.tsx) Protect moves the workload suggestions into its current browser-memory policy set.
 
 -> [PoliciesView](src/Console.tsx) A policy selection opens its source, generation, activation, selector, default action, and rule set.
@@ -84,7 +88,7 @@ Partial: [App](src/App.tsx) The URL fragment restores the console or session rou
 
 `Console.tsx` owns the local selection and filter state for Workload protection, Sessions, Findings, Policy rollout, and Response. React creates and destroys this state with each workspace. No console state is durable.
 
-`OperationsView` owns the workload mode, current rule set, suggestion set, expanded workload, and active inline edit. Protect changes only these React values. Protect does not call Mithril Control.
+`OperationsView` owns the workload mode, current rule set, suggestion set, expanded workload, active inline edit, new-policy draft, and removal confirmation. Add, edit, remove, and Protect change only these React values. A suggested-policy removal decreases the Protect count. No action calls Mithril Control.
 
 `PoliciesView` owns editable policy copies and one active draft. A save replaces the selected browser-memory copy. The save does not compile, sign, deliver, or activate a policy candidate.
 
@@ -163,7 +167,7 @@ The `datasets-server` suggestions cover sensitive `/proc` reads, parser-launched
 
 [graph.test.ts](src/graph.test.ts) verifies the pure projection and layout contracts.
 
-[session-replay.spec.ts](e2e/session-replay.spec.ts) verifies workload protection, inline editing, console navigation, browser interaction, and responsive contracts. The suite verifies that the counterfactual branch does not change the recorded edge count. The suite uses Chromium at desktop, tablet, and mobile viewport sizes. The suite also checks Workload protection, the map, and the ledger for critical accessibility violations.
+[session-replay.spec.ts](e2e/session-replay.spec.ts) verifies workload protection, policy-set addition, inline editing, confirmed removal, console navigation, browser interaction, and responsive contracts. The suite verifies that a suggested-policy removal changes the Protect count. The suite verifies that the counterfactual branch does not change the recorded edge count. The suite uses Chromium at desktop, tablet, and mobile viewport sizes. The suite also checks Workload protection, the map, and the ledger for critical accessibility violations.
 
 Use these commands:
 
@@ -176,6 +180,6 @@ npm run test:e2e
 
 ## Source state and limits
 
-This guide covers the committed `ui/mithril-console` files in the `codex/mithril-ui` worktree. The implementation starts from source revision `4078112242986588274e4cecfba0c2300c429103`. The implementation commits are `a28115f6`, `21a80113`, `a09dc043`, `949356f0`, `ce193791`, `8586f4ec`, and `f1509fdb`.
+This guide covers the committed `ui/mithril-console` files in the `codex/mithril-ui` worktree. The implementation starts from source revision `4078112242986588274e4cecfba0c2300c429103`. The implementation commits are `a28115f6`, `21a80113`, `a09dc043`, `949356f0`, `ce193791`, `8586f4ec`, `f1509fdb`, and `755710b1`.
 
 The implementation is a fixture-only user interface. It does not prove backend graph construction, durable revision storage, finding evaluation, response execution, or recovery behavior. It does not change the phase 6.2 worktree.
