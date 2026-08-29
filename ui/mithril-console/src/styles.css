@@ -10,8 +10,8 @@
   --line: rgba(135, 160, 190, .18);
   --line-strong: rgba(135, 160, 190, .32);
   --text: #dce8f7;
-  --muted: #7f91a7;
-  --faint: #536477;
+  --muted: #8fa1b6;
+  --faint: #687b90;
   --mint: #61d7bf;
   --cyan: #63dfff;
   --amber: #efd265;
@@ -118,6 +118,13 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .workload-review-actions { display: flex; align-items: center; gap: 7px; }
 .workload-review-actions button { min-height: 32px; padding: 0 9px; border: 1px solid var(--line); border-radius: 4px; color: var(--mint); background: transparent; font-size: 8px; }
 .workload-review-actions .add-workload-policy { color: #07120f; border-color: var(--mint); background: var(--mint); font-weight: 700; }
+.protect-confirmation { margin-bottom: 10px; padding: 12px; display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 10px; border: 1px solid rgba(97, 215, 191, .34); border-left: 3px solid var(--mint); border-radius: 6px; background: rgba(97, 215, 191, .045); }
+.protect-confirmation > div { min-width: 0; display: grid; gap: 4px; }
+.protect-confirmation > div > strong { color: #e1edf5; font-size: 12px; white-space: normal; }
+.protect-confirmation p { margin: 0; color: var(--muted); font-size: 9px; }
+.protect-confirmation button { min-height: 38px; padding: 0 11px; border: 1px solid var(--line-strong); border-radius: 5px; color: #b4c3d1; background: #101925; font-size: 9px; }
+.protect-confirmation .confirm-protection { color: #06130f; border-color: var(--mint); background: var(--mint); font-weight: 700; }
+.protect-confirmation .confirm-protection:disabled { opacity: .4; }
 .add-policy-form { margin-bottom: 10px; padding: 11px; border: 1px solid rgba(97, 215, 191, .3); border-radius: 6px; background: rgba(97, 215, 191, .035); }
 .workload-policy-groups { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .workload-policy-group { min-width: 0; overflow: hidden; border: 1px solid var(--line); border-radius: 6px; background: #0b121b; }
@@ -130,29 +137,29 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .workload-rule-heading { display: grid; grid-template-columns: 58px minmax(0, 1fr) auto; align-items: center; gap: 8px; }
 .workload-rule-heading strong { font-size: 9px; }
 .workload-rule-heading > div { display: flex; gap: 7px; }
-.workload-rule-heading button { color: var(--mint); background: transparent; font-size: 7px; }
+.workload-rule-heading button { min-height: 30px; padding: 0 8px; border: 1px solid var(--line); border-radius: 4px; color: var(--mint); background: #0d1721; font-size: 9px; }
 .workload-rule-heading .remove-rule-button { color: #bc7883; }
-.rule-action { color: var(--amber); font: 700 6px ui-monospace, monospace; text-transform: uppercase; }
+.rule-action { color: var(--amber); font: 700 8px ui-monospace, monospace; text-transform: uppercase; }
 .rule-action.action-deny { color: var(--red); }
 .rule-action.action-allow-list { color: var(--mint); }
-.workload-rule > code { margin: 8px 0; padding: 7px 8px; display: block; overflow-x: auto; border: 1px solid rgba(135, 160, 190, .12); border-radius: 4px; color: #9bb0c2; background: #080e15; font: 8px/1.5 ui-monospace, monospace; white-space: nowrap; }
-.workload-rule-proof { display: flex; justify-content: space-between; gap: 10px; color: var(--faint); font-size: 7px; }
+.workload-rule > code { margin: 8px 0; padding: 8px 9px; display: block; overflow-x: auto; border: 1px solid rgba(135, 160, 190, .12); border-radius: 4px; color: #a9bdcf; background: #080e15; font: 9px/1.5 ui-monospace, monospace; white-space: nowrap; }
+.workload-rule-proof { display: flex; justify-content: space-between; gap: 10px; color: var(--faint); font-size: 8px; }
 .workload-rule-proof b { color: #8ea2b5; font-weight: 550; white-space: nowrap; }
 .inline-rule-fields { display: grid; grid-template-columns: 1fr 110px; gap: 8px; }
-.inline-rule-fields label, .inline-expression { display: grid; gap: 5px; color: var(--faint); font: 6px ui-monospace, monospace; text-transform: uppercase; }
-.inline-rule-fields input, .inline-rule-fields select, .inline-expression textarea { width: 100%; border: 1px solid rgba(97, 215, 191, .28); border-radius: 4px; color: #cfdae5; background: #0c1620; font: 8px ui-monospace, monospace; }
+.inline-rule-fields label, .inline-expression { display: grid; gap: 5px; color: var(--faint); font: 8px ui-monospace, monospace; text-transform: uppercase; }
+.inline-rule-fields input, .inline-rule-fields select, .inline-expression textarea { width: 100%; border: 1px solid rgba(97, 215, 191, .28); border-radius: 4px; color: #cfdae5; background: #0c1620; font: 10px ui-monospace, monospace; }
 .inline-rule-fields input, .inline-rule-fields select { height: 32px; padding: 0 8px; }
 .inline-expression { margin-top: 8px; }
 .inline-expression textarea { padding: 8px; resize: vertical; line-height: 1.5; text-transform: none; }
 .inline-rule-actions { margin-top: 8px; display: flex; justify-content: flex-end; gap: 6px; }
-.inline-rule-actions button { min-height: 30px; padding: 0 9px; border: 1px solid var(--line-strong); border-radius: 4px; color: #9eb0c0; background: #101925; font-size: 7px; }
+.inline-rule-actions button { min-height: 36px; padding: 0 10px; border: 1px solid var(--line-strong); border-radius: 4px; color: #9eb0c0; background: #101925; font-size: 9px; }
 .inline-rule-actions .save-inline-rule { color: #07120f; border-color: var(--mint); background: var(--mint); }
 .inline-rule-actions .save-inline-rule:disabled { opacity: .35; }
 .remove-policy-confirm { min-height: 58px; display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 8px; }
 .remove-policy-confirm > div { display: grid; gap: 4px; }
 .remove-policy-confirm strong { color: #e0c4c9; font-size: 9px; }
 .remove-policy-confirm span { color: var(--faint); font-size: 7px; }
-.remove-policy-confirm button { min-height: 30px; padding: 0 8px; border: 1px solid var(--line); border-radius: 4px; color: #9baab9; background: #101925; font-size: 7px; }
+.remove-policy-confirm button { min-height: 36px; padding: 0 9px; border: 1px solid var(--line); border-radius: 4px; color: #9baab9; background: #101925; font-size: 9px; }
 .remove-policy-confirm .confirm-policy-remove { color: #21080d; border-color: var(--red); background: var(--red); font-weight: 700; }
 .no-policy-suggestions { margin: 0; padding: 18px 12px; color: var(--faint); font-size: 8px; }
 .workload-boundary { margin: 0; padding: 9px 15px; color: var(--faint); background: #080e16; font-size: 8px; }
@@ -739,6 +746,8 @@ kbd { padding: 2px 5px; border: 1px solid var(--line); border-radius: 3px; color
   .workload-review-actions { width: 100%; }
   .workload-review-actions button { flex: 1; }
   .workload-policy-groups { grid-template-columns: 1fr; }
+  .protect-confirmation { grid-template-columns: 1fr 1fr; }
+  .protect-confirmation > div { grid-column: 1 / -1; }
   .workload-rule-heading { grid-template-columns: 50px minmax(0, 1fr); }
   .workload-rule-heading > div { grid-column: 1 / -1; justify-content: flex-end; }
   .workload-rule-proof { align-items: flex-start; flex-direction: column; }

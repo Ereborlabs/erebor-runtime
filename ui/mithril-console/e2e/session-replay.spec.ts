@@ -20,6 +20,9 @@ test('an observed workload can apply its suggested protection set', async ({ pag
   const workload = page.locator('.workload-row', { hasText: 'datasets-server' });
   await expect(workload.locator('.workload-mode')).toHaveText('Observe');
   await workload.getByRole('button', { name: /Protect 4 policies/ }).click();
+  await expect(workload.locator('.workload-mode')).toHaveText('Observe');
+  await expect(workload.getByRole('region', { name: 'Suggested policies' })).toContainText('Block worker environment reads');
+  await workload.getByRole('button', { name: 'Apply 4 suggestions to datasets-server' }).click();
   await expect(workload.locator('.workload-mode')).toHaveText('Protected');
   await expect(workload.getByText('Fixture active', { exact: true })).toBeVisible();
   await expect(workload.getByRole('button', { name: 'Current policy' })).toBeVisible();
@@ -87,6 +90,13 @@ test('the surrounding product workspaces remain interactive', async ({ page }) =
     await page.getByRole('navigation', { name: 'Console sections' }).getByRole('button', { name: new RegExp(`^${workspace[0]}`) }).click();
     await expect(page.getByRole('heading', { name: workspace[1], exact: true })).toBeVisible();
   }
+});
+
+test('the top command field routes by an explicit workspace name', async ({ page }) => {
+  await page.goto('/');
+  await page.getByRole('searchbox', { name: 'Go to a console workspace' }).fill('evidence');
+  await page.getByRole('searchbox', { name: 'Go to a console workspace' }).press('Enter');
+  await expect(page.getByRole('heading', { name: 'Evidence', exact: true })).toBeVisible();
 });
 
 test('a selected policy can be edited and saved as a local draft', async ({ page }) => {
