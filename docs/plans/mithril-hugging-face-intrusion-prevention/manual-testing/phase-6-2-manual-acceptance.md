@@ -41,6 +41,12 @@ release. The independent manual procedure, watch compaction, network
 partition, storage outage, physical evidence-failure variants, and final
 uninstall cleanup remain `Not run`.
 
+The current-source automated rerun passed on 2026-08-29 with the same
+Kubernetes and containerd versions. It used two eligible Nodes and selected
+`ubuntu-5775b0d0` for the protected workload. Its result is
+`/tmp/mithril-two-node-baseline3-20260829`. The run retained both owned VMs
+after it removed all scenario resources.
+
 ## Automated Companion
 
 ```text

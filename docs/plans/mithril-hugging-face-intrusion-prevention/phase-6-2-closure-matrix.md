@@ -95,6 +95,10 @@ The physical result uses the current stock Kubernetes and OCI runtime
 extension points. The complete automated fixture passed with Kubernetes
 v1.35.5+k3s1 and containerd v2.2.3-k3s1. The result is
 `/tmp/mithril-phase-6-2-full-convergence-reuse52-terminal-retirement-20260828`.
+The current-source rerun passed on 2026-08-29. Its result is
+`/tmp/mithril-two-node-baseline3-20260829`. The run retained both owned VMs
+after it removed the scenario namespace, policies, exceptions, Pods, runtime
+classes, and marker state.
 
 | Scenario | Result | Observation |
 | --- | --- | --- |
@@ -135,6 +139,17 @@ The retained physical command passed:
 
 ```text
 rtk env MITHRIL_VM_REUSE_IMAGES=false crates/mithril-e2e/harness/vm/two-node-convergence.sh --reuse-environment /tmp/mithril-phase-6-2-full-convergence-reuse51-inventory-retry-20260828/retained-environment.json --output-directory /tmp/mithril-phase-6-2-full-convergence-reuse52-terminal-retirement-20260828
+```
+
+The lightweight companion and current two-node rerun passed in this order:
+
+```text
+rtk bash examples/mithril-kubernetes-convergence-manual/test.sh
+rtk bash crates/mithril-e2e/harness/vm/test.sh
+rtk bash packaging/mithril/helm/tests/verify.sh
+rtk cargo test -p mithril-control --lib --tests
+rtk cargo test -p mithril-node --lib --tests
+rtk env MITHRIL_VM_REUSE_IMAGES=true crates/mithril-e2e/harness/vm/two-node-convergence.sh --keep-vms --output-directory /tmp/mithril-two-node-baseline3-20260829
 ```
 
 The scenario removed its workload namespace, policy, exception, Pods, and
