@@ -11,6 +11,14 @@ metadata:
 automountServiceAccountToken: false
 ---
 apiVersion: v1
+kind: Secret
+metadata:
+  name: mithril-path-tree
+  namespace: mithril-vm-qualification
+stringData:
+  secret: restricted
+---
+apiVersion: v1
 kind: Pod
 metadata:
   name: mithril-runtime
@@ -23,22 +31,47 @@ spec:
     - name: runtime
       image: docker.io/library/busybox:1.36.1@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662
       imagePullPolicy: IfNotPresent
-      command: ["/bin/sh", "-c", "test -r /var/run/secrets/tokens/mithril && exec sleep 3600"]
+      command:
+        - /bin/sh
+        - -c
+        - >-
+          test -r /var/run/secrets/tokens/mithril &&
+          mkdir -p /var/lib/mithril &&
+          mount -t tmpfs -o mode=0755 tmpfs /var/lib/mithril &&
+          cp /run/mithril-fixture/secret /var/lib/mithril/secret &&
+          cp /run/mithril-fixture/benign /var/lib/mithril/benign &&
+          cp /run/mithril-fixture/busybox /var/lib/mithril/busybox &&
+          cp /run/mithril-fixture/open-probe /var/lib/mithril/open-probe &&
+          exec sleep 3600
+      securityContext:
+        # The fixture must create a successful bind before Mithril starts.
+        # Mithril then owns the read denial that this lane measures.
+        privileged: true
       volumeMounts:
         - name: service-account-token
           mountPath: /var/run/secrets/tokens
           readOnly: true
         - name: qualification-secret
-          mountPath: /var/lib/mithril/secret
+          mountPath: /run/mithril-fixture/secret
           readOnly: true
         - name: qualification-benign
-          mountPath: /var/lib/mithril/benign
+          mountPath: /run/mithril-fixture/benign
           readOnly: true
         - name: qualification-release
-          mountPath: /var/lib/mithril/release
+          mountPath: /run/mithril-fixture/release
           readOnly: true
         - name: administrative-executable
-          mountPath: /var/lib/mithril/busybox
+          mountPath: /run/mithril-fixture/busybox
+          readOnly: true
+        - name: qualification-open-probe
+          mountPath: /run/mithril-fixture/open-probe
+          readOnly: true
+        - name: path-tree
+          mountPath: /home/secret
+          readOnly: true
+        - name: path-tree
+          mountPath: /home/kubelet-attack
+          subPath: models
           readOnly: true
   volumes:
     # This token checks only the projected-token mount at Pod startup.
@@ -66,3 +99,13 @@ spec:
       hostPath:
         path: /var/lib/mithril-vm-qualification/busybox
         type: File
+    - name: qualification-open-probe
+      hostPath:
+        path: /var/lib/mithril-vm-qualification/open-probe
+        type: File
+    - name: path-tree
+      secret:
+        secretName: mithril-path-tree
+        items:
+          - key: secret
+            path: models/secret

@@ -283,11 +283,12 @@ static __always_inline int exact_mount_event_snapshot(
 #if defined(__TARGET_ARCH_x86) || defined(__TARGET_ARCH_arm64)
 static __always_inline int mount_scan_push(
     struct identity_scratch_v1 *scratch,
-    struct canonical_mount_cache_build_state_v1 *build, struct rb_node *node)
+    struct canonical_mount_cache_build_state_v1 *build,
+    struct mount *mount)
 {
     __u64 index;
 
-    if (!node)
+    if (!mount)
         return 0;
     if (build->stack_depth >= MAX_CANONICAL_MOUNT_SCAN_DEPTH_V1)
         return -EACCES;
@@ -296,7 +297,7 @@ static __always_inline int mount_scan_push(
                  : [bounded] "=&r"(index)
                  : [raw] "r"((__u64)build->stack_depth),
                    "i"(MAX_CANONICAL_MOUNT_SCAN_DEPTH_V1));
-    scratch->mount_scan_stack[index] = (__u64)node;
+    scratch->mount_scan_stack[index] = (__u64)mount;
     build->stack_depth++;
     return 0;
 }
@@ -312,10 +313,15 @@ static long canonical_mount_cache_build_step(__u32 offset, void *data)
     struct canonical_mount_cache_value_v1 *initial =
         &scratch->mount_cache_value;
     struct canonical_mount_cache_value_v1 *cached;
-    struct rb_node *node;
     struct mount *candidate;
+    struct mount *parent = NULL;
+    struct mount *child = NULL;
+    struct mount *sibling = NULL;
+    struct list_head *child_head;
+    struct list_head *parent_head;
     __u64 index;
 
+    (void)offset;
     if (build->failed || !build->stack_depth)
         return 1;
     __builtin_memset(key, 0, sizeof(*key));
@@ -326,18 +332,39 @@ static long canonical_mount_cache_build_step(__u32 offset, void *data)
                  : [bounded] "=&r"(index)
                  : [raw] "r"((__u64)build->stack_depth),
                    "i"(MAX_CANONICAL_MOUNT_SCAN_DEPTH_V1));
-    node = (struct rb_node *)scratch->mount_scan_stack[index];
-    build->left_node_address = 0;
-    build->right_node_address = 0;
-    if (!node ||
-        BPF_CORE_READ_INTO(&build->left_node_address, node, rb_left) ||
-        BPF_CORE_READ_INTO(&build->right_node_address, node, rb_right) ||
-        mount_scan_push(scratch, build,
-                        (struct rb_node *)build->right_node_address) ||
-        mount_scan_push(scratch, build,
-                        (struct rb_node *)build->left_node_address))
+    candidate = (struct mount *)scratch->mount_scan_stack[index];
+    build->child_node_address = 0;
+    build->sibling_node_address = 0;
+    if (!candidate)
         goto failed;
-    candidate = EREBOR_CORE_CONTAINER_OF(node, struct mount, mnt_node);
+    if ((__u64)candidate != build->walk_root_mount_address) {
+        if (BPF_CORE_READ_INTO(&parent, candidate, mnt_parent) || !parent)
+            goto failed;
+        parent_head = (struct list_head *)((char *)parent +
+            EREBOR_CORE_OFFSETOF(struct mount, mnt_mounts));
+        if (BPF_CORE_READ_INTO(&build->sibling_node_address,
+                               candidate, mnt_child.next))
+            goto failed;
+        if (build->sibling_node_address != (__u64)parent_head) {
+            sibling = EREBOR_CORE_CONTAINER_OF(
+                (struct list_head *)build->sibling_node_address,
+                struct mount, mnt_child);
+            if (mount_scan_push(scratch, build, sibling))
+                goto failed;
+        }
+    }
+    child_head = (struct list_head *)((char *)candidate +
+        EREBOR_CORE_OFFSETOF(struct mount, mnt_mounts));
+    if (BPF_CORE_READ_INTO(&build->child_node_address,
+                           candidate, mnt_mounts.next))
+        goto failed;
+    if (build->child_node_address != (__u64)child_head) {
+        child = EREBOR_CORE_CONTAINER_OF(
+            (struct list_head *)build->child_node_address,
+            struct mount, mnt_child);
+        if (mount_scan_push(scratch, build, child))
+            goto failed;
+    }
     build->candidate_mount_address = (__u64)candidate;
     build->candidate_namespace_address = 0;
     build->candidate_root_address = 0;
@@ -357,6 +384,8 @@ static long canonical_mount_cache_build_step(__u32 offset, void *data)
     key->namespace_root_mount_id_unique =
         build->namespace_root_mount_id_unique;
     key->namespace_event = build->namespace_event;
+    key->walk_root_mount_address = build->walk_root_mount_address;
+    key->walk_root_dentry_address = build->walk_root_dentry_address;
     key->root_dentry_address = build->candidate_root_address;
     initial->selected_mount_address = build->candidate_mount_address;
     initial->selected_mount_id_unique =
@@ -375,7 +404,8 @@ static long canonical_mount_cache_build_step(__u32 offset, void *data)
             build->candidate_mount_id_unique;
     }
     bpf_spin_unlock(&cached->lock);
-    return offset + 1 == build->expected_mounts ? 1 : 0;
+    build->processed_mounts++;
+    return build->stack_depth ? 0 : 1;
 
 failed:
     build->failed = 1;
@@ -384,6 +414,7 @@ failed:
 
 static __always_inline int ensure_canonical_mount_cache(
     struct mnt_namespace *mount_namespace, struct identity_scratch_v1 *scratch,
+    struct mount *walk_root_mount, struct dentry *walk_root_dentry,
     __u64 global_epoch, __u64 *namespace_event_out,
     __u64 *namespace_root_mount_id_unique_out)
 {
@@ -398,16 +429,14 @@ static __always_inline int ensure_canonical_mount_cache(
         .scratch = scratch,
     };
     struct mount *namespace_root = NULL;
-    struct rb_node *tree_root = NULL;
     __u64 namespace_event = 0;
     __u64 root_mount_id_unique = 0;
     __u64 checked_event = 0;
     __u32 mount_count = 0;
-    __u32 checked_mount_count = 0;
     long steps;
 
-    if (!mount_namespace ||
-        !bpf_core_field_exists(mount_namespace->mounts.rb_node) ||
+    if (!mount_namespace || !walk_root_mount || !walk_root_dentry ||
+        !bpf_core_field_exists(walk_root_mount->mnt_mounts.next) ||
         BPF_CORE_READ_INTO(&namespace_root, mount_namespace, root) ||
         !namespace_root ||
         read_unique_mount_id(namespace_root, &root_mount_id_unique) ||
@@ -419,31 +448,31 @@ static __always_inline int ensure_canonical_mount_cache(
     state_key->mount_namespace_address = (__u64)mount_namespace;
     state_key->namespace_root_mount_id_unique = root_mount_id_unique;
     state_key->namespace_event = namespace_event;
+    state_key->walk_root_mount_address = (__u64)walk_root_mount;
+    state_key->walk_root_dentry_address = (__u64)walk_root_dentry;
     state = bpf_map_lookup_elem(&canonical_mount_cache_states, state_key);
     if (state && state->state == CANONICAL_MOUNT_CACHE_READY_V1 &&
-        state->mount_count == mount_count)
+        state->mount_count)
         goto ready;
-
-    if (BPF_CORE_READ_INTO(&tree_root, mount_namespace, mounts.rb_node) ||
-        !tree_root)
-        return -EACCES;
     __builtin_memset(build, 0, sizeof(*build));
     build->mount_namespace_address = (__u64)mount_namespace;
     build->namespace_root_mount_id_unique = root_mount_id_unique;
     build->namespace_event = namespace_event;
-    build->expected_mounts = mount_count;
-    if (mount_scan_push(scratch, build, tree_root))
+    build->walk_root_mount_address = (__u64)walk_root_mount;
+    build->walk_root_dentry_address = (__u64)walk_root_dentry;
+    if (mount_scan_push(scratch, build, walk_root_mount))
         return -EACCES;
     steps = bpf_loop(MAX_CANONICAL_MOUNTS_V1,
                      canonical_mount_cache_build_step, &context, 0);
-    if (steps != mount_count || build->failed || build->stack_depth ||
+    if (steps != build->processed_mounts || !build->processed_mounts ||
+        build->processed_mounts > mount_count || build->failed ||
+        build->stack_depth ||
         BPF_CORE_READ_INTO(&checked_event, mount_namespace, event) ||
-        BPF_CORE_READ_INTO(&checked_mount_count, mount_namespace, nr_mounts) ||
-        checked_event != namespace_event || checked_mount_count != mount_count ||
+        checked_event != namespace_event ||
         global_mount_epoch_unchanged(global_epoch))
         return -EACCES;
     __builtin_memset(ready, 0, sizeof(*ready));
-    ready->mount_count = mount_count;
+    ready->mount_count = build->processed_mounts;
     ready->state = CANONICAL_MOUNT_CACHE_READY_V1;
     if (bpf_map_update_elem(&canonical_mount_cache_states, state_key, ready,
                             BPF_ANY))
@@ -457,11 +486,14 @@ ready:
 #else
 static __always_inline int ensure_canonical_mount_cache(
     struct mnt_namespace *mount_namespace, struct identity_scratch_v1 *scratch,
+    struct mount *walk_root_mount, struct dentry *walk_root_dentry,
     __u64 global_epoch, __u64 *namespace_event_out,
     __u64 *namespace_root_mount_id_unique_out)
 {
     (void)mount_namespace;
     (void)scratch;
+    (void)walk_root_mount;
+    (void)walk_root_dentry;
     (void)global_epoch;
     (void)namespace_event_out;
     (void)namespace_root_mount_id_unique_out;
@@ -484,6 +516,8 @@ static __always_inline int selected_mount_for_root(
     key->mount_namespace_address = (__u64)mount_namespace;
     key->namespace_root_mount_id_unique = namespace_root_mount_id_unique;
     key->namespace_event = namespace_event;
+    key->walk_root_mount_address = walk->walk_root_mount_address;
+    key->walk_root_dentry_address = walk->walk_root_dentry_address;
     key->root_dentry_address = (__u64)root;
     cached = bpf_map_lookup_elem(&canonical_mount_cache, key);
     if (!cached)
@@ -561,20 +595,37 @@ static long canonical_mount_path_walk_step(__u32 offset, void *data)
     struct canonical_mount_path_walk_state_v1 *walk =
         &scratch->mount_path_walk;
     struct mnt_namespace *mount_namespace;
+    struct mount *walk_root_mount;
     struct mount *selected_mount;
     struct mount *current_mount;
     struct dentry *mount_root = NULL;
+    struct dentry *walk_root_dentry;
     struct dentry *current;
     struct dentry *source_parent = NULL;
     int selected_result;
 
     (void)offset;
-    if (walk->failed || walk->reached_namespace_root)
+    if (walk->failed || walk->reached_walk_root)
         return 1;
     mount_namespace =
         (struct mnt_namespace *)walk->mount_namespace_address;
+    walk_root_mount =
+        (struct mount *)walk->walk_root_mount_address;
+    walk_root_dentry =
+        (struct dentry *)walk->walk_root_dentry_address;
     current_mount = (struct mount *)walk->current_mount_address;
     current = (struct dentry *)walk->current_dentry_address;
+    if (!walk_root_mount || !walk_root_dentry || !current_mount || !current)
+        goto failed;
+    if (current_mount == walk_root_mount && current == walk_root_dentry) {
+        if (!walk->first_selected_mount_id_unique &&
+            read_unique_mount_id(
+                current_mount,
+                &walk->first_selected_mount_id_unique))
+            goto failed;
+        walk->reached_walk_root = 1;
+        return 1;
+    }
     if (BPF_CORE_READ_INTO(&mount_root, current_mount, mnt.mnt_root) ||
         !mount_root)
         goto failed;
@@ -595,7 +646,7 @@ static long canonical_mount_path_walk_step(__u32 offset, void *data)
             if (!walk->first_selected_mount_id_unique)
                 walk->first_selected_mount_id_unique =
                     walk->selected_mount_id_unique;
-            walk->reached_namespace_root = 1;
+            walk->reached_walk_root = 1;
             return 1;
         }
         if (current == mount_root ||
@@ -605,11 +656,12 @@ static long canonical_mount_path_walk_step(__u32 offset, void *data)
     }
     if (selected_result)
         goto failed;
-    if (walk->selected_mount_address == walk->namespace_root_address) {
+    if (walk->selected_mount_address == walk->walk_root_mount_address &&
+        current == walk_root_dentry) {
         if (!walk->first_selected_mount_id_unique)
             walk->first_selected_mount_id_unique =
                 walk->selected_mount_id_unique;
-        walk->reached_namespace_root = 1;
+        walk->reached_walk_root = 1;
         return 1;
     }
     if (BPF_CORE_READ_INTO(&source_parent, current, d_parent) ||
@@ -649,8 +701,8 @@ static __always_inline int collect_mount_components(
     struct dentry *current = NULL;
     struct vfsmount *vfsmount = NULL;
     struct mount *current_mount = NULL;
-    struct mount *namespace_root = NULL;
-    struct mnt_namespace *mount_namespace = NULL;
+    struct mount *walk_root_mount = NULL;
+    void *owner = NULL;
     __u64 global_epoch = 0;
     __u64 namespace_event = 0;
     __u64 checked_namespace_event = 0;
@@ -667,18 +719,34 @@ static __always_inline int collect_mount_components(
         return -EACCES;
     current_mount = mount_from_vfsmount(vfsmount);
     if (!current_mount ||
-        BPF_CORE_READ_INTO(&mount_namespace, current_mount, mnt_ns) ||
-        !mount_namespace ||
-        BPF_CORE_READ_INTO(&namespace_root, mount_namespace, root) ||
-        !namespace_root ||
-        ensure_canonical_mount_cache(
-            mount_namespace, scratch, global_epoch, &namespace_event,
-            &namespace_root_mount_id_unique))
+        BPF_CORE_READ_INTO(&owner, current_mount, mnt_ns) || !owner)
         return -EACCES;
     walk = &scratch->mount_path_walk;
     __builtin_memset(walk, 0, sizeof(*walk));
-    walk->mount_namespace_address = (__u64)mount_namespace;
-    walk->namespace_root_address = (__u64)namespace_root;
+    __builtin_memset(&scratch->mount_walk_root, 0,
+                     sizeof(scratch->mount_walk_root));
+    walk->mount_namespace_address = (__u64)owner;
+    /* Reuse one pointer slot so this nested effect-gate chain stays within
+     * the verifier's combined stack limit. */
+    owner = NULL;
+    if (BPF_CORE_READ_INTO(&owner, bpf_get_current_task_btf(), fs) ||
+        !owner ||
+        BPF_CORE_READ_INTO(&scratch->mount_walk_root,
+                           (struct fs_struct *)owner, root) ||
+        !scratch->mount_walk_root.mnt ||
+        !scratch->mount_walk_root.dentry)
+        return -EACCES;
+    walk_root_mount = mount_from_vfsmount(scratch->mount_walk_root.mnt);
+    if (!walk_root_mount ||
+        ensure_canonical_mount_cache(
+            (struct mnt_namespace *)walk->mount_namespace_address, scratch,
+            walk_root_mount, scratch->mount_walk_root.dentry, global_epoch,
+            &namespace_event, &namespace_root_mount_id_unique))
+        return -EACCES;
+    walk->walk_root_mount_address = (__u64)walk_root_mount;
+    /* A source walk may cross a bind target. It must not cross the task root
+     * and turn a container path into its host rootfs path. */
+    walk->walk_root_dentry_address = (__u64)scratch->mount_walk_root.dentry;
     walk->current_mount_address = (__u64)current_mount;
     walk->current_dentry_address = (__u64)current;
     walk->namespace_event = namespace_event;
@@ -686,9 +754,11 @@ static __always_inline int collect_mount_components(
     steps = bpf_loop(MAX_CANONICAL_MOUNTS_V1 +
                          MAX_CANONICAL_PATH_COMPONENTS_V1,
                      canonical_mount_path_walk_step, &context, 0);
-    if (steps < 0 || walk->failed || !walk->reached_namespace_root ||
-        !walk->first_selected_mount_id_unique ||
-        BPF_CORE_READ_INTO(&checked_namespace_event, mount_namespace, event) ||
+    owner = (void *)walk->mount_namespace_address;
+    if (steps < 0 || walk->failed || !walk->reached_walk_root ||
+        !walk->first_selected_mount_id_unique || !owner ||
+        BPF_CORE_READ_INTO(&checked_namespace_event,
+                           (struct mnt_namespace *)owner, event) ||
         checked_namespace_event != namespace_event ||
         global_mount_epoch_unchanged(global_epoch))
         return -EACCES;
@@ -719,16 +789,16 @@ static long visible_path_walk_step(__u32 offset, void *data)
     struct dentry *mountpoint = NULL;
 
     (void)offset;
-    if (walk->failed || walk->reached_namespace_root)
+    if (walk->failed || walk->reached_walk_root)
         return 1;
     current_mount = (struct mount *)walk->current_mount_address;
-    root_mount = (struct mount *)walk->namespace_root_address;
+    root_mount = (struct mount *)walk->walk_root_mount_address;
     current = (struct dentry *)walk->current_dentry_address;
-    root_dentry = (struct dentry *)walk->selected_mount_root_address;
+    root_dentry = (struct dentry *)walk->walk_root_dentry_address;
     if (!current_mount || !root_mount || !current || !root_dentry)
         goto failed;
     if (current_mount == root_mount && current == root_dentry) {
-        walk->reached_namespace_root = 1;
+        walk->reached_walk_root = 1;
         return 1;
     }
     if (BPF_CORE_READ_INTO(&mount_root, current_mount, mnt.mnt_root) ||
@@ -784,14 +854,14 @@ static __always_inline int collect_visible_path_components(
         return -EACCES;
     walk = &scratch->mount_path_walk;
     __builtin_memset(walk, 0, sizeof(*walk));
-    walk->namespace_root_address = (__u64)root_mount;
-    walk->selected_mount_root_address = (__u64)root.dentry;
+    walk->walk_root_mount_address = (__u64)root_mount;
+    walk->walk_root_dentry_address = (__u64)root.dentry;
     walk->current_mount_address = (__u64)current_mount;
     walk->current_dentry_address = (__u64)current;
     steps = bpf_loop(MAX_CANONICAL_MOUNTS_V1 +
                          MAX_CANONICAL_PATH_COMPONENTS_V1,
                      visible_path_walk_step, &context, 0);
-    if (steps < 0 || walk->failed || !walk->reached_namespace_root)
+    if (steps < 0 || walk->failed || !walk->reached_walk_root)
         return -EACCES;
     *count = walk->component_count;
     return 0;

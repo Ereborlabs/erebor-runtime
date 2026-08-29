@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs::File;
 use std::os::fd::AsRawFd as _;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Output};
 use std::time::{Duration, Instant};
 
 use erebor_interceptor::{EffectObservationReader, KernelHost};
@@ -646,6 +646,18 @@ impl ExternalMountNamespace {
         self.run(["umount", "--"], [target])
     }
 
+    pub(super) fn create_dir_all(&self, path: &Path) -> Result<()> {
+        self.run(["mkdir", "-p", "--"], [path])
+    }
+
+    pub(super) fn create_file(&self, path: &Path) -> Result<()> {
+        self.run(["touch", "--"], [path])
+    }
+
+    pub(super) fn read_file(&self, path: &Path) -> Result<Vec<u8>> {
+        Ok(self.output(["cat", "--"], [path])?.stdout)
+    }
+
     pub(super) fn mount_setattr(&self, target: &Path, read_only: bool) -> Result<()> {
         let executable = std::env::current_exe().context(IoSnafu {
             path: Path::new("current executable"),
@@ -692,6 +704,14 @@ impl ExternalMountNamespace {
         command: [&str; A],
         paths: [&Path; P],
     ) -> Result<()> {
+        self.output(command, paths).map(drop)
+    }
+
+    fn output<const A: usize, const P: usize>(
+        &self,
+        command: [&str; A],
+        paths: [&Path; P],
+    ) -> Result<Output> {
         let flags = rustix::io::fcntl_getfd(&self.namespace)
             .map_err(std::io::Error::from)
             .context(IoSnafu {
@@ -726,7 +746,7 @@ impl ExternalMountNamespace {
                 reason: String::from_utf8_lossy(&output.stderr).trim().to_owned(),
             }
         );
-        Ok(())
+        Ok(output)
     }
 }
 

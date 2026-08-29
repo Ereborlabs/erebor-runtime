@@ -1449,11 +1449,33 @@ impl EffectTestRunner {
             None,
         )
         .context(NodeSnafu)?;
+        let propagation_secret_object = ExactFileObjectResolver::resolve(
+            propagation_peer_pid,
+            &paths.secret,
+            PROFILE_GENERATION_REF_ID,
+            PathSelectorV1::kernel_handle_for_id("manual-secret"),
+            "MANUAL_SECRET".to_owned(),
+            inode_generation(propagation_peer_pid, &paths.secret)?,
+            None,
+        )
+        .context(NodeSnafu)?;
+        let propagation_allowed_bind_object = ExactFileObjectResolver::resolve(
+            propagation_peer_pid,
+            &allowed_bind_source_file,
+            PROFILE_GENERATION_REF_ID,
+            PathSelectorV1::kernel_handle_for_id("manual-benign-bind"),
+            "MANUAL_BENIGN".to_owned(),
+            inode_generation(propagation_peer_pid, &allowed_bind_source_file)?,
+            None,
+        )
+        .context(NodeSnafu)?;
         let mut exact_objects = vec![
             exact_object.clone(),
             benign_object,
             allowed_bind_object,
+            propagation_secret_object,
             propagation_benign_object,
+            propagation_allowed_bind_object,
         ];
         if protect {
             exact_objects.push(
@@ -1480,23 +1502,46 @@ impl EffectTestRunner {
                 )
                 .context(NodeSnafu)?,
             );
+            exact_objects.push(
+                ExactFileObjectResolver::resolve(
+                    propagation_peer_pid,
+                    Path::new("/dev/pts/ptmx"),
+                    PROFILE_GENERATION_REF_ID,
+                    PathSelectorV1::kernel_handle_for_id("manual-device-ptmx"),
+                    "MANUAL_DEVICE_ALLOWED".to_owned(),
+                    0,
+                    Some("PTMX_DEVICE".to_owned()),
+                )
+                .context(NodeSnafu)?,
+            );
+            exact_objects.push(
+                ExactFileObjectResolver::resolve(
+                    propagation_peer_pid,
+                    Path::new("/dev/zero"),
+                    PROFILE_GENERATION_REF_ID,
+                    PathSelectorV1::kernel_handle_for_id("manual-device-zero"),
+                    "MANUAL_DEVICE_DENIED".to_owned(),
+                    0,
+                    Some("ZERO_DEVICE".to_owned()),
+                )
+                .context(NodeSnafu)?,
+            );
         }
         let mount_namespaces = exact_objects
             .iter()
             .map(|object| object.mount_namespace_inode)
             .collect::<BTreeSet<_>>();
-        let test_exact_objects = exact_objects
-            .iter()
-            .cloned()
-            .map(|object| {
-                let binding_id = if object.mount_view_root_pid == propagation_peer_pid {
-                    propagation_binding.binding_id.clone()
-                } else {
-                    binding.binding_id.clone()
-                };
-                (binding_id, object)
-            })
-            .collect::<Vec<_>>();
+        let mut test_exact_objects = Vec::with_capacity(exact_objects.len() * 2);
+        for object in &exact_objects {
+            if object.mount_view_root_pid == propagation_peer_pid {
+                test_exact_objects.push((propagation_binding.binding_id.clone(), object.clone()));
+                continue;
+            }
+            /* The application and peer bindings use the same live mount
+             * namespace, so both consume the same measured object view. */
+            test_exact_objects.push((binding.binding_id.clone(), object.clone()));
+            test_exact_objects.push((peer_binding.binding_id.clone(), object.clone()));
+        }
         let node_config = effect_node_config(
             &fixture_root,
             pin_root,

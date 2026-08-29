@@ -70,6 +70,7 @@ path_selectors:
     selector_kind: EXACT
     canonical_path: /var/lib/mithril/secret
     object_class_id: MANUAL_SECRET
+path_tree_deny_floors: []
 roles:
   - role_id: converter
     maximum_native_depth: 32

@@ -288,8 +288,21 @@ case ${1:-} in
     /usr/local/bin/k3s kubectl apply -f "$manifest" >/dev/null
     /usr/local/bin/k3s kubectl -n "$namespace" wait \
       --for=condition=Ready pod/mithril-runtime --timeout=300s
-    /usr/local/bin/k3s kubectl -n "$namespace" exec mithril-runtime -- \
-      test -s /var/run/secrets/tokens/mithril
+    for attempt in {1..30}; do
+      if /usr/local/bin/k3s kubectl -n "$namespace" exec mithril-runtime \
+        -c runtime -- sh -c \
+        'test -s /var/run/secrets/tokens/mithril &&
+         mkdir -p /home/attack &&
+         mount --bind /home/secret /home/attack &&
+         test -r /home/attack/models/secret'; then
+        break
+      fi
+      [[ $attempt -lt 30 ]] || {
+        echo "k3s runtime container did not accept the readiness exec" >&2
+        exit 1
+      }
+      sleep 1
+    done
 
     container_ref=$(
       /usr/local/bin/k3s kubectl -n "$namespace" get pod mithril-runtime \
@@ -321,8 +334,8 @@ case ${1:-} in
       echo "benign hostPath fixture is not visible through the workload root" >&2
       exit 1
     }
-    [[ -r /proc/$container_pid/root/var/lib/mithril/release \
-      && ! -s /proc/$container_pid/root/var/lib/mithril/release ]] || {
+    [[ -r /proc/$container_pid/root/run/mithril-fixture/release \
+      && ! -s /proc/$container_pid/root/run/mithril-fixture/release ]] || {
       echo "empty direct CRI release fixture is not visible through the workload root" >&2
       exit 1
     }
@@ -356,17 +369,18 @@ case ${1:-} in
         exit 2
         ;;
     esac
-    (($# == 11)) || { usage; exit 2; }
+    (($# == 12)) || { usage; exit 2; }
     node=$2
     inspect=$3
     policy=$4
-    template=$5
-    policy_source=$6
-    seal_request=$7
-    signing_key=$8
-    public_key=$9
-    manifest=${10}
-    work_directory=${11}
+    open_probe=$5
+    template=$6
+    policy_source=$7
+    seal_request=$8
+    signing_key=$9
+    public_key=${10}
+    manifest=${11}
+    work_directory=${12}
     require_root
     require_command jq
     require_command lsattr
@@ -374,8 +388,9 @@ case ${1:-} in
     require_command busybox
     require_command bpftool
     require_harness_guest "$work_directory"
-    for input in "$node" "$inspect" "$policy" "$template" "$policy_source" \
-      "$seal_request" "$signing_key" "$public_key" "$manifest"; do
+    for input in "$node" "$inspect" "$policy" "$open_probe" "$template" \
+      "$policy_source" "$seal_request" "$signing_key" "$public_key" \
+      "$manifest"; do
       [[ -r $input ]] || {
         echo "k3s CRI effect qualification input is not readable: $input" >&2
         exit 2
@@ -388,6 +403,7 @@ case ${1:-} in
     fixture_root=/var/lib/mithril-vm-qualification
     fixture_path=$fixture_root/secret
     benign_fixture_path=$fixture_root/benign
+    open_probe_fixture_path=$fixture_root/open-probe
     release_fixture_path=$fixture_root/release
     lane_root=$work_directory/k3s-cri-effect
     identity_config=$lane_root/identity-node.json
@@ -398,8 +414,10 @@ case ${1:-} in
     cri_state=$pod_state/cri-exec
     kubectl_state=$pod_state/kubectl-exec
     pod_pid_file=$kubectl_state/exec.pid
-    pod_release_file=$kubectl_state/release
     cri_pid_file=$cri_state/exec.pid
+    benign_pid_file=$pod_state/benign/exec.pid
+    kubelet_bind_pid_file=$pod_state/kubelet-bind/exec.pid
+    container_bind_pid_file=$pod_state/container-bind/exec.pid
     initial_snapshot=$lane_root/pod-initial-root.json
     cri_snapshot=$lane_root/cri-exec-root.json
     external_snapshot=$lane_root/kubectl-exec-root.json
@@ -411,7 +429,12 @@ case ${1:-} in
     cri_client_pid=
     cri_host_pid=
     exec_client_pid=
-    release_fd_open=false
+    benign_client_pid=
+    kubelet_bind_client_pid=
+    container_bind_client_pid=
+    benign_host_pid=
+    kubelet_bind_host_pid=
+    container_bind_host_pid=
     result_fd_open=false
     fixture_owned=false
     pin_owned=false
@@ -452,9 +475,20 @@ case ${1:-} in
         wait "$exec_client_pid" 2>/dev/null || true
         exec_client_pid=
       fi
-      if [[ $release_fd_open == true ]]; then
-        exec 9>&-
-        release_fd_open=false
+      if [[ -n $benign_client_pid ]]; then
+        kill -TERM "$benign_client_pid" 2>/dev/null
+        wait "$benign_client_pid" 2>/dev/null || true
+        benign_client_pid=
+      fi
+      if [[ -n $kubelet_bind_client_pid ]]; then
+        kill -TERM "$kubelet_bind_client_pid" 2>/dev/null
+        wait "$kubelet_bind_client_pid" 2>/dev/null || true
+        kubelet_bind_client_pid=
+      fi
+      if [[ -n $container_bind_client_pid ]]; then
+        kill -TERM "$container_bind_client_pid" 2>/dev/null
+        wait "$container_bind_client_pid" 2>/dev/null || true
+        container_bind_client_pid=
       fi
       if [[ $result_fd_open == true ]]; then
         exec 8>&-
@@ -503,12 +537,17 @@ case ${1:-} in
     : >"$release_fixture_path"
     chmod 644 "$release_fixture_path"
     install -m 0555 "$(command -v busybox)" "$fixture_root/busybox"
+    install -m 0555 "$open_probe" "$open_probe_fixture_path"
 
     /usr/local/bin/k3s kubectl delete namespace "$namespace" \
       --ignore-not-found --wait=true --timeout=120s >/dev/null 2>&1 || true
     /usr/local/bin/k3s kubectl apply -f "$manifest" >/dev/null
     /usr/local/bin/k3s kubectl -n "$namespace" wait \
       --for=condition=Ready "pod/$pod" --timeout=300s
+    /usr/local/bin/k3s kubectl -n "$namespace" exec "$pod" -c "$container" -- \
+      sh -c 'mkdir -p /home/attack &&
+             mount --bind /home/secret /home/attack &&
+             test -r /home/attack/models/secret'
 
     pod_uid=$(
       /usr/local/bin/k3s kubectl -n "$namespace" get pod "$pod" \
@@ -564,7 +603,11 @@ case ${1:-} in
     }
     [[ -r /proc/$init_pid/root/var/lib/mithril/secret \
       && -r /proc/$init_pid/root/var/lib/mithril/benign \
-      && -r /proc/$init_pid/root/var/lib/mithril/release ]] || {
+      && -r /proc/$init_pid/root/run/mithril-fixture/release \
+      && -x /proc/$init_pid/root/var/lib/mithril/open-probe \
+      && -r /proc/$init_pid/root/home/secret/models/secret \
+      && -r /proc/$init_pid/root/home/kubelet-attack/secret \
+      && -r /proc/$init_pid/root/home/attack/models/secret ]] || {
       echo "qualification fixtures are not visible through the Pod root" >&2
       exit 1
     }
@@ -584,6 +627,16 @@ case ${1:-} in
       effect_policy_source=$lane_root/protect-policy-v1.yaml
       sed \
         -e 's/desired_profile_mode: OBSERVE/desired_profile_mode: PROTECT/' \
+        -e '/^path_tree_deny_floors: \[\]$/c\
+path_tree_deny_floors:\
+  - schema_version: 1\
+    rule_id: deny-k3s-child-bind\
+    canonical_path: /home/secret\
+    recursive: true\
+    effect_families: [FILE]\
+    operation_ids: [OPEN_READ]\
+    requested_disposition: DENY\
+    exception_ids: []' \
         "$policy_source" >"$effect_policy_source"
     fi
     "$policy" compile --source "$effect_policy_source" --seal-request "$seal_request" \
@@ -596,7 +649,7 @@ case ${1:-} in
     pin_owned=true
     (
       printf '%s\n' "$BASHPID" >"$controller_cgroup/cgroup.procs"
-      exec "$node" --config "$identity_config"
+      exec env RUST_LOG=warn "$node" --config "$identity_config"
     ) >>"$node_log" 2>&1 &
     node_pid=$!
     for _attempt in {1..200}; do
@@ -634,25 +687,10 @@ case ${1:-} in
     }
 
     /usr/local/bin/k3s crictl exec "$container_id" \
-      sh -c '
-        mkdir -m 700 "$1"
-        echo $$ >"$2"
-        while [ ! -s /var/lib/mithril/release ]; do :; done
-        if IFS= read -r _ <"$3"; then
-          cri_result=CRI_EXACT_ALLOWED
-        else
-          cri_result=CRI_EXACT_DENIED
-        fi
-        if [ "$4" = OBSERVE ] && [ "$cri_result" = CRI_EXACT_ALLOWED ]; then
-          exit 0
-        fi
-        if [ "$4" = PROTECT ] && [ "$cri_result" = CRI_EXACT_DENIED ]; then
-          exit 0
-        fi
-        exit 43
-      ' \
-      sh "$cri_state" "$cri_pid_file" /var/lib/mithril/secret \
-      "$effect_mode" \
+      /var/lib/mithril/open-probe \
+      --pid-file "$cri_pid_file" \
+      --release-file /run/mithril-fixture/release \
+      /var/lib/mithril/secret \
       >"$lane_root/cri-result.out" 2>&1 &
     cri_client_pid=$!
     for _attempt in {1..200}; do
@@ -699,7 +737,7 @@ case ${1:-} in
       exit 1
     }
     [[ ! -s $release_fixture_path \
-      && ! -s /proc/$init_pid/root/var/lib/mithril/release ]] || {
+      && ! -s /proc/$init_pid/root/run/mithril-fixture/release ]] || {
       echo "direct CRI release fixture is not empty before the exact check" >&2
       exit 1
     }
@@ -707,9 +745,10 @@ case ${1:-} in
     exec 8>"$lane_root/exec-result"
     result_fd_open=true
     /usr/local/bin/k3s kubectl -n "$namespace" exec "$pod" -c "$container" -- \
-      sh -c 'mkdir -m 700 "$1"; mkfifo "$3"; echo $$ >"$2"; IFS= read -r _ <"$3"; if IFS= read -r _ <"$4"; then secret_result=SECRET_ALLOWED; else secret_result=SECRET_DENIED; fi; if IFS= read -r _ <"$5"; then benign_result=BENIGN_ALLOWED; else benign_result=BENIGN_DENIED; fi; if [ "$6" = OBSERVE ] && [ "$secret_result" = SECRET_ALLOWED ] && [ "$benign_result" = BENIGN_ALLOWED ]; then chmod 777 "$1" "$3"; exit 0; fi; if [ "$6" = PROTECT ] && [ "$secret_result" = SECRET_DENIED ] && [ "$benign_result" = BENIGN_ALLOWED ]; then chmod 777 "$1" "$3"; exit 0; fi; chmod 777 "$1" "$3"; [ "$secret_result" = SECRET_ALLOWED ] || exit 44; [ "$benign_result" = BENIGN_ALLOWED ] || exit 45; exit 43' \
-      sh "$kubectl_state" "$pod_pid_file" "$pod_release_file" \
-      /var/lib/mithril/secret /var/lib/mithril/benign "$effect_mode" >&8 &
+      /var/lib/mithril/open-probe \
+      --pid-file "$pod_pid_file" \
+      --release-file /run/mithril-fixture/release \
+      /var/lib/mithril/secret >&8 &
     exec_client_pid=$!
     for _attempt in {1..200}; do
       [[ -s /proc/$init_pid/root$pod_pid_file ]] && break
@@ -752,13 +791,71 @@ case ${1:-} in
       echo "kubectl exec has no exact Mithril task cookie" >&2
       exit 1
     }
-    exec 9>"/proc/$init_pid/root$pod_release_file"
-    release_fd_open=true
-
+    /usr/local/bin/k3s kubectl -n "$namespace" exec "$pod" -c "$container" -- \
+      /var/lib/mithril/open-probe \
+      --pid-file "$benign_pid_file" \
+      --release-file /run/mithril-fixture/release \
+      /var/lib/mithril/benign >"$lane_root/benign-result.out" 2>&1 &
+    benign_client_pid=$!
+    probe_pid_files=("$benign_pid_file")
+    probe_client_pids=("$benign_client_pid")
+    if [[ $effect_mode == PROTECT ]]; then
+      /usr/local/bin/k3s kubectl -n "$namespace" exec "$pod" -c "$container" -- \
+        /var/lib/mithril/open-probe \
+        --pid-file "$kubelet_bind_pid_file" \
+        --release-file /run/mithril-fixture/release \
+        /home/kubelet-attack/secret >"$lane_root/kubelet-bind-result.out" 2>&1 &
+      kubelet_bind_client_pid=$!
+      /usr/local/bin/k3s kubectl -n "$namespace" exec "$pod" -c "$container" -- \
+        /var/lib/mithril/open-probe \
+        --pid-file "$container_bind_pid_file" \
+        --release-file /run/mithril-fixture/release \
+        /home/attack/models/secret >"$lane_root/container-bind-result.out" 2>&1 &
+      container_bind_client_pid=$!
+      probe_pid_files+=("$kubelet_bind_pid_file" "$container_bind_pid_file")
+      probe_client_pids+=("$kubelet_bind_client_pid" "$container_bind_client_pid")
+    fi
+    probe_host_pids=()
+    for probe_index in "${!probe_pid_files[@]}"; do
+      probe_pid_file=${probe_pid_files[$probe_index]}
+      probe_client_pid=${probe_client_pids[$probe_index]}
+      for _attempt in {1..200}; do
+        [[ -s /proc/$init_pid/root$probe_pid_file ]] && break
+        kill -0 "$probe_client_pid" 2>/dev/null || {
+          echo "held Kubernetes file-open probe exited before publishing its namespace PID" >&2
+          exit 1
+        }
+        sleep 0.1
+      done
+      [[ -s /proc/$init_pid/root$probe_pid_file ]] || {
+        echo "held Kubernetes file-open probe did not publish its namespace PID" >&2
+        exit 1
+      }
+      probe_namespace_pid=$(<"/proc/$init_pid/root$probe_pid_file")
+      probe_host_pid=
+      while read -r host_pid; do
+        [[ -r /proc/$host_pid/status ]] || continue
+        mapped_pid=$(awk '/^NSpid:/ {print $NF}' "/proc/$host_pid/status")
+        if [[ $mapped_pid == "$probe_namespace_pid" ]]; then
+          probe_host_pid=$host_pid
+          break
+        fi
+      done <"$cgroup_path/cgroup.procs"
+      [[ -n $probe_host_pid ]] || {
+        echo "could not map held Kubernetes file-open probe to its host PID" >&2
+        exit 1
+      }
+      probe_host_pids+=("$probe_host_pid")
+    done
+    benign_host_pid=${probe_host_pids[0]}
+    if [[ $effect_mode == PROTECT ]]; then
+      kubelet_bind_host_pid=${probe_host_pids[1]}
+      container_bind_host_pid=${probe_host_pids[2]}
+    fi
     stop_node
     (
       printf '%s\n' "$BASHPID" >"$controller_cgroup/cgroup.procs"
-      exec "$node" --config "$effect_config"
+      exec env RUST_LOG=warn "$node" --config "$effect_config"
     ) >>"$node_log" 2>&1 &
     node_pid=$!
     for _attempt in {1..200}; do
@@ -803,57 +900,127 @@ case ${1:-} in
     fi
 
     printf '1\n' >"$release_fixture_path"
-    printf '1\n' >&9 || true
     exec 8>&-
     result_fd_open=false
-    set +e
-    wait "$exec_client_pid"
-    exec_status=$?
-    set -e
-    exec_client_pid=
-    [[ $exec_status -eq 0 ]] || {
-      echo "kubectl exec did not complete the expected $effect_mode file-open result: $exec_status" >&2
-      cat "$lane_root/exec-result" >&2
-      tail -n 80 "$node_log" >&2
-      cat "$lane_root/cri-result.out" >&2
-      "$inspect" effects --socket-path "$lane_root/observation.sock" \
-        --cgroup-scope / >&2 || true
-      exit 1
-    }
-    set +e
-    wait "$cri_client_pid"
-    cri_status=$?
-    set -e
-    cri_client_pid=
-    [[ $cri_status -eq 0 ]] || {
-      echo "direct CRI exec did not complete the expected $effect_mode file-open result: $cri_status" >&2
-      cat "$lane_root/cri-result.out" >&2
-      exit 1
-    }
+    for _attempt in {1..200}; do
+      cri_alive=false
+      exec_alive=false
+      benign_alive=false
+      kubelet_bind_alive=false
+      container_bind_alive=false
+      [[ -d /proc/$cri_host_pid ]] && cri_alive=true
+      [[ -d /proc/$exec_host_pid ]] && exec_alive=true
+      [[ -d /proc/$benign_host_pid ]] && benign_alive=true
+      if [[ -n $kubelet_bind_host_pid \
+        && -d /proc/$kubelet_bind_host_pid ]]; then
+        kubelet_bind_alive=true
+      fi
+      if [[ -n $container_bind_host_pid \
+        && -d /proc/$container_bind_host_pid ]]; then
+        container_bind_alive=true
+      fi
+      if [[ $effect_mode == OBSERVE && $cri_alive == true \
+        && $exec_alive == true && $benign_alive == true ]]; then
+        break
+      fi
+      if [[ $effect_mode == PROTECT && $cri_alive == false \
+        && $exec_alive == false && $benign_alive == true \
+        && $kubelet_bind_alive == false && $container_bind_alive == false ]]; then
+        break
+      fi
+      sleep 0.1
+    done
     case $effect_mode in
       OBSERVE)
-        expected_cri_effect="task_cookie=$cri_task_cookie family=2 operation=2 reason=WOULD_DENY result=UNKNOWN_AFTER_PRE_EFFECT"
-        expected_effect="task_cookie=$external_task_cookie family=2 operation=2 reason=WOULD_DENY result=UNKNOWN_AFTER_PRE_EFFECT"
-        expected_benign_effect="task_cookie=$external_task_cookie family=2 operation=2 reason=EXACT_POLICY_ALLOW result=UNKNOWN_AFTER_PRE_EFFECT"
+        [[ $cri_alive == true && $exec_alive == true \
+          && $benign_alive == true ]] || {
+          echo "OBSERVE file-open probes did not remain active after successful opens" >&2
+          exit 1
+        }
+        exec_status=0
+        cri_status=0
+        benign_status=0
+        kubelet_bind_status=0
+        container_bind_status=0
+        ;;
+      PROTECT)
+        [[ $cri_alive == false && $exec_alive == false \
+          && $benign_alive == true && $kubelet_bind_alive == false \
+          && $container_bind_alive == false ]] || {
+          echo "PROTECT file-open probes did not reach the expected denied and allowed states" >&2
+          exit 1
+        }
+        trap - ERR
+        set +e
+        wait "$exec_client_pid"
+        exec_status=$?
+        wait "$cri_client_pid"
+        cri_status=$?
+        wait "$kubelet_bind_client_pid"
+        kubelet_bind_status=$?
+        wait "$container_bind_client_pid"
+        container_bind_status=$?
+        set -e
+        trap 'echo "k3s CRI effect failed at line $LINENO: $BASH_COMMAND" >&2' ERR
+        benign_status=0
+        exec_client_pid=
+        cri_client_pid=
+        kubelet_bind_client_pid=
+        container_bind_client_pid=
+        ;;
+    esac
+    case $effect_mode in
+      OBSERVE)
+        [[ $exec_status -eq 0 && $cri_status -eq 0 \
+          && $benign_status -eq 0 && $kubelet_bind_status -eq 0 \
+          && $container_bind_status -eq 0 ]] || {
+          echo "OBSERVE file-open probes did not all allow" >&2
+          cat "$lane_root/exec-result" "$lane_root/cri-result.out" \
+            "$lane_root/benign-result.out" \
+            "$lane_root/kubelet-bind-result.out" \
+            "$lane_root/container-bind-result.out" >&2
+          exit 1
+        }
+        expected_cri_effect="family=2 operation=2 operation_argument=0 reason=WOULD_DENY result=UNKNOWN_AFTER_PRE_EFFECT"
+        expected_effect=$expected_cri_effect
+        expected_benign_effect="active_role_id=2 family=2 operation=2 operation_argument=0 reason=EXACT_POLICY_ALLOW result=UNKNOWN_AFTER_PRE_EFFECT"
         cri_exact_file_open=allowed-after-running-binding:WOULD_DENY
         exact_file_open=allowed-after-running-binding:WOULD_DENY
         benign_file_open=allowed-after-running-binding:EXACT_POLICY_ALLOW
+        path_tree_kubelet_file_open=not-run-without-denial-floor
+        path_tree_container_file_open=not-run-without-denial-floor
         ;;
       PROTECT)
-        expected_cri_effect="task_cookie=$cri_task_cookie family=2 operation=2 reason=EXACT_POLICY_DENY result=DENIED_BEFORE_EFFECT"
-        expected_effect="task_cookie=$external_task_cookie family=2 operation=2 reason=EXACT_POLICY_DENY result=DENIED_BEFORE_EFFECT"
-        expected_benign_effect="task_cookie=$external_task_cookie family=2 operation=2 reason=EXACT_POLICY_ALLOW result=UNKNOWN_AFTER_PRE_EFFECT"
+        [[ $exec_status -ne 0 && $cri_status -ne 0 \
+          && $benign_status -eq 0 && $kubelet_bind_status -ne 0 \
+          && $container_bind_status -ne 0 ]] || {
+          echo "PROTECT file-open probes did not preserve exact and path-tree denials" >&2
+          cat "$lane_root/exec-result" "$lane_root/cri-result.out" \
+            "$lane_root/benign-result.out" \
+            "$lane_root/kubelet-bind-result.out" \
+            "$lane_root/container-bind-result.out" >&2
+          exit 1
+        }
+        expected_cri_effect="family=2 operation=2 operation_argument=0 reason=EXACT_POLICY_DENY result=DENIED_BEFORE_EFFECT"
+        expected_effect=$expected_cri_effect
+        expected_benign_effect="active_role_id=2 family=2 operation=2 operation_argument=0 reason=EXACT_POLICY_ALLOW result=UNKNOWN_AFTER_PRE_EFFECT"
         cri_exact_file_open=denied-after-running-binding:EXACT_POLICY_DENY
         exact_file_open=denied-after-running-binding:EXACT_POLICY_DENY
         benign_file_open=allowed-after-running-binding:EXACT_POLICY_ALLOW
+        expected_path_tree_effect="active_role_id=2 family=2 operation=2 operation_argument=0 reason=PATH_TREE_POLICY_DENY result=DENIED_BEFORE_EFFECT"
+        expected_path_tree_kernel="kernel_result=-13"
+        path_tree_kubelet_file_open=denied-after-kubelet-child-bind:PATH_TREE_POLICY_DENY
+        path_tree_container_file_open=denied-after-container-bind:PATH_TREE_POLICY_DENY
         ;;
     esac
     for _attempt in {1..100}; do
       "$inspect" effects --socket-path "$lane_root/observation.sock" \
         --cgroup-scope / >"$effects"
       if grep -F "$expected_cri_effect" "$effects" \
+        | grep -F "task_cookie=$cri_task_cookie target_task_cookie=" \
         | grep -Fq "exact_object_key_id=$secret_selector_handle" \
         && grep -F "$expected_effect" "$effects" \
+        | grep -F "task_cookie=$external_task_cookie target_task_cookie=" \
         | grep -Fq "exact_object_key_id=$secret_selector_handle" \
         && grep -F "$expected_benign_effect" "$effects" \
           | grep -Fq "exact_object_key_id=$benign_selector_handle"; then
@@ -862,12 +1029,14 @@ case ${1:-} in
       sleep 0.1
     done
     grep -F "$expected_cri_effect" "$effects" \
+      | grep -F "task_cookie=$cri_task_cookie target_task_cookie=" \
       | grep -Fq "exact_object_key_id=$secret_selector_handle" || {
       echo "Mithril did not report the expected $effect_mode direct CRI exact file-open result" >&2
       cat "$effects" >&2
       exit 1
     }
     grep -F "$expected_effect" "$effects" \
+      | grep -F "task_cookie=$external_task_cookie target_task_cookie=" \
       | grep -Fq "exact_object_key_id=$secret_selector_handle" || {
       echo "Mithril did not report the expected $effect_mode exact file-open result" >&2
       cat "$effects" >&2
@@ -879,10 +1048,38 @@ case ${1:-} in
       cat "$effects" >&2
       exit 1
     }
+    path_tree_effect_count=0
+    path_tree_effect=
+    if [[ $effect_mode == PROTECT ]]; then
+      for _attempt in {1..100}; do
+        "$inspect" effects --socket-path "$lane_root/observation.sock" \
+          --cgroup-scope / >"$effects"
+        path_tree_effect_count=$(
+          grep -F "$expected_path_tree_effect" "$effects" \
+            | grep -F "exact_object_key_id=0" \
+            | grep -F "$expected_path_tree_kernel" \
+            | grep -Ec 'task_cookie=[1-9][0-9]*' \
+            || true
+        )
+        [[ $path_tree_effect_count -ge 2 ]] && break
+        sleep 0.1
+      done
+      [[ $path_tree_effect_count -ge 2 ]] || {
+        echo "Mithril did not report both Kubernetes path-tree alias results" >&2
+        cat "$effects" >&2
+        exit 1
+      }
+      path_tree_effect=$(
+        grep -F "$expected_path_tree_effect" "$effects" | sed -n '1p'
+      )
+    fi
 
     cri_exact_effect=$(grep -F "$expected_cri_effect" "$effects" \
+      | grep -F "task_cookie=$cri_task_cookie target_task_cookie=" \
       | grep -F "exact_object_key_id=$secret_selector_handle" | sed -n '1p')
-    exact_effect=$(grep -F "$expected_effect" "$effects" | grep -F "exact_object_key_id=$secret_selector_handle" | sed -n '1p')
+    exact_effect=$(grep -F "$expected_effect" "$effects" \
+      | grep -F "task_cookie=$external_task_cookie target_task_cookie=" \
+      | grep -F "exact_object_key_id=$secret_selector_handle" | sed -n '1p')
     benign_effect=$(grep -F "$expected_benign_effect" "$effects" | grep -F "exact_object_key_id=$benign_selector_handle" | sed -n '1p')
 
     printf 'lane=k3s-cri-effect\n'
@@ -901,18 +1098,31 @@ case ${1:-} in
     printf 'exact_effect=%s\n' "$exact_effect"
     printf 'benign_file_open=%s\n' "$benign_file_open"
     printf 'benign_effect=%s\n' "$benign_effect"
-    printf 'qualification_fixture=read-only-hostPath-secret-benign-and-release-files\n'
+    printf 'path_tree_kubelet_file_open=%s\n' "$path_tree_kubelet_file_open"
+    printf 'path_tree_container_file_open=%s\n' "$path_tree_container_file_open"
+    printf 'path_tree_effect_count=%s\n' "$path_tree_effect_count"
+    printf 'path_tree_effect=%s\n' "$path_tree_effect"
+    printf 'qualification_probe=static-direct-open\n'
+    printf 'qualification_fixture=container-tmpfs-runtime-with-read-only-hostPath-inputs\n'
     stop_node
     [[ -d $controller_cgroup && ! -s $controller_cgroup/cgroup.procs ]] || {
       echo "effect controller cgroup did not become reusable" >&2
       exit 1
     }
-    exec 9>&-
-    release_fd_open=false
     [[ $pin_owned == false ]] || rm -rf -- /sys/fs/bpf/mithril-k3s-cri-effect
     pin_owned=false
     /usr/local/bin/k3s kubectl delete namespace "$namespace" \
       --ignore-not-found --wait=true --timeout=120s >/dev/null
+    for probe_client_pid in "$cri_client_pid" "$exec_client_pid" \
+      "$benign_client_pid" "$kubelet_bind_client_pid" \
+      "$container_bind_client_pid"; do
+      [[ -z $probe_client_pid ]] || wait "$probe_client_pid" 2>/dev/null || true
+    done
+    cri_client_pid=
+    exec_client_pid=
+    benign_client_pid=
+    kubelet_bind_client_pid=
+    container_bind_client_pid=
     [[ $fixture_owned == false ]] || rm -rf -- "$fixture_root"
     fixture_owned=false
     rm -rf -- "$lane_root"
@@ -1271,7 +1481,7 @@ EOF
     pin_owned=true
     (
       printf '%s\n' "$BASHPID" >"$controller_cgroup/cgroup.procs"
-      exec "$node" --config "$node_config"
+      exec env RUST_LOG=warn "$node" --config "$node_config"
     ) >"$node_log" 2>&1 &
     node_pid=$!
     for _attempt in {1..300}; do

@@ -13,7 +13,8 @@ use erebor_interceptor_abi::{
     PendingExecStateV1, PendingExecV1,
 };
 use mithril_control::{
-    lower_kubernetes_policy, policy_custom_resource, WorkloadProtectionPolicySpec,
+    lower_kubernetes_policy, policy_custom_resource, EffectFamilyV1, PathTreeDenyFloorV1,
+    PolicyDispositionV1, WorkloadProtectionPolicySpec,
 };
 use mithril_node::{
     EffectObservationStore, NativeIdentityInspector, NativeSecurityStateOwner,
@@ -28,7 +29,7 @@ use zerocopy::TryFromBytes as _;
 
 use super::support::{
     effect_binding_with_identity, effect_node_config, wait_for_application_default_effect,
-    wait_for_path_exec_effect, wait_for_reason,
+    wait_for_path_exec_effect, wait_for_reason, ExternalMountNamespace,
 };
 use super::{
     sign_generation_artifact, EffectTestRunner, NEXT_PROFILE_GENERATION_REF_ID,
@@ -54,6 +55,8 @@ pub struct RuncEntryRoleRuntimeProbeV1 {
     pub application_entry_allow_observed: bool,
     pub application_default_file_allow_observed: bool,
     pub application_descendant_default_exec_role_preserved: bool,
+    pub preexisting_child_bind_path_tree_denied: bool,
+    pub path_tree_control_allowed: bool,
     pub application_admitted_entry_rule_id: u32,
     pub independent_entries: Vec<RuncEntryRoleProbeV1>,
     pub independent_entry_roles_are_distinct: bool,
@@ -114,6 +117,37 @@ struct RuncContainer {
 }
 
 impl RuncContainer {
+    fn prepare_preexisting_child_bind(&self, host_pid: u32, rootfs: &Path) -> Result<()> {
+        let source = rootfs.join("mnt/data/models");
+        let target = rootfs.join("backup/models");
+        let mount_namespace = ExternalMountNamespace::acquire(host_pid)?;
+        mount_namespace.create_dir_all(&source)?;
+        mount_namespace.create_dir_all(&target)?;
+        mount_namespace.create_file(&source.join("secret"))?;
+        mount_namespace.bind_mount(&source, &target)?;
+        ensure!(
+            mount_namespace
+                .read_file(&target.join("secret"))?
+                .is_empty(),
+            InvalidInputSnafu {
+                path: &target,
+                reason:
+                    "the direct runc child-directory bind is not readable before policy activation",
+            }
+        );
+        Ok(())
+    }
+
+    fn record_mountinfo(&self, host_pid: u32, output_directory: &Path) -> Result<()> {
+        let source = PathBuf::from(format!("/proc/{host_pid}/mountinfo"));
+        fs::copy(
+            &source,
+            output_directory.join("runc-entry-role-mountinfo.txt"),
+        )
+        .context(IoSnafu { path: &source })?;
+        Ok(())
+    }
+
     fn spawn_exec(
         &self,
         executable: &str,
@@ -278,7 +312,7 @@ impl EffectTestRunner {
         config["process"]["args"] = json!([
             "/bin/sh",
             "-c",
-            "true 2>/dev/null </run/mithril-entry-roles/application.denied || true; while [ ! -e /run/mithril-entry-roles/release ]; do /bin/sleep 1; done"
+            "true 2>/dev/null </run/mithril-entry-roles/application.denied || true; if true 2>/dev/null </backup/models/secret; then echo PATH_TREE_ALLOWED >/run/mithril-entry-roles/path-tree.result; else echo PATH_TREE_DENIED >/run/mithril-entry-roles/path-tree.result; fi; if true </run/mithril-entry-roles/control.allowed; then echo CONTROL_ALLOWED >/run/mithril-entry-roles/path-tree-control.result; else echo CONTROL_DENIED >/run/mithril-entry-roles/path-tree-control.result; fi; while [ ! -e /run/mithril-entry-roles/release ]; do /bin/sleep 1; done"
         ]);
         config["root"]["path"] = json!("rootfs");
         config["root"]["readonly"] = json!(false);
@@ -292,6 +326,21 @@ impl EffectTestRunner {
             "args": [prestart_hook, "prestart", request_directory],
             "timeout": 30,
         }]);
+        config["mounts"]
+            .as_array_mut()
+            .ok_or_else(|| {
+                InvalidInputSnafu {
+                    path: &config_path,
+                    reason: "the generated runc spec has no mount array",
+                }
+                .build()
+            })?
+            .push(json!({
+                "destination": "/mnt/data",
+                "type": "tmpfs",
+                "source": "tmpfs",
+                "options": ["nosuid", "nodev", "mode=0755"]
+            }));
         fs::write(
             &config_path,
             serde_json::to_vec_pretty(&config).context(JsonSnafu { path: &config_path })?,
@@ -384,6 +433,7 @@ impl EffectTestRunner {
                 reason: format!("direct runc used unexpected cgroup `{observed_cgroup}`"),
             }
         );
+        container.prepare_preexisting_child_bind(initial_pid, &rootfs)?;
         signal_process(initial_pid, Signal::STOP)?;
 
         let (boot_id, node_boot_id) = boot_identity()?;
@@ -537,6 +587,35 @@ impl EffectTestRunner {
             initial_pid,
             output_directory,
         )?;
+        container.record_mountinfo(initial_pid, output_directory)?;
+        wait_for_reason(&reader, &observations, marker, "PATH_TREE_POLICY_DENY")?;
+        let path_tree_result = rootfs.join("run/mithril-entry-roles/path-tree.result");
+        let path_tree_control_result =
+            rootfs.join("run/mithril-entry-roles/path-tree-control.result");
+        wait_for_path(&path_tree_result, true, "the path-tree denial result")?;
+        wait_for_path(
+            &path_tree_control_result,
+            true,
+            "the path-tree allowed-control result",
+        )?;
+        ensure!(
+            fs::read_to_string(&path_tree_result)
+                .context(IoSnafu {
+                    path: &path_tree_result,
+                })?
+                .trim()
+                == "PATH_TREE_DENIED"
+                && fs::read_to_string(&path_tree_control_result)
+                    .context(IoSnafu {
+                        path: &path_tree_control_result,
+                    })?
+                    .trim()
+                    == "CONTROL_ALLOWED",
+            InvalidInputSnafu {
+                path: &path_tree_result,
+                reason: "the direct runc path-tree negative and allowed control did not both pass",
+            }
+        );
         reader
             .poll(Duration::from_millis(100))
             .context(InterceptorSnafu)?;
@@ -1300,7 +1379,7 @@ impl EffectTestRunner {
         })?;
 
         Ok(RuncEntryRoleRuntimeProbeV1 {
-            schema_version: 11,
+            schema_version: 12,
             runc_version: runc_version.lines().next().unwrap_or_default().to_owned(),
             initial_host_pid: initial_pid,
             prepared_state_before_exec,
@@ -1309,6 +1388,8 @@ impl EffectTestRunner {
             application_entry_allow_observed: true,
             application_default_file_allow_observed: true,
             application_descendant_default_exec_role_preserved,
+            preexisting_child_bind_path_tree_denied: true,
+            path_tree_control_allowed: true,
             application_admitted_entry_rule_id: active.admitted_entry_rule_id,
             independent_entries,
             independent_entry_roles_are_distinct,
@@ -1355,13 +1436,23 @@ impl EffectTestRunner {
             policy_custom_resource("direct-entry-roles", "default", spec).context(PolicySnafu)?;
         resource.metadata.uid = Some("30000000-0000-4000-8000-000000000001".to_owned());
         resource.metadata.generation = Some(1);
-        let document = lower_kubernetes_policy(
+        let mut document = lower_kubernetes_policy(
             &resource,
             "10000000-0000-4000-8000-000000000001",
             "10000000-0000-4000-8000-000000000002",
             "10000000-0000-4000-8000-000000000003",
         )
         .context(PolicySnafu)?;
+        document.path_tree_deny_floors.push(PathTreeDenyFloorV1 {
+            schema_version: 1,
+            rule_id: "deny-model-tree".to_owned(),
+            canonical_path: "/mnt/data".to_owned(),
+            recursive: true,
+            effect_families: vec![EffectFamilyV1::File],
+            operation_ids: vec!["OPEN_READ".to_owned()],
+            requested_disposition: PolicyDispositionV1::Deny,
+            exception_ids: Vec::new(),
+        });
         ensure!(
             dynamic_loader_paths.iter().all(|dependency| {
                 document
@@ -1476,6 +1567,12 @@ fn prepare_entry_role_root(rootfs: &Path, workload_path: &Path) -> Result<Vec<St
         let path = role_directory.join(format!("{role}.denied"));
         fs::write(&path, format!("{role}\n")).context(IoSnafu { path: &path })?;
     }
+    fs::write(role_directory.join("control.allowed"), b"allowed\n").context(IoSnafu {
+        path: role_directory.join("control.allowed"),
+    })?;
+    fs::create_dir_all(rootfs.join("backup/models")).context(IoSnafu {
+        path: rootfs.join("backup/models"),
+    })?;
     for dependency in &dependencies {
         let source = Path::new(dependency);
         let relative = source.strip_prefix("/").map_err(|error| {

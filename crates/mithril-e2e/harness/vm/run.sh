@@ -179,6 +179,12 @@ else
     -p mithril-control --bin mithril-control --bin mithril-policy \
     --bin kubectl-mithril)
 
+  open_probe_target=$work_directory/open-probe-build
+  mkdir -p -- "$open_probe_target"
+  rustc --edition=2021 -C target-feature=+crt-static \
+    "$repo_root/crates/mithril-e2e/src/bin/mithril_open_probe.rs" \
+    -o "$open_probe_target/mithril-open-probe"
+
   qualification_build=$work_directory/kernel-qualification-build
   "$repo_root/target/debug/mithril-kernel-qualification" \
     --repo-root "$repo_root" probe --output-directory "$qualification_build"
@@ -264,6 +270,9 @@ fi
   "$remote_bin/kubectl-mithril"
 "$provider" put "$vm_name" "$repo_root/target/debug/mithril-kernel-qualification" \
   "$remote_bin/mithril-kernel-qualification"
+"$provider" put "$vm_name" \
+  "$open_probe_target/mithril-open-probe" \
+  "$remote_bin/mithril-open-probe"
 "$provider" put "$vm_name" "$qualification_build/feasibility.bpf.o" \
   "$remote_bin/feasibility.bpf.o"
 "$provider" put "$vm_name" \
@@ -340,13 +349,15 @@ entry_role_output=$remote_root/runc-entry-roles
 
 if [[ $entry_role_runtime_only == true ]]; then
   jq -e '
-    .schema_version == 11 and
+    .schema_version == 12 and
     .prepared_state_before_exec == "prepared" and
     .prepared_state_after_exec == "active" and
     .prepared_runtime_effect_observed and
     .application_entry_allow_observed and
     .application_default_file_allow_observed and
     .application_descendant_default_exec_role_preserved and
+    .preexisting_child_bind_path_tree_denied and
+    .path_tree_control_allowed and
     .application_admitted_entry_rule_id > 0 and
     (.independent_entries | length) == 6 and
     (.independent_entries | all(
@@ -410,7 +421,7 @@ if [[ $with_k3s == true ]]; then
       "MITHRIL_VM_CRI_EFFECT_MODE=$effect_mode" \
       bash "$remote_root/harness/guest.sh" \
       k3s-cri-effect "$remote_bin/mithril-node" "$remote_bin/mithril-inspect" \
-      "$remote_bin/mithril-policy" \
+      "$remote_bin/mithril-policy" "$remote_bin/mithril-open-probe" \
       "$remote_source/crates/mithril-e2e/harness/vm/k3s-cri-effect-node-v1.json" \
       "$remote_source/crates/mithril-e2e/fixtures/mithril-policy/observe-policy-v1.yaml" \
       "$remote_source/crates/mithril-e2e/fixtures/mithril-policy/observe-profile-seal-request.json" \

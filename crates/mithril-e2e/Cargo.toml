@@ -58,5 +58,9 @@ path = "src/bin/mithril_effect_test.rs"
 name = "mithril-network-test"
 path = "src/bin/mithril_network_test.rs"
 
+[[bin]]
+name = "mithril-open-probe"
+path = "src/bin/mithril_open_probe.rs"
+
 [lints]
 workspace = true

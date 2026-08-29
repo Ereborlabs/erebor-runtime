@@ -68,6 +68,8 @@ struct canonical_mount_cache_key_v1 {
     __u64 mount_namespace_address;
     __u64 namespace_root_mount_id_unique;
     __u64 namespace_event;
+    __u64 walk_root_mount_address;
+    __u64 walk_root_dentry_address;
     __u64 root_dentry_address;
 };
 
@@ -82,6 +84,8 @@ struct canonical_mount_cache_state_key_v1 {
     __u64 mount_namespace_address;
     __u64 namespace_root_mount_id_unique;
     __u64 namespace_event;
+    __u64 walk_root_mount_address;
+    __u64 walk_root_dentry_address;
 };
 
 struct canonical_mount_cache_state_v1 {
@@ -108,13 +112,15 @@ struct canonical_mount_cache_build_state_v1 {
     __u64 mount_namespace_address;
     __u64 namespace_root_mount_id_unique;
     __u64 namespace_event;
+    __u64 walk_root_mount_address;
+    __u64 walk_root_dentry_address;
     __u64 candidate_mount_address;
     __u64 candidate_namespace_address;
     __u64 candidate_root_address;
     __u64 candidate_mount_id_unique;
-    __u64 left_node_address;
-    __u64 right_node_address;
-    __u32 expected_mounts;
+    __u64 child_node_address;
+    __u64 sibling_node_address;
+    __u32 processed_mounts;
     __u32 stack_depth;
     __u32 failed;
     __u32 reserved;
@@ -122,7 +128,8 @@ struct canonical_mount_cache_build_state_v1 {
 
 struct canonical_mount_path_walk_state_v1 {
     __u64 mount_namespace_address;
-    __u64 namespace_root_address;
+    __u64 walk_root_mount_address;
+    __u64 walk_root_dentry_address;
     __u64 current_mount_address;
     __u64 current_dentry_address;
     __u64 next_mount_address;
@@ -138,7 +145,7 @@ struct canonical_mount_path_walk_state_v1 {
     __u64 first_selected_mount_id_unique;
     __u32 component_count;
     __u32 component_length;
-    __u32 reached_namespace_root;
+    __u32 reached_walk_root;
     __u32 failed;
 };
 
@@ -203,6 +210,7 @@ struct identity_scratch_v1 {
     __u32 effect_gate_operation_argument;
     __u32 path_mount_namespace_inode;
     struct path effect_path;
+    struct path mount_walk_root;
     exact_file_object_key_v1 file_object;
     exact_file_object_key_v1 live_file_object;
     task_label_v1 target_label;
