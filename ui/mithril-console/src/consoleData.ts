@@ -6,10 +6,42 @@ export const consoleData = {
     mode: 'Scenario replay',
   },
   metrics: [
-    { label: 'Protected workloads', value: '18 / 19', detail: '1 admission pending', tone: 'good', route: 'policies' },
-    { label: 'Active generation', value: '6 / 7', detail: 'worker-c staged', tone: 'warn', route: 'policies' },
+    { label: 'Protected workloads', value: '2 / 5', detail: '3 ready for review', tone: 'warn', route: 'operations' },
+    { label: 'Suggested controls', value: '9', detail: 'incident-grounded', tone: 'critical', route: 'operations' },
     { label: 'Evidence sources', value: '5 / 6', detail: 'GitHub audit delayed', tone: 'warn', route: 'evidence' },
     { label: 'Open findings', value: '4', detail: '1 critical · 2 high', tone: 'critical', route: 'findings' },
+  ],
+  workloads: [
+    {
+      id: 'datasets-server', name: 'datasets-server', kind: 'Deployment', namespace: 'prod-datasets',
+      environment: 'production', footprint: '41 workers · 3 clusters', mode: 'Observe', state: 'Critical', suggestions: 4,
+      coverage: 'Complete file, process, network, and Kubernetes coverage', observed: '2.8M effects · 14 days',
+      summary: 'Untrusted dataset parsing reached sensitive file, process execution, and polling-egress boundaries in the incident replay.',
+    },
+    {
+      id: 'xet-storage', name: 'xet-storage', kind: 'StatefulSet', namespace: 'prod-storage',
+      environment: 'production', footprint: '12 Pods · 2 clusters', mode: 'Protected', state: 'Current', suggestions: 0,
+      coverage: 'Complete file and network coverage', observed: '4.2M effects · 14 days',
+      summary: 'Signed storage identities use bounded repository paths and approved internal service destinations.',
+    },
+    {
+      id: 'hub-api', name: 'hub-api', kind: 'Deployment', namespace: 'prod-hub',
+      environment: 'production', footprint: '18 Pods · 3 clusters', mode: 'Protected', state: 'Current', suggestions: 0,
+      coverage: 'Complete credential and provider coverage', observed: '7.6M effects · 14 days',
+      summary: 'Repository writes and credential reads are restricted to admitted API identities.',
+    },
+    {
+      id: 'database-router', name: 'database-router', kind: 'Deployment', namespace: 'prod-data',
+      environment: 'production', footprint: '6 Pods · 2 clusters', mode: 'Observe', state: 'High', suggestions: 3,
+      coverage: 'Complete process and network coverage', observed: '984K effects · 14 days',
+      summary: 'The router accepts known service identities, but unmatched workload-to-database paths remain in Observe mode.',
+    },
+    {
+      id: 'spaces-builder', name: 'spaces-builder', kind: 'Deployment', namespace: 'prod-spaces',
+      environment: 'production', footprint: '24 Pods · 3 clusters', mode: 'Observe', state: 'Review', suggestions: 2,
+      coverage: 'Partial provider coverage · one known audit gap', observed: '1.3M effects · 14 days',
+      summary: 'Build jobs use shared services that can provide transitive egress even without direct internet access.',
+    },
   ],
   sessions: [
     { id: 'session-hf-xnode-021', time: '14:32:18', actor: 'payments-agent', scope: 'payments / payments-api', title: 'Credentialed agent created a workload on another node', machines: 3, operations: 17, result: 'prevented', proof: '16 direct · 2 contextual', graph: 'graph-7f4c.18', replay: true },

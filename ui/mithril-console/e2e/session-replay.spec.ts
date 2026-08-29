@@ -5,7 +5,7 @@ const sessionUrl = (autoplay: 0 | 1) => `/?autoplay=${autoplay}#/sessions/sessio
 
 test('the full console surrounds the causal replay', async ({ page }) => {
   await page.goto('/');
-  await expect(page.getByRole('heading', { name: 'Operations' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Workload protection' })).toBeVisible();
   await expect(page.getByRole('navigation', { name: 'Console sections' })).toBeVisible();
   await page.getByRole('button', { name: 'Sessions' }).click();
   await expect(page.getByRole('heading', { name: 'Sessions' })).toBeVisible();
@@ -13,6 +13,16 @@ test('the full console surrounds the causal replay', async ({ page }) => {
   await page.getByRole('button', { name: /Open causal replay/ }).click();
   await expect(page.getByRole('heading', { name: 'Credentialed agent created a workload on another node' })).toBeVisible();
   await expect(page.getByRole('navigation', { name: 'Console sections' }).getByRole('button', { name: 'Operations', exact: true })).toBeVisible();
+});
+
+test('an observed workload can apply its suggested protection set', async ({ page }) => {
+  await page.goto('/');
+  const workload = page.locator('.workload-row', { hasText: 'datasets-server' });
+  await expect(workload.getByText('Observe', { exact: true })).toBeVisible();
+  await workload.getByRole('button', { name: /Protect 4 policies/ }).click();
+  await expect(workload.getByText('Protected', { exact: true })).toBeVisible();
+  await expect(workload.getByText('Fixture active', { exact: true })).toBeVisible();
+  await expect(workload.getByRole('button', { name: 'View policy' })).toBeVisible();
 });
 
 test('the surrounding product workspaces remain interactive', async ({ page }) => {
