@@ -284,6 +284,25 @@ test('mobile keeps the protection and response decisions inside the viewport', a
   expect(await page.locator('.response-workbench').evaluate((element) => element.scrollWidth - element.clientWidth)).toBe(0);
 });
 
+test('every console workspace fits the mobile viewport with labeled navigation', async ({ page }) => {
+  await page.setViewportSize({ width: 375, height: 812 });
+  for (const url of ['/', '/#/sessions', '/#/findings', '/#/policies', '/#/evidence', '/#/response', '/#/agent', '/#/release', sessionUrl(0)]) {
+    await page.goto(url);
+    expect(await page.evaluate(() => Math.max(
+      document.body.scrollWidth - document.body.clientWidth,
+      document.documentElement.scrollWidth - document.documentElement.clientWidth,
+    ))).toBe(0);
+    const navigationItems = page.getByRole('navigation', { name: 'Console sections' }).getByRole('button');
+    await expect(navigationItems).toHaveCount(8);
+    for (const item of await navigationItems.all()) {
+      await expect(item.locator('span')).not.toHaveText('');
+      const box = await item.boundingBox();
+      expect(box?.width).toBeGreaterThanOrEqual(44);
+      expect(box?.height).toBeGreaterThanOrEqual(44);
+    }
+  }
+});
+
 test('every console workspace has no serious or critical accessibility violations', async ({ page }) => {
   test.setTimeout(60_000);
   const violations: string[] = [];
