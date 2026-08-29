@@ -6,6 +6,8 @@ The console contains Operations, Sessions, Findings, Policy rollout, Evidence, R
 
 Policy rollout supports policy selection and a local draft editor. The editor validates the workload selector and rule set. A saved draft changes browser memory only. It does not write to Mithril Control.
 
+An Observe policy shows evidence-backed policy suggestions. Apply adds the proposed rule to the local draft. Apply does not switch the policy to Protect mode or activate enforcement.
+
 The replay keeps each machine in a stable lane. It shows first-class operation and cross-node edges. Select an operation to expand its evidence in the map. Select an edge point or edge line to inspect its join fields. The ledger uses the same replay cursor and selection.
 
 The fixture states its product boundary in the interface. The current product branch does not provide the graph, finding, or response application programming interfaces (APIs).
