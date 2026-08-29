@@ -578,22 +578,25 @@ kbd { padding: 2px 5px; border: 1px solid var(--line); border-radius: 3px; color
 .incorrect-stop-review { position: fixed; z-index: 140; right: 22px; top: 82px; width: min(430px, calc(100vw - 32px)); max-height: calc(100vh - 104px); overflow-y: auto; border: 1px solid rgba(255, 100, 124, .38); border-radius: 8px; background: #0b121b; box-shadow: 0 28px 80px rgba(0,0,0,.62); }
 .incorrect-stop-review > header { min-height: 70px; padding: 13px 15px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--line); }
 .incorrect-stop-review h2 { margin: 4px 0 0; color: #edf3f9; font-size: 18px; font-weight: 550; }
-.incorrect-stop-review header button { width: 30px; height: 30px; border: 1px solid var(--line); border-radius: 50%; color: var(--muted); background: transparent; }
-.incorrect-stop-review > p { margin: 0; padding: 12px 15px; color: #9c8c91; background: rgba(255, 100, 124, .035); font-size: 9px; line-height: 1.55; }
-.incorrect-stop-review dl { margin: 0; padding: 8px 15px; }
+.incorrect-stop-review header button { width: 44px; height: 44px; border: 1px solid var(--line); border-radius: 50%; color: var(--muted); background: transparent; font-size: 20px; }
+.incorrect-stop-review > p { margin: 0; padding: 13px 15px; color: #bbaeb3; background: rgba(255, 100, 124, .035); font-size: 12px; line-height: 1.55; }
+.incorrect-stop-review > p strong { color: #f1d9df; }
+.incorrect-stop-review dl { margin: 0; padding: 5px 0 0; }
 .incorrect-stop-review dl div { padding: 7px 0; display: grid; grid-template-columns: 90px minmax(0, 1fr); border-bottom: 1px solid var(--line); }
-.incorrect-stop-review dt, .incorrect-stop-review > label { color: var(--faint); font: 7px ui-monospace, monospace; text-transform: uppercase; }
-.incorrect-stop-review dd { margin: 0; color: #aebcca; font: 8px ui-monospace, monospace; }
+.incorrect-stop-review dt, .incorrect-stop-review > label { color: #95a9bd; font: 10px ui-monospace, monospace; text-transform: uppercase; }
+.incorrect-stop-review dd { margin: 0; color: #bdcbd9; font: 10px ui-monospace, monospace; }
 .incorrect-stop-review > label { margin: 8px 15px 12px; display: grid; gap: 6px; }
-.incorrect-stop-review textarea { width: 100%; padding: 9px; resize: vertical; border: 1px solid var(--line-strong); border-radius: 5px; color: #d2dce6; background: #080e16; font-size: 9px; line-height: 1.45; text-transform: none; }
+.incorrect-stop-review textarea { width: 100%; padding: 11px; resize: vertical; border: 1px solid var(--line-strong); border-radius: 5px; color: #d2dce6; background: #080e16; font-size: 12px; line-height: 1.5; text-transform: none; }
 .incorrect-review-boundary { margin: 0 15px 10px; padding: 9px 10px; display: grid; gap: 3px; border-left: 2px solid var(--amber); background: rgba(239, 210, 101, .035); }
-.incorrect-review-boundary strong { color: var(--amber); font: 700 7px ui-monospace, monospace; text-transform: uppercase; }
-.incorrect-review-boundary span { color: #91896e; font-size: 8px; }
+.incorrect-review-boundary strong { color: var(--amber); font: 700 9px ui-monospace, monospace; text-transform: uppercase; }
+.incorrect-review-boundary span { color: #b0a886; font-size: 11px; }
+.incorrect-review-evidence { margin: 0 15px 12px; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.incorrect-review-evidence summary { min-height: 44px; display: flex; align-items: center; color: #9fb2c5; font-size: 11px; cursor: pointer; }
 .incorrect-review-result { color: #84b6aa !important; background: rgba(97, 215, 191, .045) !important; }
 .incorrect-stop-review footer { padding: 12px 15px; display: flex; justify-content: flex-end; gap: 7px; border-top: 1px solid var(--line); }
-.incorrect-stop-review footer button { min-height: 34px; padding: 0 10px; border: 1px solid var(--line-strong); border-radius: 5px; color: #9dacba; background: #101925; font-size: 8px; }
+.incorrect-stop-review footer button { min-height: 44px; padding: 0 12px; border: 1px solid var(--line-strong); border-radius: 5px; color: #b4c1ce; background: #101925; font-size: 11px; }
 .incorrect-stop-review footer button:last-child { color: #17080b; border-color: var(--red); background: var(--red); font-weight: 700; }
-.incorrect-stop-review footer button:disabled { opacity: .35; }
+.incorrect-stop-review footer button:last-child:disabled { color: #a98d94; border-color: #653542; background: #331d25; opacity: 1; }
 .operation-card.outcome-verified, .operation-card.outcome-confirmed { border-left-color: var(--mint); }
 .operation-card.proof-contextual { border-left-color: var(--amber); }
 .operation-trigger { width: 100%; height: 68px; padding: 8px 9px; display: flex; flex-direction: column; gap: 5px; text-align: left; background: transparent; cursor: pointer; }
