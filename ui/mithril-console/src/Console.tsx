@@ -36,9 +36,32 @@ export function ConsoleShell({ activeRoute, navigate, showToast, children }: Con
   activeRoute: ConsoleRoute;
   children: ReactNode;
 }) {
+  const [consoleQuery, setConsoleQuery] = useState('');
+
   function globalSearch(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    navigate('findings');
+    const query = consoleQuery.trim().toLowerCase();
+    if (!query) {
+      showToast('Enter a workspace name, such as Findings, Policies, or Evidence.');
+      return;
+    }
+    const aliases: readonly [ConsoleRoute, readonly string[]][] = [
+      ['operations', ['operations', 'workload', 'protect']],
+      ['sessions', ['sessions', 'session', 'graph', 'replay']],
+      ['findings', ['findings', 'finding', 'incident']],
+      ['policies', ['policies', 'policy', 'rollout']],
+      ['evidence', ['evidence', 'coverage', 'source']],
+      ['response', ['response', 'contain', 'blast']],
+      ['agent', ['agent', 'assistant', 'help']],
+      ['release', ['release', 'claim', 'blocker']],
+    ];
+    const match = aliases.find(([, terms]) => terms.some((term) => term.includes(query) || query.includes(term)));
+    if (!match) {
+      showToast(`No workspace matches “${consoleQuery.trim()}”. Try Findings, Policies, Evidence, or Agent.`);
+      return;
+    }
+    navigate(match[0]);
+    setConsoleQuery('');
   }
 
   return (
@@ -68,8 +91,8 @@ export function ConsoleShell({ activeRoute, navigate, showToast, children }: Con
           <div className="scope-identity"><span>CLUSTER</span><strong>{data.snapshot.cluster}</strong><small>/ {data.snapshot.tenant}</small></div>
           <form className="console-search" onSubmit={globalSearch}>
             <span aria-hidden="true">⌕</span>
-            <input type="search" aria-label="Search the console" placeholder="Search findings, sessions, evidence…" />
-            <kbd>/</kbd>
+            <input type="search" value={consoleQuery} onChange={(event) => setConsoleQuery(event.target.value)} aria-label="Go to a console workspace" placeholder="Go to findings, policies, evidence…" />
+            <kbd>↵</kbd>
           </form>
           <span className="console-snapshot">Snapshot 14:32:22 UTC</span>
           <button type="button" className="console-help" aria-label="Console help"
@@ -125,6 +148,7 @@ function OperationsView({ navigate, openSession, showToast }: ConsoleActions) {
   const [addingPolicyFor, setAddingPolicyFor] = useState<string | null>(null);
   const [newPolicy, setNewPolicy] = useState({ title: '', action: 'Deny', expression: '' });
   const [removingRuleId, setRemovingRuleId] = useState<string | null>(null);
+  const [protectingId, setProtectingId] = useState<string | null>(null);
 
   function toggleWorkload(workloadId: string) {
     setExpandedId((current) => current === workloadId ? null : workloadId);
@@ -132,9 +156,19 @@ function OperationsView({ navigate, openSession, showToast }: ConsoleActions) {
     setRuleDraft(null);
     setAddingPolicyFor(null);
     setRemovingRuleId(null);
+    setProtectingId(null);
   }
 
-  function protect(workload: Workload) {
+  function reviewProtection(workload: Workload) {
+    setExpandedId(workload.id);
+    setProtectingId(workload.id);
+    setEditingRuleId(null);
+    setRuleDraft(null);
+    setAddingPolicyFor(null);
+    setRemovingRuleId(null);
+  }
+
+  function applyProtection(workload: Workload) {
     const suggested = rules.filter((rule) => rule.workload === workload.id && rule.status === 'suggested').length;
     setWorkloads((current) => current.map((item) => item.id === workload.id
       ? { ...item, mode: 'Protected', state: 'Fixture active', suggestions: 0 }
@@ -143,6 +177,7 @@ function OperationsView({ navigate, openSession, showToast }: ConsoleActions) {
     setExpandedId(workload.id);
     setEditingRuleId(null);
     setRuleDraft(null);
+    setProtectingId(null);
     showToast(suggested
       ? `${suggested} suggested policies applied to the local ${workload.name} fixture.`
       : `${workload.name} has no new suggestions to apply.`);
@@ -229,12 +264,17 @@ function OperationsView({ navigate, openSession, showToast }: ConsoleActions) {
                 <span className={`workload-state state-${workload.state.toLowerCase().replace(' ', '-')}`}>{workload.state}</span>
                 <div className="workload-protection">
                   <span className={`workload-mode ${workload.mode.toLowerCase()}`}>{workload.mode}</span>
-                  <div>{workload.mode === 'Observe' ? <button type="button" className="protect-button" disabled={!suggestionCount} onClick={() => protect(workload)}>{suggestionCount ? 'Protect' : 'No suggestions'} <small>{suggestionCount} policies</small></button> : <button type="button" className="protected-button" onClick={() => toggleWorkload(workload.id)}>Current policy</button>}<button type="button" className="workload-chevron" aria-expanded={expandedId === workload.id} aria-label={`${expandedId === workload.id ? 'Hide' : 'Show'} policies for ${workload.name}`} onClick={() => toggleWorkload(workload.id)}>⌄</button></div>
+                  <div>{workload.mode === 'Observe' ? <button type="button" className="protect-button" disabled={!suggestionCount} onClick={() => reviewProtection(workload)}>{suggestionCount ? 'Protect' : 'No suggestions'} <small>{suggestionCount} policies</small></button> : <button type="button" className="protected-button" onClick={() => toggleWorkload(workload.id)}>Current policy</button>}<button type="button" className="workload-chevron" aria-expanded={expandedId === workload.id} aria-label={`${expandedId === workload.id ? 'Hide' : 'Show'} policies for ${workload.name}`} onClick={() => toggleWorkload(workload.id)}>⌄</button></div>
                 </div>
               </div>
               {expandedId === workload.id ? (
                 <section className="workload-policy-review" id={`workload-policies-${workload.id}`} aria-label={`Policies for ${workload.name}`}>
                   <header><div><span className="eyebrow">{workload.namespace} / {workload.name}</span><h3>Current and suggested policies</h3><p>Add, edit, or remove policies in this local set. No change reaches a workload.</p></div><div className="workload-review-actions"><button type="button" className="add-workload-policy" onClick={() => startAddingPolicy(workload.id)}>+ Add policy</button><button type="button" onClick={() => navigate('policies')}>Open rollout details <span>→</span></button></div></header>
+                  {protectingId === workload.id ? <section className="protect-confirmation" aria-label={`Confirm protection for ${workload.name}`}>
+                    <div><span className="eyebrow">Protection review</span><strong>Apply {suggestionCount} suggested {suggestionCount === 1 ? 'policy' : 'policies'} to {workload.name}?</strong><p>Review the New suggestions list below. This fixture changes browser memory only.</p></div>
+                    <button type="button" onClick={() => setProtectingId(null)}>Keep observing</button>
+                    <button type="button" className="confirm-protection" disabled={!suggestionCount} onClick={() => applyProtection(workload)}>Apply {suggestionCount} {suggestionCount === 1 ? 'suggestion' : 'suggestions'} to {workload.name}</button>
+                  </section> : null}
                   {addingPolicyFor === workload.id ? <form className="add-policy-form" onSubmit={(event) => addPolicy(event, workload)}>
                     <div className="inline-rule-fields"><label>Policy name<input autoFocus value={newPolicy.title} onChange={(event) => setNewPolicy({ ...newPolicy, title: event.target.value })} /></label><label>Action<select value={newPolicy.action} onChange={(event) => setNewPolicy({ ...newPolicy, action: event.target.value })}><option>Deny</option><option>Allow list</option><option>Observe</option></select></label></div>
                     <label className="inline-expression">Rule<textarea rows={2} value={newPolicy.expression} onChange={(event) => setNewPolicy({ ...newPolicy, expression: event.target.value })} /></label>
