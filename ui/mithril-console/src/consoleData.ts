@@ -28,6 +28,11 @@ export const consoleData = {
     { name: 'model-delivery', namespace: 'delivery', mode: 'Protect', source: '42', generation: '21ba', desired: 3, active: 3, state: 'Current', detail: 'All exact targets acknowledge the signed candidate.', selector: 'app=model-publisher', defaultAction: 'Deny', rules: 'allow file.read release/**\nallow network.connect registry.internal\ndeny process.exec shell' },
     { name: 'research-observe', namespace: 'research', mode: 'Observe', source: '8', generation: '11d8', desired: 4, active: 4, state: 'Observe', detail: 'The policy records effects. It does not make a prevention claim.', selector: 'team=research', defaultAction: 'Observe', rules: 'observe file.read datasets/**\nobserve network.connect external\nobserve process.exec notebook-kernel' },
   ],
+  observeSuggestions: [
+    { id: 'sug-dataset-cache', policy: 'research-observe', title: 'Allow signed dataset cache reads', rule: 'allow file.read datasets/cache/**', evidence: '184 exact reads · 7 workloads · 14 days', confidence: 'High', effect: 'Narrows one observed file branch to a signed cache path.' },
+    { id: 'sug-model-registry', policy: 'research-observe', title: 'Allow the internal model registry', rule: 'allow network.connect registry.models.internal:443', evidence: '63 exact connects · mTLS identity retained', confidence: 'High', effect: 'Keeps other external destinations in Observe mode.' },
+    { id: 'sug-shell-boundary', policy: 'research-observe', title: 'Propose a shell execution boundary', rule: 'deny process.exec /bin/sh outside=notebook-kernel', evidence: '3 shell starts · 0 signed workflow matches', confidence: 'Review', effect: 'Would prevent unmatched shell entry after Protect activation.' },
+  ],
   rolloutNodes: [
     { name: 'worker-a', identity: 'uid-a17c · boot 884', generation: '7f4c', state: 'Active', detail: 'readback complete' },
     { name: 'worker-b', identity: 'uid-b802 · boot 311', generation: '7f4c', state: 'Active', detail: 'readback complete' },
