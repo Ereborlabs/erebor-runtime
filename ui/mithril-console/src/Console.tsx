@@ -83,7 +83,7 @@ export function ConsoleView({ route, ...actions }: ConsoleActions & { route: Con
   if (route === 'operations') return <OperationsView {...actions} />;
   if (route === 'sessions') return <SessionsView {...actions} />;
   if (route === 'findings') return <FindingsView {...actions} />;
-  if (route === 'policies') return <PoliciesView />;
+  if (route === 'policies') return <PoliciesView showToast={actions.showToast} />;
   if (route === 'evidence') return <EvidenceView {...actions} />;
   if (route === 'response') return <ResponseView {...actions} />;
   return <ReleaseView {...actions} />;
@@ -204,16 +204,74 @@ function FindingsView({ openSession }: ConsoleActions) {
   );
 }
 
-function PoliciesView() {
+type EditablePolicy = {
+  name: string;
+  namespace: string;
+  mode: string;
+  source: string;
+  generation: string;
+  desired: number;
+  active: number;
+  state: string;
+  detail: string;
+  selector: string;
+  defaultAction: string;
+  rules: string;
+};
+
+function PoliciesView({ showToast }: Pick<ConsoleActions, 'showToast'>) {
+  const [policies, setPolicies] = useState<EditablePolicy[]>(() => data.policies.map((policy) => ({ ...policy })));
   const [selectedName, setSelectedName] = useState<string>(data.policies[0].name);
-  const selected = data.policies.find((policy) => policy.name === selectedName) ?? data.policies[0];
+  const [editing, setEditing] = useState(false);
+  const [error, setError] = useState('');
+  const selected = policies.find((policy) => policy.name === selectedName) ?? policies[0];
+  const [draft, setDraft] = useState<EditablePolicy>(() => ({ ...selected }));
+
+  function selectPolicy(policy: EditablePolicy) {
+    setSelectedName(policy.name);
+    setDraft({ ...policy });
+    setEditing(false);
+    setError('');
+  }
+
+  function savePolicy(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!draft.selector.trim() || !draft.rules.trim()) {
+      setError('A workload selector and at least one rule are required.');
+      return;
+    }
+    setPolicies((current) => current.map((policy) => policy.name === draft.name ? { ...draft, selector: draft.selector.trim(), rules: draft.rules.trim() } : policy));
+    setDraft((current) => ({ ...current, selector: current.selector.trim(), rules: current.rules.trim() }));
+    setEditing(false);
+    setError('');
+    showToast('Policy draft saved locally. No control-plane write occurred.');
+  }
+
+  const changedFields = ['mode', 'defaultAction', 'selector', 'rules'].filter((field) => draft[field as keyof EditablePolicy] !== selected[field as keyof EditablePolicy]).length;
   return (
     <main className="console-page">
       <PageHeader eyebrow="Desired state to physical activation" title="Policy rollout" description="Track source revisions, signed generations, exact targets, and node readback." />
       <div className="authority-banner"><strong>Status is not authority.</strong><span>The active signed node generation decides. Kubernetes status is an informational projection.</span></div>
       <section className="console-panel policy-table">
         <header className="panel-heading"><div><span className="eyebrow">WorkloadProtectionPolicy</span><h2>Desired policies</h2></div><span>{data.policies.length} sources</span></header>
-        {data.policies.map((policy) => <button type="button" key={policy.name} className={selected.name === policy.name ? 'active' : ''} onClick={() => setSelectedName(policy.name)}><span><small>{policy.namespace}</small><strong>{policy.name}</strong></span><span><small>Mode</small><strong>{policy.mode}</strong></span><span><small>Source / generation</small><strong>{policy.source} / {policy.generation}</strong></span><span><small>Activation</small><strong>{policy.active} / {policy.desired}</strong><i><b style={{ width: `${policy.active / policy.desired * 100}%` }} /></i></span><em className={`policy-${policy.state.toLowerCase()}`}>{policy.state}</em></button>)}
+        {policies.map((policy) => <button type="button" key={policy.name} className={selected.name === policy.name ? 'active' : ''} onClick={() => selectPolicy(policy)}><span><small>{policy.namespace}</small><strong>{policy.name}</strong></span><span><small>Mode</small><strong>{policy.mode}</strong></span><span><small>Source / generation</small><strong>{policy.source} / {policy.generation}</strong></span><span><small>Activation</small><strong>{policy.active} / {policy.desired}</strong><i><b style={{ width: `${policy.active / policy.desired * 100}%` }} /></i></span><em className={`policy-${policy.state.toLowerCase()}`}>{policy.state}</em></button>)}
+      </section>
+      <section className={`policy-editor ${editing ? 'editing' : ''}`} aria-labelledby="policy-editor-title">
+        <header>
+          <div><span className="eyebrow">Selected policy · source {selected.source}</span><h2 id="policy-editor-title">{selected.namespace} / {selected.name}</h2><p>Generation {selected.generation} is active on {selected.active} of {selected.desired} exact targets.</p></div>
+          {!editing ? <button type="button" className="secondary-action" onClick={() => { setDraft({ ...selected }); setEditing(true); }}>Edit policy</button> : <span className="draft-count">{changedFields} changed fields</span>}
+        </header>
+        <form onSubmit={savePolicy}>
+          <div className="policy-fields">
+            <label>Mode<select value={draft.mode} disabled={!editing} onChange={(event) => setDraft({ ...draft, mode: event.target.value })}><option>Protect</option><option>Observe</option></select></label>
+            <label>Default action<select value={draft.defaultAction} disabled={!editing} onChange={(event) => setDraft({ ...draft, defaultAction: event.target.value })}><option>Deny</option><option>Allow</option><option>Observe</option></select></label>
+            <label className="selector-field">Workload selector<input value={draft.selector} readOnly={!editing} onChange={(event) => setDraft({ ...draft, selector: event.target.value })} /></label>
+          </div>
+          <label className="rules-field">Rules<textarea rows={5} value={draft.rules} readOnly={!editing} onChange={(event) => setDraft({ ...draft, rules: event.target.value })} spellCheck="false" /></label>
+          <div className="editor-boundary"><strong>UI fixture boundary.</strong> Saving changes browser memory only. No candidate is signed, delivered, or activated.</div>
+          {error ? <p className="form-error" role="alert">{error}</p> : null}
+          {editing ? <div className="editor-actions"><button type="button" className="secondary-action" onClick={() => { setDraft({ ...selected }); setEditing(false); setError(''); }}>Cancel</button><button type="submit" className="primary-action">Save draft</button></div> : null}
+        </form>
       </section>
       <div className="console-two-column policy-lower">
         <section className="console-panel"><header className="panel-heading"><div><span className="eyebrow">{selected.namespace} / {selected.name}</span><h2>Exact node inventory</h2></div><em className={`policy-${selected.state.toLowerCase()}`}>{selected.state}</em></header><p className="panel-intro">{selected.detail}</p><div className="node-inventory"><div className="node-inventory-head"><span>Node</span><span>Exact identity</span><span>Generation</span><span>State</span></div>{data.rolloutNodes.map((node) => <div key={node.name}><strong>{node.name}</strong><code>{node.identity}</code><code>{node.generation}</code><span><b className={`node-${node.state.toLowerCase()}`}>{node.state}</b><small>{node.detail}</small></span></div>)}</div></section>
