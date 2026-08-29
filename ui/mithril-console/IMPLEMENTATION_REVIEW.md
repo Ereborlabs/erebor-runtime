@@ -16,6 +16,10 @@ The production end state requires durable graph, finding, and response APIs. Tho
 
 -> [ConsoleView](src/Console.tsx) The workspace route renders Operations, Sessions, Findings, Policy rollout, Evidence, Response, or Release.
 
+-> [PoliciesView](src/Console.tsx) A policy selection opens its source, generation, activation, selector, default action, and rule set.
+
+-> [PoliciesView](src/Console.tsx) Edit mode validates and saves one policy draft in browser memory.
+
 -> [SessionsView](src/Console.tsx) A session selection exposes its graph revision, operation count, machine count, proof summary, and replay availability.
 
 -> [App](src/App.tsx) The replay action opens the selected immutable session route.
@@ -55,6 +59,8 @@ Partial: [App](src/App.tsx) The URL fragment restores the console or session rou
 `App` owns the console route and transient notification. `ConsoleShell` owns no state. The shell sends navigation events to `App`.
 
 `Console.tsx` owns the local selection and filter state for Sessions, Findings, Policy rollout, and Response. React creates and destroys this state with each workspace. No console state is durable.
+
+`PoliciesView` owns editable policy copies and one active draft. A save replaces the selected browser-memory copy. The save does not compile, sign, deliver, or activate a policy candidate.
 
 `consoleData.ts` owns the console design fixture. The fixture contains posture metrics, sessions, findings, policy rollout, evidence health, response simulation, and release qualification records.
 

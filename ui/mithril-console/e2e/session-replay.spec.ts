@@ -29,6 +29,18 @@ test('the surrounding product workspaces remain interactive', async ({ page }) =
   }
 });
 
+test('a selected policy can be edited and saved as a local draft', async ({ page }) => {
+  await page.goto('/');
+  await page.getByRole('navigation', { name: 'Console sections' }).getByRole('button', { name: 'Policies' }).click();
+  await page.getByRole('button', { name: /delivery model-delivery/ }).click();
+  await expect(page.getByRole('heading', { name: 'delivery / model-delivery' })).toBeVisible();
+  await page.getByRole('button', { name: 'Edit policy' }).click();
+  await page.getByLabel('Workload selector').fill('app=model-publisher,track=stable');
+  await page.getByRole('button', { name: 'Save draft' }).click();
+  await expect(page.getByLabel('Workload selector')).toHaveValue('app=model-publisher,track=stable');
+  await expect(page.getByRole('status')).toContainText('Policy draft saved locally');
+});
+
 test('replays the causal front instead of showing the complete graph at once', async ({ page }) => {
   await page.goto(sessionUrl(1));
   await expect(page.getByTestId('operation-session-open')).toBeVisible();
