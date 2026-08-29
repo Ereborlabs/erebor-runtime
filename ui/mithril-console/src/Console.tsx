@@ -122,11 +122,16 @@ function OperationsView({ navigate, openSession, showToast }: ConsoleActions) {
   const [expandedId, setExpandedId] = useState<string | null>('datasets-server');
   const [editingRuleId, setEditingRuleId] = useState<string | null>(null);
   const [ruleDraft, setRuleDraft] = useState<WorkloadRule | null>(null);
+  const [addingPolicyFor, setAddingPolicyFor] = useState<string | null>(null);
+  const [newPolicy, setNewPolicy] = useState({ title: '', action: 'Deny', expression: '' });
+  const [removingRuleId, setRemovingRuleId] = useState<string | null>(null);
 
   function toggleWorkload(workloadId: string) {
     setExpandedId((current) => current === workloadId ? null : workloadId);
     setEditingRuleId(null);
     setRuleDraft(null);
+    setAddingPolicyFor(null);
+    setRemovingRuleId(null);
   }
 
   function protect(workload: Workload) {
@@ -146,6 +151,7 @@ function OperationsView({ navigate, openSession, showToast }: ConsoleActions) {
   function editRule(rule: WorkloadRule) {
     setEditingRuleId(rule.id);
     setRuleDraft({ ...rule });
+    setRemovingRuleId(null);
   }
 
   function saveRule() {
@@ -156,6 +162,40 @@ function OperationsView({ navigate, openSession, showToast }: ConsoleActions) {
     setEditingRuleId(null);
     setRuleDraft(null);
     showToast(`Saved a local edit to ${ruleDraft.title}. No policy write occurred.`);
+  }
+
+  function startAddingPolicy(workloadId: string) {
+    setAddingPolicyFor(workloadId);
+    setNewPolicy({ title: '', action: 'Deny', expression: '' });
+    setEditingRuleId(null);
+    setRuleDraft(null);
+    setRemovingRuleId(null);
+  }
+
+  function addPolicy(event: FormEvent<HTMLFormElement>, workload: Workload) {
+    event.preventDefault();
+    if (!newPolicy.title.trim() || !newPolicy.expression.trim()) return;
+    setRules((current) => [...current, {
+      id: `local-${workload.id}-${Date.now()}`,
+      workload: workload.id,
+      status: 'current',
+      title: newPolicy.title.trim(),
+      action: newPolicy.action,
+      expression: newPolicy.expression.trim(),
+      evidence: 'Operator-authored local policy',
+      confidence: 'Not simulated',
+    }]);
+    setAddingPolicyFor(null);
+    setNewPolicy({ title: '', action: 'Deny', expression: '' });
+    showToast(`Added ${newPolicy.title.trim()} to the local ${workload.name} policy set.`);
+  }
+
+  function removeRule(rule: WorkloadRule, workload: Workload) {
+    setRules((current) => current.filter((item) => item.id !== rule.id));
+    setRemovingRuleId(null);
+    setEditingRuleId(null);
+    setRuleDraft(null);
+    showToast(`Removed ${rule.title} from the local ${workload.name} policy set.`);
   }
 
   return (
@@ -175,7 +215,9 @@ function OperationsView({ navigate, openSession, showToast }: ConsoleActions) {
           <span>{workloads.filter((workload) => workload.mode === 'Protected').length} protected · {workloads.filter((workload) => workload.mode === 'Observe').length} observing</span>
         </header>
         <div className="workload-list">
-          {workloads.map((workload) => (
+          {workloads.map((workload) => {
+            const suggestionCount = rules.filter((rule) => rule.workload === workload.id && rule.status === 'suggested').length;
+            return (
             <article className={`workload-row mode-${workload.mode.toLowerCase()}`} key={workload.id}>
               <div className="workload-summary">
                 <button type="button" className="workload-identity" onClick={() => toggleWorkload(workload.id)} aria-expanded={expandedId === workload.id} aria-controls={`workload-policies-${workload.id}`}>
@@ -187,12 +229,17 @@ function OperationsView({ navigate, openSession, showToast }: ConsoleActions) {
                 <span className={`workload-state state-${workload.state.toLowerCase().replace(' ', '-')}`}>{workload.state}</span>
                 <div className="workload-protection">
                   <span className={`workload-mode ${workload.mode.toLowerCase()}`}>{workload.mode}</span>
-                  <div>{workload.mode === 'Observe' ? <button type="button" className="protect-button" onClick={() => protect(workload)}>Protect <small>{workload.suggestions} policies</small></button> : <button type="button" className="protected-button" onClick={() => toggleWorkload(workload.id)}>Current policy</button>}<button type="button" className="workload-chevron" aria-expanded={expandedId === workload.id} aria-label={`${expandedId === workload.id ? 'Hide' : 'Show'} policies for ${workload.name}`} onClick={() => toggleWorkload(workload.id)}>⌄</button></div>
+                  <div>{workload.mode === 'Observe' ? <button type="button" className="protect-button" disabled={!suggestionCount} onClick={() => protect(workload)}>{suggestionCount ? 'Protect' : 'No suggestions'} <small>{suggestionCount} policies</small></button> : <button type="button" className="protected-button" onClick={() => toggleWorkload(workload.id)}>Current policy</button>}<button type="button" className="workload-chevron" aria-expanded={expandedId === workload.id} aria-label={`${expandedId === workload.id ? 'Hide' : 'Show'} policies for ${workload.name}`} onClick={() => toggleWorkload(workload.id)}>⌄</button></div>
                 </div>
               </div>
               {expandedId === workload.id ? (
                 <section className="workload-policy-review" id={`workload-policies-${workload.id}`} aria-label={`Policies for ${workload.name}`}>
-                  <header><div><span className="eyebrow">{workload.namespace} / {workload.name}</span><h3>Current and suggested policies</h3><p>Rules come from retained workload evidence. Edit stays local until a qualified control path exists.</p></div><button type="button" onClick={() => navigate('policies')}>Open rollout details <span>→</span></button></header>
+                  <header><div><span className="eyebrow">{workload.namespace} / {workload.name}</span><h3>Current and suggested policies</h3><p>Add, edit, or remove policies in this local set. No change reaches a workload.</p></div><div className="workload-review-actions"><button type="button" className="add-workload-policy" onClick={() => startAddingPolicy(workload.id)}>+ Add policy</button><button type="button" onClick={() => navigate('policies')}>Open rollout details <span>→</span></button></div></header>
+                  {addingPolicyFor === workload.id ? <form className="add-policy-form" onSubmit={(event) => addPolicy(event, workload)}>
+                    <div className="inline-rule-fields"><label>Policy name<input autoFocus value={newPolicy.title} onChange={(event) => setNewPolicy({ ...newPolicy, title: event.target.value })} /></label><label>Action<select value={newPolicy.action} onChange={(event) => setNewPolicy({ ...newPolicy, action: event.target.value })}><option>Deny</option><option>Allow list</option><option>Observe</option></select></label></div>
+                    <label className="inline-expression">Rule<textarea rows={2} value={newPolicy.expression} onChange={(event) => setNewPolicy({ ...newPolicy, expression: event.target.value })} /></label>
+                    <div className="inline-rule-actions"><button type="button" onClick={() => setAddingPolicyFor(null)}>Cancel</button><button type="submit" className="save-inline-rule" disabled={!newPolicy.title.trim() || !newPolicy.expression.trim()}>Add to current policies</button></div>
+                  </form> : null}
                   <div className="workload-policy-groups">
                     {(['current', 'suggested'] as const).map((status) => {
                       const matching = rules.filter((rule) => rule.workload === workload.id && rule.status === status);
@@ -203,12 +250,12 @@ function OperationsView({ navigate, openSession, showToast }: ConsoleActions) {
                             const editing = editingRuleId === rule.id && ruleDraft;
                             return (
                               <article className="workload-rule" key={rule.id} data-testid={`workload-rule-${rule.id}`}>
-                                {editing ? <>
+                                {removingRuleId === rule.id ? <div className="remove-policy-confirm" role="alert"><div><strong>Remove {rule.title}?</strong><span>This changes the local fixture only.</span></div><button type="button" onClick={() => setRemovingRuleId(null)}>Cancel</button><button type="button" className="confirm-policy-remove" onClick={() => removeRule(rule, workload)}>Remove policy</button></div> : editing ? <>
                                   <div className="inline-rule-fields"><label>Policy name<input value={ruleDraft.title} onChange={(event) => setRuleDraft({ ...ruleDraft, title: event.target.value })} /></label><label>Action<select value={ruleDraft.action} onChange={(event) => setRuleDraft({ ...ruleDraft, action: event.target.value })}><option>Observe</option><option>Deny</option><option>Allow list</option></select></label></div>
                                   <label className="inline-expression">Rule<textarea rows={2} value={ruleDraft.expression} onChange={(event) => setRuleDraft({ ...ruleDraft, expression: event.target.value })} /></label>
                                   <div className="inline-rule-actions"><button type="button" onClick={() => { setEditingRuleId(null); setRuleDraft(null); }}>Cancel</button><button type="button" className="save-inline-rule" onClick={saveRule}>Save local edit</button></div>
                                 </> : <>
-                                  <div className="workload-rule-heading"><span className={`rule-action action-${rule.action.toLowerCase().replace(' ', '-')}`}>{rule.action}</span><strong>{rule.title}</strong><button type="button" onClick={() => editRule(rule)}>Edit inline</button></div>
+                                  <div className="workload-rule-heading"><span className={`rule-action action-${rule.action.toLowerCase().replace(' ', '-')}`}>{rule.action}</span><strong>{rule.title}</strong><div><button type="button" onClick={() => editRule(rule)}>Edit</button><button type="button" className="remove-rule-button" onClick={() => { setRemovingRuleId(rule.id); setAddingPolicyFor(null); }}>Remove</button></div></div>
                                   <code>{rule.expression}</code><div className="workload-rule-proof"><span>{rule.evidence}</span><b>{rule.confidence}</b></div>
                                 </>}
                               </article>
@@ -221,7 +268,7 @@ function OperationsView({ navigate, openSession, showToast }: ConsoleActions) {
                 </section>
               ) : null}
             </article>
-          ))}
+          );})}
         </div>
         <p className="workload-boundary"><strong>Fixture boundary.</strong> Protect changes local UI state only. No candidate is signed, delivered, probed, or activated.</p>
       </section>

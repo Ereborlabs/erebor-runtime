@@ -35,7 +35,7 @@ test('workload policy details expand and edit in place', async ({ page }) => {
   await expect(policies.getByRole('region', { name: 'Suggested policies' })).toContainText('Block worker environment reads');
 
   const rule = policies.getByTestId('workload-rule-datasets-proc');
-  await rule.getByRole('button', { name: 'Edit inline' }).click();
+  await rule.getByRole('button', { name: 'Edit' }).click();
   await rule.getByLabel('Policy name').fill('Block dataset worker environment reads');
   await rule.getByLabel('Rule').fill('deny file.read /proc/** source=dataset-worker exact=true');
   await rule.getByRole('button', { name: 'Save local edit' }).click();
@@ -44,6 +44,32 @@ test('workload policy details expand and edit in place', async ({ page }) => {
 
   await page.getByRole('button', { name: 'Show policies for database-router' }).click();
   await expect(page.getByRole('region', { name: 'Policies for database-router' })).toContainText('Block unmatched database clients');
+});
+
+test('the workload policy set supports adding and removing policies', async ({ page }) => {
+  await page.goto('/');
+  const workload = page.locator('.workload-row', { hasText: 'datasets-server' });
+  const policies = workload.getByRole('region', { name: 'Policies for datasets-server' });
+  const current = policies.getByRole('region', { name: 'Current policies' });
+
+  await policies.getByRole('button', { name: 'Add policy' }).click();
+  const form = policies.locator('.add-policy-form');
+  await form.getByLabel('Policy name').fill('Permit signed cache reads');
+  await form.getByLabel('Action').selectOption('Allow list');
+  await form.getByLabel('Rule').fill('allow file.read datasets/cache/** identity=dataset-worker');
+  await form.getByRole('button', { name: 'Add to current policies' }).click();
+  const added = current.locator('.workload-rule', { hasText: 'Permit signed cache reads' });
+  await expect(added).toContainText('Operator-authored local policy');
+
+  await added.getByRole('button', { name: 'Remove' }).click();
+  await expect(added).toContainText('Remove Permit signed cache reads?');
+  await added.getByRole('button', { name: 'Remove policy' }).click();
+  await expect(current.getByText('Permit signed cache reads')).toHaveCount(0);
+
+  const suggestion = policies.getByTestId('workload-rule-datasets-proc');
+  await suggestion.getByRole('button', { name: 'Remove' }).click();
+  await suggestion.getByRole('button', { name: 'Remove policy' }).click();
+  await expect(workload.getByRole('button', { name: /Protect 3 policies/ })).toBeVisible();
 });
 
 test('the surrounding product workspaces remain interactive', async ({ page }) => {
