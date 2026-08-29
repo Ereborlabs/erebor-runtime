@@ -26,7 +26,9 @@ The production end state requires durable graph, finding, and response APIs. Tho
 
 -> [OperationsView](src/Console.tsx) Remove policy requires confirmation and removes one current or suggested policy from browser memory.
 
--> [OperationsView](src/Console.tsx) Protect moves the workload suggestions into its current browser-memory policy set.
+-> [OperationsView](src/Console.tsx) Protect opens the exact workload policy set and requests a second confirmation.
+
+-> [OperationsView](src/Console.tsx) Confirm moves the workload suggestions into its current browser-memory policy set.
 
 -> [PoliciesView](src/Console.tsx) A policy selection opens its source, generation, activation, selector, default action, and rule set.
 
@@ -58,9 +60,9 @@ The production end state requires durable graph, finding, and response APIs. Tho
 
 -> [CounterfactualPath](src/App.tsx) Show if allowed renders a hypothetical incident path outside the graph data.
 
--> [SessionReplay](src/App.tsx) Review incorrect stop records a local reason for one bounded exception review.
+-> [SessionReplay](src/App.tsx) Review incorrect stop requests the expected workload action before it exposes evidence identifiers.
 
--> [EdgeDetail](src/App.tsx) An edge selection shows the relationship, endpoints, join fields, and evidence records.
+-> [EdgeDetail](src/App.tsx) An edge selection opens a pinned inspector with the relationship, endpoints, join fields, and evidence records.
 
 -> [EvidenceLedger](src/App.tsx) The ledger reads the same replay cursor and operation selection.
 
@@ -68,7 +70,7 @@ The production end state requires durable graph, finding, and response APIs. Tho
 
 -> [GraphMap](src/App.tsx) The viewport follows the active causal front without changing operation positions.
 
--> [SessionReplay](src/App.tsx) Search, evidence filters, and machine focus change the investigation view.
+-> [SessionReplay](src/App.tsx) Search, evidence filters, machine focus, and explicit frame actions change the investigation view.
 
 -> [SessionReplay](src/App.tsx) The URL fragment records the revision, step, view, selection, and machine focus.
 
@@ -88,7 +90,7 @@ Partial: [App](src/App.tsx) The URL fragment restores the console or session rou
 
 `Console.tsx` owns the local selection and filter state for Workload protection, Sessions, Findings, Policy rollout, and Response. React creates and destroys this state with each workspace. No console state is durable.
 
-`OperationsView` owns the workload mode, current rule set, suggestion set, expanded workload, active inline edit, new-policy draft, and removal confirmation. Add, edit, remove, and Protect change only these React values. A suggested-policy removal decreases the Protect count. No action calls Mithril Control.
+`OperationsView` owns the workload mode, current rule set, suggestion set, expanded workload, Protect confirmation, active inline edit, new-policy draft, and removal confirmation. Add, edit, remove, and confirmed Protect actions change only these React values. A suggested-policy removal decreases the Protect count. No action calls Mithril Control.
 
 `PoliciesView` owns editable policy copies and one active draft. A save replaces the selected browser-memory copy. The save does not compile, sign, deliver, or activate a policy candidate.
 
@@ -104,7 +106,7 @@ Partial: [App](src/App.tsx) The URL fragment restores the console or session rou
 
 `graph.ts` owns pure graph projection and layout functions. These functions do not write application state. `graph.test.ts` verifies replay visibility, multiple causal parents, an acyclic session slice, selected-rank expansion, and edge geometry.
 
-`GraphMap` owns map rendering. Native Scalable Vector Graphics (SVG) paths render the edges. React elements render the operation cards, lane labels, edge inspection points, and contextual details.
+`GraphMap` owns map rendering. Native Scalable Vector Graphics (SVG) paths render the edges. React elements render the operation cards, lane labels, edge inspection points, and the pinned edge inspector.
 
 `CounterfactualPath` reads one stop position from the layout. The component does not read or write `sessionGraph.edges`. The component marks every continuation node as hypothetical.
 
@@ -141,6 +143,8 @@ sequenceDiagram
     User->>Workload: Expand workload or edit rule
     Workload-->>User: Show current and suggested policy set
     User->>Workload: Select Protect
+    Workload-->>User: Show exact policy set and confirmation
+    User->>Workload: Confirm workload and suggestion count
     Workload-->>User: Update local fixture state
     Note over Workload,Control: No request reaches Mithril Control
 ```
@@ -155,7 +159,7 @@ The selected operation expands at its existing causal rank. Later ranks move to 
 
 The counterfactual branch starts at the denied operation position. The branch uses separate React data. The branch does not add, remove, or replace a causal edge. The browser test compares the recorded edge count before and after the branch appears.
 
-The incorrect-stop review keeps the actor, object, operation, policy, and graph result visible. The local review proposes one actor, one object, one operation, and one expiring grant. The review does not update a workload policy.
+The incorrect-stop review states that access remains denied. It asks what the workload should have been allowed to do. The local review proposes one workload, one object, one operation, and one expiring grant. Evidence identifiers remain available in a disclosure section. The review does not update a workload policy.
 
 ## Incident grounding
 
@@ -167,7 +171,9 @@ The `datasets-server` suggestions cover sensitive `/proc` reads, parser-launched
 
 [graph.test.ts](src/graph.test.ts) verifies the pure projection and layout contracts.
 
-[session-replay.spec.ts](e2e/session-replay.spec.ts) verifies workload protection, policy-set addition, inline editing, confirmed removal, console navigation, browser interaction, and responsive contracts. The suite verifies that a suggested-policy removal changes the Protect count. The suite verifies that the counterfactual branch does not change the recorded edge count. The suite uses Chromium at desktop, tablet, and mobile viewport sizes. The suite also checks Workload protection, the map, and the ledger for critical accessibility violations.
+[session-replay.spec.ts](e2e/session-replay.spec.ts) verifies workload protection, policy-set addition, inline editing, confirmed removal, console navigation, browser interaction, and responsive contracts. The suite verifies that a suggested-policy removal changes the Protect count. The suite verifies that the counterfactual branch does not change the recorded edge count. The suite uses Chromium at desktop, tablet, and mobile viewport sizes. It checks every console workspace for mobile overflow and 44 px navigation targets. It checks every workspace, the map, and the ledger for serious and critical accessibility violations.
+
+[UX_AUDIT.md](UX_AUDIT.md) records the baseline findings, implemented resolutions, final responsive result, and product boundaries.
 
 Use these commands:
 
@@ -180,6 +186,6 @@ npm run test:e2e
 
 ## Source state and limits
 
-This guide covers the committed `ui/mithril-console` files in the `codex/mithril-ui` worktree. The implementation starts from source revision `4078112242986588274e4cecfba0c2300c429103`. The implementation commits are `a28115f6`, `21a80113`, `a09dc043`, `949356f0`, `ce193791`, `8586f4ec`, `f1509fdb`, and `755710b1`.
+This guide covers the committed `ui/mithril-console` files in the `codex/mithril-ui` worktree. The implementation starts from source revision `4078112242986588274e4cecfba0c2300c429103`. The implementation commits are `a28115f6`, `21a80113`, `a09dc043`, `949356f0`, `ed32ec29`, `ce193791`, `8586f4ec`, `f1509fdb`, `701cfed3`, `755710b1`, `80800a64`, `cf5333ac`, `8f874710`, `ffac7b98`, `fb661002`, `10ca9cee`, `e91d13c0`, and `43cf1388`.
 
 The implementation is a fixture-only user interface. It does not prove backend graph construction, durable revision storage, finding evaluation, response execution, or recovery behavior. It does not change the phase 6.2 worktree.
