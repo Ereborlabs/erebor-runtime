@@ -102,9 +102,22 @@ function PageHeader({ eyebrow, title, description, action }: { eyebrow: string; 
 }
 
 function OperationsView({ navigate, openSession }: ConsoleActions) {
+  type Workload = Omit<(typeof data.workloads)[number], 'mode' | 'state' | 'suggestions'> & {
+    mode: 'Observe' | 'Protected';
+    state: string;
+    suggestions: number;
+  };
+  const [workloads, setWorkloads] = useState<Workload[]>(() => data.workloads.map((workload) => ({ ...workload })) as Workload[]);
+
+  function protect(workload: Workload) {
+    setWorkloads((current) => current.map((item) => item.id === workload.id
+      ? { ...item, mode: 'Protected', state: 'Fixture active', suggestions: 0 }
+      : item));
+  }
+
   return (
     <main className="console-page" id="main-content">
-      <PageHeader eyebrow="Protection posture" title="Operations" description="Start with the physical result. Follow its session only when the proof needs investigation."
+      <PageHeader eyebrow="Hugging Face infrastructure" title="Workload protection" description="Observe each workload, review what Mithril learned, and protect it at the first prohibited physical effect."
         action={<span className="fixture-chip"><i />{data.snapshot.mode}</span>} />
       <section className="posture-strip" aria-label="Protection posture">
         {data.metrics.map((metric) => (
@@ -113,27 +126,35 @@ function OperationsView({ navigate, openSession }: ConsoleActions) {
           </button>
         ))}
       </section>
-      <section className="priority-run" aria-labelledby="priority-title">
-        <div className="priority-copy">
-          <div className="priority-meta"><span className="severity-critical">CRITICAL</span><code>MF-2419 · HF-XNODE-001</code><time>14:32:22 UTC</time></div>
-          <h2 id="priority-title">Cross-node workload reached a denied secret boundary</h2>
-          <p>The workload started on worker-b. Its first prohibited secret open was denied before an fd or secret bytes existed.</p>
-          <div className="result-line"><span className="result-pill prevented">PREVENTED</span><strong>DENIED_BEFORE_EFFECT</strong><span>complete coverage</span></div>
-          <button type="button" className="primary-action" onClick={openSession}>Open causal replay <span>→</span></button>
+      <section className="workload-cockpit" aria-labelledby="workload-cockpit-title">
+        <header className="workload-cockpit-header">
+          <div><span className="eyebrow">Observed infrastructure</span><h2 id="workload-cockpit-title">Workloads</h2><p>Protect applies the reviewed suggestion set to this browser fixture. It does not write to a cluster.</p></div>
+          <span>{workloads.filter((workload) => workload.mode === 'Protected').length} protected · {workloads.filter((workload) => workload.mode === 'Observe').length} observing</span>
+        </header>
+        <div className="workload-list">
+          {workloads.map((workload) => (
+            <article className={`workload-row mode-${workload.mode.toLowerCase()}`} key={workload.id}>
+              <button type="button" className="workload-identity" onClick={() => navigate('policies')} aria-label={`Open policies for ${workload.name}`}>
+                <span className="workload-kind">{workload.kind}</span>
+                <span><strong>{workload.name}</strong><small>{workload.namespace} · {workload.environment}</small></span>
+              </button>
+              <div className="workload-observation"><strong>{workload.observed}</strong><small>{workload.coverage}</small></div>
+              <div className="workload-footprint"><strong>{workload.footprint}</strong><small>{workload.summary}</small></div>
+              <span className={`workload-state state-${workload.state.toLowerCase().replace(' ', '-')}`}>{workload.state}</span>
+              <div className="workload-protection">
+                <span className={`workload-mode ${workload.mode.toLowerCase()}`}>{workload.mode}</span>
+                {workload.mode === 'Observe' ? <button type="button" className="protect-button" onClick={() => protect(workload)}>Protect <small>{workload.suggestions} policies</small></button> : <button type="button" className="protected-button" onClick={() => navigate('policies')}>View policy</button>}
+              </div>
+            </article>
+          ))}
         </div>
-        <div className="causal-summary" aria-label="Session summary">
-          <div className="causal-summary-head"><span>SESSION-HF-XNODE-021</span><strong>graph-7f4c.18</strong></div>
-          <div className="causal-chain" aria-hidden="true">
-            <span className="chain-node">agent</span><i /><span className="chain-node">Kubernetes</span><i className="cross" /><span className="chain-node denied">secret open</span>
-          </div>
-          <dl><div><dt>Operations</dt><dd>17</dd></div><div><dt>Machines</dt><dd>3</dd></div><div><dt>Direct edges</dt><dd>16</dd></div><div><dt>Contextual</dt><dd>2</dd></div></dl>
-          <p>One shared-principal join stays contextual. All downstream Kubernetes and runtime joins are direct.</p>
-        </div>
+        <p className="workload-boundary"><strong>Fixture boundary.</strong> Protect changes local UI state only. No candidate is signed, delivered, probed, or activated.</p>
       </section>
       <div className="console-two-column">
         <section className="console-panel">
-          <header className="panel-heading"><div><span className="eyebrow">Triage queue</span><h2>Open findings</h2></div><button type="button" onClick={() => navigate('findings')}>View all</button></header>
+          <header className="panel-heading"><div><span className="eyebrow">Stopped effects</span><h2>Open findings</h2></div><button type="button" onClick={() => navigate('findings')}>View all</button></header>
           <div className="compact-findings">{data.findings.slice(0, 4).map((finding) => <FindingRow key={finding.id} finding={finding} onClick={() => navigate('findings')} />)}</div>
+          <button type="button" className="panel-replay-link" onClick={openSession}>Open prevention replay <span>→</span></button>
         </section>
         <section className="console-panel">
           <header className="panel-heading"><div><span className="eyebrow">Evidence boundary</span><h2>Source coverage</h2></div><button type="button" onClick={() => navigate('evidence')}>Inspect</button></header>
