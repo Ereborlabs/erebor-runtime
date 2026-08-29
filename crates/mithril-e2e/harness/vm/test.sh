@@ -39,7 +39,7 @@ reuse_manual=$("$directory/two-node-convergence.sh" \
 status=$?
 set -e
 [[ $status -eq 2 && $reuse_manual == \
-  "--reuse-environment cannot run with --manual-environment" ]]
+  "retained environment is not readable: /tmp/not-used" ]]
 
 set +e
 convergence_without_mount=$("$directory/two-node-convergence.sh" \
@@ -269,6 +269,9 @@ mkdir "$oracle_bin"
 cat >"$oracle_bin/kubectl" <<'EOF'
 #!/usr/bin/env bash
 case ${FAKE_KUBECTL_RESULT:?} in
+  client)
+    printf '%s\n' '{"apiVersion":"v1","kind":"Pod","metadata":{"annotations":{}},"spec":{}}'
+    ;;
   node-name)
     echo 'Error from server: admission webhook "pods.mithril.erebor.dev" denied the request: Mithril Control configuration is invalid: protected Pod cannot set spec.nodeName' >&2
     exit 1
@@ -289,6 +292,14 @@ EOF
 chmod +x "$oracle_bin/kubectl"
 # These checks execute the command path. They do not inspect either fixture script.
 source "$directory/../kubernetes-oracles.sh"
+node_name_bypass=$test_root/node-name-bypass.json
+PATH="$oracle_bin:$PATH" FAKE_KUBECTL_RESULT=client \
+  write_mithril_node_name_bypass protected.yaml node-a "$node_name_bypass" kubectl
+jq -e '
+  .spec.nodeName == "node-a" and
+  ([.metadata.annotations | keys[] | select(startswith("mithril.erebor.dev/"))] |
+    length) == 0
+' "$node_name_bypass" >/dev/null
 PATH="$oracle_bin:$PATH" FAKE_KUBECTL_RESULT=node-name \
   assert_mithril_node_name_denial kubectl create -f bypass.json
 PATH="$oracle_bin:$PATH" FAKE_KUBECTL_RESULT=strict-field \

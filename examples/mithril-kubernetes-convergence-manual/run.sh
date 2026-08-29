@@ -3,7 +3,7 @@
 set -Eeuo pipefail
 
 directory=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
-source "$directory/kubernetes-oracles.sh"
+source "$directory/../../crates/mithril-e2e/harness/kubernetes-oracles.sh"
 system_namespace=${MITHRIL_SYSTEM_NAMESPACE:-mithril-system}
 scenario_namespace=mithril-convergence-manual
 profile_name=converter-policy
@@ -321,19 +321,42 @@ assert_prepared_container_activation() {
   ' <<<"$task_json" >/dev/null
 }
 
-assert_live_exact_target() {
+wait_live_exact_target() {
   local node_name=$1
   local profile_id=$2
-  local operation=$3
+  local operation=${3:-}
   local predecessor=${4:-}
   local status_json
   local node_json
   local pod_json
-  status_json=$(node_status "$node_name")
-  node_json=$(kubectl get node "$node_name" -o json)
-  pod_json=$(kubectl -n "$scenario_namespace" get pod "$protected_pod" -o json)
-  assert_exact_policy_target "$status_json" "$node_json" "$pod_json" \
-    "$profile_id" converter "$operation" "$predecessor"
+  local expected_operation
+  local expected_predecessor
+  for _attempt in {1..180}; do
+    status_json=$(node_status "$node_name" 2>/dev/null || true)
+    node_json=$(kubectl get node "$node_name" -o json 2>/dev/null || true)
+    pod_json=$(kubectl -n "$scenario_namespace" get pod "$protected_pod" \
+      -o json 2>/dev/null || true)
+    expected_operation=$operation
+    expected_predecessor=$predecessor
+    if [[ -z $expected_operation && -n $status_json ]]; then
+      expected_operation=$(jq -r '.active_targets[0].operation // ""' \
+        <<<"$status_json")
+      expected_predecessor=$(jq -r \
+        '.active_targets[0].predecessor_candidate_content_id // ""' \
+        <<<"$status_json")
+    fi
+    if [[ -n $status_json && -n $node_json && -n $pod_json ]] &&
+        [[ -n $expected_operation ]] &&
+        assert_exact_policy_target "$status_json" "$node_json" "$pod_json" \
+          "$profile_id" converter "$expected_operation" \
+          "$expected_predecessor"; then
+      printf '%s\n' "$status_json"
+      return 0
+    fi
+    sleep 1
+  done
+  echo "the exact manual policy target did not converge" >&2
+  return 1
 }
 
 wait_policy_delivery_empty() {
@@ -532,8 +555,8 @@ jq -e --arg profile_id "$profile_id" '
       .values == ["amd64"])
 ' <<<"$protected_dry_run" >/dev/null
 
-jq --arg node "${eligible_nodes[0]}" '.spec.nodeName = $node' \
-  <<<"$protected_dry_run" >"$work_directory/bypass.json"
+write_mithril_node_name_bypass "$work_directory/protected.yaml" \
+  "${eligible_nodes[0]}" "$work_directory/bypass.json" kubectl
 assert_mithril_node_name_denial kubectl create \
   -f "$work_directory/bypass.json"
 
@@ -555,7 +578,7 @@ jq -e --arg profile_id "$profile_id" '
   .activation_pending == false and
   .control_acknowledged == true
 ' <<<"$(node_status "$selected_node")" >/dev/null
-assert_live_exact_target "$selected_node" "$profile_id" ACTIVATE
+wait_live_exact_target "$selected_node" "$profile_id" ACTIVATE >/dev/null
 initial_delivery_status=$(node_status "$selected_node")
 runtime_binding_before=$(jq -er '.active_targets[0].runtime_binding_id' \
   <<<"$initial_delivery_status")
@@ -676,6 +699,12 @@ kubectl -n "$scenario_namespace" delete pod "$failed_pod" \
   --wait=true --timeout=120s >/dev/null
 
 # A restart must replace the exact prepared binding, not reactivate the first binding.
+restart_baseline=$(wait_live_exact_target "$selected_node" "$profile_id")
+restart_candidate=$(jq -er '.active_candidate_content_id' <<<"$restart_baseline")
+restart_operation=$(jq -er '.active_targets[0].operation' <<<"$restart_baseline")
+restart_predecessor=$(jq -r \
+  '.active_targets[0].predecessor_candidate_content_id // ""' \
+  <<<"$restart_baseline")
 container_before=$(kubectl -n "$scenario_namespace" get pod "$protected_pod" \
   -o jsonpath='{.status.containerStatuses[0].containerID}')
 kubectl -n "$system_namespace" exec -c mithril-node "$(node_pod "$selected_node")" -- \
@@ -694,9 +723,15 @@ kubectl -n "$scenario_namespace" wait --for=condition=Ready \
   pod/"$protected_pod" --timeout=180s >/dev/null
 jq -e '.runtime_binding_count == 1 and .scheduled_binding_count == 0' \
   <<<"$(node_status "$selected_node")" >/dev/null
-assert_live_exact_target "$selected_node" "$profile_id" ACTIVATE
+restarted_delivery_status=$(wait_live_exact_target "$selected_node" \
+  "$profile_id" "$restart_operation" "$restart_predecessor")
+[[ $(jq -er '.active_candidate_content_id' \
+  <<<"$restarted_delivery_status") == "$restart_candidate" ]] || {
+  echo "the protected restart changed the active policy candidate" >&2
+  exit 1
+}
 runtime_binding_after=$(jq -er '.active_targets[0].runtime_binding_id' \
-  <<<"$(node_status "$selected_node")")
+  <<<"$restarted_delivery_status")
 [[ $runtime_binding_after != "$runtime_binding_before" ]] || {
   echo "the restarted container retained its old runtime binding" >&2
   exit 1
@@ -799,7 +834,8 @@ kubectl -n "$scenario_namespace" wait --for=condition=Ready \
   pod/"$protected_pod" --timeout=300s >/dev/null
 recreated_node=$(kubectl -n "$scenario_namespace" get pod "$protected_pod" \
   -o jsonpath='{.spec.nodeName}')
-assert_live_exact_target "$recreated_node" "$recreated_profile_id" ACTIVATE
+wait_live_exact_target "$recreated_node" "$recreated_profile_id" ACTIVATE \
+  >/dev/null
 recreated_status=$(node_status "$recreated_node")
 jq -e '
   .active_targets[0].operation == "ACTIVATE" and

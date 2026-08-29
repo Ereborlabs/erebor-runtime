@@ -14,11 +14,11 @@ Phase 6.2 is **Not done**. The approved API correction replaces the flattened
 `WorkloadProtectionException`. The branch now implements both resources,
 their lowering, their durable Control and node lifecycles, and current
 automated and manual fixture flows. The complete automated two-node physical
-fixture passed on the current source. The approved policy amendment replaces
-`initialRole` with an explicit application entry, adds declared additional
-entries and one approved administrative entry, and retains `externalRole`.
-The Kubernetes fixture uses this schema and proved its declared entries. The
-independent manual case and the physical evidence-failure, watch-compaction,
+fixture and the independent manual case passed on the current source. The
+approved policy amendment replaces `initialRole` with an explicit application
+entry, adds declared additional entries and one approved administrative entry,
+and retains `externalRole`. The Kubernetes fixture uses this schema and proved
+its declared entries. The physical evidence-failure, watch-compaction,
 network-partition, storage-outage, and final-uninstall cases remain `Not run`.
 
 The direct stock-`runc` application-start lane proves the `PREPARED` to
@@ -66,7 +66,7 @@ and cgroup binding.
 | `D6.2.9` | **Implemented, automated, and physically exercised.** | The fixture passed quarantine, same-name Node UID replacement, selector re-entry, node process restart, and host reboot with a new boot and label epoch. |
 | `D6.2.10` | **Implemented, automated, and physically exercised.** | Policy and container matching, immutable image pins, Pod mutation, update validation, binding validation, and scheduler choice passed through the current physical admission flow. |
 | `D6.2.11` | **Implemented, automated, and physically exercised.** | Exact selected-node delivery, activation, staged runtime fact equality, cgroup binding, runtime lifetime replacement, desired-inventory cleanup, and stock-runtime process release passed physically. |
-| `D6.2.12` | **Partial.** | The current chart, automated fixture, and manual case are implemented. The retained-cluster fixture installed the package and passed the full scenario. The independent manual run and final uninstall cleanup remain `Not run`. |
+| `D6.2.12` | **Partial.** | The current chart, automated fixture, and manual case are implemented. The retained-cluster fixture and the independent manual run passed. Final uninstall cleanup remains `Not run`. |
 | `D6.2.13` | **Implemented, automated, and physically exercised.** | The Kubernetes transaction proved every declared entry, the approved administrative entry, unmatched external denial, and no role inheritance. |
 
 ## Automated Proof Matrix
@@ -107,6 +107,7 @@ classes, and marker state.
 | Two eligible nodes | **Pass** | The scheduler selected `ubuntu-d6fecdb3`. The fixture compared the complete typed target with live Node and Pod facts. |
 | Focused protected start | **Pass** | Kubernetes v1.35.5+k3s1 and containerd 2.2.3-k3s1 activated the `/bin/sh` application entry, allowed later BusyBox applet execs through the admitted lineage, enforced the explicit file Deny, and denied a direct CRI external entry. This does not prove the approved additional or administrative entries. |
 | Independent entry roles | **Pass** | The direct-runc VM and Kubernetes procedures proved five independent additional-entry roles, repeated PostStart, PreStop, all three exec-probe kinds, approved administrative exec, role isolation, and unmatched external denial. |
+| Independent manual case | **Pass** | The case selected `ubuntu-5775b0d0`, proved exact target and prepared-container activation, failed closed when runtime admission was unavailable, replaced the container lifetime and runtime binding, refused stale-root replay, and created a fresh root activation. Its trap removed the namespace and both RuntimeClasses. |
 | Runtime and policy lifecycle | **Pass** | The run proved task replacement, exception target retirement, desired-inventory cleanup, restart, no-root inspection, and fresh-root activation. |
 | Node lifecycle | **Pass** | The run proved session loss, quarantine, same-name Node UID replacement, DaemonSet exclusion and re-entry, node process restart, and host reboot. |
 | Evidence failure variants | **Not run** | Automated tests pass. Physical duplicate, gap, reorder, storage failure, restart, and WAL truncation remain required. |
@@ -156,6 +157,13 @@ The scenario removed its workload namespace, policy, exception, Pods, and
 marker state. Its final fresh Node Pods were ready with zero container restarts
 and one Control connection each. It retained the two owned VMs, K3s cluster,
 and installed Mithril release for the next failure-variant run.
+
+The independent manual case then passed on the same two-node cluster after a
+fresh retained-state reset. It selected `ubuntu-5775b0d0`. Container lifetime
+`containerd://5adc2f2bbb36afcefa04f25e78fa0349973b01b02b6261fdfe894f1ea6a878a3`
+was replaced by
+`containerd://54074773fe2017945827fbab16f671fba127f4c9acbadd2ffc88f82e006978f6`.
+The final namespace and RuntimeClass queries returned `NotFound`.
 
 ## Unadvertised Work
 

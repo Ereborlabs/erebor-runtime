@@ -1,11 +1,8 @@
 # Kubernetes Policy Convergence Manual Case
 
-Status: The case is implemented. The current source has not passed this manual
-case.
-
-The last physical attempt used the superseded runtime-bootstrap model. The
-current source uses the `PreparedContainer` boundary and has not passed this
-case yet. A pass must use the current source and the stock runtime.
+Status: Pass. On 2026-08-29, the current source passed this case on two K3s
+nodes with Kubernetes v1.35.5+k3s1 and containerd v2.2.3-k3s1. The case used
+the stock runtime and the `PreparedContainer` boundary.
 
 This case uses the production Kubernetes API, admission webhooks, scheduler,
 Control service, node DaemonSet, two ordered OCI `createRuntime` hooks, policy
@@ -37,6 +34,20 @@ crates/mithril-e2e/harness/vm/manual.sh ssh-convergence
 The first command creates two retained K3s VMs and installs the production
 Mithril chart. The second command opens a shell in the first VM. The repository
 is mounted read-only at `/mnt/mithril-source`.
+
+To reset VMs from a completed automated run, use its retained-environment
+record:
+
+```bash
+crates/mithril-e2e/harness/vm/two-node-convergence.sh \
+  --reuse-environment <result-directory>/retained-environment.json \
+  --manual-environment --output-directory <new-result-directory>
+```
+
+This command removes the previous release and state before it installs the
+current release. It stages the manual example under
+`/var/tmp/mithril-convergence-manual-source` in node A. It does not require a
+source mount and does not create another VM.
 
 ## Prepare The Guest
 

@@ -5,7 +5,7 @@ Status: Not done. This procedure targets the approved
 CRD, lowering, node runtime, and automated tests implement the application,
 additional, administrative, and external entry roles. The complete automated
 two-node Kubernetes fixture passed with the current schema. The independent
-manual procedure and its failure and outage variants remain `Not run`.
+manual case passed. Its physical failure and outage variants remain `Not run`.
 
 Phase: [Control Policy And Evidence Convergence](../phase-6-2-control-policy-and-evidence-convergence.md)
 
@@ -37,15 +37,21 @@ container restarts and one Control connection each. The result is
 
 The scenario removed its workload namespace, policy, exception, Pods, and
 marker state. It retained the two owned VMs, K3s cluster, and installed Mithril
-release. The independent manual procedure, watch compaction, network
-partition, storage outage, physical evidence-failure variants, and final
-uninstall cleanup remain `Not run`.
+release. Watch compaction, network partition, storage outage, physical
+evidence-failure variants, and final uninstall cleanup remain `Not run`.
 
 The current-source automated rerun passed on 2026-08-29 with the same
 Kubernetes and containerd versions. It used two eligible Nodes and selected
 `ubuntu-5775b0d0` for the protected workload. Its result is
 `/tmp/mithril-two-node-baseline3-20260829`. The run retained both owned VMs
 after it removed all scenario resources.
+
+The independent case passed on the same two-node cluster after a fresh state
+reset. It selected `ubuntu-5775b0d0`, replaced the protected container
+lifetime and runtime binding, failed closed when runtime admission was
+unavailable, refused stale-root replay, and created a fresh root activation.
+Its cleanup removed the namespace and both RuntimeClasses. Each final query
+returned `NotFound`.
 
 ## Automated Companion
 

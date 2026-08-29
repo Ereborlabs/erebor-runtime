@@ -71,10 +71,6 @@ done
   echo "--protected-start-only cannot run with --manual-environment" >&2
   exit 2
 }
-[[ -z $reuse_environment || $manual_environment == false ]] || {
-  echo "--reuse-environment cannot run with --manual-environment" >&2
-  exit 2
-}
 
 for command in base64 cargo docker helm jq openssl sed sha256sum timeout; do
   command -v "$command" >/dev/null || {
@@ -98,7 +94,7 @@ done
   echo "the two-node convergence fixture requires an x86_64 host" >&2
   exit 2
 }
-if [[ $manual_environment == true &&
+if [[ $manual_environment == true && -z $reuse_environment &&
       ${MITHRIL_VM_SOURCE_MOUNT:-} != "$repo_root" ]]; then
   echo "the manual environment requires MITHRIL_VM_SOURCE_MOUNT=$repo_root" >&2
   exit 2
@@ -994,12 +990,31 @@ if [[ $protected_start_only == false ]]; then
 fi
 
 if [[ $manual_environment == true ]]; then
+  manual_source=/mnt/mithril-source
+  manual_bin_directory=$manual_source/target/debug
+  if [[ ${MITHRIL_VM_SOURCE_MOUNT:-} != "$repo_root" ]]; then
+    manual_source=/var/tmp/mithril-convergence-manual-source
+    manual_bin_directory=/usr/local/bin
+    manual_example=$manual_source/examples/mithril-kubernetes-convergence-manual
+    manual_oracle_directory=$manual_source/crates/mithril-e2e/harness
+    "$provider" run "$vm_a" mkdir -p \
+      "$manual_example" "$manual_oracle_directory"
+    for file in run.sh policy-v1.yaml exception-v1.yaml protected-pod-v1.yaml; do
+      "$provider" put "$vm_a" \
+        "$repo_root/examples/mithril-kubernetes-convergence-manual/$file" \
+        "$manual_example/$file"
+    done
+    "$provider" put "$vm_a" \
+      "$repo_root/crates/mithril-e2e/harness/kubernetes-oracles.sh" \
+      "$manual_oracle_directory/kubernetes-oracles.sh"
+  fi
   manual_env=$work_a/mithril-convergence-manual.env
-  # K3s dispatches kubectl by executable name in the operator shell.
-  "$provider" run "$vm_a" sudo ln -s /usr/local/bin/k3s /usr/local/bin/kubectl
+  # K3s dispatches kubectl by executable name. A retained reset keeps this link.
+  "$provider" run "$vm_a" sudo ln -sfn \
+    /usr/local/bin/k3s /usr/local/bin/kubectl
   {
-    printf 'MITHRIL_MANUAL_SOURCE=%q\n' /mnt/mithril-source
-    printf 'MITHRIL_BIN_DIRECTORY=%q\n' /mnt/mithril-source/target/debug
+    printf 'MITHRIL_MANUAL_SOURCE=%q\n' "$manual_source"
+    printf 'MITHRIL_BIN_DIRECTORY=%q\n' "$manual_bin_directory"
     printf 'MITHRIL_SYSTEM_NAMESPACE=%q\n' "$system_namespace"
   } >"$manual_env"
   "$provider" put "$vm_a" "$manual_env" "$remote_a/mithril-convergence-manual.env"
@@ -1154,10 +1169,8 @@ jq -e --arg profile_id "$profile_id" '
 ' <<<"$protected_dry_run" >/dev/null
 
 bypass=$work_a/bypass.json
-protected_input=$(remote_kubectl create --dry-run=client \
-  -f "$remote_a/protected.yaml" -o json)
-jq --arg node "$node_a_name" '.spec.nodeName = $node' \
-  <<<"$protected_input" >"$bypass"
+write_mithril_node_name_bypass "$remote_a/protected.yaml" \
+  "$node_a_name" "$bypass" remote_kubectl
 "$provider" put "$vm_a" "$bypass" "$remote_a/bypass.json"
 assert_mithril_node_name_denial remote_kubectl create \
   -f "$remote_a/bypass.json"

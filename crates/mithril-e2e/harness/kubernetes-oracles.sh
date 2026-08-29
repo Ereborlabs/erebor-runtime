@@ -32,6 +32,17 @@ assert_kubernetes_strict_field_denial() {
   fi
 }
 
+write_mithril_node_name_bypass() {
+  local manifest=$1
+  local node_name=$2
+  local output=$3
+  shift 3
+
+  # A server dry-run contains admission-owned fields and tests a different denial.
+  "$@" create --dry-run=client -f "$manifest" -o json |
+    jq --arg node "$node_name" '.spec.nodeName = $node' >"$output"
+}
+
 assert_exact_policy_target() {
   local status_json=$1
   local node_json=$2
