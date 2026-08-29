@@ -106,6 +106,8 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .workload-mode.protected { color: var(--mint); }
 .protect-button, .protected-button { min-height: 36px; padding: 6px 10px; border: 1px solid rgba(97, 215, 191, .38); border-radius: 5px; color: #06110f; background: var(--mint); font-size: 9px; font-weight: 750; }
 .protect-button small { display: block; color: #173a34; font: 6px ui-monospace, monospace; text-transform: uppercase; }
+.protect-button:disabled { color: #778591; border-color: var(--line); background: #101924; }
+.protect-button:disabled small { color: var(--faint); }
 .protected-button { color: #9fb3c6; border-color: var(--line-strong); background: #101b27; }
 .workload-chevron { width: 36px; min-height: 36px; border: 1px solid var(--line-strong); border-radius: 5px; color: #8da2b5; background: #101924; font-size: 16px; transition: transform .15s; }
 .workload-chevron[aria-expanded="true"] { color: var(--mint); transform: rotate(180deg); }
@@ -113,7 +115,10 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .workload-policy-review > header { min-height: 70px; padding: 12px 2px; display: flex; align-items: center; justify-content: space-between; gap: 16px; border-top: 1px solid var(--line); }
 .workload-policy-review h3 { margin: 3px 0; color: #dbe7f1; font-size: 15px; font-weight: 550; }
 .workload-policy-review header p { margin: 0; color: var(--muted); font-size: 8px; }
-.workload-policy-review > header > button { color: var(--mint); background: transparent; font-size: 8px; }
+.workload-review-actions { display: flex; align-items: center; gap: 7px; }
+.workload-review-actions button { min-height: 32px; padding: 0 9px; border: 1px solid var(--line); border-radius: 4px; color: var(--mint); background: transparent; font-size: 8px; }
+.workload-review-actions .add-workload-policy { color: #07120f; border-color: var(--mint); background: var(--mint); font-weight: 700; }
+.add-policy-form { margin-bottom: 10px; padding: 11px; border: 1px solid rgba(97, 215, 191, .3); border-radius: 6px; background: rgba(97, 215, 191, .035); }
 .workload-policy-groups { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .workload-policy-group { min-width: 0; overflow: hidden; border: 1px solid var(--line); border-radius: 6px; background: #0b121b; }
 .workload-policy-group > header { min-height: 38px; padding: 0 10px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--line); }
@@ -124,7 +129,9 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .workload-rule:last-child { border-bottom: 0; }
 .workload-rule-heading { display: grid; grid-template-columns: 58px minmax(0, 1fr) auto; align-items: center; gap: 8px; }
 .workload-rule-heading strong { font-size: 9px; }
+.workload-rule-heading > div { display: flex; gap: 7px; }
 .workload-rule-heading button { color: var(--mint); background: transparent; font-size: 7px; }
+.workload-rule-heading .remove-rule-button { color: #bc7883; }
 .rule-action { color: var(--amber); font: 700 6px ui-monospace, monospace; text-transform: uppercase; }
 .rule-action.action-deny { color: var(--red); }
 .rule-action.action-allow-list { color: var(--mint); }
@@ -140,6 +147,13 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .inline-rule-actions { margin-top: 8px; display: flex; justify-content: flex-end; gap: 6px; }
 .inline-rule-actions button { min-height: 30px; padding: 0 9px; border: 1px solid var(--line-strong); border-radius: 4px; color: #9eb0c0; background: #101925; font-size: 7px; }
 .inline-rule-actions .save-inline-rule { color: #07120f; border-color: var(--mint); background: var(--mint); }
+.inline-rule-actions .save-inline-rule:disabled { opacity: .35; }
+.remove-policy-confirm { min-height: 58px; display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 8px; }
+.remove-policy-confirm > div { display: grid; gap: 4px; }
+.remove-policy-confirm strong { color: #e0c4c9; font-size: 9px; }
+.remove-policy-confirm span { color: var(--faint); font-size: 7px; }
+.remove-policy-confirm button { min-height: 30px; padding: 0 8px; border: 1px solid var(--line); border-radius: 4px; color: #9baab9; background: #101925; font-size: 7px; }
+.remove-policy-confirm .confirm-policy-remove { color: #21080d; border-color: var(--red); background: var(--red); font-weight: 700; }
 .no-policy-suggestions { margin: 0; padding: 18px 12px; color: var(--faint); font-size: 8px; }
 .workload-boundary { margin: 0; padding: 9px 15px; color: var(--faint); background: #080e16; font-size: 8px; }
 .workload-boundary strong { color: var(--amber); }
