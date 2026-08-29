@@ -18,11 +18,32 @@ test('the full console surrounds the causal replay', async ({ page }) => {
 test('an observed workload can apply its suggested protection set', async ({ page }) => {
   await page.goto('/');
   const workload = page.locator('.workload-row', { hasText: 'datasets-server' });
-  await expect(workload.getByText('Observe', { exact: true })).toBeVisible();
+  await expect(workload.locator('.workload-mode')).toHaveText('Observe');
   await workload.getByRole('button', { name: /Protect 4 policies/ }).click();
-  await expect(workload.getByText('Protected', { exact: true })).toBeVisible();
+  await expect(workload.locator('.workload-mode')).toHaveText('Protected');
   await expect(workload.getByText('Fixture active', { exact: true })).toBeVisible();
-  await expect(workload.getByRole('button', { name: 'View policy' })).toBeVisible();
+  await expect(workload.getByRole('button', { name: 'Current policy' })).toBeVisible();
+  await expect(workload.getByText('No new suggestions. Mithril continues to observe for changes.')).toBeVisible();
+  await expect(page.getByRole('status')).toContainText('4 suggested policies applied');
+});
+
+test('workload policy details expand and edit in place', async ({ page }) => {
+  await page.goto('/');
+  const workload = page.locator('.workload-row', { hasText: 'datasets-server' });
+  const policies = workload.getByRole('region', { name: 'Policies for datasets-server' });
+  await expect(policies.getByRole('region', { name: 'Current policies' })).toBeVisible();
+  await expect(policies.getByRole('region', { name: 'Suggested policies' })).toContainText('Block worker environment reads');
+
+  const rule = policies.getByTestId('workload-rule-datasets-proc');
+  await rule.getByRole('button', { name: 'Edit inline' }).click();
+  await rule.getByLabel('Policy name').fill('Block dataset worker environment reads');
+  await rule.getByLabel('Rule').fill('deny file.read /proc/** source=dataset-worker exact=true');
+  await rule.getByRole('button', { name: 'Save local edit' }).click();
+  await expect(rule).toContainText('Block dataset worker environment reads');
+  await expect(rule).toContainText('exact=true');
+
+  await page.getByRole('button', { name: 'Show policies for database-router' }).click();
+  await expect(page.getByRole('region', { name: 'Policies for database-router' })).toContainText('Block unmatched database clients');
 });
 
 test('the surrounding product workspaces remain interactive', async ({ page }) => {
