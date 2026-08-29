@@ -24,9 +24,9 @@ export const consoleData = {
     { id: 'MF-2391', severity: 'low', outcome: 'allowed', age: '4h', title: 'Signed trainer read the approved model shard', package: 'HF-LOCAL-001', scope: 'models / trainer', summary: 'The admitted application entry read an approved object under the current node generation.', firstEffect: 'File open', result: 'ALLOWED', proof: 'Exact actor, object, policy, and result', graph: false },
   ],
   policies: [
-    { name: 'payments-protect', namespace: 'payments', mode: 'Protect', source: '118', generation: '7f4c', desired: 7, active: 6, state: 'Mixed', detail: 'worker-c is staged. Its last valid generation remains active.' },
-    { name: 'model-delivery', namespace: 'delivery', mode: 'Protect', source: '42', generation: '21ba', desired: 3, active: 3, state: 'Current', detail: 'All exact targets acknowledge the signed candidate.' },
-    { name: 'research-observe', namespace: 'research', mode: 'Observe', source: '8', generation: '11d8', desired: 4, active: 4, state: 'Observe', detail: 'The policy records effects. It does not make a prevention claim.' },
+    { name: 'payments-protect', namespace: 'payments', mode: 'Protect', source: '118', generation: '7f4c', desired: 7, active: 6, state: 'Mixed', detail: 'worker-c is staged. Its last valid generation remains active.', selector: 'app=payments-api', defaultAction: 'Deny', rules: 'allow file.read model-cache/**\ndeny file.read secrets/**\nallow network.connect kubernetes-api' },
+    { name: 'model-delivery', namespace: 'delivery', mode: 'Protect', source: '42', generation: '21ba', desired: 3, active: 3, state: 'Current', detail: 'All exact targets acknowledge the signed candidate.', selector: 'app=model-publisher', defaultAction: 'Deny', rules: 'allow file.read release/**\nallow network.connect registry.internal\ndeny process.exec shell' },
+    { name: 'research-observe', namespace: 'research', mode: 'Observe', source: '8', generation: '11d8', desired: 4, active: 4, state: 'Observe', detail: 'The policy records effects. It does not make a prevention claim.', selector: 'team=research', defaultAction: 'Observe', rules: 'observe file.read datasets/**\nobserve network.connect external\nobserve process.exec notebook-kernel' },
   ],
   rolloutNodes: [
     { name: 'worker-a', identity: 'uid-a17c · boot 884', generation: '7f4c', state: 'Active', detail: 'readback complete' },
