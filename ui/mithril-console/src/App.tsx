@@ -144,6 +144,18 @@ function SessionReplay() {
   }, [layout.positions, selectedOperationId]);
 
   useEffect(() => {
+    if (!showCounterfactual || !viewportRef.current) return;
+    const position = layout.positions.get('secret-open');
+    if (!position) return;
+    const viewport = viewportRef.current;
+    requestAnimationFrame(() => viewport.scrollTo({
+      left: Math.max(0, position.x + position.width - viewport.clientWidth * 0.16),
+      top: Math.max(0, position.y + 54),
+      behavior: prefersReducedMotion() ? 'auto' : 'smooth',
+    }));
+  }, [layout.positions, showCounterfactual]);
+
+  useEffect(() => {
     if (!selection) return;
     const selectedStep = selection.type === 'operation'
       ? operationById.get(selection.id)?.step
@@ -207,11 +219,21 @@ function SessionReplay() {
     requestAnimationFrame(() => viewportRef.current?.scrollTo({ left: 0, top: 0, behavior: 'smooth' }));
   }
 
+  function frameStoppedEffect() {
+    setPlaying(false);
+    setStep(finalStep);
+    setShowCounterfactual(false);
+    setSelection({ type: 'operation', id: 'secret-open' });
+  }
+
   function toggleCounterfactual() {
     setPlaying(false);
     setStep(finalStep);
     setView('map');
-    setShowCounterfactual((current) => !current);
+    setShowCounterfactual((current) => {
+      if (!current) setSelection({ type: 'operation', id: 'secret-open' });
+      return !current;
+    });
   }
 
   function openIncorrectStopReview() {
@@ -297,9 +319,10 @@ function SessionReplay() {
           ))}
         </div>
         <div className="frame-actions" role="group" aria-label="Frame graph">
-          <button type="button" onClick={() => { setPlaying(false); setSelection(null); setStep(0); viewportRef.current?.scrollTo({ left: 0, top: 0, behavior: 'smooth' }); }}>Start</button>
-          <button type="button" onClick={frameCurrent}>Current</button>
-          <button type="button" onClick={showComplete}>Reveal all</button>
+          <button type="button" onClick={() => { setPlaying(false); setSelection(null); setStep(0); viewportRef.current?.scrollTo({ left: 0, top: 0, behavior: 'smooth' }); }}>First event</button>
+          <button type="button" onClick={frameCurrent}>Current event</button>
+          <button type="button" onClick={frameStoppedEffect}>Stopped effect</button>
+          <button type="button" onClick={showComplete}>All events</button>
         </div>
       </section>
 
@@ -400,7 +423,6 @@ interface GraphMapProps {
 
 function GraphMap(props: GraphMapProps) {
   const selectedEdge = props.edges.find((edge) => edge.id === props.selectedEdgeId);
-  const selectedEdgePosition = selectedEdge ? edgeDetailPosition(selectedEdge, props.layout) : null;
   const stopPosition = props.layout.positions.get('secret-open');
   const stageHeight = props.layout.height + (props.showCounterfactual ? 205 : 0);
 
@@ -486,12 +508,9 @@ function GraphMap(props: GraphMapProps) {
             );
           })}
           {props.showCounterfactual && stopPosition ? <CounterfactualPath x={stopPosition.x + stopPosition.width + 44} y={stopPosition.y + 126} /> : null}
-          {selectedEdge && selectedEdgePosition && (
-            <EdgeDetail edge={selectedEdge} x={selectedEdgePosition.x} y={selectedEdgePosition.y}
-              onClose={() => props.onSelectEdge(selectedEdge)} />
-          )}
         </div>
       </div>
+      {selectedEdge ? <EdgeDetail edge={selectedEdge} onClose={() => props.onSelectEdge(selectedEdge)} /> : null}
     </section>
   );
 }
@@ -573,9 +592,9 @@ function CounterfactualPath({ x, y }: { x: number; y: number }) {
   );
 }
 
-function EdgeDetail({ edge, x, y, onClose }: { edge: CausalEdge; x: number; y: number; onClose: () => void }) {
+function EdgeDetail({ edge, onClose }: { edge: CausalEdge; onClose: () => void }) {
   return (
-    <aside className={`edge-detail strength-${edge.strength}`} style={{ left: x, top: y }} data-testid="edge-detail">
+    <aside className={`edge-detail strength-${edge.strength}`} data-testid="edge-detail">
       <button type="button" className="edge-close" onClick={onClose} aria-label="Close edge details">×</button>
       <div className="edge-detail-kicker">{edge.strength} causal edge</div>
       <h2>{edge.label}</h2>
@@ -644,16 +663,6 @@ function edgeDimmed(edge: CausalEdge, filter: Filter, focusedMachine: string | n
     || (filter === 'denied' && source.outcome !== 'denied' && target.outcome !== 'denied');
   const machineMismatch = focusedMachine && source.machineId !== focusedMachine && target.machineId !== focusedMachine;
   return Boolean(filterMismatch || machineMismatch);
-}
-
-function edgeDetailPosition(edge: CausalEdge, layout: ReturnType<typeof createGraphLayout>): { x: number; y: number } | null {
-  const source = layout.positions.get(edge.source);
-  const target = layout.positions.get(edge.target);
-  if (!source || !target) return null;
-  return {
-    x: Math.min(layout.width - 378, Math.max(210, (source.x + source.width + target.x) / 2 - 174)),
-    y: Math.min(layout.height - 240, Math.max(18, (source.y + target.y) / 2 - 34)),
-  };
 }
 
 function edgeInspectPosition(source: { x: number; y: number; width: number }, target: { x: number; y: number }): { x: number; y: number } {
