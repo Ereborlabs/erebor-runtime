@@ -119,7 +119,7 @@ function OperationsView({ navigate, openSession, showToast }: ConsoleActions) {
   };
   const [workloads, setWorkloads] = useState<Workload[]>(() => data.workloads.map((workload) => ({ ...workload })) as Workload[]);
   const [rules, setRules] = useState<WorkloadRule[]>(() => data.workloadPolicies.map((rule) => ({ ...rule })) as WorkloadRule[]);
-  const [expandedId, setExpandedId] = useState<string | null>('datasets-server');
+  const [expandedId, setExpandedId] = useState<string | null>(null);
   const [editingRuleId, setEditingRuleId] = useState<string | null>(null);
   const [ruleDraft, setRuleDraft] = useState<WorkloadRule | null>(null);
   const [addingPolicyFor, setAddingPolicyFor] = useState<string | null>(null);

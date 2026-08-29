@@ -30,6 +30,7 @@ test('an observed workload can apply its suggested protection set', async ({ pag
 test('workload policy details expand and edit in place', async ({ page }) => {
   await page.goto('/');
   const workload = page.locator('.workload-row', { hasText: 'datasets-server' });
+  await workload.getByRole('button', { name: 'Show policies for datasets-server' }).click();
   const policies = workload.getByRole('region', { name: 'Policies for datasets-server' });
   await expect(policies.getByRole('region', { name: 'Current policies' })).toBeVisible();
   await expect(policies.getByRole('region', { name: 'Suggested policies' })).toContainText('Block worker environment reads');
@@ -49,6 +50,7 @@ test('workload policy details expand and edit in place', async ({ page }) => {
 test('the workload policy set supports adding and removing policies', async ({ page }) => {
   await page.goto('/');
   const workload = page.locator('.workload-row', { hasText: 'datasets-server' });
+  await workload.getByRole('button', { name: 'Show policies for datasets-server' }).click();
   const policies = workload.getByRole('region', { name: 'Policies for datasets-server' });
   const current = policies.getByRole('region', { name: 'Current policies' });
 
@@ -222,6 +224,22 @@ for (const viewport of [
     await page.screenshot({ path: `test-results/${viewport.name}.png`, fullPage: true });
   });
 }
+
+test('mobile keeps the protection and response decisions inside the viewport', async ({ page }) => {
+  await page.setViewportSize({ width: 375, height: 812 });
+  await page.goto('/');
+  const workload = page.locator('.workload-row', { hasText: 'datasets-server' });
+  await expect(workload.getByRole('button', { name: /Protect 4 policies/ })).toBeInViewport();
+  await workload.getByRole('button', { name: 'Show policies for datasets-server' }).click();
+  await expect(workload.getByRole('region', { name: 'Suggested policies' })).toBeVisible();
+  expect(await workload.evaluate((element) => element.scrollWidth - element.clientWidth)).toBe(0);
+
+  await page.goto('/#/response');
+  const responseTarget = page.locator('.blast-radius').getByText('4 active Pods', { exact: true });
+  await responseTarget.scrollIntoViewIfNeeded();
+  await expect(responseTarget).toBeInViewport();
+  expect(await page.locator('.response-workbench').evaluate((element) => element.scrollWidth - element.clientWidth)).toBe(0);
+});
 
 test('map and ledger have no critical accessibility violations', async ({ page }) => {
   await page.goto('/');
