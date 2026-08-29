@@ -14,6 +14,7 @@ const navItems: readonly [ConsoleRoute, string][] = [
   ['policies', 'Policies'],
   ['evidence', 'Evidence'],
   ['response', 'Response'],
+  ['agent', 'Agent'],
   ['release', 'Release'],
 ];
 
@@ -25,6 +26,7 @@ function NavIcon({ route }: { route: ConsoleRoute }) {
     policies: <><path d="M12 3 5 6v5c0 4.5 2.5 7.5 7 10 4.5-2.5 7-5.5 7-10V6l-7-3Z" /><path d="m9 12 2 2 4-5" /></>,
     evidence: <><path d="M5 4h14v16H5zM8 8h8M8 12h8M8 16h5" /></>,
     response: <><path d="M4 12h11m-4-4 4 4-4 4" /><path d="M17 5h3v14h-3" /></>,
+    agent: <><path d="M8 9h8M8 13h5" /><path d="M5 5h14v12H9l-4 3V5Z" /><circle cx="16" cy="13" r="1" /></>,
     release: <><path d="M5 4h14v16H5zM8 9l2 2 5-5M8 16h8" /></>,
   };
   return <svg viewBox="0 0 24 24" aria-hidden="true">{paths[route]}</svg>;
@@ -86,6 +88,7 @@ export function ConsoleView({ route, ...actions }: ConsoleActions & { route: Con
   if (route === 'policies') return <PoliciesView showToast={actions.showToast} />;
   if (route === 'evidence') return <EvidenceView {...actions} />;
   if (route === 'response') return <ResponseView {...actions} />;
+  if (route === 'agent') return <AgentView {...actions} />;
   return <ReleaseView {...actions} />;
 }
 
@@ -320,6 +323,63 @@ function ResponseView({ openSession }: ConsoleActions) {
       <div className="response-workbench">
         <section className="response-actions"><header><span>ORDER</span><span>ACTION AND TARGET</span><span>SCOPE</span><span>STATE</span></header>{data.response.actions.map((item, index) => <button type="button" key={item.order} className={selectedAction === index ? 'active' : ''} onClick={() => setSelectedAction(index)}><code>{item.order}</code><span><strong>{item.action}</strong><small>{item.target}</small></span><span>{item.scope}</span><b>{item.state}</b></button>)}</section>
         <aside className="blast-radius"><span className="eyebrow">Selected action</span><h2>{action.action}</h2><p>{action.target}</p><div className="blast-graphic"><span>exact target</span><strong>{action.scope}</strong><i /></div><dl><div><dt>Resolution</dt><dd>Re-resolve before effect</dd></div><div><dt>Postcondition</dt><dd>Authoritative readback + healthy watch</dd></div><div><dt>Retry</dt><dd>Idempotent within plan lifetime</dd></div></dl><div className="response-lock">Execution is unavailable in the design fixture.</div></aside>
+      </div>
+    </main>
+  );
+}
+
+type AgentMessage = {
+  id: number;
+  role: 'agent' | 'user';
+  text: string;
+  action?: ConsoleRoute | 'session';
+  actionLabel?: string;
+};
+
+function agentReply(input: string): Omit<AgentMessage, 'id' | 'role'> {
+  const question = input.toLowerCase();
+  if (question.includes('release') || question.includes('block')) return { text: 'The release has two blockers: active fixture equality is 131 of 133, and the GitHub recovery readback has a known audit gap. The signed claim must remain blocked.', action: 'release', actionLabel: 'Review release blockers' };
+  if (question.includes('policy') || question.includes('rollout') || question.includes('generation')) return { text: 'payments-protect needs attention. Six of seven targets run generation 7f4c. worker-c keeps its last valid generation while the new probe is pending.', action: 'policies', actionLabel: 'Open policy rollout' };
+  if (question.includes('evidence') || question.includes('coverage') || question.includes('gap')) return { text: 'Five of six evidence sources have continuous coverage. GitHub audit has a gap from 14:21 to 14:24, so provider-dependent negative claims are unavailable for that interval.', action: 'evidence', actionLabel: 'Inspect source coverage' };
+  if (question.includes('response') || question.includes('contain')) return { text: 'Response plan rsp-28 freezes graph-7f4c.18. Network isolation affects one Pod. Suspending the shared ServiceAccount affects four active Pods and requires explicit authorization.', action: 'response', actionLabel: 'Review blast radius' };
+  if (question.includes('session') || question.includes('graph') || question.includes('finding') || question.includes('investigate')) return { text: 'MF-2419 is the priority finding. The graph has 17 operations across three machines. One shared-principal join is contextual; all downstream Kubernetes and runtime joins are direct.', action: 'session', actionLabel: 'Open causal replay' };
+  return { text: 'I can explain the priority finding, policy rollout, evidence gaps, response blast radius, or release blockers. I can navigate to the supporting workspace, but I cannot execute a control-plane action.', action: 'operations', actionLabel: 'Open operations' };
+}
+
+function AgentView({ navigate, openSession }: ConsoleActions) {
+  const [query, setQuery] = useState('');
+  const [messages, setMessages] = useState<AgentMessage[]>([
+    { id: 0, role: 'agent', text: 'I am scoped to the current Mithril fixture. Ask me to investigate proof, explain policy state, find coverage gaps, review response scope, or check release blockers.' },
+  ]);
+
+  function ask(input: string) {
+    const text = input.trim();
+    if (!text) return;
+    const reply = agentReply(text);
+    setMessages((current) => [...current, { id: current.length, role: 'user', text }, { id: current.length + 1, role: 'agent', ...reply }]);
+    setQuery('');
+  }
+
+  function follow(action: ConsoleRoute | 'session') {
+    if (action === 'session') openSession();
+    else navigate(action);
+  }
+
+  const prompts = ['Investigate the critical finding', 'Which policy needs attention?', 'Show evidence gaps', 'Explain the response blast radius', 'Why is the release blocked?'];
+  return (
+    <main className="console-page">
+      <PageHeader eyebrow="Bounded system copilot" title="Agent mode" description="Ask about the current operating state. Every answer points to a workspace that contains the supporting fixture evidence." action={<span className="fixture-chip"><i />Local guided fixture</span>} />
+      <div className="agent-workspace">
+        <section className="agent-conversation" aria-labelledby="agent-conversation-title">
+          <header><div className="agent-avatar" aria-hidden="true">M</div><div><h2 id="agent-conversation-title">Mithril assistant</h2><p><span /> Current snapshot · read-only guidance</p></div></header>
+          <div className="agent-messages" aria-live="polite">{messages.map((message) => <article key={message.id} className={`agent-message ${message.role}`}><span>{message.role === 'agent' ? 'M' : 'YOU'}</span><div><p>{message.text}</p>{message.action ? <button type="button" onClick={() => follow(message.action!)}>{message.actionLabel}<b>→</b></button> : null}</div></article>)}</div>
+          <form className="agent-input" onSubmit={(event) => { event.preventDefault(); ask(query); }}><label><span className="sr-only">Ask the Mithril assistant</span><textarea rows={2} value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Ask about findings, policies, evidence, response, or release…" /></label><button type="submit" disabled={!query.trim()}>Send</button></form>
+        </section>
+        <aside className="agent-context">
+          <span className="eyebrow">Suggested investigations</span><h2>Work from evidence</h2><div className="agent-prompts">{prompts.map((prompt) => <button type="button" key={prompt} onClick={() => ask(prompt)}>{prompt}<span>→</span></button>)}</div>
+          <section><span>Current scope</span><dl><div><dt>Cluster</dt><dd>{data.snapshot.cluster}</dd></div><div><dt>Priority finding</dt><dd>MF-2419</dd></div><div><dt>Graph revision</dt><dd>graph-7f4c.18</dd></div><div><dt>Policy generation</dt><dd>7f4c · mixed</dd></div></dl></section>
+          <p className="agent-boundary"><strong>Authority boundary.</strong> Agent mode reads fixture state and navigates the console. It cannot sign policy, authorize response, or claim physical effect.</p>
+        </aside>
       </div>
     </main>
   );

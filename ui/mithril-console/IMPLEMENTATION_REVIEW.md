@@ -4,7 +4,7 @@ This guide covers the isolated Mithril console fixture in `ui/mithril-console`. 
 
 ## Intended end state
 
-An operator can move between Operations, Sessions, Findings, Policy rollout, Evidence, Response, and Release workspaces. An investigator can open an immutable session graph from a related workspace. The investigator can replay operations within one machine and across machines. An operation selection exposes operation evidence. An edge selection exposes the causal join. The map and ledger keep one investigation state.
+An operator can move between Operations, Sessions, Findings, Policy rollout, Evidence, Response, Agent, and Release workspaces. An investigator can open an immutable session graph from a related workspace. The investigator can replay operations within one machine and across machines. An operation selection exposes operation evidence. An edge selection exposes the causal join. The map and ledger keep one investigation state.
 
 The production end state requires durable graph, finding, and response APIs. Those APIs are not implemented in this package or in the source branch that this worktree uses.
 
@@ -14,7 +14,7 @@ The production end state requires durable graph, finding, and response APIs. Tho
 
 -> [ConsoleShell](src/Console.tsx) The shell keeps the product navigation, cluster scope, search entry, and fixture state around each workspace.
 
--> [ConsoleView](src/Console.tsx) The workspace route renders Operations, Sessions, Findings, Policy rollout, Evidence, Response, or Release.
+-> [ConsoleView](src/Console.tsx) The workspace route renders Operations, Sessions, Findings, Policy rollout, Evidence, Response, Agent, or Release.
 
 -> [PoliciesView](src/Console.tsx) A policy selection opens its source, generation, activation, selector, default action, and rule set.
 
@@ -23,6 +23,8 @@ The production end state requires durable graph, finding, and response APIs. Tho
 -> [PoliciesView](src/Console.tsx) An Observe policy shows suggestions with retained evidence, confidence, and expected effect.
 
 -> [PoliciesView](src/Console.tsx) Apply appends one suggested rule to the selected browser-memory draft.
+
+-> [AgentView](src/Console.tsx) A question receives one bounded fixture answer and an optional route to supporting evidence.
 
 -> [SessionsView](src/Console.tsx) A session selection exposes its graph revision, operation count, machine count, proof summary, and replay availability.
 
@@ -67,6 +69,8 @@ Partial: [App](src/App.tsx) The URL fragment restores the console or session rou
 `PoliciesView` owns editable policy copies and one active draft. A save replaces the selected browser-memory copy. The save does not compile, sign, deliver, or activate a policy candidate.
 
 `PoliciesView` also owns the applied-suggestion set. Apply does not change Observe mode. Apply does not write policy state outside the page.
+
+`AgentView` owns the local conversation. `agentReply` maps a question to fixture guidance and one console route. The agent does not call a model, external tool, policy API, or response API.
 
 `consoleData.ts` owns the console design fixture. The fixture contains posture metrics, sessions, findings, policy rollout, evidence health, response simulation, and release qualification records.
 
