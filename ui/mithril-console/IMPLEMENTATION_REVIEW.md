@@ -128,6 +128,6 @@ npm run test:e2e
 
 ## Source state and limits
 
-This guide covers the uncommitted `ui/mithril-console` files in the `codex/mithril-ui` worktree. The worktree starts from source revision `4078112242986588274e4cecfba0c2300c429103`.
+This guide covers the committed `ui/mithril-console` files in the `codex/mithril-ui` worktree. The implementation starts from source revision `4078112242986588274e4cecfba0c2300c429103`. The implementation commits are `a28115f6`, `21a80113`, `a09dc043`, and `949356f0`.
 
 The implementation is a fixture-only user interface. It does not prove backend graph construction, durable revision storage, finding evaluation, response execution, or recovery behavior. It does not change the phase 6.2 worktree.
