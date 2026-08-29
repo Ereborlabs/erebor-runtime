@@ -9,8 +9,7 @@
 Phase 4 is **Not done** for the complete phase. The signed path-tree denial
 claim is **Done** for the tested mount forms. The live resolver preserves
 source ancestry after successful ordinary binds, the tested recursive-bind
-form, and the tested `open_tree` plus `move_mount` form. The closed finding is
-in [`code-review-suggestions.md`](./code-review-suggestions.md).
+form, and the tested `open_tree` plus `move_mount` form.
 
 This is capability closure. It does not say that an absent authority model was
 implemented. Appendix A.13.7 requires a physical oracle for each advertised

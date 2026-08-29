@@ -12,8 +12,7 @@ and cleanup. See the [closure matrix](./phase-4-closure-matrix.md) for the
 remaining Phase 4 boundary.
 
 Status: **Implemented** for the signed path-tree denial claim and the tested
-mount forms. The closed finding is in
-[`code-review-suggestions.md`](./code-review-suggestions.md).
+mount forms.
 
 - Architecture: [validated readable architecture](./policy-and-protection-algorithm-architecture-readable.md#path-selector-resolution-path-tree-floors-and-exact-object-authority)
 - Local-enforcement review: [implementation review guide](./phase-4-implementation-review.md)
