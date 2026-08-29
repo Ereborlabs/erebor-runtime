@@ -2,11 +2,13 @@
 
 This package is an isolated design fixture for the Mithril console. It does not import or change Mithril or Erebor Runtime code.
 
-The console contains Operations, Sessions, Findings, Policy rollout, Evidence, Response, and Release workspaces. The Sessions workspace opens the causal replay for one immutable graph revision.
+The console contains Operations, Sessions, Findings, Policy rollout, Evidence, Response, Agent, and Release workspaces. The Sessions workspace opens the causal replay for one immutable graph revision.
 
 Policy rollout supports policy selection and a local draft editor. The editor validates the workload selector and rule set. A saved draft changes browser memory only. It does not write to Mithril Control.
 
 An Observe policy shows evidence-backed policy suggestions. Apply adds the proposed rule to the local draft. Apply does not switch the policy to Protect mode or activate enforcement.
+
+Agent mode answers bounded questions about the fixture state. An answer can route the operator to its supporting workspace or causal replay. Agent mode cannot sign policy, authorize response, or claim physical effect.
 
 The replay keeps each machine in a stable lane. It shows first-class operation and cross-node edges. Select an operation to expand its evidence in the map. Select an edge point or edge line to inspect its join fields. The ledger uses the same replay cursor and selection.
 
