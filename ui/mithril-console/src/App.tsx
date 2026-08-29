@@ -81,6 +81,10 @@ function SessionReplay() {
   const [focusedMachine, setFocusedMachine] = useState<string | null>(null);
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState<Filter>('all');
+  const [showCounterfactual, setShowCounterfactual] = useState(false);
+  const [reviewingStop, setReviewingStop] = useState(false);
+  const [reviewReason, setReviewReason] = useState('');
+  const [reviewSubmitted, setReviewSubmitted] = useState(false);
   const viewportRef = useRef<HTMLDivElement>(null);
   const selectedOperationId = selection?.type === 'operation' ? selection.id : null;
   const selectedEdgeId = selection?.type === 'edge' ? selection.id : null;
@@ -107,6 +111,15 @@ function SessionReplay() {
     }, 760 / speed);
     return () => window.clearTimeout(timer);
   }, [playing, speed, step]);
+
+  useEffect(() => {
+    if (!reviewingStop) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setReviewingStop(false);
+    };
+    window.addEventListener('keydown', closeOnEscape);
+    return () => window.removeEventListener('keydown', closeOnEscape);
+  }, [reviewingStop]);
 
   useEffect(() => {
     if (!playing || !viewportRef.current || !currentOperation) return;
@@ -194,6 +207,21 @@ function SessionReplay() {
     requestAnimationFrame(() => viewportRef.current?.scrollTo({ left: 0, top: 0, behavior: 'smooth' }));
   }
 
+  function toggleCounterfactual() {
+    setPlaying(false);
+    setStep(finalStep);
+    setView('map');
+    setShowCounterfactual((current) => !current);
+  }
+
+  function openIncorrectStopReview() {
+    setPlaying(false);
+    setStep(finalStep);
+    setSelection({ type: 'operation', id: 'secret-open' });
+    setReviewSubmitted(false);
+    setReviewingStop(true);
+  }
+
   function search(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const match = sessionGraph.operations.find((operation) => operationMatches(operation, query, filter));
@@ -275,6 +303,13 @@ function SessionReplay() {
         </div>
       </section>
 
+      <section className="prevention-boundary" aria-label="Prevention decision">
+        <div className="stop-symbol" aria-hidden="true">×</div>
+        <div><span>STOPPED AT STEP 11</span><strong>Secret object open denied before effect</strong><small>task b812 · object cloud-token · rule cloud-token-deny</small></div>
+        <button type="button" className={showCounterfactual ? 'active' : ''} aria-pressed={showCounterfactual} onClick={toggleCounterfactual}>{showCounterfactual ? 'Hide if allowed' : 'Show if allowed'}</button>
+        <button type="button" onClick={openIncorrectStopReview}>Review incorrect stop</button>
+      </section>
+
       {view === 'map' ? (
         <GraphMap
           layout={layout}
@@ -286,6 +321,7 @@ function SessionReplay() {
           query={query}
           filter={filter}
           focusedMachine={focusedMachine}
+          showCounterfactual={showCounterfactual}
           viewportRef={viewportRef}
           onSelectOperation={selectOperation}
           onSelectEdge={selectEdge}
@@ -300,6 +336,18 @@ function SessionReplay() {
           onSelect={selectOperation}
         />
       )}
+
+      {reviewingStop ? (
+        <aside className="incorrect-stop-review" role="dialog" aria-modal="true" aria-labelledby="incorrect-stop-title">
+          <header><div><span className="eyebrow">False-positive review · local fixture</span><h2 id="incorrect-stop-title">Was this stop incorrect?</h2></div><button type="button" aria-label="Close incorrect-stop review" onClick={() => setReviewingStop(false)}>×</button></header>
+          <p>This review does not allow the operation or change the evidence. It can prepare a narrow exception for separate authorization.</p>
+          <dl><div><dt>Actor</dt><dd>task b812 · payments-debug</dd></div><div><dt>Object</dt><dd>cloud-token</dd></div><div><dt>Decision</dt><dd>DENIED_BEFORE_EFFECT</dd></div><div><dt>Policy</dt><dd>cloud-token-deny · generation 7f4c</dd></div></dl>
+          <label>Why was this stop incorrect?<textarea rows={4} value={reviewReason} onChange={(event) => setReviewReason(event.target.value)} placeholder="State the expected workload action and the smallest required scope." /></label>
+          <div className="incorrect-review-boundary"><strong>Proposed scope</strong><span>One actor · one object · one operation · expiring grant</span></div>
+          {reviewSubmitted ? <p className="incorrect-review-result" role="status">Bounded exception review created locally. The denial and graph revision remain unchanged.</p> : null}
+          <footer><button type="button" onClick={() => setReviewingStop(false)}>Cancel</button><button type="button" disabled={!reviewReason.trim() || reviewSubmitted} onClick={() => setReviewSubmitted(true)}>{reviewSubmitted ? 'Review created' : 'Create bounded exception review'}</button></footer>
+        </aside>
+      ) : null}
 
       <footer className="playback" aria-label="Session replay controls">
         <button type="button" className="play-button" onClick={() => {
@@ -343,6 +391,7 @@ interface GraphMapProps {
   query: string;
   filter: Filter;
   focusedMachine: string | null;
+  showCounterfactual: boolean;
   viewportRef: React.RefObject<HTMLDivElement | null>;
   onSelectOperation: (operation: Operation) => void;
   onSelectEdge: (edge: CausalEdge) => void;
@@ -352,6 +401,8 @@ interface GraphMapProps {
 function GraphMap(props: GraphMapProps) {
   const selectedEdge = props.edges.find((edge) => edge.id === props.selectedEdgeId);
   const selectedEdgePosition = selectedEdge ? edgeDetailPosition(selectedEdge, props.layout) : null;
+  const stopPosition = props.layout.positions.get('secret-open');
+  const stageHeight = props.layout.height + (props.showCounterfactual ? 205 : 0);
 
   return (
     <section className="graph-panel" aria-label="Session operation DAG">
@@ -361,7 +412,7 @@ function GraphMap(props: GraphMapProps) {
         <span>{operationById.get(props.currentOperationId)?.machineId} · {operationById.get(props.currentOperationId)?.summary}</span>
       </div>
       <div className="graph-viewport" ref={props.viewportRef} tabIndex={0} aria-label="Scrollable causal graph">
-        <div className="graph-stage" style={{ width: props.layout.width, height: props.layout.height }}>
+        <div className="graph-stage" style={{ width: props.layout.width, height: stageHeight }}>
           {sessionGraph.machines.map((machine, index) => (
             <MachineLane key={machine.id} machine={machine} index={index}
               visibleCount={props.operations.filter((operation) => operation.machineId === machine.id).length}
@@ -370,7 +421,7 @@ function GraphMap(props: GraphMapProps) {
               dimmed={Boolean(props.focusedMachine && props.focusedMachine !== machine.id)}
               onFocus={() => props.onFocusMachine(props.focusedMachine === machine.id ? null : machine.id)} />
           ))}
-          <svg className="edge-layer" width={props.layout.width} height={props.layout.height} aria-hidden="false">
+          <svg className="edge-layer" width={props.layout.width} height={stageHeight} aria-hidden="false">
             <defs>
               <marker id="arrow-direct" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse">
                 <path d="M 0 0 L 10 5 L 0 10 z" />
@@ -434,6 +485,7 @@ function GraphMap(props: GraphMapProps) {
                 onSelect={() => props.onSelectOperation(operation)} />
             );
           })}
+          {props.showCounterfactual && stopPosition ? <CounterfactualPath x={stopPosition.x + stopPosition.width + 44} y={stopPosition.y + 126} /> : null}
           {selectedEdge && selectedEdgePosition && (
             <EdgeDetail edge={selectedEdge} x={selectedEdgePosition.x} y={selectedEdgePosition.y}
               onClose={() => props.onSelectEdge(selectedEdge)} />
@@ -478,9 +530,10 @@ function OperationCard({ operation, position, selected, current, dimmed, connect
   const incoming = sessionGraph.edges.filter((edge) => edge.target === operation.id).length;
   const outgoing = sessionGraph.edges.filter((edge) => edge.source === operation.id).length;
   return (
-    <article className={`operation-card outcome-${operation.outcome} proof-${operation.proof} ${selected ? 'expanded' : ''} ${current ? 'current' : ''} ${dimmed ? 'dimmed' : ''}`}
+    <article className={`operation-card outcome-${operation.outcome} proof-${operation.proof} ${operation.id === 'secret-open' ? 'stop-point' : ''} ${selected ? 'expanded' : ''} ${current ? 'current' : ''} ${dimmed ? 'dimmed' : ''}`}
       style={{ left: position.x, top: position.y, width: position.width, minHeight: position.height }}
       data-operation-id={operation.id} data-testid={`operation-${operation.id}`}>
+      {operation.id === 'secret-open' ? <span className="stop-point-label">STOPPED HERE</span> : null}
       <button type="button" className="operation-trigger" onClick={onSelect} aria-expanded={selected}>
         <span className="operation-topline"><b>{operation.kind}</b><time>{formatEventTime(operation.timestamp)}</time></span>
         <strong>{operation.title}</strong>
@@ -502,6 +555,21 @@ function OperationCard({ operation, position, selected, current, dimmed, connect
         </div>
       )}
     </article>
+  );
+}
+
+function CounterfactualPath({ x, y }: { x: number; y: number }) {
+  const nodes = [
+    ['Credentials exposed', 'Worker environment and service credentials become readable'],
+    ['Production identity abused', 'Cluster and kubelet operations use the stolen identity'],
+    ['Privileged host Pod', 'Host network, process, and filesystem access become possible'],
+    ['Database and private data', 'Production data enters the reachable effect set'],
+  ];
+  return (
+    <section className="counterfactual-path" style={{ left: x, top: y }} aria-label="Counterfactual path if the denied effect were allowed" data-testid="counterfactual-path">
+      <header><strong>WHAT IF THIS EFFECT WAS ALLOWED?</strong><span>COUNTERFACTUAL · INCIDENT-GROUNDED · NOT EVIDENCE</span></header>
+      <div>{nodes.map(([title, detail], index) => <article key={title}><small>HYPOTHETICAL {index + 1}</small><strong>{title}</strong><span>{detail}</span>{index < nodes.length - 1 ? <i aria-hidden="true">→</i> : null}</article>)}</div>
+    </section>
   );
 }
 

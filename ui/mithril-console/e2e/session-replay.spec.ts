@@ -113,6 +113,27 @@ test('clicking an operation expands its evidence inside the graph', async ({ pag
   await expect(operation).not.toHaveClass(/expanded/);
 });
 
+test('the graph marks the stop and keeps counterfactual review outside evidence', async ({ page }) => {
+  await page.goto(sessionUrl(0));
+  const stop = page.getByTestId('operation-secret-open');
+  await expect(stop.getByText('STOPPED HERE')).toBeVisible();
+  const recordedEdgeCount = await page.locator('.edge-inspect').count();
+
+  await page.getByRole('button', { name: 'Show if allowed' }).click();
+  const counterfactual = page.getByTestId('counterfactual-path');
+  await expect(counterfactual).toContainText('COUNTERFACTUAL · INCIDENT-GROUNDED · NOT EVIDENCE');
+  await expect(counterfactual).toContainText('Privileged host Pod');
+  await expect(page.locator('.edge-inspect')).toHaveCount(recordedEdgeCount);
+
+  await page.getByRole('button', { name: 'Review incorrect stop' }).click();
+  const review = page.getByRole('dialog', { name: 'Was this stop incorrect?' });
+  await expect(review).toContainText('DENIED_BEFORE_EFFECT');
+  await review.getByLabel('Why was this stop incorrect?').fill('The admitted repair job needs one read of this exact object.');
+  await review.getByRole('button', { name: 'Create bounded exception review' }).click();
+  await expect(review.getByRole('status')).toContainText('graph revision remain unchanged');
+  await expect(stop).toHaveClass(/outcome-denied/);
+});
+
 test('clicking an edge exposes its exact join without replacing the graph', async ({ page }) => {
   await page.goto(sessionUrl(0));
   const edge = page.getByRole('button', { name: /exact task \+ object, direct causal edge/ });
