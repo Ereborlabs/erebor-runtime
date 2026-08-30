@@ -67,8 +67,8 @@ crates/mithril-e2e/harness/vm/two-node-convergence.sh \
 ```
 
 The reuse lane validates both VM ownership records. It keeps both VMs and the
-K3s cluster. It replaces the Mithril release, its node state, and the protected
-workload before it runs the next transaction.
+K3s cluster. It replaces the Mithril release and the protected workload. Each
+run uses a new Node state path and Control PVC. Prior evidence stays retained.
 
 Run the automated outage recovery qualification against a healthy retained
 two-node environment only after the lightweight outage tests pass:

@@ -3,6 +3,7 @@
 set -euo pipefail
 
 directory=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+source "$directory/clock.sh"
 test_root=$(mktemp -d /tmp/mithril-vm-harness-test.XXXXXX)
 test_cleanup() {
   local status=$?
@@ -11,6 +12,14 @@ test_cleanup() {
   exit "$status"
 }
 trap test_cleanup EXIT
+
+[[ $(clock_skew_seconds 100 91) -eq 9 ]]
+[[ $(clock_skew_seconds 91 100) -eq 9 ]]
+clock_is_within_tolerance 100 85 15
+if clock_is_within_tolerance 100 84 15; then
+  echo "a future TLS identity accepted excessive guest clock skew" >&2
+  exit 1
+fi
 
 help=$("$directory/run.sh" --help 2>&1)
 [[ $help == *--with-k3s* ]]
@@ -25,6 +34,21 @@ convergence_help=$("$directory/two-node-convergence.sh" --help 2>&1)
 [[ $convergence_help == *--manual-environment* ]]
 [[ $convergence_help == *--protected-start-only* ]]
 [[ $convergence_help == *--reuse-environment* ]]
+grep -Fq 'node_state_host_path=/var/lib/mithril-node-$run_id' \
+  "$directory/two-node-convergence.sh"
+grep -Fq 'control_state_claim=mithril-control-state-$run_id' \
+  "$directory/two-node-convergence.sh"
+grep -Fq 'capacity_policy: "RETAIN"' "$directory/two-node-convergence.sh"
+if grep -Fq 'delete namespace "$system_namespace"' \
+    "$directory/two-node-convergence.sh"; then
+  echo "the retained convergence lane deletes durable Control evidence" >&2
+  exit 1
+fi
+if grep -Fq 'for path in /var/lib/mithril-convergence \' \
+    "$directory/two-node-convergence.sh"; then
+  echo "the retained convergence lane deletes durable Node evidence" >&2
+  exit 1
+fi
 outage_help=$("$directory/two-node-outage-recovery.sh" --help 2>&1)
 [[ $outage_help == *--environment* ]]
 [[ $outage_help == *--output-directory* ]]
@@ -340,6 +364,22 @@ if PATH="$oracle_bin:$PATH" FAKE_KUBECTL_RESULT=success \
     assert_kubernetes_strict_field_denial kubectl replace \
       -f invalid-policy.json >/dev/null 2>&1; then
   echo "a successful policy replace satisfied the strict-field denial oracle" >&2
+  exit 1
+fi
+
+recreated_node_untainted='{"metadata":{"uid":"new-uid","labels":{},"annotations":{}},"spec":{}}'
+recreated_node_quarantined='{"metadata":{"uid":"new-uid","labels":{},"annotations":{}},"spec":{"taints":[{"key":"mithril.erebor.dev/not-ready","effect":"NoSchedule"}]}}'
+assert_recreated_node_unbound "$recreated_node_untainted" old-uid
+assert_recreated_node_unbound "$recreated_node_quarantined" old-uid
+if assert_recreated_node_unbound \
+    "$(jq -c '.metadata.annotations["mithril.erebor.dev/node-id"] = "old-node"' \
+      <<<"$recreated_node_quarantined")" old-uid; then
+  echo "a recreated Node with inherited Mithril identity satisfied the unbound oracle" >&2
+  exit 1
+fi
+if assert_recreated_node_unbound \
+    "$(jq -c '.metadata.uid = "old-uid"' <<<"$recreated_node_untainted")" old-uid; then
+  echo "the old Node UID satisfied the recreated-Node oracle" >&2
   exit 1
 fi
 

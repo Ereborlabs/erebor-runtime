@@ -43,6 +43,22 @@ write_mithril_node_name_bypass() {
     jq --arg node "$node_name" '.spec.nodeName = $node' >"$output"
 }
 
+assert_recreated_node_unbound() {
+  local node_json=$1
+  local old_uid=$2
+
+  # Control can quarantine a recreated Node before the first poll observes it.
+  # The durable boundary is the new UID with no inherited Mithril identity.
+  jq -e --arg old_uid "$old_uid" '
+    .metadata.uid != $old_uid and
+    (.metadata.labels["mithril.erebor.dev/ready"] // "") == "" and
+    (.metadata.annotations["mithril.erebor.dev/node-id"] // "") == "" and
+    (.metadata.annotations["mithril.erebor.dev/node-uid"] // "") == "" and
+    (.metadata.annotations["mithril.erebor.dev/node-boot-id"] // "") == "" and
+    (.metadata.annotations["mithril.erebor.dev/label-epoch"] // "") == ""
+  ' <<<"$node_json" >/dev/null
+}
+
 assert_exact_policy_target() {
   local status_json=$1
   local node_json=$2

@@ -6,6 +6,7 @@ trap 'echo "two-node convergence failed at line $LINENO: $BASH_COMMAND" >&2' ERR
 
 directory=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 source "$directory/convergence-cleanup.sh"
+source "$directory/clock.sh"
 source "$directory/../kubernetes-oracles.sh"
 repo_root=$(cd -- "$directory/../../../.." && pwd)
 provider=$directory/providers/libvirt.sh
@@ -20,6 +21,11 @@ system_namespace=mithril-system
 workload_namespace=mithril-convergence
 runtime_hook_owner=$system_namespace/mithril
 runtime_hook_socket=/run/mithril/runtime-admission.sock
+run_id=$(date -u +%Y%m%d%H%M%S)-$$
+node_state_host_path=/var/lib/mithril-node-$run_id
+control_config_secret=mithril-control-config-$run_id
+control_state_claim=mithril-control-state-$run_id
+admission_tls_secret=mithril-admission-tls-$run_id
 entry_effect_capture_pids=()
 
 usage() {
@@ -192,6 +198,27 @@ request_vm_reboot() {
     echo "the rebooted VM did not pass the provider readiness gate: $vm" >&2
     return 1
   fi
+}
+
+synchronize_vm_clock() {
+  local vm=$1
+  local host_epoch
+  local guest_epoch
+
+  host_epoch=$(date -u +%s)
+  guest_epoch=$("$provider" run "$vm" date -u +%s)
+  if clock_is_within_tolerance "$host_epoch" "$guest_epoch" 15; then
+    return 0
+  fi
+
+  # A libvirt I/O pause stops the guest clock. Advance it before generated TLS
+  # identities reach K3s admission, which rejects a future NotBefore value.
+  "$provider" run "$vm" sudo date -u --set "@$host_epoch" >/dev/null
+  guest_epoch=$("$provider" run "$vm" date -u +%s)
+  clock_is_within_tolerance "$(date -u +%s)" "$guest_epoch" 15 || {
+    echo "VM clock did not converge with the certificate owner: $vm" >&2
+    return 1
+  }
 }
 
 assert_runtime_hook() {
@@ -398,6 +425,8 @@ else
 fi
 "$provider" wait "$vm_a"
 "$provider" wait "$vm_b"
+synchronize_vm_clock "$vm_a"
+synchronize_vm_clock "$vm_b"
 address_a=$("$provider" address "$vm_a")
 address_b=$("$provider" address "$vm_b")
 [[ -n $address_a && -n $address_b && $address_a != "$address_b" ]] || {
@@ -417,8 +446,11 @@ for node in "$vm_a" "$vm_b"; do
   "$provider" put "$node" "$directory/k3s-config-v1.yaml" \
     "$remote/harness/k3s-config-v1.yaml"
   "$provider" put "$node" "$image_archive" "$remote/mithril-images.tar"
-  "$provider" run "$node" \
-    'sudo apt-get update && sudo apt-get install -y --no-install-recommends jq openssl'
+  if ! "$provider" run "$node" \
+      'command -v jq >/dev/null && command -v openssl >/dev/null'; then
+    "$provider" run "$node" \
+      'sudo apt-get update && sudo apt-get install -y --no-install-recommends jq openssl'
+  fi
 done
 
 if [[ $reusing_environment == false ]]; then
@@ -464,10 +496,6 @@ remove_retained_kubernetes_resources() {
     helm --kubeconfig "$kubeconfig" uninstall mithril \
       --namespace "$system_namespace" --wait --timeout=180s >/dev/null
   fi
-  if remote_kubectl get namespace "$system_namespace" >/dev/null 2>&1; then
-    remote_kubectl delete namespace "$system_namespace" \
-      --wait=true --timeout=180s >/dev/null
-  fi
 }
 
 if [[ $reusing_environment == true ]]; then
@@ -502,13 +530,13 @@ replace_retained_test_resources() {
   local node
   local path
 
-  echo "Resetting Mithril state in the retained K3s cluster"
+  echo "Preparing new Mithril state in the retained K3s cluster"
   # A prior forced Pod loss can leave an unowned socket inode. The new node
   # owner proves that no listener is live before it replaces that inode.
   assert_runtime_hook hooks-removed "$vm_a" "$remote_a"
   assert_runtime_hook hooks-removed "$vm_b" "$remote_b"
   for node in "$vm_a" "$vm_b"; do
-    for path in /var/lib/mithril-convergence \
+    for path in /var/lib/mithril-convergence/markers \
         /sys/fs/bpf/mithril-convergence; do
       if "$provider" run "$node" sudo test -d "$path"; then
         "$provider" run "$node" sudo find "$path" -mindepth 1 -delete
@@ -714,6 +742,11 @@ jq -n \
     ],
     trust: $trust[0],
     evidence_directory: "/var/lib/mithril-control/evidence",
+    evidence_store: {
+      maximum_retained_bytes: 1073741824,
+      maximum_retained_records: 1000000,
+      capacity_policy: "RETAIN"
+    },
     control_store_directory: "/var/lib/mithril-control/store",
     kubernetes_policy: {
       tenant_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
@@ -766,15 +799,17 @@ for index in 0 1; do
      sudo install -m 0444 '$remote/materials/administrative-public-key.hex' /etc/mithril/identity/administrative-public-key.hex"
 done
 
-remote_kubectl create namespace "$system_namespace" >/dev/null
-remote_kubectl -n "$system_namespace" create secret generic mithril-control-config \
+if ! remote_kubectl get namespace "$system_namespace" >/dev/null 2>&1; then
+  remote_kubectl create namespace "$system_namespace" >/dev/null
+fi
+remote_kubectl -n "$system_namespace" create secret generic "$control_config_secret" \
   --from-file=control.json="$remote_a/materials/control.json" \
   --from-file=policy-signing-key="$remote_a/materials/policy-signing-key" \
   --from-file=profile-seal-request.json="$remote_a/materials/profile-seal-request.json" \
   --from-file=ca.pem="$remote_a/materials/ca.pem" \
   --from-file=tls.crt="$remote_a/materials/tls.crt" \
   --from-file=tls.key="$remote_a/materials/tls.key" >/dev/null
-remote_kubectl -n "$system_namespace" create secret tls mithril-admission-tls \
+remote_kubectl -n "$system_namespace" create secret tls "$admission_tls_secret" \
   --cert="$remote_a/materials/tls.crt" --key="$remote_a/materials/tls.key" >/dev/null
 
 pvc=$work_a/control-pvc.yaml
@@ -782,7 +817,7 @@ cat >"$pvc" <<EOF
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: mithril-control-state
+  name: $control_state_claim
   namespace: $system_namespace
 spec:
   accessModes: [ReadWriteOnce]
@@ -806,7 +841,7 @@ node:
   imagePullPolicy: Never
   configHostPath: /etc/mithril/node.json
   identityHostPath: /etc/mithril/identity
-  stateHostPath: /var/lib/mithril-convergence
+  stateHostPath: $node_state_host_path
   runHostPath: /run/mithril
   containerRuntimeSocket: /run/k3s/containerd/containerd.sock
   nodeSelector:
@@ -830,16 +865,18 @@ control:
   enabled: true
   image: mithril-control:convergence
   imagePullPolicy: Never
-  configSecretName: mithril-control-config
-  statePersistentVolumeClaim: mithril-control-state
+  configSecretName: $control_config_secret
+  statePersistentVolumeClaim: $control_state_claim
   grpcPort: 8443
+  administrativeExec:
+    enabled: false
   # Keep the durable Control owner available while the worker Node UID changes.
   nodeSelector:
     kubernetes.io/hostname: $node_a_name
   admission:
     enabled: true
     port: 9443
-    tlsSecretName: mithril-admission-tls
+    tlsSecretName: $admission_tls_secret
     caBundle: $ca_bundle
     webhookTimeoutSeconds: 5
 EOF
@@ -905,12 +942,8 @@ wait_replaced_node_uid() {
   local node_json
   for _attempt in {1..300}; do
     node_json=$(remote_kubectl get node "$node_name" -o json 2>/dev/null || true)
-    if [[ -n $node_json ]] && jq -e --arg old_uid "$old_uid" '
-      .metadata.uid != $old_uid and
-      (.metadata.labels["mithril.erebor.dev/ready"] // "") == "" and
-      all(.spec.taints[]?;
-        .key != "mithril.erebor.dev/not-ready" or .effect != "NoSchedule")
-    ' <<<"$node_json" >/dev/null; then
+    if [[ -n $node_json ]] &&
+        assert_recreated_node_unbound "$node_json" "$old_uid"; then
       return 0
     fi
     sleep 1
