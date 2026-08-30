@@ -214,12 +214,15 @@ impl ObservationEnvelopeV1 {
         let external_runtime_actor = self.effect.reason
             == EffectObservationReasonV1::PreparedRuntimeInfrastructure as u8
             || self.effect.reason == EffectObservationReasonV1::RuntimeEntryInfrastructure as u8;
+        let subject_absence_is_observed =
+            self.effect.reason == EffectObservationReasonV1::MissingIdentity as u8;
         let operation_uses_argument = self.effect.operation
             == KernelEffectOperationV1::Ioctl as u16
             || self.effect.operation == KernelEffectOperationV1::IpcAccess as u16
             || process_control
             || self.effect.operation == KernelEffectOperationV1::Capability as u16;
         let subject_is_valid = self.effect.task_cookie > 0
+            || subject_absence_is_observed
             || (process_control
                 && external_runtime_actor
                 && self.effect.target_task_cookie.is_some());
@@ -232,24 +235,43 @@ impl ObservationEnvelopeV1 {
         .into_iter()
         .flatten()
         .all(|id| !id.is_zero());
-        if self.tenant_id.is_zero()
-            || self.node_boot_id.is_zero()
-            || self.source_id.is_zero()
-            || self.source_epoch == 0
-            || self.source_sequence == 0
-            || self.observed_boottime_ns == 0
-            || self.coverage_interval_id.is_zero()
-            || self.profile_generation_ref_id == Some(0)
-            || !subject_is_valid
-            || self.effect.target_task_cookie == Some(0)
-            || operation_uses_argument != self.effect.operation_argument.is_some()
-            || self.effect.effect_family == 0
-            || !optional_ids_are_valid
-            || self.effect.destination_id == Some(0)
-            || self.effect.policy_rule_id == Some(0)
-        {
+        let invalid_field = [
+            ("tenant identity", self.tenant_id.is_zero()),
+            ("node boot identity", self.node_boot_id.is_zero()),
+            ("source identity", self.source_id.is_zero()),
+            ("source epoch", self.source_epoch == 0),
+            ("source sequence", self.source_sequence == 0),
+            ("boot timestamp", self.observed_boottime_ns == 0),
+            ("coverage interval", self.coverage_interval_id.is_zero()),
+            (
+                "profile generation reference",
+                self.profile_generation_ref_id == Some(0),
+            ),
+            ("subject identity", !subject_is_valid),
+            (
+                "target subject identity",
+                self.effect.target_task_cookie == Some(0),
+            ),
+            (
+                "operation argument",
+                operation_uses_argument != self.effect.operation_argument.is_some(),
+            ),
+            ("effect family", self.effect.effect_family == 0),
+            ("optional identity", !optional_ids_are_valid),
+            (
+                "destination identity",
+                self.effect.destination_id == Some(0),
+            ),
+            (
+                "policy rule identity",
+                self.effect.policy_rule_id == Some(0),
+            ),
+        ]
+        .into_iter()
+        .find_map(|(field, invalid)| invalid.then_some(field));
+        if let Some(field) = invalid_field {
             return InvalidSnafu {
-                reason: "kernel observation identity or value is invalid".to_owned(),
+                reason: format!("kernel observation {field} is invalid"),
             }
             .fail();
         }

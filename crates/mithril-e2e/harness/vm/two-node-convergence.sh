@@ -472,6 +472,15 @@ remote_kubectl() {
   "$provider" run "$vm_a" "$command"
 }
 
+signal_pod_request() {
+  local vm=$1
+  local path=$2
+  local request=$3
+
+  "$provider" run "$vm" \
+    "printf '%s\\n' '$request' | timeout 30 sudo tee '$path' >/dev/null"
+}
+
 remove_retained_kubernetes_resources() {
   local node
   local remote
@@ -483,9 +492,14 @@ remove_retained_kubernetes_resources() {
       [[ $node == "$vm_a" ]] || remote=$remote_b
       if "$provider" run "$node" sudo test -d \
           /var/lib/mithril-convergence/markers; then
-        "$provider" run "$node" sudo touch \
+        signal_pod_request "$node" \
+          /var/lib/mithril-convergence/markers/protected.application-request \
+          APPLICATION || true
+        signal_pod_request "$node" \
           /var/lib/mithril-convergence/markers/protected.exception-request \
-          /var/lib/mithril-convergence/markers/protected.restart
+          EXCEPTION || true
+        signal_pod_request "$node" \
+          /var/lib/mithril-convergence/markers/protected.restart RESTART || true
       fi
     done
     remote_kubectl delete namespace "$workload_namespace" \
@@ -684,11 +698,11 @@ make_node_config() {
         source_id: $source_id,
         maximum_record_bytes: 131072,
         maximum_retained_bytes: 268435456,
-        maximum_retained_records: 100000,
-        maximum_batch_records: 256,
+        maximum_retained_records: 2,
+        maximum_batch_records: 1,
         maximum_control_delay_ms: 30000,
         maximum_reader_queue_records: 65535,
-        capacity_policy: "BLOCK"
+        capacity_policy: "RETAIN"
       },
       runtime_observation: {
         socket_path: "/run/mithril/observation.sock",
@@ -1437,7 +1451,6 @@ assert_node_evidence_health_clean() {
     'lost=0' \
     'evidence_errors=0' \
     'wal_capacity_blocked=0' \
-    'wal_rewritten_records=0' \
     'reader_queue_dropped_events=0'; do
     if ! grep -Eq "(^| )$expected( |$)" <<<"$health"; then
       printf '%s\n' "$health" >&2
@@ -1476,6 +1489,8 @@ start_entry_effect_capture() {
     mithril-inspect effects --socket-path /run/mithril/observation.sock \
       --cgroup-scope / --samples 6000 --sample-interval-ms 10 \
       --reason APPLICATION_DEFAULT_ALLOW \
+      --reason PREPARED_RUNTIME_INFRASTRUCTURE \
+      --reason RUNTIME_ENTRY_INFRASTRUCTURE \
       >"$output" 2>/dev/null &
   entry_effect_capture_pids+=("$!")
 }
@@ -1497,6 +1512,10 @@ prepare_pod_markers() {
       "$marker_root/$pod_name.prestop-observed"
     "$provider" run "$node" sudo touch \
       "$marker_root/$pod_name.exception-target"
+    "$provider" run "$node" sudo mkfifo \
+      "$marker_root/$pod_name.application-request" \
+      "$marker_root/$pod_name.exception-request" \
+      "$marker_root/$pod_name.restart"
     "$provider" run "$node" \
       "printf '%s\\n' READY | sudo tee '$marker_root/$pod_name.lifecycle-ready' >/dev/null"
   done
@@ -1783,8 +1802,8 @@ application_effect_marker=$(awk '
 application_effect_capture=$output_directory/application-effect-capture.txt
 start_entry_effect_capture "$selected_node" "$application_effect_capture"
 sleep 0.1
-"$provider" run "$selected_vm" sudo touch \
-  /var/lib/mithril-convergence/markers/protected.application-request
+signal_pod_request "$selected_vm" \
+  /var/lib/mithril-convergence/markers/protected.application-request APPLICATION
 for _attempt in {1..120}; do
   application_result=$("$provider" run "$selected_vm" sudo cat \
     /var/lib/mithril-convergence/markers/protected.application-result \
@@ -2017,8 +2036,8 @@ fi
 remote_kubectl --as="$exception_subject" -n "$workload_namespace" delete \
   workloadprotectionexception overlapping-file-access --wait=true --timeout=120s >/dev/null
 
-"$provider" run "$selected_vm" sudo touch \
-  /var/lib/mithril-convergence/markers/protected.exception-request
+signal_pod_request "$selected_vm" \
+  /var/lib/mithril-convergence/markers/protected.exception-request EXCEPTION
 for _attempt in {1..120}; do
   exception_result=$("$provider" run "$selected_vm" sudo cat \
     /var/lib/mithril-convergence/markers/protected.exception-result 2>/dev/null || true)
@@ -2134,8 +2153,8 @@ assert_live_exact_target "$selected_node" "$profile_id" \
 
 container_before=$(remote_kubectl -n "$workload_namespace" get pod protected \
   -o jsonpath='{.status.containerStatuses[0].containerID}')
-"$provider" run "$selected_vm" sudo touch \
-  /var/lib/mithril-convergence/markers/protected.restart
+signal_pod_request "$selected_vm" \
+  /var/lib/mithril-convergence/markers/protected.restart RESTART
 container_identity_after=$(wait_running_container_identity \
   "$selected_vm" "$workload_namespace" protected "$container_before")
 container_after=$(jq -er '.container_uri' <<<"$container_identity_after")
@@ -2441,22 +2460,7 @@ remote_kubectl -n "$system_namespace" rollout status daemonset/mithril-node \
 wait_node_projection "$selected_node" true false
 wait_policy_delivery_empty "$selected_node"
 
-"$provider" run "$vm_a" sudo rm -f \
-  /var/lib/mithril-convergence/markers/protected.started \
-  /var/lib/mithril-convergence/markers/protected.restart \
-  /var/lib/mithril-convergence/markers/protected.prepared-result \
-  /var/lib/mithril-convergence/markers/protected.application-request \
-  /var/lib/mithril-convergence/markers/protected.application-result \
-  /var/lib/mithril-convergence/markers/protected.exception-request \
-  /var/lib/mithril-convergence/markers/protected.exception-result
-"$provider" run "$vm_b" sudo rm -f \
-  /var/lib/mithril-convergence/markers/protected.started \
-  /var/lib/mithril-convergence/markers/protected.restart \
-  /var/lib/mithril-convergence/markers/protected.prepared-result \
-  /var/lib/mithril-convergence/markers/protected.application-request \
-  /var/lib/mithril-convergence/markers/protected.application-result \
-  /var/lib/mithril-convergence/markers/protected.exception-request \
-  /var/lib/mithril-convergence/markers/protected.exception-result
+prepare_pod_markers protected
 make_policy_manifest 3
 remote_kubectl --as="$policy_subject" apply --server-side --validate=strict \
   -f "$remote_a/policy-v3.yaml" >/dev/null
@@ -2464,16 +2468,7 @@ wait_policy_compiled
 recreated_profile_id=$(remote_kubectl -n "$workload_namespace" get \
   workloadprotectionpolicy converter-policy -o jsonpath='{.metadata.uid}')
 [[ $recreated_profile_id != "$profile_id" ]]
-for node in "$vm_a" "$vm_b"; do
-  "$provider" run "$node" sudo rm -f \
-    /var/lib/mithril-convergence/markers/protected.started \
-    /var/lib/mithril-convergence/markers/protected.restart \
-    /var/lib/mithril-convergence/markers/protected.prepared-result \
-    /var/lib/mithril-convergence/markers/protected.application-request \
-    /var/lib/mithril-convergence/markers/protected.application-result \
-    /var/lib/mithril-convergence/markers/protected.exception-request \
-    /var/lib/mithril-convergence/markers/protected.exception-result
-done
+prepare_pod_markers protected
 remote_kubectl create -f "$remote_a/protected.yaml" >/dev/null
 remote_kubectl -n "$workload_namespace" wait --for=condition=Ready pod/protected \
   --timeout=300s >/dev/null

@@ -65,12 +65,6 @@ pub(crate) enum EvidenceSegmentKindV1 {
         first_cursor: u64,
         last_cursor: u64,
     },
-    Gap {
-        stream_id: u64,
-        first_cursor: u64,
-        last_cursor: u64,
-        discarded_bytes: u64,
-    },
     Coverage {
         stream_id: u64,
         revision: u64,
@@ -80,9 +74,7 @@ pub(crate) enum EvidenceSegmentKindV1 {
 impl EvidenceSegmentKindV1 {
     pub(crate) fn stream_id(self) -> u64 {
         match self {
-            Self::Records { stream_id, .. }
-            | Self::Gap { stream_id, .. }
-            | Self::Coverage { stream_id, .. } => stream_id,
+            Self::Records { stream_id, .. } | Self::Coverage { stream_id, .. } => stream_id,
         }
     }
 
@@ -102,7 +94,7 @@ impl EvidenceSegmentKindV1 {
                     }
                     .build()
                 }),
-            Self::Gap { .. } | Self::Coverage { .. } => Ok(0),
+            Self::Coverage { .. } => Ok(0),
         }
     }
 }
@@ -228,24 +220,6 @@ impl EvidenceSegmentOwner {
                 last_cursor,
             },
             &records.encode_to_vec(),
-        )
-    }
-
-    pub(crate) fn write_gap(
-        &mut self,
-        stream_id: u64,
-        first_cursor: u64,
-        last_cursor: u64,
-        discarded_bytes: u64,
-    ) -> Result<EvidenceSegmentRefV1> {
-        self.write(
-            EvidenceSegmentKindV1::Gap {
-                stream_id,
-                first_cursor,
-                last_cursor,
-                discarded_bytes,
-            },
-            &[],
         )
     }
 
@@ -501,12 +475,6 @@ impl EvidenceSegmentOwner {
                 first_cursor: Self::field(&fields, 3, path)?,
                 last_cursor: Self::field(&fields, 4, path)?,
             },
-            [_, "g", _, _, _, _] => EvidenceSegmentKindV1::Gap {
-                stream_id: Self::field(&fields, 2, path)?,
-                first_cursor: Self::field(&fields, 3, path)?,
-                last_cursor: Self::field(&fields, 4, path)?,
-                discarded_bytes: Self::field(&fields, 5, path)?,
-            },
             [_, "c", _, _] => EvidenceSegmentKindV1::Coverage {
                 stream_id: Self::field(&fields, 2, path)?,
                 revision: Self::field(&fields, 3, path)?,
@@ -533,12 +501,6 @@ impl EvidenceSegmentOwner {
                     last_cursor,
                     ..
                 } => first_cursor > 0 && last_cursor >= first_cursor,
-                EvidenceSegmentKindV1::Gap {
-                    first_cursor,
-                    last_cursor,
-                    discarded_bytes,
-                    ..
-                } => first_cursor > 0 && last_cursor >= first_cursor && discarded_bytes > 0,
                 EvidenceSegmentKindV1::Coverage { revision, .. } => revision > 0,
             };
         if !valid {
@@ -553,7 +515,6 @@ impl EvidenceSegmentOwner {
 
     fn validate_size(kind: EvidenceSegmentKindV1, bytes: u64, path: &Path) -> Result<()> {
         let valid = match kind {
-            EvidenceSegmentKindV1::Gap { .. } => bytes == 0,
             EvidenceSegmentKindV1::Records { .. } | EvidenceSegmentKindV1::Coverage { .. } => {
                 bytes > 0 && bytes <= MAX_SEGMENT_BYTES
             }
@@ -596,20 +557,12 @@ impl EvidenceSegmentOwner {
             } => self.root.join(format!(
                 "{id:016x}.r.{stream_id:016x}.{first_cursor:016x}.{last_cursor:016x}"
             )),
-            EvidenceSegmentKindV1::Gap {
-                stream_id,
-                first_cursor,
-                last_cursor,
-                discarded_bytes,
-            } => self.root.join(format!(
-                "{id:016x}.g.{stream_id:016x}.{first_cursor:016x}.{last_cursor:016x}.{discarded_bytes:016x}"
-            )),
             EvidenceSegmentKindV1::Coverage {
                 stream_id,
                 revision,
-            } => self.root.join(format!(
-                "{id:016x}.c.{stream_id:016x}.{revision:016x}"
-            )),
+            } => self
+                .root
+                .join(format!("{id:016x}.c.{stream_id:016x}.{revision:016x}")),
         }
     }
 
@@ -661,31 +614,6 @@ mod tests {
             owner.read_records(reference, descriptor.kind, expected.len())?,
             records
         );
-        Ok(())
-    }
-
-    #[test]
-    fn evidence_gap_has_only_its_ordered_index() -> Result<(), Box<dyn std::error::Error>> {
-        let directory = TempDir::new()?;
-        let mut owner =
-            super::EvidenceSegmentOwner::open(directory.path(), EvidenceStoreLimitsV1::default())?;
-
-        let reference = owner.write_gap(1, 2, 4, 96)?;
-        let descriptor = owner
-            .descriptors()
-            .find(|descriptor| descriptor.reference == reference)
-            .ok_or("the gap descriptor is absent")?;
-
-        assert_eq!(
-            descriptor.kind,
-            EvidenceSegmentKindV1::Gap {
-                stream_id: 1,
-                first_cursor: 2,
-                last_cursor: 4,
-                discarded_bytes: 96,
-            }
-        );
-        assert_eq!(std::fs::metadata(owner.path(descriptor))?.len(), 0);
         Ok(())
     }
 

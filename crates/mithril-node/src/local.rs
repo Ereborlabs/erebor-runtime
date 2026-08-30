@@ -101,8 +101,6 @@ impl RuntimeObservationServer {
             negative_claim_eligible: false,
             evidence_errors: 0,
             wal_capacity_blocked: 0,
-            wal_rewritten_records: 0,
-            wal_rewritten_bytes: 0,
             reader_queue_dropped_events: 0,
         };
         Ok(Self {
@@ -279,8 +277,6 @@ fn update_effect_health(
     snapshot.decoder_errors = health.decoder_errors;
     snapshot.evidence_errors = health.evidence_errors;
     snapshot.wal_capacity_blocked = health.wal_capacity_blocked;
-    snapshot.wal_rewritten_records = health.wal_rewritten_records;
-    snapshot.wal_rewritten_bytes = health.wal_rewritten_bytes;
     snapshot.reader_queue_dropped_events = health.reader_queue_dropped_events;
     snapshot.effect_health_available = health_bytes.is_some();
 }

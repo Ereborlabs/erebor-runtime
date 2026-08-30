@@ -110,8 +110,6 @@ impl EvidenceConfig {
 pub struct ContainerRuntimeConfig {
     pub socket_path: PathBuf,
     pub effect_controller_cgroup_path: PathBuf,
-    #[serde(default)]
-    pub containerd_event_socket_path: Option<PathBuf>,
     #[serde(default = "default_runtime_reconciliation_ms")]
     pub reconciliation_interval_ms: u64,
 }
@@ -359,13 +357,9 @@ impl NodeConfig {
                 runtime.socket_path.is_absolute()
                     && runtime.effect_controller_cgroup_path.is_absolute()
                     && runtime.effect_controller_cgroup_path != Path::new("/sys/fs/cgroup")
-                    && runtime
-                        .containerd_event_socket_path
-                        .as_ref()
-                        .is_none_or(|path| path.is_absolute())
                     && runtime.reconciliation_interval_ms > 0,
                 InvalidConfigurationSnafu {
-                    reason: "container runtime requires absolute CRI, effect-controller cgroup, and optional containerd-event socket paths plus a nonzero reconciliation interval",
+                    reason: "container runtime requires absolute CRI and effect-controller cgroup paths plus a nonzero fallback reconciliation interval",
                 }
             );
         }
@@ -516,16 +510,6 @@ impl NodeConfig {
         }
         Ok(())
     }
-
-    pub(crate) fn reconciliation_interval(&self) -> Duration {
-        Duration::from_millis(
-            self.container_runtime
-                .as_ref()
-                .map_or_else(default_runtime_reconciliation_ms, |runtime| {
-                    runtime.reconciliation_interval_ms
-                }),
-        )
-    }
 }
 
 fn kubernetes_node_name_is_valid(value: &str) -> bool {
@@ -546,6 +530,10 @@ fn kubernetes_node_name_is_valid(value: &str) -> bool {
                     .last()
                     .is_some_and(u8::is_ascii_alphanumeric)
         })
+}
+
+const fn default_runtime_reconciliation_ms() -> u64 {
+    2_000
 }
 
 fn is_sha256(value: &str) -> bool {
@@ -608,10 +596,6 @@ const fn default_control_clock_skew_ns() -> i64 {
     30_000_000_000
 }
 
-const fn default_runtime_reconciliation_ms() -> u64 {
-    2_000
-}
-
 const fn default_runtime_admission_request_bytes() -> usize {
     64 * 1_024
 }
@@ -654,18 +638,16 @@ fn canonical_uuid(value: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
-    use std::fs;
-    use std::path::PathBuf;
-    use std::time::Duration;
-
     use super::{
         unified_cgroup_path, ContainerKindV1, EvidenceConfig, InterceptorConfig, NodeConfig,
         NodeControlConfig, PolicyCandidateConfig, WorkloadBindingConfig,
     };
+    use std::collections::BTreeMap;
+    use std::fs;
+    use std::path::PathBuf;
 
     #[test]
-    fn evidence_capacity_policy_defaults_to_block_and_accepts_rewrite(
+    fn evidence_capacity_policy_defaults_to_block_and_accepts_retain(
     ) -> Result<(), Box<dyn std::error::Error>> {
         let base = serde_json::json!({
             "tenant_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
@@ -678,15 +660,15 @@ mod tests {
         );
         assert_eq!(block.maximum_reader_queue_records, 65_535);
 
-        let mut rewrite = base;
-        rewrite["capacity_policy"] = serde_json::json!("REWRITE");
-        rewrite["maximum_reader_queue_records"] = serde_json::json!(4_096);
-        let rewrite: EvidenceConfig = serde_json::from_value(rewrite)?;
+        let mut retain = base;
+        retain["capacity_policy"] = serde_json::json!("RETAIN");
+        retain["maximum_reader_queue_records"] = serde_json::json!(4_096);
+        let retain: EvidenceConfig = serde_json::from_value(retain)?;
         assert_eq!(
-            rewrite.capacity_policy,
-            crate::EvidenceWalCapacityPolicyV1::Rewrite
+            retain.capacity_policy,
+            crate::EvidenceWalCapacityPolicyV1::Retain
         );
-        assert_eq!(rewrite.maximum_reader_queue_records, 4_096);
+        assert_eq!(retain.maximum_reader_queue_records, 4_096);
         Ok(())
     }
 
@@ -778,8 +760,18 @@ mod tests {
     #[test]
     fn configured_cgroup_binding_does_not_require_cri() -> crate::Result<()> {
         let config = config();
-        config.validate()?;
-        assert_eq!(config.reconciliation_interval(), Duration::from_secs(2));
+        config.validate()
+    }
+
+    #[test]
+    fn container_runtime_defaults_to_bounded_inventory_fallback(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let runtime: super::ContainerRuntimeConfig = serde_json::from_value(serde_json::json!({
+            "socket_path": "/run/containerd/containerd.sock",
+            "effect_controller_cgroup_path": "/sys/fs/cgroup/mithril-node"
+        }))?;
+
+        assert_eq!(runtime.reconciliation_interval_ms, 2_000);
         Ok(())
     }
 
@@ -837,12 +829,10 @@ mod tests {
     }
 
     #[test]
-    fn kernel_reconciliation_runs_without_workload_bindings() -> crate::Result<()> {
+    fn node_accepts_no_workload_bindings() -> crate::Result<()> {
         let mut config = config();
         config.workload_bindings.clear();
-        config.validate()?;
-        assert_eq!(config.reconciliation_interval(), Duration::from_secs(2));
-        Ok(())
+        config.validate()
     }
 
     #[test]
@@ -851,23 +841,10 @@ mod tests {
         config.container_runtime = Some(super::ContainerRuntimeConfig {
             socket_path: PathBuf::from("/run/containerd/containerd.sock"),
             effect_controller_cgroup_path: PathBuf::from("/sys/fs/cgroup/mithril-node"),
-            containerd_event_socket_path: Some(PathBuf::from("/run/containerd/containerd.sock")),
             reconciliation_interval_ms: 2_000,
         });
         config.workload_bindings[0].root_cgroup_path = None;
         config.validate()
-    }
-
-    #[test]
-    fn containerd_event_socket_must_be_absolute() {
-        let mut config = config();
-        config.container_runtime = Some(super::ContainerRuntimeConfig {
-            socket_path: PathBuf::from("/run/containerd/containerd.sock"),
-            effect_controller_cgroup_path: PathBuf::from("/sys/fs/cgroup/mithril-node"),
-            containerd_event_socket_path: Some(PathBuf::from("containerd.sock")),
-            reconciliation_interval_ms: 2_000,
-        });
-        assert!(config.validate().is_err());
     }
 
     #[test]
@@ -876,7 +853,6 @@ mod tests {
         config.container_runtime = Some(super::ContainerRuntimeConfig {
             socket_path: PathBuf::from("/run/containerd/containerd.sock"),
             effect_controller_cgroup_path: PathBuf::from("mithril-node"),
-            containerd_event_socket_path: None,
             reconciliation_interval_ms: 2_000,
         });
         assert!(config.validate().is_err());

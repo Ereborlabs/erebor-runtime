@@ -6,8 +6,8 @@ use tonic::Status;
 
 use crate::evidence_segment::EvidenceSegmentRefV1;
 use crate::{
-    CoverageAck, CoverageCounters, CoverageReport, EvidenceAck, EvidenceBatch, EvidenceGap,
-    EvidenceGapAck, EvidenceRecord, Result,
+    CoverageAck, CoverageCounters, CoverageReport, EvidenceAck, EvidenceBatch, EvidenceRecord,
+    Result,
 };
 
 mod model;
@@ -95,14 +95,6 @@ pub(crate) struct StoredEvidenceBatchV1 {
     pub first_cursor: u64,
     pub last_cursor: u64,
     pub segment: EvidenceSegmentRefV1,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct StoredEvidenceGapV1 {
-    pub first_cursor: u64,
-    pub last_cursor: u64,
-    pub discarded_bytes: u64,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -261,74 +253,6 @@ impl EvidenceIntakeOwner {
             ));
         }
         Ok(EvidenceAck {})
-    }
-
-    #[allow(clippy::result_large_err)]
-    pub fn receive_gap(
-        &self,
-        tenant_id: [u8; 16],
-        node_id: &str,
-        gap: &EvidenceGap,
-    ) -> std::result::Result<EvidenceGapAck, Status> {
-        let node_boot_id: [u8; 16] = gap
-            .node_boot_id
-            .as_slice()
-            .try_into()
-            .map_err(|_| Status::invalid_argument("evidence gap boot identity is not Id128"))?;
-        let source_id: [u8; 16] =
-            gap.source_id.as_slice().try_into().map_err(|_| {
-                Status::invalid_argument("evidence gap source identity is not Id128")
-            })?;
-        let cursor_count = gap
-            .last_cursor
-            .checked_sub(gap.first_cursor)
-            .and_then(|span| span.checked_add(1));
-        if tenant_id == [0; 16]
-            || !crate::node_id_is_valid(node_id)
-            || node_boot_id == [0; 16]
-            || source_id == [0; 16]
-            || gap.source_epoch == 0
-            || gap.first_cursor == 0
-            || cursor_count.is_none()
-            || gap.discarded_bytes == 0
-        {
-            return Err(Status::invalid_argument(
-                "evidence gap identity or range is invalid",
-            ));
-        }
-        let session = self
-            .store
-            .evidence_session_for_stream(
-                tenant_id,
-                node_id,
-                node_boot_id,
-                source_id,
-                gap.source_epoch,
-            )
-            .map_err(|_| {
-                Status::permission_denied(
-                    "evidence gap does not name one authenticated node session",
-                )
-            })?;
-        let identity = EvidenceIntakeIdentityV1 {
-            tenant_id,
-            node_id: node_id.to_owned(),
-            node_boot_id,
-            label_epoch: session.label_epoch,
-            source_id,
-            source_epoch: gap.source_epoch,
-        };
-        self.store
-            .accept_evidence_gap(
-                identity,
-                StoredEvidenceGapV1 {
-                    first_cursor: gap.first_cursor,
-                    last_cursor: gap.last_cursor,
-                    discarded_bytes: gap.discarded_bytes,
-                },
-            )
-            .map_err(internal_status)?;
-        Ok(EvidenceGapAck {})
     }
 
     pub fn contiguous_cursor(&self, identity: &EvidenceIntakeIdentityV1) -> Result<u64> {
@@ -518,8 +442,7 @@ fn internal_status(error: crate::Error) -> Status {
 mod tests {
     use crate::{
         CoverageCounters, CoverageInterval, CoverageReport, EvidenceBatch, EvidenceIdV1,
-        EvidenceRecord, KernelEffectEvidenceV1, ObservationEnvelopeV1, StoredEvidenceGapV1,
-        TemporalCoverageV1,
+        EvidenceRecord, KernelEffectEvidenceV1, ObservationEnvelopeV1, TemporalCoverageV1,
     };
 
     use super::{AuthenticatedEvidenceNodeV1, EvidenceIntakeIdentityV1, EvidenceIntakeOwner};
@@ -662,41 +585,6 @@ mod tests {
                 .accepted_evidence_records(&identity())?
                 .len(),
             3
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn durable_gap_advances_the_cursor_without_inventing_records(
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        let directory = tempfile::tempdir()?;
-        let intake = EvidenceIntakeOwner::open(directory.path())?;
-        intake.receive(&authenticated(), &batch(1, 1)?)?;
-        intake.store().accept_evidence_gap(
-            identity(),
-            StoredEvidenceGapV1 {
-                first_cursor: 2,
-                last_cursor: 3,
-                discarded_bytes: 4_096,
-            },
-        )?;
-        intake.receive(&authenticated(), &batch(4, 1)?)?;
-        assert_eq!(intake.contiguous_cursor(&identity())?, 4);
-        assert_eq!(
-            intake.store().accepted_evidence_records(&identity())?.len(),
-            2
-        );
-
-        drop(intake);
-        let reopened = EvidenceIntakeOwner::open(directory.path())?;
-        assert_eq!(reopened.contiguous_cursor(&identity())?, 4);
-        assert_eq!(reopened.store().health()?.evidence_gap_ranges, 1);
-        assert_eq!(
-            reopened
-                .store()
-                .accepted_evidence_records(&identity())?
-                .len(),
-            2
         );
         Ok(())
     }

@@ -133,7 +133,10 @@ fn kernel_effect(event: &EffectObservationV1) -> KernelEffectEvidenceV1 {
 
 #[cfg(test)]
 mod tests {
-    use erebor_interceptor_abi::{EffectObservationV1, Id128V1};
+    use erebor_interceptor_abi::{
+        EffectObservationReasonV1, EffectObservationV1, Id128V1, KernelEffectFamilyV1,
+        KernelEffectOperationV1,
+    };
 
     use super::{EvidenceIdV1, ObservationCanonicalizer, TemporalCoverageV1};
 
@@ -191,6 +194,32 @@ mod tests {
         let display = serde_json::to_string(&first)?;
         assert!(!display.contains("argv"));
         assert!(!display.contains("secret"));
+        Ok(())
+    }
+
+    #[test]
+    fn missing_identity_observation_does_not_invent_a_subject() -> crate::Result<()> {
+        let event = EffectObservationV1 {
+            observed_boottime_ns: 10,
+            source_sequence: 11,
+            source_cpu_id: 2,
+            effect_family: KernelEffectFamilyV1::File as u16,
+            operation: KernelEffectOperationV1::OpenRead as u16,
+            configured_errno: -13,
+            kernel_result: -13,
+            reason: EffectObservationReasonV1::MissingIdentity as u8,
+            physical_result: 1,
+            ..EffectObservationV1::default()
+        };
+
+        let observation = canonicalizer()?.normalize_kernel(
+            event,
+            EvidenceIdV1::new(30, 31),
+            TemporalCoverageV1::Complete,
+            100,
+        )?;
+        assert_eq!(observation.effect.task_cookie, 0);
+        assert!(observation.effect.process_lineage_id.is_none());
         Ok(())
     }
 

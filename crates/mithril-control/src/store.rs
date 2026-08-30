@@ -25,8 +25,8 @@ use crate::{
     PolicyActivationStateV1, PolicyBundleV1, PolicyDocumentV1, PolicyRolloutStateV1,
     PolicyRolloutStatusV1, PolicySourceRevisionV1, PolicySourceStateV1, PolicyTargetSnapshotV1,
     PolicyTargetV1, ProfileCandidateArtifactV1, Result, StoredCoverageReportV1,
-    StoredEvidenceBatchV1, StoredEvidenceGapV1, TrustGenerationAcknowledgementV1,
-    TrustGenerationV1, MAX_EVIDENCE_BATCH_PAYLOAD_BYTES, MAX_PENDING_EVIDENCE_RECORDS,
+    StoredEvidenceBatchV1, TrustGenerationAcknowledgementV1, TrustGenerationV1,
+    MAX_EVIDENCE_BATCH_PAYLOAD_BYTES, MAX_PENDING_EVIDENCE_RECORDS,
 };
 
 const STORE_SCHEMA_VERSION: u32 = 2;
@@ -50,7 +50,6 @@ pub struct ControlStoreHealthV1 {
     pub exception_candidates: u64,
     pub unsettled_exception_candidates: u64,
     pub evidence_cursors: u64,
-    pub evidence_gap_ranges: u64,
     pub pending_evidence_batches: u64,
     pub pending_evidence_records: u64,
     pub coverage_cursors: u64,
@@ -415,8 +414,6 @@ struct ControlStoreState {
     #[serde(skip)]
     evidence_batches: Arc<BTreeMap<EvidenceBatchKeyV1, StoredEvidenceBatchV1>>,
     #[serde(skip)]
-    evidence_gaps: Arc<BTreeMap<EvidenceGapKeyV1, IndexedEvidenceGapV1>>,
-    #[serde(skip)]
     pending_evidence_batches: Arc<BTreeMap<EvidencePendingKeyV1, StoredEvidenceBatchV1>>,
     coverage_cursors: Arc<BTreeMap<EvidenceIntakeIdentityV1, CoverageIntakeStateV1>>,
     #[serde(skip)]
@@ -456,20 +453,6 @@ struct EvidenceBatchKeyV1 {
 struct EvidencePendingKeyV1 {
     identity: EvidenceIntakeIdentityV1,
     first_cursor: u64,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
-struct EvidenceGapKeyV1 {
-    identity: EvidenceIntakeIdentityV1,
-    first_cursor: u64,
-    last_cursor: u64,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-struct IndexedEvidenceGapV1 {
-    gap: StoredEvidenceGapV1,
-    segment: crate::evidence_segment::EvidenceSegmentRefV1,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
@@ -672,8 +655,6 @@ struct EvidenceBatchTransactionV1 {
 struct EvidenceAcceptedTransactionV1 {
     identity: EvidenceIntakeIdentityV1,
     stream_id: u64,
-    #[serde(default)]
-    gap: Option<IndexedEvidenceGapV1>,
     batches: Vec<StoredEvidenceBatchV1>,
 }
 
@@ -780,7 +761,6 @@ impl ControlStore {
                     .count(),
             ),
             evidence_cursors: count(inner.state.evidence_cursors.len()),
-            evidence_gap_ranges: count(inner.state.evidence_gaps.len()),
             pending_evidence_batches: count(inner.state.pending_evidence_batches.len()),
             pending_evidence_records: inner.state.pending_evidence_batches.values().fold(
                 0_u64,
@@ -1585,94 +1565,11 @@ impl ControlStore {
                 accepted: Box::new(EvidenceAcceptedTransactionV1 {
                     identity,
                     stream_id,
-                    gap: None,
                     batches,
                 }),
             },
         )?;
         Ok(EvidenceStoreOutcomeV1::Accepted)
-    }
-
-    pub(crate) fn accept_evidence_gap(
-        &self,
-        identity: EvidenceIntakeIdentityV1,
-        gap: StoredEvidenceGapV1,
-    ) -> Result<()> {
-        let mut inner = self.evidence_lock()?;
-        validate_evidence_identity(&identity, &inner.root)?;
-        validate_stored_gap(&identity, &gap, &inner.root)?;
-        validate_source_label(&inner.state, &identity, &inner.root)?;
-        let key = EvidenceGapKeyV1 {
-            identity: identity.clone(),
-            first_cursor: gap.first_cursor,
-            last_cursor: gap.last_cursor,
-        };
-        if let Some(existing) = inner.state.evidence_gaps.get(&key) {
-            if existing.gap == gap {
-                return Ok(());
-            }
-            return ControlStoreSnafu {
-                path: inner.root.clone(),
-                reason: "an accepted evidence gap has conflicting content".to_owned(),
-            }
-            .fail();
-        }
-        let cursor = inner
-            .state
-            .evidence_cursors
-            .get(&identity)
-            .copied()
-            .unwrap_or_default();
-        if gap.first_cursor
-            != checked_store_increment(
-                cursor.contiguous_cursor,
-                &inner.root,
-                "the evidence cursor is exhausted",
-            )?
-        {
-            return ControlStoreSnafu {
-                path: inner.root.clone(),
-                reason: "an evidence gap is not contiguous with its durable cursor".to_owned(),
-            }
-            .fail();
-        }
-
-        let mut batches = Vec::new();
-        let mut next = gap.last_cursor.checked_add(1);
-        while let Some(first_cursor) = next {
-            let Some(pending) = inner
-                .state
-                .pending_evidence_batches
-                .get(&EvidencePendingKeyV1 {
-                    identity: identity.clone(),
-                    first_cursor,
-                })
-                .cloned()
-            else {
-                break;
-            };
-            next = pending.last_cursor.checked_add(1);
-            batches.push(pending);
-        }
-        let stream_id = evidence_stream_id_for_write(&inner.state, &identity, &inner.root)?;
-        let segment = inner.evidence_segments.write_gap(
-            stream_id,
-            gap.first_cursor,
-            gap.last_cursor,
-            gap.discarded_bytes,
-        )?;
-        commit(
-            &mut inner,
-            ControlTransactionV1::EvidenceAccepted {
-                accepted: Box::new(EvidenceAcceptedTransactionV1 {
-                    identity,
-                    stream_id,
-                    gap: Some(IndexedEvidenceGapV1 { gap, segment }),
-                    batches,
-                }),
-            },
-        )?;
-        Ok(())
     }
 
     pub fn install_trust_generation(&self, generation: TrustGenerationV1) -> Result<u64> {
@@ -3686,25 +3583,6 @@ fn validate_stored_batch(batch: &StoredEvidenceBatchV1, path: &Path) -> Result<(
     Ok(())
 }
 
-fn validate_stored_gap(
-    _identity: &EvidenceIntakeIdentityV1,
-    gap: &StoredEvidenceGapV1,
-    path: &Path,
-) -> Result<()> {
-    let cursor_count = gap
-        .last_cursor
-        .checked_sub(gap.first_cursor)
-        .and_then(|span| span.checked_add(1));
-    if gap.first_cursor == 0 || cursor_count.is_none() || gap.discarded_bytes == 0 {
-        return ControlStoreSnafu {
-            path: path.to_owned(),
-            reason: "stored evidence gap range is invalid".to_owned(),
-        }
-        .fail();
-    }
-    Ok(())
-}
-
 fn validate_new_pending_evidence(
     state: &ControlStoreState,
     pending: &EvidenceBatchTransactionV1,
@@ -3901,9 +3779,6 @@ impl ControlStoreState {
         let evidence_boundary_exists = watermark.evidence_cursor == current.evidence_cursor
             || self.evidence_batches.iter().any(|(key, _batch)| {
                 key.identity == watermark.identity && key.last_cursor == watermark.evidence_cursor
-            })
-            || self.evidence_gaps.keys().any(|key| {
-                key.identity == watermark.identity && key.last_cursor == watermark.evidence_cursor
             });
         let coverage_boundary_exists = watermark.coverage_revision == current.coverage_revision
             || self.coverage_reports.keys().any(|key| {
@@ -3936,7 +3811,7 @@ impl ControlStoreState {
         validate_evidence_identity(&accepted.identity, path)?;
         self.validate_evidence_stream_id(&accepted.identity, accepted.stream_id, path)?;
         validate_source_label(self, &accepted.identity, path)?;
-        if accepted.batches.is_empty() && accepted.gap.is_none() {
+        if accepted.batches.is_empty() {
             return ControlStoreSnafu {
                 path: path.to_owned(),
                 reason: "an accepted evidence transaction has no range".to_owned(),
@@ -3948,40 +3823,6 @@ impl ControlStoreState {
             .get(&accepted.identity)
             .copied()
             .unwrap_or_default();
-        if let Some(indexed) = &accepted.gap {
-            let gap = &indexed.gap;
-            validate_stored_gap(&accepted.identity, gap, path)?;
-            if indexed.segment.id == 0
-                || gap.first_cursor
-                    != checked_store_increment(
-                        cursor.contiguous_cursor,
-                        path,
-                        "the evidence cursor is exhausted",
-                    )?
-            {
-                return ControlStoreSnafu {
-                    path: path.to_owned(),
-                    reason: "accepted evidence gap is not contiguous with its durable cursor"
-                        .to_owned(),
-                }
-                .fail();
-            }
-            let key = EvidenceGapKeyV1 {
-                identity: accepted.identity.clone(),
-                first_cursor: gap.first_cursor,
-                last_cursor: gap.last_cursor,
-            };
-            if self.evidence_gaps.contains_key(&key) {
-                return ControlStoreSnafu {
-                    path: path.to_owned(),
-                    reason: "an immutable evidence gap was committed more than once".to_owned(),
-                }
-                .fail();
-            }
-            cursor = IntakeStateV1 {
-                contiguous_cursor: gap.last_cursor,
-            };
-        }
         for batch in &accepted.batches {
             validate_stored_batch(batch, path)?;
             if batch.first_cursor
@@ -4081,9 +3922,6 @@ impl ControlStoreState {
         Arc::make_mut(&mut self.evidence_batches).retain(|key, _batch| {
             key.identity != watermark.identity || key.last_cursor > watermark.evidence_cursor
         });
-        Arc::make_mut(&mut self.evidence_gaps).retain(|key, _gap| {
-            key.identity != watermark.identity || key.last_cursor > watermark.evidence_cursor
-        });
         let current_coverage_revision = self
             .coverage_cursors
             .get(&watermark.identity)
@@ -4114,21 +3952,6 @@ impl ControlStoreState {
             .get(&accepted.identity)
             .copied()
             .unwrap_or_default();
-        if let Some(indexed) = &accepted.gap {
-            let gap = &indexed.gap;
-            self.evidence_segment_id = self.evidence_segment_id.max(indexed.segment.id);
-            Arc::make_mut(&mut self.evidence_gaps).insert(
-                EvidenceGapKeyV1 {
-                    identity: accepted.identity.clone(),
-                    first_cursor: gap.first_cursor,
-                    last_cursor: gap.last_cursor,
-                },
-                indexed.clone(),
-            );
-            cursor = IntakeStateV1 {
-                contiguous_cursor: gap.last_cursor,
-            };
-        }
         for batch in &accepted.batches {
             self.evidence_segment_id = self.evidence_segment_id.max(batch.segment.id);
             cursor = IntakeStateV1 {
@@ -5246,7 +5069,6 @@ fn rebuild_evidence_indexes(
     }
 
     let mut batches = BTreeMap::new();
-    let mut gaps = BTreeMap::new();
     let mut pending = BTreeMap::new();
     let mut coverage = BTreeMap::new();
     for descriptor in segments.descriptors() {
@@ -5333,54 +5155,6 @@ fn rebuild_evidence_indexes(
                     }
                 }
             }
-            EvidenceSegmentKindV1::Gap {
-                first_cursor,
-                last_cursor,
-                discarded_bytes,
-                ..
-            } => {
-                if last_cursor <= consumed.evidence_cursor {
-                    continue;
-                }
-                let intake = state
-                    .evidence_cursors
-                    .get(&identity)
-                    .copied()
-                    .unwrap_or_default()
-                    .contiguous_cursor;
-                if first_cursor <= consumed.evidence_cursor || last_cursor > intake {
-                    return ControlStoreSnafu {
-                        path: root.to_owned(),
-                        reason: "an evidence gap is outside its durable cursor interval".to_owned(),
-                    }
-                    .fail();
-                }
-                let key = EvidenceGapKeyV1 {
-                    identity,
-                    first_cursor,
-                    last_cursor,
-                };
-                if gaps
-                    .insert(
-                        key,
-                        IndexedEvidenceGapV1 {
-                            gap: StoredEvidenceGapV1 {
-                                first_cursor,
-                                last_cursor,
-                                discarded_bytes,
-                            },
-                            segment: descriptor.reference,
-                        },
-                    )
-                    .is_some()
-                {
-                    return ControlStoreSnafu {
-                        path: root.to_owned(),
-                        reason: "an evidence gap range is duplicated".to_owned(),
-                    }
-                    .fail();
-                }
-            }
             EvidenceSegmentKindV1::Coverage { revision, .. } => {
                 let current = state
                     .coverage_cursors
@@ -5423,7 +5197,6 @@ fn rebuild_evidence_indexes(
         }
     }
     state.evidence_batches = Arc::new(batches);
-    state.evidence_gaps = Arc::new(gaps);
     state.pending_evidence_batches = Arc::new(pending);
     state.coverage_reports = Arc::new(coverage);
     validate_rebuilt_evidence_indexes(state, root)
@@ -5456,13 +5229,6 @@ fn validate_rebuilt_evidence_indexes(state: &ControlStoreState, root: &Path) -> 
             .keys()
             .filter(|key| &key.identity == identity)
             .map(|key| (key.first_cursor, key.last_cursor))
-            .chain(
-                state
-                    .evidence_gaps
-                    .keys()
-                    .filter(|key| &key.identity == identity)
-                    .map(|key| (key.first_cursor, key.last_cursor)),
-            )
             .collect::<Vec<_>>();
         ranges.sort_unstable();
         let mut expected = consumed.checked_add(1).ok_or_else(|| {
@@ -5564,7 +5330,6 @@ fn retained_evidence_segment_refs(
                 .values()
                 .map(|batch| batch.segment),
         )
-        .chain(state.evidence_gaps.values().map(|gap| gap.segment))
         .chain(state.coverage_reports.values().map(|report| report.segment))
         .collect()
 }

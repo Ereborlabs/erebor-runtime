@@ -9,8 +9,9 @@ use std::time::{Duration, Instant};
 
 use erebor_interceptor::{KernelHost, KernelHostConfig, KernelHostOwner};
 use erebor_interceptor_abi::{
-    EntryAdmissionRuleKeyV1, EntryAdmissionRuleV1, KernelEffectFamilyV1, KernelEffectOperationV1,
-    PendingExecStateV1, PendingExecV1,
+    EntryAdmissionRuleKeyV1, EntryAdmissionRuleV1, ExecGuardStateV1, Id128V1, KernelEffectFamilyV1,
+    KernelEffectOperationV1, PendingExecStateV1, PendingExecV1, ProcessSecurityStateV1,
+    TaskCoordinateStateV1,
 };
 use mithril_control::{
     lower_kubernetes_policy, policy_custom_resource, EffectFamilyV1, PathTreeDenyFloorV1,
@@ -25,7 +26,7 @@ use serde::Serialize;
 use serde_json::json;
 use sha2::{Digest as _, Sha256};
 use snafu::{ensure, ResultExt as _};
-use zerocopy::TryFromBytes as _;
+use zerocopy::{IntoBytes as _, TryFromBytes as _};
 
 use super::support::{
     effect_binding_with_identity, effect_node_config, wait_for_application_default_effect,
@@ -55,6 +56,8 @@ pub struct RuncEntryRoleRuntimeProbeV1 {
     pub application_entry_allow_observed: bool,
     pub application_default_file_allow_observed: bool,
     pub application_descendant_default_exec_role_preserved: bool,
+    pub held_runtime_admission_reconciled: bool,
+    pub application_exec_transition_event_driven: bool,
     pub preexisting_child_bind_path_tree_denied: bool,
     pub path_tree_control_allowed: bool,
     pub application_admitted_entry_rule_id: u32,
@@ -120,6 +123,130 @@ struct RuncContainer {
 }
 
 impl RuncContainer {
+    fn set_frozen(&self, frozen: bool) -> Result<()> {
+        let freeze_path = self.cgroup_path.join("cgroup.freeze");
+        let events_path = self.cgroup_path.join("cgroup.events");
+        fs::write(&freeze_path, if frozen { b"1" } else { b"0" })
+            .context(IoSnafu { path: &freeze_path })?;
+        let expected = format!("frozen {}", u8::from(frozen));
+        let deadline = Instant::now() + WAIT_LIMIT;
+        while Instant::now() < deadline {
+            let events =
+                fs::read_to_string(&events_path).context(IoSnafu { path: &events_path })?;
+            if events.lines().any(|line| line == expected) {
+                return Ok(());
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        InvalidInputSnafu {
+            path: &events_path,
+            reason: format!("the direct runc cgroup did not reach `{expected}`"),
+        }
+        .fail()
+    }
+
+    fn process_state_key(process_state_id: &str, evidence_path: &Path) -> Result<[u8; 16]> {
+        ensure!(
+            process_state_id.len() == 32
+                && process_state_id
+                    .bytes()
+                    .all(|byte| byte.is_ascii_hexdigit()),
+            InvalidInputSnafu {
+                path: evidence_path,
+                reason: format!("`{process_state_id}` is not a process-state identity"),
+            }
+        );
+        let high = u64::from_str_radix(&process_state_id[..16], 16).map_err(|error| {
+            InvalidInputSnafu {
+                path: evidence_path,
+                reason: format!("process-state identity has an invalid high word: {error}"),
+            }
+            .build()
+        })?;
+        let low = u64::from_str_radix(&process_state_id[16..], 16).map_err(|error| {
+            InvalidInputSnafu {
+                path: evidence_path,
+                reason: format!("process-state identity has an invalid low word: {error}"),
+            }
+            .build()
+        })?;
+        let id = Id128V1::new(high, low);
+        let mut key = [0_u8; 16];
+        key[..8].copy_from_slice(&id.high.to_ne_bytes());
+        key[8..].copy_from_slice(&id.low.to_ne_bytes());
+        Ok(key)
+    }
+
+    fn verify_exec_transition_event_path(
+        &self,
+        host: &mut KernelHost,
+        identity: &NativeSecurityStateOwner,
+        inspector: &NativeIdentityInspector,
+        application: &NativeTaskSnapshotV1,
+        evidence_path: &Path,
+    ) -> Result<bool> {
+        let process_key = Self::process_state_key(&application.process_state_id, evidence_path)?;
+        let process_bytes = host
+            .lookup_map("process_states", &process_key)
+            .context(InterceptorSnafu)?
+            .ok_or_else(|| {
+                InvalidInputSnafu {
+                    path: evidence_path,
+                    reason: "the application process state disappeared before reconciliation"
+                        .to_owned(),
+                }
+                .build()
+            })?;
+        let stable_process =
+            ProcessSecurityStateV1::try_read_from_bytes(&process_bytes).map_err(|error| {
+                InvalidInputSnafu {
+                    path: evidence_path,
+                    reason: format!("the application process state has invalid ABI: {error}"),
+                }
+                .build()
+            })?;
+        let before = identity.health(host).context(NodeSnafu)?;
+        let mut commit_pending = stable_process;
+        commit_pending.exec_guard_state = ExecGuardStateV1::CommitPending;
+        self.set_frozen(true)?;
+        let transition_health = (|| {
+            host.update_map("process_states", &process_key, commit_pending.as_bytes())
+                .context(InterceptorSnafu)?;
+            identity.verify(host, true).context(NodeSnafu)
+        })();
+        let restore = host
+            .update_map("process_states", &process_key, stable_process.as_bytes())
+            .context(InterceptorSnafu);
+        let resume = self.set_frozen(false);
+        restore?;
+        resume?;
+        let transition_health = transition_health?;
+        let settled_health = identity.verify(host, true).context(NodeSnafu)?;
+        let settled_application = inspector
+            .snapshot(application.host_tid)
+            .context(NodeSnafu)?
+            .ok_or_else(|| {
+                InvalidInputSnafu {
+                    path: evidence_path,
+                    reason: "the application identity disappeared after reconciliation".to_owned(),
+                }
+                .build()
+            })?;
+        let preserved = transition_health == before
+            && settled_health == before
+            && settled_application.coordinate_state == TaskCoordinateStateV1::Runnable as u8;
+        ensure!(
+            preserved,
+            InvalidInputSnafu {
+                path: evidence_path,
+                reason: format!(
+                    "an event-driven identity check changed application health: before={before:?}, transition={transition_health:?}, settled={settled_health:?}, application={settled_application:?}"
+                ),
+            }
+        );
+        Ok(true)
+    }
+
     fn prepare_preexisting_child_bind(&self, host_pid: u32, rootfs: &Path) -> Result<()> {
         let source = rootfs.join("mnt/data/models");
         let target = rootfs.join("backup/models");
@@ -539,7 +666,9 @@ impl EffectTestRunner {
         identity
             .activate_held_initial_admission(&mut host, true)
             .context(NodeSnafu)?;
-        let reconciliation = identity.reconcile(&mut host, true).context(NodeSnafu)?;
+        let reconciliation = identity
+            .activate_prepared_runtime_roots(&mut host, true)
+            .context(NodeSnafu)?;
         ensure!(
             reconciliation == Default::default(),
             InvalidInputSnafu {
@@ -653,6 +782,10 @@ impl EffectTestRunner {
                 reason: "the first configured executable did not activate normal policy",
             }
         );
+        let application_exec_transition_event_driven = container
+            .verify_exec_transition_event_path(
+                &mut host, &identity, &inspector, &active, pin_root,
+            )?;
         policy_owner
             .reconcile_cri_exact_bindings(&node_config, &mut host, &bindings)
             .context(NodeSnafu)?;
@@ -962,14 +1095,14 @@ impl EffectTestRunner {
             .context(NodeSnafu)?;
         let restarted_identity = NativeSecurityStateOwner::new(node_boot_id, 1);
         let restart_reconciliation = restarted_identity
-            .reconcile(&mut host, true)
+            .activate_initial_with_effect_policy(&mut host, true)
             .context(NodeSnafu)?;
         ensure!(
             restart_reconciliation == Default::default(),
             InvalidInputSnafu {
                 path: pin_root,
                 reason: format!(
-                    "node-owner restart changed pinned identity state: {restart_reconciliation:?}"
+                    "node-owner restart recorded an identity failure: {restart_reconciliation:?}"
                 ),
             }
         );
@@ -1440,7 +1573,7 @@ impl EffectTestRunner {
         })?;
 
         Ok(RuncEntryRoleRuntimeProbeV1 {
-            schema_version: 13,
+            schema_version: 15,
             runc_version: runc_version.lines().next().unwrap_or_default().to_owned(),
             initial_host_pid: initial_pid,
             prepared_state_before_exec,
@@ -1449,6 +1582,8 @@ impl EffectTestRunner {
             application_entry_allow_observed: true,
             application_default_file_allow_observed: true,
             application_descendant_default_exec_role_preserved,
+            held_runtime_admission_reconciled: true,
+            application_exec_transition_event_driven,
             preexisting_child_bind_path_tree_denied: true,
             path_tree_control_allowed: true,
             application_admitted_entry_rule_id: active.admitted_entry_rule_id,

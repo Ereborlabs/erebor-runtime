@@ -408,7 +408,7 @@ impl NodeChassis {
             .as_ref()
             .is_some_and(crate::NodePolicyGenerationOwner::prevention_enabled);
         let reconciliation = if held_initial_pids.is_empty() {
-            identity.activate_with_effect_policy(&mut host, policy_loaded)?
+            identity.activate_initial_with_effect_policy(&mut host, policy_loaded)?
         } else {
             identity.activate_held_initial_admission(&mut host, policy_loaded)?
         };
@@ -635,8 +635,6 @@ impl NodeChassis {
         let mut healthy_identity_capabilities = self.registration.capabilities.clone();
         let mut healthy_effect_prevention_claims =
             self.registration.effect_prevention_claims_enabled;
-        let mut reconciliation = tokio::time::interval(self.config.reconciliation_interval());
-        reconciliation.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         'running: loop {
             if *shutdown.borrow() {
                 break;
@@ -783,7 +781,7 @@ impl NodeChassis {
                                     NodeControlMessage::EvidenceAck(ack) => {
                                         if let Err(error) = self
                                             .observations
-                                            .acknowledge_evidence_upload(ack)
+                                            .acknowledge_evidence(ack)
                                         {
                                             erebor_telemetry::warn!(
                                                 error;
@@ -859,10 +857,10 @@ impl NodeChassis {
                                     continue;
                                 }
                                 if !evidence_in_flight {
-                                    if let Some(upload) = self.observations.next_evidence_upload() {
+                                    if let Some(batch) = self.observations.next_evidence_batch() {
                                         match self
                                             .await_control_rpc(
-                                                connection.send_evidence_upload(upload),
+                                                connection.send_evidence_batch(batch),
                                             )
                                             .await
                                         {
@@ -1000,12 +998,7 @@ impl NodeChassis {
                                 );
                                 break 'running;
                             }
-                            () = async {
-                                tokio::select! {
-                                    () = self.bindings.wait_for_runtime_change() => {}
-                                    _instant = reconciliation.tick() => {}
-                                }
-                            } => {
+                            () = self.bindings.wait_for_runtime_change() => {
                                 match self.reconcile_bindings(true).await {
                                     ReconciliationOutcome::Healthy => {
                                         let recovered = !evidence_healthy
@@ -1239,12 +1232,7 @@ impl NodeChassis {
                         );
                         break 'running;
                     }
-                    () = async {
-                        tokio::select! {
-                            () = self.bindings.wait_for_runtime_change() => {}
-                            _instant = reconciliation.tick() => {}
-                        }
-                    } => {
+                    () = self.bindings.wait_for_runtime_change() => {
                         match self.reconcile_bindings(false).await {
                             ReconciliationOutcome::Healthy => {
                                 // A disconnected node cannot reopen the Control-backed
@@ -1606,7 +1594,7 @@ impl NodeChassis {
         // receive an allow response. This closes the publication-to-use gap.
         let identity_readback = self
             .identity
-            .reconcile(host, policy_authority_present)
+            .activate_prepared_runtime_roots(host, policy_authority_present)
             .and_then(|_report| {
                 self.bindings.verify_prepared_initial_root(
                     host,
@@ -1829,7 +1817,7 @@ impl NodeChassis {
         }
         // Keep the global policy gate active while an old generation still has live references.
         self.identity
-            .activate_with_effect_policy(host, self.policy.is_some() || !generation_retired)?;
+            .set_effect_policy(host, self.policy.is_some() || !generation_retired)?;
         if let Some(policy) = self.policy.as_ref() {
             self.bindings
                 .adopt_activated_profiles(host, &self.config.workload_bindings)?;
@@ -1904,7 +1892,7 @@ impl NodeChassis {
                 return ReconciliationOutcome::EvidenceUnhealthy(error.to_string());
             }
         }
-        if let Err(error) = self.identity.reconcile(host, policy_authority_present) {
+        if let Err(error) = self.identity.verify(host, policy_authority_present) {
             return ReconciliationOutcome::IdentityUnhealthy {
                 owner: "execution identity",
                 reason: error.to_string(),
@@ -2271,7 +2259,7 @@ impl NodeChassis {
             self.node_boot_id,
             self.label_epoch,
         )?;
-        self.identity.activate_with_effect_policy(host, true)?;
+        self.identity.set_effect_policy(host, true)?;
         self.bindings
             .adopt_activated_profiles(host, &prepared.config.workload_bindings)?;
         // Exact active-pointer readback separates activation from staging success.

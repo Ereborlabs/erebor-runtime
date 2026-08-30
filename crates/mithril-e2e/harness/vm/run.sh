@@ -356,13 +356,15 @@ entry_role_output=$remote_root/runc-entry-roles
 
 if [[ $entry_role_runtime_only == true ]]; then
   jq -e '
-    .schema_version == 13 and
+    .schema_version == 15 and
     .prepared_state_before_exec == "prepared" and
     .prepared_state_after_exec == "active" and
     .prepared_runtime_effect_observed and
     .application_entry_allow_observed and
     .application_default_file_allow_observed and
     .application_descendant_default_exec_role_preserved and
+    .held_runtime_admission_reconciled and
+    .application_exec_transition_event_driven and
     .preexisting_child_bind_path_tree_denied and
     .path_tree_control_allowed and
     .application_admitted_entry_rule_id > 0 and

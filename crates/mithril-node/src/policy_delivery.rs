@@ -563,7 +563,7 @@ impl NodePolicyDeliveryOwner {
                 bundle.profile_artifact.header.sequence_epoch,
             )?;
             bundle
-                .verify(
+                .verify_with_clock_skew(
                     &trusted_key,
                     &config.node_id,
                     if record.staged_utc_ns == 0 {
@@ -571,6 +571,7 @@ impl NodePolicyDeliveryOwner {
                     } else {
                         record.staged_utc_ns
                     },
+                    config.control.maximum_clock_skew_ns,
                 )
                 .context(PolicySnafu)?;
             if self
@@ -3368,7 +3369,7 @@ impl NodePolicyDeliveryOwner {
                 bundle.profile_artifact.header.sequence_epoch,
             )?;
             bundle
-                .verify(
+                .verify_with_clock_skew(
                     &key,
                     &config.node_id,
                     if record.staged_utc_ns == 0 {
@@ -3376,6 +3377,7 @@ impl NodePolicyDeliveryOwner {
                     } else {
                         record.staged_utc_ns
                     },
+                    config.control.maximum_clock_skew_ns,
                 )
                 .context(PolicySnafu)?;
             if scheduled_session_state(&bundle, config, session)? != Some(false) {
@@ -3693,7 +3695,7 @@ impl NodePolicyDeliveryOwner {
             bundle.profile_artifact.header.sequence_epoch,
         )?;
         bundle
-            .verify(
+            .verify_with_clock_skew(
                 &key,
                 &config.node_id,
                 if pending.staged_utc_ns == 0 {
@@ -3701,6 +3703,7 @@ impl NodePolicyDeliveryOwner {
                 } else {
                     pending.staged_utc_ns
                 },
+                config.control.maximum_clock_skew_ns,
             )
             .context(PolicySnafu)?;
         ensure!(
@@ -4285,14 +4288,28 @@ mod tests {
             "node-a",
         )?;
         let trust = trust(directory.path(), &key)?;
-        let owner = NodePolicyDeliveryOwner::load(directory.path())?;
+        let mut owner = NodePolicyDeliveryOwner::load(directory.path())?;
 
         config.control.maximum_clock_skew_ns = 0;
         assert!(owner
             .prepare_activation(&bundle, &trust, &config, &capabilities(), 2, 9)
             .is_err());
         config.control.maximum_clock_skew_ns = 1;
-        owner.prepare_activation(&bundle, &trust, &config, &capabilities(), 2, 9)?;
+        let prepared = owner.prepare_activation(&bundle, &trust, &config, &capabilities(), 2, 9)?;
+        owner.begin_activation(&bundle, &prepared)?;
+        owner.commit_activation(
+            &bundle,
+            &prepared,
+            PolicyActivationProofV1 {
+                node_bound_generation_digest: "1".repeat(64),
+                readback_digest: "2".repeat(64),
+                probe_result_digest: "3".repeat(64),
+                observed_utc_ns: 9,
+            },
+        )?;
+        let mut restored = config.clone();
+        NodePolicyDeliveryOwner::load(directory.path())?.restore_config(&mut restored, &trust)?;
+        assert_eq!(restored.policy_candidates.len(), 1);
         Ok(())
     }
 
@@ -4842,6 +4859,7 @@ mod tests {
         )?;
         let scheduled = scheduled_bundle(base, &key, "worker-a", &[1; 16])?;
         let mut config = static_config;
+        config.control.maximum_clock_skew_ns = 1;
         config.kubernetes_node_name = Some("worker-a".to_owned());
         config.runtime_admission = Some(RuntimeAdmissionConfig {
             socket_path: directory.path().join("runtime-admission.sock"),
@@ -4851,7 +4869,6 @@ mod tests {
         config.container_runtime = Some(ContainerRuntimeConfig {
             socket_path: directory.path().join("containerd.sock"),
             effect_controller_cgroup_path: directory.path().join("mithril-node-cgroup"),
-            containerd_event_socket_path: None,
             reconciliation_interval_ms: 2_000,
         });
         config.workload_bindings.clear();
@@ -4865,7 +4882,7 @@ mod tests {
             &config,
             &capabilities(),
             2,
-            20,
+            9,
             &[1; 16],
             7,
         )?;
@@ -4877,7 +4894,7 @@ mod tests {
                 node_bound_generation_digest: "1".repeat(64),
                 readback_digest: "2".repeat(64),
                 probe_result_digest: "3".repeat(64),
-                observed_utc_ns: 21,
+                observed_utc_ns: 9,
             },
         )?;
 
@@ -4895,6 +4912,16 @@ mod tests {
         assert!(owner.inventory_retirement().is_none());
 
         owner.retire_runtime_bindings(std::slice::from_ref(&runtime.binding_id))?;
+        let mut restored = config.clone();
+        NodePolicyDeliveryOwner::load(directory.path())?.restore_config_for_session(
+            &mut restored,
+            &trust,
+            &[1; 16],
+            7,
+        )?;
+        assert_eq!(restored.policy_candidates.len(), 1);
+        assert_eq!(restored.workload_bindings.len(), 1);
+        assert!(restored.workload_bindings[0].root_cgroup_path.is_none());
         owner.accept_inventory(PolicyInventory {
             desired_inventory_complete: true,
             ..PolicyInventory::default()
@@ -5127,7 +5154,6 @@ mod tests {
         config.container_runtime = Some(ContainerRuntimeConfig {
             socket_path: directory.path().join("containerd.sock"),
             effect_controller_cgroup_path: directory.path().join("mithril-node-cgroup"),
-            containerd_event_socket_path: None,
             reconciliation_interval_ms: 2_000,
         });
         config.workload_bindings.clear();
@@ -6504,7 +6530,6 @@ mod tests {
         config.container_runtime = Some(ContainerRuntimeConfig {
             socket_path: state_directory.join("containerd.sock"),
             effect_controller_cgroup_path: state_directory.join("mithril-node-cgroup"),
-            containerd_event_socket_path: None,
             reconciliation_interval_ms: 2_000,
         });
         config.workload_bindings.clear();

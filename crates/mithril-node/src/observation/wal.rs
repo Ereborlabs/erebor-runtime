@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 use snafu::ResultExt as _;
 
-use super::{CoverageGapReasonV1, EvidenceDigestV1, ObservationEnvelopeV1};
+use super::{EvidenceDigestV1, ObservationEnvelopeV1};
 use crate::error::{EvidenceStateSnafu, IoSnafu};
 use crate::Result;
 
@@ -18,10 +18,8 @@ const WAL_FRAME_VERSION: u16 = 1;
 const WAL_FRAME_HEADER_BYTES: usize = 52;
 const WAL_FRAME_RECORD: u8 = 1;
 const WAL_FRAME_ACK: u8 = 2;
-const WAL_FRAME_GAP: u8 = 3;
 const WAL_FRAME_STREAM: u8 = 4;
 const ACK_FILE: &str = "acknowledged.bin";
-const GAP_FILE: &str = "gap.bin";
 const STREAM_FILE: &str = "stream.bin";
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -29,7 +27,7 @@ const STREAM_FILE: &str = "stream.bin";
 pub enum EvidenceWalCapacityPolicyV1 {
     #[default]
     Block,
-    Rewrite,
+    Retain,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -161,105 +159,6 @@ pub struct EvidenceBatchV1 {
     stream_identity: EvidenceWalStreamIdentityV1,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct EvidenceGapV1 {
-    pub node_boot_id: [u8; 16],
-    pub source_id: [u8; 16],
-    pub source_epoch: u64,
-    pub first_cursor: u64,
-    pub last_cursor: u64,
-    pub discarded_bytes: u64,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub enum EvidenceUploadV1 {
-    Batch(EvidenceBatchV1),
-    Gap(EvidenceGapV1),
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum EvidenceUploadAckV1 {
-    Batch(EvidenceAckV1),
-    Gap(EvidenceGapAckV1),
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct EvidenceGapAckV1;
-
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub struct EvidenceWalRewriteV1 {
-    pub discarded_records: u64,
-    pub discarded_bytes: u64,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct EvidenceWalAppendV1 {
-    pub cursor: u64,
-    pub rewrite: EvidenceWalRewriteV1,
-}
-
-impl EvidenceGapV1 {
-    fn from_record(
-        identity: EvidenceWalStreamIdentityV1,
-        record: &EvidenceRecordV1,
-        discarded_bytes: u64,
-    ) -> Result<Self> {
-        let gap = Self {
-            node_boot_id: identity.node_boot_id,
-            source_id: identity.source_id,
-            source_epoch: identity.source_epoch,
-            first_cursor: record.cursor,
-            last_cursor: record.cursor,
-            discarded_bytes,
-        };
-        gap.validate()?;
-        Ok(gap)
-    }
-
-    fn extend(&self, record: &EvidenceRecordV1, discarded_bytes: u64) -> Result<Self> {
-        if record.cursor != self.last_cursor.checked_add(1).unwrap_or(0) {
-            return EvidenceStateSnafu {
-                reason: "evidence WAL rewrite cannot cross an identity or cursor boundary"
-                    .to_owned(),
-            }
-            .fail();
-        }
-        let mut extended = self.clone();
-        extended.last_cursor = record.cursor;
-        extended.discarded_bytes = extended
-            .discarded_bytes
-            .checked_add(discarded_bytes)
-            .ok_or_else(|| {
-                EvidenceStateSnafu {
-                    reason: "evidence WAL rewritten byte count overflowed".to_owned(),
-                }
-                .build()
-            })?;
-        Ok(extended)
-    }
-
-    fn validate(&self) -> Result<()> {
-        let cursor_count = self
-            .last_cursor
-            .checked_sub(self.first_cursor)
-            .and_then(|span| span.checked_add(1));
-        if self.node_boot_id == [0; 16]
-            || self.source_id == [0; 16]
-            || self.source_epoch == 0
-            || self.first_cursor == 0
-            || cursor_count.is_none()
-            || self.discarded_bytes == 0
-        {
-            return EvidenceStateSnafu {
-                reason: "evidence WAL gap identity or range is invalid".to_owned(),
-            }
-            .fail();
-        }
-        Ok(())
-    }
-}
-
 impl From<EvidenceRecordV1> for mithril_control::EvidenceRecord {
     fn from(record: EvidenceRecordV1) -> Self {
         record.record
@@ -279,19 +178,6 @@ impl From<EvidenceBatchV1> for mithril_control::EvidenceBatch {
     }
 }
 
-impl From<EvidenceGapV1> for mithril_control::EvidenceGap {
-    fn from(gap: EvidenceGapV1) -> Self {
-        Self {
-            node_boot_id: gap.node_boot_id.to_vec(),
-            source_id: gap.source_id.to_vec(),
-            source_epoch: gap.source_epoch,
-            first_cursor: gap.first_cursor,
-            last_cursor: gap.last_cursor,
-            discarded_bytes: gap.discarded_bytes,
-        }
-    }
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct EvidenceAckV1;
 
@@ -299,14 +185,6 @@ impl TryFrom<mithril_control::EvidenceAck> for EvidenceAckV1 {
     type Error = crate::Error;
 
     fn try_from(_ack: mithril_control::EvidenceAck) -> Result<Self> {
-        Ok(Self)
-    }
-}
-
-impl TryFrom<mithril_control::EvidenceGapAck> for EvidenceGapAckV1 {
-    type Error = crate::Error;
-
-    fn try_from(_ack: mithril_control::EvidenceGapAck) -> Result<Self> {
         Ok(Self)
     }
 }
@@ -470,32 +348,6 @@ impl EvidenceWalCodecV1 {
         Ok(state)
     }
 
-    fn encode_gap(gap: &EvidenceGapV1) -> Result<Vec<u8>> {
-        let mut payload = Vec::with_capacity(72);
-        payload.extend_from_slice(&gap.node_boot_id);
-        payload.extend_from_slice(&gap.source_id);
-        payload.extend_from_slice(&gap.source_epoch.to_be_bytes());
-        payload.extend_from_slice(&gap.first_cursor.to_be_bytes());
-        payload.extend_from_slice(&gap.last_cursor.to_be_bytes());
-        payload.extend_from_slice(&gap.discarded_bytes.to_be_bytes());
-        Self::encode_frame(WAL_FRAME_GAP, &payload)
-    }
-
-    fn decode_gap(bytes: &[u8]) -> Result<EvidenceGapV1> {
-        let name = "evidence WAL gap";
-        let mut payload = Self::decode_frame(bytes, WAL_FRAME_GAP, name)?;
-        let gap = EvidenceGapV1 {
-            node_boot_id: Self::take_binary_array(&mut payload, name)?,
-            source_id: Self::take_binary_array(&mut payload, name)?,
-            source_epoch: Self::take_binary_u64(&mut payload, name)?,
-            first_cursor: Self::take_binary_u64(&mut payload, name)?,
-            last_cursor: Self::take_binary_u64(&mut payload, name)?,
-            discarded_bytes: Self::take_binary_u64(&mut payload, name)?,
-        };
-        Self::finish_binary(payload, name)?;
-        Ok(gap)
-    }
-
     fn encode_stream(identity: EvidenceWalStreamIdentityV1) -> Result<Vec<u8>> {
         let mut payload = Vec::with_capacity(60);
         payload.extend_from_slice(&identity.tenant_id);
@@ -529,22 +381,18 @@ pub struct EvidenceWal {
     records: Vec<EvidenceRecordV1>,
     retained_bytes: u64,
     acknowledged: AckStateV1,
-    gap: Option<EvidenceGapV1>,
-    gap_bytes: u64,
 }
 
 pub(super) struct EvidenceWalAppendFailure {
     pub error: Box<crate::Error>,
-    pub gap_reason: CoverageGapReasonV1,
-    pub rewrite: EvidenceWalRewriteV1,
+    pub capacity: bool,
 }
 
 impl From<crate::Error> for EvidenceWalAppendFailure {
     fn from(error: crate::Error) -> Self {
         Self {
             error: Box::new(error),
-            gap_reason: CoverageGapReasonV1::WalFailure,
-            rewrite: EvidenceWalRewriteV1::default(),
+            capacity: false,
         }
     }
 }
@@ -553,7 +401,7 @@ pub(super) struct EvidenceWalOwner {
     root: PathBuf,
     limits: EvidenceWalLimits,
     streams: BTreeMap<EvidenceWalStreamIdentityV1, EvidenceWal>,
-    in_flight: Option<(EvidenceWalStreamIdentityV1, EvidenceUploadV1)>,
+    in_flight: Option<(EvidenceWalStreamIdentityV1, EvidenceBatchV1)>,
     last_acknowledged_stream: Option<EvidenceWalStreamIdentityV1>,
 }
 
@@ -621,7 +469,7 @@ impl EvidenceWalOwner {
     pub(super) fn append_classified(
         &mut self,
         observation: &ObservationEnvelopeV1,
-    ) -> std::result::Result<EvidenceWalAppendV1, EvidenceWalAppendFailure> {
+    ) -> std::result::Result<u64, EvidenceWalAppendFailure> {
         let identity = EvidenceWalStreamIdentityV1::from_observation(observation)
             .map_err(EvidenceWalAppendFailure::from)?;
         if !self.streams.contains_key(&identity) {
@@ -630,21 +478,20 @@ impl EvidenceWalOwner {
                 EvidenceWal::open(path, self.limits).map_err(EvidenceWalAppendFailure::from)?;
             self.streams.insert(identity, wal);
         }
-        let mut rewrite = EvidenceWalRewriteV1::default();
-        loop {
+        {
             let (retained_records, retained_bytes) =
                 self.retention().map_err(EvidenceWalAppendFailure::from)?;
-            let result = {
-                let wal = self.streams.get_mut(&identity).ok_or_else(|| {
-                    EvidenceWalAppendFailure::from(
-                        EvidenceStateSnafu {
-                            reason: "the evidence WAL stream is missing after identity selection"
-                                .to_owned(),
-                        }
-                        .build(),
-                    )
-                })?;
-                // The configured retention bounds apply to all source streams together.
+            let wal = self.streams.get_mut(&identity).ok_or_else(|| {
+                EvidenceWalAppendFailure::from(
+                    EvidenceStateSnafu {
+                        reason: "the evidence WAL stream is missing after identity selection"
+                            .to_owned(),
+                    }
+                    .build(),
+                )
+            })?;
+            if self.limits.capacity_policy == EvidenceWalCapacityPolicyV1::Block {
+                // The configured bounds apply to all source streams together.
                 wal.limits.maximum_retained_records = wal.records.len()
                     + self
                         .limits
@@ -655,58 +502,19 @@ impl EvidenceWalOwner {
                         .limits
                         .maximum_retained_bytes
                         .saturating_sub(retained_bytes);
-                let result = wal.append_classified(observation);
-                wal.limits = self.limits;
-                result
-            };
-            match result {
-                Ok(cursor) => return Ok(EvidenceWalAppendV1 { cursor, rewrite }),
-                Err(failure)
-                    if failure.gap_reason == CoverageGapReasonV1::WalCapacity
-                        && self.limits.capacity_policy == EvidenceWalCapacityPolicyV1::Rewrite =>
-                {
-                    let discarded =
-                        self.rewrite_oldest_record()
-                            .map_err(|error| EvidenceWalAppendFailure {
-                                error: Box::new(error),
-                                gap_reason: CoverageGapReasonV1::WalCapacity,
-                                rewrite,
-                            })?;
-                    let Some(discarded) = discarded else {
-                        return Err(EvidenceWalAppendFailure { rewrite, ..failure });
-                    };
-                    rewrite.discarded_records = rewrite
-                        .discarded_records
-                        .saturating_add(discarded.discarded_records);
-                    rewrite.discarded_bytes = rewrite
-                        .discarded_bytes
-                        .saturating_add(discarded.discarded_bytes);
-                }
-                Err(failure) => return Err(EvidenceWalAppendFailure { rewrite, ..failure }),
+            } else {
+                wal.limits.maximum_retained_records = usize::MAX;
+                wal.limits.maximum_retained_bytes = u64::MAX;
             }
+            let result = wal.append_classified(observation);
+            wal.limits = self.limits;
+            result
         }
     }
 
     pub(super) fn next_batch(&mut self) -> Option<EvidenceBatchV1> {
-        if let Some((_identity, upload)) = &self.in_flight {
-            return match upload {
-                EvidenceUploadV1::Batch(batch) => Some(batch.clone()),
-                EvidenceUploadV1::Gap(_) => None,
-            };
-        }
-        let identity = self.streams.keys().copied().find(|identity| {
-            self.streams
-                .get(identity)
-                .is_some_and(|wal| wal.next_batch().is_some())
-        })?;
-        let batch = self.streams.get(&identity)?.next_batch()?;
-        self.in_flight = Some((identity, EvidenceUploadV1::Batch(batch.clone())));
-        Some(batch)
-    }
-
-    pub(super) fn next_upload(&mut self) -> Option<EvidenceUploadV1> {
-        if let Some((_identity, upload)) = &self.in_flight {
-            return Some(upload.clone());
+        if let Some((_identity, batch)) = &self.in_flight {
+            return Some(batch.clone());
         }
         let identity = self
             .streams
@@ -720,19 +528,15 @@ impl EvidenceWalOwner {
             .find(|identity| {
                 self.streams
                     .get(identity)
-                    .is_some_and(EvidenceWal::has_pending_upload)
+                    .is_some_and(|wal| wal.next_batch().is_some())
             })?;
-        let upload = self.streams.get(&identity)?.next_upload()?;
-        self.in_flight = Some((identity, upload.clone()));
-        Some(upload)
+        let batch = self.streams.get(&identity)?.next_batch()?;
+        self.in_flight = Some((identity, batch.clone()));
+        Some(batch)
     }
 
     pub(super) fn acknowledge(&mut self, ack: EvidenceAckV1) -> Result<()> {
-        self.acknowledge_upload(EvidenceUploadAckV1::Batch(ack))
-    }
-
-    pub(super) fn acknowledge_upload(&mut self, ack: EvidenceUploadAckV1) -> Result<()> {
-        let (identity, upload) = self.in_flight.as_ref().ok_or_else(|| {
+        let (identity, batch) = self.in_flight.as_ref().ok_or_else(|| {
             EvidenceStateSnafu {
                 reason: "evidence acknowledgement has no in-flight source item".to_owned(),
             }
@@ -744,54 +548,11 @@ impl EvidenceWalOwner {
             }
             .build()
         })?;
-        match (ack, upload) {
-            (EvidenceUploadAckV1::Batch(ack), EvidenceUploadV1::Batch(batch)) => {
-                wal.acknowledge_batch(ack, batch)?;
-            }
-            (EvidenceUploadAckV1::Gap(ack), EvidenceUploadV1::Gap(gap)) => {
-                wal.acknowledge_gap(ack, gap)?;
-            }
-            _ => {
-                return EvidenceStateSnafu {
-                    reason: "evidence acknowledgement type does not match its in-flight item"
-                        .to_owned(),
-                }
-                .fail();
-            }
-        }
+        wal.acknowledge_batch(ack, batch)?;
         let identity = *identity;
         self.in_flight = None;
         self.last_acknowledged_stream = Some(identity);
         Ok(())
-    }
-
-    fn rewrite_oldest_record(&mut self) -> Result<Option<EvidenceWalRewriteV1>> {
-        let candidate = self
-            .streams
-            .iter()
-            .filter_map(|(source_id, wal)| {
-                let in_flight = self
-                    .in_flight
-                    .as_ref()
-                    .filter(|(active_source, _upload)| active_source == source_id)
-                    .map(|(_source, upload)| upload);
-                wal.rewrite_candidate(in_flight)
-                    .map(|record| (record.record.ingested_utc_ns, *source_id, record.cursor))
-            })
-            .min();
-        let Some((_ingested_utc_ns, source_id, cursor)) = candidate else {
-            return Ok(None);
-        };
-        self.streams
-            .get_mut(&source_id)
-            .ok_or_else(|| {
-                EvidenceStateSnafu {
-                    reason: "the selected evidence rewrite stream disappeared".to_owned(),
-                }
-                .build()
-            })?
-            .rewrite_record(cursor)
-            .map(Some)
     }
 
     fn retention(&self) -> Result<(usize, u64)> {
@@ -817,8 +578,9 @@ impl EvidenceWalOwner {
 
     fn validate_retention(&self) -> Result<()> {
         let (retained_records, retained_bytes) = self.retention()?;
-        if retained_records > self.limits.maximum_retained_records
-            || retained_bytes > self.limits.maximum_retained_bytes
+        if self.limits.capacity_policy == EvidenceWalCapacityPolicyV1::Block
+            && (retained_records > self.limits.maximum_retained_records
+                || retained_bytes > self.limits.maximum_retained_bytes)
         {
             return EvidenceStateSnafu {
                 reason: "evidence WAL streams exceed their shared retention bounds".to_owned(),
@@ -844,11 +606,10 @@ impl EvidenceWal {
         fs::create_dir_all(&root).context(IoSnafu { path: &root })?;
         let persisted_stream_identity = read_stream_identity(&root)?;
         let acknowledged = read_ack(&root)?;
-        let gap = read_gap(&root, acknowledged)?;
-        let mut paths = recover_directory(&root, acknowledged, gap.as_ref())?;
+        let mut paths = recover_directory(&root, acknowledged)?;
         paths.sort_unstable();
         if persisted_stream_identity.is_none()
-            && (!paths.is_empty() || gap.is_some() || acknowledged.contiguous_cursor > 0)
+            && (!paths.is_empty() || acknowledged.contiguous_cursor > 0)
         {
             return EvidenceStateSnafu {
                 reason: "evidence WAL data has no durable stream identity".to_owned(),
@@ -880,9 +641,6 @@ impl EvidenceWal {
                 .fail();
             }
             let record = EvidenceWalCodecV1::decode_record(&bytes)?;
-            if let Some(gap) = &gap {
-                apply_gap_boundary(gap, &mut expected_cursor, record.cursor)?;
-            }
             let identity = persisted_stream_identity.ok_or_else(|| {
                 EvidenceStateSnafu {
                     reason: "evidence WAL record has no stream identity".to_owned(),
@@ -907,28 +665,9 @@ impl EvidenceWal {
             })?;
             records.push(record);
         }
-        if let Some(gap) = &gap {
-            apply_gap_boundary(gap, &mut expected_cursor, u64::MAX)?;
-            if expected_cursor <= gap.last_cursor {
-                return EvidenceStateSnafu {
-                    reason: "evidence WAL gap has a missing retained prefix".to_owned(),
-                }
-                .fail();
-            }
-        }
-        let gap_bytes = gap
-            .as_ref()
-            .map(EvidenceWalCodecV1::encode_gap)
-            .transpose()?
-            .map_or(0, |bytes| bytes.len() as u64);
-        retained_bytes = retained_bytes.checked_add(gap_bytes).ok_or_else(|| {
-            EvidenceStateSnafu {
-                reason: "evidence WAL retained byte count overflowed".to_owned(),
-            }
-            .build()
-        })?;
-        if records.len() > limits.maximum_retained_records
-            || retained_bytes > limits.maximum_retained_bytes
+        if limits.capacity_policy == EvidenceWalCapacityPolicyV1::Block
+            && (records.len() > limits.maximum_retained_records
+                || retained_bytes > limits.maximum_retained_bytes)
         {
             return EvidenceStateSnafu {
                 reason: "evidence WAL exceeds its configured retention bounds".to_owned(),
@@ -942,8 +681,6 @@ impl EvidenceWal {
             records,
             retained_bytes,
             acknowledged,
-            gap,
-            gap_bytes,
         })
     }
 
@@ -975,13 +712,10 @@ impl EvidenceWal {
                 self.stream_identity = Some(identity);
             }
         }
-        let record_tail = self.records.last().map(|record| record.cursor);
-        let gap_tail = self.gap.as_ref().map(|gap| gap.last_cursor);
-        let tail_cursor = record_tail
-            .into_iter()
-            .chain(gap_tail)
-            .max()
-            .unwrap_or(self.acknowledged.contiguous_cursor);
+        let tail_cursor = self
+            .records
+            .last()
+            .map_or(self.acknowledged.contiguous_cursor, |record| record.cursor);
         let cursor = tail_cursor.checked_add(1).ok_or_else(|| {
             EvidenceStateSnafu {
                 reason: "evidence WAL cursor is exhausted".to_owned(),
@@ -1003,8 +737,9 @@ impl EvidenceWal {
             .build()
         })?;
         if bytes_len > self.limits.maximum_record_bytes
-            || self.records.len() == self.limits.maximum_retained_records
-            || retained_bytes > self.limits.maximum_retained_bytes
+            || (self.limits.capacity_policy == EvidenceWalCapacityPolicyV1::Block
+                && (self.records.len() == self.limits.maximum_retained_records
+                    || retained_bytes > self.limits.maximum_retained_bytes))
         {
             return Err(EvidenceWalAppendFailure {
                 error: Box::new(
@@ -1013,8 +748,7 @@ impl EvidenceWal {
                     }
                     .build(),
                 ),
-                gap_reason: CoverageGapReasonV1::WalCapacity,
-                rewrite: EvidenceWalRewriteV1::default(),
+                capacity: bytes_len <= self.limits.maximum_record_bytes,
             });
         }
         let path = segment_path(&self.root, cursor);
@@ -1047,16 +781,7 @@ impl EvidenceWal {
             first_cursor,
             records: Vec::new(),
         };
-        for record in self
-            .records
-            .iter()
-            .take_while(|record| {
-                self.gap
-                    .as_ref()
-                    .is_none_or(|gap| record.cursor < gap.first_cursor)
-            })
-            .take(self.limits.maximum_batch_records)
-        {
+        for record in self.records.iter().take(self.limits.maximum_batch_records) {
             records.push(record.clone());
             wire.records.push(record.clone().into());
             if wire.encoded_len() > mithril_control::MAX_EVIDENCE_BATCH_PAYLOAD_BYTES {
@@ -1070,110 +795,6 @@ impl EvidenceWal {
             last_cursor,
             records,
             stream_identity,
-        })
-    }
-
-    fn next_upload(&self) -> Option<EvidenceUploadV1> {
-        if let Some(batch) = self.next_batch() {
-            return Some(EvidenceUploadV1::Batch(batch));
-        }
-        self.gap
-            .as_ref()
-            .filter(|gap| {
-                gap.first_cursor
-                    == self
-                        .acknowledged
-                        .contiguous_cursor
-                        .checked_add(1)
-                        .unwrap_or(0)
-            })
-            .cloned()
-            .map(EvidenceUploadV1::Gap)
-    }
-
-    fn has_pending_upload(&self) -> bool {
-        self.next_upload().is_some()
-    }
-
-    fn rewrite_candidate(&self, in_flight: Option<&EvidenceUploadV1>) -> Option<&EvidenceRecordV1> {
-        if matches!(in_flight, Some(EvidenceUploadV1::Gap(_))) {
-            return None;
-        }
-        if let Some(gap) = &self.gap {
-            return self
-                .records
-                .iter()
-                .find(|record| record.cursor == gap.last_cursor.saturating_add(1));
-        }
-        let protected_cursor = match in_flight {
-            Some(EvidenceUploadV1::Batch(batch)) => batch.last_cursor,
-            _ => self.acknowledged.contiguous_cursor,
-        };
-        self.records
-            .iter()
-            .find(|record| record.cursor > protected_cursor)
-    }
-
-    fn rewrite_record(&mut self, cursor: u64) -> Result<EvidenceWalRewriteV1> {
-        let position = self
-            .records
-            .iter()
-            .position(|record| record.cursor == cursor)
-            .ok_or_else(|| {
-                EvidenceStateSnafu {
-                    reason: "the selected evidence rewrite record disappeared".to_owned(),
-                }
-                .build()
-            })?;
-        let record = &self.records[position];
-        let record_bytes = EvidenceWalCodecV1::encode_record(record)?;
-        let discarded_bytes = record_bytes.len() as u64;
-        let gap = match &self.gap {
-            Some(gap) => gap.extend(record, discarded_bytes)?,
-            None => EvidenceGapV1::from_record(
-                self.stream_identity.ok_or_else(|| {
-                    EvidenceStateSnafu {
-                        reason: "evidence WAL rewrite has no stream identity".to_owned(),
-                    }
-                    .build()
-                })?,
-                record,
-                discarded_bytes,
-            )?,
-        };
-        let gap_bytes = EvidenceWalCodecV1::encode_gap(&gap)?;
-        atomic_write(&self.root.join(GAP_FILE), &gap_bytes)?;
-        let path = segment_path(&self.root, cursor);
-        match fs::remove_file(&path) {
-            Ok(()) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(source) => {
-                return Err(crate::Error::Io {
-                    path,
-                    source,
-                    location: snafu::Location::default(),
-                });
-            }
-        }
-        sync_directory(&self.root)?;
-        self.retained_bytes = self
-            .retained_bytes
-            .checked_sub(discarded_bytes)
-            .and_then(|bytes| bytes.checked_sub(self.gap_bytes))
-            .and_then(|bytes| bytes.checked_add(gap_bytes.len() as u64))
-            .ok_or_else(|| {
-                EvidenceStateSnafu {
-                    reason: "evidence WAL retained byte accounting underflowed or overflowed"
-                        .to_owned(),
-                }
-                .build()
-            })?;
-        self.gap_bytes = gap_bytes.len() as u64;
-        self.gap = Some(gap);
-        self.records.remove(position);
-        Ok(EvidenceWalRewriteV1 {
-            discarded_records: 1,
-            discarded_bytes,
         })
     }
 
@@ -1200,26 +821,19 @@ impl EvidenceWal {
         let bytes = EvidenceWalCodecV1::encode_ack(&state)?;
         atomic_write(&self.root.join(ACK_FILE), &bytes)?;
         let acknowledged_count = batch.records.len();
-        let remaining_bytes = self
-            .records
-            .iter()
-            .skip(acknowledged_count)
-            .try_fold(0_u64, |total, record| {
-                let bytes = EvidenceWalCodecV1::encode_record(record)?;
-                total.checked_add(bytes.len() as u64).ok_or_else(|| {
-                    EvidenceStateSnafu {
-                        reason: "evidence WAL retained byte count overflowed".to_owned(),
-                    }
-                    .build()
-                })
-            })?
-            .checked_add(self.gap_bytes)
-            .ok_or_else(|| {
-                EvidenceStateSnafu {
-                    reason: "evidence WAL retained byte count overflowed".to_owned(),
-                }
-                .build()
-            })?;
+        let remaining_bytes =
+            self.records
+                .iter()
+                .skip(acknowledged_count)
+                .try_fold(0_u64, |total, record| {
+                    let bytes = EvidenceWalCodecV1::encode_record(record)?;
+                    total.checked_add(bytes.len() as u64).ok_or_else(|| {
+                        EvidenceStateSnafu {
+                            reason: "evidence WAL retained byte count overflowed".to_owned(),
+                        }
+                        .build()
+                    })
+                })?;
         for record in self.records.iter().take(acknowledged_count) {
             let path = segment_path(&self.root, record.cursor);
             match fs::metadata(&path) {
@@ -1248,47 +862,6 @@ impl EvidenceWal {
         sync_directory(&self.root)?;
         self.records.drain(..acknowledged_count);
         self.retained_bytes = remaining_bytes;
-        self.acknowledged = state;
-        Ok(())
-    }
-
-    fn acknowledge_gap(&mut self, _ack: EvidenceGapAckV1, gap: &EvidenceGapV1) -> Result<()> {
-        if self.gap.as_ref() != Some(gap) {
-            return EvidenceStateSnafu {
-                reason: "evidence gap acknowledgement does not match the pending durable gap"
-                    .to_owned(),
-            }
-            .fail();
-        }
-        let state = AckStateV1 {
-            contiguous_cursor: gap.last_cursor,
-        };
-        let bytes = EvidenceWalCodecV1::encode_ack(&state)?;
-        atomic_write(&self.root.join(ACK_FILE), &bytes)?;
-        let path = self.root.join(GAP_FILE);
-        match fs::remove_file(&path) {
-            Ok(()) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(source) => {
-                return Err(crate::Error::Io {
-                    path,
-                    source,
-                    location: snafu::Location::default(),
-                });
-            }
-        }
-        sync_directory(&self.root)?;
-        self.retained_bytes = self
-            .retained_bytes
-            .checked_sub(self.gap_bytes)
-            .ok_or_else(|| {
-                EvidenceStateSnafu {
-                    reason: "evidence WAL gap byte accounting underflowed".to_owned(),
-                }
-                .build()
-            })?;
-        self.gap = None;
-        self.gap_bytes = 0;
         self.acknowledged = state;
         Ok(())
     }
@@ -1324,11 +897,7 @@ fn read_ack(root: &Path) -> Result<AckStateV1> {
     Ok(state)
 }
 
-fn recover_directory(
-    root: &Path,
-    acknowledged: AckStateV1,
-    gap: Option<&EvidenceGapV1>,
-) -> Result<Vec<PathBuf>> {
+fn recover_directory(root: &Path, acknowledged: AckStateV1) -> Result<Vec<PathBuf>> {
     let mut paths = Vec::new();
     let mut changed = false;
     for entry in fs::read_dir(root)
@@ -1340,10 +909,7 @@ fn recover_directory(
         match path.extension().and_then(|extension| extension.to_str()) {
             Some("wal") => {
                 let cursor = segment_cursor(&path)?;
-                if cursor <= acknowledged.contiguous_cursor
-                    || gap
-                        .is_some_and(|gap| cursor >= gap.first_cursor && cursor <= gap.last_cursor)
-                {
+                if cursor <= acknowledged.contiguous_cursor {
                     fs::remove_file(&path).context(IoSnafu { path: &path })?;
                     changed = true;
                 } else {
@@ -1363,29 +929,6 @@ fn recover_directory(
     Ok(paths)
 }
 
-fn read_gap(root: &Path, acknowledged: AckStateV1) -> Result<Option<EvidenceGapV1>> {
-    let path = root.join(GAP_FILE);
-    let Some(gap) = read_optional_file(&path)?
-        .map(|bytes| EvidenceWalCodecV1::decode_gap(&bytes))
-        .transpose()?
-    else {
-        return Ok(None);
-    };
-    gap.validate()?;
-    if gap.last_cursor <= acknowledged.contiguous_cursor {
-        remove_optional_file(&path)?;
-        sync_directory(root)?;
-        return Ok(None);
-    }
-    if gap.first_cursor <= acknowledged.contiguous_cursor {
-        return EvidenceStateSnafu {
-            reason: "evidence WAL gap overlaps its acknowledged cursor".to_owned(),
-        }
-        .fail();
-    }
-    Ok(Some(gap))
-}
-
 fn read_optional_file(path: &Path) -> Result<Option<Vec<u8>>> {
     match fs::read(path) {
         Ok(bytes) => Ok(Some(bytes)),
@@ -1396,35 +939,6 @@ fn read_optional_file(path: &Path) -> Result<Option<Vec<u8>>> {
             location: snafu::Location::default(),
         }),
     }
-}
-
-fn remove_optional_file(path: &Path) -> Result<()> {
-    match fs::remove_file(path) {
-        Ok(()) => Ok(()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(source) => Err(crate::Error::Io {
-            path: path.to_path_buf(),
-            source,
-            location: snafu::Location::default(),
-        }),
-    }
-}
-
-fn apply_gap_boundary(
-    gap: &EvidenceGapV1,
-    expected_cursor: &mut u64,
-    next_record_cursor: u64,
-) -> Result<()> {
-    if *expected_cursor != gap.first_cursor || next_record_cursor <= gap.last_cursor {
-        return Ok(());
-    }
-    *expected_cursor = gap.last_cursor.checked_add(1).ok_or_else(|| {
-        EvidenceStateSnafu {
-            reason: "evidence WAL gap exhausted its cursor".to_owned(),
-        }
-        .build()
-    })?;
-    Ok(())
 }
 
 fn segment_cursor(path: &Path) -> Result<u64> {
@@ -1458,7 +972,6 @@ fn is_owned_temporary(path: &Path) -> bool {
         .and_then(|stem| stem.to_str())
         .unwrap_or_default();
     stem == "acknowledged"
-        || stem == "gap"
         || stem == "stream"
         || (stem.len() == 20 && stem.bytes().all(|byte| byte.is_ascii_digit()))
 }
@@ -1470,9 +983,8 @@ fn segment_path(root: &Path, cursor: u64) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::{
-        segment_path, EvidenceAckV1, EvidenceGapAckV1, EvidenceUploadAckV1, EvidenceUploadV1,
-        EvidenceWal, EvidenceWalCapacityPolicyV1, EvidenceWalLimits, EvidenceWalOwner, STREAM_FILE,
-        WAL_FRAME_MAGIC,
+        segment_path, EvidenceAckV1, EvidenceWal, EvidenceWalCapacityPolicyV1, EvidenceWalLimits,
+        EvidenceWalOwner, STREAM_FILE, WAL_FRAME_MAGIC,
     };
     use crate::{EvidenceIdV1, ObservationCanonicalizer, TemporalCoverageV1};
 
@@ -1619,58 +1131,35 @@ mod tests {
     }
 
     #[test]
-    fn rewrite_persists_and_uploads_an_exact_gap_before_later_records(
+    fn retain_keeps_every_unacknowledged_record_beyond_the_soft_bound(
     ) -> Result<(), Box<dyn std::error::Error>> {
         let directory = tempfile::tempdir()?;
-        let rewrite_limits = EvidenceWalLimits {
+        let retain_limits = EvidenceWalLimits {
             maximum_retained_records: 2,
             maximum_batch_records: 1,
-            capacity_policy: EvidenceWalCapacityPolicyV1::Rewrite,
+            capacity_policy: EvidenceWalCapacityPolicyV1::Retain,
             ..limits()
         };
-        let mut owner = EvidenceWalOwner::open(directory.path(), rewrite_limits)?;
+        let mut owner = EvidenceWalOwner::open(directory.path(), retain_limits)?;
         owner
             .append_classified(&observation(1)?)
             .map_err(|failure| failure.error)?;
         owner
             .append_classified(&observation(2)?)
             .map_err(|failure| failure.error)?;
-        let first = owner.next_upload().expect("first upload must exist");
-        assert!(matches!(
-            first,
-            EvidenceUploadV1::Batch(ref batch)
-                if (batch.first_cursor, batch.last_cursor) == (1, 1)
-        ));
-
-        let append = owner
+        owner
             .append_classified(&observation(3)?)
             .map_err(|failure| failure.error)?;
-        assert_eq!(append.rewrite.discarded_records, 1);
-        owner.acknowledge_upload(EvidenceUploadAckV1::Batch(EvidenceAckV1))?;
+        assert_eq!(owner.retention()?.0, 3);
         drop(owner);
 
-        let mut reopened = EvidenceWalOwner::open(directory.path(), rewrite_limits)?;
-        let gap = reopened
-            .next_upload()
-            .expect("durable gap must be uploaded");
-        assert!(matches!(
-            gap,
-            EvidenceUploadV1::Gap(ref gap)
-                if (gap.first_cursor, gap.last_cursor) == (2, 2)
-                    && gap.discarded_bytes > 0
-        ));
-        reopened.acknowledge_upload(EvidenceUploadAckV1::Gap(EvidenceGapAckV1))?;
-
-        let last = reopened
-            .next_upload()
-            .expect("record after the gap must remain");
-        assert!(matches!(
-            last,
-            EvidenceUploadV1::Batch(ref batch)
-                if (batch.first_cursor, batch.last_cursor) == (3, 3)
-        ));
-        reopened.acknowledge_upload(EvidenceUploadAckV1::Batch(EvidenceAckV1))?;
-        assert!(reopened.next_upload().is_none());
+        let mut reopened = EvidenceWalOwner::open(directory.path(), retain_limits)?;
+        for cursor in 1..=3 {
+            let batch = reopened.next_batch().expect("retained record must upload");
+            assert_eq!((batch.first_cursor, batch.last_cursor), (cursor, cursor));
+            reopened.acknowledge(EvidenceAckV1)?;
+        }
+        assert!(reopened.next_batch().is_none());
         Ok(())
     }
 

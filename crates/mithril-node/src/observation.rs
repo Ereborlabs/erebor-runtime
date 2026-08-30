@@ -31,9 +31,8 @@ pub use model::{
 };
 use wal::EvidenceWalOwner;
 pub use wal::{
-    EvidenceAckV1, EvidenceBatchV1, EvidenceGapAckV1, EvidenceGapV1, EvidenceRecordV1,
-    EvidenceUploadAckV1, EvidenceUploadV1, EvidenceWal, EvidenceWalAppendV1,
-    EvidenceWalCapacityPolicyV1, EvidenceWalLimits, EvidenceWalRewriteV1,
+    EvidenceAckV1, EvidenceBatchV1, EvidenceRecordV1, EvidenceWal, EvidenceWalCapacityPolicyV1,
+    EvidenceWalLimits,
 };
 pub use window::{
     DeterministicLocalWindowOwner, LocalFindingWindowSpecV1, LocalFindingWindowStateV1,
@@ -56,8 +55,6 @@ struct Inner {
     wal_capacity_error: AtomicBool,
     first_wal_capacity_error: Mutex<Option<String>>,
     wal_capacity_blocked: AtomicU64,
-    wal_rewritten_records: AtomicU64,
-    wal_rewritten_bytes: AtomicU64,
     reader_queue_pending_records: AtomicU64,
     reader_queue_dropped_events: AtomicU64,
     persisted_reader_queue_dropped_events: AtomicU64,
@@ -87,8 +84,6 @@ pub struct EffectObservationHealth {
     pub decoder_errors: u64,
     pub evidence_errors: u64,
     pub wal_capacity_blocked: u64,
-    pub wal_rewritten_records: u64,
-    pub wal_rewritten_bytes: u64,
     pub reader_queue_dropped_events: u64,
 }
 
@@ -160,8 +155,6 @@ impl EffectObservationStore {
                 wal_capacity_error: AtomicBool::new(false),
                 first_wal_capacity_error: Mutex::new(None),
                 wal_capacity_blocked: AtomicU64::new(0),
-                wal_rewritten_records: AtomicU64::new(0),
-                wal_rewritten_bytes: AtomicU64::new(0),
                 reader_queue_pending_records: AtomicU64::new(0),
                 reader_queue_dropped_events: AtomicU64::new(0),
                 persisted_reader_queue_dropped_events: AtomicU64::new(0),
@@ -193,8 +186,6 @@ impl EffectObservationStore {
                 wal_capacity_error: AtomicBool::new(false),
                 first_wal_capacity_error: Mutex::new(None),
                 wal_capacity_blocked: AtomicU64::new(0),
-                wal_rewritten_records: AtomicU64::new(0),
-                wal_rewritten_bytes: AtomicU64::new(0),
                 reader_queue_pending_records: AtomicU64::new(0),
                 reader_queue_dropped_events: AtomicU64::new(0),
                 persisted_reader_queue_dropped_events: AtomicU64::new(0),
@@ -231,15 +222,12 @@ impl EffectObservationStore {
             }
         }
         if let Some(durable) = &self.inner.durable {
-            let result: std::result::Result<
-                Option<EvidenceWalAppendV1>,
-                (Box<crate::Error>, bool, EvidenceWalRewriteV1),
-            > = (|| {
+            let result: std::result::Result<Option<u64>, (Box<crate::Error>, bool)> = (|| {
                 let mut durable = durable.lock().unwrap_or_else(PoisonError::into_inner);
                 let Some((coverage_interval_id, temporal_coverage)) = durable
                     .coverage
                     .observe(event.source_cpu_id, event.source_sequence)
-                    .map_err(|error| (Box::new(error), false, EvidenceWalRewriteV1::default()))?
+                    .map_err(|error| (Box::new(error), false))?
                 else {
                     erebor_telemetry::debug!(
                         "ignored a replayed effect observation",
@@ -251,50 +239,33 @@ impl EffectObservationStore {
                 let observation = durable
                     .canonicalizer
                     .normalize_kernel(event, coverage_interval_id, temporal_coverage, utc_now_ns())
-                    .map_err(|error| (Box::new(error), false, EvidenceWalRewriteV1::default()))?;
+                    .map_err(|error| (Box::new(error), false))?;
                 match durable.wal.append_classified(&observation) {
-                    Ok(appended) => {
-                        if appended.rewrite.discarded_records > 0 {
-                            durable
-                                .coverage
-                                .mark_all_gapped(CoverageGapReasonV1::WalCapacity)
-                                .map_err(|error| (Box::new(error), false, appended.rewrite))?;
-                        }
-                        Ok(Some(appended))
-                    }
+                    Ok(cursor) => Ok(Some(cursor)),
                     Err(failure) => {
-                        let rewrite = failure.rewrite;
+                        let reason = if failure.capacity {
+                            CoverageGapReasonV1::WalCapacity
+                        } else {
+                            CoverageGapReasonV1::WalFailure
+                        };
                         durable
                             .coverage
-                            .mark_all_gapped(failure.gap_reason)
-                            .map_err(|error| (Box::new(error), false, rewrite))?;
-                        let capacity = failure.gap_reason == CoverageGapReasonV1::WalCapacity;
-                        Err((failure.error, capacity, rewrite))
+                            .mark_all_gapped(reason)
+                            .map_err(|error| (Box::new(error), false))?;
+                        Err((failure.error, failure.capacity))
                     }
                 }
-            })();
-            let rewrite = match &result {
-                Ok(Some(appended)) => appended.rewrite,
-                Ok(None) => EvidenceWalRewriteV1::default(),
-                Err((_error, _capacity, rewrite)) => *rewrite,
-            };
-            if rewrite.discarded_records > 0 {
-                self.inner
-                    .wal_rewritten_records
-                    .fetch_add(rewrite.discarded_records, Ordering::Relaxed);
-                self.inner
-                    .wal_rewritten_bytes
-                    .fetch_add(rewrite.discarded_bytes, Ordering::Relaxed);
-            }
+            })(
+            );
             match result {
                 Ok(_appended) => self.clear_wal_capacity_error(),
-                Err((error, true, _rewrite)) => {
+                Err((error, true)) => {
                     self.inner
                         .wal_capacity_blocked
                         .fetch_add(1, Ordering::Relaxed);
                     self.record_wal_capacity_error(error.to_string());
                 }
-                Err((error, false, _rewrite)) => self.record_evidence_error(error.to_string()),
+                Err((error, false)) => self.record_evidence_error(error.to_string()),
             }
         }
     }
@@ -339,46 +310,9 @@ impl EffectObservationStore {
         batch
     }
 
-    pub fn next_evidence_upload(&self) -> Option<EvidenceUploadV1> {
-        let upload = self
-            .inner
-            .durable
-            .as_ref()
-            .and_then(|durable| durable.lock().ok()?.wal.next_upload());
-        match &upload {
-            Some(EvidenceUploadV1::Batch(batch)) => erebor_telemetry::debug!(
-                "prepared an evidence batch",
-                first_cursor = %batch.first_cursor,
-                last_cursor = %batch.last_cursor,
-                count = %batch.records.len()
-            ),
-            Some(EvidenceUploadV1::Gap(gap)) => erebor_telemetry::warn!(
-                "prepared a durable evidence gap",
-                first_cursor = %gap.first_cursor,
-                last_cursor = %gap.last_cursor,
-                discarded_bytes = %gap.discarded_bytes
-            ),
-            None => {}
-        }
-        upload
-    }
-
     pub fn acknowledge_evidence(&self, ack: EvidenceAckV1) -> crate::Result<()> {
         self.lock_durable()?.wal.acknowledge(ack)?;
         erebor_telemetry::debug!("acknowledged an evidence batch");
-        Ok(())
-    }
-
-    pub fn acknowledge_evidence_upload(&self, ack: EvidenceUploadAckV1) -> crate::Result<()> {
-        self.lock_durable()?.wal.acknowledge_upload(ack)?;
-        match ack {
-            EvidenceUploadAckV1::Batch(_) => {
-                erebor_telemetry::debug!("acknowledged an evidence batch");
-            }
-            EvidenceUploadAckV1::Gap(_) => {
-                erebor_telemetry::warn!("acknowledged a durable evidence gap");
-            }
-        }
         Ok(())
     }
 
@@ -532,8 +466,6 @@ impl EffectObservationStore {
             decoder_errors: self.inner.decoder_errors.load(Ordering::Relaxed),
             evidence_errors: self.evidence_errors(),
             wal_capacity_blocked: self.inner.wal_capacity_blocked.load(Ordering::Relaxed),
-            wal_rewritten_records: self.inner.wal_rewritten_records.load(Ordering::Relaxed),
-            wal_rewritten_bytes: self.inner.wal_rewritten_bytes.load(Ordering::Relaxed),
             reader_queue_dropped_events: self
                 .inner
                 .reader_queue_dropped_events
@@ -1146,7 +1078,6 @@ mod tests {
         assert_eq!(store.recent().len(), 2);
         assert_eq!(store.evidence_errors(), 1);
         assert_eq!(store.health(None).wal_capacity_blocked, 1);
-        assert_eq!(store.health(None).wal_rewritten_records, 0);
         assert!(store
             .first_evidence_error()
             .is_some_and(|error| error.contains("retention or record capacity is exhausted")));
@@ -1196,7 +1127,8 @@ mod tests {
     }
 
     #[test]
-    fn wal_rewrite_metrics_and_gap_are_explicit() -> Result<(), Box<dyn std::error::Error>> {
+    fn wal_retain_preserves_all_records_and_complete_coverage(
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let directory = tempfile::tempdir()?;
         let store = EffectObservationStore::durable(
             4,
@@ -1204,7 +1136,7 @@ mod tests {
             EvidenceWalLimits {
                 maximum_retained_records: 3,
                 maximum_batch_records: 1,
-                capacity_policy: EvidenceWalCapacityPolicyV1::Rewrite,
+                capacity_policy: EvidenceWalCapacityPolicyV1::Retain,
                 ..EvidenceWalLimits::default()
             },
             ObservationCanonicalizer::new(
@@ -1234,15 +1166,21 @@ mod tests {
 
         let health = store.health(None);
         assert_eq!(health.wal_capacity_blocked, 0);
-        assert_eq!(health.wal_rewritten_records, 1);
-        assert!(health.wal_rewritten_bytes > 0);
         assert_eq!(health.evidence_errors, 0);
         assert!(store.coverage_snapshot().is_some_and(|snapshot| {
-            !snapshot.supports_negative_claim()
-                && snapshot.current_intervals()[0]
+            snapshot.supports_negative_claim()
+                && !snapshot.current_intervals()[0]
                     .gap_reasons
                     .contains(&CoverageGapReasonV1::WalCapacity)
         }));
+        for cursor in 1..=4 {
+            let batch = store
+                .next_evidence_batch()
+                .ok_or("retained evidence batch is missing")?;
+            assert_eq!((batch.first_cursor, batch.last_cursor), (cursor, cursor));
+            store.acknowledge_evidence(EvidenceAckV1)?;
+        }
+        assert!(store.next_evidence_batch().is_none());
         Ok(())
     }
 

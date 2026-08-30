@@ -118,8 +118,6 @@ pub struct EffectHealthV1 {
     pub decoder_errors: u64,
     pub evidence_errors: u64,
     pub wal_capacity_blocked: u64,
-    pub wal_rewritten_records: u64,
-    pub wal_rewritten_bytes: u64,
     pub reader_queue_dropped_events: u64,
 }
 
@@ -136,8 +134,6 @@ impl From<EffectObservationHealth> for EffectHealthV1 {
             decoder_errors: value.decoder_errors,
             evidence_errors: value.evidence_errors,
             wal_capacity_blocked: value.wal_capacity_blocked,
-            wal_rewritten_records: value.wal_rewritten_records,
-            wal_rewritten_bytes: value.wal_rewritten_bytes,
             reader_queue_dropped_events: value.reader_queue_dropped_events,
         }
     }
@@ -1600,7 +1596,7 @@ impl EffectTestRunner {
             }
         );
         NativeSecurityStateOwner::new(node_boot_id, 1)
-            .activate_with_effect_policy(&mut host, true)
+            .activate_initial_with_effect_policy(&mut host, true)
             .context(NodeSnafu)?;
         let observations = EffectObservationStore::durable(
             1_024,
@@ -2004,7 +2000,7 @@ impl EffectTestRunner {
                 )
                 .context(NodeSnafu)?;
             NativeSecurityStateOwner::new(node_boot_id, 1)
-                .activate_with_effect_policy(&mut host, true)
+                .activate_initial_with_effect_policy(&mut host, true)
                 .context(NodeSnafu)?;
             let sink = observations.clone();
             reader = host

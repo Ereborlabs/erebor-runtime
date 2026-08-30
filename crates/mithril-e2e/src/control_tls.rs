@@ -718,7 +718,7 @@ async fn mtls_evidence_stream_replays_after_disconnect_and_reuses_one_registered
     let NodeControlMessage::EvidenceAck(ack) = second.next_message().await? else {
         return Err("Control did not acknowledge evidence".into());
     };
-    observations.acknowledge_evidence_upload(ack)?;
+    observations.acknowledge_evidence(ack)?;
     let second_batch = observations
         .next_evidence_batch()
         .ok_or("missing second source batch")?;
@@ -728,7 +728,7 @@ async fn mtls_evidence_stream_replays_after_disconnect_and_reuses_one_registered
     let NodeControlMessage::EvidenceAck(ack) = second.next_message().await? else {
         return Err("Control did not acknowledge the second evidence source".into());
     };
-    observations.acknowledge_evidence_upload(ack)?;
+    observations.acknowledge_evidence(ack)?;
     assert_eq!(control.registered_nonce_count(), 2);
     assert!(observations.next_evidence_batch().is_none());
     for (source_id, batch) in [(first_source, first_batch), (second_source, second_batch)] {
@@ -971,7 +971,7 @@ async fn kubernetes_outage_mtls_session_converges_policy_while_replaying_retaine
     for _ in 0..2 {
         match connection.next_message().await? {
             NodeControlMessage::EvidenceAck(ack) => {
-                observations.acknowledge_evidence_upload(ack)?;
+                observations.acknowledge_evidence(ack)?;
                 evidence_acknowledged = true;
             }
             NodeControlMessage::CoverageAck(ack) => {
@@ -1143,7 +1143,7 @@ async fn kubernetes_outage_partitioned_node_reconnects_to_running_control_and_re
     let NodeControlMessage::EvidenceAck(acknowledgement) = reconnected.next_message().await? else {
         return Err("Control did not acknowledge retained partition evidence".into());
     };
-    observations.acknowledge_evidence_upload(acknowledgement)?;
+    observations.acknowledge_evidence(acknowledgement)?;
     let coverage = observations
         .coverage_snapshot()
         .ok_or("missing partition coverage")?;
@@ -1345,7 +1345,7 @@ async fn kubernetes_outage_retained_evidence_allows_protected_pod_admission(
 }
 
 #[tokio::test]
-async fn mtls_evidence_stream_commits_a_rewrite_gap_before_later_records(
+async fn mtls_evidence_stream_retains_every_record_beyond_the_soft_bound(
 ) -> Result<(), Box<dyn StdError>> {
     let directory = tempfile::tempdir()?;
     let certificates = Certificates::issue(false)?;
@@ -1376,7 +1376,7 @@ async fn mtls_evidence_stream_commits_a_rewrite_gap_before_later_records(
         EvidenceWalLimits {
             maximum_retained_records: 3,
             maximum_batch_records: 1,
-            capacity_policy: EvidenceWalCapacityPolicyV1::Rewrite,
+            capacity_policy: EvidenceWalCapacityPolicyV1::Retain,
             ..EvidenceWalLimits::default()
         },
         ObservationCanonicalizer::new(
@@ -1402,24 +1402,20 @@ async fn mtls_evidence_stream_commits_a_rewrite_gap_before_later_records(
             .as_bytes(),
         );
     }
-    assert_eq!(observations.health(None).wal_rewritten_records, 1);
-
     let connector =
         NodeControlConnector::new(files.node_config(address), "node-a".to_owned(), [7; 16]);
     let mut trust = TrustCache::load(directory.path())?;
     let mut connection = connector.connect(registration(), false, &mut trust).await?;
     let mut upload_count = 0;
     let mut delivered_source = None;
-    while let Some(upload) = observations.next_evidence_upload() {
-        if let mithril_node::EvidenceUploadV1::Batch(batch) = &upload {
-            delivered_source = delivered_source.or(Some(batch_source_id(batch)?));
-        }
-        connection.send_evidence_upload(upload).await?;
+    while let Some(batch) = observations.next_evidence_batch() {
+        delivered_source = delivered_source.or(Some(batch_source_id(&batch)?));
+        connection.send_evidence_batch(batch).await?;
         let NodeControlMessage::EvidenceAck(acknowledgement) = connection.next_message().await?
         else {
             return Err("Control did not acknowledge the evidence stream item".into());
         };
-        observations.acknowledge_evidence_upload(acknowledgement)?;
+        observations.acknowledge_evidence(acknowledgement)?;
         upload_count += 1;
     }
     assert_eq!(upload_count, 4);
@@ -1436,10 +1432,8 @@ async fn mtls_evidence_stream_commits_a_rewrite_gap_before_later_records(
     assert_eq!(intake.contiguous_cursor(&identity)?, 4);
     assert_eq!(
         intake.store().accepted_evidence_records(&identity)?.len(),
-        3
+        4
     );
-    assert_eq!(intake.store().health()?.evidence_gap_ranges, 1);
-
     drop(connection);
     let _result = shutdown.send(());
     server.await??;

@@ -180,12 +180,6 @@ pub(super) fn health_delta(
         wal_capacity_blocked: later
             .wal_capacity_blocked
             .saturating_sub(earlier.wal_capacity_blocked),
-        wal_rewritten_records: later
-            .wal_rewritten_records
-            .saturating_sub(earlier.wal_rewritten_records),
-        wal_rewritten_bytes: later
-            .wal_rewritten_bytes
-            .saturating_sub(earlier.wal_rewritten_bytes),
         reader_queue_dropped_events: later
             .reader_queue_dropped_events
             .saturating_sub(earlier.reader_queue_dropped_events),

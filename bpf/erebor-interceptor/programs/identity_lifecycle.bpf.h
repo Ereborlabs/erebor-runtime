@@ -302,6 +302,12 @@ int erebor_reconcile_tasks(struct bpf_iter__task *context)
                                           &profile_generation_task_refs,
                                           &process->active_profile_generation_ref_id)
                                     : NULL;
+        if (process &&
+            (process->exec_guard_state == exec_guard_state_v1_preparing ||
+             process->exec_guard_state == exec_guard_state_v1_commit_pending)) {
+            /* Exec owns this state until its tracepoint commits or restores it. */
+            return 0;
+        }
         if (binding_lookup || !label_matches_runtime(label, config) ||
             !binding_retains_label(binding, label) || !coordinate ||
             coordinate->state != task_coordinate_state_v1_runnable ||

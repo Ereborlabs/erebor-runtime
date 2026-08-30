@@ -608,7 +608,9 @@ impl IdentityTestRunner {
             terminating_binding.as_bytes(),
         )
         .context(InterceptorSnafu)?;
-        identity.reconcile(&mut host, false).context(NodeSnafu)?;
+        identity
+            .recover_tasks(&mut host, false)
+            .context(NodeSnafu)?;
 
         // A terminal binding removes effect authority before its task exits.
         // Reconciliation must retain that coherent graph without reopening it.
@@ -620,7 +622,9 @@ impl IdentityTestRunner {
             terminating_binding.as_bytes(),
         )
         .context(InterceptorSnafu)?;
-        identity.reconcile(&mut host, false).context(NodeSnafu)?;
+        identity
+            .recover_tasks(&mut host, false)
+            .context(NodeSnafu)?;
         binding_gap_fixture.stop();
 
         let mut external_ambiguity_first = NativeProcessFixture::start()?;
@@ -5823,7 +5827,7 @@ impl IdentityTestRunner {
                 );
             }
             let held_reconciliation = identity
-                .reconcile(
+                .activate_prepared_runtime_roots(
                     host.as_mut()
                         .ok_or_else(|| invalid_state("the PostStart identity host is missing"))?,
                     false,

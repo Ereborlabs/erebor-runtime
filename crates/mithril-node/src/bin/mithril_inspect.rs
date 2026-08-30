@@ -98,7 +98,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 let snapshot = client.snapshot().await?;
                 if sample == 0 {
                     println!(
-                        "attempted={} emitted={} lost={} unresolved={} decoder_errors={} evidence_errors={} wal_capacity_blocked={} wal_rewritten_records={} wal_rewritten_bytes={} reader_queue_dropped_events={} health_available={}",
+                        "attempted={} emitted={} lost={} unresolved={} decoder_errors={} evidence_errors={} wal_capacity_blocked={} reader_queue_dropped_events={} health_available={}",
                         snapshot.attempted_effects,
                         snapshot.emitted_effects,
                         snapshot.lost_effects,
@@ -106,8 +106,6 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                         snapshot.decoder_errors,
                         snapshot.evidence_errors,
                         snapshot.wal_capacity_blocked,
-                        snapshot.wal_rewritten_records,
-                        snapshot.wal_rewritten_bytes,
                         snapshot.reader_queue_dropped_events,
                         snapshot.effect_health_available
                     );
@@ -123,8 +121,10 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                         continue;
                     }
                     let line = format!(
-                    "observed_boottime_ns={} task_cookie={} target_task_cookie={} admitted_entry_rule_id={} active_role_id={} family={} operation={} operation_argument={} reason={} result={} object={}:{}:{}:{}:{} exact_object_key_id={} composite_atom_id={} kernel_result={}",
+                    "observed_boottime_ns={} source_sequence={} source_cpu_id={} task_cookie={} target_task_cookie={} admitted_entry_rule_id={} active_role_id={} family={} operation={} operation_argument={} reason={} result={} object={}:{}:{}:{}:{} exact_object_key_id={} composite_atom_id={} kernel_result={}",
                     effect.observed_boottime_ns,
+                    effect.source_sequence,
+                    effect.source_cpu_id,
                     effect.task_cookie,
                     effect.target_task_cookie,
                     effect.admitted_entry_rule_id,

@@ -72,7 +72,7 @@ fn descriptor_has_the_approved_grpc_inventory() -> Result<(), Box<dyn std::error
             "NodeEvidence",
             "Open",
             "EvidenceStreamRequest",
-            "EvidenceStreamAck",
+            "EvidenceAck",
             true,
             true,
         ),

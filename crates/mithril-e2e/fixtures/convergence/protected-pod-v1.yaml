@@ -19,7 +19,6 @@ spec:
         - /bin/sh
         - -ec
         - >-
-          rm -f /var/lib/mithril-convergence/MITHRIL_CONVERGENCE_POD.restart;
           touch /var/lib/mithril-convergence/MITHRIL_CONVERGENCE_POD.started;
           if [ MITHRIL_CONVERGENCE_POD = protected ]; then
           if ( /usr/bin/env /bin/sleep 0 );
@@ -35,18 +34,18 @@ spec:
           else echo BASE_DENIED >
           /var/lib/mithril-convergence/MITHRIL_CONVERGENCE_POD.exception-result;
           fi;
-          while [ ! -e
-          /var/lib/mithril-convergence/MITHRIL_CONVERGENCE_POD.exception-request ];
-          do if [ -e
-          /var/lib/mithril-convergence/MITHRIL_CONVERGENCE_POD.application-request ]
-          && [ ! -e
-          /var/lib/mithril-convergence/MITHRIL_CONVERGENCE_POD.application-result ];
+          read -r application_request <
+          /var/lib/mithril-convergence/MITHRIL_CONVERGENCE_POD.application-request;
+          if [ "$application_request" = APPLICATION ];
           then if ( /usr/bin/env /bin/sleep 1 );
           then echo APPLICATION_DEFAULT_ALLOWED >
           /var/lib/mithril-convergence/MITHRIL_CONVERGENCE_POD.application-result;
           else echo APPLICATION_DEFAULT_DENIED >
           /var/lib/mithril-convergence/MITHRIL_CONVERGENCE_POD.application-result;
-          fi; fi; sleep 1; done;
+          fi; fi;
+          read -r exception_request <
+          /var/lib/mithril-convergence/MITHRIL_CONVERGENCE_POD.exception-request;
+          [ "$exception_request" = EXCEPTION ];
           if cat /var/lib/mithril-convergence/MITHRIL_CONVERGENCE_POD.exception-target
           >/dev/null 2>&1;
           then if cat /var/lib/mithril-convergence/MITHRIL_CONVERGENCE_POD.exception-target
@@ -59,8 +58,9 @@ spec:
           else echo EXCEPTION_DENIED >
           /var/lib/mithril-convergence/MITHRIL_CONVERGENCE_POD.exception-result;
           fi; fi;
-          while [ ! -e /var/lib/mithril-convergence/MITHRIL_CONVERGENCE_POD.restart ];
-          do sleep 1; done;
+          read -r restart_request <
+          /var/lib/mithril-convergence/MITHRIL_CONVERGENCE_POD.restart;
+          [ "$restart_request" = RESTART ];
           exit 42
       lifecycle:
         postStart:

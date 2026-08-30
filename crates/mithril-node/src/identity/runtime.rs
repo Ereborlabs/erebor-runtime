@@ -23,7 +23,8 @@ const POD_UID_LABEL: &str = "io.kubernetes.pod.uid";
 const CONTAINER_NAME_LABEL: &str = "io.kubernetes.container.name";
 const POD_NAMESPACE_LABEL: &str = "io.kubernetes.pod.namespace";
 const CONTAINERD_KUBERNETES_NAMESPACE_FILTER: &str = "namespace==k8s.io";
-const CONTAINERD_EVENT_RECONNECT_DELAY: Duration = Duration::from_millis(250);
+const EVENT_RECONNECT_MINIMUM: Duration = Duration::from_secs(5);
+const EVENT_RECONNECT_MAXIMUM: Duration = Duration::from_secs(60);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum RuntimeContainerState {
@@ -78,8 +79,11 @@ impl RuntimeContainerIdentity {
 pub(super) struct ContainerRuntimeInventory {
     client: RuntimeServiceClient<Channel>,
     cgroup_root: PathBuf,
-    event_socket_path: Option<PathBuf>,
+    runtime_socket_path: PathBuf,
     event_stream: Option<tonic::Streaming<containerd_client::types::Envelope>>,
+    fallback_scan_interval: Duration,
+    event_reconnect_delay: Duration,
+    event_reconnect_at: tokio::time::Instant,
 }
 
 impl ContainerRuntimeInventory {
@@ -105,60 +109,79 @@ impl ContainerRuntimeInventory {
         Ok(Self {
             client,
             cgroup_root: cgroup_root.to_path_buf(),
-            event_socket_path: runtime.containerd_event_socket_path.clone(),
+            runtime_socket_path: runtime.socket_path.clone(),
             event_stream: None,
+            fallback_scan_interval: Duration::from_millis(runtime.reconciliation_interval_ms),
+            event_reconnect_delay: EVENT_RECONNECT_MINIMUM,
+            event_reconnect_at: tokio::time::Instant::now(),
         })
     }
 
     pub(super) async fn wait_for_change(&mut self) {
-        let Some(socket_path) = self.event_socket_path.clone() else {
-            return std::future::pending::<()>().await;
-        };
+        let fallback_at = tokio::time::Instant::now() + self.fallback_scan_interval;
         loop {
-            if self.event_stream.is_none() {
-                let Ok(channel) = containerd_client::connect(&socket_path).await else {
-                    tokio::time::sleep(CONTAINERD_EVENT_RECONNECT_DELAY).await;
-                    continue;
-                };
-                let mut client = EventsClient::new(channel);
-                let Ok(response) = client
-                    .subscribe(SubscribeRequest {
-                        filters: vec![CONTAINERD_KUBERNETES_NAMESPACE_FILTER.to_owned()],
-                    })
-                    .await
-                else {
-                    tokio::time::sleep(CONTAINERD_EVENT_RECONNECT_DELAY).await;
-                    continue;
-                };
-                self.event_stream = Some(response.into_inner());
-                continue;
-            }
-            let Some(events) = self.event_stream.as_mut() else {
-                continue;
-            };
-            let event = events.message().await;
-            match event {
-                Ok(Some(event))
-                    if matches!(
-                        event.topic.as_str(),
-                        "/containers/create"
-                            | "/containers/update"
-                            | "/containers/delete"
-                            | "/tasks/create"
-                            | "/tasks/start"
-                            | "/tasks/delete"
-                            | "/tasks/exit"
-                    ) =>
-                {
-                    return
+            if let Some(events) = self.event_stream.as_mut() {
+                match events.message().await {
+                    Ok(Some(event))
+                        if matches!(
+                            event.topic.as_str(),
+                            "/containers/create"
+                                | "/containers/update"
+                                | "/containers/delete"
+                                | "/tasks/create"
+                                | "/tasks/start"
+                                | "/tasks/delete"
+                                | "/tasks/exit"
+                        ) =>
+                    {
+                        return
+                    }
+                    Ok(Some(_event)) => continue,
+                    Ok(None) | Err(_) => {
+                        self.event_stream = None;
+                        self.event_reconnect_delay = EVENT_RECONNECT_MINIMUM;
+                        self.event_reconnect_at =
+                            tokio::time::Instant::now() + self.event_reconnect_delay;
+                        return;
+                    }
                 }
-                Ok(Some(_event)) => {}
-                Ok(None) | Err(_) => {
-                    self.event_stream = None;
+            }
+            let now = tokio::time::Instant::now();
+            if now >= self.event_reconnect_at {
+                if self.subscribe_to_runtime_events().await {
+                    self.event_reconnect_delay = EVENT_RECONNECT_MINIMUM;
+                    self.event_reconnect_at = now;
                     return;
                 }
+                self.event_reconnect_at = now + self.event_reconnect_delay;
+                self.event_reconnect_delay = self
+                    .event_reconnect_delay
+                    .saturating_mul(2)
+                    .min(EVENT_RECONNECT_MAXIMUM);
+            }
+            let wake_at = fallback_at.min(self.event_reconnect_at);
+            tokio::time::sleep_until(wake_at).await;
+            if wake_at == fallback_at {
+                return;
             }
         }
+    }
+
+    async fn subscribe_to_runtime_events(&mut self) -> bool {
+        let Ok(channel) = containerd_client::connect(&self.runtime_socket_path).await else {
+            return false;
+        };
+        let mut client = EventsClient::new(channel);
+        let Ok(response) = client
+            .subscribe(SubscribeRequest {
+                filters: vec![CONTAINERD_KUBERNETES_NAMESPACE_FILTER.to_owned()],
+            })
+            .await
+        else {
+            return false;
+        };
+        self.event_stream = Some(response.into_inner());
+        true
     }
 
     pub(super) async fn snapshot(
@@ -664,14 +687,41 @@ fn systemd_slice_path(slice: &str) -> Result<PathBuf> {
 mod tests {
     use std::collections::BTreeMap;
     use std::path::PathBuf;
+    use std::time::Duration;
 
+    use k8s_cri::v1::runtime_service_client::RuntimeServiceClient;
     use k8s_cri::v1::ContainerState;
+    use tonic::transport::Endpoint;
 
     use super::{
         parse_cgroup_path, runtime_cgroup_source, runtime_state, runtime_state_for_reconciliation,
-        RuntimeCgroupSource, RuntimeContainerIdentity, RuntimeContainerState,
+        ContainerRuntimeInventory, RuntimeCgroupSource, RuntimeContainerIdentity,
+        RuntimeContainerState,
     };
     use crate::{ContainerKindV1, WorkloadBindingConfig};
+
+    #[tokio::test]
+    async fn unavailable_event_api_uses_backoff_and_inventory_fallback() {
+        let channel = Endpoint::from_static("http://[::]").connect_lazy();
+        let directory = tempfile::tempdir().expect("temporary runtime socket directory");
+        let mut inventory = ContainerRuntimeInventory {
+            client: RuntimeServiceClient::new(channel),
+            cgroup_root: PathBuf::from("/sys/fs/cgroup"),
+            runtime_socket_path: directory.path().join("absent.sock"),
+            event_stream: None,
+            fallback_scan_interval: Duration::from_millis(1),
+            event_reconnect_delay: super::EVENT_RECONNECT_MINIMUM,
+            event_reconnect_at: tokio::time::Instant::now(),
+        };
+
+        tokio::time::timeout(Duration::from_millis(100), inventory.wait_for_change())
+            .await
+            .expect("the unavailable event API did not trigger an inventory scan");
+        assert_eq!(
+            inventory.event_reconnect_delay,
+            super::EVENT_RECONNECT_MINIMUM.saturating_mul(2)
+        );
+    }
 
     #[test]
     fn cri_paths_accept_cgroupfs_and_expand_systemd_shapes() -> crate::Result<()> {

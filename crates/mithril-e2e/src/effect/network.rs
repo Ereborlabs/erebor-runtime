@@ -469,7 +469,7 @@ impl NetworkTestRunner {
             }
         );
         NativeSecurityStateOwner::new(node_boot_id, 1)
-            .activate_with_effect_policy(&mut host, true)
+            .activate_initial_with_effect_policy(&mut host, true)
             .context(NodeSnafu)?;
         let observations = EffectObservationStore::default();
         let sink = observations.clone();
@@ -670,7 +670,7 @@ impl NetworkTestRunner {
             )
             .context(NodeSnafu)?;
         NativeSecurityStateOwner::new(node_boot_id, 1)
-            .activate_with_effect_policy(&mut host, true)
+            .activate_initial_with_effect_policy(&mut host, true)
             .context(NodeSnafu)?;
         let sink = observations.clone();
         reader = host

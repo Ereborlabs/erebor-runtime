@@ -22,6 +22,25 @@ pub struct ReconciliationReportV1 {
     pub reconciliation_required: u64,
 }
 
+impl ReconciliationReportV1 {
+    fn ensure_no_new_failures_since(self, before: Self) -> Result<()> {
+        // A task can request another reconciliation while the current scan runs. That request is
+        // pending work, not proof that the current scan failed.
+        ensure!(
+            self.allocation_failures == before.allocation_failures
+                && self.coordinate_failures == before.coordinate_failures
+                && self.placement_mismatches == before.placement_mismatches
+                && self.reconciliation_required == before.reconciliation_required,
+            IdentityStateSnafu {
+                reason: format!(
+                    "task reconciliation changed a failure counter: before {before:?}; after {self:?}"
+                ),
+            }
+        );
+        Ok(())
+    }
+}
+
 pub struct NativeSecurityStateOwner {
     node_boot_id: Id128V1,
     label_epoch: u64,
@@ -168,7 +187,7 @@ impl NativeSecurityStateOwner {
         self.activate_state(host, effect_policy_required, false)
     }
 
-    pub fn activate_with_effect_policy(
+    pub fn activate_initial_with_effect_policy(
         &self,
         host: &mut KernelHost,
         effect_policy_required: bool,
@@ -176,9 +195,17 @@ impl NativeSecurityStateOwner {
         self.activate_state(host, effect_policy_required, true)
     }
 
-    pub fn reconcile(
+    pub fn set_effect_policy(
         &self,
         host: &mut KernelHost,
+        effect_policy_required: bool,
+    ) -> Result<ReconciliationReportV1> {
+        self.activate_state(host, effect_policy_required, false)
+    }
+
+    pub fn verify(
+        &self,
+        host: &KernelHost,
         effect_policy_required: bool,
     ) -> Result<ReconciliationReportV1> {
         let key = 0_u32.to_ne_bytes();
@@ -210,10 +237,34 @@ impl NativeSecurityStateOwner {
                 reason: "live identity configuration differs from its node owner",
             }
         );
-        let before = self.health(host)?;
+        self.health(host)
+    }
+
+    pub fn activate_prepared_runtime_roots(
+        &self,
+        host: &mut KernelHost,
+        effect_policy_required: bool,
+    ) -> Result<ReconciliationReportV1> {
+        self.scan_tasks(host, effect_policy_required)
+    }
+
+    pub fn recover_tasks(
+        &self,
+        host: &mut KernelHost,
+        effect_policy_required: bool,
+    ) -> Result<ReconciliationReportV1> {
+        self.scan_tasks(host, effect_policy_required)
+    }
+
+    fn scan_tasks(
+        &self,
+        host: &mut KernelHost,
+        effect_policy_required: bool,
+    ) -> Result<ReconciliationReportV1> {
+        let before = self.verify(host, effect_policy_required)?;
         host.reconcile_tasks().context(InterceptorSnafu)?;
         let report = self.health(host)?;
-        ensure_no_new_failures(before, report)?;
+        report.ensure_no_new_failures_since(before)?;
         Ok(report)
     }
 
@@ -265,7 +316,7 @@ impl NativeSecurityStateOwner {
             host.reconcile_tasks().context(InterceptorSnafu)?;
         }
         let report = self.health(host)?;
-        ensure_no_new_failures(before, report)?;
+        report.ensure_no_new_failures_since(before)?;
         Ok(report)
     }
 
@@ -281,24 +332,6 @@ impl NativeSecurityStateOwner {
             })?;
         aggregate_health(&bytes)
     }
-}
-
-fn ensure_no_new_failures(
-    before: ReconciliationReportV1,
-    after: ReconciliationReportV1,
-) -> Result<()> {
-    ensure!(
-        after.allocation_failures == before.allocation_failures
-            && after.coordinate_failures == before.coordinate_failures
-            && after.placement_mismatches == before.placement_mismatches
-            && after.reconciliation_required == before.reconciliation_required,
-        IdentityStateSnafu {
-            reason: format!(
-                "task reconciliation changed a failure counter: before {before:?}; after {after:?}"
-            ),
-        }
-    );
-    Ok(())
 }
 
 fn aggregate_health(bytes: &[u8]) -> Result<ReconciliationReportV1> {
@@ -360,7 +393,7 @@ mod tests {
     use erebor_interceptor_abi::{IdentityHealthV1, IdentityRuntimeConfigV1};
     use zerocopy::IntoBytes as _;
 
-    use super::{aggregate_health, ensure_no_new_failures, recover_config, ReconciliationReportV1};
+    use super::{aggregate_health, recover_config, ReconciliationReportV1};
 
     #[test]
     fn health_values_use_native_kernel_layout() -> crate::Result<()> {
@@ -384,23 +417,30 @@ mod tests {
             reconciliation_required: 7,
             ..ReconciliationReportV1::default()
         };
-        assert!(ensure_no_new_failures(retained, retained).is_ok());
-        assert!(ensure_no_new_failures(
-            retained,
-            ReconciliationReportV1 {
-                placement_mismatches: 6,
-                ..retained
-            }
-        )
+        assert!(retained.ensure_no_new_failures_since(retained).is_ok());
+        assert!(ReconciliationReportV1 {
+            placement_mismatches: 6,
+            ..retained
+        }
+        .ensure_no_new_failures_since(retained)
         .is_err());
-        assert!(ensure_no_new_failures(
-            retained,
-            ReconciliationReportV1 {
-                allocation_failures: 3,
-                ..retained
-            }
-        )
+        assert!(ReconciliationReportV1 {
+            allocation_failures: 3,
+            ..retained
+        }
+        .ensure_no_new_failures_since(retained)
         .is_err());
+    }
+
+    #[test]
+    fn reconciliation_rejects_a_new_repair_request() {
+        let before = ReconciliationReportV1::default();
+        let after = ReconciliationReportV1 {
+            reconciliation_required: 1,
+            ..before
+        };
+
+        assert!(after.ensure_no_new_failures_since(before).is_err());
     }
 
     #[test]
