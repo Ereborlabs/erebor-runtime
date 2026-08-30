@@ -1,5 +1,8 @@
 {{- $runtimeAdmissionSocket := required "node.runtimeHook.socketPath is required" .Values.node.runtimeHook.socketPath }}
 {{- $cleanRuntimeAdmissionSocket := clean $runtimeAdmissionSocket }}
+{{- $containerRuntimeSocket := required "node.containerRuntimeSocket is required" .Values.node.containerRuntimeSocket }}
+{{- $cleanContainerRuntimeSocket := clean $containerRuntimeSocket }}
+{{- $containerRuntimeDirectory := dir $containerRuntimeSocket }}
 {{- $runtimeHookOwner := printf "%s/%s" .Release.Namespace .Release.Name }}
 {{- $runtimeHookConfigDirectory := required "node.runtimeHook.hostConfigDirectory is required" .Values.node.runtimeHook.hostConfigDirectory }}
 {{- $runtimeHookConfigParent := dir $runtimeHookConfigDirectory }}
@@ -9,6 +12,9 @@
 {{- $migrateLegacyRuntimeHook := ne .Values.node.runtimeHook.hostBinaryDirectory $legacyRuntimeHookBinaryDirectory }}
 {{- if or (ne $runtimeAdmissionSocket $cleanRuntimeAdmissionSocket) (ne (dir $runtimeAdmissionSocket) "/run/mithril") }}
 {{- fail "node.runtimeHook.socketPath must name a normalized socket directly within /run/mithril" }}
+{{- end }}
+{{- if or (ne $containerRuntimeSocket $cleanContainerRuntimeSocket) (eq $containerRuntimeDirectory "/") }}
+{{- fail "node.containerRuntimeSocket must name a normalized socket below a non-root directory" }}
 {{- end }}
 {{- if or (ne $runtimeHookConfigDirectory (clean $runtimeHookConfigDirectory)) (eq $runtimeHookConfigParent "/") }}
 {{- fail "node.runtimeHook.hostConfigDirectory must be normalized below a non-root parent" }}
@@ -162,7 +168,8 @@ spec:
             - name: interceptor-run
               mountPath: /run/erebor-interceptor
             - name: container-runtime
-              mountPath: {{ .Values.node.containerRuntimeSocket | quote }}
+              # The runtime can replace its socket inode without replacing this Pod.
+              mountPath: {{ $containerRuntimeDirectory | quote }}
               readOnly: true
 {{- if $runtimeHookInjectorEnabled }}
         - name: runtime-hook-injector
@@ -231,8 +238,8 @@ spec:
             type: DirectoryOrCreate
         - name: container-runtime
           hostPath:
-            path: {{ .Values.node.containerRuntimeSocket | quote }}
-            type: Socket
+            path: {{ $containerRuntimeDirectory | quote }}
+            type: Directory
         - name: runtime-hook-source
           configMap:
             name: mithril-runtime-hook

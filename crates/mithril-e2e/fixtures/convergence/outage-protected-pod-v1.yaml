@@ -1,0 +1,45 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: MITHRIL_OUTAGE_POD
+  namespace: MITHRIL_OUTAGE_NAMESPACE
+  labels:
+    app.kubernetes.io/name: mithril-outage-worker
+spec:
+  serviceAccountName: worker
+  automountServiceAccountToken: false
+  runtimeClassName: mithril-outage-recovery
+  restartPolicy: Always
+  terminationGracePeriodSeconds: 1
+  nodeSelector:
+    qualification.mithril.erebor.dev/node: MITHRIL_OUTAGE_NODE
+  containers:
+    - name: worker
+      image: docker.io/library/busybox:1.36.1@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662
+      imagePullPolicy: IfNotPresent
+      command:
+        - /bin/sh
+        - -ec
+        - >-
+          root=/var/lib/mithril-convergence;
+          touch "$root/MITHRIL_OUTAGE_POD.started";
+          last=;
+          while true; do
+          request=$(cat "$root/MITHRIL_OUTAGE_POD.request" 2>/dev/null || true);
+          if [ -n "$request" ] && [ "$request" != "$last" ]; then
+          if cat "$root/outage.denied" >/dev/null 2>&1;
+          then verdict=ALLOWED; else verdict=DENIED; fi;
+          printf '%s:%s\n' "$request" "$verdict" >
+          "$root/MITHRIL_OUTAGE_POD.result";
+          last=$request;
+          fi;
+          sleep 1;
+          done
+      volumeMounts:
+        - name: fixture
+          mountPath: /var/lib/mithril-convergence
+  volumes:
+    - name: fixture
+      hostPath:
+        path: /var/lib/mithril-convergence/markers
+        type: Directory

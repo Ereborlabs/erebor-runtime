@@ -26,14 +26,15 @@ use mithril_control::{
 use mithril_node::{
     AdministrativeControlRequest, CoverageGapReasonV1, EffectObservationStore, EvidenceIdV1,
     EvidenceWalCapacityPolicyV1, EvidenceWalLimits, NodeControlConfig, NodeControlConnector,
-    NodeControlMessage, ObservationCanonicalizer, TrustCache,
+    NodeControlMessage, ObservationCanonicalizer, PolicyControlPacingOwner, TrustCache,
 };
 use rcgen::{
     date_time_ymd, BasicConstraints, Certificate, CertificateParams, ExtendedKeyUsagePurpose, IsCa,
     KeyPair,
 };
 use sha2::{Digest as _, Sha256};
-use tokio::sync::oneshot;
+use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+use tokio::sync::{oneshot, watch};
 use tower::service_fn;
 use zerocopy::IntoBytes as _;
 
@@ -43,6 +44,23 @@ const OUTAGE_CLUSTER_UID: &str = "55555555-5555-4555-8555-555555555555";
 const OUTAGE_NAMESPACE_UID: &str = "66666666-6666-4666-8666-666666666666";
 const OUTAGE_POLICY_UID: &str = "30000000-0000-4000-8000-000000000001";
 const OUTAGE_NOW: i64 = 1_800_000_000_000_000_000;
+
+#[tokio::test]
+async fn kubernetes_outage_pending_policy_transfer_preempts_evidence_ack_backlog() {
+    let mut pacing = PolicyControlPacingOwner::default();
+    pacing.mark_pending();
+    let mut poll = tokio::time::interval(Duration::from_secs(60));
+    let (sender, mut messages) = tokio::sync::mpsc::unbounded_channel();
+    sender.send(()).expect("the message receiver is open");
+
+    let selected_policy = tokio::select! {
+        biased;
+        () = pacing.wait_until_ready(&mut poll) => true,
+        Some(()) = messages.recv() => false,
+    };
+
+    assert!(selected_policy);
+}
 
 #[test]
 #[ignore = "the startup budget requires the shipped release optimization level"]
@@ -940,11 +958,15 @@ async fn kubernetes_outage_partitioned_node_reconnects_to_running_control_and_re
     let first_candidate = first_bundle.candidate.candidate_content_id.clone();
     let first_digest = first_bundle.bundle_digest.clone();
 
-    let address = free_address()?;
-    let (shutdown, server) = start_server(address, &files, control.clone());
+    let control_address = free_address()?;
+    let (shutdown, server) = start_server(control_address, &files, control.clone());
     tokio::time::sleep(Duration::from_millis(20)).await;
-    let connector =
-        NodeControlConnector::new(files.node_config(address), "node-a".to_owned(), [7; 16]);
+    let proxy = TcpBlackholeOwner::start(control_address).await?;
+    let connector = NodeControlConnector::new(
+        files.node_config(proxy.address()),
+        "node-a".to_owned(),
+        [7; 16],
+    );
     let mut trust = TrustCache::load(&directory.path().join("trust"))?;
     let mut first_connection = connector
         .connect(
@@ -965,7 +987,7 @@ async fn kubernetes_outage_partitioned_node_reconnects_to_running_control_and_re
         ))
         .await?;
     assert_eq!(accepted.rollout_state, "ACTIVE");
-    drop(first_connection);
+    proxy.block()?;
 
     let second_resource = fixture.resource(2)?;
     let second = fixture.owner.reconcile(
@@ -979,6 +1001,16 @@ async fn kubernetes_outage_partitioned_node_reconnects_to_running_control_and_re
         second_bundle.candidate.candidate_content_id,
         first_candidate
     );
+
+    match tokio::time::timeout(Duration::from_secs(30), first_connection.next_message()).await {
+        Ok(Err(_closed)) => {}
+        Ok(Ok(_message)) => return Err("the blackholed Control session returned a message".into()),
+        Err(_elapsed) => {
+            return Err("the blackholed Control session did not force a reconnect".into());
+        }
+    }
+    drop(first_connection);
+    proxy.unblock()?;
 
     let observations = EffectObservationStore::durable(
         4,
@@ -1098,6 +1130,7 @@ async fn kubernetes_outage_partitioned_node_reconnects_to_running_control_and_re
     );
 
     drop(reconnected);
+    proxy.stop().await?;
     let _result = shutdown.send(());
     server.await??;
     Ok(())
@@ -1682,6 +1715,92 @@ fn start_server(
         .await
     });
     (shutdown, server)
+}
+
+struct TcpBlackholeOwner {
+    address: SocketAddr,
+    blocked: watch::Sender<bool>,
+    shutdown: oneshot::Sender<()>,
+    task: tokio::task::JoinHandle<std::io::Result<()>>,
+}
+
+impl TcpBlackholeOwner {
+    async fn start(upstream: SocketAddr) -> std::io::Result<Self> {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let address = listener.local_addr()?;
+        let (blocked, blocked_input) = watch::channel(false);
+        let (shutdown, mut shutdown_input) = oneshot::channel();
+        let task = tokio::spawn(async move {
+            let mut connections = tokio::task::JoinSet::new();
+            loop {
+                tokio::select! {
+                    _result = &mut shutdown_input => break,
+                    accepted = listener.accept() => {
+                        let (downstream, _peer) = accepted?;
+                        let upstream = tokio::net::TcpStream::connect(upstream).await?;
+                        let blocked = blocked_input.clone();
+                        connections.spawn(async move {
+                            Self::relay(downstream, upstream, blocked).await
+                        });
+                    }
+                }
+            }
+            connections.abort_all();
+            while connections.join_next().await.is_some() {}
+            Ok(())
+        });
+        Ok(Self {
+            address,
+            blocked,
+            shutdown,
+            task,
+        })
+    }
+
+    fn address(&self) -> SocketAddr {
+        self.address
+    }
+
+    fn block(&self) -> Result<(), watch::error::SendError<bool>> {
+        self.blocked.send(true)
+    }
+
+    fn unblock(&self) -> Result<(), watch::error::SendError<bool>> {
+        self.blocked.send(false)
+    }
+
+    async fn stop(self) -> Result<(), Box<dyn StdError>> {
+        let _result = self.shutdown.send(());
+        self.task.await??;
+        Ok(())
+    }
+
+    async fn relay(
+        downstream: tokio::net::TcpStream,
+        upstream: tokio::net::TcpStream,
+        blocked: watch::Receiver<bool>,
+    ) -> std::io::Result<()> {
+        let (mut downstream_read, mut downstream_write) = downstream.into_split();
+        let (mut upstream_read, mut upstream_write) = upstream.into_split();
+        let client_to_control = async move {
+            let mut bytes = [0_u8; 16 * 1_024];
+            loop {
+                let count = downstream_read.read(&mut bytes).await?;
+                if count == 0 {
+                    return Ok::<(), std::io::Error>(());
+                }
+                // This matches the K8s test rule: packets from Node to Control disappear.
+                if !*blocked.borrow() {
+                    upstream_write.write_all(&bytes[..count]).await?;
+                }
+            }
+        };
+        let control_to_client = tokio::io::copy(&mut upstream_read, &mut downstream_write);
+        tokio::select! {
+            result = client_to_control => result,
+            result = control_to_client => result.map(|_bytes| ()),
+        }
+    }
 }
 
 fn free_address() -> Result<SocketAddr, std::io::Error> {

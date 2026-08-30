@@ -70,6 +70,22 @@ The reuse lane validates both VM ownership records. It keeps both VMs and the
 K3s cluster. It replaces the Mithril release, its node state, and the protected
 workload before it runs the next transaction.
 
+Run the automated outage recovery qualification against a healthy retained
+two-node environment only after the lightweight outage tests pass:
+
+```bash
+crates/mithril-e2e/harness/vm/two-node-outage-recovery.sh \
+  --environment /tmp/mithril-two-node/retained-environment.json \
+  --output-directory /tmp/mithril-outage-recovery
+```
+
+This lane uses the installed Mithril release. It does not reinstall K3s,
+replace the VMs, or clear Mithril state. It owns only its namespace,
+RuntimeClass, Node fixture labels, marker files, and scoped network rule. The
+lane stops and restores Control, partitions one worker from Control, updates a
+policy during the partition, and stops and restores the K3s API. It writes the
+measured policy candidates and rollout result to `result.json`.
+
 Use the retained environment from the host with:
 
 ```bash

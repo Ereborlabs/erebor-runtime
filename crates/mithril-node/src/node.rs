@@ -82,11 +82,33 @@ enum PolicyControlPhaseV1 {
 
 #[derive(Default)]
 struct PolicyControlWorkV1 {
-    pending: bool,
+    pacing: PolicyControlPacingOwner,
     phase: PolicyControlPhaseV1,
     rejected_acknowledgement: Option<PolicyActivationAcknowledgement>,
     exception_observed: bool,
     rejected_candidate: Option<String>,
+}
+
+#[derive(Default)]
+pub struct PolicyControlPacingOwner {
+    pending: bool,
+}
+
+impl PolicyControlPacingOwner {
+    pub fn mark_pending(&mut self) {
+        self.pending = true;
+    }
+
+    pub fn mark_idle(&mut self) {
+        self.pending = false;
+    }
+
+    pub async fn wait_until_ready(&self, poll: &mut tokio::time::Interval) {
+        // A yield can be canceled forever while the Control stream always has evidence ACKs.
+        if !self.pending {
+            let _instant = poll.tick().await;
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -104,6 +126,14 @@ enum PolicyControlRpcV1<T> {
 }
 
 impl<T> PolicyControlRpcV1<T> {
+    fn control_failure(error: &crate::Error) -> Self {
+        if error.control_rpc_can_reuse_session() {
+            Self::Retry
+        } else {
+            Self::Reconnect
+        }
+    }
+
     fn into_response(self) -> std::result::Result<T, PolicyControlStepV1> {
         match self {
             Self::Accepted(response) => Ok(response),
@@ -906,20 +936,14 @@ impl NodeChassis {
                                     }
                                 }
                             }
-                            () = async {
-                                if policy_work.pending {
-                                    tokio::task::yield_now().await;
-                                } else {
-                                    let _instant = policy_poll.tick().await;
-                                }
-                            } => {
+                            () = policy_work.pacing.wait_until_ready(&mut policy_poll) => {
                                 // Ready-only policy RPCs wait while the same session reports
                                 // a local identity or evidence readiness failure.
                                 if !identity_healthy || !evidence_healthy {
-                                    policy_work.pending = false;
+                                    policy_work.pacing.mark_idle();
                                     continue;
                                 }
-                                policy_work.pending = true;
+                                policy_work.pacing.mark_pending();
                                 match self
                                     .advance_policy_control_step(
                                         &mut connection,
@@ -929,7 +953,7 @@ impl NodeChassis {
                                     .await?
                                 {
                                     PolicyControlStepV1::Continue => {}
-                                    PolicyControlStepV1::Idle => policy_work.pending = false,
+                                    PolicyControlStepV1::Idle => policy_work.pacing.mark_idle(),
                                     PolicyControlStepV1::Reconnect => {
                                         break;
                                     }
@@ -2018,11 +2042,7 @@ impl NodeChassis {
                     error = %error,
                     retry = %if reuse_session { "same_session" } else { "reconnect" }
                 );
-                Ok(if reuse_session {
-                    PolicyControlRpcV1::Retry
-                } else {
-                    PolicyControlRpcV1::Reconnect
-                })
+                Ok(PolicyControlRpcV1::control_failure(&error))
             }
             Err(error) => Err(error),
         }
@@ -2863,7 +2883,7 @@ mod tests {
         close_identity_claims, close_kernel_claims, effect_reader_finished, effect_worker_finished,
         restore_evidence_claims, restore_identity_claims, runtime_admission_exit,
         runtime_admission_finished, sample_effect_health_bytes_without_reader_wait, NodeChassis,
-        NodeReadinessV1,
+        NodeReadinessV1, PolicyControlRpcV1,
     };
     use erebor_interceptor_abi::{EffectObservationHealthV1, EffectObservationV1, Id128V1};
     use mithril_control::{CapabilityRecord, NodeRegistration};
@@ -2878,6 +2898,31 @@ mod tests {
         POD_UID_ANNOTATION, POLICY_SOURCE_REVISION_ANNOTATION, PROFILE_ID_ANNOTATION,
         SANDBOX_ID_ANNOTATION,
     };
+
+    #[test]
+    fn kubernetes_outage_dead_policy_rpc_forces_a_new_control_session() {
+        let timeout = crate::Error::ControlRpc {
+            source: Box::new(tonic::Status::deadline_exceeded(
+                "the partitioned Control RPC did not answer",
+            )),
+            location: snafu::Location::default(),
+        };
+        assert!(matches!(
+            PolicyControlRpcV1::<()>::control_failure(&timeout),
+            PolicyControlRpcV1::Reconnect
+        ));
+
+        let backpressure = crate::Error::ControlRpc {
+            source: Box::new(tonic::Status::resource_exhausted(
+                "Control is applying backpressure",
+            )),
+            location: snafu::Location::default(),
+        };
+        assert!(matches!(
+            PolicyControlRpcV1::<()>::control_failure(&backpressure),
+            PolicyControlRpcV1::Retry
+        ));
+    }
 
     #[test]
     fn transient_reader_lag_defers_without_coverage_churn() -> Result<(), Box<dyn std::error::Error>>

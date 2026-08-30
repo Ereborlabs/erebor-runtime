@@ -25,6 +25,22 @@ convergence_help=$("$directory/two-node-convergence.sh" --help 2>&1)
 [[ $convergence_help == *--manual-environment* ]]
 [[ $convergence_help == *--protected-start-only* ]]
 [[ $convergence_help == *--reuse-environment* ]]
+outage_help=$("$directory/two-node-outage-recovery.sh" --help 2>&1)
+[[ $outage_help == *--environment* ]]
+[[ $outage_help == *--output-directory* ]]
+grep -Fq 'systemctl show' "$directory/two-node-outage-recovery.sh"
+grep -Fq -- '--property ActiveState --value k3s' \
+  "$directory/two-node-outage-recovery.sh"
+if grep -Fq 'systemctl is-inactive' "$directory/two-node-outage-recovery.sh"; then
+  echo "the outage harness uses an unsupported systemctl state verb" >&2
+  exit 1
+fi
+set +e
+outage_without_environment=$("$directory/two-node-outage-recovery.sh" 2>&1)
+status=$?
+set -e
+[[ $status -eq 2 && $outage_without_environment == \
+  "retained environment is not readable: " ]]
 set +e
 protected_manual=$("$directory/two-node-convergence.sh" \
   --protected-start-only --manual-environment 2>&1)

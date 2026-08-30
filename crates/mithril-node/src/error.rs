@@ -128,9 +128,7 @@ impl Error {
                     source.code(),
                     tonic::Code::Aborted
                         | tonic::Code::Cancelled
-                        | tonic::Code::DeadlineExceeded
                         | tonic::Code::ResourceExhausted
-                        | tonic::Code::Unavailable
                 )
         )
     }
@@ -200,11 +198,11 @@ mod tests {
     use super::Error;
 
     #[test]
-    fn transient_control_failures_reuse_the_registered_session() {
+    fn only_control_rejections_with_a_live_response_reuse_the_registered_session() {
         for status in [
             tonic::Status::cancelled("request deadline elapsed"),
-            tonic::Status::deadline_exceeded("local deadline elapsed"),
-            tonic::Status::unavailable("transport is recovering"),
+            tonic::Status::aborted("transaction was retried"),
+            tonic::Status::resource_exhausted("Control is applying backpressure"),
         ] {
             let error = Error::ControlRpc {
                 source: Box::new(status),
@@ -213,10 +211,16 @@ mod tests {
             assert!(error.control_rpc_can_reuse_session());
         }
 
-        let stale_session = Error::ControlRpc {
-            source: Box::new(tonic::Status::unauthenticated("session changed")),
-            location: snafu::Location::default(),
-        };
-        assert!(!stale_session.control_rpc_can_reuse_session());
+        for status in [
+            tonic::Status::deadline_exceeded("the peer did not answer"),
+            tonic::Status::unavailable("the transport is unavailable"),
+            tonic::Status::unauthenticated("session changed"),
+        ] {
+            let error = Error::ControlRpc {
+                source: Box::new(status),
+                location: snafu::Location::default(),
+            };
+            assert!(!error.control_rpc_can_reuse_session());
+        }
     }
 }

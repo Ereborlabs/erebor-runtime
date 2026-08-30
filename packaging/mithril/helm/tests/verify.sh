@@ -32,6 +32,28 @@ node_logs=$(helm template mithril "$chart_directory" \
   --set-string 'node.logFilter=mithril_node::runtime_admission=debug')
 grep -Fq 'value: "mithril_node::runtime_admission=debug"' <<<"$node_logs"
 
+runtime_mounts=$(helm template mithril "$chart_directory" \
+  --namespace mithril-system \
+  --values "$chart_directory/tests/values.yaml" \
+  --show-only templates/daemonset.yaml \
+  --set-string 'node.containerRuntimeSocket=/run/k3s/containerd/containerd.sock')
+grep -Fq 'mountPath: "/run/k3s/containerd"' <<<"$runtime_mounts"
+grep -Fq 'path: "/run/k3s/containerd"' <<<"$runtime_mounts"
+grep -Fq 'type: Directory' <<<"$runtime_mounts"
+if grep -Fq '/run/k3s/containerd/containerd.sock' <<<"$runtime_mounts"; then
+  echo 'chart bind-mounted a replaceable runtime socket inode' >&2
+  exit 1
+fi
+
+if helm template mithril "$chart_directory" \
+  --namespace mithril-system \
+  --values "$chart_directory/tests/values.yaml" \
+  --set-string 'node.containerRuntimeSocket=/run/k3s/containerd/../containerd.sock' \
+  >/dev/null 2>&1; then
+  echo 'chart accepted a non-normalized container-runtime socket path' >&2
+  exit 1
+fi
+
 control_logs=$(helm template mithril "$chart_directory" \
   --namespace mithril-system \
   --values "$chart_directory/tests/values.yaml" \
