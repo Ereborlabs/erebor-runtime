@@ -57,7 +57,7 @@ done
   echo "retained environment is not readable: $environment" >&2
   exit 2
 }
-for command in jq sed sort timeout; do
+for command in comm jq sed sort timeout wc; do
   command -v "$command" >/dev/null || {
     echo "required command is not installed: $command" >&2
     exit 2
@@ -110,7 +110,7 @@ remote_kubectl() {
 
 control_segment_manifest() {
   remote_kubectl -n "$system_namespace" exec deployment/mithril-control -- \
-    sh -c 'set -- /var/lib/mithril-control/store/evidence/segments/*; [ -e "$1" ]; sha256sum "$@"'
+    sh -c "find /var/lib/mithril-control/store/evidence/segments -type f -exec sha256sum '{}' +"
 }
 
 remove_network_block() {
@@ -212,7 +212,9 @@ node_pod() {
   remote_kubectl -n "$system_namespace" get pods \
     -l app.kubernetes.io/name=mithril-node \
     --field-selector "spec.nodeName=$node_name" \
-    -o jsonpath='{.items[0].metadata.name}'
+    -o json | jq -er '
+      .items[] | select(.metadata.deletionTimestamp == null) | .metadata.name
+    ' | head -n 1
 }
 
 node_status() {
@@ -221,6 +223,87 @@ node_status() {
   pod=$(node_pod "$node_name")
   remote_kubectl -n "$system_namespace" exec -c mithril-node "$pod" -- \
     mithril-inspect policy-delivery --state-directory /var/lib/mithril
+}
+
+node_wal_manifest() {
+  local node_name=$1
+  local pod
+  pod=$(node_pod "$node_name")
+  remote_kubectl -n "$system_namespace" exec -c mithril-node "$pod" -- \
+    sh -c "find /var/lib/mithril/evidence-wal-v1 -type f -name '*.wal' -exec sha256sum '{}' +"
+}
+
+node_wal_count() {
+  local node_name=$1
+  local pod
+  pod=$(node_pod "$node_name")
+  remote_kubectl -n "$system_namespace" exec -c mithril-node "$pod" -- \
+    sh -c 'set -- /var/lib/mithril/evidence-wal-v1/*/*.wal; [ -e "$1" ] && echo "$#" || echo 0'
+}
+
+wait_node_wal_count() {
+  local node_name=$1
+  local minimum=$2
+  local deadline=$((SECONDS + 120))
+  local count
+  while ((SECONDS < deadline)); do
+    count=$(node_wal_count "$node_name" 2>/dev/null || true)
+    [[ $count =~ ^[0-9]+$ ]] || count=0
+    if ((count >= minimum)); then
+      printf '%s\n' "$count"
+      return 0
+    fi
+    sleep 1
+  done
+  echo "node $node_name retained fewer than $minimum evidence records" >&2
+  return 1
+}
+
+wait_node_wal_empty() {
+  local node_name=$1
+  local deadline=$((SECONDS + 180))
+  local count
+  local previous_count=
+  while true; do
+    count=$(node_wal_count "$node_name" 2>/dev/null || true)
+    if [[ $count == 0 ]]; then
+      return 0
+    fi
+    if [[ $count =~ ^[0-9]+$ ]] &&
+        [[ -z $previous_count || $count -lt $previous_count ]]; then
+      deadline=$((SECONDS + 180))
+      previous_count=$count
+    fi
+    if ((SECONDS >= deadline)); then
+      break
+    fi
+    sleep 1
+  done
+  echo "node $node_name did not truncate acknowledged evidence" >&2
+  return 1
+}
+
+wait_node_pod_replaced() {
+  local node_name=$1
+  local previous_uid=$2
+  local deadline=$((SECONDS + 180))
+  local pod_json
+  while ((SECONDS < deadline)); do
+    pod_json=$(remote_kubectl -n "$system_namespace" get pods \
+      -l app.kubernetes.io/name=mithril-node \
+      --field-selector "spec.nodeName=$node_name" -o json 2>/dev/null || true)
+    if [[ -n $pod_json ]] && jq -e --arg previous_uid "$previous_uid" '
+        any(.items[];
+          .metadata.uid != $previous_uid and
+          .status.phase == "Running" and
+          .metadata.deletionTimestamp == null)
+      ' <<<"$pod_json" >/dev/null; then
+      return 0
+    fi
+    sleep 1
+  done
+  echo "node $node_name did not replace its Mithril Pod" >&2
+  return 1
 }
 
 active_candidate() {
@@ -444,6 +527,10 @@ wait_policy_delivery_empty "$node_b_name"
 
 remove_markers
 for vm in "$vm_a" "$vm_b"; do
+  "$provider" run "$vm" sudo mkfifo \
+    "$marker_root/outage-a.request" \
+    "$marker_root/outage-b.request" \
+    "$marker_root/outage-new.request"
   "$provider" run "$vm" sudo touch \
     "$marker_root/outage.denied" "$marker_root/outage-update.denied"
 done
@@ -499,6 +586,8 @@ candidate_a_v1=$(active_candidate "$node_a_name")
 candidate_b_v1=$(active_candidate "$node_b_name")
 request_denial "$vm_a" outage-a baseline-a
 request_denial "$vm_b" outage-b baseline-b
+wait_node_wal_empty "$node_a_name"
+wait_node_wal_empty "$node_b_name"
 control_segment_manifest >"$work_directory/control-segments-before-outage.txt"
 [[ -s $work_directory/control-segments-before-outage.txt ]] || {
   echo "Control retained no evidence segments before its outage" >&2
@@ -521,8 +610,35 @@ if [[ $control_stopped != true ]]; then
   echo "Control did not stop" >&2
   exit 1
 fi
-request_denial "$vm_a" outage-a control-outage-a
-request_denial "$vm_b" outage-b control-outage-b
+for sequence in 1 2 3 4; do
+  request_denial "$vm_a" outage-a "control-outage-a-$sequence"
+  request_denial "$vm_b" outage-b "control-outage-b-$sequence"
+done
+retained_records_a=$(wait_node_wal_count "$node_a_name" 4)
+retained_records_b=$(wait_node_wal_count "$node_b_name" 4)
+node_wal_manifest "$node_a_name" >"$work_directory/node-a-wal-before-restart.txt"
+node_a_pod=$(node_pod "$node_a_name")
+node_a_pod_uid=$(remote_kubectl -n "$system_namespace" get pod "$node_a_pod" \
+  -o jsonpath='{.metadata.uid}')
+remote_kubectl -n "$system_namespace" delete pod "$node_a_pod" \
+  --wait=false >/dev/null
+wait_node_pod_replaced "$node_a_name" "$node_a_pod_uid"
+node_wal_manifest "$node_a_name" >"$work_directory/node-a-wal-after-restart.txt"
+comm -23 \
+  <(sort "$work_directory/node-a-wal-before-restart.txt") \
+  <(sort "$work_directory/node-a-wal-after-restart.txt") \
+  >"$work_directory/node-a-wal-missing-after-restart.txt"
+missing_node_record=$(sed -n '1p' \
+  "$work_directory/node-a-wal-missing-after-restart.txt")
+if [[ -n $missing_node_record ]]; then
+  cp "$work_directory/node-a-wal-before-restart.txt" \
+    "$output_directory/node-a-wal-before-restart.txt"
+  cp "$work_directory/node-a-wal-after-restart.txt" \
+    "$output_directory/node-a-wal-after-restart.txt"
+  echo "Node A changed or removed an unacknowledged record during restart: $missing_node_record" >&2
+  exit 1
+fi
+request_denial "$vm_a" outage-a control-outage-a-after-node-restart
 sed \
   -e "s/MITHRIL_OUTAGE_NAMESPACE/$scenario_namespace/g" \
   -e 's/MITHRIL_OUTAGE_POD/outage-new/g' \
@@ -549,13 +665,19 @@ wait_control_session mithril-node-a
 wait_control_session mithril-node-b
 wait_node_control_acknowledgement "$node_a_name"
 wait_node_control_acknowledgement "$node_b_name"
+wait_node_wal_empty "$node_a_name"
+wait_node_wal_empty "$node_b_name"
 control_segment_manifest >"$work_directory/control-segments-after-outage.txt"
-while IFS= read -r segment; do
-  grep -Fqx -- "$segment" "$work_directory/control-segments-after-outage.txt" || {
-    echo "Control removed an unconsumed evidence segment during restart: $segment" >&2
-    exit 1
-  }
-done <"$work_directory/control-segments-before-outage.txt"
+comm -23 \
+  <(sort "$work_directory/control-segments-before-outage.txt") \
+  <(sort "$work_directory/control-segments-after-outage.txt") \
+  >"$work_directory/control-segments-missing-after-outage.txt"
+missing_control_segment=$(sed -n '1p' \
+  "$work_directory/control-segments-missing-after-outage.txt")
+if [[ -n $missing_control_segment ]]; then
+  echo "Control removed an unconsumed evidence segment during restart: $missing_control_segment" >&2
+  exit 1
+fi
 refresh_policy_status control-recovered
 wait_rollout 2 0
 candidate_a_pre_partition=$(active_candidate "$node_a_name")
@@ -624,6 +746,10 @@ cp "$work_directory/control-segments-before-outage.txt" \
   "$output_directory/control-segments-before-outage.txt"
 cp "$work_directory/control-segments-after-outage.txt" \
   "$output_directory/control-segments-after-outage.txt"
+cp "$work_directory/node-a-wal-before-restart.txt" \
+  "$output_directory/node-a-wal-before-restart.txt"
+cp "$work_directory/node-a-wal-after-restart.txt" \
+  "$output_directory/node-a-wal-after-restart.txt"
 segments_before_outage=$(wc -l <"$work_directory/control-segments-before-outage.txt")
 segments_after_outage=$(wc -l <"$work_directory/control-segments-after-outage.txt")
 
@@ -637,13 +763,22 @@ jq -n \
   --arg candidate_a_recovered "$candidate_a_recovered" \
   --arg candidate_b_recovered "$candidate_b_recovered" \
   --argjson segments_before_outage "$segments_before_outage" \
-  --argjson segments_after_outage "$segments_after_outage" '
+  --argjson segments_after_outage "$segments_after_outage" \
+  --argjson retained_records_a "$retained_records_a" \
+  --argjson retained_records_b "$retained_records_b" '
   {
     result: "PASS",
     nodes: [$node_a, $node_b],
     control_outage_kept_local_denial: true,
     control_outage_blocked_new_protected_work: true,
     control_restart_retained_unconsumed_evidence: true,
+    node_retain_exceeded_soft_bound_without_loss: true,
+    node_restart_retained_unacknowledged_evidence: true,
+    control_acknowledgement_truncated_node_wal: true,
+    retained_node_records: {
+      node_a: $retained_records_a,
+      node_b: $retained_records_b
+    },
     evidence_segments: {
       before_outage: $segments_before_outage,
       after_outage: $segments_after_outage

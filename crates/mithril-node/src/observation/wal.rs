@@ -1164,6 +1164,37 @@ mod tests {
     }
 
     #[test]
+    fn restart_preserves_prior_records_when_new_evidence_arrives(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let retain_limits = EvidenceWalLimits {
+            maximum_retained_records: 2,
+            maximum_batch_records: 1,
+            capacity_policy: EvidenceWalCapacityPolicyV1::Retain,
+            ..limits()
+        };
+        let mut wal = EvidenceWal::open(directory.path(), retain_limits)?;
+        for sequence in 1..=4 {
+            wal.append(&observation(sequence)?)?;
+        }
+        let before_restart = (1..=4)
+            .map(|cursor| std::fs::read(segment_path(directory.path(), cursor)))
+            .collect::<Result<Vec<_>, _>>()?;
+        drop(wal);
+
+        let mut restarted = EvidenceWal::open(directory.path(), retain_limits)?;
+        restarted.append(&observation(5)?)?;
+        let after_restart = (1..=5)
+            .map(|cursor| std::fs::read(segment_path(directory.path(), cursor)))
+            .collect::<Result<Vec<_>, _>>()?;
+
+        assert_eq!(after_restart.len(), before_restart.len() + 1);
+        assert_eq!(&after_restart[..before_restart.len()], before_restart);
+        assert_eq!(restarted.pending_records(), 5);
+        Ok(())
+    }
+
+    #[test]
     fn wal_removes_owned_torn_writes_on_recovery() -> Result<(), Box<dyn std::error::Error>> {
         let directory = tempfile::tempdir()?;
         let temporary = directory.path().join("00000000000000000001.tmp");

@@ -23,17 +23,12 @@ spec:
         - >-
           root=/var/lib/mithril-convergence;
           touch "$root/MITHRIL_OUTAGE_POD.started";
-          last=;
           while true; do
-          request=$(cat "$root/MITHRIL_OUTAGE_POD.request" 2>/dev/null || true);
-          if [ -n "$request" ] && [ "$request" != "$last" ]; then
+          read -r request < "$root/MITHRIL_OUTAGE_POD.request";
           if cat "$root/outage.denied" >/dev/null 2>&1;
           then verdict=ALLOWED; else verdict=DENIED; fi;
           printf '%s:%s\n' "$request" "$verdict" >
           "$root/MITHRIL_OUTAGE_POD.result";
-          last=$request;
-          fi;
-          sleep 1;
           done
       volumeMounts:
         - name: fixture

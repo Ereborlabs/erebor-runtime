@@ -39,6 +39,11 @@ grep -Fq 'node_state_host_path=/var/lib/mithril-node-$run_id' \
 grep -Fq 'control_state_claim=mithril-control-state-$run_id' \
   "$directory/two-node-convergence.sh"
 grep -Fq 'capacity_policy: "RETAIN"' "$directory/two-node-convergence.sh"
+grep -Fq 'maximum_retained_records: 2' "$directory/two-node-convergence.sh"
+grep -Fq 'node_retain_exceeded_soft_bound_without_loss: true' \
+  "$directory/two-node-outage-recovery.sh"
+grep -Fq "-exec sha256sum '{}' +" \
+  "$directory/two-node-outage-recovery.sh"
 if grep -Fq 'delete namespace "$system_namespace"' \
     "$directory/two-node-convergence.sh"; then
   echo "the retained convergence lane deletes durable Control evidence" >&2
