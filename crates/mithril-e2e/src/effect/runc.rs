@@ -40,7 +40,7 @@ use crate::error::{
 };
 use crate::identity::IdentityTestRunner;
 use crate::physical::{boot_identity, ProbeDirectory, ProbeFile};
-use crate::Result;
+use crate::{DigestV1, Result};
 
 const WAIT_LIMIT: Duration = Duration::from_secs(15);
 
@@ -65,6 +65,9 @@ pub struct RuncEntryRoleRuntimeProbeV1 {
     pub live_replacement_preserved_running_application: bool,
     pub live_replacement_entries_use_new_generation: bool,
     pub node_owner_restart_preserved_running_application: bool,
+    pub kernel_upgrade_preserved_map_ids: bool,
+    pub kernel_upgrade_preserved_link_pins: bool,
+    pub kernel_upgrade_replaced_changed_programs: bool,
     pub post_ponr_terminal_evidence_observed: bool,
     pub post_ponr_terminal_evidence_preserved: bool,
     pub inactive_generation_retired: bool,
@@ -231,6 +234,7 @@ impl EffectTestRunner {
         runc_path: &Path,
         workload_path: &Path,
         prestart_hook: &Path,
+        retained_bpf_object: &Path,
     ) -> Result<RuncEntryRoleRuntimeProbeV1> {
         for path in [pin_root, lease_path] {
             ensure!(
@@ -241,7 +245,7 @@ impl EffectTestRunner {
                 }
             );
         }
-        for path in [runc_path, workload_path, prestart_hook] {
+        for path in [runc_path, workload_path, prestart_hook, retained_bpf_object] {
             ensure!(
                 path.is_absolute() && path.exists(),
                 InvalidInputSnafu {
@@ -437,15 +441,22 @@ impl EffectTestRunner {
         signal_process(initial_pid, Signal::STOP)?;
 
         let (boot_id, node_boot_id) = boot_identity()?;
-        let mut host = KernelHostOwner::new(KernelHostConfig::identity(
+        let retained_bpf_sha256 = DigestV1::of(fs::read(retained_bpf_object).context(IoSnafu {
+            path: retained_bpf_object,
+        })?)
+        .to_hex();
+        let mut host = KernelHostOwner::new(KernelHostConfig::retained_identity_qualification(
+            retained_bpf_object,
+            retained_bpf_sha256,
             "/sys/kernel/btf/vmlinux",
             lease_path,
             Some(pin_root.to_path_buf()),
-            boot_id,
+            &boot_id,
             1,
         ))
         .start()
         .context(InterceptorSnafu)?;
+        let retained_manifest = host.manifest().clone();
         let mut binding = effect_binding_with_identity(
             &cgroup_path,
             "99999999-9999-4999-8999-999999999996",
@@ -880,6 +891,56 @@ impl EffectTestRunner {
 
         drop(policy_owner);
         drop(bindings);
+        drop(reader);
+        host.shutdown().context(InterceptorSnafu)?;
+        let mut host = KernelHostOwner::new(KernelHostConfig::identity(
+            "/sys/kernel/btf/vmlinux",
+            lease_path,
+            Some(pin_root.to_path_buf()),
+            boot_id,
+            1,
+        ))
+        .start()
+        .context(InterceptorSnafu)?;
+        let upgraded_manifest = host.manifest();
+        let kernel_upgrade_preserved_map_ids = retained_manifest
+            .maps
+            .iter()
+            .map(|map| (&map.name, map.id))
+            .eq(upgraded_manifest.maps.iter().map(|map| (&map.name, map.id)));
+        let kernel_upgrade_preserved_link_pins = retained_manifest
+            .links
+            .iter()
+            .map(|link| (&link.program, &link.pin_path))
+            .eq(upgraded_manifest
+                .links
+                .iter()
+                .map(|link| (&link.program, &link.pin_path)));
+        let kernel_upgrade_replaced_changed_programs = retained_manifest
+            .links
+            .iter()
+            .zip(&upgraded_manifest.links)
+            .any(|(retained, upgraded)| {
+                retained.program == upgraded.program
+                    && retained.program_tag != upgraded.program_tag
+                    && retained.program_id != upgraded.program_id
+            });
+        ensure!(
+            kernel_upgrade_preserved_map_ids
+                && kernel_upgrade_preserved_link_pins
+                && kernel_upgrade_replaced_changed_programs,
+            InvalidInputSnafu {
+                path: pin_root,
+                reason: "the kernel-host upgrade did not preserve maps and link pins while replacing changed programs",
+            }
+        );
+        let sink = observations.clone();
+        let reader = host
+            .effect_observation_reader(move |bytes| {
+                sink.record_bytes(bytes);
+                0
+            })
+            .context(InterceptorSnafu)?;
         let mut restarted_bindings =
             WorkloadBindingOwner::system(node_boot_id, 1).context(NodeSnafu)?;
         restarted_bindings
@@ -1379,7 +1440,7 @@ impl EffectTestRunner {
         })?;
 
         Ok(RuncEntryRoleRuntimeProbeV1 {
-            schema_version: 12,
+            schema_version: 13,
             runc_version: runc_version.lines().next().unwrap_or_default().to_owned(),
             initial_host_pid: initial_pid,
             prepared_state_before_exec,
@@ -1398,6 +1459,9 @@ impl EffectTestRunner {
             live_replacement_preserved_running_application,
             live_replacement_entries_use_new_generation,
             node_owner_restart_preserved_running_application,
+            kernel_upgrade_preserved_map_ids,
+            kernel_upgrade_preserved_link_pins,
+            kernel_upgrade_replaced_changed_programs,
             post_ponr_terminal_evidence_observed,
             post_ponr_terminal_evidence_preserved,
             inactive_generation_retired,

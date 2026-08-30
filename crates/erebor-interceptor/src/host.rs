@@ -13,7 +13,7 @@ use erebor_interceptor_abi::{
 use libbpf_rs::{
     query::{LinkInfoIter, ProgInfoIter, ProgInfoQueryOptions},
     Iter, Link, Map, MapCore as _, MapFlags, MapHandle, Object, ObjectBuilder, OpenObject, Program,
-    ProgramHandle, ProgramInput, ProgramType, RingBuffer, RingBufferBuilder,
+    ProgramHandle, ProgramInput, ProgramMut, ProgramType, RingBuffer, RingBufferBuilder,
 };
 use sha2::{Digest as _, Sha256};
 use snafu::{ensure, OptionExt as _, ResultExt as _};
@@ -32,6 +32,7 @@ use crate::{
 
 const BUNDLED_OBJECT_NAME: &str = "embedded erebor-interceptor.bpf.o";
 const KERNEL_PROGRAM_NAME_BYTES: usize = libbpf_rs::libbpf_sys::BPF_OBJ_NAME_LEN as usize - 1;
+const RETAINED_LINK_UPGRADE_SUFFIX: &str = "-mithril-upgrade";
 
 pub struct EffectObservationReader {
     ring: RingBuffer<'static>,
@@ -402,6 +403,31 @@ impl KernelHostConfig {
         }
     }
 
+    #[must_use]
+    pub fn retained_identity_qualification(
+        object_path: impl Into<PathBuf>,
+        expected_object_sha256: impl Into<String>,
+        runtime_btf_path: impl Into<PathBuf>,
+        lease_path: impl Into<PathBuf>,
+        pin_root: Option<PathBuf>,
+        node_boot_id: impl Into<String>,
+        label_epoch: u64,
+    ) -> Self {
+        Self {
+            object_kind: KernelObjectKind::Identity,
+            object_source: KernelObjectSource::File {
+                path: object_path.into(),
+                expected_sha256: expected_object_sha256.into(),
+            },
+            runtime_btf_path: runtime_btf_path.into(),
+            lease_path: lease_path.into(),
+            pin_root,
+            node_boot_id: node_boot_id.into(),
+            label_epoch,
+            network_cgroup_root: PathBuf::from("/sys/fs/cgroup"),
+        }
+    }
+
     fn object_path(&self) -> &Path {
         match &self.object_source {
             KernelObjectSource::File { path, .. } => path,
@@ -506,43 +532,7 @@ impl KernelHostOwner {
             if !self.config.object_kind.attaches(&name, &section) {
                 continue;
             }
-            if section.starts_with("lsm/") {
-                ensure!(
-                    program.prog_type() == ProgramType::Lsm,
-                    ManifestMismatchSnafu {
-                        path: self.config.object_path(),
-                        reason: format!(
-                            "program `{name}` has an LSM section but type {:?}",
-                            program.prog_type()
-                        ),
-                    }
-                );
-            }
-            if section.starts_with("cgroup_skb/") {
-                ensure!(
-                    program.prog_type() == ProgramType::CgroupSkb,
-                    ManifestMismatchSnafu {
-                        path: self.config.object_path(),
-                        reason: format!(
-                            "program `{name}` has a cgroup_skb section but type {:?}",
-                            program.prog_type()
-                        ),
-                    }
-                );
-            }
-            let link = if section.starts_with("cgroup_skb/") {
-                let cgroup = fs::File::open(&self.config.network_cgroup_root).context(IoSnafu {
-                    action: "open network cgroup attach root",
-                    path: &self.config.network_cgroup_root,
-                })?;
-                program.attach_cgroup(cgroup.as_raw_fd())
-            } else {
-                program.attach()
-            }
-            .context(LibbpfSnafu {
-                action: "attach BPF program",
-                path: self.config.object_path(),
-            })?;
+            let link = self.attach_program(&program)?;
             let info = link.info().context(LibbpfSnafu {
                 action: "read attached LSM link",
                 path: self.config.object_path(),
@@ -692,6 +682,7 @@ impl KernelHostOwner {
             .filter(|name| self.config.object_kind.attaches_name(name))
             .map(str::to_owned)
             .collect::<BTreeSet<_>>();
+        self.clear_interrupted_link_upgrades(&links_root, &expected_links)?;
         ensure!(
             directory_entry_names(&maps_root)? == expected_maps
                 && directory_entry_names(&links_root)? == expected_links,
@@ -752,8 +743,8 @@ impl KernelHostOwner {
                 action: "read recovered BPF program",
                 path: &path,
             })?;
-            let new_program = object
-                .progs()
+            let replacement_program = object
+                .progs_mut()
                 .find(|program| program.name().to_string_lossy() == name)
                 .ok_or_else(|| {
                     ManifestMismatchSnafu {
@@ -762,14 +753,16 @@ impl KernelHostOwner {
                     }
                     .build()
                 })?;
-            let new_program_id = Program::id_from_fd(new_program.as_fd()).context(LibbpfSnafu {
-                action: "read replacement BPF program ID",
-                path: self.config.object_path(),
-            })?;
-            let new_program = ProgramHandle::from_prog_id(new_program_id).context(LibbpfSnafu {
-                action: "read replacement BPF program",
-                path: self.config.object_path(),
-            })?;
+            let replacement_program_id =
+                Program::id_from_fd(replacement_program.as_fd()).context(LibbpfSnafu {
+                    action: "read replacement BPF program ID",
+                    path: self.config.object_path(),
+                })?;
+            let replacement_program_handle = ProgramHandle::from_prog_id(replacement_program_id)
+                .context(LibbpfSnafu {
+                    action: "read replacement BPF program",
+                    path: self.config.object_path(),
+                })?;
             let old_map_ids = program_map_ids.get(&info.prog_id).ok_or_else(|| {
                 ManifestMismatchSnafu {
                     path: &path,
@@ -777,32 +770,92 @@ impl KernelHostOwner {
                 }
                 .build()
             })?;
-            let new_map_ids = program_map_ids.get(&new_program_id).ok_or_else(|| {
+            let replacement_map_ids = program_map_ids
+                .get(&replacement_program_id)
+                .ok_or_else(|| {
+                    ManifestMismatchSnafu {
+                        path: self.config.object_path(),
+                        reason: format!(
+                            "replacement kernel program {replacement_program_id} has no readable map-ID set"
+                        ),
+                    }
+                    .build()
+                })?;
+            ensure!(
+                old_map_ids == replacement_map_ids,
                 ManifestMismatchSnafu {
-                    path: self.config.object_path(),
-                    reason: format!(
-                        "replacement kernel program {new_program_id} has no readable map-ID set"
-                    ),
+                    path: &path,
+                    reason: format!("pinned program `{name}` does not use the recovered map set"),
                 }
-                .build()
+            );
+            let recovered_link = if old_program.tag() == replacement_program_handle.tag() {
+                link
+            } else {
+                let mut replacement_link = self.attach_program(&replacement_program)?;
+                let replacement_info = replacement_link.info().context(LibbpfSnafu {
+                    action: "read replacement BPF link",
+                    path: self.config.object_path(),
+                })?;
+                ensure!(
+                    replacement_info.prog_id == replacement_program_id,
+                    ManifestMismatchSnafu {
+                        path: self.config.object_path(),
+                        reason: format!(
+                            "replacement link for `{name}` attached program {}, expected {replacement_program_id}",
+                            replacement_info.prog_id
+                        ),
+                    }
+                );
+                let upgrade_path = links_root.join(format!("{name}{RETAINED_LINK_UPGRADE_SUFFIX}"));
+                replacement_link.pin(&upgrade_path).context(LibbpfSnafu {
+                    action: "pin replacement BPF link",
+                    path: &upgrade_path,
+                })?;
+                // The old link stays attached until the new durable pin replaces its canonical pin.
+                fs::rename(&upgrade_path, &path).context(IoSnafu {
+                    action: "publish replacement BPF link pin",
+                    path: &path,
+                })?;
+                replacement_link
+            };
+            let recovered_info = recovered_link.info().context(LibbpfSnafu {
+                action: "read upgraded BPF link",
+                path: &path,
+            })?;
+            let recovered_program =
+                ProgramHandle::from_prog_id(recovered_info.prog_id).context(LibbpfSnafu {
+                    action: "read upgraded BPF program",
+                    path: &path,
+                })?;
+            let pinned_readback = Link::open(&path).context(LibbpfSnafu {
+                action: "open upgraded BPF link pin",
+                path: &path,
+            })?;
+            let pinned_info = pinned_readback.info().context(LibbpfSnafu {
+                action: "read upgraded BPF link pin",
+                path: &path,
             })?;
             ensure!(
-                old_program.tag() == new_program.tag() && old_map_ids == new_map_ids,
+                recovered_info.id != 0
+                    && recovered_info.id == pinned_info.id
+                    && recovered_info.prog_id == pinned_info.prog_id
+                    && recovered_program.tag() == replacement_program_handle.tag()
+                    && program_map_ids.get(&recovered_info.prog_id) == Some(replacement_map_ids),
                 ManifestMismatchSnafu {
                     path: &path,
                     reason: format!(
-                        "pinned program `{name}` does not match the configured object and recovered maps"
+                        "pinned program `{name}` did not converge to the configured object"
                     ),
                 }
             );
             link_records.push(KernelLinkManifestV1 {
                 program: name.to_owned(),
-                link_id: info.id,
-                program_id: info.prog_id,
-                program_tag: old_program.tag(),
+                link_id: recovered_info.id,
+                program_id: recovered_info.prog_id,
+                program_tag: recovered_program.tag(),
                 pin_path: Some(path),
             });
-            links.push(link);
+            links.push(recovered_link);
         }
         self.validate_attached_set(&link_records)?;
 
@@ -885,6 +938,72 @@ impl KernelHostOwner {
                 reason: "node boot ID must be present and label epoch must be nonzero".to_owned(),
             }
         );
+        Ok(())
+    }
+
+    fn attach_program(&self, program: &ProgramMut<'_>) -> Result<Link> {
+        let name = program.name().to_string_lossy();
+        let section = program.section().to_string_lossy();
+        if section.starts_with("lsm/") {
+            ensure!(
+                program.prog_type() == ProgramType::Lsm,
+                ManifestMismatchSnafu {
+                    path: self.config.object_path(),
+                    reason: format!(
+                        "program `{name}` has an LSM section but type {:?}",
+                        program.prog_type()
+                    ),
+                }
+            );
+        }
+        if section.starts_with("cgroup_skb/") {
+            ensure!(
+                program.prog_type() == ProgramType::CgroupSkb,
+                ManifestMismatchSnafu {
+                    path: self.config.object_path(),
+                    reason: format!(
+                        "program `{name}` has a cgroup_skb section but type {:?}",
+                        program.prog_type()
+                    ),
+                }
+            );
+            let cgroup = fs::File::open(&self.config.network_cgroup_root).context(IoSnafu {
+                action: "open network cgroup attach root",
+                path: &self.config.network_cgroup_root,
+            })?;
+            return program
+                .attach_cgroup(cgroup.as_raw_fd())
+                .context(LibbpfSnafu {
+                    action: "attach BPF program",
+                    path: self.config.object_path(),
+                });
+        }
+        program.attach().context(LibbpfSnafu {
+            action: "attach BPF program",
+            path: self.config.object_path(),
+        })
+    }
+
+    fn clear_interrupted_link_upgrades(
+        &self,
+        links_root: &Path,
+        expected_links: &BTreeSet<String>,
+    ) -> Result<()> {
+        for name in expected_links {
+            let canonical_path = links_root.join(name);
+            let upgrade_path = links_root.join(format!("{name}{RETAINED_LINK_UPGRADE_SUFFIX}"));
+            if !upgrade_path.exists() {
+                continue;
+            }
+            ensure!(
+                canonical_path.exists(),
+                StalePinRootSnafu { path: links_root }
+            );
+            fs::remove_file(&upgrade_path).context(IoSnafu {
+                action: "remove interrupted BPF link upgrade pin",
+                path: &upgrade_path,
+            })?;
+        }
         Ok(())
     }
 

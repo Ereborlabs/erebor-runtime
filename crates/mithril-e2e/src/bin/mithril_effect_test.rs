@@ -16,6 +16,11 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    #[command(hide = true)]
+    CompileRetainedIdentity {
+        #[arg(long)]
+        output_directory: PathBuf,
+    },
     PhysicalProbe {
         #[arg(long)]
         output_directory: PathBuf,
@@ -46,6 +51,8 @@ enum Command {
         workload_path: PathBuf,
         #[arg(long)]
         prestart_hook: PathBuf,
+        #[arg(long)]
+        retained_bpf_object: PathBuf,
     },
     #[command(hide = true)]
     Child {
@@ -77,6 +84,16 @@ fn main() {
 fn run() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
+        Command::CompileRetainedIdentity { output_directory } => {
+            let runner = EffectTestRunner::new(cli.repo_root);
+            let record = runner.compile_retained_identity_fixture(&output_directory)?;
+            runner.write_json(
+                &output_directory.join("retained-identity-compile.json"),
+                &record,
+            )?;
+            println!("Mithril retained identity fixture compiled successfully");
+            Ok(())
+        }
         Command::PhysicalProbe {
             output_directory,
             pin_root,
@@ -110,6 +127,7 @@ fn run() -> Result<()> {
             runc_path,
             workload_path,
             prestart_hook,
+            retained_bpf_object,
         } => {
             let runner = EffectTestRunner::new(cli.repo_root);
             let result = runner.runc_entry_role_runtime_probe(
@@ -119,6 +137,7 @@ fn run() -> Result<()> {
                 &runc_path,
                 &workload_path,
                 &prestart_hook,
+                &retained_bpf_object,
             )?;
             runner.write_json(
                 &output_directory.join("runc-entry-role-runtime-probe.json"),

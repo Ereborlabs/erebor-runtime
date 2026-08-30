@@ -107,6 +107,20 @@ impl BpfPrototypeCompiler {
         self.compile_for(output_directory, BpfTargetArchitecture::for_host()?)
     }
 
+    pub(crate) fn compile_retained_identity(
+        &self,
+        output_directory: &Path,
+    ) -> Result<CompileRecordV1> {
+        // The optimizer change gives the upgrade probe different program tags without changing the map ABI.
+        self.compile_source_for(
+            output_directory,
+            BpfTargetArchitecture::for_host()?,
+            "programs/identity.bpf.c",
+            "retained-identity.bpf.o",
+            "-O1",
+        )
+    }
+
     fn compile_for(
         &self,
         output_directory: &Path,
@@ -117,6 +131,7 @@ impl BpfPrototypeCompiler {
             target,
             "qualification/feasibility.bpf.c",
             "feasibility.bpf.o",
+            "-O2",
         )
     }
 
@@ -131,6 +146,7 @@ impl BpfPrototypeCompiler {
             target,
             "programs/identity.bpf.c",
             "erebor-interceptor.bpf.o",
+            "-O2",
         )
     }
 
@@ -140,6 +156,7 @@ impl BpfPrototypeCompiler {
         target: BpfTargetArchitecture,
         relative_source: &str,
         object_name: &str,
+        optimization: &str,
     ) -> Result<CompileRecordV1> {
         fs::create_dir_all(output_directory).context(IoSnafu {
             path: output_directory.to_path_buf(),
@@ -171,7 +188,7 @@ impl BpfPrototypeCompiler {
         let compile_output = Command::new("clang")
             .args([
                 "-g",
-                "-O2",
+                optimization,
                 "-target",
                 "bpfel",
                 target.clang_define(),

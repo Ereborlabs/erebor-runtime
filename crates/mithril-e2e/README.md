@@ -10,6 +10,14 @@ This layer runs production owners and fixture commands without a Kubernetes
 cluster. It can use a stock local runtime, as `src/effect/runc.rs` does, when
 the result needs a physical container boundary.
 
+The direct-`runc` lane also qualifies a kernel-host binary upgrade. It starts
+with a different build of the production identity object, activates policy for
+a running container, and restarts with the bundled production object. The
+result must preserve the pinned map IDs, canonical link paths, running
+application identity, and path-tree decision. It must replace each program
+whose tag changed. The corresponding Kubernetes check is a retained
+DaemonSet rollout on two nodes.
+
 The lightweight case must reproduce the state transitions, failure condition,
 and observable verdicts that the physical case will use. Owner-local unit and
 integration tests can support this case, but they do not replace it.

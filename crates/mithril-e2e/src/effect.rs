@@ -41,6 +41,7 @@ use self::support::{
     wait_for_exact_io_uring_effect, wait_for_path_exec_effect, wait_for_reason,
     wait_for_unsupported_effect, ExternalMountNamespace,
 };
+use crate::capability::{BpfPrototypeCompiler, CompileRecordV1};
 use crate::error::{
     InterceptorSnafu, InvalidInputSnafu, IoSnafu, JsonSnafu, NodeSnafu, PolicySnafu,
 };
@@ -1029,6 +1030,13 @@ fn require_exact_process_control(
 }
 
 impl EffectTestRunner {
+    pub fn compile_retained_identity_fixture(
+        &self,
+        output_directory: &Path,
+    ) -> Result<CompileRecordV1> {
+        BpfPrototypeCompiler::new(&self.repo_root).compile_retained_identity(output_directory)
+    }
+
     #[must_use]
     pub fn new(repo_root: impl Into<PathBuf>) -> Self {
         Self {

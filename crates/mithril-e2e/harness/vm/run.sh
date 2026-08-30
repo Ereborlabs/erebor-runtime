@@ -188,6 +188,10 @@ else
   qualification_build=$work_directory/kernel-qualification-build
   "$repo_root/target/debug/mithril-kernel-qualification" \
     --repo-root "$repo_root" probe --output-directory "$qualification_build"
+  retained_identity_build=$work_directory/retained-identity-build
+  "$repo_root/target/debug/mithril-effect-test" \
+    --repo-root "$repo_root" compile-retained-identity \
+    --output-directory "$retained_identity_build"
 fi
 
 "$provider" create "$vm_name" "$work_directory" "$ssh_public_key"
@@ -275,6 +279,8 @@ fi
   "$remote_bin/mithril-open-probe"
 "$provider" put "$vm_name" "$qualification_build/feasibility.bpf.o" \
   "$remote_bin/feasibility.bpf.o"
+"$provider" put "$vm_name" "$retained_identity_build/retained-identity.bpf.o" \
+  "$remote_bin/retained-identity.bpf.o"
 "$provider" put "$vm_name" \
   "$repo_root/bpf/erebor-interceptor/qualification/feasibility.bpf.c" \
   "$remote_source/bpf/erebor-interceptor/qualification/feasibility.bpf.c"
@@ -341,6 +347,7 @@ entry_role_output=$remote_root/runc-entry-roles
   --pin-root "/sys/fs/bpf/$vm_name-runc-entry-roles" \
   --lease-path "$entry_role_output/owner.lock" \
   --runc-path /usr/sbin/runc --workload-path /usr/bin/sleep \
+  --retained-bpf-object "$remote_bin/retained-identity.bpf.o" \
   --prestart-hook \
   "$remote_source/crates/mithril-e2e/fixtures/identity/oci-prestart-admission-v1.sh"
 "$provider" get "$vm_name" \
@@ -349,7 +356,7 @@ entry_role_output=$remote_root/runc-entry-roles
 
 if [[ $entry_role_runtime_only == true ]]; then
   jq -e '
-    .schema_version == 12 and
+    .schema_version == 13 and
     .prepared_state_before_exec == "prepared" and
     .prepared_state_after_exec == "active" and
     .prepared_runtime_effect_observed and
@@ -374,6 +381,9 @@ if [[ $entry_role_runtime_only == true ]]; then
     .live_replacement_preserved_running_application and
     .live_replacement_entries_use_new_generation and
     .node_owner_restart_preserved_running_application and
+    .kernel_upgrade_preserved_map_ids and
+    .kernel_upgrade_preserved_link_pins and
+    .kernel_upgrade_replaced_changed_programs and
     .post_ponr_terminal_evidence_observed and
     .post_ponr_terminal_evidence_preserved and
     .inactive_generation_retired and
