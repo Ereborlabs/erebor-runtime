@@ -102,6 +102,7 @@ impl RuntimeObservationServer {
             evidence_errors: 0,
             wal_capacity_blocked: 0,
             reader_queue_dropped_events: 0,
+            pending_evidence_records: 0,
         };
         Ok(Self {
             config,
@@ -278,6 +279,7 @@ fn update_effect_health(
     snapshot.evidence_errors = health.evidence_errors;
     snapshot.wal_capacity_blocked = health.wal_capacity_blocked;
     snapshot.reader_queue_dropped_events = health.reader_queue_dropped_events;
+    snapshot.pending_evidence_records = observations.pending_evidence_records();
     snapshot.effect_health_available = health_bytes.is_some();
 }
 

@@ -14,7 +14,7 @@ mod model;
 
 pub use model::*;
 
-pub const MAX_EVIDENCE_BATCH_RECORDS: usize = 256;
+pub const DEFAULT_EVIDENCE_BATCH_RECORDS: usize = 256;
 pub const MAX_EVIDENCE_RECORD_BYTES: usize = 128 * 1_024;
 pub const MAX_EVIDENCE_GRPC_MESSAGE_BYTES: usize = 4 * 1_024 * 1_024;
 pub const MAX_EVIDENCE_BATCH_PAYLOAD_BYTES: usize = 3 * 1_024 * 1_024;
@@ -191,7 +191,6 @@ impl EvidenceIntakeOwner {
             .try_into()
             .map_err(|_| Status::invalid_argument("evidence source identity is not Id128"))?;
         if batch.records.is_empty()
-            || batch.records.len() > MAX_EVIDENCE_BATCH_RECORDS
             || batch.encoded_len() > MAX_EVIDENCE_BATCH_PAYLOAD_BYTES
             || node_boot_id == [0; 16]
             || source_id == [0; 16]

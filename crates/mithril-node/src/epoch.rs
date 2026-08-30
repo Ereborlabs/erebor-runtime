@@ -13,7 +13,7 @@ pub(crate) struct NodeEpochs;
 
 impl NodeEpochs {
     pub(crate) fn evidence_wal_directory(state_directory: &Path) -> PathBuf {
-        state_directory.join("evidence-wal-v1")
+        state_directory.join("evidence-wal-v2")
     }
 
     pub(crate) fn boot_id() -> Result<[u8; 16]> {

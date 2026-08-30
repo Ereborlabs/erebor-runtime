@@ -110,7 +110,7 @@ remote_kubectl() {
 
 control_segment_manifest() {
   remote_kubectl -n "$system_namespace" exec deployment/mithril-control -- \
-    sh -c "find /var/lib/mithril-control/store/evidence/segments -type f -exec sha256sum '{}' +"
+    sh -c "find /var/lib/mithril-control/store/evidence/segments -type f ! -name segment.tmp -exec sha256sum '{}' +"
 }
 
 remove_network_block() {
@@ -230,7 +230,9 @@ node_wal_manifest() {
   local pod
   pod=$(node_pod "$node_name")
   remote_kubectl -n "$system_namespace" exec -c mithril-node "$pod" -- \
-    sh -c "find /var/lib/mithril/evidence-wal-v1 -type f -name '*.wal' -exec sha256sum '{}' +"
+    sh -c "find /var/lib/mithril/evidence-wal-v2 -type f \
+      \( -name '*.open' -o -name '*.seg' \) \
+      -exec sh -c 'for path do printf \"%s \" \"\$(stat -c %s \"\$path\")\"; sha256sum \"\$path\"; done' sh '{}' +"
 }
 
 node_wal_count() {
@@ -238,7 +240,28 @@ node_wal_count() {
   local pod
   pod=$(node_pod "$node_name")
   remote_kubectl -n "$system_namespace" exec -c mithril-node "$pod" -- \
-    sh -c 'set -- /var/lib/mithril/evidence-wal-v1/*/*.wal; [ -e "$1" ] && echo "$#" || echo 0'
+    mithril-inspect effects --socket-path /run/mithril/observation.sock \
+      --cgroup-scope / --samples 1 | sed -n \
+      '1s/.*pending_evidence_records=\([0-9][0-9]*\).*/\1/p'
+}
+
+verify_node_wal_prefixes() {
+  local node_name=$1
+  local manifest=$2
+  local pod
+  local size
+  local expected
+  local path
+  local actual
+  pod=$(node_pod "$node_name")
+  while read -r size expected path; do
+    actual=$(remote_kubectl -n "$system_namespace" exec -c mithril-node "$pod" -- \
+      sh -c "head -c '$size' '$path' | sha256sum" | sed -n '1s/[[:space:]].*//p')
+    [[ $actual == "$expected" ]] || {
+      echo "Node $node_name changed or removed retained WAL prefix $path" >&2
+      return 1
+    }
+  done <"$manifest"
 }
 
 wait_node_wal_count() {
@@ -624,20 +647,15 @@ remote_kubectl -n "$system_namespace" delete pod "$node_a_pod" \
   --wait=false >/dev/null
 wait_node_pod_replaced "$node_a_name" "$node_a_pod_uid"
 node_wal_manifest "$node_a_name" >"$work_directory/node-a-wal-after-restart.txt"
-comm -23 \
-  <(sort "$work_directory/node-a-wal-before-restart.txt") \
-  <(sort "$work_directory/node-a-wal-after-restart.txt") \
-  >"$work_directory/node-a-wal-missing-after-restart.txt"
-missing_node_record=$(sed -n '1p' \
-  "$work_directory/node-a-wal-missing-after-restart.txt")
-if [[ -n $missing_node_record ]]; then
+if ! verify_node_wal_prefixes "$node_a_name" \
+    "$work_directory/node-a-wal-before-restart.txt"; then
   cp "$work_directory/node-a-wal-before-restart.txt" \
     "$output_directory/node-a-wal-before-restart.txt"
   cp "$work_directory/node-a-wal-after-restart.txt" \
     "$output_directory/node-a-wal-after-restart.txt"
-  echo "Node A changed or removed an unacknowledged record during restart: $missing_node_record" >&2
   exit 1
 fi
+retained_records_a_after_restart=$(wait_node_wal_count "$node_a_name" "$retained_records_a")
 request_denial "$vm_a" outage-a control-outage-a-after-node-restart
 sed \
   -e "s/MITHRIL_OUTAGE_NAMESPACE/$scenario_namespace/g" \
@@ -765,6 +783,7 @@ jq -n \
   --argjson segments_before_outage "$segments_before_outage" \
   --argjson segments_after_outage "$segments_after_outage" \
   --argjson retained_records_a "$retained_records_a" \
+  --argjson retained_records_a_after_restart "$retained_records_a_after_restart" \
   --argjson retained_records_b "$retained_records_b" '
   {
     result: "PASS",
@@ -777,6 +796,7 @@ jq -n \
     control_acknowledgement_truncated_node_wal: true,
     retained_node_records: {
       node_a: $retained_records_a,
+      node_a_after_restart: $retained_records_a_after_restart,
       node_b: $retained_records_b
     },
     evidence_segments: {

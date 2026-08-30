@@ -1,26 +1,22 @@
 use std::collections::BTreeMap;
-use std::fs;
+use std::fs::{self, OpenOptions};
+use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
 use prost::Message as _;
 use serde::{Deserialize, Serialize};
-use sha2::{Digest as _, Sha256};
 use snafu::ResultExt as _;
 
-use super::{EvidenceDigestV1, ObservationEnvelopeV1};
+use super::persistence::{atomic_write, sync_directory};
+use super::ObservationEnvelopeV1;
 use crate::error::{EvidenceStateSnafu, IoSnafu};
 use crate::Result;
 
-use super::persistence::{atomic_write, sync_directory};
-
-const WAL_FRAME_MAGIC: [u8; 8] = *b"MITHWAL\0";
-const WAL_FRAME_VERSION: u16 = 1;
-const WAL_FRAME_HEADER_BYTES: usize = 52;
-const WAL_FRAME_RECORD: u8 = 1;
-const WAL_FRAME_ACK: u8 = 2;
-const WAL_FRAME_STREAM: u8 = 4;
 const ACK_FILE: &str = "acknowledged.bin";
-const STREAM_FILE: &str = "stream.bin";
+const ACK_BYTES: usize = 12;
+const SEGMENT_HEADER_BYTES: usize = 64;
+const SEGMENT_MAX_BYTES: u64 = 8 * 1_024 * 1_024;
+const RECORD_OVERHEAD_BYTES: usize = 8;
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
@@ -46,8 +42,6 @@ impl EvidenceWalLimits {
             || self.maximum_retained_bytes < self.maximum_record_bytes
             || self.maximum_retained_records == 0
             || self.maximum_batch_records == 0
-            || self.maximum_batch_records > mithril_control::MAX_EVIDENCE_BATCH_RECORDS
-            || self.maximum_batch_records > self.maximum_retained_records
         {
             return EvidenceStateSnafu {
                 reason: "evidence WAL bounds are zero or inconsistent".to_owned(),
@@ -64,7 +58,7 @@ impl Default for EvidenceWalLimits {
             maximum_record_bytes: mithril_control::MAX_EVIDENCE_RECORD_BYTES as u64,
             maximum_retained_bytes: 256 * 1_024 * 1_024,
             maximum_retained_records: 100_000,
-            maximum_batch_records: mithril_control::MAX_EVIDENCE_BATCH_RECORDS,
+            maximum_batch_records: mithril_control::DEFAULT_EVIDENCE_BATCH_RECORDS,
             capacity_policy: EvidenceWalCapacityPolicyV1::Block,
         }
     }
@@ -143,10 +137,11 @@ impl EvidenceWalStreamIdentityV1 {
 
     fn directory_name(self) -> String {
         format!(
-            "{}-{:020}-{}",
+            "{}-{:020}-{}-{:010}",
             hex::encode(self.source_id),
             self.source_epoch,
-            hex::encode(self.node_boot_id)
+            hex::encode(self.node_boot_id),
+            self.cpu_id,
         )
     }
 }
@@ -198,179 +193,348 @@ struct AckStateV1 {
 struct EvidenceWalCodecV1;
 
 impl EvidenceWalCodecV1 {
-    fn encode_frame(kind: u8, payload: &[u8]) -> Result<Vec<u8>> {
-        let payload_len = u64::try_from(payload.len()).map_err(|_| {
+    fn encode_segment_header(identity: EvidenceWalStreamIdentityV1) -> [u8; SEGMENT_HEADER_BYTES] {
+        let mut bytes = [0_u8; SEGMENT_HEADER_BYTES];
+        bytes[..16].copy_from_slice(&identity.tenant_id);
+        bytes[16..32].copy_from_slice(&identity.node_boot_id);
+        bytes[32..48].copy_from_slice(&identity.source_id);
+        bytes[48..56].copy_from_slice(&identity.source_epoch.to_be_bytes());
+        bytes[56..60].copy_from_slice(&identity.cpu_id.to_be_bytes());
+        let checksum = crc32c::crc32c(&bytes[..60]);
+        bytes[60..].copy_from_slice(&checksum.to_be_bytes());
+        bytes
+    }
+
+    fn decode_segment_header(bytes: &[u8], name: &str) -> Result<EvidenceWalStreamIdentityV1> {
+        if bytes.len() < SEGMENT_HEADER_BYTES {
+            return EvidenceStateSnafu {
+                reason: format!("{name} has a truncated stream identity"),
+            }
+            .fail();
+        }
+        let expected = u32::from_be_bytes(bytes[60..64].try_into().unwrap_or_default());
+        if crc32c::crc32c(&bytes[..60]) != expected {
+            return EvidenceStateSnafu {
+                reason: format!("{name} stream identity checksum does not match"),
+            }
+            .fail();
+        }
+        let identity = EvidenceWalStreamIdentityV1 {
+            tenant_id: bytes[..16].try_into().unwrap_or_default(),
+            node_boot_id: bytes[16..32].try_into().unwrap_or_default(),
+            source_id: bytes[32..48].try_into().unwrap_or_default(),
+            source_epoch: u64::from_be_bytes(bytes[48..56].try_into().unwrap_or_default()),
+            cpu_id: u32::from_be_bytes(bytes[56..60].try_into().unwrap_or_default()),
+        };
+        identity.validate()?;
+        Ok(identity)
+    }
+
+    fn encode_record(record: &mithril_control::EvidenceRecord) -> Result<Vec<u8>> {
+        let payload = record.encode_to_vec();
+        let length = u32::try_from(payload.len()).map_err(|_| {
             EvidenceStateSnafu {
-                reason: "evidence WAL binary payload size is not representable".to_owned(),
+                reason: "evidence WAL record size is not representable".to_owned(),
             }
             .build()
         })?;
-        let capacity = WAL_FRAME_HEADER_BYTES
-            .checked_add(payload.len())
-            .ok_or_else(|| {
-                EvidenceStateSnafu {
-                    reason: "evidence WAL binary frame size overflowed".to_owned(),
-                }
-                .build()
-            })?;
-        let mut frame = Vec::with_capacity(capacity);
-        frame.extend_from_slice(&WAL_FRAME_MAGIC);
-        frame.extend_from_slice(&WAL_FRAME_VERSION.to_be_bytes());
-        frame.push(kind);
-        frame.push(0);
-        frame.extend_from_slice(&payload_len.to_be_bytes());
-        let mut digest = Sha256::new();
-        digest.update(&frame[WAL_FRAME_MAGIC.len()..]);
-        digest.update(payload);
-        frame.extend_from_slice(&digest.finalize());
-        frame.extend_from_slice(payload);
+        let mut frame = Vec::with_capacity(payload.len().saturating_add(RECORD_OVERHEAD_BYTES));
+        frame.extend_from_slice(&length.to_be_bytes());
+        frame.extend_from_slice(&payload);
+        let checksum = crc32c::crc32c(&frame);
+        frame.extend_from_slice(&checksum.to_be_bytes());
         Ok(frame)
     }
 
-    fn decode_frame<'a>(bytes: &'a [u8], expected_kind: u8, name: &str) -> Result<&'a [u8]> {
-        if bytes.len() < WAL_FRAME_HEADER_BYTES || bytes[..8] != WAL_FRAME_MAGIC {
-            return EvidenceStateSnafu {
-                reason: format!("{name} has an invalid binary frame header"),
-            }
-            .fail();
-        }
-        let version = u16::from_be_bytes(bytes[8..10].try_into().unwrap_or_default());
-        let kind = bytes[10];
-        let flags = bytes[11];
-        let payload_len = u64::from_be_bytes(bytes[12..20].try_into().unwrap_or_default());
-        let payload_len = usize::try_from(payload_len).map_err(|_| {
+    fn decode_record(frame: &[u8], cursor: u64) -> Result<EvidenceRecordV1> {
+        let payload_end = frame.len().checked_sub(4).ok_or_else(|| {
             EvidenceStateSnafu {
-                reason: format!("{name} binary payload size is not representable"),
+                reason: "evidence WAL record frame is truncated".to_owned(),
             }
             .build()
         })?;
-        let expected_len = WAL_FRAME_HEADER_BYTES
-            .checked_add(payload_len)
-            .ok_or_else(|| {
+        let expected = u32::from_be_bytes(frame[payload_end..].try_into().unwrap_or_default());
+        if crc32c::crc32c(&frame[..payload_end]) != expected {
+            return EvidenceStateSnafu {
+                reason: format!("evidence WAL record {cursor} checksum does not match"),
+            }
+            .fail();
+        }
+        let record =
+            mithril_control::EvidenceRecord::decode(&frame[4..payload_end]).map_err(|error| {
                 EvidenceStateSnafu {
-                    reason: format!("{name} binary frame size overflowed"),
+                    reason: format!("evidence WAL record {cursor} protobuf is invalid: {error}"),
                 }
                 .build()
             })?;
-        if version != WAL_FRAME_VERSION
-            || kind != expected_kind
-            || flags != 0
-            || bytes.len() != expected_len
-        {
-            return EvidenceStateSnafu {
-                reason: format!("{name} has an invalid binary frame version, kind, flags, or size"),
-            }
-            .fail();
-        }
-        let payload = &bytes[WAL_FRAME_HEADER_BYTES..];
-        let mut digest = Sha256::new();
-        digest.update(&bytes[WAL_FRAME_MAGIC.len()..20]);
-        digest.update(payload);
-        let actual: EvidenceDigestV1 = digest.finalize().into();
-        if bytes[20..WAL_FRAME_HEADER_BYTES] != actual {
-            return EvidenceStateSnafu {
-                reason: format!("{name} binary frame checksum does not match"),
-            }
-            .fail();
-        }
-        Ok(payload)
+        Ok(EvidenceRecordV1 { cursor, record })
     }
 
-    fn take_binary<'a>(bytes: &mut &'a [u8], count: usize, name: &str) -> Result<&'a [u8]> {
-        if bytes.len() < count {
+    fn encode_ack(state: AckStateV1) -> [u8; ACK_BYTES] {
+        let mut bytes = [0_u8; ACK_BYTES];
+        bytes[..8].copy_from_slice(&state.contiguous_cursor.to_be_bytes());
+        let checksum = crc32c::crc32c(&bytes[..8]);
+        bytes[8..].copy_from_slice(&checksum.to_be_bytes());
+        bytes
+    }
+
+    fn decode_ack(bytes: &[u8]) -> Result<AckStateV1> {
+        if bytes.len() != ACK_BYTES {
             return EvidenceStateSnafu {
-                reason: format!("{name} binary payload is truncated"),
+                reason: "evidence acknowledgement state has an invalid size".to_owned(),
             }
             .fail();
         }
-        let (value, remaining) = bytes.split_at(count);
-        *bytes = remaining;
-        Ok(value)
+        let expected = u32::from_be_bytes(bytes[8..].try_into().unwrap_or_default());
+        if crc32c::crc32c(&bytes[..8]) != expected {
+            return EvidenceStateSnafu {
+                reason: "evidence acknowledgement state checksum does not match".to_owned(),
+            }
+            .fail();
+        }
+        Ok(AckStateV1 {
+            contiguous_cursor: u64::from_be_bytes(bytes[..8].try_into().unwrap_or_default()),
+        })
+    }
+}
+
+#[derive(Debug)]
+struct EvidenceWalSegment {
+    path: PathBuf,
+    first_cursor: u64,
+    last_cursor: Option<u64>,
+    record_count: usize,
+    bytes: u64,
+    active: bool,
+}
+
+impl EvidenceWalSegment {
+    fn active_path(root: &Path, first_cursor: u64) -> PathBuf {
+        root.join(format!("{first_cursor:020}.open"))
     }
 
-    fn take_binary_array<const N: usize>(bytes: &mut &[u8], name: &str) -> Result<[u8; N]> {
-        Self::take_binary(bytes, N, name)?.try_into().map_err(|_| {
+    fn sealed_path(root: &Path, first_cursor: u64, last_cursor: u64) -> PathBuf {
+        root.join(format!("{first_cursor:020}-{last_cursor:020}.seg"))
+    }
+
+    fn parse_name(path: &Path) -> Result<(u64, Option<u64>)> {
+        let stem = path
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .unwrap_or_default();
+        let extension = path
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .unwrap_or_default();
+        if extension == "open" {
+            return Ok((Self::parse_cursor(stem, path)?, None));
+        }
+        if extension == "seg" {
+            let Some((first, last)) = stem.split_once('-') else {
+                return EvidenceStateSnafu {
+                    reason: format!(
+                        "evidence WAL segment `{}` has an invalid name",
+                        path.display()
+                    ),
+                }
+                .fail();
+            };
+            return Ok((
+                Self::parse_cursor(first, path)?,
+                Some(Self::parse_cursor(last, path)?),
+            ));
+        }
+        EvidenceStateSnafu {
+            reason: format!("evidence WAL entry `{}` is not a segment", path.display()),
+        }
+        .fail()
+    }
+
+    fn parse_cursor(value: &str, path: &Path) -> Result<u64> {
+        if value.len() != 20 || !value.bytes().all(|byte| byte.is_ascii_digit()) {
+            return EvidenceStateSnafu {
+                reason: format!(
+                    "evidence WAL segment `{}` has an invalid cursor",
+                    path.display()
+                ),
+            }
+            .fail();
+        }
+        value.parse::<u64>().map_err(|error| {
             EvidenceStateSnafu {
-                reason: format!("{name} binary field has an invalid size"),
+                reason: format!(
+                    "evidence WAL segment `{}` has an invalid cursor: {error}",
+                    path.display()
+                ),
             }
             .build()
         })
     }
 
-    fn take_binary_u64(bytes: &mut &[u8], name: &str) -> Result<u64> {
-        Ok(u64::from_be_bytes(Self::take_binary_array(bytes, name)?))
-    }
-
-    fn finish_binary(bytes: &[u8], name: &str) -> Result<()> {
-        if !bytes.is_empty() {
+    fn read(
+        path: PathBuf,
+        first_cursor: u64,
+        sealed_last_cursor: Option<u64>,
+        limits: EvidenceWalLimits,
+    ) -> Result<(Self, EvidenceWalStreamIdentityV1, Vec<EvidenceRecordV1>)> {
+        let mut bytes = fs::read(&path).context(IoSnafu { path: &path })?;
+        if bytes.len() as u64 > SEGMENT_MAX_BYTES {
             return EvidenceStateSnafu {
-                reason: format!("{name} binary payload has trailing bytes"),
+                reason: format!("evidence WAL segment `{}` exceeds 8 MiB", path.display()),
             }
             .fail();
         }
-        Ok(())
+        let name = format!("evidence WAL segment `{}`", path.display());
+        let identity = EvidenceWalCodecV1::decode_segment_header(&bytes, &name)?;
+        let active = sealed_last_cursor.is_none();
+        let mut offset = SEGMENT_HEADER_BYTES;
+        let mut records = Vec::new();
+        let mut truncated = false;
+        while offset < bytes.len() {
+            let frame_start = offset;
+            let remaining = bytes.len() - offset;
+            if remaining < 4 {
+                if active {
+                    truncated = true;
+                    break;
+                }
+                return EvidenceStateSnafu {
+                    reason: format!("{name} has an incomplete record length"),
+                }
+                .fail();
+            }
+            let payload_bytes =
+                u32::from_be_bytes(bytes[offset..offset + 4].try_into().unwrap_or_default())
+                    as usize;
+            if payload_bytes == 0 || payload_bytes as u64 > limits.maximum_record_bytes {
+                return EvidenceStateSnafu {
+                    reason: format!("{name} contains a record outside its size bound"),
+                }
+                .fail();
+            }
+            let frame_bytes = payload_bytes
+                .checked_add(RECORD_OVERHEAD_BYTES)
+                .ok_or_else(|| {
+                    EvidenceStateSnafu {
+                        reason: format!("{name} record size overflowed"),
+                    }
+                    .build()
+                })?;
+            let frame_end = frame_start.checked_add(frame_bytes).ok_or_else(|| {
+                EvidenceStateSnafu {
+                    reason: format!("{name} record end overflowed"),
+                }
+                .build()
+            })?;
+            if frame_end > bytes.len() {
+                if active {
+                    truncated = true;
+                    break;
+                }
+                return EvidenceStateSnafu {
+                    reason: format!("{name} has an incomplete record payload"),
+                }
+                .fail();
+            }
+            let cursor = first_cursor
+                .checked_add(records.len() as u64)
+                .ok_or_else(|| {
+                    EvidenceStateSnafu {
+                        reason: format!("{name} cursor is exhausted"),
+                    }
+                    .build()
+                })?;
+            let record = EvidenceWalCodecV1::decode_record(&bytes[frame_start..frame_end], cursor)?;
+            record.validate(cursor, identity)?;
+            records.push(record);
+            offset = frame_end;
+        }
+        if truncated {
+            let file = OpenOptions::new()
+                .write(true)
+                .open(&path)
+                .context(IoSnafu { path: &path })?;
+            file.set_len(offset as u64)
+                .context(IoSnafu { path: &path })?;
+            file.sync_all().context(IoSnafu { path: &path })?;
+            bytes.truncate(offset);
+        }
+        let last_cursor = records
+            .len()
+            .checked_sub(1)
+            .map(|index| first_cursor.saturating_add(index as u64));
+        if let Some(expected_last) = sealed_last_cursor {
+            if last_cursor != Some(expected_last) {
+                return EvidenceStateSnafu {
+                    reason: format!("{name} cursor range does not match its name"),
+                }
+                .fail();
+            }
+        }
+        Ok((
+            Self {
+                path,
+                first_cursor,
+                last_cursor,
+                record_count: records.len(),
+                bytes: bytes.len() as u64,
+                active,
+            },
+            identity,
+            records,
+        ))
     }
 
-    fn encode_record(record: &EvidenceRecordV1) -> Result<Vec<u8>> {
-        let encoded = record.record.encode_to_vec();
-        let mut payload = Vec::with_capacity(8_usize.saturating_add(encoded.len()));
-        payload.extend_from_slice(&record.cursor.to_be_bytes());
-        payload.extend_from_slice(&encoded);
-        Self::encode_frame(WAL_FRAME_RECORD, &payload)
+    fn create_empty(
+        root: &Path,
+        identity: EvidenceWalStreamIdentityV1,
+        first_cursor: u64,
+    ) -> Result<Self> {
+        let path = Self::active_path(root, first_cursor);
+        if path.exists() {
+            return EvidenceStateSnafu {
+                reason: format!("evidence WAL segment `{}` already exists", path.display()),
+            }
+            .fail();
+        }
+        atomic_write(&path, &EvidenceWalCodecV1::encode_segment_header(identity))?;
+        Ok(Self {
+            path,
+            first_cursor,
+            last_cursor: None,
+            record_count: 0,
+            bytes: SEGMENT_HEADER_BYTES as u64,
+            active: true,
+        })
     }
 
-    fn decode_record(bytes: &[u8]) -> Result<EvidenceRecordV1> {
-        let name = "evidence WAL record";
-        let mut payload = Self::decode_frame(bytes, WAL_FRAME_RECORD, name)?;
-        let cursor = Self::take_binary_u64(&mut payload, name)?;
-        let record = mithril_control::EvidenceRecord::decode(payload).map_err(|error| {
+    fn seal(&mut self, root: &Path) -> Result<()> {
+        let last_cursor = self.last_cursor.ok_or_else(|| {
             EvidenceStateSnafu {
-                reason: format!("evidence WAL record protobuf is invalid: {error}"),
+                reason: "an empty evidence WAL segment cannot be sealed".to_owned(),
             }
             .build()
         })?;
-        Ok(EvidenceRecordV1 { cursor, record })
+        let sealed = Self::sealed_path(root, self.first_cursor, last_cursor);
+        fs::rename(&self.path, &sealed).context(IoSnafu { path: &sealed })?;
+        sync_directory(root)?;
+        self.path = sealed;
+        self.active = false;
+        Ok(())
     }
 
-    fn encode_ack(state: &AckStateV1) -> Result<Vec<u8>> {
-        let mut payload = Vec::with_capacity(8);
-        payload.extend_from_slice(&state.contiguous_cursor.to_be_bytes());
-        Self::encode_frame(WAL_FRAME_ACK, &payload)
-    }
-
-    fn decode_ack(bytes: &[u8]) -> Result<AckStateV1> {
-        let name = "evidence acknowledgement state";
-        let mut payload = Self::decode_frame(bytes, WAL_FRAME_ACK, name)?;
-        let state = AckStateV1 {
-            contiguous_cursor: Self::take_binary_u64(&mut payload, name)?,
-        };
-        Self::finish_binary(payload, name)?;
-        Ok(state)
-    }
-
-    fn encode_stream(identity: EvidenceWalStreamIdentityV1) -> Result<Vec<u8>> {
-        let mut payload = Vec::with_capacity(60);
-        payload.extend_from_slice(&identity.tenant_id);
-        payload.extend_from_slice(&identity.node_boot_id);
-        payload.extend_from_slice(&identity.source_id);
-        payload.extend_from_slice(&identity.source_epoch.to_be_bytes());
-        payload.extend_from_slice(&identity.cpu_id.to_be_bytes());
-        Self::encode_frame(WAL_FRAME_STREAM, &payload)
-    }
-
-    fn decode_stream(bytes: &[u8]) -> Result<EvidenceWalStreamIdentityV1> {
-        let name = "evidence WAL stream identity";
-        let mut payload = Self::decode_frame(bytes, WAL_FRAME_STREAM, name)?;
-        let identity = EvidenceWalStreamIdentityV1 {
-            tenant_id: Self::take_binary_array(&mut payload, name)?,
-            node_boot_id: Self::take_binary_array(&mut payload, name)?,
-            source_id: Self::take_binary_array(&mut payload, name)?,
-            source_epoch: Self::take_binary_u64(&mut payload, name)?,
-            cpu_id: u32::from_be_bytes(Self::take_binary_array(&mut payload, name)?),
-        };
-        Self::finish_binary(payload, name)?;
-        identity.validate()?;
-        Ok(identity)
+    fn append(&mut self, frame: &[u8], cursor: u64) -> Result<()> {
+        let mut file = OpenOptions::new()
+            .append(true)
+            .open(&self.path)
+            .context(IoSnafu { path: &self.path })?;
+        file.write_all(frame)
+            .context(IoSnafu { path: &self.path })?;
+        file.sync_all().context(IoSnafu { path: &self.path })?;
+        self.last_cursor = Some(cursor);
+        self.record_count = self.record_count.saturating_add(1);
+        self.bytes = self.bytes.saturating_add(frame.len() as u64);
+        Ok(())
     }
 }
 
@@ -379,7 +543,9 @@ pub struct EvidenceWal {
     limits: EvidenceWalLimits,
     stream_identity: Option<EvidenceWalStreamIdentityV1>,
     records: Vec<EvidenceRecordV1>,
+    segments: Vec<EvidenceWalSegment>,
     retained_bytes: u64,
+    retained_records: usize,
     acknowledged: AckStateV1,
 }
 
@@ -436,7 +602,12 @@ impl EvidenceWalOwner {
                 }
                 .build()
             })?;
-            if !stream_directory_matches(&path, identity) {
+            if path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or_default()
+                != identity.directory_name()
+            {
                 return EvidenceStateSnafu {
                     reason: format!(
                         "evidence WAL stream `{}` has an invalid identity name",
@@ -478,38 +649,35 @@ impl EvidenceWalOwner {
                 EvidenceWal::open(path, self.limits).map_err(EvidenceWalAppendFailure::from)?;
             self.streams.insert(identity, wal);
         }
-        {
-            let (retained_records, retained_bytes) =
-                self.retention().map_err(EvidenceWalAppendFailure::from)?;
-            let wal = self.streams.get_mut(&identity).ok_or_else(|| {
-                EvidenceWalAppendFailure::from(
-                    EvidenceStateSnafu {
-                        reason: "the evidence WAL stream is missing after identity selection"
-                            .to_owned(),
-                    }
-                    .build(),
-                )
-            })?;
-            if self.limits.capacity_policy == EvidenceWalCapacityPolicyV1::Block {
-                // The configured bounds apply to all source streams together.
-                wal.limits.maximum_retained_records = wal.records.len()
-                    + self
-                        .limits
-                        .maximum_retained_records
-                        .saturating_sub(retained_records);
-                wal.limits.maximum_retained_bytes = wal.retained_bytes
-                    + self
-                        .limits
-                        .maximum_retained_bytes
-                        .saturating_sub(retained_bytes);
-            } else {
-                wal.limits.maximum_retained_records = usize::MAX;
-                wal.limits.maximum_retained_bytes = u64::MAX;
-            }
-            let result = wal.append_classified(observation);
-            wal.limits = self.limits;
-            result
+        let (retained_records, retained_bytes) =
+            self.retention().map_err(EvidenceWalAppendFailure::from)?;
+        let wal = self.streams.get_mut(&identity).ok_or_else(|| {
+            EvidenceWalAppendFailure::from(
+                EvidenceStateSnafu {
+                    reason: "the evidence WAL stream is missing after identity selection"
+                        .to_owned(),
+                }
+                .build(),
+            )
+        })?;
+        if self.limits.capacity_policy == EvidenceWalCapacityPolicyV1::Block {
+            wal.limits.maximum_retained_records = wal.retained_records
+                + self
+                    .limits
+                    .maximum_retained_records
+                    .saturating_sub(retained_records);
+            wal.limits.maximum_retained_bytes = wal.retained_bytes
+                + self
+                    .limits
+                    .maximum_retained_bytes
+                    .saturating_sub(retained_bytes);
+        } else {
+            wal.limits.maximum_retained_records = usize::MAX;
+            wal.limits.maximum_retained_bytes = u64::MAX;
         }
+        let result = wal.append_classified(observation);
+        wal.limits = self.limits;
+        result
     }
 
     pub(super) fn next_batch(&mut self) -> Option<EvidenceBatchV1> {
@@ -560,13 +728,13 @@ impl EvidenceWalOwner {
             .values()
             .try_fold((0_usize, 0_u64), |(records, bytes), wal| {
                 Ok((
-                    records.checked_add(wal.pending_records()).ok_or_else(|| {
+                    records.checked_add(wal.retained_records).ok_or_else(|| {
                         EvidenceStateSnafu {
                             reason: "evidence WAL retained record count overflowed".to_owned(),
                         }
                         .build()
                     })?,
-                    bytes.checked_add(wal.retained_bytes()).ok_or_else(|| {
+                    bytes.checked_add(wal.retained_bytes).ok_or_else(|| {
                         EvidenceStateSnafu {
                             reason: "evidence WAL retained byte count overflowed".to_owned(),
                         }
@@ -574,6 +742,12 @@ impl EvidenceWalOwner {
                     })?,
                 ))
             })
+    }
+
+    pub(super) fn pending_records(&self) -> usize {
+        self.streams.values().fold(0_usize, |total, wal| {
+            total.saturating_add(wal.pending_records())
+        })
     }
 
     fn validate_retention(&self) -> Result<()> {
@@ -591,82 +765,112 @@ impl EvidenceWalOwner {
     }
 }
 
-fn stream_directory_matches(path: &Path, identity: EvidenceWalStreamIdentityV1) -> bool {
-    let name = path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or_default();
-    name == identity.directory_name()
-}
-
 impl EvidenceWal {
     pub fn open(root: impl Into<PathBuf>, limits: EvidenceWalLimits) -> Result<Self> {
         let root = root.into();
         limits.validate()?;
         fs::create_dir_all(&root).context(IoSnafu { path: &root })?;
-        let persisted_stream_identity = read_stream_identity(&root)?;
-        let acknowledged = read_ack(&root)?;
-        let mut paths = recover_directory(&root, acknowledged)?;
-        paths.sort_unstable();
-        if persisted_stream_identity.is_none()
-            && (!paths.is_empty() || acknowledged.contiguous_cursor > 0)
-        {
+        let acknowledged = Self::read_ack(&root)?;
+        let paths = Self::recover_directory(&root)?;
+        let mut decoded = Vec::with_capacity(paths.len());
+        let mut stream_identity = None;
+        for (path, first_cursor, last_cursor) in paths {
+            let (segment, identity, records) =
+                EvidenceWalSegment::read(path, first_cursor, last_cursor, limits)?;
+            if stream_identity.is_some_and(|current| current != identity) {
+                return EvidenceStateSnafu {
+                    reason: "evidence WAL segments cross a stream identity boundary".to_owned(),
+                }
+                .fail();
+            }
+            stream_identity = Some(identity);
+            decoded.push((segment, records));
+        }
+        Self::validate_segment_order(&decoded, acknowledged)?;
+        if acknowledged.contiguous_cursor > 0 && stream_identity.is_none() {
             return EvidenceStateSnafu {
-                reason: "evidence WAL data has no durable stream identity".to_owned(),
+                reason: "acknowledged evidence WAL has no durable stream identity".to_owned(),
             }
             .fail();
         }
 
-        let mut records = Vec::with_capacity(paths.len());
-        let mut expected_cursor =
-            acknowledged
-                .contiguous_cursor
-                .checked_add(1)
-                .ok_or_else(|| {
-                    EvidenceStateSnafu {
-                        reason: "acknowledged evidence cursor is exhausted".to_owned(),
-                    }
-                    .build()
-                })?;
-        let mut retained_bytes = 0_u64;
-        for path in paths {
-            let bytes = fs::read(&path).context(IoSnafu { path: &path })?;
-            if bytes.len() as u64 > limits.maximum_record_bytes {
-                return EvidenceStateSnafu {
-                    reason: format!(
-                        "evidence WAL segment `{}` exceeds the record bound",
-                        path.display()
-                    ),
-                }
-                .fail();
+        let mut records = decoded
+            .iter()
+            .flat_map(|(_segment, records)| records.iter().cloned())
+            .filter(|record| record.cursor > acknowledged.contiguous_cursor)
+            .collect::<Vec<_>>();
+        records.sort_unstable_by_key(|record| record.cursor);
+        let mut segments = decoded
+            .into_iter()
+            .map(|(segment, _)| segment)
+            .collect::<Vec<_>>();
+        if let Some(identity) = stream_identity {
+            let needs_active = segments.last().is_none_or(|segment| {
+                !segment.active
+                    || segment
+                        .last_cursor
+                        .is_some_and(|cursor| cursor <= acknowledged.contiguous_cursor)
+            });
+            if needs_active {
+                let first_cursor = segments
+                    .last()
+                    .and_then(|segment| segment.last_cursor)
+                    .unwrap_or(acknowledged.contiguous_cursor)
+                    .max(acknowledged.contiguous_cursor)
+                    .checked_add(1)
+                    .ok_or_else(|| {
+                        EvidenceStateSnafu {
+                            reason: "evidence WAL cursor is exhausted".to_owned(),
+                        }
+                        .build()
+                    })?;
+                segments.push(EvidenceWalSegment::create_empty(
+                    &root,
+                    identity,
+                    first_cursor,
+                )?);
             }
-            let record = EvidenceWalCodecV1::decode_record(&bytes)?;
-            let identity = persisted_stream_identity.ok_or_else(|| {
-                EvidenceStateSnafu {
-                    reason: "evidence WAL record has no stream identity".to_owned(),
-                }
-                .build()
-            })?;
-            record.validate(expected_cursor, identity)?;
-            let stored_bytes = bytes.len();
-            retained_bytes = retained_bytes
-                .checked_add(stored_bytes as u64)
-                .ok_or_else(|| {
-                    EvidenceStateSnafu {
-                        reason: "evidence WAL retained byte count overflowed".to_owned(),
-                    }
-                    .build()
-                })?;
-            expected_cursor = expected_cursor.checked_add(1).ok_or_else(|| {
-                EvidenceStateSnafu {
-                    reason: "evidence WAL cursor is exhausted".to_owned(),
-                }
-                .build()
-            })?;
-            records.push(record);
         }
+
+        let mut changed = false;
+        for segment in &segments {
+            if segment
+                .last_cursor
+                .is_some_and(|cursor| cursor <= acknowledged.contiguous_cursor)
+            {
+                fs::remove_file(&segment.path).context(IoSnafu {
+                    path: &segment.path,
+                })?;
+                changed = true;
+            }
+        }
+        segments.retain(|segment| {
+            !segment
+                .last_cursor
+                .is_some_and(|cursor| cursor <= acknowledged.contiguous_cursor)
+        });
+        if changed {
+            sync_directory(&root)?;
+        }
+
+        let retained_bytes = segments.iter().try_fold(0_u64, |total, segment| {
+            total.checked_add(segment.bytes).ok_or_else(|| {
+                EvidenceStateSnafu {
+                    reason: "evidence WAL retained byte count overflowed".to_owned(),
+                }
+                .build()
+            })
+        })?;
+        let retained_records = segments.iter().try_fold(0_usize, |total, segment| {
+            total.checked_add(segment.record_count).ok_or_else(|| {
+                EvidenceStateSnafu {
+                    reason: "evidence WAL retained record count overflowed".to_owned(),
+                }
+                .build()
+            })
+        })?;
         if limits.capacity_policy == EvidenceWalCapacityPolicyV1::Block
-            && (records.len() > limits.maximum_retained_records
+            && (retained_records > limits.maximum_retained_records
                 || retained_bytes > limits.maximum_retained_bytes)
         {
             return EvidenceStateSnafu {
@@ -677,11 +881,103 @@ impl EvidenceWal {
         Ok(Self {
             root,
             limits,
-            stream_identity: persisted_stream_identity,
+            stream_identity,
             records,
+            segments,
             retained_bytes,
+            retained_records,
             acknowledged,
         })
+    }
+
+    fn validate_segment_order(
+        decoded: &[(EvidenceWalSegment, Vec<EvidenceRecordV1>)],
+        acknowledged: AckStateV1,
+    ) -> Result<()> {
+        let mut expected_first = None;
+        for (index, (segment, _records)) in decoded.iter().enumerate() {
+            if expected_first.is_some_and(|expected| segment.first_cursor != expected) {
+                return EvidenceStateSnafu {
+                    reason: "evidence WAL segment ranges are not contiguous".to_owned(),
+                }
+                .fail();
+            }
+            if segment.active
+                && index + 1 != decoded.len()
+                && !segment
+                    .last_cursor
+                    .is_some_and(|cursor| cursor <= acknowledged.contiguous_cursor)
+            {
+                return EvidenceStateSnafu {
+                    reason: "only the evidence WAL tail segment can be active".to_owned(),
+                }
+                .fail();
+            }
+            expected_first = match segment.last_cursor {
+                Some(cursor) => Some(cursor.checked_add(1).ok_or_else(|| {
+                    EvidenceStateSnafu {
+                        reason: "evidence WAL cursor is exhausted".to_owned(),
+                    }
+                    .build()
+                })?),
+                None if index + 1 == decoded.len() => Some(segment.first_cursor),
+                None => {
+                    return EvidenceStateSnafu {
+                        reason: "an empty evidence WAL segment is not the tail".to_owned(),
+                    }
+                    .fail()
+                }
+            };
+        }
+        if let Some((first, _)) = decoded.first() {
+            if first.first_cursor > acknowledged.contiguous_cursor.saturating_add(1) {
+                return EvidenceStateSnafu {
+                    reason: "evidence WAL starts after its acknowledged cursor".to_owned(),
+                }
+                .fail();
+            }
+        }
+        Ok(())
+    }
+
+    fn recover_directory(root: &Path) -> Result<Vec<(PathBuf, u64, Option<u64>)>> {
+        let mut paths = Vec::new();
+        let mut changed = false;
+        for entry in fs::read_dir(root)
+            .context(IoSnafu { path: root })?
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .context(IoSnafu { path: root })?
+        {
+            let path = entry.path();
+            if path.file_name().and_then(|name| name.to_str()) == Some(ACK_FILE) {
+                continue;
+            }
+            if path.extension().and_then(|extension| extension.to_str()) == Some("tmp") {
+                fs::remove_file(&path).context(IoSnafu { path: &path })?;
+                changed = true;
+                continue;
+            }
+            let (first, last) = EvidenceWalSegment::parse_name(&path)?;
+            paths.push((path, first, last));
+        }
+        paths.sort_unstable_by_key(|(_path, first, _last)| *first);
+        if changed {
+            sync_directory(root)?;
+        }
+        Ok(paths)
+    }
+
+    fn read_ack(root: &Path) -> Result<AckStateV1> {
+        let path = root.join(ACK_FILE);
+        match fs::read(&path) {
+            Ok(bytes) => EvidenceWalCodecV1::decode_ack(&bytes),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(AckStateV1::default()),
+            Err(source) => Err(crate::Error::Io {
+                path,
+                source,
+                location: snafu::Location::default(),
+            }),
+        }
     }
 
     pub fn append(&mut self, observation: &ObservationEnvelopeV1) -> Result<u64> {
@@ -694,52 +990,41 @@ impl EvidenceWal {
         observation: &ObservationEnvelopeV1,
     ) -> std::result::Result<u64, EvidenceWalAppendFailure> {
         let identity = EvidenceWalStreamIdentityV1::from_observation(observation)?;
-        match self.stream_identity {
-            Some(current) if current != identity => {
-                return Err(EvidenceStateSnafu {
-                    reason: "evidence WAL append crossed a boot, source, or source-epoch boundary"
-                        .to_owned(),
+        if self
+            .stream_identity
+            .is_some_and(|current| current != identity)
+        {
+            return Err(EvidenceStateSnafu {
+                reason: "evidence WAL append crossed a boot, CPU, source, or source-epoch boundary"
+                    .to_owned(),
+            }
+            .build()
+            .into());
+        }
+        let cursor = self.next_cursor()?;
+        let record = EvidenceRecordV1::new(cursor, observation)?;
+        let payload_bytes = record.record.encoded_len() as u64;
+        let frame = EvidenceWalCodecV1::encode_record(&record.record)?;
+        let active_fits = self.segments.last().is_some_and(|segment| {
+            segment.active && segment.bytes + frame.len() as u64 <= SEGMENT_MAX_BYTES
+        });
+        let added_bytes = frame.len() as u64
+            + if active_fits {
+                0
+            } else {
+                SEGMENT_HEADER_BYTES as u64
+            };
+        let retained_bytes = self
+            .retained_bytes
+            .checked_add(added_bytes)
+            .ok_or_else(|| {
+                EvidenceStateSnafu {
+                    reason: "evidence WAL retained byte count overflowed".to_owned(),
                 }
                 .build()
-                .into());
-            }
-            Some(_) => {}
-            None => {
-                atomic_write(
-                    &self.root.join(STREAM_FILE),
-                    &EvidenceWalCodecV1::encode_stream(identity)?,
-                )?;
-                self.stream_identity = Some(identity);
-            }
-        }
-        let tail_cursor = self
-            .records
-            .last()
-            .map_or(self.acknowledged.contiguous_cursor, |record| record.cursor);
-        let cursor = tail_cursor.checked_add(1).ok_or_else(|| {
-            EvidenceStateSnafu {
-                reason: "evidence WAL cursor is exhausted".to_owned(),
-            }
-            .build()
-        })?;
-        let record = EvidenceRecordV1::new(cursor, observation)?;
-        let bytes = EvidenceWalCodecV1::encode_record(&record)?;
-        let bytes_len = u64::try_from(bytes.len()).map_err(|_| {
-            EvidenceStateSnafu {
-                reason: "evidence WAL segment size is not representable".to_owned(),
-            }
-            .build()
-        })?;
-        let retained_bytes = self.retained_bytes.checked_add(bytes_len).ok_or_else(|| {
-            EvidenceStateSnafu {
-                reason: "evidence WAL retained byte count overflowed".to_owned(),
-            }
-            .build()
-        })?;
-        if bytes_len > self.limits.maximum_record_bytes
-            || (self.limits.capacity_policy == EvidenceWalCapacityPolicyV1::Block
-                && (self.records.len() == self.limits.maximum_retained_records
-                    || retained_bytes > self.limits.maximum_retained_bytes))
+            })?;
+        if payload_bytes > self.limits.maximum_record_bytes
+            || frame.len() as u64 + SEGMENT_HEADER_BYTES as u64 > SEGMENT_MAX_BYTES
         {
             return Err(EvidenceWalAppendFailure {
                 error: Box::new(
@@ -748,21 +1033,89 @@ impl EvidenceWal {
                     }
                     .build(),
                 ),
-                capacity: bytes_len <= self.limits.maximum_record_bytes,
+                capacity: false,
             });
         }
-        let path = segment_path(&self.root, cursor);
-        if path.exists() {
-            return Err(EvidenceStateSnafu {
-                reason: format!("evidence WAL segment `{}` already exists", path.display()),
+        if self.limits.capacity_policy == EvidenceWalCapacityPolicyV1::Block
+            && (self.retained_records == self.limits.maximum_retained_records
+                || retained_bytes > self.limits.maximum_retained_bytes)
+        {
+            return Err(EvidenceWalAppendFailure {
+                error: Box::new(
+                    EvidenceStateSnafu {
+                        reason: "evidence WAL retention or record capacity is exhausted".to_owned(),
+                    }
+                    .build(),
+                ),
+                capacity: true,
+            });
+        }
+
+        if !active_fits {
+            if let Some(active) = self.segments.last_mut().filter(|segment| segment.active) {
+                active.seal(&self.root)?;
+            }
+            self.segments.push(EvidenceWalSegment::create_empty(
+                &self.root, identity, cursor,
+            )?);
+            self.retained_bytes = self
+                .retained_bytes
+                .checked_add(SEGMENT_HEADER_BYTES as u64)
+                .ok_or_else(|| {
+                    EvidenceStateSnafu {
+                        reason: "evidence WAL retained byte count overflowed".to_owned(),
+                    }
+                    .build()
+                })?;
+        }
+        let active = self.segments.last_mut().ok_or_else(|| {
+            EvidenceStateSnafu {
+                reason: "evidence WAL has no active segment after selection".to_owned(),
             }
             .build()
-            .into());
-        }
-        atomic_write(&path, &bytes)?;
-        self.retained_bytes = retained_bytes;
+        })?;
+        active.append(&frame, cursor)?;
+        self.stream_identity = Some(identity);
+        self.retained_bytes = self
+            .retained_bytes
+            .checked_add(frame.len() as u64)
+            .ok_or_else(|| {
+                EvidenceStateSnafu {
+                    reason: "evidence WAL retained byte count overflowed".to_owned(),
+                }
+                .build()
+            })?;
+        self.retained_records = self.retained_records.checked_add(1).ok_or_else(|| {
+            EvidenceStateSnafu {
+                reason: "evidence WAL retained record count overflowed".to_owned(),
+            }
+            .build()
+        })?;
         self.records.push(record);
         Ok(cursor)
+    }
+
+    fn next_cursor(&self) -> Result<u64> {
+        if let Some(segment) = self.segments.last() {
+            return match segment.last_cursor {
+                Some(cursor) => cursor.checked_add(1).ok_or_else(|| {
+                    EvidenceStateSnafu {
+                        reason: "evidence WAL cursor is exhausted".to_owned(),
+                    }
+                    .build()
+                }),
+                None => Ok(segment.first_cursor),
+            };
+        }
+        self.acknowledged
+            .contiguous_cursor
+            .checked_add(1)
+            .ok_or_else(|| {
+                EvidenceStateSnafu {
+                    reason: "evidence WAL cursor is exhausted".to_owned(),
+                }
+                .build()
+            })
     }
 
     #[must_use]
@@ -818,50 +1171,62 @@ impl EvidenceWal {
         let state = AckStateV1 {
             contiguous_cursor: batch.last_cursor,
         };
-        let bytes = EvidenceWalCodecV1::encode_ack(&state)?;
-        atomic_write(&self.root.join(ACK_FILE), &bytes)?;
-        let acknowledged_count = batch.records.len();
-        let remaining_bytes =
-            self.records
-                .iter()
-                .skip(acknowledged_count)
-                .try_fold(0_u64, |total, record| {
-                    let bytes = EvidenceWalCodecV1::encode_record(record)?;
-                    total.checked_add(bytes.len() as u64).ok_or_else(|| {
-                        EvidenceStateSnafu {
-                            reason: "evidence WAL retained byte count overflowed".to_owned(),
-                        }
-                        .build()
-                    })
-                })?;
-        for record in self.records.iter().take(acknowledged_count) {
-            let path = segment_path(&self.root, record.cursor);
-            match fs::metadata(&path) {
-                Ok(_metadata) => {}
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-                Err(source) => {
-                    return Err(crate::Error::Io {
-                        path,
-                        source,
-                        location: snafu::Location::default(),
-                    });
-                }
+        atomic_write(
+            &self.root.join(ACK_FILE),
+            &EvidenceWalCodecV1::encode_ack(state),
+        )?;
+        let identity = self.stream_identity.ok_or_else(|| {
+            EvidenceStateSnafu {
+                reason: "evidence WAL acknowledgement has no stream identity".to_owned(),
             }
-            match fs::remove_file(&path) {
-                Ok(()) => {}
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                Err(source) => {
-                    return Err(crate::Error::Io {
-                        path,
-                        source,
-                        location: snafu::Location::default(),
-                    });
+            .build()
+        })?;
+        let needs_active = self.segments.last().is_some_and(|segment| {
+            segment
+                .last_cursor
+                .is_some_and(|cursor| cursor <= state.contiguous_cursor)
+        });
+        if needs_active {
+            let next = state.contiguous_cursor.checked_add(1).ok_or_else(|| {
+                EvidenceStateSnafu {
+                    reason: "evidence WAL cursor is exhausted".to_owned(),
                 }
+                .build()
+            })?;
+            self.segments.push(EvidenceWalSegment::create_empty(
+                &self.root, identity, next,
+            )?);
+        }
+        let mut removed_bytes = 0_u64;
+        let mut removed_records = 0_usize;
+        for segment in &self.segments {
+            if segment
+                .last_cursor
+                .is_some_and(|cursor| cursor <= state.contiguous_cursor)
+            {
+                fs::remove_file(&segment.path).context(IoSnafu {
+                    path: &segment.path,
+                })?;
+                removed_bytes = removed_bytes.saturating_add(segment.bytes);
+                removed_records = removed_records.saturating_add(segment.record_count);
             }
         }
+        self.segments.retain(|segment| {
+            !segment
+                .last_cursor
+                .is_some_and(|cursor| cursor <= state.contiguous_cursor)
+        });
         sync_directory(&self.root)?;
-        self.records.drain(..acknowledged_count);
-        self.retained_bytes = remaining_bytes;
+        self.records.drain(..batch.records.len());
+        self.retained_bytes = self
+            .retained_bytes
+            .saturating_add(if needs_active {
+                SEGMENT_HEADER_BYTES as u64
+            } else {
+                0
+            })
+            .saturating_sub(removed_bytes);
+        self.retained_records = self.retained_records.saturating_sub(removed_records);
         self.acknowledged = state;
         Ok(())
     }
@@ -882,109 +1247,14 @@ impl EvidenceWal {
     }
 }
 
-fn read_stream_identity(root: &Path) -> Result<Option<EvidenceWalStreamIdentityV1>> {
-    read_optional_file(&root.join(STREAM_FILE))?
-        .map(|bytes| EvidenceWalCodecV1::decode_stream(&bytes))
-        .transpose()
-}
-
-fn read_ack(root: &Path) -> Result<AckStateV1> {
-    let path = root.join(ACK_FILE);
-    let state = read_optional_file(&path)?
-        .map(|bytes| EvidenceWalCodecV1::decode_ack(&bytes))
-        .transpose()?
-        .unwrap_or_default();
-    Ok(state)
-}
-
-fn recover_directory(root: &Path, acknowledged: AckStateV1) -> Result<Vec<PathBuf>> {
-    let mut paths = Vec::new();
-    let mut changed = false;
-    for entry in fs::read_dir(root)
-        .context(IoSnafu { path: root })?
-        .collect::<std::result::Result<Vec<_>, _>>()
-        .context(IoSnafu { path: root })?
-    {
-        let path = entry.path();
-        match path.extension().and_then(|extension| extension.to_str()) {
-            Some("wal") => {
-                let cursor = segment_cursor(&path)?;
-                if cursor <= acknowledged.contiguous_cursor {
-                    fs::remove_file(&path).context(IoSnafu { path: &path })?;
-                    changed = true;
-                } else {
-                    paths.push(path);
-                }
-            }
-            Some("tmp") if is_owned_temporary(&path) => {
-                fs::remove_file(&path).context(IoSnafu { path: &path })?;
-                changed = true;
-            }
-            _ => {}
-        }
-    }
-    if changed {
-        sync_directory(root)?;
-    }
-    Ok(paths)
-}
-
-fn read_optional_file(path: &Path) -> Result<Option<Vec<u8>>> {
-    match fs::read(path) {
-        Ok(bytes) => Ok(Some(bytes)),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(source) => Err(crate::Error::Io {
-            path: path.to_path_buf(),
-            source,
-            location: snafu::Location::default(),
-        }),
-    }
-}
-
-fn segment_cursor(path: &Path) -> Result<u64> {
-    let stem = path
-        .file_stem()
-        .and_then(|stem| stem.to_str())
-        .unwrap_or_default();
-    if stem.len() != 20 || !stem.bytes().all(|byte| byte.is_ascii_digit()) {
-        return EvidenceStateSnafu {
-            reason: format!(
-                "evidence WAL segment `{}` has an invalid name",
-                path.display()
-            ),
-        }
-        .fail();
-    }
-    stem.parse::<u64>().map_err(|error| {
-        EvidenceStateSnafu {
-            reason: format!(
-                "evidence WAL segment `{}` has an invalid cursor: {error}",
-                path.display()
-            ),
-        }
-        .build()
-    })
-}
-
-fn is_owned_temporary(path: &Path) -> bool {
-    let stem = path
-        .file_stem()
-        .and_then(|stem| stem.to_str())
-        .unwrap_or_default();
-    stem == "acknowledged"
-        || stem == "stream"
-        || (stem.len() == 20 && stem.bytes().all(|byte| byte.is_ascii_digit()))
-}
-
-fn segment_path(root: &Path, cursor: u64) -> PathBuf {
-    root.join(format!("{cursor:020}.wal"))
-}
-
 #[cfg(test)]
 mod tests {
+    use std::io::Write as _;
+    use std::os::unix::fs::MetadataExt as _;
+
     use super::{
-        segment_path, EvidenceAckV1, EvidenceWal, EvidenceWalCapacityPolicyV1, EvidenceWalLimits,
-        EvidenceWalOwner, STREAM_FILE, WAL_FRAME_MAGIC,
+        EvidenceAckV1, EvidenceWal, EvidenceWalCapacityPolicyV1, EvidenceWalLimits,
+        EvidenceWalOwner, EvidenceWalSegment, OpenOptions, SEGMENT_HEADER_BYTES,
     };
     use crate::{EvidenceIdV1, ObservationCanonicalizer, TemporalCoverageV1};
 
@@ -1034,75 +1304,154 @@ mod tests {
         }
     }
 
+    fn active_segment(
+        root: &std::path::Path,
+    ) -> Result<std::path::PathBuf, Box<dyn std::error::Error>> {
+        let paths = std::fs::read_dir(root)?
+            .map(|entry| entry.map(|entry| entry.path()))
+            .collect::<Result<Vec<_>, _>>()?;
+        paths
+            .into_iter()
+            .find(|path| path.extension().and_then(|extension| extension.to_str()) == Some("open"))
+            .ok_or_else(|| "WAL has no active segment".into())
+    }
+
     #[test]
-    fn wal_replays_and_acknowledges_only_the_current_prefix(
+    fn wal_replays_and_keeps_a_partially_acknowledged_segment_unchanged(
     ) -> Result<(), Box<dyn std::error::Error>> {
         let directory = tempfile::tempdir()?;
         let mut wal = EvidenceWal::open(directory.path(), limits())?;
         wal.append(&observation(1)?)?;
         wal.append(&observation(2)?)?;
         wal.append(&observation(3)?)?;
+        let segment = active_segment(directory.path())?;
+        let before_ack = std::fs::read(&segment)?;
 
-        let first = wal.next_batch().expect("first batch must exist");
+        let first = wal.next_batch().ok_or("first batch does not exist")?;
         assert_eq!((first.first_cursor, first.last_cursor), (1, 2));
         let wire: mithril_control::EvidenceBatch = first.into();
         assert_eq!(wire.first_cursor, 1);
         assert_eq!(wire.records.len(), 2);
-        assert_eq!(wire.node_boot_id, EvidenceIdV1::new(6, 7).to_be_bytes());
-
         wal.acknowledge(EvidenceAckV1)?;
-        assert_eq!(wal.acknowledged_cursor(), 2);
-        assert!(!segment_path(directory.path(), 1).exists());
-        assert!(!segment_path(directory.path(), 2).exists());
-        assert!(segment_path(directory.path(), 3).exists());
+        assert_eq!(std::fs::read(&segment)?, before_ack);
         drop(wal);
 
         let mut reopened = EvidenceWal::open(directory.path(), limits())?;
-        let remaining = reopened.next_batch().expect("remaining batch must exist");
+        let remaining = reopened
+            .next_batch()
+            .ok_or("remaining batch does not exist")?;
         assert_eq!((remaining.first_cursor, remaining.last_cursor), (3, 3));
         reopened.acknowledge(EvidenceAckV1)?;
         assert_eq!(reopened.acknowledged_cursor(), 3);
         assert_eq!(reopened.pending_records(), 0);
-        assert!(reopened.acknowledge(EvidenceAckV1).is_err());
+        assert_eq!(
+            std::fs::metadata(active_segment(directory.path())?)?.len(),
+            SEGMENT_HEADER_BYTES as u64
+        );
         Ok(())
     }
 
     #[test]
-    fn wal_rejects_corrupt_binary_frames() -> Result<(), Box<dyn std::error::Error>> {
+    fn acknowledgement_deletes_only_fully_acknowledged_segments(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let mut wal = EvidenceWal::open(
+            directory.path(),
+            EvidenceWalLimits {
+                maximum_batch_records: 1,
+                ..limits()
+            },
+        )?;
+        wal.append(&observation(1)?)?;
+        wal.segments
+            .last_mut()
+            .ok_or("first segment does not exist")?
+            .seal(directory.path())?;
+        let sealed = EvidenceWalSegment::sealed_path(directory.path(), 1, 1);
+        wal.append(&observation(2)?)?;
+        let active = active_segment(directory.path())?;
+        let active_before_ack = std::fs::read(&active)?;
+
+        wal.acknowledge(EvidenceAckV1)?;
+
+        assert!(!sealed.exists());
+        assert_eq!(std::fs::read(active)?, active_before_ack);
+        assert_eq!(wal.pending_records(), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn wal_rejects_a_complete_record_with_a_bad_crc32c() -> Result<(), Box<dyn std::error::Error>> {
         let directory = tempfile::tempdir()?;
         let mut wal = EvidenceWal::open(directory.path(), limits())?;
         wal.append(&observation(1)?)?;
         drop(wal);
-
-        let path = segment_path(directory.path(), 1);
+        let path = active_segment(directory.path())?;
         let mut bytes = std::fs::read(&path)?;
-        assert_eq!(bytes[..WAL_FRAME_MAGIC.len()], WAL_FRAME_MAGIC);
-        let last = bytes.last_mut().expect("WAL frame must contain a payload");
-        *last ^= 1;
+        *bytes.last_mut().ok_or("record has no checksum")? ^= 1;
         std::fs::write(path, bytes)?;
         assert!(EvidenceWal::open(directory.path(), limits()).is_err());
         Ok(())
     }
 
     #[test]
-    fn wal_requires_one_durable_identity_and_rejects_stream_crossing(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn wal_truncates_only_an_incomplete_active_tail() -> Result<(), Box<dyn std::error::Error>> {
         let directory = tempfile::tempdir()?;
         let mut wal = EvidenceWal::open(directory.path(), limits())?;
         wal.append(&observation(1)?)?;
-        assert!(wal
-            .append(&observation_for_stream(2, 1, 6, EvidenceIdV1::new(6, 7))?)
-            .is_err());
         drop(wal);
+        let path = active_segment(directory.path())?;
+        let complete = std::fs::read(&path)?;
+        OpenOptions::new()
+            .append(true)
+            .open(&path)?
+            .write_all(&[0, 0, 0])?;
 
-        std::fs::remove_file(directory.path().join(STREAM_FILE))?;
+        let reopened = EvidenceWal::open(directory.path(), limits())?;
+        assert_eq!(reopened.pending_records(), 1);
+        assert_eq!(std::fs::read(path)?, complete);
+        Ok(())
+    }
+
+    #[test]
+    fn wal_rejects_an_incomplete_sealed_segment() -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let mut wal = EvidenceWal::open(directory.path(), limits())?;
+        wal.append(&observation(1)?)?;
+        drop(wal);
+        let active = active_segment(directory.path())?;
+        let sealed = EvidenceWalSegment::sealed_path(directory.path(), 1, 1);
+        std::fs::rename(&active, &sealed)?;
+        OpenOptions::new()
+            .append(true)
+            .open(&sealed)?
+            .write_all(&[0, 0, 0])?;
         assert!(EvidenceWal::open(directory.path(), limits()).is_err());
         Ok(())
     }
 
     #[test]
-    fn binary_wal_is_more_than_100x_smaller_than_the_legacy_records(
+    fn wal_rejects_stream_crossing_and_corrupt_segment_identity(
     ) -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let mut wal = EvidenceWal::open(directory.path(), limits())?;
+        wal.append(&observation(1)?)?;
+        assert!(wal
+            .append(&observation_for_stream(2, 2, 5, EvidenceIdV1::new(6, 7))?)
+            .is_err());
+        drop(wal);
+
+        let path = active_segment(directory.path())?;
+        let mut bytes = std::fs::read(&path)?;
+        bytes[0] ^= 1;
+        std::fs::write(path, bytes)?;
+        assert!(EvidenceWal::open(directory.path(), limits()).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn segmented_wal_uses_one_allocation_for_many_records() -> Result<(), Box<dyn std::error::Error>>
+    {
         const RECORDS: u64 = 32;
         const LEGACY_BYTES_PER_RECORD: u64 = 16_776;
 
@@ -1116,17 +1465,10 @@ mod tests {
         for sequence in 1..=RECORDS {
             wal.append(&observation(sequence)?)?;
         }
-        let stored_bytes = std::fs::read_dir(directory.path())?.try_fold(
-            0_u64,
-            |total, entry| -> Result<u64, std::io::Error> {
-                Ok(total.saturating_add(entry?.metadata()?.len()))
-            },
-        )?;
-        eprintln!(
-            "stored {RECORDS} node WAL records in {stored_bytes} bytes ({:.1} bytes per record)",
-            stored_bytes as f64 / RECORDS as f64
-        );
-        assert!(stored_bytes * 100 <= LEGACY_BYTES_PER_RECORD * RECORDS);
+        let files = std::fs::read_dir(directory.path())?.collect::<Result<Vec<_>, _>>()?;
+        assert_eq!(files.len(), 1);
+        let allocated_bytes = files[0].metadata()?.blocks() * 512;
+        assert!(allocated_bytes * 100 <= LEGACY_BYTES_PER_RECORD * RECORDS);
         Ok(())
     }
 
@@ -1141,21 +1483,19 @@ mod tests {
             ..limits()
         };
         let mut owner = EvidenceWalOwner::open(directory.path(), retain_limits)?;
-        owner
-            .append_classified(&observation(1)?)
-            .map_err(|failure| failure.error)?;
-        owner
-            .append_classified(&observation(2)?)
-            .map_err(|failure| failure.error)?;
-        owner
-            .append_classified(&observation(3)?)
-            .map_err(|failure| failure.error)?;
+        for sequence in 1..=3 {
+            owner
+                .append_classified(&observation(sequence)?)
+                .map_err(|failure| failure.error)?;
+        }
         assert_eq!(owner.retention()?.0, 3);
         drop(owner);
 
         let mut reopened = EvidenceWalOwner::open(directory.path(), retain_limits)?;
         for cursor in 1..=3 {
-            let batch = reopened.next_batch().expect("retained record must upload");
+            let batch = reopened
+                .next_batch()
+                .ok_or("retained record did not upload")?;
             assert_eq!((batch.first_cursor, batch.last_cursor), (cursor, cursor));
             reopened.acknowledge(EvidenceAckV1)?;
         }
@@ -1164,7 +1504,25 @@ mod tests {
     }
 
     #[test]
-    fn restart_preserves_prior_records_when_new_evidence_arrives(
+    fn block_refuses_a_record_beyond_the_configured_limit() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let directory = tempfile::tempdir()?;
+        let mut wal = EvidenceWal::open(
+            directory.path(),
+            EvidenceWalLimits {
+                maximum_retained_records: 1,
+                maximum_batch_records: 1,
+                ..limits()
+            },
+        )?;
+        wal.append(&observation(1)?)?;
+        assert!(wal.append(&observation(2)?).is_err());
+        assert_eq!(wal.pending_records(), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn restart_preserves_segment_bytes_before_appending_new_evidence(
     ) -> Result<(), Box<dyn std::error::Error>> {
         let directory = tempfile::tempdir()?;
         let retain_limits = EvidenceWalLimits {
@@ -1177,32 +1535,37 @@ mod tests {
         for sequence in 1..=4 {
             wal.append(&observation(sequence)?)?;
         }
-        let before_restart = (1..=4)
-            .map(|cursor| std::fs::read(segment_path(directory.path(), cursor)))
-            .collect::<Result<Vec<_>, _>>()?;
+        let path = active_segment(directory.path())?;
+        let before_restart = std::fs::read(&path)?;
         drop(wal);
 
         let mut restarted = EvidenceWal::open(directory.path(), retain_limits)?;
+        assert_eq!(std::fs::read(&path)?, before_restart);
         restarted.append(&observation(5)?)?;
-        let after_restart = (1..=5)
-            .map(|cursor| std::fs::read(segment_path(directory.path(), cursor)))
-            .collect::<Result<Vec<_>, _>>()?;
-
-        assert_eq!(after_restart.len(), before_restart.len() + 1);
+        let after_restart = std::fs::read(path)?;
         assert_eq!(&after_restart[..before_restart.len()], before_restart);
         assert_eq!(restarted.pending_records(), 5);
         Ok(())
     }
 
     #[test]
-    fn wal_removes_owned_torn_writes_on_recovery() -> Result<(), Box<dyn std::error::Error>> {
+    fn stream_directories_include_cpu_identity() -> Result<(), Box<dyn std::error::Error>> {
         let directory = tempfile::tempdir()?;
-        let temporary = directory.path().join("00000000000000000001.tmp");
-        std::fs::write(&temporary, b"torn")?;
-
-        let mut wal = EvidenceWal::open(directory.path(), limits())?;
-        assert!(!temporary.exists());
-        assert_eq!(wal.append(&observation(1)?)?, 1);
+        let mut owner = EvidenceWalOwner::open(directory.path(), limits())?;
+        owner
+            .append_classified(&observation_for_stream(1, 1, 5, EvidenceIdV1::new(6, 7))?)
+            .map_err(|failure| failure.error)?;
+        owner
+            .append_classified(&observation_for_stream(1, 2, 5, EvidenceIdV1::new(6, 7))?)
+            .map_err(|failure| failure.error)?;
+        assert_eq!(std::fs::read_dir(directory.path())?.count(), 2);
+        drop(owner);
+        assert_eq!(
+            EvidenceWalOwner::open(directory.path(), limits())?
+                .streams
+                .len(),
+            2
+        );
         Ok(())
     }
 }

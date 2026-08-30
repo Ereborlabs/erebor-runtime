@@ -1345,7 +1345,7 @@ async fn kubernetes_outage_retained_evidence_allows_protected_pod_admission(
 }
 
 #[tokio::test]
-async fn mtls_evidence_stream_retains_every_record_beyond_the_soft_bound(
+async fn mtls_evidence_stream_retains_every_record_across_node_restart_beyond_the_soft_bound(
 ) -> Result<(), Box<dyn StdError>> {
     let directory = tempfile::tempdir()?;
     let certificates = Certificates::issue(false)?;
@@ -1370,15 +1370,17 @@ async fn mtls_evidence_stream_retains_every_record_beyond_the_soft_bound(
     )?;
     let (shutdown, server) = start_server(address, &files, control.clone());
     tokio::time::sleep(Duration::from_millis(20)).await;
+    let wal_root = directory.path().join("node-wal");
+    let wal_limits = EvidenceWalLimits {
+        maximum_retained_records: 3,
+        maximum_batch_records: 4_096,
+        capacity_policy: EvidenceWalCapacityPolicyV1::Retain,
+        ..EvidenceWalLimits::default()
+    };
     let observations = EffectObservationStore::durable(
         4,
-        directory.path().join("node-wal"),
-        EvidenceWalLimits {
-            maximum_retained_records: 3,
-            maximum_batch_records: 1,
-            capacity_policy: EvidenceWalCapacityPolicyV1::Retain,
-            ..EvidenceWalLimits::default()
-        },
+        wal_root.clone(),
+        wal_limits,
         ObservationCanonicalizer::new(
             EvidenceIdV1::new(1, 2),
             EvidenceIdV1::new(3, 4),
@@ -1386,7 +1388,7 @@ async fn mtls_evidence_stream_retains_every_record_beyond_the_soft_bound(
             EvidenceIdV1::from([7; 16]),
         )?,
     )?;
-    for source_sequence in 1..=4 {
+    for source_sequence in 1..=2 {
         observations.record_bytes(
             erebor_interceptor_abi::EffectObservationV1 {
                 observed_boottime_ns: source_sequence,
@@ -1402,23 +1404,62 @@ async fn mtls_evidence_stream_retains_every_record_beyond_the_soft_bound(
             .as_bytes(),
         );
     }
+    let before_restart = observations
+        .next_evidence_batch()
+        .ok_or("the Node retained no evidence before restart")?;
+    assert_eq!(before_restart.records.len(), 2);
+    assert_eq!(observations.pending_evidence_records(), 2);
+    drop(observations);
+
+    let observations = EffectObservationStore::durable(
+        4,
+        wal_root,
+        wal_limits,
+        ObservationCanonicalizer::new(
+            EvidenceIdV1::new(1, 2),
+            EvidenceIdV1::new(3, 4),
+            1,
+            EvidenceIdV1::from([7; 16]),
+        )?,
+    )?;
+    assert_eq!(observations.next_evidence_batch(), Some(before_restart));
+    assert_eq!(observations.pending_evidence_records(), 2);
+    for source_sequence in 3..=303 {
+        observations.record_bytes(
+            erebor_interceptor_abi::EffectObservationV1 {
+                observed_boottime_ns: source_sequence,
+                source_sequence,
+                source_cpu_id: 0,
+                task_cookie: source_sequence,
+                reason: 9,
+                physical_result: 1,
+                effect_family: 1,
+                operation: 1,
+                ..erebor_interceptor_abi::EffectObservationV1::default()
+            }
+            .as_bytes(),
+        );
+    }
+    assert_eq!(observations.pending_evidence_records(), 303);
     let connector =
         NodeControlConnector::new(files.node_config(address), "node-a".to_owned(), [7; 16]);
     let mut trust = TrustCache::load(directory.path())?;
     let mut connection = connector.connect(registration(), false, &mut trust).await?;
-    let mut upload_count = 0;
+    let mut upload_records = Vec::new();
     let mut delivered_source = None;
     while let Some(batch) = observations.next_evidence_batch() {
         delivered_source = delivered_source.or(Some(batch_source_id(&batch)?));
+        upload_records.push(batch.records.len());
         connection.send_evidence_batch(batch).await?;
         let NodeControlMessage::EvidenceAck(acknowledgement) = connection.next_message().await?
         else {
             return Err("Control did not acknowledge the evidence stream item".into());
         };
         observations.acknowledge_evidence(acknowledgement)?;
-        upload_count += 1;
     }
-    assert_eq!(upload_count, 4);
+    assert_eq!(upload_records.iter().sum::<usize>(), 303);
+    assert_eq!(upload_records, vec![2, 301]);
+    assert_eq!(observations.pending_evidence_records(), 0);
     assert_eq!(control.registered_nonce_count(), 1);
 
     let identity = EvidenceIntakeIdentityV1 {
@@ -1429,10 +1470,10 @@ async fn mtls_evidence_stream_retains_every_record_beyond_the_soft_bound(
         source_id: delivered_source.ok_or("the evidence stream had no source identity")?,
         source_epoch: 1,
     };
-    assert_eq!(intake.contiguous_cursor(&identity)?, 4);
+    assert_eq!(intake.contiguous_cursor(&identity)?, 303);
     assert_eq!(
         intake.store().accepted_evidence_records(&identity)?.len(),
-        4
+        303
     );
     drop(connection);
     let _result = shutdown.send(());

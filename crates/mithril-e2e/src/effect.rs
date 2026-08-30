@@ -1600,7 +1600,7 @@ impl EffectTestRunner {
             .context(NodeSnafu)?;
         let observations = EffectObservationStore::durable(
             1_024,
-            output_directory.join("evidence-wal-v1"),
+            output_directory.join("evidence-wal-v2"),
             EvidenceWalLimits {
                 maximum_retained_records: 1_024,
                 ..EvidenceWalLimits::default()
@@ -4258,7 +4258,7 @@ impl EffectTestRunner {
         let evidence_errors = observations.evidence_errors();
         let evidence_batch = observations.next_evidence_batch().ok_or_else(|| {
             InvalidInputSnafu {
-                path: Path::new("evidence-wal-v1"),
+                path: Path::new("evidence-wal-v2"),
                 reason: "the durable effect fixture produced no replay batch",
             }
             .build()

@@ -2367,11 +2367,7 @@ impl ControlStore {
         batch_count: u64,
         records_per_batch: usize,
     ) -> Result<u64> {
-        if self.commit_index() != 0
-            || batch_count == 0
-            || records_per_batch == 0
-            || records_per_batch > crate::MAX_EVIDENCE_BATCH_RECORDS
-        {
+        if self.commit_index() != 0 || batch_count == 0 || records_per_batch == 0 {
             return ControlStoreSnafu {
                 path: self.root(),
                 reason:

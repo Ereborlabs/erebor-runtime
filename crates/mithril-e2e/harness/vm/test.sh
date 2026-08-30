@@ -40,10 +40,24 @@ grep -Fq 'control_state_claim=mithril-control-state-$run_id' \
   "$directory/two-node-convergence.sh"
 grep -Fq 'capacity_policy: "RETAIN"' "$directory/two-node-convergence.sh"
 grep -Fq 'maximum_retained_records: 2' "$directory/two-node-convergence.sh"
+grep -Fq 'maximum_batch_records: 4096' "$directory/two-node-convergence.sh"
 grep -Fq 'node_retain_exceeded_soft_bound_without_loss: true' \
   "$directory/two-node-outage-recovery.sh"
-grep -Fq "-exec sha256sum '{}' +" \
+grep -Fq 'pending_evidence_records=' \
   "$directory/two-node-outage-recovery.sh"
+grep -Fq 'verify_node_wal_prefixes' \
+  "$directory/two-node-outage-recovery.sh"
+grep -Fq -- "-type f ! -name segment.tmp -exec sha256sum '{}' +" \
+  "$directory/two-node-outage-recovery.sh"
+control_segments=$test_root/control-segments
+mkdir -p -- "$control_segments"
+printf durable >"$control_segments/0000000000000001.r.0000000000000001.0000000000000001.0000000000000001"
+printf transient >"$control_segments/segment.tmp"
+control_manifest=$(find "$control_segments" -type f ! -name segment.tmp -exec \
+  sh -c 'rm -f -- "$1/segment.tmp"; root=$1; shift; sha256sum "$@" | sed "s|$root/||"' \
+  sh "$control_segments" '{}' +)
+[[ $control_manifest == *0000000000000001.r.0000000000000001.0000000000000001.0000000000000001 ]]
+[[ $control_manifest != *segment.tmp* ]]
 if grep -Fq 'delete namespace "$system_namespace"' \
     "$directory/two-node-convergence.sh"; then
   echo "the retained convergence lane deletes durable Control evidence" >&2

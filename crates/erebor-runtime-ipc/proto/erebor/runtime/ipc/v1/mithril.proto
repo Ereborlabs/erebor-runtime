@@ -35,6 +35,7 @@ message MithrilObservationSnapshot {
   uint64 evidence_errors = 16;
   uint64 wal_capacity_blocked = 17;
   uint64 reader_queue_dropped_events = 20;
+  uint64 pending_evidence_records = 21;
 }
 
 message MithrilCoverageInterval {

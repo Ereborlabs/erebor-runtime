@@ -621,7 +621,7 @@ const fn default_evidence_retained_records() -> usize {
 }
 
 const fn default_evidence_batch_records() -> usize {
-    mithril_control::MAX_EVIDENCE_BATCH_RECORDS
+    mithril_control::DEFAULT_EVIDENCE_BATCH_RECORDS
 }
 
 const fn default_evidence_control_delay_ms() -> u64 {
@@ -897,9 +897,9 @@ mod tests {
 
         let mut batch_config = config();
         if let Some(evidence) = &mut batch_config.evidence {
-            evidence.maximum_batch_records = mithril_control::MAX_EVIDENCE_BATCH_RECORDS + 1;
+            evidence.maximum_batch_records = 4_096;
         }
-        assert!(batch_config.validate().is_err());
+        assert!(batch_config.validate().is_ok());
     }
 
     #[test]

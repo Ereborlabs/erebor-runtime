@@ -381,6 +381,14 @@ impl EffectObservationStore {
             .load(Ordering::Relaxed)
     }
 
+    #[must_use]
+    pub fn pending_evidence_records(&self) -> u64 {
+        self.inner.durable.as_ref().map_or(0, |durable| {
+            let durable = durable.lock().unwrap_or_else(PoisonError::into_inner);
+            u64::try_from(durable.wal.pending_records()).unwrap_or(u64::MAX)
+        })
+    }
+
     pub fn recover_coverage_after_prior_probe(&self, per_cpu_bytes: &[u8]) -> crate::Result<bool> {
         let samples =
             decode_cpu_health(per_cpu_bytes).ok_or_else(|| crate::Error::EvidenceState {

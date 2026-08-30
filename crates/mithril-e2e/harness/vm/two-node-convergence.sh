@@ -699,7 +699,7 @@ make_node_config() {
         maximum_record_bytes: 131072,
         maximum_retained_bytes: 268435456,
         maximum_retained_records: 2,
-        maximum_batch_records: 1,
+        maximum_batch_records: 4096,
         maximum_control_delay_ms: 30000,
         maximum_reader_queue_records: 65535,
         capacity_policy: "RETAIN"
