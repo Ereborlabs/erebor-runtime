@@ -1,8 +1,7 @@
-.git
-target
-worktrees
-crates/mithril-e2e/fixtures
-crates/mithril-e2e/harness
-docs
-examples
-packaging/mithril/helm
+**
+!Cargo.lock
+!Cargo.toml
+!bpf
+!bpf/**
+!crates
+!crates/**
