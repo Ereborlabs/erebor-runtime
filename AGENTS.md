@@ -76,6 +76,23 @@ must remain a stable method for finding and reading them.
   commit message, handoff, status output, code comment, log, or other outward
   work unless the user explicitly asks.
 
+## Mithril Qualification Layers
+
+- Put lightweight end-to-end qualification in `crates/mithril-e2e/src` and
+  its command entry points in `crates/mithril-e2e/src/bin`. It must run the
+  production owners without a Kubernetes cluster.
+- Put automated physical Kubernetes qualification in
+  `crates/mithril-e2e/harness` and its inputs in
+  `crates/mithril-e2e/fixtures`. A harness can use Bash or Python.
+- Run the lightweight case before the paired physical case. Require the same
+  state transitions, result fields, and decisions in both layers. Environment
+  identities and timestamps can differ.
+- If a physical Kubernetes case finds a condition that its lightweight case
+  misses, add that exact condition to the lightweight case before you change
+  the implementation or rerun the physical case.
+- Keep manual operator examples separate. Automated harnesses must not read or
+  execute files from `examples/`.
+
 ## Documents And Comments
 
 - Treat every plan and document as user-owned source material. Preserve its
