@@ -1423,7 +1423,12 @@ impl NodePolicyDeliveryOwner {
             base_bundle.profile_artifact.header.sequence_epoch,
         )?;
         candidate
-            .verify(&trusted_key, &config.node_id, now_utc_ns)
+            .verify_with_clock_skew(
+                &trusted_key,
+                &config.node_id,
+                now_utc_ns,
+                config.control.maximum_clock_skew_ns,
+            )
             .context(PolicySnafu)?;
         let identity = candidate.exact_target.kubernetes.as_ref().ok_or_else(|| {
             ControlProtocolSnafu {
@@ -4301,6 +4306,38 @@ mod tests {
             .is_err());
         config.control.maximum_clock_skew_ns = 1;
         owner.prepare_activation(&bundle, &trust, &config, &capabilities(), 2, 9)?;
+        Ok(())
+    }
+
+    #[test]
+    fn kubernetes_exception_candidate_uses_control_clock_skew() -> crate::Result<()> {
+        let directory = tempfile::tempdir().context(IoSnafu {
+            path: "temporary clock-skew exception delivery directory",
+        })?;
+        let mut fixture = pending_exception_fixture(directory.path())?;
+        let node_time = fixture.activation.issued_utc_ns - 1;
+
+        fixture.config.control.maximum_clock_skew_ns = 0;
+        assert!(fixture
+            .owner
+            .prepare_exception_delivery(
+                fixture.activation.clone(),
+                &fixture.trust,
+                &fixture.config,
+                &[1; 16],
+                7,
+                node_time,
+            )
+            .is_err());
+        fixture.config.control.maximum_clock_skew_ns = 1;
+        fixture.owner.prepare_exception_delivery(
+            fixture.activation.clone(),
+            &fixture.trust,
+            &fixture.config,
+            &[1; 16],
+            7,
+            node_time,
+        )?;
         Ok(())
     }
 

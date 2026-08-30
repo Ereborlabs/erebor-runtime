@@ -418,6 +418,16 @@ impl ExceptionDeliveryCandidateV1 {
     }
 
     pub fn verify(&self, key: &VerifyingKey, node_id: &str, now_utc_ns: i64) -> Result<()> {
+        self.verify_with_clock_skew(key, node_id, now_utc_ns, 0)
+    }
+
+    pub fn verify_with_clock_skew(
+        &self,
+        key: &VerifyingKey,
+        node_id: &str,
+        now_utc_ns: i64,
+        maximum_clock_skew_ns: i64,
+    ) -> Result<()> {
         self.validate_content()?;
         let unsigned = self.unsigned_bytes()?;
         let signature = Signature::from_slice(&self.signature).map_err(|error| {
@@ -427,9 +437,10 @@ impl ExceptionDeliveryCandidateV1 {
             }
             .build()
         })?;
-        let valid = self.exact_target.node_id == node_id
-            && self.issued_utc_ns <= now_utc_ns
-            && now_utc_ns < self.expires_utc_ns
+        let valid = (0..=300_000_000_000).contains(&maximum_clock_skew_ns)
+            && self.exact_target.node_id == node_id
+            && now_utc_ns.saturating_add(maximum_clock_skew_ns) >= self.issued_utc_ns
+            && now_utc_ns.saturating_sub(maximum_clock_skew_ns) < self.expires_utc_ns
             && key
                 .verify(&self.signature_input(&unsigned), &signature)
                 .is_ok();
