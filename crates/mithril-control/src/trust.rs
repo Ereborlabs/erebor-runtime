@@ -205,6 +205,44 @@ impl TrustBundleOwner {
         Ok(())
     }
 
+    pub(crate) fn require_evidence_session_acknowledged(
+        &self,
+        node_id: &str,
+        node_boot_id: [u8; 16],
+        label_epoch: u64,
+    ) -> Result<()> {
+        let current = self.current()?;
+        let matches = if let Some(store) = &self.store {
+            store
+                .evidence_trust_acknowledgement(
+                    node_id,
+                    node_boot_id,
+                    label_epoch,
+                    current.generation,
+                )?
+                .is_some_and(|acknowledgement| {
+                    acknowledgement.bundle_digest == current.bundle_digest
+                })
+        } else {
+            self.lock()?
+                .acknowledgements
+                .get(node_id)
+                .is_some_and(|acknowledged| acknowledged == &current)
+        };
+        if !matches {
+            return ControlStoreSnafu {
+                path: self.store.as_ref().map_or_else(
+                    || std::path::PathBuf::from("<static-trust-owner>"),
+                    ControlStore::root,
+                ),
+                reason: "the current node boot and label epoch have not acknowledged trust"
+                    .to_owned(),
+            }
+            .fail();
+        }
+        Ok(())
+    }
+
     fn lock(&self) -> Result<MutexGuard<'_, TrustBundleState>> {
         self.state.lock().map_err(|_| {
             ControlStoreSnafu {

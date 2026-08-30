@@ -24,11 +24,10 @@ pub use coverage::{
     EffectObservationCpuHealth,
 };
 pub use model::{
-    CoverageGapReasonV1, CoverageStateV1, EvidenceDigestV1, EvidenceFieldKeyV1, EvidenceFieldV1,
-    EvidenceIdV1, EvidencePayloadV1, EvidenceValueV1, IntegrityV1, LocalSubjectBindingV1,
-    ObservationCanonicalizer, ObservationEnvelopeV1, OperationResultAuthorityV1, ProofQualityV1,
-    RemoteSubjectBindingV1, SensitivityV1, SourceAuthorityV1, TemporalCoverageV1,
-    MAX_EVIDENCE_FIELDS_V1, MAX_PROVENANCE_OBSERVATIONS_V1,
+    CoverageGapReasonV1, CoverageStateV1, EvidenceDigestV1, EvidenceFieldKeyV1, EvidenceIdV1,
+    IntegrityV1, LocalSubjectBindingV1, ObservationCanonicalizer, ObservationEnvelopeV1,
+    OperationResultAuthorityV1, ProofQualityV1, RemoteSubjectBindingV1, SensitivityV1,
+    SourceAuthorityV1, TemporalCoverageV1,
 };
 use wal::EvidenceWalOwner;
 pub use wal::{
@@ -357,7 +356,6 @@ impl EffectObservationStore {
                 "prepared a durable evidence gap",
                 first_cursor = %gap.first_cursor,
                 last_cursor = %gap.last_cursor,
-                discarded_records = %gap.discarded_records,
                 discarded_bytes = %gap.discarded_bytes
             ),
             None => {}
@@ -367,27 +365,19 @@ impl EffectObservationStore {
 
     pub fn acknowledge_evidence(&self, ack: EvidenceAckV1) -> crate::Result<()> {
         self.lock_durable()?.wal.acknowledge(ack)?;
-        erebor_telemetry::debug!(
-            "acknowledged an evidence batch",
-            first_cursor = %ack.first_cursor,
-            last_cursor = %ack.last_cursor
-        );
+        erebor_telemetry::debug!("acknowledged an evidence batch");
         Ok(())
     }
 
     pub fn acknowledge_evidence_upload(&self, ack: EvidenceUploadAckV1) -> crate::Result<()> {
         self.lock_durable()?.wal.acknowledge_upload(ack)?;
         match ack {
-            EvidenceUploadAckV1::Batch(ack) => erebor_telemetry::debug!(
-                "acknowledged an evidence batch",
-                first_cursor = %ack.first_cursor,
-                last_cursor = %ack.last_cursor
-            ),
-            EvidenceUploadAckV1::Gap(ack) => erebor_telemetry::warn!(
-                "acknowledged a durable evidence gap",
-                first_cursor = %ack.first_cursor,
-                last_cursor = %ack.last_cursor
-            ),
+            EvidenceUploadAckV1::Batch(_) => {
+                erebor_telemetry::debug!("acknowledged an evidence batch");
+            }
+            EvidenceUploadAckV1::Gap(_) => {
+                erebor_telemetry::warn!("acknowledged a durable evidence gap");
+            }
         }
         Ok(())
     }
@@ -1018,10 +1008,14 @@ mod tests {
         for source_sequence in [1, 2] {
             ingress.record_bytes(
                 EffectObservationV1 {
+                    observed_boottime_ns: source_sequence,
                     source_sequence,
+                    task_cookie: 1,
                     reason: EffectObservationReasonV1::ExactPolicyDeny as u8,
                     physical_result: EffectPhysicalResultV1::DeniedBeforeEffect as u8,
                     kernel_result: -13,
+                    effect_family: 1,
+                    operation: 1,
                     ..EffectObservationV1::default()
                 }
                 .as_bytes(),
@@ -1136,10 +1130,14 @@ mod tests {
         for source_sequence in [1, 2] {
             store.record_bytes(
                 EffectObservationV1 {
+                    observed_boottime_ns: source_sequence,
                     source_sequence,
+                    task_cookie: 1,
                     reason: EffectObservationReasonV1::ExactPolicyDeny as u8,
                     physical_result: EffectPhysicalResultV1::DeniedBeforeEffect as u8,
                     kernel_result: -13,
+                    effect_family: 1,
+                    operation: 1,
                     ..EffectObservationV1::default()
                 }
                 .as_bytes(),
@@ -1163,17 +1161,18 @@ mod tests {
         let batch = store
             .next_evidence_batch()
             .ok_or("evidence batch missing")?;
-        store.acknowledge_evidence(EvidenceAckV1 {
-            first_cursor: batch.first_cursor,
-            last_cursor: batch.last_cursor,
-            batch_sha256: batch.batch_sha256,
-        })?;
+        assert_eq!((batch.first_cursor, batch.last_cursor), (1, 1));
+        store.acknowledge_evidence(EvidenceAckV1)?;
         store.record_bytes(
             EffectObservationV1 {
+                observed_boottime_ns: 3,
                 source_sequence: 3,
+                task_cookie: 1,
                 reason: EffectObservationReasonV1::ExactPolicyDeny as u8,
                 physical_result: EffectPhysicalResultV1::DeniedBeforeEffect as u8,
                 kernel_result: -13,
+                effect_family: 1,
+                operation: 1,
                 ..EffectObservationV1::default()
             }
             .as_bytes(),
@@ -1219,10 +1218,14 @@ mod tests {
         for source_sequence in 1..=4 {
             store.record_bytes(
                 EffectObservationV1 {
+                    observed_boottime_ns: source_sequence,
                     source_sequence,
+                    task_cookie: 1,
                     reason: EffectObservationReasonV1::ExactPolicyDeny as u8,
                     physical_result: EffectPhysicalResultV1::DeniedBeforeEffect as u8,
                     kernel_result: -13,
+                    effect_family: 1,
+                    operation: 1,
                     ..EffectObservationV1::default()
                 }
                 .as_bytes(),
@@ -1266,7 +1269,11 @@ mod tests {
         for source_sequence in 1..=4 {
             store.record_bytes(
                 EffectObservationV1 {
+                    observed_boottime_ns: source_sequence,
                     source_sequence,
+                    task_cookie: 1,
+                    effect_family: 1,
+                    operation: 1,
                     ..EffectObservationV1::default()
                 }
                 .as_bytes(),
@@ -1299,7 +1306,11 @@ mod tests {
             .ok_or("evidence batch missing before replay")?;
         restarted.record_bytes(
             EffectObservationV1 {
+                observed_boottime_ns: 4,
                 source_sequence: 4,
+                task_cookie: 1,
+                effect_family: 1,
+                operation: 1,
                 ..EffectObservationV1::default()
             }
             .as_bytes(),
@@ -1310,7 +1321,7 @@ mod tests {
 
         assert_eq!(after_replay.records.len(), 4);
         assert_eq!(after_replay.last_cursor, before_replay.last_cursor);
-        assert_eq!(after_replay.batch_sha256, before_replay.batch_sha256);
+        assert_eq!(after_replay.records, before_replay.records);
         assert_eq!(restarted.evidence_errors(), 0);
         assert!(restarted
             .coverage_snapshot()

@@ -1,34 +1,42 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File, OpenOptions};
 use std::io::Write as _;
+use std::ops::{Deref, DerefMut};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, MutexGuard};
+#[cfg(feature = "test-fixtures")]
+use std::sync::Barrier;
+use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 
 use erebor_telemetry::{debug, info};
+use rustix::fs::{flock, FlockOperation};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 use snafu::ResultExt as _;
 
 use crate::error::{ControlStoreSnafu, IoSnafu, JsonSnafu};
+use crate::evidence_segment::{EvidenceSegmentOwner, EvidenceStoreLimitsV1};
 use crate::{
-    canonical_policy_spec_digest, CoverageIntakeStateV1, EvidenceIntakeIdentityV1,
+    canonical_policy_spec_digest, CoverageIntakeStateV1, CoverageReport, CoverageReportInputV1,
+    EvidenceBatchInputV1, EvidenceIntakeIdentityV1, EvidenceRecord, EvidenceRecords,
     EvidenceStoreOutcomeV1, ExceptionActivationAcknowledgementV1, ExceptionActivationStateV1,
     ExceptionDeliveryCandidateV1, ExceptionDeliveryOperationV1, ExceptionRolloutStateV1,
     ExceptionSourceRevisionV1, ExceptionSourceStateV1, IntakeStateV1,
     PolicyActivationAcknowledgementV1, PolicyActivationStateV1, PolicyBundleV1, PolicyDocumentV1,
     PolicyRolloutStateV1, PolicyRolloutStatusV1, PolicySourceRevisionV1, PolicySourceStateV1,
     PolicyTargetSnapshotV1, PolicyTargetV1, ProfileCandidateArtifactV1, Result,
-    StoredCoverageReportV1, StoredEvidenceBatchV1, StoredEvidenceGapV1, StoredRecordV1,
-    TrustGenerationAcknowledgementV1, TrustGenerationV1, MAX_PENDING_EVIDENCE_RECORDS,
+    StoredCoverageReportV1, StoredEvidenceBatchV1, StoredEvidenceGapV1,
+    TrustGenerationAcknowledgementV1, TrustGenerationV1, MAX_EVIDENCE_BATCH_PAYLOAD_BYTES,
+    MAX_PENDING_EVIDENCE_RECORDS,
 };
 
 const STORE_SCHEMA_VERSION: u32 = 1;
-const ZERO_DIGEST: &str = "0000000000000000000000000000000000000000000000000000000000000000";
+const STATE_DIGEST_BYTES: usize = 32;
+const MAX_STATE_BYTES: usize = 64 * 1_024 * 1_024;
 
 #[derive(Clone)]
-/// Owns the append-only Control commit chain and its replayed in-memory index.
+/// Owns current Control metadata and immutable evidence segments.
 pub struct ControlStore {
-    inner: Arc<Mutex<ControlStoreInner>>,
+    inner: Arc<ControlStoreLock>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -51,13 +59,311 @@ pub struct ControlStoreHealthV1 {
 struct ControlStoreInner {
     root: PathBuf,
     state: ControlStoreState,
+    state_file: ControlStateOwner,
+    evidence_segments: EvidenceSegmentOwner,
 }
 
-#[derive(Clone, Default)]
+struct ControlStateOwner {
+    path: PathBuf,
+    temporary: PathBuf,
+    _lease: File,
+}
+
+impl ControlStateOwner {
+    fn open(root: &Path) -> Result<(Self, ControlStoreState)> {
+        fs::create_dir_all(root).context(IoSnafu { path: root })?;
+        let lease_path = root.join("owner.lock");
+        let lease = OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .truncate(false)
+            .open(&lease_path)
+            .context(IoSnafu { path: &lease_path })?;
+        flock(&lease, FlockOperation::NonBlockingLockExclusive).map_err(|error| {
+            ControlStoreSnafu {
+                path: lease_path,
+                reason: format!("another Control store owner holds the lease: {error}"),
+            }
+            .build()
+        })?;
+        let owner = Self {
+            path: root.join("state.bin"),
+            temporary: root.join("state.tmp"),
+            _lease: lease,
+        };
+        match fs::remove_file(&owner.temporary) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(source) => {
+                return Err(crate::Error::Io {
+                    path: owner.temporary.clone(),
+                    source,
+                    location: snafu::Location::default(),
+                });
+            }
+        }
+        let state = owner.read()?.unwrap_or_default();
+        Ok((owner, state))
+    }
+
+    fn read(&self) -> Result<Option<ControlStoreState>> {
+        let bytes = match fs::read(&self.path) {
+            Ok(bytes) => bytes,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(source) => {
+                return Err(crate::Error::Io {
+                    path: self.path.clone(),
+                    source,
+                    location: snafu::Location::default(),
+                });
+            }
+        };
+        let Some((stored_digest, encoded)) = bytes.split_at_checked(STATE_DIGEST_BYTES) else {
+            return ControlStoreSnafu {
+                path: self.path.clone(),
+                reason: "the current Control state is truncated".to_owned(),
+            }
+            .fail();
+        };
+        if stored_digest != Sha256::digest(encoded).as_slice() {
+            return ControlStoreSnafu {
+                path: self.path.clone(),
+                reason: "the current Control state checksum is invalid".to_owned(),
+            }
+            .fail();
+        }
+        if encoded.len() > MAX_STATE_BYTES {
+            return ControlStoreSnafu {
+                path: self.path.clone(),
+                reason: "the current Control state exceeds its size bound".to_owned(),
+            }
+            .fail();
+        }
+        let durable: DurableControlStateV1 = rmp_serde::from_slice(encoded).map_err(|error| {
+            ControlStoreSnafu {
+                path: self.path.clone(),
+                reason: format!("current Control state decoding failed: {error}"),
+            }
+            .build()
+        })?;
+        if durable.schema_version != STORE_SCHEMA_VERSION {
+            return ControlStoreSnafu {
+                path: self.path.clone(),
+                reason: "the current Control state schema is invalid".to_owned(),
+            }
+            .fail();
+        }
+        Ok(Some(durable.state))
+    }
+
+    fn replace(&self, root: &Path, state: &ControlStoreState) -> Result<()> {
+        let encoded = rmp_serde::to_vec_named(&DurableControlStateV1 {
+            schema_version: STORE_SCHEMA_VERSION,
+            state: state.clone(),
+        })
+        .map_err(|error| {
+            ControlStoreSnafu {
+                path: self.path.clone(),
+                reason: format!("current Control state encoding failed: {error}"),
+            }
+            .build()
+        })?;
+        if encoded.len() > MAX_STATE_BYTES {
+            return ControlStoreSnafu {
+                path: self.path.clone(),
+                reason: "the current Control state exceeds its size bound".to_owned(),
+            }
+            .fail();
+        }
+        let digest = Sha256::digest(&encoded);
+        let mut file = OpenOptions::new()
+            .create(true)
+            .truncate(true)
+            .write(true)
+            .open(&self.temporary)
+            .context(IoSnafu {
+                path: &self.temporary,
+            })?;
+        file.write_all(&digest)
+            .and_then(|()| file.write_all(&encoded))
+            .context(IoSnafu {
+                path: &self.temporary,
+            })?;
+        file.sync_all().context(IoSnafu {
+            path: &self.temporary,
+        })?;
+        fs::rename(&self.temporary, &self.path).context(IoSnafu { path: &self.path })?;
+        File::open(root)
+            .and_then(|directory| directory.sync_all())
+            .context(IoSnafu { path: root })
+    }
+}
+
+impl ControlStoreInner {
+    fn read_evidence_records(&self, batch: &StoredEvidenceBatchV1) -> Result<Vec<EvidenceRecord>> {
+        let records: EvidenceRecords = self
+            .evidence_segments
+            .read(batch.segment, MAX_EVIDENCE_BATCH_PAYLOAD_BYTES)?;
+        let expected = batch
+            .last_cursor
+            .checked_sub(batch.first_cursor)
+            .and_then(|count| count.checked_add(1))
+            .and_then(|count| usize::try_from(count).ok());
+        if expected != Some(records.records.len()) {
+            return ControlStoreSnafu {
+                path: self.root.clone(),
+                reason: "evidence segment record count does not match its index".to_owned(),
+            }
+            .fail();
+        }
+        Ok(records.records)
+    }
+
+    fn accepted_evidence_records(
+        &self,
+        identity: &EvidenceIntakeIdentityV1,
+        first_cursor: u64,
+        last_cursor: u64,
+    ) -> Result<Vec<EvidenceRecord>> {
+        let mut records = Vec::new();
+        for (key, batch) in self.state.evidence_batches.iter().filter(|(key, _batch)| {
+            &key.identity == identity
+                && key.first_cursor <= last_cursor
+                && key.last_cursor >= first_cursor
+        }) {
+            let stored = self.read_evidence_records(batch)?;
+            let start = first_cursor.saturating_sub(key.first_cursor) as usize;
+            let end = last_cursor
+                .min(key.last_cursor)
+                .saturating_sub(key.first_cursor) as usize;
+            records.extend_from_slice(&stored[start..=end]);
+        }
+        let expected = last_cursor
+            .checked_sub(first_cursor)
+            .and_then(|count| count.checked_add(1))
+            .and_then(|count| usize::try_from(count).ok());
+        if expected != Some(records.len()) {
+            return ControlStoreSnafu {
+                path: self.root.clone(),
+                reason: "accepted evidence index has a cursor gap".to_owned(),
+            }
+            .fail();
+        }
+        Ok(records)
+    }
+}
+
+// Evidence fsyncs can keep this owner busy. Evidence waits while Control work is active or queued
+// so policy inventory and desired-state reconciliation cannot starve.
+struct ControlStoreLock {
+    inner: Mutex<ControlStoreInner>,
+    priority_holders: Mutex<usize>,
+    evidence_ready: Condvar,
+    #[cfg(feature = "test-fixtures")]
+    evidence_wait_barriers: Mutex<Option<(Arc<Barrier>, Arc<Barrier>)>>,
+}
+
+struct ControlStorePriorityGuard<'a> {
+    inner: MutexGuard<'a, ControlStoreInner>,
+    lock: &'a ControlStoreLock,
+}
+
+impl ControlStoreLock {
+    fn new(inner: ControlStoreInner) -> Self {
+        Self {
+            inner: Mutex::new(inner),
+            priority_holders: Mutex::new(0),
+            evidence_ready: Condvar::new(),
+            #[cfg(feature = "test-fixtures")]
+            evidence_wait_barriers: Mutex::new(None),
+        }
+    }
+
+    #[cfg(feature = "test-fixtures")]
+    fn pause_next_evidence_wait(&self) {
+        let barriers = self
+            .evidence_wait_barriers
+            .lock()
+            .ok()
+            .and_then(|mut barriers| barriers.take());
+        if let Some((entered, release)) = barriers {
+            entered.wait();
+            release.wait();
+        }
+    }
+
+    fn priority_lock(&self) -> Option<ControlStorePriorityGuard<'_>> {
+        let mut holders = self.priority_holders.lock().ok()?;
+        *holders = holders.checked_add(1)?;
+        drop(holders);
+        match self.inner.lock() {
+            Ok(inner) => Some(ControlStorePriorityGuard { inner, lock: self }),
+            Err(_error) => {
+                self.finish_priority();
+                None
+            }
+        }
+    }
+
+    fn evidence_lock(&self) -> Option<MutexGuard<'_, ControlStoreInner>> {
+        let holders = self.priority_holders.lock().ok()?;
+        let holders = self
+            .evidence_ready
+            .wait_while(holders, |holders| {
+                let waiting = *holders != 0;
+                #[cfg(feature = "test-fixtures")]
+                if waiting {
+                    self.pause_next_evidence_wait();
+                }
+                waiting
+            })
+            .ok()?;
+        // Keep the predicate locked until evidence owns the store. A new priority request
+        // cannot pass evidence after the last prior request has released it.
+        let inner = self.inner.lock().ok()?;
+        drop(holders);
+        Some(inner)
+    }
+
+    fn finish_priority(&self) {
+        if let Ok(mut holders) = self.priority_holders.lock() {
+            if *holders == 0 {
+                return;
+            }
+            *holders -= 1;
+            if *holders == 0 {
+                self.evidence_ready.notify_all();
+            }
+        }
+    }
+}
+
+impl Deref for ControlStorePriorityGuard<'_> {
+    type Target = ControlStoreInner;
+
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+
+impl DerefMut for ControlStorePriorityGuard<'_> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.inner
+    }
+}
+
+impl Drop for ControlStorePriorityGuard<'_> {
+    fn drop(&mut self) {
+        self.lock.finish_priority();
+    }
+}
+
+#[derive(Clone, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 struct ControlStoreState {
-    // This state is a cache. Startup rebuilds every field from verified commits.
+    // This state keeps every unconsumed segment reference. Replacing it never consumes evidence.
     commit_index: u64,
-    last_commit_digest: String,
     source_revisions: BTreeMap<String, PolicySourceRevisionV1>,
     policy_documents: BTreeMap<String, PolicyDocumentV1>,
     latest_sources: BTreeMap<PolicyObjectKeyV1, String>,
@@ -79,14 +385,38 @@ struct ControlStoreState {
     trust_generations: BTreeMap<u64, TrustGenerationV1>,
     trust_acknowledgements:
         BTreeMap<(String, u64, [u8; 16], u64), TrustGenerationAcknowledgementV1>,
-    evidence_cursors: BTreeMap<EvidenceIntakeIdentityV1, IntakeStateV1>,
-    evidence_records: BTreeMap<EvidenceRecordKeyV1, StoredRecordV1>,
-    evidence_batch_receipts: BTreeMap<EvidenceBatchKeyV1, [u8; 32]>,
-    evidence_gaps: BTreeMap<EvidenceGapKeyV1, StoredEvidenceGapV1>,
-    pending_evidence_batches: BTreeMap<EvidencePendingKeyV1, StoredEvidenceBatchV1>,
-    coverage_cursors: BTreeMap<EvidenceIntakeIdentityV1, CoverageIntakeStateV1>,
-    coverage_reports: BTreeMap<CoverageReportKeyV1, StoredCoverageReportV1>,
-    evidence_source_labels: BTreeMap<EvidenceSourceEpochKeyV1, u64>,
+    // Policy transactions clone this cache for validation. Shared evidence maps keep that clone
+    // independent of retained evidence volume. Evidence transactions still mutate one owned map.
+    evidence_cursors: Arc<BTreeMap<EvidenceIntakeIdentityV1, IntakeStateV1>>,
+    evidence_batches: Arc<BTreeMap<EvidenceBatchKeyV1, StoredEvidenceBatchV1>>,
+    evidence_gaps: Arc<BTreeMap<EvidenceGapKeyV1, StoredEvidenceGapV1>>,
+    pending_evidence_batches: Arc<BTreeMap<EvidencePendingKeyV1, StoredEvidenceBatchV1>>,
+    coverage_cursors: Arc<BTreeMap<EvidenceIntakeIdentityV1, CoverageIntakeStateV1>>,
+    coverage_reports: Arc<BTreeMap<CoverageReportKeyV1, StoredCoverageReportV1>>,
+    evidence_source_labels: Arc<BTreeMap<EvidenceSourceEpochKeyV1, u64>>,
+}
+
+impl ControlStoreState {
+    fn retained_evidence_records(&self) -> u64 {
+        self.evidence_batches
+            .values()
+            .chain(self.pending_evidence_batches.values())
+            .fold(0_u64, |total, batch| {
+                total.saturating_add(
+                    batch
+                        .last_cursor
+                        .saturating_sub(batch.first_cursor)
+                        .saturating_add(1),
+                )
+            })
+    }
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct DurableControlStateV1 {
+    schema_version: u32,
+    state: ControlStoreState,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
@@ -100,12 +430,6 @@ struct PolicyObjectKeyV1 {
 struct PolicyRolloutKeyV1 {
     candidate_content_id: String,
     node_id: String,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
-struct EvidenceRecordKeyV1 {
-    identity: EvidenceIntakeIdentityV1,
-    cursor: u64,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
@@ -140,16 +464,6 @@ struct EvidenceSourceEpochKeyV1 {
     node_id: String,
     source_id: [u8; 16],
     source_epoch: u64,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-struct ControlCommitV1 {
-    schema_version: u32,
-    commit_index: u64,
-    previous_commit_digest: String,
-    transaction: ControlTransactionV1,
-    commit_digest: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -203,6 +517,17 @@ enum ControlTransactionV1 {
     TrustAcknowledged {
         acknowledgement: Box<TrustGenerationAcknowledgementV1>,
     },
+}
+
+impl ControlTransactionV1 {
+    fn is_evidence(&self) -> bool {
+        matches!(
+            self,
+            Self::EvidencePending { .. }
+                | Self::EvidenceAccepted { .. }
+                | Self::CoverageAccepted { .. }
+        )
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
@@ -362,52 +687,29 @@ pub fn startup_absence_proof_digest(
 
 impl ControlStore {
     pub fn open(root: impl Into<PathBuf>) -> Result<Self> {
+        Self::open_with_evidence_limits(root, EvidenceStoreLimitsV1::default())
+    }
+
+    pub fn open_with_evidence_limits(
+        root: impl Into<PathBuf>,
+        evidence_limits: EvidenceStoreLimitsV1,
+    ) -> Result<Self> {
         let root = root.into();
-        fs::create_dir_all(root.join("commits")).context(IoSnafu {
-            path: root.join("commits"),
-        })?;
-        let mut state = ControlStoreState {
-            last_commit_digest: ZERO_DIGEST.to_owned(),
-            ..ControlStoreState::default()
-        };
-        let mut paths = fs::read_dir(root.join("commits"))
-            .context(IoSnafu {
-                path: root.join("commits"),
-            })?
-            .map(|entry| {
-                entry.map(|entry| entry.path()).context(IoSnafu {
-                    path: root.join("commits"),
-                })
-            })
-            .collect::<Result<Vec<_>>>()?;
-        paths.sort();
-        // Replay in lexical index order and reject any gap, digest break, or unknown file.
-        for path in paths {
-            if path.extension().and_then(|value| value.to_str()) == Some("tmp") {
-                fs::remove_file(&path).context(IoSnafu { path: &path })?;
-                continue;
-            }
-            if path.extension().and_then(|value| value.to_str()) != Some("json") {
-                return ControlStoreSnafu {
-                    path,
-                    reason: "the commits directory contains an unknown file".to_owned(),
-                }
-                .fail();
-            }
-            let bytes = fs::read(&path).context(IoSnafu { path: &path })?;
-            let commit: ControlCommitV1 =
-                serde_json::from_slice(&bytes).context(JsonSnafu { path: &path })?;
-            verify_commit(&commit, &state, &path)?;
-            apply_transaction(&mut state, &commit.transaction, &path)?;
-            state.commit_index = commit.commit_index;
-            state.last_commit_digest = commit.commit_digest;
-        }
+        let (state_file, state) = ControlStateOwner::open(&root)?;
+        let evidence_segments = EvidenceSegmentOwner::open(&root, evidence_limits)?;
+        evidence_segments.validate_retention(state.retained_evidence_records())?;
+        validate_evidence_segment_refs(&state, &evidence_segments, &root)?;
         info!(
-            "opened and replayed the Control store",
+            "opened the Control store",
             commit_index = %state.commit_index
         );
         Ok(Self {
-            inner: Arc::new(Mutex::new(ControlStoreInner { root, state })),
+            inner: Arc::new(ControlStoreLock::new(ControlStoreInner {
+                root,
+                state,
+                state_file,
+                evidence_segments,
+            })),
         })
     }
 
@@ -450,13 +752,17 @@ impl ControlStore {
             evidence_cursors: count(inner.state.evidence_cursors.len()),
             evidence_gap_ranges: count(inner.state.evidence_gaps.len()),
             pending_evidence_batches: count(inner.state.pending_evidence_batches.len()),
-            pending_evidence_records: inner
-                .state
-                .pending_evidence_batches
-                .values()
-                .fold(0_u64, |total, batch| {
-                    total.saturating_add(count(batch.records.len()))
-                }),
+            pending_evidence_records: inner.state.pending_evidence_batches.values().fold(
+                0_u64,
+                |total, batch| {
+                    total.saturating_add(
+                        batch
+                            .last_cursor
+                            .saturating_sub(batch.first_cursor)
+                            .saturating_add(1),
+                    )
+                },
+            ),
             coverage_cursors: count(inner.state.coverage_cursors.len()),
         })
     }
@@ -598,7 +904,7 @@ impl ControlStore {
         source_id: [u8; 16],
         source_epoch: u64,
     ) -> Result<DurableNodeSessionV1> {
-        let inner = self.lock()?;
+        let inner = self.evidence_lock()?;
         let known_label = inner
             .state
             .evidence_source_labels
@@ -1021,20 +1327,19 @@ impl ControlStore {
     pub(crate) fn accept_evidence_batch(
         &self,
         identity: EvidenceIntakeIdentityV1,
-        batch: StoredEvidenceBatchV1,
+        batch: EvidenceBatchInputV1,
     ) -> Result<EvidenceStoreOutcomeV1> {
-        let mut inner = self.lock()?;
+        let mut inner = self.evidence_lock()?;
         validate_evidence_identity(&identity, &inner.root)?;
-        validate_stored_batch(&batch, &inner.root)?;
+        validate_evidence_batch_input(&batch, &inner.root)?;
         validate_source_label(&inner.state, &identity, &inner.root)?;
-        let receipt_key = EvidenceBatchKeyV1 {
+        let exact_key = EvidenceBatchKeyV1 {
             identity: identity.clone(),
             first_cursor: batch.first_cursor,
             last_cursor: batch.last_cursor,
         };
-        // An accepted range is idempotent only when its complete digest is unchanged.
-        if let Some(digest) = inner.state.evidence_batch_receipts.get(&receipt_key) {
-            if digest == &batch.batch_sha256 {
+        if let Some(existing) = inner.state.evidence_batches.get(&exact_key) {
+            if inner.read_evidence_records(existing)? == batch.records {
                 return Ok(EvidenceStoreOutcomeV1::Accepted);
             }
             return ControlStoreSnafu {
@@ -1063,13 +1368,9 @@ impl ControlStore {
                     }
                     .build()
                 })?;
-            let overlap_matches = batch.records[..overlap_count].iter().all(|record| {
-                inner.state.evidence_records.get(&EvidenceRecordKeyV1 {
-                    identity: identity.clone(),
-                    cursor: record.cursor,
-                }) == Some(record)
-            });
-            if !overlap_matches {
+            let accepted =
+                inner.accepted_evidence_records(&identity, batch.first_cursor, overlap_last)?;
+            if accepted != batch.records[..overlap_count] {
                 return ControlStoreSnafu {
                     path: inner.root.clone(),
                     reason: "an evidence retry conflicts with accepted record content".to_owned(),
@@ -1083,7 +1384,7 @@ impl ControlStore {
             // An acknowledgement can be lost while the node extends its current WAL batch.
             // Commit only the new suffix after the accepted prefix matches durable records.
             let suffix_records = batch.records.split_off(overlap_count);
-            batch = StoredEvidenceBatchV1 {
+            batch = EvidenceBatchInputV1 {
                 first_cursor: cursor.contiguous_cursor.checked_add(1).ok_or_else(|| {
                     ControlStoreSnafu {
                         path: inner.root.clone(),
@@ -1092,10 +1393,9 @@ impl ControlStore {
                     .build()
                 })?,
                 last_cursor: batch.last_cursor,
-                batch_sha256: stored_batch_digest(&suffix_records),
                 records: suffix_records,
             };
-            validate_stored_batch(&batch, &inner.root)?;
+            validate_evidence_batch_input(&batch, &inner.root)?;
         }
         while let Some(existing) = inner
             .state
@@ -1106,22 +1406,23 @@ impl ControlStore {
             })
             .cloned()
         {
-            let shared = batch.records.len().min(existing.records.len());
-            if batch.records[..shared] != existing.records[..shared] {
+            let existing_records = inner.read_evidence_records(&existing)?;
+            let shared = batch.records.len().min(existing_records.len());
+            if batch.records[..shared] != existing_records[..shared] {
                 return ControlStoreSnafu {
                     path: inner.root.clone(),
                     reason: "pending evidence ranges overlap or conflict".to_owned(),
                 }
                 .fail();
             }
-            if batch.records.len() <= existing.records.len() {
+            if batch.records.len() <= existing_records.len() {
                 return Ok(EvidenceStoreOutcomeV1::Pending);
             }
 
             // The node can extend an unacknowledged WAL batch. Keep the durable
             // prefix and persist only its new contiguous suffix.
-            let suffix_records = batch.records.split_off(existing.records.len());
-            batch = StoredEvidenceBatchV1 {
+            let suffix_records = batch.records.split_off(existing_records.len());
+            batch = EvidenceBatchInputV1 {
                 first_cursor: existing.last_cursor.checked_add(1).ok_or_else(|| {
                     ControlStoreSnafu {
                         path: inner.root.clone(),
@@ -1130,10 +1431,9 @@ impl ControlStore {
                     .build()
                 })?,
                 last_cursor: batch.last_cursor,
-                batch_sha256: stored_batch_digest(&suffix_records),
                 records: suffix_records,
             };
-            validate_stored_batch(&batch, &inner.root)?;
+            validate_evidence_batch_input(&batch, &inner.root)?;
         }
         for (key, existing) in inner
             .state
@@ -1144,7 +1444,10 @@ impl ControlStore {
             let overlaps =
                 batch.first_cursor <= existing.last_cursor && key.first_cursor <= batch.last_cursor;
             if overlaps {
-                if key.first_cursor == batch.first_cursor && existing == &batch {
+                if key.first_cursor == batch.first_cursor
+                    && existing.last_cursor == batch.last_cursor
+                    && inner.read_evidence_records(existing)? == batch.records
+                {
                     return Ok(EvidenceStoreOutcomeV1::Pending);
                 }
                 return ControlStoreSnafu {
@@ -1154,6 +1457,19 @@ impl ControlStore {
                 .fail();
             }
         }
+        let retained_records = inner.state.retained_evidence_records();
+        let additional_records = u64::try_from(batch.records.len()).unwrap_or(u64::MAX);
+        let batch = StoredEvidenceBatchV1 {
+            first_cursor: batch.first_cursor,
+            last_cursor: batch.last_cursor,
+            segment: inner.evidence_segments.write(
+                &EvidenceRecords {
+                    records: batch.records,
+                },
+                retained_records,
+                additional_records,
+            )?,
+        };
         let next = checked_store_increment(
             cursor.contiguous_cursor,
             &inner.root,
@@ -1217,7 +1533,7 @@ impl ControlStore {
         identity: EvidenceIntakeIdentityV1,
         gap: StoredEvidenceGapV1,
     ) -> Result<()> {
-        let mut inner = self.lock()?;
+        let mut inner = self.evidence_lock()?;
         validate_evidence_identity(&identity, &inner.root)?;
         validate_stored_gap(&identity, &gap, &inner.root)?;
         validate_source_label(&inner.state, &identity, &inner.root)?;
@@ -1248,7 +1564,6 @@ impl ControlStore {
                 &inner.root,
                 "the evidence cursor is exhausted",
             )?
-            || gap.previous_record_sha256 != cursor.last_record_sha256
         {
             return ControlStoreSnafu {
                 path: inner.root.clone(),
@@ -1388,10 +1703,42 @@ impl ControlStore {
             .cloned())
     }
 
-    pub(crate) fn accept_coverage_report(&self, report: StoredCoverageReportV1) -> Result<u64> {
-        let mut inner = self.lock()?;
-        validate_evidence_identity(&report.identity, &inner.root)?;
-        validate_source_label(&inner.state, &report.identity, &inner.root)?;
+    pub(crate) fn evidence_trust_acknowledgement(
+        &self,
+        node_id: &str,
+        node_boot_id: [u8; 16],
+        label_epoch: u64,
+        generation: u64,
+    ) -> Result<Option<TrustGenerationAcknowledgementV1>> {
+        Ok(self
+            .evidence_lock()?
+            .state
+            .trust_acknowledgements
+            .get(&(node_id.to_owned(), generation, node_boot_id, label_epoch))
+            .cloned())
+    }
+
+    pub(crate) fn accept_coverage_report(&self, input: CoverageReportInputV1) -> Result<u64> {
+        let mut inner = self.evidence_lock()?;
+        validate_evidence_identity(&input.identity, &inner.root)?;
+        validate_source_label(&inner.state, &input.identity, &inner.root)?;
+        if input.report.source_epoch != input.identity.source_epoch || input.report.revision == 0 {
+            return ControlStoreSnafu {
+                path: inner.root.clone(),
+                reason: "coverage evidence has invalid identity or revision".to_owned(),
+            }
+            .fail();
+        }
+        let retained_records = inner.state.retained_evidence_records();
+        let report = StoredCoverageReportV1 {
+            identity: input.identity,
+            state: CoverageIntakeStateV1 {
+                revision: input.report.revision,
+            },
+            segment: inner
+                .evidence_segments
+                .write(&input.report, retained_records, 0)?,
+        };
         let current = inner
             .state
             .coverage_cursors
@@ -1412,14 +1759,7 @@ impl ControlStore {
             }
             .fail();
         }
-        if report.state.source_epoch < current.source_epoch
-            || (report.state.source_epoch == current.source_epoch
-                && report.state.revision <= current.revision)
-            || report.state.source_epoch != report.identity.source_epoch
-            || report.state.revision == 0
-            || report.state.report_sha256 == [0; 32]
-            || report.encoded_report.is_empty()
-        {
+        if report.state.revision <= current.revision {
             return ControlStoreSnafu {
                 path: inner.root.clone(),
                 reason: "coverage evidence is stale or has invalid identity".to_owned(),
@@ -1446,23 +1786,26 @@ impl ControlStore {
     pub fn accepted_evidence_records(
         &self,
         identity: &EvidenceIntakeIdentityV1,
-    ) -> Result<Vec<Vec<u8>>> {
-        Ok(self
-            .lock()?
+    ) -> Result<Vec<EvidenceRecord>> {
+        let inner = self.lock()?;
+        let mut records = Vec::new();
+        for (_key, batch) in inner
             .state
-            .evidence_records
+            .evidence_batches
             .iter()
-            .filter(|(key, _record)| &key.identity == identity)
-            .map(|(_key, record)| record.payload.clone())
-            .collect())
+            .filter(|(key, _batch)| &key.identity == identity)
+        {
+            records.extend(inner.read_evidence_records(batch)?);
+        }
+        Ok(records)
     }
 
     pub(crate) fn latest_coverage_report(
         &self,
         identity: &EvidenceIntakeIdentityV1,
-    ) -> Result<Option<StoredCoverageReportV1>> {
+    ) -> Result<Option<CoverageReport>> {
         let inner = self.lock()?;
-        Ok(inner
+        let stored = inner
             .state
             .coverage_cursors
             .get(identity)
@@ -1475,7 +1818,14 @@ impl ControlStore {
                         revision: cursor.revision,
                     })
                     .cloned()
-            }))
+            });
+        stored
+            .map(|stored| {
+                inner
+                    .evidence_segments
+                    .read(stored.segment, MAX_EVIDENCE_BATCH_PAYLOAD_BYTES)
+            })
+            .transpose()
     }
 
     pub fn source_revision(&self, id: &str) -> Result<Option<PolicySourceRevisionV1>> {
@@ -1963,19 +2313,149 @@ impl ControlStore {
     #[must_use]
     pub fn root(&self) -> PathBuf {
         self.inner
-            .lock()
-            .map_or_else(|_| PathBuf::new(), |inner| inner.root.clone())
+            .priority_lock()
+            .map_or_else(PathBuf::new, |inner| inner.root.clone())
     }
 
     #[must_use]
     pub fn commit_index(&self) -> u64 {
         self.inner
-            .lock()
+            .priority_lock()
             .map_or(0, |inner| inner.state.commit_index)
     }
 
-    fn lock(&self) -> Result<MutexGuard<'_, ControlStoreInner>> {
-        self.inner.lock().map_err(|_| {
+    #[cfg(feature = "test-fixtures")]
+    pub fn write_retained_evidence_for_test(
+        &self,
+        batch_count: u64,
+        records_per_batch: usize,
+    ) -> Result<u64> {
+        if self.commit_index() != 0
+            || batch_count == 0
+            || records_per_batch == 0
+            || records_per_batch > crate::MAX_EVIDENCE_BATCH_RECORDS
+        {
+            return ControlStoreSnafu {
+                path: self.root(),
+                reason:
+                    "the retained-evidence fixture requires a fresh store and valid batch bounds"
+                        .to_owned(),
+            }
+            .fail();
+        }
+        let node_boot_id = [1; 16];
+        let proof = startup_absence_proof_digest("node-a", &node_boot_id, 1, true, true);
+        self.register_node_physical_session(
+            "node-a",
+            &node_boot_id,
+            1,
+            Some("worker-a"),
+            &proof,
+            true,
+            true,
+            1,
+        )?;
+        let identity = EvidenceIntakeIdentityV1 {
+            tenant_id: [2; 16],
+            node_id: "node-a".to_owned(),
+            node_boot_id,
+            label_epoch: 1,
+            source_id: [3; 16],
+            source_epoch: 1,
+        };
+        let root = self.root();
+        let mut cursor = 1_u64;
+        for _batch in 0..batch_count {
+            let first_cursor = cursor;
+            let mut records = Vec::with_capacity(records_per_batch);
+            for _record in 0..records_per_batch {
+                records.push(EvidenceRecord {
+                    observed_boottime_ns: cursor,
+                    ingested_utc_ns: i64::try_from(cursor).unwrap_or(i64::MAX),
+                    coverage_interval_id: vec![4; 16],
+                    task_cookie: cursor,
+                    process_lineage_id: vec![5; 16],
+                    authority_domain_id: vec![6; 16],
+                    execution_set_id: vec![7; 16],
+                    exact_object_id: vec![8; 16],
+                    policy_rule_id: 1,
+                    reason: 1,
+                    decision: 1,
+                    effect_family: 1,
+                    operation: 1,
+                    configured_errno: -13,
+                    kernel_result: -13,
+                    temporal_coverage: crate::EvidenceTemporalCoverage::Complete as i32,
+                    ..EvidenceRecord::default()
+                });
+                cursor = checked_store_increment(
+                    cursor,
+                    &root,
+                    "the retained-evidence fixture cursor is exhausted",
+                )?;
+            }
+            if self.accept_evidence_batch(
+                identity.clone(),
+                EvidenceBatchInputV1 {
+                    first_cursor,
+                    last_cursor: cursor - 1,
+                    records,
+                },
+            )? != EvidenceStoreOutcomeV1::Accepted
+            {
+                return ControlStoreSnafu {
+                    path: root,
+                    reason: "the retained-evidence fixture did not commit a contiguous batch"
+                        .to_owned(),
+                }
+                .fail();
+            }
+        }
+
+        let mut stored_bytes = fs::metadata(root.join("state.bin"))
+            .context(IoSnafu { path: &root })?
+            .len();
+        let directory = root.join("evidence/segments");
+        for entry in fs::read_dir(&directory).context(IoSnafu { path: &directory })? {
+            let path = entry.context(IoSnafu { path: &directory })?.path();
+            stored_bytes = stored_bytes
+                .saturating_add(fs::metadata(&path).context(IoSnafu { path: &path })?.len());
+        }
+        Ok(stored_bytes)
+    }
+    #[cfg(feature = "test-fixtures")]
+    pub fn pause_next_evidence_wait_for_test(
+        &self,
+        entered: Arc<Barrier>,
+        release: Arc<Barrier>,
+    ) -> bool {
+        self.inner
+            .evidence_wait_barriers
+            .lock()
+            .map(|mut barriers| *barriers = Some((entered, release)))
+            .is_ok()
+    }
+
+    #[cfg(feature = "test-fixtures")]
+    pub fn hold_priority_for_test(&self, entered: &Barrier, release: &Barrier) -> Result<()> {
+        let _guard = self.lock()?;
+        entered.wait();
+        release.wait();
+        Ok(())
+    }
+
+    fn lock(&self) -> Result<ControlStorePriorityGuard<'_>> {
+        self.inner.priority_lock().ok_or_else(|| {
+            ControlStoreSnafu {
+                path: PathBuf::from("<poisoned-control-store>"),
+                reason: "the Control store lock is poisoned".to_owned(),
+            }
+            .build()
+        })
+    }
+
+    fn evidence_lock(&self) -> Result<MutexGuard<'_, ControlStoreInner>> {
+        self.inner.evidence_lock().ok_or_else(|| {
             ControlStoreSnafu {
                 path: PathBuf::from("<poisoned-control-store>"),
                 reason: "the Control store lock is poisoned".to_owned(),
@@ -2209,47 +2689,16 @@ fn commit(inner: &mut ControlStoreInner, transaction: ControlTransactionV1) -> R
         &inner.root,
         "the Control commit index is exhausted",
     )?;
-    let mut record = ControlCommitV1 {
-        schema_version: STORE_SCHEMA_VERSION,
-        commit_index,
-        previous_commit_digest: inner.state.last_commit_digest.clone(),
-        transaction,
-        commit_digest: String::new(),
-    };
-    record.commit_digest = commit_digest(&record)?;
-    let path = commit_path(&inner.root, commit_index);
-    // Validate on a clone, make the record durable, then publish the new in-memory state.
     let mut next_state = inner.state.clone();
-    apply_transaction(&mut next_state, &record.transaction, &path)?;
-    write_commit(&path, &record)?;
+    apply_transaction(&mut next_state, &transaction, &inner.root)?;
     next_state.commit_index = commit_index;
-    next_state.last_commit_digest = record.commit_digest;
+    inner.state_file.replace(&inner.root, &next_state)?;
     inner.state = next_state;
     debug!(
         "committed a Control store transaction",
         commit_index = %commit_index
     );
     Ok(commit_index)
-}
-
-fn verify_commit(commit: &ControlCommitV1, state: &ControlStoreState, path: &Path) -> Result<()> {
-    let expected_index = checked_store_increment(
-        state.commit_index,
-        path,
-        "the Control commit index is exhausted",
-    )?;
-    if commit.schema_version != STORE_SCHEMA_VERSION
-        || commit.commit_index != expected_index
-        || commit.previous_commit_digest != state.last_commit_digest
-        || commit.commit_digest != commit_digest(commit)?
-    {
-        return ControlStoreSnafu {
-            path: path.to_owned(),
-            reason: "the commit schema, sequence, chain, or digest is invalid".to_owned(),
-        }
-        .fail();
-    }
-    Ok(())
 }
 
 fn checked_store_increment(value: u64, path: &Path, reason: &str) -> Result<u64> {
@@ -2646,7 +3095,11 @@ fn apply_transaction(
     transaction: &ControlTransactionV1,
     path: &Path,
 ) -> Result<()> {
-    // Use the same transition code before a write and during startup replay.
+    if transaction.is_evidence() {
+        state.validate_evidence_transaction(transaction, path)?;
+        state.apply_validated_evidence_transaction(transaction);
+        return Ok(());
+    }
     match transaction {
         ControlTransactionV1::NodeSessionAdvanced { advance } => {
             validate_node_session_advance(state, advance, path)?;
@@ -2919,70 +3372,10 @@ fn apply_transaction(
                 .and_modify(|uses| *uses = (*uses).max(result.acknowledgement.consumed_uses))
                 .or_insert(result.acknowledgement.consumed_uses);
         }
-        ControlTransactionV1::EvidencePending { pending } => {
-            validate_evidence_identity(&pending.identity, path)?;
-            validate_stored_batch(&pending.batch, path)?;
-            validate_new_pending_evidence(state, pending, path)?;
-            bind_source_label(state, &pending.identity, path)?;
-            let key = EvidencePendingKeyV1 {
-                identity: pending.identity.clone(),
-                first_cursor: pending.batch.first_cursor,
-            };
-            if state
-                .pending_evidence_batches
-                .insert(key, pending.batch.clone())
-                .is_some()
-            {
-                return ControlStoreSnafu {
-                    path: path.to_owned(),
-                    reason: "a pending evidence range was committed more than once".to_owned(),
-                }
-                .fail();
-            }
-        }
-        ControlTransactionV1::EvidenceAccepted { accepted } => {
-            apply_accepted_evidence(state, accepted, path)?;
-        }
-        ControlTransactionV1::CoverageAccepted { report } => {
-            validate_evidence_identity(&report.identity, path)?;
-            bind_source_label(state, &report.identity, path)?;
-            let current = state
-                .coverage_cursors
-                .get(&report.identity)
-                .copied()
-                .unwrap_or_default();
-            if report.state.source_epoch != report.identity.source_epoch
-                || report.state.revision == 0
-                || report.state.report_sha256 == [0; 32]
-                || report.encoded_report.is_empty()
-                || report.state.source_epoch < current.source_epoch
-                || (report.state.source_epoch == current.source_epoch
-                    && report.state.revision <= current.revision)
-            {
-                return ControlStoreSnafu {
-                    path: path.to_owned(),
-                    reason: "committed coverage evidence is stale or invalid".to_owned(),
-                }
-                .fail();
-            }
-            let key = CoverageReportKeyV1 {
-                identity: report.identity.clone(),
-                revision: report.state.revision,
-            };
-            if state
-                .coverage_reports
-                .insert(key, report.as_ref().clone())
-                .is_some()
-            {
-                return ControlStoreSnafu {
-                    path: path.to_owned(),
-                    reason: "a coverage revision was committed more than once".to_owned(),
-                }
-                .fail();
-            }
-            state
-                .coverage_cursors
-                .insert(report.identity.clone(), report.state);
+        ControlTransactionV1::EvidencePending { .. }
+        | ControlTransactionV1::EvidenceAccepted { .. }
+        | ControlTransactionV1::CoverageAccepted { .. } => {
+            unreachable!("evidence transactions return before the main transition match")
         }
         ControlTransactionV1::TrustInstalled { generation } => {
             validate_trust_transition(state, generation, path)?;
@@ -3123,29 +3516,32 @@ fn validate_evidence_identity(identity: &EvidenceIntakeIdentityV1, path: &Path) 
     Ok(())
 }
 
-fn validate_stored_batch(batch: &StoredEvidenceBatchV1, path: &Path) -> Result<()> {
-    let valid = batch.first_cursor > 0
-        && batch.last_cursor >= batch.first_cursor
-        && batch.batch_sha256 != [0; 32]
-        && batch.batch_sha256 == stored_batch_digest(&batch.records)
-        && batch.last_cursor - batch.first_cursor + 1
-            == u64::try_from(batch.records.len()).unwrap_or(u64::MAX)
-        && !batch.records.is_empty()
-        && batch.records.iter().enumerate().all(|(index, record)| {
-            record.cursor
-                == batch
-                    .first_cursor
-                    .saturating_add(u64::try_from(index).unwrap_or(u64::MAX))
-                && record.observation_id.len() == 32
-                && !record.payload.is_empty()
-                && record.payload_sha256.len() == 32
-                && record.previous_record_sha256.len() == 32
-                && record.record_sha256.len() == 32
-        });
-    if !valid {
+fn validate_evidence_batch_input(batch: &EvidenceBatchInputV1, path: &Path) -> Result<()> {
+    let count = batch
+        .last_cursor
+        .checked_sub(batch.first_cursor)
+        .and_then(|count| count.checked_add(1));
+    if batch.first_cursor == 0
+        || batch.records.is_empty()
+        || count != u64::try_from(batch.records.len()).ok()
+    {
         return ControlStoreSnafu {
             path: path.to_owned(),
-            reason: "stored evidence batch identity or bounds are invalid".to_owned(),
+            reason: "evidence batch cursor range does not match its record count".to_owned(),
+        }
+        .fail();
+    }
+    Ok(())
+}
+
+fn validate_stored_batch(batch: &StoredEvidenceBatchV1, path: &Path) -> Result<()> {
+    if batch.first_cursor == 0
+        || batch.last_cursor < batch.first_cursor
+        || batch.segment.sha256 == [0; 32]
+    {
+        return ControlStoreSnafu {
+            path: path.to_owned(),
+            reason: "stored evidence segment reference is invalid".to_owned(),
         }
         .fail();
     }
@@ -3153,35 +3549,18 @@ fn validate_stored_batch(batch: &StoredEvidenceBatchV1, path: &Path) -> Result<(
 }
 
 fn validate_stored_gap(
-    identity: &EvidenceIntakeIdentityV1,
+    _identity: &EvidenceIntakeIdentityV1,
     gap: &StoredEvidenceGapV1,
     path: &Path,
 ) -> Result<()> {
-    let wire = crate::EvidenceGap {
-        node_boot_id: identity.node_boot_id.to_vec(),
-        source_id: identity.source_id.to_vec(),
-        source_epoch: identity.source_epoch,
-        first_cursor: gap.first_cursor,
-        last_cursor: gap.last_cursor,
-        previous_record_sha256: gap.previous_record_sha256.to_vec(),
-        last_record_sha256: gap.last_record_sha256.to_vec(),
-        discarded_records: gap.discarded_records,
-        discarded_bytes: gap.discarded_bytes,
-        gap_sha256: Vec::new(),
-    };
     let cursor_count = gap
         .last_cursor
         .checked_sub(gap.first_cursor)
         .and_then(|span| span.checked_add(1));
-    if gap.first_cursor == 0
-        || cursor_count != Some(gap.discarded_records)
-        || gap.discarded_bytes == 0
-        || gap.last_record_sha256 == [0; 32]
-        || gap.gap_sha256 != crate::evidence_gap_digest(&wire)
-    {
+    if gap.first_cursor == 0 || cursor_count.is_none() || gap.discarded_bytes == 0 {
         return ControlStoreSnafu {
             path: path.to_owned(),
-            reason: "stored evidence gap identity, range, count, or digest is invalid".to_owned(),
+            reason: "stored evidence gap range is invalid".to_owned(),
         }
         .fail();
     }
@@ -3227,15 +3606,6 @@ fn validate_new_pending_evidence(
     Ok(())
 }
 
-fn stored_batch_digest(records: &[StoredRecordV1]) -> [u8; 32] {
-    let mut digest = Sha256::new();
-    for record in records {
-        digest.update(record.cursor.to_be_bytes());
-        digest.update(&record.record_sha256);
-    }
-    digest.finalize().into()
-}
-
 fn source_epoch_key(identity: &EvidenceIntakeIdentityV1) -> EvidenceSourceEpochKeyV1 {
     EvidenceSourceEpochKeyV1 {
         tenant_id: identity.tenant_id,
@@ -3265,146 +3635,148 @@ fn validate_source_label(
     Ok(())
 }
 
-fn bind_source_label(
-    state: &mut ControlStoreState,
-    identity: &EvidenceIntakeIdentityV1,
-    path: &Path,
-) -> Result<()> {
-    validate_source_label(state, identity, path)?;
-    state
-        .evidence_source_labels
-        .insert(source_epoch_key(identity), identity.label_epoch);
-    Ok(())
-}
+impl ControlStoreState {
+    fn validate_evidence_transaction(
+        &self,
+        transaction: &ControlTransactionV1,
+        path: &Path,
+    ) -> Result<()> {
+        match transaction {
+            ControlTransactionV1::EvidencePending { pending } => {
+                validate_evidence_identity(&pending.identity, path)?;
+                validate_stored_batch(&pending.batch, path)?;
+                validate_new_pending_evidence(self, pending, path)?;
+                validate_source_label(self, &pending.identity, path)
+            }
+            ControlTransactionV1::EvidenceAccepted { accepted } => {
+                self.validate_accepted_evidence(accepted, path)
+            }
+            ControlTransactionV1::CoverageAccepted { report } => {
+                validate_evidence_identity(&report.identity, path)?;
+                validate_source_label(self, &report.identity, path)?;
+                let current = self
+                    .coverage_cursors
+                    .get(&report.identity)
+                    .copied()
+                    .unwrap_or_default();
+                if report.state.revision == 0
+                    || report.segment.sha256 == [0; 32]
+                    || report.state.revision <= current.revision
+                {
+                    return ControlStoreSnafu {
+                        path: path.to_owned(),
+                        reason: "committed coverage evidence is stale or invalid".to_owned(),
+                    }
+                    .fail();
+                }
+                let key = CoverageReportKeyV1 {
+                    identity: report.identity.clone(),
+                    revision: report.state.revision,
+                };
+                if self.coverage_reports.contains_key(&key) {
+                    return ControlStoreSnafu {
+                        path: path.to_owned(),
+                        reason: "a coverage revision was committed more than once".to_owned(),
+                    }
+                    .fail();
+                }
+                Ok(())
+            }
+            _ => unreachable!("only evidence transactions use evidence validation"),
+        }
+    }
 
-fn apply_accepted_evidence(
-    state: &mut ControlStoreState,
-    accepted: &EvidenceAcceptedTransactionV1,
-    path: &Path,
-) -> Result<()> {
-    validate_evidence_identity(&accepted.identity, path)?;
-    bind_source_label(state, &accepted.identity, path)?;
-    if accepted.batches.is_empty() && accepted.gap.is_none() {
-        return ControlStoreSnafu {
-            path: path.to_owned(),
-            reason: "an accepted evidence transaction has no range".to_owned(),
-        }
-        .fail();
-    }
-    let mut cursor = state
-        .evidence_cursors
-        .get(&accepted.identity)
-        .copied()
-        .unwrap_or_default();
-    if let Some(gap) = &accepted.gap {
-        validate_stored_gap(&accepted.identity, gap, path)?;
-        if gap.first_cursor
-            != checked_store_increment(
-                cursor.contiguous_cursor,
-                path,
-                "the evidence cursor is exhausted",
-            )?
-            || gap.previous_record_sha256 != cursor.last_record_sha256
-        {
+    fn validate_accepted_evidence(
+        &self,
+        accepted: &EvidenceAcceptedTransactionV1,
+        path: &Path,
+    ) -> Result<()> {
+        validate_evidence_identity(&accepted.identity, path)?;
+        validate_source_label(self, &accepted.identity, path)?;
+        if accepted.batches.is_empty() && accepted.gap.is_none() {
             return ControlStoreSnafu {
                 path: path.to_owned(),
-                reason: "accepted evidence gap is not contiguous with its durable cursor"
-                    .to_owned(),
+                reason: "an accepted evidence transaction has no range".to_owned(),
             }
             .fail();
         }
-        let key = EvidenceGapKeyV1 {
-            identity: accepted.identity.clone(),
-            first_cursor: gap.first_cursor,
-            last_cursor: gap.last_cursor,
-        };
-        if state.evidence_gaps.insert(key, gap.clone()).is_some() {
-            return ControlStoreSnafu {
-                path: path.to_owned(),
-                reason: "an immutable evidence gap was committed more than once".to_owned(),
-            }
-            .fail();
-        }
-        cursor = IntakeStateV1 {
-            contiguous_cursor: gap.last_cursor,
-            last_first_cursor: gap.first_cursor,
-            last_batch_sha256: gap.gap_sha256,
-            last_record_sha256: gap.last_record_sha256,
-        };
-    }
-    // Records, receipts, and the contiguous cursor advance in this one transaction.
-    for batch in &accepted.batches {
-        validate_stored_batch(batch, path)?;
-        let supplied_previous = batch
-            .records
-            .first()
-            .and_then(|record| record.previous_record_sha256.as_slice().try_into().ok());
-        if batch.first_cursor
-            != checked_store_increment(
-                cursor.contiguous_cursor,
-                path,
-                "the evidence cursor is exhausted",
-            )?
-            || supplied_previous != Some(cursor.last_record_sha256)
-        {
-            return ControlStoreSnafu {
-                path: path.to_owned(),
-                reason: "accepted evidence is not contiguous with its durable cursor".to_owned(),
-            }
-            .fail();
-        }
-        for record in &batch.records {
-            let key = EvidenceRecordKeyV1 {
-                identity: accepted.identity.clone(),
-                cursor: record.cursor,
-            };
-            if state.evidence_records.insert(key, record.clone()).is_some() {
+        let mut cursor = self
+            .evidence_cursors
+            .get(&accepted.identity)
+            .copied()
+            .unwrap_or_default();
+        if let Some(gap) = &accepted.gap {
+            validate_stored_gap(&accepted.identity, gap, path)?;
+            if gap.first_cursor
+                != checked_store_increment(
+                    cursor.contiguous_cursor,
+                    path,
+                    "the evidence cursor is exhausted",
+                )?
+            {
                 return ControlStoreSnafu {
                     path: path.to_owned(),
-                    reason: "an immutable evidence cursor was committed more than once".to_owned(),
+                    reason: "accepted evidence gap is not contiguous with its durable cursor"
+                        .to_owned(),
                 }
                 .fail();
             }
-        }
-        let last_record_sha256 = batch
-            .records
-            .last()
-            .and_then(|record| record.record_sha256.as_slice().try_into().ok())
-            .ok_or_else(|| {
-                ControlStoreSnafu {
+            let key = EvidenceGapKeyV1 {
+                identity: accepted.identity.clone(),
+                first_cursor: gap.first_cursor,
+                last_cursor: gap.last_cursor,
+            };
+            if self.evidence_gaps.contains_key(&key) {
+                return ControlStoreSnafu {
                     path: path.to_owned(),
-                    reason: "an accepted evidence batch has no final record digest".to_owned(),
+                    reason: "an immutable evidence gap was committed more than once".to_owned(),
                 }
-                .build()
-            })?;
-        cursor = IntakeStateV1 {
-            contiguous_cursor: batch.last_cursor,
-            last_first_cursor: batch.first_cursor,
-            last_batch_sha256: batch.batch_sha256,
-            last_record_sha256,
-        };
-        let receipt_key = EvidenceBatchKeyV1 {
-            identity: accepted.identity.clone(),
-            first_cursor: batch.first_cursor,
-            last_cursor: batch.last_cursor,
-        };
-        if state
-            .evidence_batch_receipts
-            .insert(receipt_key, batch.batch_sha256)
-            .is_some()
-        {
-            return ControlStoreSnafu {
-                path: path.to_owned(),
-                reason: "an accepted evidence receipt was committed more than once".to_owned(),
+                .fail();
             }
-            .fail();
+            cursor = IntakeStateV1 {
+                contiguous_cursor: gap.last_cursor,
+            };
         }
-        let pending_key = EvidencePendingKeyV1 {
-            identity: accepted.identity.clone(),
-            first_cursor: batch.first_cursor,
-        };
-        if let Some(pending) = state.pending_evidence_batches.remove(&pending_key) {
-            if pending != *batch {
+        for batch in &accepted.batches {
+            validate_stored_batch(batch, path)?;
+            if batch.first_cursor
+                != checked_store_increment(
+                    cursor.contiguous_cursor,
+                    path,
+                    "the evidence cursor is exhausted",
+                )?
+            {
+                return ControlStoreSnafu {
+                    path: path.to_owned(),
+                    reason: "accepted evidence is not contiguous with its durable cursor"
+                        .to_owned(),
+                }
+                .fail();
+            }
+            cursor = IntakeStateV1 {
+                contiguous_cursor: batch.last_cursor,
+            };
+            let batch_key = EvidenceBatchKeyV1 {
+                identity: accepted.identity.clone(),
+                first_cursor: batch.first_cursor,
+                last_cursor: batch.last_cursor,
+            };
+            if self.evidence_batches.contains_key(&batch_key) {
+                return ControlStoreSnafu {
+                    path: path.to_owned(),
+                    reason: "an accepted evidence segment was committed more than once".to_owned(),
+                }
+                .fail();
+            }
+            let pending_key = EvidencePendingKeyV1 {
+                identity: accepted.identity.clone(),
+                first_cursor: batch.first_cursor,
+            };
+            if self
+                .pending_evidence_batches
+                .get(&pending_key)
+                .is_some_and(|pending| pending != batch)
+            {
                 return ControlStoreSnafu {
                     path: path.to_owned(),
                     reason: "promoted pending evidence differs from its durable content".to_owned(),
@@ -3412,11 +3784,88 @@ fn apply_accepted_evidence(
                 .fail();
             }
         }
+        Ok(())
     }
-    state
-        .evidence_cursors
-        .insert(accepted.identity.clone(), cursor);
-    Ok(())
+
+    fn apply_validated_evidence_transaction(&mut self, transaction: &ControlTransactionV1) {
+        match transaction {
+            ControlTransactionV1::EvidencePending { pending } => {
+                Arc::make_mut(&mut self.evidence_source_labels).insert(
+                    source_epoch_key(&pending.identity),
+                    pending.identity.label_epoch,
+                );
+                Arc::make_mut(&mut self.pending_evidence_batches).insert(
+                    EvidencePendingKeyV1 {
+                        identity: pending.identity.clone(),
+                        first_cursor: pending.batch.first_cursor,
+                    },
+                    pending.batch.clone(),
+                );
+            }
+            ControlTransactionV1::EvidenceAccepted { accepted } => {
+                self.apply_validated_accepted_evidence(accepted);
+            }
+            ControlTransactionV1::CoverageAccepted { report } => {
+                Arc::make_mut(&mut self.evidence_source_labels).insert(
+                    source_epoch_key(&report.identity),
+                    report.identity.label_epoch,
+                );
+                Arc::make_mut(&mut self.coverage_reports).insert(
+                    CoverageReportKeyV1 {
+                        identity: report.identity.clone(),
+                        revision: report.state.revision,
+                    },
+                    report.as_ref().clone(),
+                );
+                Arc::make_mut(&mut self.coverage_cursors)
+                    .insert(report.identity.clone(), report.state);
+            }
+            _ => unreachable!("only validated evidence transactions use evidence application"),
+        }
+    }
+
+    fn apply_validated_accepted_evidence(&mut self, accepted: &EvidenceAcceptedTransactionV1) {
+        Arc::make_mut(&mut self.evidence_source_labels).insert(
+            source_epoch_key(&accepted.identity),
+            accepted.identity.label_epoch,
+        );
+        let mut cursor = self
+            .evidence_cursors
+            .get(&accepted.identity)
+            .copied()
+            .unwrap_or_default();
+        if let Some(gap) = &accepted.gap {
+            Arc::make_mut(&mut self.evidence_gaps).insert(
+                EvidenceGapKeyV1 {
+                    identity: accepted.identity.clone(),
+                    first_cursor: gap.first_cursor,
+                    last_cursor: gap.last_cursor,
+                },
+                gap.clone(),
+            );
+            cursor = IntakeStateV1 {
+                contiguous_cursor: gap.last_cursor,
+            };
+        }
+        for batch in &accepted.batches {
+            cursor = IntakeStateV1 {
+                contiguous_cursor: batch.last_cursor,
+            };
+            Arc::make_mut(&mut self.evidence_batches).insert(
+                EvidenceBatchKeyV1 {
+                    identity: accepted.identity.clone(),
+                    first_cursor: batch.first_cursor,
+                    last_cursor: batch.last_cursor,
+                },
+                batch.clone(),
+            );
+            Arc::make_mut(&mut self.pending_evidence_batches).remove(&EvidencePendingKeyV1 {
+                identity: accepted.identity.clone(),
+                first_cursor: batch.first_cursor,
+            });
+        }
+        Arc::make_mut(&mut self.evidence_cursors).insert(accepted.identity.clone(), cursor);
+    }
 }
 
 fn validate_exception_desired(
@@ -4496,54 +4945,43 @@ fn count(value: usize) -> u64 {
     u64::try_from(value).unwrap_or(u64::MAX)
 }
 
-fn commit_digest(commit: &ControlCommitV1) -> Result<String> {
-    let mut unsigned = commit.clone();
-    unsigned.commit_digest.clear();
-    let bytes = serde_json::to_vec(&unsigned).context(JsonSnafu {
-        path: PathBuf::from("<control-commit>"),
-    })?;
-    Ok(format!("{:x}", Sha256::digest(bytes)))
-}
-
-fn commit_path(root: &Path, index: u64) -> PathBuf {
-    root.join("commits").join(format!("{index:020}.json"))
-}
-
-fn write_commit(path: &Path, commit: &ControlCommitV1) -> Result<()> {
-    let parent = path.parent().ok_or_else(|| {
-        ControlStoreSnafu {
-            path: path.to_owned(),
-            reason: "the commit path has no parent".to_owned(),
+fn validate_evidence_segment_refs(
+    state: &ControlStoreState,
+    segments: &EvidenceSegmentOwner,
+    root: &Path,
+) -> Result<()> {
+    let references = state
+        .evidence_batches
+        .values()
+        .map(|batch| batch.segment)
+        .chain(
+            state
+                .pending_evidence_batches
+                .values()
+                .map(|batch| batch.segment),
+        )
+        .chain(state.coverage_reports.values().map(|report| report.segment))
+        .collect::<BTreeSet<_>>();
+    for reference in references {
+        if !segments.exists(reference)? {
+            return ControlStoreSnafu {
+                path: root.to_owned(),
+                reason: format!(
+                    "Control metadata references missing evidence segment {}",
+                    hex::encode(reference.sha256)
+                ),
+            }
+            .fail();
         }
-        .build()
-    })?;
-    let temporary = path.with_extension("tmp");
-    let bytes = serde_json::to_vec(commit).context(JsonSnafu { path })?;
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&temporary)
-        .context(IoSnafu { path: &temporary })?;
-    file.write_all(&bytes)
-        .context(IoSnafu { path: &temporary })?;
-    file.sync_all().context(IoSnafu { path: &temporary })?;
-    // A hard link publishes the synced inode without replacing a commit from another writer.
-    // A stale Control process must stop instead of creating a valid but forked hash chain.
-    if let Err(error) = fs::hard_link(&temporary, path) {
-        let _ = fs::remove_file(&temporary);
-        return Err(error).context(IoSnafu { path });
     }
-    fs::remove_file(&temporary).context(IoSnafu { path: &temporary })?;
-    File::open(parent)
-        .context(IoSnafu { path: parent })?
-        .sync_all()
-        .context(IoSnafu { path: parent })
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
     use std::path::Path;
+    use std::sync::Arc;
 
     use ed25519_dalek::SigningKey;
     use snafu::ResultExt as _;
@@ -4559,6 +4997,40 @@ mod tests {
         RegistryDigestsV1, WorkloadProtectionExceptionStateV1, WorkloadTargetFactV1,
     };
     use tempfile::TempDir;
+
+    #[test]
+    fn policy_validation_clone_shares_retained_evidence_maps() {
+        let mut state = super::ControlStoreState::default();
+        let key = super::EvidenceBatchKeyV1 {
+            identity: crate::EvidenceIntakeIdentityV1 {
+                tenant_id: [1; 16],
+                node_id: "node-a".to_owned(),
+                node_boot_id: [2; 16],
+                label_epoch: 1,
+                source_id: [3; 16],
+                source_epoch: 1,
+            },
+            first_cursor: 1,
+            last_cursor: 1,
+        };
+        Arc::make_mut(&mut state.evidence_batches).insert(
+            key.clone(),
+            crate::StoredEvidenceBatchV1 {
+                first_cursor: 1,
+                last_cursor: 1,
+                segment: crate::evidence_segment::EvidenceSegmentRefV1 { sha256: [4; 32] },
+            },
+        );
+
+        let mut validation = state.clone();
+        assert!(Arc::ptr_eq(
+            &state.evidence_batches,
+            &validation.evidence_batches
+        ));
+        Arc::make_mut(&mut validation.evidence_batches).remove(&key);
+        assert!(state.evidence_batches.contains_key(&key));
+        assert!(!validation.evidence_batches.contains_key(&key));
+    }
 
     fn signed_artifact(
         document: &PolicyDocumentV1,
@@ -5135,7 +5607,7 @@ mod tests {
     }
 
     #[test]
-    fn stale_control_writer_cannot_replace_a_published_commit() -> crate::Result<()> {
+    fn control_store_lease_allows_one_durable_owner() -> crate::Result<()> {
         let directory = TempDir::new().map_err(|error| {
             crate::error::ControlStoreSnafu {
                 path: Path::new("single-writer-test").to_owned(),
@@ -5144,7 +5616,7 @@ mod tests {
             .build()
         })?;
         let first = super::ControlStore::open(directory.path())?;
-        let stale = super::ControlStore::open(directory.path())?;
+        assert!(super::ControlStore::open(directory.path()).is_err());
         let first_proof = super::startup_absence_proof_digest("node-a", &[1; 16], 1, true, true);
         first.register_node_physical_session(
             "node-a",
@@ -5157,24 +5629,12 @@ mod tests {
             1,
         )?;
 
-        let stale_proof = super::startup_absence_proof_digest("node-b", &[2; 16], 1, true, true);
-        assert!(stale
-            .register_node_physical_session(
-                "node-b",
-                &[2; 16],
-                1,
-                Some("worker-b.example"),
-                &stale_proof,
-                true,
-                true,
-                2,
-            )
-            .is_err());
-
+        drop(first);
         let replayed = super::ControlStore::open(directory.path())?;
         assert_eq!(replayed.commit_index(), 1);
         assert!(replayed.current_node_session_matches("node-a", &[1; 16], 1)?);
         assert!(!replayed.current_node_session_matches("node-a", &[2; 16], 1)?);
+        let stale_proof = super::startup_absence_proof_digest("node-b", &[2; 16], 1, true, true);
         replayed.register_node_physical_session(
             "node-b",
             &[2; 16],
@@ -5186,6 +5646,355 @@ mod tests {
             2,
         )?;
         assert_eq!(replayed.commit_index(), 2);
+        Ok(())
+    }
+
+    #[test]
+    fn kubernetes_outage_evidence_fast_path_matches_durable_replay() -> crate::Result<()> {
+        let directory = TempDir::new().map_err(|error| {
+            crate::error::ControlStoreSnafu {
+                path: Path::new("evidence-fast-path-test").to_owned(),
+                reason: error.to_string(),
+            }
+            .build()
+        })?;
+        let store = super::ControlStore::open(directory.path())?;
+        let absence_proof = super::startup_absence_proof_digest("node-a", &[1; 16], 1, true, true);
+        store.register_node_physical_session(
+            "node-a",
+            &[1; 16],
+            1,
+            Some("worker-a.example"),
+            &absence_proof,
+            true,
+            true,
+            1,
+        )?;
+        let identity = super::EvidenceIntakeIdentityV1 {
+            tenant_id: [1; 16],
+            node_id: "node-a".to_owned(),
+            node_boot_id: [1; 16],
+            label_epoch: 1,
+            source_id: [2; 16],
+            source_epoch: 1,
+        };
+        let records = (1_u64..=3)
+            .map(|cursor| crate::EvidenceRecord {
+                observed_boottime_ns: cursor,
+                ingested_utc_ns: i64::try_from(cursor).unwrap_or_default(),
+                coverage_interval_id: vec![3; 16],
+                task_cookie: cursor,
+                reason: 1,
+                decision: 1,
+                effect_family: 1,
+                operation: 1,
+                configured_errno: -13,
+                kernel_result: -13,
+                temporal_coverage: crate::EvidenceTemporalCoverage::Complete as i32,
+                ..crate::EvidenceRecord::default()
+            })
+            .collect::<Vec<_>>();
+        let pending = super::EvidenceBatchInputV1 {
+            first_cursor: 3,
+            last_cursor: 3,
+            records: records[2..].to_vec(),
+        };
+        assert_eq!(
+            store.accept_evidence_batch(identity.clone(), pending)?,
+            super::EvidenceStoreOutcomeV1::Pending
+        );
+        let contiguous = super::EvidenceBatchInputV1 {
+            first_cursor: 1,
+            last_cursor: 2,
+            records: records[..2].to_vec(),
+        };
+        assert_eq!(
+            store.accept_evidence_batch(identity.clone(), contiguous)?,
+            super::EvidenceStoreOutcomeV1::Accepted
+        );
+        let counters = crate::CoverageCounters {
+            attempted: 3,
+            requested: 3,
+            emitted: 3,
+            next_sequence: 4,
+            ..crate::CoverageCounters::default()
+        };
+        let coverage = crate::CoverageReport {
+            source_id: identity.source_id.to_vec(),
+            cpu_id: 0,
+            source_epoch: identity.source_epoch,
+            revision: 1,
+            intervals: vec![crate::CoverageInterval {
+                interval_id: vec![3; 16],
+                source_epoch: identity.source_epoch,
+                revision: 1,
+                state: "HEALTHY".to_owned(),
+                first_sequence: 1,
+                last_sequence: Some(3),
+                opening_counters: Some(crate::CoverageCounters::default()),
+                closing_counters: Some(counters),
+                gap_reasons: Vec::new(),
+                current: true,
+            }],
+        };
+        store.accept_coverage_report(super::CoverageReportInputV1 {
+            identity: identity.clone(),
+            report: coverage.clone(),
+        })?;
+
+        let live_health = store.health()?;
+        let live_records = store.accepted_evidence_records(&identity)?;
+        assert_eq!(store.evidence_cursor(&identity)?, 3);
+        assert_eq!(
+            store.latest_coverage_report(&identity)?,
+            Some(coverage.clone())
+        );
+        drop(store);
+
+        let replayed = super::ControlStore::open(directory.path())?;
+        assert_eq!(replayed.health()?, live_health);
+        assert_eq!(replayed.accepted_evidence_records(&identity)?, live_records);
+        assert_eq!(replayed.evidence_cursor(&identity)?, 3);
+        assert_eq!(replayed.latest_coverage_report(&identity)?, Some(coverage));
+        assert!(replayed.current_node_session_matches("node-a", &[1; 16], 1)?);
+        Ok(())
+    }
+
+    #[test]
+    fn latest_state_retains_every_segment_and_meets_the_storage_target() -> crate::Result<()> {
+        const BATCHES: u64 = 130;
+        const RECORDS_PER_BATCH: u64 = 64;
+        const LEGACY_BYTES_PER_RECORD: u64 = 16_776;
+
+        let directory = TempDir::new().map_err(|error| {
+            crate::error::ControlStoreSnafu {
+                path: Path::new("latest-state-test").to_owned(),
+                reason: error.to_string(),
+            }
+            .build()
+        })?;
+        let store = super::ControlStore::open(directory.path())?;
+        let identity = crate::EvidenceIntakeIdentityV1 {
+            tenant_id: [1; 16],
+            node_id: "node-a".to_owned(),
+            node_boot_id: [2; 16],
+            label_epoch: 1,
+            source_id: [3; 16],
+            source_epoch: 1,
+        };
+        for batch_index in 0..BATCHES {
+            let first_cursor = batch_index * RECORDS_PER_BATCH + 1;
+            let records = (first_cursor..first_cursor + RECORDS_PER_BATCH)
+                .map(|cursor| crate::EvidenceRecord {
+                    observed_boottime_ns: cursor,
+                    ingested_utc_ns: i64::try_from(cursor).unwrap_or_default(),
+                    coverage_interval_id: vec![4; 16],
+                    task_cookie: cursor,
+                    reason: 1,
+                    decision: 1,
+                    effect_family: 1,
+                    operation: 1,
+                    configured_errno: -13,
+                    kernel_result: -13,
+                    temporal_coverage: crate::EvidenceTemporalCoverage::Complete as i32,
+                    ..crate::EvidenceRecord::default()
+                })
+                .collect();
+            assert_eq!(
+                store.accept_evidence_batch(
+                    identity.clone(),
+                    crate::EvidenceBatchInputV1 {
+                        first_cursor,
+                        last_cursor: first_cursor + RECORDS_PER_BATCH - 1,
+                        records,
+                    },
+                )?,
+                crate::EvidenceStoreOutcomeV1::Accepted
+            );
+        }
+        let segments = directory.path().join("evidence/segments");
+        let segment_count = std::fs::read_dir(&segments)
+            .map_err(|error| crate::Error::Io {
+                path: segments.clone(),
+                source: error,
+                location: snafu::Location::default(),
+            })?
+            .count();
+        assert_eq!(segment_count as u64, BATCHES);
+        let state = directory.path().join("state.bin");
+        assert!(state.is_file());
+        assert!(!directory.path().join("commits").exists());
+
+        let mut stored_bytes = std::fs::metadata(&state)
+            .map_err(|error| crate::Error::Io {
+                path: state,
+                source: error,
+                location: snafu::Location::default(),
+            })?
+            .len();
+        for entry in std::fs::read_dir(&segments).map_err(|error| crate::Error::Io {
+            path: segments.clone(),
+            source: error,
+            location: snafu::Location::default(),
+        })? {
+            let path = entry
+                .map_err(|error| crate::Error::Io {
+                    path: segments.clone(),
+                    source: error,
+                    location: snafu::Location::default(),
+                })?
+                .path();
+            stored_bytes = stored_bytes.saturating_add(
+                std::fs::metadata(&path)
+                    .map_err(|error| crate::Error::Io {
+                        path,
+                        source: error,
+                        location: snafu::Location::default(),
+                    })?
+                    .len(),
+            );
+        }
+        let record_count = BATCHES * RECORDS_PER_BATCH;
+        assert!(stored_bytes * 100 <= LEGACY_BYTES_PER_RECORD * record_count);
+
+        drop(store);
+        let started = std::time::Instant::now();
+        let reopened = super::ControlStore::open(directory.path())?;
+        assert!(started.elapsed() < std::time::Duration::from_secs(1));
+        assert_eq!(reopened.commit_index(), BATCHES);
+        assert_eq!(
+            reopened.accepted_evidence_records(&identity)?.len() as u64,
+            record_count
+        );
+        assert_eq!(
+            std::fs::read_dir(&segments)
+                .map_err(|error| crate::Error::Io {
+                    path: segments.clone(),
+                    source: error,
+                    location: snafu::Location::default(),
+                })?
+                .count() as u64,
+            BATCHES
+        );
+        drop(reopened);
+
+        let segment = std::fs::read_dir(&segments)
+            .map_err(|error| crate::Error::Io {
+                path: segments.clone(),
+                source: error,
+                location: snafu::Location::default(),
+            })?
+            .next()
+            .ok_or_else(|| {
+                crate::error::ControlStoreSnafu {
+                    path: directory.path().to_owned(),
+                    reason: "latest-state test did not write an evidence segment".to_owned(),
+                }
+                .build()
+            })?
+            .map_err(|error| crate::Error::Io {
+                path: segments,
+                source: error,
+                location: snafu::Location::default(),
+            })?
+            .path();
+        std::fs::remove_file(&segment).map_err(|error| crate::Error::Io {
+            path: segment,
+            source: error,
+            location: snafu::Location::default(),
+        })?;
+        assert!(super::ControlStore::open(directory.path()).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn evidence_capacity_blocks_or_retains_without_rewriting_segments() -> crate::Result<()> {
+        let identity = crate::EvidenceIntakeIdentityV1 {
+            tenant_id: [1; 16],
+            node_id: "node-a".to_owned(),
+            node_boot_id: [2; 16],
+            label_epoch: 1,
+            source_id: [3; 16],
+            source_epoch: 1,
+        };
+        let batch = |cursor| crate::EvidenceBatchInputV1 {
+            first_cursor: cursor,
+            last_cursor: cursor,
+            records: vec![crate::EvidenceRecord {
+                observed_boottime_ns: cursor,
+                task_cookie: cursor,
+                coverage_interval_id: vec![4; 16],
+                reason: 1,
+                decision: 1,
+                effect_family: 1,
+                operation: 1,
+                configured_errno: -13,
+                kernel_result: -13,
+                temporal_coverage: crate::EvidenceTemporalCoverage::Complete as i32,
+                ..crate::EvidenceRecord::default()
+            }],
+        };
+        let limits = |capacity_policy| crate::EvidenceStoreLimitsV1 {
+            maximum_retained_bytes: 8 * 1_024 * 1_024,
+            maximum_retained_records: 1,
+            capacity_policy,
+        };
+
+        let blocked = TempDir::new().map_err(|error| {
+            crate::error::ControlStoreSnafu {
+                path: Path::new("blocked-evidence-store").to_owned(),
+                reason: error.to_string(),
+            }
+            .build()
+        })?;
+        let store = super::ControlStore::open_with_evidence_limits(
+            blocked.path(),
+            limits(crate::EvidenceStoreCapacityPolicyV1::Block),
+        )?;
+        store.accept_evidence_batch(identity.clone(), batch(1))?;
+        assert!(store
+            .accept_evidence_batch(identity.clone(), batch(2))
+            .is_err());
+        assert_eq!(
+            std::fs::read_dir(blocked.path().join("evidence/segments"))
+                .map_err(|error| crate::Error::Io {
+                    path: blocked.path().to_owned(),
+                    source: error,
+                    location: snafu::Location::default(),
+                })?
+                .count(),
+            1
+        );
+
+        let retained = TempDir::new().map_err(|error| {
+            crate::error::ControlStoreSnafu {
+                path: Path::new("retained-evidence-store").to_owned(),
+                reason: error.to_string(),
+            }
+            .build()
+        })?;
+        let store = super::ControlStore::open_with_evidence_limits(
+            retained.path(),
+            limits(crate::EvidenceStoreCapacityPolicyV1::Retain),
+        )?;
+        store.accept_evidence_batch(identity.clone(), batch(1))?;
+        store.accept_evidence_batch(identity.clone(), batch(2))?;
+        drop(store);
+        let reopened = super::ControlStore::open_with_evidence_limits(
+            retained.path(),
+            limits(crate::EvidenceStoreCapacityPolicyV1::Retain),
+        )?;
+        assert_eq!(reopened.accepted_evidence_records(&identity)?.len(), 2);
+        assert_eq!(
+            std::fs::read_dir(retained.path().join("evidence/segments"))
+                .map_err(|error| crate::Error::Io {
+                    path: retained.path().to_owned(),
+                    source: error,
+                    location: snafu::Location::default(),
+                })?
+                .count(),
+            2
+        );
         Ok(())
     }
 

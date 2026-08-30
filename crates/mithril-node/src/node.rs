@@ -3407,6 +3407,7 @@ mod tests {
                 private_key_path: state_directory.join("node-key.pem"),
                 reconnect_minimum_ms: 100,
                 reconnect_maximum_ms: 5_000,
+                maximum_clock_skew_ns: 30_000_000_000,
             },
             evidence: None,
             runtime_observation: None,

@@ -9,8 +9,8 @@ type TestResult = Result<(), Box<dyn std::error::Error>>;
 fn invalid_store_exits_with_one_formatted_owner_error() -> TestResult {
     let directory = TempDir::new()?;
     let store = directory.path().join("store");
-    fs::create_dir_all(store.join("commits"))?;
-    fs::write(store.join("commits/00000000000000000001.json"), b"{}")?;
+    fs::create_dir_all(&store)?;
+    fs::write(store.join("state.bin"), b"invalid")?;
     let config = control_config(&directory, &store)?;
 
     let output = Command::new(env!("CARGO_BIN_EXE_mithril-control"))
@@ -33,7 +33,10 @@ fn invalid_store_exits_with_one_formatted_owner_error() -> TestResult {
         1
     );
     assert!(stderr.contains(" ERROR mithril_control:"), "{stderr}");
-    assert!(stderr.contains("Mithril Control JSON"), "{stderr}");
+    assert!(
+        stderr.contains("the current Control state is truncated"),
+        "{stderr}"
+    );
     Ok(())
 }
 

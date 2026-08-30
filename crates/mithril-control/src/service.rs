@@ -91,6 +91,7 @@ struct ControlState {
     sessions: BTreeMap<String, NodeSession>,
     pending: BTreeMap<Vec<u8>, PendingAdministrativeResponse>,
     kubernetes_workload_targets: BTreeMap<String, crate::WorkloadTargetFactV1>,
+    kubernetes_workload_inventory_complete: bool,
 }
 
 struct NodeSession {
@@ -255,6 +256,20 @@ impl ControlPlane {
         )
     }
 
+    pub(crate) fn complete_kubernetes_workload_inventory(
+        &self,
+    ) -> Option<Vec<crate::WorkloadTargetFactV1>> {
+        self.state.lock().ok().and_then(|state| {
+            state.kubernetes_workload_inventory_complete.then(|| {
+                state
+                    .kubernetes_workload_targets
+                    .values()
+                    .cloned()
+                    .collect()
+            })
+        })
+    }
+
     pub fn replace_kubernetes_workload_inventory(
         &self,
         targets: Vec<crate::WorkloadTargetFactV1>,
@@ -285,11 +300,13 @@ impl ControlPlane {
             ));
         }
         let mut state = self.lock_state()?;
-        if state.kubernetes_workload_targets == targets {
-            return Ok(false);
+        let changed = !state.kubernetes_workload_inventory_complete
+            || state.kubernetes_workload_targets != targets;
+        state.kubernetes_workload_inventory_complete = true;
+        if changed {
+            state.kubernetes_workload_targets = targets;
         }
-        state.kubernetes_workload_targets = targets;
-        Ok(true)
+        Ok(changed)
     }
 
     #[must_use]
@@ -546,6 +563,26 @@ impl ControlPlane {
         // Policy and evidence RPCs require trust acknowledgement from this boot and label epoch.
         self.trust
             .require_session_acknowledged(
+                node_id,
+                node_boot_id,
+                self.session_label_epoch(&identity)?,
+            )
+            .map_err(invalid_policy_status)
+    }
+
+    fn require_current_evidence_trust(
+        &self,
+        node_id: &str,
+        context: &NodeSessionContext,
+    ) -> Result<(), Status> {
+        let node_boot_id: [u8; 16] = context
+            .node_boot_id
+            .as_slice()
+            .try_into()
+            .map_err(|_| Status::invalid_argument("node boot identity is not Id128"))?;
+        let identity = StreamIdentity::new(node_id.to_owned(), context)?;
+        self.trust
+            .require_evidence_session_acknowledged(
                 node_id,
                 node_boot_id,
                 self.session_label_epoch(&identity)?,
@@ -954,7 +991,16 @@ impl NodeEvidence for ControlPlane {
         request: Request<EvidenceBatchRequest>,
     ) -> Result<Response<EvidenceAck>, Status> {
         let node_id = self.authenticated_node(&request)?;
-        let acknowledgement = self.receive_evidence_batch(&node_id, request.into_inner())?;
+        let request = request.into_inner();
+        let control = self.clone();
+        // Durable evidence intake performs fsync. Keep it off the RPC executor so policy and
+        // readiness requests can enter their owners while evidence upload is busy.
+        let acknowledgement =
+            tokio::task::spawn_blocking(move || control.receive_evidence_batch(&node_id, request))
+                .await
+                .map_err(|error| {
+                    Status::internal(format!("evidence intake worker failed: {error}"))
+                })??;
         Ok(Response::new(acknowledgement))
     }
 
@@ -968,8 +1014,23 @@ impl NodeEvidence for ControlPlane {
         let control = self.clone();
         tokio::spawn(async move {
             while let Some(message) = input.next().await {
-                let result = message
-                    .and_then(|request| control.receive_evidence_stream_item(&node_id, request));
+                let result = match message {
+                    Ok(request) => {
+                        let control = control.clone();
+                        let node_id = node_id.clone();
+                        match tokio::task::spawn_blocking(move || {
+                            control.receive_evidence_stream_item(&node_id, request)
+                        })
+                        .await
+                        {
+                            Ok(result) => result,
+                            Err(error) => Err(Status::internal(format!(
+                                "evidence intake worker failed: {error}"
+                            ))),
+                        }
+                    }
+                    Err(status) => Err(status),
+                };
                 match result {
                     Ok(acknowledgement) => {
                         if output.send(Ok(acknowledgement)).await.is_err() {
@@ -1016,7 +1077,7 @@ impl ControlPlane {
             }
             crate::evidence_stream_request::Item::Gap(gap) => {
                 self.require_session(node_id, &session)?;
-                self.require_current_trust(node_id, &session)?;
+                self.require_current_evidence_trust(node_id, &session)?;
                 let evidence = self.evidence.as_ref().ok_or_else(|| {
                     Status::failed_precondition("Control has no durable evidence intake owner")
                 })?;
@@ -1029,7 +1090,7 @@ impl ControlPlane {
                     source_id = %hex::encode(&gap.source_id),
                     first_cursor = %gap.first_cursor,
                     last_cursor = %gap.last_cursor,
-                    discarded_records = %gap.discarded_records,
+                    discarded_records = %gap.last_cursor.saturating_sub(gap.first_cursor).saturating_add(1),
                     discarded_bytes = %gap.discarded_bytes
                 );
                 Ok(EvidenceStreamAck {
@@ -1052,7 +1113,7 @@ impl ControlPlane {
             .ok_or_else(|| Status::invalid_argument("node session context is required"))?;
         // A degraded node must upload retained evidence before it can recover readiness.
         self.require_session(node_id, context)?;
-        self.require_current_trust(node_id, context)?;
+        self.require_current_evidence_trust(node_id, context)?;
         let batch = request
             .batch
             .as_ref()
@@ -1082,7 +1143,7 @@ impl ControlPlane {
             node_id = %node_id,
             node_boot_id = %hex::encode(&context.node_boot_id),
             first_cursor = %batch.first_cursor,
-            last_cursor = %batch.last_cursor,
+            last_cursor = %batch.first_cursor.saturating_add(batch.records.len() as u64).saturating_sub(1),
             count = %batch.records.len()
         );
         Ok(acknowledgement)
@@ -1097,12 +1158,29 @@ impl NodeCoverage for ControlPlane {
     ) -> Result<Response<CoverageAck>, Status> {
         let node_id = self.authenticated_node(&request)?;
         let request = request.into_inner();
+        let control = self.clone();
+        let acknowledgement =
+            tokio::task::spawn_blocking(move || control.receive_coverage_report(&node_id, request))
+                .await
+                .map_err(|error| {
+                    Status::internal(format!("coverage intake worker failed: {error}"))
+                })??;
+        Ok(Response::new(acknowledgement))
+    }
+}
+
+impl ControlPlane {
+    fn receive_coverage_report(
+        &self,
+        node_id: &str,
+        request: CoverageReportRequest,
+    ) -> Result<CoverageAck, Status> {
         let context = request
             .session
             .as_ref()
             .ok_or_else(|| Status::invalid_argument("node session context is required"))?;
-        self.require_session(&node_id, context)?;
-        let authenticated = self.authenticated_evidence_node(&node_id, context)?;
+        self.require_session(node_id, context)?;
+        let authenticated = self.authenticated_evidence_node(node_id, context)?;
         let report = request
             .report
             .as_ref()
@@ -1118,7 +1196,7 @@ impl NodeCoverage for ControlPlane {
             source_epoch = %report.source_epoch,
             revision = %report.revision
         );
-        Ok(Response::new(acknowledgement))
+        Ok(acknowledgement)
     }
 }
 
@@ -2293,6 +2371,21 @@ mod tests {
 
         assert_eq!(control.workload_inventory().len(), 1);
         assert!(control.kubernetes_workload_inventory().is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn kubernetes_outage_inventory_distinguishes_unknown_from_complete_empty(
+    ) -> Result<(), tonic::Status> {
+        let control = control();
+
+        assert_eq!(control.complete_kubernetes_workload_inventory(), None);
+        assert!(control.replace_kubernetes_workload_inventory(Vec::new())?);
+        assert_eq!(
+            control.complete_kubernetes_workload_inventory(),
+            Some(Vec::new())
+        );
+        assert!(!control.replace_kubernetes_workload_inventory(Vec::new())?);
         Ok(())
     }
 

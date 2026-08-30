@@ -2,10 +2,9 @@ use std::path::PathBuf;
 
 use prost::Message as _;
 use serde::{Deserialize, Serialize};
-use sha2::{Digest as _, Sha256};
 use tonic::Status;
 
-use crate::error::EvidenceStateSnafu;
+use crate::evidence_segment::EvidenceSegmentRefV1;
 use crate::{
     CoverageAck, CoverageCounters, CoverageReport, EvidenceAck, EvidenceBatch, EvidenceGap,
     EvidenceGapAck, EvidenceRecord, Result,
@@ -53,28 +52,19 @@ pub struct AuthenticatedEvidenceNodeV1 {
 #[serde(deny_unknown_fields)]
 pub(crate) struct IntakeStateV1 {
     pub contiguous_cursor: u64,
-    pub last_first_cursor: u64,
-    pub last_batch_sha256: [u8; 32],
-    pub last_record_sha256: [u8; 32],
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct CoverageIntakeStateV1 {
-    pub source_epoch: u64,
     pub revision: u64,
-    pub report_sha256: [u8; 32],
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct StoredRecordV1 {
-    pub cursor: u64,
-    pub observation_id: Vec<u8>,
-    pub payload: Vec<u8>,
-    pub payload_sha256: Vec<u8>,
-    pub previous_record_sha256: Vec<u8>,
-    pub record_sha256: Vec<u8>,
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct EvidenceBatchInputV1 {
+    pub first_cursor: u64,
+    pub last_cursor: u64,
+    pub records: Vec<EvidenceRecord>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -82,8 +72,7 @@ pub(crate) struct StoredRecordV1 {
 pub(crate) struct StoredEvidenceBatchV1 {
     pub first_cursor: u64,
     pub last_cursor: u64,
-    pub batch_sha256: [u8; 32],
-    pub records: Vec<StoredRecordV1>,
+    pub segment: EvidenceSegmentRefV1,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -91,11 +80,7 @@ pub(crate) struct StoredEvidenceBatchV1 {
 pub(crate) struct StoredEvidenceGapV1 {
     pub first_cursor: u64,
     pub last_cursor: u64,
-    pub previous_record_sha256: [u8; 32],
-    pub last_record_sha256: [u8; 32],
-    pub discarded_records: u64,
     pub discarded_bytes: u64,
-    pub gap_sha256: [u8; 32],
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -103,39 +88,19 @@ pub(crate) struct StoredEvidenceGapV1 {
 pub(crate) struct StoredCoverageReportV1 {
     pub identity: EvidenceIntakeIdentityV1,
     pub state: CoverageIntakeStateV1,
-    pub encoded_report: Vec<u8>,
+    pub segment: EvidenceSegmentRefV1,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct CoverageReportInputV1 {
+    pub identity: EvidenceIntakeIdentityV1,
+    pub report: CoverageReport,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum EvidenceStoreOutcomeV1 {
     Accepted,
     Pending,
-}
-
-impl From<&EvidenceRecord> for StoredRecordV1 {
-    fn from(record: &EvidenceRecord) -> Self {
-        Self {
-            cursor: record.cursor,
-            observation_id: record.observation_id.clone(),
-            payload: record.payload.clone(),
-            payload_sha256: record.payload_sha256.clone(),
-            previous_record_sha256: record.previous_record_sha256.clone(),
-            record_sha256: record.record_sha256.clone(),
-        }
-    }
-}
-
-impl From<StoredRecordV1> for EvidenceRecord {
-    fn from(record: StoredRecordV1) -> Self {
-        Self {
-            cursor: record.cursor,
-            observation_id: record.observation_id,
-            payload: record.payload,
-            payload_sha256: record.payload_sha256,
-            previous_record_sha256: record.previous_record_sha256,
-            record_sha256: record.record_sha256,
-        }
-    }
 }
 
 impl EvidenceIntakeOwner {
@@ -160,21 +125,16 @@ impl EvidenceIntakeOwner {
         node_id: &str,
         batch: &EvidenceBatch,
     ) -> std::result::Result<AuthenticatedEvidenceNodeV1, Status> {
-        let record = batch
-            .records
-            .first()
-            .ok_or_else(|| Status::invalid_argument("evidence batch has no records"))?;
-        let envelope = ObservationEnvelopeV1::from_wire_bytes(&record.payload)
-            .map_err(|_| Status::invalid_argument("evidence payload schema is invalid"))?;
-        let node_boot_id = envelope
+        let node_boot_id: [u8; 16] = batch
             .node_boot_id
-            .ok_or_else(|| Status::invalid_argument("node evidence has no boot identity"))?
-            .to_be_bytes();
-        if envelope.tenant_id.to_be_bytes() != tenant_id {
-            return Err(Status::permission_denied(
-                "evidence tenant identity is not authenticated",
-            ));
-        }
+            .as_slice()
+            .try_into()
+            .map_err(|_| Status::invalid_argument("evidence boot identity is not Id128"))?;
+        let source_id: [u8; 16] = batch
+            .source_id
+            .as_slice()
+            .try_into()
+            .map_err(|_| Status::invalid_argument("evidence source identity is not Id128"))?;
         // Current mTLS and trust authenticate the sender. The retained record selects
         // the exact durable session that originally owned its immutable stream.
         let session = self
@@ -183,8 +143,8 @@ impl EvidenceIntakeOwner {
                 tenant_id,
                 node_id,
                 node_boot_id,
-                envelope.source_id.to_be_bytes(),
-                envelope.source_epoch,
+                source_id,
+                batch.source_epoch,
             )
             .map_err(|_| {
                 Status::permission_denied(
@@ -206,85 +166,66 @@ impl EvidenceIntakeOwner {
         batch: &EvidenceBatch,
     ) -> std::result::Result<EvidenceAck, Status> {
         validate_authenticated_node(authenticated)?;
+        let node_boot_id: [u8; 16] = batch
+            .node_boot_id
+            .as_slice()
+            .try_into()
+            .map_err(|_| Status::invalid_argument("evidence boot identity is not Id128"))?;
+        let source_id: [u8; 16] = batch
+            .source_id
+            .as_slice()
+            .try_into()
+            .map_err(|_| Status::invalid_argument("evidence source identity is not Id128"))?;
         if batch.records.is_empty()
             || batch.records.len() > MAX_EVIDENCE_BATCH_RECORDS
             || batch.encoded_len() > MAX_EVIDENCE_BATCH_PAYLOAD_BYTES
-            || batch.batch_sha256.len() != 32
+            || node_boot_id == [0; 16]
+            || source_id == [0; 16]
+            || batch.source_epoch == 0
+            || batch.node_boot_id.as_slice() != authenticated.node_boot_id
         {
             return Err(Status::invalid_argument(
                 "evidence batch identity or bounds are invalid",
             ));
         }
-        let batch_digest: [u8; 32] = batch.batch_sha256.as_slice().try_into().map_err(|_| {
-            Status::invalid_argument("evidence batch digest must be one SHA-256 digest")
-        })?;
-        let cursor_count = batch
-            .last_cursor
-            .checked_sub(batch.first_cursor)
-            .and_then(|span| span.checked_add(1));
-        if batch.first_cursor == 0 || cursor_count != u64::try_from(batch.records.len()).ok() {
+        let last_cursor = batch
+            .first_cursor
+            .checked_add(u64::try_from(batch.records.len()).unwrap_or(u64::MAX))
+            .and_then(|cursor| cursor.checked_sub(1))
+            .ok_or_else(|| Status::invalid_argument("evidence batch cursor range overflowed"))?;
+        if batch.first_cursor == 0 {
             return Err(Status::invalid_argument(
                 "evidence batch cursor range does not match its record count",
             ));
         }
-        let mut previous = batch
-            .records
-            .first()
-            .and_then(|record| record.previous_record_sha256.as_slice().try_into().ok())
-            .ok_or_else(|| {
-                Status::invalid_argument("evidence batch has no valid previous record digest")
-            })?;
-        // Every record in a batch must resolve to the same authenticated evidence stream.
-        let mut stream_identity = None;
         for (index, record) in batch.records.iter().enumerate() {
             let cursor = batch.first_cursor
                 + u64::try_from(index).map_err(|_| {
                     Status::invalid_argument("evidence batch record index exceeds u64")
                 })?;
-            validate_record(record, cursor, previous)?;
-            let envelope = ObservationEnvelopeV1::from_wire_bytes(&record.payload)
-                .map_err(|_| Status::invalid_argument("evidence payload schema is invalid"))?;
-            let identity = EvidenceIntakeIdentityV1 {
-                tenant_id: envelope.tenant_id.to_be_bytes(),
-                node_id: authenticated.node_id.clone(),
-                node_boot_id: envelope
-                    .node_boot_id
-                    .ok_or_else(|| Status::invalid_argument("node evidence has no boot identity"))?
-                    .to_be_bytes(),
-                label_epoch: authenticated.label_epoch,
-                source_id: envelope.source_id.to_be_bytes(),
-                source_epoch: envelope.source_epoch,
-            };
-            if identity.tenant_id != authenticated.tenant_id
-                || identity.node_boot_id != authenticated.node_boot_id
-                || stream_identity
-                    .as_ref()
-                    .is_some_and(|current| current != &identity)
-            {
-                return Err(Status::permission_denied(
-                    "evidence tenant, boot, source, or label identity is not authenticated",
-                ));
-            }
-            stream_identity = Some(identity);
-            previous = record.record_sha256.as_slice().try_into().map_err(|_| {
-                Status::invalid_argument("evidence record digest must be one SHA-256 digest")
-            })?;
+            ObservationEnvelopeV1::from_wire_record(
+                authenticated.tenant_id.into(),
+                node_boot_id.into(),
+                source_id.into(),
+                batch.source_epoch,
+                cursor,
+                batch.cpu_id,
+                record,
+            )
+            .map_err(|_| Status::invalid_argument("evidence record is invalid"))?;
         }
-        let actual_batch = batch_digest_for(&batch.records);
-        if batch.last_cursor != batch.records.last().map_or(0, |record| record.cursor)
-            || actual_batch != batch_digest
-        {
-            return Err(Status::data_loss(
-                "evidence batch digest does not match its records",
-            ));
-        }
-        let identity = stream_identity
-            .ok_or_else(|| Status::invalid_argument("evidence batch has no stream identity"))?;
-        let stored = StoredEvidenceBatchV1 {
+        let identity = EvidenceIntakeIdentityV1 {
+            tenant_id: authenticated.tenant_id,
+            node_id: authenticated.node_id.clone(),
+            node_boot_id,
+            label_epoch: authenticated.label_epoch,
+            source_id,
+            source_epoch: batch.source_epoch,
+        };
+        let stored = EvidenceBatchInputV1 {
             first_cursor: batch.first_cursor,
-            last_cursor: batch.last_cursor,
-            batch_sha256: batch_digest,
-            records: batch.records.iter().map(StoredRecordV1::from).collect(),
+            last_cursor,
+            records: batch.records.clone(),
         };
         // Pending batches are durable but receive no acknowledgement before the gap closes.
         if self
@@ -297,11 +238,7 @@ impl EvidenceIntakeOwner {
                 "evidence batch is durable but waits for an earlier cursor range",
             ));
         }
-        Ok(EvidenceAck {
-            first_cursor: batch.first_cursor,
-            last_cursor: batch.last_cursor,
-            batch_sha256: batch.batch_sha256.clone(),
-        })
+        Ok(EvidenceAck {})
     }
 
     #[allow(clippy::result_large_err)]
@@ -320,20 +257,6 @@ impl EvidenceIntakeOwner {
             gap.source_id.as_slice().try_into().map_err(|_| {
                 Status::invalid_argument("evidence gap source identity is not Id128")
             })?;
-        let previous_record_sha256: [u8; 32] = gap
-            .previous_record_sha256
-            .as_slice()
-            .try_into()
-            .map_err(|_| Status::invalid_argument("evidence gap previous digest is not SHA-256"))?;
-        let last_record_sha256: [u8; 32] =
-            gap.last_record_sha256.as_slice().try_into().map_err(|_| {
-                Status::invalid_argument("evidence gap final digest is not SHA-256")
-            })?;
-        let gap_sha256: [u8; 32] = gap
-            .gap_sha256
-            .as_slice()
-            .try_into()
-            .map_err(|_| Status::invalid_argument("evidence gap digest is not SHA-256"))?;
         let cursor_count = gap
             .last_cursor
             .checked_sub(gap.first_cursor)
@@ -344,13 +267,11 @@ impl EvidenceIntakeOwner {
             || source_id == [0; 16]
             || gap.source_epoch == 0
             || gap.first_cursor == 0
-            || cursor_count != Some(gap.discarded_records)
+            || cursor_count.is_none()
             || gap.discarded_bytes == 0
-            || last_record_sha256 == [0; 32]
-            || gap_sha256 != evidence_gap_digest(gap)
         {
             return Err(Status::invalid_argument(
-                "evidence gap identity, range, count, or digest is invalid",
+                "evidence gap identity or range is invalid",
             ));
         }
         let session = self
@@ -381,19 +302,11 @@ impl EvidenceIntakeOwner {
                 StoredEvidenceGapV1 {
                     first_cursor: gap.first_cursor,
                     last_cursor: gap.last_cursor,
-                    previous_record_sha256,
-                    last_record_sha256,
-                    discarded_records: gap.discarded_records,
                     discarded_bytes: gap.discarded_bytes,
-                    gap_sha256,
                 },
             )
             .map_err(internal_status)?;
-        Ok(EvidenceGapAck {
-            first_cursor: gap.first_cursor,
-            last_cursor: gap.last_cursor,
-            gap_sha256: gap.gap_sha256.clone(),
-        })
+        Ok(EvidenceGapAck {})
     }
 
     pub fn contiguous_cursor(&self, identity: &EvidenceIntakeIdentityV1) -> Result<u64> {
@@ -407,37 +320,12 @@ impl EvidenceIntakeOwner {
         report: &CoverageReport,
     ) -> std::result::Result<CoverageAck, Status> {
         validate_authenticated_node(authenticated)?;
-        let report_digest: [u8; 32] = report
-            .report_sha256
+        let source_id: [u8; 16] = report
+            .source_id
             .as_slice()
             .try_into()
-            .map_err(|_| Status::invalid_argument("coverage report digest must be SHA-256"))?;
-        let mut unsigned = report.clone();
-        unsigned.report_sha256.clear();
-        let actual_digest: [u8; 32] = Sha256::digest(unsigned.encode_to_vec()).into();
-        if actual_digest != report_digest {
-            return Err(Status::data_loss(
-                "coverage report digest does not match its content",
-            ));
-        }
+            .map_err(|_| Status::invalid_argument("coverage source identity is not Id128"))?;
         validate_coverage_report(report)?;
-        // Current intervals must describe one source so the report has one durable cursor.
-        let source_ids = report
-            .intervals
-            .iter()
-            .filter(|interval| interval.current)
-            .map(|interval| interval.source_id.as_slice())
-            .collect::<std::collections::BTreeSet<_>>();
-        if source_ids.len() != 1 {
-            return Err(Status::invalid_argument(
-                "coverage must have exactly one current source identity",
-            ));
-        }
-        let source_id: [u8; 16] = source_ids
-            .into_iter()
-            .next()
-            .and_then(|value| value.try_into().ok())
-            .ok_or_else(|| Status::invalid_argument("coverage has no current source identity"))?;
         let identity = EvidenceIntakeIdentityV1 {
             tenant_id: authenticated.tenant_id,
             node_id: authenticated.node_id.clone(),
@@ -447,52 +335,20 @@ impl EvidenceIntakeOwner {
             source_epoch: report.source_epoch,
         };
         self.store
-            .accept_coverage_report(StoredCoverageReportV1 {
+            .accept_coverage_report(CoverageReportInputV1 {
                 identity,
-                state: CoverageIntakeStateV1 {
-                    source_epoch: report.source_epoch,
-                    revision: report.revision,
-                    report_sha256: report_digest,
-                },
-                encoded_report: report.encode_to_vec(),
+                report: report.clone(),
             })
             .map_err(internal_status)?;
-        Ok(coverage_ack(report))
+        Ok(CoverageAck {})
     }
 
     pub fn latest_coverage_report(
         &self,
         identity: &EvidenceIntakeIdentityV1,
     ) -> Result<Option<CoverageReport>> {
-        self.store
-            .latest_coverage_report(identity)?
-            .map(|stored| {
-                CoverageReport::decode(stored.encoded_report.as_slice()).map_err(|error| {
-                    EvidenceStateSnafu {
-                        path: self.store.root(),
-                        reason: format!("stored coverage report decoding failed: {error}"),
-                    }
-                    .build()
-                })
-            })
-            .transpose()
+        self.store.latest_coverage_report(identity)
     }
-}
-
-#[must_use]
-pub fn evidence_gap_digest(gap: &EvidenceGap) -> [u8; 32] {
-    let mut digest = Sha256::new();
-    digest.update(b"MITHRIL-EVIDENCE-GAP-V1\0");
-    digest.update(&gap.node_boot_id);
-    digest.update(&gap.source_id);
-    digest.update(gap.source_epoch.to_be_bytes());
-    digest.update(gap.first_cursor.to_be_bytes());
-    digest.update(gap.last_cursor.to_be_bytes());
-    digest.update(&gap.previous_record_sha256);
-    digest.update(&gap.last_record_sha256);
-    digest.update(gap.discarded_records.to_be_bytes());
-    digest.update(gap.discarded_bytes.to_be_bytes());
-    digest.finalize().into()
 }
 
 #[allow(clippy::result_large_err)]
@@ -514,6 +370,8 @@ fn validate_authenticated_node(
 #[allow(clippy::result_large_err)]
 fn validate_coverage_report(report: &CoverageReport) -> std::result::Result<(), Status> {
     if report.source_epoch == 0
+        || report.source_id.len() != 16
+        || report.source_id.iter().all(|byte| *byte == 0)
         || report.revision == 0
         || report.intervals.is_empty()
         || report.intervals.len() > MAX_COVERAGE_INTERVALS
@@ -523,15 +381,10 @@ fn validate_coverage_report(report: &CoverageReport) -> std::result::Result<(), 
         ));
     }
     let mut interval_ids = std::collections::BTreeSet::new();
-    let mut current_cpus = std::collections::BTreeSet::new();
-    // Negative claims require a current healthy interval for every reported CPU.
-    let mut current_healthy = true;
     let mut current_count = 0_usize;
     for interval in &report.intervals {
         let ids_valid = interval.interval_id.len() == 16
             && interval.interval_id.iter().any(|byte| *byte != 0)
-            && interval.source_id.len() == 16
-            && interval.source_id.iter().any(|byte| *byte != 0)
             && interval_ids.insert(interval.interval_id.as_slice());
         let state = CoverageStateV1::try_from(interval.state.as_str()).ok();
         let mut reasons = std::collections::BTreeSet::new();
@@ -579,18 +432,11 @@ fn validate_coverage_report(report: &CoverageReport) -> std::result::Result<(), 
         }
         if interval.current {
             current_count += 1;
-            if !current_cpus.insert(interval.cpu_id) {
-                return Err(Status::invalid_argument(
-                    "coverage report contains duplicate current CPU state",
-                ));
-            }
-            current_healthy &= state == Some(CoverageStateV1::Healthy) && reasons.is_empty();
         }
     }
-    let calculated_negative_eligibility = current_count > 0 && current_healthy;
-    if report.negative_claim_eligible != calculated_negative_eligibility {
+    if current_count != 1 {
         return Err(Status::invalid_argument(
-            "coverage report negative-claim state does not match current intervals",
+            "coverage report must contain one current interval",
         ));
     }
     Ok(())
@@ -615,243 +461,22 @@ fn coverage_counters_do_not_regress(
         && closing.next_sequence >= opening.next_sequence
 }
 
-fn coverage_ack(report: &CoverageReport) -> CoverageAck {
-    CoverageAck {
-        source_epoch: report.source_epoch,
-        revision: report.revision,
-        report_sha256: report.report_sha256.clone(),
-    }
-}
-
-#[allow(clippy::result_large_err)]
-fn validate_record(
-    record: &EvidenceRecord,
-    expected_cursor: u64,
-    previous: [u8; 32],
-) -> std::result::Result<(), Status> {
-    if record.cursor != expected_cursor
-        || record.observation_id.len() != 32
-        || record.payload.is_empty()
-        || record.payload.len() > MAX_EVIDENCE_RECORD_BYTES
-        || record.payload_sha256.len() != 32
-        || record.previous_record_sha256.as_slice() != previous
-        || record.record_sha256.len() != 32
-    {
-        return Err(Status::invalid_argument(
-            "evidence record identity or bounds are invalid",
-        ));
-    }
-    let payload_digest: [u8; 32] = Sha256::digest(&record.payload).into();
-    let supplied_payload: [u8; 32] = record.payload_sha256.as_slice().try_into().map_err(|_| {
-        Status::invalid_argument("evidence payload digest must be one SHA-256 digest")
-    })?;
-    let supplied_record: [u8; 32] = record.record_sha256.as_slice().try_into().map_err(|_| {
-        Status::invalid_argument("evidence record digest must be one SHA-256 digest")
-    })?;
-    // Verify both the payload identity and the hash-chain link before persistence.
-    if payload_digest != supplied_payload
-        || record_digest(record, previous) != supplied_record
-        || !payload_has_identity(&record.payload, &record.observation_id)
-    {
-        return Err(Status::data_loss(
-            "evidence record content or digest is invalid",
-        ));
-    }
-    Ok(())
-}
-
-fn payload_has_identity(payload: &[u8], observation_id: &[u8]) -> bool {
-    let Ok(envelope) = ObservationEnvelopeV1::from_wire_bytes(payload) else {
-        return false;
-    };
-    envelope.observation_id.as_slice() == observation_id
-}
-
-fn record_digest(record: &EvidenceRecord, previous: [u8; 32]) -> [u8; 32] {
-    let mut digest = Sha256::new();
-    digest.update(1_u32.to_be_bytes());
-    digest.update(record.cursor.to_be_bytes());
-    digest.update(&record.observation_id);
-    digest.update(&record.payload_sha256);
-    digest.update(previous);
-    digest.finalize().into()
-}
-
-fn batch_digest_for(records: &[EvidenceRecord]) -> [u8; 32] {
-    let mut digest = Sha256::new();
-    for record in records {
-        digest.update(record.cursor.to_be_bytes());
-        digest.update(&record.record_sha256);
-    }
-    digest.finalize().into()
-}
-
 fn internal_status(error: crate::Error) -> Status {
     Status::internal(error.to_string())
 }
 
 #[cfg(test)]
 mod tests {
-    use super::EvidenceIntakeOwner;
     use crate::{
-        CoverageCounters, CoverageInterval, CoverageReport, EvidenceBatch, EvidenceFieldKeyV1,
-        EvidenceFieldV1, EvidenceGap, EvidenceIdV1, EvidencePayloadV1, EvidenceRecord,
-        EvidenceSensitivityV1, EvidenceValueV1, ObservationEnvelopeV1, ProofQualityV1,
-        StoredEvidenceGapV1, TemporalCoverageV1,
+        CoverageCounters, CoverageInterval, CoverageReport, EvidenceBatch, EvidenceIdV1,
+        EvidenceRecord, KernelEffectEvidenceV1, ObservationEnvelopeV1, StoredEvidenceGapV1,
+        TemporalCoverageV1,
     };
-    use prost::Message as _;
-    use sha2::{Digest as _, Sha256};
 
-    fn observation(cursor: u64) -> Result<ObservationEnvelopeV1, Box<dyn std::error::Error>> {
-        let proof_quality = ProofQualityV1::kernel_decision(TemporalCoverageV1::Complete);
-        let payload = EvidencePayloadV1::new(
-            vec![
-                (
-                    EvidenceFieldKeyV1::ReasonCode,
-                    EvidenceValueV1::ReasonCode(9),
-                ),
-                (EvidenceFieldKeyV1::Decision, EvidenceValueV1::Decision(1)),
-                (
-                    EvidenceFieldKeyV1::EffectFamily,
-                    EvidenceValueV1::EffectFamily(1),
-                ),
-                (EvidenceFieldKeyV1::Operation, EvidenceValueV1::Operation(2)),
-                (EvidenceFieldKeyV1::Errno, EvidenceValueV1::Errno(-13)),
-                (
-                    EvidenceFieldKeyV1::KernelResult,
-                    EvidenceValueV1::KernelResult(-13),
-                ),
-                (
-                    EvidenceFieldKeyV1::TaskCookie,
-                    EvidenceValueV1::TaskCookie(14),
-                ),
-            ]
-            .into_iter()
-            .map(|(key, value)| EvidenceFieldV1 {
-                key,
-                sensitivity: EvidenceSensitivityV1::Internal,
-                provenance_observation_ids: Vec::new(),
-                proof_quality,
-                value,
-            })
-            .collect(),
-        )?;
-        Ok(ObservationEnvelopeV1 {
-            schema_version: 1,
-            tenant_id: EvidenceIdV1::new(1, 2),
-            observation_id: [0; 32],
-            source_id: EvidenceIdV1::new(3, 4),
-            source_epoch: 5,
-            source_sequence: cursor,
-            stable_provider_event_id: None,
-            node_boot_id: Some(EvidenceIdV1::new(6, 7)),
-            cpu_id: Some(0),
-            hook_or_adapter_id: 1,
-            payload_schema_id: 1,
-            abi_or_api_version: 1,
-            profile_generation_ref_id: Some(8),
-            boottime_ns: Some(cursor),
-            projected_utc_ns: None,
-            time_uncertainty_ns: u64::MAX,
-            ingested_utc_ns: 10,
-            payload,
-            proof_quality,
-            coverage_interval_id: EvidenceIdV1::new(11, 12),
-            transport_integrity_digest: [13; 32],
-            signature_or_batch_digest: None,
-        }
-        .finalize()?)
-    }
+    use super::{AuthenticatedEvidenceNodeV1, EvidenceIntakeIdentityV1, EvidenceIntakeOwner};
 
-    fn record_from_payload(
-        cursor: u64,
-        observation_id: [u8; 32],
-        payload: Vec<u8>,
-        previous: [u8; 32],
-    ) -> EvidenceRecord {
-        let payload_sha256: [u8; 32] = Sha256::digest(&payload).into();
-        let mut value = EvidenceRecord {
-            cursor,
-            observation_id: observation_id.to_vec(),
-            payload,
-            payload_sha256: payload_sha256.to_vec(),
-            previous_record_sha256: previous.to_vec(),
-            record_sha256: Vec::new(),
-        };
-        value.record_sha256 = super::record_digest(&value, previous).to_vec();
-        value
-    }
-
-    fn record(
-        cursor: u64,
-        previous: [u8; 32],
-    ) -> Result<EvidenceRecord, Box<dyn std::error::Error>> {
-        let observation = observation(cursor)?;
-        Ok(record_from_payload(
-            cursor,
-            observation.observation_id,
-            observation.wire_bytes()?,
-            previous,
-        ))
-    }
-
-    fn batch(
-        first: u64,
-        count: u64,
-        mut previous: [u8; 32],
-    ) -> Result<EvidenceBatch, Box<dyn std::error::Error>> {
-        let mut records = Vec::new();
-        for cursor in first..first + count {
-            let record = record(cursor, previous)?;
-            previous.copy_from_slice(&record.record_sha256);
-            records.push(record);
-        }
-        Ok(EvidenceBatch {
-            first_cursor: first,
-            last_cursor: first + count - 1,
-            batch_sha256: super::batch_digest_for(&records).to_vec(),
-            records,
-        })
-    }
-
-    fn coverage_report(epoch: u64, revision: u64, state: &str) -> CoverageReport {
-        let counters = CoverageCounters {
-            attempted: 3,
-            requested: 3,
-            emitted: 3,
-            next_sequence: 3,
-            ..CoverageCounters::default()
-        };
-        let mut report = CoverageReport {
-            source_epoch: epoch,
-            revision,
-            intervals: vec![CoverageInterval {
-                interval_id: vec![1; 16],
-                source_id: vec![2; 16],
-                source_epoch: epoch,
-                cpu_id: 0,
-                revision: 1,
-                state: state.to_owned(),
-                first_sequence: 1,
-                last_sequence: Some(3),
-                opening_counters: Some(CoverageCounters::default()),
-                closing_counters: Some(counters),
-                gap_reasons: if state == "HEALTHY" {
-                    Vec::new()
-                } else {
-                    vec!["RING_LOSS".to_owned()]
-                },
-                current: true,
-            }],
-            negative_claim_eligible: state == "HEALTHY",
-            report_sha256: Vec::new(),
-        };
-        report.report_sha256 = Sha256::digest(report.encode_to_vec()).to_vec();
-        report
-    }
-
-    fn authenticated() -> super::AuthenticatedEvidenceNodeV1 {
-        super::AuthenticatedEvidenceNodeV1 {
+    fn authenticated() -> AuthenticatedEvidenceNodeV1 {
+        AuthenticatedEvidenceNodeV1 {
             tenant_id: EvidenceIdV1::new(1, 2).to_be_bytes(),
             node_id: "node-a".to_owned(),
             node_boot_id: EvidenceIdV1::new(6, 7).to_be_bytes(),
@@ -859,64 +484,131 @@ mod tests {
         }
     }
 
-    fn evidence_identity() -> super::EvidenceIntakeIdentityV1 {
-        super::EvidenceIntakeIdentityV1 {
-            tenant_id: EvidenceIdV1::new(1, 2).to_be_bytes(),
-            node_id: "node-a".to_owned(),
-            node_boot_id: EvidenceIdV1::new(6, 7).to_be_bytes(),
-            label_epoch: 9,
+    fn identity() -> EvidenceIntakeIdentityV1 {
+        EvidenceIntakeIdentityV1 {
+            tenant_id: authenticated().tenant_id,
+            node_id: authenticated().node_id,
+            node_boot_id: authenticated().node_boot_id,
+            label_epoch: authenticated().label_epoch,
             source_id: EvidenceIdV1::new(3, 4).to_be_bytes(),
             source_epoch: 5,
         }
     }
 
-    fn coverage_identity(epoch: u64) -> super::EvidenceIntakeIdentityV1 {
-        super::EvidenceIntakeIdentityV1 {
+    fn observation(sequence: u64) -> ObservationEnvelopeV1 {
+        ObservationEnvelopeV1 {
+            tenant_id: EvidenceIdV1::from(authenticated().tenant_id),
+            node_boot_id: EvidenceIdV1::from(authenticated().node_boot_id),
+            source_id: EvidenceIdV1::from(identity().source_id),
+            source_epoch: identity().source_epoch,
+            source_sequence: sequence,
+            cpu_id: 0,
+            observed_boottime_ns: sequence,
+            ingested_utc_ns: 10,
+            coverage_interval_id: EvidenceIdV1::new(11, 12),
+            profile_generation_ref_id: Some(8),
+            temporal_coverage: TemporalCoverageV1::Complete,
+            effect: KernelEffectEvidenceV1 {
+                task_cookie: 14,
+                process_lineage_id: Some(EvidenceIdV1::new(15, 16)),
+                authority_domain_id: Some(EvidenceIdV1::new(17, 18)),
+                execution_set_id: Some(EvidenceIdV1::new(19, 20)),
+                exact_object_id: Some(EvidenceIdV1::new(21, 22)),
+                destination_id: None,
+                policy_rule_id: Some(23),
+                reason: 9,
+                decision: 1,
+                effect_family: 1,
+                operation: 2,
+                configured_errno: -13,
+                kernel_result: -13,
+            },
+        }
+    }
+
+    fn batch(first_cursor: u64, count: u64) -> Result<EvidenceBatch, Box<dyn std::error::Error>> {
+        let records = (first_cursor..first_cursor + count)
+            .map(|cursor| observation(cursor).to_wire_record())
+            .collect::<Result<Vec<EvidenceRecord>, _>>()?;
+        Ok(EvidenceBatch {
+            node_boot_id: identity().node_boot_id.to_vec(),
+            source_id: identity().source_id.to_vec(),
+            source_epoch: identity().source_epoch,
+            cpu_id: 0,
+            first_cursor,
+            records,
+        })
+    }
+
+    fn coverage_report(revision: u64, state: &str) -> CoverageReport {
+        let closing = CoverageCounters {
+            attempted: 3,
+            requested: 3,
+            emitted: 3,
+            next_sequence: 4,
+            ..CoverageCounters::default()
+        };
+        CoverageReport {
+            source_id: vec![2; 16],
+            cpu_id: 0,
+            source_epoch: 7,
+            revision,
+            intervals: vec![CoverageInterval {
+                interval_id: vec![1; 16],
+                source_epoch: 7,
+                revision: 1,
+                state: state.to_owned(),
+                first_sequence: 1,
+                last_sequence: Some(3),
+                opening_counters: Some(CoverageCounters::default()),
+                closing_counters: Some(closing),
+                gap_reasons: (state == "GAPPED")
+                    .then(|| "RING_LOSS".to_owned())
+                    .into_iter()
+                    .collect(),
+                current: true,
+            }],
+        }
+    }
+
+    fn coverage_identity() -> EvidenceIntakeIdentityV1 {
+        EvidenceIntakeIdentityV1 {
             source_id: [2; 16],
-            source_epoch: epoch,
-            ..evidence_identity()
+            source_epoch: 7,
+            ..identity()
         }
     }
 
     #[test]
-    fn intake_promotes_durable_out_of_order_batches_and_is_idempotent(
+    fn intake_promotes_out_of_order_batches_and_recovers_exact_records(
     ) -> Result<(), Box<dyn std::error::Error>> {
         let directory = tempfile::tempdir()?;
         let intake = EvidenceIntakeOwner::open(directory.path())?;
-        let first = batch(1, 2, [0; 32])?;
-        let previous = first
-            .records
-            .last()
-            .and_then(|record| record.record_sha256.as_slice().try_into().ok())
-            .ok_or("first batch has no final digest")?;
-        let third = batch(3, 1, previous)?;
+        let first = batch(1, 2)?;
+        let third = batch(3, 1)?;
 
-        let Err(pending) = intake.receive(&authenticated(), &third) else {
-            return Err("out-of-order evidence did not wait for its gap".into());
-        };
+        let pending = intake
+            .receive(&authenticated(), &third)
+            .expect_err("out-of-order evidence must remain unacknowledged");
         assert_eq!(pending.code(), tonic::Code::Unavailable);
-        assert_eq!(intake.contiguous_cursor(&evidence_identity())?, 0);
+        assert_eq!(intake.contiguous_cursor(&identity())?, 0);
 
-        let ack = intake.receive(&authenticated(), &first)?;
-        assert_eq!(ack.last_cursor, 2);
-        assert_eq!(intake.contiguous_cursor(&evidence_identity())?, 3);
-        assert_eq!(intake.receive(&authenticated(), &first)?, ack);
-        assert_eq!(intake.receive(&authenticated(), &third)?.last_cursor, 3);
+        intake.receive(&authenticated(), &first)?;
+        assert_eq!(intake.contiguous_cursor(&identity())?, 3);
+        intake.receive(&authenticated(), &first)?;
+        intake.receive(&authenticated(), &third)?;
         assert_eq!(
-            intake
-                .store()
-                .accepted_evidence_records(&evidence_identity())?
-                .len(),
-            3
+            intake.store().accepted_evidence_records(&identity())?,
+            [first.records, third.records].concat()
         );
 
         drop(intake);
-        let intake = EvidenceIntakeOwner::open(directory.path())?;
-        assert_eq!(intake.contiguous_cursor(&evidence_identity())?, 3);
+        let reopened = EvidenceIntakeOwner::open(directory.path())?;
+        assert_eq!(reopened.contiguous_cursor(&identity())?, 3);
         assert_eq!(
-            intake
+            reopened
                 .store()
-                .accepted_evidence_records(&evidence_identity())?
+                .accepted_evidence_records(&identity())?
                 .len(),
             3
         );
@@ -924,218 +616,56 @@ mod tests {
     }
 
     #[test]
-    fn durable_gap_advances_the_hash_chain_and_survives_replay(
+    fn durable_gap_advances_the_cursor_without_inventing_records(
     ) -> Result<(), Box<dyn std::error::Error>> {
         let directory = tempfile::tempdir()?;
         let intake = EvidenceIntakeOwner::open(directory.path())?;
-        let first = batch(1, 1, [0; 32])?;
-        let previous: [u8; 32] = first.records[0].record_sha256.as_slice().try_into()?;
-        intake.receive(&authenticated(), &first)?;
-
-        let mut wire_gap = EvidenceGap {
-            node_boot_id: evidence_identity().node_boot_id.to_vec(),
-            source_id: evidence_identity().source_id.to_vec(),
-            source_epoch: evidence_identity().source_epoch,
-            first_cursor: 2,
-            last_cursor: 3,
-            previous_record_sha256: previous.to_vec(),
-            last_record_sha256: vec![17; 32],
-            discarded_records: 2,
-            discarded_bytes: 4_096,
-            gap_sha256: Vec::new(),
-        };
-        wire_gap.gap_sha256 = super::evidence_gap_digest(&wire_gap).to_vec();
+        intake.receive(&authenticated(), &batch(1, 1)?)?;
         intake.store().accept_evidence_gap(
-            evidence_identity(),
+            identity(),
             StoredEvidenceGapV1 {
-                first_cursor: wire_gap.first_cursor,
-                last_cursor: wire_gap.last_cursor,
-                previous_record_sha256: previous,
-                last_record_sha256: [17; 32],
-                discarded_records: wire_gap.discarded_records,
-                discarded_bytes: wire_gap.discarded_bytes,
-                gap_sha256: wire_gap.gap_sha256.as_slice().try_into()?,
+                first_cursor: 2,
+                last_cursor: 3,
+                discarded_bytes: 4_096,
             },
         )?;
-        let fourth = batch(4, 1, [17; 32])?;
-        intake.receive(&authenticated(), &fourth)?;
-        drop(intake);
-
-        let replayed = EvidenceIntakeOwner::open(directory.path())?;
-        assert_eq!(replayed.contiguous_cursor(&evidence_identity())?, 4);
-        assert_eq!(replayed.store().health()?.evidence_gap_ranges, 1);
-        Ok(())
-    }
-
-    #[test]
-    fn intake_accepts_an_extended_retry_after_the_prefix_ack_is_lost(
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        let directory = tempfile::tempdir()?;
-        let intake = EvidenceIntakeOwner::open(directory.path())?;
-        let first = batch(1, 1, [0; 32])?;
-        let extended = batch(1, 3, [0; 32])?;
-
-        assert_eq!(intake.receive(&authenticated(), &first)?.last_cursor, 1);
-        let acknowledgement = intake.receive(&authenticated(), &extended)?;
-        assert_eq!(acknowledgement.first_cursor, 1);
-        assert_eq!(acknowledgement.last_cursor, 3);
-        assert_eq!(intake.contiguous_cursor(&evidence_identity())?, 3);
+        intake.receive(&authenticated(), &batch(4, 1)?)?;
+        assert_eq!(intake.contiguous_cursor(&identity())?, 4);
         assert_eq!(
-            intake
-                .store()
-                .accepted_evidence_records(&evidence_identity())?
-                .len(),
-            3
+            intake.store().accepted_evidence_records(&identity())?.len(),
+            2
         );
 
         drop(intake);
-        let intake = EvidenceIntakeOwner::open(directory.path())?;
+        let reopened = EvidenceIntakeOwner::open(directory.path())?;
+        assert_eq!(reopened.contiguous_cursor(&identity())?, 4);
+        assert_eq!(reopened.store().health()?.evidence_gap_ranges, 1);
         assert_eq!(
-            intake.receive(&authenticated(), &extended)?,
-            acknowledgement
-        );
-        assert_eq!(intake.contiguous_cursor(&evidence_identity())?, 3);
-        assert_eq!(
-            intake
+            reopened
                 .store()
-                .accepted_evidence_records(&evidence_identity())?
+                .accepted_evidence_records(&identity())?
                 .len(),
-            3
+            2
         );
         Ok(())
     }
 
     #[test]
-    fn intake_persists_only_the_new_suffix_of_an_extended_pending_retry(
+    fn intake_rejects_invalid_records_and_conflicting_retries(
     ) -> Result<(), Box<dyn std::error::Error>> {
         let directory = tempfile::tempdir()?;
         let intake = EvidenceIntakeOwner::open(directory.path())?;
-        let first = batch(1, 2, [0; 32])?;
-        let previous = first
-            .records
-            .last()
-            .and_then(|record| record.record_sha256.as_slice().try_into().ok())
-            .ok_or("first batch has no final digest")?;
-        let pending = batch(3, 1, previous)?;
-        let extended = batch(3, 3, previous)?;
-
-        for batch in [&pending, &extended, &extended] {
-            let error = intake
-                .receive(&authenticated(), batch)
-                .err()
-                .ok_or("out-of-order evidence did not remain pending")?;
-            assert_eq!(error.code(), tonic::Code::Unavailable);
-        }
-        drop(intake);
-
-        let intake = EvidenceIntakeOwner::open(directory.path())?;
-        assert_eq!(intake.receive(&authenticated(), &first)?.last_cursor, 2);
-        assert_eq!(intake.contiguous_cursor(&evidence_identity())?, 5);
-        assert_eq!(
-            intake
-                .store()
-                .accepted_evidence_records(&evidence_identity())?
-                .len(),
-            5
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn intake_rejects_corruption_and_conflicting_accepted_ranges(
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        let directory = tempfile::tempdir()?;
-        let intake = EvidenceIntakeOwner::open(directory.path())?;
-        let mut corrupted = batch(1, 2, [0; 32])?;
-        corrupted.records[1].payload[0] ^= 1;
-        assert!(intake.receive(&authenticated(), &corrupted).is_err());
-        assert_eq!(intake.contiguous_cursor(&evidence_identity())?, 0);
-
-        let mut overflowing = batch(1, 1, [0; 32])?;
-        overflowing.first_cursor = 0;
-        overflowing.last_cursor = u64::MAX;
-        assert!(intake.receive(&authenticated(), &overflowing).is_err());
-        assert_eq!(intake.contiguous_cursor(&evidence_identity())?, 0);
-
-        let accepted = batch(1, 1, [0; 32])?;
+        let accepted = batch(1, 1)?;
         intake.receive(&authenticated(), &accepted)?;
-        let mut different_observation = observation(1)?;
-        different_observation.ingested_utc_ns = 11;
-        let different_observation = different_observation.finalize()?;
-        let different = record_from_payload(
-            1,
-            different_observation.observation_id,
-            different_observation.wire_bytes()?,
-            [0; 32],
-        );
-        let conflicting = EvidenceBatch {
-            first_cursor: 1,
-            last_cursor: 1,
-            batch_sha256: super::batch_digest_for(std::slice::from_ref(&different)).to_vec(),
-            records: vec![different],
-        };
+
+        let mut invalid = batch(2, 1)?;
+        invalid.records[0].reason = u32::from(u8::MAX) + 1;
+        assert!(intake.receive(&authenticated(), &invalid).is_err());
+
+        let mut conflicting = accepted.clone();
+        conflicting.records[0].ingested_utc_ns += 1;
         assert!(intake.receive(&authenticated(), &conflicting).is_err());
-        assert_eq!(intake.contiguous_cursor(&evidence_identity())?, 1);
-        Ok(())
-    }
-
-    #[test]
-    fn intake_requires_a_complete_self_consistent_envelope(
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        let directory = tempfile::tempdir()?;
-        let intake = EvidenceIntakeOwner::open(directory.path())?;
-
-        let shallow_id = [1; 32];
-        let shallow_payload = serde_json::to_vec(&serde_json::json!({
-            "schema_version": 1,
-            "observation_id": shallow_id,
-        }))?;
-        let shallow = record_from_payload(1, shallow_id, shallow_payload, [0; 32]);
-        let shallow_batch = EvidenceBatch {
-            first_cursor: 1,
-            last_cursor: 1,
-            batch_sha256: super::batch_digest_for(std::slice::from_ref(&shallow)).to_vec(),
-            records: vec![shallow],
-        };
-        assert!(intake.receive(&authenticated(), &shallow_batch).is_err());
-
-        let mut tampered = observation(1)?;
-        tampered.coverage_interval_id = EvidenceIdV1::new(20, 21);
-        let tampered_payload = serde_json::to_vec(&tampered)?;
-        let tampered = record_from_payload(1, tampered.observation_id, tampered_payload, [0; 32]);
-        let tampered_batch = EvidenceBatch {
-            first_cursor: 1,
-            last_cursor: 1,
-            batch_sha256: super::batch_digest_for(std::slice::from_ref(&tampered)).to_vec(),
-            records: vec![tampered],
-        };
-        assert!(intake.receive(&authenticated(), &tampered_batch).is_err());
-        assert_eq!(intake.contiguous_cursor(&evidence_identity())?, 0);
-        Ok(())
-    }
-
-    #[test]
-    fn intake_binds_enrolled_tenant_boot_and_label_epoch() -> Result<(), Box<dyn std::error::Error>>
-    {
-        let directory = tempfile::tempdir()?;
-        let intake = EvidenceIntakeOwner::open(directory.path())?;
-        let valid = batch(1, 1, [0; 32])?;
-        let mut wrong_tenant = authenticated();
-        wrong_tenant.tenant_id = [20; 16];
-        let Err(wrong_tenant) = intake.receive(&wrong_tenant, &valid) else {
-            return Err("cross-tenant evidence was accepted".into());
-        };
-        assert_eq!(wrong_tenant.code(), tonic::Code::PermissionDenied);
-        let mut wrong_boot = authenticated();
-        wrong_boot.node_boot_id = [21; 16];
-        let Err(wrong_boot) = intake.receive(&wrong_boot, &valid) else {
-            return Err("evidence from another boot was accepted".into());
-        };
-        assert_eq!(wrong_boot.code(), tonic::Code::PermissionDenied);
-        intake.receive(&authenticated(), &valid)?;
-        let mut next_label = authenticated();
-        next_label.label_epoch += 1;
-        assert!(intake.receive(&next_label, &valid).is_err());
+        assert_eq!(intake.contiguous_cursor(&identity())?, 1);
         Ok(())
     }
 
@@ -1144,109 +674,22 @@ mod tests {
     {
         let directory = tempfile::tempdir()?;
         let intake = EvidenceIntakeOwner::open(directory.path())?;
-        let healthy = coverage_report(7, 1, "HEALTHY");
-        assert_eq!(
-            intake
-                .receive_coverage(&authenticated(), &healthy)?
-                .revision,
-            healthy.revision
-        );
-        assert_eq!(
-            intake
-                .receive_coverage(&authenticated(), &healthy)?
-                .revision,
-            1
-        );
-        let gapped = coverage_report(7, 2, "GAPPED");
+        let healthy = coverage_report(1, "HEALTHY");
+        intake.receive_coverage(&authenticated(), &healthy)?;
+        intake.receive_coverage(&authenticated(), &healthy)?;
+
+        let gapped = coverage_report(2, "GAPPED");
         intake.receive_coverage(&authenticated(), &gapped)?;
-        assert!(
-            !intake
-                .latest_coverage_report(&coverage_identity(7))?
-                .ok_or("missing coverage report")?
-                .negative_claim_eligible
-        );
         assert!(intake.receive_coverage(&authenticated(), &healthy).is_err());
+
         drop(intake);
-        let intake = EvidenceIntakeOwner::open(directory.path())?;
+        let reopened = EvidenceIntakeOwner::open(directory.path())?;
         assert_eq!(
-            intake
-                .latest_coverage_report(&coverage_identity(7))?
-                .ok_or("missing recovered coverage report")?
-                .revision,
-            2
+            reopened
+                .latest_coverage_report(&coverage_identity())?
+                .expect("coverage report must survive restart"),
+            gapped
         );
-        Ok(())
-    }
-
-    #[test]
-    fn coverage_intake_retains_closed_history_from_an_older_epoch(
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        let directory = tempfile::tempdir()?;
-        let intake = EvidenceIntakeOwner::open(directory.path())?;
-        let mut report = coverage_report(8, 1, "HEALTHY");
-        let mut old = coverage_report(7, 2, "GAPPED").intervals.remove(0);
-        old.interval_id = vec![3; 16];
-        old.current = false;
-        report.intervals.insert(0, old);
-        report.report_sha256.clear();
-        report.report_sha256 = Sha256::digest(report.encode_to_vec()).to_vec();
-
-        intake.receive_coverage(&authenticated(), &report)?;
-        assert_eq!(
-            intake
-                .latest_coverage_report(&coverage_identity(8))?
-                .ok_or("missing coverage report")?
-                .intervals
-                .len(),
-            2
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn recovery_rechecks_the_complete_durable_chain() -> Result<(), Box<dyn std::error::Error>> {
-        let directory = tempfile::tempdir()?;
-        let intake = EvidenceIntakeOwner::open(directory.path())?;
-        let first = batch(1, 2, [0; 32])?;
-        intake.receive(&authenticated(), &first)?;
-        let path = directory.path().join("commits/00000000000000000001.json");
-        std::fs::write(&path, b"corrupt durable record")?;
-        drop(intake);
-        assert!(EvidenceIntakeOwner::open(directory.path()).is_err());
-        Ok(())
-    }
-
-    #[test]
-    fn intake_removes_owned_torn_commit_writes() -> Result<(), Box<dyn std::error::Error>> {
-        let directory = tempfile::tempdir()?;
-        let commits = directory.path().join("commits");
-        std::fs::create_dir_all(&commits)?;
-        let temporary = commits.join("00000000000000000001.tmp");
-        std::fs::write(&temporary, b"torn commit")?;
-
-        let intake = EvidenceIntakeOwner::open(directory.path())?;
-        intake.receive(&authenticated(), &batch(1, 1, [0; 32])?)?;
-        assert!(!temporary.exists());
-        assert!(commits.join("00000000000000000001.json").exists());
-        Ok(())
-    }
-
-    #[test]
-    fn storage_failure_does_not_advance_the_acknowledged_cursor(
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        let directory = tempfile::tempdir()?;
-        let intake = EvidenceIntakeOwner::open(directory.path())?;
-        let blocked_temporary = directory.path().join("commits/00000000000000000001.tmp");
-        std::fs::create_dir(&blocked_temporary)?;
-        let first = batch(1, 1, [0; 32])?;
-
-        assert!(intake.receive(&authenticated(), &first).is_err());
-        assert_eq!(intake.contiguous_cursor(&evidence_identity())?, 0);
-        assert_eq!(intake.store().commit_index(), 0);
-
-        std::fs::remove_dir(blocked_temporary)?;
-        assert_eq!(intake.receive(&authenticated(), &first)?.last_cursor, 1);
-        assert_eq!(intake.contiguous_cursor(&evidence_identity())?, 1);
         Ok(())
     }
 
@@ -1255,28 +698,20 @@ mod tests {
     ) -> Result<(), Box<dyn std::error::Error>> {
         let directory = tempfile::tempdir()?;
         let intake = EvidenceIntakeOwner::open(directory.path())?;
+        let mut report = coverage_report(1, "HEALTHY");
+        report.intervals[0].gap_reasons = vec!["RING_LOSS".to_owned()];
+        assert!(intake.receive_coverage(&authenticated(), &report).is_err());
 
-        let mut reasoned_healthy = coverage_report(7, 1, "HEALTHY");
-        reasoned_healthy.intervals[0].gap_reasons = vec!["RING_LOSS".to_owned()];
-        reasoned_healthy.report_sha256.clear();
-        reasoned_healthy.report_sha256 = Sha256::digest(reasoned_healthy.encode_to_vec()).to_vec();
-        assert!(intake
-            .receive_coverage(&authenticated(), &reasoned_healthy)
-            .is_err());
-
-        let mut regressed_healthy = coverage_report(7, 1, "HEALTHY");
-        regressed_healthy.intervals[0].opening_counters = Some(CoverageCounters {
+        let mut regressed = coverage_report(1, "HEALTHY");
+        regressed.intervals[0].opening_counters = Some(CoverageCounters {
             attempted: 4,
             requested: 4,
             emitted: 4,
-            next_sequence: 4,
+            next_sequence: 5,
             ..CoverageCounters::default()
         });
-        regressed_healthy.report_sha256.clear();
-        regressed_healthy.report_sha256 =
-            Sha256::digest(regressed_healthy.encode_to_vec()).to_vec();
         assert!(intake
-            .receive_coverage(&authenticated(), &regressed_healthy)
+            .receive_coverage(&authenticated(), &regressed)
             .is_err());
         Ok(())
     }

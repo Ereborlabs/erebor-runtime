@@ -39,7 +39,6 @@ uuid.workspace = true
 zerocopy.workspace = true
 
 [dev-dependencies]
-rcgen = "0.13.2"
 tempfile = "3.23.0"
 
 [[bin]]

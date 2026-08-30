@@ -2251,6 +2251,16 @@ impl PolicyDeliveryCandidateV1 {
     }
 
     pub fn verify(&self, key: &VerifyingKey, node_id: &str, now_utc_ns: i64) -> Result<()> {
+        self.verify_with_clock_skew(key, node_id, now_utc_ns, 0)
+    }
+
+    pub fn verify_with_clock_skew(
+        &self,
+        key: &VerifyingKey,
+        node_id: &str,
+        now_utc_ns: i64,
+        maximum_clock_skew_ns: i64,
+    ) -> Result<()> {
         let unsigned = self.unsigned_bytes()?;
         let signature = Signature::from_slice(&self.signature).map_err(|error| {
             PolicySignatureSnafu {
@@ -2259,13 +2269,14 @@ impl PolicyDeliveryCandidateV1 {
             }
             .build()
         })?;
-        let valid = self.schema_version == 1
+        let valid = (0..=300_000_000_000).contains(&maximum_clock_skew_ns)
+            && self.schema_version == 1
             && self.exact_target.node_id == node_id
             && self.exact_target.tenant_id == self.tenant_id
             && self.distribution_sequence_epoch > 0
             && self.distribution_sequence > 0
-            && now_utc_ns >= self.issued_utc_ns
-            && now_utc_ns < self.expires_utc_ns
+            && now_utc_ns.saturating_add(maximum_clock_skew_ns) >= self.issued_utc_ns
+            && now_utc_ns.saturating_sub(maximum_clock_skew_ns) < self.expires_utc_ns
             && self.candidate_content_id == domain_digest(CANDIDATE_DOMAIN, &unsigned)
             && key
                 .verify(&self.signature_input(&unsigned), &signature)
@@ -2393,6 +2404,16 @@ impl PolicyBundleV1 {
         node_id: &str,
         now: i64,
     ) -> Result<()> {
+        self.verify_with_clock_skew(trusted_candidate_key, node_id, now, 0)
+    }
+
+    pub fn verify_with_clock_skew(
+        &self,
+        trusted_candidate_key: &VerifyingKey,
+        node_id: &str,
+        now: i64,
+        maximum_clock_skew_ns: i64,
+    ) -> Result<()> {
         ensure!(
             self.schema_version == 1
                 && self.bundle_digest == sha256(&self.unsigned_bytes()?)
@@ -2413,7 +2434,12 @@ impl PolicyBundleV1 {
                 reason: "the policy bundle digest is invalid",
             }
         );
-        self.candidate.verify(trusted_candidate_key, node_id, now)?;
+        self.candidate.verify_with_clock_skew(
+            trusted_candidate_key,
+            node_id,
+            now,
+            maximum_clock_skew_ns,
+        )?;
         let profile_key: [u8; 32] = self
             .profile_signing_public_key
             .as_slice()

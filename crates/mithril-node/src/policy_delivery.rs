@@ -1517,7 +1517,7 @@ impl NodePolicyDeliveryOwner {
                 && identity.kubernetes_node_name == expected_node_name
                 && identity.node_boot_id == hex::encode(node_boot_id)
                 && identity.label_epoch == label_epoch
-                && identity.policy_source_revision_id == candidate.base_policy_source_revision_id
+                && is_sha256(&identity.policy_source_revision_id)
                 && candidate.maximum_uses <= grant.maximum_uses
                 && (candidate.operation == ExceptionDeliveryOperationV1::Revoke
                     || u64::try_from(requested_duration)
@@ -1974,7 +1974,12 @@ impl NodePolicyDeliveryOwner {
             }
         );
         bundle
-            .verify(&trusted_key, &config.node_id, now_utc_ns)
+            .verify_with_clock_skew(
+                &trusted_key,
+                &config.node_id,
+                now_utc_ns,
+                config.control.maximum_clock_skew_ns,
+            )
             .context(PolicySnafu)?;
         let supported_capabilities = capabilities
             .iter()
@@ -3776,7 +3781,7 @@ fn materialize_scheduled_bindings(
             }
             .build()
         })?;
-        // Retirement can name the previous source; all other operations name the current source.
+        // Pod admission provenance stays stable while a later source revises the signed policy.
         ensure!(
             mithril_control::workload_target_fact_digest(target)
                 .is_ok_and(|digest| digest == target.workload_binding_generation_digest)
@@ -3785,10 +3790,7 @@ fn materialize_scheduled_bindings(
                 && identity.kubernetes_node_name == expected_node_name
                 && identity.node_boot_id == expected_boot_id
                 && identity.label_epoch == label_epoch
-                && (identity.policy_source_revision_id
-                    == bundle.candidate.policy_source_revision_id
-                    || bundle.candidate.operation
-                        == PolicyDeliveryOperationV1::RetireToRestrictiveTerminal),
+                && is_sha256(&identity.policy_source_revision_id),
             ControlProtocolSnafu {
                 reason: "scheduled policy target does not match this node session and candidate",
             }
@@ -4273,6 +4275,36 @@ mod tests {
     }
 
     #[test]
+    fn kubernetes_outage_candidate_uses_control_clock_skew() -> crate::Result<()> {
+        let directory = tempfile::tempdir().context(IoSnafu {
+            path: "temporary clock-skew policy delivery directory",
+        })?;
+        let mut config = config(directory.path());
+        let key = SigningKey::from_bytes(&[9; 32]);
+        let bundle = bundle(
+            &config,
+            &key,
+            1,
+            1,
+            PolicyDeliveryOperationV1::Activate,
+            None,
+            10,
+            100,
+            "node-a",
+        )?;
+        let trust = trust(directory.path(), &key)?;
+        let owner = NodePolicyDeliveryOwner::load(directory.path())?;
+
+        config.control.maximum_clock_skew_ns = 0;
+        assert!(owner
+            .prepare_activation(&bundle, &trust, &config, &capabilities(), 2, 9)
+            .is_err());
+        config.control.maximum_clock_skew_ns = 1;
+        owner.prepare_activation(&bundle, &trust, &config, &capabilities(), 2, 9)?;
+        Ok(())
+    }
+
+    #[test]
     fn rejected_policy_receipt_is_recomputed_after_restart() -> crate::Result<()> {
         let directory = tempfile::tempdir().context(IoSnafu {
             path: "temporary rejected policy receipt directory",
@@ -4535,7 +4567,8 @@ mod tests {
         let directory = tempfile::tempdir().context(IoSnafu {
             path: "temporary rejected policy directory",
         })?;
-        let config = config(directory.path());
+        let mut config = config(directory.path());
+        config.control.maximum_clock_skew_ns = 0;
         let key = SigningKey::from_bytes(&[9; 32]);
         let trust = trust(directory.path(), &key)?;
         let owner = NodePolicyDeliveryOwner::load(directory.path())?;
@@ -5010,7 +5043,7 @@ mod tests {
     }
 
     #[test]
-    fn signed_scheduled_material_is_bound_to_one_node_session() -> crate::Result<()> {
+    fn kubernetes_outage_scheduled_material_keeps_admission_provenance() -> crate::Result<()> {
         let directory = tempfile::tempdir().context(IoSnafu {
             path: "temporary scheduled policy directory",
         })?;
@@ -5364,7 +5397,8 @@ mod tests {
     }
 
     #[test]
-    fn exception_delivery_survives_restart_and_keeps_revocation_monotonic() -> crate::Result<()> {
+    fn kubernetes_outage_exception_keeps_admission_provenance_across_restart() -> crate::Result<()>
+    {
         let directory = tempfile::tempdir().context(IoSnafu {
             path: "temporary exception delivery directory",
         })?;
@@ -6192,7 +6226,8 @@ mod tests {
         kubernetes_node_name: &str,
         node_boot_id: &[u8],
     ) -> crate::Result<mithril_control::PolicyBundleV1> {
-        let source_revision_id = "a".repeat(64);
+        let admitted_source_revision_id = "a".repeat(64);
+        let source_revision_id = "d".repeat(64);
         let binding_id = crate::runtime_admission::ScheduledRuntimeBindingV1::authority_binding_id(
             "aaaaaaaa-1111-4111-8111-111111111111",
             "converter",
@@ -6215,7 +6250,7 @@ mod tests {
                 namespace_name: "default".to_owned(),
                 pod_name: "converter-0".to_owned(),
                 profile_id: "11111111-1111-4111-8111-111111111111".to_owned(),
-                policy_source_revision_id: source_revision_id.clone(),
+                policy_source_revision_id: admitted_source_revision_id,
                 binding_id,
                 protected_scope_id: "33333333-3333-4333-8333-333333333333".to_owned(),
                 workload_selector_id: "worker".to_owned(),
@@ -6513,6 +6548,7 @@ mod tests {
                 private_key_path: state_directory.join("node-key.pem"),
                 reconnect_minimum_ms: 100,
                 reconnect_maximum_ms: 5_000,
+                maximum_clock_skew_ns: 30_000_000_000,
             },
             evidence: Some(EvidenceConfig {
                 tenant_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa".to_owned(),

@@ -252,7 +252,10 @@ impl KubernetesAdmissionOwner {
         // Read the API source inside admission so watch lag cannot admit a matching Pod unprotected.
         let resources =
             list_inventory(&api, "WorkloadProtectionPolicies for Pod admission").await?;
-        let inventory = self.control.kubernetes_workload_inventory();
+        let inventory = self
+            .control
+            .complete_kubernetes_workload_inventory()
+            .ok_or_else(|| admission_error("Kubernetes workload inventory is not complete"))?;
         let mut matches = Vec::new();
         for resource in resources {
             if resource.metadata.deletion_timestamp.is_some() {
@@ -450,11 +453,36 @@ impl KubernetesAdmissionOwner {
         nodes: KubernetesNodeReadinessOwner,
         shutdown: impl Future<Output = ()> + Send + 'static,
     ) -> Result<()> {
+        let kube = Client::try_default()
+            .await
+            .map_err(|error| admission_error(format!("load Kubernetes client: {error}")))?;
+        Self::serve_client(config, kube, control, policies, nodes, shutdown).await
+    }
+
+    #[cfg(feature = "test-fixtures")]
+    /// Starts the production HTTPS owner with a caller-owned Kubernetes client.
+    pub async fn serve_with_client(
+        config: KubernetesAdmissionHttpConfigV1,
+        kube: Client,
+        control: ControlPlane,
+        policies: PolicyDesiredStateOwner,
+        nodes: KubernetesNodeReadinessOwner,
+        shutdown: impl Future<Output = ()> + Send + 'static,
+    ) -> Result<()> {
+        Self::serve_client(config, kube, control, policies, nodes, shutdown).await
+    }
+
+    async fn serve_client(
+        config: KubernetesAdmissionHttpConfigV1,
+        kube: Client,
+        control: ControlPlane,
+        policies: PolicyDesiredStateOwner,
+        nodes: KubernetesNodeReadinessOwner,
+        shutdown: impl Future<Output = ()> + Send + 'static,
+    ) -> Result<()> {
         config.validate()?;
         let owner = Arc::new(Self {
-            kube: Client::try_default()
-                .await
-                .map_err(|error| admission_error(format!("load Kubernetes client: {error}")))?,
+            kube,
             control,
             policies,
             nodes,
@@ -732,8 +760,9 @@ impl KubernetesWorkloadInventoryOwner {
         };
         // Keep the admission revision as provenance. The current live revision
         // drives rollout updates for the same profile.
-        let Some(_admitted_source_revision_id) =
-            annotations.and_then(|values| values.get(KUBERNETES_SOURCE_ANNOTATION))
+        let Some(admitted_source_revision_id) = annotations
+            .and_then(|values| values.get(KUBERNETES_SOURCE_ANNOTATION))
+            .cloned()
         else {
             return Ok(Vec::new());
         };
@@ -804,7 +833,7 @@ impl KubernetesWorkloadInventoryOwner {
             .find(|owner| owner.controller == Some(true))
             .map_or(pod_uid, |owner| owner.uid.as_str());
         // The current live revision updates existing Pods without changing their admitted profile.
-        let (source_revision, policy, _compiled) = self
+        let (_source_revision, policy, _compiled) = self
             .policies
             .live_policies_in_namespace(&namespace_name)?
             .into_iter()
@@ -812,7 +841,6 @@ impl KubernetesWorkloadInventoryOwner {
             .ok_or_else(|| {
                 admission_error("protected Pod profile has no current compiled policy")
             })?;
-        let source_revision_id = &source_revision.policy_source_revision_id;
         validate_kubernetes_policy_shape(&policy)?;
         let facts = pod_admission_facts(
             pod,
@@ -847,7 +875,7 @@ impl KubernetesWorkloadInventoryOwner {
                 namespace_name: namespace_name.clone(),
                 pod_name: pod_name.to_owned(),
                 profile_id: profile_id.clone(),
-                policy_source_revision_id: source_revision_id.clone(),
+                policy_source_revision_id: admitted_source_revision_id.clone(),
                 binding_id,
                 protected_scope_id: policy.protected_universe.protected_scope_ids[0].clone(),
                 workload_selector_id: selector_id,
@@ -1801,7 +1829,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn pending_and_terminal_protected_pods_do_not_enter_live_inventory(
+    async fn kubernetes_outage_inventory_keeps_admission_source_and_excludes_nonlive_pods(
     ) -> Result<(), Box<dyn std::error::Error>> {
         let directory = TempDir::new()?;
         let policies = test_policy_owner(directory.path())?;
@@ -1822,10 +1850,19 @@ mod tests {
             "spec": spec,
         }))?;
         let reconciled = policies.reconcile(&resource, NAMESPACE_UID, &[], 1)?;
+        let admitted_source_revision_id = reconciled.source_revision.policy_source_revision_id;
         let document = policies
             .store()
-            .policy_document(&reconciled.source_revision.policy_source_revision_id)?
+            .policy_document(&admitted_source_revision_id)?
             .ok_or("the reconciled policy has no document")?;
+        let mut updated = resource;
+        updated.metadata.generation = Some(2);
+        updated.metadata.resource_version = Some("source-2".to_owned());
+        let current = policies.reconcile(&updated, NAMESPACE_UID, &[], 2)?;
+        assert_ne!(
+            current.source_revision.policy_source_revision_id,
+            admitted_source_revision_id
+        );
 
         let service = service_fn(|_request: Request<KubeBody>| async move {
             Ok::<_, Infallible>(Response::new(Body::empty()))
@@ -1874,7 +1911,7 @@ mod tests {
             ),
             (
                 KUBERNETES_SOURCE_ANNOTATION.to_owned(),
-                reconciled.source_revision.policy_source_revision_id,
+                admitted_source_revision_id.clone(),
             ),
         ]));
         if let Some(spec) = bound.spec.as_mut() {
@@ -1908,7 +1945,13 @@ mod tests {
 
         assert_eq!(targets.len(), 1);
         assert_eq!(targets[0].node_id, "node-a");
-        assert!(targets[0].kubernetes.is_some());
+        assert_eq!(
+            targets[0]
+                .kubernetes
+                .as_ref()
+                .map(|identity| identity.policy_source_revision_id.as_str()),
+            Some(admitted_source_revision_id.as_str())
+        );
         assert!(owner
             .control
             .replace_kubernetes_workload_inventory(targets.clone())?);
@@ -1987,7 +2030,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn pod_admission_reads_a_matching_profile_before_watch_reconciliation(
+    async fn kubernetes_outage_pod_admission_reads_a_matching_profile_before_watch_reconciliation(
     ) -> Result<(), Box<dyn std::error::Error>> {
         let policy = WorkloadProtectionPolicySpec::parse(
             std::path::Path::new("kubernetes-policy-v1.yaml"),
@@ -2026,17 +2069,19 @@ mod tests {
         let directory = TempDir::new()?;
         let policies = test_policy_owner(directory.path())?;
         assert!(policies.live_policies_in_namespace("tenant-a")?.is_empty());
+        let control = ControlPlane::new(
+            Vec::new(),
+            TrustGenerationV1 {
+                generation: 1,
+                bundle_digest: "0".repeat(64),
+                policy_issuer_sequence_epoch: 0,
+                policy_signers: Vec::new(),
+            },
+        );
+        assert!(control.replace_kubernetes_workload_inventory(Vec::new())?);
         let owner = KubernetesAdmissionOwner {
             kube: Client::new(service, "default"),
-            control: ControlPlane::new(
-                Vec::new(),
-                TrustGenerationV1 {
-                    generation: 1,
-                    bundle_digest: "0".repeat(64),
-                    policy_issuer_sequence_epoch: 0,
-                    policy_signers: Vec::new(),
-                },
-            ),
+            control,
             policies: policies.clone(),
             nodes: KubernetesNodeReadinessOwner::new(KubernetesNodeControlConfigV1 {
                 daemon_set_namespace: "mithril-system".to_owned(),

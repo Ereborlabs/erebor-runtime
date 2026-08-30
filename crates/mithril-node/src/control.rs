@@ -7,8 +7,8 @@ use mithril_control::{
     node_policy_client::NodePolicyClient, node_registry_client::NodeRegistryClient,
     node_trust_client::NodeTrustClient, AdministrativeExecArmResult,
     AdministrativeExecArmStreamRequest, AdministrativeExecResolution,
-    AdministrativeExecResolutionStreamRequest, ArmAdministrativeExec, CoverageAck,
-    CoverageCounters, CoverageInterval, CoverageReport, CoverageReportRequest, EvidenceStreamAck,
+    AdministrativeExecResolutionStreamRequest, ArmAdministrativeExec, CoverageCounters,
+    CoverageInterval, CoverageReport, CoverageReportRequest, EvidenceStreamAck,
     EvidenceStreamRequest, ExceptionAcknowledgementRequest, ExceptionActivationAcknowledgement,
     ExceptionInventory, ExceptionInventoryRequest, NodeReadinessReport, NodeReadinessRequest,
     NodeRegistration, NodeRegistrationRequest, NodeSessionContext, PolicyAcknowledgementAccepted,
@@ -16,8 +16,6 @@ use mithril_control::{
     PolicyInventory, PolicyInventoryRequest, ResolveAdministrativeExec, TrustGenerationAck,
     TrustGenerationAckRequest, MAX_EVIDENCE_GRPC_MESSAGE_BYTES, MAX_POLICY_GRPC_MESSAGE_BYTES,
 };
-use prost::Message as _;
-use sha2::{Digest as _, Sha256};
 use snafu::ResultExt as _;
 use tokio::sync::{mpsc, oneshot};
 use tokio_stream::wrappers::ReceiverStream;
@@ -31,7 +29,9 @@ use crate::error::{ControlProtocolSnafu, ControlRpcSnafu, ControlTransportSnafu,
 use crate::{NodeControlConfig, Result, TrustCache};
 
 const CONTROL_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
-const CONTROL_UNARY_TIMEOUT: Duration = Duration::from_secs(1);
+// A policy or readiness RPC can wait for the current durable evidence fsync before its priority
+// store operation runs. Keep that wait bounded without forcing retries during one durable flush.
+const CONTROL_UNARY_TIMEOUT: Duration = Duration::from_secs(10);
 const CONTROL_READINESS_RENEWAL_INTERVAL: Duration = Duration::from_secs(1);
 
 #[derive(Clone)]
@@ -78,7 +78,13 @@ pub enum AdministrativeControlRequest {
 pub enum NodeControlMessage {
     Administrative(AdministrativeControlRequest),
     EvidenceAck(crate::EvidenceUploadAckV1),
-    CoverageAck(CoverageAck),
+    CoverageAck(CoverageAckV1),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CoverageAckV1 {
+    pub source_epoch: u64,
+    pub revision: u64,
 }
 
 impl NodeControlConnector {
@@ -487,7 +493,7 @@ impl ControlConnection {
         &mut self,
         snapshot: &crate::CoverageSnapshotV1,
         current_interval: &crate::CoverageIntervalV1,
-    ) -> Result<CoverageAck> {
+    ) -> Result<CoverageAckV1> {
         let all_intervals = snapshot.all_intervals();
         // Control persists one cursor per source, so each report has one current identity.
         let intervals = all_intervals
@@ -496,9 +502,7 @@ impl ControlConnection {
             .map(|interval| CoverageInterval {
                 current: interval.interval_id == current_interval.interval_id,
                 interval_id: interval.interval_id.to_be_bytes().to_vec(),
-                source_id: interval.source_id.to_be_bytes().to_vec(),
                 source_epoch: interval.source_epoch,
-                cpu_id: interval.cpu_id,
                 revision: interval.revision,
                 state: interval.state.as_str().to_owned(),
                 first_sequence: interval.first_sequence,
@@ -512,28 +516,24 @@ impl ControlConnection {
                     .collect(),
             })
             .collect();
-        let mut report = CoverageReport {
+        let report = CoverageReport {
+            source_id: current_interval.source_id.to_be_bytes().to_vec(),
+            cpu_id: current_interval.cpu_id,
             source_epoch: snapshot.source_epoch,
             revision: snapshot.revision,
             intervals,
-            negative_claim_eligible: current_interval.supports_negative_claim(),
-            report_sha256: Vec::new(),
         };
-        report.report_sha256 = Sha256::digest(report.encode_to_vec()).to_vec();
-        let expected = CoverageAck {
+        let expected = CoverageAckV1 {
             source_epoch: report.source_epoch,
             revision: report.revision,
-            report_sha256: report.report_sha256.clone(),
         };
-        let response =
-            bounded_response(self.coverage.report(bounded_request(CoverageReportRequest {
-                session: Some(self.identity.clone()),
-                report: Some(report),
-            })))
-            .await?
-            .into_inner();
+        bounded_response(self.coverage.report(bounded_request(CoverageReportRequest {
+            session: Some(self.identity.clone()),
+            report: Some(report),
+        })))
+        .await?;
         self.queued
-            .push_back(NodeControlMessage::CoverageAck(response));
+            .push_back(NodeControlMessage::CoverageAck(expected));
         Ok(expected)
     }
 
@@ -714,7 +714,30 @@ fn read(path: &std::path::Path) -> Result<Vec<u8>> {
 mod tests {
     use std::time::Duration;
 
-    use super::{bounded_request, bounded_response_with_timeout};
+    use super::{bounded_request, bounded_response_with_timeout, CONTROL_UNARY_TIMEOUT};
+
+    #[tokio::test]
+    async fn kubernetes_outage_rpc_deadline_covers_one_slow_durable_response() {
+        let slow_response = async {
+            tokio::time::sleep(Duration::from_millis(1_100)).await;
+            Ok(tonic::Response::new(()))
+        };
+        assert!(
+            bounded_response_with_timeout(slow_response, Duration::from_secs(1))
+                .await
+                .is_err()
+        );
+
+        let slow_response = async {
+            tokio::time::sleep(Duration::from_millis(1_100)).await;
+            Ok(tonic::Response::new(()))
+        };
+        assert!(
+            bounded_response_with_timeout(slow_response, CONTROL_UNARY_TIMEOUT)
+                .await
+                .is_ok()
+        );
+    }
 
     #[tokio::test]
     async fn unary_requests_propagate_and_enforce_a_deadline() {

@@ -29,6 +29,8 @@ pub struct NodeControlConfig {
     pub reconnect_minimum_ms: u64,
     #[serde(default = "default_reconnect_maximum_ms")]
     pub reconnect_maximum_ms: u64,
+    #[serde(default = "default_control_clock_skew_ns")]
+    pub maximum_clock_skew_ns: i64,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -337,9 +339,10 @@ impl NodeConfig {
         );
         ensure!(
             self.control.reconnect_minimum_ms > 0
-                && self.control.reconnect_maximum_ms >= self.control.reconnect_minimum_ms,
+                && self.control.reconnect_maximum_ms >= self.control.reconnect_minimum_ms
+                && (0..=300_000_000_000).contains(&self.control.maximum_clock_skew_ns),
             InvalidConfigurationSnafu {
-                reason: "Control reconnect bounds are invalid",
+                reason: "Control reconnect or clock-skew bounds are invalid",
             }
         );
         if let Some(runtime) = &self.runtime_observation {
@@ -601,6 +604,10 @@ const fn default_reconnect_maximum_ms() -> u64 {
     5_000
 }
 
+const fn default_control_clock_skew_ns() -> i64 {
+    30_000_000_000
+}
+
 const fn default_runtime_reconciliation_ms() -> u64 {
     2_000
 }
@@ -701,6 +708,7 @@ mod tests {
                 private_key_path: PathBuf::from("/tmp/node-key.pem"),
                 reconnect_minimum_ms: 100,
                 reconnect_maximum_ms: 5_000,
+                maximum_clock_skew_ns: 30_000_000_000,
             },
             evidence: Some(EvidenceConfig {
                 tenant_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa".to_owned(),
@@ -747,6 +755,24 @@ mod tests {
             policy_candidates: Vec::new(),
             administrative_authorization: None,
         }
+    }
+
+    #[test]
+    fn kubernetes_outage_control_clock_skew_defaults_and_is_bounded(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let control: NodeControlConfig = serde_json::from_value(serde_json::json!({
+            "endpoint": "https://mithril-control:8443",
+            "server_name": "mithril-control",
+            "ca_path": "/etc/mithril/identity/ca.pem",
+            "certificate_path": "/etc/mithril/identity/node.pem",
+            "private_key_path": "/etc/mithril/identity/node-key.pem"
+        }))?;
+        assert_eq!(control.maximum_clock_skew_ns, 30_000_000_000);
+
+        let mut invalid = config();
+        invalid.control.maximum_clock_skew_ns = 300_000_000_001;
+        assert!(invalid.validate().is_err());
+        Ok(())
     }
 
     #[test]

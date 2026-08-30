@@ -3189,6 +3189,8 @@ dependencies = [
  "prost-types",
  "rcgen",
  "reqwest",
+ "rmp-serde",
+ "rustix",
  "schemars 1.2.2",
  "secrecy",
  "serde",
@@ -3210,6 +3212,7 @@ dependencies = [
 name = "mithril-e2e"
 version = "0.1.0"
 dependencies = [
+ "axum",
  "clap",
  "ed25519-dalek 3.0.0",
  "erebor-interceptor",
@@ -3217,18 +3220,24 @@ dependencies = [
  "erebor-runtime-error",
  "erebor-runtime-ipc",
  "hex",
+ "k8s-openapi",
+ "kube",
  "libbpf-rs",
  "libc",
  "linux-raw-sys",
  "memmap2",
  "mithril-control",
  "mithril-node",
+ "rcgen",
+ "reqwest",
  "rustix",
  "serde",
  "serde_json",
  "sha2 0.10.9",
  "snafu",
  "tempfile",
+ "tokio",
+ "tower 0.4.13",
  "uuid",
  "zerocopy",
 ]
@@ -3254,7 +3263,6 @@ dependencies = [
  "mithril-control",
  "procfs",
  "prost",
- "rcgen",
  "rustix",
  "serde",
  "serde_json",
@@ -4095,6 +4103,25 @@ dependencies = [
  "libc",
  "untrusted",
  "windows-sys 0.52.0",
+]
+
+[[package]]
+name = "rmp"
+version = "0.8.15"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4ba8be72d372b2c9b35542551678538b562e7cf86c3315773cae48dfbfe7790c"
+dependencies = [
+ "num-traits",
+]
+
+[[package]]
+name = "rmp-serde"
+version = "1.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "72f81bee8c8ef9b577d1681a70ebbc962c232461e397b22c208c43c04b67a155"
+dependencies = [
+ "rmp",
+ "serde",
 ]
 
 [[package]]

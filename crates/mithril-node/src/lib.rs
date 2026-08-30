@@ -39,14 +39,13 @@ pub use observation::{
     CoverageCountersV1, CoverageGapReasonV1, CoverageHealthOwner, CoverageIntervalV1,
     CoverageSnapshotV1, CoverageStateV1, DeterministicLocalWindowOwner, EffectObservationCpuHealth,
     EffectObservationHealth, EffectObservationStore, EvidenceAckV1, EvidenceBatchV1,
-    EvidenceDigestV1, EvidenceFieldKeyV1, EvidenceFieldV1, EvidenceGapAckV1, EvidenceGapV1,
-    EvidenceIdV1, EvidencePayloadV1, EvidenceRecordV1, EvidenceUploadAckV1, EvidenceUploadV1,
-    EvidenceValueV1, EvidenceWal, EvidenceWalAppendV1, EvidenceWalCapacityPolicyV1,
-    EvidenceWalLimits, EvidenceWalRewriteV1, IntegrityV1, LocalFindingWindowSpecV1,
-    LocalFindingWindowStateV1, LocalFindingWindowV1, LocalSubjectBindingV1,
-    ObservationCanonicalizer, ObservationEnvelopeV1, OperationResultAuthorityV1, ProofQualityV1,
-    RemoteSubjectBindingV1, SensitivityV1, SourceAuthorityV1, TemporalCoverageV1,
-    MAX_EVIDENCE_FIELDS_V1, MAX_PROVENANCE_OBSERVATIONS_V1,
+    EvidenceDigestV1, EvidenceFieldKeyV1, EvidenceGapAckV1, EvidenceGapV1, EvidenceIdV1,
+    EvidenceRecordV1, EvidenceUploadAckV1, EvidenceUploadV1, EvidenceWal, EvidenceWalAppendV1,
+    EvidenceWalCapacityPolicyV1, EvidenceWalLimits, EvidenceWalRewriteV1, IntegrityV1,
+    LocalFindingWindowSpecV1, LocalFindingWindowStateV1, LocalFindingWindowV1,
+    LocalSubjectBindingV1, ObservationCanonicalizer, ObservationEnvelopeV1,
+    OperationResultAuthorityV1, ProofQualityV1, RemoteSubjectBindingV1, SensitivityV1,
+    SourceAuthorityV1, TemporalCoverageV1,
 };
 pub use policy::NodePolicyGenerationOwner;
 pub use policy_delivery::{

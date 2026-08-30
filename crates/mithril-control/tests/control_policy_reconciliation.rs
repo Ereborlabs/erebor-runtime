@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
-use ed25519_dalek::SigningKey;
+use ed25519_dalek::{SigningKey, VerifyingKey};
 use mithril_control::{
     canonical_kubernetes_policy_spec_digest, lower_kubernetes_policy, workload_target_fact_digest,
     ContainerKindV1, ControlPlane, ControlStore, ExceptionActivationAcknowledgementV1,
@@ -365,6 +365,60 @@ fn prepare_exception(store: &ControlStore) -> TestResult<PreparedException> {
         resource,
         activation,
     })
+}
+
+#[test]
+fn kubernetes_outage_exception_uses_current_policy_with_admission_provenance() -> TestResult {
+    let directory = TempDir::new()?;
+    let owner = make_owner(ControlStore::open(directory.path())?);
+    let policy = policy()?;
+    let policy_v1 = resource(&policy, "profile", OBJECT_UID, 1, false)?;
+    let initial = owner.reconcile(&policy_v1, NAMESPACE_UID, &inventory(&"1".repeat(64))?, NOW)?;
+    let admitted_source_revision_id = initial.source_revision.policy_source_revision_id;
+    let profile_id = initial.bundles[0]
+        .profile_artifact
+        .policy_document
+        .metadata
+        .profile_id
+        .clone();
+    let inventory = kubernetes_inventory(&admitted_source_revision_id, &profile_id)?;
+    let bound_v1 = owner.reconcile(&policy_v1, NAMESPACE_UID, &inventory, NOW + 1)?;
+    owner.rollout_owner().acknowledge(acknowledgement(
+        &bound_v1.bundles[0],
+        PolicyActivationStateV1::Active,
+        NOW + 2,
+    )?)?;
+
+    let policy_v2 = resource(&policy, "profile", OBJECT_UID, 2, false)?;
+    let bound_v2 = owner.reconcile(&policy_v2, NAMESPACE_UID, &inventory, NOW + 3)?;
+    let current_source_revision_id = bound_v2.source_revision.policy_source_revision_id.clone();
+    assert_ne!(current_source_revision_id, admitted_source_revision_id);
+    owner.rollout_owner().acknowledge(acknowledgement(
+        &bound_v2.bundles[0],
+        PolicyActivationStateV1::Active,
+        NOW + 4,
+    )?)?;
+
+    let activated = owner.reconcile_exception(
+        &exception_resource(EXCEPTION_UID, false)?,
+        NAMESPACE_UID,
+        &inventory,
+        NOW + 5,
+    )?;
+    assert_eq!(
+        activated.candidate.base_policy_source_revision_id,
+        current_source_revision_id
+    );
+    assert_eq!(
+        activated
+            .candidate
+            .exact_target
+            .kubernetes
+            .as_ref()
+            .map(|identity| identity.policy_source_revision_id.as_str()),
+        Some(admitted_source_revision_id.as_str())
+    );
+    Ok(())
 }
 
 #[test]
@@ -1065,6 +1119,118 @@ fn create_update_duplicate_and_restart_preserve_one_monotonic_rollout() -> TestR
     )?;
     assert_eq!(restarted.bundles, second.bundles);
     assert_eq!(reopened.commit_index(), 4);
+    Ok(())
+}
+
+#[test]
+fn kubernetes_outage_partial_two_node_update_survives_control_restart() -> TestResult {
+    let directory = TempDir::new()?;
+    let store = ControlStore::open(directory.path())?;
+    let owner = make_owner(store.clone());
+
+    let first_policy = policy()?;
+    let first_resource = resource(&first_policy, "profile", OBJECT_UID, 1, false)?;
+    let first_inventory = two_node_inventory_for_resource(&first_resource)?;
+    let first = owner.reconcile(&first_resource, NAMESPACE_UID, &first_inventory, NOW)?;
+    for bundle in &first.bundles {
+        owner.rollout_owner().acknowledge(acknowledgement(
+            bundle,
+            PolicyActivationStateV1::Active,
+            NOW + 1,
+        )?)?;
+    }
+
+    let mut second_policy = first_policy;
+    second_policy.roles[0].files[0].operations.reverse();
+    let second_resource = resource(&second_policy, "profile", OBJECT_UID, 2, false)?;
+    let second_inventory = two_node_inventory_for_resource(&second_resource)?;
+    let second = owner.reconcile(&second_resource, NAMESPACE_UID, &second_inventory, NOW + 2)?;
+    let node_a = second
+        .bundles
+        .iter()
+        .find(|bundle| bundle.candidate.exact_target.node_id == "node-a")
+        .ok_or("the replacement rollout has no node-a bundle")?;
+    let node_b = second
+        .bundles
+        .iter()
+        .find(|bundle| bundle.candidate.exact_target.node_id == "node-b")
+        .ok_or("the replacement rollout has no node-b bundle")?;
+    assert_eq!(
+        node_a.candidate.operation,
+        PolicyDeliveryOperationV1::Replace
+    );
+    assert_eq!(
+        node_b.candidate.operation,
+        PolicyDeliveryOperationV1::Replace
+    );
+
+    owner.rollout_owner().acknowledge(acknowledgement(
+        node_a,
+        PolicyActivationStateV1::Active,
+        NOW + 3,
+    )?)?;
+    let mixed = owner.reconcile(&second_resource, NAMESPACE_UID, &second_inventory, NOW + 4)?;
+    assert_eq!(mixed.status.rollout.desired, 2);
+    assert_eq!(mixed.status.rollout.active, 1);
+    assert_eq!(mixed.status.rollout.updating, 1);
+    assert_eq!(mixed.status.rollout.failed, 0);
+
+    let first_node_b = first
+        .bundles
+        .iter()
+        .find(|bundle| bundle.candidate.exact_target.node_id == "node-b")
+        .ok_or("the initial rollout has no node-b bundle")?;
+    assert_eq!(
+        store.next_bundle_for_node("node-b", std::slice::from_ref(&first_node_b.bundle_digest),)?,
+        Some(node_b.clone())
+    );
+
+    drop(owner);
+    drop(store);
+    let reopened = ControlStore::open(directory.path())?;
+    let recovered = make_owner(reopened).reconcile(
+        &second_resource,
+        NAMESPACE_UID,
+        &second_inventory,
+        NOW + 5,
+    )?;
+    assert_eq!(recovered.status.rollout, mixed.status.rollout);
+    assert_eq!(recovered.bundles, second.bundles);
+    Ok(())
+}
+
+#[test]
+fn kubernetes_outage_candidate_accepts_bounded_clock_skew() -> TestResult {
+    let directory = TempDir::new()?;
+    let owner = make_owner(ControlStore::open(directory.path())?);
+    let resource = resource(&policy()?, "profile", OBJECT_UID, 1, false)?;
+    let inventory = inventory_for_resource(&resource, &"1".repeat(64))?;
+    let reconciled = owner.reconcile(&resource, NAMESPACE_UID, &inventory, NOW)?;
+    let bundle = reconciled
+        .bundles
+        .first()
+        .ok_or("the rollout has no policy bundle")?;
+    let key_bytes: [u8; 32] = bundle.profile_signing_public_key.as_slice().try_into()?;
+    let key = VerifyingKey::from_bytes(&key_bytes)?;
+    let before_issue = bundle.candidate.issued_utc_ns - 1;
+
+    assert!(bundle
+        .verify(&key, &bundle.candidate.exact_target.node_id, before_issue)
+        .is_err());
+    bundle.verify_with_clock_skew(
+        &key,
+        &bundle.candidate.exact_target.node_id,
+        before_issue,
+        1,
+    )?;
+    assert!(bundle
+        .verify_with_clock_skew(
+            &key,
+            &bundle.candidate.exact_target.node_id,
+            before_issue,
+            300_000_000_001,
+        )
+        .is_err());
     Ok(())
 }
 
@@ -2000,7 +2166,7 @@ fn new_physical_node_epoch_starts_a_new_activation_chain() -> TestResult {
 }
 
 #[test]
-fn corrupt_or_incompatible_commit_chain_blocks_store_recovery() -> TestResult {
+fn corrupt_current_state_blocks_store_recovery() -> TestResult {
     let directory = TempDir::new()?;
     let store = ControlStore::open(directory.path())?;
     make_owner(store.clone()).reconcile(
@@ -2011,11 +2177,11 @@ fn corrupt_or_incompatible_commit_chain_blocks_store_recovery() -> TestResult {
     )?;
     drop(store);
 
-    let first_commit = directory.path().join("commits/00000000000000000001.json");
-    let bytes = std::fs::read_to_string(&first_commit)?;
-    // Change the first record without rebuilding the chain to exercise startup validation.
-    let incompatible = bytes.replacen("\"schema_version\":1", "\"schema_version\":2", 1);
-    std::fs::write(&first_commit, incompatible)?;
+    let state = directory.path().join("state.bin");
+    let mut bytes = std::fs::read(&state)?;
+    let last = bytes.last_mut().ok_or("the current state is empty")?;
+    *last ^= 1;
+    std::fs::write(&state, bytes)?;
     assert!(ControlStore::open(directory.path()).is_err());
     Ok(())
 }

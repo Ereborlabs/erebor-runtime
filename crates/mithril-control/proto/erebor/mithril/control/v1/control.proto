@@ -170,27 +170,48 @@ message NodeReadinessReport {
 }
 
 message EvidenceRecord {
-  uint64 cursor = 1;
-  bytes observation_id = 2;
-  bytes payload = 3;
-  bytes payload_sha256 = 4;
-  bytes previous_record_sha256 = 5;
-  bytes record_sha256 = 6;
+  uint64 observed_boottime_ns = 1;
+  sint64 ingested_utc_ns = 2;
+  bytes coverage_interval_id = 3;
+  optional uint64 profile_generation_ref_id = 4;
+  uint64 task_cookie = 5;
+  bytes process_lineage_id = 6;
+  bytes authority_domain_id = 7;
+  bytes execution_set_id = 8;
+  bytes exact_object_id = 9;
+  uint64 destination_id = 10;
+  uint64 policy_rule_id = 11;
+  uint32 reason = 12;
+  uint32 decision = 13;
+  uint32 effect_family = 14;
+  uint32 operation = 15;
+  sint32 configured_errno = 16;
+  sint32 kernel_result = 17;
+  EvidenceTemporalCoverage temporal_coverage = 18;
+}
+
+enum EvidenceTemporalCoverage {
+  EVIDENCE_TEMPORAL_COVERAGE_UNKNOWN = 0;
+  EVIDENCE_TEMPORAL_COVERAGE_COMPLETE = 1;
+  EVIDENCE_TEMPORAL_COVERAGE_GAPPED = 2;
+}
+
+// Stores only record bytes. Its segment reference owns stream identity and cursor bounds.
+message EvidenceRecords {
+  repeated EvidenceRecord records = 1;
 }
 
 message EvidenceBatch {
-  uint64 first_cursor = 1;
-  uint64 last_cursor = 2;
-  repeated EvidenceRecord records = 3;
-  bytes batch_sha256 = 4;
+  bytes node_boot_id = 1;
+  bytes source_id = 2;
+  uint64 source_epoch = 3;
+  uint32 cpu_id = 4;
+  uint64 first_cursor = 5;
+  repeated EvidenceRecord records = 6;
 }
 
 // Acknowledges only a complete range that Control committed contiguously.
-message EvidenceAck {
-  uint64 first_cursor = 1;
-  uint64 last_cursor = 2;
-  bytes batch_sha256 = 3;
-}
+message EvidenceAck {}
 
 // Advances a stream across records that the configured WAL rewrite policy removed.
 message EvidenceGap {
@@ -199,18 +220,10 @@ message EvidenceGap {
   uint64 source_epoch = 3;
   uint64 first_cursor = 4;
   uint64 last_cursor = 5;
-  bytes previous_record_sha256 = 6;
-  bytes last_record_sha256 = 7;
-  uint64 discarded_records = 8;
-  uint64 discarded_bytes = 9;
-  bytes gap_sha256 = 10;
+  uint64 discarded_bytes = 6;
 }
 
-message EvidenceGapAck {
-  uint64 first_cursor = 1;
-  uint64 last_cursor = 2;
-  bytes gap_sha256 = 3;
-}
+message EvidenceGapAck {}
 
 message EvidenceStreamAck {
   oneof acknowledgement {
@@ -232,32 +245,26 @@ message CoverageCounters {
 
 message CoverageInterval {
   bytes interval_id = 1;
-  bytes source_id = 2;
-  uint64 source_epoch = 3;
-  uint32 cpu_id = 4;
-  uint64 revision = 5;
-  string state = 6;
-  uint64 first_sequence = 7;
-  optional uint64 last_sequence = 8;
-  CoverageCounters opening_counters = 9;
-  optional CoverageCounters closing_counters = 10;
-  repeated string gap_reasons = 11;
-  bool current = 12;
+  uint64 source_epoch = 2;
+  uint64 revision = 3;
+  string state = 4;
+  uint64 first_sequence = 5;
+  optional uint64 last_sequence = 6;
+  CoverageCounters opening_counters = 7;
+  optional CoverageCounters closing_counters = 8;
+  repeated string gap_reasons = 9;
+  bool current = 10;
 }
 
 message CoverageReport {
-  uint64 source_epoch = 1;
-  uint64 revision = 2;
-  repeated CoverageInterval intervals = 3;
-  bool negative_claim_eligible = 4;
-  bytes report_sha256 = 5;
+  bytes source_id = 1;
+  uint32 cpu_id = 2;
+  uint64 source_epoch = 3;
+  uint64 revision = 4;
+  repeated CoverageInterval intervals = 5;
 }
 
-message CoverageAck {
-  uint64 source_epoch = 1;
-  uint64 revision = 2;
-  bytes report_sha256 = 3;
-}
+message CoverageAck {}
 
 // Describes a candidate before the node requests bounded chunks.
 message PolicyInventory {

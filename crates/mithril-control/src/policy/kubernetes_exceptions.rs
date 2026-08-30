@@ -315,8 +315,7 @@ impl ExceptionDeliveryCandidateV1 {
                 && profile_generation_ref_id > 0
                 && exact_target.kubernetes.as_ref().is_some_and(|identity| {
                     identity.profile_id == profile_id
-                        && identity.policy_source_revision_id
-                            == source.base_policy_source_revision_id
+                        && valid_sha256(&identity.policy_source_revision_id)
                         && valid_id128_hex(&identity.node_boot_id)
                 })
                 && super::workload_target_fact_digest(&exact_target)
@@ -386,8 +385,7 @@ impl ExceptionDeliveryCandidateV1 {
                     .as_ref()
                     .is_some_and(|identity| {
                         identity.profile_id == self.profile_id
-                            && identity.policy_source_revision_id
-                                == self.base_policy_source_revision_id
+                            && valid_sha256(&identity.policy_source_revision_id)
                             && valid_id128_hex(&identity.node_boot_id)
                     })
                 && super::workload_target_fact_digest(&self.exact_target).is_ok_and(|digest| {
@@ -650,6 +648,12 @@ impl PolicyDesiredStateOwner {
                 ExceptionDesiredPurposeV1::SourceLifecycle,
             );
         }
+        let base_profile_id = self
+            .store
+            .policy_document(&base_source.policy_source_revision_id)?
+            .ok_or_else(|| invalid(object_uid, "the exception base policy has no document"))?
+            .profile_id()
+            .to_owned();
         // Only API-derived scheduler facts can resolve the requested Pod and container.
         let mut targets = inventory.iter().filter(|target| {
             target.cluster_uid == self.config.cluster_uid
@@ -659,8 +663,7 @@ impl PolicyDesiredStateOwner {
                 && target.kubernetes.as_ref().is_some_and(|identity| {
                     identity.namespace_name == source.namespace_name
                         && identity.pod_name == resource.spec.target.pod.name
-                        && identity.policy_source_revision_id
-                            == base_source.policy_source_revision_id
+                        && identity.profile_id == base_profile_id
                 })
         });
         let target = targets.next().cloned().ok_or_else(|| {
@@ -1102,6 +1105,10 @@ async fn relist_exception_cluster(
     owner: &PolicyDesiredStateOwner,
     control: &crate::ControlPlane,
 ) -> Option<String> {
+    if control.complete_kubernetes_workload_inventory().is_none() {
+        owner.record_relist(false);
+        return None;
+    }
     let mut continuation = None::<String>;
     let mut resource_version = None::<String>;
     let mut seen_object_uids = BTreeSet::new();
@@ -1177,10 +1184,14 @@ async fn reconcile_exception_resource(
     } else {
         ExceptionSourceStateV1::Accepted
     };
+    let Some(inventory) = control.complete_kubernetes_workload_inventory() else {
+        owner.record_watch_failure();
+        return;
+    };
     let mut status = match owner.reconcile_exception_observation(
         &resource,
         namespace_uid.as_deref().unwrap_or_default(),
-        &control.kubernetes_workload_inventory(),
+        &inventory,
         utc_now_ns(),
         source_state,
     ) {

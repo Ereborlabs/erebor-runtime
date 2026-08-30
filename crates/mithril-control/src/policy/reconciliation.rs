@@ -1048,6 +1048,10 @@ async fn relist_cluster(
     owner: &PolicyDesiredStateOwner,
     control: &crate::ControlPlane,
 ) -> Option<String> {
+    if control.complete_kubernetes_workload_inventory().is_none() {
+        owner.record_relist(false);
+        return None;
+    }
     let mut continuation = None::<String>;
     let mut resource_version = None::<String>;
     // Collect UIDs across every page. Only a complete set can prove deletion by absence.
@@ -1089,13 +1093,13 @@ async fn relist_cluster(
     let resource_version = resource_version.filter(|value| !value.is_empty());
     // Retire missing sources before the watch begins, or discard the snapshot as incomplete.
     let complete = resource_version.is_some()
-        && owner
-            .retire_missing_sources(
-                &seen_object_uids,
-                &control.kubernetes_workload_inventory(),
-                utc_now_ns(),
-            )
-            .is_ok();
+        && control
+            .complete_kubernetes_workload_inventory()
+            .is_some_and(|inventory| {
+                owner
+                    .retire_missing_sources(&seen_object_uids, &inventory, utc_now_ns())
+                    .is_ok()
+            });
     owner.record_relist(complete);
     if complete {
         resource_version
@@ -1132,11 +1136,15 @@ async fn reconcile_resource(
     } else {
         PolicySourceStateV1::Accepted
     };
+    let Some(inventory) = control.complete_kubernetes_workload_inventory() else {
+        owner.record_watch_failure();
+        return;
+    };
     // Reconciliation failure changes only status; it does not replace the last valid rollout.
     let mut status = match owner.reconcile_observation(
         &resource,
         namespace_uid.as_deref().unwrap_or_default(),
-        &control.kubernetes_workload_inventory(),
+        &inventory,
         utc_now_ns(),
         source_state,
     ) {

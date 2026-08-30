@@ -1,4 +1,4 @@
-use erebor_interceptor_abi::{EffectObservationV1, Id128V1};
+use erebor_interceptor_abi::EffectObservationV1;
 use sha2::{Digest as _, Sha256};
 use zerocopy::IntoBytes as _;
 
@@ -6,11 +6,10 @@ use crate::error::IdentityStateSnafu;
 use crate::Result;
 
 pub use mithril_control::{
-    CoverageGapReasonV1, CoverageStateV1, EvidenceDigestV1, EvidenceFieldKeyV1, EvidenceFieldV1,
-    EvidenceIdV1, EvidencePayloadV1, EvidenceSensitivityV1 as SensitivityV1, EvidenceValueV1,
-    LocalSubjectBindingV1, ObservationEnvelopeV1, OperationResultAuthorityV1,
-    ProofIntegrityV1 as IntegrityV1, ProofQualityV1, RemoteSubjectBindingV1, SourceAuthorityV1,
-    TemporalCoverageV1, MAX_EVIDENCE_FIELDS_V1, MAX_PROVENANCE_OBSERVATIONS_V1,
+    CoverageGapReasonV1, CoverageStateV1, EvidenceDigestV1, EvidenceFieldKeyV1, EvidenceIdV1,
+    EvidenceSensitivityV1 as SensitivityV1, KernelEffectEvidenceV1, LocalSubjectBindingV1,
+    ObservationEnvelopeV1, OperationResultAuthorityV1, ProofIntegrityV1 as IntegrityV1,
+    ProofQualityV1, RemoteSubjectBindingV1, SourceAuthorityV1, TemporalCoverageV1,
 };
 
 #[derive(Clone, Copy, Debug)]
@@ -65,35 +64,24 @@ impl ObservationCanonicalizer {
             .fail();
         }
         let source_id = self.cpu_source_id(event.source_cpu_id);
-        let proof_quality = ProofQualityV1::kernel_decision(temporal_coverage);
-        let payload = kernel_payload(&event, proof_quality)?;
-        ObservationEnvelopeV1 {
-            schema_version: 1,
+        let effect = kernel_effect(&event);
+        let observation = ObservationEnvelopeV1 {
             tenant_id: self.tenant_id,
-            observation_id: [0; 32],
+            node_boot_id: self.node_boot_id,
             source_id,
             source_epoch: self.source_epoch,
             source_sequence: event.source_sequence,
-            stable_provider_event_id: None,
-            node_boot_id: Some(self.node_boot_id),
-            cpu_id: Some(event.source_cpu_id),
-            hook_or_adapter_id: u32::from(event.effect_family),
-            payload_schema_id: 1,
-            abi_or_api_version: 1,
+            cpu_id: event.source_cpu_id,
+            observed_boottime_ns: event.observed_boottime_ns,
+            ingested_utc_ns,
+            coverage_interval_id,
             profile_generation_ref_id: (event.profile_generation_ref_id > 0)
                 .then_some(event.profile_generation_ref_id),
-            boottime_ns: Some(event.observed_boottime_ns),
-            projected_utc_ns: None,
-            time_uncertainty_ns: u64::MAX,
-            ingested_utc_ns,
-            payload,
-            proof_quality,
-            coverage_interval_id,
-            transport_integrity_digest: Sha256::digest(event.as_bytes()).into(),
-            signature_or_batch_digest: None,
-        }
-        .finalize()
-        .map_err(Into::into)
+            temporal_coverage,
+            effect,
+        };
+        observation.validate()?;
+        Ok(observation)
     }
 
     pub(crate) fn cpu_source_id(self, cpu_id: u32) -> EvidenceIdV1 {
@@ -106,115 +94,33 @@ impl ObservationCanonicalizer {
     }
 }
 
-fn kernel_payload(
-    event: &EffectObservationV1,
-    proof_quality: ProofQualityV1,
-) -> Result<EvidencePayloadV1> {
-    let mut fields = vec![
-        field(
-            EvidenceFieldKeyV1::ReasonCode,
-            EvidenceValueV1::ReasonCode(u32::from(event.reason)),
-            proof_quality,
-        ),
-        field(
-            EvidenceFieldKeyV1::Decision,
-            EvidenceValueV1::Decision(u32::from(event.physical_result)),
-            proof_quality,
-        ),
-        field(
-            EvidenceFieldKeyV1::EffectFamily,
-            EvidenceValueV1::EffectFamily(event.effect_family),
-            proof_quality,
-        ),
-        field(
-            EvidenceFieldKeyV1::Operation,
-            EvidenceValueV1::Operation(event.operation),
-            proof_quality,
-        ),
-        field(
-            EvidenceFieldKeyV1::Errno,
-            EvidenceValueV1::Errno(event.configured_errno),
-            proof_quality,
-        ),
-        field(
-            EvidenceFieldKeyV1::KernelResult,
-            EvidenceValueV1::KernelResult(event.kernel_result),
-            proof_quality,
-        ),
-        field(
-            EvidenceFieldKeyV1::TaskCookie,
-            EvidenceValueV1::TaskCookie(event.task_cookie),
-            proof_quality,
-        ),
-    ];
-    push_id(
-        &mut fields,
-        EvidenceFieldKeyV1::ProcessLineageId,
-        event.process_lineage_id,
-        proof_quality,
-    );
-    push_id(
-        &mut fields,
-        EvidenceFieldKeyV1::AuthorityDomainId,
-        event.authority_domain_id,
-        proof_quality,
-    );
-    push_id(
-        &mut fields,
-        EvidenceFieldKeyV1::ExecutionSetId,
-        event.execution_set_id,
-        proof_quality,
-    );
-    if event.exact_object_key_id > 0 {
+fn kernel_effect(event: &EffectObservationV1) -> KernelEffectEvidenceV1 {
+    let exact_object_id = if event.exact_object_key_id > 0 {
         let mut digest = Sha256::new();
         digest.update(b"MITHRIL-EXACT-OBJECT-V1\0");
         digest.update(event.file_object.as_bytes());
         digest.update(event.exact_object_key_id.to_be_bytes());
-        fields.push(field(
-            EvidenceFieldKeyV1::ExactObjectId,
-            EvidenceValueV1::Id(EvidenceDigestV1::from(digest.finalize()).into()),
-            proof_quality,
-        ));
-    }
-    if event.network_destination_policy_handle > 0 {
-        fields.push(field(
-            EvidenceFieldKeyV1::DestinationId,
-            EvidenceValueV1::Destination(event.network_destination_policy_handle),
-            proof_quality,
-        ));
-    }
-    if event.composite_atom_id > 0 {
-        fields.push(field(
-            EvidenceFieldKeyV1::PolicyRuleIds,
-            EvidenceValueV1::PolicyRules(vec![event.composite_atom_id]),
-            proof_quality,
-        ));
-    }
-    EvidencePayloadV1::new(fields).map_err(Into::into)
-}
-
-fn field(
-    key: EvidenceFieldKeyV1,
-    value: EvidenceValueV1,
-    proof_quality: ProofQualityV1,
-) -> EvidenceFieldV1 {
-    EvidenceFieldV1 {
-        key,
-        sensitivity: SensitivityV1::Internal,
-        provenance_observation_ids: Vec::new(),
-        proof_quality,
-        value,
-    }
-}
-
-fn push_id(
-    fields: &mut Vec<EvidenceFieldV1>,
-    key: EvidenceFieldKeyV1,
-    value: Id128V1,
-    proof_quality: ProofQualityV1,
-) {
-    if !value.is_zero() {
-        fields.push(field(key, EvidenceValueV1::Id(value), proof_quality));
+        Some(EvidenceDigestV1::from(digest.finalize()).into())
+    } else {
+        None
+    };
+    KernelEffectEvidenceV1 {
+        task_cookie: event.task_cookie,
+        process_lineage_id: (!event.process_lineage_id.is_zero())
+            .then_some(event.process_lineage_id),
+        authority_domain_id: (!event.authority_domain_id.is_zero())
+            .then_some(event.authority_domain_id),
+        execution_set_id: (!event.execution_set_id.is_zero()).then_some(event.execution_set_id),
+        exact_object_id,
+        destination_id: (event.network_destination_policy_handle > 0)
+            .then_some(event.network_destination_policy_handle),
+        policy_rule_id: (event.composite_atom_id > 0).then_some(event.composite_atom_id),
+        reason: event.reason,
+        decision: event.physical_result,
+        effect_family: event.effect_family,
+        operation: event.operation,
+        configured_errno: event.configured_errno,
+        kernel_result: event.kernel_result,
     }
 }
 
@@ -222,10 +128,7 @@ fn push_id(
 mod tests {
     use erebor_interceptor_abi::{EffectObservationV1, Id128V1};
 
-    use super::{
-        EvidenceFieldKeyV1, EvidenceIdV1, EvidenceValueV1, ObservationCanonicalizer,
-        TemporalCoverageV1,
-    };
+    use super::{EvidenceIdV1, ObservationCanonicalizer, TemporalCoverageV1};
 
     fn canonicalizer() -> crate::Result<ObservationCanonicalizer> {
         ObservationCanonicalizer::new(
@@ -273,17 +176,11 @@ mod tests {
             TemporalCoverageV1::Complete,
             200,
         )?;
-        assert_eq!(first.observation_id, second.observation_id);
+        assert_eq!(first.observation_id()?, second.observation_id()?);
         assert_ne!(first.canonical_bytes()?, second.canonical_bytes()?);
         assert!(first.supports_negative_claim());
-        assert!(first.payload.fields.iter().any(|field| {
-            field.key == EvidenceFieldKeyV1::Operation
-                && field.value == EvidenceValueV1::Operation(2)
-        }));
-        assert!(first.payload.fields.iter().any(|field| {
-            field.key == EvidenceFieldKeyV1::KernelResult
-                && field.value == EvidenceValueV1::KernelResult(-13)
-        }));
+        assert_eq!(first.effect.operation, 2);
+        assert_eq!(first.effect.kernel_result, -13);
         let display = serde_json::to_string(&first)?;
         assert!(!display.contains("argv"));
         assert!(!display.contains("secret"));
@@ -314,8 +211,11 @@ mod tests {
             TemporalCoverageV1::Complete,
             100,
         )?;
-        assert_ne!(original.observation_id, changed_operation.observation_id);
-        assert_ne!(original.observation_id, changed_result.observation_id);
+        assert_ne!(
+            original.observation_id()?,
+            changed_operation.observation_id()?
+        );
+        assert_ne!(original.observation_id()?, changed_result.observation_id()?);
         Ok(())
     }
 
@@ -334,7 +234,7 @@ mod tests {
             100,
         )?;
         assert_ne!(first.source_id, second.source_id);
-        assert_ne!(first.observation_id, second.observation_id);
+        assert_ne!(first.observation_id()?, second.observation_id()?);
         Ok(())
     }
 

@@ -1,16 +1,13 @@
 use erebor_interceptor_abi::Id128V1;
-use minicbor::Encoder;
+use prost::Message as _;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 use snafu::{Location, Snafu};
 
-use crate::{ProofQualityV1, SourceAuthorityV1, TemporalCoverageV1};
+use crate::{EvidenceRecord, EvidenceTemporalCoverage, TemporalCoverageV1};
 
-pub const MAX_EVIDENCE_FIELDS_V1: usize = 64;
-pub const MAX_PROVENANCE_OBSERVATIONS_V1: usize = 16;
-const MAX_NESTED_IDENTITIES_V1: usize = 64;
-const MAX_PROVIDER_EVENT_ID_BYTES_V1: usize = 4_096;
+const OBSERVATION_ID_DOMAIN: &[u8] = b"MITHRIL-KERNEL-OBSERVATION-V2\0";
 
 pub type EvidenceDigestV1 = [u8; 32];
 pub type EvidenceIdV1 = Id128V1;
@@ -27,6 +24,7 @@ pub enum EvidenceModelError {
     },
 }
 
+// Finding packages use these keys to select evidence. Kernel records use typed fields on the wire.
 #[derive(
     Clone, Copy, Debug, Deserialize, Eq, JsonSchema, Ord, PartialEq, PartialOrd, Serialize,
 )]
@@ -170,324 +168,234 @@ impl TryFrom<&str> for CoverageGapReasonV1 {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(tag = "kind", content = "value", rename_all = "snake_case")]
-pub enum EvidenceValueV1 {
-    Digest(EvidenceDigestV1),
-    ReasonCode(u32),
-    Decision(u32),
-    EffectFamily(u16),
-    Operation(u16),
-    Errno(i16),
-    KernelResult(i32),
-    TaskCookie(u64),
-    Id(EvidenceIdV1),
-    ObjectClass(u64),
-    Destination(u64),
-    ProviderResult(u32),
-    CoverageIntervals(Vec<EvidenceIdV1>),
-    PolicyRules(Vec<u64>),
-    ResponseResult(u32),
-    Redacted,
-    Unknown,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
-pub struct EvidenceFieldV1 {
-    pub key: EvidenceFieldKeyV1,
-    pub sensitivity: EvidenceSensitivityV1,
-    pub provenance_observation_ids: Vec<EvidenceDigestV1>,
-    pub proof_quality: ProofQualityV1,
-    pub value: EvidenceValueV1,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct EvidencePayloadV1 {
-    pub fields: Vec<EvidenceFieldV1>,
-}
-
-impl EvidencePayloadV1 {
-    pub fn new(mut fields: Vec<EvidenceFieldV1>) -> EvidenceModelResult<Self> {
-        fields.sort_unstable_by_key(|field| field.key);
-        let payload = Self { fields };
-        payload.validate()?;
-        Ok(payload)
-    }
-
-    pub fn validate(&self) -> EvidenceModelResult<()> {
-        if self.fields.is_empty()
-            || self.fields.len() > MAX_EVIDENCE_FIELDS_V1
-            || self
-                .fields
-                .windows(2)
-                .any(|pair| pair[0].key >= pair[1].key)
-            || self.fields.iter().any(|field| {
-                field.provenance_observation_ids.len() > MAX_PROVENANCE_OBSERVATIONS_V1
-                    || field.provenance_observation_ids.contains(&[0; 32])
-                    || field
-                        .provenance_observation_ids
-                        .windows(2)
-                        .any(|pair| pair[0] >= pair[1])
-                    || !field_value_matches_key(field.key, &field.value)
-                    || !nested_value_is_bounded(&field.value)
-            })
-        {
-            return InvalidSnafu {
-                reason: "payload fields are unbounded, repeated, unsorted, or mistyped".to_owned(),
-            }
-            .fail();
-        }
-        Ok(())
-    }
+pub struct KernelEffectEvidenceV1 {
+    pub task_cookie: u64,
+    pub process_lineage_id: Option<EvidenceIdV1>,
+    pub authority_domain_id: Option<EvidenceIdV1>,
+    pub execution_set_id: Option<EvidenceIdV1>,
+    pub exact_object_id: Option<EvidenceIdV1>,
+    pub destination_id: Option<u64>,
+    pub policy_rule_id: Option<u64>,
+    pub reason: u8,
+    pub decision: u8,
+    pub effect_family: u16,
+    pub operation: u16,
+    pub configured_errno: i16,
+    pub kernel_result: i32,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ObservationEnvelopeV1 {
-    pub schema_version: u32,
     pub tenant_id: EvidenceIdV1,
-    pub observation_id: EvidenceDigestV1,
+    pub node_boot_id: EvidenceIdV1,
     pub source_id: EvidenceIdV1,
     pub source_epoch: u64,
     pub source_sequence: u64,
-    pub stable_provider_event_id: Option<Vec<u8>>,
-    pub node_boot_id: Option<EvidenceIdV1>,
-    pub cpu_id: Option<u32>,
-    pub hook_or_adapter_id: u32,
-    pub payload_schema_id: u32,
-    pub abi_or_api_version: u32,
-    pub profile_generation_ref_id: Option<u64>,
-    pub boottime_ns: Option<u64>,
-    pub projected_utc_ns: Option<i64>,
-    pub time_uncertainty_ns: u64,
+    pub cpu_id: u32,
+    pub observed_boottime_ns: u64,
     pub ingested_utc_ns: i64,
-    pub payload: EvidencePayloadV1,
-    pub proof_quality: ProofQualityV1,
     pub coverage_interval_id: EvidenceIdV1,
-    pub transport_integrity_digest: EvidenceDigestV1,
-    pub signature_or_batch_digest: Option<EvidenceDigestV1>,
+    pub profile_generation_ref_id: Option<u64>,
+    pub temporal_coverage: TemporalCoverageV1,
+    pub effect: KernelEffectEvidenceV1,
 }
 
 impl ObservationEnvelopeV1 {
-    pub fn finalize(mut self) -> EvidenceModelResult<Self> {
-        self.observation_id = self.expected_observation_id()?;
-        self.validate()?;
-        Ok(self)
-    }
-
     pub fn validate(&self) -> EvidenceModelResult<()> {
-        self.payload.validate()?;
-        let valid = self.schema_version == 1
-            && !self.tenant_id.is_zero()
-            && self.observation_id != [0; 32]
-            && !self.source_id.is_zero()
-            && self.source_epoch > 0
-            && self.source_sequence > 0
-            && !self.coverage_interval_id.is_zero()
-            && self.payload_schema_id > 0
-            && self.abi_or_api_version > 0
-            && self.transport_integrity_digest != [0; 32]
-            && self
-                .stable_provider_event_id
-                .as_ref()
-                .is_none_or(|id| !id.is_empty() && id.len() <= MAX_PROVIDER_EVENT_ID_BYTES_V1)
-            && self.node_boot_id.is_none_or(|id| !id.is_zero())
-            && self.profile_generation_ref_id.is_none_or(|id| id > 0)
-            && self
-                .signature_or_batch_digest
-                .is_none_or(|digest| digest != [0; 32])
-            && self.kernel_contract_is_complete();
-        if !valid || self.observation_id != self.expected_observation_id()? {
+        let optional_ids_are_valid = [
+            self.effect.process_lineage_id,
+            self.effect.authority_domain_id,
+            self.effect.execution_set_id,
+            self.effect.exact_object_id,
+        ]
+        .into_iter()
+        .flatten()
+        .all(|id| !id.is_zero());
+        if self.tenant_id.is_zero()
+            || self.node_boot_id.is_zero()
+            || self.source_id.is_zero()
+            || self.source_epoch == 0
+            || self.source_sequence == 0
+            || self.observed_boottime_ns == 0
+            || self.coverage_interval_id.is_zero()
+            || self.profile_generation_ref_id == Some(0)
+            || self.effect.task_cookie == 0
+            || self.effect.effect_family == 0
+            || !optional_ids_are_valid
+            || self.effect.destination_id == Some(0)
+            || self.effect.policy_rule_id == Some(0)
+        {
             return InvalidSnafu {
-                reason: "envelope identity, version, or bound is invalid".to_owned(),
+                reason: "kernel observation identity or value is invalid".to_owned(),
             }
             .fail();
         }
         Ok(())
     }
 
-    pub fn canonical_bytes(&self) -> EvidenceModelResult<Vec<u8>> {
+    pub fn to_wire_record(&self) -> EvidenceModelResult<EvidenceRecord> {
         self.validate()?;
-        canonical_cbor(self)
-    }
-
-    pub fn wire_bytes(&self) -> EvidenceModelResult<Vec<u8>> {
-        self.validate()?;
-        serde_json::to_vec(self).map_err(|error| {
-            InvalidSnafu {
-                reason: format!("wire encoding failed: {error}"),
-            }
-            .build()
+        Ok(EvidenceRecord {
+            observed_boottime_ns: self.observed_boottime_ns,
+            ingested_utc_ns: self.ingested_utc_ns,
+            coverage_interval_id: self.coverage_interval_id.to_be_bytes().to_vec(),
+            profile_generation_ref_id: self.profile_generation_ref_id,
+            task_cookie: self.effect.task_cookie,
+            process_lineage_id: optional_id_bytes(self.effect.process_lineage_id),
+            authority_domain_id: optional_id_bytes(self.effect.authority_domain_id),
+            execution_set_id: optional_id_bytes(self.effect.execution_set_id),
+            exact_object_id: optional_id_bytes(self.effect.exact_object_id),
+            destination_id: self.effect.destination_id.unwrap_or_default(),
+            policy_rule_id: self.effect.policy_rule_id.unwrap_or_default(),
+            reason: u32::from(self.effect.reason),
+            decision: u32::from(self.effect.decision),
+            effect_family: u32::from(self.effect.effect_family),
+            operation: u32::from(self.effect.operation),
+            configured_errno: i32::from(self.effect.configured_errno),
+            kernel_result: self.effect.kernel_result,
+            temporal_coverage: match self.temporal_coverage {
+                TemporalCoverageV1::Complete => EvidenceTemporalCoverage::Complete as i32,
+                TemporalCoverageV1::Gapped => EvidenceTemporalCoverage::Gapped as i32,
+                TemporalCoverageV1::Unknown => EvidenceTemporalCoverage::Unknown as i32,
+            },
         })
     }
 
-    pub fn from_wire_bytes(bytes: &[u8]) -> EvidenceModelResult<Self> {
-        let envelope: Self = serde_json::from_slice(bytes).map_err(|error| {
+    #[allow(clippy::too_many_arguments)]
+    pub fn from_wire_record(
+        tenant_id: EvidenceIdV1,
+        node_boot_id: EvidenceIdV1,
+        source_id: EvidenceIdV1,
+        source_epoch: u64,
+        source_sequence: u64,
+        cpu_id: u32,
+        record: &EvidenceRecord,
+    ) -> EvidenceModelResult<Self> {
+        let temporal_coverage = match EvidenceTemporalCoverage::try_from(record.temporal_coverage) {
+            Ok(EvidenceTemporalCoverage::Complete) => TemporalCoverageV1::Complete,
+            Ok(EvidenceTemporalCoverage::Gapped) => TemporalCoverageV1::Gapped,
+            Ok(EvidenceTemporalCoverage::Unknown) => TemporalCoverageV1::Unknown,
+            Err(_error) => {
+                return InvalidSnafu {
+                    reason: "kernel observation temporal coverage is invalid".to_owned(),
+                }
+                .fail();
+            }
+        };
+        let observation = Self {
+            tenant_id,
+            node_boot_id,
+            source_id,
+            source_epoch,
+            source_sequence,
+            cpu_id,
+            observed_boottime_ns: record.observed_boottime_ns,
+            ingested_utc_ns: record.ingested_utc_ns,
+            coverage_interval_id: required_id(&record.coverage_interval_id, "coverage interval")?,
+            profile_generation_ref_id: record.profile_generation_ref_id,
+            temporal_coverage,
+            effect: KernelEffectEvidenceV1 {
+                task_cookie: record.task_cookie,
+                process_lineage_id: optional_id(&record.process_lineage_id, "process lineage")?,
+                authority_domain_id: optional_id(&record.authority_domain_id, "authority domain")?,
+                execution_set_id: optional_id(&record.execution_set_id, "execution set")?,
+                exact_object_id: optional_id(&record.exact_object_id, "exact object")?,
+                destination_id: (record.destination_id != 0).then_some(record.destination_id),
+                policy_rule_id: (record.policy_rule_id != 0).then_some(record.policy_rule_id),
+                reason: u8::try_from(record.reason).map_err(|_error| {
+                    InvalidSnafu {
+                        reason: "kernel observation reason exceeds u8".to_owned(),
+                    }
+                    .build()
+                })?,
+                decision: u8::try_from(record.decision).map_err(|_error| {
+                    InvalidSnafu {
+                        reason: "kernel observation decision exceeds u8".to_owned(),
+                    }
+                    .build()
+                })?,
+                effect_family: u16::try_from(record.effect_family).map_err(|_error| {
+                    InvalidSnafu {
+                        reason: "kernel observation effect family exceeds u16".to_owned(),
+                    }
+                    .build()
+                })?,
+                operation: u16::try_from(record.operation).map_err(|_error| {
+                    InvalidSnafu {
+                        reason: "kernel observation operation exceeds u16".to_owned(),
+                    }
+                    .build()
+                })?,
+                configured_errno: i16::try_from(record.configured_errno).map_err(|_error| {
+                    InvalidSnafu {
+                        reason: "kernel observation errno exceeds i16".to_owned(),
+                    }
+                    .build()
+                })?,
+                kernel_result: record.kernel_result,
+            },
+        };
+        observation.validate()?;
+        Ok(observation)
+    }
+
+    pub fn canonical_bytes(&self) -> EvidenceModelResult<Vec<u8>> {
+        let record = self.to_wire_record()?;
+        let mut bytes = Vec::with_capacity(80 + record.encoded_len());
+        bytes.extend_from_slice(OBSERVATION_ID_DOMAIN);
+        bytes.extend_from_slice(&self.tenant_id.to_be_bytes());
+        bytes.extend_from_slice(&self.node_boot_id.to_be_bytes());
+        bytes.extend_from_slice(&self.source_id.to_be_bytes());
+        bytes.extend_from_slice(&self.source_epoch.to_be_bytes());
+        bytes.extend_from_slice(&self.source_sequence.to_be_bytes());
+        bytes.extend_from_slice(&self.cpu_id.to_be_bytes());
+        record.encode(&mut bytes).map_err(|error| {
             InvalidSnafu {
-                reason: format!("wire decoding failed: {error}"),
+                reason: format!("kernel observation encoding failed: {error}"),
             }
             .build()
         })?;
-        envelope.validate()?;
-        Ok(envelope)
+        Ok(bytes)
+    }
+
+    pub fn observation_id(&self) -> EvidenceModelResult<EvidenceDigestV1> {
+        let mut identity = self.clone();
+        identity.ingested_utc_ns = 0;
+        Ok(Sha256::digest(identity.canonical_bytes()?).into())
     }
 
     #[must_use]
     pub fn supports_negative_claim(&self) -> bool {
-        self.proof_quality.temporal_coverage == TemporalCoverageV1::Complete
-            && self
-                .payload
-                .fields
-                .iter()
-                .all(|field| field.proof_quality.temporal_coverage == TemporalCoverageV1::Complete)
-    }
-
-    fn expected_observation_id(&self) -> EvidenceModelResult<EvidenceDigestV1> {
-        let mut identity = self.clone();
-        identity.observation_id = [0; 32];
-        identity.ingested_utc_ns = 0;
-        identity.signature_or_batch_digest = None;
-        let mut digest = Sha256::new();
-        digest.update(b"MITHRIL-OBSERVATION-ID-V1\0");
-        digest.update(canonical_cbor(&identity)?);
-        Ok(digest.finalize().into())
-    }
-
-    fn kernel_contract_is_complete(&self) -> bool {
-        if self.proof_quality.source_authority != SourceAuthorityV1::KernelDecision {
-            return true;
-        }
-        let expected_quality =
-            ProofQualityV1::kernel_decision(self.proof_quality.temporal_coverage);
-        let effect_family = self.payload.fields.iter().find_map(|field| {
-            (field.key == EvidenceFieldKeyV1::EffectFamily).then_some(&field.value)
-        });
-        let expected_effect_family = u16::try_from(self.hook_or_adapter_id)
-            .ok()
-            .map(EvidenceValueV1::EffectFamily);
-        self.proof_quality == expected_quality
-            && self.node_boot_id.is_some()
-            && self.cpu_id.is_some()
-            && self.boottime_ns.is_some()
-            && self.payload_schema_id == 1
-            && self.abi_or_api_version == 1
-            && effect_family == expected_effect_family.as_ref()
-            && [
-                EvidenceFieldKeyV1::ReasonCode,
-                EvidenceFieldKeyV1::Decision,
-                EvidenceFieldKeyV1::EffectFamily,
-                EvidenceFieldKeyV1::Operation,
-                EvidenceFieldKeyV1::Errno,
-                EvidenceFieldKeyV1::KernelResult,
-                EvidenceFieldKeyV1::TaskCookie,
-            ]
-            .into_iter()
-            .all(|key| {
-                self.payload.fields.iter().any(|field| {
-                    field.key == key
-                        && field.proof_quality == expected_quality
-                        && !matches!(
-                            field.value,
-                            EvidenceValueV1::Redacted | EvidenceValueV1::Unknown
-                        )
-                })
-            })
+        self.temporal_coverage == TemporalCoverageV1::Complete
     }
 }
 
-fn nested_value_is_bounded(value: &EvidenceValueV1) -> bool {
-    match value {
-        EvidenceValueV1::CoverageIntervals(values) => {
-            !values.is_empty()
-                && values.len() <= MAX_NESTED_IDENTITIES_V1
-                && values.iter().all(|id| !id.is_zero())
-                && values.windows(2).all(|pair| pair[0] < pair[1])
-        }
-        EvidenceValueV1::PolicyRules(values) => {
-            !values.is_empty()
-                && values.len() <= MAX_NESTED_IDENTITIES_V1
-                && values.iter().all(|id| *id > 0)
-                && values.windows(2).all(|pair| pair[0] < pair[1])
-        }
-        _ => true,
+fn optional_id_bytes(id: Option<EvidenceIdV1>) -> Vec<u8> {
+    id.map_or_else(Vec::new, |id| id.to_be_bytes().to_vec())
+}
+
+fn optional_id(bytes: &[u8], name: &str) -> EvidenceModelResult<Option<EvidenceIdV1>> {
+    if bytes.is_empty() {
+        return Ok(None);
     }
+    required_id(bytes, name).map(Some)
 }
 
-fn field_value_matches_key(key: EvidenceFieldKeyV1, value: &EvidenceValueV1) -> bool {
-    matches!(
-        (key, value),
-        (EvidenceFieldKeyV1::FindingId, EvidenceValueV1::Digest(_))
-            | (
-                EvidenceFieldKeyV1::ReasonCode,
-                EvidenceValueV1::ReasonCode(_)
-            )
-            | (EvidenceFieldKeyV1::Decision, EvidenceValueV1::Decision(_))
-            | (
-                EvidenceFieldKeyV1::EffectFamily,
-                EvidenceValueV1::EffectFamily(_)
-            )
-            | (EvidenceFieldKeyV1::Operation, EvidenceValueV1::Operation(_))
-            | (EvidenceFieldKeyV1::Errno, EvidenceValueV1::Errno(_))
-            | (
-                EvidenceFieldKeyV1::KernelResult,
-                EvidenceValueV1::KernelResult(_)
-            )
-            | (
-                EvidenceFieldKeyV1::TaskCookie,
-                EvidenceValueV1::TaskCookie(_)
-            )
-            | (
-                EvidenceFieldKeyV1::ProcessLineageId
-                    | EvidenceFieldKeyV1::AuthorityDomainId
-                    | EvidenceFieldKeyV1::ExecutionSetId
-                    | EvidenceFieldKeyV1::ExactObjectId
-                    | EvidenceFieldKeyV1::ProviderRequestId
-                    | EvidenceFieldKeyV1::ProviderPrincipalId
-                    | EvidenceFieldKeyV1::ProviderResourceId,
-                EvidenceValueV1::Id(_)
-            )
-            | (
-                EvidenceFieldKeyV1::ObjectClassId,
-                EvidenceValueV1::ObjectClass(_)
-            )
-            | (
-                EvidenceFieldKeyV1::DestinationId,
-                EvidenceValueV1::Destination(_)
-            )
-            | (
-                EvidenceFieldKeyV1::ProviderResult,
-                EvidenceValueV1::ProviderResult(_)
-            )
-            | (
-                EvidenceFieldKeyV1::CoverageIntervalIds,
-                EvidenceValueV1::CoverageIntervals(_)
-            )
-            | (
-                EvidenceFieldKeyV1::PolicyRuleIds,
-                EvidenceValueV1::PolicyRules(_)
-            )
-            | (
-                EvidenceFieldKeyV1::ResponseResult,
-                EvidenceValueV1::ResponseResult(_)
-            )
-            | (_, EvidenceValueV1::Redacted | EvidenceValueV1::Unknown)
-    )
-}
-
-fn canonical_cbor<T: Serialize>(value: &T) -> EvidenceModelResult<Vec<u8>> {
-    let value = serde_json::to_value(value).map_err(|error| {
+fn required_id(bytes: &[u8], name: &str) -> EvidenceModelResult<EvidenceIdV1> {
+    let bytes: [u8; 16] = bytes.try_into().map_err(|_error| {
         InvalidSnafu {
-            reason: format!("canonical value is invalid: {error}"),
+            reason: format!("kernel observation {name} is not Id128"),
         }
         .build()
     })?;
-    let mut bytes = Vec::new();
-    crate::canonical::encode_value(&mut Encoder::new(&mut bytes), &value).map_err(|error| {
-        InvalidSnafu {
-            reason: format!("canonical CBOR encoding failed: {error}"),
+    let id = EvidenceIdV1::from(bytes);
+    if id.is_zero() {
+        return InvalidSnafu {
+            reason: format!("kernel observation {name} is zero"),
         }
-        .build()
-    })?;
-    Ok(bytes)
+        .fail();
+    }
+    Ok(id)
 }

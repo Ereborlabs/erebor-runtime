@@ -10,8 +10,9 @@ use snafu::{ensure, ResultExt as _};
 use crate::error::{InvalidConfigurationSnafu, IoSnafu, JsonSnafu};
 use crate::{
     AdministrativeHttpConfigV1, AllowedNodeIdentity, ControlPlane, ControlServerTls, ControlStore,
-    KubernetesAdmissionHttpConfigV1, KubernetesNodeControlConfigV1, KubernetesNodeReadinessOwner,
-    PolicyDesiredStateConfigV1, PolicyDesiredStateOwner, Result, TrustGenerationV1,
+    EvidenceStoreLimitsV1, KubernetesAdmissionHttpConfigV1, KubernetesNodeControlConfigV1,
+    KubernetesNodeReadinessOwner, PolicyDesiredStateConfigV1, PolicyDesiredStateOwner, Result,
+    TrustGenerationV1,
 };
 
 #[derive(Clone, Debug, Deserialize)]
@@ -23,6 +24,8 @@ pub struct ControlConfig {
     pub trust: TrustGenerationV1,
     pub administrative_exec: Option<AdministrativeHttpConfigV1>,
     pub evidence_directory: PathBuf,
+    #[serde(default)]
+    pub evidence_store: EvidenceStoreLimitsV1,
     #[serde(default)]
     pub control_store_directory: Option<PathBuf>,
     #[serde(default)]
@@ -51,11 +54,11 @@ impl ControlConfig {
     }
 
     pub fn into_parts(self) -> Result<ControlRuntimeParts> {
-        // Policy and evidence use one commit chain so acknowledgements share one durability model.
+        // Policy metadata and evidence references share one atomic current state.
         let store_directory = self
             .control_store_directory
             .unwrap_or_else(|| self.evidence_directory.clone());
-        let store = ControlStore::open(store_directory)?;
+        let store = ControlStore::open_with_evidence_limits(store_directory, self.evidence_store)?;
         let mut control = ControlPlane::with_control_store(
             self.allowed_nodes,
             self.trust.clone(),
@@ -105,6 +108,7 @@ impl ControlConfig {
                 reason: "evidence_directory must be absolute",
             }
         );
+        self.evidence_store.validate()?;
         ensure!(
             self.control_store_directory
                 .as_ref()

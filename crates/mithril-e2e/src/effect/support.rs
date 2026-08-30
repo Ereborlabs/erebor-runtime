@@ -47,6 +47,7 @@ pub(super) fn effect_node_config(
             private_key_path: PathBuf::new(),
             reconnect_minimum_ms: 100,
             reconnect_maximum_ms: 5_000,
+            maximum_clock_skew_ns: 30_000_000_000,
         },
         evidence: Some(EvidenceConfig {
             tenant_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa".to_owned(),

@@ -159,7 +159,7 @@ impl DeterministicLocalWindowOwner {
                 .observations
                 .entry(observation.source_sequence)
                 .or_default()
-                .insert(observation.observation_id);
+                .insert(observation.observation_id()?);
             inputs.coverage_incomplete |= !observation.supports_negative_claim() || !exact_coverage;
         }
         if grouped.len() > MAX_LOCAL_WINDOWS
@@ -405,11 +405,14 @@ mod tests {
                 .ok_or("new sequence was not recorded")?;
             observations.push(canonicalizer.normalize_kernel(
                 EffectObservationV1 {
+                    observed_boottime_ns: sequence,
                     source_sequence: sequence,
                     source_cpu_id: 0,
                     task_cookie: 7,
                     reason: u8::try_from(sequence)?,
                     physical_result: 1,
+                    effect_family: 1,
+                    operation: 1,
                     ..EffectObservationV1::default()
                 },
                 coverage_id,
@@ -433,7 +436,6 @@ mod tests {
 
         let mut wrong_interval = observations.clone();
         wrong_interval[0].coverage_interval_id = EvidenceIdV1::new(99, 100);
-        wrong_interval[0] = wrong_interval[0].clone().finalize()?;
         let inconsistent = owner()?.build(&wrong_interval, &coverage.snapshot())?;
         assert_eq!(
             inconsistent[0].state,
@@ -455,11 +457,14 @@ mod tests {
             .ok_or("new sequence was not recorded")?;
         let first = canonicalizer.normalize_kernel(
             EffectObservationV1 {
+                observed_boottime_ns: 1,
                 source_sequence: 1,
                 source_cpu_id: 0,
                 task_cookie: 7,
                 reason: 1,
                 physical_result: 1,
+                effect_family: 1,
+                operation: 1,
                 ..EffectObservationV1::default()
             },
             first_coverage,
@@ -471,11 +476,14 @@ mod tests {
             .ok_or("new sequence was not recorded")?;
         let third = canonicalizer.normalize_kernel(
             EffectObservationV1 {
+                observed_boottime_ns: 3,
                 source_sequence: 3,
                 source_cpu_id: 0,
                 task_cookie: 7,
                 reason: 3,
                 physical_result: 1,
+                effect_family: 1,
+                operation: 1,
                 ..EffectObservationV1::default()
             },
             third_coverage,
@@ -492,11 +500,14 @@ mod tests {
 
         let contradictory = canonicalizer.normalize_kernel(
             EffectObservationV1 {
+                observed_boottime_ns: 1,
                 source_sequence: 1,
                 source_cpu_id: 0,
                 task_cookie: 7,
                 reason: 9,
                 physical_result: 1,
+                effect_family: 1,
+                operation: 1,
                 ..EffectObservationV1::default()
             },
             first_coverage,

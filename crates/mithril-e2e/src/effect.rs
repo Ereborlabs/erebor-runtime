@@ -25,8 +25,8 @@ use mithril_control::{
     PolicyDocumentV1, ProfileSealRequestV1,
 };
 use mithril_node::{
-    CoverageGapReasonV1, EffectObservationHealth, EffectObservationStore, EvidenceBatchV1,
-    EvidenceIdV1, EvidenceWalLimits, ExactFileObjectResolver, NativeSecurityStateOwner,
+    CoverageGapReasonV1, EffectObservationHealth, EffectObservationStore, EvidenceIdV1,
+    EvidenceWalLimits, ExactFileObjectResolver, NativeSecurityStateOwner,
     NodePolicyGenerationOwner, ObservationCanonicalizer, WorkloadBindingOwner,
 };
 use serde::Serialize;
@@ -486,7 +486,7 @@ pub struct EffectPhysicalProbeBundleV1 {
     pub saturation_preserved_benign_allow: bool,
     pub emitted_source_sequences_monotonic: bool,
     pub durable_evidence_batch_records: usize,
-    pub durable_evidence_batch_integrity_valid: bool,
+    pub durable_evidence_batch_is_contiguous: bool,
     pub wal_capacity_gapped: bool,
     pub ring_loss_gapped: bool,
     pub negative_claim_blocked: bool,
@@ -4268,18 +4268,27 @@ impl EffectTestRunner {
             .build()
         })?;
         let durable_evidence_batch_records = evidence_batch.records.len();
-        let durable_evidence_batch_integrity_valid =
-            evidence_batch.batch_sha256 == EvidenceBatchV1::digest(&evidence_batch.records);
+        let durable_evidence_batch_is_contiguous =
+            evidence_batch
+                .records
+                .iter()
+                .enumerate()
+                .all(|(index, record)| {
+                    u64::try_from(index)
+                        .ok()
+                        .and_then(|index| evidence_batch.first_cursor.checked_add(index))
+                        == Some(record.cursor)
+                });
         ensure!(
             wal_capacity_gapped
                 && ring_loss_gapped
                 && negative_claim_blocked
                 && evidence_errors > 0
                 && durable_evidence_batch_records > 0
-                && durable_evidence_batch_integrity_valid,
+                && durable_evidence_batch_is_contiguous,
             InvalidInputSnafu {
                 path: Path::new("durable effect evidence"),
-                reason: "saturation did not preserve an integrity-checked replay batch and explicit coverage gaps",
+                reason: "saturation did not preserve a contiguous replay batch and explicit coverage gaps",
             }
         );
 
@@ -4444,7 +4453,7 @@ impl EffectTestRunner {
             saturation_preserved_benign_allow: true,
             emitted_source_sequences_monotonic,
             durable_evidence_batch_records,
-            durable_evidence_batch_integrity_valid,
+            durable_evidence_batch_is_contiguous,
             wal_capacity_gapped,
             ring_loss_gapped,
             negative_claim_blocked,
