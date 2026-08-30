@@ -1766,16 +1766,10 @@ done
 "$provider" run "$other_vm" sudo test ! -e \
   /var/lib/mithril-convergence/markers/protected.application-result
 
-sleep 0.1
-stop_entry_effect_capture
-application_effects=$(printf '%s\n%s\n%s\n' \
-  "$application_effects" "$(<"$application_effect_capture")" \
-  "$(node_effects "$selected_node")")
-printf '%s\n' "$application_effects" \
-  >"$output_directory/application-effects.txt"
-awk -v marker="$application_effect_marker" \
-    -v role="$application_role_id" \
-    -v admission="$application_admission_id" '
+for _attempt in {1..600}; do
+  if awk -v marker="$application_effect_marker" \
+      -v role="$application_role_id" \
+      -v admission="$application_admission_id" '
     /^observed_boottime_ns=/ &&
     / family=1 operation=1 / &&
     / reason=APPLICATION_DEFAULT_ALLOW / &&
@@ -1795,10 +1789,21 @@ awk -v marker="$application_effect_marker" \
           observed_admission == admission) found = 1
     }
     END { exit !found }
-  ' <<<"$application_effects" || {
-  echo "a later application exec did not inherit its application role" >&2
-  exit 1
-}
+  ' "$application_effect_capture"; then
+    break
+  fi
+  [[ $_attempt -lt 600 ]] || {
+    echo "a later application exec did not inherit its application role" >&2
+    exit 1
+  }
+  sleep 0.1
+done
+stop_entry_effect_capture
+application_effects=$(printf '%s\n%s\n%s\n' \
+  "$application_effects" "$(<"$application_effect_capture")" \
+  "$(node_effects "$selected_node")")
+printf '%s\n' "$application_effects" \
+  >"$output_directory/application-effects.txt"
 application_exec_default_allowed=true
 effect_marker=$(awk '
   /^observed_boottime_ns=/ {
