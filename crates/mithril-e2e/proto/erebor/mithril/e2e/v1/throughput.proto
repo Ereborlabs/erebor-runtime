@@ -1,0 +1,15 @@
+syntax = "proto3";
+
+package erebor.mithril.e2e.v1;
+
+service GrpcThroughput {
+  rpc Upload(stream FileChunk) returns (FileReceipt);
+}
+
+message FileChunk {
+  bytes payload = 1;
+}
+
+message FileReceipt {
+  uint64 received_bytes = 1;
+}

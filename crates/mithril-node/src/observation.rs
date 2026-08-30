@@ -304,16 +304,42 @@ impl EffectObservationStore {
                 "prepared an evidence batch",
                 first_cursor = %batch.first_cursor,
                 last_cursor = %batch.last_cursor,
-                count = %batch.records.len()
+                count = %batch.record_count()
             );
         }
         batch
     }
 
-    pub fn acknowledge_evidence(&self, ack: EvidenceAckV1) -> crate::Result<()> {
-        self.lock_durable()?.wal.acknowledge(ack)?;
-        erebor_telemetry::debug!("acknowledged an evidence batch");
-        Ok(())
+    pub fn next_evidence_batches(&self) -> Vec<EvidenceBatchV1> {
+        let batches = self
+            .inner
+            .durable
+            .as_ref()
+            .and_then(|durable| {
+                durable
+                    .lock()
+                    .ok()
+                    .map(|mut state| state.wal.next_batches())
+            })
+            .unwrap_or_default();
+        if let (Some(first), Some(last)) = (batches.first(), batches.last()) {
+            erebor_telemetry::debug!(
+                "prepared an evidence commit group",
+                first_cursor = %first.first_cursor,
+                last_cursor = %last.last_cursor,
+                batch_count = %batches.len()
+            );
+        }
+        batches
+    }
+
+    pub fn acknowledge_evidence(&self, ack: EvidenceAckV1) -> crate::Result<bool> {
+        let complete = self.lock_durable()?.wal.acknowledge(ack)?;
+        erebor_telemetry::debug!(
+            "advanced the evidence truncation marker",
+            contiguous_cursor = %ack.contiguous_cursor
+        );
+        Ok(complete)
     }
 
     #[must_use]
@@ -1101,7 +1127,9 @@ mod tests {
             .next_evidence_batch()
             .ok_or("evidence batch missing")?;
         assert_eq!((batch.first_cursor, batch.last_cursor), (1, 1));
-        store.acknowledge_evidence(EvidenceAckV1)?;
+        store.acknowledge_evidence(EvidenceAckV1 {
+            contiguous_cursor: batch.last_cursor,
+        })?;
         store.record_bytes(
             EffectObservationV1 {
                 observed_boottime_ns: 3,
@@ -1186,7 +1214,9 @@ mod tests {
                 .next_evidence_batch()
                 .ok_or("retained evidence batch is missing")?;
             assert_eq!((batch.first_cursor, batch.last_cursor), (cursor, cursor));
-            store.acknowledge_evidence(EvidenceAckV1)?;
+            store.acknowledge_evidence(EvidenceAckV1 {
+                contiguous_cursor: batch.last_cursor,
+            })?;
         }
         assert!(store.next_evidence_batch().is_none());
         Ok(())
@@ -1265,9 +1295,12 @@ mod tests {
             .next_evidence_batch()
             .ok_or("evidence batch missing after replay")?;
 
-        assert_eq!(after_replay.records.len(), 4);
+        assert_eq!(after_replay.record_count(), 4);
         assert_eq!(after_replay.last_cursor, before_replay.last_cursor);
-        assert_eq!(after_replay.records, before_replay.records);
+        assert_eq!(
+            after_replay.decode_records()?,
+            before_replay.decode_records()?
+        );
         assert_eq!(restarted.evidence_errors(), 0);
         assert!(restarted
             .coverage_snapshot()

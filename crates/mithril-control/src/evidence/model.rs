@@ -283,7 +283,7 @@ impl ObservationEnvelopeV1 {
         Ok(EvidenceRecord {
             observed_boottime_ns: self.observed_boottime_ns,
             ingested_utc_ns: self.ingested_utc_ns,
-            coverage_interval_id: self.coverage_interval_id.to_be_bytes().to_vec(),
+            coverage_interval_id: self.coverage_interval_id.to_be_bytes().to_vec().into(),
             profile_generation_ref_id: self.profile_generation_ref_id,
             task_cookie: self.effect.task_cookie,
             target_task_cookie: self.effect.target_task_cookie,
@@ -419,8 +419,10 @@ impl ObservationEnvelopeV1 {
     }
 }
 
-fn optional_id_bytes(id: Option<EvidenceIdV1>) -> Vec<u8> {
-    id.map_or_else(Vec::new, |id| id.to_be_bytes().to_vec())
+fn optional_id_bytes(id: Option<EvidenceIdV1>) -> prost::bytes::Bytes {
+    id.map_or_else(prost::bytes::Bytes::new, |id| {
+        prost::bytes::Bytes::copy_from_slice(&id.to_be_bytes())
+    })
 }
 
 fn optional_id(bytes: &[u8], name: &str) -> EvidenceModelResult<Option<EvidenceIdV1>> {

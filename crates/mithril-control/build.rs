@@ -12,6 +12,14 @@ fn main() -> Result<(), io::Error> {
     tonic_build::configure()
         .build_server(true)
         .build_client(true)
+        .bytes([
+            ".erebor.mithril.control.v1.EvidenceBatch.framed_records",
+            ".erebor.mithril.control.v1.EvidenceRecord.coverage_interval_id",
+            ".erebor.mithril.control.v1.EvidenceRecord.process_lineage_id",
+            ".erebor.mithril.control.v1.EvidenceRecord.authority_domain_id",
+            ".erebor.mithril.control.v1.EvidenceRecord.execution_set_id",
+            ".erebor.mithril.control.v1.EvidenceRecord.exact_object_id",
+        ])
         .file_descriptor_set_path(descriptor_path)
         .compile_protos(&[proto], &[PathBuf::from("proto")])
 }

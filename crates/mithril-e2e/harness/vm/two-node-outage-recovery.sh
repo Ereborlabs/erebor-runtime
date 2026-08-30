@@ -57,7 +57,7 @@ done
   echo "retained environment is not readable: $environment" >&2
   exit 2
 }
-for command in comm jq sed sort timeout wc; do
+for command in jq sed timeout wc; do
   command -v "$command" >/dev/null || {
     echo "required command is not installed: $command" >&2
     exit 2
@@ -110,7 +110,24 @@ remote_kubectl() {
 
 control_segment_manifest() {
   remote_kubectl -n "$system_namespace" exec deployment/mithril-control -- \
-    sh -c "find /var/lib/mithril-control/store/evidence/segments -type f ! -name segment.tmp -exec sha256sum '{}' +"
+    sh -c "find /var/lib/mithril-control/store/evidence/segments-v2 -type f \
+      -exec sh -c 'for path do printf \"%s \" \"\$(stat -c %s \"\$path\")\"; sha256sum \"\$path\"; done' sh '{}' +"
+}
+
+verify_control_segment_prefixes() {
+  local manifest=$1
+  local size
+  local expected
+  local path
+  local actual
+  while read -r size expected path; do
+    actual=$(remote_kubectl -n "$system_namespace" exec deployment/mithril-control -- \
+      sh -c "head -c '$size' '$path' | sha256sum" | sed -n '1s/[[:space:]].*//p')
+    [[ $actual == "$expected" ]] || {
+      echo "Control changed or removed an unconsumed evidence prefix: $path" >&2
+      return 1
+    }
+  done <"$manifest"
 }
 
 remove_network_block() {
@@ -686,14 +703,12 @@ wait_node_control_acknowledgement "$node_b_name"
 wait_node_wal_empty "$node_a_name"
 wait_node_wal_empty "$node_b_name"
 control_segment_manifest >"$work_directory/control-segments-after-outage.txt"
-comm -23 \
-  <(sort "$work_directory/control-segments-before-outage.txt") \
-  <(sort "$work_directory/control-segments-after-outage.txt") \
-  >"$work_directory/control-segments-missing-after-outage.txt"
-missing_control_segment=$(sed -n '1p' \
-  "$work_directory/control-segments-missing-after-outage.txt")
-if [[ -n $missing_control_segment ]]; then
-  echo "Control removed an unconsumed evidence segment during restart: $missing_control_segment" >&2
+if ! verify_control_segment_prefixes \
+    "$work_directory/control-segments-before-outage.txt"; then
+  cp "$work_directory/control-segments-before-outage.txt" \
+    "$output_directory/control-segments-before-outage.txt"
+  cp "$work_directory/control-segments-after-outage.txt" \
+    "$output_directory/control-segments-after-outage.txt"
   exit 1
 fi
 refresh_policy_status control-recovered

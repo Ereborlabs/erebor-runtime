@@ -737,7 +737,7 @@ impl NodeChassis {
                     let mut policy_poll = tokio::time::interval(Duration::from_millis(250));
                     policy_poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
                     let mut policy_work = PolicyControlWorkV1::default();
-                    loop {
+                    'control: loop {
                         tokio::select! {
                             result = connection.next_message() => {
                                 let message = match result {
@@ -779,19 +779,21 @@ impl NodeChassis {
                                         }
                                     }
                                     NodeControlMessage::EvidenceAck(ack) => {
-                                        if let Err(error) = self
+                                        match self
                                             .observations
                                             .acknowledge_evidence(ack)
                                         {
-                                            erebor_telemetry::warn!(
-                                                error;
-                                                "Control returned a stale evidence acknowledgement",
-                                                node_id = %self.config.node_id,
-                                                retry = %"reconnect"
-                                            );
-                                            break;
+                                            Ok(complete) => evidence_in_flight = !complete,
+                                            Err(error) => {
+                                                erebor_telemetry::warn!(
+                                                    error;
+                                                    "Control returned a stale evidence acknowledgement",
+                                                    node_id = %self.config.node_id,
+                                                    retry = %"reconnect"
+                                                );
+                                                break;
+                                            }
                                         }
-                                        evidence_in_flight = false;
                                     }
                                     NodeControlMessage::CoverageAck(ack) => {
                                         let Some(position) = coverage_in_flight
@@ -857,10 +859,11 @@ impl NodeChassis {
                                     continue;
                                 }
                                 if !evidence_in_flight {
-                                    if let Some(batch) = self.observations.next_evidence_batch() {
+                                    let batches = self.observations.next_evidence_batches();
+                                    if !batches.is_empty() {
                                         match self
                                             .await_control_rpc(
-                                                connection.send_evidence_batch(batch),
+                                                connection.send_evidence_group(batches),
                                             )
                                             .await
                                         {
@@ -870,12 +873,12 @@ impl NodeChassis {
                                                     error.control_rpc_can_reuse_session();
                                                 erebor_telemetry::warn!(
                                                     error;
-                                                    "failed to upload an evidence batch",
+                                                    "failed to upload an evidence commit group",
                                                     node_id = %self.config.node_id,
                                                     retry = %if reuse_session { "same_session" } else { "after_registration" }
                                                 );
                                                 if !reuse_session {
-                                                    break;
+                                                    break 'control;
                                                 }
                                             }
                                         }

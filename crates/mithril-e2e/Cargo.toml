@@ -37,13 +37,20 @@ zerocopy.workspace = true
 
 [dev-dependencies]
 axum.workspace = true
+crc32c.workspace = true
 k8s-openapi.workspace = true
 kube.workspace = true
+prost.workspace = true
 rcgen = "0.13.2"
 reqwest.workspace = true
 tempfile = "3.23.0"
 tokio.workspace = true
+tokio-stream.workspace = true
+tonic.workspace = true
 tower.workspace = true
+
+[build-dependencies]
+tonic-build.workspace = true
 
 [[bin]]
 name = "mithril-kernel-qualification"

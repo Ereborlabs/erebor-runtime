@@ -72,6 +72,9 @@ outage_help=$("$directory/two-node-outage-recovery.sh" --help 2>&1)
 [[ $outage_help == *--environment* ]]
 [[ $outage_help == *--output-directory* ]]
 grep -Fq 'systemctl show' "$directory/two-node-outage-recovery.sh"
+grep -Fq 'verify_control_segment_prefixes' "$directory/two-node-outage-recovery.sh"
+grep -Fq 'Control changed or removed an unconsumed evidence prefix' \
+  "$directory/two-node-outage-recovery.sh"
 grep -Fq -- '--property ActiveState --value k3s' \
   "$directory/two-node-outage-recovery.sh"
 if grep -Fq 'systemctl is-inactive' "$directory/two-node-outage-recovery.sh"; then

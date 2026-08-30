@@ -15,7 +15,7 @@ use crate::Result;
 const ACK_FILE: &str = "acknowledged.bin";
 const ACK_BYTES: usize = 12;
 const SEGMENT_HEADER_BYTES: usize = 64;
-const SEGMENT_MAX_BYTES: u64 = 8 * 1_024 * 1_024;
+const SEGMENT_MAX_BYTES: u64 = 16 * 1_024 * 1_024;
 const RECORD_OVERHEAD_BYTES: usize = 8;
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -42,6 +42,7 @@ impl EvidenceWalLimits {
             || self.maximum_retained_bytes < self.maximum_record_bytes
             || self.maximum_retained_records == 0
             || self.maximum_batch_records == 0
+            || self.maximum_batch_records > mithril_control::MAX_EVIDENCE_BATCH_RECORDS
         {
             return EvidenceStateSnafu {
                 reason: "evidence WAL bounds are zero or inconsistent".to_owned(),
@@ -67,15 +68,19 @@ impl Default for EvidenceWalLimits {
 #[derive(Clone, Debug, PartialEq)]
 pub struct EvidenceRecordV1 {
     pub cursor: u64,
-    pub record: mithril_control::EvidenceRecord,
+    frame: Vec<u8>,
 }
 
 impl EvidenceRecordV1 {
     fn new(cursor: u64, observation: &ObservationEnvelopeV1) -> Result<Self> {
         Ok(Self {
             cursor,
-            record: observation.to_wire_record()?,
+            frame: EvidenceWalCodecV1::encode_record(&observation.to_wire_record()?)?,
         })
+    }
+
+    pub fn decode(&self) -> Result<mithril_control::EvidenceRecord> {
+        EvidenceWalCodecV1::decode_record_payload(&self.frame, self.cursor)
     }
 
     fn validate(&self, expected_cursor: u64, identity: EvidenceWalStreamIdentityV1) -> Result<()> {
@@ -85,6 +90,7 @@ impl EvidenceRecordV1 {
             }
             .fail();
         }
+        let record = self.decode()?;
         let observation = ObservationEnvelopeV1::from_wire_record(
             identity.tenant_id.into(),
             identity.node_boot_id.into(),
@@ -92,7 +98,7 @@ impl EvidenceRecordV1 {
             identity.source_epoch,
             self.cursor,
             identity.cpu_id,
-            &self.record,
+            &record,
         )?;
         observation.validate()?;
         Ok(())
@@ -150,13 +156,33 @@ impl EvidenceWalStreamIdentityV1 {
 pub struct EvidenceBatchV1 {
     pub first_cursor: u64,
     pub last_cursor: u64,
-    pub records: Vec<EvidenceRecordV1>,
+    framed_records: Vec<u8>,
     stream_identity: EvidenceWalStreamIdentityV1,
 }
 
-impl From<EvidenceRecordV1> for mithril_control::EvidenceRecord {
-    fn from(record: EvidenceRecordV1) -> Self {
-        record.record
+impl EvidenceBatchV1 {
+    #[must_use]
+    pub fn record_count(&self) -> usize {
+        usize::try_from(self.last_cursor - self.first_cursor + 1).unwrap_or(usize::MAX)
+    }
+
+    pub fn decode_records(&self) -> Result<Vec<mithril_control::EvidenceRecord>> {
+        let mut offset = 0_usize;
+        let mut records = Vec::with_capacity(self.record_count());
+        while offset < self.framed_records.len() {
+            let payload_bytes = u32::from_be_bytes(
+                self.framed_records[offset..offset + 4]
+                    .try_into()
+                    .unwrap_or_default(),
+            ) as usize;
+            let end = offset + payload_bytes + RECORD_OVERHEAD_BYTES;
+            records.push(EvidenceWalCodecV1::decode_record_payload(
+                &self.framed_records[offset..end],
+                self.first_cursor + records.len() as u64,
+            )?);
+            offset = end;
+        }
+        Ok(records)
     }
 }
 
@@ -168,19 +194,30 @@ impl From<EvidenceBatchV1> for mithril_control::EvidenceBatch {
             source_epoch: batch.stream_identity.source_epoch,
             cpu_id: batch.stream_identity.cpu_id,
             first_cursor: batch.first_cursor,
-            records: batch.records.into_iter().map(Into::into).collect(),
+            framed_records: batch.framed_records.into(),
+            commit_group_tail: false,
         }
     }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct EvidenceAckV1;
+pub struct EvidenceAckV1 {
+    pub contiguous_cursor: u64,
+}
 
 impl TryFrom<mithril_control::EvidenceAck> for EvidenceAckV1 {
     type Error = crate::Error;
 
-    fn try_from(_ack: mithril_control::EvidenceAck) -> Result<Self> {
-        Ok(Self)
+    fn try_from(ack: mithril_control::EvidenceAck) -> Result<Self> {
+        if ack.contiguous_cursor == 0 {
+            return EvidenceStateSnafu {
+                reason: "Control returned a zero evidence cursor".to_owned(),
+            }
+            .fail();
+        }
+        Ok(Self {
+            contiguous_cursor: ack.contiguous_cursor,
+        })
     }
 }
 
@@ -246,7 +283,7 @@ impl EvidenceWalCodecV1 {
         Ok(frame)
     }
 
-    fn decode_record(frame: &[u8], cursor: u64) -> Result<EvidenceRecordV1> {
+    fn decode_record_payload(frame: &[u8], cursor: u64) -> Result<mithril_control::EvidenceRecord> {
         let payload_end = frame.len().checked_sub(4).ok_or_else(|| {
             EvidenceStateSnafu {
                 reason: "evidence WAL record frame is truncated".to_owned(),
@@ -260,14 +297,20 @@ impl EvidenceWalCodecV1 {
             }
             .fail();
         }
-        let record =
-            mithril_control::EvidenceRecord::decode(&frame[4..payload_end]).map_err(|error| {
-                EvidenceStateSnafu {
-                    reason: format!("evidence WAL record {cursor} protobuf is invalid: {error}"),
-                }
-                .build()
-            })?;
-        Ok(EvidenceRecordV1 { cursor, record })
+        mithril_control::EvidenceRecord::decode(&frame[4..payload_end]).map_err(|error| {
+            EvidenceStateSnafu {
+                reason: format!("evidence WAL record {cursor} protobuf is invalid: {error}"),
+            }
+            .build()
+        })
+    }
+
+    fn decode_record(frame: &[u8], cursor: u64) -> Result<EvidenceRecordV1> {
+        Self::decode_record_payload(frame, cursor)?;
+        Ok(EvidenceRecordV1 {
+            cursor,
+            frame: frame.to_vec(),
+        })
     }
 
     fn encode_ack(state: AckStateV1) -> [u8; ACK_BYTES] {
@@ -380,7 +423,7 @@ impl EvidenceWalSegment {
         let mut bytes = fs::read(&path).context(IoSnafu { path: &path })?;
         if bytes.len() as u64 > SEGMENT_MAX_BYTES {
             return EvidenceStateSnafu {
-                reason: format!("evidence WAL segment `{}` exceeds 8 MiB", path.display()),
+                reason: format!("evidence WAL segment `{}` exceeds 16 MiB", path.display()),
             }
             .fail();
         }
@@ -567,7 +610,7 @@ pub(super) struct EvidenceWalOwner {
     root: PathBuf,
     limits: EvidenceWalLimits,
     streams: BTreeMap<EvidenceWalStreamIdentityV1, EvidenceWal>,
-    in_flight: Option<(EvidenceWalStreamIdentityV1, EvidenceBatchV1)>,
+    in_flight: Option<(EvidenceWalStreamIdentityV1, Vec<EvidenceBatchV1>)>,
     last_acknowledged_stream: Option<EvidenceWalStreamIdentityV1>,
 }
 
@@ -681,11 +724,71 @@ impl EvidenceWalOwner {
     }
 
     pub(super) fn next_batch(&mut self) -> Option<EvidenceBatchV1> {
-        if let Some((_identity, batch)) = &self.in_flight {
-            return Some(batch.clone());
+        if let Some((_identity, batches)) = &self.in_flight {
+            return batches.first().cloned();
         }
-        let identity = self
-            .streams
+        let identity = self.next_identity()?;
+        let batch = self.streams.get(&identity)?.next_batch()?;
+        self.in_flight = Some((identity, vec![batch.clone()]));
+        Some(batch)
+    }
+
+    pub(super) fn next_batches(&mut self) -> Vec<EvidenceBatchV1> {
+        if let Some((_identity, batches)) = &self.in_flight {
+            return batches.clone();
+        }
+        let Some(identity) = self.next_identity() else {
+            return Vec::new();
+        };
+        let Some(wal) = self.streams.get(&identity) else {
+            return Vec::new();
+        };
+        let batches = wal.next_batches();
+        if !batches.is_empty() {
+            self.in_flight = Some((identity, batches.clone()));
+        }
+        batches
+    }
+
+    pub(super) fn acknowledge(&mut self, ack: EvidenceAckV1) -> Result<bool> {
+        let (identity, batches) = self.in_flight.as_ref().ok_or_else(|| {
+            EvidenceStateSnafu {
+                reason: "evidence acknowledgement has no in-flight source item".to_owned(),
+            }
+            .build()
+        })?;
+        let acknowledged_batches = batches
+            .iter()
+            .position(|batch| batch.last_cursor == ack.contiguous_cursor)
+            .and_then(|position| position.checked_add(1))
+            .ok_or_else(|| {
+                EvidenceStateSnafu {
+                    reason: "evidence acknowledgement is not an in-flight batch boundary"
+                        .to_owned(),
+                }
+                .build()
+            })?;
+        let identity = *identity;
+        let wal = self.streams.get_mut(&identity).ok_or_else(|| {
+            EvidenceStateSnafu {
+                reason: "evidence acknowledgement source is not retained".to_owned(),
+            }
+            .build()
+        })?;
+        wal.acknowledge(ack)?;
+        let (_identity, batches) = self.in_flight.as_mut().unwrap_or_else(|| {
+            unreachable!("the in-flight group was validated before acknowledgement")
+        });
+        batches.drain(..acknowledged_batches);
+        if batches.is_empty() {
+            self.in_flight = None;
+            self.last_acknowledged_stream = Some(identity);
+        }
+        Ok(self.in_flight.is_none())
+    }
+
+    fn next_identity(&self) -> Option<EvidenceWalStreamIdentityV1> {
+        self.streams
             .keys()
             .copied()
             .filter(|identity| {
@@ -697,30 +800,7 @@ impl EvidenceWalOwner {
                 self.streams
                     .get(identity)
                     .is_some_and(|wal| wal.next_batch().is_some())
-            })?;
-        let batch = self.streams.get(&identity)?.next_batch()?;
-        self.in_flight = Some((identity, batch.clone()));
-        Some(batch)
-    }
-
-    pub(super) fn acknowledge(&mut self, ack: EvidenceAckV1) -> Result<()> {
-        let (identity, batch) = self.in_flight.as_ref().ok_or_else(|| {
-            EvidenceStateSnafu {
-                reason: "evidence acknowledgement has no in-flight source item".to_owned(),
-            }
-            .build()
-        })?;
-        let wal = self.streams.get_mut(identity).ok_or_else(|| {
-            EvidenceStateSnafu {
-                reason: "evidence acknowledgement source is not retained".to_owned(),
-            }
-            .build()
-        })?;
-        wal.acknowledge_batch(ack, batch)?;
-        let identity = *identity;
-        self.in_flight = None;
-        self.last_acknowledged_stream = Some(identity);
-        Ok(())
+            })
     }
 
     fn retention(&self) -> Result<(usize, u64)> {
@@ -1003,12 +1083,11 @@ impl EvidenceWal {
         }
         let cursor = self.next_cursor()?;
         let record = EvidenceRecordV1::new(cursor, observation)?;
-        let payload_bytes = record.record.encoded_len() as u64;
-        let frame = EvidenceWalCodecV1::encode_record(&record.record)?;
+        let payload_bytes = record.frame.len().saturating_sub(RECORD_OVERHEAD_BYTES) as u64;
         let active_fits = self.segments.last().is_some_and(|segment| {
-            segment.active && segment.bytes + frame.len() as u64 <= SEGMENT_MAX_BYTES
+            segment.active && segment.bytes + record.frame.len() as u64 <= SEGMENT_MAX_BYTES
         });
-        let added_bytes = frame.len() as u64
+        let added_bytes = record.frame.len() as u64
             + if active_fits {
                 0
             } else {
@@ -1024,7 +1103,7 @@ impl EvidenceWal {
                 .build()
             })?;
         if payload_bytes > self.limits.maximum_record_bytes
-            || frame.len() as u64 + SEGMENT_HEADER_BYTES as u64 > SEGMENT_MAX_BYTES
+            || record.frame.len() as u64 + SEGMENT_HEADER_BYTES as u64 > SEGMENT_MAX_BYTES
         {
             return Err(EvidenceWalAppendFailure {
                 error: Box::new(
@@ -1074,11 +1153,11 @@ impl EvidenceWal {
             }
             .build()
         })?;
-        active.append(&frame, cursor)?;
+        active.append(&record.frame, cursor)?;
         self.stream_identity = Some(identity);
         self.retained_bytes = self
             .retained_bytes
-            .checked_add(frame.len() as u64)
+            .checked_add(record.frame.len() as u64)
             .ok_or_else(|| {
                 EvidenceStateSnafu {
                     reason: "evidence WAL retained byte count overflowed".to_owned(),
@@ -1120,56 +1199,94 @@ impl EvidenceWal {
 
     #[must_use]
     pub fn next_batch(&self) -> Option<EvidenceBatchV1> {
-        let first_cursor = self.records.first()?.cursor;
-        if first_cursor != self.acknowledged.contiguous_cursor.checked_add(1)? {
+        self.batch_from(0)
+    }
+
+    #[must_use]
+    fn next_batches(&self) -> Vec<EvidenceBatchV1> {
+        let mut batches = Vec::new();
+        let mut record_offset = 0_usize;
+        let mut framed_bytes = 0_usize;
+        while let Some(batch) = self.batch_from(record_offset) {
+            let batch_bytes = batch.framed_records.len();
+            if !batches.is_empty()
+                && framed_bytes.saturating_add(batch_bytes)
+                    > mithril_control::MAX_EVIDENCE_COMMIT_PAYLOAD_BYTES
+            {
+                break;
+            }
+            framed_bytes += batch_bytes;
+            record_offset += batch.record_count();
+            batches.push(batch);
+        }
+        batches
+    }
+
+    fn batch_from(&self, record_offset: usize) -> Option<EvidenceBatchV1> {
+        let first_cursor = self.records.get(record_offset)?.cursor;
+        if first_cursor
+            != self
+                .acknowledged
+                .contiguous_cursor
+                .checked_add(record_offset as u64 + 1)?
+        {
             return None;
         }
         let stream_identity = self.stream_identity?;
-        let mut records = Vec::new();
-        let mut wire = mithril_control::EvidenceBatch {
-            node_boot_id: stream_identity.node_boot_id.to_vec(),
-            source_id: stream_identity.source_id.to_vec(),
-            source_epoch: stream_identity.source_epoch,
-            cpu_id: stream_identity.cpu_id,
-            first_cursor,
-            records: Vec::new(),
-        };
-        for record in self.records.iter().take(self.limits.maximum_batch_records) {
-            records.push(record.clone());
-            wire.records.push(record.clone().into());
-            if wire.encoded_len() > mithril_control::MAX_EVIDENCE_BATCH_PAYLOAD_BYTES {
-                records.pop();
+        let maximum_frame_bytes =
+            mithril_control::MAX_EVIDENCE_BATCH_PAYLOAD_BYTES.saturating_sub(128);
+        let mut framed_records = Vec::new();
+        let mut last_cursor = None;
+        for record in self
+            .records
+            .iter()
+            .skip(record_offset)
+            .take(self.limits.maximum_batch_records)
+        {
+            if framed_records.len().saturating_add(record.frame.len()) > maximum_frame_bytes {
                 break;
             }
+            framed_records.extend_from_slice(&record.frame);
+            last_cursor = Some(record.cursor);
         }
-        let last_cursor = records.last()?.cursor;
-        Some(EvidenceBatchV1 {
+        let batch = EvidenceBatchV1 {
             first_cursor,
-            last_cursor,
-            records,
+            last_cursor: last_cursor?,
+            framed_records,
             stream_identity,
-        })
+        };
+        debug_assert!({
+            let wire: mithril_control::EvidenceBatch = batch.clone().into();
+            wire.encoded_len() <= mithril_control::MAX_EVIDENCE_BATCH_PAYLOAD_BYTES
+        });
+        Some(batch)
     }
 
     pub fn acknowledge(&mut self, ack: EvidenceAckV1) -> Result<()> {
-        let Some(batch) = self.next_batch() else {
+        let record_count = ack
+            .contiguous_cursor
+            .checked_sub(self.acknowledged.contiguous_cursor)
+            .and_then(|count| usize::try_from(count).ok())
+            .filter(|count| *count > 0)
+            .ok_or_else(|| {
+                EvidenceStateSnafu {
+                    reason: "evidence acknowledgement did not advance the durable cursor"
+                        .to_owned(),
+                }
+                .build()
+            })?;
+        if self.records.get(..record_count).is_none_or(|records| {
+            records.first().map(|record| record.cursor)
+                != self.acknowledged.contiguous_cursor.checked_add(1)
+                || records.last().map(|record| record.cursor) != Some(ack.contiguous_cursor)
+        }) {
             return EvidenceStateSnafu {
-                reason: "evidence acknowledgement has no pending batch".to_owned(),
-            }
-            .fail();
-        };
-        self.acknowledge_batch(ack, &batch)
-    }
-
-    fn acknowledge_batch(&mut self, _ack: EvidenceAckV1, batch: &EvidenceBatchV1) -> Result<()> {
-        if self.records.get(..batch.records.len()) != Some(batch.records.as_slice()) {
-            return EvidenceStateSnafu {
-                reason: "the in-flight evidence batch is not a retained WAL prefix".to_owned(),
+                reason: "evidence acknowledgement is not a retained WAL prefix".to_owned(),
             }
             .fail();
         }
         let state = AckStateV1 {
-            contiguous_cursor: batch.last_cursor,
+            contiguous_cursor: ack.contiguous_cursor,
         };
         atomic_write(
             &self.root.join(ACK_FILE),
@@ -1217,7 +1334,7 @@ impl EvidenceWal {
                 .is_some_and(|cursor| cursor <= state.contiguous_cursor)
         });
         sync_directory(&self.root)?;
-        self.records.drain(..batch.records.len());
+        self.records.drain(..record_count);
         self.retained_bytes = self
             .retained_bytes
             .saturating_add(if needs_active {
@@ -1329,10 +1446,13 @@ mod tests {
 
         let first = wal.next_batch().ok_or("first batch does not exist")?;
         assert_eq!((first.first_cursor, first.last_cursor), (1, 2));
+        assert_eq!(first.record_count(), 2);
         let wire: mithril_control::EvidenceBatch = first.into();
         assert_eq!(wire.first_cursor, 1);
-        assert_eq!(wire.records.len(), 2);
-        wal.acknowledge(EvidenceAckV1)?;
+        assert!(!wire.framed_records.is_empty());
+        wal.acknowledge(EvidenceAckV1 {
+            contiguous_cursor: 2,
+        })?;
         assert_eq!(std::fs::read(&segment)?, before_ack);
         drop(wal);
 
@@ -1341,13 +1461,58 @@ mod tests {
             .next_batch()
             .ok_or("remaining batch does not exist")?;
         assert_eq!((remaining.first_cursor, remaining.last_cursor), (3, 3));
-        reopened.acknowledge(EvidenceAckV1)?;
+        reopened.acknowledge(EvidenceAckV1 {
+            contiguous_cursor: 3,
+        })?;
         assert_eq!(reopened.acknowledged_cursor(), 3);
         assert_eq!(reopened.pending_records(), 0);
         assert_eq!(
             std::fs::metadata(active_segment(directory.path())?)?.len(),
             SEGMENT_HEADER_BYTES as u64
         );
+        Ok(())
+    }
+
+    #[test]
+    fn wal_owner_pipelines_batches_and_applies_cumulative_acknowledgements(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let mut owner = EvidenceWalOwner::open(
+            directory.path(),
+            EvidenceWalLimits {
+                maximum_retained_records: 5,
+                ..limits()
+            },
+        )?;
+        for sequence in 1..=5 {
+            owner
+                .append_classified(&observation(sequence)?)
+                .map_err(|failure| failure.error)?;
+        }
+
+        let batches = owner.next_batches();
+        assert_eq!(
+            batches
+                .iter()
+                .map(|batch| (batch.first_cursor, batch.last_cursor))
+                .collect::<Vec<_>>(),
+            [(1, 2), (3, 4), (5, 5)]
+        );
+        assert!(!owner.acknowledge(EvidenceAckV1 {
+            contiguous_cursor: 4,
+        })?);
+        assert_eq!(
+            owner
+                .next_batches()
+                .iter()
+                .map(|batch| (batch.first_cursor, batch.last_cursor))
+                .collect::<Vec<_>>(),
+            [(5, 5)]
+        );
+        assert!(owner.acknowledge(EvidenceAckV1 {
+            contiguous_cursor: 5,
+        })?);
+        assert!(owner.next_batches().is_empty());
         Ok(())
     }
 
@@ -1372,7 +1537,9 @@ mod tests {
         let active = active_segment(directory.path())?;
         let active_before_ack = std::fs::read(&active)?;
 
-        wal.acknowledge(EvidenceAckV1)?;
+        wal.acknowledge(EvidenceAckV1 {
+            contiguous_cursor: 1,
+        })?;
 
         assert!(!sealed.exists());
         assert_eq!(std::fs::read(active)?, active_before_ack);
@@ -1497,7 +1664,9 @@ mod tests {
                 .next_batch()
                 .ok_or("retained record did not upload")?;
             assert_eq!((batch.first_cursor, batch.last_cursor), (cursor, cursor));
-            reopened.acknowledge(EvidenceAckV1)?;
+            reopened.acknowledge(EvidenceAckV1 {
+                contiguous_cursor: cursor,
+            })?;
         }
         assert!(reopened.next_batch().is_none());
         Ok(())

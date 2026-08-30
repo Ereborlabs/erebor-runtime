@@ -1009,25 +1009,65 @@ impl NodeEvidence for ControlPlane {
         let node_id = self.authenticated_node(&request)?;
         let mut input = request.into_inner();
         let (output, receiver) = mpsc::channel(8);
-        let control = self.clone();
+        let (pending_output, mut pending_input) = mpsc::channel(64);
         tokio::spawn(async move {
             while let Some(message) = input.next().await {
-                let result = match message {
-                    Ok(request) => {
-                        let control = control.clone();
-                        let node_id = node_id.clone();
-                        match tokio::task::spawn_blocking(move || {
-                            control.receive_evidence_stream_item(&node_id, request)
-                        })
-                        .await
-                        {
-                            Ok(result) => result,
-                            Err(error) => Err(Status::internal(format!(
-                                "evidence intake worker failed: {error}"
-                            ))),
+                if pending_output.send(message).await.is_err() {
+                    return;
+                }
+            }
+        });
+        let control = self.clone();
+        tokio::spawn(async move {
+            let mut group = Vec::new();
+            let mut framed_bytes = 0_usize;
+            loop {
+                let message = pending_input.recv().await;
+                let closing = message.is_none();
+                if let Some(message) = message {
+                    let request = match message {
+                        Ok(request) => request,
+                        Err(status) => {
+                            let _result = output.send(Err(status)).await;
+                            return;
                         }
+                    };
+                    let Some(batch) = request.batch.as_ref() else {
+                        let _result = output
+                            .send(Err(Status::invalid_argument("evidence batch is required")))
+                            .await;
+                        return;
+                    };
+                    framed_bytes = framed_bytes.saturating_add(batch.framed_records.len());
+                    if framed_bytes > crate::MAX_EVIDENCE_COMMIT_PAYLOAD_BYTES {
+                        let _result = output
+                            .send(Err(Status::invalid_argument(
+                                "an evidence commit group exceeds one segment",
+                            )))
+                            .await;
+                        return;
                     }
-                    Err(status) => Err(status),
+                    let commit_group_tail = batch.commit_group_tail;
+                    group.push(request);
+                    if !commit_group_tail {
+                        continue;
+                    }
+                } else if group.is_empty() {
+                    return;
+                }
+                let ready = std::mem::take(&mut group);
+                framed_bytes = 0;
+                let control = control.clone();
+                let node_id = node_id.clone();
+                let result = match tokio::task::spawn_blocking(move || {
+                    control.receive_evidence_stream_group(&node_id, ready)
+                })
+                .await
+                {
+                    Ok(result) => result,
+                    Err(error) => Err(Status::internal(format!(
+                        "evidence intake worker failed: {error}"
+                    ))),
                 };
                 match result {
                     Ok(acknowledgement) => {
@@ -1040,6 +1080,9 @@ impl NodeEvidence for ControlPlane {
                         return;
                     }
                 }
+                if closing {
+                    return;
+                }
             }
         });
         Ok(Response::new(Box::pin(ReceiverStream::new(receiver))))
@@ -1047,69 +1090,71 @@ impl NodeEvidence for ControlPlane {
 }
 
 impl ControlPlane {
-    fn receive_evidence_stream_item(
-        &self,
-        node_id: &str,
-        request: EvidenceStreamRequest,
-    ) -> Result<EvidenceAck, Status> {
-        let session = request
-            .session
-            .ok_or_else(|| Status::invalid_argument("node session context is required"))?;
-        let batch = request
-            .batch
-            .ok_or_else(|| Status::invalid_argument("evidence batch is required"))?;
-        self.receive_evidence_batch(
-            node_id,
-            EvidenceBatchRequest {
-                session: Some(session),
-                batch: Some(batch),
-            },
-        )
-    }
-
     fn receive_evidence_batch(
         &self,
         node_id: &str,
         request: EvidenceBatchRequest,
     ) -> Result<EvidenceAck, Status> {
-        let context = request
-            .session
-            .as_ref()
-            .ok_or_else(|| Status::invalid_argument("node session context is required"))?;
-        // A degraded node must upload retained evidence before it can recover readiness.
-        self.require_session(node_id, context)?;
-        self.require_current_evidence_trust(node_id, context)?;
-        let batch = request
-            .batch
-            .as_ref()
-            .ok_or_else(|| Status::invalid_argument("evidence batch is required"))?;
+        self.receive_evidence_stream_group(
+            node_id,
+            vec![EvidenceStreamRequest {
+                session: request.session,
+                batch: request.batch,
+            }],
+        )
+    }
+
+    fn receive_evidence_stream_group(
+        &self,
+        node_id: &str,
+        requests: Vec<EvidenceStreamRequest>,
+    ) -> Result<EvidenceAck, Status> {
         let evidence = self.evidence.as_ref().ok_or_else(|| {
             Status::failed_precondition("Control has no durable evidence intake owner")
         })?;
-        let authenticated = match evidence.authenticate_retained_batch(
-            self.evidence_tenant(node_id)?,
-            node_id,
-            batch,
-        ) {
-            Ok(authenticated) => authenticated,
-            Err(status) => {
-                warn!(
-                    "rejected a Mithril evidence batch",
-                    node_id = %node_id,
-                    node_boot_id = %hex::encode(&context.node_boot_id),
-                    grpc_code = %status.code()
-                );
-                return Err(status);
-            }
-        };
-        let acknowledgement = evidence.receive(&authenticated, batch)?;
+        let mut batches = Vec::with_capacity(requests.len());
+        let mut first_cursor = None;
+        let mut framed_bytes = 0_usize;
+        for request in requests {
+            let context = request
+                .session
+                .as_ref()
+                .ok_or_else(|| Status::invalid_argument("node session context is required"))?;
+            // A degraded node must upload retained evidence before it can recover readiness.
+            self.require_session(node_id, context)?;
+            self.require_current_evidence_trust(node_id, context)?;
+            let batch = request
+                .batch
+                .ok_or_else(|| Status::invalid_argument("evidence batch is required"))?;
+            let authenticated = match evidence.authenticate_retained_batch(
+                self.evidence_tenant(node_id)?,
+                node_id,
+                &batch,
+            ) {
+                Ok(authenticated) => authenticated,
+                Err(status) => {
+                    warn!(
+                        "rejected a Mithril evidence batch",
+                        node_id = %node_id,
+                        node_boot_id = %hex::encode(&context.node_boot_id),
+                        grpc_code = %status.code()
+                    );
+                    return Err(status);
+                }
+            };
+            first_cursor.get_or_insert(batch.first_cursor);
+            framed_bytes = framed_bytes.saturating_add(batch.framed_records.len());
+            batches.push((authenticated, batch));
+        }
+        let batch_count = batches.len();
+        let acknowledgement = evidence.receive_group(batches)?;
         debug!(
-            "accepted a Mithril evidence batch",
+            "accepted a Mithril evidence commit group",
             node_id = %node_id,
-            node_boot_id = %hex::encode(&context.node_boot_id),
-            first_cursor = %batch.first_cursor,
-            last_cursor = %batch.first_cursor.saturating_add(batch.records.len() as u64).saturating_sub(1),
-            count = %batch.records.len()
+            first_cursor = %first_cursor.unwrap_or_default(),
+            contiguous_cursor = %acknowledgement.contiguous_cursor,
+            batch_count = %batch_count,
+            framed_bytes = %framed_bytes
         );
         Ok(acknowledgement)
     }

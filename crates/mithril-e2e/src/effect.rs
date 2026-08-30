@@ -4263,18 +4263,12 @@ impl EffectTestRunner {
             }
             .build()
         })?;
-        let durable_evidence_batch_records = evidence_batch.records.len();
-        let durable_evidence_batch_is_contiguous =
-            evidence_batch
-                .records
-                .iter()
-                .enumerate()
-                .all(|(index, record)| {
-                    u64::try_from(index)
-                        .ok()
-                        .and_then(|index| evidence_batch.first_cursor.checked_add(index))
-                        == Some(record.cursor)
-                });
+        let durable_evidence_batch_records = evidence_batch.record_count();
+        let durable_evidence_batch_is_contiguous = evidence_batch
+            .first_cursor
+            .checked_add(durable_evidence_batch_records as u64)
+            .and_then(|cursor| cursor.checked_sub(1))
+            == Some(evidence_batch.last_cursor);
         ensure!(
             wal_capacity_gapped
                 && ring_loss_gapped
@@ -4541,15 +4535,16 @@ mod tests {
         let batch = observations
             .next_evidence_batch()
             .ok_or("durable process-control evidence is missing")?;
-        assert_eq!(batch.records.len(), 3);
-        assert!(batch.records[..2].iter().all(|record| {
-            record.record.task_cookie == 0 && record.record.target_task_cookie == Some(5)
-        }));
-        assert_eq!(batch.records[0].record.operation_argument, Some(9));
-        assert_eq!(batch.records[1].record.operation_argument, Some(15));
-        assert_eq!(batch.records[2].record.task_cookie, 160);
-        assert_eq!(batch.records[2].record.target_task_cookie, None);
-        assert_eq!(batch.records[2].record.operation_argument, Some(0));
+        let records = batch.decode_records()?;
+        assert_eq!(records.len(), 3);
+        assert!(records[..2]
+            .iter()
+            .all(|record| { record.task_cookie == 0 && record.target_task_cookie == Some(5) }));
+        assert_eq!(records[0].operation_argument, Some(9));
+        assert_eq!(records[1].operation_argument, Some(15));
+        assert_eq!(records[2].task_cookie, 160);
+        assert_eq!(records[2].target_task_cookie, None);
+        assert_eq!(records[2].operation_argument, Some(0));
         Ok(())
     }
 

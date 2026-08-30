@@ -206,11 +206,14 @@ message EvidenceBatch {
   uint64 source_epoch = 3;
   uint32 cpu_id = 4;
   uint64 first_cursor = 5;
-  repeated EvidenceRecord records = 6;
+  bytes framed_records = 6;
+  bool commit_group_tail = 7;
 }
 
-// Acknowledges only a complete range that Control committed contiguously.
-message EvidenceAck {}
+// Advances the Node truncation marker through one durable contiguous range.
+message EvidenceAck {
+  uint64 contiguous_cursor = 1;
+}
 
 message CoverageCounters {
   uint64 attempted = 1;

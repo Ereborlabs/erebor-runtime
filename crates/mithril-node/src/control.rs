@@ -33,6 +33,7 @@ const CONTROL_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 // store operation runs. Keep that wait bounded without forcing retries during one durable flush.
 const CONTROL_UNARY_TIMEOUT: Duration = Duration::from_secs(10);
 const CONTROL_READINESS_RENEWAL_INTERVAL: Duration = Duration::from_secs(1);
+const EVIDENCE_PIPELINE_BATCHES: usize = 64;
 
 #[derive(Clone)]
 pub struct NodeControlConnector {
@@ -219,7 +220,7 @@ impl NodeControlConnector {
             .context(ControlRpcSnafu)?
             .into_inner();
 
-        let (evidence_output, evidence_receiver) = mpsc::channel(8);
+        let (evidence_output, evidence_receiver) = mpsc::channel(EVIDENCE_PIPELINE_BATCHES);
         let evidence_input = NodeEvidenceClient::new(channel.clone())
             .max_decoding_message_size(MAX_EVIDENCE_GRPC_MESSAGE_BYTES)
             .max_encoding_message_size(MAX_EVIDENCE_GRPC_MESSAGE_BYTES)
@@ -449,10 +450,32 @@ impl ControlConnection {
     }
 
     pub async fn send_evidence_batch(&mut self, batch: crate::EvidenceBatchV1) -> Result<()> {
+        let mut batch: mithril_control::EvidenceBatch = batch.into();
+        batch.commit_group_tail = true;
+        self.send_evidence_wire_batch(batch).await
+    }
+
+    pub async fn send_evidence_group(
+        &mut self,
+        batches: Vec<crate::EvidenceBatchV1>,
+    ) -> Result<()> {
+        let count = batches.len();
+        for (index, batch) in batches.into_iter().enumerate() {
+            let mut batch: mithril_control::EvidenceBatch = batch.into();
+            batch.commit_group_tail = index.checked_add(1) == Some(count);
+            self.send_evidence_wire_batch(batch).await?;
+        }
+        Ok(())
+    }
+
+    async fn send_evidence_wire_batch(
+        &mut self,
+        batch: mithril_control::EvidenceBatch,
+    ) -> Result<()> {
         self.evidence_output
             .send(EvidenceStreamRequest {
                 session: Some(self.identity.clone()),
-                batch: Some(batch.into()),
+                batch: Some(batch),
             })
             .await
             .map_err(|_closed| {

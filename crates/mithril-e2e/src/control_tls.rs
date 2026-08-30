@@ -30,15 +30,29 @@ use mithril_node::{
     EvidenceWalCapacityPolicyV1, EvidenceWalLimits, NodeControlConfig, NodeControlConnector,
     NodeControlMessage, ObservationCanonicalizer, PolicyControlPacingOwner, TrustCache,
 };
+use prost::Message as _;
 use rcgen::{
     date_time_ymd, BasicConstraints, Certificate, CertificateParams, ExtendedKeyUsagePurpose, IsCa,
     KeyPair,
 };
 use sha2::{Digest as _, Sha256};
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
-use tokio::sync::{oneshot, watch};
+use tokio::sync::{mpsc, oneshot, watch};
+use tokio_stream::wrappers::ReceiverStream;
+use tonic::transport::{
+    Certificate as TonicCertificate, ClientTlsConfig, Endpoint, Identity, Server, ServerTlsConfig,
+};
+use tonic::{Request as TonicRequest, Response as TonicResponse, Status as TonicStatus};
 use tower::service_fn;
 use zerocopy::IntoBytes as _;
+
+mod grpc_throughput_protocol {
+    tonic::include_proto!("erebor.mithril.e2e.v1");
+}
+
+use grpc_throughput_protocol::grpc_throughput_client::GrpcThroughputClient;
+use grpc_throughput_protocol::grpc_throughput_server::{GrpcThroughput, GrpcThroughputServer};
+use grpc_throughput_protocol::{FileChunk, FileReceipt};
 
 const OUTAGE_POLICY: &[u8] = include_bytes!("../fixtures/convergence/outage-policy-v1.json");
 const OUTAGE_TENANT_ID: &str = "00000000-0000-0001-0000-000000000002";
@@ -46,6 +60,9 @@ const OUTAGE_CLUSTER_UID: &str = "55555555-5555-4555-8555-555555555555";
 const OUTAGE_NAMESPACE_UID: &str = "66666666-6666-4666-8666-666666666666";
 const OUTAGE_POLICY_UID: &str = "30000000-0000-4000-8000-000000000001";
 const OUTAGE_NOW: i64 = 1_800_000_000_000_000_000;
+const GRPC_THROUGHPUT_CHUNK_BYTES: usize = 3 * 1_024 * 1_024;
+const GRPC_THROUGHPUT_MESSAGE_BYTES: usize = 4 * 1_024 * 1_024;
+const GRPC_THROUGHPUT_WINDOW_BYTES: u32 = 16 * 1_024 * 1_024;
 
 #[tokio::test]
 async fn kubernetes_outage_pending_policy_transfer_preempts_evidence_ack_backlog() {
@@ -94,10 +111,8 @@ fn kubernetes_outage_retained_control_store_starts_from_latest_state(
     assert!(stored_bytes * 100 <= LEGACY_BYTES_PER_RECORD * record_count);
     assert!(store_path.join("state.bin").is_file());
     assert!(!store_path.join("commits").exists());
-    assert_eq!(
-        fs::read_dir(store_path.join("evidence/segments"))?.count() as u64,
-        FIXTURE_BATCHES
-    );
+    let segment_count = fs::read_dir(store_path.join("evidence/segments-v2"))?.count() as u64;
+    assert!(segment_count > 0 && segment_count < FIXTURE_BATCHES);
     Ok(())
 }
 
@@ -107,7 +122,7 @@ fn control_evidence_queue_reclaims_only_durably_consumed_segments() -> Result<()
     let directory = tempfile::tempdir()?;
     let store_path = directory.path().join("control-store");
     let limits = EvidenceStoreLimitsV1 {
-        maximum_retained_bytes: 8 * 1_024 * 1_024,
+        maximum_retained_bytes: mithril_control::MAX_EVIDENCE_SEGMENT_BYTES as u64,
         maximum_retained_records: 2,
         capacity_policy: EvidenceStoreCapacityPolicyV1::Block,
     };
@@ -127,37 +142,45 @@ fn control_evidence_queue_reclaims_only_durably_consumed_segments() -> Result<()
         node_boot_id: identity.node_boot_id,
         label_epoch: identity.label_epoch,
     };
+    let record = EvidenceRecord {
+        observed_boottime_ns: 3,
+        ingested_utc_ns: 3,
+        coverage_interval_id: vec![4; 16].into(),
+        task_cookie: 3,
+        process_lineage_id: vec![5; 16].into(),
+        authority_domain_id: vec![6; 16].into(),
+        execution_set_id: vec![7; 16].into(),
+        exact_object_id: vec![8; 16].into(),
+        policy_rule_id: 1,
+        reason: 1,
+        decision: 1,
+        effect_family: 1,
+        operation: 1,
+        configured_errno: -13,
+        kernel_result: -13,
+        temporal_coverage: EvidenceTemporalCoverage::Complete as i32,
+        ..EvidenceRecord::default()
+    };
+    let payload = record.encode_to_vec();
+    let mut framed_records = Vec::with_capacity(payload.len() + 8);
+    framed_records.extend_from_slice(&(payload.len() as u32).to_be_bytes());
+    framed_records.extend_from_slice(&payload);
+    let checksum = crc32c::crc32c(&framed_records);
+    framed_records.extend_from_slice(&checksum.to_be_bytes());
     let third = EvidenceBatch {
         node_boot_id: identity.node_boot_id.to_vec(),
         source_id: identity.source_id.to_vec(),
         source_epoch: identity.source_epoch,
         cpu_id: 0,
         first_cursor: 3,
-        records: vec![EvidenceRecord {
-            observed_boottime_ns: 3,
-            ingested_utc_ns: 3,
-            coverage_interval_id: vec![4; 16],
-            task_cookie: 3,
-            process_lineage_id: vec![5; 16],
-            authority_domain_id: vec![6; 16],
-            execution_set_id: vec![7; 16],
-            exact_object_id: vec![8; 16],
-            policy_rule_id: 1,
-            reason: 1,
-            decision: 1,
-            effect_family: 1,
-            operation: 1,
-            configured_errno: -13,
-            kernel_result: -13,
-            temporal_coverage: EvidenceTemporalCoverage::Complete as i32,
-            ..EvidenceRecord::default()
-        }],
+        framed_records: framed_records.into(),
+        commit_group_tail: false,
     };
     let intake = EvidenceIntakeOwner::from_store(store.clone());
-    assert!(intake.receive(&authenticated, &third).is_err());
+    assert!(intake.receive(&authenticated, third.clone()).is_err());
     assert_eq!(
-        fs::read_dir(store_path.join("evidence/segments"))?.count(),
-        2
+        fs::read_dir(store_path.join("evidence/segments-v2"))?.count(),
+        1
     );
 
     let retention = EvidenceRetentionOwner::from_store(store.clone());
@@ -167,15 +190,25 @@ fn control_evidence_queue_reclaims_only_durably_consumed_segments() -> Result<()
         coverage_revision: 0,
     })?;
     assert_eq!(
-        fs::read_dir(store_path.join("evidence/segments"))?.count(),
+        fs::read_dir(store_path.join("evidence/segments-v2"))?.count(),
         1
     );
     assert_eq!(retention.watermark(&identity)?.evidence_cursor, 1);
-    intake.receive(&authenticated, &third)?;
-    assert_eq!(store.accepted_evidence_records(&identity)?.len(), 2);
+    assert!(intake.receive(&authenticated, third.clone()).is_err());
+    retention.acknowledge(EvidenceConsumptionWatermarkV1 {
+        identity: identity.clone(),
+        evidence_cursor: 2,
+        coverage_revision: 0,
+    })?;
     assert_eq!(
-        fs::read_dir(store_path.join("evidence/segments"))?.count(),
-        2
+        fs::read_dir(store_path.join("evidence/segments-v2"))?.count(),
+        0
+    );
+    intake.receive(&authenticated, third)?;
+    assert_eq!(store.accepted_evidence_records(&identity)?.len(), 1);
+    assert_eq!(
+        fs::read_dir(store_path.join("evidence/segments-v2"))?.count(),
+        1
     );
 
     drop(retention);
@@ -183,9 +216,9 @@ fn control_evidence_queue_reclaims_only_durably_consumed_segments() -> Result<()
     drop(store);
     let reopened = ControlStore::open_with_evidence_limits(&store_path, limits)?;
     let retention = EvidenceRetentionOwner::from_store(reopened.clone());
-    assert_eq!(retention.watermark(&identity)?.evidence_cursor, 1);
+    assert_eq!(retention.watermark(&identity)?.evidence_cursor, 2);
     assert_eq!(reopened.evidence_cursor(&identity)?, 3);
-    assert_eq!(reopened.accepted_evidence_records(&identity)?.len(), 2);
+    assert_eq!(reopened.accepted_evidence_records(&identity)?.len(), 1);
     Ok(())
 }
 
@@ -743,7 +776,7 @@ async fn mtls_evidence_stream_replays_after_disconnect_and_reuses_one_registered
         assert_eq!(intake.contiguous_cursor(&identity)?, batch.last_cursor);
         assert_eq!(
             intake.store().accepted_evidence_records(&identity)?.len(),
-            batch.records.len()
+            batch.record_count()
         );
     }
 
@@ -999,11 +1032,7 @@ async fn kubernetes_outage_mtls_session_converges_policy_while_replaying_retaine
         intake
             .store()
             .accepted_evidence_records(&original_identity)?,
-        retained
-            .records
-            .iter()
-            .map(|record| record.record.clone())
-            .collect::<Vec<_>>()
+        retained.decode_records()?
     );
 
     drop(connection);
@@ -1269,7 +1298,7 @@ async fn kubernetes_outage_retained_evidence_allows_protected_pod_admission(
             node_boot_id: [7; 16],
             label_epoch: 1,
         },
-        &retained,
+        retained,
     )?;
 
     let fixture = OutagePolicyFixture::new(store.clone());
@@ -1407,7 +1436,7 @@ async fn mtls_evidence_stream_retains_every_record_across_node_restart_beyond_th
     let before_restart = observations
         .next_evidence_batch()
         .ok_or("the Node retained no evidence before restart")?;
-    assert_eq!(before_restart.records.len(), 2);
+    assert_eq!(before_restart.record_count(), 2);
     assert_eq!(observations.pending_evidence_records(), 2);
     drop(observations);
 
@@ -1422,7 +1451,6 @@ async fn mtls_evidence_stream_retains_every_record_across_node_restart_beyond_th
             EvidenceIdV1::from([7; 16]),
         )?,
     )?;
-    assert_eq!(observations.next_evidence_batch(), Some(before_restart));
     assert_eq!(observations.pending_evidence_records(), 2);
     for source_sequence in 3..=303 {
         observations.record_bytes(
@@ -1445,20 +1473,33 @@ async fn mtls_evidence_stream_retains_every_record_across_node_restart_beyond_th
         NodeControlConnector::new(files.node_config(address), "node-a".to_owned(), [7; 16]);
     let mut trust = TrustCache::load(directory.path())?;
     let mut connection = connector.connect(registration(), false, &mut trust).await?;
-    let mut upload_records = Vec::new();
+    let batches = observations.next_evidence_batches();
+    let upload_records = batches
+        .iter()
+        .map(mithril_node::EvidenceBatchV1::record_count)
+        .collect::<Vec<_>>();
     let mut delivered_source = None;
-    while let Some(batch) = observations.next_evidence_batch() {
+    let expected_cursor = batches
+        .last()
+        .map(|batch| batch.last_cursor)
+        .ok_or("the Node did not prepare an evidence commit group")?;
+    for batch in &batches {
         delivered_source = delivered_source.or(Some(batch_source_id(&batch)?));
-        upload_records.push(batch.records.len());
-        connection.send_evidence_batch(batch).await?;
+    }
+    connection.send_evidence_group(batches).await?;
+    loop {
         let NodeControlMessage::EvidenceAck(acknowledgement) = connection.next_message().await?
         else {
-            return Err("Control did not acknowledge the evidence stream item".into());
+            return Err("Control did not acknowledge the evidence commit group".into());
         };
-        observations.acknowledge_evidence(acknowledgement)?;
+        let complete = observations.acknowledge_evidence(acknowledgement)?;
+        if complete {
+            assert_eq!(acknowledgement.contiguous_cursor, expected_cursor);
+            break;
+        }
     }
     assert_eq!(upload_records.iter().sum::<usize>(), 303);
-    assert_eq!(upload_records, vec![2, 301]);
+    assert_eq!(upload_records, vec![303]);
     assert_eq!(observations.pending_evidence_records(), 0);
     assert_eq!(control.registered_nonce_count(), 1);
 
@@ -1478,6 +1519,194 @@ async fn mtls_evidence_stream_retains_every_record_across_node_restart_beyond_th
     drop(connection);
     let _result = shutdown.send(());
     server.await??;
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "the evidence throughput budget requires the shipped release optimization level"]
+async fn mtls_evidence_backlog_exceeds_the_previous_baseline() -> Result<(), Box<dyn StdError>> {
+    const BATCH_RECORDS: usize = 4_096;
+    const QUALIFICATION_BYTES: u64 = 512 * 1_024 * 1_024;
+    const PREVIOUS_MIB_PER_SECOND: f64 = 107.1;
+    const TARGET_MIB_PER_SECOND: f64 = 300.0;
+
+    let target = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target");
+    fs::create_dir_all(&target)?;
+    let directory = tempfile::tempdir_in(target)?;
+    let certificates = Certificates::issue(false)?;
+    let files = certificates.write(directory.path())?;
+    let address = free_address()?;
+    let store = ControlStore::open_with_evidence_limits(
+        directory.path().join("control-evidence"),
+        EvidenceStoreLimitsV1 {
+            capacity_policy: EvidenceStoreCapacityPolicyV1::Retain,
+            ..EvidenceStoreLimitsV1::default()
+        },
+    )?;
+    let control = ControlPlane::with_control_store(
+        vec![AllowedNodeIdentity {
+            node_id: "node-a".to_owned(),
+            certificate_sha256: certificates.node_digest(),
+            tenant_id: "00000000-0000-0001-0000-000000000002".to_owned(),
+        }],
+        TrustGenerationV1 {
+            generation: 1,
+            bundle_digest: "d".repeat(64),
+            policy_issuer_sequence_epoch: 0,
+            policy_signers: Vec::new(),
+        },
+        store.clone(),
+    )?;
+    let (shutdown, server) = start_server(address, &files, control);
+    tokio::time::sleep(Duration::from_millis(20)).await;
+
+    let observations = EffectObservationStore::durable(
+        4,
+        directory.path().join("node-wal"),
+        EvidenceWalLimits {
+            maximum_retained_records: BATCH_RECORDS,
+            maximum_batch_records: BATCH_RECORDS,
+            ..EvidenceWalLimits::default()
+        },
+        ObservationCanonicalizer::new(
+            EvidenceIdV1::new(1, 2),
+            EvidenceIdV1::new(3, 4),
+            1,
+            EvidenceIdV1::from([7; 16]),
+        )?,
+    )?;
+    for source_sequence in 1..=BATCH_RECORDS as u64 {
+        observations.record_bytes(
+            erebor_interceptor_abi::EffectObservationV1 {
+                observed_boottime_ns: source_sequence,
+                source_sequence,
+                source_cpu_id: 0,
+                task_cookie: source_sequence,
+                reason: 9,
+                physical_result: 1,
+                effect_family: 1,
+                operation: 1,
+                ..erebor_interceptor_abi::EffectObservationV1::default()
+            }
+            .as_bytes(),
+        );
+    }
+    let template = observations
+        .next_evidence_batch()
+        .ok_or("the Node did not create a throughput batch template")?;
+    assert_eq!(template.record_count(), BATCH_RECORDS);
+    let encoded_batch_bytes = {
+        let batch: EvidenceBatch = template.clone().into();
+        batch.encoded_len() as u64
+    };
+    assert!(encoded_batch_bytes <= mithril_control::MAX_EVIDENCE_BATCH_PAYLOAD_BYTES as u64);
+    let batch_count = QUALIFICATION_BYTES.div_ceil(encoded_batch_bytes);
+    let accepted_bytes = encoded_batch_bytes * batch_count;
+    let maximum_group_batches =
+        (mithril_control::MAX_EVIDENCE_COMMIT_PAYLOAD_BYTES as u64 / encoded_batch_bytes).max(1);
+    let (grpc_elapsed, grpc_mib_per_second) =
+        measure_grpc_file_transfer(&files, accepted_bytes, None).await?;
+    let (durable_grpc_elapsed, durable_grpc_mib_per_second) = measure_grpc_file_transfer(
+        &files,
+        accepted_bytes,
+        Some(directory.path().join("grpc-received.bin")),
+    )
+    .await?;
+    eprintln!(
+        "raw mTLS gRPC transferred {accepted_bytes} bytes in {grpc_elapsed:?}: {grpc_mib_per_second:.1} MiB/s; durable receiver completed in {durable_grpc_elapsed:?}: {durable_grpc_mib_per_second:.1} MiB/s"
+    );
+
+    let connector =
+        NodeControlConnector::new(files.node_config(address), "node-a".to_owned(), [7; 16]);
+    let mut trust = TrustCache::load(&directory.path().join("trust"))?;
+    let mut connection = connector.connect(registration(), false, &mut trust).await?;
+    let intake = EvidenceIntakeOwner::from_store(store.clone());
+    let direct_authenticated = AuthenticatedEvidenceNodeV1 {
+        tenant_id: EvidenceIdV1::new(1, 2).to_be_bytes(),
+        node_id: "node-a".to_owned(),
+        node_boot_id: [7; 16],
+        label_epoch: 1,
+    };
+    let direct_batch_count = maximum_group_batches;
+    let mut direct_batches = Vec::new();
+    for index in 0..direct_batch_count {
+        let mut batch = template.clone();
+        let first_cursor = index * BATCH_RECORDS as u64 + 1;
+        batch.first_cursor = first_cursor;
+        batch.last_cursor = first_cursor + BATCH_RECORDS as u64 - 1;
+        let mut batch: EvidenceBatch = batch.into();
+        batch.source_id = vec![9; 16];
+        direct_batches.push((direct_authenticated.clone(), batch));
+    }
+    let direct_started = Instant::now();
+    let direct_acknowledgement = intake.receive_group(direct_batches)?;
+    let direct_elapsed = direct_started.elapsed();
+    let direct_mib_per_second = encoded_batch_bytes as f64 * direct_batch_count as f64
+        / 1_048_576.0
+        / direct_elapsed.as_secs_f64();
+    eprintln!(
+        "direct Control intake completed in {direct_elapsed:?}: {direct_mib_per_second:.1} MiB/s"
+    );
+    assert_eq!(
+        direct_acknowledgement.contiguous_cursor,
+        direct_batch_count * BATCH_RECORDS as u64
+    );
+    let mut preparation_elapsed = Duration::ZERO;
+    let mut enqueue_elapsed = Duration::ZERO;
+    let mut acknowledgement_elapsed = Duration::ZERO;
+    let mut acknowledgement_count = 0_u64;
+    let started = Instant::now();
+    let expected_acknowledgements = batch_count.div_ceil(maximum_group_batches);
+    let mut index = 0_u64;
+    while index < batch_count {
+        let group_batches = maximum_group_batches.min(batch_count - index);
+        let first_group_index = index;
+        let mut batches = Vec::with_capacity(group_batches as usize);
+        for _ in 0..group_batches {
+            let phase_started = Instant::now();
+            let mut batch = template.clone();
+            let first_cursor = index * BATCH_RECORDS as u64 + 1;
+            batch.first_cursor = first_cursor;
+            batch.last_cursor = first_cursor + BATCH_RECORDS as u64 - 1;
+            preparation_elapsed += phase_started.elapsed();
+            batches.push(batch);
+            index += 1;
+        }
+        let phase_started = Instant::now();
+        connection.send_evidence_group(batches).await?;
+        enqueue_elapsed += phase_started.elapsed();
+        let expected_cursor = index * BATCH_RECORDS as u64;
+        let minimum_cursor = first_group_index * BATCH_RECORDS as u64;
+        let phase_started = Instant::now();
+        loop {
+            let NodeControlMessage::EvidenceAck(acknowledgement) =
+                connection.next_message().await?
+            else {
+                return Err("Control did not acknowledge the throughput group".into());
+            };
+            acknowledgement_count += 1;
+            if acknowledgement.contiguous_cursor <= minimum_cursor
+                || acknowledgement.contiguous_cursor > expected_cursor
+            {
+                return Err("Control returned a cursor outside the throughput group".into());
+            }
+            if acknowledgement.contiguous_cursor == expected_cursor {
+                break;
+            }
+        }
+        acknowledgement_elapsed += phase_started.elapsed();
+    }
+    let elapsed = started.elapsed();
+    let mib_per_second = accepted_bytes as f64 / 1_048_576.0 / elapsed.as_secs_f64();
+    eprintln!(
+        "durably acknowledged {accepted_bytes} evidence bytes in {elapsed:?}: {mib_per_second:.1} MiB/s (target {TARGET_MIB_PER_SECOND:.1}); acknowledgements={acknowledgement_count} prepare={preparation_elapsed:?} enqueue={enqueue_elapsed:?} control_ack={acknowledgement_elapsed:?}"
+    );
+    assert_eq!(acknowledgement_count, expected_acknowledgements);
+    assert_eq!(store.health()?.pending_evidence_records, 0);
+    drop(connection);
+    let _result = shutdown.send(());
+    server.await??;
+    assert!(mib_per_second > PREVIOUS_MIB_PER_SECOND);
     Ok(())
 }
 
@@ -1840,6 +2069,128 @@ fn start_server(
         .await
     });
     (shutdown, server)
+}
+
+#[derive(Clone)]
+struct GrpcThroughputReceiver {
+    durable_path: Option<PathBuf>,
+}
+
+#[tonic::async_trait]
+impl GrpcThroughput for GrpcThroughputReceiver {
+    async fn upload(
+        &self,
+        request: TonicRequest<tonic::Streaming<FileChunk>>,
+    ) -> Result<TonicResponse<FileReceipt>, TonicStatus> {
+        let mut input = request.into_inner();
+        let mut file = match &self.durable_path {
+            Some(path) => Some(tokio::fs::File::create(path).await.map_err(|error| {
+                TonicStatus::internal(format!(
+                    "throughput receiver could not create its file: {error}"
+                ))
+            })?),
+            None => None,
+        };
+        let mut received_bytes = 0_u64;
+        while let Some(chunk) = input.message().await? {
+            received_bytes = received_bytes
+                .checked_add(chunk.payload.len() as u64)
+                .ok_or_else(|| TonicStatus::out_of_range("throughput byte count is exhausted"))?;
+            if let Some(file) = &mut file {
+                file.write_all(&chunk.payload).await.map_err(|error| {
+                    TonicStatus::internal(format!("throughput receiver write failed: {error}"))
+                })?;
+            }
+        }
+        if let Some(file) = file {
+            file.sync_data().await.map_err(|error| {
+                TonicStatus::internal(format!("throughput receiver sync failed: {error}"))
+            })?;
+        }
+        Ok(TonicResponse::new(FileReceipt { received_bytes }))
+    }
+}
+
+async fn measure_grpc_file_transfer(
+    files: &CertificateFiles,
+    total_bytes: u64,
+    durable_path: Option<PathBuf>,
+) -> Result<(Duration, f64), Box<dyn StdError>> {
+    let address = free_address()?;
+    let tls = ServerTlsConfig::new()
+        .identity(Identity::from_pem(
+            fs::read(&files.server_certificate)?,
+            fs::read(&files.server_key)?,
+        ))
+        .client_ca_root(TonicCertificate::from_pem(fs::read(&files.ca)?));
+    let receiver = GrpcThroughputReceiver { durable_path };
+    let (shutdown, shutdown_input) = oneshot::channel();
+    let server = tokio::spawn(async move {
+        Server::builder()
+            .initial_stream_window_size(GRPC_THROUGHPUT_WINDOW_BYTES)
+            .initial_connection_window_size(GRPC_THROUGHPUT_WINDOW_BYTES)
+            .tls_config(tls)?
+            .add_service(
+                GrpcThroughputServer::new(receiver)
+                    .max_decoding_message_size(GRPC_THROUGHPUT_MESSAGE_BYTES)
+                    .max_encoding_message_size(GRPC_THROUGHPUT_MESSAGE_BYTES),
+            )
+            .serve_with_shutdown(address, async move {
+                let _result = shutdown_input.await;
+            })
+            .await
+    });
+    tokio::time::sleep(Duration::from_millis(20)).await;
+
+    let client_tls = ClientTlsConfig::new()
+        .ca_certificate(TonicCertificate::from_pem(fs::read(&files.ca)?))
+        .identity(Identity::from_pem(
+            fs::read(&files.node_certificate)?,
+            fs::read(&files.node_key)?,
+        ))
+        .domain_name("localhost");
+    let channel = Endpoint::from_shared(format!("https://{address}"))?
+        .tls_config(client_tls)?
+        .initial_stream_window_size(GRPC_THROUGHPUT_WINDOW_BYTES)
+        .initial_connection_window_size(GRPC_THROUGHPUT_WINDOW_BYTES)
+        .connect()
+        .await?;
+    let mut client = GrpcThroughputClient::new(channel)
+        .max_decoding_message_size(GRPC_THROUGHPUT_MESSAGE_BYTES)
+        .max_encoding_message_size(GRPC_THROUGHPUT_MESSAGE_BYTES);
+    let (output, input) = mpsc::channel(8);
+    let source = prost::bytes::Bytes::from(vec![0xa5; GRPC_THROUGHPUT_CHUNK_BYTES]);
+    let started = Instant::now();
+    let upload = tokio::spawn(async move {
+        client
+            .upload(TonicRequest::new(ReceiverStream::new(input)))
+            .await
+    });
+    let mut remaining = total_bytes;
+    while remaining > 0 {
+        let chunk_bytes = remaining.min(GRPC_THROUGHPUT_CHUNK_BYTES as u64) as usize;
+        output
+            .send(FileChunk {
+                payload: source.slice(..chunk_bytes),
+            })
+            .await
+            .map_err(|_closed| "throughput receiver closed before the file completed")?;
+        remaining -= chunk_bytes as u64;
+    }
+    drop(output);
+    let receipt = upload.await??.into_inner();
+    let elapsed = started.elapsed();
+    if receipt.received_bytes != total_bytes {
+        return Err(format!(
+            "throughput receiver accepted {} of {total_bytes} bytes",
+            receipt.received_bytes
+        )
+        .into());
+    }
+    let _result = shutdown.send(());
+    server.await??;
+    let mib_per_second = total_bytes as f64 / 1_048_576.0 / elapsed.as_secs_f64();
+    Ok((elapsed, mib_per_second))
 }
 
 struct TcpBlackholeOwner {
