@@ -1,4 +1,4 @@
-use erebor_interceptor_abi::EffectObservationV1;
+use erebor_interceptor_abi::{EffectObservationV1, KernelEffectOperationV1};
 use sha2::{Digest as _, Sha256};
 use zerocopy::IntoBytes as _;
 
@@ -106,6 +106,7 @@ fn kernel_effect(event: &EffectObservationV1) -> KernelEffectEvidenceV1 {
     };
     KernelEffectEvidenceV1 {
         task_cookie: event.task_cookie,
+        target_task_cookie: (event.target_task_cookie > 0).then_some(event.target_task_cookie),
         process_lineage_id: (!event.process_lineage_id.is_zero())
             .then_some(event.process_lineage_id),
         authority_domain_id: (!event.authority_domain_id.is_zero())
@@ -119,6 +120,12 @@ fn kernel_effect(event: &EffectObservationV1) -> KernelEffectEvidenceV1 {
         decision: event.physical_result,
         effect_family: event.effect_family,
         operation: event.operation,
+        operation_argument: (event.operation == KernelEffectOperationV1::Ioctl as u16
+            || event.operation == KernelEffectOperationV1::IpcAccess as u16
+            || event.operation == KernelEffectOperationV1::Ptrace as u16
+            || event.operation == KernelEffectOperationV1::Signal as u16
+            || event.operation == KernelEffectOperationV1::Capability as u16)
+            .then_some(event.operation_argument),
         configured_errno: event.configured_errno,
         kernel_result: event.kernel_result,
     }

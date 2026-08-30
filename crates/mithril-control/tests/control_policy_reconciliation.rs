@@ -1200,6 +1200,68 @@ fn kubernetes_outage_partial_two_node_update_survives_control_restart() -> TestR
 }
 
 #[test]
+fn kubernetes_outage_two_node_recreate_converges_after_retained_cleanup() -> TestResult {
+    let directory = TempDir::new()?;
+    let store = ControlStore::open(directory.path())?;
+    let owner = make_owner(store.clone());
+    let policy = policy()?;
+    let first_resource = resource(&policy, "profile", OBJECT_UID, 1, false)?;
+    let first_inventory = two_node_inventory_for_resource(&first_resource)?;
+    let first = owner.reconcile(&first_resource, NAMESPACE_UID, &first_inventory, NOW)?;
+    for bundle in &first.bundles {
+        owner.rollout_owner().acknowledge(acknowledgement(
+            bundle,
+            PolicyActivationStateV1::Active,
+            NOW + 1,
+        )?)?;
+    }
+    let active = owner.reconcile(&first_resource, NAMESPACE_UID, &first_inventory, NOW + 2)?;
+    assert_eq!(active.status.rollout.active, 2);
+
+    let deleting = resource(&policy, "profile", OBJECT_UID, 1, true)?;
+    let deleted = owner.reconcile(&deleting, NAMESPACE_UID, &[], NOW + 3)?;
+    assert_eq!(deleted.status.rollout.desired, 0);
+    drop(owner);
+    drop(store);
+
+    let reopened = ControlStore::open(directory.path())?;
+    let restarted = make_owner(reopened);
+    let recreated_resource = resource(
+        &policy,
+        "profile",
+        "30000000-0000-4000-8000-000000000004",
+        1,
+        false,
+    )?;
+    let recreated_inventory = two_node_inventory_for_resource(&recreated_resource)?;
+    let recreated = restarted.reconcile(
+        &recreated_resource,
+        NAMESPACE_UID,
+        &recreated_inventory,
+        NOW + 4,
+    )?;
+    assert_eq!(recreated.bundles.len(), 2);
+    for bundle in &recreated.bundles {
+        restarted.rollout_owner().acknowledge(acknowledgement(
+            bundle,
+            PolicyActivationStateV1::Active,
+            NOW + 5,
+        )?)?;
+    }
+    let converged = restarted.reconcile(
+        &recreated_resource,
+        NAMESPACE_UID,
+        &recreated_inventory,
+        NOW + 6,
+    )?;
+    assert_eq!(converged.status.rollout.desired, 2);
+    assert_eq!(converged.status.rollout.active, 2);
+    assert_eq!(converged.status.rollout.updating, 0);
+    assert_eq!(converged.status.rollout.failed, 0);
+    Ok(())
+}
+
+#[test]
 fn kubernetes_outage_candidate_accepts_bounded_clock_skew() -> TestResult {
     let directory = TempDir::new()?;
     let owner = make_owner(ControlStore::open(directory.path())?);
@@ -1311,10 +1373,11 @@ fn policy_delivery_skips_superseded_candidates_before_node_poll() -> TestResult 
 fn bound_inventory_change_reconciles_without_a_policy_source_change() -> TestResult {
     let directory = TempDir::new()?;
     let store = ControlStore::open(directory.path())?;
-    let owner = make_owner(store);
+    let owner = make_owner(store.clone());
     let policy = policy()?;
     let resource = resource(&policy, "profile", OBJECT_UID, 1, false)?;
     let first = owner.reconcile(&resource, NAMESPACE_UID, &inventory(&"1".repeat(64))?, NOW)?;
+    let first_node_a = &first.bundles[0];
     let second = owner.reconcile(&resource, NAMESPACE_UID, &two_node_inventory()?, NOW + 1)?;
 
     assert_eq!(
@@ -1344,6 +1407,32 @@ fn bound_inventory_change_reconciles_without_a_policy_source_change() -> TestRes
         node_b.candidate.operation,
         PolicyDeliveryOperationV1::Activate
     );
+    owner.rollout_owner().acknowledge(acknowledgement(
+        first_node_a,
+        PolicyActivationStateV1::Active,
+        NOW + 2,
+    )?)?;
+    assert_eq!(
+        store.next_bundle_for_node("node-a", std::slice::from_ref(&first_node_a.bundle_digest),)?,
+        Some(node_a.clone())
+    );
+    owner.rollout_owner().acknowledge(acknowledgement(
+        node_b,
+        PolicyActivationStateV1::Active,
+        NOW + 3,
+    )?)?;
+    let mixed = owner.reconcile(&resource, NAMESPACE_UID, &two_node_inventory()?, NOW + 4)?;
+    assert_eq!(mixed.status.rollout.active, 1);
+    assert_eq!(mixed.status.rollout.updating, 1);
+
+    owner.rollout_owner().acknowledge(acknowledgement(
+        node_a,
+        PolicyActivationStateV1::Active,
+        NOW + 5,
+    )?)?;
+    let converged = owner.reconcile(&resource, NAMESPACE_UID, &two_node_inventory()?, NOW + 6)?;
+    assert_eq!(converged.status.rollout.active, 2);
+    assert_eq!(converged.status.rollout.updating, 0);
     Ok(())
 }
 

@@ -27,6 +27,12 @@ pub struct EvidenceIntakeOwner {
     store: crate::ControlStore,
 }
 
+#[derive(Clone)]
+/// Owns the durable boundary after which retained evidence can be reclaimed.
+pub struct EvidenceRetentionOwner {
+    store: crate::ControlStore,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(deny_unknown_fields)]
 /// Separates evidence streams by authenticated tenant, node session, source, and source epoch.
@@ -37,6 +43,22 @@ pub struct EvidenceIntakeIdentityV1 {
     pub label_epoch: u64,
     pub source_id: [u8; 16],
     pub source_epoch: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+/// Records the highest source positions that a durable consumer has incorporated.
+pub struct EvidenceConsumptionWatermarkV1 {
+    pub identity: EvidenceIntakeIdentityV1,
+    pub evidence_cursor: u64,
+    pub coverage_revision: u64,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct EvidenceConsumptionStateV1 {
+    pub evidence_cursor: u64,
+    pub coverage_revision: u64,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -351,6 +373,33 @@ impl EvidenceIntakeOwner {
     }
 }
 
+impl EvidenceRetentionOwner {
+    pub fn open(root: impl Into<PathBuf>) -> Result<Self> {
+        Ok(Self::from_store(crate::ControlStore::open(root)?))
+    }
+
+    #[must_use]
+    pub fn from_store(store: crate::ControlStore) -> Self {
+        Self { store }
+    }
+
+    pub fn acknowledge(&self, watermark: EvidenceConsumptionWatermarkV1) -> Result<u64> {
+        self.store.acknowledge_evidence_consumption(watermark)
+    }
+
+    pub fn watermark(
+        &self,
+        identity: &EvidenceIntakeIdentityV1,
+    ) -> Result<EvidenceConsumptionWatermarkV1> {
+        let state = self.store.evidence_consumption(identity)?;
+        Ok(EvidenceConsumptionWatermarkV1 {
+            identity: identity.clone(),
+            evidence_cursor: state.evidence_cursor,
+            coverage_revision: state.coverage_revision,
+        })
+    }
+}
+
 #[allow(clippy::result_large_err)]
 fn validate_authenticated_node(
     authenticated: &AuthenticatedEvidenceNodeV1,
@@ -510,6 +559,7 @@ mod tests {
             temporal_coverage: TemporalCoverageV1::Complete,
             effect: KernelEffectEvidenceV1 {
                 task_cookie: 14,
+                target_task_cookie: None,
                 process_lineage_id: Some(EvidenceIdV1::new(15, 16)),
                 authority_domain_id: Some(EvidenceIdV1::new(17, 18)),
                 execution_set_id: Some(EvidenceIdV1::new(19, 20)),
@@ -520,6 +570,7 @@ mod tests {
                 decision: 1,
                 effect_family: 1,
                 operation: 2,
+                operation_argument: None,
                 configured_errno: -13,
                 kernel_result: -13,
             },

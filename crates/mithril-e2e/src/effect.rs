@@ -4488,12 +4488,74 @@ fn source_sequences_are_monotonic(observations: &EffectObservationStore) -> bool
 mod tests {
     use std::collections::BTreeSet;
 
-    use erebor_interceptor_abi::QualificationResultV1;
+    use erebor_interceptor_abi::{
+        EffectObservationHealthV1, EffectObservationReasonV1, EffectObservationV1,
+        EffectPhysicalResultV1, KernelEffectFamilyV1, KernelEffectOperationV1,
+        QualificationResultV1,
+    };
+    use mithril_node::{
+        EffectObservationStore, EvidenceIdV1, EvidenceWalLimits, ObservationCanonicalizer,
+    };
+    use zerocopy::IntoBytes as _;
 
     use super::{
         hf_static_effect_classification, local_enforcement_fixture_results,
         HfStaticEffectClassificationV1,
     };
+
+    #[test]
+    fn runtime_entry_process_control_is_durable_with_exact_target(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let observations = EffectObservationStore::durable(
+            4,
+            directory.path().join("wal"),
+            EvidenceWalLimits::default(),
+            ObservationCanonicalizer::new(
+                EvidenceIdV1::new(1, 2),
+                EvidenceIdV1::new(3, 4),
+                1,
+                EvidenceIdV1::new(5, 6),
+            )?,
+        )?;
+        observations.sample_coverage_health(EffectObservationHealthV1::default().as_bytes())?;
+        for (source_sequence, task_cookie, target_task_cookie, operation, argument) in [
+            (1, 0, 5, KernelEffectOperationV1::Ptrace, 9),
+            (2, 0, 5, KernelEffectOperationV1::Signal, 15),
+            (3, 160, 0, KernelEffectOperationV1::Signal, 0),
+        ] {
+            observations.record_bytes(
+                EffectObservationV1 {
+                    observed_boottime_ns: source_sequence,
+                    source_sequence,
+                    task_cookie,
+                    target_task_cookie,
+                    effect_family: KernelEffectFamilyV1::Privilege as u16,
+                    operation: operation as u16,
+                    operation_argument: argument,
+                    reason: EffectObservationReasonV1::RuntimeEntryInfrastructure as u8,
+                    physical_result: EffectPhysicalResultV1::UnknownAfterPreEffect as u8,
+                    ..EffectObservationV1::default()
+                }
+                .as_bytes(),
+            );
+        }
+
+        assert_eq!(observations.evidence_errors(), 0);
+        let batch = observations
+            .next_evidence_batch()
+            .ok_or("durable process-control evidence is missing")?;
+        assert_eq!(batch.records.len(), 3);
+        assert!(batch.records[..2].iter().all(|record| {
+            record.record.task_cookie == 0 && record.record.target_task_cookie == Some(5)
+        }));
+        assert_eq!(batch.records[0].record.operation_argument, Some(9));
+        assert_eq!(batch.records[1].record.operation_argument, Some(15));
+        assert_eq!(batch.records[2].record.task_cookie, 160);
+        assert_eq!(batch.records[2].record.target_task_cookie, None);
+        assert_eq!(batch.records[2].record.operation_argument, Some(0));
+        Ok(())
+    }
 
     #[test]
     fn static_effect_classification_covers_every_branch_without_physical_claims() {

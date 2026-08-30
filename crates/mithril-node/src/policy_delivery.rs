@@ -727,50 +727,37 @@ impl NodePolicyDeliveryOwner {
     pub(crate) fn startup_authority_absence(
         &self,
         host: &erebor_interceptor::KernelHost,
-        config: &NodeConfig,
     ) -> Result<StartupAuthorityAbsenceV1> {
-        let node_id = crate::policy::stable_node_id(&config.node_id)?;
-        let mut exception_physical_present = false;
-        for (instance_id, record) in &self.state.exception_records {
+        let mut exception_binding_present = false;
+        for record in self.state.exception_records.values() {
             if matches!(
                 record.state,
                 LocalExceptionStateV1::Rejected | LocalExceptionStateV1::Stale
             ) {
                 continue;
             }
-            let runtime_key = ExceptionRuntimeStateKeyV1 {
-                node_id,
-                exception_instance_id: crate::policy::parse_id(
-                    "exception_instance_id",
-                    instance_id,
-                )?,
-            };
             let binding_key = ExceptionHandleBindingKeyV1 {
                 profile_generation_ref_id: record.profile_generation_ref_id,
                 exception_numeric_handle: record.grant_handle,
                 reserved: 0,
             };
-            exception_physical_present |= host
-                .lookup_map_locked("exception_runtime_states", runtime_key.as_bytes())
+            exception_binding_present |= host
+                .lookup_map("exception_handle_bindings", binding_key.as_bytes())
                 .context(InterceptorSnafu)?
-                .is_some()
-                || host
-                    .lookup_map("exception_handle_bindings", binding_key.as_bytes())
-                    .context(InterceptorSnafu)?
-                    .is_some();
+                .is_some();
         }
-        Ok(self.startup_authority_absence_from_readback(exception_physical_present))
+        Ok(self.startup_authority_absence_from_readback(exception_binding_present))
     }
 
     fn startup_authority_absence_from_readback(
         &self,
-        exception_physical_present: bool,
+        exception_binding_present: bool,
     ) -> StartupAuthorityAbsenceV1 {
         StartupAuthorityAbsenceV1 {
             policy_authority_absent: self.state.active_profiles.is_empty()
                 && self.state.pending_activation.is_none()
                 && self.state.inventory_retirement.is_none(),
-            exception_authority_absent: !exception_physical_present
+            exception_authority_absent: !exception_binding_present
                 && self.state.exception_records.values().all(|record| {
                     !matches!(
                         record.state,
@@ -4715,7 +4702,8 @@ mod tests {
     }
 
     #[test]
-    fn complete_desired_inventory_retires_only_a_stale_inactive_profile() -> crate::Result<()> {
+    fn retained_node_rejects_fresh_control_sequence_reset_and_accepts_new_epochs(
+    ) -> crate::Result<()> {
         let directory = tempfile::tempdir().context(IoSnafu {
             path: "temporary desired policy inventory directory",
         })?;
@@ -4800,6 +4788,37 @@ mod tests {
                 .startup_authority_absence_from_readback(false)
                 .policy_authority_absent
         );
+
+        let stale = bundle(
+            &config,
+            &key,
+            1,
+            1,
+            PolicyDeliveryOperationV1::Activate,
+            None,
+            30,
+            100,
+            "node-a",
+        )?;
+        assert!(recovered
+            .prepare_activation(&stale, &trust, &config, &capabilities, 3, 30)
+            .is_err());
+
+        let advanced_trust = trust_at_epoch(directory.path(), &key, 2, 2)?;
+        let advanced = bundle_with_epochs(
+            &config,
+            &key,
+            2,
+            1,
+            2,
+            1,
+            PolicyDeliveryOperationV1::Activate,
+            None,
+            30,
+            100,
+            "node-a",
+        )?;
+        recovered.prepare_activation(&advanced, &advanced_trust, &config, &capabilities, 3, 30)?;
         Ok(())
     }
 
@@ -5750,6 +5769,19 @@ mod tests {
         assert_eq!(retired.consumed_uses, 1);
         assert!(!retired.report_to_control);
         assert!(restarted.pending_exception_acknowledgement()?.is_none());
+        // Revocation retains its final use count, but no BPF path can reach it
+        // after the grant binding is absent.
+        assert!(
+            restarted
+                .startup_authority_absence_from_readback(false)
+                .exception_authority_absent
+        );
+        assert!(
+            !restarted
+                .startup_authority_absence_from_readback(true)
+                .exception_authority_absent,
+            "a retained grant binding is still physical exception authority"
+        );
 
         // Restore the crash checkpoint from before physical activation and restart after expiry.
         restarted.state = expired_restart_state.clone();
@@ -6155,6 +6187,35 @@ mod tests {
         expires_utc_ns: i64,
         node_id: &str,
     ) -> crate::Result<mithril_control::PolicyBundleV1> {
+        bundle_with_epochs(
+            config,
+            key,
+            1,
+            issuer_sequence,
+            1,
+            distribution_sequence,
+            operation,
+            predecessor,
+            issued_utc_ns,
+            expires_utc_ns,
+            node_id,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn bundle_with_epochs(
+        config: &NodeConfig,
+        key: &SigningKey,
+        issuer_epoch: u64,
+        issuer_sequence: u64,
+        distribution_epoch: u64,
+        distribution_sequence: u64,
+        operation: PolicyDeliveryOperationV1,
+        predecessor: Option<String>,
+        issued_utc_ns: i64,
+        expires_utc_ns: i64,
+        node_id: &str,
+    ) -> crate::Result<mithril_control::PolicyBundleV1> {
         let document = PolicyDocumentV1::parse(
             std::path::Path::new("policy-v1.yaml"),
             include_bytes!("../../mithril-control/tests/fixtures/policy-v1.yaml"),
@@ -6163,7 +6224,9 @@ mod tests {
         bundle_from_document(
             config,
             key,
+            issuer_epoch,
             issuer_sequence,
+            distribution_epoch,
             distribution_sequence,
             operation,
             predecessor,
@@ -6178,7 +6241,9 @@ mod tests {
     fn bundle_from_document(
         config: &NodeConfig,
         key: &SigningKey,
+        issuer_epoch: u64,
         issuer_sequence: u64,
+        distribution_epoch: u64,
         distribution_sequence: u64,
         operation: PolicyDeliveryOperationV1,
         predecessor: Option<String>,
@@ -6194,7 +6259,7 @@ mod tests {
             ProfileSealRequestV1 {
                 signing_key_id: "test-key".to_owned(),
                 issuer_id: "88888888-8888-4888-8888-888888888888".to_owned(),
-                sequence_epoch: 1,
+                sequence_epoch: issuer_epoch,
                 issuer_sequence,
                 rollback_authorization_id: None,
                 registry_digests: RegistryDigestsV1 {
@@ -6241,7 +6306,7 @@ mod tests {
             target,
             operation,
             predecessor,
-            1,
+            distribution_epoch,
             distribution_sequence,
             issued_utc_ns,
             expires_utc_ns,
@@ -6341,6 +6406,15 @@ mod tests {
     }
 
     fn trust(state_directory: &std::path::Path, key: &SigningKey) -> crate::Result<TrustCache> {
+        trust_at_epoch(state_directory, key, 1, 1)
+    }
+
+    fn trust_at_epoch(
+        state_directory: &std::path::Path,
+        key: &SigningKey,
+        generation: u64,
+        issuer_epoch: u64,
+    ) -> crate::Result<TrustCache> {
         let signer = PolicySignerTrust {
             signing_key_id: "test-key".to_owned(),
             ed25519_public_key: key.verifying_key().to_bytes().to_vec(),
@@ -6353,9 +6427,15 @@ mod tests {
                 revoked: false,
             },
         )]);
-        let digest = crate::trust::trust_bundle_digest(1, 1, &installed);
+        let digest = crate::trust::trust_bundle_digest(generation, issuer_epoch, &installed);
         let mut trust = TrustCache::load(state_directory)?;
-        trust.install_with_policy(1, digest, 1, &[signer], &[1; 16])?;
+        trust.install_with_policy(
+            generation,
+            digest,
+            issuer_epoch,
+            &[signer],
+            &[generation as u8; 16],
+        )?;
         Ok(trust)
     }
 
@@ -6402,6 +6482,8 @@ mod tests {
         let base = bundle_from_document(
             &static_config,
             &key,
+            1,
+            1,
             1,
             1,
             PolicyDeliveryOperationV1::Activate,

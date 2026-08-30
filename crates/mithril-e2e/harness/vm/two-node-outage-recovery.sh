@@ -110,7 +110,7 @@ remote_kubectl() {
 
 control_segment_manifest() {
   remote_kubectl -n "$system_namespace" exec deployment/mithril-control -- \
-    sh -c 'set -- /var/lib/mithril-control/store/evidence/segments/*.pb; [ -e "$1" ]; sha256sum "$@"'
+    sh -c 'set -- /var/lib/mithril-control/store/evidence/segments/*; [ -e "$1" ]; sha256sum "$@"'
 }
 
 remove_network_block() {

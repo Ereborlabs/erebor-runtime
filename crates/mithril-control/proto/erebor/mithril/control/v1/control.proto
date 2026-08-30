@@ -188,6 +188,8 @@ message EvidenceRecord {
   sint32 configured_errno = 16;
   sint32 kernel_result = 17;
   EvidenceTemporalCoverage temporal_coverage = 18;
+  optional uint64 target_task_cookie = 19;
+  optional uint32 operation_argument = 20;
 }
 
 enum EvidenceTemporalCoverage {

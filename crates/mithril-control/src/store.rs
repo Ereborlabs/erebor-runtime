@@ -14,22 +14,22 @@ use sha2::{Digest as _, Sha256};
 use snafu::ResultExt as _;
 
 use crate::error::{ControlStoreSnafu, IoSnafu, JsonSnafu};
-use crate::evidence_segment::{EvidenceSegmentOwner, EvidenceStoreLimitsV1};
+use crate::evidence_segment::{EvidenceSegmentKindV1, EvidenceSegmentOwner, EvidenceStoreLimitsV1};
 use crate::{
     canonical_policy_spec_digest, CoverageIntakeStateV1, CoverageReport, CoverageReportInputV1,
-    EvidenceBatchInputV1, EvidenceIntakeIdentityV1, EvidenceRecord, EvidenceRecords,
-    EvidenceStoreOutcomeV1, ExceptionActivationAcknowledgementV1, ExceptionActivationStateV1,
-    ExceptionDeliveryCandidateV1, ExceptionDeliveryOperationV1, ExceptionRolloutStateV1,
-    ExceptionSourceRevisionV1, ExceptionSourceStateV1, IntakeStateV1,
-    PolicyActivationAcknowledgementV1, PolicyActivationStateV1, PolicyBundleV1, PolicyDocumentV1,
-    PolicyRolloutStateV1, PolicyRolloutStatusV1, PolicySourceRevisionV1, PolicySourceStateV1,
-    PolicyTargetSnapshotV1, PolicyTargetV1, ProfileCandidateArtifactV1, Result,
-    StoredCoverageReportV1, StoredEvidenceBatchV1, StoredEvidenceGapV1,
-    TrustGenerationAcknowledgementV1, TrustGenerationV1, MAX_EVIDENCE_BATCH_PAYLOAD_BYTES,
-    MAX_PENDING_EVIDENCE_RECORDS,
+    EvidenceBatchInputV1, EvidenceConsumptionStateV1, EvidenceConsumptionWatermarkV1,
+    EvidenceIntakeIdentityV1, EvidenceRecord, EvidenceRecords, EvidenceStoreOutcomeV1,
+    ExceptionActivationAcknowledgementV1, ExceptionActivationStateV1, ExceptionDeliveryCandidateV1,
+    ExceptionDeliveryOperationV1, ExceptionRolloutStateV1, ExceptionSourceRevisionV1,
+    ExceptionSourceStateV1, IntakeStateV1, PolicyActivationAcknowledgementV1,
+    PolicyActivationStateV1, PolicyBundleV1, PolicyDocumentV1, PolicyRolloutStateV1,
+    PolicyRolloutStatusV1, PolicySourceRevisionV1, PolicySourceStateV1, PolicyTargetSnapshotV1,
+    PolicyTargetV1, ProfileCandidateArtifactV1, Result, StoredCoverageReportV1,
+    StoredEvidenceBatchV1, StoredEvidenceGapV1, TrustGenerationAcknowledgementV1,
+    TrustGenerationV1, MAX_EVIDENCE_BATCH_PAYLOAD_BYTES, MAX_PENDING_EVIDENCE_RECORDS,
 };
 
-const STORE_SCHEMA_VERSION: u32 = 1;
+const STORE_SCHEMA_VERSION: u32 = 2;
 const STATE_DIGEST_BYTES: usize = 32;
 const MAX_STATE_BYTES: usize = 64 * 1_024 * 1_024;
 
@@ -201,10 +201,35 @@ impl ControlStateOwner {
 }
 
 impl ControlStoreInner {
-    fn read_evidence_records(&self, batch: &StoredEvidenceBatchV1) -> Result<Vec<EvidenceRecord>> {
-        let records: EvidenceRecords = self
-            .evidence_segments
-            .read(batch.segment, MAX_EVIDENCE_BATCH_PAYLOAD_BYTES)?;
+    fn stream_id(&self, identity: &EvidenceIntakeIdentityV1) -> Result<u64> {
+        self.state
+            .evidence_stream_ids
+            .get(identity)
+            .copied()
+            .ok_or_else(|| {
+                ControlStoreSnafu {
+                    path: self.root.clone(),
+                    reason: "evidence stream has no durable identifier".to_owned(),
+                }
+                .build()
+            })
+    }
+
+    fn read_evidence_records(
+        &self,
+        identity: &EvidenceIntakeIdentityV1,
+        batch: &StoredEvidenceBatchV1,
+    ) -> Result<Vec<EvidenceRecord>> {
+        let expected_kind = EvidenceSegmentKindV1::Records {
+            stream_id: self.stream_id(identity)?,
+            first_cursor: batch.first_cursor,
+            last_cursor: batch.last_cursor,
+        };
+        let records: EvidenceRecords = self.evidence_segments.read_records(
+            batch.segment,
+            expected_kind,
+            MAX_EVIDENCE_BATCH_PAYLOAD_BYTES,
+        )?;
         let expected = batch
             .last_cursor
             .checked_sub(batch.first_cursor)
@@ -232,7 +257,7 @@ impl ControlStoreInner {
                 && key.first_cursor <= last_cursor
                 && key.last_cursor >= first_cursor
         }) {
-            let stored = self.read_evidence_records(batch)?;
+            let stored = self.read_evidence_records(identity, batch)?;
             let start = first_cursor.saturating_sub(key.first_cursor) as usize;
             let end = last_cursor
                 .min(key.last_cursor)
@@ -362,7 +387,6 @@ impl Drop for ControlStorePriorityGuard<'_> {
 #[derive(Clone, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct ControlStoreState {
-    // This state keeps every unconsumed segment reference. Replacing it never consumes evidence.
     commit_index: u64,
     source_revisions: BTreeMap<String, PolicySourceRevisionV1>,
     policy_documents: BTreeMap<String, PolicyDocumentV1>,
@@ -385,31 +409,20 @@ struct ControlStoreState {
     trust_generations: BTreeMap<u64, TrustGenerationV1>,
     trust_acknowledgements:
         BTreeMap<(String, u64, [u8; 16], u64), TrustGenerationAcknowledgementV1>,
-    // Policy transactions clone this cache for validation. Shared evidence maps keep that clone
-    // independent of retained evidence volume. Evidence transactions still mutate one owned map.
     evidence_cursors: Arc<BTreeMap<EvidenceIntakeIdentityV1, IntakeStateV1>>,
+    evidence_stream_ids: Arc<BTreeMap<EvidenceIntakeIdentityV1, u64>>,
+    evidence_segment_id: u64,
+    #[serde(skip)]
     evidence_batches: Arc<BTreeMap<EvidenceBatchKeyV1, StoredEvidenceBatchV1>>,
-    evidence_gaps: Arc<BTreeMap<EvidenceGapKeyV1, StoredEvidenceGapV1>>,
+    #[serde(skip)]
+    evidence_gaps: Arc<BTreeMap<EvidenceGapKeyV1, IndexedEvidenceGapV1>>,
+    #[serde(skip)]
     pending_evidence_batches: Arc<BTreeMap<EvidencePendingKeyV1, StoredEvidenceBatchV1>>,
     coverage_cursors: Arc<BTreeMap<EvidenceIntakeIdentityV1, CoverageIntakeStateV1>>,
+    #[serde(skip)]
     coverage_reports: Arc<BTreeMap<CoverageReportKeyV1, StoredCoverageReportV1>>,
+    evidence_consumption: Arc<BTreeMap<EvidenceIntakeIdentityV1, EvidenceConsumptionStateV1>>,
     evidence_source_labels: Arc<BTreeMap<EvidenceSourceEpochKeyV1, u64>>,
-}
-
-impl ControlStoreState {
-    fn retained_evidence_records(&self) -> u64 {
-        self.evidence_batches
-            .values()
-            .chain(self.pending_evidence_batches.values())
-            .fold(0_u64, |total, batch| {
-                total.saturating_add(
-                    batch
-                        .last_cursor
-                        .saturating_sub(batch.first_cursor)
-                        .saturating_add(1),
-                )
-            })
-    }
 }
 
 #[derive(Deserialize, Serialize)]
@@ -450,6 +463,13 @@ struct EvidenceGapKeyV1 {
     identity: EvidenceIntakeIdentityV1,
     first_cursor: u64,
     last_cursor: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct IndexedEvidenceGapV1 {
+    gap: StoredEvidenceGapV1,
+    segment: crate::evidence_segment::EvidenceSegmentRefV1,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
@@ -503,13 +523,18 @@ enum ControlTransactionV1 {
         result: Box<ExceptionAcknowledgementTransactionV1>,
     },
     EvidencePending {
+        stream_id: u64,
         pending: Box<EvidenceBatchTransactionV1>,
     },
     EvidenceAccepted {
         accepted: Box<EvidenceAcceptedTransactionV1>,
     },
     CoverageAccepted {
+        stream_id: u64,
         report: Box<StoredCoverageReportV1>,
+    },
+    EvidenceConsumed {
+        watermark: Box<EvidenceConsumptionWatermarkV1>,
     },
     TrustInstalled {
         generation: Box<TrustGenerationV1>,
@@ -526,6 +551,7 @@ impl ControlTransactionV1 {
             Self::EvidencePending { .. }
                 | Self::EvidenceAccepted { .. }
                 | Self::CoverageAccepted { .. }
+                | Self::EvidenceConsumed { .. }
         )
     }
 }
@@ -645,8 +671,9 @@ struct EvidenceBatchTransactionV1 {
 #[serde(deny_unknown_fields)]
 struct EvidenceAcceptedTransactionV1 {
     identity: EvidenceIntakeIdentityV1,
+    stream_id: u64,
     #[serde(default)]
-    gap: Option<StoredEvidenceGapV1>,
+    gap: Option<IndexedEvidenceGapV1>,
     batches: Vec<StoredEvidenceBatchV1>,
 }
 
@@ -695,10 +722,13 @@ impl ControlStore {
         evidence_limits: EvidenceStoreLimitsV1,
     ) -> Result<Self> {
         let root = root.into();
-        let (state_file, state) = ControlStateOwner::open(&root)?;
-        let evidence_segments = EvidenceSegmentOwner::open(&root, evidence_limits)?;
-        evidence_segments.validate_retention(state.retained_evidence_records())?;
-        validate_evidence_segment_refs(&state, &evidence_segments, &root)?;
+        let (state_file, mut state) = ControlStateOwner::open(&root)?;
+        let mut evidence_segments = EvidenceSegmentOwner::open(&root, evidence_limits)?;
+        evidence_segments.reclaim_after(state.evidence_segment_id)?;
+        rebuild_evidence_indexes(&mut state, &evidence_segments, &root)?;
+        evidence_segments.reclaim_unreferenced(&retained_evidence_segment_refs(&state))?;
+        evidence_segments.ensure_next_id_after(state.evidence_segment_id)?;
+        evidence_segments.validate_retention()?;
         info!(
             "opened the Control store",
             commit_index = %state.commit_index
@@ -1333,13 +1363,46 @@ impl ControlStore {
         validate_evidence_identity(&identity, &inner.root)?;
         validate_evidence_batch_input(&batch, &inner.root)?;
         validate_source_label(&inner.state, &identity, &inner.root)?;
+        let consumed_cursor = inner
+            .state
+            .evidence_consumption
+            .get(&identity)
+            .copied()
+            .unwrap_or_default()
+            .evidence_cursor;
+        if batch.last_cursor <= consumed_cursor {
+            return Ok(EvidenceStoreOutcomeV1::Accepted);
+        }
+        let mut batch = batch;
+        if batch.first_cursor <= consumed_cursor {
+            let consumed_records = consumed_cursor
+                .checked_sub(batch.first_cursor)
+                .and_then(|count| count.checked_add(1))
+                .and_then(|count| usize::try_from(count).ok())
+                .ok_or_else(|| {
+                    ControlStoreSnafu {
+                        path: inner.root.clone(),
+                        reason: "an evidence retry crosses an exhausted consumer watermark"
+                            .to_owned(),
+                    }
+                    .build()
+                })?;
+            batch.records = batch.records.split_off(consumed_records);
+            batch.first_cursor = consumed_cursor.checked_add(1).ok_or_else(|| {
+                ControlStoreSnafu {
+                    path: inner.root.clone(),
+                    reason: "the consumed evidence cursor is exhausted".to_owned(),
+                }
+                .build()
+            })?;
+        }
         let exact_key = EvidenceBatchKeyV1 {
             identity: identity.clone(),
             first_cursor: batch.first_cursor,
             last_cursor: batch.last_cursor,
         };
         if let Some(existing) = inner.state.evidence_batches.get(&exact_key) {
-            if inner.read_evidence_records(existing)? == batch.records {
+            if inner.read_evidence_records(&identity, existing)? == batch.records {
                 return Ok(EvidenceStoreOutcomeV1::Accepted);
             }
             return ControlStoreSnafu {
@@ -1354,7 +1417,6 @@ impl ControlStore {
             .get(&identity)
             .copied()
             .unwrap_or_default();
-        let mut batch = batch;
         if batch.first_cursor <= cursor.contiguous_cursor {
             let overlap_last = batch.last_cursor.min(cursor.contiguous_cursor);
             let overlap_count = overlap_last
@@ -1406,7 +1468,7 @@ impl ControlStore {
             })
             .cloned()
         {
-            let existing_records = inner.read_evidence_records(&existing)?;
+            let existing_records = inner.read_evidence_records(&identity, &existing)?;
             let shared = batch.records.len().min(existing_records.len());
             if batch.records[..shared] != existing_records[..shared] {
                 return ControlStoreSnafu {
@@ -1446,7 +1508,7 @@ impl ControlStore {
             if overlaps {
                 if key.first_cursor == batch.first_cursor
                     && existing.last_cursor == batch.last_cursor
-                    && inner.read_evidence_records(existing)? == batch.records
+                    && inner.read_evidence_records(&identity, existing)? == batch.records
                 {
                     return Ok(EvidenceStoreOutcomeV1::Pending);
                 }
@@ -1457,40 +1519,42 @@ impl ControlStore {
                 .fail();
             }
         }
-        let retained_records = inner.state.retained_evidence_records();
-        let additional_records = u64::try_from(batch.records.len()).unwrap_or(u64::MAX);
-        let batch = StoredEvidenceBatchV1 {
-            first_cursor: batch.first_cursor,
-            last_cursor: batch.last_cursor,
-            segment: inner.evidence_segments.write(
-                &EvidenceRecords {
-                    records: batch.records,
-                },
-                retained_records,
-                additional_records,
-            )?,
-        };
         let next = checked_store_increment(
             cursor.contiguous_cursor,
             &inner.root,
             "the evidence cursor is exhausted",
         )?;
-        if batch.first_cursor != next {
-            // Persist bounded reordering without advancing the contiguous acknowledgement.
-            if batch.last_cursor
+        if batch.first_cursor != next
+            && batch.last_cursor
                 > cursor
                     .contiguous_cursor
                     .saturating_add(MAX_PENDING_EVIDENCE_RECORDS)
-            {
-                return ControlStoreSnafu {
-                    path: inner.root.clone(),
-                    reason: "out-of-order evidence exceeds the bounded pending window".to_owned(),
-                }
-                .fail();
+        {
+            return ControlStoreSnafu {
+                path: inner.root.clone(),
+                reason: "out-of-order evidence exceeds the bounded pending window".to_owned(),
             }
+            .fail();
+        }
+        let stream_id = evidence_stream_id_for_write(&inner.state, &identity, &inner.root)?;
+        let batch = StoredEvidenceBatchV1 {
+            first_cursor: batch.first_cursor,
+            last_cursor: batch.last_cursor,
+            segment: inner.evidence_segments.write_records(
+                stream_id,
+                batch.first_cursor,
+                batch.last_cursor,
+                &EvidenceRecords {
+                    records: batch.records,
+                },
+            )?,
+        };
+        if batch.first_cursor != next {
+            // A bounded gap can close when an earlier retained Node batch arrives.
             commit(
                 &mut inner,
                 ControlTransactionV1::EvidencePending {
+                    stream_id,
                     pending: Box::new(EvidenceBatchTransactionV1 { identity, batch }),
                 },
             )?;
@@ -1520,6 +1584,7 @@ impl ControlStore {
             ControlTransactionV1::EvidenceAccepted {
                 accepted: Box::new(EvidenceAcceptedTransactionV1 {
                     identity,
+                    stream_id,
                     gap: None,
                     batches,
                 }),
@@ -1543,7 +1608,7 @@ impl ControlStore {
             last_cursor: gap.last_cursor,
         };
         if let Some(existing) = inner.state.evidence_gaps.get(&key) {
-            if existing == &gap {
+            if existing.gap == gap {
                 return Ok(());
             }
             return ControlStoreSnafu {
@@ -1589,12 +1654,20 @@ impl ControlStore {
             next = pending.last_cursor.checked_add(1);
             batches.push(pending);
         }
+        let stream_id = evidence_stream_id_for_write(&inner.state, &identity, &inner.root)?;
+        let segment = inner.evidence_segments.write_gap(
+            stream_id,
+            gap.first_cursor,
+            gap.last_cursor,
+            gap.discarded_bytes,
+        )?;
         commit(
             &mut inner,
             ControlTransactionV1::EvidenceAccepted {
                 accepted: Box::new(EvidenceAcceptedTransactionV1 {
                     identity,
-                    gap: Some(gap),
+                    stream_id,
+                    gap: Some(IndexedEvidenceGapV1 { gap, segment }),
                     batches,
                 }),
             },
@@ -1729,28 +1802,49 @@ impl ControlStore {
             }
             .fail();
         }
-        let retained_records = inner.state.retained_evidence_records();
-        let report = StoredCoverageReportV1 {
-            identity: input.identity,
-            state: CoverageIntakeStateV1 {
-                revision: input.report.revision,
-            },
-            segment: inner
-                .evidence_segments
-                .write(&input.report, retained_records, 0)?,
+        let consumed_revision = inner
+            .state
+            .evidence_consumption
+            .get(&input.identity)
+            .copied()
+            .unwrap_or_default()
+            .coverage_revision;
+        if input.report.revision <= consumed_revision {
+            return Ok(inner.state.commit_index);
+        }
+        let state = CoverageIntakeStateV1 {
+            revision: input.report.revision,
         };
         let current = inner
             .state
             .coverage_cursors
-            .get(&report.identity)
+            .get(&input.identity)
             .copied()
             .unwrap_or_default();
-        if current == report.state {
-            let key = CoverageReportKeyV1 {
-                identity: report.identity.clone(),
-                revision: report.state.revision,
-            };
-            if inner.state.coverage_reports.get(&key) == Some(&report) {
+        if current == state {
+            let stored = inner
+                .state
+                .coverage_reports
+                .get(&CoverageReportKeyV1 {
+                    identity: input.identity.clone(),
+                    revision: state.revision,
+                })
+                .ok_or_else(|| {
+                    ControlStoreSnafu {
+                        path: inner.root.clone(),
+                        reason: "the current coverage revision has no stored segment".to_owned(),
+                    }
+                    .build()
+                })?;
+            let existing = inner.evidence_segments.read_coverage(
+                stored.segment,
+                EvidenceSegmentKindV1::Coverage {
+                    stream_id: inner.stream_id(&input.identity)?,
+                    revision: state.revision,
+                },
+                MAX_EVIDENCE_BATCH_PAYLOAD_BYTES,
+            )?;
+            if existing == input.report {
                 return Ok(inner.state.commit_index);
             }
             return ControlStoreSnafu {
@@ -1759,16 +1853,27 @@ impl ControlStore {
             }
             .fail();
         }
-        if report.state.revision <= current.revision {
+        if state.revision <= current.revision {
             return ControlStoreSnafu {
                 path: inner.root.clone(),
                 reason: "coverage evidence is stale or has invalid identity".to_owned(),
             }
             .fail();
         }
+        let stream_id = evidence_stream_id_for_write(&inner.state, &input.identity, &inner.root)?;
+        let report = StoredCoverageReportV1 {
+            identity: input.identity,
+            state,
+            segment: inner.evidence_segments.write_coverage(
+                stream_id,
+                state.revision,
+                &input.report,
+            )?,
+        };
         commit(
             &mut inner,
             ControlTransactionV1::CoverageAccepted {
+                stream_id,
                 report: Box::new(report),
             },
         )
@@ -1795,9 +1900,39 @@ impl ControlStore {
             .iter()
             .filter(|(key, _batch)| &key.identity == identity)
         {
-            records.extend(inner.read_evidence_records(batch)?);
+            records.extend(inner.read_evidence_records(identity, batch)?);
         }
         Ok(records)
+    }
+
+    pub(crate) fn acknowledge_evidence_consumption(
+        &self,
+        watermark: EvidenceConsumptionWatermarkV1,
+    ) -> Result<u64> {
+        let mut inner = self.evidence_lock()?;
+        let commit_index = commit(
+            &mut inner,
+            ControlTransactionV1::EvidenceConsumed {
+                watermark: Box::new(watermark),
+            },
+        )?;
+        let references = retained_evidence_segment_refs(&inner.state);
+        inner.evidence_segments.reclaim_unreferenced(&references)?;
+        inner.evidence_segments.validate_retention()?;
+        Ok(commit_index)
+    }
+
+    pub(crate) fn evidence_consumption(
+        &self,
+        identity: &EvidenceIntakeIdentityV1,
+    ) -> Result<EvidenceConsumptionStateV1> {
+        Ok(self
+            .evidence_lock()?
+            .state
+            .evidence_consumption
+            .get(identity)
+            .copied()
+            .unwrap_or_default())
     }
 
     pub(crate) fn latest_coverage_report(
@@ -1821,9 +1956,14 @@ impl ControlStore {
             });
         stored
             .map(|stored| {
-                inner
-                    .evidence_segments
-                    .read(stored.segment, MAX_EVIDENCE_BATCH_PAYLOAD_BYTES)
+                inner.evidence_segments.read_coverage(
+                    stored.segment,
+                    EvidenceSegmentKindV1::Coverage {
+                        stream_id: inner.stream_id(identity)?,
+                        revision: stored.state.revision,
+                    },
+                    MAX_EVIDENCE_BATCH_PAYLOAD_BYTES,
+                )
             })
             .transpose()
     }
@@ -3374,7 +3514,8 @@ fn apply_transaction(
         }
         ControlTransactionV1::EvidencePending { .. }
         | ControlTransactionV1::EvidenceAccepted { .. }
-        | ControlTransactionV1::CoverageAccepted { .. } => {
+        | ControlTransactionV1::CoverageAccepted { .. }
+        | ControlTransactionV1::EvidenceConsumed { .. } => {
             unreachable!("evidence transactions return before the main transition match")
         }
         ControlTransactionV1::TrustInstalled { generation } => {
@@ -3535,10 +3676,7 @@ fn validate_evidence_batch_input(batch: &EvidenceBatchInputV1, path: &Path) -> R
 }
 
 fn validate_stored_batch(batch: &StoredEvidenceBatchV1, path: &Path) -> Result<()> {
-    if batch.first_cursor == 0
-        || batch.last_cursor < batch.first_cursor
-        || batch.segment.sha256 == [0; 32]
-    {
+    if batch.first_cursor == 0 || batch.last_cursor < batch.first_cursor || batch.segment.id == 0 {
         return ControlStoreSnafu {
             path: path.to_owned(),
             reason: "stored evidence segment reference is invalid".to_owned(),
@@ -3615,6 +3753,30 @@ fn source_epoch_key(identity: &EvidenceIntakeIdentityV1) -> EvidenceSourceEpochK
     }
 }
 
+fn evidence_stream_id_for_write(
+    state: &ControlStoreState,
+    identity: &EvidenceIntakeIdentityV1,
+    path: &Path,
+) -> Result<u64> {
+    if let Some(stream_id) = state.evidence_stream_ids.get(identity) {
+        return Ok(*stream_id);
+    }
+    state
+        .evidence_stream_ids
+        .values()
+        .copied()
+        .max()
+        .unwrap_or(0)
+        .checked_add(1)
+        .ok_or_else(|| {
+            ControlStoreSnafu {
+                path: path.to_owned(),
+                reason: "the evidence stream identifier is exhausted".to_owned(),
+            }
+            .build()
+        })
+}
+
 fn validate_source_label(
     state: &ControlStoreState,
     identity: &EvidenceIntakeIdentityV1,
@@ -3636,14 +3798,37 @@ fn validate_source_label(
 }
 
 impl ControlStoreState {
+    fn validate_evidence_stream_id(
+        &self,
+        identity: &EvidenceIntakeIdentityV1,
+        stream_id: u64,
+        path: &Path,
+    ) -> Result<()> {
+        if stream_id != evidence_stream_id_for_write(self, identity, path)? {
+            return ControlStoreSnafu {
+                path: path.to_owned(),
+                reason: "evidence stream identifier is stale or duplicated".to_owned(),
+            }
+            .fail();
+        }
+        Ok(())
+    }
+
+    fn apply_evidence_stream_id(&mut self, identity: &EvidenceIntakeIdentityV1, stream_id: u64) {
+        Arc::make_mut(&mut self.evidence_stream_ids)
+            .entry(identity.clone())
+            .or_insert(stream_id);
+    }
+
     fn validate_evidence_transaction(
         &self,
         transaction: &ControlTransactionV1,
         path: &Path,
     ) -> Result<()> {
         match transaction {
-            ControlTransactionV1::EvidencePending { pending } => {
+            ControlTransactionV1::EvidencePending { stream_id, pending } => {
                 validate_evidence_identity(&pending.identity, path)?;
+                self.validate_evidence_stream_id(&pending.identity, *stream_id, path)?;
                 validate_stored_batch(&pending.batch, path)?;
                 validate_new_pending_evidence(self, pending, path)?;
                 validate_source_label(self, &pending.identity, path)
@@ -3651,8 +3836,9 @@ impl ControlStoreState {
             ControlTransactionV1::EvidenceAccepted { accepted } => {
                 self.validate_accepted_evidence(accepted, path)
             }
-            ControlTransactionV1::CoverageAccepted { report } => {
+            ControlTransactionV1::CoverageAccepted { stream_id, report } => {
                 validate_evidence_identity(&report.identity, path)?;
+                self.validate_evidence_stream_id(&report.identity, *stream_id, path)?;
                 validate_source_label(self, &report.identity, path)?;
                 let current = self
                     .coverage_cursors
@@ -3660,7 +3846,7 @@ impl ControlStoreState {
                     .copied()
                     .unwrap_or_default();
                 if report.state.revision == 0
-                    || report.segment.sha256 == [0; 32]
+                    || report.segment.id == 0
                     || report.state.revision <= current.revision
                 {
                     return ControlStoreSnafu {
@@ -3682,8 +3868,64 @@ impl ControlStoreState {
                 }
                 Ok(())
             }
+            ControlTransactionV1::EvidenceConsumed { watermark } => {
+                self.validate_evidence_consumption(watermark, path)
+            }
             _ => unreachable!("only evidence transactions use evidence validation"),
         }
+    }
+
+    fn validate_evidence_consumption(
+        &self,
+        watermark: &EvidenceConsumptionWatermarkV1,
+        path: &Path,
+    ) -> Result<()> {
+        validate_evidence_identity(&watermark.identity, path)?;
+        let current = self
+            .evidence_consumption
+            .get(&watermark.identity)
+            .copied()
+            .unwrap_or_default();
+        let intake_cursor = self
+            .evidence_cursors
+            .get(&watermark.identity)
+            .copied()
+            .unwrap_or_default()
+            .contiguous_cursor;
+        let coverage_revision = self
+            .coverage_cursors
+            .get(&watermark.identity)
+            .copied()
+            .unwrap_or_default()
+            .revision;
+        let evidence_boundary_exists = watermark.evidence_cursor == current.evidence_cursor
+            || self.evidence_batches.iter().any(|(key, _batch)| {
+                key.identity == watermark.identity && key.last_cursor == watermark.evidence_cursor
+            })
+            || self.evidence_gaps.keys().any(|key| {
+                key.identity == watermark.identity && key.last_cursor == watermark.evidence_cursor
+            });
+        let coverage_boundary_exists = watermark.coverage_revision == current.coverage_revision
+            || self.coverage_reports.keys().any(|key| {
+                key.identity == watermark.identity && key.revision == watermark.coverage_revision
+            });
+        if watermark.evidence_cursor < current.evidence_cursor
+            || watermark.evidence_cursor > intake_cursor
+            || watermark.coverage_revision < current.coverage_revision
+            || watermark.coverage_revision > coverage_revision
+            || !evidence_boundary_exists
+            || !coverage_boundary_exists
+            || (watermark.evidence_cursor == current.evidence_cursor
+                && watermark.coverage_revision == current.coverage_revision)
+        {
+            return ControlStoreSnafu {
+                path: path.to_owned(),
+                reason: "the evidence consumer watermark is stale, uncommitted, or not on a segment boundary"
+                    .to_owned(),
+            }
+            .fail();
+        }
+        Ok(())
     }
 
     fn validate_accepted_evidence(
@@ -3692,6 +3934,7 @@ impl ControlStoreState {
         path: &Path,
     ) -> Result<()> {
         validate_evidence_identity(&accepted.identity, path)?;
+        self.validate_evidence_stream_id(&accepted.identity, accepted.stream_id, path)?;
         validate_source_label(self, &accepted.identity, path)?;
         if accepted.batches.is_empty() && accepted.gap.is_none() {
             return ControlStoreSnafu {
@@ -3705,14 +3948,16 @@ impl ControlStoreState {
             .get(&accepted.identity)
             .copied()
             .unwrap_or_default();
-        if let Some(gap) = &accepted.gap {
+        if let Some(indexed) = &accepted.gap {
+            let gap = &indexed.gap;
             validate_stored_gap(&accepted.identity, gap, path)?;
-            if gap.first_cursor
-                != checked_store_increment(
-                    cursor.contiguous_cursor,
-                    path,
-                    "the evidence cursor is exhausted",
-                )?
+            if indexed.segment.id == 0
+                || gap.first_cursor
+                    != checked_store_increment(
+                        cursor.contiguous_cursor,
+                        path,
+                        "the evidence cursor is exhausted",
+                    )?
             {
                 return ControlStoreSnafu {
                     path: path.to_owned(),
@@ -3789,7 +4034,9 @@ impl ControlStoreState {
 
     fn apply_validated_evidence_transaction(&mut self, transaction: &ControlTransactionV1) {
         match transaction {
-            ControlTransactionV1::EvidencePending { pending } => {
+            ControlTransactionV1::EvidencePending { stream_id, pending } => {
+                self.apply_evidence_stream_id(&pending.identity, *stream_id);
+                self.evidence_segment_id = self.evidence_segment_id.max(pending.batch.segment.id);
                 Arc::make_mut(&mut self.evidence_source_labels).insert(
                     source_epoch_key(&pending.identity),
                     pending.identity.label_epoch,
@@ -3803,9 +4050,12 @@ impl ControlStoreState {
                 );
             }
             ControlTransactionV1::EvidenceAccepted { accepted } => {
+                self.apply_evidence_stream_id(&accepted.identity, accepted.stream_id);
                 self.apply_validated_accepted_evidence(accepted);
             }
-            ControlTransactionV1::CoverageAccepted { report } => {
+            ControlTransactionV1::CoverageAccepted { stream_id, report } => {
+                self.apply_evidence_stream_id(&report.identity, *stream_id);
+                self.evidence_segment_id = self.evidence_segment_id.max(report.segment.id);
                 Arc::make_mut(&mut self.evidence_source_labels).insert(
                     source_epoch_key(&report.identity),
                     report.identity.label_epoch,
@@ -3820,8 +4070,38 @@ impl ControlStoreState {
                 Arc::make_mut(&mut self.coverage_cursors)
                     .insert(report.identity.clone(), report.state);
             }
+            ControlTransactionV1::EvidenceConsumed { watermark } => {
+                self.apply_validated_evidence_consumption(watermark);
+            }
             _ => unreachable!("only validated evidence transactions use evidence application"),
         }
+    }
+
+    fn apply_validated_evidence_consumption(&mut self, watermark: &EvidenceConsumptionWatermarkV1) {
+        Arc::make_mut(&mut self.evidence_batches).retain(|key, _batch| {
+            key.identity != watermark.identity || key.last_cursor > watermark.evidence_cursor
+        });
+        Arc::make_mut(&mut self.evidence_gaps).retain(|key, _gap| {
+            key.identity != watermark.identity || key.last_cursor > watermark.evidence_cursor
+        });
+        let current_coverage_revision = self
+            .coverage_cursors
+            .get(&watermark.identity)
+            .copied()
+            .unwrap_or_default()
+            .revision;
+        Arc::make_mut(&mut self.coverage_reports).retain(|key, _report| {
+            key.identity != watermark.identity
+                || key.revision > watermark.coverage_revision
+                || key.revision == current_coverage_revision
+        });
+        Arc::make_mut(&mut self.evidence_consumption).insert(
+            watermark.identity.clone(),
+            EvidenceConsumptionStateV1 {
+                evidence_cursor: watermark.evidence_cursor,
+                coverage_revision: watermark.coverage_revision,
+            },
+        );
     }
 
     fn apply_validated_accepted_evidence(&mut self, accepted: &EvidenceAcceptedTransactionV1) {
@@ -3834,20 +4114,23 @@ impl ControlStoreState {
             .get(&accepted.identity)
             .copied()
             .unwrap_or_default();
-        if let Some(gap) = &accepted.gap {
+        if let Some(indexed) = &accepted.gap {
+            let gap = &indexed.gap;
+            self.evidence_segment_id = self.evidence_segment_id.max(indexed.segment.id);
             Arc::make_mut(&mut self.evidence_gaps).insert(
                 EvidenceGapKeyV1 {
                     identity: accepted.identity.clone(),
                     first_cursor: gap.first_cursor,
                     last_cursor: gap.last_cursor,
                 },
-                gap.clone(),
+                indexed.clone(),
             );
             cursor = IntakeStateV1 {
                 contiguous_cursor: gap.last_cursor,
             };
         }
         for batch in &accepted.batches {
+            self.evidence_segment_id = self.evidence_segment_id.max(batch.segment.id);
             cursor = IntakeStateV1 {
                 contiguous_cursor: batch.last_cursor,
             };
@@ -4945,12 +5228,333 @@ fn count(value: usize) -> u64 {
     u64::try_from(value).unwrap_or(u64::MAX)
 }
 
-fn validate_evidence_segment_refs(
-    state: &ControlStoreState,
+fn rebuild_evidence_indexes(
+    state: &mut ControlStoreState,
     segments: &EvidenceSegmentOwner,
     root: &Path,
 ) -> Result<()> {
-    let references = state
+    let mut identities = BTreeMap::new();
+    for (identity, stream_id) in state.evidence_stream_ids.iter() {
+        validate_evidence_identity(identity, root)?;
+        if *stream_id == 0 || identities.insert(*stream_id, identity.clone()).is_some() {
+            return ControlStoreSnafu {
+                path: root.to_owned(),
+                reason: "durable evidence stream identifiers are zero or duplicated".to_owned(),
+            }
+            .fail();
+        }
+    }
+
+    let mut batches = BTreeMap::new();
+    let mut gaps = BTreeMap::new();
+    let mut pending = BTreeMap::new();
+    let mut coverage = BTreeMap::new();
+    for descriptor in segments.descriptors() {
+        if descriptor.reference.id > state.evidence_segment_id {
+            return ControlStoreSnafu {
+                path: root.to_owned(),
+                reason: "an uncommitted evidence segment survived recovery".to_owned(),
+            }
+            .fail();
+        }
+        let identity = identities
+            .get(&descriptor.kind.stream_id())
+            .cloned()
+            .ok_or_else(|| {
+                ControlStoreSnafu {
+                    path: root.to_owned(),
+                    reason: "an evidence segment has no durable stream identity".to_owned(),
+                }
+                .build()
+            })?;
+        let consumed = state
+            .evidence_consumption
+            .get(&identity)
+            .copied()
+            .unwrap_or_default();
+        match descriptor.kind {
+            EvidenceSegmentKindV1::Records {
+                first_cursor,
+                last_cursor,
+                ..
+            } => {
+                if last_cursor <= consumed.evidence_cursor {
+                    continue;
+                }
+                if first_cursor <= consumed.evidence_cursor {
+                    return ControlStoreSnafu {
+                        path: root.to_owned(),
+                        reason: "an evidence segment crosses its consumer watermark".to_owned(),
+                    }
+                    .fail();
+                }
+                let batch = StoredEvidenceBatchV1 {
+                    first_cursor,
+                    last_cursor,
+                    segment: descriptor.reference,
+                };
+                let intake = state
+                    .evidence_cursors
+                    .get(&identity)
+                    .copied()
+                    .unwrap_or_default()
+                    .contiguous_cursor;
+                if last_cursor <= intake {
+                    let key = EvidenceBatchKeyV1 {
+                        identity,
+                        first_cursor,
+                        last_cursor,
+                    };
+                    if batches.insert(key, batch).is_some() {
+                        return ControlStoreSnafu {
+                            path: root.to_owned(),
+                            reason: "an accepted evidence range is duplicated".to_owned(),
+                        }
+                        .fail();
+                    }
+                } else {
+                    if first_cursor <= intake {
+                        return ControlStoreSnafu {
+                            path: root.to_owned(),
+                            reason: "an evidence segment crosses its intake cursor".to_owned(),
+                        }
+                        .fail();
+                    }
+                    let key = EvidencePendingKeyV1 {
+                        identity,
+                        first_cursor,
+                    };
+                    if pending.insert(key, batch).is_some() {
+                        return ControlStoreSnafu {
+                            path: root.to_owned(),
+                            reason: "a pending evidence range is duplicated".to_owned(),
+                        }
+                        .fail();
+                    }
+                }
+            }
+            EvidenceSegmentKindV1::Gap {
+                first_cursor,
+                last_cursor,
+                discarded_bytes,
+                ..
+            } => {
+                if last_cursor <= consumed.evidence_cursor {
+                    continue;
+                }
+                let intake = state
+                    .evidence_cursors
+                    .get(&identity)
+                    .copied()
+                    .unwrap_or_default()
+                    .contiguous_cursor;
+                if first_cursor <= consumed.evidence_cursor || last_cursor > intake {
+                    return ControlStoreSnafu {
+                        path: root.to_owned(),
+                        reason: "an evidence gap is outside its durable cursor interval".to_owned(),
+                    }
+                    .fail();
+                }
+                let key = EvidenceGapKeyV1 {
+                    identity,
+                    first_cursor,
+                    last_cursor,
+                };
+                if gaps
+                    .insert(
+                        key,
+                        IndexedEvidenceGapV1 {
+                            gap: StoredEvidenceGapV1 {
+                                first_cursor,
+                                last_cursor,
+                                discarded_bytes,
+                            },
+                            segment: descriptor.reference,
+                        },
+                    )
+                    .is_some()
+                {
+                    return ControlStoreSnafu {
+                        path: root.to_owned(),
+                        reason: "an evidence gap range is duplicated".to_owned(),
+                    }
+                    .fail();
+                }
+            }
+            EvidenceSegmentKindV1::Coverage { revision, .. } => {
+                let current = state
+                    .coverage_cursors
+                    .get(&identity)
+                    .copied()
+                    .unwrap_or_default()
+                    .revision;
+                if revision <= consumed.coverage_revision && revision != current {
+                    continue;
+                }
+                if revision > current {
+                    return ControlStoreSnafu {
+                        path: root.to_owned(),
+                        reason: "a coverage segment is newer than its durable cursor".to_owned(),
+                    }
+                    .fail();
+                }
+                let key = CoverageReportKeyV1 {
+                    identity: identity.clone(),
+                    revision,
+                };
+                if coverage
+                    .insert(
+                        key,
+                        StoredCoverageReportV1 {
+                            identity,
+                            state: CoverageIntakeStateV1 { revision },
+                            segment: descriptor.reference,
+                        },
+                    )
+                    .is_some()
+                {
+                    return ControlStoreSnafu {
+                        path: root.to_owned(),
+                        reason: "a coverage revision is duplicated".to_owned(),
+                    }
+                    .fail();
+                }
+            }
+        }
+    }
+    state.evidence_batches = Arc::new(batches);
+    state.evidence_gaps = Arc::new(gaps);
+    state.pending_evidence_batches = Arc::new(pending);
+    state.coverage_reports = Arc::new(coverage);
+    validate_rebuilt_evidence_indexes(state, root)
+}
+
+fn validate_rebuilt_evidence_indexes(state: &ControlStoreState, root: &Path) -> Result<()> {
+    for (identity, intake) in state.evidence_cursors.iter() {
+        if !state.evidence_stream_ids.contains_key(identity) {
+            return ControlStoreSnafu {
+                path: root.to_owned(),
+                reason: "an evidence cursor has no durable stream identity".to_owned(),
+            }
+            .fail();
+        }
+        let consumed = state
+            .evidence_consumption
+            .get(identity)
+            .copied()
+            .unwrap_or_default()
+            .evidence_cursor;
+        if consumed > intake.contiguous_cursor {
+            return ControlStoreSnafu {
+                path: root.to_owned(),
+                reason: "an evidence consumer watermark is newer than its intake cursor".to_owned(),
+            }
+            .fail();
+        }
+        let mut ranges = state
+            .evidence_batches
+            .keys()
+            .filter(|key| &key.identity == identity)
+            .map(|key| (key.first_cursor, key.last_cursor))
+            .chain(
+                state
+                    .evidence_gaps
+                    .keys()
+                    .filter(|key| &key.identity == identity)
+                    .map(|key| (key.first_cursor, key.last_cursor)),
+            )
+            .collect::<Vec<_>>();
+        ranges.sort_unstable();
+        let mut expected = consumed.checked_add(1).ok_or_else(|| {
+            ControlStoreSnafu {
+                path: root.to_owned(),
+                reason: "the consumed evidence cursor is exhausted".to_owned(),
+            }
+            .build()
+        })?;
+        for (first_cursor, last_cursor) in ranges {
+            if first_cursor != expected {
+                return ControlStoreSnafu {
+                    path: root.to_owned(),
+                    reason: "retained evidence does not cover its durable cursor interval"
+                        .to_owned(),
+                }
+                .fail();
+            }
+            expected = last_cursor.checked_add(1).ok_or_else(|| {
+                ControlStoreSnafu {
+                    path: root.to_owned(),
+                    reason: "the retained evidence cursor is exhausted".to_owned(),
+                }
+                .build()
+            })?;
+        }
+        if expected != intake.contiguous_cursor.saturating_add(1) {
+            return ControlStoreSnafu {
+                path: root.to_owned(),
+                reason: "retained evidence ends before its durable intake cursor".to_owned(),
+            }
+            .fail();
+        }
+    }
+
+    for identity in state.evidence_stream_ids.keys() {
+        let intake = state
+            .evidence_cursors
+            .get(identity)
+            .copied()
+            .unwrap_or_default()
+            .contiguous_cursor;
+        let mut last = None;
+        for (key, batch) in state
+            .pending_evidence_batches
+            .iter()
+            .filter(|(key, _batch)| &key.identity == identity)
+        {
+            if key.first_cursor <= intake.saturating_add(1)
+                || batch.last_cursor > intake.saturating_add(MAX_PENDING_EVIDENCE_RECORDS)
+                || last.is_some_and(|last_cursor| key.first_cursor <= last_cursor)
+            {
+                return ControlStoreSnafu {
+                    path: root.to_owned(),
+                    reason: "a recovered pending evidence range is invalid or overlapping"
+                        .to_owned(),
+                }
+                .fail();
+            }
+            last = Some(batch.last_cursor);
+        }
+    }
+
+    for (identity, current) in state.coverage_cursors.iter() {
+        let consumed = state
+            .evidence_consumption
+            .get(identity)
+            .copied()
+            .unwrap_or_default()
+            .coverage_revision;
+        if !state.evidence_stream_ids.contains_key(identity)
+            || consumed > current.revision
+            || (current.revision > 0
+                && !state.coverage_reports.contains_key(&CoverageReportKeyV1 {
+                    identity: identity.clone(),
+                    revision: current.revision,
+                }))
+        {
+            return ControlStoreSnafu {
+                path: root.to_owned(),
+                reason: "coverage latest state has no matching durable segment".to_owned(),
+            }
+            .fail();
+        }
+    }
+    Ok(())
+}
+
+fn retained_evidence_segment_refs(
+    state: &ControlStoreState,
+) -> BTreeSet<crate::evidence_segment::EvidenceSegmentRefV1> {
+    state
         .evidence_batches
         .values()
         .map(|batch| batch.segment)
@@ -4960,21 +5564,9 @@ fn validate_evidence_segment_refs(
                 .values()
                 .map(|batch| batch.segment),
         )
+        .chain(state.evidence_gaps.values().map(|gap| gap.segment))
         .chain(state.coverage_reports.values().map(|report| report.segment))
-        .collect::<BTreeSet<_>>();
-    for reference in references {
-        if !segments.exists(reference)? {
-            return ControlStoreSnafu {
-                path: root.to_owned(),
-                reason: format!(
-                    "Control metadata references missing evidence segment {}",
-                    hex::encode(reference.sha256)
-                ),
-            }
-            .fail();
-        }
-    }
-    Ok(())
+        .collect()
 }
 
 #[cfg(test)]
@@ -5018,7 +5610,7 @@ mod tests {
             crate::StoredEvidenceBatchV1 {
                 first_cursor: 1,
                 last_cursor: 1,
-                segment: crate::evidence_segment::EvidenceSegmentRefV1 { sha256: [4; 32] },
+                segment: crate::evidence_segment::EvidenceSegmentRefV1 { id: 4 },
             },
         );
 
@@ -5761,6 +6353,75 @@ mod tests {
     }
 
     #[test]
+    fn rejected_evidence_never_survives_as_a_durable_segment() -> crate::Result<()> {
+        let directory = TempDir::new().map_err(|error| {
+            crate::error::ControlStoreSnafu {
+                path: Path::new("rejected-evidence-segment-test").to_owned(),
+                reason: error.to_string(),
+            }
+            .build()
+        })?;
+        let identity = super::EvidenceIntakeIdentityV1 {
+            tenant_id: [1; 16],
+            node_id: "node-a".to_owned(),
+            node_boot_id: [2; 16],
+            label_epoch: 1,
+            source_id: [3; 16],
+            source_epoch: 1,
+        };
+        let cursor = super::MAX_PENDING_EVIDENCE_RECORDS + 1;
+        let store = super::ControlStore::open(directory.path())?;
+        for _ in 0..2 {
+            assert!(store
+                .accept_evidence_batch(
+                    identity.clone(),
+                    super::EvidenceBatchInputV1 {
+                        first_cursor: cursor,
+                        last_cursor: cursor,
+                        records: vec![crate::EvidenceRecord {
+                            observed_boottime_ns: cursor,
+                            task_cookie: cursor,
+                            coverage_interval_id: vec![4; 16],
+                            reason: 1,
+                            decision: 1,
+                            effect_family: 1,
+                            operation: 1,
+                            configured_errno: -13,
+                            kernel_result: -13,
+                            temporal_coverage: crate::EvidenceTemporalCoverage::Complete as i32,
+                            ..crate::EvidenceRecord::default()
+                        }],
+                    },
+                )
+                .is_err());
+        }
+        store.accept_coverage_report(super::CoverageReportInputV1 {
+            identity: identity.clone(),
+            report: crate::CoverageReport {
+                source_id: identity.source_id.to_vec(),
+                source_epoch: identity.source_epoch,
+                revision: 1,
+                ..crate::CoverageReport::default()
+            },
+        })?;
+        drop(store);
+
+        let reopened = super::ControlStore::open(directory.path())?;
+        assert!(reopened.accepted_evidence_records(&identity)?.is_empty());
+        assert_eq!(
+            std::fs::read_dir(directory.path().join("evidence/segments"))
+                .map_err(|error| crate::Error::Io {
+                    path: directory.path().to_owned(),
+                    source: error,
+                    location: snafu::Location::default(),
+                })?
+                .count(),
+            1
+        );
+        Ok(())
+    }
+
+    #[test]
     fn latest_state_retains_every_segment_and_meets_the_storage_target() -> crate::Result<()> {
         const BATCHES: u64 = 130;
         const RECORDS_PER_BATCH: u64 = 64;
@@ -5774,6 +6435,8 @@ mod tests {
             .build()
         })?;
         let store = super::ControlStore::open(directory.path())?;
+        let state = directory.path().join("state.bin");
+        let mut initial_state_bytes = 0;
         let identity = crate::EvidenceIntakeIdentityV1 {
             tenant_id: [1; 16],
             node_id: "node-a".to_owned(),
@@ -5811,6 +6474,15 @@ mod tests {
                 )?,
                 crate::EvidenceStoreOutcomeV1::Accepted
             );
+            if batch_index == 0 {
+                initial_state_bytes = std::fs::metadata(&state)
+                    .map_err(|error| crate::Error::Io {
+                        path: state.clone(),
+                        source: error,
+                        location: snafu::Location::default(),
+                    })?
+                    .len();
+            }
         }
         let segments = directory.path().join("evidence/segments");
         let segment_count = std::fs::read_dir(&segments)
@@ -5821,17 +6493,19 @@ mod tests {
             })?
             .count();
         assert_eq!(segment_count as u64, BATCHES);
-        let state = directory.path().join("state.bin");
         assert!(state.is_file());
         assert!(!directory.path().join("commits").exists());
 
-        let mut stored_bytes = std::fs::metadata(&state)
+        let final_state_bytes = std::fs::metadata(&state)
             .map_err(|error| crate::Error::Io {
-                path: state,
+                path: state.clone(),
                 source: error,
                 location: snafu::Location::default(),
             })?
             .len();
+        assert!(final_state_bytes <= initial_state_bytes.saturating_add(32));
+        assert!(final_state_bytes < 16 * 1_024);
+        let mut stored_bytes = final_state_bytes;
         for entry in std::fs::read_dir(&segments).map_err(|error| crate::Error::Io {
             path: segments.clone(),
             source: error,
@@ -5908,7 +6582,93 @@ mod tests {
     }
 
     #[test]
-    fn evidence_capacity_blocks_or_retains_without_rewriting_segments() -> crate::Result<()> {
+    fn restart_discards_only_a_segment_without_a_committed_high_watermark() -> crate::Result<()> {
+        let directory = TempDir::new().map_err(|error| {
+            crate::error::ControlStoreSnafu {
+                path: Path::new("uncommitted-segment-test").to_owned(),
+                reason: error.to_string(),
+            }
+            .build()
+        })?;
+        let identity = crate::EvidenceIntakeIdentityV1 {
+            tenant_id: [1; 16],
+            node_id: "node-a".to_owned(),
+            node_boot_id: [2; 16],
+            label_epoch: 1,
+            source_id: [3; 16],
+            source_epoch: 1,
+        };
+        let store = super::ControlStore::open(directory.path())?;
+        store.accept_evidence_batch(
+            identity.clone(),
+            crate::EvidenceBatchInputV1 {
+                first_cursor: 1,
+                last_cursor: 1,
+                records: vec![crate::EvidenceRecord {
+                    observed_boottime_ns: 1,
+                    task_cookie: 1,
+                    coverage_interval_id: vec![4; 16],
+                    reason: 1,
+                    decision: 1,
+                    effect_family: 1,
+                    operation: 1,
+                    configured_errno: -13,
+                    kernel_result: -13,
+                    temporal_coverage: crate::EvidenceTemporalCoverage::Complete as i32,
+                    ..crate::EvidenceRecord::default()
+                }],
+            },
+        )?;
+        drop(store);
+
+        let segments = directory.path().join("evidence/segments");
+        let committed = std::fs::read_dir(&segments)
+            .map_err(|error| crate::Error::Io {
+                path: segments.clone(),
+                source: error,
+                location: snafu::Location::default(),
+            })?
+            .next()
+            .ok_or_else(|| {
+                crate::error::ControlStoreSnafu {
+                    path: segments.clone(),
+                    reason: "the committed evidence segment is absent".to_owned(),
+                }
+                .build()
+            })?
+            .map_err(|error| crate::Error::Io {
+                path: segments.clone(),
+                source: error,
+                location: snafu::Location::default(),
+            })?
+            .path();
+        let suffix = committed
+            .file_name()
+            .and_then(|name| name.to_str())
+            .and_then(|name| name.get(16..))
+            .ok_or_else(|| {
+                crate::error::ControlStoreSnafu {
+                    path: committed.clone(),
+                    reason: "the committed evidence segment name is invalid".to_owned(),
+                }
+                .build()
+            })?;
+        let uncommitted = segments.join(format!("{:016x}{suffix}", 2));
+        std::fs::copy(&committed, &uncommitted).map_err(|error| crate::Error::Io {
+            path: uncommitted.clone(),
+            source: error,
+            location: snafu::Location::default(),
+        })?;
+
+        let reopened = super::ControlStore::open(directory.path())?;
+        assert_eq!(reopened.accepted_evidence_records(&identity)?.len(), 1);
+        assert!(!uncommitted.exists());
+        assert!(committed.exists());
+        Ok(())
+    }
+
+    #[test]
+    fn evidence_capacity_reclaims_only_consumed_segments_or_retains_them() -> crate::Result<()> {
         let identity = crate::EvidenceIntakeIdentityV1 {
             tenant_id: [1; 16],
             node_id: "node-a".to_owned(),
@@ -5951,6 +6711,13 @@ mod tests {
             blocked.path(),
             limits(crate::EvidenceStoreCapacityPolicyV1::Block),
         )?;
+        assert!(store
+            .acknowledge_evidence_consumption(crate::EvidenceConsumptionWatermarkV1 {
+                identity: identity.clone(),
+                evidence_cursor: 1,
+                coverage_revision: 0,
+            })
+            .is_err());
         store.accept_evidence_batch(identity.clone(), batch(1))?;
         assert!(store
             .accept_evidence_batch(identity.clone(), batch(2))
@@ -5965,6 +6732,51 @@ mod tests {
                 .count(),
             1
         );
+        store.acknowledge_evidence_consumption(crate::EvidenceConsumptionWatermarkV1 {
+            identity: identity.clone(),
+            evidence_cursor: 1,
+            coverage_revision: 0,
+        })?;
+        assert!(store.accepted_evidence_records(&identity)?.is_empty());
+        assert_eq!(store.evidence_cursor(&identity)?, 1);
+        assert_eq!(
+            std::fs::read_dir(blocked.path().join("evidence/segments"))
+                .map_err(|error| crate::Error::Io {
+                    path: blocked.path().to_owned(),
+                    source: error,
+                    location: snafu::Location::default(),
+                })?
+                .count(),
+            0
+        );
+        assert_eq!(
+            store.accept_evidence_batch(identity.clone(), batch(1))?,
+            crate::EvidenceStoreOutcomeV1::Accepted
+        );
+        store.accept_evidence_batch(identity.clone(), batch(2))?;
+        assert_eq!(
+            std::fs::read_dir(blocked.path().join("evidence/segments"))
+                .map_err(|error| crate::Error::Io {
+                    path: blocked.path().to_owned(),
+                    source: error,
+                    location: snafu::Location::default(),
+                })?
+                .count(),
+            1
+        );
+        drop(store);
+        let reopened = super::ControlStore::open_with_evidence_limits(
+            blocked.path(),
+            limits(crate::EvidenceStoreCapacityPolicyV1::Block),
+        )?;
+        assert_eq!(
+            reopened.evidence_consumption(&identity)?,
+            crate::EvidenceConsumptionStateV1 {
+                evidence_cursor: 1,
+                coverage_revision: 0,
+            }
+        );
+        assert_eq!(reopened.accepted_evidence_records(&identity)?.len(), 1);
 
         let retained = TempDir::new().map_err(|error| {
             crate::error::ControlStoreSnafu {

@@ -1,4 +1,6 @@
-use erebor_interceptor_abi::Id128V1;
+use erebor_interceptor_abi::{
+    EffectObservationReasonV1, Id128V1, KernelEffectFamilyV1, KernelEffectOperationV1,
+};
 use prost::Message as _;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -171,6 +173,7 @@ impl TryFrom<&str> for CoverageGapReasonV1 {
 #[serde(deny_unknown_fields)]
 pub struct KernelEffectEvidenceV1 {
     pub task_cookie: u64,
+    pub target_task_cookie: Option<u64>,
     pub process_lineage_id: Option<EvidenceIdV1>,
     pub authority_domain_id: Option<EvidenceIdV1>,
     pub execution_set_id: Option<EvidenceIdV1>,
@@ -181,6 +184,7 @@ pub struct KernelEffectEvidenceV1 {
     pub decision: u8,
     pub effect_family: u16,
     pub operation: u16,
+    pub operation_argument: Option<u32>,
     pub configured_errno: i16,
     pub kernel_result: i32,
 }
@@ -204,6 +208,21 @@ pub struct ObservationEnvelopeV1 {
 
 impl ObservationEnvelopeV1 {
     pub fn validate(&self) -> EvidenceModelResult<()> {
+        let process_control = self.effect.effect_family == KernelEffectFamilyV1::Privilege as u16
+            && (self.effect.operation == KernelEffectOperationV1::Ptrace as u16
+                || self.effect.operation == KernelEffectOperationV1::Signal as u16);
+        let external_runtime_actor = self.effect.reason
+            == EffectObservationReasonV1::PreparedRuntimeInfrastructure as u8
+            || self.effect.reason == EffectObservationReasonV1::RuntimeEntryInfrastructure as u8;
+        let operation_uses_argument = self.effect.operation
+            == KernelEffectOperationV1::Ioctl as u16
+            || self.effect.operation == KernelEffectOperationV1::IpcAccess as u16
+            || process_control
+            || self.effect.operation == KernelEffectOperationV1::Capability as u16;
+        let subject_is_valid = self.effect.task_cookie > 0
+            || (process_control
+                && external_runtime_actor
+                && self.effect.target_task_cookie.is_some());
         let optional_ids_are_valid = [
             self.effect.process_lineage_id,
             self.effect.authority_domain_id,
@@ -221,7 +240,9 @@ impl ObservationEnvelopeV1 {
             || self.observed_boottime_ns == 0
             || self.coverage_interval_id.is_zero()
             || self.profile_generation_ref_id == Some(0)
-            || self.effect.task_cookie == 0
+            || !subject_is_valid
+            || self.effect.target_task_cookie == Some(0)
+            || operation_uses_argument != self.effect.operation_argument.is_some()
             || self.effect.effect_family == 0
             || !optional_ids_are_valid
             || self.effect.destination_id == Some(0)
@@ -243,6 +264,7 @@ impl ObservationEnvelopeV1 {
             coverage_interval_id: self.coverage_interval_id.to_be_bytes().to_vec(),
             profile_generation_ref_id: self.profile_generation_ref_id,
             task_cookie: self.effect.task_cookie,
+            target_task_cookie: self.effect.target_task_cookie,
             process_lineage_id: optional_id_bytes(self.effect.process_lineage_id),
             authority_domain_id: optional_id_bytes(self.effect.authority_domain_id),
             execution_set_id: optional_id_bytes(self.effect.execution_set_id),
@@ -253,6 +275,7 @@ impl ObservationEnvelopeV1 {
             decision: u32::from(self.effect.decision),
             effect_family: u32::from(self.effect.effect_family),
             operation: u32::from(self.effect.operation),
+            operation_argument: self.effect.operation_argument,
             configured_errno: i32::from(self.effect.configured_errno),
             kernel_result: self.effect.kernel_result,
             temporal_coverage: match self.temporal_coverage {
@@ -298,6 +321,7 @@ impl ObservationEnvelopeV1 {
             temporal_coverage,
             effect: KernelEffectEvidenceV1 {
                 task_cookie: record.task_cookie,
+                target_task_cookie: record.target_task_cookie,
                 process_lineage_id: optional_id(&record.process_lineage_id, "process lineage")?,
                 authority_domain_id: optional_id(&record.authority_domain_id, "authority domain")?,
                 execution_set_id: optional_id(&record.execution_set_id, "execution set")?,
@@ -328,6 +352,7 @@ impl ObservationEnvelopeV1 {
                     }
                     .build()
                 })?,
+                operation_argument: record.operation_argument,
                 configured_errno: i16::try_from(record.configured_errno).map_err(|_error| {
                     InvalidSnafu {
                         reason: "kernel observation errno exceeds i16".to_owned(),

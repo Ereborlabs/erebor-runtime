@@ -1762,15 +1762,14 @@ impl NodeChassis {
     }
 
     fn refresh_registration_authority_state(&mut self) -> Result<()> {
-        let absence = self.policy_delivery.startup_authority_absence(
-            self.host.as_ref().ok_or_else(|| {
-                IdentityStateSnafu {
-                    reason: "startup authority proof has no live kernel host".to_owned(),
-                }
-                .build()
-            })?,
-            &self.config,
-        )?;
+        let absence =
+            self.policy_delivery
+                .startup_authority_absence(self.host.as_ref().ok_or_else(|| {
+                    IdentityStateSnafu {
+                        reason: "startup authority proof has no live kernel host".to_owned(),
+                    }
+                    .build()
+                })?)?;
         self.registration.policy_authority_absent = absence.policy_authority_absent;
         self.registration.exception_authority_absent = absence.exception_authority_absent;
         self.registration.startup_absence_proof_digest =
