@@ -3,8 +3,9 @@
 **Status: VALIDATED DESIGN AUTHORITY — 2026-08-08; CONTROL POLICY AND EVIDENCE
 AMENDMENT — 2026-08-19; gRPC SERVICE AND IPC AMENDMENT — 2026-08-21;
 CAPABILITY-GROUNDED KUBERNETES POLICY API AMENDMENT — 2026-08-23;
-STOCK-RUNTIME BOOTSTRAP AMENDMENT — 2026-08-23.** This is the sole normative
-Mithril architecture for implementation planning.
+STOCK-RUNTIME BOOTSTRAP AMENDMENT — 2026-08-23; STATE-PRESERVING REINSTALL
+AMENDMENT — 2026-08-31.** This is the sole normative Mithril architecture for
+implementation planning.
 Implementation still requires allocation and approval through the master plan
 and one named phase. Historical architecture text may explain rejected
 designs, but cannot override this file.
@@ -37,6 +38,13 @@ application exec. It does not add a public policy field, a generic runtime
 exception, or a runtime-specific syscall list. Historical phase results keep
 their recorded ABI. Phase 6.2 and later results bind the amended ABI and
 architecture.
+
+The 2026-08-31 amendment lets the retained runtime gate admit a
+version-changed Mithril installer after an ordinary Helm deletion. The
+installer replaces the binaries, runtime integration, and recovery manifest.
+It does not replace durable Control or Node state. Each state owner performs
+only a supported migration before it becomes ready, and the next policy
+candidate continues the retained sequence and predecessor chain.
 
 Status: proposed architecture. This document does not authorize an
 implementation phase. The
@@ -1406,9 +1414,16 @@ pinned BPF links, maps, and decisions in place. Containerd invokes the hook
 without a retained NRI process and without a RuntimeClass. The absent node
 admission socket makes a matching protected start fail closed. The retained
 hook rejects the exact hostile unmatched OCI shape before its initial process.
-It permits only the exact measured Mithril executable and
-security-sensitive OCI shape needed to recover the node owner. Kubernetes
-metadata is not recovery authority. Retained BPF state continues to govern
+It admits a version-changed Mithril installer only when the installer command,
+owner, host paths, writable mounts, privileges, and socket match the retained
+installation. The installer replaces the Mithril binaries, runtime
+integration, and exact recovery manifest. It does not replace Control or Node
+durable state. The new Control and Node reopen their existing state, run only
+supported owner-controlled migrations, and continue the existing policy
+sequence and predecessor chain. The hook then permits only the exact Node
+recovery recorded by the new manifest. A failed or unsupported migration keeps
+admission closed and leaves the original state intact. Kubernetes metadata is
+not installer or recovery authority. Retained BPF state continues to govern
 existing bindings and denies the incident's first covered effect after a
 direct non-CRI bypass.
 
