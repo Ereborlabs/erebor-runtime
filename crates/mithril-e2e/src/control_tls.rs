@@ -787,6 +787,132 @@ async fn mtls_evidence_stream_replays_after_disconnect_and_reuses_one_registered
 }
 
 #[tokio::test]
+async fn mtls_storage_failure_withholds_ack_until_replay_is_durable(
+) -> Result<(), Box<dyn StdError>> {
+    let directory = tempfile::tempdir()?;
+    let certificates = Certificates::issue(false)?;
+    let files = certificates.write(directory.path())?;
+    let store_path = directory.path().join("control-evidence");
+    let limits = |maximum_retained_records| EvidenceStoreLimitsV1 {
+        maximum_retained_bytes: mithril_control::MAX_EVIDENCE_SEGMENT_BYTES as u64,
+        maximum_retained_records,
+        capacity_policy: EvidenceStoreCapacityPolicyV1::Block,
+    };
+    let control = |store| {
+        ControlPlane::with_control_store(
+            vec![AllowedNodeIdentity {
+                node_id: "node-a".to_owned(),
+                certificate_sha256: certificates.node_digest(),
+                tenant_id: "00000000-0000-0001-0000-000000000002".to_owned(),
+            }],
+            TrustGenerationV1 {
+                generation: 1,
+                bundle_digest: "d".repeat(64),
+                policy_issuer_sequence_epoch: 0,
+                policy_signers: Vec::new(),
+            },
+            store,
+        )
+    };
+    let observations = EffectObservationStore::durable(
+        4,
+        directory.path().join("node-wal"),
+        EvidenceWalLimits {
+            maximum_retained_records: 10,
+            maximum_batch_records: 10,
+            ..EvidenceWalLimits::default()
+        },
+        ObservationCanonicalizer::new(
+            EvidenceIdV1::new(1, 2),
+            EvidenceIdV1::new(3, 4),
+            1,
+            EvidenceIdV1::from([7; 16]),
+        )?,
+    )?;
+    for source_sequence in 1..=2 {
+        observations.record_bytes(
+            erebor_interceptor_abi::EffectObservationV1 {
+                observed_boottime_ns: source_sequence,
+                source_sequence,
+                source_cpu_id: 0,
+                task_cookie: source_sequence,
+                reason: 9,
+                physical_result: 1,
+                effect_family: 1,
+                operation: 1,
+                ..erebor_interceptor_abi::EffectObservationV1::default()
+            }
+            .as_bytes(),
+        );
+    }
+
+    let initial_store = ControlStore::open_with_evidence_limits(&store_path, limits(10))?;
+    drop(initial_store);
+    let retained_store_path = directory.path().join("retained-control-evidence");
+    fs::rename(&store_path, &retained_store_path)?;
+    fs::write(&store_path, [])?;
+    assert!(ControlStore::open_with_evidence_limits(&store_path, limits(10)).is_err());
+    assert_eq!(observations.pending_evidence_records(), 2);
+    fs::remove_file(&store_path)?;
+    fs::rename(retained_store_path, &store_path)?;
+
+    let blocked_store = ControlStore::open_with_evidence_limits(&store_path, limits(1))?;
+    let blocked_control = control(blocked_store.clone())?;
+    let blocked_address = free_address()?;
+    let (blocked_shutdown, blocked_server) =
+        start_server(blocked_address, &files, blocked_control.clone());
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    let mut trust = TrustCache::load(directory.path())?;
+    let mut connection = NodeControlConnector::new(
+        files.node_config(blocked_address),
+        "node-a".to_owned(),
+        [7; 16],
+    )
+    .connect(registration(), false, &mut trust)
+    .await?;
+    connection
+        .send_evidence_group(observations.next_evidence_batches())
+        .await?;
+    if connection.next_message().await.is_ok() {
+        return Err("Control acknowledged evidence that exceeded durable capacity".into());
+    }
+    assert_eq!(observations.pending_evidence_records(), 2);
+    assert_eq!(blocked_store.health()?.evidence_cursors, 0);
+    drop(connection);
+    let _result = blocked_shutdown.send(());
+    blocked_server.await??;
+    drop(blocked_control);
+    drop(blocked_store);
+
+    let restored_store = ControlStore::open_with_evidence_limits(&store_path, limits(10))?;
+    let restored_control = control(restored_store.clone())?;
+    let restored_address = free_address()?;
+    let (restored_shutdown, restored_server) =
+        start_server(restored_address, &files, restored_control);
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    let mut connection = NodeControlConnector::new(
+        files.node_config(restored_address),
+        "node-a".to_owned(),
+        [7; 16],
+    )
+    .connect(registration(), false, &mut trust)
+    .await?;
+    connection
+        .send_evidence_group(observations.next_evidence_batches())
+        .await?;
+    let NodeControlMessage::EvidenceAck(acknowledgement) = connection.next_message().await? else {
+        return Err("restored Control returned no evidence acknowledgement".into());
+    };
+    assert!(observations.acknowledge_evidence(acknowledgement)?);
+    assert_eq!(observations.pending_evidence_records(), 0);
+    assert_eq!(restored_store.health()?.evidence_cursors, 1);
+    drop(connection);
+    let _result = restored_shutdown.send(());
+    restored_server.await??;
+    Ok(())
+}
+
+#[tokio::test]
 async fn kubernetes_outage_mtls_session_converges_policy_while_replaying_retained_evidence(
 ) -> Result<(), Box<dyn StdError>> {
     let directory = tempfile::tempdir()?;

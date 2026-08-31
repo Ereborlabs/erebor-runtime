@@ -47,17 +47,19 @@ grep -Fq 'pending_evidence_records=' \
   "$directory/two-node-outage-recovery.sh"
 grep -Fq 'verify_node_wal_prefixes' \
   "$directory/two-node-outage-recovery.sh"
-grep -Fq -- "-type f ! -name segment.tmp -exec sha256sum '{}' +" \
+grep -Fq "\\( -name '*.open' -o -name '*.seg' \\)" \
   "$directory/two-node-outage-recovery.sh"
 control_segments=$test_root/control-segments
 mkdir -p -- "$control_segments"
-printf durable >"$control_segments/0000000000000001.r.0000000000000001.0000000000000001.0000000000000001"
-printf transient >"$control_segments/segment.tmp"
-control_manifest=$(find "$control_segments" -type f ! -name segment.tmp -exec \
-  sh -c 'rm -f -- "$1/segment.tmp"; root=$1; shift; sha256sum "$@" | sed "s|$root/||"' \
-  sh "$control_segments" '{}' +)
-[[ $control_manifest == *0000000000000001.r.0000000000000001.0000000000000001.0000000000000001 ]]
-[[ $control_manifest != *segment.tmp* ]]
+sealed_segment=$control_segments/0000000000000001.r.0000000000000001.0000000000000001.0000000000000001.seg
+active_segment=$control_segments/0000000000000002.r.0000000000000001.0000000000000002.open
+printf durable >"$sealed_segment"
+printf transient >"$active_segment"
+control_manifest=$(find "$control_segments" -type f -name '*.seg' -exec \
+  sh -c 'for path do printf "%s " "$(stat -c %s "$path")"; sha256sum "$path"; done' \
+  sh '{}' +)
+[[ $control_manifest == *"$sealed_segment" ]]
+[[ $control_manifest != *"$active_segment"* ]]
 if grep -Fq 'delete namespace "$system_namespace"' \
     "$directory/two-node-convergence.sh"; then
   echo "the retained convergence lane deletes durable Control evidence" >&2
@@ -75,6 +77,13 @@ grep -Fq 'systemctl show' "$directory/two-node-outage-recovery.sh"
 grep -Fq 'verify_control_segment_prefixes' "$directory/two-node-outage-recovery.sh"
 grep -Fq 'Control changed or removed an unconsumed evidence prefix' \
   "$directory/two-node-outage-recovery.sh"
+grep -Fq 'storage_failure_withheld_acknowledgement: true' \
+  "$directory/two-node-outage-recovery.sh"
+grep -Fq 'restore_control_storage || cleanup_failed=true' \
+  "$directory/two-node-outage-recovery.sh"
+grep -Fq '"readOnly":true' "$directory/two-node-outage-recovery.sh"
+grep -Fq '"readOnly":false' "$directory/two-node-outage-recovery.sh"
+grep -Fq -- "-name '*.seg'" "$directory/two-node-outage-recovery.sh"
 grep -Fq -- '--property ActiveState --value k3s' \
   "$directory/two-node-outage-recovery.sh"
 if grep -Fq 'systemctl is-inactive' "$directory/two-node-outage-recovery.sh"; then

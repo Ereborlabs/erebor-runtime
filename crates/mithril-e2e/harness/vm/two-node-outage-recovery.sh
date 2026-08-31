@@ -20,6 +20,7 @@ owns_runtime_class=false
 owns_node_labels=false
 network_blocked=false
 api_stopped=false
+control_storage_read_only=false
 
 usage() {
   echo "usage: $0 --environment PATH [--provider PATH] [--output-directory PATH]" >&2
@@ -110,7 +111,7 @@ remote_kubectl() {
 
 control_segment_manifest() {
   remote_kubectl -n "$system_namespace" exec deployment/mithril-control -- \
-    sh -c "find /var/lib/mithril-control/store/evidence/segments-v2 -type f \
+    sh -c "find /var/lib/mithril-control/store/evidence/segments-v2 -type f -name '*.seg' \
       -exec sh -c 'for path do printf \"%s \" \"\$(stat -c %s \"\$path\")\"; sha256sum \"\$path\"; done' sh '{}' +"
 }
 
@@ -135,6 +136,22 @@ remove_network_block() {
     "$provider" run "$vm_b" sudo nft delete table inet "$network_table"
     network_blocked=false
   fi
+}
+
+restore_control_storage() {
+  if [[ $control_storage_read_only == true ]]; then
+    remote_kubectl -n "$system_namespace" patch deployment mithril-control \
+      --type=strategic -p '{"spec":{"template":{"spec":{"containers":[{"name":"mithril-control","volumeMounts":[{"name":"state","mountPath":"/var/lib/mithril-control","readOnly":false}]}]}}}}' \
+      >/dev/null
+    control_storage_read_only=false
+  fi
+}
+
+block_control_storage() {
+  remote_kubectl -n "$system_namespace" patch deployment mithril-control \
+    --type=strategic -p '{"spec":{"template":{"spec":{"containers":[{"name":"mithril-control","volumeMounts":[{"name":"state","mountPath":"/var/lib/mithril-control","readOnly":true}]}]}}}}' \
+    >/dev/null
+  control_storage_read_only=true
 }
 
 remove_markers() {
@@ -177,6 +194,7 @@ cleanup() {
     wait_api || cleanup_failed=true
   fi
   if remote_kubectl get --raw=/readyz >/dev/null 2>&1; then
+    restore_control_storage || cleanup_failed=true
     remote_kubectl -n "$system_namespace" scale deployment/mithril-control \
       --replicas=1 >/dev/null 2>&1 || cleanup_failed=true
     if [[ $owns_namespace == true ]]; then
@@ -711,6 +729,64 @@ if ! verify_control_segment_prefixes \
     "$output_directory/control-segments-after-outage.txt"
   exit 1
 fi
+
+control_segment_manifest >"$work_directory/control-segments-before-storage-outage.txt"
+remote_kubectl -n "$system_namespace" scale deployment/mithril-control \
+  --replicas=0 >/dev/null
+storage_stop_deadline=$((SECONDS + 120))
+storage_control_stopped=false
+while ((SECONDS < storage_stop_deadline)); do
+  if [[ $(remote_kubectl -n "$system_namespace" get pods \
+    -l app.kubernetes.io/name=mithril-control -o json | jq '.items | length') -eq 0 ]]; then
+    storage_control_stopped=true
+    break
+  fi
+  sleep 1
+done
+[[ $storage_control_stopped == true ]] || {
+  echo "Control did not stop before its storage outage" >&2
+  exit 1
+}
+block_control_storage
+remote_kubectl -n "$system_namespace" scale deployment/mithril-control \
+  --replicas=1 >/dev/null
+storage_failure_deadline=$((SECONDS + 120))
+storage_failure_observed=false
+while ((SECONDS < storage_failure_deadline)); do
+  storage_failure_output=$(remote_kubectl -n "$system_namespace" logs \
+    deployment/mithril-control --tail=40 2>&1 || true)
+  if [[ $storage_failure_output == *'Read-only file system'* ]]; then
+    storage_failure_observed=true
+    break
+  fi
+  sleep 1
+done
+[[ $storage_failure_observed == true ]] || {
+  echo "Control did not report its unavailable evidence store" >&2
+  exit 1
+}
+request_denial "$vm_a" outage-a storage-outage-a
+request_denial "$vm_b" outage-b storage-outage-b
+storage_retained_records_a=$(wait_node_wal_count "$node_a_name" 1)
+storage_retained_records_b=$(wait_node_wal_count "$node_b_name" 1)
+restore_control_storage
+remote_kubectl -n "$system_namespace" rollout status deployment/mithril-control \
+  --timeout=300s >/dev/null
+wait_control_session mithril-node-a
+wait_control_session mithril-node-b
+wait_node_control_acknowledgement "$node_a_name"
+wait_node_control_acknowledgement "$node_b_name"
+wait_node_wal_empty "$node_a_name"
+wait_node_wal_empty "$node_b_name"
+control_segment_manifest >"$work_directory/control-segments-after-storage-outage.txt"
+if ! verify_control_segment_prefixes \
+    "$work_directory/control-segments-before-storage-outage.txt"; then
+  cp "$work_directory/control-segments-before-storage-outage.txt" \
+    "$output_directory/control-segments-before-storage-outage.txt"
+  cp "$work_directory/control-segments-after-storage-outage.txt" \
+    "$output_directory/control-segments-after-storage-outage.txt"
+  exit 1
+fi
 refresh_policy_status control-recovered
 wait_rollout 2 0
 candidate_a_pre_partition=$(active_candidate "$node_a_name")
@@ -779,6 +855,10 @@ cp "$work_directory/control-segments-before-outage.txt" \
   "$output_directory/control-segments-before-outage.txt"
 cp "$work_directory/control-segments-after-outage.txt" \
   "$output_directory/control-segments-after-outage.txt"
+cp "$work_directory/control-segments-before-storage-outage.txt" \
+  "$output_directory/control-segments-before-storage-outage.txt"
+cp "$work_directory/control-segments-after-storage-outage.txt" \
+  "$output_directory/control-segments-after-storage-outage.txt"
 cp "$work_directory/node-a-wal-before-restart.txt" \
   "$output_directory/node-a-wal-before-restart.txt"
 cp "$work_directory/node-a-wal-after-restart.txt" \
@@ -799,13 +879,21 @@ jq -n \
   --argjson segments_after_outage "$segments_after_outage" \
   --argjson retained_records_a "$retained_records_a" \
   --argjson retained_records_a_after_restart "$retained_records_a_after_restart" \
-  --argjson retained_records_b "$retained_records_b" '
+  --argjson retained_records_b "$retained_records_b" \
+  --argjson storage_retained_records_a "$storage_retained_records_a" \
+  --argjson storage_retained_records_b "$storage_retained_records_b" '
   {
     result: "PASS",
     nodes: [$node_a, $node_b],
     control_outage_kept_local_denial: true,
     control_outage_blocked_new_protected_work: true,
     control_restart_retained_unconsumed_evidence: true,
+    storage_failure_withheld_acknowledgement: true,
+    storage_recovery_replayed_retained_evidence: true,
+    storage_outage_retained_node_records: {
+      node_a: $storage_retained_records_a,
+      node_b: $storage_retained_records_b
+    },
     node_retain_exceeded_soft_bound_without_loss: true,
     node_restart_retained_unacknowledged_evidence: true,
     control_acknowledgement_truncated_node_wal: true,
