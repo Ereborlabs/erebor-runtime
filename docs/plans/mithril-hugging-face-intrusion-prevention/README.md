@@ -302,11 +302,12 @@ the named phase file contains a matching deliverable and proof.
 | Appendix C fixtures/completion | every phase, final 11 | exact registry equality and criterion mapping |
 | Appendix D sources | 0 | pinned digest/license/provenance/source-evidence registry |
 
-The validated architecture leaves the unmatched-workload hard floor
-unallocated while declaring it required for the complete Hugging Face claim.
-This master plan resolves that allocation explicitly in Phase 8. All other
-unallocated surfaces remain evaluation-only in Phase 12 and require a new
-approved implementation phase before they can ship.
+Phase 6.2 owns the exact hostile privileged-Pod admission and retained BPF
+incident floor. Phase 8 owns signed privileged exceptions and the complete
+typed runtime matrix. Phase 11 must rerun both before it can make the complete
+Hugging Face prevention claim. All other unallocated surfaces remain
+evaluation-only in Phase 12 and require a new approved implementation phase
+before they can ship.
 
 ### Hugging Face Card Allocation
 

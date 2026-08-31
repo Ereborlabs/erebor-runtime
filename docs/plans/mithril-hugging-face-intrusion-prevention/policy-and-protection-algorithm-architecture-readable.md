@@ -1389,8 +1389,57 @@ A reviewed CSI DaemonSet with an exact non-expired exception remains the
 legitimate control.
 
 This architecture marks the full node floor
-`UNALLOCATED_REQUIRED_FOR_FULL_HF_CLAIM`. It must be assigned to approved
-phases before a release claims prevention of the privileged-Pod branch.
+`PARTIAL_PHASE_6_2_INCIDENT_FLOOR`. Phase 6.2 owns the exact incident case:
+admission rejects the hostile Pod specification, and retained BPF state denies
+the hostile unmatched task's first covered host-secret, mount, device,
+privilege, process-control, or network effect if admission is bypassed. Phase 8
+owns signed exceptions and the complete typed field and runtime matrix. Phase
+11 must test the combined result before a release claims complete prevention
+of the privileged-Pod branch.
+
+#### Administrative decommission
+
+Deleting Kubernetes objects is not authorization to relax node enforcement.
+An ordinary Helm uninstall removes the release objects. It leaves owned host
+runtime hooks and pinned BPF links, maps, and decisions in place. The absent
+node admission socket makes a matching protected start fail closed. Retained
+BPF state continues to govern existing bindings and the Phase 6.2 unmatched
+incident floor.
+
+Decommission uses an independent offline signing key. Kubernetes ServiceAccount
+credentials, a CRD, a label, an annotation, a Helm release, Control status, or
+`system:masters` authority cannot replace this signature. The signed payload
+contains only:
+
+```text
+NodeDecommissionAuthorizationV1 {
+  cluster_uid
+  node_id
+  node_boot_id
+  expires_at_utc_ns
+  nonce
+}
+```
+
+The signature envelope adds the signer key ID, algorithm, canonical payload,
+and signature. Control stores and relays the artifact unchanged over the
+existing authenticated node session. Control cannot mint or edit it.
+
+The node verifies the independent key, signature, exact cluster, node, current
+boot, expiry, and unused nonce. It refuses decommission while a protected
+runtime binding is live. It durably records the accepted nonce before it
+changes physical state. Control then removes scheduling readiness and
+quarantines the exact Node. The node closes admission, removes only its owned
+runtime-hook documents and binary, removes its pinned links and maps, and
+reads back absence. It durably records completion and acknowledges the exact
+authorization. Control removes only its readiness label, identity annotations,
+and quarantine taint after that acknowledgement. The operator can then remove
+the Helm release.
+
+If Helm is removed first, the retained host state stays active. The operator
+must restore the same node owner or use the host decommission entry point with
+the same valid artifact. Helm deletion itself never enters the decommission
+state machine.
 
 #### Checkpoint creation and restore
 

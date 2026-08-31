@@ -16339,13 +16339,12 @@ a convenient phase:
 | Checkpoint creation and restore (`CheckpointCreationRequestV1`, `CheckpointRestoreIntentV1`) | `UNALLOCATED_OPTIONAL` | release manifest reports checkpoint create/restore prevention/admission `UNSUPPORTED`; these fixtures are dormant requirements, not phase acceptance | amend master plan and exact phase file with `CheckpointAuthorityOwner`, restore-engine/runtime matrix, held-target protocol, storage actuator and `CHECKPOINT-CREATE-001`/`ENTRY-RESTORE-001` |
 | Attach and port-forward `StreamAuthorityV1` | `UNALLOCATED_OPTIONAL` | Mithril makes no attach/port-forward authorization/metering claim; ordinary process/network evidence may still be contextual | amend exact phase with stream gate placement, `StreamAuthorityOwner`, audit/runtime adapters, budgets/fence and `ENTRY-STREAM-001` |
 | Named GitHub Actions, GitLab, Jenkins, and Tekton coordinator adapters plus a compilable CI policy surface | `UNALLOCATED_OPTIONAL` | `CiStepIntentBodyV1` and CI fixture semantics are architectural contracts only; no adapter may claim CI1/CI2/CI3, and every `CI-*` fixture is dormant outside an explicitly advertised CI claim vector | amend master plan and exact phase with coordinator trust roots, runner-control placement, held task/root transport, closed CI policy schema, adapter conformance matrix, and exact CI fixture subset |
-| Unmatched-workload node hard floor and signed privileged exceptions | `UNALLOCATED_REQUIRED_FOR_FULL_HF_CLAIM` | full prevention of the incident's attacker-created privileged Pod and Phase 11 full `HF-008..021` claim are blocked; later node detection is not equivalent | amend Phase 0 schema/fixture scope, the chosen runtime-admission implementation phase, and Phase 11 conformance with `WorkloadBindingOwner`, per-runtime pre-setup oracle, `XNODE-PRIVILEGED-POD-001` and `NODE-FLOOR-EXCEPTION-002` |
+| Unmatched-workload node hard floor and signed privileged exceptions | `PARTIAL_PHASE_6_2_INCIDENT_FLOOR` | Phase 6.2 owns admission rejection and a retained BPF floor for the exact hostile privileged-Pod case; the complete typed runtime matrix and signed exceptions remain required for the full claim | Phase 6.2 implements and tests the exact hostile Pod through `KubernetesAdmissionOwner`, retained node BPF state, and a two-node physical oracle; Phase 8 extends it with signed exceptions and the complete `NodeAdmissionRequestV1` matrix; Phase 11 reruns both |
 
-A proposed amendment may place the node-floor schema/hostile baseline in Phase
-0, transport/binding primitives in Phases 1–4, and final runtime/platform
-qualification in Phase 11, but that proposal is not approved merely by
-appearing here. Until the master/phase files mirror it and the user approves
-the owning phase, implementers stop at `UNALLOCATED`.
+The approved Phase 6.2 amendment owns only the exact incident floor and its
+decommission-safe retention. Phase 8 owns the remaining typed request matrix
+and signed privileged exceptions. Phase 11 owns final runtime and platform
+qualification.
 
 Runtime-created entry handling crosses phases and cannot be postponed as a
 late integration detail:

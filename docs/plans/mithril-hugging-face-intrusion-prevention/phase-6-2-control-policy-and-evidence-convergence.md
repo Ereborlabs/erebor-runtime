@@ -35,7 +35,10 @@ signed candidates, distribute each candidate to the selected nodes, and move
 the existing Phase 6 evidence intake into the production Control transaction.
 Keep node activation and physical enforcement inside `mithril-node`. Give
 Phase 7 one stable evidence and policy-provenance foundation on which it can
-build the cross-node graph.
+build the cross-node graph. Keep node enforcement after Kubernetes package
+deletion unless an independently signed node decommission authorization
+completes. Reject the exact attacker-created privileged Pod at admission and
+retain a BPF incident floor for an admission bypass.
 
 ## Scope And Design Coverage
 
@@ -66,6 +69,20 @@ Phase 6 node WAL and coverage
   -> typed mTLS NodeEvidence and NodeCoverage RPCs
   -> EvidenceIntakeOwner durable append and contiguous acknowledgement
   -> immutable accepted evidence for Phase 7 graph replay
+
+Offline decommission signer
+  -> minimal signed cluster, node, boot, expiry, and nonce authorization
+  -> Control relays the artifact unchanged over the authenticated node session
+  -> NodeDecommissionOwner verifies and durably consumes it
+  -> Control removes scheduling readiness and quarantines the exact Node
+  -> the node closes admission and removes owned hooks and pinned BPF state
+  -> node readback and acknowledgement authorize projection cleanup
+  -> Helm removal deletes only Kubernetes release objects
+
+Unmatched privileged Pod CREATE
+  -> KubernetesAdmissionOwner rejects dangerous fields before scheduling
+  -> no Kubernetes metadata can act as an exception signature
+  -> retained BPF state denies the exact hostile task's first covered effect if admission is bypassed
 ```
 
 The CRDs store desired state. They are not signed node artifacts, evidence
@@ -529,6 +546,30 @@ Control does not require or update a CRD finalizer. Forced object deletion,
 namespace deletion, API-server loss, or Control loss cannot remove a node's
 active protection.
 
+Helm deletion follows the same rule. The chart has no pre-delete host cleanup
+hook. An ordinary uninstall removes Kubernetes objects but leaves owned host
+runtime hooks and pinned BPF state. A missing node admission socket denies a
+matching protected start. Retained BPF state continues to protect existing
+bindings and the unmatched privileged-Pod incident case.
+
+`NodeDecommissionOwner` accepts only an independently signed
+`NodeDecommissionAuthorizationV1`. Its payload contains the cluster UID, node
+ID, current node boot ID, expiry in UTC nanoseconds, and one nonce. The
+envelope contains the signer key ID, Ed25519 algorithm, canonical payload, and
+signature. Control stores and relays these bytes. It cannot sign or change
+them. The node verifies every field, rejects a used nonce, and rejects while a
+protected runtime binding is live. It durably records acceptance before any
+physical change.
+
+Control removes readiness and quarantines the exact Node before cleanup. The
+node then closes runtime admission, removes only hook files with its ownership
+markers, removes its pinned BPF links and maps, and reads back absence. It
+durably records completion and acknowledges the authorization. Only that
+acknowledgement lets Control remove its Node label, identity annotations, and
+quarantine taint. The operator removes Helm last. If Helm is removed first,
+the host state stays active until the same owner or host entry point consumes
+a valid authorization.
+
 After a Control restart, relist, watch compaction, node reconnect, or network
 partition, reconcile from the durable source, rollout, intake, and node
 inventory records. Never trust watch delivery order or an in-memory cursor.
@@ -674,13 +715,34 @@ fields. The readiness owner changes only the Mithril projection. Control can
 update the two status subresources but cannot write either spec. Node
 identities cannot modify Kubernetes policy, exceptions, or Node readiness.
 
+Do not package a pre-delete cleanup DaemonSet or Job. Ordinary Helm deletion
+is not decommission authority. Package the independent decommission public
+key as host-provisioned node input. Control receives only signed artifacts and
+relays them unchanged. The node owns durable nonce consumption, exact owned
+hook cleanup, pin removal, and absence readback.
+
+For every Pod CREATE that has no matching policy, reject privileged mode,
+host PID, host IPC, host networking, `CAP_SYS_ADMIN`, `CAP_BPF`,
+`CAP_SYS_MODULE`, hostPath, host devices, and unsafe unconfined security
+settings. This is the exact incident admission floor. Retained BPF state must
+also deny the hostile unmatched task's first covered host-secret, mount,
+device, privilege, process-control, or network effect when the API path is
+bypassed. Phase 8 owns signed privileged exceptions and the complete runtime
+field matrix.
+
 Prove both structural schemas, policy-to-internal lowering, exception bounding
 and consumption, DaemonSet selector and affinity derivation, selector change,
 new-node quarantine, stale-session quarantine, Pod mutation, scheduler choice
 among two eligible nodes, binding rejection, exact-node delivery, held
 initial-task release,
 timeout denial, restart recovery, Pod deletion, container restart, and policy
-retirement. Use API-server admission review objects and deterministic runtime
+retirement. Prove that ordinary Helm deletion retains hooks and pins, that a
+matching start fails closed without the node process, and that only a valid
+exact decommission artifact removes them. Prove rejection for wrong key,
+cluster, node, boot, expiry, reused nonce, live protected binding, forged
+acknowledgement, and partial cleanup restart. Prove the exact hostile Pod
+rejection and the retained BPF fallback before the two-node physical case.
+Use API-server admission review objects and deterministic runtime
 gate tests in automated acceptance. Use the current stock Kubernetes and OCI
 runtime path for the physical manual result.
 
@@ -908,6 +970,15 @@ created in this phase.
   installation of only `administrativeEntry.role`, explicit Deny precedence,
   applicable exception authorization, and denial of an ordinary exec without
   the slot.
+- Decommission tests must prove signature and target validation, durable
+  one-use nonce consumption, live-binding refusal, restart recovery, owned-path
+  cleanup, BPF absence readback, projection cleanup only after an exact node
+  acknowledgement, and ordinary Helm deletion with retained enforcement.
+- The hostile privileged-Pod test must include `privileged`, `hostPID`, a host
+  `/` mount at `/host`, `CAP_SYS_ADMIN`, and a read of
+  `/host/etc/shadow`. The lightweight admission test must reject the same
+  PodSpec. The lightweight BPF test must deny the same physical fallback
+  effect before the two-node Kubernetes test runs.
 - Phase 6.2 owns no new Appendix C fixture ID. These named phase tests remain
   mandatory and Phase 11 must run them for each advertised Kubernetes mode.
 
@@ -939,6 +1010,10 @@ created in this phase.
   the application role.
 - `externalRole` remains the role for an unmatched independent root and never
   receives the admitted-entry default.
+- Helm deletion cannot remove host enforcement. Only a valid, exact,
+  independently signed decommission authorization can do that.
+- The exact hostile unmatched privileged Pod rejects at Kubernetes admission.
+  A bypassed API path hits the retained BPF incident floor.
 
 ## Excluded
 
@@ -953,11 +1028,12 @@ network, IPC, device, privilege, or mount rules.
 
 Graph edges, findings, detection packages, severity and finding routes,
 notification routing, response actions, provider leases, provider-specific
-evidence, privileged or unmatched workload floors, and cross-node causal joins
-also remain excluded. Phase 7 owns the graph and finding extension. Phase 8
-consumes the Kubernetes object, scheduler, and runtime facts established here
-for distributed causality and adds authenticated audit history and the
-privileged or unmatched workload floor.
+evidence, the complete privileged-exception and typed unmatched-workload
+matrix, and cross-node causal joins also remain excluded. Phase 7 owns the
+graph and finding extension. Phase 8 consumes the Kubernetes object,
+scheduler, runtime, and incident-floor facts established here for distributed
+causality and adds authenticated audit history, signed privileged exceptions,
+and the complete unmatched-workload floor.
 
 ## Phase Result
 

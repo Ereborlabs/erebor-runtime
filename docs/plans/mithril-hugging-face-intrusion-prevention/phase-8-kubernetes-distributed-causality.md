@@ -42,13 +42,13 @@ Complete `HF-XNODE-001` from a credential/API action on node A to a workload
 root/effect on node B. Shared ServiceAccount or timing remains shared-principal/
 context unless exact request/object/binding identifiers close the join.
 
-### D8.4 — Unmatched-workload and privileged-root floor
+### D8.4 — Complete unmatched-workload and privileged-root floor
 
-Implement the architecture-approved Kubernetes validating-admission and node
-hard-floor contracts for privileged mode, host namespaces, dangerous
-capabilities, hostPath/devices, unsafe security settings, and unresolved roots.
-Normal OCI setup remains runtime-owned. Exceptions are signed, exact,
-expiring, bounded-use, physically consumed, and separately audited.
+Extend the Phase 6.2 incident floor to the complete architecture-approved
+typed runtime matrix for privileged mode, host namespaces, dangerous
+capabilities, hostPath/devices, unsafe security settings, and unresolved
+roots. Normal OCI setup remains runtime-owned. Add signed, exact, expiring,
+bounded-use, physically consumed, and separately audited exceptions.
 
 ### D8.5 — Root-purpose truth matrix
 
