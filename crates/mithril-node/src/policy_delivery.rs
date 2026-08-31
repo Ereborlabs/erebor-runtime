@@ -4840,6 +4840,92 @@ mod tests {
     }
 
     #[test]
+    fn state_preserving_upgrade_reopens_node_and_accepts_the_next_candidate() -> crate::Result<()> {
+        let directory = tempfile::tempdir().context(IoSnafu {
+            path: "temporary state-preserving upgrade directory",
+        })?;
+        let config = config(directory.path());
+        let key = SigningKey::from_bytes(&[9; 32]);
+        let trust = trust(directory.path(), &key)?;
+        let capabilities = capabilities();
+        let mut owner = NodePolicyDeliveryOwner::load(directory.path())?;
+        let active = bundle(
+            &config,
+            &key,
+            1,
+            1,
+            PolicyDeliveryOperationV1::Activate,
+            None,
+            10,
+            100,
+            "node-a",
+        )?;
+        let prepared = owner.prepare_activation(&active, &trust, &config, &capabilities, 2, 20)?;
+        owner.begin_activation(&active, &prepared)?;
+        owner.commit_activation(
+            &active,
+            &prepared,
+            PolicyActivationProofV1 {
+                node_bound_generation_digest: "1".repeat(64),
+                readback_digest: "2".repeat(64),
+                probe_result_digest: "3".repeat(64),
+                observed_utc_ns: 21,
+            },
+        )?;
+        let active_candidate = active.candidate.candidate_content_id.clone();
+        drop(owner);
+
+        let mut upgraded = NodePolicyDeliveryOwner::load(directory.path())?;
+        let replacement = bundle(
+            &config,
+            &key,
+            2,
+            2,
+            PolicyDeliveryOperationV1::Replace,
+            Some(active_candidate),
+            30,
+            100,
+            "node-a",
+        )?;
+        let prepared =
+            upgraded.prepare_activation(&replacement, &trust, &config, &capabilities, 3, 30)?;
+        upgraded.begin_activation(&replacement, &prepared)?;
+        upgraded.commit_activation(
+            &replacement,
+            &prepared,
+            PolicyActivationProofV1 {
+                node_bound_generation_digest: "4".repeat(64),
+                readback_digest: "5".repeat(64),
+                probe_result_digest: "6".repeat(64),
+                observed_utc_ns: 31,
+            },
+        )?;
+
+        assert_eq!(
+            upgraded.status().active_candidate_content_id.as_deref(),
+            Some(replacement.candidate.candidate_content_id.as_str())
+        );
+        assert_eq!(
+            upgraded
+                .state
+                .issuer_high_water
+                .get("test-key")
+                .map(|sequence| sequence.sequence),
+            Some(2)
+        );
+        assert_eq!(
+            upgraded
+                .state
+                .distribution_high_water
+                .values()
+                .next()
+                .map(|sequence| sequence.sequence),
+            Some(2)
+        );
+        Ok(())
+    }
+
+    #[test]
     fn complete_desired_inventory_waits_for_runtime_lifetime_retirement() -> crate::Result<()> {
         let directory = tempfile::tempdir().context(IoSnafu {
             path: "temporary live runtime inventory directory",

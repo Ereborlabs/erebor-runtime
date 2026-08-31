@@ -68,7 +68,7 @@ spec:
       affinity:
 {{ toYaml . | indent 8 }}
 {{- end }}
-      # This measured installer is one of the two exact recovery executables.
+      # The retained gate checks this installer's owner and host mounts across version changes.
       initContainers:
         - name: install-runtime-gate
           image: {{ .Values.node.image | quote }}
@@ -117,7 +117,9 @@ spec:
       "/sys/fs/bpf=/sys/fs/bpf"
       (printf "%s=/var/lib/mithril" $.Values.node.stateHostPath)
       (printf "%s=/run/mithril" $.Values.node.runHostPath)
-      "/run/erebor-interceptor=/run/erebor-interceptor" }}
+      "/run/erebor-interceptor=/run/erebor-interceptor"
+      (printf "%s=/host-hook-bin" $runtimeHookBinaryDirectory)
+      (printf "%s=/host-containerd" $containerdConfigDirectory) }}
             - --node-read-write-mount
             - {{ $mount | quote }}
 {{- end }}

@@ -84,12 +84,13 @@ need a RuntimeClass. Containerd invokes the hook directly; no NRI process is
 installed or retained.
 
 The first `createRuntime` hook denies the exact hostile incident shape. When
-the node socket is unavailable, it denies every new CRI container except the
-exact measured installer and `mithril-node` recovery shapes. A healthy node
-admits ordinary unprotected containers and receives each protected container
-through the existing ordered admission stages. The hook logs the decision code
-for each denial and exact recovery. Healthy unprotected decisions use debug
-level.
+the node socket is unavailable, it denies every new CRI container except a
+version-changed Mithril installer with the retained owner and host shape, and
+the exact `mithril-node` recovery recorded by the current manifest. A healthy
+node admits ordinary unprotected containers and receives each protected
+container through the existing ordered admission stages. The hook logs the
+decision code for each denial, installer admission, and exact recovery.
+Healthy unprotected decisions use debug level.
 
 The installer restarts the first configured active container runtime service
 only when the loaded base spec changes. It then reads back the generated
@@ -110,17 +111,19 @@ control:
   logFilter: info,mithril_control::store=trace
 ```
 
-A Helm upgrade changes the Pod template and restarts the affected owner. Logs
-remain human-readable service stderr. The filter does not change policy,
-evidence, readiness, or enforcement state. The chart bounds each value and
-rejects line breaks. The service validates the complete filter before startup.
+A Helm upgrade changes the Pod template and restarts the affected owner. The
+Control PVC and Node state host paths remain unchanged. Each new owner opens
+the existing state before it becomes ready. Logs remain human-readable service
+stderr. The filter does not change policy, evidence, readiness, or enforcement
+state. The chart bounds each value and rejects line breaks. The service
+validates the complete filter before startup.
 
 Helm uninstall removes Kubernetes release objects. It does not remove the
 owned hook binary, containerd drop-in, OCI base spec, recovery manifest, or
 pinned BPF state. The missing node admission socket blocks all new CRI starts
-except exact measured Mithril recovery. Direct non-CRI starts remain subject to
-the retained BPF incident floor. Run the independently signed node
-decommission flow when host enforcement must be removed.
+except the retained installer shape and exact Node recovery. Direct non-CRI
+starts remain subject to the retained BPF incident floor. Run the independently
+signed node decommission flow when host enforcement must be removed.
 
 ## Verification
 

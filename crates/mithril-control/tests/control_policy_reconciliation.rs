@@ -422,6 +422,58 @@ fn kubernetes_outage_exception_uses_current_policy_with_admission_provenance() -
 }
 
 #[test]
+fn state_preserving_upgrade_reopens_control_and_continues_the_policy_chain() -> TestResult {
+    let directory = TempDir::new()?;
+    let store = ControlStore::open(directory.path())?;
+    let owner = make_owner(store.clone());
+    let spec = policy()?;
+    let policy_v1 = resource(&spec, "profile", OBJECT_UID, 1, false)?;
+    let initial = owner.reconcile(&policy_v1, NAMESPACE_UID, &inventory(&"1".repeat(64))?, NOW)?;
+    let targets = kubernetes_inventory(
+        &initial.source_revision.policy_source_revision_id,
+        initial.bundles[0]
+            .profile_artifact
+            .policy_document
+            .metadata
+            .profile_id
+            .as_str(),
+    )?;
+    let active = owner.reconcile(&policy_v1, NAMESPACE_UID, &targets, NOW + 1)?;
+    owner.rollout_owner().acknowledge(acknowledgement(
+        &active.bundles[0],
+        PolicyActivationStateV1::Active,
+        NOW + 2,
+    )?)?;
+    let active = &active.bundles[0];
+    let active_candidate = active.candidate.candidate_content_id.clone();
+    let active_issuer_sequence = active.profile_artifact.header.issuer_sequence;
+    let active_distribution_sequence = active.candidate.distribution_sequence;
+    drop(owner);
+    drop(store);
+
+    let reopened = ControlStore::open(directory.path())?;
+    let upgraded = make_owner(reopened);
+    let policy_v2 = resource(&spec, "profile", OBJECT_UID, 2, false)?;
+    let replacement = upgraded.reconcile(&policy_v2, NAMESPACE_UID, &targets, NOW + 3)?;
+    let replacement = &replacement.bundles[0];
+
+    assert_eq!(
+        replacement.candidate.operation,
+        PolicyDeliveryOperationV1::Replace
+    );
+    assert_eq!(
+        replacement
+            .candidate
+            .predecessor_candidate_content_id
+            .as_deref(),
+        Some(active_candidate.as_str())
+    );
+    assert!(replacement.profile_artifact.header.issuer_sequence > active_issuer_sequence);
+    assert!(replacement.candidate.distribution_sequence > active_distribution_sequence);
+    Ok(())
+}
+
+#[test]
 fn exception_is_bounded_to_one_active_container_and_replays_revocation() -> TestResult {
     let directory = TempDir::new()?;
     let store = ControlStore::open(directory.path())?;

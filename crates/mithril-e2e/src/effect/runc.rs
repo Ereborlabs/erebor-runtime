@@ -114,6 +114,17 @@ pub struct RuncRetainedRuntimeGateProbeV1 {
     pub exact_recovery_allowed: bool,
     pub exact_recovery_process_started: bool,
     pub exact_recovery_decision_logged: bool,
+    pub exact_installer_allowed: bool,
+    pub exact_installer_process_started: bool,
+    pub changed_installer_allowed: bool,
+    pub changed_installer_process_started: bool,
+    pub changed_installer_decision_logged: bool,
+    pub forged_installer_denied: bool,
+    pub forged_installer_process_never_started: bool,
+    pub forged_installer_decision_logged: bool,
+    pub changed_recovery_binary_denied: bool,
+    pub changed_recovery_binary_process_never_started: bool,
+    pub changed_recovery_binary_decision_logged: bool,
     pub changed_recovery_denied: bool,
     pub changed_recovery_process_never_started: bool,
     pub unavailable_decision_logged: bool,
@@ -151,6 +162,7 @@ struct RetainedRuntimeGateRuncFixture {
     k3s_path: PathBuf,
     output_directory: PathBuf,
     recovery_args: Vec<String>,
+    installer_args: Vec<String>,
     stock_config: serde_json::Value,
 }
 
@@ -200,32 +212,109 @@ impl RetainedRuntimeGateRuncFixture {
             "{:x}",
             Sha256::digest(fs::read(&shell).context(IoSnafu { path: &shell })?)
         );
+        let installer = rootfs.join("usr/local/bin/mithril-oci-hook");
+        fs::create_dir_all(installer.parent().ok_or_else(|| {
+            InvalidInputSnafu {
+                path: &installer,
+                reason: "the installer fixture path has no parent",
+            }
+            .build()
+        })?)
+        .context(IoSnafu { path: &installer })?;
+        fs::write(
+            &installer,
+            b"#!/bin/sh\nprintf INSTALLER_ALLOWED >/result/installer\n",
+        )
+        .context(IoSnafu { path: &installer })?;
+        fs::set_permissions(&installer, fs::Permissions::from_mode(0o755))
+            .context(IoSnafu { path: &installer })?;
+        let installer_digest = format!(
+            "{:x}",
+            Sha256::digest(fs::read(&installer).context(IoSnafu { path: &installer })?)
+        );
+        let host_hook_directory = fixture_root.join("host-hook");
+        let host_containerd_directory = fixture_root.join("host-containerd");
+        fs::create_dir(&host_hook_directory).context(IoSnafu {
+            path: &host_hook_directory,
+        })?;
+        fs::create_dir(&host_containerd_directory).context(IoSnafu {
+            path: &host_containerd_directory,
+        })?;
         let mut recovery_args = vec![
             "/bin/sh".to_owned(),
             "-c".to_owned(),
             "printf RECOVERY_ALLOWED >/result/recovery".to_owned(),
         ];
         recovery_args.extend((0..35).map(|index| format!("recovery-argument-{index}")));
+        let installer_args = vec![
+            "/usr/local/bin/mithril-oci-hook".to_owned(),
+            "install".to_owned(),
+            "--owner".to_owned(),
+            "mithril-system/mithril".to_owned(),
+            "--hook-host-directory".to_owned(),
+            "/usr/libexec/oci/hooks.d".to_owned(),
+            "--containerd-host-directory".to_owned(),
+            "/var/lib/rancher/k3s/agent/etc/containerd".to_owned(),
+            "--k3s-host-path".to_owned(),
+            "/usr/local/bin/k3s".to_owned(),
+            "--socket".to_owned(),
+            "/run/mithril/runtime-admission.sock".to_owned(),
+        ];
         let manifest = fixture_root.join("mithril-recovery.json");
         fs::write(
             &manifest,
             serde_json::to_vec_pretty(&json!({
                 "version": 1,
-                "entries": [{
-                    "executable": "/bin/sh",
-                    "executableSha256": shell_digest,
-                    "args": recovery_args,
-                    "requiredMounts": [{
-                        "source": marker_directory,
-                        "destination": "/result",
-                        "readOnly": false
-                    }]
-                }]
+                "entries": [
+                    {
+                        "executable": "/bin/sh",
+                        "executableSha256": shell_digest,
+                        "args": recovery_args,
+                        "requiredMounts": [
+                            {
+                                "source": marker_directory,
+                                "destination": "/result",
+                                "readOnly": false
+                            },
+                            {
+                                "source": host_hook_directory,
+                                "destination": "/host-hook-bin",
+                                "readOnly": false
+                            },
+                            {
+                                "source": host_containerd_directory,
+                                "destination": "/host-containerd",
+                                "readOnly": false
+                            }
+                        ]
+                    },
+                    {
+                        "executable": "/usr/local/bin/mithril-oci-hook",
+                        "executableSha256": installer_digest,
+                        "args": installer_args,
+                        "requiredMounts": [
+                            {
+                                "source": host_hook_directory,
+                                "destination": "/host-hook-bin",
+                                "readOnly": false
+                            },
+                            {
+                                "source": host_containerd_directory,
+                                "destination": "/host-containerd",
+                                "readOnly": false
+                            },
+                            {
+                                "source": k3s_path,
+                                "destination": "/host-k3s",
+                                "readOnly": true
+                            }
+                        ]
+                    }
+                ]
             }))
             .context(JsonSnafu { path: &manifest })?,
         )
         .context(IoSnafu { path: &manifest })?;
-
         Ok(Self {
             fixture_root,
             bundle,
@@ -236,6 +325,7 @@ impl RetainedRuntimeGateRuncFixture {
             k3s_path: k3s_path.to_path_buf(),
             output_directory: output_directory.to_path_buf(),
             recovery_args,
+            installer_args,
             stock_config,
         })
     }
@@ -299,6 +389,37 @@ impl RetainedRuntimeGateRuncFixture {
         self.run_case("exact-recovery", self.exact_recovery_config()?)
     }
 
+    fn run_exact_installer(&self) -> Result<RetainedRuntimeGateCaseResult> {
+        self.run_case("exact-installer", self.installer_config(false)?)
+    }
+
+    fn run_changed_installer(&self) -> Result<RetainedRuntimeGateCaseResult> {
+        let executable = self.bundle.join("rootfs/usr/local/bin/mithril-oci-hook");
+        let original = fs::read(&executable).context(IoSnafu { path: &executable })?;
+        fs::OpenOptions::new()
+            .append(true)
+            .open(&executable)
+            .and_then(|mut file| file.write_all(b"# upgraded Mithril installer\n"))
+            .context(IoSnafu { path: &executable })?;
+        let marker = self.marker_directory.join("installer");
+        if marker.exists() {
+            fs::remove_file(&marker).context(IoSnafu { path: &marker })?;
+        }
+        let result = self.run_case("changed-installer", self.installer_config(true)?);
+        fs::write(&executable, original).context(IoSnafu { path: &executable })?;
+        result
+    }
+
+    fn run_forged_installer(&self) -> Result<RetainedRuntimeGateCaseResult> {
+        let mut config = self.installer_config(true)?;
+        config["process"]["args"][3] = json!("attacker/other");
+        let marker = self.marker_directory.join("installer");
+        if marker.exists() {
+            fs::remove_file(&marker).context(IoSnafu { path: &marker })?;
+        }
+        self.run_case("forged-installer", config)
+    }
+
     fn run_changed_recovery(&self) -> Result<RetainedRuntimeGateCaseResult> {
         let mut config = self.stock_config("changed-recovery")?;
         config["process"]["args"] = json!([
@@ -307,6 +428,23 @@ impl RetainedRuntimeGateRuncFixture {
             "printf CHANGED_RECOVERY_RAN >/result/changed-recovery"
         ]);
         self.run_case("changed-recovery", config)
+    }
+
+    fn run_changed_recovery_binary(&self) -> Result<RetainedRuntimeGateCaseResult> {
+        let executable = self.bundle.join("rootfs/bin/sh");
+        let original = fs::read(&executable).context(IoSnafu { path: &executable })?;
+        fs::OpenOptions::new()
+            .append(true)
+            .open(&executable)
+            .and_then(|mut file| file.write_all(&[0]))
+            .context(IoSnafu { path: &executable })?;
+        let marker = self.marker_directory.join("recovery");
+        if marker.exists() {
+            fs::remove_file(&marker).context(IoSnafu { path: &marker })?;
+        }
+        let result = self.run_case("changed-recovery-binary", self.exact_recovery_config()?);
+        fs::write(&executable, original).context(IoSnafu { path: &executable })?;
+        result
     }
 
     fn run_host_stock_spec(&self) -> Result<RetainedRuntimeGateCaseResult> {
@@ -407,19 +545,101 @@ impl RetainedRuntimeGateRuncFixture {
     fn exact_recovery_config(&self) -> Result<serde_json::Value> {
         let mut config = self.stock_config("exact-recovery")?;
         config["process"]["args"] = json!(self.recovery_args);
+        self.add_bind_mount(
+            &mut config,
+            &self.fixture_root.join("host-hook"),
+            Path::new("/host-hook-bin"),
+            false,
+        )?;
+        self.add_bind_mount(
+            &mut config,
+            &self.fixture_root.join("host-containerd"),
+            Path::new("/host-containerd"),
+            false,
+        )?;
+        Ok(config)
+    }
+
+    fn installer_config(&self, upgraded: bool) -> Result<serde_json::Value> {
+        let mut config = self.stock_config(if upgraded {
+            "changed-installer"
+        } else {
+            "exact-installer"
+        })?;
+        config["process"]["args"] = if upgraded {
+            json!([
+                "/usr/local/bin/mithril-oci-hook",
+                "install",
+                "--owner",
+                "mithril-system/mithril",
+                "--hook-host-directory",
+                "/usr/libexec/oci/hooks.d",
+                "--containerd-host-directory",
+                "/var/lib/rancher/k3s/agent/etc/containerd",
+                "--containerd-drop-in-directory",
+                "config-v3.toml.d",
+                "--runtime-cli-host-path",
+                "/usr/local/bin/k3s",
+                "--runtime-cli-arg",
+                "ctr",
+                "--runtime-cli-arg",
+                "oci",
+                "--runtime-cli-arg",
+                "spec",
+                "--runtime-service",
+                "k3s",
+                "--runtime-service",
+                "k3s-agent",
+                "--socket",
+                "/run/mithril/runtime-admission.sock",
+                "--decommission-state-directory",
+                "/var/lib/mithril"
+            ])
+        } else {
+            json!(self.installer_args)
+        };
+        self.add_bind_mount(
+            &mut config,
+            &self.fixture_root.join("host-hook"),
+            Path::new("/host-hook-bin"),
+            false,
+        )?;
+        self.add_bind_mount(
+            &mut config,
+            &self.fixture_root.join("host-containerd"),
+            Path::new("/host-containerd"),
+            false,
+        )?;
+        self.add_bind_mount(
+            &mut config,
+            &self.k3s_path,
+            if upgraded {
+                Path::new("/host-runtime-cli")
+            } else {
+                Path::new("/host-k3s")
+            },
+            true,
+        )?;
         Ok(config)
     }
 
     fn exact_recovery_log(&self) -> Result<String> {
+        self.decision_log(self.exact_recovery_config()?, b"exact-recovery-log")
+    }
+
+    fn changed_installer_log(&self) -> Result<String> {
+        self.decision_log(self.installer_config(true)?, b"changed-installer-log")
+    }
+
+    fn decision_log(&self, config: serde_json::Value, identity: &[u8]) -> Result<String> {
         let config_path = self.bundle.join("config.json");
         fs::write(
             &config_path,
-            serde_json::to_vec_pretty(&self.exact_recovery_config()?)
-                .context(JsonSnafu { path: &config_path })?,
+            serde_json::to_vec_pretty(&config).context(JsonSnafu { path: &config_path })?,
         )
         .context(IoSnafu { path: &config_path })?;
         let state = serde_json::to_vec(&json!({
-            "id": format!("{:064x}", Sha256::digest(b"exact-recovery-log")),
+            "id": format!("{:064x}", Sha256::digest(identity)),
             "pid": 1,
             "bundle": self.bundle,
             "annotations": {}
@@ -827,9 +1047,17 @@ impl EffectTestRunner {
         )?;
         let hostile = fixture.run_hostile()?;
         let recovery = fixture.run_exact_recovery()?;
+        let exact_recovery_process_started = fixture.marker_exists("recovery");
+        let installer = fixture.run_exact_installer()?;
+        let exact_installer_process_started = fixture.marker_exists("installer");
+        let changed_installer = fixture.run_changed_installer()?;
+        let changed_installer_process_started = fixture.marker_exists("installer");
+        let forged_installer = fixture.run_forged_installer()?;
+        let changed_binary = fixture.run_changed_recovery_binary()?;
         let changed = fixture.run_changed_recovery()?;
         let host_stock_spec = fixture.run_host_stock_spec()?;
         let recovery_log = fixture.exact_recovery_log()?;
+        let installer_log = fixture.changed_installer_log()?;
         let host_stock_spec_generated = host_stock_spec.success
             && serde_json::from_str::<serde_json::Value>(&host_stock_spec.stdout)
                 .ok()
@@ -837,14 +1065,30 @@ impl EffectTestRunner {
                 .is_some();
 
         let result = RuncRetainedRuntimeGateProbeV1 {
-            schema_version: 1,
+            schema_version: 2,
             runc_version: command_text(Command::new(runc_path).arg("--version"), runc_path)?,
             hostile_container_denied: !hostile.success,
             hostile_process_never_started: !fixture.marker_exists("hostile"),
             hostile_decision_logged: hostile.stderr.contains("decision=DENY_HOSTILE"),
             exact_recovery_allowed: recovery.success,
-            exact_recovery_process_started: fixture.marker_exists("recovery"),
+            exact_recovery_process_started,
             exact_recovery_decision_logged: recovery_log.contains("decision=ALLOW_EXACT_RECOVERY"),
+            exact_installer_allowed: installer.success,
+            exact_installer_process_started,
+            changed_installer_allowed: changed_installer.success,
+            changed_installer_process_started,
+            changed_installer_decision_logged: installer_log
+                .contains("decision=ALLOW_MITHRIL_INSTALLER"),
+            forged_installer_denied: !forged_installer.success,
+            forged_installer_process_never_started: !fixture.marker_exists("installer"),
+            forged_installer_decision_logged: forged_installer
+                .stderr
+                .contains("decision=DENY_NODE_UNAVAILABLE"),
+            changed_recovery_binary_denied: !changed_binary.success,
+            changed_recovery_binary_process_never_started: !fixture.marker_exists("recovery"),
+            changed_recovery_binary_decision_logged: changed_binary
+                .stderr
+                .contains("decision=DENY_NODE_UNAVAILABLE"),
             changed_recovery_denied: !changed.success,
             changed_recovery_process_never_started: !fixture.marker_exists("changed-recovery"),
             unavailable_decision_logged: changed.stderr.contains("decision=DENY_NODE_UNAVAILABLE"),
@@ -858,13 +1102,34 @@ impl EffectTestRunner {
                 && result.exact_recovery_allowed
                 && result.exact_recovery_process_started
                 && result.exact_recovery_decision_logged
+                && result.exact_installer_allowed
+                && result.exact_installer_process_started
+                && result.changed_installer_allowed
+                && result.changed_installer_process_started
+                && result.changed_installer_decision_logged
+                && result.forged_installer_denied
+                && result.forged_installer_process_never_started
+                && result.forged_installer_decision_logged
+                && result.changed_recovery_binary_denied
+                && result.changed_recovery_binary_process_never_started
+                && result.changed_recovery_binary_decision_logged
                 && result.changed_recovery_denied
                 && result.changed_recovery_process_never_started
                 && result.unavailable_decision_logged
                 && result.host_stock_spec_generated,
             InvalidInputSnafu {
                 path: output_directory,
-                reason: "the direct runc retained-gate oracle failed; inspect its case logs",
+                reason: format!(
+                    "the direct runc retained-gate oracle failed: hostile={:?}; recovery={:?}; exact_installer={:?}; changed_installer={:?}; forged_installer={:?}; changed_recovery_binary={:?}; changed_recovery={:?}; stock_spec={:?}",
+                    hostile.stderr.trim(),
+                    recovery.stderr.trim(),
+                    installer.stderr.trim(),
+                    changed_installer.stderr.trim(),
+                    forged_installer.stderr.trim(),
+                    changed_binary.stderr.trim(),
+                    changed.stderr.trim(),
+                    host_stock_spec.stderr.trim(),
+                ),
             }
         );
         fixture.cleanup()?;

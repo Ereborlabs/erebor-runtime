@@ -248,6 +248,14 @@ impl OciHookOwner {
                     );
                     return Self::submit(args.stage, state, &args.cgroup_root, &client).await;
                 }
+                RetainedRuntimeDecisionV1::AllowInstaller => {
+                    erebor_telemetry::info!(
+                        "retained runtime gate allowed a Mithril installer during node recovery",
+                        decision = %"ALLOW_MITHRIL_INSTALLER",
+                        container_id = %state.id
+                    );
+                    return Ok(());
+                }
                 RetainedRuntimeDecisionV1::AllowRecovery => {
                     erebor_telemetry::info!(
                         "retained runtime gate allowed exact Mithril recovery",

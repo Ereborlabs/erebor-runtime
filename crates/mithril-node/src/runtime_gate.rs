@@ -16,6 +16,7 @@ pub(crate) const MAXIMUM_RECOVERY_ARGUMENTS: usize = 64;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RetainedRuntimeDecisionV1 {
     AllowHealthy,
+    AllowInstaller,
     AllowRecovery,
     AdmitProtected,
     DenyHostile,
@@ -142,8 +143,8 @@ impl RetainedRuntimeGate {
         if endpoint_available {
             return Ok(RetainedRuntimeDecisionV1::AllowHealthy);
         }
-        if self.recovery.matches(bundle, &config)? {
-            return Ok(RetainedRuntimeDecisionV1::AllowRecovery);
+        if let Some(decision) = self.recovery.recovery_decision(bundle, &config)? {
+            return Ok(decision);
         }
         Ok(RetainedRuntimeDecisionV1::DenyUnavailable)
     }
@@ -180,13 +181,20 @@ impl RuntimeRecoveryManifestV1 {
         Ok(())
     }
 
-    fn matches(&self, bundle: &Path, config: &OciRuntimeConfigV1) -> io::Result<bool> {
+    fn recovery_decision(
+        &self,
+        bundle: &Path,
+        config: &OciRuntimeConfigV1,
+    ) -> io::Result<Option<RetainedRuntimeDecisionV1>> {
         for entry in &self.entries {
+            if entry.matches_installer(config)? {
+                return Ok(Some(RetainedRuntimeDecisionV1::AllowInstaller));
+            }
             if entry.matches(bundle, config)? {
-                return Ok(true);
+                return Ok(Some(RetainedRuntimeDecisionV1::AllowRecovery));
             }
         }
-        Ok(false)
+        Ok(None)
     }
 
     fn clean_absolute(path: &Path) -> bool {
@@ -256,6 +264,64 @@ impl RuntimeRecoveryEntryV1 {
         Ok(format!("{:x}", Sha256::digest(bytes)) == self.executable_sha256)
     }
 
+    fn matches_installer(&self, config: &OciRuntimeConfigV1) -> io::Result<bool> {
+        if self.executable != Path::new("/usr/local/bin/mithril-oci-hook")
+            || self.args.get(1).map(String::as_str) != Some("install")
+            || config
+                .process
+                .args
+                .first()
+                .map(|argument| Path::new(argument))
+                != Some(self.executable.as_path())
+            || config.process.args.get(1).map(String::as_str) != Some("install")
+            || !(2..=MAXIMUM_RECOVERY_ARGUMENTS).contains(&config.process.args.len())
+            || config.process.no_new_privileges
+            || !config.process.capabilities.contains("CAP_SYS_ADMIN")
+            || !config.linux.shares_host_pid_namespace()?
+        {
+            return Ok(false);
+        }
+        for option in [
+            "--owner",
+            "--hook-host-directory",
+            "--containerd-host-directory",
+            "--socket",
+        ] {
+            match (
+                self.unique_option(option),
+                Self::unique_option_in(&config.process.args, option),
+            ) {
+                (Some(retained), Some(actual)) if retained == actual => {}
+                _ => return Ok(false),
+            }
+        }
+        Ok(self
+            .required_mounts
+            .iter()
+            .filter(|mount| !mount.read_only)
+            .all(|required| {
+                config.mounts.iter().any(|mount| {
+                    mount.is_bind()
+                        && mount.source == required.source
+                        && mount.destination == required.destination
+                        && !mount.is_read_only()
+                })
+            }))
+    }
+
+    fn unique_option(&self, option: &str) -> Option<&str> {
+        Self::unique_option_in(&self.args, option)
+    }
+
+    fn unique_option_in<'a>(args: &'a [String], option: &str) -> Option<&'a str> {
+        let mut values = args
+            .windows(2)
+            .filter(|pair| pair[0] == option)
+            .map(|pair| pair[1].as_str());
+        let value = values.next()?;
+        values.next().is_none().then_some(value)
+    }
+
     fn mounts_match(&self, actual: &[OciMountV1]) -> bool {
         let required_match = self.required_mounts.iter().all(|required| {
             actual.iter().any(|mount| {
@@ -318,8 +384,18 @@ impl OciLinuxV1 {
         }
         // containerd records hostPID as a path to a process that already uses
         // the host PID namespace. Compare the namespace identity, not its PID.
-        let actual = std::fs::metadata(path)?;
-        let host = std::fs::metadata("/proc/1/ns/pid")?;
+        let actual = std::fs::metadata(path).map_err(|error| {
+            io::Error::new(
+                error.kind(),
+                format!("cannot inspect PID namespace {}: {error}", path.display()),
+            )
+        })?;
+        let host = std::fs::metadata("/proc/1/ns/pid").map_err(|error| {
+            io::Error::new(
+                error.kind(),
+                format!("cannot inspect the host PID namespace: {error}"),
+            )
+        })?;
         Ok(actual.dev() == host.dev() && actual.ino() == host.ino())
     }
 }
@@ -392,6 +468,22 @@ mod tests {
                                 {"source": "/etc/mithril/node.json", "destination": "/etc/mithril/node.json", "readOnly": true},
                                 {"source": "/sys/fs/bpf", "destination": "/sys/fs/bpf", "readOnly": false}
                             ]
+                        },
+                        {
+                            "executable": "/usr/local/bin/mithril-oci-hook",
+                            "executableSha256": format!("{:x}", Sha256::digest(b"old-installer")),
+                            "args": [
+                                "/usr/local/bin/mithril-oci-hook", "install",
+                                "--owner", "mithril-system/mithril",
+                                "--hook-host-directory", "/usr/libexec/oci/hooks.d",
+                                "--containerd-host-directory", "/var/lib/containerd",
+                                "--socket", "/run/mithril/runtime-admission.sock"
+                            ],
+                            "requiredMounts": [
+                                {"source": "/usr/libexec/oci/hooks.d", "destination": "/host-hook-bin", "readOnly": false},
+                                {"source": "/var/lib/containerd", "destination": "/host-containerd", "readOnly": false},
+                                {"source": "/usr/bin/ctr", "destination": "/host-ctr", "readOnly": true}
+                            ]
                         }
                     ]
                 }))?,
@@ -422,7 +514,6 @@ mod tests {
                     {"destination": "/etc/hosts", "source": "/var/lib/kubelet/pods/uid/etc-hosts", "type": "bind", "options": ["bind", "rw"]}
                 ],
                 "linux": {"namespaces": [
-                    {"type": "pid", "path": "/proc/1/ns/pid"},
                     {"type": "mount"},
                     {"type": "network"},
                     {"type": "ipc"},
@@ -430,6 +521,39 @@ mod tests {
                 ]},
                 "annotations": {}
             }))
+        }
+
+        fn upgraded_installer_config() -> serde_json::Value {
+            serde_json::json!({
+                "process": {
+                    "args": [
+                        "/usr/local/bin/mithril-oci-hook", "install",
+                        "--owner", "mithril-system/mithril",
+                        "--hook-host-directory", "/usr/libexec/oci/hooks.d",
+                        "--containerd-host-directory", "/var/lib/containerd",
+                        "--runtime-cli-host-path", "/usr/bin/ctr",
+                        "--runtime-cli-arg", "plugins",
+                        "--socket", "/run/mithril/runtime-admission.sock"
+                    ],
+                    "capabilities": {
+                        "bounding": ["CAP_SYS_ADMIN"],
+                        "effective": ["CAP_SYS_ADMIN"],
+                        "permitted": ["CAP_SYS_ADMIN"]
+                    },
+                    "noNewPrivileges": false
+                },
+                "root": {"path": "rootfs"},
+                "mounts": [
+                    {"destination": "/host-hook-bin", "source": "/usr/libexec/oci/hooks.d", "type": "bind", "options": ["rbind", "rw"]},
+                    {"destination": "/host-containerd", "source": "/var/lib/containerd", "type": "bind", "options": ["rbind", "rw"]},
+                    {"destination": "/host-runtime-cli", "source": "/usr/bin/ctr", "type": "bind", "options": ["bind", "ro"]}
+                ],
+                "linux": {"namespaces": [
+                    {"type": "mount"},
+                    {"type": "network"}
+                ]},
+                "annotations": {}
+            })
         }
 
         fn gate(&self) -> Result<RetainedRuntimeGate, Box<dyn std::error::Error>> {
@@ -451,6 +575,36 @@ mod tests {
         fs::write(
             fixture.bundle.join("rootfs/usr/local/bin/mithril-node"),
             b"changed-node",
+        )?;
+        assert_eq!(
+            fixture
+                .gate()?
+                .decide(&fixture.bundle, &BTreeMap::new(), false)?,
+            RetainedRuntimeDecisionV1::DenyUnavailable
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn unavailable_gate_allows_the_retained_owner_to_install_a_new_mithril_version(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let fixture = Fixture::new()?;
+        fs::write(
+            fixture.bundle.join("config.json"),
+            serde_json::to_vec(&Fixture::upgraded_installer_config())?,
+        )?;
+        assert_eq!(
+            fixture
+                .gate()?
+                .decide(&fixture.bundle, &BTreeMap::new(), false)?,
+            RetainedRuntimeDecisionV1::AllowInstaller
+        );
+
+        let mut wrong_owner = Fixture::upgraded_installer_config();
+        wrong_owner["process"]["args"][3] = serde_json::json!("attacker/other");
+        fs::write(
+            fixture.bundle.join("config.json"),
+            serde_json::to_vec(&wrong_owner)?,
         )?;
         assert_eq!(
             fixture
