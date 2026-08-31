@@ -65,12 +65,15 @@ const GRPC_THROUGHPUT_MESSAGE_BYTES: usize = 4 * 1_024 * 1_024;
 const GRPC_THROUGHPUT_WINDOW_BYTES: u32 = 16 * 1_024 * 1_024;
 
 #[tokio::test]
-async fn kubernetes_outage_pending_policy_transfer_preempts_evidence_ack_backlog() {
+async fn kubernetes_outage_pending_policy_transfer_preempts_evidence_ack_backlog(
+) -> Result<(), Box<dyn StdError>> {
     let mut pacing = PolicyControlPacingOwner::default();
     pacing.mark_pending();
     let mut poll = tokio::time::interval(Duration::from_secs(60));
     let (sender, mut messages) = tokio::sync::mpsc::unbounded_channel();
-    sender.send(()).expect("the message receiver is open");
+    if sender.send(()).is_err() {
+        return Err("the message receiver closed before the test started".into());
+    }
 
     let selected_policy = tokio::select! {
         biased;
@@ -79,6 +82,7 @@ async fn kubernetes_outage_pending_policy_transfer_preempts_evidence_ack_backlog
     };
 
     assert!(selected_policy);
+    Ok(())
 }
 
 #[test]
@@ -1754,7 +1758,7 @@ async fn mtls_evidence_stream_retains_every_record_across_node_restart_beyond_th
         .map(|batch| batch.last_cursor)
         .ok_or("the Node did not prepare an evidence commit group")?;
     for batch in &batches {
-        delivered_source = delivered_source.or(Some(batch_source_id(&batch)?));
+        delivered_source = delivered_source.or(Some(batch_source_id(batch)?));
     }
     connection.send_evidence_group(batches).await?;
     loop {

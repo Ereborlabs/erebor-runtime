@@ -701,9 +701,10 @@ mod tests {
     use crate::{ContainerKindV1, WorkloadBindingConfig};
 
     #[tokio::test]
-    async fn unavailable_event_api_uses_backoff_and_inventory_fallback() {
+    async fn unavailable_event_api_uses_backoff_and_inventory_fallback(
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let channel = Endpoint::from_static("http://[::]").connect_lazy();
-        let directory = tempfile::tempdir().expect("temporary runtime socket directory");
+        let directory = tempfile::tempdir()?;
         let mut inventory = ContainerRuntimeInventory {
             client: RuntimeServiceClient::new(channel),
             cgroup_root: PathBuf::from("/sys/fs/cgroup"),
@@ -714,13 +715,12 @@ mod tests {
             event_reconnect_at: tokio::time::Instant::now(),
         };
 
-        tokio::time::timeout(Duration::from_millis(100), inventory.wait_for_change())
-            .await
-            .expect("the unavailable event API did not trigger an inventory scan");
+        tokio::time::timeout(Duration::from_millis(100), inventory.wait_for_change()).await?;
         assert_eq!(
             inventory.event_reconnect_delay,
             super::EVENT_RECONNECT_MINIMUM.saturating_mul(2)
         );
+        Ok(())
     }
 
     #[test]

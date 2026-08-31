@@ -5,10 +5,6 @@ use std::process;
 use std::thread;
 use std::time::Duration;
 
-unsafe extern "C" {
-    fn pause() -> i32;
-}
-
 struct OpenProbe {
     path: PathBuf,
     pid_file: Option<PathBuf>,
@@ -58,9 +54,11 @@ impl OpenProbe {
             }
         }
         let succeeded = fs::File::open(&self.path).is_ok();
-        while succeeded && self.hold_after_success {
+        if succeeded && self.hold_after_success {
             // A held success must not issue another filesystem operation.
-            unsafe { pause() };
+            loop {
+                thread::park();
+            }
         }
         succeeded
     }
