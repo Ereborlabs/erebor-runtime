@@ -1,0 +1,60 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: forged-upgrade-installer
+  namespace: mithril-system
+spec:
+  hostPID: true
+  nodeName: MITHRIL_UPGRADE_NODE
+  restartPolicy: Never
+  containers:
+    - name: installer
+      image: mithril-node:convergence
+      imagePullPolicy: Never
+      command: ["/usr/local/bin/mithril-oci-hook", "install"]
+      args:
+        - --owner
+        - attacker/mithril
+        - --hook-host-directory
+        - /usr/libexec/oci/hooks.d
+        - --containerd-host-directory
+        - /var/lib/rancher/k3s/agent/etc/containerd
+        - --containerd-drop-in-directory
+        - config-v3.toml.d
+        - --runtime-cli-host-path
+        - /usr/local/bin/k3s
+        - --runtime-cli-arg
+        - ctr
+        - --runtime-cli-arg
+        - oci
+        - --runtime-cli-arg
+        - spec
+        - --runtime-service
+        - k3s
+        - --runtime-service
+        - k3s-agent
+        - --socket
+        - /run/mithril/runtime-admission.sock
+      securityContext:
+        privileged: true
+      volumeMounts:
+        - name: runtime-hook-bin
+          mountPath: /host-hook-bin
+        - name: containerd-config
+          mountPath: /host-containerd
+        - name: runtime-cli
+          mountPath: /host-runtime-cli
+          readOnly: true
+  volumes:
+    - name: runtime-hook-bin
+      hostPath:
+        path: /usr/libexec/oci/hooks.d
+        type: Directory
+    - name: containerd-config
+      hostPath:
+        path: /var/lib/rancher/k3s/agent/etc/containerd
+        type: Directory
+    - name: runtime-cli
+      hostPath:
+        path: /usr/local/bin/k3s
+        type: File

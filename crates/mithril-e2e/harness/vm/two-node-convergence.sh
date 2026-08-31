@@ -448,22 +448,43 @@ echo "Building the policy fixture tool"
   -p mithril-e2e --bin mithril-effect-test)
 if [[ $reuse_images == true ]]; then
   echo "Reusing the local Mithril owner images"
-  docker image inspect mithril-node:convergence mithril-control:convergence >/dev/null
+  docker image inspect \
+    mithril-node:convergence mithril-control:convergence \
+    mithril-node:upgrade-baseline mithril-control:upgrade-baseline >/dev/null
 else
   echo "Building the packaged Mithril owners"
   (cd -- "$repo_root" && docker build --file packaging/mithril/Dockerfile \
     --target node --tag mithril-node:convergence .)
   (cd -- "$repo_root" && docker build --file packaging/mithril/Dockerfile \
     --target control --tag mithril-control:convergence .)
+  echo "Building the prior-version upgrade fixtures"
+  (cd -- "$repo_root" && docker build \
+    --file crates/mithril-e2e/fixtures/convergence/Dockerfile.upgrade-baseline \
+    --target node --tag mithril-node:upgrade-baseline .)
+  (cd -- "$repo_root" && docker build \
+    --file crates/mithril-e2e/fixtures/convergence/Dockerfile.upgrade-baseline \
+    --target control --tag mithril-control:upgrade-baseline .)
 fi
 docker run --rm --entrypoint /bin/cp \
   --user "$(id -u):$(id -g)" \
   --volume "$work_a:/output" mithril-node:convergence \
   /usr/local/bin/mithril-oci-hook /output/mithril-oci-hook
+docker run --rm --entrypoint /bin/cp \
+  --user "$(id -u):$(id -g)" \
+  --volume "$work_a:/output" mithril-node:upgrade-baseline \
+  /usr/local/bin/mithril-oci-hook /output/mithril-oci-hook-upgrade-baseline
 chmod 755 "$work_a/mithril-oci-hook"
+chmod 755 "$work_a/mithril-oci-hook-upgrade-baseline"
+current_hook_digest=$(sha256sum "$work_a/mithril-oci-hook" | awk '{print $1}')
+baseline_hook_digest=$(sha256sum "$work_a/mithril-oci-hook-upgrade-baseline" | awk '{print $1}')
+[[ $current_hook_digest != "$baseline_hook_digest" ]] || {
+  echo "the upgrade fixture did not change the runtime hook binary" >&2
+  exit 1
+}
 image_archive=$work_a/mithril-images.tar
 docker save --output "$image_archive" \
-  mithril-node:convergence mithril-control:convergence
+  mithril-node:convergence mithril-control:convergence \
+  mithril-node:upgrade-baseline mithril-control:upgrade-baseline
 
 materials=$work_a/materials
 install -d -m 700 "$materials"
@@ -642,6 +663,8 @@ remove_retained_kubernetes_resources() {
     helm --kubeconfig "$kubeconfig" uninstall mithril \
       --namespace "$system_namespace" --wait --timeout=180s >/dev/null
   fi
+  remote_kubectl -n "$system_namespace" delete pod forged-upgrade-installer \
+    --ignore-not-found --wait=true --timeout=120s >/dev/null
 }
 
 if [[ $reusing_environment == true ]]; then
@@ -982,10 +1005,31 @@ if [[ $reuse_mithril_state == true ]]; then
 else
   ca_bundle=$(base64 -w0 "$ca")
 fi
+node_image=mithril-node:upgrade-baseline
+control_image=mithril-control:upgrade-baseline
+qualify_state_preserving_upgrade=true
+if [[ $reuse_mithril_state == true ]]; then
+  retained_hook_digest_a=$("$provider" run "$vm_a" sudo sha256sum \
+    /usr/libexec/oci/hooks.d/mithril-oci-hook | awk '{print $1}')
+  retained_hook_digest_b=$("$provider" run "$vm_b" sudo sha256sum \
+    /usr/libexec/oci/hooks.d/mithril-oci-hook | awk '{print $1}')
+  [[ $retained_hook_digest_a == "$retained_hook_digest_b" ]] || {
+    echo "retained nodes have different runtime-hook versions" >&2
+    exit 1
+  }
+  if [[ $retained_hook_digest_a == "$current_hook_digest" ]]; then
+    node_image=mithril-node:convergence
+    control_image=mithril-control:convergence
+    qualify_state_preserving_upgrade=false
+  elif [[ $retained_hook_digest_a != "$baseline_hook_digest" ]]; then
+    echo "the retained runtime hook is not a known qualification version" >&2
+    exit 1
+  fi
+fi
 values=$work_a/values.yaml
 cat >"$values" <<EOF
 node:
-  image: mithril-node:convergence
+  image: $node_image
   imagePullPolicy: Never
   configHostPath: /etc/mithril/node.json
   identityHostPath: /etc/mithril/identity
@@ -1019,7 +1063,7 @@ node:
     runtimeTimeoutSeconds: 5
 control:
   enabled: true
-  image: mithril-control:convergence
+  image: $control_image
   imagePullPolicy: Never
   configSecretName: $control_config_secret
   statePersistentVolumeClaim: $control_state_claim
@@ -1036,6 +1080,11 @@ control:
     caBundle: $ca_bundle
     webhookTimeoutSeconds: 5
 EOF
+current_values=$work_a/values-current.yaml
+sed \
+  -e 's/mithril-node:upgrade-baseline/mithril-node:convergence/' \
+  -e 's/mithril-control:upgrade-baseline/mithril-control:convergence/' \
+  "$values" >"$current_values"
 helm --kubeconfig "$kubeconfig" upgrade --install mithril \
   "$repo_root/packaging/mithril/helm" --namespace "$system_namespace" \
   --values "$values"
@@ -1886,6 +1935,198 @@ else
   selected_vm=$vm_b
   other_vm=$vm_a
 fi
+
+if [[ $qualify_state_preserving_upgrade == true ]]; then
+  upgrade_candidate_before=$protected_candidate
+  upgrade_source_revision_before=$(jq -er \
+    '.active_targets[0].policy_source_revision_id' <<<"$selected_status")
+  upgrade_operation_before=$protected_operation
+  upgrade_predecessor_before=$protected_predecessor
+  upgrade_runtime_binding_before=$runtime_binding_before
+  upgrade_pod_uid_before=$(remote_kubectl -n "$workload_namespace" get pod protected \
+    -o jsonpath='{.metadata.uid}')
+  upgrade_container_before=$(remote_kubectl -n "$workload_namespace" get pod protected \
+    -o jsonpath='{.status.containerStatuses[0].containerID}')
+  control_pvc_uid_before=$(remote_kubectl -n "$system_namespace" get pvc \
+    "$control_state_claim" -o jsonpath='{.metadata.uid}')
+
+  for node in "$vm_a" "$vm_b"; do
+    [[ $("$provider" run "$node" sudo sha256sum \
+      /usr/libexec/oci/hooks.d/mithril-oci-hook | awk '{print $1}') \
+      == "$baseline_hook_digest" ]] || {
+      echo "the initial runtime hook does not contain the prior-version fixture on $node" >&2
+      exit 1
+    }
+  done
+
+  helm --kubeconfig "$kubeconfig" uninstall mithril \
+    --namespace "$system_namespace" --wait --timeout=180s >/dev/null
+  for node in "$vm_a" "$vm_b"; do
+    remote=$remote_a
+    [[ $node == "$vm_a" ]] || remote=$remote_b
+    assert_runtime_hook retained "$node" "$remote"
+    [[ $("$provider" run "$node" sudo sha256sum \
+      /usr/libexec/oci/hooks.d/mithril-oci-hook | awk '{print $1}') \
+      == "$baseline_hook_digest" ]] || {
+      echo "Helm uninstall changed the retained runtime hook on $node" >&2
+      exit 1
+    }
+  done
+
+  forged_upgrade=$work_a/forged-upgrade-installer.yaml
+  sed "s/MITHRIL_UPGRADE_NODE/$selected_node/" \
+    "$repo_root/crates/mithril-e2e/fixtures/convergence/forged-upgrade-installer-v1.yaml" \
+    >"$forged_upgrade"
+  "$provider" put "$vm_a" "$forged_upgrade" \
+    "$remote_a/forged-upgrade-installer.yaml"
+  remote_kubectl create -f "$remote_a/forged-upgrade-installer.yaml" >/dev/null
+  forged_sandbox_id=
+  forged_container_id=
+  for _attempt in {1..120}; do
+    forged_status=$(remote_kubectl -n "$system_namespace" get pod \
+      forged-upgrade-installer -o json 2>/dev/null || true)
+    forged_sandbox_id=$("$provider" run "$selected_vm" \
+      "sudo /usr/local/bin/k3s crictl pods --name forged-upgrade-installer -q | head -1" \
+      2>/dev/null || true)
+    forged_container_id=$(jq -er \
+      '.status.containerStatuses[0].containerID | sub("^containerd://"; "")' \
+      <<<"$forged_status" 2>/dev/null || true)
+    if [[ $forged_sandbox_id =~ ^[0-9a-f]{64}$ ]] &&
+        [[ $forged_container_id =~ ^[0-9a-f]{64}$ ]] &&
+        jq -e '
+          .status.phase == "Failed" and
+          .status.containerStatuses[0].started == false and
+          .status.containerStatuses[0].state.terminated.reason == "StartError" and
+          .status.containerStatuses[0].state.terminated.startedAt == "1970-01-01T00:00:00Z" and
+          (.status.containerStatuses[0].state.terminated.message |
+            contains("decision=DENY_NODE_UNAVAILABLE") and
+            contains("retained gate denied a non-recovery start"))
+        ' <<<"$forged_status" >/dev/null; then
+      forged_container_status=$("$provider" run "$selected_vm" sudo \
+        /usr/local/bin/k3s crictl inspect "$forged_container_id" 2>/dev/null || true)
+      if jq -e '
+          .info.pid == 0 and
+          .status.state == "CONTAINER_EXITED" and
+          .status.startedAt == "1970-01-01T00:00:00Z"
+        ' <<<"$forged_container_status" >/dev/null; then
+        break
+      fi
+    fi
+    [[ $_attempt -lt 120 ]] || {
+      echo "the forged installer did not reach sandbox-only denial: $forged_status" >&2
+      exit 1
+    }
+    sleep 1
+  done
+  [[ $("$provider" run "$selected_vm" sudo sha256sum \
+    /usr/libexec/oci/hooks.d/mithril-oci-hook | awk '{print $1}') \
+    == "$baseline_hook_digest" ]] || {
+    echo "the forged installer changed the retained runtime hook" >&2
+    exit 1
+  }
+  remote_kubectl -n "$system_namespace" delete pod forged-upgrade-installer \
+    --wait=true --timeout=120s >/dev/null
+
+  helm --kubeconfig "$kubeconfig" upgrade --install mithril \
+    "$repo_root/packaging/mithril/helm" --namespace "$system_namespace" \
+    --values "$current_values"
+  remote_kubectl -n "$system_namespace" rollout status daemonset/mithril-node \
+    --timeout=300s >/dev/null
+  retry_kubernetes_command 30 1 remote_kubectl -n "$system_namespace" \
+    rollout status deployment/mithril-control --timeout=10s >/dev/null
+  wait_node_projection "$node_a_name" true false
+  wait_node_projection "$node_b_name" true false
+
+  for node in "$vm_a" "$vm_b"; do
+    remote=$remote_a
+    [[ $node == "$vm_a" ]] || remote=$remote_b
+    assert_runtime_hook installed "$node" "$remote"
+    [[ $("$provider" run "$node" sudo sha256sum \
+      /usr/libexec/oci/hooks.d/mithril-oci-hook | awk '{print $1}') \
+      == "$current_hook_digest" ]] || {
+      echo "the upgraded runtime hook does not contain the current binary on $node" >&2
+      exit 1
+    }
+  done
+  [[ $(remote_kubectl -n "$system_namespace" get pvc "$control_state_claim" \
+    -o jsonpath='{.metadata.uid}') == "$control_pvc_uid_before" ]]
+  remote_kubectl -n "$system_namespace" get deployment mithril-control -o json | \
+    jq -e '.spec.template.spec.containers[0].image == "mithril-control:convergence"' \
+      >/dev/null
+  remote_kubectl -n "$system_namespace" get daemonset mithril-node -o json | jq -e '
+    .spec.template.spec.initContainers[0].image == "mithril-node:convergence" and
+    .spec.template.spec.containers[0].image == "mithril-node:convergence"
+  ' >/dev/null
+
+  upgraded_status=$(wait_runtime_delivery "$selected_node" "$profile_id")
+  jq -e \
+    --arg candidate "$upgrade_candidate_before" \
+    --arg operation "$upgrade_operation_before" \
+    --arg predecessor "$upgrade_predecessor_before" \
+    --arg source_revision "$upgrade_source_revision_before" \
+    --arg runtime_binding "$upgrade_runtime_binding_before" '
+      .active_candidate_content_id == $candidate and
+      .active_targets[0].operation == $operation and
+      (.active_targets[0].predecessor_candidate_content_id // "") == $predecessor and
+      .active_targets[0].policy_source_revision_id == $source_revision and
+      .active_targets[0].runtime_binding_id == $runtime_binding and
+      .control_acknowledged == true and
+      .activation_pending == false
+    ' <<<"$upgraded_status" >/dev/null
+  [[ $(remote_kubectl -n "$workload_namespace" get pod protected \
+    -o jsonpath='{.metadata.uid}') == "$upgrade_pod_uid_before" ]]
+  [[ $(remote_kubectl -n "$workload_namespace" get pod protected \
+    -o jsonpath='{.status.containerStatuses[0].containerID}') \
+    == "$upgrade_container_before" ]]
+  assert_live_exact_target "$selected_node" "$profile_id" \
+    "$upgrade_operation_before" "$upgrade_predecessor_before"
+
+  make_policy_manifest 2
+  remote_kubectl --as="$policy_subject" apply --server-side --validate=strict \
+    -f "$remote_a/policy-v2.yaml" >/dev/null
+  wait_policy_compiled
+  protected_candidate=$(wait_stable_live_replacement \
+    "$selected_node" "$profile_id" "$upgrade_candidate_before" \
+    "$upgrade_source_revision_before")
+  selected_status=$(node_status "$selected_node")
+  protected_operation=$(jq -er '.active_targets[0].operation' <<<"$selected_status")
+  protected_predecessor=$(jq -er \
+    '.active_targets[0].predecessor_candidate_content_id' <<<"$selected_status")
+  runtime_binding_before=$(jq -er '.active_targets[0].runtime_binding_id' \
+    <<<"$selected_status")
+  [[ $protected_operation == REPLACE &&
+     $protected_predecessor == "$upgrade_candidate_before" ]]
+
+  jq -n \
+    --arg baseline_hook_digest "$baseline_hook_digest" \
+    --arg current_hook_digest "$current_hook_digest" \
+    --arg control_pvc_uid "$control_pvc_uid_before" \
+    --arg pod_uid "$upgrade_pod_uid_before" \
+    --arg container_id "$upgrade_container_before" \
+    --arg forged_sandbox_id "$forged_sandbox_id" \
+    --arg forged_container_id "$forged_container_id" \
+    --arg candidate_before "$upgrade_candidate_before" \
+    --arg candidate_after "$protected_candidate" \
+    --arg predecessor "$protected_predecessor" '
+      {
+        schema_version: 1,
+        baseline_hook_digest: $baseline_hook_digest,
+        current_hook_digest: $current_hook_digest,
+        control_pvc_uid: $control_pvc_uid,
+        protected_pod_uid: $pod_uid,
+        protected_container_id: $container_id,
+        forged_installer_sandbox_id: $forged_sandbox_id,
+        forged_installer_container_id: $forged_container_id,
+        forged_installer_process_never_started: true,
+        candidate_before: $candidate_before,
+        candidate_after: $candidate_after,
+        predecessor_candidate: $predecessor,
+        control_state_reopened: true,
+        node_state_reopened: true
+      }
+    ' >"$output_directory/state-preserving-upgrade-result.json"
+fi
+
 container_identity_before=$(wait_running_container_identity \
   "$selected_vm" "$workload_namespace" protected)
 container_before=$(jq -er '.container_uri' <<<"$container_identity_before")
@@ -2435,9 +2676,9 @@ policy_before=$(node_status "$selected_node")
 candidate_before=$(jq -er '.active_candidate_content_id' <<<"$policy_before")
 source_revision_before=$(jq -er \
   '.active_targets[0].policy_source_revision_id' <<<"$policy_before")
-make_policy_manifest 2
+make_policy_manifest 3
 remote_kubectl --as="$policy_subject" apply --server-side --validate=strict \
-  -f "$remote_a/policy-v2.yaml" >/dev/null
+  -f "$remote_a/policy-v3.yaml" >/dev/null
 wait_policy_compiled
 candidate_after=$(wait_stable_live_replacement \
   "$selected_node" "$profile_id" "$candidate_before" "$source_revision_before")
@@ -2603,9 +2844,9 @@ wait_node_projection "$selected_node" true false
 wait_policy_delivery_empty "$selected_node"
 
 prepare_pod_markers protected
-make_policy_manifest 3
+make_policy_manifest 4
 remote_kubectl --as="$policy_subject" apply --server-side --validate=strict \
-  -f "$remote_a/policy-v3.yaml" >/dev/null
+  -f "$remote_a/policy-v4.yaml" >/dev/null
 wait_policy_compiled
 recreated_profile_id=$(remote_kubectl -n "$workload_namespace" get \
   workloadprotectionpolicy converter-policy -o jsonpath='{.metadata.uid}')

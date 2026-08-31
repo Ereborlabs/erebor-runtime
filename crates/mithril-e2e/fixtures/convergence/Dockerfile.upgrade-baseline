@@ -1,0 +1,10 @@
+ARG NODE_BASE=mithril-node:convergence
+ARG CONTROL_BASE=mithril-control:convergence
+FROM ${NODE_BASE} AS node
+RUN printf '\nMITHRIL_UPGRADE_BASELINE\n' >>/usr/local/bin/mithril-node \
+    && printf '\nMITHRIL_UPGRADE_BASELINE\n' >>/usr/local/bin/mithril-oci-hook
+
+FROM ${CONTROL_BASE} AS control
+USER 0:0
+RUN printf '\nMITHRIL_UPGRADE_BASELINE\n' >>/usr/local/bin/mithril-control
+USER 65532:65532
