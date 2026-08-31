@@ -1401,10 +1401,16 @@ of the privileged-Pod branch.
 
 Deleting Kubernetes objects is not authorization to relax node enforcement.
 An ordinary Helm uninstall removes the release objects. It leaves owned host
-runtime hooks and pinned BPF links, maps, and decisions in place. The absent
-node admission socket makes a matching protected start fail closed. Retained
-BPF state continues to govern existing bindings and the Phase 6.2 unmatched
-incident floor.
+runtime hooks, the OCI base spec, the containerd default-runtime fragment, and
+pinned BPF links, maps, and decisions in place. Containerd invokes the hook
+without a retained NRI process and without a RuntimeClass. The absent node
+admission socket makes a matching protected start fail closed. The retained
+hook rejects the exact hostile unmatched OCI shape before its initial process.
+It permits only the exact measured Mithril executable and
+security-sensitive OCI shape needed to recover the node owner. Kubernetes
+metadata is not recovery authority. Retained BPF state continues to govern
+existing bindings and denies the incident's first covered effect after a
+direct non-CRI bypass.
 
 Decommission uses an independent offline signing key. Kubernetes ServiceAccount
 credentials, a CRD, a label, an annotation, a Helm release, Control status, or
@@ -1429,9 +1435,11 @@ The node verifies the independent key, signature, exact cluster, node, current
 boot, expiry, and unused nonce. It refuses decommission while a protected
 runtime binding is live. It durably records the accepted nonce before it
 changes physical state. Control then removes scheduling readiness and
-quarantines the exact Node. The node closes admission, removes only its owned
-runtime-hook documents and binary, removes its pinned links and maps, and
-reads back absence. It durably records completion and acknowledges the exact
+quarantines the exact Node. The node closes admission and removes only its
+marked containerd fragment, OCI base spec, recovery manifest, hook documents,
+and hook binary. It restarts containerd and reads back that the default runtime
+no longer invokes the hook. It then removes its pinned links and maps and reads
+back absence. It durably records completion and acknowledges the exact
 authorization. Control removes only its readiness label, identity annotations,
 and quarantine taint after that acknowledgement. The operator can then remove
 the Helm release.
@@ -2462,7 +2470,7 @@ policy into the mechanisms that own each physical boundary.
 | Cgroup BPF | Enforces workload/device floors, connect/send address policy, packet fences, and some socket operations at cgroup boundaries. | Cgroup membership alone is not per-process intent. Packet hooks may lack a meaningful current task. |
 | TC/XDP/cgroup-skb | Drops actual packets, including established flows, after a response or final destination rewrite. | A packet does not reliably identify which of several sharing processes queued the bytes. Whole-socket/cgroup blast radius may be necessary. |
 | Traditional SELinux/AppArmor | Adds mature distribution-owned mandatory policy and stacking defense. | Mithril cannot assume its hook observes every earlier denial; ordering and audit coverage are measured. |
-| Supported runtime/admission extension | Lets Mithril prepare identity or reject a start at the exact point the stock interface documents. A later Seccomp evaluation may test whether a qualified NRI integration can adjust the OCI policy so the ordinary runtime installs it in the target. A separate target-context launcher integration may install Landlock. | Changing an OCI Seccomp field is not target-context execution and does not install Landlock. A callback cannot claim fields, ordering, or rejection behavior that its interface does not provide. It does not control hostile code already executing inside an admitted process. |
+| Supported runtime/admission extension | Lets Mithril prepare identity or reject a start at the exact point the stock interface documents. In the Kubernetes tier, Helm installs a marked OCI base spec on containerd's default CRI runtime. Containerd then invokes the retained hook directly. A later Seccomp evaluation may test whether a qualified NRI integration can adjust the OCI policy so the ordinary runtime installs it in the target. A separate target-context launcher integration may install Landlock. | The containerd base spec covers CRI starts, not direct non-CRI starts. Changing an OCI Seccomp field is not target-context execution and does not install Landlock. A callback cannot claim fields, ordering, or rejection behavior that its interface does not provide. It does not control hostile code already executing inside an admitted process. |
 
 Where the existing mount view and supported start path permit it, a worker can
 receive the three currently designed local layers without changing its

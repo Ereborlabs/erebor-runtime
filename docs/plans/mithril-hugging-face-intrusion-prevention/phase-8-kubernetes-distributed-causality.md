@@ -44,8 +44,9 @@ context unless exact request/object/binding identifiers close the join.
 
 ### D8.4 — Complete unmatched-workload and privileged-root floor
 
-Extend the Phase 6.2 incident floor to the complete architecture-approved
-typed runtime matrix for privileged mode, host namespaces, dangerous
+Extend the Phase 6.2 admission, retained containerd runtime gate, and BPF
+incident floor from the exact hostile OCI shape to the complete
+architecture-approved typed runtime matrix for privileged mode, host namespaces, dangerous
 capabilities, hostPath/devices, unsafe security settings, and unresolved
 roots. Normal OCI setup remains runtime-owned. Add signed, exact, expiring,
 bounded-use, physically consumed, and separately audited exceptions.

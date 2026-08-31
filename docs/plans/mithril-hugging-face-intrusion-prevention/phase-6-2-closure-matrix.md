@@ -19,7 +19,8 @@ approved policy amendment replaces `initialRole` with an explicit application
 entry, adds declared additional entries and one approved administrative entry,
 and retains `externalRole`. The Kubernetes fixture uses this schema and proved
 its declared entries. The physical evidence-failure, watch-compaction,
-network-partition, storage-outage, and final-uninstall cases remain `Not run`.
+network-partition, storage-outage, retained-gate uninstall, measured recovery,
+and authorized-decommission cases remain `Not run`.
 
 The direct stock-`runc` application-start lane proves the `PREPARED` to
 `ACTIVE` transition and dependency access with libc and the ELF loader absent
@@ -65,8 +66,8 @@ and cgroup binding.
 | `D6.2.8` | **Implemented, automated, and physically exercised.** | The non-Kubernetes VM and complete Kubernetes fixtures proved independent and reusable entry roles, application start, PostStart, PreStop, exec probes, approved administrative exec, external-entry denial, and scenario cleanup. |
 | `D6.2.9` | **Implemented, automated, and physically exercised.** | The fixture passed quarantine, same-name Node UID replacement, selector re-entry, node process restart, and host reboot with a new boot and label epoch. |
 | `D6.2.10` | **Implemented, automated, and physically exercised.** | Policy and container matching, immutable image pins, Pod mutation, update validation, binding validation, and scheduler choice passed through the current physical admission flow. |
-| `D6.2.11` | **Implemented, automated, and physically exercised.** | Exact selected-node delivery, activation, staged runtime fact equality, cgroup binding, runtime lifetime replacement, desired-inventory cleanup, and stock-runtime process release passed physically. |
-| `D6.2.12` | **Partial.** | The current chart, automated fixture, and manual case are implemented. The retained-cluster fixture and the independent manual run passed. Final uninstall cleanup remains `Not run`. |
+| `D6.2.11` | **Partial.** | Exact selected-node delivery, activation, staged runtime fact equality, cgroup binding, runtime lifetime replacement, desired-inventory cleanup, and stock-runtime process release passed physically. The retained containerd default-runtime gate, exact incident denial, measured recovery, and direct non-CRI BPF fallback remain unproved. |
+| `D6.2.12` | **Partial.** | The current chart, automated fixture, and manual case are implemented. The chart must still install and read back the retained containerd fragment, OCI base spec, hook, and recovery manifest. Ordinary uninstall, exact recovery, forged recovery rejection, and authorized decommission remain `Not run`. |
 | `D6.2.13` | **Implemented, automated, and physically exercised.** | The Kubernetes transaction proved every declared entry, the approved administrative entry, unmatched external denial, and no role inheritance. |
 
 ## Automated Proof Matrix
@@ -86,6 +87,7 @@ and cgroup binding.
 | Workload target | Persisted Pod UID, selected node, controller, ServiceAccount, container, and digest create one immutable exact target. | Pod deletion, UID reuse, node change, or container change retires the old target. |
 | Policy delivery | Only the selected node can inventory, fetch, verify, and acknowledge the target-bound candidate. | Every other node and boot rejects the candidate even when it has the same signed policy artifact. |
 | Runtime gate | The first `createRuntime` call stages facts only. The second call stays held until the node publishes and reads back the exact cgroup, TGID, binding, policy generation, and `PreparedContainer` state. | Missing candidate, changed stage, wrong policy annotations, TGID or cgroup mismatch, timeout, disconnect, active socket-owner replacement, and restart reject without release. |
+| Retained default-runtime gate | Containerd's default CRI runtime invokes the retained hook without NRI or a RuntimeClass. The exact hostile OCI shape rejects before its process runs. Exact measured Mithril recovery succeeds when the node socket is absent. | Ordinary Helm deletion leaves the integration active. A changed executable measurement or security-sensitive recovery field rejects. A direct non-CRI bypass reaches the retained BPF incident floor. |
 | Prepared container and entries | The exact prepared binding permits runtime setup. The application entry activates the binding. A declared PostStart can commit before or after activation. Later declared entries and an approved administrative entry install only their own roles. | Another binding, unmatched external root, ordinary administrative exec, failed or ambiguous entry match, expired state, or cgroup-only entry rejects. Explicit matching Deny remains effective, and runtime-created objects carry no separate grant. |
 | Retirement | A complete relist or target snapshot removes stale bundles from complete desired node inventory. The node retains live runtime protection and removes known local membership after runtime absence. A signed exception revocation closes only its runtime instance. | A partial relist, historical event, API loss, Control loss, or recreated exception cannot erase live base protection or restore consumed authority. |
 
@@ -112,7 +114,7 @@ classes, and marker state.
 | Node lifecycle | **Pass** | The run proved session loss, quarantine, same-name Node UID replacement, DaemonSet exclusion and re-entry, node process restart, and host reboot. |
 | Evidence failure variants | **Not run** | Automated tests pass. Physical duplicate, gap, reorder, storage failure, restart, and WAL truncation remain required. |
 | Watch and outage variants | **Not run** | Physical complete and partial relist, Control outage, API outage, and mixed rollout remain required. |
-| Installation cleanup | **Partial** | The retained run removed the prior release and checked hook cleanup on both hosts before installation. It retained the final release and VMs, so final uninstall cleanup remains `Not run`. |
+| Retained runtime integration | **Not run** | The physical run must retain healthy VMs and Kubernetes. It must remove only the Helm release and scenario Pods, read back the containerd default-runtime integration on both hosts, reject the exact hostile Pod, recover the exact Mithril Pods, reject a forged recovery, and remove the integration only through authorized decommission. |
 
 The procedure cleanup removed the test namespace and runtime classes. Control
 accepted the denial evidence before the node truncated the related WAL data.

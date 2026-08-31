@@ -3867,43 +3867,47 @@ kubelet / CRI caller
 
 ##### Cold-boot ordering and the DaemonSet circular dependency
 
-A DaemonSet-only node cannot provide fail-closed admission before its own Pod
-starts, and kubelet may start other Pods before that DaemonSet/NRI callback
-registers after reboot. Advertising enforce-from-boot from that packaging is
-abandoned.
+A DaemonSet and NRI callback cannot provide fail-closed admission before their
+own Pods start. Kubelet can start another Pod before the callback registers
+after reboot. The Kubernetes tier therefore does not depend on a retained NRI
+service.
 
-The preferred full tier installs the same single `mithril-node` binary as a
-host service ordered after the container runtime's control socket is available
-but before kubelet is allowed to schedule/start workloads. It loads/verifies
-links/maps/node floor, opens the local runtime admission endpoint, records a new
-boot coverage interval, and only then releases kubelet. There is still one
-gatherer, one event stream, and one WAL per node; Kubernetes may manage its
-configuration, but the enforcement owner is not bootstrapped by an unprotected
-workload container.
+Helm installs a marked OCI base spec and configuration fragment on
+containerd's default CRI runtime. Containerd invokes the retained Mithril hook
+for each later CRI container start. The integration does not require a
+RuntimeClass. Ordinary Helm deletion removes Kubernetes objects but does not
+remove the fragment, base spec, hook, recovery manifest, or pinned BPF state.
 
-An alternative Kubernetes-packaged full tier needs a tiny persistent
-runtime/shim admission gate. That gate is not a gatherer: it owns no policy
-compiler, telemetry stream, graph, or WAL. At boot it holds/rejects all starts
-except one exact signed Mithril bootstrap image/request under a fixed
-no-network/no-host-mutation budget. After the DaemonSet node process attests
-required links/maps and opens admission, the gate disables the bootstrap
-exception. A forged image/tag/Pod label cannot claim it; image digest, runtime
-request peer, node boot nonce, binary measurement, and one-use bootstrap slot
-all match.
+The retained hook is a gate, not a gatherer. It owns no policy compiler,
+telemetry stream, graph, or WAL. It rejects the exact Phase 6.2 hostile
+unmatched OCI shape before the initial process. A missing node socket also
+rejects a protected start. The only socket-free bootstrap exception is the
+exact measured Mithril recovery executable and its exact security-sensitive
+OCI shape. A forged image tag, Pod label, annotation, namespace, Helm release,
+or RuntimeClass cannot claim it. After recovery, the one `mithril-node` process
+verifies the retained BPF state, opens normal admission, and remains the only
+gatherer.
+
+The containerd base spec covers CRI starts. A caller that starts a task through
+a direct non-CRI path bypasses this gate, so retained BPF enforcement denies
+the hostile task's first covered effect. Only a valid offline decommission
+authorization removes the owned runtime integration and pinned BPF state.
 
 Packaging tiers are explicit:
 
 | Tier | Boot guarantee |
 | --- | --- |
 | Host service before kubelet | Full start admission after local boot attestation |
-| DaemonSet plus persistent non-gathering runtime gate | Full after exact bootstrap transaction |
+| Helm-installed containerd default-runtime gate plus DaemonSet | Exact retained incident denial and measured Mithril recovery; normal protected starts wait for node admission |
 | DaemonSet/NRI alone | `START_GAP`; reconcile/restart workloads before upgrading coverage, never first-exec prevention |
 
 `BOOT-ADMISSION-001` exercises cold boot with runtime then kubelet then node
 agent, reversed service timing, agent Pod reschedule, daemon crash, upgrade,
-and a forged bootstrap Pod. No non-bootstrap user marker may run before healthy
-admission; the real bootstrap cannot receive workload/network/host authority.
-In DaemonSet-only mode the same race must report `START_GAP`, not pass.
+ordinary Helm deletion, exact recovery, and a forged recovery Pod. The exact
+hostile user marker must not run while the retained gate is installed. The
+recovery process must match the installed executable measurement and exact OCI
+shape. In DaemonSet/NRI-only mode the same race must report `START_GAP`, not
+pass.
 
 Preferred mechanisms, in descending order of guarantee:
 

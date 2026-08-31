@@ -19,8 +19,10 @@ that the Kubernetes scheduler selects the exact node. Prove that Control sends
 the exact policy only to that node and that the initial container process does
 not run before local policy and cgroup-binding activation. Prove that one base
 policy and one bounded file exception converge without giving Control ownership
-of node activation or exception consumption. Prove that Phase 6 evidence
-reaches the production Control transaction before the node truncates its WAL.
+of node activation or exception consumption. Prove that containerd retains the
+exact incident gate after ordinary Helm deletion and permits only measured
+Mithril recovery. Prove that Phase 6 evidence reaches the production Control
+transaction before the node truncates its WAL.
 
 ## Current Physical Result
 
@@ -38,7 +40,8 @@ container restarts and one Control connection each. The result is
 The scenario removed its workload namespace, policy, exception, Pods, and
 marker state. It retained the two owned VMs, K3s cluster, and installed Mithril
 release. Watch compaction, network partition, storage outage, physical
-evidence-failure variants, and final uninstall cleanup remain `Not run`.
+evidence-failure variants, retained-gate uninstall, measured recovery, and
+authorized decommission remain `Not run`.
 
 The current-source automated rerun passed on 2026-08-29 with the same
 Kubernetes and containerd versions. It used two eligible Nodes and selected
@@ -75,9 +78,10 @@ run.
 ## Preflight
 
 1. Run the automated companion against the source under test.
-2. Record the Kubernetes, CRI-O or containerd, runc, OCI hook manager, and NRI
-   hook-injector versions. For containerd, verify that NRI and the hook-injector
-   are active. Verify that the runtime reads the configured hook directory.
+2. Record the Kubernetes, containerd, runc, and OCI runtime versions. On each
+   node, verify that containerd's default CRI runtime reads the marked Mithril
+   OCI base spec. Verify that the base spec invokes the retained Mithril hook.
+   Do not require NRI or a RuntimeClass.
 3. On each selected host, provision one unique `mithril-node` configuration
    and mTLS identity at the chart host paths. Verify that Control has the exact
    certificate digest for each node. Do not reuse one node ID or private key.
@@ -183,7 +187,7 @@ run.
     records the Pod, controller, ServiceAccount, container, pinned image,
     selected Node, node UID, node ID, boot ID, and label epoch. Verify only the
     selected node inventories and downloads the exact signed candidate.
-11. Observe the two ordered injected `createRuntime` hooks for the protected
+11. Observe the two ordered default-runtime `createRuntime` hooks for the protected
     container. Prove the first hook stages the exact container, cgroup,
     image, and Pod facts without runtime authority. Prove the initial PID
     remains held while the node verifies the same staged facts, CRI `Created`
@@ -263,6 +267,23 @@ run.
     `ControlHealth.Get` method. Record the queue, storage, watch, compile,
     rollout, target, node, evidence-cursor, and pending evidence counts. Verify
     that the reply has no policy, evidence, or secret payload.
+23. Remove the Helm release but keep both healthy VMs and the Kubernetes
+    cluster. On both nodes, read back the marked containerd fragment, OCI base
+    spec, hook binary, recovery manifest, and pinned BPF state. Create the exact
+    hostile Pod with privileged mode, host PID, `CAP_SYS_ADMIN`, host `/`
+    mounted at `/host`, and a command that reads `/host/etc/shadow` before it
+    writes a marker. Verify that the Pod does not write the marker. Verify that
+    the retained runtime gate records a start rejection.
+24. Reinstall the same Mithril release. Verify that only the exact measured
+    Mithril executable and security-sensitive OCI shape can start while the
+    node admission socket is absent. Change one recovery field and verify that
+    the forged recovery Pod rejects. After recovery, rerun every real
+    Kubernetes scenario in this runbook. Do not replace healthy VMs or the
+    Kubernetes cluster.
+25. Submit the exact signed decommission authorization. Verify that the owner
+    removes only its marked containerd fragment, OCI base spec, recovery
+    manifest, hook documents, hook binary, and BPF pins. Verify that it restarts
+    containerd and reads back the default runtime without the Mithril hook.
 
 ## Required Oracles
 
@@ -299,6 +320,10 @@ run.
 | External entry | An unmatched ordinary `kubectl exec`, direct `crictl exec`, or cgroup-entering task keeps the external or fail-closed role and denies before effect. |
 | Administrative entry | Only the signed one-use administrative slot installs the administrative role. An applicable exception can authorize only its exact compiled Deny. |
 | Gate failure | The runtime reports start failure at the bounded hook deadline and no application marker runs |
+| Helm deletion | The containerd default-runtime gate and pinned BPF state remain on both nodes; the exact hostile process does not write its marker |
+| Mithril recovery | Only the exact measured Mithril executable and security-sensitive OCI shape start without the node socket; a changed field rejects |
+| Direct non-CRI bypass | The retained BPF floor denies the exact hostile task's first covered effect |
+| Authorized decommission | Only the signed node authorization removes marked runtime files and pins; containerd restart and readback prove removal |
 | Runtime lifetime | Container restart and Pod UID replacement create new authority and cannot reuse the old binding |
 
 ## Required Artifacts And Pass Rule
