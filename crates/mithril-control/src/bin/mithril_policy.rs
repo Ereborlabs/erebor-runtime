@@ -1,9 +1,11 @@
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand, ValueEnum};
+use ed25519_dalek::SigningKey;
 use mithril_control::{
-    policy_custom_resource, HardSafetyConditionV1, PolicyArtifactOwner, PolicySignerTrustV1,
-    TrustGenerationV1, WorkloadProtectionPolicySpec,
+    policy_custom_resource, HardSafetyConditionV1, NodeDecommissionAuthorizationV1,
+    PolicyArtifactOwner, PolicySignerTrustV1, SignedNodeDecommissionV1, TrustGenerationV1,
+    WorkloadProtectionPolicySpec,
 };
 
 #[derive(Parser)]
@@ -48,6 +50,24 @@ enum Command {
         source: PathBuf,
         #[arg(long)]
         seal_request: PathBuf,
+        #[arg(long)]
+        signing_key: PathBuf,
+        #[arg(long)]
+        output: PathBuf,
+    },
+    SealNodeDecommission {
+        #[arg(long)]
+        cluster_uid: String,
+        #[arg(long)]
+        node_id: String,
+        #[arg(long)]
+        node_boot_id: String,
+        #[arg(long)]
+        expires_at_utc_ns: i64,
+        #[arg(long)]
+        nonce: String,
+        #[arg(long)]
+        signing_key_id: String,
         #[arg(long)]
         signing_key: PathBuf,
         #[arg(long)]
@@ -175,6 +195,27 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 artifact.compiled_profile.compiled_cells.len()
             );
         }
+        Command::SealNodeDecommission {
+            cluster_uid,
+            node_id,
+            node_boot_id,
+            expires_at_utc_ns,
+            nonce,
+            signing_key_id,
+            signing_key,
+            output,
+        } => {
+            let authorization = NodeDecommissionAuthorizationV1::new(
+                &cluster_uid,
+                node_id,
+                &node_boot_id,
+                expires_at_utc_ns,
+                &nonce,
+            )?;
+            let key = SigningKey::from_bytes(&read_signing_key(&signing_key)?);
+            let artifact = SignedNodeDecommissionV1::sign(&authorization, signing_key_id, &key)?;
+            std::fs::write(output, artifact.to_bytes()?)?;
+        }
         Command::Verify {
             artifact,
             public_key,
@@ -205,6 +246,20 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
     Ok(())
+}
+
+fn read_signing_key(path: &std::path::Path) -> Result<[u8; 32], Box<dyn std::error::Error>> {
+    let bytes = std::fs::read(path)?;
+    if bytes.len() == 32 {
+        return Ok(bytes
+            .try_into()
+            .map_err(|_| "signing key is not 32 bytes")?);
+    }
+    let text = std::str::from_utf8(&bytes)?.trim();
+    let decoded = hex::decode(text)?;
+    decoded
+        .try_into()
+        .map_err(|_| "signing key must be 32 raw bytes or 64 lowercase hex characters".into())
 }
 
 fn write_json(

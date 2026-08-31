@@ -6738,6 +6738,7 @@ mod tests {
             }],
             policy_candidates: Vec::new(),
             administrative_authorization: None,
+            decommission: None,
         }
     }
 }

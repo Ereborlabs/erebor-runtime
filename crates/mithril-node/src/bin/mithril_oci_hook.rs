@@ -165,7 +165,7 @@ impl OciHookOwner {
             base_spec = %result.base_spec_host_path.display()
         );
         if result.restart_required {
-            let service = Self::restart_k3s()?;
+            let service = RuntimeIntegrationOwner::restart_k3s()?;
             erebor_telemetry::info!(
                 "restarted K3s for the retained runtime integration",
                 decision = %"RUNTIME_INTEGRATION_RESTARTED",
@@ -192,50 +192,6 @@ impl OciHookOwner {
             destination: PathBuf::from(destination),
             read_only,
         })
-    }
-
-    fn restart_k3s() -> io::Result<&'static str> {
-        for service in ["k3s", "k3s-agent"] {
-            let active = std::process::Command::new("/usr/bin/nsenter")
-                .args([
-                    "--target",
-                    "1",
-                    "--mount",
-                    "--uts",
-                    "--ipc",
-                    "--net",
-                    "--pid",
-                    "--",
-                    "/usr/bin/systemctl",
-                    "is-active",
-                    "--quiet",
-                    service,
-                ])
-                .status()?;
-            if !active.success() {
-                continue;
-            }
-            let restarted = std::process::Command::new("/usr/bin/nsenter")
-                .args([
-                    "--target",
-                    "1",
-                    "--mount",
-                    "--uts",
-                    "--ipc",
-                    "--net",
-                    "--pid",
-                    "--",
-                    "/usr/bin/systemctl",
-                    "restart",
-                    service,
-                ])
-                .status()?;
-            if restarted.success() {
-                return Ok(service);
-            }
-            return Err(invalid_data("K3s restart failed"));
-        }
-        Err(invalid_data("no active K3s service exists on the host"))
     }
 
     async fn run_hook(args: RunArgsV1) -> Result<(), Box<dyn std::error::Error>> {

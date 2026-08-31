@@ -44,6 +44,13 @@ pub struct RuntimeIntegrationInstallResultV1 {
     pub base_spec_host_path: PathBuf,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RuntimeIntegrationDecommissionV1 {
+    pub owner: String,
+    pub hook_directory: PathBuf,
+    pub containerd_config_directory: PathBuf,
+}
+
 pub struct RuntimeIntegrationOwner {
     install: RuntimeIntegrationInstallV1,
 }
@@ -148,6 +155,184 @@ impl RuntimeIntegrationOwner {
             &self.install.log_filter,
         )?;
         Ok(())
+    }
+
+    pub fn decommission(input: &RuntimeIntegrationDecommissionV1) -> io::Result<&'static str> {
+        Self::decommission_with_restart(input, Self::restart_k3s)
+    }
+
+    fn decommission_with_restart(
+        input: &RuntimeIntegrationDecommissionV1,
+        restart: impl FnOnce() -> io::Result<&'static str>,
+    ) -> io::Result<&'static str> {
+        Self::validate_decommission(input)?;
+        let targets = Self::decommission_targets(input);
+        for target in &targets {
+            let marker = Self::decommission_marker(target)?;
+            let target_kind = fs::symlink_metadata(target).map(|value| value.file_type());
+            let marker_kind = fs::symlink_metadata(&marker).map(|value| value.file_type());
+            match (target_kind, marker_kind) {
+                (Err(target_error), Err(marker_error))
+                    if target_error.kind() == io::ErrorKind::NotFound
+                        && marker_error.kind() == io::ErrorKind::NotFound => {}
+                (Ok(target_kind), Ok(marker_kind))
+                    if target_kind.is_file()
+                        && marker_kind.is_file()
+                        && fs::read_to_string(&marker)?.trim_end() == input.owner => {}
+                (Err(target_error), Ok(marker_kind))
+                    if target_error.kind() == io::ErrorKind::NotFound
+                        && marker_kind.is_file()
+                        && fs::read_to_string(&marker)?.trim_end() == input.owner => {}
+                _ => {
+                    return Err(Self::invalid(&format!(
+                        "refusing to remove unowned or partial runtime path {}",
+                        target.display()
+                    )))
+                }
+            }
+        }
+        for target in &targets {
+            Self::remove_owned_target(target)?;
+        }
+        let service = restart()?;
+        Self::read_back_decommissioned(input)?;
+        Ok(service)
+    }
+
+    pub fn read_back_decommissioned(input: &RuntimeIntegrationDecommissionV1) -> io::Result<()> {
+        Self::validate_decommission(input)?;
+        for target in Self::decommission_targets(input) {
+            if target.exists() || Self::decommission_marker(&target)?.exists() {
+                return Err(Self::invalid(
+                    "runtime integration removal readback found an owned path",
+                ));
+            }
+        }
+        let config = fs::read_to_string(input.containerd_config_directory.join("config.toml"))?;
+        let owned_base_spec = format!(
+            "\"{}\"",
+            input
+                .containerd_config_directory
+                .join("mithril-base-spec.json")
+                .display()
+        );
+        let mut in_default_runtime = false;
+        for line in config.lines().map(str::trim) {
+            if line.starts_with('[') {
+                in_default_runtime =
+                    line == "[plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.runc]";
+            } else if in_default_runtime
+                && line.starts_with("base_runtime_spec")
+                && line.ends_with(&owned_base_spec)
+            {
+                return Err(Self::invalid(
+                    "containerd default runtime still invokes the Mithril base spec",
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    pub fn restart_k3s() -> io::Result<&'static str> {
+        for service in ["k3s", "k3s-agent"] {
+            let active = Command::new("/usr/bin/nsenter")
+                .args([
+                    "--target",
+                    "1",
+                    "--mount",
+                    "--uts",
+                    "--ipc",
+                    "--net",
+                    "--pid",
+                    "--",
+                    "/usr/bin/systemctl",
+                    "is-active",
+                    "--quiet",
+                    service,
+                ])
+                .status()?;
+            if !active.success() {
+                continue;
+            }
+            let restarted = Command::new("/usr/bin/nsenter")
+                .args([
+                    "--target",
+                    "1",
+                    "--mount",
+                    "--uts",
+                    "--ipc",
+                    "--net",
+                    "--pid",
+                    "--",
+                    "/usr/bin/systemctl",
+                    "restart",
+                    service,
+                ])
+                .status()?;
+            if restarted.success() {
+                return Ok(service);
+            }
+            return Err(Self::invalid("K3s restart failed"));
+        }
+        Err(Self::invalid("no active K3s service exists on the host"))
+    }
+
+    fn validate_decommission(input: &RuntimeIntegrationDecommissionV1) -> io::Result<()> {
+        if !(1..=253).contains(&input.owner.len())
+            || input.owner.contains(['\r', '\n'])
+            || !Self::clean_absolute(&input.hook_directory)
+            || !Self::clean_absolute(&input.containerd_config_directory)
+        {
+            return Err(Self::invalid(
+                "runtime integration decommission input is not canonical and bounded",
+            ));
+        }
+        Ok(())
+    }
+
+    fn decommission_targets(input: &RuntimeIntegrationDecommissionV1) -> [PathBuf; 4] {
+        [
+            input
+                .containerd_config_directory
+                .join("config-v3.toml.d/99-mithril.toml"),
+            input
+                .containerd_config_directory
+                .join("mithril-base-spec.json"),
+            input
+                .containerd_config_directory
+                .join("mithril-recovery.json"),
+            input.hook_directory.join("mithril-oci-hook"),
+        ]
+    }
+
+    fn decommission_marker(target: &Path) -> io::Result<PathBuf> {
+        let name = target
+            .file_name()
+            .ok_or_else(|| Self::invalid("owned path has no file name"))?
+            .to_string_lossy();
+        Ok(target.with_file_name(format!(".{name}.mithril-owner")))
+    }
+
+    fn remove_owned_target(target: &Path) -> io::Result<()> {
+        let marker = Self::decommission_marker(target)?;
+        match fs::remove_file(target) {
+            Ok(()) => Self::sync_parent(target)?,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
+        match fs::remove_file(&marker) {
+            Ok(()) => Self::sync_parent(&marker),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(error),
+        }
+    }
+
+    fn sync_parent(path: &Path) -> io::Result<()> {
+        File::open(
+            path.parent()
+                .ok_or_else(|| Self::invalid("owned path has no parent"))?,
+        )?
+        .sync_all()
     }
 
     fn install_from_spec(
@@ -573,7 +758,8 @@ mod tests {
     use crate::runtime_gate::RetainedRuntimeGate;
 
     use super::{
-        RuntimeIntegrationInstallV1, RuntimeIntegrationOwner, RuntimeRecoveryMountInputV1,
+        RuntimeIntegrationDecommissionV1, RuntimeIntegrationInstallV1, RuntimeIntegrationOwner,
+        RuntimeRecoveryMountInputV1,
     };
 
     #[test]
@@ -654,6 +840,30 @@ mod tests {
         let result = owner.install_from_spec(br#"{"ociVersion":"1.2.0"}"#)?;
         assert!(result.restart_required);
         owner.read_back()?;
+
+        let decommission = RuntimeIntegrationDecommissionV1 {
+            owner: "mithril-system/mithril".to_owned(),
+            hook_directory: hook_mount,
+            containerd_config_directory: containerd_mount.clone(),
+        };
+        let fragment = containerd_mount.join("config-v3.toml.d/99-mithril.toml");
+        fs::remove_file(&fragment)?;
+        fs::write(
+            containerd_mount.join("config.toml"),
+            format!(
+                "version = 3\n[plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.runc]\nbase_runtime_spec = \"{}\"\n",
+                containerd_mount.join("mithril-base-spec.json").display()
+            ),
+        )?;
+        let restarted = RuntimeIntegrationOwner::decommission_with_restart(&decommission, || {
+            fs::write(
+                containerd_mount.join("config.toml"),
+                "version = 3\n[plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.runc]\n",
+            )?;
+            Ok("k3s-agent")
+        })?;
+        assert_eq!(restarted, "k3s-agent");
+        RuntimeIntegrationOwner::read_back_decommissioned(&decommission)?;
         Ok(())
     }
 }

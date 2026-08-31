@@ -1,6 +1,7 @@
 mod administrative_exec;
 mod config;
 mod control;
+mod decommission;
 mod epoch;
 mod error;
 mod exact_object;
@@ -19,12 +20,13 @@ mod unix_socket;
 pub use config::{
     AdministrativeAuthorizationConfig, ContainerKindV1, ContainerRuntimeConfig, EvidenceConfig,
     ExactDeviceConfig, ExactDeviceType, ExactFileObjectConfig, InterceptorConfig, NodeConfig,
-    NodeControlConfig, PolicyCandidateConfig, RuntimeAdmissionConfig, RuntimeObservationConfig,
-    WorkloadBindingConfig,
+    NodeControlConfig, NodeDecommissionConfig, PolicyCandidateConfig, RuntimeAdmissionConfig,
+    RuntimeObservationConfig, WorkloadBindingConfig,
 };
 pub use control::{
     AdministrativeControlRequest, ControlConnection, NodeControlConnector, NodeControlMessage,
 };
+pub use decommission::{NodeDecommissionAcceptanceV1, NodeDecommissionOwner};
 pub use error::{Error, Result};
 pub use exact_object::ExactFileObjectResolver;
 pub use identity::{
@@ -61,7 +63,7 @@ pub use runtime_admission::{
 };
 pub use runtime_gate::{RetainedRuntimeDecisionV1, RetainedRuntimeGate};
 pub use runtime_integration::{
-    OciBaseSpecOwner, RuntimeIntegrationInstallResultV1, RuntimeIntegrationInstallV1,
-    RuntimeIntegrationOwner, RuntimeRecoveryMountInputV1,
+    OciBaseSpecOwner, RuntimeIntegrationDecommissionV1, RuntimeIntegrationInstallResultV1,
+    RuntimeIntegrationInstallV1, RuntimeIntegrationOwner, RuntimeRecoveryMountInputV1,
 };
 pub use trust::{InstalledTrustGenerationV1, TrustCache};

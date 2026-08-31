@@ -141,6 +141,17 @@ pub struct AdministrativeAuthorizationConfig {
     pub maximum_clock_skew_ns: i64,
 }
 
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NodeDecommissionConfig {
+    pub cluster_uid: String,
+    pub signing_key_id: String,
+    pub public_key_path: PathBuf,
+    pub runtime_integration_owner: String,
+    pub runtime_hook_directory: PathBuf,
+    pub containerd_config_directory: PathBuf,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ExactDeviceConfig {
@@ -252,6 +263,8 @@ pub struct NodeConfig {
     pub policy_candidates: Vec<PolicyCandidateConfig>,
     #[serde(default)]
     pub administrative_authorization: Option<AdministrativeAuthorizationConfig>,
+    #[serde(default)]
+    pub decommission: Option<NodeDecommissionConfig>,
 }
 
 impl NodeConfig {
@@ -360,6 +373,26 @@ impl NodeConfig {
                     && runtime.reconciliation_interval_ms > 0,
                 InvalidConfigurationSnafu {
                     reason: "container runtime requires absolute CRI and effect-controller cgroup paths plus a nonzero fallback reconciliation interval",
+                }
+            );
+        }
+        if let Some(decommission) = &self.decommission {
+            ensure!(
+                canonical_uuid(&decommission.cluster_uid)
+                    && (1..=128).contains(&decommission.signing_key_id.len())
+                    && (1..=253).contains(&decommission.runtime_integration_owner.len())
+                    && !decommission
+                        .runtime_integration_owner
+                        .contains(['\r', '\n'])
+                    && [
+                        &decommission.public_key_path,
+                        &decommission.runtime_hook_directory,
+                        &decommission.containerd_config_directory,
+                    ]
+                    .into_iter()
+                    .all(|path| clean_absolute_path(path)),
+                InvalidConfigurationSnafu {
+                    reason: "decommission requires one canonical cluster, key, owner, and path set",
                 }
             );
         }
@@ -636,6 +669,17 @@ fn canonical_uuid(value: &str) -> bool {
     uuid::Uuid::parse_str(value).is_ok_and(|uuid| uuid.hyphenated().to_string() == value)
 }
 
+fn clean_absolute_path(path: &Path) -> bool {
+    path.is_absolute()
+        && path.as_os_str().as_encoded_bytes().len() <= 4_096
+        && path.components().all(|component| {
+            matches!(
+                component,
+                std::path::Component::RootDir | std::path::Component::Normal(_)
+            )
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -736,6 +780,7 @@ mod tests {
             }],
             policy_candidates: Vec::new(),
             administrative_authorization: None,
+            decommission: None,
         }
     }
 

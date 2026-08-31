@@ -3454,6 +3454,7 @@ mod tests {
             workload_bindings: Vec::new(),
             policy_candidates: Vec::new(),
             administrative_authorization: None,
+            decommission: None,
         }
     }
 

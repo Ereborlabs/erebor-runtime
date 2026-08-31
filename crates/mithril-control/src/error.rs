@@ -77,6 +77,12 @@ pub enum Error {
         #[snafu(implicit)]
         location: Location,
     },
+    #[snafu(display("Mithril node decommission failed: {reason}"))]
+    Decommission {
+        reason: String,
+        #[snafu(implicit)]
+        location: Location,
+    },
     #[snafu(display("Mithril evidence state `{}` is invalid: {reason}", path.display()))]
     EvidenceState {
         path: PathBuf,
@@ -106,6 +112,7 @@ impl ErrorExt for Error {
             | Self::PolicyState { .. }
             | Self::EvidenceState { .. }
             | Self::ControlStore { .. }
+            | Self::Decommission { .. }
             | Self::AdministrativeApproval { .. } => StatusCode::InvalidArguments,
             Self::Io { .. } | Self::Tls { .. } | Self::Serve { .. } => StatusCode::External,
         }
@@ -124,6 +131,7 @@ impl ErrorExt for Error {
             | Self::PolicyState { .. }
             | Self::EvidenceState { .. }
             | Self::ControlStore { .. }
+            | Self::Decommission { .. }
             | Self::AdministrativeApproval { .. } => RetryHint::NonRetryable,
         }
     }
