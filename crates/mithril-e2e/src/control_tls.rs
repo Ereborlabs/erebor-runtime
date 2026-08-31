@@ -787,6 +787,150 @@ async fn mtls_evidence_stream_replays_after_disconnect_and_reuses_one_registered
 }
 
 #[tokio::test]
+async fn mtls_evidence_gap_survives_control_restart_and_closes_with_one_ack(
+) -> Result<(), Box<dyn StdError>> {
+    let directory = tempfile::tempdir()?;
+    let certificates = Certificates::issue(false)?;
+    let files = certificates.write(directory.path())?;
+    let store_path = directory.path().join("control-evidence");
+    let control = |store| {
+        ControlPlane::with_control_store(
+            vec![AllowedNodeIdentity {
+                node_id: "node-a".to_owned(),
+                certificate_sha256: certificates.node_digest(),
+                tenant_id: "00000000-0000-0001-0000-000000000002".to_owned(),
+            }],
+            TrustGenerationV1 {
+                generation: 1,
+                bundle_digest: "d".repeat(64),
+                policy_issuer_sequence_epoch: 0,
+                policy_signers: Vec::new(),
+            },
+            store,
+        )
+    };
+    let observations = EffectObservationStore::durable(
+        4,
+        directory.path().join("node-wal"),
+        EvidenceWalLimits {
+            maximum_retained_records: 10,
+            maximum_batch_records: 1,
+            ..EvidenceWalLimits::default()
+        },
+        ObservationCanonicalizer::new(
+            EvidenceIdV1::new(1, 2),
+            EvidenceIdV1::new(3, 4),
+            1,
+            EvidenceIdV1::from([7; 16]),
+        )?,
+    )?;
+    for source_sequence in 1..=3 {
+        observations.record_bytes(
+            erebor_interceptor_abi::EffectObservationV1 {
+                observed_boottime_ns: source_sequence,
+                source_sequence,
+                source_cpu_id: 0,
+                task_cookie: source_sequence,
+                reason: 9,
+                physical_result: 1,
+                effect_family: 1,
+                operation: 1,
+                ..erebor_interceptor_abi::EffectObservationV1::default()
+            }
+            .as_bytes(),
+        );
+    }
+    let batches = observations.next_evidence_batches();
+    assert_eq!(
+        batches
+            .iter()
+            .map(|batch| (batch.first_cursor, batch.last_cursor))
+            .collect::<Vec<_>>(),
+        vec![(1, 1), (2, 2), (3, 3)]
+    );
+    let source_id = batch_source_id(&batches[0])?;
+    let identity = EvidenceIntakeIdentityV1 {
+        tenant_id: EvidenceIdV1::new(1, 2).to_be_bytes(),
+        node_id: "node-a".to_owned(),
+        node_boot_id: [7; 16],
+        label_epoch: 1,
+        source_id,
+        source_epoch: 1,
+    };
+    let connector = |address| {
+        NodeControlConnector::new(files.node_config(address), "node-a".to_owned(), [7; 16])
+    };
+
+    let initial_store = ControlStore::open(&store_path)?;
+    let initial_intake = EvidenceIntakeOwner::from_store(initial_store.clone());
+    let initial_control = control(initial_store.clone())?;
+    let initial_address = free_address()?;
+    let (initial_shutdown, initial_server) =
+        start_server(initial_address, &files, initial_control.clone());
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    let mut trust = TrustCache::load(directory.path())?;
+    let mut connection = connector(initial_address)
+        .connect(registration(), false, &mut trust)
+        .await?;
+    connection.send_evidence_batch(batches[2].clone()).await?;
+    if connection.next_message().await.is_ok() {
+        return Err("Control acknowledged evidence across a cursor gap".into());
+    }
+    assert_eq!(initial_intake.contiguous_cursor(&identity)?, 0);
+    assert_eq!(initial_store.health()?.pending_evidence_records, 1);
+    assert_eq!(observations.pending_evidence_records(), 3);
+    drop(connection);
+    let _result = initial_shutdown.send(());
+    initial_server.await??;
+    drop(initial_control);
+    drop(initial_intake);
+    drop(initial_store);
+
+    let reopened_store = ControlStore::open(&store_path)?;
+    let reopened_intake = EvidenceIntakeOwner::from_store(reopened_store.clone());
+    assert_eq!(reopened_intake.contiguous_cursor(&identity)?, 0);
+    assert_eq!(reopened_store.health()?.pending_evidence_records, 1);
+    let reopened_control = control(reopened_store.clone())?;
+    let reopened_address = free_address()?;
+    let (reopened_shutdown, reopened_server) =
+        start_server(reopened_address, &files, reopened_control);
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    let mut connection = connector(reopened_address)
+        .connect(registration(), false, &mut trust)
+        .await?;
+    connection
+        .send_evidence_group(batches[..2].to_vec())
+        .await?;
+    let NodeControlMessage::EvidenceAck(acknowledgement) = connection.next_message().await? else {
+        return Err("Control returned no cumulative evidence acknowledgement".into());
+    };
+    assert_eq!(acknowledgement.contiguous_cursor, 3);
+    assert_eq!(reopened_intake.contiguous_cursor(&identity)?, 3);
+    assert_eq!(reopened_store.health()?.pending_evidence_records, 0);
+
+    connection.send_evidence_group(batches.clone()).await?;
+    let NodeControlMessage::EvidenceAck(duplicate_acknowledgement) =
+        connection.next_message().await?
+    else {
+        return Err("Control returned no acknowledgement for an exact retry".into());
+    };
+    assert_eq!(duplicate_acknowledgement, acknowledgement);
+    assert!(observations.acknowledge_evidence(acknowledgement)?);
+    assert_eq!(observations.pending_evidence_records(), 0);
+    assert_eq!(
+        reopened_intake
+            .store()
+            .accepted_evidence_records(&identity)?
+            .len(),
+        3
+    );
+    drop(connection);
+    let _result = reopened_shutdown.send(());
+    reopened_server.await??;
+    Ok(())
+}
+
+#[tokio::test]
 async fn mtls_storage_failure_withholds_ack_until_replay_is_durable(
 ) -> Result<(), Box<dyn StdError>> {
     let directory = tempfile::tempdir()?;
