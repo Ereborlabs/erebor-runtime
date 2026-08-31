@@ -80,6 +80,21 @@ This keeps policy anti-replay state and unconsumed evidence on both sides of
 the durable transaction. A retained integration with an incomplete environment
 record fails before Helm uninstall.
 
+Run the direct-runc upgrade gate before the Kubernetes upgrade test:
+
+```bash
+crates/mithril-e2e/harness/vm/two-node-convergence.sh \
+  --lightweight-only \
+  --reuse-environment \
+    /tmp/mithril-protected-start-evidence/retained-environment.json \
+  --output-directory /tmp/mithril-upgrade-lightweight
+```
+
+This lane reuses one healthy retained VM. It does not build images, replace
+Kubernetes resources, or start Mithril Pods. It proves the CRI sandbox,
+changed installer, forged installer, and exact recovery decisions through the
+same production OCI hook that the Kubernetes lane uses.
+
 Run the automated outage recovery qualification against a healthy retained
 two-node environment only after the lightweight outage tests pass:
 

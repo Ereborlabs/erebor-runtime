@@ -14,6 +14,7 @@ output_directory=
 keep_vms=false
 manual_environment=false
 protected_start_only=false
+lightweight_only=false
 reuse_environment=
 k3s_version=${MITHRIL_VM_K3S_VERSION:-v1.35.5+k3s1}
 reuse_images=${MITHRIL_VM_REUSE_IMAGES:-false}
@@ -29,12 +30,11 @@ admission_tls_secret=mithril-admission-tls-$run_id
 reuse_mithril_state=false
 retained_mithril_state_ready=false
 entry_effect_capture_pids=()
-lightweight_remote=
 runtime_sockets_held=false
 held_runtime_socket=$runtime_hook_socket.gate-$run_id
 
 usage() {
-  echo "usage: $0 [--provider PATH] [--output-directory PATH] [--keep-vms] [--manual-environment] [--protected-start-only] [--reuse-environment PATH]" >&2
+  echo "usage: $0 [--provider PATH] [--output-directory PATH] [--keep-vms] [--manual-environment] [--protected-start-only] [--lightweight-only] [--reuse-environment PATH]" >&2
 }
 
 while (($#)); do
@@ -62,6 +62,11 @@ while (($#)); do
       protected_start_only=true
       shift
       ;;
+    --lightweight-only)
+      lightweight_only=true
+      keep_vms=true
+      shift
+      ;;
     --reuse-environment)
       (($# >= 2)) || { usage; exit 2; }
       reuse_environment=$2
@@ -83,7 +88,11 @@ done
   exit 2
 }
 
-for command in base64 cargo docker helm jq openssl sed sha256sum timeout; do
+required_commands=(cargo jq timeout)
+if [[ $lightweight_only == false ]]; then
+  required_commands+=(base64 docker helm openssl sed sha256sum)
+fi
+for command in "${required_commands[@]}"; do
   command -v "$command" >/dev/null || {
     echo "required command is not installed: $command" >&2
     exit 2
@@ -167,7 +176,7 @@ if [[ -n $reuse_environment ]]; then
       ${owner_a[1]} =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ &&
       ${#owner_b[@]} -eq 2 && ${owner_b[0]} == "$vm_b" &&
       ${owner_b[1]} =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ &&
-      -r $work_a/kubeconfig.yaml ]] || {
+      ( $lightweight_only == true || -r $work_a/kubeconfig.yaml ) ]] || {
     echo "retained environment ownership records are invalid" >&2
     exit 2
   }
@@ -180,6 +189,75 @@ else
   vm_a=mithril-runtime-qualification-$$1
   vm_b=mithril-runtime-qualification-$$2
   export MITHRIL_VM_KNOWN_HOSTS=$work_a/known_hosts
+fi
+[[ $lightweight_only == false || $reusing_environment == true ]] || {
+  echo "--lightweight-only requires --reuse-environment" >&2
+  exit 2
+}
+
+run_lightweight_upgrade_probe() {
+  local vm=$1
+  local remote_root=$2
+  local hook=$3
+  local remote=$remote_root/runtime-gate-lightweight-$run_id
+
+  "$provider" run "$vm" mkdir -p "$remote"
+  "$provider" put "$vm" "$repo_root/target/debug/mithril-effect-test" \
+    "$remote/mithril-effect-test"
+  "$provider" put "$vm" "$hook" "$remote/mithril-oci-hook"
+  "$provider" run "$vm" sudo "$remote/mithril-effect-test" \
+    --repo-root "$remote" runc-retained-runtime-gate-probe \
+    --output-directory "$remote/evidence" \
+    --runc-path /var/lib/rancher/k3s/data/current/bin/runc \
+    --hook-path "$remote/mithril-oci-hook"
+  "$provider" get "$vm" \
+    "$remote/evidence/runc-retained-runtime-gate-probe.json" \
+    "$output_directory/runc-retained-runtime-gate-probe.json"
+  jq -e '
+    .hostile_container_denied == true and
+    .hostile_process_never_started == true and
+    .hostile_decision_logged == true and
+    .cri_sandbox_allowed == true and
+    .cri_sandbox_process_started == true and
+    .cri_sandbox_decision_logged == true and
+    .forged_cri_sandbox_denied == true and
+    .forged_cri_sandbox_process_never_started == true and
+    .forged_cri_sandbox_decision_logged == true and
+    .exact_recovery_allowed == true and
+    .exact_recovery_process_started == true and
+    .exact_recovery_decision_logged == true and
+    .exact_installer_allowed == true and
+    .exact_installer_process_started == true and
+    .changed_installer_allowed == true and
+    .changed_installer_process_started == true and
+    .changed_installer_decision_logged == true and
+    .forged_installer_denied == true and
+    .forged_installer_process_never_started == true and
+    .forged_installer_decision_logged == true and
+    .changed_recovery_binary_denied == true and
+    .changed_recovery_binary_process_never_started == true and
+    .changed_recovery_binary_decision_logged == true and
+    .changed_recovery_denied == true and
+    .changed_recovery_process_never_started == true and
+    .unavailable_decision_logged == true and
+    .host_stock_spec_generated == true and
+    .fixture_root_removed == true
+  ' "$output_directory/runc-retained-runtime-gate-probe.json" >/dev/null
+  "$provider" run "$vm" sudo rm -rf -- "$remote"
+}
+
+if [[ $lightweight_only == true ]]; then
+  echo "Building the lightweight retained-upgrade probe"
+  (cd -- "$repo_root" && cargo build --locked \
+    -p mithril-e2e --bin mithril-effect-test \
+    -p mithril-node --bin mithril-oci-hook)
+  "$provider" wait "$vm_a"
+  remote_a=/var/tmp/$vm_a
+  "$provider" run "$vm_a" mkdir -p "$remote_a"
+  run_lightweight_upgrade_probe "$vm_a" "$remote_a" \
+    "$repo_root/target/debug/mithril-oci-hook"
+  echo "Mithril lightweight upgrade qualification passed"
+  exit 0
 fi
 ssh_public_key=${MITHRIL_VM_SSH_PUBLIC_KEY:-$HOME/.ssh/id_rsa.pub}
 created_a=false
@@ -297,11 +375,6 @@ cleanup() {
   set +e
   stop_entry_effect_capture
   restore_runtime_sockets || cleanup_failed=true
-  if [[ -n $lightweight_remote && $cluster_created == true ]]; then
-    "$provider" run "$vm_a" sudo rm -rf -- "$lightweight_remote" \
-      || cleanup_failed=true
-    lightweight_remote=
-  fi
   if ((original_status != 0)) && [[ $cluster_created == true ]]; then
     collect_mithril_diagnostics "$output_directory" "$system_namespace" \
       "$workload_namespace" || cleanup_failed=true
@@ -521,35 +594,8 @@ if [[ $reusing_environment == true ]]; then
   fi
 fi
 
-lightweight_remote=$remote_a/runtime-gate-lightweight-$run_id
-"$provider" run "$vm_a" mkdir -p "$lightweight_remote"
-"$provider" put "$vm_a" "$repo_root/target/debug/mithril-effect-test" \
-  "$lightweight_remote/mithril-effect-test"
-"$provider" put "$vm_a" "$work_a/mithril-oci-hook" \
-  "$lightweight_remote/mithril-oci-hook"
-"$provider" run "$vm_a" sudo "$lightweight_remote/mithril-effect-test" \
-  --repo-root "$lightweight_remote" runc-retained-runtime-gate-probe \
-  --output-directory "$lightweight_remote/evidence" \
-  --runc-path /var/lib/rancher/k3s/data/current/bin/runc \
-  --hook-path "$lightweight_remote/mithril-oci-hook"
-"$provider" get "$vm_a" \
-  "$lightweight_remote/evidence/runc-retained-runtime-gate-probe.json" \
-  "$output_directory/runc-retained-runtime-gate-probe.json"
-jq -e '
-  .hostile_container_denied == true and
-  .hostile_process_never_started == true and
-  .hostile_decision_logged == true and
-  .exact_recovery_allowed == true and
-  .exact_recovery_process_started == true and
-  .exact_recovery_decision_logged == true and
-  .changed_recovery_denied == true and
-  .changed_recovery_process_never_started == true and
-  .unavailable_decision_logged == true and
-  .host_stock_spec_generated == true and
-  .fixture_root_removed == true
-' "$output_directory/runc-retained-runtime-gate-probe.json" >/dev/null
-"$provider" run "$vm_a" sudo rm -rf -- "$lightweight_remote"
-lightweight_remote=
+run_lightweight_upgrade_probe "$vm_a" "$remote_a" \
+  "$work_a/mithril-oci-hook"
 
 remote_kubectl() {
   local command

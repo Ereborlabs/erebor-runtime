@@ -18,6 +18,7 @@ pub enum RetainedRuntimeDecisionV1 {
     AllowHealthy,
     AllowInstaller,
     AllowRecovery,
+    AllowSandbox,
     AdmitProtected,
     DenyHostile,
     DenyUnavailable,
@@ -83,6 +84,8 @@ struct OciCapabilitiesV1 {
 #[derive(Debug, Deserialize)]
 struct OciRootV1 {
     path: PathBuf,
+    #[serde(default)]
+    readonly: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -142,6 +145,9 @@ impl RetainedRuntimeGate {
         }
         if endpoint_available {
             return Ok(RetainedRuntimeDecisionV1::AllowHealthy);
+        }
+        if config.is_cri_sandbox(state_annotations) {
+            return Ok(RetainedRuntimeDecisionV1::AllowSandbox);
         }
         if let Some(decision) = self.recovery.recovery_decision(bundle, &config)? {
             return Ok(decision);
@@ -342,6 +348,33 @@ impl RuntimeRecoveryEntryV1 {
 }
 
 impl OciRuntimeConfigV1 {
+    fn is_cri_sandbox(&self, state_annotations: &BTreeMap<String, String>) -> bool {
+        let annotation = |name: &str| {
+            self.annotations
+                .get(name)
+                .or_else(|| state_annotations.get(name))
+                .map(String::as_str)
+        };
+        annotation("io.kubernetes.cri.container-type") == Some("sandbox")
+            && annotation("io.kubernetes.cri.podsandbox.image-name")
+                .is_some_and(|value| !value.is_empty() && value.len() <= 4_096)
+            && annotation("io.kubernetes.cri.sandbox-id").is_some_and(|value| {
+                value.len() == 64
+                    && value
+                        .bytes()
+                        .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+            })
+            && self.process.args == ["/pause"]
+            && self.process.no_new_privileges
+            && !self.process.capabilities.contains("CAP_SYS_ADMIN")
+            && self.root.readonly
+            && self
+                .mounts
+                .iter()
+                .filter(|mount| mount.is_bind())
+                .all(OciMountV1::is_read_only)
+    }
+
     fn is_protected(&self, state_annotations: &BTreeMap<String, String>) -> bool {
         self.annotations
             .get(PROFILE_ID_ANNOTATION)
@@ -556,6 +589,34 @@ mod tests {
             })
         }
 
+        fn cri_sandbox_config() -> serde_json::Value {
+            serde_json::json!({
+                "process": {
+                    "args": ["/pause"],
+                    "capabilities": {
+                        "bounding": ["CAP_CHOWN", "CAP_NET_RAW"],
+                        "effective": ["CAP_CHOWN", "CAP_NET_RAW"],
+                        "permitted": ["CAP_CHOWN", "CAP_NET_RAW"]
+                    },
+                    "noNewPrivileges": true
+                },
+                "root": {"path": "rootfs", "readonly": true},
+                "mounts": [
+                    {"destination": "/etc/resolv.conf", "source": "/var/lib/kubelet/pods/uid/resolv.conf", "type": "bind", "options": ["rbind", "ro"]}
+                ],
+                "linux": {"namespaces": [
+                    {"type": "pid"},
+                    {"type": "mount"},
+                    {"type": "network"}
+                ]},
+                "annotations": {
+                    "io.kubernetes.cri.container-type": "sandbox",
+                    "io.kubernetes.cri.podsandbox.image-name": "registry.k8s.io/pause:3.10",
+                    "io.kubernetes.cri.sandbox-id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                }
+            })
+        }
+
         fn gate(&self) -> Result<RetainedRuntimeGate, Box<dyn std::error::Error>> {
             Ok(RetainedRuntimeGate::open(&self.manifest)?)
         }
@@ -605,6 +666,36 @@ mod tests {
         fs::write(
             fixture.bundle.join("config.json"),
             serde_json::to_vec(&wrong_owner)?,
+        )?;
+        assert_eq!(
+            fixture
+                .gate()?
+                .decide(&fixture.bundle, &BTreeMap::new(), false)?,
+            RetainedRuntimeDecisionV1::DenyUnavailable
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn unavailable_gate_allows_only_an_inert_cri_sandbox() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let fixture = Fixture::new()?;
+        let mut config = Fixture::cri_sandbox_config();
+        fs::write(
+            fixture.bundle.join("config.json"),
+            serde_json::to_vec(&config)?,
+        )?;
+        assert_eq!(
+            fixture
+                .gate()?
+                .decide(&fixture.bundle, &BTreeMap::new(), false)?,
+            RetainedRuntimeDecisionV1::AllowSandbox
+        );
+
+        config["process"]["args"] = serde_json::json!(["/bin/sh", "-c", "true"]);
+        fs::write(
+            fixture.bundle.join("config.json"),
+            serde_json::to_vec(&config)?,
         )?;
         assert_eq!(
             fixture

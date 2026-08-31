@@ -264,6 +264,14 @@ impl OciHookOwner {
                     );
                     return Ok(());
                 }
+                RetainedRuntimeDecisionV1::AllowSandbox => {
+                    erebor_telemetry::info!(
+                        "retained runtime gate allowed a CRI Pod sandbox during node recovery",
+                        decision = %"ALLOW_CRI_SANDBOX",
+                        container_id = %state.id
+                    );
+                    return Ok(());
+                }
                 RetainedRuntimeDecisionV1::DenyUnavailable => {
                     if client.available().await {
                         erebor_telemetry::debug!(
