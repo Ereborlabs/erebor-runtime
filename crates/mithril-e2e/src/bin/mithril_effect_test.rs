@@ -54,6 +54,18 @@ enum Command {
         #[arg(long)]
         retained_bpf_object: PathBuf,
     },
+    RuncRetainedRuntimeGateProbe {
+        #[arg(long)]
+        output_directory: PathBuf,
+        #[arg(long)]
+        runc_path: PathBuf,
+        #[arg(long)]
+        hook_path: PathBuf,
+        #[arg(long, default_value = "/usr/local/bin/k3s")]
+        k3s_path: PathBuf,
+        #[arg(long, default_value = "/usr/bin/nsenter")]
+        nsenter_path: PathBuf,
+    },
     #[command(hide = true)]
     Child {
         #[arg(long)]
@@ -144,6 +156,28 @@ fn run() -> Result<()> {
                 &result,
             )?;
             println!("Mithril direct runc entry-role probe passed");
+            Ok(())
+        }
+        Command::RuncRetainedRuntimeGateProbe {
+            output_directory,
+            runc_path,
+            hook_path,
+            k3s_path,
+            nsenter_path,
+        } => {
+            let runner = EffectTestRunner::new(cli.repo_root);
+            let result = runner.runc_retained_runtime_gate_probe(
+                &output_directory,
+                &runc_path,
+                &hook_path,
+                &k3s_path,
+                &nsenter_path,
+            )?;
+            runner.write_json(
+                &output_directory.join("runc-retained-runtime-gate-probe.json"),
+                &result,
+            )?;
+            println!("Mithril direct runc retained runtime-gate probe passed");
             Ok(())
         }
         Command::Child {

@@ -20,7 +20,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
 
 FROM debian:trixie-slim AS node
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates \
+    && apt-get install -y --no-install-recommends ca-certificates util-linux \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=build /out/mithril-node /usr/local/bin/mithril-node
 COPY --from=build /out/mithril-oci-hook /usr/local/bin/mithril-oci-hook

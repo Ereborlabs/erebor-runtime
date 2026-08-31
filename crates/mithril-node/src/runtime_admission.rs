@@ -39,6 +39,7 @@ pub struct RuntimeAdmissionRequestV1 {
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum RuntimeAdmissionOperationV1 {
+    Health,
     StageRuntimeFacts,
     PrepareContainer,
     PrepareDeclaredEntries,
@@ -102,8 +103,18 @@ pub struct RuntimeAdmissionClient {
 }
 
 impl RuntimeAdmissionRequestV1 {
+    fn is_health_probe(&self) -> bool {
+        self.operation == RuntimeAdmissionOperationV1::Health
+            && self.container_id.is_empty()
+            && self.initial_pid.is_none()
+            && self.cgroup_path.is_none()
+            && self.oci_bundle.is_none()
+            && self.annotations.is_empty()
+    }
+
     pub(crate) fn kubernetes_identity(&self) -> Result<KubernetesRuntimeIdentityV1> {
         let operation_is_canonical = match self.operation {
+            RuntimeAdmissionOperationV1::Health => false,
             RuntimeAdmissionOperationV1::StageRuntimeFacts => {
                 self.initial_pid.is_none()
                     && self.cgroup_path.as_deref().is_some_and(clean_cgroup_path)
@@ -384,6 +395,20 @@ impl RuntimeAdmissionClient {
         })?
     }
 
+    pub async fn available(&self) -> bool {
+        let request = RuntimeAdmissionRequestV1 {
+            operation: RuntimeAdmissionOperationV1::Health,
+            container_id: String::new(),
+            initial_pid: None,
+            cgroup_path: None,
+            oci_bundle: None,
+            annotations: BTreeMap::new(),
+        };
+        self.submit(&request)
+            .await
+            .is_ok_and(|response| response.allowed && response.reason_code == "ADMISSION_READY")
+    }
+
     async fn exchange(
         &self,
         mut stream: UnixStream,
@@ -635,9 +660,24 @@ impl RuntimeAdmissionServer {
                 }
             );
             bytes.pop();
-            let request = serde_json::from_slice(&bytes).context(JsonSnafu {
-                path: "runtime-admission-request",
-            })?;
+            let request: RuntimeAdmissionRequestV1 =
+                serde_json::from_slice(&bytes).context(JsonSnafu {
+                    path: "runtime-admission-request",
+                })?;
+            if request.is_health_probe() {
+                let bytes = serde_json::to_vec(&RuntimeAdmissionResponseV1 {
+                    allowed: true,
+                    reason_code: "ADMISSION_READY".to_owned(),
+                })
+                .context(JsonSnafu {
+                    path: "runtime-admission-response",
+                })?;
+                stream
+                    .write_all(&bytes)
+                    .await
+                    .context(IoSnafu { path: socket_path })?;
+                return Ok(());
+            }
             let mut trailing = [0_u8; 1];
             let dispatched = tokio::select! {
                 result = Self::dispatch(request, requests, deadline) => result?,

@@ -1323,6 +1323,9 @@ impl NodeChassis {
             return Ok(());
         }
         match envelope.request.operation {
+            crate::runtime_admission::RuntimeAdmissionOperationV1::Health => {
+                unreachable!("runtime admission health requests do not enter the node queue")
+            }
             crate::runtime_admission::RuntimeAdmissionOperationV1::StageRuntimeFacts => {
                 self.answer_runtime_stage(envelope).await
             }

@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
+use std::io::Write as _;
 use std::os::unix::ffi::OsStrExt as _;
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
@@ -102,6 +103,23 @@ pub struct RuncEntryRoleProbeV1 {
     pub application_policy_not_inherited: bool,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct RuncRetainedRuntimeGateProbeV1 {
+    pub schema_version: u32,
+    pub runc_version: String,
+    pub hostile_container_denied: bool,
+    pub hostile_process_never_started: bool,
+    pub hostile_decision_logged: bool,
+    pub exact_recovery_allowed: bool,
+    pub exact_recovery_process_started: bool,
+    pub exact_recovery_decision_logged: bool,
+    pub changed_recovery_denied: bool,
+    pub changed_recovery_process_never_started: bool,
+    pub unavailable_decision_logged: bool,
+    pub host_stock_spec_generated: bool,
+    pub fixture_root_removed: bool,
+}
+
 struct RuncPolicyFixture {
     artifact_path: PathBuf,
     replacement_artifact_path: PathBuf,
@@ -120,6 +138,425 @@ struct RuncContainer {
     state_root: PathBuf,
     container_id: String,
     cgroup_path: PathBuf,
+}
+
+struct RetainedRuntimeGateRuncFixture {
+    fixture_root: PathBuf,
+    bundle: PathBuf,
+    marker_directory: PathBuf,
+    manifest: PathBuf,
+    runc_path: PathBuf,
+    hook_path: PathBuf,
+    k3s_path: PathBuf,
+    output_directory: PathBuf,
+    recovery_args: Vec<String>,
+    stock_config: serde_json::Value,
+}
+
+struct RetainedRuntimeGateCaseResult {
+    success: bool,
+    stdout: String,
+    stderr: String,
+}
+
+impl RetainedRuntimeGateRuncFixture {
+    fn create(
+        output_directory: &Path,
+        runc_path: &Path,
+        hook_path: &Path,
+        k3s_path: &Path,
+        nsenter_path: &Path,
+    ) -> Result<Self> {
+        let fixture_root = output_directory.join("runc-retained-runtime-gate-fixture");
+        ensure!(
+            !fixture_root.exists(),
+            InvalidInputSnafu {
+                path: &fixture_root,
+                reason: "the direct runc retained-gate fixture must start absent",
+            }
+        );
+        let bundle = fixture_root.join("bundle");
+        let rootfs = bundle.join("rootfs");
+        let marker_directory = fixture_root.join("markers");
+        fs::create_dir_all(rootfs.join("bin")).context(IoSnafu { path: &rootfs })?;
+        fs::create_dir(&marker_directory).context(IoSnafu {
+            path: &marker_directory,
+        })?;
+        Self::copy_executable(&rootfs, Path::new("/bin/sh"), Path::new("/bin/sh"))?;
+        Self::copy_executable(&rootfs, nsenter_path, nsenter_path)?;
+        run_checked(
+            Command::new(runc_path).args(["spec", "--bundle", bundle.to_string_lossy().as_ref()]),
+            runc_path,
+        )?;
+        let config_path = bundle.join("config.json");
+        let stock_config = serde_json::from_slice(
+            &fs::read(&config_path).context(IoSnafu { path: &config_path })?,
+        )
+        .context(JsonSnafu { path: &config_path })?;
+
+        let shell = rootfs.join("bin/sh");
+        let shell_digest = format!(
+            "{:x}",
+            Sha256::digest(fs::read(&shell).context(IoSnafu { path: &shell })?)
+        );
+        let mut recovery_args = vec![
+            "/bin/sh".to_owned(),
+            "-c".to_owned(),
+            "printf RECOVERY_ALLOWED >/result/recovery".to_owned(),
+        ];
+        recovery_args.extend((0..35).map(|index| format!("recovery-argument-{index}")));
+        let manifest = fixture_root.join("mithril-recovery.json");
+        fs::write(
+            &manifest,
+            serde_json::to_vec_pretty(&json!({
+                "version": 1,
+                "entries": [{
+                    "executable": "/bin/sh",
+                    "executableSha256": shell_digest,
+                    "args": recovery_args,
+                    "requiredMounts": [{
+                        "source": marker_directory,
+                        "destination": "/result",
+                        "readOnly": false
+                    }]
+                }]
+            }))
+            .context(JsonSnafu { path: &manifest })?,
+        )
+        .context(IoSnafu { path: &manifest })?;
+
+        Ok(Self {
+            fixture_root,
+            bundle,
+            marker_directory,
+            manifest,
+            runc_path: runc_path.to_path_buf(),
+            hook_path: hook_path.to_path_buf(),
+            k3s_path: k3s_path.to_path_buf(),
+            output_directory: output_directory.to_path_buf(),
+            recovery_args,
+            stock_config,
+        })
+    }
+
+    fn copy_executable(rootfs: &Path, source: &Path, destination: &Path) -> Result<()> {
+        let destination = destination.strip_prefix("/").map_err(|error| {
+            InvalidInputSnafu {
+                path: destination,
+                reason: format!("rootfs executable path is not absolute: {error}"),
+            }
+            .build()
+        })?;
+        let destination = rootfs.join(destination);
+        if let Some(parent) = destination.parent() {
+            fs::create_dir_all(parent).context(IoSnafu { path: parent })?;
+        }
+        fs::copy(source, &destination).context(IoSnafu { path: source })?;
+        let output = Command::new("ldd").arg(source).output().context(IoSnafu {
+            path: Path::new("ldd"),
+        })?;
+        ensure!(
+            output.status.success(),
+            CommandSnafu {
+                program: "ldd".to_owned(),
+                reason: String::from_utf8_lossy(&output.stderr).trim().to_owned(),
+            }
+        );
+        for dependency in String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .filter_map(ldd_dependency_path)
+        {
+            let source = Path::new(&dependency);
+            let relative = source.strip_prefix("/").map_err(|error| {
+                InvalidInputSnafu {
+                    path: source,
+                    reason: format!("dynamic-loader path is not absolute: {error}"),
+                }
+                .build()
+            })?;
+            let target = rootfs.join(relative);
+            if let Some(parent) = target.parent() {
+                fs::create_dir_all(parent).context(IoSnafu { path: parent })?;
+            }
+            fs::copy(source, &target).context(IoSnafu { path: source })?;
+        }
+        Ok(())
+    }
+
+    fn run_hostile(&self) -> Result<RetainedRuntimeGateCaseResult> {
+        let mut config = self.stock_config("hostile")?;
+        config["process"]["args"] = json!([
+            "/bin/sh",
+            "-c",
+            "read line </host/etc/shadow; printf HOSTILE_RAN >/result/hostile"
+        ]);
+        self.add_bind_mount(&mut config, Path::new("/"), Path::new("/host"), false)?;
+        self.run_case("hostile", config)
+    }
+
+    fn run_exact_recovery(&self) -> Result<RetainedRuntimeGateCaseResult> {
+        self.run_case("exact-recovery", self.exact_recovery_config()?)
+    }
+
+    fn run_changed_recovery(&self) -> Result<RetainedRuntimeGateCaseResult> {
+        let mut config = self.stock_config("changed-recovery")?;
+        config["process"]["args"] = json!([
+            "/bin/sh",
+            "-c",
+            "printf CHANGED_RECOVERY_RAN >/result/changed-recovery"
+        ]);
+        self.run_case("changed-recovery", config)
+    }
+
+    fn run_host_stock_spec(&self) -> Result<RetainedRuntimeGateCaseResult> {
+        let mut config = self.stock_config("host-stock-spec")?;
+        // nsenter needs SYS_PTRACE to open the target namespace and SYS_ADMIN
+        // plus SYS_CHROOT to join its mount namespace.
+        config["process"]["capabilities"] = json!({
+            "bounding": ["CAP_SYS_ADMIN", "CAP_SYS_CHROOT", "CAP_SYS_PTRACE"],
+            "effective": ["CAP_SYS_ADMIN", "CAP_SYS_CHROOT", "CAP_SYS_PTRACE"],
+            "permitted": ["CAP_SYS_ADMIN", "CAP_SYS_CHROOT", "CAP_SYS_PTRACE"]
+        });
+        config
+            .as_object_mut()
+            .ok_or_else(|| {
+                InvalidInputSnafu {
+                    path: self.bundle.join("config.json"),
+                    reason: "the generated runc spec is not an object",
+                }
+                .build()
+            })?
+            .remove("hooks");
+        config["process"]["args"] = json!([
+            "/usr/bin/nsenter",
+            "--target",
+            "1",
+            "--mount",
+            "--",
+            self.k3s_path,
+            "ctr",
+            "oci",
+            "spec"
+        ]);
+        self.run_case("host-stock-spec", config)
+    }
+
+    fn stock_config(&self, case: &str) -> Result<serde_json::Value> {
+        let config_path = self.bundle.join("config.json");
+        let mut config = self.stock_config.clone();
+        config["process"]["terminal"] = json!(false);
+        config["process"]["cwd"] = json!("/");
+        config["process"]["env"] = json!(["PATH=/bin"]);
+        config["process"]["noNewPrivileges"] = json!(false);
+        config["process"]["capabilities"] = json!({
+            "bounding": ["CAP_SYS_ADMIN"],
+            "effective": ["CAP_SYS_ADMIN"],
+            "permitted": ["CAP_SYS_ADMIN"]
+        });
+        config["root"]["path"] = json!("rootfs");
+        config["root"]["readonly"] = json!(false);
+        config["linux"]["cgroupsPath"] =
+            json!(format!("/mithril-runc-gate-{}-{case}", std::process::id()));
+        let namespaces = config["linux"]["namespaces"]
+            .as_array_mut()
+            .ok_or_else(|| {
+                InvalidInputSnafu {
+                    path: &config_path,
+                    reason: "the generated runc spec has no namespace array",
+                }
+                .build()
+            })?;
+        let pid_namespace = namespaces
+            .iter_mut()
+            .find(|namespace| namespace["type"] == "pid")
+            .ok_or_else(|| {
+                InvalidInputSnafu {
+                    path: &config_path,
+                    reason: "the generated runc spec has no PID namespace",
+                }
+                .build()
+            })?;
+        pid_namespace["path"] = json!("/proc/1/ns/pid");
+        config["annotations"] = json!({
+            "io.kubernetes.cri.container-type": "container",
+            "io.kubernetes.cri.container-id": format!("{:064x}", Sha256::digest(case.as_bytes()))
+        });
+        config["hooks"] = json!({
+            "createRuntime": [{
+                "path": self.hook_path,
+                "args": [
+                    "mithril-oci-hook", "run", "--stage", "stage-runtime-facts",
+                    "--socket", self.fixture_root.join("absent-runtime-admission.sock"),
+                    "--recovery-manifest", self.manifest,
+                    "--timeout-ms", "100"
+                ],
+                "env": ["RUST_LOG=debug"],
+                "timeout": 2
+            }]
+        });
+        self.add_bind_mount(
+            &mut config,
+            &self.marker_directory,
+            Path::new("/result"),
+            false,
+        )?;
+        Ok(config)
+    }
+
+    fn exact_recovery_config(&self) -> Result<serde_json::Value> {
+        let mut config = self.stock_config("exact-recovery")?;
+        config["process"]["args"] = json!(self.recovery_args);
+        Ok(config)
+    }
+
+    fn exact_recovery_log(&self) -> Result<String> {
+        let config_path = self.bundle.join("config.json");
+        fs::write(
+            &config_path,
+            serde_json::to_vec_pretty(&self.exact_recovery_config()?)
+                .context(JsonSnafu { path: &config_path })?,
+        )
+        .context(IoSnafu { path: &config_path })?;
+        let state = serde_json::to_vec(&json!({
+            "id": format!("{:064x}", Sha256::digest(b"exact-recovery-log")),
+            "pid": 1,
+            "bundle": self.bundle,
+            "annotations": {}
+        }))
+        .context(JsonSnafu { path: &config_path })?;
+        let mut child = Command::new(&self.hook_path)
+            .args([
+                "run",
+                "--stage",
+                "stage-runtime-facts",
+                "--socket",
+                self.fixture_root
+                    .join("absent-runtime-admission.sock")
+                    .to_string_lossy()
+                    .as_ref(),
+                "--recovery-manifest",
+                self.manifest.to_string_lossy().as_ref(),
+                "--timeout-ms",
+                "100",
+            ])
+            .env("RUST_LOG", "info")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .context(IoSnafu {
+                path: &self.hook_path,
+            })?;
+        child
+            .stdin
+            .take()
+            .ok_or_else(|| {
+                InvalidInputSnafu {
+                    path: &self.hook_path,
+                    reason: "the direct hook log probe has no stdin",
+                }
+                .build()
+            })?
+            .write_all(&state)
+            .context(IoSnafu {
+                path: &self.hook_path,
+            })?;
+        let output = child.wait_with_output().context(IoSnafu {
+            path: &self.hook_path,
+        })?;
+        ensure!(
+            output.status.success() && output.stdout.is_empty(),
+            CommandSnafu {
+                program: self.hook_path.display().to_string(),
+                reason: String::from_utf8_lossy(&output.stderr).trim().to_owned(),
+            }
+        );
+        Ok(String::from_utf8_lossy(&output.stderr).into_owned())
+    }
+
+    fn add_bind_mount(
+        &self,
+        config: &mut serde_json::Value,
+        source: &Path,
+        destination: &Path,
+        read_only: bool,
+    ) -> Result<()> {
+        let config_path = self.bundle.join("config.json");
+        let mounts = config["mounts"].as_array_mut().ok_or_else(|| {
+            InvalidInputSnafu {
+                path: &config_path,
+                reason: "the generated runc spec has no mount array",
+            }
+            .build()
+        })?;
+        mounts.push(json!({
+            "destination": destination,
+            "type": "bind",
+            "source": source,
+            "options": if read_only { vec!["rbind", "ro"] } else { vec!["rbind", "rw"] }
+        }));
+        Ok(())
+    }
+
+    fn run_case(
+        &self,
+        case: &str,
+        config: serde_json::Value,
+    ) -> Result<RetainedRuntimeGateCaseResult> {
+        let config_path = self.bundle.join("config.json");
+        fs::write(
+            &config_path,
+            serde_json::to_vec_pretty(&config).context(JsonSnafu { path: &config_path })?,
+        )
+        .context(IoSnafu { path: &config_path })?;
+        let container_id = format!("{:064x}", Sha256::digest(case.as_bytes()));
+        let state_root = self.fixture_root.join("runc-state");
+        fs::create_dir_all(&state_root).context(IoSnafu { path: &state_root })?;
+        let output = Command::new(&self.runc_path)
+            .args(["--root", state_root.to_string_lossy().as_ref()])
+            .args(["run", "--bundle", self.bundle.to_string_lossy().as_ref()])
+            .arg(&container_id)
+            .output()
+            .context(IoSnafu {
+                path: &self.runc_path,
+            })?;
+        let _cleanup = Command::new(&self.runc_path)
+            .args(["--root", state_root.to_string_lossy().as_ref()])
+            .args(["delete", "--force", &container_id])
+            .output();
+        let stdout_path = self
+            .output_directory
+            .join(format!("runc-gate-{case}.stdout"));
+        let stderr_path = self
+            .output_directory
+            .join(format!("runc-gate-{case}.stderr"));
+        fs::write(&stdout_path, &output.stdout).context(IoSnafu { path: &stdout_path })?;
+        fs::write(&stderr_path, &output.stderr).context(IoSnafu { path: &stderr_path })?;
+        Ok(RetainedRuntimeGateCaseResult {
+            success: output.status.success(),
+            stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+        })
+    }
+
+    fn marker_exists(&self, name: &str) -> bool {
+        self.marker_directory.join(name).is_file()
+    }
+
+    fn cleanup(&self) -> Result<()> {
+        if self.fixture_root.exists() {
+            fs::remove_dir_all(&self.fixture_root).context(IoSnafu {
+                path: &self.fixture_root,
+            })?;
+        }
+        Ok(())
+    }
+}
+
+impl Drop for RetainedRuntimeGateRuncFixture {
+    fn drop(&mut self) {
+        let _result = self.cleanup();
+    }
 }
 
 impl RuncContainer {
@@ -352,6 +789,82 @@ impl Drop for RuncContainer {
 }
 
 impl EffectTestRunner {
+    pub fn runc_retained_runtime_gate_probe(
+        &self,
+        output_directory: &Path,
+        runc_path: &Path,
+        hook_path: &Path,
+        k3s_path: &Path,
+        nsenter_path: &Path,
+    ) -> Result<RuncRetainedRuntimeGateProbeV1> {
+        for path in [runc_path, hook_path, k3s_path, nsenter_path] {
+            ensure!(
+                path.is_absolute() && path.is_file(),
+                InvalidInputSnafu {
+                    path,
+                    reason: "the direct runc retained-gate input must be an existing absolute file",
+                }
+            );
+        }
+        fs::create_dir_all(output_directory).context(IoSnafu {
+            path: output_directory,
+        })?;
+        let fixture = RetainedRuntimeGateRuncFixture::create(
+            output_directory,
+            runc_path,
+            hook_path,
+            k3s_path,
+            nsenter_path,
+        )?;
+        let hostile = fixture.run_hostile()?;
+        let recovery = fixture.run_exact_recovery()?;
+        let changed = fixture.run_changed_recovery()?;
+        let host_stock_spec = fixture.run_host_stock_spec()?;
+        let recovery_log = fixture.exact_recovery_log()?;
+        let host_stock_spec_generated = host_stock_spec.success
+            && serde_json::from_str::<serde_json::Value>(&host_stock_spec.stdout)
+                .ok()
+                .and_then(|spec| spec.get("ociVersion").cloned())
+                .is_some();
+
+        let result = RuncRetainedRuntimeGateProbeV1 {
+            schema_version: 1,
+            runc_version: command_text(Command::new(runc_path).arg("--version"), runc_path)?,
+            hostile_container_denied: !hostile.success,
+            hostile_process_never_started: !fixture.marker_exists("hostile"),
+            hostile_decision_logged: hostile.stderr.contains("decision=DENY_HOSTILE"),
+            exact_recovery_allowed: recovery.success,
+            exact_recovery_process_started: fixture.marker_exists("recovery"),
+            exact_recovery_decision_logged: recovery_log.contains("decision=ALLOW_EXACT_RECOVERY"),
+            changed_recovery_denied: !changed.success,
+            changed_recovery_process_never_started: !fixture.marker_exists("changed-recovery"),
+            unavailable_decision_logged: changed.stderr.contains("decision=DENY_NODE_UNAVAILABLE"),
+            host_stock_spec_generated,
+            fixture_root_removed: false,
+        };
+        ensure!(
+            result.hostile_container_denied
+                && result.hostile_process_never_started
+                && result.hostile_decision_logged
+                && result.exact_recovery_allowed
+                && result.exact_recovery_process_started
+                && result.exact_recovery_decision_logged
+                && result.changed_recovery_denied
+                && result.changed_recovery_process_never_started
+                && result.unavailable_decision_logged
+                && result.host_stock_spec_generated,
+            InvalidInputSnafu {
+                path: output_directory,
+                reason: "the direct runc retained-gate oracle failed; inspect its case logs",
+            }
+        );
+        fixture.cleanup()?;
+        Ok(RuncRetainedRuntimeGateProbeV1 {
+            fixture_root_removed: !fixture.fixture_root.exists(),
+            ..result
+        })
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn runc_entry_role_runtime_probe(
         &self,

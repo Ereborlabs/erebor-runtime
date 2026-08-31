@@ -35,6 +35,12 @@ entry admission, unmatched external-entry denial, and role-policy isolation.
 The dynamic loader and libraries are absent from policy and run under the
 admitted entry's default authority.
 
+The lane compiles a second production identity object as retained state. It
+starts that object, activates the real policy, and restarts the kernel host
+with the bundled object. The result requires the same map IDs and canonical
+link pin paths, a changed program replacement, the same running application
+identity, and the same path-tree denial after restart.
+
 Run only the protected Kubernetes application-start transaction in a fresh
 two-node cluster:
 
@@ -67,8 +73,12 @@ crates/mithril-e2e/harness/vm/two-node-convergence.sh \
 ```
 
 The reuse lane validates both VM ownership records. It keeps both VMs and the
-K3s cluster. It replaces the Mithril release and the protected workload. Each
-run uses a new Node state path and Control PVC. Prior evidence stays retained.
+K3s cluster. It replaces the Mithril release and the protected workload. A
+retained runtime integration reuses the exact Node state path, Control PVC,
+Control configuration Secret, admission TLS Secret, and host Node identity.
+This keeps policy anti-replay state and unconsumed evidence on both sides of
+the durable transaction. A retained integration with an incomplete environment
+record fails before Helm uninstall.
 
 Run the automated outage recovery qualification against a healthy retained
 two-node environment only after the lightweight outage tests pass:

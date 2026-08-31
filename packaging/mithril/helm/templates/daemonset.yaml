@@ -4,23 +4,26 @@
 {{- $cleanContainerRuntimeSocket := clean $containerRuntimeSocket }}
 {{- $containerRuntimeDirectory := dir $containerRuntimeSocket }}
 {{- $runtimeHookOwner := printf "%s/%s" .Release.Namespace .Release.Name }}
-{{- $runtimeHookConfigDirectory := required "node.runtimeHook.hostConfigDirectory is required" .Values.node.runtimeHook.hostConfigDirectory }}
-{{- $runtimeHookConfigParent := dir $runtimeHookConfigDirectory }}
-{{- $runtimeHookConfigBase := base $runtimeHookConfigDirectory }}
-{{- $runtimeHookInjectorEnabled := and .Values.node.runtimeHook.install .Values.node.runtimeHook.injector.enabled }}
-{{- $legacyRuntimeHookBinaryDirectory := "/opt/mithril/bin" }}
-{{- $migrateLegacyRuntimeHook := ne .Values.node.runtimeHook.hostBinaryDirectory $legacyRuntimeHookBinaryDirectory }}
+{{- $runtimeHookBinaryDirectory := required "node.runtimeHook.hostBinaryDirectory is required" .Values.node.runtimeHook.hostBinaryDirectory }}
+{{- $containerdConfigDirectory := required "node.runtimeHook.containerdConfigHostDirectory is required" .Values.node.runtimeHook.containerdConfigHostDirectory }}
+{{- $k3sBinaryHostPath := required "node.runtimeHook.k3sBinaryHostPath is required" .Values.node.runtimeHook.k3sBinaryHostPath }}
 {{- if or (ne $runtimeAdmissionSocket $cleanRuntimeAdmissionSocket) (ne (dir $runtimeAdmissionSocket) "/run/mithril") }}
 {{- fail "node.runtimeHook.socketPath must name a normalized socket directly within /run/mithril" }}
 {{- end }}
 {{- if or (ne $containerRuntimeSocket $cleanContainerRuntimeSocket) (eq $containerRuntimeDirectory "/") }}
 {{- fail "node.containerRuntimeSocket must name a normalized socket below a non-root directory" }}
 {{- end }}
-{{- if or (ne $runtimeHookConfigDirectory (clean $runtimeHookConfigDirectory)) (eq $runtimeHookConfigParent "/") }}
-{{- fail "node.runtimeHook.hostConfigDirectory must be normalized below a non-root parent" }}
+{{- if or (ne $runtimeHookBinaryDirectory (clean $runtimeHookBinaryDirectory)) (eq (dir $runtimeHookBinaryDirectory) "/") }}
+{{- fail "node.runtimeHook.hostBinaryDirectory must be normalized below a non-root parent" }}
 {{- end }}
-{{- if and $runtimeHookInjectorEnabled (not (has $runtimeHookConfigDirectory (list "/etc/containers/oci/hooks.d" "/usr/share/containers/oci/hooks.d" "/usr/libexec/oci/hooks.d"))) }}
-{{- fail "the stock runtime-hook injector requires one supported OCI hook directory" }}
+{{- if or (ne $containerdConfigDirectory (clean $containerdConfigDirectory)) (eq (dir $containerdConfigDirectory) "/") }}
+{{- fail "node.runtimeHook.containerdConfigHostDirectory must be normalized below a non-root parent" }}
+{{- end }}
+{{- if or (ne $k3sBinaryHostPath (clean $k3sBinaryHostPath)) (eq (dir $k3sBinaryHostPath) "/") }}
+{{- fail "node.runtimeHook.k3sBinaryHostPath must be normalized below a non-root parent" }}
+{{- end }}
+{{- if le (mul (int .Values.node.runtimeHook.runtimeTimeoutSeconds) 1000) (int .Values.node.runtimeHook.timeoutMs) }}
+{{- fail "node.runtimeHook.runtimeTimeoutSeconds must exceed node.runtimeHook.timeoutMs" }}
 {{- end }}
 apiVersion: v1
 kind: ServiceAccount
@@ -64,48 +67,63 @@ spec:
       affinity:
 {{ toYaml . | indent 8 }}
 {{- end }}
-      # The init container completes hook installation or cleanup before node startup.
+      # This measured installer is one of the two exact recovery executables.
       initContainers:
-        - name: manage-runtime-hook
+        - name: install-runtime-gate
           image: {{ .Values.node.image | quote }}
           imagePullPolicy: {{ .Values.node.imagePullPolicy }}
-          command: ["/bin/sh", "/hook-source/runtime-hook-owner.sh"]
+          command: ["/usr/local/bin/mithril-oci-hook", "install"]
           args:
-{{- if .Values.node.runtimeHook.install }}
-            - install
+            - --owner
             - {{ $runtimeHookOwner | quote }}
-            - /usr/local/bin/mithril-oci-hook
-            - /hook-source/98-mithril-runtime-stage.json
-            - /hook-source/99-mithril-runtime-admission.json
-            - /hook-source/99-mithril-runtime-entry-preparation.json
-{{- else }}
-            - cleanup
-            - {{ $runtimeHookOwner | quote }}
+            - --hook-host-directory
+            - {{ $runtimeHookBinaryDirectory | quote }}
+            - --containerd-host-directory
+            - {{ $containerdConfigDirectory | quote }}
+            - --k3s-host-path
+            - {{ $k3sBinaryHostPath | quote }}
+            - --socket
+            - {{ $runtimeAdmissionSocket | quote }}
+            - --timeout-ms
+            - {{ .Values.node.runtimeHook.timeoutMs | quote }}
+            - --runtime-timeout-seconds
+            - {{ .Values.node.runtimeHook.runtimeTimeoutSeconds | quote }}
+            - --log-filter
+            - {{ .Values.node.logFilter | quote }}
+{{- range $mount := list
+      (printf "%s=/etc/mithril/node.json" $.Values.node.configHostPath)
+      (printf "%s=/etc/mithril/identity" $.Values.node.identityHostPath)
+      "/sys/kernel/btf=/sys/kernel/btf"
+      "/sys/kernel/tracing=/sys/kernel/tracing"
+      "/sys/fs/cgroup=/sys/fs/cgroup"
+      (printf "%s=%s" $containerRuntimeDirectory $containerRuntimeDirectory) }}
+            - --node-read-only-mount
+            - {{ $mount | quote }}
 {{- end }}
-            - /host-hook-bin
-            - {{ printf "/host-hook-config-parent/%s" $runtimeHookConfigBase | quote }}
-{{- if $migrateLegacyRuntimeHook }}
-            - /host-hook-legacy-bin
+{{- range $mount := list
+      "/sys/fs/bpf=/sys/fs/bpf"
+      (printf "%s=/var/lib/mithril" $.Values.node.stateHostPath)
+      (printf "%s=/run/mithril" $.Values.node.runHostPath)
+      "/run/erebor-interceptor=/run/erebor-interceptor" }}
+            - --node-read-write-mount
+            - {{ $mount | quote }}
 {{- end }}
+          env:
+            - name: RUST_LOG
+              value: {{ .Values.node.logFilter | quote }}
           securityContext:
             runAsUser: 0
             runAsGroup: 0
-            allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
-            capabilities:
-              drop: ["ALL"]
+            privileged: true
           volumeMounts:
-            - name: runtime-hook-source
-              mountPath: /hook-source
-              readOnly: true
             - name: runtime-hook-bin
               mountPath: /host-hook-bin
-            - name: runtime-hook-config
-              mountPath: /host-hook-config-parent
-{{- if $migrateLegacyRuntimeHook }}
-            - name: runtime-hook-legacy-bin
-              mountPath: /host-hook-legacy-bin
-{{- end }}
+            - name: containerd-config
+              mountPath: /host-containerd
+            - name: k3s-binary
+              mountPath: /host-k3s
+              readOnly: true
       containers:
         - name: mithril-node
           image: {{ .Values.node.image | quote }}
@@ -171,34 +189,6 @@ spec:
               # The runtime can replace its socket inode without replacing this Pod.
               mountPath: {{ $containerRuntimeDirectory | quote }}
               readOnly: true
-{{- if $runtimeHookInjectorEnabled }}
-        - name: runtime-hook-injector
-          image: {{ .Values.node.runtimeHook.injector.image | quote }}
-          imagePullPolicy: {{ .Values.node.runtimeHook.injector.imagePullPolicy }}
-          args: ["-idx", {{ .Values.node.runtimeHook.injector.pluginIndex | quote }}]
-          securityContext:
-            allowPrivilegeEscalation: false
-            readOnlyRootFilesystem: true
-            capabilities:
-              drop: ["ALL"]
-          resources:
-            requests:
-              cpu: 2m
-              memory: 5Mi
-          volumeMounts:
-            - name: nri-socket
-              mountPath: /var/run/nri/nri.sock
-            # The stock injector watches the same fixed directories as CRI-O.
-            - name: nri-hooks-etc
-              mountPath: /etc/containers/oci/hooks.d
-              readOnly: true
-            - name: nri-hooks-share
-              mountPath: /usr/share/containers/oci/hooks.d
-              readOnly: true
-            - name: nri-hooks-libexec
-              mountPath: /usr/libexec/oci/hooks.d
-              readOnly: true
-{{- end }}
       volumes:
         - name: node-config
           hostPath:
@@ -240,40 +230,15 @@ spec:
           hostPath:
             path: {{ $containerRuntimeDirectory | quote }}
             type: Directory
-        - name: runtime-hook-source
-          configMap:
-            name: mithril-runtime-hook
         - name: runtime-hook-bin
           hostPath:
-            path: {{ .Values.node.runtimeHook.hostBinaryDirectory | quote }}
+            path: {{ $runtimeHookBinaryDirectory | quote }}
             type: DirectoryOrCreate
-        - name: runtime-hook-config
+        - name: containerd-config
           hostPath:
-            # The parent mount permits same-filesystem atomic publication from
-            # outside the NRI-watched directory.
-            path: {{ $runtimeHookConfigParent | quote }}
-            type: DirectoryOrCreate
-{{- if $runtimeHookInjectorEnabled }}
-        - name: nri-socket
+            path: {{ $containerdConfigDirectory | quote }}
+            type: Directory
+        - name: k3s-binary
           hostPath:
-            path: {{ .Values.node.runtimeHook.injector.hostSocketPath | quote }}
-            type: Socket
-        - name: nri-hooks-etc
-          hostPath:
-            path: /etc/containers/oci/hooks.d
-            type: DirectoryOrCreate
-        - name: nri-hooks-share
-          hostPath:
-            path: /usr/share/containers/oci/hooks.d
-            type: DirectoryOrCreate
-        - name: nri-hooks-libexec
-          hostPath:
-            path: /usr/libexec/oci/hooks.d
-            type: DirectoryOrCreate
-{{- end }}
-{{- if $migrateLegacyRuntimeHook }}
-        - name: runtime-hook-legacy-bin
-          hostPath:
-            path: {{ $legacyRuntimeHookBinaryDirectory | quote }}
-            type: DirectoryOrCreate
-{{- end }}
+            path: {{ $k3sBinaryHostPath | quote }}
+            type: File

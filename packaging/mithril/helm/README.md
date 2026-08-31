@@ -77,18 +77,24 @@ timeout. The OCI runtime terminates a hook that exceeds this outer limit.
 
 ## Runtime Hook
 
-The init container installs `mithril-oci-hook` and two ordered,
-protected-Pod-only OCI hooks on each selected host. The `createRuntime` hook
-stages immutable runtime facts. The `createContainer` hook admits
-PreparedContainer after the runtime constructs the container filesystem.
-The default binary
-directory is `/usr/libexec/oci/hooks.d`, which is visible to the stock NRI
-hook-injector. CRI-O can read the default configuration directory directly.
-For containerd, `mithril-node` runs the pinned stock NRI hook-injector as a
-sidecar in the same DaemonSet Pod. The sidecar has the same node selection and
-lifecycle as the Mithril node owner. Set `node.runtimeHook.injector.enabled` to
-`false` only when the runtime reads OCI hook configuration without NRI. The
-package does not replace or patch the container runtime.
+The measured init container installs `mithril-oci-hook`, an OCI base spec, a
+recovery manifest, and one containerd v3 drop-in on each selected K3s host. The
+drop-in sets the base spec on containerd's default CRI runtime. A Pod does not
+need a RuntimeClass. Containerd invokes the hook directly; no NRI process is
+installed or retained.
+
+The first `createRuntime` hook denies the exact hostile incident shape. When
+the node socket is unavailable, it denies every new CRI container except the
+exact measured installer and `mithril-node` recovery shapes. A healthy node
+admits ordinary unprotected containers and receives each protected container
+through the existing ordered admission stages. The hook logs the decision code
+for each denial and exact recovery. Healthy unprotected decisions use debug
+level.
+
+The installer restarts the active `k3s` or `k3s-agent` service only when the
+loaded base spec changes. It then reads back the generated containerd
+configuration and every marked file. It refuses an unowned file or an existing
+foreign base spec on the default runtime.
 
 ## Operational Logs
 
@@ -108,6 +114,13 @@ A Helm upgrade changes the Pod template and restarts the affected owner. Logs
 remain human-readable service stderr. The filter does not change policy,
 evidence, readiness, or enforcement state. The chart bounds each value and
 rejects line breaks. The service validates the complete filter before startup.
+
+Helm uninstall removes Kubernetes release objects. It does not remove the
+owned hook binary, containerd drop-in, OCI base spec, recovery manifest, or
+pinned BPF state. The missing node admission socket blocks all new CRI starts
+except exact measured Mithril recovery. Direct non-CRI starts remain subject to
+the retained BPF incident floor. Run the independently signed node
+decommission flow when host enforcement must be removed.
 
 ## Verification
 

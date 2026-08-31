@@ -8,7 +8,6 @@ metadata:
 spec:
   serviceAccountName: converter
   automountServiceAccountToken: false
-  runtimeClassName: MITHRIL_CONVERGENCE_RUNTIME_CLASS
   restartPolicy: Always
   terminationGracePeriodSeconds: 1
   containers:

@@ -3,7 +3,7 @@
 set -euo pipefail
 
 usage() {
-  echo "usage: MITHRIL_VM_CRI_EFFECT_MODE=OBSERVE|PROTECT $0 {platform INSPECT WORK_DIRECTORY|k3s-install VERSION CONFIG WORK_DIRECTORY|k3s-agent-install VERSION SERVER TOKEN WORK_DIRECTORY|k3s-runtime-hook HOOK WORK_DIRECTORY|k3s-product-runtime WORK_DIRECTORY|k3s-qualify MANIFEST WORK_DIRECTORY|k3s-cri-effect NODE INSPECT POLICY TEMPLATE POLICY_SOURCE SEAL_REQUEST SIGNING_KEY PUBLIC_KEY MANIFEST WORK_DIRECTORY|k3s-administrative-exec CONTROL NODE INSPECT POLICY KUBECTL_MITHRIL OIDC TEMPLATE POLICY_SOURCE SEAL_REQUEST SIGNING_KEY PUBLIC_KEY MANIFEST WORK_DIRECTORY|k3s-remove WORK_DIRECTORY|k3s-agent-remove WORK_DIRECTORY}" >&2
+  echo "usage: MITHRIL_VM_CRI_EFFECT_MODE=OBSERVE|PROTECT $0 {platform INSPECT WORK_DIRECTORY|k3s-install VERSION CONFIG WORK_DIRECTORY|k3s-agent-install VERSION SERVER TOKEN WORK_DIRECTORY|k3s-runtime-hook HOOK WORK_DIRECTORY|k3s-qualify MANIFEST WORK_DIRECTORY|k3s-cri-effect NODE INSPECT POLICY TEMPLATE POLICY_SOURCE SEAL_REQUEST SIGNING_KEY PUBLIC_KEY MANIFEST WORK_DIRECTORY|k3s-administrative-exec CONTROL NODE INSPECT POLICY KUBECTL_MITHRIL OIDC TEMPLATE POLICY_SOURCE SEAL_REQUEST SIGNING_KEY PUBLIC_KEY MANIFEST WORK_DIRECTORY|k3s-remove WORK_DIRECTORY|k3s-agent-remove WORK_DIRECTORY}" >&2
 }
 
 require_root() {
@@ -199,54 +199,6 @@ case ${1:-} in
     systemctl restart k3s
     /usr/local/bin/k3s kubectl wait --for=condition=Ready node --all --timeout=300s
     : >"$work_directory/k3s-runtime-hook-installed-by-harness"
-    ;;
-  k3s-product-runtime)
-    (($# == 2)) || { usage; exit 2; }
-    work_directory=$2
-    require_root
-    require_command jq
-    require_command systemctl
-    require_harness_guest "$work_directory"
-    if [[ -f $work_directory/k3s-installed-by-harness ]]; then
-      service=k3s
-    elif [[ -f $work_directory/k3s-agent-installed-by-harness ]]; then
-      service=k3s-agent
-    else
-      echo "Mithril runtime setup needs a harness-owned K3s service" >&2
-      exit 2
-    fi
-
-    fail_spec=/etc/containerd/mithril-product-fail-base-spec.json
-    template=/var/lib/rancher/k3s/agent/etc/containerd/config-v3.toml.tmpl
-    temporary_spec=$work_directory/mithril-product-fail-base-spec.json
-    install -d -m 755 /etc/containerd "$(dirname "$template")"
-    /usr/local/bin/k3s ctr oci spec | jq \
-      '.hooks.prestart = [{
-        path: "/opt/mithril/bin/mithril-oci-hook",
-        args: ["mithril-oci-hook", "--socket", "/run/mithril/missing-runtime-admission.sock", "--timeout-ms", "1000"]
-      }]' >"$temporary_spec"
-    install -m 600 "$temporary_spec" "$fail_spec"
-    rm -f -- "$temporary_spec"
-    printf '%s\n' \
-      '{{ template "base" . }}' \
-      '[plugins.'\''io.containerd.cri.v1.runtime'\''.containerd.runtimes.mithril]' \
-      'runtime_type = "io.containerd.runc.v2"' \
-      'pod_annotations = ["mithril.erebor.dev/*"]' \
-      '[plugins.'\''io.containerd.cri.v1.runtime'\''.containerd.runtimes.mithril.options]' \
-      'SystemdCgroup = true' \
-      '[plugins.'\''io.containerd.cri.v1.runtime'\''.containerd.runtimes.mithril-fail]' \
-      'runtime_type = "io.containerd.runc.v2"' \
-      'base_runtime_spec = "/etc/containerd/mithril-product-fail-base-spec.json"' \
-      'pod_annotations = ["mithril.erebor.dev/*"]' \
-      '[plugins.'\''io.containerd.cri.v1.runtime'\''.containerd.runtimes.mithril-fail.options]' \
-      'SystemdCgroup = true' >"$template"
-    chmod 600 "$template"
-    systemctl restart "$service"
-    systemctl is-active --quiet "$service"
-    if [[ $service == k3s ]]; then
-      /usr/local/bin/k3s kubectl wait --for=condition=Ready node --all --timeout=300s
-    fi
-    : >"$work_directory/k3s-product-runtime-installed-by-harness"
     ;;
   k3s-qualify)
     (($# == 3)) || { usage; exit 2; }
@@ -1785,12 +1737,6 @@ EOF
         /var/lib/rancher/k3s/agent/etc/containerd/config-v3.toml.tmpl
       rm -f -- "$work_directory/k3s-runtime-hook-installed-by-harness"
     fi
-    if [[ -f $work_directory/k3s-product-runtime-installed-by-harness ]]; then
-      rm -f -- /etc/containerd/mithril-product-base-spec.json \
-        /etc/containerd/mithril-product-fail-base-spec.json \
-        /var/lib/rancher/k3s/agent/etc/containerd/config-v3.toml.tmpl
-      rm -f -- "$work_directory/k3s-product-runtime-installed-by-harness"
-    fi
     ! systemctl is-active --quiet k3s
     [[ ! -S /run/k3s/containerd/containerd.sock ]]
     rm -f -- "$work_directory/k3s-installed-by-harness"
@@ -1806,12 +1752,6 @@ EOF
       exit 1
     }
     /usr/local/bin/k3s-agent-uninstall.sh
-    if [[ -f $work_directory/k3s-product-runtime-installed-by-harness ]]; then
-      rm -f -- /etc/containerd/mithril-product-base-spec.json \
-        /etc/containerd/mithril-product-fail-base-spec.json \
-        /var/lib/rancher/k3s/agent/etc/containerd/config-v3.toml.tmpl
-      rm -f -- "$work_directory/k3s-product-runtime-installed-by-harness"
-    fi
     ! systemctl is-active --quiet k3s-agent
     [[ ! -S /run/k3s/containerd/containerd.sock ]]
     rm -f -- "$work_directory/k3s-agent-installed-by-harness"

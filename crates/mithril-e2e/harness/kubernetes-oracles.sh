@@ -59,6 +59,81 @@ assert_recreated_node_unbound() {
   ' <<<"$node_json" >/dev/null
 }
 
+retained_mithril_state() {
+  local environment=$1
+
+  jq -er '
+    if .mithril == null then
+      ["fresh", "-", "-", "-"]
+    elif
+      (.mithril | type) == "object" and
+      (.mithril.control_state_claim |
+        test("^mithril-control-state-[0-9]{14}-[0-9]+$")) and
+      (.mithril.control_config_secret |
+        test("^mithril-control-config-[0-9]{14}-[0-9]+$")) and
+      (.mithril.admission_tls_secret |
+        test("^mithril-admission-tls-[0-9]{14}-[0-9]+$"))
+    then
+      [
+        "retained",
+        .mithril.control_state_claim,
+        .mithril.control_config_secret,
+        .mithril.admission_tls_secret
+      ]
+    else
+      error("retained Mithril state is incomplete")
+    end | @tsv
+  ' "$environment"
+}
+
+write_retained_environment() {
+  (($# == 11)) || {
+    echo "invalid retained environment output" >&2
+    return 2
+  }
+  local output=$1
+  local mithril_state_ready=$2
+  local node_a=$3
+  local node_a_work_directory=$4
+  local node_b=$5
+  local node_b_work_directory=$6
+  local provider=$7
+  local known_hosts=$8
+  local control_state_claim=$9
+  local control_config_secret=${10}
+  local admission_tls_secret=${11}
+  [[ $mithril_state_ready == true || $mithril_state_ready == false ]] || {
+    echo "invalid retained Mithril state" >&2
+    return 2
+  }
+
+  jq -n \
+    --arg node_a "$node_a" \
+    --arg node_a_work_directory "$node_a_work_directory" \
+    --arg node_b "$node_b" \
+    --arg node_b_work_directory "$node_b_work_directory" \
+    --arg provider "$provider" \
+    --arg known_hosts "$known_hosts" \
+    --arg control_state_claim "$control_state_claim" \
+    --arg control_config_secret "$control_config_secret" \
+    --arg admission_tls_secret "$admission_tls_secret" \
+    --argjson mithril_state_ready "$mithril_state_ready" \
+    '{
+      schema_version: 2,
+      node_a: $node_a,
+      node_a_work_directory: $node_a_work_directory,
+      node_b: $node_b,
+      node_b_work_directory: $node_b_work_directory,
+      provider: $provider,
+      known_hosts: $known_hosts,
+      mithril: (if $mithril_state_ready then {
+        control_state_claim: $control_state_claim,
+        control_config_secret: $control_config_secret,
+        admission_tls_secret: $admission_tls_secret
+      } else null end)
+    }' >"$output"
+}
+
 assert_exact_policy_target() {
   local status_json=$1
   local node_json=$2
@@ -117,4 +192,27 @@ assert_exact_policy_target() {
       ($target.runtime_binding_id | length) > 0 and
       $target.container_generation >= 1
     ' >/dev/null
+}
+retry_kubernetes_command() {
+  local maximum_attempts=$1
+  local retry_delay_seconds=$2
+  shift 2
+  [[ $maximum_attempts =~ ^[1-9][0-9]*$ &&
+     $retry_delay_seconds =~ ^[0-9]+$ && $# -gt 0 ]] || {
+    echo "invalid Kubernetes retry input" >&2
+    return 2
+  }
+  local attempt
+  local status=1
+  for ((attempt = 1; attempt <= maximum_attempts; attempt++)); do
+    if "$@"; then
+      return 0
+    else
+      status=$?
+    fi
+    if ((attempt < maximum_attempts)); then
+      sleep "$retry_delay_seconds"
+    fi
+  done
+  return "$status"
 }

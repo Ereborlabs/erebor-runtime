@@ -4,12 +4,15 @@ set -euo pipefail
 
 chart_directory=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 
-bash "$chart_directory/tests/runtime-hook-owner-test.sh"
-
 helm lint "$chart_directory" --values "$chart_directory/tests/values.yaml"
-helm template mithril "$chart_directory" \
+rendered=$(helm template mithril "$chart_directory" \
   --namespace mithril-system \
-  --values "$chart_directory/tests/values.yaml" >/dev/null
+  --values "$chart_directory/tests/values.yaml")
+if grep -Fq 'helm.sh/hook: pre-delete' <<<"$rendered" ||
+   grep -Fq 'mithril-runtime-hook-cleanup' <<<"$rendered"; then
+  echo 'chart rendered Kubernetes-authorized host cleanup' >&2
+  exit 1
+fi
 
 default_node_logs=$(helm template mithril "$chart_directory" \
   --namespace mithril-system \
@@ -31,6 +34,18 @@ node_logs=$(helm template mithril "$chart_directory" \
   --show-only templates/daemonset.yaml \
   --set-string 'node.logFilter=mithril_node::runtime_admission=debug')
 grep -Fq 'value: "mithril_node::runtime_admission=debug"' <<<"$node_logs"
+grep -Fq 'name: install-runtime-gate' <<<"$node_logs"
+grep -Fq 'command: ["/usr/local/bin/mithril-oci-hook", "install"]' <<<"$node_logs"
+[[ $(grep -Fc 'value: "mithril_node::runtime_admission=debug"' <<<"$node_logs") -eq 2 ]]
+grep -Fq 'path: "/var/lib/rancher/k3s/agent/etc/containerd"' <<<"$node_logs"
+grep -Fq 'path: "/usr/local/bin/k3s"' <<<"$node_logs"
+grep -Fq -- '--node-read-only-mount' <<<"$node_logs"
+grep -Fq -- '--node-read-write-mount' <<<"$node_logs"
+if grep -Fq 'runtime-hook-injector' <<<"$node_logs" ||
+   grep -Fq '/var/run/nri/nri.sock' <<<"$node_logs"; then
+  echo 'chart rendered an NRI runtime-hook owner' >&2
+  exit 1
+fi
 
 runtime_mounts=$(helm template mithril "$chart_directory" \
   --namespace mithril-system \
@@ -61,13 +76,6 @@ control_logs=$(helm template mithril "$chart_directory" \
   --set-string 'control.logFilter=mithril_control::store=trace')
 grep -Fq 'value: "mithril_control::store=trace"' <<<"$control_logs"
 
-hook_logs=$(helm template mithril "$chart_directory" \
-  --namespace mithril-system \
-  --values "$chart_directory/tests/values.yaml" \
-  --show-only templates/runtime-hook-configmap.yaml \
-  --set-string 'node.logFilter=mithril_oci_hook=debug')
-[[ $(grep -Fc '"env": ["RUST_LOG=mithril_oci_hook=debug"]' <<<"$hook_logs") -eq 3 ]]
-
 if helm template mithril "$chart_directory" \
   --namespace mithril-system \
   --values "$chart_directory/tests/values.yaml" \
@@ -88,11 +96,6 @@ if helm template mithril "$chart_directory" \
   echo 'chart accepted an unbounded admission timeout' >&2
   exit 1
 fi
-
-helm template mithril "$chart_directory" \
-  --namespace mithril-system \
-  --values "$chart_directory/tests/values.yaml" \
-  --set node.runtimeHook.install=false >/dev/null
 
 if helm template mithril "$chart_directory" \
   --namespace mithril-system \

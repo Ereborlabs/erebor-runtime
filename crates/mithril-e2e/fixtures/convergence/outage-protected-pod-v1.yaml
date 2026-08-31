@@ -8,7 +8,6 @@ metadata:
 spec:
   serviceAccountName: worker
   automountServiceAccountToken: false
-  runtimeClassName: mithril-outage-recovery
   restartPolicy: Always
   terminationGracePeriodSeconds: 1
   nodeSelector:

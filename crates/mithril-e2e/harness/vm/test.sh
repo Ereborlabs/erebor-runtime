@@ -201,61 +201,39 @@ grep -q '^--kubeconfig .* uninstall mithril -n mithril-system$' "$removed_helm_l
 
 hook_root=$test_root/hook-root
 hook_binary=$hook_root/usr/libexec/oci/hooks.d/mithril-oci-hook
-hook_binary_owner=$hook_root/usr/libexec/oci/hooks.d/.mithril-oci-hook.helm-owner
-hook_stage_config=$hook_root/usr/share/containers/oci/hooks.d/98-mithril-runtime-stage.json
-hook_stage_config_owner=$hook_root/usr/libexec/oci/hooks.d/.98-mithril-runtime-stage.json.helm-owner
-hook_admission_config=$hook_root/usr/share/containers/oci/hooks.d/99-mithril-runtime-admission.json
-hook_admission_config_owner=$hook_root/usr/libexec/oci/hooks.d/.99-mithril-runtime-admission.json.helm-owner
-hook_entry_config=$hook_root/usr/share/containers/oci/hooks.d/99-mithril-runtime-entry-preparation.json
-hook_entry_config_owner=$hook_root/usr/libexec/oci/hooks.d/.99-mithril-runtime-entry-preparation.json.helm-owner
+hook_binary_owner=$hook_root/usr/libexec/oci/hooks.d/.mithril-oci-hook.mithril-owner
+containerd=$hook_root/var/lib/rancher/k3s/agent/etc/containerd
+recovery=$containerd/mithril-recovery.json
+recovery_owner=$containerd/.mithril-recovery.json.mithril-owner
+base_spec=$containerd/mithril-base-spec.json
+base_spec_owner=$containerd/.mithril-base-spec.json.mithril-owner
+fragment=$containerd/config-v3.toml.d/99-mithril.toml
+fragment_owner=$containerd/config-v3.toml.d/.99-mithril.toml.mithril-owner
 hook_socket=$hook_root/run/mithril/runtime-admission.sock
-mkdir -p "$(dirname "$hook_binary")" "$(dirname "$hook_stage_config")" \
+mkdir -p "$(dirname "$hook_binary")" "$(dirname "$fragment")" \
   "$(dirname "$hook_socket")" "$test_root/hook-bin"
 printf '#!/bin/sh\nexit 0\n' >"$hook_binary"
 chmod 755 "$hook_binary"
-printf 'mithril-system/mithril\n' >"$hook_binary_owner"
-printf 'mithril-system/mithril\n' >"$hook_stage_config_owner"
-printf 'mithril-system/mithril\n' >"$hook_admission_config_owner"
-printf 'mithril-system/mithril\n' >"$hook_entry_config_owner"
-chmod 600 "$hook_binary_owner" "$hook_stage_config_owner" \
-  "$hook_admission_config_owner" "$hook_entry_config_owner"
-cat >"$hook_stage_config" <<'EOF'
-{
-  "version": "1.0.0",
-  "hook": {
-    "path": "/usr/libexec/oci/hooks.d/mithril-oci-hook",
-    "args": ["mithril-oci-hook", "--stage", "stage-runtime-facts", "--socket", "/run/mithril/runtime-admission.sock", "--timeout-ms", "4000"],
-    "timeout": 5
-  },
-  "when": {"annotations": {"^mithril\\.erebor\\.dev/profile-id$": ".+"}},
-  "stages": ["createRuntime"]
-}
+for marker in "$hook_binary_owner" "$recovery_owner" "$base_spec_owner" \
+    "$fragment_owner"; do
+  printf 'mithril-system/mithril\n' >"$marker"
+  chmod 600 "$marker"
+done
+cat >"$recovery" <<'EOF'
+{"version":1,"entries":[{"executable":"/usr/local/bin/mithril-oci-hook","executableSha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","args":["/usr/local/bin/mithril-oci-hook","install"],"requiredMounts":[{"source":"/usr/libexec/oci/hooks.d","destination":"/host-hook-bin","readOnly":false}]},{"executable":"/usr/local/bin/mithril-node","executableSha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","args":["/usr/local/bin/mithril-node","--config","/etc/mithril/node.json"],"requiredMounts":[{"source":"/etc/mithril/node.json","destination":"/etc/mithril/node.json","readOnly":true},{"source":"/var/lib/mithril-node-20260831000000-123","destination":"/var/lib/mithril","readOnly":false}]}]}
 EOF
-cat >"$hook_admission_config" <<'EOF'
-{
-  "version": "1.0.0",
-  "hook": {
-    "path": "/usr/libexec/oci/hooks.d/mithril-oci-hook",
-    "args": ["mithril-oci-hook", "--stage", "prepare-container", "--socket", "/run/mithril/runtime-admission.sock", "--timeout-ms", "4000"],
-    "timeout": 5
-  },
-  "when": {"annotations": {"^mithril\\.erebor\\.dev/profile-id$": ".+"}},
-  "stages": ["createRuntime"]
-}
+cat >"$base_spec" <<'EOF'
+{"hooks":{"createRuntime":[{"path":"/usr/libexec/oci/hooks.d/mithril-oci-hook","args":["mithril-oci-hook","run","--stage","stage-runtime-facts","--socket","/run/mithril/runtime-admission.sock","--recovery-manifest","/var/lib/rancher/k3s/agent/etc/containerd/mithril-recovery.json","--timeout-ms","4000"],"timeout":5},{"path":"/usr/libexec/oci/hooks.d/mithril-oci-hook","args":["mithril-oci-hook","run","--stage","prepare-container"],"timeout":5}],"createContainer":[{"path":"/usr/libexec/oci/hooks.d/mithril-oci-hook","args":["mithril-oci-hook","run","--stage","prepare-declared-entries"],"timeout":5}]}}
 EOF
-cat >"$hook_entry_config" <<'EOF'
-{
-  "version": "1.0.0",
-  "hook": {
-    "path": "/usr/libexec/oci/hooks.d/mithril-oci-hook",
-    "args": ["mithril-oci-hook", "--stage", "prepare-declared-entries", "--socket", "/run/mithril/runtime-admission.sock", "--timeout-ms", "4000"],
-    "timeout": 5
-  },
-  "when": {"annotations": {"^mithril\\.erebor\\.dev/profile-id$": ".+"}},
-  "stages": ["createContainer"]
-}
-EOF
-chmod 644 "$hook_stage_config" "$hook_admission_config" "$hook_entry_config"
+printf '%s\n' \
+  'version = 3' \
+  "base_runtime_spec = \"/var/lib/rancher/k3s/agent/etc/containerd/mithril-base-spec.json\"" \
+  >"$fragment"
+printf '%s\n' \
+  'version = 3' \
+  'imports = ["/var/lib/rancher/k3s/agent/etc/containerd/config-v3.toml.d/*.toml"]' \
+  >"$containerd/config.toml"
+chmod 600 "$recovery" "$base_spec" "$fragment"
 cat >"$test_root/hook-bin/stat" <<'EOF'
 #!/usr/bin/env bash
 path=${!#}
@@ -297,18 +275,33 @@ if bash "$directory/runtime-hook-oracle.sh" removed "$hook_root" \
   echo "installed runtime-hook paths satisfied the removal oracle" >&2
   exit 1
 fi
-rm -f -- "$hook_binary" "$hook_binary_owner" \
-  "$hook_stage_config" "$hook_stage_config_owner" \
-  "$hook_admission_config" "$hook_admission_config_owner" \
-  "$hook_entry_config" "$hook_entry_config_owner"
-bash "$directory/runtime-hook-oracle.sh" hooks-removed "$hook_root" \
-  /run/mithril/runtime-admission.sock
-if bash "$directory/runtime-hook-oracle.sh" removed "$hook_root" \
-    /run/mithril/runtime-admission.sock >/dev/null 2>&1; then
-  echo "a stale runtime socket satisfied the complete removal oracle" >&2
+rm -f -- "$hook_socket"
+PATH="$test_root/hook-bin:$PATH" bash "$directory/runtime-hook-oracle.sh" \
+  retained "$hook_root" mithril-system/mithril \
+  /run/mithril/runtime-admission.sock 4000 5
+[[ $(bash "$directory/runtime-hook-oracle.sh" node-state-path "$hook_root") == \
+   /var/lib/mithril-node-20260831000000-123 ]]
+if PATH="$test_root/hook-bin:$PATH" bash "$directory/runtime-hook-oracle.sh" \
+    recovery-inputs "$hook_root" >/dev/null 2>&1; then
+  echo "missing retained Node config satisfied the recovery-input oracle" >&2
   exit 1
 fi
-rm -f -- "$hook_socket"
+mkdir -p "$hook_root/etc/mithril"
+printf '{}\n' >"$hook_root/etc/mithril/node.json"
+chmod 400 "$hook_root/etc/mithril/node.json"
+PATH="$test_root/hook-bin:$PATH" bash "$directory/runtime-hook-oracle.sh" \
+  recovery-inputs "$hook_root"
+if PATH="$test_root/hook-bin:$PATH" bash "$directory/runtime-hook-oracle.sh" \
+    installed "$hook_root" mithril-system/mithril \
+      /run/mithril/runtime-admission.sock 4000 5 >/dev/null 2>&1; then
+  echo "retained runtime-hook paths satisfied the live installation oracle" >&2
+  exit 1
+fi
+touch "$hook_socket"
+chmod 600 "$hook_socket"
+rm -f -- "$hook_socket" "$hook_binary" "$hook_binary_owner" \
+  "$recovery" "$recovery_owner" "$base_spec" "$base_spec_owner" \
+  "$fragment" "$fragment_owner"
 bash "$directory/runtime-hook-oracle.sh" removed "$hook_root" \
   /run/mithril/runtime-admission.sock
 
@@ -322,7 +315,6 @@ collect_mithril_diagnostics "$test_root" mithril-system tenant-a
 [[ -s $test_root/diagnostics/control.log ]]
 [[ -s $test_root/diagnostics/nodes.log ]]
 [[ -s $test_root/diagnostics/nodes-previous.log ]]
-[[ -s $test_root/diagnostics/nri-hook-injector.log ]]
 [[ -s $test_root/diagnostics/node-effects-0.log ]]
 [[ -s $test_root/diagnostics/node-policy-delivery-0.json ]]
 [[ -s $test_root/diagnostics/workload.txt ]]
@@ -330,8 +322,6 @@ collect_mithril_diagnostics "$test_root" mithril-system tenant-a
 [[ -s $test_root/diagnostics/workload.log ]]
 [[ -s $test_root/diagnostics/workload-previous.log ]]
 grep -q -- '--tail=200 --limit-bytes=131072' "$test_root/diagnostic-kubectl.log"
-grep -q -- 'app.kubernetes.io/name=mithril-node -c runtime-hook-injector' \
-  "$test_root/diagnostic-kubectl.log"
 grep -q -- 'mithril-inspect effects --socket-path /run/mithril/observation.sock' \
   "$test_root/diagnostic-kubectl.log"
 
@@ -340,6 +330,16 @@ mkdir "$oracle_bin"
 cat >"$oracle_bin/kubectl" <<'EOF'
 #!/usr/bin/env bash
 case ${FAKE_KUBECTL_RESULT:?} in
+  readiness)
+    count=0
+    [[ ! -r ${FAKE_KUBECTL_COUNT:?} ]] || count=$(<"$FAKE_KUBECTL_COUNT")
+    ((count += 1))
+    printf '%s\n' "$count" >"$FAKE_KUBECTL_COUNT"
+    if ((count < ${FAKE_KUBECTL_READY_AFTER:?})); then
+      echo 'The connection to the server was refused' >&2
+      exit 1
+    fi
+    ;;
   client)
     printf '%s\n' '{"apiVersion":"v1","kind":"Pod","metadata":{"annotations":{}},"spec":{}}'
     ;;
@@ -363,6 +363,39 @@ EOF
 chmod +x "$oracle_bin/kubectl"
 # These checks execute the command path. They do not inspect either fixture script.
 source "$directory/../kubernetes-oracles.sh"
+retained_environment=$test_root/retained-environment.json
+write_retained_environment "$retained_environment" true \
+  mithril-runtime-qualification-1 /tmp/mithril-vm-test.a \
+  mithril-runtime-qualification-2 /tmp/mithril-vm-test.b \
+  /repo/providers/libvirt.sh /tmp/mithril-vm-test.a/known_hosts \
+  mithril-control-state-20260831000000-123 \
+  mithril-control-config-20260831000000-123 \
+  mithril-admission-tls-20260831000000-123
+IFS=$'\t' read -r state claim config_secret tls_secret \
+  < <(retained_mithril_state "$retained_environment")
+[[ $state == retained ]]
+[[ $claim == mithril-control-state-20260831000000-123 ]]
+[[ $config_secret == mithril-control-config-20260831000000-123 ]]
+[[ $tls_secret == mithril-admission-tls-20260831000000-123 ]]
+write_retained_environment "$retained_environment" false \
+  mithril-runtime-qualification-1 /tmp/mithril-vm-test.a \
+  mithril-runtime-qualification-2 /tmp/mithril-vm-test.b \
+  /repo/providers/libvirt.sh /tmp/mithril-vm-test.a/known_hosts \
+  mithril-control-state-20260831000000-123 \
+  mithril-control-config-20260831000000-123 \
+  mithril-admission-tls-20260831000000-123
+[[ $(retained_mithril_state "$retained_environment") == $'fresh\t-\t-\t-' ]]
+printf '%s\n' '{"schema_version":2,"mithril":{"control_state_claim":"mithril-control-state-20260831000000-123"}}' \
+  >"$retained_environment"
+if retained_mithril_state "$retained_environment" >/dev/null 2>&1; then
+  echo "an incomplete retained Control transaction satisfied the environment oracle" >&2
+  exit 1
+fi
+readiness_count=$test_root/readiness-count
+PATH="$oracle_bin:$PATH" FAKE_KUBECTL_RESULT=readiness \
+  FAKE_KUBECTL_COUNT="$readiness_count" FAKE_KUBECTL_READY_AFTER=3 \
+  retry_kubernetes_command 5 0 kubectl get --raw=/readyz
+[[ $(<"$readiness_count") -eq 3 ]]
 node_name_bypass=$test_root/node-name-bypass.json
 PATH="$oracle_bin:$PATH" FAKE_KUBECTL_RESULT=client \
   write_mithril_node_name_bypass protected.yaml node-a "$node_name_bypass" kubectl

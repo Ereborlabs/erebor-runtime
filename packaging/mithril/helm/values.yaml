@@ -10,17 +10,9 @@ node:
   nodeSelector: {}
   affinity: {}
   runtimeHook:
-    install: true
-    injector:
-      enabled: true
-      image: ghcr.io/containerd/nri/plugins/hook-injector:v0.10.0
-      imagePullPolicy: IfNotPresent
-      hostSocketPath: /var/run/nri/nri.sock
-      pluginIndex: "10"
-    cleanupImage: registry.k8s.io/kubectl:v1.35.5
-    cleanupImagePullPolicy: IfNotPresent
     hostBinaryDirectory: /usr/libexec/oci/hooks.d
-    hostConfigDirectory: /usr/share/containers/oci/hooks.d
+    containerdConfigHostDirectory: /var/lib/rancher/k3s/agent/etc/containerd
+    k3sBinaryHostPath: /usr/local/bin/k3s
     socketPath: /run/mithril/runtime-admission.sock
     timeoutMs: 4000
     runtimeTimeoutSeconds: 5

@@ -26,7 +26,12 @@ node_state_host_path=/var/lib/mithril-node-$run_id
 control_config_secret=mithril-control-config-$run_id
 control_state_claim=mithril-control-state-$run_id
 admission_tls_secret=mithril-admission-tls-$run_id
+reuse_mithril_state=false
+retained_mithril_state_ready=false
 entry_effect_capture_pids=()
+lightweight_remote=
+runtime_sockets_held=false
+held_runtime_socket=$runtime_hook_socket.gate-$run_id
 
 usage() {
   echo "usage: $0 [--provider PATH] [--output-directory PATH] [--keep-vms] [--manual-environment] [--protected-start-only] [--reuse-environment PATH]" >&2
@@ -128,7 +133,16 @@ if [[ -n $reuse_environment ]]; then
     exit 2
   }
   reuse_environment=$(cd -- "$(dirname -- "$reuse_environment")" && pwd)/$(basename -- "$reuse_environment")
-  jq -e '.schema_version == 1' "$reuse_environment" >/dev/null
+  jq -e '.schema_version == 2' "$reuse_environment" >/dev/null
+  IFS=$'\t' read -r state control_claim control_secret admission_secret \
+    < <(retained_mithril_state "$reuse_environment")
+  if [[ $state == retained ]]; then
+    control_state_claim=$control_claim
+    control_config_secret=$control_secret
+    admission_tls_secret=$admission_secret
+    reuse_mithril_state=true
+    retained_mithril_state_ready=true
+  fi
   vm_a=$(jq -er '.node_a' "$reuse_environment")
   vm_b=$(jq -er '.node_b' "$reuse_environment")
   work_a=$(jq -er '.node_a_work_directory' "$reuse_environment")
@@ -226,7 +240,7 @@ assert_runtime_hook() {
   local node=$2
   local remote=$3
   local arguments=("$state" /)
-  if [[ $state == installed ]]; then
+  if [[ $state == installed || $state == retained ]]; then
     arguments+=("$runtime_hook_owner" "$runtime_hook_socket" 4000 5)
   else
     arguments+=("$runtime_hook_socket")
@@ -236,7 +250,7 @@ assert_runtime_hook() {
       "$remote/harness/runtime-hook-oracle.sh" "${arguments[@]}"
     return
   fi
-  # Runtime socket removal follows DaemonSet termination after the hook files leave.
+  # Runtime socket removal follows DaemonSet termination. Host integration stays.
   for _attempt in {1..30}; do
     if timeout 10s "$provider" run "$node" sudo bash \
         "$remote/harness/runtime-hook-oracle.sh" "${arguments[@]}" \
@@ -245,7 +259,7 @@ assert_runtime_hook() {
     fi
     sleep 1
   done
-  echo "Mithril runtime-hook paths remained on $node after uninstall" >&2
+  echo "Mithril runtime integration did not reach $state on $node" >&2
   return 1
 }
 
@@ -260,6 +274,20 @@ stop_entry_effect_capture() {
   entry_effect_capture_pids=()
 }
 
+restore_runtime_sockets() {
+  local node
+  if [[ $runtime_sockets_held == false ]]; then
+    return 0
+  fi
+  for node in "$vm_a" "$vm_b"; do
+    if "$provider" run "$node" sudo test -S "$held_runtime_socket"; then
+      "$provider" run "$node" sudo mv -- \
+        "$held_runtime_socket" "$runtime_hook_socket"
+    fi
+  done
+  runtime_sockets_held=false
+}
+
 cleanup() {
   local original_status=$?
   local cleanup_failed=false
@@ -268,17 +296,18 @@ cleanup() {
   trap - EXIT
   set +e
   stop_entry_effect_capture
+  restore_runtime_sockets || cleanup_failed=true
+  if [[ -n $lightweight_remote && $cluster_created == true ]]; then
+    "$provider" run "$vm_a" sudo rm -rf -- "$lightweight_remote" \
+      || cleanup_failed=true
+    lightweight_remote=
+  fi
   if ((original_status != 0)) && [[ $cluster_created == true ]]; then
     collect_mithril_diagnostics "$output_directory" "$system_namespace" \
       "$workload_namespace" || cleanup_failed=true
   fi
   remove_mithril_release "$cluster_created" "$keep_vms" \
     "$manual_environment" "$kubeconfig" "$system_namespace" || cleanup_failed=true
-  if [[ $cluster_created == true && $keep_vms == false &&
-        $manual_environment == false ]]; then
-    assert_runtime_hook removed "$vm_a" "$remote_a" || cleanup_failed=true
-    assert_runtime_hook removed "$vm_b" "$remote_b" || cleanup_failed=true
-  fi
   if [[ $created_b == true && $keep_vms == false ]]; then
     "$provider" destroy "$vm_b" "$work_b" || cleanup_failed=true
   fi
@@ -293,22 +322,12 @@ cleanup() {
       printf 'export MITHRIL_VM_KNOWN_HOSTS=%q\n' "$MITHRIL_VM_KNOWN_HOSTS"
       printf 'manual_environment=%q\n' "$manual_environment"
     } >"$output_directory/retained-vms.txt" || cleanup_failed=true
-    jq -n \
-      --arg node_a "$vm_a" \
-      --arg node_a_work_directory "$work_a" \
-      --arg node_b "$vm_b" \
-      --arg node_b_work_directory "$work_b" \
-      --arg provider "$provider" \
-      --arg known_hosts "$MITHRIL_VM_KNOWN_HOSTS" \
-      '{
-        schema_version: 1,
-        node_a: $node_a,
-        node_a_work_directory: $node_a_work_directory,
-        node_b: $node_b,
-        node_b_work_directory: $node_b_work_directory,
-        provider: $provider,
-        known_hosts: $known_hosts
-      }' >"$output_directory/retained-environment.json" || cleanup_failed=true
+    write_retained_environment \
+      "$output_directory/retained-environment.json" \
+      "$retained_mithril_state_ready" \
+      "$vm_a" "$work_a" "$vm_b" "$work_b" "$provider" \
+      "$MITHRIL_VM_KNOWN_HOSTS" "$control_state_claim" \
+      "$control_config_secret" "$admission_tls_secret" || cleanup_failed=true
   else
     if [[ $work_a == /tmp/mithril-vm-test.* ]]; then
       rm -rf -- "$work_a" || cleanup_failed=true
@@ -351,7 +370,9 @@ trap cleanup EXIT
 }
 
 echo "Building the policy fixture tool"
-(cd -- "$repo_root" && cargo build --locked -p mithril-control --bin mithril-policy)
+(cd -- "$repo_root" && cargo build --locked \
+  -p mithril-control --bin mithril-policy \
+  -p mithril-e2e --bin mithril-effect-test)
 if [[ $reuse_images == true ]]; then
   echo "Reusing the local Mithril owner images"
   docker image inspect mithril-node:convergence mithril-control:convergence >/dev/null
@@ -362,6 +383,11 @@ else
   (cd -- "$repo_root" && docker build --file packaging/mithril/Dockerfile \
     --target control --tag mithril-control:convergence .)
 fi
+docker run --rm --entrypoint /bin/cp \
+  --user "$(id -u):$(id -g)" \
+  --volume "$work_a:/output" mithril-node:convergence \
+  /usr/local/bin/mithril-oci-hook /output/mithril-oci-hook
+chmod 755 "$work_a/mithril-oci-hook"
 image_archive=$work_a/mithril-images.tar
 docker save --output "$image_archive" \
   mithril-node:convergence mithril-control:convergence
@@ -465,6 +491,66 @@ else
 fi
 cluster_created=true
 
+if [[ $reusing_environment == true ]]; then
+  retained_state_a=false
+  retained_state_b=false
+  "$provider" run "$vm_a" sudo test -f \
+    /var/lib/rancher/k3s/agent/etc/containerd/mithril-recovery.json && \
+    retained_state_a=true
+  "$provider" run "$vm_b" sudo test -f \
+    /var/lib/rancher/k3s/agent/etc/containerd/mithril-recovery.json && \
+    retained_state_b=true
+  [[ $retained_state_a == "$retained_state_b" ]] || {
+    echo "retained nodes disagree about the Mithril recovery manifest" >&2
+    exit 1
+  }
+  [[ $retained_state_a == "$reuse_mithril_state" ]] || {
+    echo "retained environment does not match its durable Mithril state" >&2
+    exit 1
+  }
+  if [[ $retained_state_a == true ]]; then
+    retained_node_state_a=$("$provider" run "$vm_a" sudo bash \
+      "$remote_a/harness/runtime-hook-oracle.sh" node-state-path /)
+    retained_node_state_b=$("$provider" run "$vm_b" sudo bash \
+      "$remote_b/harness/runtime-hook-oracle.sh" node-state-path /)
+    [[ $retained_node_state_a == "$retained_node_state_b" ]] || {
+      echo "retained nodes disagree about the Mithril Node state path" >&2
+      exit 1
+    }
+    node_state_host_path=$retained_node_state_a
+  fi
+fi
+
+lightweight_remote=$remote_a/runtime-gate-lightweight-$run_id
+"$provider" run "$vm_a" mkdir -p "$lightweight_remote"
+"$provider" put "$vm_a" "$repo_root/target/debug/mithril-effect-test" \
+  "$lightweight_remote/mithril-effect-test"
+"$provider" put "$vm_a" "$work_a/mithril-oci-hook" \
+  "$lightweight_remote/mithril-oci-hook"
+"$provider" run "$vm_a" sudo "$lightweight_remote/mithril-effect-test" \
+  --repo-root "$lightweight_remote" runc-retained-runtime-gate-probe \
+  --output-directory "$lightweight_remote/evidence" \
+  --runc-path /var/lib/rancher/k3s/data/current/bin/runc \
+  --hook-path "$lightweight_remote/mithril-oci-hook"
+"$provider" get "$vm_a" \
+  "$lightweight_remote/evidence/runc-retained-runtime-gate-probe.json" \
+  "$output_directory/runc-retained-runtime-gate-probe.json"
+jq -e '
+  .hostile_container_denied == true and
+  .hostile_process_never_started == true and
+  .hostile_decision_logged == true and
+  .exact_recovery_allowed == true and
+  .exact_recovery_process_started == true and
+  .exact_recovery_decision_logged == true and
+  .changed_recovery_denied == true and
+  .changed_recovery_process_never_started == true and
+  .unavailable_decision_logged == true and
+  .host_stock_spec_generated == true and
+  .fixture_root_removed == true
+' "$output_directory/runc-retained-runtime-gate-probe.json" >/dev/null
+"$provider" run "$vm_a" sudo rm -rf -- "$lightweight_remote"
+lightweight_remote=
+
 remote_kubectl() {
   local command
 
@@ -523,10 +609,6 @@ for node in "$vm_a" "$vm_b"; do
   "$provider" run "$node" sudo /usr/local/bin/k3s ctr images import \
     "$remote/mithril-images.tar" >/dev/null
 done
-"$provider" run "$vm_b" sudo bash "$remote_b/harness/guest.sh" \
-  k3s-product-runtime "$remote_b"
-"$provider" run "$vm_a" sudo bash "$remote_a/harness/guest.sh" \
-  k3s-product-runtime "$remote_a"
 
 nodes_json=$("$provider" run "$vm_a" sudo /usr/local/bin/k3s kubectl get nodes -o json)
 node_a_name=$(jq -er --arg address "$address_a" '
@@ -547,8 +629,14 @@ replace_retained_test_resources() {
   echo "Preparing new Mithril state in the retained K3s cluster"
   # A prior forced Pod loss can leave an unowned socket inode. The new node
   # owner proves that no listener is live before it replaces that inode.
-  assert_runtime_hook hooks-removed "$vm_a" "$remote_a"
-  assert_runtime_hook hooks-removed "$vm_b" "$remote_b"
+  for node in "$vm_a" "$vm_b"; do
+    remote=$remote_a
+    [[ $node == "$vm_a" ]] || remote=$remote_b
+    if "$provider" run "$node" sudo test -f \
+        /usr/libexec/oci/hooks.d/mithril-oci-hook; then
+      assert_runtime_hook retained "$node" "$remote"
+    fi
+  done
   for node in "$vm_a" "$vm_b"; do
     for path in /var/lib/mithril-convergence/markers \
         /sys/fs/bpf/mithril-convergence; do
@@ -556,8 +644,10 @@ replace_retained_test_resources() {
         "$provider" run "$node" sudo find "$path" -mindepth 1 -delete
       fi
     done
-    "$provider" run "$node" sudo rm -f \
-      /etc/mithril/node.json /etc/mithril/node.json.held
+    if [[ $reuse_mithril_state == false ]]; then
+      "$provider" run "$node" sudo rm -f \
+        /etc/mithril/node.json /etc/mithril/node.json.held
+    fi
   done
   remote_kubectl label node "$node_a_name" "$node_b_name" \
     mithril.erebor.dev/ready- --overwrite >/dev/null
@@ -582,38 +672,6 @@ remote_kubectl wait --for=condition=Established \
   customresourcedefinition/workloadprotectionpolicies.mithril.erebor.dev \
   customresourcedefinition/workloadprotectionexceptions.mithril.erebor.dev \
   --timeout=120s >/dev/null
-
-nri_hook_logs() {
-  remote_kubectl -n "$system_namespace" logs \
-    -l app.kubernetes.io/name=mithril-node -c runtime-hook-injector \
-    --prefix=true --tail=200 --limit-bytes=131072
-}
-
-assert_nri_hook_loader_healthy() {
-  local logs
-  logs=$(nri_hook_logs)
-  if grep -F 'level=error' <<<"$logs" >/dev/null; then
-    printf '%s\n' "$logs" >&2
-    echo "the stock NRI hook injector reported a loader error" >&2
-    return 1
-  fi
-}
-
-wait_nri_hook_injection() {
-  local pod_name=$1
-  local container_name=$2
-  local logs
-  for _attempt in {1..120}; do
-    logs=$(nri_hook_logs 2>/dev/null || true)
-    if grep -F "$pod_name/$container_name: OCI hooks injected" \
-        <<<"$logs" >/dev/null; then
-      return 0
-    fi
-    sleep 1
-  done
-  echo "the stock NRI plugin did not inject the Mithril hooks" >&2
-  return 1
-}
 
 assert_cluster_access() {
   local expected=$1
@@ -735,15 +793,20 @@ make_node_config() {
       policy_candidates: []
     }' >"$output"
 }
-make_node_config "$materials/node-a.json" "${node_ids[0]}" "$node_a_name" \
-  66666666-6666-4666-8666-666666666661
-make_node_config "$materials/node-b.json" "${node_ids[1]}" "$node_b_name" \
-  66666666-6666-4666-8666-666666666662
+if ! remote_kubectl get namespace "$system_namespace" >/dev/null 2>&1; then
+  remote_kubectl create namespace "$system_namespace" >/dev/null
+fi
 
-jq -n \
-  --arg digest_a "${node_digests[0]}" --arg digest_b "${node_digests[1]}" \
-  --slurpfile trust "$materials/trust.json" \
-  '{
+if [[ $reuse_mithril_state == false ]]; then
+  make_node_config "$materials/node-a.json" "${node_ids[0]}" "$node_a_name" \
+    66666666-6666-4666-8666-666666666661
+  make_node_config "$materials/node-b.json" "${node_ids[1]}" "$node_b_name" \
+    66666666-6666-4666-8666-666666666662
+
+  jq -n \
+    --arg digest_a "${node_digests[0]}" --arg digest_b "${node_digests[1]}" \
+    --slurpfile trust "$materials/trust.json" \
+    '{
     listen: "0.0.0.0:8443",
     tls: {
       certificate_path: "/etc/mithril/tls.crt",
@@ -786,48 +849,51 @@ jq -n \
       maximum_request_bytes: 1048576,
       request_timeout_ms: 4000
     }
-  }' >"$materials/control.json"
+    }' >"$materials/control.json"
 
-for file in ca.pem tls.crt tls.key policy-signing-key profile-seal-request.json control.json; do
-  "$provider" put "$vm_a" "$materials/$file" "$remote_a/materials/$file"
-done
-for index in 0 1; do
-  node=$vm_a
-  remote=$remote_a
-  label=a
-  [[ $index -eq 0 ]] || { node=$vm_b; remote=$remote_b; label=b; }
-  "$provider" put "$node" "$ca" "$remote/materials/ca.pem"
-  "$provider" put "$node" "$materials/${node_ids[$index]}.pem" \
-    "$remote/materials/node.pem"
-  "$provider" put "$node" "$materials/${node_ids[$index]}-key.pem" \
-    "$remote/materials/node-key.pem"
-  "$provider" put "$node" "$materials/administrative-public-key.hex" \
-    "$remote/materials/administrative-public-key.hex"
-  "$provider" put "$node" "$materials/node-$label.json" \
-    "$remote/materials/node.json"
-  "$provider" run "$node" \
-    "sudo install -d -m 0700 /etc/mithril/identity /var/lib/mithril-convergence/markers /run/mithril && \
-     sudo install -m 0444 '$remote/materials/ca.pem' /etc/mithril/identity/ca.pem && \
-     sudo install -m 0444 '$remote/materials/node.pem' /etc/mithril/identity/node.pem && \
-     sudo install -m 0400 '$remote/materials/node-key.pem' /etc/mithril/identity/node-key.pem && \
-     sudo install -m 0444 '$remote/materials/administrative-public-key.hex' /etc/mithril/identity/administrative-public-key.hex"
-done
+  for file in ca.pem tls.crt tls.key policy-signing-key profile-seal-request.json control.json; do
+    "$provider" put "$vm_a" "$materials/$file" "$remote_a/materials/$file"
+  done
+  for index in 0 1; do
+    node=$vm_a
+    remote=$remote_a
+    label=a
+    [[ $index -eq 0 ]] || { node=$vm_b; remote=$remote_b; label=b; }
+    "$provider" put "$node" "$ca" "$remote/materials/ca.pem"
+    "$provider" put "$node" "$materials/${node_ids[$index]}.pem" \
+      "$remote/materials/node.pem"
+    "$provider" put "$node" "$materials/${node_ids[$index]}-key.pem" \
+      "$remote/materials/node-key.pem"
+    "$provider" put "$node" "$materials/administrative-public-key.hex" \
+      "$remote/materials/administrative-public-key.hex"
+    "$provider" put "$node" "$materials/node-$label.json" \
+      "$remote/materials/node.json"
+    "$provider" run "$node" \
+      "sudo install -d -m 0700 /etc/mithril/identity /var/lib/mithril-convergence/markers /run/mithril && \
+       sudo install -m 0444 '$remote/materials/ca.pem' /etc/mithril/identity/ca.pem && \
+       sudo install -m 0444 '$remote/materials/node.pem' /etc/mithril/identity/node.pem && \
+       sudo install -m 0400 '$remote/materials/node-key.pem' /etc/mithril/identity/node-key.pem && \
+       sudo install -m 0444 '$remote/materials/administrative-public-key.hex' /etc/mithril/identity/administrative-public-key.hex"
+    if [[ $reusing_environment == true ]]; then
+      "$provider" run "$node" sudo install -m 0400 \
+        "$remote/materials/node.json" /etc/mithril/node.json
+      "$provider" run "$node" sudo bash \
+        "$remote/harness/runtime-hook-oracle.sh" recovery-inputs /
+    fi
+  done
 
-if ! remote_kubectl get namespace "$system_namespace" >/dev/null 2>&1; then
-  remote_kubectl create namespace "$system_namespace" >/dev/null
-fi
-remote_kubectl -n "$system_namespace" create secret generic "$control_config_secret" \
-  --from-file=control.json="$remote_a/materials/control.json" \
-  --from-file=policy-signing-key="$remote_a/materials/policy-signing-key" \
-  --from-file=profile-seal-request.json="$remote_a/materials/profile-seal-request.json" \
-  --from-file=ca.pem="$remote_a/materials/ca.pem" \
-  --from-file=tls.crt="$remote_a/materials/tls.crt" \
-  --from-file=tls.key="$remote_a/materials/tls.key" >/dev/null
-remote_kubectl -n "$system_namespace" create secret tls "$admission_tls_secret" \
-  --cert="$remote_a/materials/tls.crt" --key="$remote_a/materials/tls.key" >/dev/null
+  remote_kubectl -n "$system_namespace" create secret generic "$control_config_secret" \
+    --from-file=control.json="$remote_a/materials/control.json" \
+    --from-file=policy-signing-key="$remote_a/materials/policy-signing-key" \
+    --from-file=profile-seal-request.json="$remote_a/materials/profile-seal-request.json" \
+    --from-file=ca.pem="$remote_a/materials/ca.pem" \
+    --from-file=tls.crt="$remote_a/materials/tls.crt" \
+    --from-file=tls.key="$remote_a/materials/tls.key" >/dev/null
+  remote_kubectl -n "$system_namespace" create secret tls "$admission_tls_secret" \
+    --cert="$remote_a/materials/tls.crt" --key="$remote_a/materials/tls.key" >/dev/null
 
-pvc=$work_a/control-pvc.yaml
-cat >"$pvc" <<EOF
+  pvc=$work_a/control-pvc.yaml
+  cat >"$pvc" <<EOF
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
@@ -839,15 +905,37 @@ spec:
     requests:
       storage: 1Gi
 EOF
-"$provider" put "$vm_a" "$pvc" "$remote_a/control-pvc.yaml"
-remote_kubectl apply --server-side --validate=strict \
-  -f "$remote_a/control-pvc.yaml" >/dev/null
+  "$provider" put "$vm_a" "$pvc" "$remote_a/control-pvc.yaml"
+  remote_kubectl apply --server-side --validate=strict \
+    -f "$remote_a/control-pvc.yaml" >/dev/null
+else
+  for node in "$vm_a" "$vm_b"; do
+    remote=$remote_a
+    [[ $node == "$vm_a" ]] || remote=$remote_b
+    "$provider" run "$node" sudo install -d -m 0700 \
+      /var/lib/mithril-convergence/markers /run/mithril
+    "$provider" run "$node" sudo bash \
+      "$remote/harness/runtime-hook-oracle.sh" recovery-inputs /
+  done
+  remote_kubectl -n "$system_namespace" get secret "$control_config_secret" \
+    -o json | jq -e '.data["control.json"] and .data["ca.pem"]' >/dev/null
+  remote_kubectl -n "$system_namespace" get secret "$admission_tls_secret" \
+    -o json | jq -e '.type == "kubernetes.io/tls"' >/dev/null
+  remote_kubectl -n "$system_namespace" get pvc "$control_state_claim" \
+    -o json | jq -e '.status.phase == "Bound"' >/dev/null
+fi
+retained_mithril_state_ready=true
 
 "$provider" run "$vm_a" sudo cp /etc/rancher/k3s/k3s.yaml "$remote_a/kubeconfig.yaml"
 "$provider" run "$vm_a" sudo chown ubuntu:ubuntu "$remote_a/kubeconfig.yaml"
 "$provider" get "$vm_a" "$remote_a/kubeconfig.yaml" "$kubeconfig"
 sed -i "s|https://127.0.0.1:6443|https://$address_a:6443|" "$kubeconfig"
-ca_bundle=$(base64 -w0 "$ca")
+if [[ $reuse_mithril_state == true ]]; then
+  ca_bundle=$(remote_kubectl -n "$system_namespace" get secret \
+    "$control_config_secret" -o 'jsonpath={.data.ca\.pem}')
+else
+  ca_bundle=$(base64 -w0 "$ca")
+fi
 values=$work_a/values.yaml
 cat >"$values" <<EOF
 node:
@@ -869,9 +957,9 @@ node:
                 operator: In
                 values: [amd64]
   runtimeHook:
-    install: true
     hostBinaryDirectory: /usr/libexec/oci/hooks.d
-    hostConfigDirectory: /usr/share/containers/oci/hooks.d
+    containerdConfigHostDirectory: /var/lib/rancher/k3s/agent/etc/containerd
+    k3sBinaryHostPath: /usr/local/bin/k3s
     socketPath: /run/mithril/runtime-admission.sock
     timeoutMs: 4000
     runtimeTimeoutSeconds: 5
@@ -897,8 +985,8 @@ EOF
 helm --kubeconfig "$kubeconfig" upgrade --install mithril \
   "$repo_root/packaging/mithril/helm" --namespace "$system_namespace" \
   --values "$values"
-remote_kubectl -n "$system_namespace" rollout status deployment/mithril-control \
-  --timeout=300s >/dev/null
+retry_kubernetes_command 30 1 remote_kubectl -n "$system_namespace" \
+  rollout status deployment/mithril-control --timeout=10s >/dev/null
 
 wait_node_projection() {
   local node_name=$1
@@ -990,23 +1078,26 @@ wait_node_epoch_advance() {
   return 1
 }
 
-# Config is withheld until Control proves that matching Nodes begin quarantined.
-wait_node_projection "$node_a_name" "" true
-wait_node_projection "$node_b_name" "" true
-for index in 0 1; do
-  node=$vm_a
-  remote=$remote_a
-  [[ $index -eq 0 ]] || { node=$vm_b; remote=$remote_b; }
-  "$provider" run "$node" sudo install -m 0400 \
-    "$remote/materials/node.json" /etc/mithril/node.json
-done
+# A fresh cluster withholds config until Control proves that matching Nodes
+# begin quarantined. Retained recovery needs the measured config before its
+# exact installer and node containers can start.
+if [[ $reusing_environment == false ]]; then
+  wait_node_projection "$node_a_name" "" true
+  wait_node_projection "$node_b_name" "" true
+  for index in 0 1; do
+    node=$vm_a
+    remote=$remote_a
+    [[ $index -eq 0 ]] || { node=$vm_b; remote=$remote_b; }
+    "$provider" run "$node" sudo install -m 0400 \
+      "$remote/materials/node.json" /etc/mithril/node.json
+  done
+fi
 remote_kubectl -n "$system_namespace" rollout status daemonset/mithril-node \
   --timeout=300s >/dev/null
 wait_node_projection "$node_a_name" true false
 wait_node_projection "$node_b_name" true false
 assert_runtime_hook installed "$vm_a" "$remote_a"
 assert_runtime_hook installed "$vm_b" "$remote_b"
-assert_nri_hook_loader_healthy
 
 if [[ $protected_start_only == false ]]; then
   # The full suite proves Node UID replacement. The focused startup lane keeps
@@ -1089,11 +1180,6 @@ assert_cluster_access false "$control_subject" update mithril.erebor.dev \
   workloadprotectionexceptions
 assert_cluster_access false "$node_subject" get "" nodes
 
-"$provider" put "$vm_a" \
-  "$repo_root/crates/mithril-e2e/fixtures/convergence/runtime-classes-v1.yaml" \
-  "$remote_a/runtime-classes-v1.yaml"
-remote_kubectl apply --server-side --validate=strict \
-  -f "$remote_a/runtime-classes-v1.yaml" >/dev/null
 remote_kubectl create namespace "$workload_namespace" >/dev/null
 remote_kubectl -n "$workload_namespace" create serviceaccount converter >/dev/null
 remote_kubectl -n "$workload_namespace" create serviceaccount policy-writer >/dev/null
@@ -1177,19 +1263,17 @@ remote_kubectl -n "$workload_namespace" get workloadprotectionpolicy converter-p
 
 render_pod() {
   local pod=$1
-  local runtime_class=$2
   local output=$work_a/$pod.yaml
   sed \
     -e "s/MITHRIL_CONVERGENCE_NAMESPACE/$workload_namespace/g" \
     -e "s/MITHRIL_CONVERGENCE_POD/$pod/g" \
-    -e "s/MITHRIL_CONVERGENCE_RUNTIME_CLASS/$runtime_class/g" \
     "$repo_root/crates/mithril-e2e/fixtures/convergence/protected-pod-v1.yaml" \
     >"$output"
   "$provider" put "$vm_a" "$output" "$remote_a/$pod.yaml"
 }
-render_pod protected mithril
-render_pod gate-failure mithril-fail
-render_pod entry-roles mithril
+render_pod protected
+render_pod gate-failure
+render_pod entry-roles
 
 unprotected=$work_a/unprotected.yaml
 sed "s/MITHRIL_CONVERGENCE_NAMESPACE/$workload_namespace/g" \
@@ -1558,7 +1642,6 @@ sleep 1
 remote_kubectl create -f "$remote_a/entry-roles.yaml" >/dev/null
 remote_kubectl -n "$workload_namespace" wait \
   --for=condition=Ready pod/entry-roles --timeout=300s >/dev/null
-wait_nri_hook_injection entry-roles converter
 entry_roles_node=$(remote_kubectl -n "$workload_namespace" get pod entry-roles \
   -o jsonpath='{.spec.nodeName}')
 [[ $entry_roles_node == "$node_a_name" || $entry_roles_node == "$node_b_name" ]] || {
@@ -1652,7 +1735,6 @@ prepare_pod_markers protected
 remote_kubectl create -f "$remote_a/protected.yaml" >/dev/null
 remote_kubectl -n "$workload_namespace" wait --for=condition=Ready pod/protected \
   --timeout=300s >/dev/null
-wait_nri_hook_injection protected converter
 selected_node=$(remote_kubectl -n "$workload_namespace" get pod protected \
   -o jsonpath='{.spec.nodeName}')
 [[ $selected_node == "$node_a_name" || $selected_node == "$node_b_name" ]] || {
@@ -2106,6 +2188,11 @@ wait_exception_state excessive-file-access Failed
 remote_kubectl --as="$exception_subject" -n "$workload_namespace" delete \
   workloadprotectionexception excessive-file-access --wait=true --timeout=120s >/dev/null
 
+for node in "$vm_a" "$vm_b"; do
+  "$provider" run "$node" sudo mv -- \
+    "$runtime_hook_socket" "$held_runtime_socket"
+done
+runtime_sockets_held=true
 remote_kubectl create -f "$remote_a/gate-failure.yaml" >/dev/null
 for _attempt in {1..120}; do
   failure_json=$(remote_kubectl -n "$workload_namespace" get pod gate-failure -o json)
@@ -2136,6 +2223,7 @@ jq -e --arg predecessor "$protected_candidate" '
   /var/lib/mithril-convergence/markers/gate-failure.started
 remote_kubectl -n "$workload_namespace" delete pod gate-failure \
   --wait=true --timeout=120s >/dev/null
+restore_runtime_sockets
 
 restart_baseline=$(wait_runtime_delivery "$selected_node" "$profile_id" \
   1 0 1 "$gate_candidate")
@@ -2542,6 +2630,7 @@ jq -n \
     deleted_root_not_inspected: true,
     old_root_replay_refused: true,
     fresh_policy_uses_root_activation: true,
+    direct_runc_runtime_gate_passed: true,
     rbac_boundary: true
   }' >"$output_directory/two-node-convergence.json"
 

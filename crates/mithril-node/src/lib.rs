@@ -11,6 +11,8 @@ mod observation;
 mod policy;
 mod policy_delivery;
 mod runtime_admission;
+mod runtime_gate;
+mod runtime_integration;
 mod trust;
 mod unix_socket;
 
@@ -56,5 +58,10 @@ pub use runtime_admission::{
     RuntimeAdmissionResponseV1, CONTAINER_NAME_ANNOTATION, IMAGE_NAME_ANNOTATION,
     POD_NAMESPACE_ANNOTATION, POD_UID_ANNOTATION, POLICY_SOURCE_REVISION_ANNOTATION,
     PROFILE_ID_ANNOTATION, SANDBOX_ID_ANNOTATION,
+};
+pub use runtime_gate::{RetainedRuntimeDecisionV1, RetainedRuntimeGate};
+pub use runtime_integration::{
+    OciBaseSpecOwner, RuntimeIntegrationInstallResultV1, RuntimeIntegrationInstallV1,
+    RuntimeIntegrationOwner, RuntimeRecoveryMountInputV1,
 };
 pub use trust::{InstalledTrustGenerationV1, TrustCache};

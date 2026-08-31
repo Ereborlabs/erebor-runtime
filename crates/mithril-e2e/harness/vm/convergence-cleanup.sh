@@ -27,10 +27,6 @@ collect_mithril_diagnostics() {
     -l app.kubernetes.io/name=mithril-node --all-containers=true --previous \
     --prefix=true --tail=200 --limit-bytes=131072 \
     >"$diagnostics/nodes-previous.log" 2>&1
-  diagnostic_kubectl -n "$namespace" logs \
-    -l app.kubernetes.io/name=mithril-node -c runtime-hook-injector \
-    --prefix=true --tail=200 --limit-bytes=131072 \
-    >"$diagnostics/nri-hook-injector.log" 2>&1
   local node_pod
   local node_index=0
   while read -r node_pod && ((node_index < 16)); do

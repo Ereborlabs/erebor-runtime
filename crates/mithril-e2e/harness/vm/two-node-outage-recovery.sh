@@ -11,13 +11,11 @@ provider=
 output_directory=
 system_namespace=mithril-system
 scenario_namespace=mithril-outage-recovery
-runtime_class=mithril-outage-recovery
 policy_name=outage-policy
 network_table=mithril_outage_qualification
 watch_table=mithril_watch_relist_qualification
 marker_root=/var/lib/mithril-convergence/markers
 owns_namespace=false
-owns_runtime_class=false
 owns_node_labels=false
 network_blocked=false
 watch_blocked=false
@@ -215,10 +213,6 @@ cleanup() {
         wait_policy_delivery_empty "$node_a_name" || cleanup_failed=true
         wait_policy_delivery_empty "$node_b_name" || cleanup_failed=true
       fi
-    fi
-    if [[ $owns_runtime_class == true ]]; then
-      remote_kubectl delete runtimeclass "$runtime_class" --ignore-not-found=true \
-        --wait=true --timeout=120s >/dev/null 2>&1 || cleanup_failed=true
     fi
     if [[ $owns_node_labels == true ]]; then
       remote_kubectl label node "$node_a_name" "$node_b_name" \
@@ -586,7 +580,6 @@ remote_kubectl -n "$system_namespace" rollout status deployment/mithril-control 
 remote_kubectl -n "$system_namespace" rollout status daemonset/mithril-node \
   --timeout=180s >/dev/null
 assert_absent namespace "$scenario_namespace"
-assert_absent runtimeclass "$runtime_class"
 if "$provider" run "$vm_b" sudo nft list table inet "$network_table" \
     >/dev/null 2>&1; then
   echo "outage recovery qualification refuses to replace nft table $network_table" >&2
@@ -637,15 +630,6 @@ remote_kubectl label node "$node_b_name" \
   qualification.mithril.erebor.dev/node=b --overwrite >/dev/null
 owns_node_labels=true
 
-remote_kubectl apply --server-side --field-manager=mithril-outage-recovery \
-  --validate=strict -f - >/dev/null <<EOF
-apiVersion: node.k8s.io/v1
-kind: RuntimeClass
-metadata:
-  name: $runtime_class
-handler: mithril
-EOF
-owns_runtime_class=true
 remote_kubectl create namespace "$scenario_namespace" >/dev/null
 owns_namespace=true
 remote_kubectl -n "$scenario_namespace" create serviceaccount worker >/dev/null

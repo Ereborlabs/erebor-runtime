@@ -11,7 +11,7 @@ static STDERR_LOGGING_INIT: Once = Once::new();
 pub fn init_stderr_logging() -> Result<()> {
     let filter = EnvFilter::builder()
         .with_default_directive(LevelFilter::INFO.into())
-        .try_from_env()
+        .from_env()
         .map_err(|source| TelemetryError::InvalidFilter {
             source,
             location: snafu::Location::default(),
