@@ -1938,6 +1938,45 @@ fn deletion_withdraws_desired_policy_and_recreate_gets_a_new_source_identity() -
         .predecessor_candidate_content_id
         .is_none());
     assert_eq!(recreated.bundles[0].candidate.distribution_sequence, 1);
+
+    let root = recreated.bundles[0].clone();
+    owner.rollout_owner().acknowledge(acknowledgement(
+        &root,
+        PolicyActivationStateV1::Active,
+        NOW + 4,
+    )?)?;
+    let mut runtime_inventory = recreated_inventory;
+    runtime_inventory[0].container_id = "containerd://converter-recreated".to_owned();
+    runtime_inventory[0].workload_binding_generation_digest =
+        workload_target_fact_digest(&runtime_inventory[0])?;
+    let runtime_bound = owner.reconcile(
+        &recreated_resource,
+        NAMESPACE_UID,
+        &runtime_inventory,
+        NOW + 5,
+    )?;
+    assert_eq!(runtime_bound.bundles.len(), 1);
+    let successor = &runtime_bound.bundles[0];
+    assert_eq!(
+        successor.profile_artifact.header.profile_id,
+        recreated_resource.metadata.uid.clone().unwrap_or_default()
+    );
+    assert_eq!(
+        successor.candidate.policy_source_revision_id,
+        recreated.source_revision.policy_source_revision_id
+    );
+    assert_eq!(
+        successor.candidate.operation,
+        PolicyDeliveryOperationV1::Replace
+    );
+    assert_eq!(
+        successor
+            .candidate
+            .predecessor_candidate_content_id
+            .as_deref(),
+        Some(root.candidate.candidate_content_id.as_str())
+    );
+    assert_eq!(successor.candidate.distribution_sequence, 2);
     Ok(())
 }
 

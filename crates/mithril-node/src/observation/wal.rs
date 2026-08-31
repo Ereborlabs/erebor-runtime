@@ -1706,13 +1706,16 @@ mod tests {
         }
         let path = active_segment(directory.path())?;
         let before_restart = std::fs::read(&path)?;
+        let captured_size = before_restart.len();
         drop(wal);
 
         let mut restarted = EvidenceWal::open(directory.path(), retain_limits)?;
         assert_eq!(std::fs::read(&path)?, before_restart);
         restarted.append(&observation(5)?)?;
         let after_restart = std::fs::read(path)?;
-        assert_eq!(&after_restart[..before_restart.len()], before_restart);
+        assert_ne!(after_restart, before_restart);
+        // A live-file manifest must hash its captured length because the writer can append next.
+        assert_eq!(&after_restart[..captured_size], before_restart);
         assert_eq!(restarted.pending_records(), 5);
         Ok(())
     }

@@ -14,11 +14,14 @@ scenario_namespace=mithril-outage-recovery
 runtime_class=mithril-outage-recovery
 policy_name=outage-policy
 network_table=mithril_outage_qualification
+watch_table=mithril_watch_relist_qualification
 marker_root=/var/lib/mithril-convergence/markers
 owns_namespace=false
 owns_runtime_class=false
 owns_node_labels=false
 network_blocked=false
+watch_blocked=false
+watch_vm=
 api_stopped=false
 control_storage_read_only=false
 
@@ -138,6 +141,13 @@ remove_network_block() {
   fi
 }
 
+remove_watch_block() {
+  if [[ $watch_blocked == true ]]; then
+    "$provider" run "$watch_vm" sudo nft delete table inet "$watch_table"
+    watch_blocked=false
+  fi
+}
+
 restore_control_storage() {
   if [[ $control_storage_read_only == true ]]; then
     remote_kubectl -n "$system_namespace" patch deployment mithril-control \
@@ -188,6 +198,7 @@ cleanup() {
   trap - EXIT
   set +e
   remove_network_block || cleanup_failed=true
+  remove_watch_block || cleanup_failed=true
   if [[ $api_stopped == true ]]; then
     "$provider" run "$vm_a" sudo systemctl start k3s || cleanup_failed=true
     api_stopped=false
@@ -267,7 +278,9 @@ node_wal_manifest() {
   remote_kubectl -n "$system_namespace" exec -c mithril-node "$pod" -- \
     sh -c "find /var/lib/mithril/evidence-wal-v2 -type f \
       \( -name '*.open' -o -name '*.seg' \) \
-      -exec sh -c 'for path do printf \"%s \" \"\$(stat -c %s \"\$path\")\"; sha256sum \"\$path\"; done' sh '{}' +"
+      -exec sh -c 'for path do size=\$(stat -c %s \"\$path\"); \
+        digest=\$(head -c \"\$size\" \"\$path\" | sha256sum | sed -n \"1s/[[:space:]].*//p\"); \
+        printf \"%s %s %s\\n\" \"\$size\" \"\$digest\" \"\$path\"; done' sh '{}' +"
 }
 
 node_wal_count() {
@@ -464,6 +477,25 @@ refresh_policy_status() {
     --overwrite >/dev/null
 }
 
+wait_policy_accepted() {
+  local name=$1
+  local deadline=$((SECONDS + 180))
+  local policy_json
+  while ((SECONDS < deadline)); do
+    policy_json=$(remote_kubectl -n "$scenario_namespace" get \
+      workloadprotectionpolicy "$name" -o json 2>/dev/null || true)
+    if [[ -n $policy_json ]] && jq -e '
+        .status.observedGeneration == .metadata.generation and
+        any(.status.conditions[]?; .type == "Accepted" and .status == "True")
+      ' <<<"$policy_json" >/dev/null; then
+      return 0
+    fi
+    sleep 1
+  done
+  echo "policy $name did not become accepted" >&2
+  return 1
+}
+
 wait_rollout() {
   local active=$1
   local updating=$2
@@ -560,6 +592,13 @@ if "$provider" run "$vm_b" sudo nft list table inet "$network_table" \
   echo "outage recovery qualification refuses to replace nft table $network_table" >&2
   exit 2
 fi
+for vm in "$vm_a" "$vm_b"; do
+  if "$provider" run "$vm" sudo nft list table inet "$watch_table" \
+      >/dev/null 2>&1; then
+    echo "outage recovery qualification refuses to replace nft table $watch_table" >&2
+    exit 2
+  fi
+done
 
 address_a=$("$provider" address "$vm_a")
 address_b=$("$provider" address "$vm_b")
@@ -851,6 +890,126 @@ wait_rollout 2 0
 candidate_a_recovered=$(active_candidate "$node_a_name")
 candidate_b_recovered=$(active_candidate "$node_b_name")
 request_denial "$vm_b" outage-b recovered-b
+
+control_pod_json=$(remote_kubectl -n "$system_namespace" get pods \
+  -l app.kubernetes.io/name=mithril-control -o json)
+control_pod_uid_before_relist=$(jq -er '.items[0].metadata.uid' <<<"$control_pod_json")
+control_pod_ip=$(jq -er '.items[0].status.podIP' <<<"$control_pod_json")
+control_pod_node=$(jq -er '.items[0].spec.nodeName' <<<"$control_pod_json")
+case $control_pod_node in
+  "$node_a_name") watch_vm=$vm_a ;;
+  "$node_b_name") watch_vm=$vm_b ;;
+  *)
+    echo "Control Pod is not on either retained test Node: $control_pod_node" >&2
+    exit 1
+    ;;
+esac
+api_endpoints_json=$(remote_kubectl -n default get endpointslices.discovery.k8s.io \
+  -l kubernetes.io/service-name=kubernetes -o json)
+api_endpoint_ip=$(jq -er '
+  [.items[].endpoints[] |
+    select(.conditions.ready != false) |
+    .addresses[]][0]
+' <<<"$api_endpoints_json")
+api_endpoint_port=$(jq -er '
+  [.items[].ports[] |
+    select(.protocol == "TCP" and .name == "https") |
+    .port][0]
+' <<<"$api_endpoints_json")
+[[ -n $control_pod_ip && -n $api_endpoint_ip && -n $api_endpoint_port ]] || {
+  echo "watch interruption targets are incomplete" >&2
+  exit 1
+}
+old_policy_uid=$(remote_kubectl -n "$scenario_namespace" get \
+  workloadprotectionpolicy "$policy_name" -o jsonpath='{.metadata.uid}')
+jq '
+  .metadata.name = "relist-sentinel" |
+  .spec.podSelector.matchLabels["app.kubernetes.io/name"] = "mithril-relist-sentinel"
+' "$work_directory/policy.json" >"$work_directory/relist-sentinel.json"
+"$provider" put "$vm_a" "$work_directory/relist-sentinel.json" \
+  /var/tmp/mithril-relist-sentinel.json
+
+"$provider" run "$watch_vm" sudo nft add table inet "$watch_table"
+watch_blocked=true
+"$provider" run "$watch_vm" \
+  "sudo nft add chain inet $watch_table input '{ type filter hook input priority -50; policy accept; }'"
+"$provider" run "$watch_vm" sudo nft add rule inet "$watch_table" input \
+  ip saddr "$control_pod_ip" ip daddr "$api_endpoint_ip" \
+  tcp dport "$api_endpoint_port" drop
+remote_kubectl apply --server-side --field-manager=mithril-outage-recovery \
+  --validate=strict -f /var/tmp/mithril-relist-sentinel.json >/dev/null
+remote_kubectl -n "$scenario_namespace" delete workloadprotectionpolicy \
+  "$policy_name" --wait=true --timeout=120s >/dev/null
+if remote_kubectl -n "$scenario_namespace" get workloadprotectionpolicy \
+    relist-sentinel -o json | jq -e '.status != null' >/dev/null; then
+  echo "Control observed the sentinel while its Kubernetes watch was blocked" >&2
+  exit 1
+fi
+request_denial "$vm_a" outage-a watch-blocked-a
+request_denial "$vm_b" outage-b watch-blocked-b
+
+"$provider" run "$watch_vm" sudo nft insert rule inet "$watch_table" input \
+  ip saddr "$control_pod_ip" ip daddr "$api_endpoint_ip" \
+  tcp dport "$api_endpoint_port" reject with tcp reset
+sleep 2
+remove_watch_block
+wait_policy_accepted relist-sentinel
+control_pod_uid_after_relist=$(remote_kubectl -n "$system_namespace" get pods \
+  -l app.kubernetes.io/name=mithril-control -o jsonpath='{.items[0].metadata.uid}')
+[[ $control_pod_uid_after_relist == "$control_pod_uid_before_relist" ]] || {
+  echo "Control restarted instead of recovering its Kubernetes watch" >&2
+  exit 1
+}
+
+remote_kubectl -n "$scenario_namespace" delete pod outage-a outage-b \
+  --wait=true --timeout=120s >/dev/null
+wait_policy_delivery_empty "$node_a_name"
+wait_policy_delivery_empty "$node_b_name"
+remote_kubectl -n "$scenario_namespace" delete workloadprotectionpolicy \
+  relist-sentinel --wait=true --timeout=120s >/dev/null
+remote_kubectl apply --server-side --field-manager=mithril-outage-recovery \
+  --validate=strict -f /var/tmp/mithril-outage-policy.json >/dev/null
+wait_policy_accepted "$policy_name"
+new_policy_uid=$(remote_kubectl -n "$scenario_namespace" get \
+  workloadprotectionpolicy "$policy_name" -o jsonpath='{.metadata.uid}')
+[[ $new_policy_uid != "$old_policy_uid" ]] || {
+  echo "the relist case reused the deleted policy UID" >&2
+  exit 1
+}
+for suffix in a b; do
+  "$provider" run "$vm_a" sudo rm -f \
+    "$marker_root/outage-$suffix.started" "$marker_root/outage-$suffix.result"
+  remote_kubectl create -f "/var/tmp/mithril-outage-pod-$suffix.yaml" >/dev/null
+done
+remote_kubectl -n "$scenario_namespace" wait --for=condition=Ready pod/outage-a \
+  pod/outage-b --timeout=300s >/dev/null
+wait_application_started "$vm_a" outage-a
+wait_application_started "$vm_b" outage-b
+wait_node_control_acknowledgement "$node_a_name"
+wait_node_control_acknowledgement "$node_b_name"
+refresh_policy_status relist-recreated
+wait_rollout 2 0
+candidate_a_after_relist=$(wait_candidate_change "$node_a_name" "$candidate_a_recovered")
+candidate_b_after_relist=$(wait_candidate_change "$node_b_name" "$candidate_b_recovered")
+for node_name in "$node_a_name" "$node_b_name"; do
+  node_status "$node_name" | jq -e --arg profile_id "$new_policy_uid" '
+    .active_target_count == 1 and
+    .active_targets[0].profile_id == $profile_id and
+    .active_targets[0].policy_source_revision_id != "" and
+    (
+      (
+        .active_targets[0].operation == "ACTIVATE" and
+        .active_targets[0].predecessor_candidate_content_id == null
+      ) or
+      (
+        .active_targets[0].operation == "REPLACE" and
+        .active_targets[0].predecessor_candidate_content_id != null
+      )
+    )
+  ' >/dev/null
+done
+request_denial "$vm_a" outage-a relist-recreated-a
+request_denial "$vm_b" outage-b relist-recreated-b
 cp "$work_directory/control-segments-before-outage.txt" \
   "$output_directory/control-segments-before-outage.txt"
 cp "$work_directory/control-segments-after-outage.txt" \

@@ -1594,19 +1594,244 @@ fn read_json<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T> {
 #[cfg(test)]
 mod tests {
     use std::convert::Infallible;
+    use std::path::{Path, PathBuf};
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
+    use std::time::Duration;
 
     use axum::body::Body;
     use axum::http::{header, HeaderValue, Request, Response, StatusCode};
+    use ed25519_dalek::SigningKey;
     use kube::client::Body as KubeBody;
     use kube::Client;
     use serde_json::json;
-    use tokio::sync::Mutex;
+    use tempfile::tempdir;
+    use tokio::sync::{Mutex, Notify};
     use tower::service_fn;
 
     use super::{
-        kubernetes_condition, patch_policy_status, preserve_transition_times, rejected_status,
+        kubernetes_condition, patch_policy_status, preserve_transition_times, reconcile_cluster,
+        rejected_status, PolicyDesiredStateConfigV1, PolicyDesiredStateOwner, PolicySignerConfigV1,
+        ProfileSealRequestV1, WorkloadProtectionPolicy,
     };
+    use crate::{
+        ControlPlane, ControlStore, RegistryDigestsV1, TrustGenerationV1,
+        WorkloadProtectionPolicySpec, POLICY_API_VERSION, POLICY_KIND,
+    };
+
+    #[tokio::test]
+    async fn watch_gone_retries_partial_relist_without_retiring_until_complete_snapshot(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempdir()?;
+        let store = ControlStore::open(directory.path())?;
+        let digest = "0".repeat(64);
+        let owner = PolicyDesiredStateOwner::new(
+            PolicyDesiredStateConfigV1 {
+                tenant_id: "10000000-0000-4000-8000-000000000001".to_owned(),
+                cluster_uid: "55555555-5555-4555-8555-555555555555".to_owned(),
+                signer: PolicySignerConfigV1 {
+                    signing_key_id: "policy-key-a".to_owned(),
+                    signing_key_path: PathBuf::from("/unused/policy-key"),
+                    seal_request_path: PathBuf::from("/unused/seal-request"),
+                    distribution_sequence_epoch: 9,
+                    candidate_validity_ns: 60_000_000_000,
+                },
+            },
+            store.clone(),
+            SigningKey::from_bytes(&[7; 32]),
+            ProfileSealRequestV1 {
+                signing_key_id: "policy-key-a".to_owned(),
+                issuer_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa".to_owned(),
+                sequence_epoch: 4,
+                issuer_sequence: 0,
+                rollback_authorization_id: None,
+                registry_digests: RegistryDigestsV1 {
+                    provider_numeric_registry_bundle_digest: digest.clone(),
+                    required_capability_schema_digest: digest.clone(),
+                    source_selector_registry_digest: digest.clone(),
+                    object_classifier_registry_digest: digest.clone(),
+                    reason_code_registry_digest: digest.clone(),
+                    correlation_package_registry_digest: digest.clone(),
+                    provider_vocabulary_registry_digest: digest,
+                },
+            },
+        );
+        let control = ControlPlane::with_control_store(
+            Vec::new(),
+            TrustGenerationV1 {
+                generation: 1,
+                bundle_digest: "d".repeat(64),
+                policy_issuer_sequence_epoch: 0,
+                policy_signers: Vec::new(),
+            },
+            store.clone(),
+        )?
+        .with_policy_desired_state(owner.clone());
+        control.replace_kubernetes_workload_inventory(Vec::new())?;
+
+        let spec = WorkloadProtectionPolicySpec::parse(
+            Path::new("kubernetes-policy-v1.yaml"),
+            include_bytes!("../../tests/fixtures/kubernetes-policy-v1.yaml"),
+        )?;
+        let policy: WorkloadProtectionPolicy = serde_json::from_value(json!({
+            "apiVersion": POLICY_API_VERSION,
+            "kind": POLICY_KIND,
+            "metadata": {
+                "name": "profile",
+                "namespace": "tenant-a",
+                "uid": "30000000-0000-4000-8000-000000000001",
+                "generation": 1,
+                "resourceVersion": "policy-1"
+            },
+            "spec": spec
+        }))?;
+        let policy_json = serde_json::to_value(&policy)?;
+        let mut sentinel_json = policy_json.clone();
+        sentinel_json["metadata"]["name"] = json!("relist-sentinel");
+        sentinel_json["metadata"]["uid"] = json!("30000000-0000-4000-8000-000000000002");
+        sentinel_json["metadata"]["resourceVersion"] = json!("policy-2");
+        sentinel_json["spec"]["podSelector"]["matchLabels"]["app.kubernetes.io/name"] =
+            json!("mithril-relist-sentinel");
+        let list_attempts = Arc::new(AtomicUsize::new(0));
+        let continuation_attempts = Arc::new(AtomicUsize::new(0));
+        let watch_attempts = Arc::new(AtomicUsize::new(0));
+        let release_complete_relist = Arc::new(Notify::new());
+        let service = service_fn({
+            let list_attempts = list_attempts.clone();
+            let continuation_attempts = continuation_attempts.clone();
+            let watch_attempts = watch_attempts.clone();
+            let release_complete_relist = release_complete_relist.clone();
+            move |request: Request<KubeBody>| {
+                let policy_json = policy_json.clone();
+                let sentinel_json = sentinel_json.clone();
+                let list_attempts = list_attempts.clone();
+                let continuation_attempts = continuation_attempts.clone();
+                let watch_attempts = watch_attempts.clone();
+                let release_complete_relist = release_complete_relist.clone();
+                async move {
+                    let uri = request.uri().to_string();
+                    let response = |status, value: serde_json::Value| {
+                        let mut response = Response::new(Body::from(value.to_string()));
+                        *response.status_mut() = status;
+                        response.headers_mut().insert(
+                            header::CONTENT_TYPE,
+                            HeaderValue::from_static("application/json"),
+                        );
+                        response
+                    };
+                    let value = if request.uri().path() == "/api/v1/namespaces/tenant-a" {
+                        json!({
+                            "apiVersion": "v1",
+                            "kind": "Namespace",
+                            "metadata": {
+                                "name": "tenant-a",
+                                "uid": "66666666-6666-4666-8666-666666666666"
+                            }
+                        })
+                    } else if request.uri().path().ends_with("/status") {
+                        if request.uri().path().ends_with("/relist-sentinel/status") {
+                            sentinel_json
+                        } else {
+                            policy_json
+                        }
+                    } else if uri.contains("watch=true") {
+                        watch_attempts.fetch_add(1, Ordering::Relaxed);
+                        json!({
+                            "type": "ERROR",
+                            "object": {
+                                "apiVersion": "v1",
+                                "kind": "Status",
+                                "status": "Failure",
+                                "message": "too old resource version",
+                                "reason": "Gone",
+                                "code": 410
+                            }
+                        })
+                    } else if uri.contains("continue=next") {
+                        continuation_attempts.fetch_add(1, Ordering::Relaxed);
+                        return Ok::<_, Infallible>(response(
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            json!({
+                                "apiVersion": "v1",
+                                "kind": "Status",
+                                "status": "Failure",
+                                "reason": "InternalError",
+                                "code": 500
+                            }),
+                        ));
+                    } else {
+                        match list_attempts.fetch_add(1, Ordering::Relaxed) {
+                            0 => json!({
+                                "apiVersion": POLICY_API_VERSION,
+                                "kind": "WorkloadProtectionPolicyList",
+                                "metadata": {"resourceVersion": "list-1"},
+                                "items": [policy_json]
+                            }),
+                            1 => json!({
+                                "apiVersion": POLICY_API_VERSION,
+                                "kind": "WorkloadProtectionPolicyList",
+                                "metadata": {
+                                    "resourceVersion": "list-partial",
+                                    "continue": "next"
+                                },
+                                "items": []
+                            }),
+                            _ => {
+                                release_complete_relist.notified().await;
+                                json!({
+                                    "apiVersion": POLICY_API_VERSION,
+                                    "kind": "WorkloadProtectionPolicyList",
+                                    "metadata": {"resourceVersion": "list-complete"},
+                                    "items": [sentinel_json]
+                                })
+                            }
+                        }
+                    };
+                    Ok::<_, Infallible>(response(StatusCode::OK, value))
+                }
+            }
+        });
+        let task = tokio::spawn(reconcile_cluster(
+            Client::new(service, "default"),
+            owner.clone(),
+            control,
+        ));
+
+        let mut partial_relist_failed = false;
+        for _attempt in 0..300 {
+            if owner.health()?.failed_relists > 0 {
+                partial_relist_failed = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert!(partial_relist_failed);
+        assert_eq!(store.latest_live_sources()?.len(), 1);
+        release_complete_relist.notify_one();
+
+        let mut complete_relist_retired_source = false;
+        for _attempt in 0..300 {
+            let health = owner.health()?;
+            let live_sources = store.latest_live_sources()?;
+            if health.successful_relists >= 2
+                && live_sources.len() == 1
+                && live_sources[0].0.object_name == "relist-sentinel"
+            {
+                complete_relist_retired_source = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        task.abort();
+        let _result = task.await;
+
+        assert!(complete_relist_retired_source);
+        assert!(owner.health()?.watch_failures >= 1);
+        assert!(list_attempts.load(Ordering::Relaxed) >= 3);
+        assert_eq!(continuation_attempts.load(Ordering::Relaxed), 1);
+        assert!(watch_attempts.load(Ordering::Relaxed) >= 1);
+        Ok(())
+    }
 
     #[tokio::test]
     async fn rejected_policy_status_uses_its_namespace_subresource(
