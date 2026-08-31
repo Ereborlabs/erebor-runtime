@@ -3881,12 +3881,15 @@ remove the fragment, base spec, hook, recovery manifest, or pinned BPF state.
 The retained hook is a gate, not a gatherer. It owns no policy compiler,
 telemetry stream, graph, or WAL. It rejects the exact Phase 6.2 hostile
 unmatched OCI shape before the initial process. A missing node socket also
-rejects a protected start. The only socket-free bootstrap exception is the
-exact measured Mithril recovery executable and its exact security-sensitive
-OCI shape. A forged image tag, Pod label, annotation, namespace, Helm release,
-or RuntimeClass cannot claim it. After recovery, the one `mithril-node` process
-verifies the retained BPF state, opens normal admission, and remains the only
-gatherer.
+rejects a protected start. The socket-free bootstrap exceptions are a Mithril
+installer with the retained command and host ownership shape, and the exact
+Node recovery recorded by the current manifest. The installer can replace the
+integration and manifest. It cannot replace Control or Node durable state. A
+normal reinstall reopens the same state, runs only supported migrations, and
+continues the existing policy sequence. A forged image tag, Pod label,
+annotation, namespace, Helm release, or RuntimeClass cannot claim bootstrap
+authority. After recovery, the one `mithril-node` process verifies the retained
+BPF state, opens normal admission, and remains the only gatherer.
 
 The containerd base spec covers CRI starts. A caller that starts a task through
 a direct non-CRI path bypasses this gate, so retained BPF enforcement denies
@@ -3903,10 +3906,12 @@ Packaging tiers are explicit:
 
 `BOOT-ADMISSION-001` exercises cold boot with runtime then kubelet then node
 agent, reversed service timing, agent Pod reschedule, daemon crash, upgrade,
-ordinary Helm deletion, exact recovery, and a forged recovery Pod. The exact
-hostile user marker must not run while the retained gate is installed. The
-recovery process must match the installed executable measurement and exact OCI
-shape. In DaemonSet/NRI-only mode the same race must report `START_GAP`, not
+ordinary Helm deletion, installer replacement, exact Node recovery, and forged
+installer and recovery Pods. The exact hostile user marker must not run while
+the retained gate is installed. The installer must match the retained command
+and host ownership shape. Ordinary Node recovery must match the current
+manifest. The recovered Control and Node must continue their durable policy
+chain. In DaemonSet/NRI-only mode the same race must report `START_GAP`, not
 pass.
 
 Preferred mechanisms, in descending order of guarantee:

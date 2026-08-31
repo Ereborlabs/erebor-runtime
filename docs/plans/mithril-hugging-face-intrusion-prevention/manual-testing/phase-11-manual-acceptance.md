@@ -39,7 +39,11 @@ the final source state.
 5. Run upgrade, rollback, interrupted install, node/control loss, CRD
    conversion and relist, Control leader failover, mixed-version, stale-pin,
    policy/trust rotation, WAL/intake-cursor recovery, scale, capacity, and
-   performance matrices.
+   performance matrices. For an upgrade, retain the Control PVC and each Node
+   state path. Record the policy sequence and predecessor before replacement,
+   then prove that the new version continues both values. Use a separate
+   negative case to prove that fresh Control state cannot replace retained Node
+   policy state.
 6. Run the complete Hugging Face acceptance contract and live two-node probe.
 7. Uninstall, inventory remaining resources, and verify no active program,
    link, map, pin, credential, route, workload, or durable owner remains.
@@ -85,7 +89,9 @@ mode:
   CRD/status access, network policy, storage, mTLS, bootstrap, and config
   rejection;
 - upgrade and roll back BPF link/map/ABI, node/control, policy, and trust state
-  without an unmeasured allow window;
+  without an unmeasured allow window; preserve the Control PVC, Node state
+  paths, unconsumed evidence, sequence high-water values, and predecessor
+  chain;
 - convert the CRD storage version, relist after watch compaction, fail over the
   Control writer, and prove that stale source, target, and node receipts cannot
   win; and

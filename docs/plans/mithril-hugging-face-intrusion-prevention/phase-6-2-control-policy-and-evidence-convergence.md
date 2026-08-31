@@ -90,7 +90,11 @@ Unmatched privileged Pod CREATE
 Mithril recovery after ordinary Helm deletion
   -> Helm installs the retained hook, OCI base spec, and containerd default-runtime configuration
   -> containerd, not an NRI service, owns hook invocation after installation
-  -> the hook permits only the exact measured Mithril recovery executable and OCI shape without the node socket
+  -> the hook admits a version-changed Mithril installer with the retained installer command and host ownership shape
+  -> the installer atomically replaces binaries, runtime configuration, and the exact recovery manifest
+  -> Control and Node reopen their existing durable state and run only supported migrations
+  -> Control continues the existing policy sequence and predecessor chain
+  -> the hook permits only the exact Node recovery recorded by the new manifest
   -> Pod labels, annotations, namespaces, RuntimeClass, and Helm ownership grant no recovery authority
   -> the recovered node verifies retained BPF state and opens normal admission
 ```
@@ -563,11 +567,31 @@ configuration, and pinned BPF state. Containerd invokes the retained hook
 directly. It does not depend on a retained NRI process or a RuntimeClass. A
 missing node admission socket denies a matching protected start. The hook also
 rejects the exact unmatched privileged-Pod OCI shape before its initial
-process. It permits only the exact measured Mithril recovery executable and
-OCI shape without the socket. Kubernetes names, labels, annotations,
-namespaces, and Helm ownership are not recovery authority. Retained BPF state
-continues to protect existing bindings and denies the incident's first covered
-effect if a caller bypasses the CRI path.
+process. It permits the exact Node recovery recorded by the current manifest.
+It also permits a version-changed Mithril installer when the installer command,
+retained owner, host paths, writable mounts, privileges, and socket match the
+installed integration. The installer can replace the hook binary, runtime
+configuration, and recovery manifest. It cannot reset Control or Node durable
+state. Kubernetes names, labels, annotations, namespaces, and Helm ownership
+are not recovery authority. Retained BPF state continues to protect existing
+bindings and denies the incident's first covered effect if a caller bypasses
+the CRI path.
+
+A normal reinstall mounts the same Control PVC and the same Node state
+directory on each host. Control and Node own their respective migrations. A
+migration must be explicit, bounded, and crash-safe. The owner must complete it
+before it serves policy or opens admission. A failed or unsupported migration
+keeps the original state intact and keeps admission fail-closed. The installer
+does not create fresh policy authority. After restart, Control sends the next
+sequence and names the previously active candidate as its predecessor.
+
+A fresh Control PVC and a retained Node state directory do not form an upgrade
+baseline. The Node retains issuer and distribution high-water values and the
+active candidate, but fresh Control starts without that transaction history.
+Its first root candidate is therefore a replay or an invalid predecessor. This
+combination proves anti-replay rejection only. It cannot prove upgrade
+continuity. A storage contract that cannot use an explicitly supported
+migration is outside this upgrade path.
 
 `NodeDecommissionOwner` accepts only an independently signed
 `NodeDecommissionAuthorizationV1`. Its payload contains the cluster UID, node
@@ -732,9 +756,13 @@ keeps the runtime start fail-closed.
 
 The same adapter owns the retained incident gate. It reads the OCI bundle and
 rejects the exact Phase 6.2 unmatched privileged-Pod shape before the initial
-process. If the node socket is absent, it permits only a recovery start whose
+process. If the node socket is absent, it permits the exact Node recovery whose
 executable measurement and security-sensitive OCI fields equal the retained
-Mithril recovery manifest. A caller cannot create this authority with
+Mithril recovery manifest. It also admits a version-changed installer whose
+command and host ownership shape match the retained installation. The
+installer replaces the integration and writes a new exact recovery manifest.
+The new Control and Node processes must reopen their existing state and
+continue the policy chain. A caller cannot create this authority with
 Kubernetes metadata. A direct containerd or OCI caller can bypass the CRI base
 spec, so retained BPF enforcement remains the final incident floor.
 
@@ -774,9 +802,15 @@ initial-task release,
 timeout denial, restart recovery, Pod deletion, container restart, and policy
 retirement. Prove that ordinary Helm deletion retains hooks and pins, that a
 matching start and the exact hostile unmatched start fail closed without the
-node process, and that the exact measured Mithril recovery start succeeds.
-Prove that a forged recovery start fails and that only a valid exact
-decommission artifact removes the retained integration. Prove rejection for wrong key,
+node process, and that a version-changed installer with the retained ownership
+shape succeeds. Prove that the installer replaces the recovery manifest, that
+the exact new Node starts, and that Control and Node reopen the same durable
+state. The next candidate must continue the retained sequence and name the
+retained active candidate as its predecessor. Prove that a changed ordinary
+Node recovery and a forged installer shape fail. Prove that an unsupported
+state migration fails closed without a fresh root or state deletion. Prove
+that only a valid exact decommission artifact removes the retained
+integration. Prove rejection for wrong key,
 cluster, node, boot, expiry, reused nonce, live protected binding, forged
 acknowledgement, and partial cleanup restart. Prove the exact hostile Pod
 rejection and the retained BPF fallback before the two-node physical case.
@@ -1020,9 +1054,13 @@ created in this phase.
   `/host/etc/shadow`. The lightweight admission test must reject the same
   PodSpec. The direct-runc test must prove that the retained default-runtime
   hook rejects the equivalent OCI shape before the process creates a marker.
-  It must also prove exact Mithril recovery and reject one changed recovery
-  field. The lightweight BPF test must deny the same physical fallback effect.
-  All lightweight cases must pass before the two-node Kubernetes test runs.
+  It must also prove admission of a version-changed installer with the retained
+  ownership shape, exact recovery after manifest replacement, and rejection of
+  a changed ordinary recovery or forged installer shape. The lightweight
+  policy test must prove retained-sequence continuation and rejection of a
+  fresh Control root against retained Node state. The lightweight BPF test must
+  deny the same physical fallback effect. All lightweight cases must pass
+  before the two-node Kubernetes test runs.
 - Phase 6.2 owns no new Appendix C fixture ID. These named phase tests remain
   mandatory and Phase 11 must run them for each advertised Kubernetes mode.
 
@@ -1057,9 +1095,11 @@ created in this phase.
 - Helm deletion cannot remove host enforcement. Only a valid, exact,
   independently signed decommission authorization can do that.
 - The exact hostile unmatched privileged Pod rejects at Kubernetes admission
-  and at the retained containerd default-runtime gate. An exact measured
-  Mithril recovery Pod can restore the node owner without another host service.
-  A direct non-CRI bypass hits the retained BPF incident floor.
+  and at the retained containerd default-runtime gate. A version-changed
+  Mithril installer with the retained ownership shape can replace the host
+  integration. The exact new Node recovery reopens the existing durable state
+  and continues the policy chain without another host service. A direct
+  non-CRI bypass hits the retained BPF incident floor.
 
 ## Excluded
 

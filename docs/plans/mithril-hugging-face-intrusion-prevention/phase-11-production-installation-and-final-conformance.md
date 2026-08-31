@@ -45,6 +45,17 @@ Control leader failover, backup/restore, WAL/intake-cursor recovery,
 mixed-version and stale-acknowledgement rejection, controller/node loss, stale
 pins, and interrupted installation without an unmeasured allow window.
 
+A normal upgrade preserves the Control PVC, every Node state path, installation
+identity, policy candidate chain, sequence high-water values, and unconsumed
+evidence. The retained hook can admit a version-changed installer with the
+retained command and host ownership shape. The installer changes integration
+files and the recovery manifest only. Control, Node, and the BPF owner perform
+their own supported migrations before they become ready. The next policy
+candidate continues the retained sequence and predecessor chain. A failed or
+unsupported migration keeps the original state intact and fails closed. A
+fresh Control with retained Node policy state is a negative anti-replay case,
+not an upgrade or recovery shortcut.
+
 ### D11.4 — Scale, capacity, and performance
 
 Measure every qualified hot path and complete bundle with evidence enabled:

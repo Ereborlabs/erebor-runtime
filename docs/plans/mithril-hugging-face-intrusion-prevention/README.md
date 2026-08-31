@@ -312,6 +312,17 @@ owns signed privileged exceptions and the complete typed runtime matrix. Phase
 claim. All other unallocated surfaces remain evaluation-only in Phase 12 and
 require a new approved implementation phase before they can ship.
 
+The retained gate admits a version-changed Mithril installer only when its
+installer command, owner, host paths, writable mounts, privileges, and socket
+match the retained installation. The installer replaces the host integration
+and exact recovery manifest. It does not replace Control or Node durable
+state. A normal reinstall reopens the same Control PVC and Node state paths.
+Each state owner performs only an explicitly supported migration, and Control
+continues the existing policy candidate and sequence chain. An unsupported
+migration fails closed. A fresh Control combined with retained Node policy
+state is not an upgrade and must fail anti-replay. Phase 11 qualifies the full
+upgrade, rollback, and migration matrix.
+
 ### Hugging Face Card Allocation
 
 | Incident cards | Owning implementation phases | Required integration result |
