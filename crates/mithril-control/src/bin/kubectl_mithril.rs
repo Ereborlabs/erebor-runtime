@@ -9,13 +9,13 @@ use kube::api::{Api, AttachParams};
 use kube::{Client, Config};
 use mithril_control::{
     AdministrativeExecDraftRequestV1, AdministrativeExecDraftResponseV1,
-    AdministrativeExecPollResponseV1,
+    AdministrativeExecPollResponseV1, NodeDecommissionStateV1, NodeDecommissionStatusV1,
 };
 use secrecy::SecretString;
 use tokio::io;
 
 #[derive(Parser)]
-#[command(about = "Run an approved Mithril Kubernetes administrative exec")]
+#[command(about = "Operate Mithril through Control HTTPS")]
 struct Cli {
     #[arg(long)]
     control_url: String,
@@ -30,6 +30,13 @@ struct Cli {
 #[derive(Subcommand)]
 enum CommandKind {
     Exec(ExecArgs),
+    Decommission(DecommissionArgs),
+}
+
+#[derive(Args)]
+struct DecommissionArgs {
+    #[arg(long)]
+    artifact: PathBuf,
 }
 
 #[derive(Args)]
@@ -68,6 +75,64 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     match cli.command {
         CommandKind::Exec(args) => {
             run_exec(&cli.control_url, cli.control_ca.as_deref(), args).await
+        }
+        CommandKind::Decommission(args) => {
+            args.run(&cli.control_url, cli.control_ca.as_deref()).await
+        }
+    }
+}
+
+impl DecommissionArgs {
+    async fn run(
+        self,
+        control_url: &str,
+        control_ca: Option<&std::path::Path>,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        if !control_url.starts_with("https://") || control_url.ends_with('/') {
+            return Err("--control-url must be one HTTPS origin without a trailing slash".into());
+        }
+        let mut client = reqwest::Client::builder().redirect(reqwest::redirect::Policy::none());
+        if let Some(path) = control_ca {
+            client =
+                client.add_root_certificate(reqwest::Certificate::from_pem(&std::fs::read(path)?)?);
+        }
+        let client = client.build()?;
+        let response = client
+            .post(format!("{control_url}/v1/node-decommissions"))
+            .header(reqwest::header::CONTENT_TYPE, "application/octet-stream")
+            .body(std::fs::read(self.artifact)?)
+            .send()
+            .await?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(
+                format!("node decommission submission failed with {status}: {body}").into(),
+            );
+        }
+        let mut status: NodeDecommissionStatusV1 = response.json().await?;
+        let status_url = format!(
+            "{control_url}/v1/node-decommissions/{}",
+            status.artifact_sha256
+        );
+        loop {
+            println!("{} {:?}", status.artifact_sha256, status.state);
+            match status.state {
+                NodeDecommissionStateV1::Completed => return Ok(()),
+                NodeDecommissionStateV1::Rejected => {
+                    return Err(
+                        format!("node rejected decommission: {}", status.reason_code).into(),
+                    )
+                }
+                _ => tokio::time::sleep(Duration::from_millis(250)).await,
+            }
+            status = client
+                .get(&status_url)
+                .send()
+                .await?
+                .error_for_status()?
+                .json()
+                .await?;
         }
     }
 }
@@ -227,5 +292,33 @@ impl Drop for RawTerminal {
         if self.0 {
             let _result = disable_raw_mode();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use clap::Parser as _;
+
+    use super::{Cli, CommandKind};
+
+    #[test]
+    fn decommission_command_requires_one_artifact() -> Result<(), clap::Error> {
+        let cli = Cli::try_parse_from([
+            "kubectl-mithril",
+            "--control-url",
+            "https://control.example",
+            "decommission",
+            "--artifact",
+            "authorization.cbor",
+        ])?;
+        assert!(matches!(cli.command, CommandKind::Decommission(_)));
+        assert!(Cli::try_parse_from([
+            "kubectl-mithril",
+            "--control-url",
+            "https://control.example",
+            "decommission",
+        ])
+        .is_err());
+        Ok(())
     }
 }

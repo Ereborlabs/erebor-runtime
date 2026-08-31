@@ -73,6 +73,12 @@ enum Command {
         #[arg(long)]
         output: PathBuf,
     },
+    PrintNodeDecommissionPublicKey {
+        #[arg(long)]
+        signing_key: PathBuf,
+        #[arg(long)]
+        output: PathBuf,
+    },
     Verify {
         #[arg(long)]
         artifact: PathBuf,
@@ -215,6 +221,13 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             let key = SigningKey::from_bytes(&read_signing_key(&signing_key)?);
             let artifact = SignedNodeDecommissionV1::sign(&authorization, signing_key_id, &key)?;
             std::fs::write(output, artifact.to_bytes()?)?;
+        }
+        Command::PrintNodeDecommissionPublicKey {
+            signing_key,
+            output,
+        } => {
+            let key = SigningKey::from_bytes(&read_signing_key(&signing_key)?);
+            std::fs::write(output, format!("{}\n", hex::encode(key.verifying_key())))?;
         }
         Command::Verify {
             artifact,

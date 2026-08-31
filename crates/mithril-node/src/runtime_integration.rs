@@ -21,8 +21,11 @@ pub struct RuntimeIntegrationInstallV1 {
     pub hook_host_directory: PathBuf,
     pub containerd_mount_directory: PathBuf,
     pub containerd_host_directory: PathBuf,
-    pub k3s_binary: PathBuf,
-    pub k3s_host_path: PathBuf,
+    pub containerd_drop_in_directory: String,
+    pub runtime_cli_mount_path: PathBuf,
+    pub runtime_cli_host_path: PathBuf,
+    pub runtime_cli_args: Vec<String>,
+    pub runtime_services: Vec<String>,
     pub installer_executable: PathBuf,
     pub installer_args: Vec<String>,
     pub node_mounts: Vec<RuntimeRecoveryMountInputV1>,
@@ -49,6 +52,8 @@ pub struct RuntimeIntegrationDecommissionV1 {
     pub owner: String,
     pub hook_directory: PathBuf,
     pub containerd_config_directory: PathBuf,
+    pub containerd_drop_in_directory: String,
+    pub runtime_services: Vec<String>,
 }
 
 pub struct RuntimeIntegrationOwner {
@@ -68,8 +73,8 @@ impl RuntimeIntegrationOwner {
             &install.hook_host_directory,
             &install.containerd_mount_directory,
             &install.containerd_host_directory,
-            &install.k3s_binary,
-            &install.k3s_host_path,
+            &install.runtime_cli_mount_path,
+            &install.runtime_cli_host_path,
             &install.installer_executable,
             &install.socket,
         ]
@@ -93,6 +98,14 @@ impl RuntimeIntegrationOwner {
             || !paths_are_valid
             || !args_are_valid
             || !mounts_are_valid
+            || !Self::valid_drop_in_directory(&install.containerd_drop_in_directory)
+            || install.runtime_cli_args.is_empty()
+            || install.runtime_cli_args.len() > 8
+            || install
+                .runtime_cli_args
+                .iter()
+                .any(|arg| arg.is_empty() || arg.len() > 128 || arg.contains(['\0', '\r', '\n']))
+            || !Self::valid_runtime_services(&install.runtime_services)
             || !(100..=30_000).contains(&install.timeout_ms)
             || install.runtime_timeout_seconds * 1_000 <= install.timeout_ms
             || install.runtime_timeout_seconds > 30
@@ -110,12 +123,12 @@ impl RuntimeIntegrationOwner {
     pub fn install(&self) -> io::Result<RuntimeIntegrationInstallResultV1> {
         let default_spec = Command::new("/usr/bin/nsenter")
             .args(["--target", "1", "--mount", "--"])
-            .arg(&self.install.k3s_host_path)
-            .args(["ctr", "oci", "spec"])
+            .arg(&self.install.runtime_cli_host_path)
+            .args(&self.install.runtime_cli_args)
             .output()?;
         if !default_spec.status.success() || default_spec.stdout.is_empty() {
             return Err(Self::invalid(
-                "host K3s did not produce the stock containerd OCI spec",
+                "host runtime CLI did not produce the stock containerd OCI spec",
             ));
         }
         self.install_from_spec(&default_spec.stdout)
@@ -125,12 +138,13 @@ impl RuntimeIntegrationOwner {
         let generated =
             fs::read_to_string(self.install.containerd_mount_directory.join("config.toml"))?;
         let expected = format!(
-            "imports = [\"{}/config-v3.toml.d/*.toml\"]",
-            self.install.containerd_host_directory.display()
+            "imports = [\"{}/{}/*.toml\"]",
+            self.install.containerd_host_directory.display(),
+            self.install.containerd_drop_in_directory
         );
         if !generated.lines().any(|line| line.trim() == expected) {
             return Err(Self::invalid(
-                "K3s did not import the owned containerd drop-in directory",
+                "containerd did not import the owned drop-in directory",
             ));
         }
         let base_spec = self.base_spec_mount_path();
@@ -157,14 +171,18 @@ impl RuntimeIntegrationOwner {
         Ok(())
     }
 
-    pub fn decommission(input: &RuntimeIntegrationDecommissionV1) -> io::Result<&'static str> {
-        Self::decommission_with_restart(input, Self::restart_k3s)
+    pub fn restart(&self) -> io::Result<String> {
+        Self::restart_runtime(&self.install.runtime_services)
+    }
+
+    pub fn decommission(input: &RuntimeIntegrationDecommissionV1) -> io::Result<String> {
+        Self::decommission_with_restart(input, || Self::restart_runtime(&input.runtime_services))
     }
 
     fn decommission_with_restart(
         input: &RuntimeIntegrationDecommissionV1,
-        restart: impl FnOnce() -> io::Result<&'static str>,
-    ) -> io::Result<&'static str> {
+        restart: impl FnOnce() -> io::Result<String>,
+    ) -> io::Result<String> {
         Self::validate_decommission(input)?;
         let targets = Self::decommission_targets(input);
         for target in &targets {
@@ -233,8 +251,11 @@ impl RuntimeIntegrationOwner {
         Ok(())
     }
 
-    pub fn restart_k3s() -> io::Result<&'static str> {
-        for service in ["k3s", "k3s-agent"] {
+    pub fn restart_runtime(services: &[String]) -> io::Result<String> {
+        if !Self::valid_runtime_services(services) {
+            return Err(Self::invalid("runtime service list is invalid"));
+        }
+        for service in services {
             let active = Command::new("/usr/bin/nsenter")
                 .args([
                     "--target",
@@ -270,11 +291,13 @@ impl RuntimeIntegrationOwner {
                 ])
                 .status()?;
             if restarted.success() {
-                return Ok(service);
+                return Ok(service.clone());
             }
-            return Err(Self::invalid("K3s restart failed"));
+            return Err(Self::invalid("container runtime restart failed"));
         }
-        Err(Self::invalid("no active K3s service exists on the host"))
+        Err(Self::invalid(
+            "no configured container runtime service is active on the host",
+        ))
     }
 
     fn validate_decommission(input: &RuntimeIntegrationDecommissionV1) -> io::Result<()> {
@@ -282,6 +305,8 @@ impl RuntimeIntegrationOwner {
             || input.owner.contains(['\r', '\n'])
             || !Self::clean_absolute(&input.hook_directory)
             || !Self::clean_absolute(&input.containerd_config_directory)
+            || !Self::valid_drop_in_directory(&input.containerd_drop_in_directory)
+            || !Self::valid_runtime_services(&input.runtime_services)
         {
             return Err(Self::invalid(
                 "runtime integration decommission input is not canonical and bounded",
@@ -294,7 +319,8 @@ impl RuntimeIntegrationOwner {
         [
             input
                 .containerd_config_directory
-                .join("config-v3.toml.d/99-mithril.toml"),
+                .join(&input.containerd_drop_in_directory)
+                .join("99-mithril.toml"),
             input
                 .containerd_config_directory
                 .join("mithril-base-spec.json"),
@@ -344,7 +370,7 @@ impl RuntimeIntegrationOwner {
         let dropin_directory = self
             .install
             .containerd_mount_directory
-            .join("config-v3.toml.d");
+            .join(&self.install.containerd_drop_in_directory);
         fs::create_dir_all(&dropin_directory)?;
 
         self.reject_foreign_base_spec()?;
@@ -413,8 +439,8 @@ impl RuntimeIntegrationOwner {
                 read_only: false,
             },
             RuntimeRecoveryMountV1 {
-                source: self.install.k3s_host_path.clone(),
-                destination: self.install.k3s_binary.clone(),
+                source: self.install.runtime_cli_host_path.clone(),
+                destination: self.install.runtime_cli_mount_path.clone(),
                 read_only: true,
             },
         ];
@@ -575,7 +601,8 @@ impl RuntimeIntegrationOwner {
     fn fragment_mount_path(&self) -> PathBuf {
         self.install
             .containerd_mount_directory
-            .join("config-v3.toml.d/99-mithril.toml")
+            .join(&self.install.containerd_drop_in_directory)
+            .join("99-mithril.toml")
     }
 
     fn fragment(&self) -> String {
@@ -606,6 +633,27 @@ impl RuntimeIntegrationOwner {
             && path
                 .components()
                 .all(|component| matches!(component, Component::RootDir | Component::Normal(_)))
+    }
+
+    fn valid_drop_in_directory(value: &str) -> bool {
+        !value.is_empty()
+            && value.len() <= 255
+            && Path::new(value).components().count() == 1
+            && Path::new(value)
+                .components()
+                .all(|component| matches!(component, Component::Normal(_)))
+    }
+
+    fn valid_runtime_services(services: &[String]) -> bool {
+        !services.is_empty()
+            && services.len() <= 8
+            && services.iter().all(|service| {
+                !service.is_empty()
+                    && service.len() <= 253
+                    && service
+                        .bytes()
+                        .all(|byte| byte.is_ascii_alphanumeric() || b"-_.@".contains(&byte))
+            })
     }
 
     fn invalid(reason: &str) -> io::Error {
@@ -770,14 +818,14 @@ mod tests {
         let containerd_mount = directory.path().join("containerd");
         let hook_source = directory.path().join("mithril-oci-hook-source");
         let node_source = directory.path().join("mithril-node-source");
-        let k3s = directory.path().join("k3s");
+        let runtime_cli = directory.path().join("ctr");
         fs::write(&hook_source, b"hook")?;
         fs::write(&node_source, b"node")?;
-        fs::write(&k3s, b"k3s")?;
+        fs::write(&runtime_cli, b"ctr")?;
         fs::create_dir_all(&containerd_mount)?;
         fs::write(
             containerd_mount.join("config.toml"),
-            "version = 3\nimports = [\"/var/lib/rancher/k3s/agent/etc/containerd/config-v3.toml.d/*.toml\"]\n",
+            "version = 3\nimports = [\"/etc/containerd/conf.d/*.toml\"]\n",
         )?;
         let mut installer_args = vec![
             "/usr/local/bin/mithril-oci-hook".to_owned(),
@@ -791,9 +839,12 @@ mod tests {
             hook_mount_directory: hook_mount.clone(),
             hook_host_directory: "/usr/libexec/oci/hooks.d".into(),
             containerd_mount_directory: containerd_mount.clone(),
-            containerd_host_directory: "/var/lib/rancher/k3s/agent/etc/containerd".into(),
-            k3s_binary: k3s,
-            k3s_host_path: "/usr/local/bin/k3s".into(),
+            containerd_host_directory: "/etc/containerd".into(),
+            containerd_drop_in_directory: "conf.d".to_owned(),
+            runtime_cli_mount_path: runtime_cli,
+            runtime_cli_host_path: "/usr/bin/ctr".into(),
+            runtime_cli_args: vec!["oci".to_owned(), "spec".to_owned()],
+            runtime_services: vec!["containerd".to_owned()],
             installer_executable: "/usr/local/bin/mithril-oci-hook".into(),
             installer_args,
             node_mounts: vec![RuntimeRecoveryMountInputV1 {
@@ -832,7 +883,7 @@ mod tests {
         owner.read_back()?;
 
         fs::write(
-            containerd_mount.join("config-v3.toml.d/99-mithril.toml"),
+            containerd_mount.join("conf.d/99-mithril.toml"),
             "version = 3\n",
         )?;
         assert!(owner.read_back().is_err());
@@ -845,8 +896,10 @@ mod tests {
             owner: "mithril-system/mithril".to_owned(),
             hook_directory: hook_mount,
             containerd_config_directory: containerd_mount.clone(),
+            containerd_drop_in_directory: "conf.d".to_owned(),
+            runtime_services: vec!["containerd".to_owned()],
         };
-        let fragment = containerd_mount.join("config-v3.toml.d/99-mithril.toml");
+        let fragment = containerd_mount.join("conf.d/99-mithril.toml");
         fs::remove_file(&fragment)?;
         fs::write(
             containerd_mount.join("config.toml"),
@@ -860,9 +913,9 @@ mod tests {
                 containerd_mount.join("config.toml"),
                 "version = 3\n[plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.runc]\n",
             )?;
-            Ok("k3s-agent")
+            Ok("containerd".to_owned())
         })?;
-        assert_eq!(restarted, "k3s-agent");
+        assert_eq!(restarted, "containerd");
         RuntimeIntegrationOwner::read_back_decommissioned(&decommission)?;
         Ok(())
     }

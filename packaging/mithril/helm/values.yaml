@@ -11,8 +11,14 @@ node:
   affinity: {}
   runtimeHook:
     hostBinaryDirectory: /usr/libexec/oci/hooks.d
-    containerdConfigHostDirectory: /var/lib/rancher/k3s/agent/etc/containerd
-    k3sBinaryHostPath: /usr/local/bin/k3s
+    containerdConfigHostDirectory: /etc/containerd
+    containerdDropInDirectory: conf.d
+    runtimeCliHostPath: /usr/bin/ctr
+    runtimeCliArgs:
+      - oci
+      - spec
+    runtimeServices:
+      - containerd
     socketPath: /run/mithril/runtime-admission.sock
     timeoutMs: 4000
     runtimeTimeoutSeconds: 5

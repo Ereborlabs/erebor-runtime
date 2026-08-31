@@ -43,6 +43,10 @@ service NodeAdministrativeArm {
   rpc Open(stream AdministrativeExecArmStreamRequest) returns (stream ArmAdministrativeExec);
 }
 
+service NodeDecommission {
+  rpc Open(stream NodeDecommissionStreamRequest) returns (stream NodeDecommissionCommand);
+}
+
 // Binds every RPC to one node boot and one connection nonce.
 message NodeSessionContext {
   string node_id = 1;
@@ -116,6 +120,11 @@ message AdministrativeExecResolutionStreamRequest {
 message AdministrativeExecArmStreamRequest {
   NodeSessionContext session = 1;
   AdministrativeExecArmResult result = 2;
+}
+
+message NodeDecommissionStreamRequest {
+  NodeSessionContext session = 1;
+  NodeDecommissionResult result = 2;
 }
 
 message CapabilityRecord {
@@ -413,6 +422,17 @@ message AdministrativeExecArmResult {
   string reason_code = 3;
   bytes proof_id = 4;
   bytes claim_slot_id = 5;
+}
+
+message NodeDecommissionCommand {
+  bytes artifact = 1;
+  bool execute = 2;
+}
+
+message NodeDecommissionResult {
+  bytes artifact_sha256 = 1;
+  string state = 2;
+  string reason_code = 3;
 }
 
 message RegistrationAccepted {}

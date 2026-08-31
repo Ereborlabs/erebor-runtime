@@ -219,15 +219,33 @@ impl KubernetesNodeReadinessOwner {
         };
         // Bind the session to the API object UID before the session can project readiness.
         let _result = control.bind_kubernetes_node_session(&name, node_uid);
+        let completed = control
+            .completed_kubernetes_node_decommission(&name, node_uid)
+            .unwrap_or(false);
+        let decommissioning = control
+            .decommissioning_kubernetes_node(&name, node_uid)
+            .ok()
+            .flatten();
         let sessions = control
             .ready_kubernetes_node_sessions(Duration::from_secs(self.config.session_ttl_seconds));
         let session = sessions.iter().find(|session| {
             session.kubernetes_node_name == name && session.kubernetes_node_uid == node_uid
         });
-        let patch = node_projection_patch(node, constraints, session);
-        let _result = nodes
+        let patch = if completed {
+            node_decommission_cleanup_patch(node)
+        } else {
+            node_projection_patch(node, constraints, session)
+        };
+        let result = nodes
             .patch(&name, &PatchParams::default(), &Patch::Merge(&patch))
             .await;
+        if let (Ok(projected), Some(decommissioning)) = (result, decommissioning) {
+            if node_has_decommission_quarantine(&projected, &decommissioning) {
+                let _result = control
+                    .confirm_node_decommission_quarantine(&decommissioning)
+                    .await;
+            }
+        }
     }
 }
 
@@ -356,6 +374,54 @@ pub fn node_projection_patch(
     })
 }
 
+fn node_decommission_cleanup_patch(node: &Node) -> Value {
+    let mut taints = node
+        .spec
+        .as_ref()
+        .and_then(|spec| spec.taints.clone())
+        .unwrap_or_default();
+    taints.retain(|taint| taint.key != KUBERNETES_NOT_READY_TAINT);
+    json!({
+        "metadata": {
+            "labels": { KUBERNETES_READY_LABEL: Value::Null },
+            "annotations": {
+                KUBERNETES_NODE_ID_ANNOTATION: Value::Null,
+                KUBERNETES_NODE_UID_ANNOTATION: Value::Null,
+                KUBERNETES_NODE_BOOT_ANNOTATION: Value::Null,
+                KUBERNETES_LABEL_EPOCH_ANNOTATION: Value::Null,
+            }
+        },
+        "spec": { "taints": taints }
+    })
+}
+
+fn node_has_decommission_quarantine(node: &Node, session: &KubernetesNodeSessionV1) -> bool {
+    let labels = node.metadata.labels.as_ref();
+    let annotations = node.metadata.annotations.as_ref();
+    labels
+        .and_then(|labels| labels.get(KUBERNETES_READY_LABEL))
+        .is_none()
+        && annotations.and_then(|values| values.get(KUBERNETES_NODE_ID_ANNOTATION))
+            == Some(&session.node_id)
+        && annotations.and_then(|values| values.get(KUBERNETES_NODE_UID_ANNOTATION))
+            == Some(&session.kubernetes_node_uid)
+        && annotations.and_then(|values| values.get(KUBERNETES_NODE_BOOT_ANNOTATION))
+            == Some(&hex::encode(&session.node_boot_id))
+        && annotations.and_then(|values| values.get(KUBERNETES_LABEL_EPOCH_ANNOTATION))
+            == Some(&session.label_epoch.to_string())
+        && node
+            .spec
+            .as_ref()
+            .and_then(|spec| spec.taints.as_ref())
+            .is_some_and(|taints| {
+                taints.iter().any(|taint| {
+                    taint.key == KUBERNETES_NOT_READY_TAINT
+                        && taint.effect == "NoSchedule"
+                        && taint.value.as_deref() == Some("true")
+                })
+            })
+}
+
 fn retained_annotation(annotations: Option<&BTreeMap<String, String>>, key: &str) -> Value {
     annotations
         .and_then(|values| values.get(key))
@@ -451,9 +517,11 @@ mod tests {
     use tower::service_fn;
 
     use super::{
-        node_projection_patch, DaemonSetNodeConstraintsV1, KubernetesNodeControlConfigV1,
-        KubernetesNodeReadinessOwner, KubernetesNodeSessionV1, KUBERNETES_NOT_READY_TAINT,
-        KUBERNETES_READY_LABEL,
+        node_decommission_cleanup_patch, node_has_decommission_quarantine, node_projection_patch,
+        DaemonSetNodeConstraintsV1, KubernetesNodeControlConfigV1, KubernetesNodeReadinessOwner,
+        KubernetesNodeSessionV1, KUBERNETES_LABEL_EPOCH_ANNOTATION,
+        KUBERNETES_NODE_BOOT_ANNOTATION, KUBERNETES_NODE_ID_ANNOTATION,
+        KUBERNETES_NODE_UID_ANNOTATION, KUBERNETES_NOT_READY_TAINT, KUBERNETES_READY_LABEL,
     };
     use crate::{ControlPlane, TrustGenerationV1};
 
@@ -602,6 +670,60 @@ mod tests {
             .and_then(serde_json::Value::as_array)
             .is_some_and(|taints| !taints.is_empty()));
         Ok(())
+    }
+
+    #[test]
+    fn decommission_exec_requires_exact_quarantine_readback_and_completion_cleans_projection() {
+        let session = KubernetesNodeSessionV1 {
+            node_id: "enrolled-node-a".to_owned(),
+            kubernetes_node_name: "node-a".to_owned(),
+            kubernetes_node_uid: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa".to_owned(),
+            node_boot_id: vec![7; 16],
+            label_epoch: 9,
+        };
+        let mut quarantined = node("node-a", "protected", "a");
+        quarantined.metadata.annotations = Some(BTreeMap::from([
+            (
+                KUBERNETES_NODE_ID_ANNOTATION.to_owned(),
+                session.node_id.clone(),
+            ),
+            (
+                KUBERNETES_NODE_UID_ANNOTATION.to_owned(),
+                session.kubernetes_node_uid.clone(),
+            ),
+            (
+                KUBERNETES_NODE_BOOT_ANNOTATION.to_owned(),
+                hex::encode(&session.node_boot_id),
+            ),
+            (
+                KUBERNETES_LABEL_EPOCH_ANNOTATION.to_owned(),
+                session.label_epoch.to_string(),
+            ),
+        ]));
+        quarantined.spec.as_mut().unwrap().taints = Some(vec![Taint {
+            effect: "NoSchedule".to_owned(),
+            key: KUBERNETES_NOT_READY_TAINT.to_owned(),
+            time_added: None,
+            value: Some("true".to_owned()),
+        }]);
+        assert!(node_has_decommission_quarantine(&quarantined, &session));
+
+        let mut wrong_boot = session.clone();
+        wrong_boot.node_boot_id = vec![8; 16];
+        assert!(!node_has_decommission_quarantine(&quarantined, &wrong_boot));
+        quarantined.spec.as_mut().unwrap().taints = None;
+        assert!(!node_has_decommission_quarantine(&quarantined, &session));
+
+        let cleanup = node_decommission_cleanup_patch(&quarantined);
+        for path in [
+            "/metadata/labels/mithril.erebor.dev~1ready",
+            "/metadata/annotations/mithril.erebor.dev~1node-id",
+            "/metadata/annotations/mithril.erebor.dev~1node-uid",
+            "/metadata/annotations/mithril.erebor.dev~1node-boot-id",
+            "/metadata/annotations/mithril.erebor.dev~1label-epoch",
+        ] {
+            assert_eq!(cleanup.pointer(path), Some(&serde_json::Value::Null));
+        }
     }
 
     #[test]

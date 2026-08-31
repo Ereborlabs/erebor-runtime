@@ -71,6 +71,7 @@ pub(super) fn effect_node_config(
             rollback_public_key_path: None,
         }],
         administrative_authorization: None,
+        decommission: None,
     }
 }
 

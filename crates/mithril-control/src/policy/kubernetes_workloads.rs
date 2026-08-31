@@ -34,7 +34,7 @@ use super::{
     KUBERNETES_READY_LABEL,
 };
 use crate::error::InvalidConfigurationSnafu;
-use crate::{ControlPlane, Result};
+use crate::{ControlPlane, NodeDecommissionHttpOwner, Result};
 
 pub const KUBERNETES_PROFILE_ANNOTATION: &str = "mithril.erebor.dev/profile-id";
 pub const KUBERNETES_SOURCE_ANNOTATION: &str = "mithril.erebor.dev/policy-source-revision";
@@ -77,6 +77,7 @@ pub struct KubernetesAdmissionOwner {
     control: ControlPlane,
     policies: PolicyDesiredStateOwner,
     nodes: KubernetesNodeReadinessOwner,
+    decommission: Arc<NodeDecommissionHttpOwner>,
     request_timeout_ms: u64,
 }
 
@@ -437,11 +438,13 @@ impl KubernetesAdmissionOwner {
     }
 
     fn router(self: Arc<Self>, maximum_request_bytes: usize) -> Router {
+        let decommission = self.decommission.clone().router();
         Router::new()
             .route("/admit", post(Self::review))
             .route("/healthz", get(Self::health))
             .layer(DefaultBodyLimit::max(maximum_request_bytes))
             .with_state(self)
+            .merge(decommission)
     }
 }
 
@@ -481,11 +484,16 @@ impl KubernetesAdmissionOwner {
         shutdown: impl Future<Output = ()> + Send + 'static,
     ) -> Result<()> {
         config.validate()?;
+        let decommission = Arc::new(NodeDecommissionHttpOwner::new(
+            policies.cluster_uid(),
+            control.clone(),
+        )?);
         let owner = Arc::new(Self {
             kube,
             control,
             policies,
             nodes,
+            decommission,
             request_timeout_ms: config.request_timeout_ms,
         });
         let tls =
@@ -1491,9 +1499,9 @@ mod tests {
     };
     use crate::{
         ContainerKindV1, ControlPlane, ControlStore, KubernetesNodeControlConfigV1,
-        PolicyDesiredStateConfigV1, PolicyDesiredStateOwner, PolicyDocumentV1,
-        PolicySignerConfigV1, ProfileSealRequestV1, RegistryDigestsV1, TrustGenerationV1,
-        WorkloadProtectionPolicy, WorkloadProtectionPolicySpec,
+        NodeDecommissionHttpOwner, PolicyDesiredStateConfigV1, PolicyDesiredStateOwner,
+        PolicyDocumentV1, PolicySignerConfigV1, ProfileSealRequestV1, RegistryDigestsV1,
+        TrustGenerationV1, WorkloadProtectionPolicy, WorkloadProtectionPolicySpec,
     };
 
     const POLICY: &str = include_str!("../../tests/fixtures/policy-v1.yaml");
@@ -2081,7 +2089,7 @@ mod tests {
         assert!(control.replace_kubernetes_workload_inventory(Vec::new())?);
         let owner = KubernetesAdmissionOwner {
             kube: Client::new(service, "default"),
-            control,
+            control: control.clone(),
             policies: policies.clone(),
             nodes: KubernetesNodeReadinessOwner::new(KubernetesNodeControlConfigV1 {
                 daemon_set_namespace: "mithril-system".to_owned(),
@@ -2089,6 +2097,7 @@ mod tests {
                 session_ttl_seconds: 30,
                 reconcile_interval_ms: 100,
             })?,
+            decommission: Arc::new(NodeDecommissionHttpOwner::new(CLUSTER_UID, control)?),
             request_timeout_ms: 1_000,
         };
         let facts = pod_admission_facts(

@@ -3,14 +3,15 @@ use std::{fs, future::Future, time::Duration};
 use mithril_control::{
     node_administrative_arm_client::NodeAdministrativeArmClient,
     node_administrative_resolution_client::NodeAdministrativeResolutionClient,
-    node_coverage_client::NodeCoverageClient, node_evidence_client::NodeEvidenceClient,
-    node_policy_client::NodePolicyClient, node_registry_client::NodeRegistryClient,
-    node_trust_client::NodeTrustClient, AdministrativeExecArmResult,
-    AdministrativeExecArmStreamRequest, AdministrativeExecResolution,
+    node_coverage_client::NodeCoverageClient, node_decommission_client::NodeDecommissionClient,
+    node_evidence_client::NodeEvidenceClient, node_policy_client::NodePolicyClient,
+    node_registry_client::NodeRegistryClient, node_trust_client::NodeTrustClient,
+    AdministrativeExecArmResult, AdministrativeExecArmStreamRequest, AdministrativeExecResolution,
     AdministrativeExecResolutionStreamRequest, ArmAdministrativeExec, CoverageCounters,
     CoverageInterval, CoverageReport, CoverageReportRequest, EvidenceAck, EvidenceStreamRequest,
     ExceptionAcknowledgementRequest, ExceptionActivationAcknowledgement, ExceptionInventory,
-    ExceptionInventoryRequest, NodeReadinessReport, NodeReadinessRequest, NodeRegistration,
+    ExceptionInventoryRequest, NodeDecommissionCommand, NodeDecommissionResult,
+    NodeDecommissionStreamRequest, NodeReadinessReport, NodeReadinessRequest, NodeRegistration,
     NodeRegistrationRequest, NodeSessionContext, PolicyAcknowledgementAccepted,
     PolicyAcknowledgementRequest, PolicyActivationAcknowledgement, PolicyChunkRequest,
     PolicyInventory, PolicyInventoryRequest, ResolveAdministrativeExec, TrustGenerationAck,
@@ -48,6 +49,8 @@ pub struct ControlConnection {
     resolution_input: Streaming<ResolveAdministrativeExec>,
     arm_output: mpsc::Sender<AdministrativeExecArmStreamRequest>,
     arm_input: Streaming<ArmAdministrativeExec>,
+    decommission_output: mpsc::Sender<NodeDecommissionStreamRequest>,
+    decommission_input: Streaming<NodeDecommissionCommand>,
     evidence_output: mpsc::Sender<EvidenceStreamRequest>,
     evidence_input: Streaming<EvidenceAck>,
     coverage: NodeCoverageClient<Channel>,
@@ -78,6 +81,7 @@ pub enum AdministrativeControlRequest {
 
 pub enum NodeControlMessage {
     Administrative(AdministrativeControlRequest),
+    Decommission(NodeDecommissionCommand),
     EvidenceAck(crate::EvidenceAckV1),
     CoverageAck(CoverageAckV1),
 }
@@ -220,6 +224,25 @@ impl NodeControlConnector {
             .context(ControlRpcSnafu)?
             .into_inner();
 
+        let (decommission_output, decommission_receiver) = mpsc::channel(4);
+        decommission_output
+            .send(NodeDecommissionStreamRequest {
+                session: Some(identity.clone()),
+                result: None,
+            })
+            .await
+            .map_err(|_closed| {
+                ControlProtocolSnafu {
+                    reason: String::from("decommission stream closed before registration"),
+                }
+                .build()
+            })?;
+        let decommission_input = NodeDecommissionClient::new(channel.clone())
+            .open(Request::new(ReceiverStream::new(decommission_receiver)))
+            .await
+            .context(ControlRpcSnafu)?
+            .into_inner();
+
         let (evidence_output, evidence_receiver) = mpsc::channel(EVIDENCE_PIPELINE_BATCHES);
         let evidence_input = NodeEvidenceClient::new(channel.clone())
             .max_decoding_message_size(MAX_EVIDENCE_GRPC_MESSAGE_BYTES)
@@ -235,6 +258,8 @@ impl NodeControlConnector {
             resolution_input,
             arm_output,
             arm_input,
+            decommission_output,
+            decommission_input,
             evidence_output,
             evidence_input,
             coverage: NodeCoverageClient::new(channel.clone())
@@ -416,6 +441,15 @@ impl ControlConnection {
                         None => self.arm_closed = true,
                     }
                 }
+                message = self.decommission_input.message() => {
+                    return match message.context(ControlRpcSnafu)? {
+                        Some(command) => Ok(NodeControlMessage::Decommission(command)),
+                        None => ControlProtocolSnafu {
+                            reason: String::from("Control closed the decommission stream"),
+                        }
+                        .fail(),
+                    };
+                }
                 message = self.evidence_input.message() => {
                     return match message.context(ControlRpcSnafu)? {
                         Some(acknowledgement) => Ok(NodeControlMessage::EvidenceAck(
@@ -434,6 +468,12 @@ impl ControlConnection {
     pub async fn next_administrative_request(&mut self) -> Result<AdministrativeControlRequest> {
         match self.next_message().await? {
             NodeControlMessage::Administrative(request) => Ok(request),
+            NodeControlMessage::Decommission(_) => ControlProtocolSnafu {
+                reason: String::from(
+                    "Control returned a decommission command to an administrative owner",
+                ),
+            }
+            .fail(),
             NodeControlMessage::EvidenceAck(_) => ControlProtocolSnafu {
                 reason: String::from(
                     "Control returned evidence acknowledgement to an administrative owner",
@@ -447,6 +487,30 @@ impl ControlConnection {
             }
             .fail(),
         }
+    }
+
+    pub async fn send_decommission_result(
+        &self,
+        artifact_sha256: [u8; 32],
+        state: &str,
+        reason_code: String,
+    ) -> Result<()> {
+        self.decommission_output
+            .send(NodeDecommissionStreamRequest {
+                session: Some(self.identity.clone()),
+                result: Some(NodeDecommissionResult {
+                    artifact_sha256: artifact_sha256.to_vec(),
+                    state: state.to_owned(),
+                    reason_code,
+                }),
+            })
+            .await
+            .map_err(|_closed| {
+                ControlProtocolSnafu {
+                    reason: String::from("Control decommission stream closed"),
+                }
+                .build()
+            })
     }
 
     pub async fn send_evidence_batch(&mut self, batch: crate::EvidenceBatchV1) -> Result<()> {

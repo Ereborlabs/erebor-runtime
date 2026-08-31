@@ -13,10 +13,10 @@ use crate::{
     control_health_server::ControlHealthServer,
     node_administrative_arm_server::NodeAdministrativeArmServer,
     node_administrative_resolution_server::NodeAdministrativeResolutionServer,
-    node_coverage_server::NodeCoverageServer, node_evidence_server::NodeEvidenceServer,
-    node_policy_server::NodePolicyServer, node_registry_server::NodeRegistryServer,
-    node_trust_server::NodeTrustServer, ControlPlane, Result, MAX_EVIDENCE_GRPC_MESSAGE_BYTES,
-    MAX_POLICY_GRPC_MESSAGE_BYTES,
+    node_coverage_server::NodeCoverageServer, node_decommission_server::NodeDecommissionServer,
+    node_evidence_server::NodeEvidenceServer, node_policy_server::NodePolicyServer,
+    node_registry_server::NodeRegistryServer, node_trust_server::NodeTrustServer, ControlPlane,
+    Result, MAX_EVIDENCE_GRPC_MESSAGE_BYTES, MAX_POLICY_GRPC_MESSAGE_BYTES,
 };
 
 #[derive(Clone, Debug, Deserialize)]
@@ -71,7 +71,8 @@ pub async fn serve(
         )
         .add_service(ControlHealthServer::new(control.clone()))
         .add_service(NodeAdministrativeResolutionServer::new(control.clone()))
-        .add_service(NodeAdministrativeArmServer::new(control))
+        .add_service(NodeAdministrativeArmServer::new(control.clone()))
+        .add_service(NodeDecommissionServer::new(control))
         .serve_with_shutdown(address, shutdown)
         .await
         .context(ServeSnafu { address })

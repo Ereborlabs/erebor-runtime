@@ -6,9 +6,10 @@ use std::time::Duration;
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use erebor_telemetry::{error, init_stderr_logging};
 use mithril_node::{
-    OciBaseSpecOwner, RetainedRuntimeDecisionV1, RetainedRuntimeGate, RuntimeAdmissionClient,
-    RuntimeAdmissionOperationV1, RuntimeAdmissionRequestV1, RuntimeIntegrationInstallV1,
-    RuntimeIntegrationOwner, RuntimeRecoveryMountInputV1, PROFILE_ID_ANNOTATION,
+    NodeDecommissionOwner, OciBaseSpecOwner, RetainedRuntimeDecisionV1, RetainedRuntimeGate,
+    RuntimeAdmissionClient, RuntimeAdmissionOperationV1, RuntimeAdmissionRequestV1,
+    RuntimeIntegrationInstallV1, RuntimeIntegrationOwner, RuntimeRecoveryMountInputV1,
+    PROFILE_ID_ANNOTATION,
 };
 use serde::Deserialize;
 
@@ -78,10 +79,16 @@ struct InstallArgsV1 {
     containerd_mount_directory: PathBuf,
     #[arg(long)]
     containerd_host_directory: PathBuf,
-    #[arg(long, default_value = "/host-k3s")]
-    k3s_binary: PathBuf,
+    #[arg(long, default_value = "conf.d")]
+    containerd_drop_in_directory: String,
+    #[arg(long, default_value = "/host-runtime-cli")]
+    runtime_cli_mount_path: PathBuf,
     #[arg(long)]
-    k3s_host_path: PathBuf,
+    runtime_cli_host_path: PathBuf,
+    #[arg(long)]
+    runtime_cli_arg: Vec<String>,
+    #[arg(long)]
+    runtime_service: Vec<String>,
     #[arg(long)]
     node_read_only_mount: Vec<String>,
     #[arg(long)]
@@ -94,6 +101,8 @@ struct InstallArgsV1 {
     runtime_timeout_seconds: u64,
     #[arg(long, default_value = "info")]
     log_filter: String,
+    #[arg(long)]
+    decommission_state_directory: Option<PathBuf>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
@@ -132,6 +141,18 @@ impl OciHookOwner {
         args: InstallArgsV1,
         process_args: Vec<String>,
     ) -> Result<(), Box<dyn std::error::Error>> {
+        if let Some(directory) = &args.decommission_state_directory {
+            if !Self::clean_absolute(directory) {
+                return Err(invalid_data("decommission state directory is not absolute").into());
+            }
+            if NodeDecommissionOwner::durable_completion(directory)? {
+                erebor_telemetry::info!(
+                    "kept a completed node decommission free of runtime integration",
+                    decision = %"DECOMMISSION_REINSTALL_SKIPPED"
+                );
+                return Ok(());
+            }
+        }
         let mut node_mounts = Vec::new();
         for value in &args.node_read_only_mount {
             node_mounts.push(Self::parse_mount(value, true)?);
@@ -147,8 +168,11 @@ impl OciHookOwner {
             hook_host_directory: args.hook_host_directory,
             containerd_mount_directory: args.containerd_mount_directory,
             containerd_host_directory: args.containerd_host_directory,
-            k3s_binary: args.k3s_binary,
-            k3s_host_path: args.k3s_host_path,
+            containerd_drop_in_directory: args.containerd_drop_in_directory,
+            runtime_cli_mount_path: args.runtime_cli_mount_path,
+            runtime_cli_host_path: args.runtime_cli_host_path,
+            runtime_cli_args: args.runtime_cli_arg,
+            runtime_services: args.runtime_service,
             installer_executable: PathBuf::from("/usr/local/bin/mithril-oci-hook"),
             installer_args: process_args,
             node_mounts,
@@ -165,9 +189,9 @@ impl OciHookOwner {
             base_spec = %result.base_spec_host_path.display()
         );
         if result.restart_required {
-            let service = RuntimeIntegrationOwner::restart_k3s()?;
+            let service = owner.restart()?;
             erebor_telemetry::info!(
-                "restarted K3s for the retained runtime integration",
+                "restarted the container runtime for retained integration",
                 decision = %"RUNTIME_INTEGRATION_RESTARTED",
                 service = %service
             );

@@ -25,8 +25,9 @@ use crate::error::{
 };
 use crate::{
     AdministrativeControlRequest, CoverageGapReasonV1, NativeSecurityStateOwner, NodeConfig,
-    NodeControlConnector, NodeControlMessage, ObservationCanonicalizer, Result, TrustCache,
-    WorkloadBindingOwner,
+    NodeControlConnector, NodeControlMessage, NodeDecommissionAcceptanceV1, NodeDecommissionOwner,
+    ObservationCanonicalizer, Result, RuntimeIntegrationDecommissionV1, RuntimeIntegrationOwner,
+    TrustCache, WorkloadBindingOwner,
 };
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize)]
@@ -178,6 +179,7 @@ pub struct NodeChassis {
     effect_reader: Option<EffectObservationReader>,
     effect_worker: Option<crate::observation::EffectObservationWorker>,
     host: Option<KernelHost>,
+    decommission: Option<NodeDecommissionOwner>,
     connector: NodeControlConnector,
     registration: NodeRegistration,
     local_server: Option<crate::RuntimeObservationServer>,
@@ -228,6 +230,26 @@ impl NodeChassis {
         }
         let boot_id = NodeEpochs::boot_id()?;
         let node_boot_id = boot_id.into();
+        let decommission = config
+            .decommission
+            .as_ref()
+            .map(|decommission| {
+                NodeDecommissionOwner::load(
+                    decommission,
+                    &config.state_directory,
+                    config.node_id.clone(),
+                    node_boot_id,
+                )
+            })
+            .transpose()?;
+        snafu::ensure!(
+            decommission
+                .as_ref()
+                .is_none_or(|decommission| !decommission.completed()),
+            IdentityStateSnafu {
+                reason: "completed node decommission prevents enforcement restart",
+            }
+        );
         let recover_identity = config
             .interceptor
             .pin_root
@@ -559,6 +581,7 @@ impl NodeChassis {
             effect_reader,
             effect_worker,
             host: Some(host),
+            decommission,
             connector,
             registration,
             local_server,
@@ -777,6 +800,203 @@ impl NodeChassis {
                                             );
                                             break;
                                         }
+                                    }
+                                    NodeControlMessage::Decommission(command) => {
+                                        let artifact_sha256: [u8; 32] =
+                                            Sha256::digest(&command.artifact).into();
+                                        if !command.execute {
+                                            let live_bindings =
+                                                self.policy_delivery.status().runtime_binding_count;
+                                            let result = self.decommission.as_mut().ok_or_else(|| {
+                                                IdentityStateSnafu {
+                                                    reason: "node decommission is not configured"
+                                                        .to_owned(),
+                                                }
+                                                .build()
+                                            }).and_then(|owner| {
+                                                owner.accept(
+                                                    &command.artifact,
+                                                    live_bindings,
+                                                    crate::policy::current_utc_ns()?,
+                                                )
+                                            });
+                                            let (state, reason_code) = match result {
+                                                Ok(acceptance) => {
+                                                    erebor_telemetry::info!(
+                                                        "accepted a signed node decommission",
+                                                        node_id = %self.config.node_id,
+                                                        artifact_sha256 = %hex::encode(artifact_sha256),
+                                                        acceptance = %format!("{acceptance:?}")
+                                                    );
+                                                    ("ACCEPTED", String::new())
+                                                }
+                                                Err(error) => {
+                                                    erebor_telemetry::warn!(
+                                                        error;
+                                                        "rejected a signed node decommission",
+                                                        node_id = %self.config.node_id,
+                                                        artifact_sha256 = %hex::encode(artifact_sha256)
+                                                    );
+                                                    ("REJECTED", "AUTHORIZATION_REJECTED".to_owned())
+                                                }
+                                            };
+                                            if let Err(error) = connection
+                                                .send_decommission_result(
+                                                    artifact_sha256,
+                                                    state,
+                                                    reason_code,
+                                                )
+                                                .await
+                                            {
+                                                erebor_telemetry::warn!(
+                                                    error;
+                                                    "failed to return node decommission acceptance",
+                                                    node_id = %self.config.node_id,
+                                                    retry = %"reconnect"
+                                                );
+                                                break;
+                                            }
+                                            continue;
+                                        }
+
+                                        if let Some(task) = runtime_admission_task.take() {
+                                            task.abort();
+                                            let _result = task.await;
+                                        }
+                                        self.runtime_admission_requests = None;
+                                        if let Some(admission) = &self.config.runtime_admission {
+                                            match std::fs::remove_file(&admission.socket_path) {
+                                                Ok(()) => {}
+                                                Err(error)
+                                                    if error.kind()
+                                                        == std::io::ErrorKind::NotFound => {}
+                                                Err(source) => {
+                                                    run_error = Some(crate::Error::Io {
+                                                        path: admission.socket_path.clone(),
+                                                        source,
+                                                        location: snafu::Location::default(),
+                                                    });
+                                                    break 'running;
+                                                }
+                                            }
+                                        }
+                                        let live_bindings =
+                                            self.policy_delivery.status().runtime_binding_count;
+                                        let acceptance = self
+                                            .decommission
+                                            .as_mut()
+                                            .ok_or_else(|| {
+                                                IdentityStateSnafu {
+                                                    reason: "node decommission is not configured"
+                                                        .to_owned(),
+                                                }
+                                                .build()
+                                            })
+                                            .and_then(|owner| {
+                                                owner.accept(
+                                                    &command.artifact,
+                                                    live_bindings,
+                                                    crate::policy::current_utc_ns()?,
+                                                )
+                                            });
+                                        let acceptance = match acceptance {
+                                            Ok(acceptance) => acceptance,
+                                            Err(error) => {
+                                                erebor_telemetry::warn!(
+                                                    error;
+                                                    "deferred physical node decommission",
+                                                    node_id = %self.config.node_id,
+                                                    artifact_sha256 = %hex::encode(artifact_sha256),
+                                                    retry = %"after_restart"
+                                                );
+                                                run_error = Some(error);
+                                                break 'running;
+                                            }
+                                        };
+                                        if acceptance != NodeDecommissionAcceptanceV1::Completed {
+                                            let config = self.config.decommission.as_ref().ok_or_else(|| {
+                                                IdentityStateSnafu {
+                                                    reason: "node decommission is not configured"
+                                                        .to_owned(),
+                                                }
+                                                .build()
+                                            })?;
+                                            let runtime = RuntimeIntegrationDecommissionV1 {
+                                                owner: config.runtime_integration_owner.clone(),
+                                                hook_directory: config.runtime_hook_directory.clone(),
+                                                containerd_config_directory:
+                                                    config.containerd_config_directory.clone(),
+                                                containerd_drop_in_directory: config
+                                                    .containerd_drop_in_directory
+                                                    .clone(),
+                                                runtime_services: config.runtime_services.clone(),
+                                            };
+                                            RuntimeIntegrationOwner::decommission(&runtime).map_err(
+                                                |source| crate::Error::Io {
+                                                    path: runtime.containerd_config_directory.clone(),
+                                                    source,
+                                                    location: snafu::Location::default(),
+                                                },
+                                            )?;
+                                            erebor_telemetry::info!(
+                                                "removed the owned Mithril runtime integration",
+                                                node_id = %self.config.node_id,
+                                                artifact_sha256 = %hex::encode(artifact_sha256)
+                                            );
+
+                                            if let Some(task) = local_task.take() {
+                                                task.abort();
+                                                let _result = task.await;
+                                            }
+                                            effect_stop.store(true, Ordering::Release);
+                                            if let Some(task) = effect_task.take() {
+                                                task.await
+                                                    .context(LocalTaskSnafu)?
+                                                    .context(InterceptorSnafu)?;
+                                            }
+                                            if let Some(task) = effect_worker_task.take() {
+                                                task.await.context(LocalTaskSnafu)?;
+                                            }
+                                            self.host
+                                                .take()
+                                                .ok_or_else(|| {
+                                                    IdentityStateSnafu {
+                                                        reason: "node decommission has no kernel owner"
+                                                            .to_owned(),
+                                                    }
+                                                    .build()
+                                                })?
+                                                .decommission()
+                                                .context(InterceptorSnafu)?;
+                                            erebor_telemetry::info!(
+                                                "removed the owned Mithril kernel attachments",
+                                                node_id = %self.config.node_id,
+                                                artifact_sha256 = %hex::encode(artifact_sha256)
+                                            );
+                                            self.decommission
+                                                .as_mut()
+                                                .ok_or_else(|| {
+                                                    IdentityStateSnafu {
+                                                        reason: "node decommission owner disappeared"
+                                                            .to_owned(),
+                                                    }
+                                                    .build()
+                                                })?
+                                                .complete(&command.artifact)?;
+                                        }
+                                        connection
+                                            .send_decommission_result(
+                                                artifact_sha256,
+                                                "COMPLETED",
+                                                String::new(),
+                                            )
+                                            .await?;
+                                        erebor_telemetry::info!(
+                                            "completed a Mithril node decommission",
+                                            node_id = %self.config.node_id,
+                                            artifact_sha256 = %hex::encode(artifact_sha256)
+                                        );
+                                        break 'running;
                                     }
                                     NodeControlMessage::EvidenceAck(ack) => {
                                         match self
@@ -3364,6 +3584,7 @@ mod tests {
             effect_reader: None,
             effect_worker: None,
             host: None,
+            decommission: None,
             connector,
             registration: NodeRegistration {
                 platform_digest: "a".repeat(64),

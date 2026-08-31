@@ -133,6 +133,14 @@ fn descriptor_has_the_approved_grpc_inventory() -> Result<(), Box<dyn std::error
             false,
         ),
         method(
+            "NodeDecommission",
+            "Open",
+            "NodeDecommissionStreamRequest",
+            "NodeDecommissionCommand",
+            true,
+            true,
+        ),
+        method(
             "NodeAdministrativeResolution",
             "Open",
             "AdministrativeExecResolutionStreamRequest",

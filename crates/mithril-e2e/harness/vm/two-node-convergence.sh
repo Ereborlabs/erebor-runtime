@@ -959,7 +959,15 @@ node:
   runtimeHook:
     hostBinaryDirectory: /usr/libexec/oci/hooks.d
     containerdConfigHostDirectory: /var/lib/rancher/k3s/agent/etc/containerd
-    k3sBinaryHostPath: /usr/local/bin/k3s
+    containerdDropInDirectory: config-v3.toml.d
+    runtimeCliHostPath: /usr/local/bin/k3s
+    runtimeCliArgs:
+      - ctr
+      - oci
+      - spec
+    runtimeServices:
+      - k3s
+      - k3s-agent
     socketPath: /run/mithril/runtime-admission.sock
     timeoutMs: 4000
     runtimeTimeoutSeconds: 5

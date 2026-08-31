@@ -16,16 +16,19 @@ use tonic::{Request, Response, Status, Streaming};
 use crate::{
     control_health_server::ControlHealth, node_administrative_arm_server::NodeAdministrativeArm,
     node_administrative_resolution_server::NodeAdministrativeResolution,
-    node_coverage_server::NodeCoverage, node_evidence_server::NodeEvidence,
-    node_policy_server::NodePolicy, node_registry_server::NodeRegistry,
-    node_trust_server::NodeTrust, AdministrativeExecArmResult, AdministrativeExecArmStreamRequest,
-    AdministrativeExecResolution, AdministrativeExecResolutionStreamRequest, ArmAdministrativeExec,
-    ControlConvergenceHealth, CoverageAck, CoverageReportRequest, EvidenceAck,
-    EvidenceBatchRequest, EvidenceStreamRequest, ExceptionAcknowledgementRequest,
-    ExceptionInventory, ExceptionInventoryRequest, NodeReadinessRequest, NodeRegistrationRequest,
-    NodeSessionContext, PolicyAcknowledgementAccepted, PolicyAcknowledgementRequest, PolicyChunk,
-    PolicyChunkRequest, PolicyInventory, PolicyInventoryRequest, RegistrationAccepted,
-    ResolveAdministrativeExec, TrustGeneration, TrustGenerationAckRequest, IDENTITY_BYTES,
+    node_coverage_server::NodeCoverage, node_decommission_server::NodeDecommission,
+    node_evidence_server::NodeEvidence, node_policy_server::NodePolicy,
+    node_registry_server::NodeRegistry, node_trust_server::NodeTrust, AdministrativeExecArmResult,
+    AdministrativeExecArmStreamRequest, AdministrativeExecResolution,
+    AdministrativeExecResolutionStreamRequest, ArmAdministrativeExec, ControlConvergenceHealth,
+    CoverageAck, CoverageReportRequest, EvidenceAck, EvidenceBatchRequest, EvidenceStreamRequest,
+    ExceptionAcknowledgementRequest, ExceptionInventory, ExceptionInventoryRequest,
+    NodeDecommissionCommand, NodeDecommissionResult, NodeDecommissionStateV1,
+    NodeDecommissionStatusV1, NodeDecommissionStreamRequest, NodeReadinessRequest,
+    NodeRegistrationRequest, NodeSessionContext, PolicyAcknowledgementAccepted,
+    PolicyAcknowledgementRequest, PolicyChunk, PolicyChunkRequest, PolicyInventory,
+    PolicyInventoryRequest, RegistrationAccepted, ResolveAdministrativeExec, TrustGeneration,
+    TrustGenerationAckRequest, IDENTITY_BYTES,
 };
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
@@ -100,6 +103,8 @@ struct NodeSession {
     kubernetes_node_uid: Option<String>,
     resolution_output: Option<mpsc::Sender<Result<ResolveAdministrativeExec, Status>>>,
     arm_output: Option<mpsc::Sender<Result<ArmAdministrativeExec, Status>>>,
+    decommission_output: Option<mpsc::Sender<Result<NodeDecommissionCommand, Status>>>,
+    decommissioning: bool,
     admission_ready: bool,
     label_epoch: u64,
     last_seen: std::time::Instant,
@@ -323,6 +328,7 @@ impl ControlPlane {
                     // Readiness expires even when a dead connection has not been removed yet.
                     .filter(|session| {
                         session.admission_ready
+                            && !session.decommissioning
                             && now.saturating_duration_since(session.last_seen) <= maximum_age
                     })
                     .filter_map(|session| {
@@ -483,6 +489,247 @@ impl ControlPlane {
             ));
         }
         await_administrative(receiver, &request_id, self, "arm administrative exec").await
+    }
+
+    pub async fn submit_node_decommission(
+        &self,
+        artifact: Vec<u8>,
+    ) -> Result<NodeDecommissionStatusV1, Status> {
+        let store = self.decommission_store()?;
+        let record = store
+            .submit_node_decommission(artifact)
+            .map_err(invalid_policy_status)?;
+        self.send_decommission_command(&record).await?;
+        info!(
+            "submitted a signed Mithril node decommission",
+            artifact_sha256 = %hex::encode(record.digest()),
+            state = %format!("{:?}", record.state)
+        );
+        Ok(record.status())
+    }
+
+    pub fn node_decommission_status(
+        &self,
+        artifact_sha256: &str,
+    ) -> Result<NodeDecommissionStatusV1, Status> {
+        let digest = decode_sha256(artifact_sha256)?;
+        self.decommission_store()?
+            .node_decommission(digest)
+            .map_err(invalid_policy_status)?
+            .map(|record| record.status())
+            .ok_or_else(|| Status::not_found("node decommission artifact is unknown"))
+    }
+
+    pub(crate) fn decommissioning_kubernetes_node(
+        &self,
+        kubernetes_node_name: &str,
+        kubernetes_node_uid: &str,
+    ) -> Result<Option<KubernetesNodeSessionV1>, Status> {
+        let session = {
+            let state = self.lock_state()?;
+            state.sessions.values().find_map(|session| {
+                (session.decommissioning
+                    && session.kubernetes_node_name.as_deref() == Some(kubernetes_node_name)
+                    && session.kubernetes_node_uid.as_deref() == Some(kubernetes_node_uid))
+                .then(|| KubernetesNodeSessionV1 {
+                    node_id: session.identity.node_id.clone(),
+                    kubernetes_node_name: kubernetes_node_name.to_owned(),
+                    kubernetes_node_uid: kubernetes_node_uid.to_owned(),
+                    node_boot_id: session.identity.node_boot_id.clone(),
+                    label_epoch: session.label_epoch,
+                })
+            })
+        };
+        let Some(session) = session else {
+            return Ok(None);
+        };
+        let pending = self
+            .decommission_store()?
+            .node_decommission_for_session(&session.node_id, &session.node_boot_id)
+            .map_err(invalid_policy_status)?
+            .is_some_and(|record| {
+                matches!(
+                    record.state,
+                    NodeDecommissionStateV1::Accepted | NodeDecommissionStateV1::Quarantined
+                )
+            });
+        Ok(pending.then_some(session))
+    }
+
+    pub(crate) fn completed_kubernetes_node_decommission(
+        &self,
+        kubernetes_node_name: &str,
+        kubernetes_node_uid: &str,
+    ) -> Result<bool, Status> {
+        self.decommission_store()?
+            .completed_node_decommission(kubernetes_node_name, kubernetes_node_uid)
+            .map_err(invalid_policy_status)
+    }
+
+    pub(crate) async fn confirm_node_decommission_quarantine(
+        &self,
+        session: &KubernetesNodeSessionV1,
+    ) -> Result<(), Status> {
+        let store = self.decommission_store()?;
+        let mut record = store
+            .node_decommission_for_session(&session.node_id, &session.node_boot_id)
+            .map_err(invalid_policy_status)?
+            .ok_or_else(|| Status::failed_precondition("node has no pending decommission"))?;
+        if record.state == NodeDecommissionStateV1::Accepted {
+            record = store
+                .advance_node_decommission(
+                    record.digest(),
+                    NodeDecommissionStateV1::Quarantined,
+                    String::new(),
+                )
+                .map_err(invalid_policy_status)?;
+            info!(
+                "quarantined a Mithril node before physical decommission",
+                node_id = %session.node_id,
+                artifact_sha256 = %hex::encode(record.digest())
+            );
+        }
+        if record.state != NodeDecommissionStateV1::Quarantined {
+            return Err(Status::failed_precondition(
+                "node decommission is not ready for physical cleanup",
+            ));
+        }
+        self.send_decommission_command(&record).await
+    }
+
+    #[cfg(feature = "test-fixtures")]
+    pub async fn confirm_node_decommission_quarantine_for_test(
+        &self,
+        session: &KubernetesNodeSessionV1,
+    ) -> Result<(), Status> {
+        self.confirm_node_decommission_quarantine(session).await
+    }
+
+    async fn send_decommission_command(
+        &self,
+        record: &crate::StoredNodeDecommissionV1,
+    ) -> Result<(), Status> {
+        if matches!(
+            record.state,
+            NodeDecommissionStateV1::Completed | NodeDecommissionStateV1::Rejected
+        ) {
+            return Ok(());
+        }
+        let authorization = record.authorization().map_err(invalid_policy_status)?;
+        let output = {
+            let state = self.lock_state()?;
+            state
+                .sessions
+                .get(&authorization.node_id)
+                .filter(|session| session.identity.node_boot_id == authorization.node_boot_id)
+                .and_then(|session| session.decommission_output.clone())
+        };
+        let Some(output) = output else {
+            return Ok(());
+        };
+        output
+            .send(Ok(NodeDecommissionCommand {
+                artifact: record.artifact.clone(),
+                execute: record.state == NodeDecommissionStateV1::Quarantined,
+            }))
+            .await
+            .map_err(|_closed| Status::unavailable("target node decommission stream closed"))
+    }
+
+    fn receive_node_decommission_result(
+        &self,
+        node_id: &str,
+        identity: &StreamIdentity,
+        result: NodeDecommissionResult,
+    ) -> Result<(), Status> {
+        let digest: [u8; 32] =
+            result.artifact_sha256.as_slice().try_into().map_err(|_| {
+                Status::invalid_argument("decommission result digest is not SHA-256")
+            })?;
+        if result.reason_code.len() > 128 || result.reason_code.contains(['\r', '\n']) {
+            return Err(Status::invalid_argument(
+                "decommission result reason is invalid",
+            ));
+        }
+        let store = self.decommission_store()?;
+        let record = store
+            .node_decommission(digest)
+            .map_err(invalid_policy_status)?
+            .ok_or_else(|| Status::aborted("decommission result has no durable artifact"))?;
+        let authorization = record.authorization().map_err(invalid_policy_status)?;
+        if authorization.node_id != node_id
+            || authorization.node_boot_id.as_slice() != identity.node_boot_id
+        {
+            return Err(Status::unauthenticated(
+                "decommission result does not match its node boot",
+            ));
+        }
+        let next = match result.state.as_str() {
+            "ACCEPTED"
+                if matches!(
+                    record.state,
+                    NodeDecommissionStateV1::Submitted
+                        | NodeDecommissionStateV1::Accepted
+                        | NodeDecommissionStateV1::Quarantined
+                ) && result.reason_code.is_empty() =>
+            {
+                NodeDecommissionStateV1::Accepted
+            }
+            "COMPLETED"
+                if matches!(
+                    record.state,
+                    NodeDecommissionStateV1::Quarantined | NodeDecommissionStateV1::Completed
+                ) && result.reason_code.is_empty() =>
+            {
+                NodeDecommissionStateV1::Completed
+            }
+            "REJECTED"
+                if matches!(
+                    record.state,
+                    NodeDecommissionStateV1::Submitted | NodeDecommissionStateV1::Rejected
+                ) && !result.reason_code.is_empty() =>
+            {
+                NodeDecommissionStateV1::Rejected
+            }
+            _ => {
+                return Err(Status::failed_precondition(
+                    "decommission result skips or reverses durable state",
+                ))
+            }
+        };
+        let next = if record.state == next {
+            record
+        } else {
+            store
+                .advance_node_decommission(digest, next, result.reason_code.clone())
+                .map_err(invalid_policy_status)?
+        };
+        if next.state == NodeDecommissionStateV1::Accepted {
+            let mut state = self.lock_state()?;
+            let session = state
+                .sessions
+                .get_mut(node_id)
+                .ok_or_else(|| Status::unauthenticated("node session is not registered"))?;
+            if session.identity != *identity {
+                return Err(Status::unauthenticated("node session changed"));
+            }
+            session.decommissioning = true;
+            session.admission_ready = false;
+        }
+        info!(
+            "advanced a Mithril node decommission",
+            node_id = %node_id,
+            artifact_sha256 = %hex::encode(digest),
+            state = %format!("{:?}", next.state),
+            reason_code = %next.reason_code
+        );
+        Ok(())
+    }
+
+    fn decommission_store(&self) -> Result<&crate::ControlStore, Status> {
+        self.policy_store.as_ref().ok_or_else(|| {
+            Status::failed_precondition("Control has no durable node decommission store")
+        })
     }
 
     fn authenticated_node<T>(&self, request: &Request<T>) -> Result<String, Status> {
@@ -684,6 +931,21 @@ impl ControlPlane {
                     .flatten()
             })
         };
+        let decommissioning = self
+            .policy_store
+            .as_ref()
+            .and_then(|store| {
+                store
+                    .node_decommission_for_session(&node_id, &context.node_boot_id)
+                    .ok()
+                    .flatten()
+            })
+            .is_some_and(|record| {
+                matches!(
+                    record.state,
+                    NodeDecommissionStateV1::Accepted | NodeDecommissionStateV1::Quarantined
+                )
+            });
         state.registrations.insert(identity.clone());
         // A valid reconnect replaces prior streams and pending requests for this node identity.
         state
@@ -697,6 +959,8 @@ impl ControlPlane {
                 kubernetes_node_uid,
                 resolution_output: None,
                 arm_output: None,
+                decommission_output: None,
+                decommissioning,
                 admission_ready: false,
                 label_epoch: registration.label_epoch,
                 last_seen: std::time::Instant::now(),
@@ -776,14 +1040,15 @@ impl ControlPlane {
         if session.identity != identity {
             return Err(Status::unauthenticated("node session changed"));
         }
-        let changed = session.admission_ready != report.admission_ready;
-        session.admission_ready = report.admission_ready;
+        let admission_ready = report.admission_ready && !session.decommissioning;
+        let changed = session.admission_ready != admission_ready;
+        session.admission_ready = admission_ready;
         if changed {
             info!(
                 "changed Mithril node admission readiness",
                 node_id = %node_id,
                 node_boot_id = %hex::encode(&context.node_boot_id),
-                admission_ready = %report.admission_ready
+                admission_ready = %admission_ready
             );
         }
         Ok(())
@@ -870,6 +1135,16 @@ impl ControlPlane {
             if let Some(session) = state.sessions.get_mut(&identity.node_id) {
                 if session.identity == *identity {
                     session.arm_output = None;
+                }
+            }
+        }
+    }
+
+    fn clear_decommission_output(&self, identity: &StreamIdentity) {
+        if let Ok(mut state) = self.state.lock() {
+            if let Some(session) = state.sessions.get_mut(&identity.node_id) {
+                if session.identity == *identity {
+                    session.decommission_output = None;
                 }
             }
         }
@@ -1633,6 +1908,76 @@ impl NodeAdministrativeArm for ControlPlane {
     }
 }
 
+#[tonic::async_trait]
+impl NodeDecommission for ControlPlane {
+    type OpenStream = Pin<Box<dyn Stream<Item = Result<NodeDecommissionCommand, Status>> + Send>>;
+
+    async fn open(
+        &self,
+        request: Request<Streaming<NodeDecommissionStreamRequest>>,
+    ) -> Result<Response<Self::OpenStream>, Status> {
+        let node_id = self.authenticated_node(&request)?;
+        let mut input = request.into_inner();
+        let first = input
+            .message()
+            .await?
+            .ok_or_else(|| Status::invalid_argument("node session context is required"))?;
+        let context = first
+            .session
+            .as_ref()
+            .ok_or_else(|| Status::invalid_argument("node session context is required"))?;
+        let identity = self.require_session(&node_id, context)?;
+        if first.result.is_some() {
+            return Err(Status::invalid_argument(
+                "the first decommission stream message must contain only session context",
+            ));
+        }
+        let (output, receiver) = mpsc::channel(4);
+        self.lock_state()?
+            .sessions
+            .get_mut(&node_id)
+            .ok_or_else(|| Status::unauthenticated("node session is not registered"))?
+            .decommission_output = Some(output.clone());
+        if let Some(record) = self
+            .decommission_store()?
+            .node_decommission_for_session(&node_id, &identity.node_boot_id)
+            .map_err(invalid_policy_status)?
+        {
+            output
+                .send(Ok(NodeDecommissionCommand {
+                    artifact: record.artifact,
+                    execute: record.state == NodeDecommissionStateV1::Quarantined,
+                }))
+                .await
+                .map_err(|_closed| Status::unavailable("node decommission stream closed"))?;
+        }
+        let control = self.clone();
+        tokio::spawn(async move {
+            while let Some(message) = input.next().await {
+                let result = message.and_then(|message| {
+                    let context = message.session.as_ref().ok_or_else(|| {
+                        Status::invalid_argument("node session context is required")
+                    })?;
+                    let current = control.require_session(&node_id, context)?;
+                    if current != identity {
+                        return Err(Status::unauthenticated("node session changed"));
+                    }
+                    let result = message.result.ok_or_else(|| {
+                        Status::invalid_argument("node decommission result is required")
+                    })?;
+                    control.receive_node_decommission_result(&node_id, &identity, result)
+                });
+                if let Err(error) = result {
+                    let _result = output.send(Err(error)).await;
+                    break;
+                }
+            }
+            control.clear_decommission_output(&identity);
+        });
+        Ok(Response::new(Box::pin(ReceiverStream::new(receiver))))
+    }
+}
+
 fn authenticated_channel_receipt_digest<M: prost::Message>(
     request: &Request<M>,
 ) -> Result<String, Status> {
@@ -1860,6 +2205,18 @@ fn is_sha256_hex(value: &str) -> bool {
             .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
 }
 
+fn decode_sha256(value: &str) -> Result<[u8; 32], Status> {
+    if !is_sha256_hex(value) {
+        return Err(Status::invalid_argument(
+            "artifact digest must be lowercase SHA-256",
+        ));
+    }
+    hex::decode(value)
+        .ok()
+        .and_then(|bytes| bytes.try_into().ok())
+        .ok_or_else(|| Status::invalid_argument("artifact digest must be lowercase SHA-256"))
+}
+
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 struct StreamIdentity {
     node_id: String,
@@ -1946,9 +2303,11 @@ async fn await_administrative<T>(
 mod tests {
     use super::{valid_registration, ControlPlane, StreamIdentity};
     use crate::{
-        AllowedNodeIdentity, CapabilityRecord, NodeReadinessReport, NodeRegistration,
-        NodeSessionContext, RegisteredWorkloadTarget, TrustGenerationV1,
+        AllowedNodeIdentity, CapabilityRecord, NodeDecommissionAuthorizationV1,
+        NodeDecommissionResult, NodeDecommissionStateV1, NodeReadinessReport, NodeRegistration,
+        NodeSessionContext, RegisteredWorkloadTarget, SignedNodeDecommissionV1, TrustGenerationV1,
     };
+    use ed25519_dalek::SigningKey;
     use tempfile::TempDir;
     use tonic::Request;
 
@@ -2113,6 +2472,93 @@ mod tests {
             store.clone(),
         )?;
         Ok((control, store))
+    }
+
+    #[tokio::test]
+    async fn decommission_result_cannot_forge_or_skip_the_control_transition(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let directory = TempDir::new()?;
+        let (control, store) = durable_control(&directory)?;
+        let context = NodeSessionContext {
+            node_id: "node-a".to_owned(),
+            node_boot_id: vec![1; 16],
+            connection_nonce: vec![2; 16],
+        };
+        control.register(
+            "node-a".to_owned(),
+            &context,
+            &registration_for(&context, 1, true, true),
+        )?;
+        let identity = StreamIdentity::new("node-a".to_owned(), &context)?;
+        let artifact = SignedNodeDecommissionV1::sign(
+            &NodeDecommissionAuthorizationV1::new(
+                "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+                "node-a".to_owned(),
+                "01010101-0101-0101-0101-010101010101",
+                i64::MAX,
+                "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+            )?,
+            "offline-decommission-v1".to_owned(),
+            &SigningKey::from_bytes(&[7; 32]),
+        )?
+        .to_bytes()?;
+        let submitted = control.submit_node_decommission(artifact).await?;
+        let digest: [u8; 32] = hex::decode(&submitted.artifact_sha256)?.try_into().unwrap();
+        assert!(control
+            .receive_node_decommission_result(
+                "node-a",
+                &identity,
+                NodeDecommissionResult {
+                    artifact_sha256: digest.to_vec(),
+                    state: "COMPLETED".to_owned(),
+                    reason_code: String::new(),
+                },
+            )
+            .is_err());
+        assert!(control
+            .receive_node_decommission_result(
+                "node-a",
+                &identity,
+                NodeDecommissionResult {
+                    artifact_sha256: vec![9; 32],
+                    state: "ACCEPTED".to_owned(),
+                    reason_code: String::new(),
+                },
+            )
+            .is_err());
+        control.receive_node_decommission_result(
+            "node-a",
+            &identity,
+            NodeDecommissionResult {
+                artifact_sha256: digest.to_vec(),
+                state: "ACCEPTED".to_owned(),
+                reason_code: String::new(),
+            },
+        )?;
+        assert!(control
+            .ready_kubernetes_node_sessions(std::time::Duration::from_secs(1))
+            .is_empty());
+        store.advance_node_decommission(
+            digest,
+            NodeDecommissionStateV1::Quarantined,
+            String::new(),
+        )?;
+        control.receive_node_decommission_result(
+            "node-a",
+            &identity,
+            NodeDecommissionResult {
+                artifact_sha256: digest.to_vec(),
+                state: "COMPLETED".to_owned(),
+                reason_code: String::new(),
+            },
+        )?;
+        assert_eq!(
+            control
+                .node_decommission_status(&submitted.artifact_sha256)?
+                .state,
+            NodeDecommissionStateV1::Completed
+        );
+        Ok(())
     }
 
     #[test]

@@ -24,15 +24,15 @@ use crate::{
     EvidenceIntakeIdentityV1, EvidenceRecord, EvidenceRecords, EvidenceStoreOutcomeV1,
     ExceptionActivationAcknowledgementV1, ExceptionActivationStateV1, ExceptionDeliveryCandidateV1,
     ExceptionDeliveryOperationV1, ExceptionRolloutStateV1, ExceptionSourceRevisionV1,
-    ExceptionSourceStateV1, IntakeStateV1, PolicyActivationAcknowledgementV1,
-    PolicyActivationStateV1, PolicyBundleV1, PolicyDocumentV1, PolicyRolloutStateV1,
-    PolicyRolloutStatusV1, PolicySourceRevisionV1, PolicySourceStateV1, PolicyTargetSnapshotV1,
-    PolicyTargetV1, ProfileCandidateArtifactV1, Result, StoredCoverageReportV1,
-    StoredEvidenceBatchV1, TrustGenerationAcknowledgementV1, TrustGenerationV1,
-    MAX_PENDING_EVIDENCE_RECORDS,
+    ExceptionSourceStateV1, IntakeStateV1, NodeDecommissionStateV1,
+    PolicyActivationAcknowledgementV1, PolicyActivationStateV1, PolicyBundleV1, PolicyDocumentV1,
+    PolicyRolloutStateV1, PolicyRolloutStatusV1, PolicySourceRevisionV1, PolicySourceStateV1,
+    PolicyTargetSnapshotV1, PolicyTargetV1, ProfileCandidateArtifactV1, Result,
+    StoredCoverageReportV1, StoredEvidenceBatchV1, StoredNodeDecommissionV1,
+    TrustGenerationAcknowledgementV1, TrustGenerationV1, MAX_PENDING_EVIDENCE_RECORDS,
 };
 
-const STORE_SCHEMA_VERSION: u32 = 3;
+const STORE_SCHEMA_VERSION: u32 = 4;
 const STATE_DIGEST_BYTES: usize = 32;
 const MAX_STATE_BYTES: usize = 64 * 1_024 * 1_024;
 
@@ -419,6 +419,7 @@ struct ControlStoreState {
     exception_consumed_uses: BTreeMap<PolicyRolloutKeyV1, u32>,
     node_sessions: BTreeMap<String, DurableNodeSessionV1>,
     node_session_history: BTreeMap<NodePhysicalEpochV1, DurableNodeSessionV1>,
+    node_decommissions: BTreeMap<[u8; 32], StoredNodeDecommissionV1>,
     trust_generations: BTreeMap<u64, TrustGenerationV1>,
     trust_acknowledgements:
         BTreeMap<(String, u64, [u8; 16], u64), TrustGenerationAcknowledgementV1>,
@@ -538,6 +539,9 @@ enum ControlTransactionV1 {
     },
     TrustAcknowledged {
         acknowledgement: Box<TrustGenerationAcknowledgementV1>,
+    },
+    NodeDecommissionUpdated {
+        record: Box<StoredNodeDecommissionV1>,
     },
 }
 
@@ -918,6 +922,179 @@ impl ControlStore {
             .is_none_or(|session| {
                 session.node_boot_id == node_boot_id && session.label_epoch == label_epoch
             }))
+    }
+
+    pub(crate) fn submit_node_decommission(
+        &self,
+        artifact: Vec<u8>,
+    ) -> Result<StoredNodeDecommissionV1> {
+        let (_envelope, authorization) = crate::SignedNodeDecommissionV1::parse(&artifact)?;
+        let digest: [u8; 32] = Sha256::digest(&artifact).into();
+        let mut inner = self.lock()?;
+        if let Some(existing) = inner.state.node_decommissions.get(&digest) {
+            return Ok(existing.clone());
+        }
+        if inner.state.node_decommissions.len() >= 4_096 {
+            return ControlStoreSnafu {
+                path: inner.root.clone(),
+                reason: "the decommission artifact capacity is exhausted".to_owned(),
+            }
+            .fail();
+        }
+        if inner.state.node_decommissions.values().any(|record| {
+            matches!(
+                record.state,
+                NodeDecommissionStateV1::Submitted
+                    | NodeDecommissionStateV1::Accepted
+                    | NodeDecommissionStateV1::Quarantined
+            ) && record.authorization().is_ok_and(|stored| {
+                stored.node_id == authorization.node_id
+                    && stored.node_boot_id == authorization.node_boot_id
+            })
+        }) {
+            return ControlStoreSnafu {
+                path: inner.root.clone(),
+                reason: "decommission target already has a pending artifact".to_owned(),
+            }
+            .fail();
+        }
+        let session = inner
+            .state
+            .node_sessions
+            .get(&authorization.node_id)
+            .ok_or_else(|| {
+                ControlStoreSnafu {
+                    path: inner.root.clone(),
+                    reason: "decommission target has no durable node session".to_owned(),
+                }
+                .build()
+            })?;
+        if session.node_boot_id != authorization.node_boot_id {
+            return ControlStoreSnafu {
+                path: inner.root.clone(),
+                reason: "decommission target does not match the current node boot".to_owned(),
+            }
+            .fail();
+        }
+        if inner.state.node_decommissions.values().any(|record| {
+            record
+                .authorization()
+                .is_ok_and(|stored| stored.nonce == authorization.nonce)
+        }) {
+            return ControlStoreSnafu {
+                path: inner.root.clone(),
+                reason: "decommission nonce already names another artifact".to_owned(),
+            }
+            .fail();
+        }
+        let record = StoredNodeDecommissionV1 {
+            artifact,
+            state: NodeDecommissionStateV1::Submitted,
+            reason_code: String::new(),
+        };
+        commit(
+            &mut inner,
+            ControlTransactionV1::NodeDecommissionUpdated {
+                record: Box::new(record.clone()),
+            },
+        )?;
+        Ok(record)
+    }
+
+    pub(crate) fn advance_node_decommission(
+        &self,
+        artifact_sha256: [u8; 32],
+        state: NodeDecommissionStateV1,
+        reason_code: String,
+    ) -> Result<StoredNodeDecommissionV1> {
+        let mut inner = self.lock()?;
+        let mut record = inner
+            .state
+            .node_decommissions
+            .get(&artifact_sha256)
+            .cloned()
+            .ok_or_else(|| {
+                ControlStoreSnafu {
+                    path: inner.root.clone(),
+                    reason: "decommission result has no durable artifact".to_owned(),
+                }
+                .build()
+            })?;
+        if record.state == state && record.reason_code == reason_code {
+            return Ok(record);
+        }
+        record.state = state;
+        record.reason_code = reason_code;
+        commit(
+            &mut inner,
+            ControlTransactionV1::NodeDecommissionUpdated {
+                record: Box::new(record.clone()),
+            },
+        )?;
+        Ok(record)
+    }
+
+    pub(crate) fn node_decommission(
+        &self,
+        artifact_sha256: [u8; 32],
+    ) -> Result<Option<StoredNodeDecommissionV1>> {
+        Ok(self
+            .lock()?
+            .state
+            .node_decommissions
+            .get(&artifact_sha256)
+            .cloned())
+    }
+
+    pub(crate) fn node_decommission_for_session(
+        &self,
+        node_id: &str,
+        node_boot_id: &[u8],
+    ) -> Result<Option<StoredNodeDecommissionV1>> {
+        let inner = self.lock()?;
+        Ok(inner
+            .state
+            .node_decommissions
+            .values()
+            .filter(|record| {
+                matches!(
+                    record.state,
+                    NodeDecommissionStateV1::Submitted
+                        | NodeDecommissionStateV1::Accepted
+                        | NodeDecommissionStateV1::Quarantined
+                )
+            })
+            .find(|record| {
+                record.authorization().is_ok_and(|authorization| {
+                    authorization.node_id == node_id
+                        && authorization.node_boot_id.as_slice() == node_boot_id
+                })
+            })
+            .cloned())
+    }
+
+    pub(crate) fn completed_node_decommission(
+        &self,
+        kubernetes_node_name: &str,
+        kubernetes_node_uid: &str,
+    ) -> Result<bool> {
+        let inner = self.lock()?;
+        Ok(inner.state.node_decommissions.values().any(|record| {
+            record.state == NodeDecommissionStateV1::Completed
+                && record.authorization().is_ok_and(|authorization| {
+                    inner
+                        .state
+                        .node_sessions
+                        .get(&authorization.node_id)
+                        .is_some_and(|session| {
+                            session.node_boot_id == authorization.node_boot_id
+                                && session.kubernetes_node_name.as_deref()
+                                    == Some(kubernetes_node_name)
+                                && session.kubernetes_node_uid.as_deref()
+                                    == Some(kubernetes_node_uid)
+                        })
+                })
+        }))
     }
 
     pub(crate) fn evidence_session_for_stream(
@@ -3475,6 +3652,89 @@ fn apply_transaction(
                 .fail();
             }
         }
+        ControlTransactionV1::NodeDecommissionUpdated { record } => {
+            validate_node_decommission_update(state, record, path)?;
+            state
+                .node_decommissions
+                .insert(record.digest(), record.as_ref().clone());
+        }
+    }
+    Ok(())
+}
+
+fn validate_node_decommission_update(
+    state: &ControlStoreState,
+    record: &StoredNodeDecommissionV1,
+    path: &Path,
+) -> Result<()> {
+    let (_envelope, authorization) = crate::SignedNodeDecommissionV1::parse(&record.artifact)?;
+    let digest = record.digest();
+    if record.reason_code.len() > 128
+        || record.reason_code.contains(['\r', '\n'])
+        || (record.state == NodeDecommissionStateV1::Rejected) != !record.reason_code.is_empty()
+    {
+        return ControlStoreSnafu {
+            path: path.to_owned(),
+            reason: "the decommission result reason is invalid".to_owned(),
+        }
+        .fail();
+    }
+
+    if let Some(current) = state.node_decommissions.get(&digest) {
+        let valid_transition = current.artifact == record.artifact
+            && matches!(
+                (current.state, record.state),
+                (
+                    NodeDecommissionStateV1::Submitted,
+                    NodeDecommissionStateV1::Accepted | NodeDecommissionStateV1::Rejected
+                ) | (
+                    NodeDecommissionStateV1::Accepted,
+                    NodeDecommissionStateV1::Quarantined
+                ) | (
+                    NodeDecommissionStateV1::Quarantined,
+                    NodeDecommissionStateV1::Completed
+                )
+            );
+        if !valid_transition {
+            return ControlStoreSnafu {
+                path: path.to_owned(),
+                reason: "the decommission state transition is invalid".to_owned(),
+            }
+            .fail();
+        }
+        return Ok(());
+    }
+
+    let current_session_matches = state
+        .node_sessions
+        .get(&authorization.node_id)
+        .is_some_and(|session| session.node_boot_id == authorization.node_boot_id);
+    let nonce_is_unused = state.node_decommissions.values().all(|stored| {
+        stored
+            .authorization()
+            .is_ok_and(|stored| stored.nonce != authorization.nonce)
+    });
+    let target_has_no_pending_artifact = state.node_decommissions.values().all(|stored| {
+        !matches!(
+            stored.state,
+            NodeDecommissionStateV1::Submitted
+                | NodeDecommissionStateV1::Accepted
+                | NodeDecommissionStateV1::Quarantined
+        ) || stored.authorization().is_ok_and(|stored| {
+            stored.node_id != authorization.node_id
+                || stored.node_boot_id != authorization.node_boot_id
+        })
+    });
+    if record.state != NodeDecommissionStateV1::Submitted
+        || !current_session_matches
+        || !nonce_is_unused
+        || !target_has_no_pending_artifact
+    {
+        return ControlStoreSnafu {
+            path: path.to_owned(),
+            reason: "the submitted decommission artifact is stale or duplicated".to_owned(),
+        }
+        .fail();
     }
     Ok(())
 }
@@ -5462,11 +5722,13 @@ mod tests {
         canonical_policy_spec_digest, workload_target_fact_digest, ContainerKindV1,
         ExceptionDeliveryCandidateV1, ExceptionDeliveryOperationV1, ExceptionRolloutStateV1,
         ExceptionSourceRevisionV1, ExceptionSourceStateV1, KubernetesWorkloadIdentityV1,
+        NodeDecommissionAuthorizationV1, NodeDecommissionStateV1,
         PolicyActivationAcknowledgementV1, PolicyActivationStateV1, PolicyBundleV1, PolicyCompiler,
         PolicyDeliveryCandidateV1, PolicyDeliveryOperationV1, PolicyDocumentV1,
         PolicyRolloutStateV1, PolicyRolloutStatusV1, PolicySourceRevisionV1, PolicySourceStateV1,
         PolicyTargetSnapshotV1, PolicyTargetV1, ProfileCandidateArtifactV1, ProfileSealRequestV1,
-        RegistryDigestsV1, WorkloadProtectionExceptionStateV1, WorkloadTargetFactV1,
+        RegistryDigestsV1, SignedNodeDecommissionV1, WorkloadProtectionExceptionStateV1,
+        WorkloadTargetFactV1,
     };
     use tempfile::TempDir;
 
@@ -6118,6 +6380,110 @@ mod tests {
             2,
         )?;
         assert_eq!(replayed.commit_index(), 2);
+        Ok(())
+    }
+
+    #[test]
+    fn decommission_replay_requires_each_durable_transition_and_exact_node_boot(
+    ) -> crate::Result<()> {
+        let directory = TempDir::new().map_err(|error| {
+            crate::error::ControlStoreSnafu {
+                path: Path::new("decommission-store-test").to_owned(),
+                reason: error.to_string(),
+            }
+            .build()
+        })?;
+        let store = super::ControlStore::open(directory.path())?;
+        let proof = super::startup_absence_proof_digest("node-a", &[1; 16], 1, true, true);
+        store.register_node_physical_session(
+            "node-a",
+            &[1; 16],
+            1,
+            Some("worker-a.example"),
+            &proof,
+            true,
+            true,
+            1,
+        )?;
+        store.bind_kubernetes_node_session(
+            "node-a",
+            &[1; 16],
+            1,
+            "worker-a.example",
+            "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        )?;
+        let key = SigningKey::from_bytes(&[7; 32]);
+        let artifact = SignedNodeDecommissionV1::sign(
+            &NodeDecommissionAuthorizationV1::new(
+                "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+                "node-a".to_owned(),
+                "01010101-0101-0101-0101-010101010101",
+                i64::MAX,
+                "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+            )?,
+            "offline-decommission-v1".to_owned(),
+            &key,
+        )?
+        .to_bytes()?;
+        let submitted = store.submit_node_decommission(artifact.clone())?;
+        let digest = submitted.digest();
+        assert!(store
+            .advance_node_decommission(digest, NodeDecommissionStateV1::Completed, String::new(),)
+            .is_err());
+        assert!(store.submit_node_decommission(artifact.clone()).is_ok());
+
+        let second = SignedNodeDecommissionV1::sign(
+            &NodeDecommissionAuthorizationV1::new(
+                "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+                "node-a".to_owned(),
+                "01010101-0101-0101-0101-010101010101",
+                i64::MAX,
+                "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+            )?,
+            "offline-decommission-v1".to_owned(),
+            &key,
+        )?
+        .to_bytes()?;
+        assert!(store.submit_node_decommission(second).is_err());
+
+        store.advance_node_decommission(
+            digest,
+            NodeDecommissionStateV1::Accepted,
+            String::new(),
+        )?;
+        assert!(store
+            .advance_node_decommission(
+                digest,
+                NodeDecommissionStateV1::Rejected,
+                "LATE_REJECTION".to_owned(),
+            )
+            .is_err());
+        store.advance_node_decommission(
+            digest,
+            NodeDecommissionStateV1::Quarantined,
+            String::new(),
+        )?;
+        store.advance_node_decommission(
+            digest,
+            NodeDecommissionStateV1::Completed,
+            String::new(),
+        )?;
+        assert!(store.completed_node_decommission(
+            "worker-a.example",
+            "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+        )?);
+        drop(store);
+
+        let reopened = super::ControlStore::open(directory.path())?;
+        assert_eq!(
+            reopened
+                .node_decommission(digest)?
+                .map(|record| record.state),
+            Some(NodeDecommissionStateV1::Completed)
+        );
+        assert!(reopened
+            .advance_node_decommission(digest, NodeDecommissionStateV1::Quarantined, String::new(),)
+            .is_err());
         Ok(())
     }
 

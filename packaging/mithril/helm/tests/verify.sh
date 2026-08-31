@@ -37,8 +37,11 @@ grep -Fq 'value: "mithril_node::runtime_admission=debug"' <<<"$node_logs"
 grep -Fq 'name: install-runtime-gate' <<<"$node_logs"
 grep -Fq 'command: ["/usr/local/bin/mithril-oci-hook", "install"]' <<<"$node_logs"
 [[ $(grep -Fc 'value: "mithril_node::runtime_admission=debug"' <<<"$node_logs") -eq 2 ]]
-grep -Fq 'path: "/var/lib/rancher/k3s/agent/etc/containerd"' <<<"$node_logs"
-grep -Fq 'path: "/usr/local/bin/k3s"' <<<"$node_logs"
+grep -Fq 'path: "/etc/containerd"' <<<"$node_logs"
+grep -Fq 'path: "/usr/bin/ctr"' <<<"$node_logs"
+grep -Fq -- '--containerd-drop-in-directory' <<<"$node_logs"
+grep -Fq -- '--runtime-cli-arg' <<<"$node_logs"
+grep -Fq -- '--runtime-service' <<<"$node_logs"
 grep -Fq -- '--node-read-only-mount' <<<"$node_logs"
 grep -Fq -- '--node-read-write-mount' <<<"$node_logs"
 if grep -Fq 'runtime-hook-injector' <<<"$node_logs" ||
@@ -51,11 +54,11 @@ runtime_mounts=$(helm template mithril "$chart_directory" \
   --namespace mithril-system \
   --values "$chart_directory/tests/values.yaml" \
   --show-only templates/daemonset.yaml \
-  --set-string 'node.containerRuntimeSocket=/run/k3s/containerd/containerd.sock')
-grep -Fq 'mountPath: "/run/k3s/containerd"' <<<"$runtime_mounts"
-grep -Fq 'path: "/run/k3s/containerd"' <<<"$runtime_mounts"
+  --set-string 'node.containerRuntimeSocket=/run/runtime-test/containerd.sock')
+grep -Fq 'mountPath: "/run/runtime-test"' <<<"$runtime_mounts"
+grep -Fq 'path: "/run/runtime-test"' <<<"$runtime_mounts"
 grep -Fq 'type: Directory' <<<"$runtime_mounts"
-if grep -Fq '/run/k3s/containerd/containerd.sock' <<<"$runtime_mounts"; then
+if grep -Fq '/run/runtime-test/containerd.sock' <<<"$runtime_mounts"; then
   echo 'chart bind-mounted a replaceable runtime socket inode' >&2
   exit 1
 fi
@@ -63,7 +66,7 @@ fi
 if helm template mithril "$chart_directory" \
   --namespace mithril-system \
   --values "$chart_directory/tests/values.yaml" \
-  --set-string 'node.containerRuntimeSocket=/run/k3s/containerd/../containerd.sock' \
+  --set-string 'node.containerRuntimeSocket=/run/runtime-test/../containerd.sock' \
   >/dev/null 2>&1; then
   echo 'chart accepted a non-normalized container-runtime socket path' >&2
   exit 1

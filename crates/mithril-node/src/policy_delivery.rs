@@ -340,7 +340,7 @@ impl NodePolicyDeliveryOwner {
         Ok(())
     }
 
-    fn status(&self) -> PolicyDeliveryStatusV1 {
+    pub(crate) fn status(&self) -> PolicyDeliveryStatusV1 {
         let bindings = self
             .state
             .active_profiles

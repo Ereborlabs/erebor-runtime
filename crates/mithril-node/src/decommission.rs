@@ -43,6 +43,20 @@ pub struct NodeDecommissionOwner {
 }
 
 impl NodeDecommissionOwner {
+    pub fn durable_completion(state_directory: &Path) -> Result<bool> {
+        let path = state_directory.join("node-decommission-v1.cbor");
+        match fs::read(&path) {
+            Ok(bytes) => Ok(DurableDecommissionV1::decode(&bytes)?.state
+                == DurableDecommissionStateV1::Completed),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+            Err(source) => Err(crate::Error::Io {
+                path,
+                source,
+                location: snafu::Location::default(),
+            }),
+        }
+    }
+
     pub fn load(
         config: &NodeDecommissionConfig,
         state_directory: &Path,
@@ -121,6 +135,12 @@ impl NodeDecommissionOwner {
             if durable.nonce != authorization.nonce || durable.artifact_sha256 != artifact_sha256 {
                 return AuthorizationSnafu {
                     reason: "decommission nonce was already consumed by another artifact",
+                }
+                .fail();
+            }
+            if durable.state == DurableDecommissionStateV1::Accepted && live_runtime_bindings != 0 {
+                return AuthorizationSnafu {
+                    reason: "decommission is blocked by a live protected runtime binding",
                 }
                 .fail();
             }
@@ -344,6 +364,8 @@ mod tests {
             runtime_integration_owner: "mithril-system/mithril".to_owned(),
             runtime_hook_directory: directory.path().join("hooks"),
             containerd_config_directory: directory.path().join("containerd"),
+            containerd_drop_in_directory: "conf.d".to_owned(),
+            runtime_services: vec!["containerd".to_owned()],
         })
     }
 
@@ -393,14 +415,19 @@ mod tests {
             owner.accept(&artifact, 0, 10)?,
             NodeDecommissionAcceptanceV1::Accepted
         );
+        assert!(!NodeDecommissionOwner::durable_completion(
+            directory.path()
+        )?);
         let mut restarted =
             NodeDecommissionOwner::load(&config, directory.path(), "node-a".to_owned(), boot_id())?;
+        assert!(restarted.accept(&artifact, 1, 10).is_err());
         assert_eq!(
             restarted.accept(&artifact, 0, 10)?,
             NodeDecommissionAcceptanceV1::ResumeCleanup
         );
         restarted.complete(&artifact)?;
         assert!(restarted.completed());
+        assert!(NodeDecommissionOwner::durable_completion(directory.path())?);
         assert_eq!(
             restarted.accept(&artifact, 0, 10)?,
             NodeDecommissionAcceptanceV1::Completed

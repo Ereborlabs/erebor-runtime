@@ -11,7 +11,7 @@ use erebor_interceptor_abi::{
     PolicyActivationProbeV1, MAX_POLICY_ACTIVATION_PROBE_KEY_BYTES_V1,
 };
 use libbpf_rs::{
-    query::{LinkInfoIter, ProgInfoIter, ProgInfoQueryOptions},
+    query::{LinkInfoIter, MapInfoIter, ProgInfoIter, ProgInfoQueryOptions},
     Iter, Link, Map, MapCore as _, MapFlags, MapHandle, Object, ObjectBuilder, OpenObject, Program,
     ProgramHandle, ProgramInput, ProgramMut, ProgramType, RingBuffer, RingBufferBuilder,
 };
@@ -1665,6 +1665,99 @@ impl KernelHost {
             self.remove_pins()?;
         }
         self.links.clear();
+        Ok(())
+    }
+
+    pub fn decommission(mut self) -> Result<()> {
+        let link_ids = self
+            .manifest
+            .links
+            .iter()
+            .map(|link| (link.link_id, link.program_id))
+            .collect::<BTreeSet<_>>();
+        let map_ids = self
+            .manifest
+            .maps
+            .iter()
+            .map(|map| map.id)
+            .collect::<BTreeSet<_>>();
+        let link_paths = self
+            .manifest
+            .links
+            .iter()
+            .map(|link| link.pin_path.clone())
+            .collect::<Option<Vec<_>>>()
+            .ok_or_else(|| {
+                ManifestMismatchSnafu {
+                    path: Path::new("BPF link pins"),
+                    reason: "decommission requires every BPF link to have an owned pin".to_owned(),
+                }
+                .build()
+            })?;
+        let map_paths = self
+            .manifest
+            .maps
+            .iter()
+            .map(|map| map.pin_path.clone())
+            .collect::<Option<Vec<_>>>()
+            .ok_or_else(|| {
+                ManifestMismatchSnafu {
+                    path: Path::new("BPF map pins"),
+                    reason: "decommission requires every BPF map to have an owned pin".to_owned(),
+                }
+                .build()
+            })?;
+        ensure!(
+            !link_paths.is_empty() && !map_paths.is_empty(),
+            ManifestMismatchSnafu {
+                path: Path::new("BPF pins"),
+                reason: "decommission requires a nonempty pinned link and map set".to_owned(),
+            }
+        );
+        for path in link_paths.iter().chain(map_paths.iter()) {
+            fs::remove_file(path).context(IoSnafu {
+                action: "remove decommissioned BPF pin",
+                path,
+            })?;
+        }
+        self.links.clear();
+        let mut directories = link_paths
+            .iter()
+            .chain(map_paths.iter())
+            .filter_map(|path| path.parent().map(Path::to_path_buf))
+            .collect::<BTreeSet<_>>();
+        if let Some(root) = directories
+            .iter()
+            .next()
+            .and_then(|directory| directory.parent())
+            .map(Path::to_path_buf)
+        {
+            directories.insert(root);
+        }
+        for directory in directories.iter().rev() {
+            fs::remove_dir(directory).context(IoSnafu {
+                action: "remove empty decommissioned BPF pin directory",
+                path: directory,
+            })?;
+        }
+        self.pinned_paths.clear();
+        self.pinned_directories.clear();
+        self.remove_pins_on_shutdown = false;
+        drop(self);
+
+        ensure!(
+            link_paths
+                .iter()
+                .chain(map_paths.iter())
+                .all(|path| !path.exists())
+                && directories.iter().all(|path| !path.exists())
+                && LinkInfoIter::default().all(|link| !link_ids.contains(&(link.id, link.prog_id)))
+                && MapInfoIter::default().all(|map| !map_ids.contains(&map.id)),
+            ManifestMismatchSnafu {
+                path: Path::new("BPF decommission readback"),
+                reason: "decommissioned BPF links, maps, or pins remain present".to_owned(),
+            }
+        );
         Ok(())
     }
 

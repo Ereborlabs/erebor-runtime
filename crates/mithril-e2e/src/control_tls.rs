@@ -20,15 +20,17 @@ use mithril_control::{
     EvidenceIntakeOwner, EvidenceRecord, EvidenceRetentionOwner, EvidenceStoreCapacityPolicyV1,
     EvidenceStoreLimitsV1, EvidenceTemporalCoverage, KubernetesAdmissionHttpConfigV1,
     KubernetesAdmissionOwner, KubernetesNodeControlConfigV1, KubernetesNodeReadinessOwner,
-    KubernetesWorkloadIdentityV1, NodeRegistration, PolicyActivationAcknowledgement,
-    PolicyBundleV1, PolicyDesiredStateConfigV1, PolicyDesiredStateOwner, PolicySignerConfigV1,
-    PolicySourceRevisionV1, PolicySourceStateV1, ProfileSealRequestV1, RegistryDigestsV1,
-    ResolveAdministrativeExec, TrustGenerationV1, WorkloadProtectionPolicy, WorkloadTargetFactV1,
+    KubernetesWorkloadIdentityV1, NodeDecommissionAuthorizationV1, NodeDecommissionStateV1,
+    NodeRegistration, PolicyActivationAcknowledgement, PolicyBundleV1, PolicyDesiredStateConfigV1,
+    PolicyDesiredStateOwner, PolicySignerConfigV1, PolicySourceRevisionV1, PolicySourceStateV1,
+    ProfileSealRequestV1, RegistryDigestsV1, ResolveAdministrativeExec, SignedNodeDecommissionV1,
+    TrustGenerationV1, WorkloadProtectionPolicy, WorkloadTargetFactV1,
 };
 use mithril_node::{
     AdministrativeControlRequest, CoverageGapReasonV1, EffectObservationStore, EvidenceIdV1,
     EvidenceWalCapacityPolicyV1, EvidenceWalLimits, NodeControlConfig, NodeControlConnector,
-    NodeControlMessage, ObservationCanonicalizer, PolicyControlPacingOwner, TrustCache,
+    NodeControlMessage, NodeDecommissionAcceptanceV1, NodeDecommissionConfig,
+    NodeDecommissionOwner, ObservationCanonicalizer, PolicyControlPacingOwner, TrustCache,
 };
 use prost::Message as _;
 use rcgen::{
@@ -633,6 +635,128 @@ async fn mtls_connection_reports_local_readiness_transitions_without_reconnect(
         1
     );
     assert_eq!(control.registered_nonce_count(), 1);
+
+    drop(connection);
+    let _result = shutdown.send(());
+    server.await??;
+    Ok(())
+}
+
+#[tokio::test]
+async fn signed_node_decommission_uses_the_same_durable_mtls_sequence_as_kubernetes(
+) -> Result<(), Box<dyn StdError>> {
+    let directory = tempfile::tempdir()?;
+    let certificates = Certificates::issue(false)?;
+    let files = certificates.write(directory.path())?;
+    let address = free_address()?;
+    let store = ControlStore::open(directory.path().join("control-store"))?;
+    let control = ControlPlane::with_control_store(
+        vec![AllowedNodeIdentity {
+            node_id: "node-a".to_owned(),
+            certificate_sha256: certificates.node_digest(),
+            tenant_id: "00000000-0000-0001-0000-000000000002".to_owned(),
+        }],
+        TrustGenerationV1 {
+            generation: 4,
+            bundle_digest: "d".repeat(64),
+            policy_issuer_sequence_epoch: 0,
+            policy_signers: Vec::new(),
+        },
+        store,
+    )?;
+    let (shutdown, server) = start_server(address, &files, control.clone());
+    tokio::time::sleep(Duration::from_millis(20)).await;
+
+    let connector =
+        NodeControlConnector::new(files.node_config(address), "node-a".to_owned(), [7; 16]);
+    let mut trust = TrustCache::load(&directory.path().join("node-trust"))?;
+    let mut node = registration();
+    node.kubernetes_node_name = "worker-a.example".to_owned();
+    let mut connection = connector.connect(node, true, &mut trust).await?;
+    control
+        .bind_kubernetes_node_session("worker-a.example", "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")?;
+    let session = control
+        .ready_kubernetes_node_sessions(Duration::from_secs(2))
+        .into_iter()
+        .next()
+        .ok_or("registered node has no ready Kubernetes session")?;
+
+    let signing_key = SigningKey::from_bytes(&[9; 32]);
+    let public_key = directory.path().join("decommission-public-key");
+    fs::write(&public_key, signing_key.verifying_key().to_bytes())?;
+    let artifact = SignedNodeDecommissionV1::sign(
+        &NodeDecommissionAuthorizationV1::new(
+            "55555555-5555-4555-8555-555555555555",
+            "node-a".to_owned(),
+            &uuid::Uuid::from_bytes([7; 16]).hyphenated().to_string(),
+            i64::MAX,
+            "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+        )?,
+        "offline-decommission-v1".to_owned(),
+        &signing_key,
+    )?
+    .to_bytes()?;
+    let submitted = control.submit_node_decommission(artifact.clone()).await?;
+    let NodeControlMessage::Decommission(prepare) = connection.next_message().await? else {
+        return Err("Control did not deliver decommission preparation".into());
+    };
+    assert!(!prepare.execute);
+    assert_eq!(prepare.artifact, artifact);
+
+    let mut node_owner = NodeDecommissionOwner::load(
+        &NodeDecommissionConfig {
+            cluster_uid: "55555555-5555-4555-8555-555555555555".to_owned(),
+            signing_key_id: "offline-decommission-v1".to_owned(),
+            public_key_path: public_key,
+            runtime_integration_owner: "mithril-system/mithril".to_owned(),
+            runtime_hook_directory: directory.path().join("host-hook-bin"),
+            containerd_config_directory: directory.path().join("host-containerd"),
+            containerd_drop_in_directory: "conf.d".to_owned(),
+            runtime_services: vec!["containerd".to_owned()],
+        },
+        &directory.path().join("node-state"),
+        "node-a".to_owned(),
+        erebor_interceptor_abi::Id128V1::from([7; 16]),
+    )?;
+    assert_eq!(
+        node_owner.accept(&prepare.artifact, 0, 1)?,
+        NodeDecommissionAcceptanceV1::Accepted
+    );
+    let digest: [u8; 32] = Sha256::digest(&prepare.artifact).into();
+    connection
+        .send_decommission_result(digest, "ACCEPTED", String::new())
+        .await?;
+    wait_for_decommission_state(
+        &control,
+        &submitted.artifact_sha256,
+        NodeDecommissionStateV1::Accepted,
+    )
+    .await?;
+    assert!(control
+        .ready_kubernetes_node_sessions(Duration::from_secs(2))
+        .is_empty());
+
+    control
+        .confirm_node_decommission_quarantine_for_test(&session)
+        .await?;
+    let NodeControlMessage::Decommission(execute) = connection.next_message().await? else {
+        return Err("Control did not deliver quarantined decommission execution".into());
+    };
+    assert!(execute.execute);
+    assert_eq!(
+        node_owner.accept(&execute.artifact, 0, 1)?,
+        NodeDecommissionAcceptanceV1::ResumeCleanup
+    );
+    node_owner.complete(&execute.artifact)?;
+    connection
+        .send_decommission_result(digest, "COMPLETED", String::new())
+        .await?;
+    wait_for_decommission_state(
+        &control,
+        &submitted.artifact_sha256,
+        NodeDecommissionStateV1::Completed,
+    )
+    .await?;
 
     drop(connection);
     let _result = shutdown.send(());
@@ -1288,6 +1412,9 @@ async fn kubernetes_outage_mtls_session_converges_policy_while_replaying_retaine
             NodeControlMessage::Administrative(_) => {
                 return Err("Control returned an unrelated administrative request".into());
             }
+            NodeControlMessage::Decommission(_) => {
+                return Err("Control returned an unrelated decommission command".into());
+            }
         }
     }
     assert!(evidence_acknowledged && coverage_acknowledged);
@@ -1644,6 +1771,128 @@ async fn kubernetes_outage_retained_evidence_allows_protected_pod_admission(
 
     let _result = shutdown.send(());
     server.await??;
+    Ok(())
+}
+
+#[tokio::test]
+async fn node_decommission_https_accepts_the_same_signed_artifact_as_control(
+) -> Result<(), Box<dyn StdError>> {
+    let directory = tempfile::tempdir()?;
+    let certificates = Certificates::issue(false)?;
+    let files = certificates.write(directory.path())?;
+    let store = ControlStore::open(directory.path().join("control-store"))?;
+    let fixture = OutagePolicyFixture::new(store.clone());
+    let resource = fixture.resource(1)?;
+    let kube = fixture.kubernetes_client(&resource)?;
+    let control = ControlPlane::with_control_store(
+        vec![AllowedNodeIdentity {
+            node_id: "node-a".to_owned(),
+            certificate_sha256: certificates.node_digest(),
+            tenant_id: OUTAGE_TENANT_ID.to_owned(),
+        }],
+        TrustGenerationV1 {
+            generation: 1,
+            bundle_digest: "d".repeat(64),
+            policy_issuer_sequence_epoch: 0,
+            policy_signers: Vec::new(),
+        },
+        store,
+    )?;
+    let grpc_address = free_address()?;
+    let (grpc_shutdown, grpc_server) = start_server(grpc_address, &files, control.clone());
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    let connector = NodeControlConnector::new(
+        files.node_config(grpc_address),
+        "node-a".to_owned(),
+        [1; 16],
+    );
+    let mut trust = TrustCache::load(&directory.path().join("node-trust"))?;
+    let connection = connector
+        .connect(
+            OutagePolicyFixture::registration([1; 16], false),
+            true,
+            &mut trust,
+        )
+        .await?;
+    let nodes = KubernetesNodeReadinessOwner::new(KubernetesNodeControlConfigV1 {
+        daemon_set_namespace: "mithril-system".to_owned(),
+        daemon_set_name: "mithril-node".to_owned(),
+        session_ttl_seconds: 30,
+        reconcile_interval_ms: 100,
+    })?;
+    let address = free_address()?;
+    let config = KubernetesAdmissionHttpConfigV1 {
+        listen: address,
+        tls_certificate_path: files.server_certificate.clone(),
+        tls_private_key_path: files.server_key.clone(),
+        maximum_request_bytes: 1024 * 1024,
+        request_timeout_ms: 1_000,
+    };
+    let (shutdown, receiver) = oneshot::channel();
+    let server = tokio::spawn(async move {
+        KubernetesAdmissionOwner::serve_with_client(
+            config,
+            kube,
+            control,
+            fixture.owner,
+            nodes,
+            async move {
+                let _result = receiver.await;
+            },
+        )
+        .await
+    });
+    tokio::time::sleep(Duration::from_millis(20)).await;
+
+    let artifact = SignedNodeDecommissionV1::sign(
+        &NodeDecommissionAuthorizationV1::new(
+            OUTAGE_CLUSTER_UID,
+            "node-a".to_owned(),
+            &uuid::Uuid::from_bytes([1; 16]).hyphenated().to_string(),
+            i64::MAX,
+            "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+        )?,
+        "offline-decommission-v1".to_owned(),
+        &SigningKey::from_bytes(&[9; 32]),
+    )?
+    .to_bytes()?;
+    let client = reqwest::Client::builder()
+        .add_root_certificate(reqwest::Certificate::from_pem(&fs::read(&files.ca)?)?)
+        .timeout(Duration::from_secs(2))
+        .build()?;
+    let response = client
+        .post(format!(
+            "https://localhost:{}/v1/node-decommissions",
+            address.port()
+        ))
+        .header(reqwest::header::CONTENT_TYPE, "application/octet-stream")
+        .body(artifact)
+        .send()
+        .await?;
+    assert_eq!(response.status(), reqwest::StatusCode::ACCEPTED);
+    let submitted: mithril_control::NodeDecommissionStatusV1 = response.json().await?;
+    assert_eq!(submitted.state, NodeDecommissionStateV1::Submitted);
+    let response = client
+        .get(format!(
+            "https://localhost:{}/v1/node-decommissions/{}",
+            address.port(),
+            submitted.artifact_sha256
+        ))
+        .send()
+        .await?;
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
+    assert_eq!(
+        response
+            .json::<mithril_control::NodeDecommissionStatusV1>()
+            .await?,
+        submitted
+    );
+
+    let _result = shutdown.send(());
+    server.await??;
+    drop(connection);
+    let _result = grpc_shutdown.send(());
+    grpc_server.await??;
     Ok(())
 }
 
@@ -2324,6 +2573,27 @@ fn capabilities() -> Vec<CapabilityRecord> {
         state: "SUPPORTED".to_owned(),
         reason_code: "EXACT_ATTACH_READBACK".to_owned(),
     }]
+}
+
+async fn wait_for_decommission_state(
+    control: &ControlPlane,
+    artifact_sha256: &str,
+    expected: NodeDecommissionStateV1,
+) -> Result<(), Box<dyn StdError>> {
+    tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            if control
+                .node_decommission_status(artifact_sha256)
+                .is_ok_and(|status| status.state == expected)
+            {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .map_err(|_elapsed| format!("decommission did not reach {expected:?}"))?;
+    Ok(())
 }
 
 fn start_server(

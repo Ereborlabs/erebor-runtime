@@ -6,7 +6,8 @@
 {{- $runtimeHookOwner := printf "%s/%s" .Release.Namespace .Release.Name }}
 {{- $runtimeHookBinaryDirectory := required "node.runtimeHook.hostBinaryDirectory is required" .Values.node.runtimeHook.hostBinaryDirectory }}
 {{- $containerdConfigDirectory := required "node.runtimeHook.containerdConfigHostDirectory is required" .Values.node.runtimeHook.containerdConfigHostDirectory }}
-{{- $k3sBinaryHostPath := required "node.runtimeHook.k3sBinaryHostPath is required" .Values.node.runtimeHook.k3sBinaryHostPath }}
+{{- $containerdDropInDirectory := required "node.runtimeHook.containerdDropInDirectory is required" .Values.node.runtimeHook.containerdDropInDirectory }}
+{{- $runtimeCliHostPath := required "node.runtimeHook.runtimeCliHostPath is required" .Values.node.runtimeHook.runtimeCliHostPath }}
 {{- if or (ne $runtimeAdmissionSocket $cleanRuntimeAdmissionSocket) (ne (dir $runtimeAdmissionSocket) "/run/mithril") }}
 {{- fail "node.runtimeHook.socketPath must name a normalized socket directly within /run/mithril" }}
 {{- end }}
@@ -19,8 +20,8 @@
 {{- if or (ne $containerdConfigDirectory (clean $containerdConfigDirectory)) (eq (dir $containerdConfigDirectory) "/") }}
 {{- fail "node.runtimeHook.containerdConfigHostDirectory must be normalized below a non-root parent" }}
 {{- end }}
-{{- if or (ne $k3sBinaryHostPath (clean $k3sBinaryHostPath)) (eq (dir $k3sBinaryHostPath) "/") }}
-{{- fail "node.runtimeHook.k3sBinaryHostPath must be normalized below a non-root parent" }}
+{{- if or (ne $runtimeCliHostPath (clean $runtimeCliHostPath)) (eq (dir $runtimeCliHostPath) "/") }}
+{{- fail "node.runtimeHook.runtimeCliHostPath must be normalized below a non-root parent" }}
 {{- end }}
 {{- if le (mul (int .Values.node.runtimeHook.runtimeTimeoutSeconds) 1000) (int .Values.node.runtimeHook.timeoutMs) }}
 {{- fail "node.runtimeHook.runtimeTimeoutSeconds must exceed node.runtimeHook.timeoutMs" }}
@@ -80,8 +81,18 @@ spec:
             - {{ $runtimeHookBinaryDirectory | quote }}
             - --containerd-host-directory
             - {{ $containerdConfigDirectory | quote }}
-            - --k3s-host-path
-            - {{ $k3sBinaryHostPath | quote }}
+            - --containerd-drop-in-directory
+            - {{ $containerdDropInDirectory | quote }}
+            - --runtime-cli-host-path
+            - {{ $runtimeCliHostPath | quote }}
+{{- range .Values.node.runtimeHook.runtimeCliArgs }}
+            - --runtime-cli-arg
+            - {{ . | quote }}
+{{- end }}
+{{- range .Values.node.runtimeHook.runtimeServices }}
+            - --runtime-service
+            - {{ . | quote }}
+{{- end }}
             - --socket
             - {{ $runtimeAdmissionSocket | quote }}
             - --timeout-ms
@@ -90,6 +101,8 @@ spec:
             - {{ .Values.node.runtimeHook.runtimeTimeoutSeconds | quote }}
             - --log-filter
             - {{ .Values.node.logFilter | quote }}
+            - --decommission-state-directory
+            - /var/lib/mithril
 {{- range $mount := list
       (printf "%s=/etc/mithril/node.json" $.Values.node.configHostPath)
       (printf "%s=/etc/mithril/identity" $.Values.node.identityHostPath)
@@ -117,12 +130,14 @@ spec:
             readOnlyRootFilesystem: true
             privileged: true
           volumeMounts:
+            - name: state
+              mountPath: /var/lib/mithril
             - name: runtime-hook-bin
               mountPath: /host-hook-bin
             - name: containerd-config
               mountPath: /host-containerd
-            - name: k3s-binary
-              mountPath: /host-k3s
+            - name: runtime-cli
+              mountPath: /host-runtime-cli
               readOnly: true
       containers:
         - name: mithril-node
@@ -189,6 +204,10 @@ spec:
               # The runtime can replace its socket inode without replacing this Pod.
               mountPath: {{ $containerRuntimeDirectory | quote }}
               readOnly: true
+            - name: runtime-hook-bin
+              mountPath: /host-hook-bin
+            - name: containerd-config
+              mountPath: /host-containerd
       volumes:
         - name: node-config
           hostPath:
@@ -238,7 +257,7 @@ spec:
           hostPath:
             path: {{ $containerdConfigDirectory | quote }}
             type: Directory
-        - name: k3s-binary
+        - name: runtime-cli
           hostPath:
-            path: {{ $k3sBinaryHostPath | quote }}
+            path: {{ $runtimeCliHostPath | quote }}
             type: File

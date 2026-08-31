@@ -1,5 +1,13 @@
+use std::sync::Arc;
+
 use crate::error::DecommissionSnafu;
-use crate::{Result, SignatureAlgorithmV1};
+use crate::{ControlPlane, Result, SignatureAlgorithmV1};
+use axum::body::Bytes;
+use axum::extract::{DefaultBodyLimit, Path, State};
+use axum::http::StatusCode;
+use axum::response::{IntoResponse, Response};
+use axum::routing::{get, post};
+use axum::{Json, Router};
 use ed25519_dalek::{Signature, Signer as _, SigningKey, Verifier as _, VerifyingKey};
 use minicbor::{Decoder, Encoder};
 use serde::{Deserialize, Serialize};
@@ -38,6 +46,26 @@ pub enum NodeDecommissionStateV1 {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
+pub struct NodeDecommissionStatusV1 {
+    pub artifact_sha256: String,
+    pub state: NodeDecommissionStateV1,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub reason_code: String,
+}
+
+#[derive(Clone)]
+pub(crate) struct NodeDecommissionHttpOwner {
+    cluster_uid: [u8; 16],
+    control: ControlPlane,
+}
+
+#[derive(Serialize)]
+struct NodeDecommissionProblemV1 {
+    error: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct StoredNodeDecommissionV1 {
     pub(crate) artifact: Vec<u8>,
     pub(crate) state: NodeDecommissionStateV1,
@@ -52,6 +80,87 @@ impl StoredNodeDecommissionV1 {
     pub(crate) fn authorization(&self) -> Result<NodeDecommissionAuthorizationV1> {
         SignedNodeDecommissionV1::parse(&self.artifact)
             .map(|(_envelope, authorization)| authorization)
+    }
+
+    pub(crate) fn status(&self) -> NodeDecommissionStatusV1 {
+        NodeDecommissionStatusV1 {
+            artifact_sha256: hex::encode(self.digest()),
+            state: self.state,
+            reason_code: self.reason_code.clone(),
+        }
+    }
+}
+
+impl NodeDecommissionHttpOwner {
+    pub(crate) fn new(cluster_uid: &str, control: ControlPlane) -> Result<Self> {
+        Ok(Self {
+            cluster_uid: canonical_uuid(cluster_uid, "cluster UID")?,
+            control,
+        })
+    }
+
+    pub(crate) async fn submit(
+        &self,
+        artifact: Vec<u8>,
+    ) -> std::result::Result<NodeDecommissionStatusV1, tonic::Status> {
+        let (_envelope, target) = SignedNodeDecommissionV1::parse(&artifact)
+            .map_err(|error| tonic::Status::invalid_argument(error.to_string()))?;
+        if target.cluster_uid != self.cluster_uid {
+            return Err(tonic::Status::permission_denied(
+                "decommission artifact targets another cluster",
+            ));
+        }
+        self.control.submit_node_decommission(artifact).await
+    }
+
+    pub(crate) fn status(
+        &self,
+        artifact_sha256: &str,
+    ) -> std::result::Result<NodeDecommissionStatusV1, tonic::Status> {
+        self.control.node_decommission_status(artifact_sha256)
+    }
+
+    pub(crate) fn router(self: Arc<Self>) -> Router {
+        Router::new()
+            .route("/v1/node-decommissions", post(Self::create))
+            .route("/v1/node-decommissions/:artifact_sha256", get(Self::get))
+            .layer(DefaultBodyLimit::max(MAX_DECOMMISSION_ARTIFACT_BYTES))
+            .with_state(self)
+    }
+
+    async fn create(State(owner): State<Arc<Self>>, artifact: Bytes) -> Response {
+        match owner.submit(artifact.to_vec()).await {
+            Ok(status) => (StatusCode::ACCEPTED, Json(status)).into_response(),
+            Err(status) => Self::tonic_response(status),
+        }
+    }
+
+    async fn get(State(owner): State<Arc<Self>>, Path(artifact_sha256): Path<String>) -> Response {
+        match owner.status(&artifact_sha256) {
+            Ok(status) => (StatusCode::OK, Json(status)).into_response(),
+            Err(status) => Self::tonic_response(status),
+        }
+    }
+
+    fn tonic_response(status: tonic::Status) -> Response {
+        let http_status = match status.code() {
+            tonic::Code::InvalidArgument => StatusCode::BAD_REQUEST,
+            tonic::Code::PermissionDenied => StatusCode::FORBIDDEN,
+            tonic::Code::Unauthenticated => StatusCode::UNAUTHORIZED,
+            tonic::Code::NotFound => StatusCode::NOT_FOUND,
+            tonic::Code::AlreadyExists | tonic::Code::FailedPrecondition => StatusCode::CONFLICT,
+            tonic::Code::Unavailable | tonic::Code::DeadlineExceeded => {
+                StatusCode::SERVICE_UNAVAILABLE
+            }
+            _ => StatusCode::INTERNAL_SERVER_ERROR,
+        };
+        (
+            http_status,
+            Json(NodeDecommissionProblemV1 {
+                error: status.message().to_owned(),
+            }),
+        )
+            .into_response()
     }
 }
 

@@ -32,7 +32,8 @@ use uuid::Uuid;
 use crate::error::AdministrativeApprovalSnafu;
 use crate::{
     AdministrativeApprovalConfigV1, AdministrativeApprovalOwner, AdministrativeExecCredentialV1,
-    AdministrativeExecRequestV1, AdministrativeExecResolution, ControlPlane, Result,
+    AdministrativeExecRequestV1, AdministrativeExecResolution, ControlPlane,
+    NodeDecommissionHttpOwner, Result,
 };
 
 const APPROVAL_EXTRA_KEY: &str = "mithril.ereborlabs.com/approval-id";
@@ -138,6 +139,7 @@ pub struct AdministrativeExecPollResponseV1 {
 pub struct AdministrativeHttpOwner {
     config: PreparedHttpConfig,
     approval: AdministrativeApprovalOwner,
+    decommission: Arc<NodeDecommissionHttpOwner>,
     kube: Client,
     provider: CoreProviderMetadata,
     http: reqwest::Client,
@@ -305,7 +307,11 @@ impl AdministrativeHttpOwner {
                         approval_error(format!("request lifetime overflow: {error}"))
                     })?,
             },
-            approval: AdministrativeApprovalOwner::load(&config.approval, control)?,
+            approval: AdministrativeApprovalOwner::load(&config.approval, control.clone())?,
+            decommission: Arc::new(NodeDecommissionHttpOwner::new(
+                &config.approval.cluster_uid,
+                control,
+            )?),
             kube,
             provider,
             http,
@@ -314,6 +320,7 @@ impl AdministrativeHttpOwner {
     }
 
     fn router(self: Arc<Self>) -> Router {
+        let decommission = self.decommission.clone().router();
         let authentication_path = format!(
             "/kubernetes/{}/authenticate",
             self.config.kubernetes_webhook_token
@@ -342,6 +349,7 @@ impl AdministrativeHttpOwner {
             .route(&admission_path, post(Self::admission_review))
             .layer(DefaultBodyLimit::max(64 * 1024))
             .with_state(self)
+            .merge(decommission)
     }
 
     async fn create_request(
@@ -1288,6 +1296,7 @@ fn approval_error(reason: impl Into<String>) -> crate::Error {
 mod tests {
     use std::collections::BTreeMap;
 
+    use ed25519_dalek::SigningKey;
     use erebor_interceptor_abi::Id128V1;
     use k8s_openapi::api::authentication::v1::UserInfo;
     use serde_json::json;
@@ -1296,7 +1305,68 @@ mod tests {
         approval_identity_from_user, html_escape, principal_id, stream_flags,
         validate_exec_options, Draft, HttpState, PodExecOptionsV1, APPROVAL_EXTRA_KEY,
     };
-    use crate::AdministrativeExecRequestV1;
+    use crate::{
+        AdministrativeExecRequestV1, AllowedNodeIdentity, ControlPlane, ControlStore,
+        NodeDecommissionAuthorizationV1, NodeDecommissionHttpOwner, SignedNodeDecommissionV1,
+        TrustGenerationV1,
+    };
+
+    #[tokio::test]
+    async fn decommission_https_owner_accepts_only_its_cluster_artifact(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let store = ControlStore::open(directory.path())?;
+        let proof = crate::startup_absence_proof_digest("node-a", &[1; 16], 1, true, true);
+        store.register_node_physical_session(
+            "node-a",
+            &[1; 16],
+            1,
+            Some("worker-a.example"),
+            &proof,
+            true,
+            true,
+            1,
+        )?;
+        let control = ControlPlane::with_control_store(
+            vec![AllowedNodeIdentity {
+                node_id: "node-a".to_owned(),
+                certificate_sha256: "a".repeat(64),
+                tenant_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa".to_owned(),
+            }],
+            TrustGenerationV1 {
+                generation: 1,
+                bundle_digest: "b".repeat(64),
+                policy_issuer_sequence_epoch: 0,
+                policy_signers: Vec::new(),
+            },
+            store,
+        )?;
+        let owner =
+            NodeDecommissionHttpOwner::new("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", control)?;
+        let signed = |cluster| {
+            SignedNodeDecommissionV1::sign(
+                &NodeDecommissionAuthorizationV1::new(
+                    cluster,
+                    "node-a".to_owned(),
+                    "01010101-0101-0101-0101-010101010101",
+                    i64::MAX,
+                    "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+                )?,
+                "offline-decommission-v1".to_owned(),
+                &SigningKey::from_bytes(&[7; 32]),
+            )?
+            .to_bytes()
+        };
+        assert!(owner
+            .submit(signed("dddddddd-dddd-4ddd-8ddd-dddddddddddd")?)
+            .await
+            .is_err());
+        let status = owner
+            .submit(signed("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb")?)
+            .await?;
+        assert_eq!(owner.status(&status.artifact_sha256)?, status);
+        Ok(())
+    }
 
     #[test]
     fn principal_identity_is_stable_and_issuer_scoped() {

@@ -78,7 +78,7 @@ timeout. The OCI runtime terminates a hook that exceeds this outer limit.
 ## Runtime Hook
 
 The measured init container installs `mithril-oci-hook`, an OCI base spec, a
-recovery manifest, and one containerd v3 drop-in on each selected K3s host. The
+recovery manifest, and one containerd v3 drop-in on each selected host. The
 drop-in sets the base spec on containerd's default CRI runtime. A Pod does not
 need a RuntimeClass. Containerd invokes the hook directly; no NRI process is
 installed or retained.
@@ -91,10 +91,10 @@ through the existing ordered admission stages. The hook logs the decision code
 for each denial and exact recovery. Healthy unprotected decisions use debug
 level.
 
-The installer restarts the active `k3s` or `k3s-agent` service only when the
-loaded base spec changes. It then reads back the generated containerd
-configuration and every marked file. It refuses an unowned file or an existing
-foreign base spec on the default runtime.
+The installer restarts the first configured active container runtime service
+only when the loaded base spec changes. It then reads back the generated
+containerd configuration and every marked file. It refuses an unowned file or
+an existing foreign base spec on the default runtime.
 
 ## Operational Logs
 

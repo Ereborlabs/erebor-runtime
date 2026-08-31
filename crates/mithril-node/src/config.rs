@@ -150,6 +150,8 @@ pub struct NodeDecommissionConfig {
     pub runtime_integration_owner: String,
     pub runtime_hook_directory: PathBuf,
     pub containerd_config_directory: PathBuf,
+    pub containerd_drop_in_directory: String,
+    pub runtime_services: Vec<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -384,6 +386,20 @@ impl NodeConfig {
                     && !decommission
                         .runtime_integration_owner
                         .contains(['\r', '\n'])
+                    && !decommission.containerd_drop_in_directory.is_empty()
+                    && decommission.containerd_drop_in_directory.len() <= 255
+                    && Path::new(&decommission.containerd_drop_in_directory)
+                        .components()
+                        .count()
+                        == 1
+                    && (1..=8).contains(&decommission.runtime_services.len())
+                    && decommission.runtime_services.iter().all(|service| {
+                        !service.is_empty()
+                            && service.len() <= 253
+                            && service
+                                .bytes()
+                                .all(|byte| byte.is_ascii_alphanumeric() || b"-_.@".contains(&byte))
+                    })
                     && [
                         &decommission.public_key_path,
                         &decommission.runtime_hook_directory,
