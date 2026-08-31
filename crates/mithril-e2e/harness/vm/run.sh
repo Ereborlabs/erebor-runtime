@@ -113,7 +113,11 @@ mkdir -p -- "$output_directory"
 output_directory=$(cd -- "$output_directory" && pwd)
 
 vm_name=mithril-runtime-qualification-$$
-work_directory=$(mktemp -d /tmp/mithril-vm-test.XXXXXX)
+work_root=${MITHRIL_VM_WORK_ROOT:-$repo_root/target/mithril-vm-work}
+mkdir -p -- "$work_root"
+work_root=$(cd -- "$work_root" && pwd)
+export MITHRIL_VM_WORK_ROOT=$work_root
+work_directory=$(mktemp -d "$work_root/mithril-vm-test.XXXXXX")
 export MITHRIL_VM_KNOWN_HOSTS=${MITHRIL_VM_KNOWN_HOSTS:-$work_directory/known_hosts}
 ssh_user=${MITHRIL_VM_SSH_USER:-ubuntu}
 ssh_private_key=${MITHRIL_VM_SSH_PRIVATE_KEY:-$HOME/.ssh/id_rsa}
@@ -141,7 +145,7 @@ cleanup() {
       fi
     } >"$output_directory/retained-vm.txt"
     echo "VM retained: $vm_name ($work_directory)" >&2
-  elif [[ $destroy_ok == true && -d $work_directory && $work_directory == /tmp/mithril-vm-test.* ]]; then
+  elif [[ $destroy_ok == true && -d $work_directory && $work_directory == "$work_root"/mithril-vm-test.* ]]; then
     rm -rf -- "$work_directory"
   elif [[ $destroy_ok == false ]]; then
     echo "VM cleanup failed; retained provider state in $work_directory" >&2
@@ -356,7 +360,7 @@ entry_role_output=$remote_root/runc-entry-roles
 
 if [[ $entry_role_runtime_only == true ]]; then
   jq -e '
-    .schema_version == 15 and
+    .schema_version == 16 and
     .prepared_state_before_exec == "prepared" and
     .prepared_state_after_exec == "active" and
     .prepared_runtime_effect_observed and
@@ -365,7 +369,8 @@ if [[ $entry_role_runtime_only == true ]]; then
     .application_descendant_default_exec_role_preserved and
     .held_runtime_admission_reconciled and
     .application_exec_transition_event_driven and
-    .preexisting_child_bind_path_tree_denied and
+    .kubernetes_subpath_alias_path_tree_denied and
+    .container_bind_alias_path_tree_denied and
     .path_tree_control_allowed and
     .application_admitted_entry_rule_id > 0 and
     (.independent_entries | length) == 6 and

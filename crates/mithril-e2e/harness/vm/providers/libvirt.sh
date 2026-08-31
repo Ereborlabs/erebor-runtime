@@ -26,6 +26,14 @@ require_command() {
   }
 }
 
+valid_work_directory() {
+  local work_directory=$1
+  local configured_root=${MITHRIL_VM_WORK_ROOT:-}
+  [[ $work_directory == /tmp/mithril-vm-test.* && -d $work_directory ]] ||
+    [[ -n $configured_root && $configured_root == /* && $configured_root != / &&
+       $work_directory == "$configured_root"/mithril-vm-test.* && -d $work_directory ]]
+}
+
 address() {
   virsh -c "$connection" domifaddr "$1" --source lease 2>/dev/null \
     | awk '$3 == "ipv4" && !found {sub(/\/.*/, "", $4); print $4; found = 1} END {exit !found}'
@@ -52,7 +60,7 @@ case ${1:-} in
     require_command sha256sum
     require_command virsh
     require_command virt-install
-    [[ $work_directory == /tmp/mithril-vm-test.* && -d $work_directory ]] || {
+    valid_work_directory "$work_directory" || {
       echo "unexpected VM work directory: $work_directory" >&2
       exit 2
     }
@@ -222,7 +230,7 @@ case ${1:-} in
       mithril-runtime-qualification-[0-9]*) ;;
       *) echo "refusing to destroy an unexpected domain: $name" >&2; exit 2 ;;
     esac
-    [[ $work_directory == /tmp/mithril-vm-test.* && -d $work_directory ]] || {
+    valid_work_directory "$work_directory" || {
       echo "refusing cleanup without the VM work directory: $work_directory" >&2
       exit 2
     }

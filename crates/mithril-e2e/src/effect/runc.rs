@@ -59,7 +59,8 @@ pub struct RuncEntryRoleRuntimeProbeV1 {
     pub application_descendant_default_exec_role_preserved: bool,
     pub held_runtime_admission_reconciled: bool,
     pub application_exec_transition_event_driven: bool,
-    pub preexisting_child_bind_path_tree_denied: bool,
+    pub kubernetes_subpath_alias_path_tree_denied: bool,
+    pub container_bind_alias_path_tree_denied: bool,
     pub path_tree_control_allowed: bool,
     pub application_admitted_entry_rule_id: u32,
     pub independent_entries: Vec<RuncEntryRoleProbeV1>,
@@ -684,22 +685,30 @@ impl RuncContainer {
         Ok(true)
     }
 
-    fn prepare_preexisting_child_bind(&self, host_pid: u32, rootfs: &Path) -> Result<()> {
-        let source = rootfs.join("mnt/data/models");
-        let target = rootfs.join("backup/models");
+    fn prepare_preexisting_path_tree_aliases(&self, host_pid: u32, rootfs: &Path) -> Result<()> {
+        let source_root = rootfs.join("home/secret");
+        let source_directory = source_root.join("models");
+        let source_file = source_directory.join("secret");
+        let kubernetes_alias_directory = rootfs.join("home/kubelet-attack");
+        let kubernetes_alias = kubernetes_alias_directory.join("secret");
+        let container_alias = rootfs.join("home/attack");
         let mount_namespace = ExternalMountNamespace::acquire(host_pid)?;
-        mount_namespace.create_dir_all(&source)?;
-        mount_namespace.create_dir_all(&target)?;
-        mount_namespace.create_file(&source.join("secret"))?;
-        mount_namespace.bind_mount(&source, &target)?;
+        mount_namespace.create_dir_all(&kubernetes_alias_directory)?;
+        mount_namespace.create_dir_all(&container_alias)?;
+        mount_namespace.create_dir_all(&source_directory)?;
+        mount_namespace.create_file(&source_file)?;
+        mount_namespace.create_file(&kubernetes_alias)?;
+        mount_namespace.bind_mount(&source_file, &kubernetes_alias)?;
+        mount_namespace.bind_mount(&source_root, &container_alias)?;
         ensure!(
-            mount_namespace
-                .read_file(&target.join("secret"))?
-                .is_empty(),
+            mount_namespace.read_file(&kubernetes_alias)?.is_empty()
+                && mount_namespace
+                    .read_file(&container_alias.join("models/secret"))?
+                    .is_empty(),
             InvalidInputSnafu {
-                path: &target,
+                path: &source_root,
                 reason:
-                    "the direct runc child-directory bind is not readable before policy activation",
+                    "the direct runc path-tree aliases are not readable before policy activation",
             }
         );
         Ok(())
@@ -956,7 +965,7 @@ impl EffectTestRunner {
         config["process"]["args"] = json!([
             "/bin/sh",
             "-c",
-            "true 2>/dev/null </run/mithril-entry-roles/application.denied || true; if true 2>/dev/null </backup/models/secret; then echo PATH_TREE_ALLOWED >/run/mithril-entry-roles/path-tree.result; else echo PATH_TREE_DENIED >/run/mithril-entry-roles/path-tree.result; fi; if true </run/mithril-entry-roles/control.allowed; then echo CONTROL_ALLOWED >/run/mithril-entry-roles/path-tree-control.result; else echo CONTROL_DENIED >/run/mithril-entry-roles/path-tree-control.result; fi; while [ ! -e /run/mithril-entry-roles/release ]; do /bin/sleep 1; done"
+            "true 2>/dev/null </run/mithril-entry-roles/application.denied || true; if true 2>/dev/null </home/kubelet-attack/secret; then echo PATH_TREE_ALLOWED >/run/mithril-entry-roles/kubernetes-subpath.result; else echo PATH_TREE_DENIED >/run/mithril-entry-roles/kubernetes-subpath.result; fi; if true 2>/dev/null </home/attack/models/secret; then echo PATH_TREE_ALLOWED >/run/mithril-entry-roles/container-bind.result; else echo PATH_TREE_DENIED >/run/mithril-entry-roles/container-bind.result; fi; if true </run/mithril-entry-roles/control.allowed; then echo CONTROL_ALLOWED >/run/mithril-entry-roles/path-tree-control.result; else echo CONTROL_DENIED >/run/mithril-entry-roles/path-tree-control.result; fi; while [ ! -e /run/mithril-entry-roles/release ]; do /bin/sleep 1; done"
         ]);
         config["root"]["path"] = json!("rootfs");
         config["root"]["readonly"] = json!(false);
@@ -980,7 +989,7 @@ impl EffectTestRunner {
                 .build()
             })?
             .push(json!({
-                "destination": "/mnt/data",
+                "destination": "/home/secret",
                 "type": "tmpfs",
                 "source": "tmpfs",
                 "options": ["nosuid", "nodev", "mode=0755"]
@@ -1077,7 +1086,7 @@ impl EffectTestRunner {
                 reason: format!("direct runc used unexpected cgroup `{observed_cgroup}`"),
             }
         );
-        container.prepare_preexisting_child_bind(initial_pid, &rootfs)?;
+        container.prepare_preexisting_path_tree_aliases(initial_pid, &rootfs)?;
         signal_process(initial_pid, Signal::STOP)?;
 
         let (boot_id, node_boot_id) = boot_identity()?;
@@ -1242,22 +1251,39 @@ impl EffectTestRunner {
         )?;
         container.record_mountinfo(initial_pid, output_directory)?;
         wait_for_reason(&reader, &observations, marker, "PATH_TREE_POLICY_DENY")?;
-        let path_tree_result = rootfs.join("run/mithril-entry-roles/path-tree.result");
+        let kubernetes_subpath_result =
+            rootfs.join("run/mithril-entry-roles/kubernetes-subpath.result");
+        let container_bind_result = rootfs.join("run/mithril-entry-roles/container-bind.result");
         let path_tree_control_result =
             rootfs.join("run/mithril-entry-roles/path-tree-control.result");
-        wait_for_path(&path_tree_result, true, "the path-tree denial result")?;
+        wait_for_path(
+            &kubernetes_subpath_result,
+            true,
+            "the Kubernetes subPath denial result",
+        )?;
+        wait_for_path(
+            &container_bind_result,
+            true,
+            "the in-container bind denial result",
+        )?;
         wait_for_path(
             &path_tree_control_result,
             true,
             "the path-tree allowed-control result",
         )?;
         ensure!(
-            fs::read_to_string(&path_tree_result)
+            fs::read_to_string(&kubernetes_subpath_result)
                 .context(IoSnafu {
-                    path: &path_tree_result,
+                    path: &kubernetes_subpath_result,
                 })?
                 .trim()
                 == "PATH_TREE_DENIED"
+                && fs::read_to_string(&container_bind_result)
+                    .context(IoSnafu {
+                        path: &container_bind_result,
+                    })?
+                    .trim()
+                    == "PATH_TREE_DENIED"
                 && fs::read_to_string(&path_tree_control_result)
                     .context(IoSnafu {
                         path: &path_tree_control_result,
@@ -1265,13 +1291,31 @@ impl EffectTestRunner {
                     .trim()
                     == "CONTROL_ALLOWED",
             InvalidInputSnafu {
-                path: &path_tree_result,
-                reason: "the direct runc path-tree negative and allowed control did not both pass",
+                path: &kubernetes_subpath_result,
+                reason: "the direct runc path-tree aliases and allowed control did not all pass",
             }
         );
         reader
             .poll(Duration::from_millis(100))
             .context(InterceptorSnafu)?;
+        ensure!(
+            observations
+                .recent_since(marker)
+                .iter()
+                .filter(|event| {
+                    event.reason == "PATH_TREE_POLICY_DENY"
+                        && event.effect_family == u32::from(KernelEffectFamilyV1::File as u16)
+                        && event.operation == u32::from(KernelEffectOperationV1::OpenRead as u16)
+                        && event.exact_object_key_id == 0
+                        && event.kernel_result == -13
+                })
+                .count()
+                >= 2,
+            InvalidInputSnafu {
+                path: &kubernetes_subpath_result,
+                reason: "the direct runc aliases did not produce two physical path-tree denials",
+            }
+        );
         let active = inspector
             .snapshot(initial_pid)
             .context(NodeSnafu)?
@@ -2086,7 +2130,7 @@ impl EffectTestRunner {
         })?;
 
         Ok(RuncEntryRoleRuntimeProbeV1 {
-            schema_version: 15,
+            schema_version: 16,
             runc_version: runc_version.lines().next().unwrap_or_default().to_owned(),
             initial_host_pid: initial_pid,
             prepared_state_before_exec,
@@ -2097,7 +2141,8 @@ impl EffectTestRunner {
             application_descendant_default_exec_role_preserved,
             held_runtime_admission_reconciled: true,
             application_exec_transition_event_driven,
-            preexisting_child_bind_path_tree_denied: true,
+            kubernetes_subpath_alias_path_tree_denied: true,
+            container_bind_alias_path_tree_denied: true,
             path_tree_control_allowed: true,
             application_admitted_entry_rule_id: active.admitted_entry_rule_id,
             independent_entries,
@@ -2158,7 +2203,7 @@ impl EffectTestRunner {
         document.path_tree_deny_floors.push(PathTreeDenyFloorV1 {
             schema_version: 1,
             rule_id: "deny-model-tree".to_owned(),
-            canonical_path: "/mnt/data".to_owned(),
+            canonical_path: "/home/secret".to_owned(),
             recursive: true,
             effect_families: vec![EffectFamilyV1::File],
             operation_ids: vec!["OPEN_READ".to_owned()],
@@ -2281,9 +2326,6 @@ fn prepare_entry_role_root(rootfs: &Path, workload_path: &Path) -> Result<Vec<St
     }
     fs::write(role_directory.join("control.allowed"), b"allowed\n").context(IoSnafu {
         path: role_directory.join("control.allowed"),
-    })?;
-    fs::create_dir_all(rootfs.join("backup/models")).context(IoSnafu {
-        path: rootfs.join("backup/models"),
     })?;
     for dependency in &dependencies {
         let source = Path::new(dependency);
