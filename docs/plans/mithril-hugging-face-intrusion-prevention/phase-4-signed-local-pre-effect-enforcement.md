@@ -2,8 +2,9 @@
 
 Status: **Not done** for the complete phase. The signed path-tree denial claim
 is **Done** for the tested ordinary bind, recursive-bind, and `move_mount`
-forms. The remaining unsupported capabilities and the stock-runc
-administrative bootstrap keep the phase open.
+forms. The Kubernetes baseline-submount route correction is **Not done**. The
+remaining unsupported capabilities and the stock-runc administrative
+bootstrap keep the phase open.
 
 - Master: [Mithril Hugging Face Intrusion Prevention](./README.md)
 - Design: [Validated readable architecture](./policy-and-protection-algorithm-architecture-readable.md)
@@ -56,6 +57,14 @@ create, rename, link, and other name-changing operations before visibility.
 Reject a path-tree `ALLOW`, allow exception, or another positive disposition.
 Exact object identity remains required for positive file authority and for
 file-instance provenance.
+
+Use a current Node route before mount-age selection when Node knows the mount
+root path. The route identifies the mount root by its container binding,
+profile generation, topology generation, mount namespace, filesystem device,
+and root inode. It stores the compiled path-graph prefix. If no route exists on
+the source dentry ancestry, use the oldest unique mount as the canonical
+fallback. Treat all mounts in the initial Kubernetes container snapshot as one
+baseline. Their creation order does not select policy authority.
 
 ### D4.4 — IPC and process-control enforcement
 
@@ -245,6 +254,41 @@ mount complete. It reconciles postactivation topology before access. The
 protected aliases return `PATH_TREE_POLICY_DENY`. Matching allowed aliases and
 the outside-tree file remain readable. The readable algorithm is in the
 [path-tree implementation review](./path-tree-denial-implementation-review.md#successful-child-bind-source-walk).
+
+## Kubernetes baseline-submount route correction — 2026-08-31
+
+State: **Not done**. This is the approved correction for the Kubernetes
+submount order case. It does not change the earlier physical result.
+
+```text
+Node holds the authenticated initial container mount snapshot
+  -> Node records one path-graph prefix for each known mount-root source
+  -> a Kubernetes submount inherits the known source path
+  -> Kubernetes mount creation order does not select the route
+
+BPF reaches a mount-root dentry during a path walk
+  -> BPF uses the current Node route when one exists
+  -> BPF appends the collected child components and continues graph matching
+  -> BPF does not compare unique mount IDs for this routed path
+
+BPF finds no Node route on the source dentry ancestry
+  -> BPF selects the oldest represented mount by unique mount ID
+  -> BPF continues through that mount's parent path
+  -> a missing or unresolved fallback denies under strict policy
+```
+
+The route stores a graph state, not an inode denial bit. A mount-root route at
+`/home` keeps `*` active for `/home/*/secrets`. A mount-root route at `/srv`
+keeps `**` active for `/srv/**/secrets`. The container-root route supplies the
+same result when the path does not cross another mount. A future child uses
+the route on its known ancestor. If more than one known path applies to one
+source root, Node retains all applicable denial continuations and any denial
+wins.
+
+The paired lightweight and Kubernetes tests must use both Kubernetes mount
+orders. They must also complete a later in-container bind mount. Both source
+and target paths are inside the container. The alias read must return
+`EACCES`, while an unrelated control path remains readable.
 
 ## Qualification update — 2026-08-12
 

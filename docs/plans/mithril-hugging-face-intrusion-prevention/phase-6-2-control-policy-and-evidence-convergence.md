@@ -3,15 +3,17 @@
 Status: Not done. The branch implements the approved capability-grounded
 `WorkloadProtectionPolicy` and separate `WorkloadProtectionException`, their
 Control and node lifecycles, Helm package, automated fixture, and independent
-manual example. The complete automated two-node physical fixture passed on the
-current source. It uses the runtime-independent `PreparedContainer` transition
-and the current public policy schema. That schema has an explicit
+manual example. The recorded complete automated two-node physical fixture
+passed on its recorded source. It uses the runtime-independent
+`PreparedContainer` transition and the current public policy schema. That
+schema has an explicit
 `applicationEntry`, a bounded set of `additionalEntries`, one
 `administrativeEntry`, and `externalRole` as the fail-closed fallback. The
 stock-`runc`, non-Kubernetes VM, and Kubernetes procedures prove independent
 entry roles and reusable declarations. The independent manual procedure also
 passed. The physical evidence-failure, watch-compaction, network-partition,
-storage-outage, and final-uninstall cases remain `Not run`.
+storage-outage, final-uninstall, and Kubernetes baseline-submount route cases
+remain `Not run` or `Not done` on the current changed source.
 
 Master: [Mithril Hugging Face Intrusion Prevention](./README.md)
 
@@ -57,6 +59,22 @@ WorkloadProtectionPolicy CRD base revision
   -> typed mTLS NodePolicy delivery
   -> PolicyActivationOwner stage, readback, probes, and pointer CAS
   -> authenticated node acknowledgement and Control rollout inventory
+
+Linux capability authority
+  -> Kubernetes or the OCI runtime puts a Linux capability in the process credentials
+  -> the active Mithril role matches one exact named capability rule
+  -> an Allow rule permits use of that existing capability
+  -> a Deny rule rejects use of that capability
+  -> Mithril does not add a capability that is absent from the process credentials
+  -> the mount gate uses the exact SysAdmin decision and needs no second public mount rule
+
+Known path-tree route
+  -> Node holds the authenticated initial container mount snapshot
+  -> Node records the compiled path prefix for each known mount-root source
+  -> BPF uses the route when the target dentry or a source ancestor has one
+  -> BPF does not compare mount ages for a routed path
+  -> BPF uses the oldest unique mount only when no route exists
+  -> an unresolved route and fallback deny under strict policy
 
 WorkloadProtectionException CRD bounded request
   -> PolicyDesiredStateOwner validates the same-namespace base-policy grant and bounds
@@ -284,8 +302,9 @@ one declared storage version. Its structural `.spec` contains only:
 - a bounded `additionalEntries` list with a unique name, closed entry kind,
   named execution-rule reference, and role for each entry;
 - one `administrativeEntry` role and one conservative `externalRole`;
-- named roles with canonical-path file rules, execution rules, explicit-address
-  network rules, process-control rules, and Unix-stream role relationships; and
+- named roles with canonical-path file rules, execution rules, exact Linux
+  capability rules, explicit-address network rules, process-control rules, and
+  Unix-stream role relationships; and
 - named bounded `exceptionGrants` that refer only to named file rules.
 
 The closed additional-entry kinds are `PostStart`, `PreStop`, `StartupProbe`,
@@ -341,6 +360,22 @@ is physically qualified. The supported operations are `OpenRead`,
 `OpenWrite`, `Read`, `Write`, `MmapRead`, `MmapWrite`, `Execute`,
 `MmapExecute`, `Mprotect`, `Create`, `SetAttributes`, `Unlink`, `Link`, and
 `Rename` in their applicable rule family.
+
+Capability rules use the same named, per-rule action model as the other role
+rules:
+
+```yaml
+capabilities:
+  - name: allow-sys-admin
+    capabilities: [SysAdmin]
+    action: Allow
+```
+
+Each rule contains one or more exact Linux capability names and one `Allow` or
+`Deny` action. The runtime must put an allowed capability in the process
+credentials. Mithril authorizes its use but does not add it. A successful
+mount needs the role's exact `SysAdmin` authorization. It does not need a
+second public mount rule. Keep generic capability authority denial-only.
 
 Network rules support IPv4 and IPv6 prefixes, TCP and UDP, port ranges,
 final-address enforcement, and the qualified socket operations. Separate
@@ -734,6 +769,26 @@ must reject material for another Node, boot, Pod, profile, or candidate. Keep
 non-Kubernetes static workload bindings available for the existing host mode;
 they cannot authorize a Kubernetes Pod that Control did not observe as bound.
 
+When the node receives the exact held initial PID, it snapshots the complete
+initial container mount view. For each known mount-root source, it records the
+binding, profile generation, topology generation, mount namespace, filesystem
+device, root inode, and compiled path prefix. This record tells BPF which path
+to use. It does not use the mount's creation order as policy authority.
+
+For an initial Kubernetes submount, Node follows the source dentry ancestry
+and records the inherited source path. For example, if the source root is
+mounted at `/home/secret` and `source/models` is also mounted at
+`/home/kubelet-attack`, the recorded route for the submount is
+`/home/secret/models`. On access to `/home/kubelet-attack/secret`, BPF checks
+`/home/secret/models/secret`.
+
+A route stores a compiled graph state. It keeps `*` and `**` transitions
+active for later components and therefore covers future descendants. If no
+route exists on the source dentry ancestry, BPF selects the oldest unique
+mount as the canonical fallback. A later in-container bind mount does not
+install a new policy route. A dirty, missing, or unresolved path denies under
+strict policy.
+
 Helm installs the Mithril hook through containerd's default CRI runtime. The
 installation owns one marked OCI base spec and one marked containerd
 configuration fragment. It does not install a persistent NRI service, and it
@@ -991,6 +1046,12 @@ created in this phase.
   of every deliberately absent field.
 - Recursive deny behavior and recursive allow rejection until its Kubernetes
   runtime control passes physical qualification.
+- Path-tree route tests must use both initial Kubernetes mount orders. They
+  must cover a direct protected mount, a Kubernetes submount alias, a later
+  in-container bind alias, `/home/*/secrets`, and `/srv/**/secrets`. The later
+  bind must complete before its alias read returns `EACCES`. The lightweight
+  test must reproduce each mount and result before the two-node Kubernetes
+  test runs.
 - Exception-writer RBAC, grant, exact Pod UID, container, duration, use bound,
   immutable spec, atomic consumption, expiry, revocation, deletion, stale
   event, overlap, replay, wrong base generation, wrong node or boot, and active
@@ -1087,6 +1148,10 @@ created in this phase.
   does not choose the scheduler's exact Node.
 - A matching protected Pod cannot start its initial process until the selected
   node has activated its exact candidate and cgroup binding.
+- A known mount-root route controls path-tree evaluation without mount-age
+  selection. The oldest unique mount controls only the fallback when no route
+  exists. Both Kubernetes baseline mount orders and a later in-container bind
+  must preserve the same denial.
 - The application entry, every declared additional entry, and the approved
   administrative entry install independent roles. No entry inherits or unions
   the application role.
@@ -1124,16 +1189,16 @@ and the complete unmatched-workload floor.
 ## Phase Result
 
 ```text
-State: Not done. The current policy and exception implementation, PreparedContainer boundary, independent entry roles, package, automated fixture, and independent manual example are present. The direct-runc entry-role, complete non-Kubernetes VM, complete automated two-node Kubernetes, and independent manual procedures passed. The physical evidence-failure variants, watch-compaction, network-partition, storage-outage, retained-gate uninstall, measured recovery, and authorized decommission remain Not run.
-Implemented deliverable scope: D6.2.1 through D6.2.4 implement and automate `applicationEntry`, `additionalEntries`, `administrativeEntry`, and `externalRole`; the current Kubernetes fixture exercised them physically. D6.2.5 has automated intake, WAL, and capacity proof plus one healthy physical stream, but lacks the physical failure variants. D6.2.6 through D6.2.10 and D6.2.13 passed their current automated Kubernetes physical cases. D6.2.11 is partial until the retained containerd gate, exact incident denial, measured recovery, and direct non-CRI fallback pass. D6.2.12 is partial until retained installation and authorized decommission pass.
+State: Not done. The current policy and exception implementation, PreparedContainer boundary, independent entry roles, package, automated fixture, and independent manual example are present. The direct-runc entry-role, complete non-Kubernetes VM, complete automated two-node Kubernetes, and independent manual procedures passed for their recorded source states. The newly required known-route case is not implemented. The physical evidence-failure variants, watch-compaction, network-partition, storage-outage, retained-gate uninstall, measured recovery, and authorized decommission remain Not run.
+Implemented deliverable scope: D6.2.1 through D6.2.4 implement and automate `applicationEntry`, `additionalEntries`, `administrativeEntry`, and `externalRole`; the recorded Kubernetes fixture exercised them physically. D6.2.5 has automated intake, WAL, and capacity proof plus one healthy physical stream, but lacks the physical failure variants. D6.2.6 through D6.2.10 and D6.2.13 passed their recorded automated Kubernetes physical cases. D6.2.11 is partial until the known-route path walk, retained containerd gate, exact incident denial, measured recovery, and direct non-CRI fallback pass. D6.2.12 is partial until retained installation and authorized decommission pass.
 Files and durable owners changed: the branch contains both namespaced CRDs and their Helm package; PolicyDesiredStateOwner; PolicyRolloutOwner; the exception desired-state path; TrustBundleOwner; KubernetesNodeReadinessOwner; KubernetesAdmissionOwner; KubernetesWorkloadInventoryOwner; one append-only ControlStore for policy, exception, node session, trust, rollout, acknowledgement, evidence, coverage, and cursor transactions; generated NodePolicy and ControlHealth services; NodePolicyDeliveryOwner; ExceptionAuthorityOwner; RuntimeAdmissionClient; RuntimeAdmissionServer; ScheduledRuntimeBindingV1; bounded runtime-fact staging in WorkloadBindingOwner; the node activation and cgroup-binding paths; the stateless two-stage OCI adapter; the PreparedContainer binding ABI and BPF transition owner; current hook ownership; the two-node fixture; and the independent manual example. The retained containerd integration owner and measured recovery gate are not implemented.
 Upstream-adoption dossier IDs used: none.
-Fixture cases and exact physical results: the complete non-Kubernetes VM procedure passed with runc 1.3.4. It recorded PREPARED to ACTIVE, the declared application entry, five additional-entry roles, role-specific Deny decisions, and external-entry denial. It invoked the PostStart declaration twice. Both invocations used the same role and rule. They had distinct host PIDs, task cookies, process-state IDs, and execution IDs. The policy did not list libc or the ELF loader. Identity, observe-mode effect, protect-mode effect, kernel, and network probes also passed. The later direct-runc regression restarted node owners over pinned state. It preserved a terminal `PostPonrFatal` evidence row while it retired the inactive policy generation and owned resources. Its evidence is `/tmp/mithril-runc-terminal-regression-20260828/runc-entry-role-runtime-probe.json`. The complete retained two-node Kubernetes fixture passed with Kubernetes v1.35.5+k3s1 and containerd v2.2.3-k3s1. It proved scheduler-selected exact delivery, declared entry roles, runtime and Pod lifetime replacement, bounded exception use and retirement, Control and Node restart recovery, same-name Node UID replacement, host boot and label-epoch advance, desired-inventory cleanup, and fresh root activation. Its healthy evidence stream recorded no lost events, reader-queue drops, WAL capacity block, WAL rewrite, or repeated Control connection. The final fresh Node Pods were ready with zero container restarts and one Control connection each. The evidence is `/tmp/mithril-phase-6-2-full-convergence-reuse52-terminal-retirement-20260828`. The current-source rerun passed on 2026-08-29 with the same Kubernetes and containerd versions. Its evidence is `/tmp/mithril-two-node-baseline3-20260829`. The independent manual case then passed on the same two-node cluster after a fresh state reset. It selected `ubuntu-5775b0d0`, replaced container lifetime `containerd://5adc2f2bbb36afcefa04f25e78fa0349973b01b02b6261fdfe894f1ea6a878a3` with `containerd://54074773fe2017945827fbab16f671fba127f4c9acbadd2ffc88f82e006978f6`, proved exact target and PreparedContainer activation, and failed closed when runtime admission was unavailable. Its cleanup removed the namespace and both RuntimeClasses.
+Fixture cases and exact physical results: the complete non-Kubernetes VM procedure passed with runc 1.3.4. It recorded PREPARED to ACTIVE, the declared application entry, five additional-entry roles, role-specific Deny decisions, and external-entry denial. It invoked the PostStart declaration twice. Both invocations used the same role and rule. They had distinct host PIDs, task cookies, process-state IDs, and execution IDs. The policy did not list libc or the ELF loader. Identity, observe-mode effect, protect-mode effect, kernel, and network probes also passed. The later direct-runc regression restarted node owners over pinned state. It preserved a terminal `PostPonrFatal` evidence row while it retired the inactive policy generation and owned resources. Its evidence is `/tmp/mithril-runc-terminal-regression-20260828/runc-entry-role-runtime-probe.json`. The complete retained two-node Kubernetes fixture passed with Kubernetes v1.35.5+k3s1 and containerd v2.2.3-k3s1. It proved scheduler-selected exact delivery, declared entry roles, runtime and Pod lifetime replacement, bounded exception use and retirement, Control and Node restart recovery, same-name Node UID replacement, host boot and label-epoch advance, desired-inventory cleanup, and fresh root activation. Its healthy evidence stream recorded no lost events, reader-queue drops, WAL capacity block, WAL rewrite, or repeated Control connection. The final fresh Node Pods were ready with zero container restarts and one Control connection each. The evidence is `/tmp/mithril-phase-6-2-full-convergence-reuse52-terminal-retirement-20260828`. The recorded rerun passed on 2026-08-29 with the same Kubernetes and containerd versions. Its evidence is `/tmp/mithril-two-node-baseline3-20260829`. The independent manual case then passed on the same two-node cluster after a fresh state reset. It selected `ubuntu-5775b0d0`, replaced container lifetime `containerd://5adc2f2bbb36afcefa04f25e78fa0349973b01b02b6261fdfe894f1ea6a878a3` with `containerd://54074773fe2017945827fbab16f671fba127f4c9acbadd2ffc88f82e006978f6`, proved exact target and PreparedContainer activation, and failed closed when runtime admission was unavailable. Its cleanup removed the namespace and both RuntimeClasses. The current lightweight route fixture proves the remaining defect: with `/home/kubelet-attack` mounted before `/home/secret`, the older Kubernetes submount is denied but a newer alias of the same submount returns `PATH_TREE_ALLOWED`. The later in-container bind and both wildcard cases deny. No current-source Kubernetes pass is claimed.
 Earlier fixture cases and exact physical results: the direct-runc application-start lane passed with runc 1.3.4. It recorded PREPARED to ACTIVE, the path-approved application entry, an application-default dependency read, no exact executable object, libc and the ELF loader absent from policy, successful exit, and owned-resource cleanup. The focused protected-start lane passed with Kubernetes v1.35.5+k3s1 and containerd 2.2.3-k3s1. It replaced Mithril and the protected Pod in the retained two-VM cluster. The policy contained `/bin/sh` as its sole execution selector. Fresh Pod UID `078ffde6-6ef9-4268-a7da-3a398e2f205e` ran as container `05bb1cc19d8b5bed04ae9058053cd907effcb18956ab65162f67f75e2daa707e` on `ubuntu-b1bfec97`. Policy revision `5c8ab1236e1d26a7bb8ec0b9bed7bda91bdabfebd669c41533c244da957afb5d` activated binding `0044aed1-8c6e-877a-a0e6-84fffdaf54c9`. The exact admitted entry reached ACTIVE. Later BusyBox applet execs received `APPLICATION_DEFAULT_ALLOW` without an exact object key or composite atom. The explicit matching Deny blocked its target. A direct CRI exec into the same container cgroup failed with `UNSUPPORTED_OBJECT`, `DENIED_BEFORE_EFFECT`, and kernel result `-13`. It did not create its marker. The result is `/tmp/phase-6-2-shell-only-entry-20260825-run13/protected-start-result.json`. These earlier results do not prove declared additional entries or the administrative entry. The complete current fixture and independent manual case now prove them. The prior old-API Kubernetes run remains partial historical evidence.
 Automated verification: PreparedContainer ABI, application-default ABI, compiled BPF object, independent entry roles, repeated entry admission, complete desired-inventory validation, live-runtime retention, terminal pending-exec retirement, crash-safe stale-profile cleanup, node observation, binary WAL migration, capacity policy, Control connection reuse, VM-harness behavior, diff checks, and the complete non-Kubernetes VM procedure passed for the current source. The lightweight suites execute the Rust owners and fixture command paths. They do not read source text as a capability oracle. The repository Rust CI script passed format, workspace check, strict Clippy, and the full workspace test gate.
 Platform/kernel/runtime manifests: the Helm package contains both generated closed CRDs, separate writer and Control RBAC, the exact DaemonSet reader Role, the Control Deployment and Service, fail-closed admission webhooks, the node DaemonSet, and two atomically owned `createRuntime` hook registrations. It does not yet install the approved retained containerd default-runtime integration. The complete result records Kubernetes v1.35.5+k3s1, containerd v2.2.3-k3s1, the two eligible Nodes, and the scheduler-selected Node. The scenario removed its workload namespace, policy, exception, Pods, and marker state. The VMs, K3s cluster, and current Mithril release remain available for the next physical variant.
 Performance/capacity results: no new benchmark. Runtime stages are limited to 128 records and 30 seconds. PreparedContainer is designed for one exact binding and one application activation. Evidence gRPC messages are limited to 4 MiB. Policy gRPC messages are limited to 128 KiB. The Control pending evidence window is limited to 4,096 records. The node reader queue retains 65,535 records by default. The binary node WAL retains 10,000 records by default. Both node bounds are configurable. WAL capacity policy is configurable as `BLOCK` or `REWRITE`. Queue loss, capacity blocks, rewritten records, and rewritten bytes have explicit health metrics and durable coverage gaps. Health reports fixed counts and booleans only.
 Unsupported/degraded paths: the physical evidence-failure, watch-compaction, network-partition, storage-outage, retained-gate uninstall, measured recovery, direct non-CRI fallback, and authorized-decommission cases are Not run. Phase 7 graph and finding behavior is not present.
-Remaining work in this phase: implement and qualify the retained containerd gate and decommission path. Run the lightweight tests first. Then run the complete two-node Kubernetes suite and the physical evidence-failure and outage matrix on the retained cluster.
+Remaining work in this phase: implement the known-route path walk and make both initial Kubernetes mount orders, the later in-container bind, `*`, and `**` pass in the lightweight fixture. Then run the paired path case and the complete two-node Kubernetes suite on the retained cluster. Implement and qualify the retained containerd gate and decommission path. Run the physical evidence-failure and outage matrix.
 Next phase not authorized: yes.
 ```

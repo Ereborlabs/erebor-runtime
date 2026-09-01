@@ -6,6 +6,7 @@ service and IPC convergence on 2026-08-21. The capability-grounded Kubernetes
 policy API amendment was approved on 2026-08-23. Proposed; this document does
 not authorize implementation until the user approves one phase by name. The
 stock-runtime bootstrap amendment was approved for Phase 6.2 on 2026-08-23.
+The known-path route with oldest-mount fallback was approved on 2026-08-31.
 
 Design authority:
 
@@ -46,6 +47,13 @@ for the exact held initial task after it verifies the scheduled binding and
 active signed policy. BPF restricts it to a fixed qualified operation set,
 one entry lineage, owned anonymous objects, one deadline, and one application
 handoff. It is not a CRD field, a policy rule, or a runtime-selected bypass.
+
+The known-path routing amendment separates Kubernetes baseline mounts from
+later bind mounts. Node records the compiled path prefix for a known mount
+root in the authenticated initial container mount snapshot. BPF uses that
+route without mount-age selection. If no route exists on the source dentry
+ancestry, BPF uses the oldest unique mount as the canonical fallback. A dirty,
+missing, or unresolved route and fallback cannot allow an effect.
 
 ## Goal And Release Boundary
 
@@ -271,7 +279,7 @@ the named phase file contains a matching deliverable and proof.
 | Ch. 12 compiler, signatures, activation, rollback | 0, 3, 4, 6, 6.2 | deterministic bytes; source provenance; inactive readback; one CAS; retirement recovery |
 | Ch. 13 one local decision and atomic state | 0, 2-5 | Rust/BPF lookup golden; task-first and contention tests |
 | Ch. 14 mechanism boundaries and deferred Seccomp | 0, 1, 3-5, 12 | hook/capability matrix; Seccomp remains absent unless Phase 12 gate passes |
-| Ch. 15 mounts, canonical oldest-mount path, exact objects | 0, 3, 4 | Meta bind-alias fixture; DIRTY topology races; object revalidation |
+| Ch. 15 mounts, known-root path routes, oldest-mount fallback, exact objects | 0, 3, 4, 6.2 | Kubernetes baseline-submount order fixture; later bind-alias fixture; DIRTY topology races; object revalidation |
 | Ch. 16 exec images and executable memory | 0, 3, 4 | exec chain, loader, memfd, mmap/mprotect, immutable-image fixtures |
 | Ch. 17 files, credentials, delegated I/O | 0, 3, 4, 5 | token rotation, proc-fd, fd pass, remote delegate fixtures |
 | Ch. 18 IPC, native authority, persistent objects | 2-5 | directional relationship, shared mapping, async unsupported tests |
@@ -367,7 +375,7 @@ copied or derived. It must separately cover:
 
 | Source | Required lesson/prototype | Explicit rejection or limit |
 | --- | --- | --- |
-| Meta BpfJailer deck | component state graph, wildcard matching, mount-root map, lowest `mnt_id_unique` canonicalization, mount/rename/link protection, verifier/code-size budget | presentation is design evidence, not source-code provenance |
+| Meta BpfJailer deck | component state graph, wildcard matching, mount-root map, lowest `mnt_id_unique` fallback canonicalization, mount/rename/link protection, verifier/code-size budget | Node uses a known-root route first; the presentation is design evidence, not source-code provenance |
 | Independent Jailer | task-storage declaration, parent-to-child copy in `task_alloc`, bounded BPF map/state patterns | never use pending-PID delayed enrollment; its dentry-only walk/inode cache is not the path authority |
 | KubeArmor | BPF LSM pre-effect patterns, policy lowering, map publication, DNS/parser bounds, reader/loss behavior, mount traversal | missing identity cannot allow; action words/events do not prove physical results; no KubeArmor daemon |
 | Tetragon | early fork identity, non-leader exec, cgroup resolution, NRI facts, loss accounting, fresh maps, generic LSM lessons | process cache is not Mithril authority; runtime metadata does not invent purpose; no Tetragon daemon |

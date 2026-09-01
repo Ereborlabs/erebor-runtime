@@ -4,8 +4,8 @@
 AMENDMENT — 2026-08-19; gRPC SERVICE AND IPC AMENDMENT — 2026-08-21;
 CAPABILITY-GROUNDED KUBERNETES POLICY API AMENDMENT — 2026-08-23;
 STOCK-RUNTIME BOOTSTRAP AMENDMENT — 2026-08-23; STATE-PRESERVING REINSTALL
-AMENDMENT — 2026-08-31.** This is the sole normative Mithril architecture for
-implementation planning.
+AMENDMENT — 2026-08-31; KNOWN-PATH ROUTING AMENDMENT — 2026-08-31.** This is
+the sole normative Mithril architecture for implementation planning.
 Implementation still requires allocation and approval through the master plan
 and one named phase. Historical architecture text may explain rejected
 designs, but cannot override this file.
@@ -45,6 +45,14 @@ installer replaces the binaries, runtime integration, and recovery manifest.
 It does not replace durable Control or Node state. Each state owner performs
 only a supported migration before it becomes ready, and the next policy
 candidate continues the retained sequence and predecessor chain.
+
+The known-path routing amendment makes a Node-installed route authoritative
+for a known mount root. BPF uses the route before it considers mount age. If
+no route exists on the source dentry ancestry, BPF selects the oldest unique
+mount as the canonical fallback. Initial Kubernetes mounts are one baseline
+snapshot. Their creation order does not select policy authority. A later bind
+mount does not install a new route and therefore cannot rename its source for
+policy evaluation.
 
 Status: proposed architecture. This document does not authorize an
 implementation phase. The
@@ -2763,22 +2771,21 @@ entry, deadline, and transition or keep admission readiness closed. An
 `EXACT` path selector does not participate in the prepared state. After
 activation, exact object resolution runs only for a selector that explicitly
 requests `EXACT`.
-Mithril resolves paths with Meta's bounded canonical-path algorithm:
-reconstruct the path through a verified mount tree, canonicalizing a repeated
-mount-root dentry to its oldest mount before matching components with a
-compiled graph/state machine. This is deliberately different from merely
-reconstructing the path string through which the caller reached the file: a
-later bind-mount alias must not choose the path that policy matches. Mithril
-adds clean-topology, identity, and exact-object conditions for a positive file
-decision. The public Meta BpfJailer LPC 2025 presentation supplies the
-mount-crossing traversal and graph-matching approach. The presentation is
-design evidence, not public implementation source; its slides 16-21 are bound
-here to the supplied PDF SHA-256
+Mithril resolves paths with a Node route first and Meta's bounded oldest-mount
+algorithm as the fallback. Node records a graph prefix for each known mount
+root in the authenticated container mount view. BPF uses that prefix when the
+target dentry or one of its source ancestors has a current route. BPF selects
+the oldest unique mount only when no route exists. A later bind-mount alias
+cannot choose a new policy path. Mithril adds clean-topology, identity, and
+exact-object conditions for a positive file decision. The public Meta
+BpfJailer LPC 2025 presentation supplies the fallback mount-crossing traversal
+and graph-matching approach. The presentation is design evidence, not public
+implementation source; its slides 16-21 are bound here to the supplied PDF SHA-256
 `81dca098d1ed96e19fd89b48b78be63c504f9f52f9f25b662e4a94c14a5209f6`.
 
 | Design part | Meta presentation contributes | Mithril retains or adds | Combined result |
 | --- | --- | --- | --- |
-| Canonical path reconstruction | Enumerate one root mount namespace, index `mount-root dentry -> mounts`, select the oldest (`lowest mnt_id_unique`) mount for that dentry, then cross through that selected mount's parent mountpoint | A verified `MountSecurityViewV1` is the selected root domain; its complete clean snapshot supplies the mount index, unique IDs, parent, and mountpoint | A later bind alias cannot select its own target spelling when the same root dentry already belongs to an older tracked mount. |
+| Canonical path reconstruction | Enumerate one root mount namespace, index `mount-root dentry -> mounts`, select the oldest (`lowest mnt_id_unique`) mount for an unresolved dentry, then cross through that selected mount's parent mountpoint | A verified `MountSecurityViewV1` supplies Node routes for known mount roots. A route is keyed by the binding, profile generation, topology generation, mount namespace, filesystem device, and root inode. It stores the compiled graph prefix. | BPF uses a known route without mount-age selection. The oldest unique mount remains the fallback for an unknown route and prevents a later bind alias from selecting its target spelling. |
 | Large rule matching | Bounded component graph/state machine with exact and wildcard transitions | Compile-time bounds, terminal-overlap rejection or signed exact override, no priority-by-specificity | Large hierarchical policies evaluate without linear rule scans or an unbounded string map. |
 | Cache correctness | Cache/invalidate path work around rename and mount changes | Cache key includes policy generation, actor mount view, topology snapshot, live mount, and exact object; DIRTY stops decisions before topology change | A cache cannot grant access through an old bind alias, reused inode, overlay copy-up, or remount. |
 | Authorization result | A matched path rule | A signed `PATH` terminal can allow or deny from the live canonical path. A signed `EXACT` terminal also requires the current measured inode binding. | Live path policy and inode policy remain separate selector kinds. An unresolved `EXACT` selector cannot grant authority. |
@@ -2793,27 +2800,27 @@ Mithril's compiler and hot path therefore use this single bounded algorithm:
    Mithril's supported platform profile fixes and measures its own lower or
    equal bounds before a profile can activate. The vector is derived from
    kernel objects, never from a caller-supplied path string.
-3. At every mount-root dentry `D`, use the current clean mount-topology
-   snapshot as Meta does: look up every mount whose root is `D`, select the
-   oldest mount by `mnt_id_unique`, and continue from *that selected mount's*
-   parent mount and mountpoint. Do not continue through the mount by which the
-   caller happened to enter `D`. Meta repeats this to the root dentry of PID
-   1's mount namespace. Mithril applies the same selection in the verified
-   `MountSecurityViewV1` chosen for the actor; all candidate mounts, unique
-   IDs, parent links, mountpoints, and the final root must belong to its clean
-   snapshot. A path that cannot reach the required root is unresolved, not an
-   alternate spelling that grants authority.
-4. Reverse the resulting components and run them through the compiled graph.
+3. At every mount-root dentry `D`, look up a current Node route by binding,
+   profile generation, topology generation, mount namespace, filesystem
+   device, and root inode. If the route exists, use its graph prefix and the
+   collected child components. Do not select a mount by age.
+4. If no route exists on the source dentry ancestry, use the current clean
+   mount-topology snapshot as Meta does. Look up every mount whose root is
+   `D`, select the oldest mount by `mnt_id_unique`, and continue from that
+   mount's parent and mountpoint. Do not continue through the mount by which
+   the caller entered `D`. A missing candidate or an unreachable root is
+   unresolved and denies under strict policy.
+5. Reverse the resulting components and run them through the compiled graph.
    A transition can consume one exact component or the explicitly compiled
    wildcard component; only one non-conflicting terminal rule selects a
    candidate disposition. The compiler rejects overlapping terminal patterns
    with different physical results unless a signed override names the exact
    selector delta; YAML order, wildcard count, and “more specific” never
    choose authority.
-5. If the terminal is a signed `PATH` selector, apply its compiled `ALLOW` or
+6. If the terminal is a signed `PATH` selector, apply its compiled `ALLOW` or
    `DENY` decision from the live canonical path. Do not resolve an exact file
    object. A separate signed path-tree deny floor can also deny at this stage.
-6. If the terminal is a signed `EXACT` selector, revalidate the task mount
+7. If the terminal is a signed `EXACT` selector, revalidate the task mount
    view, topology generation, selected canonical mount chain, measured file
    object, and retained policy generation before returning its physical
    decision. A selector match never authorizes a later inode generation,
@@ -2841,13 +2848,36 @@ parent/name path before the object becomes visible. A missing path, an
 ambiguous mount chain, a dirty view, or an unqualified hook cannot bypass the
 floor. Strict policy denies the operation until Mithril has a qualified result.
 
+Node stores a graph prefix, not a deny bit. If a known mount root is attached
+at `/home`, its route stores the state after `home`; `*` still consumes one
+later component for `/home/*/secrets`. A route attached at `/srv` keeps the
+`**` loop active for `/srv/**/secrets`. A container-root route starts at graph
+state zero and provides the same result for paths that do not cross another
+mount. A future child uses its existing ancestor route. Node also records a
+continuation at each initial Kubernetes submount that crosses into another
+source tree.
+
 This rule protects a location. It does not make pathname spelling a positive
 identity. A separate exact-object rule is still required to allow a file, to
 make a content claim, or to retain authority across a file instance. Existing,
 passed, or inherited file descriptors remain subject to their
 `FileInstanceProvenanceV1` and current-actor floors.
 
-**Canonical bind-mount example.** The first defense is before this resolver:
+**Kubernetes submount example.** The initial container mount snapshot contains
+these two mounts:
+
+```text
+source root         -> /home/secret
+source root/models  -> /home/kubelet-attack
+```
+
+Node records that `source root/models` continues from
+`/home/secret/models`. On access to `/home/kubelet-attack/secret`, BPF walks
+from `secret` to the `models` dentry, finds the recorded route, and evaluates
+`/home/secret/models/secret`. The decision does not depend on which
+Kubernetes mount has the lower unique mount ID.
+
+**Oldest-mount fallback example.** The first defense is before this resolver:
 an untrusted worker is denied `mount --bind`, `move_mount`, `umount`,
 `pivot_root`, namespace changes, directory rename, and hard-link changes that
 could create or alter a protected alias. Therefore its attempted bind mount is
@@ -2872,7 +2902,7 @@ policy allow pattern: /work/input/*/config.json
 ```
 
 The dentry walk first collects `config.json` and reaches mount-root dentry
-`D`. The resolver then performs the critical Meta lookup:
+`D`. No Node route exists for `D`, so the resolver performs the Meta fallback:
 
 ```text
 D -> [ M5 (41), M9 (92) ]
