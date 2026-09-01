@@ -137,6 +137,7 @@ include = [
   "PathGraphTerminalV1",
   "PathGraphTransitionKeyV1",
   "PathGraphTransitionV1",
+  "PathTreeDenyKeyV1",
   "PolicyGenerationStateV1",
   "PolicyGenerationModeV1",
   "ProfileGenerationDescriptorV1",
@@ -271,6 +272,7 @@ include = [
 "PathGraphTerminalV1" = "path_graph_terminal_v1"
 "PathGraphTransitionKeyV1" = "path_graph_transition_key_v1"
 "PathGraphTransitionV1" = "path_graph_transition_v1"
+"PathTreeDenyKeyV1" = "path_tree_deny_key_v1"
 "PolicyGenerationStateV1" = "policy_generation_state_v1"
 "PolicyGenerationModeV1" = "policy_generation_mode_v1"
 "ProfileGenerationDescriptorV1" = "profile_generation_descriptor_v1"

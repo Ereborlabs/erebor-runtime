@@ -6,6 +6,7 @@ pub const MAX_CANONICAL_PATH_COMPONENTS_V1: usize = 255;
 pub const MAX_CANONICAL_MOUNT_SCAN_DEPTH_V1: usize = 255;
 pub const MAX_CANONICAL_COMPONENT_BYTES_V1: usize = 255;
 pub const CANONICAL_COMPONENT_STORAGE_BYTES_V1: usize = 256;
+pub const MAX_CANONICAL_ROUTE_STATES_V1: usize = 16;
 
 #[repr(u8)]
 #[derive(
@@ -62,7 +63,8 @@ pub struct CanonicalMountRootKeyV1 {
 pub struct CanonicalMountRootV1 {
     pub selected_mount_id_unique: u64,
     pub snapshot_digest_id: u64,
-    pub graph_prefix_state_id: u32,
+    pub graph_prefix_state_ids: [u32; MAX_CANONICAL_ROUTE_STATES_V1],
+    pub graph_prefix_state_count: u32,
     pub reserved: u32,
 }
 
@@ -121,7 +123,16 @@ pub struct PathGraphTerminalV1 {
     pub rule_numeric_id: u32,
     pub exact_object_required: u8,
     pub reserved: [u8; 3],
-    pub path_tree_deny_operation_mask: u64,
+}
+
+#[repr(C)]
+#[derive(
+    Clone, Copy, Debug, Default, Eq, FromBytes, Immutable, IntoBytes, KnownLayout, PartialEq,
+)]
+pub struct PathTreeDenyKeyV1 {
+    pub profile_generation_ref_id: u64,
+    pub state_id: u32,
+    pub active_role_id: u32,
 }
 
 #[repr(C)]
@@ -148,10 +159,11 @@ mod tests {
         assert_eq!(size_of::<MountSecurityViewStateV1>(), 40);
         assert_eq!(size_of::<MountReconciliationProposalV1>(), 32);
         assert_eq!(size_of::<CanonicalMountRootKeyV1>(), 48);
-        assert_eq!(size_of::<CanonicalMountRootV1>(), 24);
+        assert_eq!(size_of::<CanonicalMountRootV1>(), 88);
         assert_eq!(size_of::<PathGraphStateKeyV1>(), 16);
         assert_eq!(size_of::<PathGraphTransitionV1>(), 8);
-        assert_eq!(size_of::<PathGraphTerminalV1>(), 24);
+        assert_eq!(size_of::<PathGraphTerminalV1>(), 16);
+        assert_eq!(size_of::<PathTreeDenyKeyV1>(), 16);
         assert_eq!(size_of::<MountMutationAttemptV1>(), 8);
     }
 

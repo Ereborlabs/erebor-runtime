@@ -2503,7 +2503,13 @@ mod tests {
         )?
         .to_bytes()?;
         let submitted = control.submit_node_decommission(artifact).await?;
-        let digest: [u8; 32] = hex::decode(&submitted.artifact_sha256)?.try_into().unwrap();
+        let digest_bytes = hex::decode(&submitted.artifact_sha256)?;
+        let digest: [u8; 32] = digest_bytes.try_into().map_err(|_| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "submitted decommission digest must contain 32 bytes",
+            )
+        })?;
         assert!(control
             .receive_node_decommission_result(
                 "node-a",

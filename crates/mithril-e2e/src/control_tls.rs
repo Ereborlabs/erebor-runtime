@@ -494,7 +494,8 @@ async fn mtls_registration_acknowledges_trust_and_reconnects_with_a_fresh_nonce(
     let certificates = Certificates::issue(false)?;
     let files = certificates.write(directory.path())?;
     let address = free_address()?;
-    let control = ControlPlane::new(
+    let store = ControlStore::open(directory.path().join("control-store"))?;
+    let control = ControlPlane::with_control_store(
         vec![AllowedNodeIdentity {
             node_id: "node-a".to_owned(),
             certificate_sha256: certificates.node_digest(),
@@ -506,7 +507,8 @@ async fn mtls_registration_acknowledges_trust_and_reconnects_with_a_fresh_nonce(
             policy_issuer_sequence_epoch: 0,
             policy_signers: Vec::new(),
         },
-    );
+        store,
+    )?;
     let (shutdown, server) = start_server(address, &files, control.clone());
     tokio::time::sleep(Duration::from_millis(20)).await;
 
@@ -548,7 +550,8 @@ async fn mtls_connection_renews_the_ready_session_while_its_owner_is_idle(
     let certificates = Certificates::issue(false)?;
     let files = certificates.write(directory.path())?;
     let address = free_address()?;
-    let control = ControlPlane::new(
+    let store = ControlStore::open(directory.path().join("control-store"))?;
+    let control = ControlPlane::with_control_store(
         vec![AllowedNodeIdentity {
             node_id: "node-a".to_owned(),
             certificate_sha256: certificates.node_digest(),
@@ -560,7 +563,8 @@ async fn mtls_connection_renews_the_ready_session_while_its_owner_is_idle(
             policy_issuer_sequence_epoch: 0,
             policy_signers: Vec::new(),
         },
-    );
+        store,
+    )?;
     let (shutdown, server) = start_server(address, &files, control.clone());
     tokio::time::sleep(Duration::from_millis(20)).await;
 
@@ -591,7 +595,8 @@ async fn mtls_connection_reports_local_readiness_transitions_without_reconnect(
     let certificates = Certificates::issue(false)?;
     let files = certificates.write(directory.path())?;
     let address = free_address()?;
-    let control = ControlPlane::new(
+    let store = ControlStore::open(directory.path().join("control-store"))?;
+    let control = ControlPlane::with_control_store(
         vec![AllowedNodeIdentity {
             node_id: "node-a".to_owned(),
             certificate_sha256: certificates.node_digest(),
@@ -603,7 +608,8 @@ async fn mtls_connection_reports_local_readiness_transitions_without_reconnect(
             policy_issuer_sequence_epoch: 0,
             policy_signers: Vec::new(),
         },
-    );
+        store,
+    )?;
     let (shutdown, server) = start_server(address, &files, control.clone());
     tokio::time::sleep(Duration::from_millis(20)).await;
 
@@ -2356,7 +2362,8 @@ async fn mtls_administrative_services_route_matching_results_and_cancel_waiters(
     let certificates = Certificates::issue(false)?;
     let files = certificates.write(directory.path())?;
     let address = free_address()?;
-    let control = ControlPlane::new(
+    let store = ControlStore::open(directory.path().join("control-store"))?;
+    let control = ControlPlane::with_control_store(
         vec![AllowedNodeIdentity {
             node_id: "node-a".to_owned(),
             certificate_sha256: certificates.node_digest(),
@@ -2368,7 +2375,8 @@ async fn mtls_administrative_services_route_matching_results_and_cancel_waiters(
             policy_issuer_sequence_epoch: 0,
             policy_signers: Vec::new(),
         },
-    );
+        store,
+    )?;
     let (shutdown, server) = start_server(address, &files, control.clone());
     tokio::time::sleep(Duration::from_millis(20)).await;
     let connector =

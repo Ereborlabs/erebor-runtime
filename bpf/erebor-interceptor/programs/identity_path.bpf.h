@@ -59,16 +59,12 @@ static __always_inline int begin_global_mount_mutation(void)
 
 static __always_inline int begin_mount_mutation(void)
 {
-    mount_security_view_state_v1 *view;
-    struct mount_security_view_lock_v1 *view_lock;
-    __u64 *mutation_epoch;
-    mount_mutation_attempt_v1 *attempt;
     struct task_struct *task;
     task_label_v1 *label;
+    mount_mutation_attempt_v1 *attempt;
     __u32 mount_namespace_inode;
-    int result;
+    int result = begin_global_mount_mutation();
 
-    result = begin_global_mount_mutation();
     if (result)
         return result;
     task = bpf_get_current_task_btf();
@@ -76,27 +72,16 @@ static __always_inline int begin_mount_mutation(void)
     attempt = bpf_task_storage_get(&mount_mutation_attempts, task, 0, 0);
     if (!attempt || !attempt->active)
         return label ? -EACCES : 0;
-
     mount_namespace_inode = current_mount_namespace_inode();
     if (!mount_namespace_inode)
         return label ? -EACCES : 0;
-    view = bpf_map_lookup_elem(&mount_security_views,
-                               &mount_namespace_inode);
-    if (!view)
+    if (!bpf_map_lookup_elem(&mount_security_views,
+                             &mount_namespace_inode) ||
+        !bpf_map_lookup_elem(&mount_security_view_locks,
+                             &mount_namespace_inode) ||
+        !bpf_map_lookup_elem(&mount_mutation_epochs,
+                             &mount_namespace_inode))
         return label ? -EACCES : 0;
-    view_lock = bpf_map_lookup_elem(&mount_security_view_locks,
-                                    &mount_namespace_inode);
-    mutation_epoch = bpf_map_lookup_elem(&mount_mutation_epochs,
-                                         &mount_namespace_inode);
-    if (!view_lock || !mutation_epoch)
-        return -EACCES;
-    bpf_spin_lock(&view_lock->lock);
-    /* Linux cannot have enough live tasks to overflow this u64 counter. */
-    __sync_fetch_and_add(&view->pending_mutations, 1);
-    view->state = mount_topology_state_v1_dirty;
-    (*mutation_epoch)++;
-    __sync_fetch_and_add(&view->transition_version, 1);
-    bpf_spin_unlock(&view_lock->lock);
     attempt->mount_namespace_inode = mount_namespace_inode;
     return 0;
 }
@@ -106,19 +91,14 @@ static __always_inline void finish_mount_mutation(void)
     const __u32 global_key = 0;
     struct task_struct *task = bpf_get_current_task_btf();
     mount_mutation_attempt_v1 *attempt;
-    mount_security_view_state_v1 *view;
     __u64 *global_pending;
 
     attempt = bpf_task_storage_get(&mount_mutation_attempts, task, 0, 0);
     if (!attempt || !attempt->active)
         return;
-    if (attempt->mount_namespace_inode) {
-        view = bpf_map_lookup_elem(&mount_security_views,
-                                   &attempt->mount_namespace_inode);
-        /* The pre-effect hook already published DIRTY and its new version. */
-        if (view)
-            decrement_nonzero_counter(&view->pending_mutations);
-    }
+    if (attempt->mount_namespace_inode)
+        (void)bpf_map_lookup_elem(&mount_security_views,
+                                  &attempt->mount_namespace_inode);
     global_pending = bpf_map_lookup_elem(&mount_global_pending_mutations,
                                          &global_key);
     if (global_pending)
@@ -164,6 +144,23 @@ static __always_inline int global_mount_epoch_unchanged(__u64 epoch)
 
     return current && pending && *current == epoch && !*pending ? 0
                                                                : -EACCES;
+}
+
+static __always_inline int synchronous_mount_snapshot_unchanged(
+    struct identity_scratch_v1 *scratch)
+{
+    struct canonical_mount_path_walk_state_v1 *walk =
+        &scratch->mount_path_walk;
+    struct mnt_namespace *mount_namespace =
+        (struct mnt_namespace *)walk->mount_namespace_address;
+    __u64 namespace_event = 0;
+
+    if (!scratch->mount_topology_generation || !mount_namespace ||
+        BPF_CORE_READ_INTO(&namespace_event, mount_namespace, event) ||
+        namespace_event != walk->namespace_event)
+        return -EACCES;
+    return global_mount_epoch_unchanged(
+        scratch->mount_topology_generation);
 }
 
 static __always_inline int global_mount_epoch_is_clean(__u64 epoch)
@@ -502,47 +499,49 @@ static __always_inline int ensure_canonical_mount_cache(
 #endif
 
 static __always_inline int selected_mount_for_root(
-    struct identity_scratch_v1 *scratch,
-    struct mnt_namespace *mount_namespace, __u64 namespace_event,
-    __u64 namespace_root_mount_id_unique, struct dentry *root)
+    struct identity_scratch_v1 *scratch, struct dentry *root)
 {
-    struct canonical_mount_cache_key_v1 *key = &scratch->mount_cache_key;
     struct canonical_mount_path_walk_state_v1 *walk =
         &scratch->mount_path_walk;
     struct canonical_mount_cache_value_v1 *cached;
     struct mount *selected;
 
-    __builtin_memset(key, 0, sizeof(*key));
-    key->mount_namespace_address = (__u64)mount_namespace;
-    key->namespace_root_mount_id_unique = namespace_root_mount_id_unique;
-    key->namespace_event = namespace_event;
-    key->walk_root_mount_address = walk->walk_root_mount_address;
-    key->walk_root_dentry_address = walk->walk_root_dentry_address;
-    key->root_dentry_address = (__u64)root;
-    cached = bpf_map_lookup_elem(&canonical_mount_cache, key);
+    __builtin_memset(&scratch->mount_cache_key, 0,
+                     sizeof(scratch->mount_cache_key));
+    scratch->mount_cache_key.mount_namespace_address =
+        walk->mount_namespace_address;
+    scratch->mount_cache_key.namespace_root_mount_id_unique =
+        walk->namespace_root_mount_id_unique;
+    scratch->mount_cache_key.namespace_event = walk->namespace_event;
+    scratch->mount_cache_key.walk_root_mount_address =
+        walk->walk_root_mount_address;
+    scratch->mount_cache_key.walk_root_dentry_address =
+        walk->walk_root_dentry_address;
+    scratch->mount_cache_key.root_dentry_address = (__u64)root;
+    cached = bpf_map_lookup_elem(&canonical_mount_cache,
+                                 &scratch->mount_cache_key);
     if (!cached)
         return CANONICAL_MOUNT_CACHE_MISS_V1;
     walk->selected_mount_address = 0;
     walk->selected_mount_id_unique = 0;
-    walk->selected_mount_namespace_address = 0;
-    walk->selected_mount_root_address = 0;
-    walk->live_selected_mount_id_unique = 0;
     bpf_spin_lock(&cached->lock);
     walk->selected_mount_address = cached->selected_mount_address;
     walk->selected_mount_id_unique = cached->selected_mount_id_unique;
     bpf_spin_unlock(&cached->lock);
     selected = (struct mount *)walk->selected_mount_address;
-    if (!walk->selected_mount_address || !walk->selected_mount_id_unique ||
-        BPF_CORE_READ_INTO(
-            &walk->selected_mount_namespace_address, selected, mnt_ns) ||
-        walk->selected_mount_namespace_address != (__u64)mount_namespace ||
-        BPF_CORE_READ_INTO(
-            &walk->selected_mount_root_address, selected, mnt.mnt_root) ||
-        walk->selected_mount_root_address != (__u64)root ||
-        read_unique_mount_id(selected,
-                             &walk->live_selected_mount_id_unique) ||
-        walk->live_selected_mount_id_unique !=
-            walk->selected_mount_id_unique)
+    if (!walk->selected_mount_address || !walk->selected_mount_id_unique)
+        return -EACCES;
+    walk->read_address = 0;
+    if (BPF_CORE_READ_INTO(&walk->read_address, selected, mnt_ns) ||
+        walk->read_address != walk->mount_namespace_address)
+        return -EACCES;
+    walk->read_address = 0;
+    if (BPF_CORE_READ_INTO(&walk->read_address, selected, mnt.mnt_root) ||
+        walk->read_address != (__u64)root)
+        return -EACCES;
+    walk->read_address = 0;
+    if (read_unique_mount_id(selected, &walk->read_address) ||
+        walk->read_address != walk->selected_mount_id_unique)
         return -EACCES;
     return 0;
 }
@@ -563,7 +562,7 @@ static __always_inline int record_canonical_dentry_component(
                  : [raw] "r"((__u64)walk->component_count),
                    "i"(MAX_CANONICAL_PATH_COMPONENTS_V1));
     walk->next_dentry_address = 0;
-    walk->component_name_address = 0;
+    walk->read_address = 0;
     walk->component_length = 0;
     if (BPF_CORE_READ_INTO(&walk->next_dentry_address, current, d_parent) ||
         !walk->next_dentry_address ||
@@ -571,13 +570,12 @@ static __always_inline int record_canonical_dentry_component(
         BPF_CORE_READ_INTO(&walk->component_length, current, d_name.len) ||
         !walk->component_length ||
         walk->component_length > MAX_CANONICAL_COMPONENT_BYTES_V1 ||
-        BPF_CORE_READ_INTO(&walk->component_name_address, current,
-                           d_name.name) ||
-        !walk->component_name_address)
+        BPF_CORE_READ_INTO(&walk->read_address, current, d_name.name) ||
+        !walk->read_address)
         return -EACCES;
     component = &scratch->path_component_views[index];
     __builtin_memset(component, 0, sizeof(*component));
-    component->name_address = walk->component_name_address;
+    component->name_address = walk->read_address;
     component->length = walk->component_length;
     walk->component_count++;
     walk->current_dentry_address = walk->next_dentry_address;
@@ -588,13 +586,148 @@ struct canonical_mount_path_walk_context_v1 {
     struct identity_scratch_v1 *scratch;
 };
 
+static __always_inline int load_known_mount_root(
+    struct identity_scratch_v1 *scratch)
+{
+    __u64 topology_generation =
+        scratch->canonical_mount_root_key.topology_generation;
+    canonical_mount_root_v1 *route;
+
+    scratch->canonical_mount_root_key.topology_generation = 0;
+    route = bpf_map_lookup_elem(
+        &canonical_mount_roots, &scratch->canonical_mount_root_key);
+    scratch->canonical_mount_root_key.topology_generation =
+        topology_generation;
+    if (route && route->selected_mount_id_unique &&
+        route->graph_prefix_state_count <= MAX_CANONICAL_ROUTE_STATES_V1) {
+        scratch->canonical_mount_root = *route;
+        return 1;
+    }
+    if (!topology_generation)
+        return 0;
+    route = bpf_map_lookup_elem(
+        &canonical_mount_roots, &scratch->canonical_mount_root_key);
+    if (!route || !route->selected_mount_id_unique ||
+        !route->graph_prefix_state_count ||
+        route->graph_prefix_state_count > MAX_CANONICAL_ROUTE_STATES_V1)
+        return 0;
+    scratch->canonical_mount_root = *route;
+    return 1;
+}
+
+static long known_mount_path_walk_step(__u32 offset, void *data)
+{
+    struct canonical_mount_path_walk_context_v1 *context = data;
+    struct identity_scratch_v1 *scratch = context->scratch;
+    struct canonical_mount_path_walk_state_v1 *walk =
+        &scratch->mount_path_walk;
+    struct dentry *current;
+    struct inode *inode;
+    struct super_block *superblock;
+
+    (void)offset;
+    if (walk->failed || walk->reached_walk_root)
+        return 1;
+    current = (struct dentry *)walk->current_dentry_address;
+    if (!current)
+        goto failed;
+    walk->read_address = 0;
+    if (BPF_CORE_READ_INTO(&walk->read_address, current, d_inode))
+        goto failed;
+    if (!walk->read_address) {
+        if (record_canonical_dentry_component(scratch, current))
+            goto failed;
+        return 0;
+    }
+    inode = (struct inode *)walk->read_address;
+    if (BPF_CORE_READ_INTO(
+            &scratch->canonical_mount_root_key.root_inode, inode, i_ino) ||
+        !scratch->canonical_mount_root_key.root_inode ||
+        BPF_CORE_READ_INTO(&walk->read_address, inode, i_sb) ||
+        !walk->read_address)
+        goto failed;
+    superblock = (struct super_block *)walk->read_address;
+    if (BPF_CORE_READ_INTO(
+            &scratch->canonical_mount_root_key.filesystem_device,
+            superblock, s_dev))
+        goto failed;
+    scratch->canonical_mount_root_key.filesystem_device =
+        encoded_filesystem_device(
+            scratch->canonical_mount_root_key.filesystem_device);
+    if (load_known_mount_root(scratch)) {
+        walk->reached_walk_root = 1;
+        return 1;
+    }
+    if (record_canonical_dentry_component(scratch, current))
+        goto failed;
+    return 0;
+
+failed:
+    walk->failed = 1;
+    return 1;
+}
+
+/* Initial mount routes are binding-scoped inode facts. They remain valid
+ * while a topology change prevents the oldest-mount fallback. */
+static __always_inline int collect_known_mount_components(
+    const struct path *path, const execution_set_binding_state_v1 *binding,
+    __u64 profile_generation_ref_id, struct identity_scratch_v1 *scratch,
+    __u32 *count)
+{
+    struct dentry *current = NULL;
+    struct vfsmount *vfsmount = NULL;
+    struct mount *current_mount;
+    struct mnt_namespace *mount_namespace = NULL;
+    struct canonical_mount_path_walk_state_v1 *walk;
+    struct canonical_mount_path_walk_context_v1 context = {
+        .scratch = scratch,
+    };
+    __u64 namespace_event = 0;
+    __u64 checked_namespace_event = 0;
+    long steps;
+
+    if (!path || BPF_CORE_READ_INTO(&current, path, dentry) || !current ||
+        BPF_CORE_READ_INTO(&vfsmount, path, mnt) || !vfsmount)
+        return -EACCES;
+    current_mount = mount_from_vfsmount(vfsmount);
+    if (!current_mount ||
+        BPF_CORE_READ_INTO(&mount_namespace, current_mount, mnt_ns) ||
+        !mount_namespace ||
+        BPF_CORE_READ_INTO(&namespace_event, mount_namespace, event))
+        return -EACCES;
+    walk = &scratch->mount_path_walk;
+    __builtin_memset(walk, 0, sizeof(*walk));
+    __builtin_memset(&scratch->canonical_mount_root_key, 0,
+                     sizeof(scratch->canonical_mount_root_key));
+    __builtin_memset(&scratch->canonical_mount_root, 0,
+                     sizeof(scratch->canonical_mount_root));
+    scratch->canonical_mount_root_key.profile_generation_ref_id =
+        profile_generation_ref_id;
+    scratch->canonical_mount_root_key.binding_id = binding->binding_id;
+    scratch->canonical_mount_root_key.mount_namespace_inode =
+        current_mount_namespace_inode();
+    if (!scratch->canonical_mount_root_key.mount_namespace_inode)
+        return -EACCES;
+    walk->mount_namespace_address = (__u64)mount_namespace;
+    walk->current_dentry_address = (__u64)current;
+    walk->namespace_event = namespace_event;
+    steps = bpf_loop(MAX_CANONICAL_PATH_COMPONENTS_V1,
+                     known_mount_path_walk_step, &context, 0);
+    if (steps < 0 || walk->failed || !walk->reached_walk_root ||
+        !scratch->canonical_mount_root.selected_mount_id_unique ||
+        BPF_CORE_READ_INTO(&checked_namespace_event, mount_namespace, event) ||
+        checked_namespace_event != namespace_event)
+        return -EACCES;
+    *count = walk->component_count;
+    return 0;
+}
+
 static long canonical_mount_path_walk_step(__u32 offset, void *data)
 {
     struct canonical_mount_path_walk_context_v1 *context = data;
     struct identity_scratch_v1 *scratch = context->scratch;
     struct canonical_mount_path_walk_state_v1 *walk =
         &scratch->mount_path_walk;
-    struct mnt_namespace *mount_namespace;
     struct mount *walk_root_mount;
     struct mount *selected_mount;
     struct mount *current_mount;
@@ -602,21 +735,50 @@ static long canonical_mount_path_walk_step(__u32 offset, void *data)
     struct dentry *walk_root_dentry;
     struct dentry *current;
     struct dentry *source_parent = NULL;
+    struct inode *inode;
+    struct super_block *superblock;
     int selected_result;
 
     (void)offset;
     if (walk->failed || walk->reached_walk_root)
         return 1;
-    mount_namespace =
-        (struct mnt_namespace *)walk->mount_namespace_address;
+    if (!walk->walk_root_mount_address ||
+        !walk->walk_root_dentry_address ||
+        !walk->current_mount_address || !walk->current_dentry_address)
+        goto failed;
+    current = (struct dentry *)walk->current_dentry_address;
+    walk->read_address = 0;
+    if (BPF_CORE_READ_INTO(&walk->read_address, current, d_inode) ||
+        !walk->read_address)
+        goto failed;
+    inode = (struct inode *)walk->read_address;
+    if (BPF_CORE_READ_INTO(
+            &scratch->canonical_mount_root_key.root_inode, inode, i_ino) ||
+        !scratch->canonical_mount_root_key.root_inode)
+        goto failed;
+    if (BPF_CORE_READ_INTO(&walk->read_address, inode, i_sb) ||
+        !walk->read_address)
+        goto failed;
+    superblock = (struct super_block *)walk->read_address;
+    if (BPF_CORE_READ_INTO(
+            &scratch->canonical_mount_root_key.filesystem_device,
+            superblock, s_dev))
+        goto failed;
+    scratch->canonical_mount_root_key.filesystem_device =
+        encoded_filesystem_device(
+            scratch->canonical_mount_root_key.filesystem_device);
+    if (load_known_mount_root(scratch)) {
+        walk->first_selected_mount_id_unique =
+            scratch->canonical_mount_root.selected_mount_id_unique;
+        walk->reached_walk_root = 1;
+        return 1;
+    }
     walk_root_mount =
         (struct mount *)walk->walk_root_mount_address;
     walk_root_dentry =
         (struct dentry *)walk->walk_root_dentry_address;
     current_mount = (struct mount *)walk->current_mount_address;
     current = (struct dentry *)walk->current_dentry_address;
-    if (!walk_root_mount || !walk_root_dentry || !current_mount || !current)
-        goto failed;
     if (current_mount == walk_root_mount && current == walk_root_dentry) {
         if (!walk->first_selected_mount_id_unique &&
             read_unique_mount_id(
@@ -629,9 +791,9 @@ static long canonical_mount_path_walk_step(__u32 offset, void *data)
     if (BPF_CORE_READ_INTO(&mount_root, current_mount, mnt.mnt_root) ||
         !mount_root)
         goto failed;
-    selected_result = selected_mount_for_root(
-        scratch, mount_namespace, walk->namespace_event,
-        walk->namespace_root_mount_id_unique, current);
+    if (current == mount_root)
+        walk->source_ancestry_started = 1;
+    selected_result = selected_mount_for_root(scratch, current);
     if (selected_result == CANONICAL_MOUNT_CACHE_MISS_V1) {
         if (BPF_CORE_READ_INTO(&source_parent, current, d_parent) ||
             !source_parent)
@@ -664,6 +826,12 @@ static long canonical_mount_path_walk_step(__u32 offset, void *data)
         walk->reached_walk_root = 1;
         return 1;
     }
+    if (walk->source_ancestry_started &&
+        walk->selected_mount_address != walk->current_mount_address) {
+        /* A child bind can enter below an existing source mount. Switch to
+         * that source mount before the dentry walk enters the host path. */
+        goto selected_mount_target;
+    }
     if (BPF_CORE_READ_INTO(&source_parent, current, d_parent) ||
         !source_parent)
         goto failed;
@@ -672,12 +840,14 @@ static long canonical_mount_path_walk_step(__u32 offset, void *data)
             goto failed;
         return 0;
     }
+
+selected_mount_target:
+    selected_mount = (struct mount *)walk->selected_mount_address;
     if (!walk->first_selected_mount_id_unique)
         walk->first_selected_mount_id_unique =
             walk->selected_mount_id_unique;
     walk->next_mount_address = 0;
     walk->next_dentry_address = 0;
-    selected_mount = (struct mount *)walk->selected_mount_address;
     if (BPF_CORE_READ_INTO(
             &walk->next_mount_address, selected_mount, mnt_parent) ||
         !walk->next_mount_address ||
@@ -696,7 +866,9 @@ failed:
 }
 
 static __always_inline int collect_mount_components(
-    const struct path *path, struct identity_scratch_v1 *scratch, __u32 *count)
+    const struct path *path, const execution_set_binding_state_v1 *binding,
+    __u64 profile_generation_ref_id, struct identity_scratch_v1 *scratch,
+    __u32 *count)
 {
     struct dentry *current = NULL;
     struct vfsmount *vfsmount = NULL;
@@ -717,6 +889,7 @@ static __always_inline int collect_mount_components(
         BPF_CORE_READ_INTO(&current, path, dentry) || !current ||
         BPF_CORE_READ_INTO(&vfsmount, path, mnt) || !vfsmount)
         return -EACCES;
+    scratch->mount_topology_generation = 0;
     current_mount = mount_from_vfsmount(vfsmount);
     if (!current_mount ||
         BPF_CORE_READ_INTO(&owner, current_mount, mnt_ns) || !owner)
@@ -726,6 +899,18 @@ static __always_inline int collect_mount_components(
     __builtin_memset(&scratch->mount_walk_root, 0,
                      sizeof(scratch->mount_walk_root));
     walk->mount_namespace_address = (__u64)owner;
+    __builtin_memset(&scratch->canonical_mount_root_key, 0,
+                     sizeof(scratch->canonical_mount_root_key));
+    __builtin_memset(&scratch->canonical_mount_root, 0,
+                     sizeof(scratch->canonical_mount_root));
+    scratch->canonical_mount_root_key.profile_generation_ref_id =
+        profile_generation_ref_id;
+    scratch->canonical_mount_root_key.binding_id = binding->binding_id;
+    scratch->canonical_mount_root_key.topology_generation = global_epoch;
+    scratch->canonical_mount_root_key.mount_namespace_inode =
+        current_mount_namespace_inode();
+    if (!scratch->canonical_mount_root_key.mount_namespace_inode)
+        return -EACCES;
     /* Reuse one pointer slot so this nested effect-gate chain stays within
      * the verifier's combined stack limit. */
     owner = NULL;
@@ -1137,69 +1322,266 @@ unresolved:
     return 1;
 }
 
+#define CANONICAL_ROUTE_STATE_UNRESOLVED_V1 0xffffffffU
+#define MAX_CANONICAL_ROUTED_PATH_MATCH_STEPS_V1                         \
+    ((MAX_CANONICAL_PATH_COMPONENTS_V1 + 1) *                           \
+     MAX_CANONICAL_ROUTE_STATES_V1)
+
+static long canonical_routed_path_match_step(__u32 offset, void *data)
+{
+    struct canonical_path_match_context_v1 *context = data;
+    struct identity_scratch_v1 *scratch = context->scratch;
+    struct canonical_path_match_state_v1 *match = &scratch->path_match;
+    __u32 route_count =
+        scratch->canonical_mount_root.graph_prefix_state_count;
+    __u32 component_offset;
+    __u32 slot;
+    __u32 state_id;
+    __u64 bounded_slot;
+
+    if (!route_count || route_count > MAX_CANONICAL_ROUTE_STATES_V1)
+        goto unresolved;
+    component_offset = offset / route_count;
+    if (component_offset > match->component_count)
+        return 1;
+    slot = offset % route_count;
+    asm volatile("%[bounded] = %[raw] ;\n"
+                 "%[bounded] &= %2 ;\n"
+                 : [bounded] "=&r"(bounded_slot)
+                 : [raw] "r"((__u64)slot),
+                   "i"(MAX_CANONICAL_ROUTE_STATES_V1 - 1));
+    slot = bounded_slot;
+    state_id = scratch->canonical_mount_root.graph_prefix_state_ids[slot];
+
+    if (component_offset == match->component_count) {
+        if (state_id != CANONICAL_ROUTE_STATE_UNRESOLVED_V1) {
+            path_graph_terminal_v1 *terminal;
+            __u64 *path_tree_deny_operation_mask;
+
+            scratch->path_tree_deny_key.profile_generation_ref_id =
+                match->profile_generation_ref_id;
+            scratch->path_tree_deny_key.state_id = state_id;
+            scratch->path_tree_deny_key.active_role_id = match->reserved;
+            path_tree_deny_operation_mask = bpf_map_lookup_elem(
+                &path_tree_denials, &scratch->path_tree_deny_key);
+            if (path_tree_deny_operation_mask) {
+                scratch->path_tree_deny_operation_mask |=
+                    *path_tree_deny_operation_mask;
+                match->state_id = 1;
+            }
+            scratch->path_state_key.profile_generation_ref_id =
+                match->profile_generation_ref_id;
+            scratch->path_state_key.state_id = state_id;
+            scratch->path_state_key.reserved = 0;
+            terminal = bpf_map_lookup_elem(&path_graph_terminals,
+                                           &scratch->path_state_key);
+            if (terminal && terminal->composite_atom_id &&
+                terminal->rule_numeric_id) {
+                if (scratch->path_terminal.composite_atom_id &&
+                    (scratch->path_terminal.composite_atom_id !=
+                         terminal->composite_atom_id ||
+                     scratch->path_terminal.rule_numeric_id !=
+                         terminal->rule_numeric_id ||
+                     scratch->path_terminal.exact_object_required !=
+                         terminal->exact_object_required))
+                    goto unresolved;
+                scratch->path_terminal = *terminal;
+                match->state_id = 1;
+            }
+        }
+        return slot + 1 >= route_count;
+    }
+
+    if (!slot) {
+        struct canonical_path_view_v1 *view;
+        canonical_path_component_v1 *component;
+        __u32 raw_index =
+            match->component_count - component_offset - 1;
+        __u32 raw_length;
+        __u64 copy_length;
+        __u64 index;
+
+        asm volatile("%[bounded] = %[raw] ;\n"
+                     "%[bounded] &= %2 ;\n"
+                     : [bounded] "=&r"(index)
+                     : [raw] "r"((__u64)raw_index),
+                       "i"(MAX_CANONICAL_PATH_COMPONENTS_V1));
+        view = &scratch->path_component_views[index];
+        raw_length = view->length;
+        if (!raw_length ||
+            raw_length > MAX_CANONICAL_COMPONENT_BYTES_V1 ||
+            !view->name_address)
+            goto unresolved;
+        component = &scratch->path_transition_key.component;
+        if (bpf_probe_read_kernel(component->bytes,
+                                  sizeof(component->bytes),
+                                  scratch->zero_bytes))
+            goto unresolved;
+        asm volatile("%[bounded] = %[raw] ;\n"
+                     "%[bounded] &= 0xff ;\n"
+                     : [bounded] "=&r"(copy_length)
+                     : [raw] "r"((__u64)raw_length));
+        if (bpf_probe_read_kernel(component->bytes, copy_length,
+                                  (const void *)view->name_address))
+            goto unresolved;
+        scratch->path_transition_key.profile_generation_ref_id =
+            match->profile_generation_ref_id;
+        component->length = raw_length;
+        scratch->path_transition_key.reserved = 0;
+    }
+
+    if (state_id != CANONICAL_ROUTE_STATE_UNRESOLVED_V1) {
+        path_graph_transition_v1 *transition;
+
+        scratch->path_transition_key.current_state_id = state_id;
+        transition = bpf_map_lookup_elem(
+            &path_graph_exact_transitions,
+            &scratch->path_transition_key);
+        if (!transition) {
+            scratch->path_state_key.profile_generation_ref_id =
+                match->profile_generation_ref_id;
+            scratch->path_state_key.state_id = state_id;
+            scratch->path_state_key.reserved = 0;
+            transition = bpf_map_lookup_elem(
+                &path_graph_wildcard_transitions,
+                &scratch->path_state_key);
+        }
+        scratch->canonical_mount_root.graph_prefix_state_ids[slot] =
+            transition ? transition->next_state_id
+                       : CANONICAL_ROUTE_STATE_UNRESOLVED_V1;
+    }
+    return 0;
+
+unresolved:
+    match->unresolved = 1;
+    return 1;
+}
+
 /*
- * The userspace compiler determinizes exact+wildcard pattern subsets. That
- * keeps the kernel hot path to one bounded state instead of an NFA state set.
+ * Each route state already belongs to the immutable policy graph. Equivalent
+ * source paths stay separate so one denial cannot hide another denial.
  */
+static __always_inline int match_routed_path_components(
+    __u64 profile_generation_ref_id, struct identity_scratch_v1 *scratch,
+    __u32 component_count, __u32 active_role_id,
+    struct canonical_path_match_context_v1 *context)
+{
+    if (!scratch->canonical_mount_root.graph_prefix_state_count ||
+        scratch->canonical_mount_root.graph_prefix_state_count >
+            MAX_CANONICAL_ROUTE_STATES_V1)
+        return -EACCES;
+    __builtin_memset(&scratch->path_match, 0,
+                     sizeof(scratch->path_match));
+    scratch->path_match.profile_generation_ref_id =
+        profile_generation_ref_id;
+    scratch->path_match.component_count = component_count;
+    scratch->path_match.reserved = active_role_id;
+    if (bpf_loop(MAX_CANONICAL_ROUTED_PATH_MATCH_STEPS_V1,
+                 canonical_routed_path_match_step, context, 0) < 0 ||
+        scratch->path_match.unresolved ||
+        !scratch->path_match.state_id)
+        return -EACCES;
+    return 0;
+}
+
 static __always_inline int match_path_components(
     __u64 profile_generation_ref_id, struct identity_scratch_v1 *scratch,
-    __u32 component_count)
+    __u32 component_count, __u32 active_role_id)
 {
     path_graph_terminal_v1 *terminal;
-    struct canonical_path_match_state_v1 *match = &scratch->path_match;
+    __u64 *path_tree_deny_operation_mask;
     struct canonical_path_match_context_v1 context = {
         .scratch = scratch,
     };
     long steps;
 
-    __builtin_memset(match, 0, sizeof(*match));
-    match->profile_generation_ref_id = profile_generation_ref_id;
-    match->component_count = component_count;
-    match->state_id = 0;
-
+    __builtin_memset(&scratch->path_terminal, 0,
+                     sizeof(scratch->path_terminal));
+    scratch->path_tree_deny_operation_mask = 0;
+    if (scratch->canonical_mount_root.graph_prefix_state_count)
+        return match_routed_path_components(
+            profile_generation_ref_id, scratch, component_count,
+            active_role_id, &context);
+    __builtin_memset(&scratch->path_match, 0,
+                     sizeof(scratch->path_match));
+    scratch->path_match.profile_generation_ref_id =
+        profile_generation_ref_id;
+    scratch->path_match.component_count = component_count;
     steps = bpf_loop(MAX_CANONICAL_PATH_COMPONENTS_V1,
                      canonical_path_match_step, &context, 0);
-    if (steps < 0 || match->unresolved)
+    if (steps < 0 || scratch->path_match.unresolved)
         return -EACCES;
     __builtin_memset(&scratch->path_state_key, 0,
                      sizeof(scratch->path_state_key));
     scratch->path_state_key.profile_generation_ref_id =
         profile_generation_ref_id;
-    scratch->path_state_key.state_id = match->state_id;
+    scratch->path_state_key.state_id = scratch->path_match.state_id;
     terminal = bpf_map_lookup_elem(&path_graph_terminals,
                                    &scratch->path_state_key);
-    if (!terminal ||
-        ((!terminal->composite_atom_id || !terminal->rule_numeric_id) &&
-         !terminal->path_tree_deny_operation_mask))
+    __builtin_memset(&scratch->path_tree_deny_key, 0,
+                     sizeof(scratch->path_tree_deny_key));
+    scratch->path_tree_deny_key.profile_generation_ref_id =
+        profile_generation_ref_id;
+    scratch->path_tree_deny_key.state_id =
+        scratch->path_match.state_id;
+    scratch->path_tree_deny_key.active_role_id = active_role_id;
+    path_tree_deny_operation_mask = bpf_map_lookup_elem(
+        &path_tree_denials, &scratch->path_tree_deny_key);
+    if ((!terminal || !terminal->composite_atom_id ||
+         !terminal->rule_numeric_id) && !path_tree_deny_operation_mask)
         return -EACCES;
-    scratch->path_terminal = *terminal;
+    if (terminal)
+        scratch->path_terminal = *terminal;
+    if (path_tree_deny_operation_mask)
+        scratch->path_tree_deny_operation_mask =
+            *path_tree_deny_operation_mask;
     return 0;
 }
 
 static __always_inline int canonical_path_candidate(
     const struct path *path, const execution_set_binding_state_v1 *binding,
-    __u64 profile_generation_ref_id, struct identity_scratch_v1 *scratch)
+    __u64 profile_generation_ref_id, __u32 active_role_id,
+    struct identity_scratch_v1 *scratch)
 {
     __u32 component_count = 0;
 
-    (void)binding;
-    if (collect_mount_components(path, scratch, &component_count))
+    if (collect_mount_components(path, binding, profile_generation_ref_id,
+                                 scratch, &component_count))
         return -EACCES;
     return match_path_components(profile_generation_ref_id, scratch,
-                                 component_count);
+                                 component_count, active_role_id);
+}
+
+static __always_inline int known_mount_path_candidate(
+    const struct path *path, const execution_set_binding_state_v1 *binding,
+    __u64 profile_generation_ref_id, __u32 active_role_id,
+    struct identity_scratch_v1 *scratch)
+{
+    __u32 component_count = 0;
+
+    if (collect_known_mount_components(
+            path, binding, profile_generation_ref_id, scratch,
+            &component_count))
+        return -EACCES;
+    if (!scratch->canonical_mount_root.graph_prefix_state_count)
+        return -EACCES;
+    return match_path_components(profile_generation_ref_id, scratch,
+                                 component_count, active_role_id);
 }
 
 static __always_inline int container_visible_path_candidate(
     const struct path *path, __u64 profile_generation_ref_id,
-    struct identity_scratch_v1 *scratch)
+    __u32 active_role_id, struct identity_scratch_v1 *scratch)
 {
     __u32 component_count = 0;
 
     /* A positive result means that no task-root path represents the object. */
     if (collect_visible_path_components(path, scratch, &component_count))
         return 1;
+    __builtin_memset(&scratch->canonical_mount_root, 0,
+                     sizeof(scratch->canonical_mount_root));
     return match_path_components(profile_generation_ref_id, scratch,
-                                 component_count);
+                                 component_count, active_role_id);
 }
 
 SEC("tracepoint/raw_syscalls/sys_exit")

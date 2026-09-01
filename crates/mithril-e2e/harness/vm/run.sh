@@ -360,7 +360,7 @@ entry_role_output=$remote_root/runc-entry-roles
 
 if [[ $entry_role_runtime_only == true ]]; then
   jq -e '
-    .schema_version == 16 and
+    .schema_version == 20 and
     .prepared_state_before_exec == "prepared" and
     .prepared_state_after_exec == "active" and
     .prepared_runtime_effect_observed and
@@ -370,7 +370,12 @@ if [[ $entry_role_runtime_only == true ]]; then
     .held_runtime_admission_reconciled and
     .application_exec_transition_event_driven and
     .kubernetes_subpath_alias_path_tree_denied and
+    .newer_kubernetes_subpath_alias_path_tree_denied and
+    .container_bind_mount_succeeded and
     .container_bind_alias_path_tree_denied and
+    .single_wildcard_path_tree_denied and
+    .recursive_wildcard_path_tree_denied and
+    .other_role_path_tree_allowed and
     .path_tree_control_allowed and
     .application_admitted_entry_rule_id > 0 and
     (.independent_entries | length) == 6 and

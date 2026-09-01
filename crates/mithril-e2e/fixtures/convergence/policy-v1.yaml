@@ -49,11 +49,25 @@ spec:
           recursive: false
           operations: [OpenRead]
           action: Deny
+      pathTreeDenials:
+        - name: deny-home-secret-tree
+          path: /home/secret
+          operations: [OpenRead]
+        - name: deny-user-secret-trees
+          path: /home/*/secrets
+          operations: [OpenRead]
+        - name: deny-nested-secret-trees
+          path: /srv/**/secrets
+          operations: [OpenRead]
       execution:
         - name: allow-shell-execution
           path: /bin/sh
           recursive: false
           operations: [Execute]
+          action: Allow
+      capabilities:
+        - name: allow-sys-admin
+          capabilities: [SysAdmin]
           action: Allow
       network:
         socketControls: []

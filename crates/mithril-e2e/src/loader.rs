@@ -105,6 +105,14 @@ impl BpfQualificationLoader {
         fs::create_dir_all(output_directory).context(IoSnafu {
             path: output_directory,
         })?;
+        let pin_root = output_directory.join("decommission-pins");
+        ensure!(
+            !pin_root.exists(),
+            InvalidInputSnafu {
+                path: &pin_root,
+                reason: "the decommission probe pin root already exists",
+            }
+        );
         let target = output_directory.join("kernel-qualification-file-open-deny-target");
         fs::write(&target, b"kernel qualification BPF LSM probe\n")
             .context(IoSnafu { path: &target })?;
@@ -112,7 +120,7 @@ impl BpfQualificationLoader {
             .context(IoSnafu { path: &target })?
             .ino();
         let object_layout = self.inspect()?;
-        let attachment = self.attach()?;
+        let attachment = self.attach_with_pin_root(&pin_root)?;
         let allowed_before_target_install = File::open(&target).is_ok();
         ensure!(
             allowed_before_target_install,
@@ -152,7 +160,16 @@ impl BpfQualificationLoader {
                 program_id: link.program_id,
             })
             .collect();
-        let result = PhysicalFileOpenProbeV1 {
+        attachment.decommission().context(InterceptorSnafu)?;
+        ensure!(
+            !pin_root.exists() && File::open(&target).is_ok(),
+            InvalidInputSnafu {
+                path: &pin_root,
+                reason: "kernel decommission left pins or an active file-open decision",
+            }
+        );
+        lease_cleanup.cleanup()?;
+        Ok(PhysicalFileOpenProbeV1 {
             object_layout,
             links,
             target,
@@ -160,10 +177,7 @@ impl BpfQualificationLoader {
             allowed_before_target_install,
             denied_after_target_install,
             allowed_after_target_clear,
-        };
-        attachment.shutdown().context(InterceptorSnafu)?;
-        lease_cleanup.cleanup()?;
-        Ok(result)
+        })
     }
 
     pub(crate) fn lease_path(&self) -> PathBuf {
@@ -171,6 +185,10 @@ impl BpfQualificationLoader {
     }
 
     fn owner(&self) -> Result<KernelHostOwner> {
+        self.owner_with_pin_root(None)
+    }
+
+    fn owner_with_pin_root(&self, pin_root: Option<PathBuf>) -> Result<KernelHostOwner> {
         let bytes = fs::read(&self.object_path).context(IoSnafu {
             path: &self.object_path,
         })?;
@@ -180,10 +198,16 @@ impl BpfQualificationLoader {
             digest,
             RUNTIME_BTF,
             self.lease_path(),
-            None,
+            pin_root,
             KERNEL_QUALIFICATION_BOOT_ID,
             1,
         )))
+    }
+
+    fn attach_with_pin_root(&self, pin_root: &Path) -> Result<KernelHost> {
+        self.owner_with_pin_root(Some(pin_root.to_path_buf()))?
+            .start()
+            .context(InterceptorSnafu)
     }
 
     fn validate_layout(object_path: &Path, layout: &BpfObjectLayoutV1) -> Result<()> {

@@ -16,7 +16,8 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     && install -D -m 0755 target/release/mithril-node /out/mithril-node \
     && install -D -m 0755 target/release/mithril-oci-hook /out/mithril-oci-hook \
     && install -D -m 0755 target/release/mithril-inspect /out/mithril-inspect \
-    && install -D -m 0755 target/release/mithril-control /out/mithril-control
+    && install -D -m 0755 target/release/mithril-control /out/mithril-control \
+    && install -D -m 0755 target/release/kubectl-mithril /out/kubectl-mithril
 
 FROM debian:trixie-slim AS node
 RUN apt-get update \
@@ -33,6 +34,7 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=build /out/mithril-control /usr/local/bin/mithril-control
+COPY --from=build /out/kubectl-mithril /usr/local/bin/kubectl-mithril
 USER 65532:65532
 ENTRYPOINT ["/usr/local/bin/mithril-control"]
 CMD ["--config", "/etc/mithril/control.json"]

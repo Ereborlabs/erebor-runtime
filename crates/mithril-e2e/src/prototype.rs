@@ -248,13 +248,8 @@ impl TaskStorage {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MountGraph {
     roots: HashMap<u64, Vec<MountAttachment>>,
-    state: TopologyState,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum TopologyState {
-    Active,
-    Dirty,
+    mutation_epoch: u64,
+    pending_mutations: u64,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -268,7 +263,8 @@ impl MountGraph {
     pub fn new() -> Self {
         Self {
             roots: HashMap::new(),
-            state: TopologyState::Active,
+            mutation_epoch: 1,
+            pending_mutations: 0,
         }
     }
 
@@ -288,20 +284,30 @@ impl MountGraph {
     }
 
     pub fn begin_mutation(&mut self) {
-        self.state = TopologyState::Dirty;
+        self.mutation_epoch = self.mutation_epoch.saturating_add(1);
+        self.pending_mutations = self.pending_mutations.saturating_add(1);
     }
 
-    pub fn reconcile_complete_snapshot(&mut self) {
-        self.state = TopologyState::Active;
+    pub fn finish_mutation(&mut self) -> bool {
+        if self.pending_mutations == 0 {
+            return false;
+        }
+        self.pending_mutations -= 1;
+        true
     }
 
     #[must_use]
-    pub const fn state(&self) -> TopologyState {
-        self.state
+    pub const fn stable_epoch(&self) -> Option<u64> {
+        if self.pending_mutations == 0 {
+            Some(self.mutation_epoch)
+        } else {
+            None
+        }
     }
 
     #[must_use]
     pub fn canonical_path(&self, root_dentry_id: u64, relative_path: &str) -> Option<String> {
+        self.stable_epoch()?;
         let oldest = self
             .roots
             .get(&root_dentry_id)?
@@ -429,7 +435,7 @@ mod tests {
     use super::{
         AtomicGeneration, AuthoritativeMap, BoundedDnsName, CapacityResult, ComponentGraph,
         Decision, ExecCommitResult, ExecStateMap, MatchResult, MountGraph, RenameDecisionPoint,
-        RuntimeJoin, RuntimeJoinResult, SourceCoverage, TaskStorage, TopologyState,
+        RuntimeJoin, RuntimeJoinResult, SourceCoverage, TaskStorage,
     };
 
     #[test]
@@ -492,13 +498,20 @@ mod tests {
     }
 
     #[test]
-    fn meta_mutation_is_dirty_before_effect_until_complete_reconciliation() {
+    fn meta_mutation_guard_requires_one_stable_live_snapshot() {
         let mut graph = MountGraph::new();
-        assert_eq!(graph.state(), TopologyState::Active);
+        graph.add_attachment(77, 41, "/var/run/secrets/service");
+        let initial_epoch = graph.stable_epoch();
         graph.begin_mutation();
-        assert_eq!(graph.state(), TopologyState::Dirty);
-        graph.reconcile_complete_snapshot();
-        assert_eq!(graph.state(), TopologyState::Active);
+        graph.add_attachment(77, 92, "/work/input/job-42");
+        assert_eq!(graph.stable_epoch(), None);
+        assert_eq!(graph.canonical_path(77, "config.json"), None);
+        assert!(graph.finish_mutation());
+        assert!(graph.stable_epoch() > initial_epoch);
+        assert_eq!(
+            graph.canonical_path(77, "config.json").as_deref(),
+            Some("/var/run/secrets/service/config.json")
+        );
     }
 
     #[test]

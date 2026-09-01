@@ -50,7 +50,7 @@ const KUBERNETES_CLEANUP_WAIT_LIMIT: Duration = Duration::from_secs(120);
 const PROFILE_GENERATION_REF_ID: u64 = 7;
 const PRESTART_REQUEST_DIRECTORY: &str = "/run/mithril-identity-prestart";
 
-const REQUIRED_IDENTITY_MAPS: [&str; 72] = [
+const REQUIRED_IDENTITY_MAPS: [&str; 73] = [
     "active_profile_generations",
     "approved_exec_arguments",
     "approved_exec_slots",
@@ -110,6 +110,7 @@ const REQUIRED_IDENTITY_MAPS: [&str; 72] = [
     "path_graph_exact_transitions",
     "path_graph_terminals",
     "path_graph_wildcard_transitions",
+    "path_tree_denials",
     "policy_activation_probe_requests",
     "process_execution_instances",
     "process_control_rules",
@@ -9273,7 +9274,12 @@ second.join()
         let path = PathBuf::from(format!("/proc/{intermediate_pid}/status"));
         match fs::read_to_string(&path) {
             Ok(status) => Ok(status.lines().any(|line| line.starts_with("State:\tZ"))),
-            Err(source) if source.kind() == std::io::ErrorKind::NotFound => Ok(true),
+            Err(source)
+                if source.kind() == std::io::ErrorKind::NotFound
+                    || source.raw_os_error() == Some(libc::ESRCH) =>
+            {
+                Ok(true)
+            }
             Err(source) => Err(source).context(IoSnafu { path: &path }),
         }
     }

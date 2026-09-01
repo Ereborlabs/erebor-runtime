@@ -28,11 +28,22 @@ roles:
         recursive: true
         operations: [OpenRead]
         action: Deny
+    pathTreeDenials:
+      - name: deny-home-secret-trees
+        path: /home/*/secrets
+        operations: [OpenRead]
+      - name: deny-nested-secret-trees
+        path: /srv/**/secrets
+        operations: [OpenRead]
     execution:
       - name: allow-python-execute
         path: /usr/bin/python
         recursive: false
         operations: [Execute, MmapExecute, Mprotect]
+        action: Allow
+    capabilities:
+      - name: allow-sys-admin
+        capabilities: [SysAdmin]
         action: Allow
     network:
       socketControls:

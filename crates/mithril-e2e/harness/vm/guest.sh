@@ -581,14 +581,10 @@ case ${1:-} in
         -e 's/desired_profile_mode: OBSERVE/desired_profile_mode: PROTECT/' \
         -e '/^path_tree_deny_floors: \[\]$/c\
 path_tree_deny_floors:\
-  - schema_version: 1\
-    rule_id: deny-k3s-child-bind\
-    canonical_path: /home/secret\
-    recursive: true\
-    effect_families: [FILE]\
-    operation_ids: [OPEN_READ]\
-    requested_disposition: DENY\
-    exception_ids: []' \
+  - rule_id: deny-container-child-bind\
+    role_id: converter\
+    path: /home/secret\
+    operation_ids: [OPEN_READ]' \
         "$policy_source" >"$effect_policy_source"
     fi
     "$policy" compile --source "$effect_policy_source" --seal-request "$seal_request" \

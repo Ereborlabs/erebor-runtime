@@ -636,25 +636,31 @@ signal_pod_request() {
 
 remove_retained_kubernetes_resources() {
   local node
-  local remote
+  local node_name
+  local protected_node
 
   echo "Removing the prior Mithril release from the retained K3s cluster"
   if remote_kubectl get namespace "$workload_namespace" >/dev/null 2>&1; then
-    for node in "$vm_a" "$vm_b"; do
-      remote=$remote_a
-      [[ $node == "$vm_a" ]] || remote=$remote_b
-      if "$provider" run "$node" sudo test -d \
-          /var/lib/mithril-convergence/markers; then
-        signal_pod_request "$node" \
-          /var/lib/mithril-convergence/markers/protected.application-request \
-          APPLICATION || true
-        signal_pod_request "$node" \
-          /var/lib/mithril-convergence/markers/protected.exception-request \
-          EXCEPTION || true
-        signal_pod_request "$node" \
-          /var/lib/mithril-convergence/markers/protected.restart RESTART || true
-      fi
-    done
+    protected_node=$(remote_kubectl -n "$workload_namespace" get pod protected \
+      -o json 2>/dev/null | jq -r \
+      'select(.status.phase == "Running") | .spec.nodeName' || true)
+    if [[ -n $protected_node ]]; then
+      for node in "$vm_a" "$vm_b"; do
+        node_name=$("$provider" run "$node" hostname)
+        [[ $node_name == "$protected_node" ]] || continue
+        if "$provider" run "$node" sudo test -d \
+            /var/lib/mithril-convergence/markers; then
+          signal_pod_request "$node" \
+            /var/lib/mithril-convergence/markers/protected.application-request \
+            APPLICATION || true
+          signal_pod_request "$node" \
+            /var/lib/mithril-convergence/markers/protected.exception-request \
+            EXCEPTION || true
+          signal_pod_request "$node" \
+            /var/lib/mithril-convergence/markers/protected.restart RESTART || true
+        fi
+      done
+    fi
     remote_kubectl delete namespace "$workload_namespace" \
       --wait=true --timeout=180s >/dev/null
   fi
@@ -995,6 +1001,12 @@ else
 fi
 retained_mithril_state_ready=true
 
+for node in "$vm_a" "$vm_b"; do
+  "$provider" run "$node" \
+    "sudo install -d -m 0755 /var/lib/mithril-convergence/path-tree/models && \
+     printf '%s\n' secret | sudo tee /var/lib/mithril-convergence/path-tree/models/secret >/dev/null"
+done
+
 "$provider" run "$vm_a" sudo cp /etc/rancher/k3s/k3s.yaml "$remote_a/kubeconfig.yaml"
 "$provider" run "$vm_a" sudo chown ubuntu:ubuntu "$remote_a/kubeconfig.yaml"
 "$provider" get "$vm_a" "$remote_a/kubeconfig.yaml" "$kubeconfig"
@@ -1022,8 +1034,11 @@ if [[ $reuse_mithril_state == true ]]; then
     control_image=mithril-control:convergence
     qualify_state_preserving_upgrade=false
   elif [[ $retained_hook_digest_a != "$baseline_hook_digest" ]]; then
-    echo "the retained runtime hook is not a known qualification version" >&2
-    exit 1
+    # The retained gate admits a changed installer by its exact host authority,
+    # not by a digest list from the new build.
+    node_image=mithril-node:convergence
+    control_image=mithril-control:convergence
+    qualify_state_preserving_upgrade=false
   fi
 fi
 values=$work_a/values.yaml
@@ -1591,7 +1606,7 @@ node_effects() {
   remote_kubectl -n "$system_namespace" exec -c mithril-node "$pod" -- \
     mithril-inspect effects --socket-path /run/mithril/observation.sock \
       --cgroup-scope / --reason APPLICATION_DEFAULT_ALLOW \
-      --reason UNSUPPORTED_OBJECT
+      --reason UNSUPPORTED_OBJECT --reason PATH_TREE_POLICY_DENY
 }
 
 effect_health_value() {
@@ -1678,6 +1693,7 @@ start_entry_effect_capture() {
       --reason APPLICATION_DEFAULT_ALLOW \
       --reason PREPARED_RUNTIME_INFRASTRUCTURE \
       --reason RUNTIME_ENTRY_INFRASTRUCTURE \
+      --reason PATH_TREE_POLICY_DENY \
       >"$output" 2>/dev/null &
   entry_effect_capture_pids+=("$!")
 }
@@ -1695,6 +1711,13 @@ prepare_pod_markers() {
       "$marker_root/$pod_name.application-result" \
       "$marker_root/$pod_name.exception-request" \
       "$marker_root/$pod_name.exception-result" \
+      "$marker_root/$pod_name.path-tree-mount-result" \
+      "$marker_root/$pod_name.path-tree-subpath-result" \
+      "$marker_root/$pod_name.path-tree-subpath-newer-result" \
+      "$marker_root/$pod_name.path-tree-bind-result" \
+      "$marker_root/$pod_name.path-tree-wildcard-result" \
+      "$marker_root/$pod_name.path-tree-recursive-wildcard-result" \
+      "$marker_root/$pod_name.path-tree-control-result" \
       "$marker_root/$pod_name.poststart-observed" \
       "$marker_root/$pod_name.prestop-observed"
     "$provider" run "$node" sudo touch \
@@ -1835,6 +1858,10 @@ wait_policy_delivery_empty "$entry_roles_node"
 
 # Both possible scheduler targets receive the same inert files, not policy authority.
 prepare_pod_markers protected
+protected_effect_capture_a=$output_directory/protected-effect-capture-node-a.txt
+protected_effect_capture_b=$output_directory/protected-effect-capture-node-b.txt
+start_entry_effect_capture "$node_a_name" "$protected_effect_capture_a"
+start_entry_effect_capture "$node_b_name" "$protected_effect_capture_b"
 remote_kubectl create -f "$remote_a/protected.yaml" >/dev/null
 remote_kubectl -n "$workload_namespace" wait --for=condition=Ready pod/protected \
   --timeout=300s >/dev/null
@@ -2154,6 +2181,69 @@ for _attempt in {1..120}; do
 done
 "$provider" run "$other_vm" sudo test ! -e \
   /var/lib/mithril-convergence/markers/protected.prepared-result
+
+for path_tree_result in \
+    path-tree-mount-result:MOUNT_READY \
+    path-tree-subpath-result:PATH_TREE_DENIED \
+    path-tree-subpath-newer-result:PATH_TREE_DENIED \
+    path-tree-bind-result:PATH_TREE_DENIED \
+    path-tree-wildcard-result:PATH_TREE_DENIED \
+    path-tree-recursive-wildcard-result:PATH_TREE_DENIED \
+    path-tree-control-result:CONTROL_ALLOWED; do
+  marker_name=${path_tree_result%%:*}
+  expected_result=${path_tree_result#*:}
+  for _attempt in {1..120}; do
+    observed_result=$("$provider" run "$selected_vm" sudo cat \
+      "/var/lib/mithril-convergence/markers/protected.$marker_name" \
+      2>/dev/null || true)
+    [[ $observed_result == "$expected_result" ]] && break
+    [[ $_attempt -lt 120 ]] || {
+      echo "the protected Pod path-tree result $marker_name was $observed_result, expected $expected_result" >&2
+      exit 1
+    }
+    sleep 1
+  done
+  "$provider" run "$other_vm" sudo test ! -e \
+    "/var/lib/mithril-convergence/markers/protected.$marker_name"
+done
+
+stop_entry_effect_capture
+protected_effect_capture=$protected_effect_capture_a
+[[ $selected_node == "$node_b_name" ]] && \
+  protected_effect_capture=$protected_effect_capture_b
+path_tree_effect_count=$(awk -v role="$application_role_id" '
+      /^observed_boottime_ns=/ {
+        reason = ""
+        family = 0
+        operation = 0
+        kernel_result = 0
+        active_role_id = 0
+        for (field_index = 1; field_index <= NF; field_index++) {
+          split($field_index, field, "=")
+          if (field[1] == "reason") {
+            reason = field[2]
+          } else if (field[1] == "family") {
+            family = field[2]
+          } else if (field[1] == "operation") {
+            operation = field[2]
+          } else if (field[1] == "kernel_result") {
+            kernel_result = field[2]
+          } else if (field[1] == "active_role_id") {
+            active_role_id = field[2]
+          }
+        }
+        if (reason == "PATH_TREE_POLICY_DENY" &&
+            family == 2 && operation == 2 && kernel_result == -13 &&
+            active_role_id == role) {
+          count++
+        }
+      }
+      END { print count + 0 }
+    ' "$protected_effect_capture")
+[[ $path_tree_effect_count -ge 5 ]] || {
+  echo "the protected Pod produced $path_tree_effect_count of five required path-tree denial events" >&2
+  exit 1
+}
 
 for _attempt in {1..120}; do
   base_result=$("$provider" run "$selected_vm" sudo cat \

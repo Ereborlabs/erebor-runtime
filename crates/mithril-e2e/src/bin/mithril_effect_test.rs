@@ -1,8 +1,12 @@
-use std::path::PathBuf;
+use std::fs;
+use std::io::{self, Read as _};
+use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
+use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use clap::{Parser, Subcommand};
 use mithril_e2e::{
-    run_effect_child, run_mount_move_child, run_mount_setattr_child, EffectTestRunner, Result,
+    run_effect_child, run_mount_move_child, run_mount_setattr_child, EffectTestRunner,
 };
 
 #[derive(Parser)]
@@ -50,8 +54,6 @@ enum Command {
         #[arg(long, default_value = "/usr/bin/sleep")]
         workload_path: PathBuf,
         #[arg(long)]
-        prestart_hook: PathBuf,
-        #[arg(long)]
         retained_bpf_object: PathBuf,
     },
     RuncRetainedRuntimeGateProbe {
@@ -84,6 +86,136 @@ enum Command {
     },
     #[command(hide = true)]
     MountMove { source: PathBuf, target: PathBuf },
+    #[command(hide = true)]
+    OciStageFixture {
+        #[arg(long)]
+        stage: String,
+        #[arg(long)]
+        request_directory: PathBuf,
+    },
+}
+
+struct OciStageFixtureOwner;
+
+impl OciStageFixtureOwner {
+    const MAXIMUM_STATE_BYTES: u64 = 1_048_576;
+
+    fn invalid(reason: impl Into<String>) -> io::Error {
+        io::Error::new(io::ErrorKind::InvalidData, reason.into())
+    }
+
+    fn runtime_cgroup(pid: u32) -> io::Result<String> {
+        let source = fs::read_to_string(format!("/proc/{pid}/cgroup"))?;
+        let cgroup = source
+            .lines()
+            .find_map(|line| line.strip_prefix("0::"))
+            .filter(|path| path.starts_with('/') && path.len() > 1)
+            .ok_or_else(|| Self::invalid("the OCI task has no unified cgroup"))?;
+        let tasks = fs::read_to_string(format!("/sys/fs/cgroup{cgroup}/cgroup.procs"))?;
+        let live = tasks
+            .lines()
+            .map(str::parse::<u32>)
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(|error| Self::invalid(format!("the OCI cgroup is invalid: {error}")))?;
+        if live.as_slice() != [pid] {
+            return Err(Self::invalid(
+                "the createRuntime cgroup does not contain only the OCI task",
+            ));
+        }
+        Ok(cgroup.to_owned())
+    }
+
+    fn run(stage: &str, request_directory: &Path) -> io::Result<()> {
+        if !matches!(stage, "createRuntime" | "createContainer") {
+            return Err(Self::invalid("the OCI fixture stage is invalid"));
+        }
+        let metadata = fs::symlink_metadata(request_directory)?;
+        if !metadata.is_dir()
+            || metadata.file_type().is_symlink()
+            || metadata.uid() != 0
+            || metadata.mode() & 0o777 != 0o700
+        {
+            return Err(Self::invalid(
+                "the OCI request directory is not a root-owned mode-0700 directory",
+            ));
+        }
+        let mut bytes = Vec::new();
+        io::stdin()
+            .take(Self::MAXIMUM_STATE_BYTES + 1)
+            .read_to_end(&mut bytes)?;
+        if bytes.is_empty() || bytes.len() > Self::MAXIMUM_STATE_BYTES as usize {
+            return Err(Self::invalid("the OCI state exceeds its byte limit"));
+        }
+        let state: serde_json::Value = serde_json::from_slice(&bytes)
+            .map_err(|error| Self::invalid(format!("the OCI state is invalid: {error}")))?;
+        let pid = state
+            .get("pid")
+            .and_then(serde_json::Value::as_u64)
+            .and_then(|pid| u32::try_from(pid).ok())
+            .filter(|pid| *pid > 0)
+            .ok_or_else(|| Self::invalid("the OCI state has no task PID"))?;
+        let container_id = state
+            .get("id")
+            .and_then(serde_json::Value::as_str)
+            .filter(|id| id.len() == 64 && id.bytes().all(|byte| byte.is_ascii_hexdigit()))
+            .ok_or_else(|| Self::invalid("the OCI state has no exact container ID"))?;
+        let annotations = state
+            .get("annotations")
+            .and_then(serde_json::Value::as_object)
+            .ok_or_else(|| Self::invalid("the OCI state has no annotations"))?;
+        if annotations
+            .get("io.kubernetes.cri.container-type")
+            .and_then(serde_json::Value::as_str)
+            != Some("container")
+        {
+            return Ok(());
+        }
+        let cgroup = (stage == "createRuntime")
+            .then(|| Self::runtime_cgroup(pid))
+            .transpose()?;
+        let request = request_directory.join(format!("{container_id}.{stage}.json"));
+        let release = request_directory.join(format!("{container_id}.{stage}.release"));
+        if request.exists() || release.exists() {
+            return Err(Self::invalid("the OCI stage request already exists"));
+        }
+        let temporary = request_directory.join(format!(
+            ".{container_id}.{stage}.{}.tmp",
+            std::process::id()
+        ));
+        fs::write(
+            &temporary,
+            serde_json::to_vec(&serde_json::json!({
+                "stage": stage,
+                "pid": pid,
+                "cgroup": cgroup,
+                "state": state,
+                "annotations": annotations,
+            }))
+            .map_err(|error| Self::invalid(format!("the OCI request is invalid: {error}")))?,
+        )?;
+        fs::set_permissions(&temporary, fs::Permissions::from_mode(0o600))?;
+        fs::rename(&temporary, &request)?;
+
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while Instant::now() < deadline {
+            if release.is_file() {
+                let response = fs::read_to_string(&release)?;
+                fs::remove_file(&request)?;
+                fs::remove_file(&release)?;
+                let expected = if stage == "createRuntime" {
+                    format!("accepted:{pid}")
+                } else {
+                    "accepted".to_owned()
+                };
+                if response != expected {
+                    return Err(Self::invalid("the OCI stage was rejected"));
+                }
+                return Ok(());
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        Err(Self::invalid("the OCI stage timed out"))
+    }
 }
 
 fn main() {
@@ -93,7 +225,7 @@ fn main() {
     }
 }
 
-fn run() -> Result<()> {
+fn run() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
     match cli.command {
         Command::CompileRetainedIdentity { output_directory } => {
@@ -138,7 +270,6 @@ fn run() -> Result<()> {
             lease_path,
             runc_path,
             workload_path,
-            prestart_hook,
             retained_bpf_object,
         } => {
             let runner = EffectTestRunner::new(cli.repo_root);
@@ -148,7 +279,6 @@ fn run() -> Result<()> {
                 &lease_path,
                 &runc_path,
                 &workload_path,
-                &prestart_hook,
                 &retained_bpf_object,
             )?;
             runner.write_json(
@@ -183,12 +313,16 @@ fn run() -> Result<()> {
         Command::Child {
             fixture_root,
             mailbox_path,
-        } => run_effect_child(&fixture_root, &mailbox_path),
+        } => Ok(run_effect_child(&fixture_root, &mailbox_path)?),
         Command::MountSetattr {
             namespace,
             path,
             read_only,
-        } => run_mount_setattr_child(&namespace, &path, read_only),
-        Command::MountMove { source, target } => run_mount_move_child(&source, &target),
+        } => Ok(run_mount_setattr_child(&namespace, &path, read_only)?),
+        Command::MountMove { source, target } => Ok(run_mount_move_child(&source, &target)?),
+        Command::OciStageFixture {
+            stage,
+            request_directory,
+        } => Ok(OciStageFixtureOwner::run(&stage, &request_directory)?),
     }
 }

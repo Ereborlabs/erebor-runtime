@@ -21,8 +21,8 @@ use erebor_interceptor_abi::{
     ProfileGenerationDescriptorV1, QualificationResultV1, MAX_CANONICAL_PATH_COMPONENTS_V1,
 };
 use mithril_control::{
-    EffectFamilyV1, PathSelectorV1, PathTreeDenyFloorV1, PolicyArtifactOwner, PolicyDispositionV1,
-    PolicyDocumentV1, ProfileSealRequestV1,
+    PathSelectorV1, PathTreeDenyFloorV1, PolicyArtifactOwner, PolicyDocumentV1,
+    ProfileSealRequestV1,
 };
 use mithril_node::{
     CoverageGapReasonV1, EffectObservationHealth, EffectObservationStore, EvidenceIdV1,
@@ -67,14 +67,14 @@ const BOUNDED_EXCEPTION_INSTANCE_ID: Id128V1 =
 const EXPIRED_EXCEPTION_INSTANCE_ID: Id128V1 =
     Id128V1::new(0x8888_8888_8888_4888, 0x8888_8888_8888_888a);
 
-fn reconcile_mount_views_until_clean(
+fn reconcile_policy_lifecycle_with_admission_views(
     policy: &NodePolicyGenerationOwner,
     host: &mut KernelHost,
     mount_namespaces: &BTreeSet<u32>,
 ) -> Result<()> {
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
-        policy.reconcile_mount_views(host).context(NodeSnafu)?;
+        policy.reconcile_policy_lifecycle(host).context(NodeSnafu)?;
         if mount_views_are_clean(host, mount_namespaces)? {
             return Ok(());
         }
@@ -82,8 +82,7 @@ fn reconcile_mount_views_until_clean(
             Instant::now() < deadline,
             InvalidInputSnafu {
                 path: Path::new("mount_security_views"),
-                reason:
-                    "mount reconciliation did not restore clean views before an exact-effect check",
+                reason: "admission mount-view readback was not stable before an exact-effect check",
             }
         );
         std::thread::sleep(Duration::from_millis(25));
@@ -603,11 +602,9 @@ fn build_generation_artifact(
             .build()
         })?;
         document.path_tree_deny_floors.push(PathTreeDenyFloorV1 {
-            schema_version: 1,
             rule_id: "manual-secret-tree-deny".to_owned(),
-            canonical_path: canonical_path.to_owned(),
-            recursive: true,
-            effect_families: vec![EffectFamilyV1::File],
+            role_id: "converter".to_owned(),
+            path: canonical_path.to_owned(),
             operation_ids: [
                 "CREATE",
                 "LINK",
@@ -624,8 +621,6 @@ fn build_generation_artifact(
             ]
             .map(str::to_owned)
             .to_vec(),
-            requested_disposition: PolicyDispositionV1::Deny,
-            exception_ids: Vec::new(),
         });
     }
     sign_generation_artifact(document, seal_source, signing_key, fixture_root, generation)
@@ -2109,7 +2104,7 @@ impl EffectTestRunner {
                 }
             );
 
-            reconcile_mount_views_until_clean(&policy, &mut host, &mount_namespaces)?;
+            reconcile_policy_lifecycle_with_admission_views(&policy, &mut host, &mount_namespaces)?;
             let inherited_marker = observations.cursor();
             ensure!(
                 fixture.read_prepared()?.denied(),
@@ -3271,7 +3266,7 @@ impl EffectTestRunner {
             }
         );
 
-        reconcile_mount_views_until_clean(&policy, &mut host, &mount_namespaces)?;
+        reconcile_policy_lifecycle_with_admission_views(&policy, &mut host, &mount_namespaces)?;
         let original_marker = observations.cursor();
         let original = fixture.open(&paths.secret)?;
         if original.allowed == protect {
@@ -3416,7 +3411,7 @@ impl EffectTestRunner {
                 None,
             )?;
 
-            reconcile_mount_views_until_clean(&policy, &mut host, &mount_namespaces)?;
+            reconcile_policy_lifecycle_with_admission_views(&policy, &mut host, &mount_namespaces)?;
             let passed_secret_marker = observations.cursor();
             ensure!(
                 fixture
@@ -3595,7 +3590,7 @@ impl EffectTestRunner {
             "UNSUPPORTED_OBJECT",
             (KernelEffectFamilyV1::Mount, KernelEffectOperationV1::Mount),
         )?;
-        reconcile_mount_views_until_clean(&policy, &mut host, &mount_namespaces)?;
+        reconcile_policy_lifecycle_with_admission_views(&policy, &mut host, &mount_namespaces)?;
         let reconciled_marker = observations.cursor();
         ensure!(
             fixture.open(&paths.secret)?.allowed != protect,
@@ -3731,7 +3726,7 @@ impl EffectTestRunner {
             stale_proposal_marker,
             "UNRESOLVED_OBJECT",
         )?;
-        reconcile_mount_views_until_clean(&policy, &mut host, &mount_namespaces)?;
+        reconcile_policy_lifecycle_with_admission_views(&policy, &mut host, &mount_namespaces)?;
         let current_proposal_marker = observations.cursor();
         ensure!(
             fixture.open(&paths.secret)?.allowed != protect,
@@ -3753,7 +3748,7 @@ impl EffectTestRunner {
             None,
         )?;
         external_mount_namespace.unmount(&paths.mount_target)?;
-        reconcile_mount_views_until_clean(&policy, &mut host, &mount_namespaces)?;
+        reconcile_policy_lifecycle_with_admission_views(&policy, &mut host, &mount_namespaces)?;
 
         external_mount_namespace.bind_mount(&paths.benign, &paths.secret)?;
         ensure!(
@@ -3779,14 +3774,14 @@ impl EffectTestRunner {
             "UNRESOLVED_OBJECT",
         )?;
         ensure!(
-            policy.reconcile_mount_views(&mut host).is_err(),
+            policy.reconcile_policy_lifecycle(&mut host).is_err(),
             InvalidInputSnafu {
                 path: &paths.secret,
                 reason: "reconciliation accepted a different object mounted over the exact path",
             }
         );
         external_mount_namespace.unmount(&paths.secret)?;
-        reconcile_mount_views_until_clean(&policy, &mut host, &mount_namespaces)?;
+        reconcile_policy_lifecycle_with_admission_views(&policy, &mut host, &mount_namespaces)?;
         let restored_marker = observations.cursor();
         ensure!(
             fixture.open(&paths.secret)?.allowed != protect,
@@ -3824,7 +3819,7 @@ impl EffectTestRunner {
                     reason: "a successful protected-tree bind did not dirty its mount view",
                 }
             );
-            reconcile_mount_views_until_clean(&policy, &mut host, &mount_namespaces)?;
+            reconcile_policy_lifecycle_with_admission_views(&policy, &mut host, &mount_namespaces)?;
             let path_tree_mount_marker = observations.cursor();
             let mounted_child = path_tree_postactivation_bind_target.join("pre-existing");
             ensure!(
@@ -3870,14 +3865,14 @@ impl EffectTestRunner {
         }
         external_mount_namespace.unmount(&path_tree_preexisting_bind_target)?;
         external_mount_namespace.unmount(&allowed_bind_target)?;
-        reconcile_mount_views_until_clean(&policy, &mut host, &mount_namespaces)?;
+        reconcile_policy_lifecycle_with_admission_views(&policy, &mut host, &mount_namespaces)?;
 
         if protect {
             external_mount_namespace
                 .recursive_bind_mount(&path_tree_root, &path_tree_recursive_bind_target)?;
             external_mount_namespace
                 .recursive_bind_mount(&allowed_bind_source, &allowed_recursive_bind_target)?;
-            reconcile_mount_views_until_clean(&policy, &mut host, &mount_namespaces)?;
+            reconcile_policy_lifecycle_with_admission_views(&policy, &mut host, &mount_namespaces)?;
 
             let protected_recursive_child = path_tree_recursive_bind_target.join("pre-existing");
             let protected_recursive_marker = observations.cursor();
@@ -3924,12 +3919,12 @@ impl EffectTestRunner {
 
             external_mount_namespace.unmount(&path_tree_recursive_bind_target)?;
             external_mount_namespace.unmount(&allowed_recursive_bind_target)?;
-            reconcile_mount_views_until_clean(&policy, &mut host, &mount_namespaces)?;
+            reconcile_policy_lifecycle_with_admission_views(&policy, &mut host, &mount_namespaces)?;
 
             external_mount_namespace.move_mount(&path_tree_root, &path_tree_move_mount_target)?;
             external_mount_namespace
                 .move_mount(&allowed_bind_source, &allowed_move_mount_target)?;
-            reconcile_mount_views_until_clean(&policy, &mut host, &mount_namespaces)?;
+            reconcile_policy_lifecycle_with_admission_views(&policy, &mut host, &mount_namespaces)?;
 
             let protected_move_child = path_tree_move_mount_target.join("pre-existing");
             let protected_move_marker = observations.cursor();
@@ -3976,7 +3971,7 @@ impl EffectTestRunner {
 
             external_mount_namespace.unmount(&path_tree_move_mount_target)?;
             external_mount_namespace.unmount(&allowed_move_mount_target)?;
-            reconcile_mount_views_until_clean(&policy, &mut host, &mount_namespaces)?;
+            reconcile_policy_lifecycle_with_admission_views(&policy, &mut host, &mount_namespaces)?;
         }
 
         ensure!(
@@ -4002,7 +3997,7 @@ impl EffectTestRunner {
                 reason: "one represented namespace authorized an exact open after propagation",
             }
         );
-        reconcile_mount_views_until_clean(&policy, &mut host, &mount_namespaces)?;
+        reconcile_policy_lifecycle_with_admission_views(&policy, &mut host, &mount_namespaces)?;
         ensure!(
             fixture.open(&paths.benign)?.allowed && fixture.propagation_peer_open()?.allowed,
             InvalidInputSnafu {
@@ -4018,7 +4013,7 @@ impl EffectTestRunner {
                 reason: "propagated unmount did not invalidate the peer namespace",
             }
         );
-        reconcile_mount_views_until_clean(&policy, &mut host, &mount_namespaces)?;
+        reconcile_policy_lifecycle_with_admission_views(&policy, &mut host, &mount_namespaces)?;
         ensure!(
             fixture.propagation_peer_open()?.allowed,
             InvalidInputSnafu {
@@ -4037,7 +4032,7 @@ impl EffectTestRunner {
                 reason: "mount_setattr did not invalidate every represented namespace",
             }
         );
-        reconcile_mount_views_until_clean(&policy, &mut host, &mount_namespaces)?;
+        reconcile_policy_lifecycle_with_admission_views(&policy, &mut host, &mount_namespaces)?;
         ensure!(
             fixture.open(&paths.benign)?.allowed && fixture.propagation_peer_open()?.allowed,
             InvalidInputSnafu {
@@ -4053,7 +4048,7 @@ impl EffectTestRunner {
                 reason: "mount_setattr restore did not invalidate the global view",
             }
         );
-        reconcile_mount_views_until_clean(&policy, &mut host, &mount_namespaces)?;
+        reconcile_policy_lifecycle_with_admission_views(&policy, &mut host, &mount_namespaces)?;
         ensure!(
             fixture.open(&paths.benign)?.allowed,
             InvalidInputSnafu {
@@ -4283,7 +4278,9 @@ impl EffectTestRunner {
         );
 
         fixture.stop()?;
-        policy.reconcile_mount_views(&mut host).context(NodeSnafu)?;
+        policy
+            .reconcile_policy_lifecycle(&mut host)
+            .context(NodeSnafu)?;
         let old_target = BindingActivationTargetKeyV1 {
             binding_id: Id128V1::new(0x9999_9999_9999_4999, 0x8999_9999_9999_9999),
             profile_generation_ref_id: PROFILE_GENERATION_REF_ID,
@@ -4492,6 +4489,21 @@ mod tests {
         hf_static_effect_classification, local_enforcement_fixture_results,
         HfStaticEffectClassificationV1,
     };
+
+    #[test]
+    fn kubernetes_mount_attack_matches_the_lightweight_security_boundary(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let pod: serde_json::Value = serde_saphyr::from_slice(include_bytes!(
+            "../fixtures/convergence/protected-pod-v1.yaml"
+        ))?;
+        let security = &pod["spec"]["containers"][0]["securityContext"];
+
+        assert_eq!(security["appArmorProfile"]["type"], "Unconfined");
+        assert!(security["capabilities"]["add"]
+            .as_array()
+            .is_some_and(|capabilities| capabilities.iter().any(|value| value == "SYS_ADMIN")));
+        Ok(())
+    }
 
     #[test]
     fn runtime_entry_process_control_is_durable_with_exact_target(

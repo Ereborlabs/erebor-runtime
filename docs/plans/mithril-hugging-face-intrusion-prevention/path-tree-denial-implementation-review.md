@@ -1,18 +1,28 @@
-# Signed Path-Tree Denial And Meta Algorithm Implementation Review
+# Signed Live-Path, Path-Tree Denial, And Meta Algorithm Implementation Review
 
 This guide covers the current checked Berkeley Packet Filter (BPF) and Rust
-source. The path resolver in
+source. It distinguishes a signed `PATH` selector from a signed `EXACT`
+selector. A `PATH` selector matches a live canonical path. It can contain
+literal components, `*`, or `**`, and it does not resolve an inode. An `EXACT`
+selector has literal components but also requires a measured exact-object
+binding. The path resolver in
 [`identity_path.bpf.h`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h)
 and its private state in
 [`identity_maps.h`](../../../bpf/erebor-interceptor/programs/identity_maps.h)
-contain the source-aware live walk. The current protected physical probe
-proves direct paths, repeated-root aliases, successful child-directory binds,
-recursive binds, `open_tree` plus `move_mount`, allowed aliases, mount denial,
-and cleanup. See the [closure matrix](./phase-4-closure-matrix.md) for the
-remaining Phase 4 boundary.
+contain the source-aware live walk. Historical records in this document report
+direct paths, repeated-root aliases, child-directory binds, recursive binds,
+`open_tree` plus `move_mount`, allowed aliases, mount denial, and cleanup. The
+[current route case](./phase-4-signed-local-pre-effect-enforcement.md#kubernetes-baseline-submount-route-correction--2026-08-31)
+proves both Kubernetes mount orders and one later child-directory bind. This
+guide does not make a current physical claim for the positive signed `PATH`
+selector branch.
 
-Status: **Implemented** for the signed path-tree denial claim and the tested
-mount forms.
+Status: **Implemented in source** for the live path graph and signed path-tree
+denial flow. The focused lowering tests cover `PATH` selector and path-tree
+graph creation. The paired current-source lightweight and Kubernetes cases
+prove the routed path-tree denial branch. Current physical proof remains
+incomplete for the positive live `PATH` branch. The exact-object authority
+migration remains an open finding.
 
 - Architecture: [validated readable architecture](./policy-and-protection-algorithm-architecture-readable.md#path-selector-resolution-path-tree-floors-and-exact-object-authority)
 - Local-enforcement review: [implementation review guide](./phase-4-implementation-review.md)
@@ -32,71 +42,112 @@ flow.
 BPF programs run the kernel checks. Linux Security Module (LSM) hooks call the
 BPF programs before the covered effects.
 
+## Intended end state
+
+Node supplies authenticated entry-time graph-prefix routes for known source
+roots. BPF reconstructs the live mount topology in each file or executable
+decision. BPF uses an admitted route before it uses the oldest unique mount as
+the fallback. No userspace event or reconciliation pass can complete an
+authorization decision.
+
+## Implementation event flow
+
+[`CanonicalPathGraphV1`](../../../crates/mithril-control/src/policy/path.rs) Control compiles the immutable path graph
+  -> [`resolve_cri_exact_objects`](../../../crates/mithril-node/src/policy.rs) Node resolves known source roots through the held entry-time view
+  -> [`LoweredGeneration::for_binding_with_mount_routes`](../../../crates/mithril-node/src/policy.rs) Node installs binding-scoped graph-prefix routes
+  -> [`known_mount_path_candidate`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h) BPF tries an admitted route on the source dentry ancestry
+  -> [`canonical_path_candidate`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h) BPF uses the synchronous oldest-mount fallback only when no route applies
+  -> [`resolved_identity_effect_gate`](../../../bpf/erebor-interceptor/programs/identity_effects.bpf.h) BPF applies the path-tree decision before the kernel effect
+
+[`begin_global_mount_mutation`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h) A BPF mount hook starts a namespace-visible mutation
+  -> [`finish_mount_mutation`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h) the BPF syscall return hook clears the pending count
+  -> [`collect_mount_components`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h) the next decision scans one live stable topology
+  -> [`synchronous_mount_snapshot_unchanged`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h) BPF rejects a concurrent or changed topology
+
+[`effect_observations`](../../../bpf/erebor-interceptor/programs/identity_maps.h) BPF writes result evidence
+  -> [`EffectObservationStore`](../../../crates/mithril-node/src/observation.rs) Node stores available observations
+  -> [`resolved_identity_effect_gate`](../../../bpf/erebor-interceptor/programs/identity_effects.bpf.h) ring loss or consumer delay does not change the completed kernel decision
+
 ## Review route
 
 Read the implementation in this order:
 
-1. Read [`PathTreeDenyFloorV1`](../../../crates/mithril-control/src/policy/source.rs)
-   and its
-   [`Validate` implementation](../../../crates/mithril-control/src/policy/validation/records.rs#L180).
-   These sources define and validate the signed restriction.
-2. Read
+1. Read [`PathSelectorV1`](../../../crates/mithril-control/src/policy/source.rs#L661),
+   [`PathSelectorTargetV1`](../../../crates/mithril-control/src/policy/source.rs#L772),
+   and [`PathTreeDenyFloorV1`](../../../crates/mithril-control/src/policy/source.rs#L510).
+   A `PATH` target is live path authority. An `EXACT` target requires a later
+   exact-object binding. A path-tree floor is a separate recursive denial.
+2. Read their [`Validate` implementations](../../../crates/mithril-control/src/policy/validation/records.rs#L191).
+   Validation parses policy path text. It does not resolve a filesystem path.
+3. Read
    [`PolicyDocumentV1::validate`](../../../crates/mithril-control/src/policy/validation/document.rs#L13)
    and
    [`PolicyCompiler::compile`](../../../crates/mithril-control/src/policy/compiler.rs#L82).
    The document owns recursive and cross-record checks. The compiler starts
    only after validation succeeds.
-3. Read
+4. Read
    [`CompiledOperationV1`](../../../crates/mithril-control/src/policy/compiler/conversion.rs#L10)
    and
    [`RuleDimensions`](../../../crates/mithril-control/src/policy/compiler/expansion.rs#L121).
    Conversion implementations own signed-to-kernel value mapping. Expansion
-   owns policy-dimension products and exact-cell resolution.
-4. Read
-   [`CanonicalPathGraphV1::compile_with_path_tree_denies`](../../../crates/mithril-control/src/policy/path.rs#L312)
+   owns policy-dimension products and creates a `PATH:<selector-id>` cell.
+5. Read
+   [`PathSelectorTargetV1::pattern_components`](../../../crates/mithril-control/src/policy/path.rs#L205),
+   [`CanonicalPathGraphV1::compile_with_path_tree_denies_and_precedence`](../../../crates/mithril-control/src/policy/path.rs#L368),
    and
-   [`insert_path_tree_deny`](../../../crates/mithril-control/src/policy/path.rs#L552).
-   These functions create the recursive graph terminal and operation mask.
-5. Read [`lower_path_tables`](../../../crates/mithril-node/src/policy.rs).
-   This function compiles static policy components to generation-scoped map
-   rows. It does not inspect a filesystem or mount namespace for a path-tree
-   floor.
-6. Read [`LoweredGeneration::install`](../../../crates/mithril-node/src/policy.rs).
+   [`insert_path_tree_deny`](../../../crates/mithril-control/src/policy/path.rs#L580).
+   These functions make graph components, selector terminals, and recursive
+   denial operation masks.
+6. Read [`lower_path_tables`](../../../crates/mithril-node/src/policy.rs#L4060).
+   It lowers `PATH` and `EXACT` terminals to generation-scoped map rows. It
+   creates no live binding for a `PATH` selector.
+7. Read [`LoweredGeneration::install`](../../../crates/mithril-node/src/policy.rs#L2292).
    This function installs and reads back the graph before generation
    activation.
-7. Read
-   [`canonical_mount_cache_build_step`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h),
-   [`canonical_mount_path_walk_step`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h),
+8. Read
+   [`load_known_mount_root`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h),
+   [`known_mount_path_walk_step`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h),
+   [`canonical_mount_cache_build_step`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L304),
+   [`canonical_mount_path_walk_step`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L557),
    and
-   [`collect_mount_components`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h).
-   These functions inspect the task's live mount namespace, select the oldest
-   mount, follow source dentry ancestry, and walk from the leaf to the
-   namespace root. Use the
+   [`collect_mount_components`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L630).
+   These functions first search the source ancestry for an admitted route. If
+   no route applies, they inspect the task's live mount namespace, select the
+   oldest mount, and walk from the leaf to the namespace root. Use the
    [detailed BPF Meta walkthrough](#detailed-bpf-meta-walkthrough) to review
    each source block, callback result, state change, and fail-closed check.
-8. Read
+9. Read
    [`canonical_path_match_step`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L763)
    and
    [`canonical_path_candidate`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L832).
    These functions reverse the collected components and traverse only the
    task's active profile generation.
-9. Read
-   [`resolved_identity_effect_gate`](../../../bpf/erebor-interceptor/programs/identity_effects.bpf.h#L300).
-   The path-tree decision occurs before exact-object lookup.
 10. Read
+   [`resolved_identity_effect_gate`](../../../bpf/erebor-interceptor/programs/identity_effects.bpf.h#L300).
+   The gate checks a path-tree denial, applies a live `PATH` decision, or
+   continues to exact-object validation.
+11. Read
    [`bpf_path_walks_use_compiled_component_and_namespace_budgets`](../../../crates/erebor-interceptor/src/bundled.rs#L349).
    This test checks the compiled BPF loop limits.
-11. Read [`EffectTestRunner::physical_probe`](../../../crates/mithril-e2e/src/effect.rs).
-   This test checks the 255-component limit and the successful mount forms.
+12. Read
+   [`recursive_signed_selector_stages_without_a_live_object`](../../../crates/mithril-node/src/policy.rs#L4637),
+   [`path_selector_stages_a_path_decision_without_an_exact_object`](../../../crates/mithril-node/src/policy.rs#L4665),
+   and [`EffectTestRunner::physical_probe`](../../../crates/mithril-e2e/src/effect.rs).
+   The first two tests cover live path lowering. The physical probe covers the
+   mount forms for the path-tree floor.
 
 ## Implemented result
 
-The signed policy accepts a recursive path-tree `DENY` floor for qualified
-`FILE` operations. The compiler rejects a positive disposition, an exception,
-a nonrecursive rule, an invalid canonical path, an empty operation set, and an
+The signed policy accepts `PathSelectorV1` records and recursive path-tree
+`DENY` floors. A `PATH` target can contain literal components, `*`, and `**`.
+It can select an `ALLOW` or `DENY` decision without inode resolution. An
+`EXACT` target contains literal components and sets the later
+`exact_object_required` flag. The path-tree floor remains a recursive `FILE`
+denial. Its validator rejects a positive disposition, an exception, a
+nonrecursive rule, an invalid canonical path, an empty operation set, and an
 unsupported effect family.
 
-Rust compiles only the static signed policy graph. It can do this before a Pod,
+Rust compiles the static signed policy graph. It can do this before a Pod,
 container, mount namespace, target directory, or target child exists. Every
 exact transition, wildcard transition, and terminal key contains
 `profile_generation_ref_id`.
@@ -105,27 +156,31 @@ The workload binding selects the active generation for a cgroup. At effect
 time, BPF reads that generation from the task's process state. BPF then:
 
 1. Reads the supplied live `struct path`.
-2. Finds the task's live `mnt_namespace` and namespace root.
-3. Enumerates the namespace mount red-black tree.
-4. Selects the lowest `mnt_id_unique` for each repeated root dentry.
-5. Probes the root-dentry cache at each dentry in the leaf-to-root walk.
-6. Records the name and follows source `d_parent` when the dentry has a
+2. Snapshots the global mount mutation epoch and pending count.
+3. Finds the task's live `mnt_namespace`, namespace event, and namespace root.
+4. Searches source dentry ancestry for an admitted graph-prefix route.
+5. If no route applies, enumerates the namespace mount red-black tree.
+6. Selects the lowest `mnt_id_unique` for each repeated root dentry.
+7. Probes the root-dentry cache at each dentry in the leaf-to-root walk.
+8. Records the name and follows source `d_parent` when the dentry has a
    non-self parent.
-7. Crosses to the selected mount's `mnt_parent` and `mnt_mountpoint` only at a
+9. Crosses to the selected mount's `mnt_parent` and `mnt_mountpoint` only at a
    self-parent filesystem root.
-8. Stops at the selected live namespace root.
-9. Reverses the leaf-first component vector.
-10. Traverses graph rows for the active profile generation from state zero.
-11. Applies the terminal operation mask before exact-object lookup.
+10. Stops at the selected live namespace root.
+11. Rechecks the namespace event, mutation epoch, and pending count.
+12. Traverses the collected components from each selected graph-prefix state.
+13. Applies the terminal path-tree mask before every positive decision.
+14. Applies a live `PATH` decision when `exact_object_required` is zero.
+15. Requires an exact-object binding only when `exact_object_required` is one.
 
 The walk does not test the inode type. A file and a directory both use their
 path. Name operations can deny a negative dentry before an inode exists.
 
-The path-tree decision uses names from the live walk. It does not use inode
-matching as the path-tree authority. The shared walker also supplies the
-canonical mount identity for the later exact-object branch. The Rust resolver
-mirrors the source-side mount ancestry so exact-object configuration remains
-consistent with the BPF representation.
+The path-tree and `PATH` decisions use names from the live walk. Neither uses
+inode matching as authority. The shared walker also supplies the canonical
+mount identity for the later exact-object branch. `EXACT` still depends on a
+measured binding. The current source does not yet make the signed policy the
+only producer of that binding.
 
 ## Meta slides 19 through 21 in readable form
 
@@ -172,7 +227,7 @@ mounts share that root dentry.
 
 The slide does not show the distinct-root child-bind case. In that case, the
 source mount root and bind mount root are different dentries. The
-[successful child-bind source walk](#successful-child-bind-source-walk)
+[child-bind source walk](#child-bind-source-walk)
 diagram shows how the walker follows their dentry ancestry.
 
 ### Slide 20: mount traversal
@@ -264,7 +319,7 @@ flowchart TD
     G[Mark match unresolved]
     H{More components?}
     I[Read terminal for generation and final state]
-    J[Apply denied operation mask]
+    J[Read selector flag and denied operation mask]
 
     A --> B --> C
     C -- Yes --> D --> H
@@ -275,20 +330,22 @@ flowchart TD
     H -- No --> I --> J
 ```
 
-`path_graph_exact_transitions` represents exact node advances.
-`path_graph_wildcard_transitions` represents the determinized glob advances.
-`path_graph_terminals` maps a completed state to the denied operation mask.
-This compilation can preserve the state-machine semantics only after the mount
-walk supplies the correct canonical component sequence.
+`path_graph_exact_transitions` represents literal component advances.
+`path_graph_wildcard_transitions` represents determinized `*` and `**`
+advances. `path_graph_terminals` maps a completed state to a selected path
+selector, its `exact_object_required` flag, and a path-tree denied-operation
+mask. This compilation can preserve the state-machine semantics only after the
+mount walk supplies the correct canonical component sequence.
 
 ## Algorithm walkthrough
 
 The algorithm has a static stage and a live stage. Rust runs the static stage
 when the node installs a policy generation. BPF runs the live stage for each
 covered effect. The live stage uses the task's current mount namespace. Rust
-never resolves the protected path in a filesystem or mount namespace. The
-policy path can name a future Pod path that does not exist during policy
-installation.
+does not resolve a `PATH` selector in a filesystem or mount namespace. A
+`PATH` selector can name a future Pod path that does not exist during policy
+installation. An `EXACT` selector has a separate measured-object path. The
+current node still receives that measured object outside the signed selector.
 
 ### Validation ownership
 
@@ -301,7 +358,9 @@ owns the shared lexical checks for local IDs, registry symbols, UUIDs,
 digests, and durations. Each policy record that owns intrinsic checks implements
 [`Validate`](../../../crates/mithril-control/src/policy/validation.rs#L5)
 for its intrinsic fields. For example,
-[`PathTreeDenyFloorV1::validate`](../../../crates/mithril-control/src/policy/validation/records.rs#L180)
+[`PathSelectorV1::validate`](../../../crates/mithril-control/src/policy/validation/records.rs#L223)
+owns selector kind, path text, and device-class compatibility.
+[`PathTreeDenyFloorV1::validate`](../../../crates/mithril-control/src/policy/validation/records.rs#L191)
 owns the path-tree schema, disposition, recursion, operation, and canonical
 path syntax checks.
 
@@ -313,7 +372,7 @@ only direct parent information when one check requires it, such as the
 evaluation stage for a fallback.
 
 The canonical path check calls
-[`canonical_path_components`](../../../crates/mithril-control/src/policy/path.rs#L279).
+[`canonical_path_components`](../../../crates/mithril-control/src/policy/path.rs#L322).
 This function parses the signed string into Linux name bytes and checks its
 shape and bounds. It does not call `open`, `stat`, `readlink`, `setns`, or any
 mount API. Rust therefore does not inspect a current container path and does
@@ -333,39 +392,55 @@ free functions. Rule expansion and conflict resolution are in
 [`expansion.rs`](../../../crates/mithril-control/src/policy/compiler/expansion.rs#L1).
 The compiler module has one loose helper: a stateless SHA-256 formatter.
 
-### 1. Compile the signed path-tree floor
+### 1. Compile signed live paths, exact paths, and path-tree floors
 
-[`PathTreeDenyFloorV1::validate`](../../../crates/mithril-control/src/policy/validation/records.rs#L180)
+[`PathSelectorTargetV1::pattern_components`](../../../crates/mithril-control/src/policy/path.rs#L205)
+converts a signed `PATH` expression to literal, one-component wildcard, and
+recursive wildcard components. It converts a signed `EXACT` expression to
+literal components only. This conversion parses text. It does not resolve a
+file or a directory.
+
+[`PathTreeDenyFloorV1::validate`](../../../crates/mithril-control/src/policy/validation/records.rs#L191)
 accepts only a recursive `FILE` denial. The rule cannot have an exception.
 The validator also rejects an empty or unsupported operation set.
 [`PolicyDocumentV1::validate`](../../../crates/mithril-control/src/policy/validation/document.rs#L13)
 requires `PROTECT` mode when the document contains a path-tree denial.
 
-[`canonical_path_components`](../../../crates/mithril-control/src/policy/path.rs#L279)
+[`canonical_path_components`](../../../crates/mithril-control/src/policy/path.rs#L322)
 splits the absolute policy path into Linux name bytes. It rejects the root
 path, empty components, `.` and `..`, embedded null bytes, more than 255
 components, and a component longer than 255 bytes. This function parses policy
 text. It does not read the filesystem.
 
-[`insert_path_tree_deny`](../../../crates/mithril-control/src/policy/path.rs#L552)
+[`CanonicalPathGraphV1::compile_with_path_tree_denies_and_precedence`](../../../crates/mithril-control/src/policy/path.rs#L368)
+inserts every signed path selector and every path-tree floor into one
+intermediate graph. The selector terminal keeps its rule ID and object class.
+`PathPatternPrecedenceV1` resolves a reachable set of conflicting selector
+terminals. The setting is part of the signed policy document.
+
+[`insert_path_tree_deny`](../../../crates/mithril-control/src/policy/path.rs#L580)
 adds one exact graph edge for each policy component. At the terminal state, it
 adds the denied operation IDs and a wildcard self-loop. The self-loop makes
 the rule recursive. A path that stays below that terminal remains in a state
 that contains the denial.
 
-[`CanonicalPathGraphV1::determinize`](../../../crates/mithril-control/src/policy/path.rs#L388)
+[`CanonicalPathGraphV1::determinize`](../../../crates/mithril-control/src/policy/path.rs#L424)
 converts the graph to one deterministic state per active state set. Each
-deterministic state contains the union of its active denial operation IDs.
-This conversion preserves the recursive wildcard when another exact edge also
+deterministic state contains one selected path-selector terminal, if a
+selector reaches that state, and the union of active denial operation IDs.
+This conversion preserves recursive wildcards when another exact edge also
 starts at the same state.
 
-[`lower_path_tables`](../../../crates/mithril-node/src/policy.rs)
+[`lower_path_tables`](../../../crates/mithril-node/src/policy.rs#L4060)
 adds `profile_generation_ref_id` to every exact-transition, wildcard-transition,
-and terminal key. The terminal value contains a 64-bit denied-operation mask.
-The function does not require a Pod, target file, target directory, or mount
-namespace.
+and terminal key. Its terminal value contains a composite atom, a rule handle,
+the `exact_object_required` flag, and a 64-bit denied-operation mask. For a
+`PATH` selector, it emits an `effect_defaults` decision and no exact-object or
+mount row. For an `EXACT` selector, it emits an exact-object decision and
+requires a matching measured object. The function does not resolve a `PATH`
+selector or require a Pod, target file, target directory, or mount namespace.
 
-[`LoweredGeneration::install`](../../../crates/mithril-node/src/policy.rs)
+[`LoweredGeneration::install`](../../../crates/mithril-node/src/policy.rs#L2292)
 writes the three graph tables, verifies the immutable rows, and then changes
 the generation descriptor to active. The graph is complete before a task can
 use the generation.
@@ -524,9 +599,12 @@ flowchart TD
     X -- No --> Y[Candidate fails; resolved gate denies before effect]
     X -- Yes --> Z[canonical_path_match_step: reverse and traverse active-generation graph]
     Z --> AA[Read path_graph_terminals]
-    AA --> AB{Terminal denies this operation?}
+    AA --> AB{Path-tree terminal denies this operation?}
     AB -- Yes --> AC[path_tree_effect_result: emit denial and return errno]
-    AB -- No --> AD[Continue to exact-object lookup and the remaining effect decision]
+    AB -- No --> AD{exact_object_required?}
+    AD -- No --> AE[Read PATH effect-default decision and return result]
+    AD -- Yes --> AF[Read and validate exact-object binding]
+    AF --> AG[Read exact effect decision and return result]
 ```
 
 The file LSM programs enter through
@@ -546,9 +624,11 @@ or, for an active io_uring execution,
 [`resolved_io_uring_effect_gate`](../../../bpf/erebor-interceptor/programs/identity_io_uring.bpf.h#L267).
 After their resolver preconditions pass for a covered file effect, both routes
 invoke
-[`canonical_path_candidate`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L832)
-and apply a matched path-tree denial before
-`configured_file_object_binding` performs an exact-object lookup. A prior
+[`canonical_path_candidate`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L832).
+They apply a matched path-tree denial before a positive decision. A terminal
+with `exact_object_required == 0` reads the path-scoped default decision. A
+terminal with `exact_object_required == 1` calls
+`configured_file_object_binding` and reads the exact-object decision. A prior
 LSM denial is preserved and emitted before either resolver reaches the path
 candidate.
 
@@ -567,7 +647,7 @@ the vector to read the generation-scoped policy graph.
 
 The callbacks do not allocate a large C stack frame. They receive a pointer to
 one value in the per-CPU
-[`identity_scratch`](../../../bpf/erebor-interceptor/programs/identity_maps.h#L220)
+[`identity_scratch`](../../../bpf/erebor-interceptor/programs/identity_maps.h#L226)
 map. One CPU owns that scratch value for the current hook execution.
 
 BPF Compile Once - Run Everywhere (CO-RE) relocations resolve kernel structure
@@ -576,12 +656,12 @@ cache build or path walk.
 
 | State | Source | Purpose |
 | --- | --- | --- |
-| `mount_cache_build` | [`canonical_mount_cache_build_state_v1`](../../../bpf/erebor-interceptor/programs/identity_maps.h#L94) | Holds the namespace identity, expected mount count, current candidate, explicit tree-stack depth, and failure flag. |
-| `mount_scan_stack` | [`identity_scratch_v1`](../../../bpf/erebor-interceptor/programs/identity_maps.h#L194) | Holds red-black-tree node addresses for a bounded depth-first scan. The semantic stack limit is 255 entries. |
-| `mount_cache_key` and `mount_cache_value` | [`identity_scratch_v1`](../../../bpf/erebor-interceptor/programs/identity_maps.h#L188) | Provide zeroed temporary key and value storage for cache updates. |
-| `mount_path_walk` | [`canonical_mount_path_walk_state_v1`](../../../bpf/erebor-interceptor/programs/identity_maps.h#L110) | Holds the current mount, current dentry, namespace identity, counters, selected mount, and terminal state. |
+| `mount_cache_build` | [`canonical_mount_cache_build_state_v1`](../../../bpf/erebor-interceptor/programs/identity_maps.h#L95) | Holds the namespace identity, expected mount count, current candidate, explicit tree-stack depth, and failure flag. |
+| `mount_scan_stack` | [`identity_scratch_v1`](../../../bpf/erebor-interceptor/programs/identity_maps.h#L201) | Holds red-black-tree node addresses for a bounded depth-first scan. The semantic stack limit is 255 entries. |
+| `mount_cache_key` and `mount_cache_value` | [`identity_scratch_v1`](../../../bpf/erebor-interceptor/programs/identity_maps.h#L194) | Provide zeroed temporary key and value storage for cache updates. |
+| `mount_path_walk` | [`canonical_mount_path_walk_state_v1`](../../../bpf/erebor-interceptor/programs/identity_maps.h#L111) | Holds the current mount, current dentry, namespace identity, counters, selected mount, and terminal state. |
 | `path_component_views` | [`canonical_path_view_v1`](../../../bpf/erebor-interceptor/programs/identity_maps.h#L132) | Holds a kernel name address and length for each leaf-first component. It does not copy the name bytes. |
-| `file_object.mount_id_unique` | [`identity_scratch_v1`](../../../bpf/erebor-interceptor/programs/identity_maps.h#L178) | Receives the first canonical selected mount ID after the complete walk passes. |
+| `file_object.mount_id_unique` | [`identity_scratch_v1`](../../../bpf/erebor-interceptor/programs/identity_maps.h#L184) | Receives the first canonical selected mount ID after the complete walk passes. |
 
 The `+ 1` array slots and the inline assembly masks are verifier controls. The
 code still rejects a semantic count of 255 before it pushes or records another
@@ -652,8 +732,8 @@ flowchart TD
 | [`340-344`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L340) | 7 | Uses the CO-RE container offset to recover the enclosing `struct mount` from its `mnt_node`. It records the candidate address and clears all candidate fields before kernel reads. |
 | [`345-354`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L345) | 8 | Reads the candidate's `mnt_ns` and requires the exact namespace address selected by the wrapper. It reads `mnt.mnt_root` and requires a non-null dentry. `read_unique_mount_id` requires the qualified `mnt_id_unique` field and a nonzero value. Any mismatch or read failure stops the build as failed. |
 | [`356-363`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L356) | 9 | Builds the cache key from namespace address, namespace-root unique ID, namespace event, and candidate root-dentry address. It builds the draft value from the candidate mount address and unique ID. |
-| [`364-367`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L364) | 10 | Tries `bpf_map_update_elem` with `BPF_NOEXIST`. The first candidate for a key creates the row. An existing row is an expected update race or a repeated root. An insertion error is accepted only when a lookup confirms that the row now exists. A full map or another error with no row fails closed. |
-| [`368-370`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L368) | 11 | Looks up the row that this or another callback created. A missing row marks the build as failed. |
+| [`364-367`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L364) | 10 | Attempts `bpf_map_update_elem` with `BPF_NOEXIST` and deliberately ignores its result. The first candidate can create the row. An existing row can result from a repeated root or a concurrent builder. |
+| [`368-370`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L368) | 11 | Looks up the row once after the update attempt. The row can be the newly inserted row or an existing row. A missing row marks the build as failed, so a full map or another unusable update failure remains fail closed. |
 | [`371-379`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L371) | 12 | Locks the cache value. An empty selected ID or a lower candidate ID replaces the selected mount address and ID. The callback unlocks the row after both fields agree. This minimum operation implements the oldest-mount selection. |
 | [`380`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L380) | 13 | Stops after the reported number of mounts. Otherwise, it requests another callback. The wrapper also requires an empty scan stack, so an understated mount count cannot produce a successful partial index. |
 | [`382-384`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L382) | 14 | Sets the persistent failure flag and stops the loop. The callback does not return a partial-success code. |
@@ -822,7 +902,7 @@ signed recursive denial under `/var/run/secrets/service` can match before the
 exact-object lookup.
 
 This trace covers two mounts that share a self-parent root dentry. The
-[successful child-bind source walk](#successful-child-bind-source-walk)
+[child-bind source walk](#child-bind-source-walk)
 covers a bind root whose dentry has a source parent.
 
 #### Failure points and physical result
@@ -866,7 +946,8 @@ reads the vector in reverse order. It therefore submits `srv`, `secret`,
 A missing transition or failed helper call marks the match unresolved. After
 all components, `canonical_path_candidate` reads `path_graph_terminals` with
 the active generation and final state. It copies the terminal and its denied
-operation mask to per-CPU scratch.
+operation mask, composite atom, rule handle, and `exact_object_required` flag
+to per-CPU scratch.
 
 For a recursive `/srv/secret` floor, the graph enters the denial state after
 `secret`. The wildcard-derived deterministic states keep the denial mask while
@@ -884,37 +965,41 @@ generation calls
 That function emits `PATH_TREE_POLICY_DENY` and returns the configured negative
 error before the kernel effect.
 
-The gate evaluates this denial before exact-object policy. If the path-tree
-mask does not deny the operation, the existing exact-object branch continues.
-If path reconstruction or graph traversal fails, the gate returns a hard
-denial. It does not convert an unresolved path to an allow.
+The gate evaluates this denial before every positive path result. If the mask
+does not deny the operation and `exact_object_required` is zero, the gate
+calls `effect_base_decision` with the terminal composite atom. Node lowering
+placed the signed `PATH` rule in `effect_defaults`, so this decision needs no
+exact-object lookup. If `exact_object_required` is one, the existing
+exact-object branch validates the measured binding first. If path
+reconstruction or graph traversal fails, the gate returns a hard denial. It
+does not convert an unresolved path to an allow.
 
 ## Validation against Meta's algorithm
 
 The implementation uses the same bounded mount index and path-matching model.
 It does not copy Meta source code because the presentation does not publish
-that source. The live traversal preserves source ancestry for the tested bind
-forms.
+that source. The source walk follows source dentry ancestry. The current
+records do not provide one reconciled physical result for every bind form.
 
 | Meta property | Implementation | Review source |
 | --- | --- | --- |
+| Preserve an authenticated known source path. | Node installs entry-time graph-prefix states for the binding and source root. BPF uses them before it compares mount age. | [`LoweredGeneration::for_binding_with_mount_routes`](../../../crates/mithril-node/src/policy.rs), [`known_mount_path_candidate`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h) |
 | Walk from the target leaf toward the head. | BPF probes the mount-root cache, records `d_name`, and follows `d_parent` at each dentry. | [`canonical_mount_path_walk_step`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h) |
 | Resolve repeated mount roots through the oldest mount. | BPF scans `mnt_namespace.mounts` and retains the lowest nonzero `mnt_id_unique` for each root dentry. | [`canonical_mount_cache_build_step`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L304) |
 | Continue across mount boundaries. | A non-self root follows source `d_parent`. A self-parent filesystem root crosses the selected mount's `mnt_parent` and `mnt_mountpoint`. | [`canonical_mount_path_walk_step`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h) |
 | Stop at the task's namespace root. | The walk succeeds only after the selected mount equals `mnt_namespace.root`. | [`collect_mount_components`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L630) |
 | Hash a name and find node or initializer IDs. | Rust compiles name choices into exact and wildcard transition keys. BPF map lookup hashes each full key. | [`PathGraphTransitionKeyV1`](../../../crates/erebor-interceptor-abi/src/abi/path.rs), [`canonical_path_match_step`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L763) |
-| Advance and remove iterators. | Rust determinizes the active iterator set. BPF advances one deterministic state. A missing exact and wildcard transition makes the match unresolved. | [`CanonicalPathGraphV1::determinize`](../../../crates/mithril-control/src/policy/path.rs#L388) |
-| Start initializer iterators. | The initial deterministic state contains every pattern that can start at the first component. | [`CanonicalPathGraphV1::determinize`](../../../crates/mithril-control/src/policy/path.rs#L388) |
+| Advance and remove iterators. | Rust determinizes the active iterator set. BPF advances one deterministic state. A missing literal and wildcard transition makes the match unresolved. | [`CanonicalPathGraphV1::determinize`](../../../crates/mithril-control/src/policy/path.rs#L424) |
+| Start initializer iterators. | The initial deterministic state contains every pattern that can start at the first component. | [`CanonicalPathGraphV1::determinize`](../../../crates/mithril-control/src/policy/path.rs#L424) |
 | Keep glob iterators active. | A wildcard transition represents the next deterministic set after all applicable glob and exact advances. | [`path_graph_wildcard_transitions`](../../../bpf/erebor-interceptor/programs/identity_maps.h) |
-| Extract a path ID and role policy at a root node. | A terminal stores the path-tree denied-operation mask. The task's active generation and role remain in the surrounding effect decision. | [`PathGraphTerminalV1`](../../../crates/erebor-interceptor-abi/src/abi/path.rs), [`resolved_identity_effect_gate`](../../../bpf/erebor-interceptor/programs/identity_effects.bpf.h#L300) |
+| Extract a path ID and role policy at a root node. | A terminal stores the selected path rule, composite atom, exact-object requirement, and path-tree denied-operation mask. The task's active generation and role remain in the surrounding effect decision. | [`PathGraphTerminalV1`](../../../crates/erebor-interceptor-abi/src/abi/path.rs), [`resolved_identity_effect_gate`](../../../bpf/erebor-interceptor/programs/identity_effects.bpf.h#L300) |
 | Reverse leaf-first components before graph lookup. | The graph callback reads `component_count - offset - 1`. | [`canonical_path_match_step`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L763) |
 | Reject a topology race. | BPF checks the global mutation epoch, pending count, namespace event, and mount count before and after cache construction and path collection. | [`ensure_canonical_mount_cache`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L385), [`collect_mount_components`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L630) |
 
-The old split did not meet this table. Rust previously resolved the namespace
-mount chain and installed a graph prefix. BPF walked only from the leaf to the
-current mount root. The current implementation removes that path-tree
-dependency. The path-tree branch does not read `canonical_mount_roots` or
-require a clean Rust mount snapshot.
+Node installs `canonical_mount_roots` only from the authenticated entry-time
+view. BPF reads those rows before its oldest-mount fallback. BPF then owns the
+live topology scan and stability checks. The path-tree branch does not wait
+for a clean Rust mount snapshot or a ring-buffer consumer.
 
 ## Kubernetes and profile binding
 
@@ -929,14 +1014,15 @@ sequenceDiagram
     participant B as Cgroup binding owner
     participant T as Pod task
 
-    C->>N: verified signed path-tree floor
+    C->>N: verified signed PATH selector, EXACT selector, or path-tree floor
     N->>K: install generation-scoped graph
     N->>K: read back and activate generation
     Note over R,T: The Pod can be absent during policy installation
     R->>T: create mount namespace and task
+    B->>K: install admitted source-root routes
     B->>K: bind cgroup to profile generation
     T->>K: effect under bound cgroup
-    K-->>T: evaluate live mount path in that generation
+    K-->>T: reconstruct and evaluate one live stable mount path
 ```
 
 Different cgroups can select different profile generations. BPF places the
@@ -957,11 +1043,11 @@ existing signed generation and cgroup binding boundary.
 | --- | --- | --- |
 | `PolicyDocumentV1` and child `Validate` implementations | Signed policy records. | Check intrinsic child fields, then document-wide IDs, references, conflicts, and reachability. They inspect no filesystem or mount namespace. |
 | `PolicyCompiler` | One signed `PolicyDocumentV1`. | Calls document validation, then produces a verified artifact. Its root orchestrates compilation, conversion implementations map signed values, and expansion owns exact cells. It creates no kernel state. |
-| `CanonicalPathGraphV1` | Canonical policy components and operation IDs. | Produces deterministic static transitions and terminal masks. It does not inspect live mounts. |
-| `NodePolicyGenerationOwner` | Verified artifact and profile generation. | Installs, reads back, activates, and retires generation-scoped policy rows. It does not enter a workload mount namespace for path-tree lowering. |
-| Workload binding owner | Exact cgroup and selected profile generation. | Installs the generation that new tasks inherit through the existing identity path. |
+| `CanonicalPathGraphV1` | Canonical selector components and path-tree operation IDs. | Produces deterministic static transitions, selector terminals, and denial masks. It does not inspect live mounts. |
+| `NodePolicyGenerationOwner` | Verified artifact, profile generation, current exact-object bindings, and the held entry-time container view. | Installs, reads back, activates, and retires generation-scoped policy rows. It resolves and installs binding-scoped source-root routes at admission. It does not rebuild post-start topology. |
+| Workload binding owner | Exact cgroup, selected profile generation, and admitted source-root routes. | Installs the generation and route scope that new tasks inherit through the existing identity path. |
 | `KernelHostOwner` | One production BPF object, maps, links, pin root, and exclusive lease. | Loads, attaches, pins, recovers, and shuts down the single Interceptor owner. |
-| BPF path resolver | Per-CPU scratch and the task's live kernel path and mount namespace. | Builds the oldest-mount cache, walks the live path, traverses the selected graph, and returns the physical decision. |
+| BPF path resolver | Per-CPU scratch, admitted route rows, and the task's live kernel path and mount namespace. | Uses a route first, builds the oldest-mount fallback cache, checks topology stability, traverses the selected graph, and returns the physical decision. |
 | `EffectObservationStore` | Fixed BPF observation records. | Copies and names evidence. It does not authorize an effect. |
 | `EffectTestRunner` | Disposable files, directories, namespaces, cgroups, and policy artifacts. | Checks syscall results, filesystem postconditions, evidence, and cleanup in the repository VM. |
 
@@ -971,24 +1057,35 @@ existing signed generation and cgroup binding boundary.
 sequenceDiagram
     participant T as Managed task
     participant L as BPF LSM hook
+    participant A as Admitted route map
     participant M as Live mount tree
     participant C as Oldest-mount cache
     participant G as Generation graph
+    participant P as Live PATH policy
     participant E as Exact-object policy
     participant R as Observation ring
 
     T->>L: file or name effect
     L->>L: verify task, cgroup binding, and active generation
-    L->>M: read namespace root, event, mount count, and mount tree
-    M->>C: select the lowest mount ID for each root dentry
-    L->>M: walk leaf to namespace root across selected mounts
-    L->>L: recheck namespace event and global mutation epoch
-    L->>G: reverse components; traverse active generation from state zero
-    G-->>L: terminal operation mask
+    L->>L: snapshot global mutation epoch and pending count
+    L->>A: search source ancestry for a binding-scoped route
+    alt admitted route exists
+        A-->>L: graph-prefix states
+    else no admitted route exists
+        L->>M: read namespace root, event, mount count, and mount tree
+        M->>C: select the lowest mount ID for each root dentry
+        L->>M: walk leaf to namespace root across selected mounts
+    end
+    L->>L: recheck namespace event, mutation epoch, and pending count
+    L->>G: traverse components from the selected graph-prefix state
+    G-->>L: terminal mask, composite atom, and exact flag
     alt path-tree operation is denied
         L->>R: PATH_TREE_POLICY_DENY
         L-->>T: negative errno before effect
-    else no path-tree denial
+    else PATH terminal
+        L->>P: effect-default decision by terminal composite atom
+        P-->>L: allow, audit, or deny result
+    else EXACT terminal
         L->>E: continue through exact-object policy
         E-->>L: exact decision or fail closed
     end
@@ -1004,11 +1101,13 @@ mount ID, namespace event, and root-dentry address. A mount event therefore
 selects a new cache generation. The selected cache value is revalidated
 against the live namespace, root dentry, and unique mount ID before use.
 
-## Successful child-bind source walk
+## Child-bind source walk
 
-The path-tree decision uses the live mount tree on every effect. The first bind
-of a child directory creates different roots for the source mount and the bind
-mount. The walker must use dentry ancestry to connect these roots.
+The path-tree decision uses the live mount tree on every effect. A bind of a
+child directory creates different roots for the source mount and the bind
+mount. The walker uses dentry ancestry to connect these roots. This is a
+source walkthrough. The current paired route case also proves this behavior
+for the later in-container child bind.
 
 The walker probes the root-dentry cache at each node. A cache hit validates the
 selected mount. A non-self `d_parent` identifies source ancestry. The walker
@@ -1040,25 +1139,23 @@ parent. A cache miss at the active mount root fails. A self-parent dentry with
 no represented mount also fails. Component overflow, invalid names, cache
 revalidation errors, and topology races fail closed.
 
-Mount mutation hooks still publish global and represented-namespace state for
-the separate exact-object reconciliation path. BPF counts a mutation when the
-task is managed or its current mount namespace already has a represented view.
-This rule prevents construction of a not-yet-bound Pod namespace from
-invalidating an unrelated Pod's exact-object policy. The path-tree decision
-does not depend on that exact-object reconciliation state.
+Mount mutation hooks update the global epoch and pending count. Represented
+namespace lookups validate the admitted registry. They do not publish a dirty
+view. The exact file and executable hot path uses the same synchronous
+snapshot recheck. The retained clean/dirty and exact-mount-event helpers have
+no caller in the current effect path. They remain in the pinned ABI surface.
 
-`open_tree`, `fsconfig`, `fsmount`, and `mount_setattr` use one represented
-namespace ambiguity epoch. Exact-object decisions remain closed until
-reconciliation when those operations occur in a represented namespace. This
-epoch does not gate the live path-tree traversal. Mutation invalidation and
-race checks prove that a topology snapshot is stable. They do not prove that
-its selected mount edges preserve source lineage.
+`open_tree`, `fsconfig`, `fsmount`, and `mount_setattr` also update the global
+mutation guard. Mutation invalidation and race checks prove that one topology
+snapshot is stable. They do not prove that its selected mount edges preserve
+source lineage. The admitted route supplies that lineage for a known source.
 
 ## BPF programs
 
 ```mermaid
 flowchart LR
     N[NodePolicyGenerationOwner] -->|writes policy rows| M[Generation graph maps]
+    N -->|writes entry-time routes| A[Admitted route map]
     H[KernelHostOwner] -->|loads, attaches, pins| O[Interceptor BPF object]
     O --> F[File LSM programs]
     O --> P[Path LSM programs]
@@ -1068,7 +1165,10 @@ flowchart LR
     P --> W
     U --> W
     W --> M
+    W --> A
     W --> C[Live mount caches]
+    X --> G[Mutation epoch and pending count]
+    W --> G
     F --> R[Observation ring]
     P --> R
     U --> R
@@ -1081,7 +1181,9 @@ at
 They receive a live `struct file`, preserve a prior LSM denial, derive the
 operation, and call the shared effect gate. A failed identity, path, mount, or
 graph lookup returns the configured negative errno. A path-tree match returns
-that errno before the file effect completes.
+that errno before the file effect completes. A matched `PATH` terminal reads a
+path-scoped default decision. A matched `EXACT` terminal continues to
+exact-object validation.
 
 The name programs use `lsm/path_unlink` through `lsm/path_rename` at
 [`identity_effects.bpf.h`](../../../bpf/erebor-interceptor/programs/identity_effects.bpf.h#L1015).
@@ -1089,13 +1191,15 @@ They receive a directory path and dentry. The path can name a file, a
 directory, or a negative dentry. Link and rename check the source before the
 destination. A nonzero return stops the kernel operation.
 
-The mount programs use `lsm/sb_kern_mount`, `lsm/sb_mount`,
-`lsm/sb_umount`, `lsm/sb_pivotroot`, and `lsm/move_mount` at
+The mount programs use `lsm/sb_mount`, `lsm/sb_umount`,
+`lsm/sb_pivotroot`, and `lsm/move_mount` at
 [`identity_effects.bpf.h`](../../../bpf/erebor-interceptor/programs/identity_effects.bpf.h#L1174).
 The `raw_syscalls/sys_exit` program clears the pending mutation count. The
 special mount syscall tracepoints update the represented ambiguity epoch.
-These programs update stability and exact-object reconciliation state. They
-do not compile or change a path-tree terminal.
+These programs update the synchronous stability guard. The current source has
+no `sb_kern_mount` program because that hook creates an unattached kernel
+mount. These programs do not compile a graph, change a path-tree terminal, or
+wait for Node.
 
 The path resolver uses `bpf_get_current_task_btf` to find the current task,
 `BPF_CORE_READ_INTO` for kernel fields, `bpf_loop` for bounded mount and path
@@ -1136,8 +1240,10 @@ live path walk accepts 4,351 callbacks. This count covers 4,096 mount steps and
 not truncate the input to a valid path.
 
 The scan stack and component vector each use one extra array slot for the
-verifier-safe `& 0xff` index. The semantic limit remains 255. The source has no
-separate 64-entry mount-depth constant and no duplicate path-walk limit.
+verifier-safe `& 0xff` index. The semantic limit remains 255.
+`MAX_CANONICAL_MOUNT_SCAN_DEPTH_V1` names the scan-stack limit separately from
+`MAX_CANONICAL_PATH_COMPONENTS_V1`. Both values are currently 255. The source
+has no duplicate path-walk limit.
 
 ## Map lifecycle
 
@@ -1145,17 +1251,19 @@ separate 64-entry mount-depth constant and no duplicate path-walk limit.
 | --- | --- | --- | --- | --- | --- |
 | `path_graph_exact_transitions` | `PathGraphTransitionKeyV1` to `PathGraphTransitionV1`. | Node generation install. | None. | BPF graph matcher. | Pinned. Immutable until generation retirement. |
 | `path_graph_wildcard_transitions` | `PathGraphStateKeyV1` to `PathGraphTransitionV1`. | Node generation install. | None. | BPF graph matcher. | Pinned. Immutable until generation retirement. |
-| `path_graph_terminals` | `PathGraphStateKeyV1` to `PathGraphTerminalV1`. | Node generation install. | None. | BPF effect and io_uring gates. | Pinned. Immutable until generation retirement. |
+| `path_graph_terminals` | `PathGraphStateKeyV1` to `PathGraphTerminalV1`, with a composite atom, rule handle, exact-object flag, and denial mask. | Node generation install. | None. | BPF effect and io_uring gates. | Pinned. Immutable until generation retirement. |
+| `canonical_mount_roots` | `CanonicalMountRootKeyV1` to `CanonicalMountRootV1`. | Node held-entry admission. | None. | BPF known-route walker. | Pinned. Binding-scoped dynamic rows retire with the binding or generation. Entry-time rows use topology generation zero. |
 | `canonical_mount_cache` | Private live namespace, event, root dentry key to locked selected mount address and unique ID. | None. | BPF cache builder. | BPF path walk. | Pinned. Bounded at 65,536 rows. A missing or full map fails closed. |
 | `canonical_mount_cache_states` | Private live namespace and event key to build state. | None. | BPF cache builder. | BPF resolver. | Pinned least-recently-used map. Bounded at 4,096 rows. |
 | `identity_scratch` | Per-CPU zero `u32` to private `identity_scratch_v1`. | None. | BPF effect and path programs. | BPF effect and path programs. | Pinned with the object. One CPU owns one active scratch value. |
-| `mount_global_mutation_epoch` and `mount_global_pending_mutations` | Native-endian zero `u32` to native-endian `u64`. | Node initializes rows. | BPF mount hooks. | BPF stability checks and node reconciliation. | Pinned for the pin-root lifetime. |
-| `mount_global_ambiguous_epoch` | Native-endian zero `u32` to native-endian `u64`. | Node initializes the row. | BPF special mount syscall hooks. | BPF exact-object branch. | Pinned for the pin-root lifetime. It does not select a path-tree graph. |
-| `exact_mount_events` | Private represented namespace key to transition, event, and ambiguity epoch. | None. | BPF exact-object branch. | BPF exact-object branch. | Pinned and bounded at 4,096 rows. It does not gate a matching path-tree denial. |
+| `mount_security_views` | Namespace inode to retained `mount_security_view_state_v1`. | Node held-entry admission. | None in the current hot path. | BPF mount hooks use it as the represented-namespace registry. Legacy snapshot helpers also reference it but have no current caller. | Pinned for the admitted binding lifetime. It does not supply a post-start topology. |
+| `mount_global_mutation_epoch` and `mount_global_pending_mutations` | Native-endian zero `u32` to native-endian `u64`. | Node initializes rows. | BPF mount hooks. | BPF synchronous stability checks. | Pinned for the pin-root lifetime. |
+| `mount_global_ambiguous_epoch` | Native-endian zero `u32` to native-endian `u64`. | Node initializes the row. | BPF special mount syscall hooks. | Legacy exact-mount helpers have no current effect-path caller. | Pinned for ABI compatibility. It does not select a path-tree graph. |
+| `exact_mount_events` | Private represented namespace key to transition, event, and ambiguity epoch. | None. | No current caller. | No current caller. | Pinned and bounded at 4,096 rows for ABI compatibility. It does not gate the current file or executable decision. |
 | `effect_observations` | Ring buffer of `EffectObservationV1`. | None. | BPF effect programs. | `EffectObservationReader` and `EffectObservationStore`. | Pinned with the object. Ring loss cannot change enforcement. |
 
 The graph maps and BPF caches are declared in
-[`identity_maps.h`](../../../bpf/erebor-interceptor/programs/identity_maps.h#L564).
+[`identity_maps.h`](../../../bpf/erebor-interceptor/programs/identity_maps.h#L612).
 Generation retirement deletes exact transitions, wildcard transitions, and
 terminals for the retired generation. The
 [`generation_retirement_waits_for_async_io_authority`](../../../crates/mithril-node/src/policy.rs)
@@ -1193,11 +1301,12 @@ generation rows. They remain policy-neutral and bounded by map capacity.
 
 ## ABI boundary
 
-[`PathGraphTransitionKeyV1`](../../../crates/erebor-interceptor-abi/src/abi/path.rs#L88)
+[`PathGraphTransitionKeyV1`](../../../crates/erebor-interceptor-abi/src/abi/path.rs#L89)
 contains the profile generation, current state, component bytes, and explicit
-padding. [`PathGraphStateKeyV1`](../../../crates/erebor-interceptor-abi/src/abi/path.rs#L99)
-contains the profile generation and state. [`PathGraphTerminalV1`](../../../crates/erebor-interceptor-abi/src/abi/path.rs#L118)
-contains the exact-object candidate fields and the path-tree operation mask.
+padding. [`PathGraphStateKeyV1`](../../../crates/erebor-interceptor-abi/src/abi/path.rs#L100)
+contains the profile generation and state. [`PathGraphTerminalV1`](../../../crates/erebor-interceptor-abi/src/abi/path.rs#L119)
+contains a path-terminal composite atom, rule handle, exact-object requirement,
+and path-tree operation mask.
 
 These Rust types use `repr(C)` and native byte order because userspace and BPF
 share one kernel host. cbindgen produces the checked C declarations. The BPF
@@ -1216,24 +1325,52 @@ typed identity or policy error before activation.
 | --- | --- |
 | `path_tree_rules_are_signed_denial_floors_only` | Checks the signed restriction boundary and rejects positive or ambiguous forms. |
 | `child_owned_policy_values_validate_before_document_relationships` | Checks that a child-owned local-ID error is returned before document relationship checks. |
-| [`process_control_requires_exact_positive_arguments_and_target_roles`](../../../crates/mithril-control/tests/policy_compilation.rs#L241) | Checks the `TryFrom` operation conversion, exact numeric arguments, wildcard limits, and target-role requirement. |
-| [`file_namespace_operations_compile_to_closed_kernel_ids`](../../../crates/mithril-control/tests/policy_compilation.rs#L398) | Checks that each signed file-namespace operation converts to its closed kernel operation ID. |
+| [`process_control_requires_exact_positive_arguments_and_target_roles`](../../../crates/mithril-control/tests/policy_compilation.rs#L357) | Checks the `TryFrom` operation conversion, exact numeric arguments, wildcard limits, and target-role requirement. |
+| [`file_namespace_operations_compile_to_closed_kernel_ids`](../../../crates/mithril-control/tests/policy_compilation.rs#L514) | Checks that each signed file-namespace operation converts to its closed kernel operation ID. |
 | `recursive_path_tree_deny_covers_the_root_and_descendants` | Checks the root, descendants, and outside path in the deterministic graph. |
 | `canonical_path_accepts_meta_depth_and_rejects_one_more` | Accepts 255 canonical components and rejects 256 components. |
+| `recursive_signed_selector_stages_without_a_live_object` | Checks that a recursive signed `PATH` selector creates graph and default-decision rows without an exact-object or mount row. |
+| `path_selector_stages_a_path_decision_without_an_exact_object` | Checks that a signed `PATH` selector creates a terminal with `exact_object_required == 0` and a matching default decision. |
 | `path_tree_floor_lowers_without_a_live_mount_view` | Checks that Rust lowers the floor with no exact object, mount namespace, or mount root row. |
 | `path_graph_rows_are_scoped_to_the_bound_generation` | Checks that two generations have disjoint graph keys. |
-| Current BPF source inspection | Confirms namespace filtering, minimum unique mount ID per root dentry, source-side `d_parent` traversal, filesystem-root mount crossing, leaf-to-head collection, reversal, and path-tree decision order. |
+| Current BPF source inspection | Confirms admitted-route lookup before mount-age selection, namespace filtering, minimum unique mount ID per fallback root dentry, source-side `d_parent` traversal, filesystem-root mount crossing, synchronous stability recheck, path-tree denial order, `PATH` default-decision branch, and `EXACT` binding branch. |
 | `bpf_path_walks_use_compiled_component_and_namespace_budgets` | Inspects the compiled object for the 255-component and 4,351-callback `bpf_loop` limits. It also checks the 255-entry scan-stack source bound. |
-| Successful child-directory bind | The protected physical probe creates one bind before activation and one bind after activation. It reconciles the second bind. Both alias opens return `PATH_TREE_POLICY_DENY`. |
-| Recursive bind and new mount API | Successful recursive-bind and `open_tree` plus `move_mount` aliases return `PATH_TREE_POLICY_DENY`. Matching allowed aliases return `EXACT_POLICY_ALLOW`. |
+| Current paired route case | The lightweight and Kubernetes cases deny both Kubernetes mount orders and one later child-directory bind. Both cases allow the unrelated control path. |
+| Historical recursive bind and new mount API record | One recorded probe reports denial for recursive-bind and `open_tree` plus `move_mount` aliases. It is not current proof for the live `PATH` selector branch. |
 | `generation_retirement_waits_for_async_io_authority` | Checks retained asynchronous authority and removal of all three generation-scoped path maps. |
-| Cross-architecture compile | The production object compiles with `-Wall -Werror` against checked x86, arm64, arm, and RISC-V kernel headers. This is not non-x86 physical proof. |
-| Merged source comparison | The current `identity_path.bpf.h` and `identity_maps.h` files match the physically qualified path implementation. The current tree contains that path implementation and later local-enforcement changes. |
-| Repository Rust verification | The repository gate passed formatting, workspace check, and warnings-as-errors Clippy. The full workspace test command passed 972 tests; 15 tests were ignored and 4 were filtered out. |
-| Phase 2 companion | The exact four-crate, all-targets, all-features suite passed 224 tests. Identity source verification and the identity probe build also passed. |
-| Qualification VM | The current protected effect probe passed with the production BPF object. Its result records all protected and allowed bind-form fields as true. It also records pin-root, lease, cgroup, and fixture cleanup as true. |
+| Historical cross-architecture compile | The recorded production object compilation used `-Wall -Werror` against checked x86, arm64, arm, and RISC-V kernel headers. This is not non-x86 physical proof. |
+| Current repository Rust verification | `.github/scripts/verify-rust-ci.sh` passed on 2026-09-01 after the last Rust change. It covered format, workspace check, strict Clippy, and the full test suite. |
+| Historical qualification VM | The recorded protected effect probe passed with the production BPF object. Its result records protected and allowed bind-form fields, pin-root cleanup, lease cleanup, cgroup cleanup, and fixture cleanup. It does not exercise the current `PATH` selector branch. |
 
-The path-tree source VM command was:
+On 2026-08-22, this guide ran these current focused checks:
+
+```sh
+rtk cargo test -p mithril-node selector_stages --lib
+rtk cargo test -p mithril-control recursive_path_tree_deny_covers_the_root_and_descendants --lib
+```
+
+Both commands passed. They do not attach BPF programs or run a qualification
+virtual machine.
+
+On 2026-09-01, the exact current BPF object had SHA-256
+`15f93b0a25ecd5442901d1b6ea09d8a86cb36f770c269a84d13f7a991ff43b37`.
+The retained lightweight VM ran the paired route case at
+`/var/tmp/mithril-runtime-qualification-3504827/runc-entry-roles-oci66`.
+It denied both Kubernetes mount orders, the later in-container bind,
+`/home/*/secrets`, and `/srv/**/secrets`. The unrelated control path and the
+other role remained allowed. The case also passed Node owner restart and
+pinned-program upgrade.
+
+The Kubernetes protected-start case then passed with the same production
+images and BPF object. It produced the same five denials and
+`CONTROL_ALLOWED`. Its evidence directory is
+`/tmp/mithril-route-synchronous-parser-fixed-20260901`. The effect capture
+contains nine `PATH_TREE_POLICY_DENY` records for application role 8. The
+fixture parser reads whitespace-delimited `key=value` fields and accepts
+`kernel_result=-13` as the final field. The ring records are evidence. The
+marker files and syscall results are the authorization oracle.
+
+The following path-tree source VM command and result are historical evidence:
 
 ```sh
 rtk proxy crates/mithril-e2e/harness/vm/run.sh --with-k3s \
@@ -1253,7 +1390,9 @@ The platform was x86_64 Ubuntu with Linux `6.8.0-137-generic` and BPF in the
 active LSM order. The harness removed the VM. An independent libvirt query
 found no remaining domain.
 
-The current protected probe records these new true results:
+The historical protected-probe record contains these true fields. This guide
+does not treat them as current proof. The paired current-source result above
+supplies the current routed child-bind proof:
 
 - `path_tree_preexisting_bind_alias_denied`
 - `path_tree_postactivation_bind_alias_denied`
@@ -1325,11 +1464,17 @@ rejected artifact contributes to the checked qualification record.
 - The physical result is x86_64 only.
 - The component and mount bounds are verifier limits. They are not claims that
   Linux cannot contain larger paths or mount namespaces. An overflow denies.
-- The BPF live walk covers the path-tree restriction. Exact-object,
+- The BPF source has a live `PATH` terminal branch. The current focused tests
+  prove only lowering. They do not yet prove that branch through an attached
+  BPF LSM hook or a qualification virtual machine.
+- The recorded physical result covers the path-tree restriction. Exact-object,
   persistent-file, virtual-memory, and delegated-I/O authority retain their
   separate rules and limits.
-- The implementation does not add a Kubernetes custom resource definition,
-  admission webhook, policy controller, or multi-node distribution path.
+- `EXACT` selector matching still depends on a measured object supplied to the
+  node. The signed-policy-only producer and CRI-time resolution path remain
+  unimplemented.
+- This path-tree result does not prove the Kubernetes custom resource,
+  admission, or multi-node distribution contracts outside the paired case.
 - The VM proves future namespace binding and multiple generation-scoped map
   keys. It does not prove a complete Kubernetes admission race or two physical
   Pods with different custom-resource policies.
@@ -1339,17 +1484,18 @@ rejected artifact contributes to the checked qualification record.
   nested submount. A recursive tree with nested mounts needs separate proof.
 - The new mount API proof uses `open_tree` plus `move_mount`. It does not prove
   an `fsopen` plus `fsmount` filesystem construction.
-- The focused signed path-tree denial claim is **Done** for the tested mount
-  forms. Unrelated Phase 4 work remains outside this result.
+- The live `PATH` selector branch has source and lowering-test coverage only.
+- The current paired result establishes the two Kubernetes mount orders and one
+  later child-directory bind. It does not qualify every mount form above.
 
 ## Source state and guide verification
 
-This guide was checked against the current working tree on 2026-08-21. The
-working tree contains the source-aware BPF walk, its Rust compatibility
-resolver, the physical mount-form fixture, and this documentation update.
+This guide covers the working tree based on `63ffb57328ab` on 2026-09-01. It
+includes the signed `PathSelectorV1` source, live `PATH` lowering,
+exact-object-required terminal flag, entry-time route rows, synchronous BPF
+topology reconstruction, and the path-tree floor branch.
 
-The focused Rust suites passed. The compiled BPF-object tests passed. The
-repository formatting, check, Clippy, and full workspace test gates passed.
-The protected physical probe passed in the retained x86_64 qualification VM.
-The probe used the production BPF object and cleaned its owned kernel and
-filesystem state. The source state is not a non-x86 physical result.
+The exact current BPF object and paired lightweight and Kubernetes route cases
+passed. The full repository Rust gate result appears in the test table above.
+The current evidence is not proof of the positive live `PATH` selector branch,
+every mount form, or a non-x86 physical result.

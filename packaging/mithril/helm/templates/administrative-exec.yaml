@@ -1,0 +1,101 @@
+{{- if and .Values.control.enabled .Values.control.administrativeExec.enabled }}
+{{- $token := required "control.administrativeExec.webhookToken is required" .Values.control.administrativeExec.webhookToken }}
+{{- $ca := required "control.administrativeExec.webhookCABundle is required" .Values.control.administrativeExec.webhookCABundle }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: mithril-control
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: mithril-control-administrative-exec
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: mithril-control-administrative-exec
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: mithril-control-administrative-exec
+subjects:
+  - kind: ServiceAccount
+    name: mithril-control
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: mithril-approved-administrative-exec
+rules:
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: mithril-approved-administrative-exec
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: mithril-approved-administrative-exec
+subjects:
+  - kind: Group
+    name: mithril:administrative-exec
+    apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingWebhookConfiguration
+metadata:
+  name: mithril-administrative-exec
+webhooks:
+  - name: administrative-exec.mithril.ereborlabs.com
+    admissionReviewVersions: ["v1"]
+    sideEffects: None
+    failurePolicy: Fail
+    matchPolicy: Exact
+    timeoutSeconds: 5
+    clientConfig:
+      service:
+        namespace: {{ .Release.Namespace }}
+        name: mithril-control
+        port: {{ .Values.control.administrativeExec.port }}
+        path: /kubernetes/{{ $token }}/admit
+      caBundle: {{ $ca | quote }}
+    rules:
+      - operations: ["CONNECT"]
+        apiGroups: [""]
+        apiVersions: ["v1"]
+        resources: ["pods/exec"]
+        scope: Namespaced
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: mithril-authentication-webhook
+type: Opaque
+stringData:
+  kubeconfig.yaml: |
+    apiVersion: v1
+    kind: Config
+    clusters:
+      - name: mithril
+        cluster:
+          certificate-authority-data: {{ $ca }}
+          server: https://mithril-control.{{ .Release.Namespace }}.svc:{{ .Values.control.administrativeExec.port }}/kubernetes/{{ $token }}/authenticate
+    contexts:
+      - name: mithril
+        context:
+          cluster: mithril
+          user: kube-apiserver
+    current-context: mithril
+    users:
+      - name: kube-apiserver
+        user: {}
+{{- end }}

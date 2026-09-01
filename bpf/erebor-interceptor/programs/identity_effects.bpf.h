@@ -3,6 +3,8 @@
 #ifndef EREBOR_IDENTITY_EFFECTS_BPF_H
 #define EREBOR_IDENTITY_EFFECTS_BPF_H
 
+#define LINUX_CAP_SYS_ADMIN_V1 21
+
 SEC("raw_tracepoint/sys_enter")
 int erebor_exception_sys_enter(struct bpf_raw_tracepoint_args *context)
 {
@@ -193,7 +195,7 @@ static __always_inline bool path_tree_denies(
 {
     if (!scratch || operation >= 64)
         return false;
-    return scratch->path_terminal.path_tree_deny_operation_mask &
+    return scratch->path_tree_deny_operation_mask &
            (1ULL << operation);
 }
 
@@ -259,6 +261,12 @@ static __always_inline physical_decision_v1 *effect_base_decision(
     scratch->effect_key.operation = scratch->observation.operation;
     scratch->effect_key.composite_atom_id =
         scratch->observation.composite_atom_id;
+    if (scratch->effect_key.effect_family ==
+            kernel_effect_family_v1_privilege &&
+        scratch->effect_key.operation ==
+            kernel_effect_operation_v1_capability)
+        scratch->effect_key.composite_atom_id =
+            (__u64)scratch->observation.operation_argument + 1;
     scratch->effect_key.exact_object_key_id =
         scratch->observation.exact_object_key_id;
     scratch->effect_key.process_state_vector_id =
@@ -284,7 +292,34 @@ static __always_inline physical_decision_v1 *effect_base_decision(
         scratch->effect_key.process_state_vector_id;
     scratch->effect_default.binding_lifecycle_state =
         scratch->effect_key.binding_lifecycle_state;
-    return bpf_map_lookup_elem(&effect_defaults, &scratch->effect_default);
+    decision = bpf_map_lookup_elem(&effect_defaults,
+                                   &scratch->effect_default);
+    if (decision)
+        return decision;
+    if (scratch->effect_key.effect_family ==
+            kernel_effect_family_v1_privilege &&
+        scratch->effect_key.operation ==
+            kernel_effect_operation_v1_capability) {
+        scratch->effect_default.composite_atom_id = 0;
+        return bpf_map_lookup_elem(&effect_defaults,
+                                   &scratch->effect_default);
+    }
+    if (scratch->effect_key.effect_family == kernel_effect_family_v1_mount) {
+        scratch->effect_default.effect_family =
+            kernel_effect_family_v1_privilege;
+        scratch->effect_default.operation =
+            kernel_effect_operation_v1_capability;
+        scratch->effect_default.composite_atom_id =
+            LINUX_CAP_SYS_ADMIN_V1 + 1;
+        decision = bpf_map_lookup_elem(&effect_defaults,
+                                       &scratch->effect_default);
+        if (decision)
+            return decision;
+        scratch->effect_default.composite_atom_id = 0;
+        return bpf_map_lookup_elem(&effect_defaults,
+                                   &scratch->effect_default);
+    }
+    return NULL;
 }
 
 static __always_inline exact_object_binding_v1 *configured_file_object_binding(
@@ -607,22 +642,41 @@ static __noinline int resolved_identity_effect_gate(struct file *file,
         return admitted_default_or_hard_effect_result(
             config, scratch, binding, label, entry,
             effect_observation_reason_v1_unsupported_object);
-    visible_path_result = container_visible_path_candidate(
-        &scratch->effect_path,
-        scratch->process.active_profile_generation_ref_id, scratch);
+    visible_path_result = known_mount_path_candidate(
+        &scratch->effect_path, binding,
+        scratch->process.active_profile_generation_ref_id,
+        scratch->process.active_role_id, scratch);
+    if (visible_path_result &&
+        scratch->canonical_mount_root.selected_mount_id_unique)
+        return admitted_default_or_hard_effect_result(
+            config, scratch, binding, label, entry,
+            effect_observation_reason_v1_unresolved_object);
     if (visible_path_result) {
+        visible_path_result = container_visible_path_candidate(
+            &scratch->effect_path,
+            scratch->process.active_profile_generation_ref_id,
+            scratch->process.active_role_id, scratch);
         __u8 reason = visible_path_result > 0
                           ? effect_observation_reason_v1_unsupported_object
                           : effect_observation_reason_v1_unresolved_object;
 
-        if (canonical_path_candidate(
+        if (visible_path_result) {
+            visible_path_result = canonical_path_candidate(
                 &scratch->effect_path, binding,
-                scratch->process.active_profile_generation_ref_id, scratch) ||
-            (!scratch->path_terminal.exact_object_required &&
-             !path_tree_denies(scratch,
-                               scratch->observation.operation)))
-            return admitted_default_or_hard_effect_result(
-                config, scratch, binding, label, entry, reason);
+                scratch->process.active_profile_generation_ref_id,
+                scratch->process.active_role_id, scratch);
+            if (visible_path_result &&
+                !scratch->mount_topology_generation)
+                return hard_effect_result(
+                    config, scratch,
+                    effect_observation_reason_v1_unresolved_object);
+            if (visible_path_result &&
+                !scratch->path_terminal.exact_object_required &&
+                !path_tree_denies(scratch,
+                                  scratch->observation.operation))
+                return admitted_default_or_hard_effect_result(
+                    config, scratch, binding, label, entry, reason);
+        }
     }
     if (scratch->path_terminal.exact_object_required) {
         path_composite_atom_id = scratch->path_terminal.composite_atom_id;
@@ -647,7 +701,8 @@ static __noinline int resolved_identity_effect_gate(struct file *file,
         scratch->file_object = scratch->live_file_object;
         if (canonical_path_candidate(
                 &scratch->effect_path, binding,
-                scratch->process.active_profile_generation_ref_id, scratch)) {
+                scratch->process.active_profile_generation_ref_id,
+                scratch->process.active_role_id, scratch)) {
             if (scratch->path_mount_namespace_inode) {
                 scratch->path_mount_namespace_inode = 0;
                 return admitted_default_or_hard_effect_result(
@@ -693,11 +748,7 @@ static __noinline int resolved_identity_effect_gate(struct file *file,
         return admitted_default_or_hard_effect_result(
             config, scratch, binding, label, entry,
             effect_observation_reason_v1_unsupported_object);
-    if (exact_mount_view_snapshot(
-            scratch->file_object.mount_namespace_inode, 0,
-            &scratch->mount_transition_version) ||
-        exact_mount_event_snapshot(
-            scratch, scratch->mount_transition_version, true))
+    if (synchronous_mount_snapshot_unchanged(scratch))
         return admitted_default_or_hard_effect_result(
             config, scratch, binding, label, entry,
             effect_observation_reason_v1_unresolved_object);
@@ -719,12 +770,7 @@ static __noinline int resolved_identity_effect_gate(struct file *file,
         return 0;
     decision = effect_base_decision(scratch, &scratch->process,
                                     process_vector, entry, binding);
-    if (exact_mount_view_snapshot(
-            scratch->file_object.mount_namespace_inode,
-            scratch->mount_transition_version,
-            &scratch->mount_transition_version) ||
-        exact_mount_event_snapshot(
-            scratch, scratch->mount_transition_version, false))
+    if (synchronous_mount_snapshot_unchanged(scratch))
         return admitted_default_or_hard_effect_result(
             config, scratch, binding, label, entry,
             effect_observation_reason_v1_unresolved_object);
@@ -1322,7 +1368,7 @@ static __always_inline bool initial_root_is_before_first_exec(void)
 
 static __always_inline int mount_mutation_effect(__u16 operation, int ret)
 {
-    /* Only the exact prepared runtime entry can change its setup mount view. */
+    /* An explicit mount denial wins before exact CAP_SYS_ADMIN authority. */
     if (!ret)
         prepare_effect_identity();
     if (ret || initial_root_is_before_first_exec())
@@ -1330,17 +1376,6 @@ static __always_inline int mount_mutation_effect(__u16 operation, int ret)
     ret = identity_effect_gate(NULL, kernel_effect_family_v1_mount, operation,
                                ret);
     if (ret)
-        return ret;
-    return begin_mount_mutation();
-}
-
-SEC("lsm/sb_kern_mount")
-int BPF_PROG(erebor_identity_sb_kern_mount, const struct super_block *superblock,
-             int ret)
-{
-    if (!ret)
-        prepare_effect_identity();
-    if (ret || initial_root_is_before_first_exec())
         return ret;
     return begin_mount_mutation();
 }

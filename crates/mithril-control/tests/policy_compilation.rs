@@ -186,38 +186,30 @@ fn path_tree_rules_are_signed_denial_floors_only() -> mithril_control::Result<()
         1,
     ))?;
     document.path_tree_deny_floors.push(PathTreeDenyFloorV1 {
-        schema_version: 1,
         rule_id: "deny-secret-tree".to_owned(),
-        canonical_path: "/tmp/secret-dir".to_owned(),
-        recursive: true,
-        effect_families: vec![EffectFamilyV1::File],
+        role_id: "converter".to_owned(),
+        path: "/home/*/secrets".to_owned(),
         operation_ids: ["CREATE", "OPEN_READ", "RENAME"]
             .map(str::to_owned)
             .to_vec(),
-        requested_disposition: PolicyDispositionV1::Deny,
-        exception_ids: Vec::new(),
     });
     assert!(PolicyCompiler.compile(&document).is_ok());
 
-    let mut allow = document.clone();
-    allow.path_tree_deny_floors[0].requested_disposition = PolicyDispositionV1::Allow;
+    let mut unknown_role = document.clone();
+    unknown_role.path_tree_deny_floors[0].role_id = "unknown".to_owned();
     assert!(PolicyCompiler
-        .compile(&allow)
+        .compile(&unknown_role)
+        .is_err_and(|error| error.to_string().contains("CFG_ROLE_REFERENCE")));
+
+    let mut root = document.clone();
+    root.path_tree_deny_floors[0].path = "/".to_owned();
+    assert!(PolicyCompiler
+        .compile(&root)
         .is_err_and(|error| error.to_string().contains("CFG_PATH_TREE_DENY")));
 
-    let mut non_recursive = document.clone();
-    non_recursive.path_tree_deny_floors[0].recursive = false;
-    assert!(PolicyCompiler
-        .compile(&non_recursive)
-        .is_err_and(|error| error.to_string().contains("CFG_PATH_TREE_DENY")));
-
-    let mut excepted = document;
-    excepted.path_tree_deny_floors[0]
-        .exception_ids
-        .push("not-a-positive-path-exception".to_owned());
-    assert!(PolicyCompiler
-        .compile(&excepted)
-        .is_err_and(|error| error.to_string().contains("CFG_PATH_TREE_DENY")));
+    let mut empty_role = document;
+    empty_role.path_tree_deny_floors[0].role_id.clear();
+    assert!(PolicyCompiler.compile(&empty_role).is_err());
     Ok(())
 }
 
@@ -424,6 +416,40 @@ fn generic_privilege_local_rules_are_denial_only() -> mithril_control::Result<()
                 .compile(&invalid)
                 .is_err_and(|error| error.to_string().contains("CFG_PRIVILEGE_WILDCARD")));
         }
+    }
+
+    let mut exact = parse(VALID_POLICY)?;
+    let mithril_control::RuleMatchV1::LocalPreEffect(effect) = &mut exact.rules[0].rule_match
+    else {
+        unreachable!("fixture has a local effect rule")
+    };
+    effect.effect_families = vec![EffectFamilyV1::Privilege];
+    effect.operation_ids = vec!["CAPABILITY".to_owned()];
+    effect.object = mithril_control::LocalObjectSelectorV1::SecurityObjects {
+        security_object_ids: vec!["LINUX_CAPABILITY".to_owned()],
+        target_selector_ids: vec!["21".to_owned()],
+    };
+    exact.rules[0].requested_disposition = PolicyDispositionV1::Allow;
+    exact.rules[0].errno = None;
+    let compiled = PolicyCompiler.compile(&exact)?;
+    assert!(compiled.compiled_cells.iter().all(|cell| {
+        cell.key.effect_family == EffectFamilyV1::Privilege
+            && cell.key.operation_id == "CAPABILITY"
+            && cell.key.object_selector == "SECURITY:LINUX_CAPABILITY:21"
+            && cell.physical_result == CompiledPhysicalResultV1::AllowEffect
+    }));
+
+    for target in ["*", "41", "sys_admin"] {
+        let mut invalid = exact.clone();
+        let mithril_control::RuleMatchV1::LocalPreEffect(effect) = &mut invalid.rules[0].rule_match
+        else {
+            unreachable!("fixture has a local effect rule")
+        };
+        effect.object = mithril_control::LocalObjectSelectorV1::SecurityObjects {
+            security_object_ids: vec!["LINUX_CAPABILITY".to_owned()],
+            target_selector_ids: vec![target.to_owned()],
+        };
+        assert!(PolicyCompiler.compile(&invalid).is_err());
     }
     Ok(())
 }

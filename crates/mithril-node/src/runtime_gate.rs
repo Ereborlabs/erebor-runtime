@@ -273,12 +273,7 @@ impl RuntimeRecoveryEntryV1 {
     fn matches_installer(&self, config: &OciRuntimeConfigV1) -> io::Result<bool> {
         if self.executable != Path::new("/usr/local/bin/mithril-oci-hook")
             || self.args.get(1).map(String::as_str) != Some("install")
-            || config
-                .process
-                .args
-                .first()
-                .map(|argument| Path::new(argument))
-                != Some(self.executable.as_path())
+            || config.process.args.first().map(Path::new) != Some(self.executable.as_path())
             || config.process.args.get(1).map(String::as_str) != Some("install")
             || !(2..=MAXIMUM_RECOVERY_ARGUMENTS).contains(&config.process.args.len())
             || config.process.no_new_privileges

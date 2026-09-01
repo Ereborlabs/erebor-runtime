@@ -175,6 +175,13 @@ impl PolicyDocumentV1 {
             "role registry must equal defined roles"
         );
         require!(
+            self.path_tree_deny_floors
+                .iter()
+                .all(|floor| roles.contains(floor.role_id.as_str())),
+            "CFG_ROLE_REFERENCE",
+            "path-tree denial references an unknown role"
+        );
+        require!(
             selectors == string_set!(&self.protected_universe.workload_selector_ids),
             "CFG_SELECTOR_REGISTRY",
             "selector registry must equal defined selectors"
@@ -472,6 +479,18 @@ impl PolicyDocumentV1 {
                             roles.contains(target_selector_ids[0].as_str()),
                             "CFG_PROCESS_CONTROL_KEY",
                             format!("rule `{}` has an unknown target role", rule.rule_id)
+                        );
+                    }
+                    if security_object_ids
+                        .iter()
+                        .any(|id| id == "LINUX_CAPABILITY")
+                    {
+                        require!(
+                            target_selector_ids.iter().all(|target| target
+                                .parse::<u32>()
+                                .is_ok_and(|capability| capability <= 40)),
+                            "CFG_LINUX_CAPABILITY_KEY",
+                            format!("rule `{}` has an unknown Linux capability", rule.rule_id)
                         );
                     }
                 }

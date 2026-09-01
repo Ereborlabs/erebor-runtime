@@ -383,12 +383,30 @@ impl DetectionDispositionRuleV1 {
                     | "IO_URING_COMMAND"
             )
         };
+        let exact_linux_capability = matches!(
+            &effect.object,
+            LocalObjectSelectorV1::SecurityObjects {
+                security_object_ids,
+                target_selector_ids,
+            } if security_object_ids.as_slice() == ["LINUX_CAPABILITY"]
+                && !target_selector_ids.is_empty()
+                && ordered_unique(target_selector_ids)
+                && target_selector_ids.iter().all(|target| {
+                    target.parse::<u32>().is_ok_and(|capability| capability <= 40)
+                })
+                && effect.effect_families.as_slice() == [EffectFamilyV1::Privilege]
+                && effect.operation_ids.as_slice() == ["CAPABILITY"]
+        );
         require!(
             self.requested_disposition == PolicyDispositionV1::Deny
                 || effect
                     .operation_ids
                     .iter()
-                    .all(|operation| !matches!(operation.as_str(), "CAPABILITY" | "BPF")),
+                    .all(|operation| match operation.as_str() {
+                        "CAPABILITY" => exact_linux_capability,
+                        "BPF" => false,
+                        _ => true,
+                    }),
             "CFG_PRIVILEGE_WILDCARD",
             format!("rule `{}` uses generic privilege authority", self.rule_id)
         );
@@ -463,6 +481,22 @@ impl DetectionDispositionRuleV1 {
                 "CFG_PROCESS_CONTROL_KEY",
                 format!("rule `{}` has an invalid process-control key", self.rule_id)
             ),
+            LocalObjectSelectorV1::SecurityObjects {
+                security_object_ids,
+                ..
+            } if security_object_ids
+                .iter()
+                .any(|object| object == "LINUX_CAPABILITY") =>
+            {
+                require!(
+                    exact_linux_capability,
+                    "CFG_LINUX_CAPABILITY_KEY",
+                    format!(
+                        "rule `{}` has an invalid Linux capability key",
+                        self.rule_id
+                    )
+                )
+            }
             _ => {}
         }
         Ok(())

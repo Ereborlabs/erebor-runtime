@@ -165,7 +165,7 @@ pub const REQUIRED_QUALIFICATION_PROGRAMS: [&str; 55] = [
     "qualification_final_flow",
 ];
 
-pub const REQUIRED_IDENTITY_PROGRAMS: [&str; 79] = [
+pub const REQUIRED_IDENTITY_PROGRAMS: [&str; 78] = [
     "erebor_task_alloc",
     "erebor_policy_activation_probe",
     "erebor_cgroup_attach_task",
@@ -220,7 +220,6 @@ pub const REQUIRED_IDENTITY_PROGRAMS: [&str; 79] = [
     "erebor_identity_file_truncate",
     "erebor_identity_path_link",
     "erebor_identity_path_rename",
-    "erebor_identity_sb_kern_mount",
     "erebor_identity_sb_mount",
     "erebor_identity_sb_umount",
     "erebor_identity_sb_pivotroot",

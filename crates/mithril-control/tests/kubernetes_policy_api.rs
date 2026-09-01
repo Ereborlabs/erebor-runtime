@@ -18,6 +18,9 @@ const POLICY: &str = include_str!("fixtures/kubernetes-policy-v1.yaml");
 const ENTRY_ROLES_POLICY: &str = include_str!("fixtures/kubernetes-entry-roles-v1.yaml");
 const CONVERGENCE_POLICY: &[u8] =
     include_bytes!("../../mithril-e2e/fixtures/convergence/policy-v1.yaml");
+const PACKAGED_POLICY_CRD: &[u8] = include_bytes!(
+    "../../../packaging/mithril/helm/crds/mithril.erebor.dev_workloadprotectionpolicies.yaml"
+);
 const TENANT_ID: &str = "10000000-0000-4000-8000-000000000001";
 const CLUSTER_UID: &str = "10000000-0000-4000-8000-000000000002";
 const NAMESPACE_UID: &str = "10000000-0000-4000-8000-000000000003";
@@ -110,6 +113,12 @@ fn generated_crds_are_namespaced_structural_and_keep_authority_out_of_status() -
             "LivenessProbe"
         ]))
     );
+    assert!(policy_json
+        .pointer(
+            "/spec/versions/0/schema/openAPIV3Schema/properties/spec/properties/roles/items/properties/capabilities/items/properties/capabilities/items/enum",
+        )
+        .and_then(Value::as_array)
+        .is_some_and(|capabilities| capabilities.contains(&json!("SysAdmin"))));
 
     let exception = exception_custom_resource_definition()?;
     assert_eq!(exception.spec.scope, "Namespaced");
@@ -146,6 +155,14 @@ fn generated_crds_are_namespaced_structural_and_keep_authority_out_of_status() -
 }
 
 #[test]
+fn packaged_policy_crd_matches_the_control_schema_owner() -> TestResult {
+    let packaged: Value = serde_json::from_slice(PACKAGED_POLICY_CRD)?;
+    let generated = serde_json::to_value(policy_custom_resource_definition()?)?;
+    assert_eq!(packaged, generated);
+    Ok(())
+}
+
+#[test]
 fn stored_and_offline_policy_specs_lower_to_the_same_compilable_policy() -> TestResult {
     let offline = spec()?;
     let resource = resource()?;
@@ -161,6 +178,36 @@ fn stored_and_offline_policy_specs_lower_to_the_same_compilable_policy() -> Test
     assert!(!compiled.compiled_cells.is_empty());
     assert!(lowered.exceptions.is_empty());
     assert_eq!(lowered.file_exception_grants.len(), 1);
+    assert_eq!(lowered.path_tree_deny_floors.len(), 2);
+    assert!(lowered.path_tree_deny_floors.iter().any(|denial| {
+        denial.rule_id == "deny-home-secret-trees"
+            && denial.role_id == "worker"
+            && denial.path == "/home/*/secrets"
+            && denial.operation_ids == ["OPEN_READ"]
+    }));
+    let capability_cells = compiled
+        .compiled_cells
+        .iter()
+        .filter(|cell| {
+            cell.source_rule_ids
+                .iter()
+                .any(|rule| rule == "allow-sys-admin")
+        })
+        .collect::<Vec<_>>();
+    assert!(!capability_cells.is_empty());
+    assert!(capability_cells.iter().all(|cell| {
+        cell.key.effect_family == EffectFamilyV1::Privilege
+            && cell.key.operation_id == "CAPABILITY"
+            && cell.key.object_selector == "SECURITY:LINUX_CAPABILITY:21"
+            && cell.physical_result == CompiledPhysicalResultV1::AllowEffect
+            && cell.errno.is_none()
+    }));
+    assert!(lowered.path_tree_deny_floors.iter().any(|denial| {
+        denial.rule_id == "deny-nested-secret-trees"
+            && denial.role_id == "worker"
+            && denial.path == "/srv/**/secrets"
+            && denial.operation_ids == ["OPEN_READ"]
+    }));
     assert_eq!(lowered.effect_family_defaults.len(), 2);
     assert!(lowered.effect_family_defaults.iter().all(|default| {
         default.effect_family == EffectFamilyV1::Network
@@ -552,6 +599,20 @@ fn policy_lowering_rejects_unqualified_or_ambiguous_authority() -> TestResult {
     allow_exception.spec.exception_grants[0].file_rules = vec!["allow-python-read".to_owned()];
     assert!(
         lower_kubernetes_policy(&allow_exception, TENANT_ID, CLUSTER_UID, NAMESPACE_UID).is_err()
+    );
+
+    let mut invalid_path_tree = resource()?;
+    invalid_path_tree.spec.roles[0].path_tree_denials[0].path = "/".to_owned();
+    assert!(
+        lower_kubernetes_policy(&invalid_path_tree, TENANT_ID, CLUSTER_UID, NAMESPACE_UID).is_err()
+    );
+
+    let mut duplicate_path_tree = resource()?;
+    duplicate_path_tree.spec.roles[0].path_tree_denials[0].name =
+        duplicate_path_tree.spec.roles[0].files[0].name.clone();
+    assert!(
+        lower_kubernetes_policy(&duplicate_path_tree, TENANT_ID, CLUSTER_UID, NAMESPACE_UID)
+            .is_err()
     );
     Ok(())
 }

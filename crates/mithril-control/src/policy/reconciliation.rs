@@ -1239,10 +1239,6 @@ pub(crate) fn restrictive_terminal_document(policy: &PolicyDocumentV1) -> Policy
     let mut terminal = policy.clone();
     terminal.file_exception_grants.clear();
     terminal.exceptions.clear();
-    for floor in &mut terminal.path_tree_deny_floors {
-        floor.requested_disposition = PolicyDispositionV1::Deny;
-        floor.exception_ids.clear();
-    }
     for transition in &mut terminal.native_transition_rules {
         transition.requested_disposition = PolicyDispositionV1::Deny;
         transition.errno = Some(ErrnoV1::Eperm);

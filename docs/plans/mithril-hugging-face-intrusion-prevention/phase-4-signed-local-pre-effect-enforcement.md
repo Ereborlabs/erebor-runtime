@@ -2,7 +2,7 @@
 
 Status: **Not done** for the complete phase. The signed path-tree denial claim
 is **Done** for the tested ordinary bind, recursive-bind, and `move_mount`
-forms. The Kubernetes baseline-submount route correction is **Not done**. The
+forms. The Kubernetes baseline-submount route correction is **Done**. The
 remaining unsupported capabilities and the stock-runc administrative
 bootstrap keep the phase open.
 
@@ -44,9 +44,11 @@ current exec/native state, not a command string or path alone.
 Enforce exact open/read/write/create/setattr/rename/link/unlink/mmap decisions,
 projected-token rotation, proc aliases, inherited/passed fds, overlay copy-up,
 persistent objects, and delegated-I/O acquisition. Mount/topology mutations
-are denied where undeclared; any allowed change enters DIRTY before effect and
-blocks strict file/exec decisions until complete reconciliation. Canonical path
-matching remains an exact-object candidate for a positive decision.
+are denied where undeclared. For an allowed topology change, BPF updates its
+synchronous mutation guard before effect. Each later file or executable
+decision rebuilds and verifies the live topology before it can allow.
+Canonical path matching remains an exact-object candidate for a positive
+decision.
 
 Add signed recursive path-tree `DENY` floors. A rule can protect a canonical
 path such as `/tmp/secret-dir/**` and deny its covered effects for every
@@ -71,6 +73,20 @@ PID inode stage publishes route rows as dynamic binding state in that same
 generation. Route publication must not add graph states, change the generation
 digest, or allocate a second generation. Completion of provisional entry and
 exact-object measurement also stays in the same generation.
+
+At the held `createRuntime` stage, the task still has its pre-container root.
+Node opens the configured root from the OCI bundle through the held mount
+namespace. It rebases bundle mountpoints to container paths and publishes the
+entry-time routes. It must not derive a route from `/proc/<pid>/root` at this
+stage. Node does not rebuild these routes after the task starts. This lifecycle
+does not change the graph or allocate another generation.
+
+BPF owns topology reconstruction after admission. Before a namespace-visible
+mount change, the BPF hooks update a global mutation epoch and pending count.
+For each file or executable decision, BPF snapshots that guard, reads the live
+namespace event, scans the live mount tree, resolves the path, and rechecks the
+same guard. A concurrent or unresolved topology denies. The ring-buffer mount
+event is evidence only. Node does not complete this authorization path.
 
 ### D4.4 — IPC and process-control enforcement
 
@@ -256,22 +272,24 @@ follows source `d_parent`. It crosses a selected mount attachment only at a
 self-parent filesystem root.
 
 Mount policy remains a separate owner. The physical probe lets each tested
-mount complete. It reconciles postactivation topology before access. The
-protected aliases return `PATH_TREE_POLICY_DENY`. Matching allowed aliases and
-the outside-tree file remain readable. The readable algorithm is in the
+mount complete. That source state reconciled postactivation topology before
+access. The protected aliases return `PATH_TREE_POLICY_DENY`. Matching allowed
+aliases and the outside-tree file remain readable. The synchronous correction
+below replaces the earlier reconciliation ownership. The readable algorithm is in the
 [path-tree implementation review](./path-tree-denial-implementation-review.md#successful-child-bind-source-walk).
 
 ## Kubernetes baseline-submount route correction — 2026-08-31
 
-State: **Not done**. This is the approved correction for the Kubernetes
-submount order case. It does not change the earlier physical result.
+State: **Done** for the paired lightweight and Kubernetes route case.
 
 ```text
 Node holds the authenticated initial container mount snapshot
-  -> the policy generation already contains the complete immutable path graph
+  -> Control has already compiled and signed the complete immutable path graph
   -> Node measures existing source dentries through the held container root
-  -> Node publishes dynamic inode routes that reference existing graph states
-  -> the active policy generation and its digest do not change
+  -> Node resolves each represented source path to an existing graph state
+  -> Node publishes only dynamic inode routes for the container binding
+  -> the provisional and completed binding keep the same generation handle
+  -> the active graph and its digest do not change
   -> a Kubernetes submount inherits the known source path
   -> Kubernetes mount creation order does not select the route
 
@@ -284,25 +302,44 @@ BPF finds no Node route on the source dentry ancestry
   -> BPF selects the oldest represented mount by unique mount ID
   -> BPF continues through that mount's parent path
   -> a missing or unresolved fallback denies under strict policy
+
+A represented namespace changes after activation
+  -> the BPF mount hook updates the global epoch and pending count before effect
+  -> the BPF return hook clears the pending count after the syscall
+  -> the next BPF decision snapshots the guard and live namespace event
+  -> BPF scans the live mount tree and resolves the path in the same hook chain
+  -> BPF rechecks the guard before it applies the policy decision
+  -> a race or unresolved path denies without a Node round trip
 ```
 
-The route stores a graph state, not an inode denial bit. A mount-root route at
+The route stores graph state IDs, not an inode denial bit. A mount-root route at
 `/home` keeps `*` active for `/home/*/secrets`. A mount-root route at `/srv`
 keeps `**` active for `/srv/**/secrets`. The container-root route supplies the
 same result when the path does not cross another mount. A future child uses
 the route on its known ancestor. If more than one known path applies to one
-source root, Node retains all applicable denial continuations and any denial
-wins.
+source root, Node stores the deduplicated existing states. BPF advances all of
+them, combines their role-specific denial masks, and applies any denial. One
+route can contain 16 states. Node refuses binding activation if it needs more.
+Node does not create a combined graph state.
 
-This route publication is part of container binding, not policy compilation.
-It does not require a second policy generation. A later signed policy
-replacement can use a new generation, but container creation cannot use
-generation replacement to publish inode routes.
+This route publication is part of the existing held-initial-PID inode stage.
+It is not policy compilation and does not require a second generation. A later
+signed policy replacement can use a new generation. Container creation cannot
+replace a generation to publish inode routes.
 
 The paired lightweight and Kubernetes tests must use both Kubernetes mount
 orders. They must also complete a later in-container bind mount. Both source
 and target paths are inside the container. The alias read must return
 `EACCES`, while an unrelated control path remains readable.
+
+The paired tests passed on 2026-09-01 with the current BPF object. The
+lightweight case denied both Kubernetes mount orders, the later in-container
+bind, `/home/*/secrets`, and `/srv/**/secrets`. Its unrelated control path
+remained readable. The case also passed owner restart and pinned-program
+upgrade. The Kubernetes protected-start case then produced the same five
+denials and `CONTROL_ALLOWED`. It ran with
+`--protected-start-only --reuse-environment` and wrote its result to
+`/tmp/mithril-route-synchronous-parser-fixed-20260901`.
 
 ## Qualification update — 2026-08-12
 

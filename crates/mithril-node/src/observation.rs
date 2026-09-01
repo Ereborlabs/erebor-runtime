@@ -8,7 +8,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use erebor_interceptor_abi::{
     EffectObservationHealthV1, EffectObservationReasonV1, EffectObservationV1,
-    EffectPhysicalResultV1, Id128V1,
+    EffectPhysicalResultV1, Id128V1, KernelEffectFamilyV1,
 };
 use erebor_runtime_ipc::v1::MithrilEffectObservation;
 use zerocopy::FromBytes as _;
@@ -58,6 +58,8 @@ struct Inner {
     reader_queue_pending_records: AtomicU64,
     reader_queue_dropped_events: AtomicU64,
     persisted_reader_queue_dropped_events: AtomicU64,
+    mount_change_sequence: AtomicU64,
+    mount_change_notify: tokio::sync::Notify,
     durable: Option<Mutex<DurableEvidence>>,
 }
 
@@ -158,6 +160,8 @@ impl EffectObservationStore {
                 reader_queue_pending_records: AtomicU64::new(0),
                 reader_queue_dropped_events: AtomicU64::new(0),
                 persisted_reader_queue_dropped_events: AtomicU64::new(0),
+                mount_change_sequence: AtomicU64::new(0),
+                mount_change_notify: tokio::sync::Notify::new(),
                 durable: None,
             }),
         }
@@ -189,6 +193,8 @@ impl EffectObservationStore {
                 reader_queue_pending_records: AtomicU64::new(0),
                 reader_queue_dropped_events: AtomicU64::new(0),
                 persisted_reader_queue_dropped_events: AtomicU64::new(0),
+                mount_change_sequence: AtomicU64::new(0),
+                mount_change_notify: tokio::sync::Notify::new(),
                 durable: Some(Mutex::new(DurableEvidence {
                     canonicalizer,
                     wal: EvidenceWalOwner::open(&wal_root, limits)?,
@@ -220,6 +226,12 @@ impl EffectObservationStore {
                 }
                 recent.events.push_back(to_ipc(event));
             }
+        }
+        if event.effect_family == KernelEffectFamilyV1::Mount as u16 {
+            self.inner
+                .mount_change_sequence
+                .fetch_add(1, Ordering::Release);
+            self.inner.mount_change_notify.notify_one();
         }
         if let Some(durable) = &self.inner.durable {
             let result: std::result::Result<Option<u64>, (Box<crate::Error>, bool)> = (|| {
@@ -267,6 +279,22 @@ impl EffectObservationStore {
                 }
                 Err((error, false)) => self.record_evidence_error(error.to_string()),
             }
+        }
+    }
+
+    #[must_use]
+    pub fn mount_change_sequence(&self) -> u64 {
+        self.inner.mount_change_sequence.load(Ordering::Acquire)
+    }
+
+    pub async fn wait_for_mount_change(&self, observed_sequence: u64) -> u64 {
+        loop {
+            let notified = self.inner.mount_change_notify.notified();
+            let current = self.mount_change_sequence();
+            if current != observed_sequence {
+                return current;
+            }
+            notified.await;
         }
     }
 
@@ -796,7 +824,7 @@ const fn observation_stage(result: u8) -> &'static str {
 mod tests {
     use erebor_interceptor_abi::{
         EffectObservationHealthV1, EffectObservationReasonV1, EffectObservationV1,
-        EffectPhysicalResultV1, Id128V1, NetworkNamespaceGenerationV1,
+        EffectPhysicalResultV1, Id128V1, KernelEffectFamilyV1, NetworkNamespaceGenerationV1,
     };
     use zerocopy::IntoBytes as _;
 
@@ -921,6 +949,32 @@ mod tests {
         assert_eq!(recent[0].io_uring_request_flags, 25);
         assert_eq!(recent[0].io_uring_rw_flags, 26);
         assert_eq!(recent[0].io_uring_opcode, 27);
+    }
+
+    #[tokio::test]
+    async fn mount_observation_advances_the_evidence_sequence() {
+        let store = EffectObservationStore::new(2);
+        let observed_sequence = store.mount_change_sequence();
+        store.record_bytes(
+            EffectObservationV1 {
+                effect_family: KernelEffectFamilyV1::File as u16,
+                ..EffectObservationV1::default()
+            }
+            .as_bytes(),
+        );
+        assert_eq!(store.mount_change_sequence(), observed_sequence);
+
+        store.record_bytes(
+            EffectObservationV1 {
+                effect_family: KernelEffectFamilyV1::Mount as u16,
+                ..EffectObservationV1::default()
+            }
+            .as_bytes(),
+        );
+        assert_eq!(
+            store.wait_for_mount_change(observed_sequence).await,
+            observed_sequence + 1
+        );
     }
 
     #[test]

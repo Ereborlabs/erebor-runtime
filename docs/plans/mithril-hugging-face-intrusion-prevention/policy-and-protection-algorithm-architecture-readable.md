@@ -2582,44 +2582,43 @@ Userspace holds namespace/root fds while binding. Strong targets use
 `mountinfo` snapshot is a lower tier. Bare mount IDs, namespace display
 numbers, and paths are contextual and reusable.
 
-#### No asynchronous topology race
+#### Synchronous topology decision
 
-Watching a successful mount and updating policy later is too late. Before any
-covered mount, unmount, `move_mount`, `open_tree`, `pivot_root`, `fsconfig`, or
-other topology change can take effect, the qualified hook performs:
+Watching a successful mount and updating policy later is too late. Node
+publishes authenticated graph-prefix routes only from the held entry-time
+container view. Node does not rebuild the mount topology after the task starts.
+
+Before a namespace-visible mount mutation can take effect, the BPF hook
+increments the global mutation epoch and pending count. The syscall return hook
+clears the pending count. Each file or executable decision then performs these
+steps in one BPF hook chain:
 
 ```text
-allocate bounded mutation ID
-increment topology epoch and pending count
-mark the target namespace DIRTY
+snapshot the global mutation epoch and require pending count zero
+read the live mount namespace root and namespace event
+scan the live mount tree and build the oldest-mount cache
+use an admitted graph-prefix route before the oldest-mount fallback
+resolve and match the complete path
+recheck the namespace event, mutation epoch, and pending count
 ```
 
-Strict file/exec decisions in a non-`CLEAN` namespace deny. A qualified return
-path marks that exact mutation complete even if event delivery fails. Rust
-reconciles only at `(epoch E, pending 0, DIRTY)`, snapshots and resolves the
-whole topology, installs and reads back new object tables, then compare-and-
-swaps exactly `(E, 0, DIRTY) -> (E, 0, CLEAN, snapshot digest)`. A concurrent
-mutation changes E and defeats the CAS.
+A concurrent mutation, incomplete scan, missing route target, or unresolved
+fallback denies under strict policy. Ring-buffer delivery is evidence only.
+Daemon delay, restart, or event loss cannot authorize a file or executable
+effect.
 
-A failed mount may leave a newer clean epoch after reconciliation. Correctness
-does not depend on rolling the number back. Daemon death, lost completion, map
-capacity failure, truncated snapshot, or disappearing namespace leaves it
-DIRTY until a signed quiescent recovery.
-
-Shared/slave propagation, automount, and NFS referrals can change another
-namespace without a direct syscall there. Mithril does not change the
-workload's mount propagation or automount configuration. It measures the real
-topology and must mark every affected namespace `DIRTY` before relying on a new
-object decision. If a platform cannot provide that ordering, the exact
-file-object claim is `UNSUPPORTED` for the affected mount and strict policy
-denies the unresolved object. Bounded-fanout overflow sets a common fail-closed
-state.
+Shared propagation, automount, and network filesystem referrals can change a
+namespace without the current task issuing the original syscall. The live
+namespace event and mount-tree scan expose the resulting topology to the next
+decision. If BPF cannot read a complete stable topology, the decision is
+unresolved and denies.
 
 **Race fixture.** A host task joins the worker mount namespace and mounts a
-different object over an allowed path while the worker loops on open. Opens
-before DIRTY see the old exact object; every open after DIRTY denies until the
-new snapshot commits. The fixture repeats with two concurrent changes, failed
-mount, propagation, overlay copy-up, and a process dying during snapshot.
+different object over an allowed path while the worker loops on open. A BPF
+decision either completes against one stable live snapshot or denies because
+the epoch, pending count, or namespace event changed. The fixture repeats with
+two concurrent changes, a failed mount, propagation, overlay copy-up, and a
+process exit during the scan.
 
 #### Path selector resolution, path-tree floors, and exact object authority
 
@@ -2791,11 +2790,19 @@ graph states, change the generation digest, or activate another generation.
 The provisional entry-measurement pass and the completed exact-object pass
 remain two activation steps inside one policy generation.
 
+Node does not rebuild these routes after the task starts. BPF reconstructs the
+live topology for each file or executable decision. Its mount hooks update a
+global mutation guard before a namespace-visible change. The decision path
+reads the live namespace event and mount tree, uses an admitted route before
+the oldest-mount fallback, and rechecks the guard before it returns. A
+concurrent or unresolved topology denies. Ring-buffer delivery is evidence
+only and is not part of authorization.
+
 | Design part | Meta presentation contributes | Mithril retains or adds | Combined result |
 | --- | --- | --- | --- |
-| Canonical path reconstruction | Enumerate one root mount namespace, index `mount-root dentry -> mounts`, select the oldest (`lowest mnt_id_unique`) mount for an unresolved dentry, then cross through that selected mount's parent mountpoint | A verified `MountSecurityViewV1` supplies Node routes for known mount roots. A route is keyed by the binding, profile generation, topology generation, mount namespace, filesystem device, and root inode. It stores the compiled graph prefix. | BPF uses a known route without mount-age selection. The oldest unique mount remains the fallback for an unknown route and prevents a later bind alias from selecting its target spelling. |
+| Canonical path reconstruction | Enumerate one root mount namespace, index `mount-root dentry -> mounts`, select the oldest (`lowest mnt_id_unique`) mount for an unresolved dentry, then cross through that selected mount's parent mountpoint | The admitted entry-time view supplies Node routes for known mount roots. A route is scoped to the binding, profile generation, mount namespace, filesystem device, and root inode. It stores existing graph-prefix states. | BPF scans the live topology synchronously. It uses a known route without mount-age selection. The oldest unique mount remains the fallback for an unknown route and prevents a later bind alias from selecting its target spelling. |
 | Large rule matching | Bounded component graph/state machine with exact and wildcard transitions | Compile-time bounds, terminal-overlap rejection or signed exact override, no priority-by-specificity | Large hierarchical policies evaluate without linear rule scans or an unbounded string map. |
-| Cache correctness | Cache/invalidate path work around rename and mount changes | Cache key includes policy generation, actor mount view, topology snapshot, live mount, and exact object; DIRTY stops decisions before topology change | A cache cannot grant access through an old bind alias, reused inode, overlay copy-up, or remount. |
+| Cache correctness | Cache or invalidate path work around rename and mount changes | The BPF cache key includes the live namespace event, namespace root, and root dentry. BPF checks the mutation epoch and pending count before and after resolution. | A cache cannot grant access through an old bind alias, reused inode, overlay copy-up, or remount. |
 | Authorization result | A matched path rule | A signed `PATH` terminal can allow or deny from the live canonical path. A signed `EXACT` terminal also requires the current measured inode binding. | Live path policy and inode policy remain separate selector kinds. An unresolved `EXACT` selector cannot grant authority. |
 
 Mithril's compiler and hot path therefore use this single bounded algorithm:
@@ -2809,13 +2816,13 @@ Mithril's compiler and hot path therefore use this single bounded algorithm:
    Mithril's supported platform profile fixes and measures its own lower or
    equal bounds before a profile can activate. The vector is derived from
    kernel objects, never from a caller-supplied path string.
-3. At every mount-root dentry `D`, look up a current Node route by binding,
-   profile generation, topology generation, mount namespace, filesystem
-   device, and root inode. If the route exists, use its graph prefix and the
-   collected child components. Do not select a mount by age.
-4. If no route exists on the source dentry ancestry, use the current clean
-   mount-topology snapshot as Meta does. Look up every mount whose root is
-   `D`, select the oldest mount by `mnt_id_unique`, and continue from that
+3. At each source dentry, look up an admitted Node route by binding, profile
+   generation, mount namespace, filesystem device, and root inode. If the
+   route exists, use its graph-prefix states and the collected child
+   components. Do not select a mount by age for that routed path.
+4. If no route exists on the source dentry ancestry, use the live BPF snapshot
+   as Meta does. Look up every mount whose root is `D`, select the oldest mount
+   by `mnt_id_unique`, and continue from that
    mount's parent and mountpoint. Do not continue through the mount by which
    the caller entered `D`. A missing candidate or an unreachable root is
    unresolved and denies under strict policy.
@@ -2850,26 +2857,32 @@ does not contain a child inode number or inode generation. A file created after
 policy activation, a replacement after unlink, and a file reached through a
 represented alias are denied when their real canonical path is in this tree.
 
-The BPF decision checks this floor after canonical path reconstruction and
-clean-view validation, but before exact-object lookup. For create, rename,
+The BPF decision checks this floor after synchronous canonical path
+reconstruction, but before exact-object lookup. For create, rename,
 link, and similar name-changing operations, it checks each affected canonical
 parent/name path before the object becomes visible. A missing path, an
-ambiguous mount chain, a dirty view, or an unqualified hook cannot bypass the
-floor. Strict policy denies the operation until Mithril has a qualified result.
+ambiguous mount chain, a topology race, or an unqualified hook cannot bypass
+the floor. Strict policy denies the operation until BPF has a stable result.
 
-Node stores a graph prefix, not a deny bit. If a known mount root is attached
-at `/home`, its route stores the state after `home`; `*` still consumes one
-later component for `/home/*/secrets`. A route attached at `/srv` keeps the
-`**` loop active for `/srv/**/secrets`. A container-root route starts at graph
-state zero and provides the same result for paths that do not cross another
-mount. A future child uses its existing ancestor route. Node also records a
-continuation at each initial Kubernetes submount that crosses into another
-source tree.
+Node stores graph prefix states, not a deny bit. If a known mount root is
+attached at `/home`, its route stores the state after `home`; `*` still
+consumes one later component for `/home/*/secrets`. A route attached at `/srv`
+keeps the `**` loop active for `/srv/**/secrets`. A container-root route starts
+at graph state zero and provides the same result for paths that do not cross
+another mount. One source can reference up to 16 deduplicated existing states.
+BPF advances all of them and applies any role-specific denial. Node refuses
+binding activation if it needs more than 16 states. It does not add a combined
+state to the immutable graph. A future child uses its existing ancestor route.
+Node also records a continuation at each initial Kubernetes submount that
+crosses into another source tree.
 
-Node publishes these routes during the held-initial-PID inode stage. Route
-rows are dynamic state owned by the container binding. They do not form a new
-policy candidate and do not require a second generation. A policy replacement
-uses a new generation only when its signed candidate changes.
+Control compiles and signs the path graph once before container admission.
+During the existing held-initial-PID inode stage, Node resolves each
+represented source path to a state in that graph. Node publishes only the
+dynamic route rows owned by the container binding. The provisional and exact
+object passes keep the same generation handle and digest. They do not form a
+new policy candidate or require a second generation. A policy replacement uses
+a new generation only when its signed candidate changes.
 
 This rule protects a location. It does not make pathname spelling a positive
 identity. A separate exact-object rule is still required to allow a file, to
@@ -2945,7 +2958,7 @@ The `/work/input/*/config.json` rule therefore does not match. If a mount-root
 dentry has no older tracked mount, the Meta selection cannot invent one; the
 pre-effect mount/topology fence is what prevents an untrusted task from
 creating that first alias. A newly observed or ambiguous alias is unresolved
-under strict policy until the complete topology is reconciled and admitted.
+under strict policy unless BPF can reconstruct one complete stable topology.
 
 #### eBPF implementation envelope
 
@@ -2974,14 +2987,13 @@ performance claim: Mithril qualifies its own kernels, hardware, policies, and
 workloads under the capability/performance contract in Appendix A.4.
 
 The matcher may cache a resolved candidate only under the role, selector graph
-generation, actor mount-view snapshot/topology generation, and exact live
-object identity. Bare inode caches are insufficient: bind aliases, inode reuse,
-overlay copy-up, remount, and different actor roots can change the answer. The
-existing pre-effect DIRTY transition invalidates the candidate before any
-mount, unmount, move, propagation, pivot-root, or relevant rename/link change
-can expose a new topology. A cache miss, truncation, topology ambiguity, or
-state-graph bound failure follows the configured strict unresolved-object
-result; it never falls through to allow.
+generation, live namespace event, namespace root, and exact live object
+identity. Bare inode caches are insufficient. Bind aliases, inode reuse,
+overlay copy-up, remount, and different actor roots can change the answer. BPF
+checks the mutation epoch and pending count around reconstruction. A cache
+miss, truncation, topology race, ambiguity, or state-graph bound failure
+follows the configured strict unresolved-object result. It never falls through
+to allow.
 
 This combined resolver does not copy the independent open-source `jailer`
 matcher. That implementation is a useful task-storage example, but its bounded
@@ -6212,7 +6224,7 @@ The remaining intentionally non-struct names have explicit status:
 | `ExactObjectGenerationV1` | Common non-reused live object generation used by file, socket, memory, device, and kernel-object contracts |
 | `MountViewIdentityV1` / `LiveMountObjectV1` | Exact mount namespace/topology and live mount identity used during resolution |
 | `NetworkNamespaceIdentityV1` | Exact netns cookie/live interval plus qualified capture mechanism |
-| `MountNamespaceStateV1` | Mount namespace identity, topology generation, CLEAN/DIRTY state, snapshot digest, live interval |
+| `MountNamespaceStateV1` | Admission-time mount namespace identity and retained ABI state. It does not authorize a post-start topology decision. |
 | `MountSecurityViewV1` | Actor-visible mount/root/propagation/read-only/security view used for object resolution |
 | `MountSourceClassRecordV1` | Exact declared/image/projected/host/device/remote mount source classification |
 | `VolumeMountBarrierV1` | **Rejected design.** Mithril never owns, holds, or releases a mount or root filesystem. |
@@ -7070,7 +7082,7 @@ above; Appendix B.2 keeps the rejection and its reason.
 | Protected parent or root has no label | Resolve it as initial, restricted external, restored/unknown, or fail-closed unresolved; never inherit application authority |
 | Task, process, or binding map is full | Deny the returning task/effect hook where supported and install/retain the fail-closed floor; never call an unlabeled actor protected |
 | PID-coordinate finalization fails | Keep `FAIL_CLOSED_UNKNOWN`; no protected effect succeeds |
-| Rootfs/mount/object binding is incomplete | Keep the binding `DIRTY` or unresolved and deny affected protected effects; claim start rejection only if the configured stock hook returned it |
+| Rootfs/mount/object binding is incomplete | Keep the binding unresolved and deny affected protected effects; claim start rejection only if the configured stock hook returned it |
 | Runtime/hook source authentication fails | Discard its metadata; kernel placement remains restricted and source coverage becomes unhealthy |
 | Concurrent exec loses the guard CAS | Deny that attempt before staging |
 | Exec success observer cannot update | Retain the already installed pending deny floor |
@@ -9650,17 +9662,16 @@ MountNamespaceStateV1 {
   node_boot_id: Id128
   namespace_inode: u64
   namespace_generation: u64
-  topology_generation: u64
   root_mount_id: u64
-  snapshot_digest: DigestV1
-  state: CLEAN | DIRTY_RECONCILING | FAIL_CLOSED_UNKNOWN | TOMBSTONED
+  admitted_route_digest: DigestV1
+  state: ADMISSION_ACTIVE | FAIL_CLOSED_UNKNOWN | TOMBSTONED
   live_interval_id: Id128
   transition_version: u64
 }
 
 MountSecurityViewV1 {
   mount_namespace_id: Id128
-  topology_generation: u64
+  admission_generation: u64
   task_root_identity: ExactObjectGenerationV1
   visible_mount_snapshot_digest: DigestV1
   propagation_and_peer_group_digest: DigestV1
@@ -9702,12 +9713,11 @@ generation. The final positive decision uses the resolved mount, filesystem,
 object, and generation. Rename and bind aliases do not change positive object
 authority. Inode-number reuse creates a new generation.
 
-Mount, unmount, move, propagation, pivot-root, chroot, automount, overlay copy-
-up, and network-filesystem referral synchronously mark the affected namespace
-`DIRTY_RECONCILING` before exposing the new topology. Rust builds a new bounded
-snapshot, reads it back, then atomically advances the topology generation. A
-file decision during a required dirty interval denies or uses an explicitly
-compiled safe floor; it never resolves against the old snapshot.
+The BPF mount hooks update the mutation epoch and pending count before a
+namespace-visible change. Each file or executable decision reads the live
+namespace event and mount tree. BPF resolves the complete path and rechecks the
+guard in the same hook chain. A concurrent or incomplete topology denies. Rust
+does not build or publish a post-start topology snapshot.
 
 #### A.13.2 File-operation coverage
 

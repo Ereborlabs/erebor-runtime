@@ -113,6 +113,7 @@ impl NodeDecommissionHttpOwner {
         self.control.submit_node_decommission(artifact).await
     }
 
+    #[allow(clippy::result_large_err)]
     pub(crate) fn status(
         &self,
         artifact_sha256: &str,

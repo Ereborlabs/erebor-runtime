@@ -114,8 +114,12 @@ _Static_assert(sizeof(canonical_path_component_v1) == 258,
                "canonical component ABI size");
 _Static_assert(sizeof(path_graph_transition_key_v1) == 272,
                "path transition key ABI size");
-_Static_assert(sizeof(path_graph_terminal_v1) == 24,
+_Static_assert(sizeof(path_graph_terminal_v1) == 16,
                "path terminal ABI size");
+_Static_assert(sizeof(path_tree_deny_key_v1) == 16,
+               "path-tree denial key ABI size");
+_Static_assert(sizeof(canonical_mount_root_v1) == 88,
+               "canonical mount root ABI size");
 _Static_assert(sizeof(mount_security_view_state_v1) == 40,
                "mount view ABI size");
 _Static_assert(sizeof(mount_mutation_attempt_v1) == 8,

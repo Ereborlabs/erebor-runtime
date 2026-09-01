@@ -14,15 +14,15 @@ use erebor_interceptor_abi::{
     ExactFileObjectKeyV1, ExactObjectBindingStateV1, ExactObjectBindingV1, ExceptionBindingStateV1,
     ExceptionHandleBindingKeyV1, ExceptionHandleBindingV1, ExceptionRuntimeStateKeyV1,
     ExceptionRuntimeStateKindV1, ExceptionRuntimeStateV1, ExecutionSetBindingStateV1, Id128V1,
-    IoUringRequestStateV1, IoUringRingStateV1, KernelEffectFamilyV1, MountReconciliationProposalV1,
+    IoUringRequestStateV1, IoUringRingStateV1, KernelEffectFamilyV1, KernelEffectOperationV1,
     MountSecurityViewStateV1, MountTopologyStateV1, NetworkDestinationDecisionKeyV1,
     NetworkResponseFloorKeyV1, NetworkResponseFloorV1, NetworkResponseScopeV1, PathGraphStateKeyV1,
-    PathGraphTerminalV1, PathGraphTransitionKeyV1, PathGraphTransitionV1,
+    PathGraphTerminalV1, PathGraphTransitionKeyV1, PathGraphTransitionV1, PathTreeDenyKeyV1,
     PendingAdministrativeMatchV1, PendingExecStateV1, PendingExecV1, PhysicalDecisionKindV1,
     PhysicalDecisionV1, PolicyActivationProbeMapKindV1, PolicyActivationProbeV1,
     PolicyGenerationModeV1, PolicyGenerationStateV1, ProcessSecurityStateKindV1,
     ProcessSecurityStateV1, ProfileGenerationDescriptorV1, ReferenceTombstoneStateV1,
-    TaskReferenceTombstoneV1, MAX_CANONICAL_COMPONENT_BYTES_V1,
+    TaskReferenceTombstoneV1, MAX_CANONICAL_COMPONENT_BYTES_V1, MAX_CANONICAL_ROUTE_STATES_V1,
     MAX_POLICY_ACTIVATION_PROBE_KEY_BYTES_V1,
 };
 use mithril_control::{
@@ -61,15 +61,17 @@ use self::generation_allocator::GenerationHandleAllocator;
 use self::ipc::lower_ipc_relationships;
 use self::network::LoweredNetworkPolicy;
 
+const LINUX_CAPABILITY_SELECTOR_PREFIX: &str = "SECURITY:LINUX_CAPABILITY:";
+
 pub struct NodePolicyGenerationOwner {
     node_boot_id: Id128V1,
     label_epoch: u64,
-    mount_roots: Vec<MountRootReconciliation>,
     mount_view_handles: BTreeMap<u32, crate::exact_object::ExactFileObjectView>,
     prevention_enabled: bool,
     administrative_required: bool,
     administrative_plans: Vec<AdministrativePolicyPlanV1>,
     measured_exact_objects: Vec<MeasuredExactObjectV1>,
+    measured_mount_routes: Vec<MeasuredMountRouteV1>,
     dynamic_rows: BTreeMap<&'static str, BTreeSet<Vec<u8>>>,
     exception_authority: Mutex<ExceptionAuthorityOwner>,
 }
@@ -91,6 +93,20 @@ struct MeasuredExactObjectV1 {
     binding_id: String,
     object: ExactFileObjectConfig,
 }
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct MeasuredMountRouteV1 {
+    binding_id: String,
+    mount_view_root_pid: u32,
+    mount_topology_generation: u64,
+    route: crate::exact_object::LiveMountRootRouteV1,
+}
+
+type ResolvedCriExactObjectsV1 = (
+    Vec<MeasuredExactObjectV1>,
+    Vec<MeasuredMountRouteV1>,
+    BTreeMap<u32, crate::exact_object::ExactFileObjectView>,
+);
 
 #[derive(Clone, Debug)]
 struct AdministrativePolicyPlanV1 {
@@ -660,6 +676,7 @@ impl NodePolicyGenerationOwner {
             node_boot_id,
             label_epoch,
             Vec::new(),
+            Vec::new(),
             BTreeMap::new(),
         )
     }
@@ -671,19 +688,21 @@ impl NodePolicyGenerationOwner {
         node_boot_id: Id128V1,
         label_epoch: u64,
     ) -> Result<Self> {
-        let measured_exact_objects = Self::resolve_cri_exact_objects(
-            config,
-            host,
-            bindings.exact_object_binding_targets(),
-            None,
-        )?;
+        let (measured_exact_objects, measured_mount_routes, measured_mount_views) =
+            Self::resolve_cri_exact_objects(
+                config,
+                host,
+                bindings.exact_object_binding_targets(),
+                None,
+            )?;
         Self::install(
             config,
             host,
             node_boot_id,
             label_epoch,
             measured_exact_objects,
-            BTreeMap::new(),
+            measured_mount_routes,
+            measured_mount_views,
         )
     }
 
@@ -695,12 +714,14 @@ impl NodePolicyGenerationOwner {
         label_epoch: u64,
     ) -> Result<Self> {
         let measured_exact_objects = self.measured_exact_objects;
+        let measured_mount_routes = self.measured_mount_routes;
         Self::install(
             config,
             host,
             node_boot_id,
             label_epoch,
             measured_exact_objects,
+            measured_mount_routes,
             self.mount_view_handles,
         )
     }
@@ -724,6 +745,7 @@ impl NodePolicyGenerationOwner {
             node_boot_id,
             label_epoch,
             measured_exact_objects,
+            Vec::new(),
             BTreeMap::new(),
         )
     }
@@ -748,6 +770,7 @@ impl NodePolicyGenerationOwner {
             node_boot_id,
             label_epoch,
             measured_exact_objects,
+            Vec::new(),
             self.mount_view_handles,
         )
     }
@@ -758,6 +781,7 @@ impl NodePolicyGenerationOwner {
         node_boot_id: Id128V1,
         label_epoch: u64,
         measured_exact_objects: Vec<MeasuredExactObjectV1>,
+        measured_mount_routes: Vec<MeasuredMountRouteV1>,
         mut retained_mount_views: BTreeMap<u32, crate::exact_object::ExactFileObjectView>,
     ) -> Result<Self> {
         let platform_scope_digest = format!(
@@ -862,10 +886,16 @@ impl NodePolicyGenerationOwner {
                 .filter(|measured| measured.binding_id == binding.binding_id)
                 .map(|measured| measured.object.clone())
                 .collect::<Vec<_>>();
-            let lowered = LoweredGeneration::for_binding(
+            let mount_routes_for_binding = measured_mount_routes
+                .iter()
+                .filter(|measured| measured.binding_id == binding.binding_id)
+                .cloned()
+                .collect::<Vec<_>>();
+            let lowered = LoweredGeneration::for_binding_with_mount_routes(
                 artifact,
                 binding,
                 &measured_for_binding,
+                &mount_routes_for_binding,
                 node_boot_id,
                 node_id,
                 label_epoch,
@@ -972,7 +1002,6 @@ impl NodePolicyGenerationOwner {
         let owner = Self {
             node_boot_id,
             label_epoch,
-            mount_roots,
             mount_view_handles,
             prevention_enabled: generations
                 .values()
@@ -980,10 +1009,11 @@ impl NodePolicyGenerationOwner {
             administrative_required,
             administrative_plans,
             measured_exact_objects,
+            measured_mount_routes,
             dynamic_rows,
             exception_authority: Mutex::new(exception_authority),
         };
-        owner.reconcile_mount_views(host)?;
+        owner.reconcile_policy_lifecycle(host)?;
         Ok(owner)
     }
 
@@ -1015,12 +1045,32 @@ impl NodePolicyGenerationOwner {
         held_initial_pid: u32,
         bundle: &Path,
     ) -> Result<()> {
-        let view = crate::exact_object::OciEntryFileObjectView::acquire(held_initial_pid, bundle)?;
+        let view = crate::exact_object::ExactFileObjectView::acquire_oci(held_initial_pid, bundle)?;
         self.reconcile_cri_exact_bindings_inner(
             config,
             host,
             bindings,
-            Some((binding_id, held_initial_pid, &view)),
+            Some((binding_id, held_initial_pid, view)),
+        )
+    }
+
+    #[cfg(feature = "test-support")]
+    pub fn reconcile_cri_exact_bindings_for_oci_entries_for_test(
+        &mut self,
+        config: &NodeConfig,
+        host: &mut KernelHost,
+        bindings: &WorkloadBindingOwner,
+        binding_id: &str,
+        held_initial_pid: u32,
+        bundle: &Path,
+    ) -> Result<()> {
+        self.reconcile_cri_exact_bindings_for_oci_entries(
+            config,
+            host,
+            bindings,
+            binding_id,
+            held_initial_pid,
+            bundle,
         )
     }
 
@@ -1029,32 +1079,48 @@ impl NodePolicyGenerationOwner {
         config: &NodeConfig,
         host: &mut KernelHost,
         bindings: &WorkloadBindingOwner,
-        oci_entry_view: Option<(&str, u32, &crate::exact_object::OciEntryFileObjectView)>,
+        oci_entry_view: Option<(&str, u32, crate::exact_object::ExactFileObjectView)>,
     ) -> Result<()> {
-        let measured_exact_objects = match Self::resolve_cri_exact_objects(
-            config,
-            host,
-            bindings.exact_object_binding_targets(),
-            oci_entry_view,
-        ) {
-            Ok(measured) => measured,
-            Err(error) => {
-                self.revoke_dynamic_path_authority(host)?;
-                return Err(error);
+        let borrowed_oci_entry_view = oci_entry_view
+            .as_ref()
+            .map(|(binding_id, root_pid, view)| (*binding_id, *root_pid, view));
+        let (measured_exact_objects, measured_mount_routes, measured_mount_views) =
+            match Self::resolve_cri_exact_objects(
+                config,
+                host,
+                bindings.exact_object_binding_targets(),
+                borrowed_oci_entry_view,
+            ) {
+                Ok(measured) => measured,
+                Err(error) => {
+                    self.revoke_dynamic_path_authority(host)?;
+                    return Err(error);
+                }
+            };
+        if measured_exact_objects == self.measured_exact_objects
+            && measured_mount_routes == self.measured_mount_routes
+        {
+            self.mount_view_handles.extend(measured_mount_views);
+            if let Some((_, _, view)) = oci_entry_view {
+                self.mount_view_handles
+                    .insert(view.mount_namespace_inode()?, view);
             }
-        };
-        if measured_exact_objects == self.measured_exact_objects {
             return Ok(());
         }
 
         self.revoke_dynamic_path_authority(host)?;
-        let retained_mount_views = std::mem::take(&mut self.mount_view_handles);
+        let mut retained_mount_views = std::mem::take(&mut self.mount_view_handles);
+        retained_mount_views.extend(measured_mount_views);
+        if let Some((_, _, view)) = oci_entry_view {
+            retained_mount_views.insert(view.mount_namespace_inode()?, view);
+        }
         let next = Self::install(
             config,
             host,
             self.node_boot_id,
             self.label_epoch,
             measured_exact_objects,
+            measured_mount_routes,
             retained_mount_views,
         )?;
         *self = next;
@@ -1096,6 +1162,7 @@ impl NodePolicyGenerationOwner {
         }
         self.dynamic_rows.clear();
         self.measured_exact_objects.clear();
+        self.measured_mount_routes.clear();
         self.administrative_plans.clear();
         Ok(())
     }
@@ -1104,8 +1171,8 @@ impl NodePolicyGenerationOwner {
         config: &NodeConfig,
         host: &KernelHost,
         bindings: impl IntoIterator<Item = ExactObjectBindingTargetV1<'a>>,
-        oci_entry_view: Option<(&str, u32, &crate::exact_object::OciEntryFileObjectView)>,
-    ) -> Result<Vec<MeasuredExactObjectV1>> {
+        oci_entry_view: Option<(&str, u32, &crate::exact_object::ExactFileObjectView)>,
+    ) -> Result<ResolvedCriExactObjectsV1> {
         let now_utc_ns = current_utc_ns()?;
         let artifact_owner = PolicyArtifactOwner::default();
         let mut artifacts = BTreeMap::new();
@@ -1128,6 +1195,8 @@ impl NodePolicyGenerationOwner {
         }
         let topology_generation = Self::current_mount_topology_generation(host)?;
         let mut measured = Vec::new();
+        let mut measured_mount_routes = Vec::new();
+        let mut measured_mount_views = BTreeMap::new();
         let mut target_bindings = BTreeSet::new();
         let mut oci_entry_view_used = false;
         for target in bindings {
@@ -1179,6 +1248,21 @@ impl NodePolicyGenerationOwner {
                     }
                 );
                 oci_entry_view_used = true;
+            }
+            let route_view = target_oci_entry_view
+                .map(|(_, _, oci_view)| oci_view)
+                .or_else(|| process_root_is_container.then_some(&view));
+            if !artifact.policy_document.path_tree_deny_floors.is_empty() {
+                if let Some(route_view) = route_view {
+                    measured_mount_routes.extend(route_view.mount_root_routes()?.into_iter().map(
+                        |route| MeasuredMountRouteV1 {
+                            binding_id: binding.binding_id.clone(),
+                            mount_view_root_pid: target.init_pid,
+                            mount_topology_generation: topology_generation,
+                            route,
+                        },
+                    ));
+                }
             }
             for selector in selectors {
                 let canonical_path = selector.path_expression();
@@ -1243,6 +1327,9 @@ impl NodePolicyGenerationOwner {
                     object,
                 });
             }
+            if process_root_is_container && target_oci_entry_view.is_none() {
+                measured_mount_views.insert(view.mount_namespace_inode()?, view);
+            }
         }
         ensure!(
             oci_entry_view.is_none() || oci_entry_view_used,
@@ -1250,7 +1337,7 @@ impl NodePolicyGenerationOwner {
                 reason: "OCI entry view has no authenticated exact-object target",
             }
         );
-        Ok(measured)
+        Ok((measured, measured_mount_routes, measured_mount_views))
     }
 
     #[cfg(feature = "test-support")]
@@ -1592,7 +1679,7 @@ impl NodePolicyGenerationOwner {
         })
     }
 
-    pub fn reconcile_mount_views(&self, host: &mut KernelHost) -> Result<()> {
+    pub fn reconcile_policy_lifecycle(&self, host: &mut KernelHost) -> Result<bool> {
         self.exception_authority
             .lock()
             .map_err(|_| {
@@ -1603,297 +1690,28 @@ impl NodePolicyGenerationOwner {
             })?
             .reconcile(host, current_utc_ns()?)?;
         reconcile_generation_retirement(host, self.node_boot_id, self.label_epoch)?;
-        let mut views = BTreeMap::<u32, Vec<&MountRootReconciliation>>::new();
-        for root in &self.mount_roots {
-            views
-                .entry(root.mount_namespace_inode)
-                .or_default()
-                .push(root);
-        }
-        if views.is_empty() {
-            return Ok(());
-        }
-        let global_key = 0_u32.to_ne_bytes();
-        let global_epoch = mount_epoch_from(host, "mount_global_mutation_epoch", &global_key)?;
-        let global_clean = mount_epoch_from(host, "mount_global_clean_epoch", &global_key)?;
-        let global_pending = mount_epoch_from(host, "mount_global_pending_mutations", &global_key)?;
-        if global_pending != 0 {
-            return Ok(());
-        }
-        ensure!(
-            global_epoch != 0 && global_clean <= global_epoch,
-            IdentityStateSnafu {
-                reason: "global mount security barrier is not usable",
-            }
-        );
-        let mut all_views_clean = global_clean == global_epoch;
-        if all_views_clean {
-            for roots in views.values() {
-                if !self.mount_view_is_clean(host, roots, global_epoch)? {
-                    all_views_clean = false;
-                    break;
-                }
-            }
-        }
-        if all_views_clean {
-            return Ok(());
-        }
-        for roots in views.values() {
-            if self
-                .reconcile_mount_view(host, roots, global_epoch)?
-                .is_none()
-            {
-                return Ok(());
-            }
-        }
-        if mount_epoch_from(host, "mount_global_mutation_epoch", &global_key)? != global_epoch
-            || mount_epoch_from(host, "mount_global_pending_mutations", &global_key)? != 0
-        {
-            return Ok(());
-        }
-        for roots in views.values() {
-            if !self.mount_view_is_clean(host, roots, global_epoch)? {
-                return Ok(());
-            }
-        }
-        if global_clean != global_epoch {
-            host.update_map(
-                "mount_global_clean_epoch",
-                &global_key,
-                &global_epoch.to_ne_bytes(),
-            )
-            .context(InterceptorSnafu)?;
-            ensure!(
-                mount_epoch_from(host, "mount_global_clean_epoch", &global_key)? == global_epoch,
-                IdentityStateSnafu {
-                    reason: "global mount clean-epoch publication readback failed",
-                }
-            );
-        }
-        if mount_epoch_from(host, "mount_global_mutation_epoch", &global_key)? != global_epoch
-            || mount_epoch_from(host, "mount_global_pending_mutations", &global_key)? != 0
-        {
-            return Ok(());
-        }
-        for roots in views.values() {
-            if !self.mount_view_is_clean(host, roots, global_epoch)? {
-                return Ok(());
-            }
-        }
-        Ok(())
+        Ok(true)
     }
 
-    fn mount_view_is_clean(
-        &self,
-        host: &KernelHost,
-        roots: &[&MountRootReconciliation],
-        target_epoch: u64,
-    ) -> Result<bool> {
-        let root = roots.first().ok_or_else(|| {
-            IdentityStateSnafu {
-                reason: "mount reconciliation view has no roots".to_owned(),
+    #[cfg(feature = "test-support")]
+    pub fn retained_mount_views_are_readable_for_test(&self) -> Result<bool> {
+        if self.mount_view_handles.is_empty() {
+            return Ok(false);
+        }
+        for view in self.mount_view_handles.values() {
+            if !view.retained_mountinfo_is_readable_for_test()? {
+                return Ok(false);
             }
-            .build()
-        })?;
-        let key = root.mount_namespace_inode.to_ne_bytes();
-        let state = mount_state(host, "mount_security_views", &key)?;
-        Ok(state.state == MountTopologyStateV1::Clean
-            && state.topology_generation == target_epoch
-            && state.snapshot_digest_id != 0
-            && state.pending_mutations == 0
-            && state.transition_version != 0
-            && mount_epoch(host, &key)? == target_epoch)
-    }
-
-    fn reconcile_mount_view(
-        &self,
-        host: &mut KernelHost,
-        roots: &[&MountRootReconciliation],
-        target_epoch: u64,
-    ) -> Result<Option<u64>> {
-        let root = roots.first().ok_or_else(|| {
-            IdentityStateSnafu {
-                reason: "mount reconciliation view has no roots".to_owned(),
-            }
-            .build()
-        })?;
-        let key = root.mount_namespace_inode.to_ne_bytes();
-        let view = self
-            .mount_view_handles
-            .get(&root.mount_namespace_inode)
-            .ok_or_else(|| {
-                IdentityStateSnafu {
-                    reason: "mount reconciliation view has no retained namespace capability"
-                        .to_owned(),
-                }
-                .build()
-            })?;
-        let state = mount_state(host, "mount_security_views", &key)?;
-        let epoch = mount_epoch(host, &key)?;
-        if state.state == MountTopologyStateV1::Clean
-            && state.topology_generation == target_epoch
-            && epoch == target_epoch
-            && state.pending_mutations == 0
-            && state.snapshot_digest_id != 0
-            && state.transition_version != 0
-        {
-            return Ok(Some(state.snapshot_digest_id));
         }
-        if state.pending_mutations != 0 {
-            return Ok(None);
-        }
-        ensure!(
-            matches!(
-                state.state,
-                MountTopologyStateV1::Clean | MountTopologyStateV1::Dirty
-            ),
-            IdentityStateSnafu {
-                reason: "mount security view is not reconcilable",
-            }
-        );
-        if epoch != target_epoch {
-            host.update_map("mount_mutation_epochs", &key, &target_epoch.to_ne_bytes())
-                .context(InterceptorSnafu)?;
-            ensure!(
-                mount_epoch(host, &key)? == target_epoch,
-                IdentityStateSnafu {
-                    reason: "mount mutation epoch synchronization failed",
-                }
-            );
-        }
-        let mut snapshot_digest_id = None;
-        for planned in roots {
-            let configured = &planned.configured;
-            let resolved = view.resolve(
-                &planned.canonical_path,
-                configured.profile_generation_ref_id,
-                configured.exact_object_key_id,
-                configured.object_class_id.clone(),
-                configured.inode_generation,
-                configured
-                    .device
-                    .as_ref()
-                    .map(|device| device.device_class_id.clone()),
-            )?;
-            ensure!(
-                same_exact_file(configured, &resolved)
-                    && resolved.canonical_component_hex == configured.canonical_component_hex
-                    && resolved.mount_relative_component_count
-                        == configured.mount_relative_component_count,
-                IdentityStateSnafu {
-                    reason: "mount reconciliation changed the exact object, actor view, or canonical policy path",
-                }
-            );
-            if let Some(digest) = snapshot_digest_id {
-                ensure!(
-                    digest == resolved.mount_snapshot_digest_id,
-                    IdentityStateSnafu {
-                        reason: "one mount security view produced unequal topology snapshots",
-                    }
-                );
-            } else {
-                snapshot_digest_id = Some(resolved.mount_snapshot_digest_id);
-            }
-            let root_key = CanonicalMountRootKeyV1 {
-                profile_generation_ref_id: configured.profile_generation_ref_id,
-                mount_namespace_inode: configured.mount_namespace_inode,
-                binding_id: planned.binding_id,
-                topology_generation: target_epoch,
-                filesystem_device: resolved.mount_root_filesystem_device,
-                root_inode: resolved.mount_root_inode,
-            };
-            let value = CanonicalMountRootV1 {
-                selected_mount_id_unique: resolved.selected_mount_id_unique,
-                snapshot_digest_id: resolved.mount_snapshot_digest_id,
-                graph_prefix_state_id: planned.graph_prefix_state_id,
-                reserved: 0,
-            };
-            host.update_map(
-                "canonical_mount_roots",
-                root_key.as_bytes(),
-                value.as_bytes(),
-            )
-            .context(InterceptorSnafu)?;
-            ensure!(
-                host.lookup_map("canonical_mount_roots", root_key.as_bytes())
-                    .context(InterceptorSnafu)?
-                    .as_deref()
-                    == Some(value.as_bytes()),
-                IdentityStateSnafu {
-                    reason: "canonical mount-root reconciliation readback failed",
-                }
-            );
-        }
-        let current = mount_state(host, "mount_security_views", &key)?;
-        if mount_epoch(host, &key)? != target_epoch
-            || current.pending_mutations != 0
-            || current.transition_version != state.transition_version
-        {
-            return Ok(None);
-        }
-        let snapshot_digest_id = snapshot_digest_id.ok_or_else(|| {
-            IdentityStateSnafu {
-                reason: "mount reconciliation produced no snapshot".to_owned(),
-            }
-            .build()
-        })?;
-        let proposal = MountReconciliationProposalV1 {
-            topology_generation: target_epoch,
-            snapshot_digest_id,
-            expected_transition_version: state.transition_version,
-            transition_version: state.transition_version.checked_add(1).ok_or_else(|| {
-                IdentityStateSnafu {
-                    reason: "mount transition version exhausted".to_owned(),
-                }
-                .build()
-            })?,
-        };
-        host.update_map("mount_reconciliation_proposals", &key, proposal.as_bytes())
-            .context(InterceptorSnafu)?;
-        ensure!(
-            host.lookup_map("mount_reconciliation_proposals", &key)
-                .context(InterceptorSnafu)?
-                .as_deref()
-                == Some(proposal.as_bytes()),
-            IdentityStateSnafu {
-                reason: "mount reconciliation proposal readback failed",
-            }
-        );
-        if !host
-            .apply_mount_reconciliation_proposal(root.mount_namespace_inode)
-            .context(InterceptorSnafu)?
-        {
-            return Ok(None);
-        }
-        let committed = mount_state(host, "mount_security_views", &key)?;
-        if mount_epoch(host, &key)? != target_epoch
-            || committed.state != MountTopologyStateV1::Clean
-            || committed.topology_generation != proposal.topology_generation
-            || committed.snapshot_digest_id != proposal.snapshot_digest_id
-            || committed.pending_mutations != 0
-            || committed.transition_version != proposal.transition_version
-        {
-            return Ok(None);
-        }
-        Ok(Some(snapshot_digest_id))
+        Ok(true)
     }
 }
 
 #[derive(Clone)]
 struct MountRootReconciliation {
     mount_namespace_inode: u32,
-    binding_id: Id128V1,
     configured: ExactFileObjectConfig,
     canonical_path: PathBuf,
-    graph_prefix_state_id: u32,
-}
-
-struct MountViewSnapshot {
-    topology_generation: u64,
-    snapshot_digest_id: u64,
-    pending_mutations: u64,
-    transition_version: u64,
-    state: MountTopologyStateV1,
 }
 
 fn install_global_mount_barrier(
@@ -1985,7 +1803,14 @@ fn validate_mount_view(
             && (retained
                 || resolved.mount_snapshot_digest_id == configured.mount_snapshot_digest_id),
         IdentityStateSnafu {
-            reason: "retained mount view differs from its exact configured authority",
+            reason: format!(
+                "mount view differs from exact authority for {}: retained={retained}, configured mount/inode={}/{}, resolved mount/inode={}/{}",
+                planned.canonical_path.display(),
+                configured.mount_id_unique,
+                configured.inode,
+                resolved.mount_id_unique,
+                resolved.inode,
+            ),
         }
     );
     Ok(())
@@ -2013,17 +1838,44 @@ struct LoweredGeneration {
     path_exact: BTreeMap<Vec<u8>, Vec<u8>>,
     path_wildcards: BTreeMap<Vec<u8>, Vec<u8>>,
     path_terminals: BTreeMap<Vec<u8>, Vec<u8>>,
+    path_tree_denials: BTreeMap<Vec<u8>, Vec<u8>>,
     administrative_required: bool,
     administrative_plans: Vec<AdministrativePolicyPlanV1>,
     mount_reconciliation: Vec<MountRootReconciliation>,
 }
 
 impl LoweredGeneration {
+    #[cfg(test)]
     #[allow(clippy::too_many_arguments)]
     fn for_binding(
         artifact: &ProfileCandidateArtifactV1,
         binding: &WorkloadBindingConfig,
         measured_objects: &[ExactFileObjectConfig],
+        node_boot_id: Id128V1,
+        node_id: Id128V1,
+        label_epoch: u64,
+        now_utc_ns: i64,
+        now_boottime_ns: u64,
+    ) -> Result<Self> {
+        Self::for_binding_with_mount_routes(
+            artifact,
+            binding,
+            measured_objects,
+            &[],
+            node_boot_id,
+            node_id,
+            label_epoch,
+            now_utc_ns,
+            now_boottime_ns,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn for_binding_with_mount_routes(
+        artifact: &ProfileCandidateArtifactV1,
+        binding: &WorkloadBindingConfig,
+        measured_objects: &[ExactFileObjectConfig],
+        measured_mount_routes: &[MeasuredMountRouteV1],
         node_boot_id: Id128V1,
         node_id: Id128V1,
         label_epoch: u64,
@@ -2304,6 +2156,28 @@ impl LoweredGeneration {
                 .unwrap_or_default();
             let physical =
                 physical_decision(cell.physical_result, cell.errno, exception_numeric_handle);
+            if let Some(capability) = Self::linux_capability(cell)? {
+                ensure!(
+                    family == KernelEffectFamilyV1::Privilege as u16
+                        && operation == KernelEffectOperationV1::Capability as u16,
+                    IdentityStateSnafu {
+                        reason:
+                            "a Linux capability selector is valid only for PRIVILEGE/CAPABILITY",
+                    }
+                );
+                let key = EffectDefaultKeyV1 {
+                    profile_generation_ref_id: binding.active_profile_generation_ref_id,
+                    active_role_id: role,
+                    effect_family: family,
+                    operation,
+                    composite_atom_id: u64::from(capability) + 1,
+                    process_state_vector_id: process_state,
+                    binding_lifecycle_state: lifecycle(cell.key.binding_lifecycle),
+                    reserved_tail: [0; 3],
+                };
+                insert_exact(&mut defaults, key.as_bytes(), physical.as_bytes())?;
+                continue;
+            }
             if let Some(destination_id) = cell.key.object_selector.strip_prefix("DESTINATION:") {
                 ensure!(
                     cell.key.effect_family == mithril_control::EffectFamilyV1::Network,
@@ -2609,8 +2483,15 @@ impl LoweredGeneration {
         }
         let (administrative_required, administrative_plans) =
             lower_administrative_plans(artifact, binding, &role_handles, &process_state_handles)?;
-        let path_tables =
-            Self::lower_path_tables(artifact, binding, &policy_exact_objects, &composite_handles)?;
+        let mut path_tables = Self::lower_path_tables(
+            artifact,
+            binding,
+            &policy_exact_objects,
+            measured_mount_routes,
+            &composite_handles,
+            &role_handles,
+        )?;
+        path_tables.add_mount_namespace_guards(&generation_objects)?;
         let tables = [
             ("entry-admission", &entry_admission_authority),
             ("decision", &decisions),
@@ -2623,6 +2504,7 @@ impl LoweredGeneration {
             ("path-exact", &path_tables.exact),
             ("path-wildcard", &path_tables.wildcards),
             ("path-terminal", &path_tables.terminals),
+            ("path-tree-denial", &path_tables.path_tree_denials),
         ];
         let table_digest = table_digest(&tables);
         let descriptor = ProfileGenerationDescriptorV1 {
@@ -2683,6 +2565,7 @@ impl LoweredGeneration {
             path_exact: path_tables.exact,
             path_wildcards: path_tables.wildcards,
             path_terminals: path_tables.terminals,
+            path_tree_denials: path_tables.path_tree_denials,
             administrative_required,
             administrative_plans,
             mount_reconciliation: path_tables.reconciliation,
@@ -2729,6 +2612,7 @@ impl LoweredGeneration {
         merge_rows(&mut self.path_exact, other.path_exact)?;
         merge_rows(&mut self.path_wildcards, other.path_wildcards)?;
         merge_rows(&mut self.path_terminals, other.path_terminals)?;
+        merge_rows(&mut self.path_tree_denials, other.path_tree_denials)?;
         self.administrative_required |= other.administrative_required;
         self.administrative_plans.extend(other.administrative_plans);
         self.mount_reconciliation.extend(other.mount_reconciliation);
@@ -2762,6 +2646,7 @@ impl LoweredGeneration {
             ("path-exact", &self.path_exact),
             ("path-wildcard", &self.path_wildcards),
             ("path-terminal", &self.path_terminals),
+            ("path-tree-denial", &self.path_tree_denials),
         ]);
         Ok(())
     }
@@ -2793,6 +2678,7 @@ impl LoweredGeneration {
             ("path_graph_exact_transitions", &self.path_exact),
             ("path_graph_wildcard_transitions", &self.path_wildcards),
             ("path_graph_terminals", &self.path_terminals),
+            ("path_tree_denials", &self.path_tree_denials),
         ]
     }
 
@@ -2951,6 +2837,7 @@ impl LoweredGeneration {
             &self.path_wildcards,
         )?;
         install_rows(host, "path_graph_terminals", &self.path_terminals)?;
+        install_rows(host, "path_tree_denials", &self.path_tree_denials)?;
         self.verify_immutable_rows(host)?;
         self.verify_dynamic_authority_rows(host)?;
         let read_back = self.read_back_descriptor();
@@ -3020,6 +2907,7 @@ impl LoweredGeneration {
             ("path_graph_exact_transitions", &self.path_exact),
             ("path_graph_wildcard_transitions", &self.path_wildcards),
             ("path_graph_terminals", &self.path_terminals),
+            ("path_tree_denials", &self.path_tree_denials),
         ] {
             verify_rows(host, map, rows)?;
         }
@@ -4116,6 +4004,7 @@ fn retire_generation_rows(
         "path_graph_exact_transitions",
         "path_graph_wildcard_transitions",
         "path_graph_terminals",
+        "path_tree_denials",
     ] {
         delete_generation_prefixed_rows(host, map, generation, 0)?;
     }
@@ -4321,30 +4210,6 @@ fn install_missing_rows(
         }
     }
     Ok(())
-}
-
-fn mount_state(host: &KernelHost, map: &str, key: &[u8]) -> Result<MountViewSnapshot> {
-    let bytes = host
-        .lookup_map(map, key)
-        .context(InterceptorSnafu)?
-        .ok_or_else(|| {
-            IdentityStateSnafu {
-                reason: format!("mount security state `{map}` disappeared during reconciliation"),
-            }
-            .build()
-        })?;
-    let state = read_abi_value::<MountSecurityViewStateV1>(&bytes, "mount security view")?;
-    Ok(MountViewSnapshot {
-        topology_generation: state.topology_generation,
-        snapshot_digest_id: state.snapshot_digest_id,
-        pending_mutations: state.pending_mutations,
-        state: state.state,
-        transition_version: state.transition_version,
-    })
-}
-
-fn mount_epoch(host: &KernelHost, key: &[u8]) -> Result<u64> {
-    mount_epoch_from(host, "mount_mutation_epochs", key)
 }
 
 fn mount_epoch_from(host: &KernelHost, map: &str, key: &[u8]) -> Result<u64> {
@@ -4965,7 +4830,165 @@ struct PathTables {
     exact: BTreeMap<Vec<u8>, Vec<u8>>,
     wildcards: BTreeMap<Vec<u8>, Vec<u8>>,
     terminals: BTreeMap<Vec<u8>, Vec<u8>>,
+    path_tree_denials: BTreeMap<Vec<u8>, Vec<u8>>,
     reconciliation: Vec<MountRootReconciliation>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+struct MountRouteIdentity {
+    mount_namespace_inode: u32,
+    filesystem_device: u32,
+    root_inode: u64,
+    topology_generation: u64,
+}
+
+struct MountRoutePlan {
+    prefixes: Vec<Vec<Vec<u8>>>,
+    mount_view_root_pid: u32,
+    selected_mount_id_unique: u64,
+    snapshot_digest_id: u64,
+    has_known_route: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct GraphPrefixStates {
+    ids: [u32; MAX_CANONICAL_ROUTE_STATES_V1],
+    count: u32,
+}
+
+impl GraphPrefixStates {
+    fn compile(
+        graph: &mithril_control::DeterministicPathGraphV1,
+        prefixes: &[Vec<Vec<u8>>],
+    ) -> Result<Option<Self>> {
+        let ids = prefixes
+            .iter()
+            .filter_map(|prefix| graph.state_after(prefix))
+            .collect::<BTreeSet<_>>();
+        if ids.is_empty() {
+            return Ok(None);
+        }
+        ensure!(
+            ids.len() <= MAX_CANONICAL_ROUTE_STATES_V1,
+            IdentityStateSnafu {
+                reason: format!(
+                    "one mount source exceeds {MAX_CANONICAL_ROUTE_STATES_V1} policy path routes"
+                ),
+            }
+        );
+        let count = ids.len() as u32;
+        let mut state_ids = [0; MAX_CANONICAL_ROUTE_STATES_V1];
+        for (slot, state_id) in state_ids.iter_mut().zip(ids) {
+            *slot = state_id;
+        }
+        Ok(Some(Self {
+            ids: state_ids,
+            count,
+        }))
+    }
+
+    fn mount_root(
+        &self,
+        selected_mount_id_unique: u64,
+        snapshot_digest_id: u64,
+    ) -> CanonicalMountRootV1 {
+        CanonicalMountRootV1 {
+            selected_mount_id_unique,
+            snapshot_digest_id,
+            graph_prefix_state_ids: self.ids,
+            graph_prefix_state_count: self.count,
+            reserved: 0,
+        }
+    }
+}
+
+impl MountRoutePlan {
+    fn new(
+        prefix: Vec<Vec<u8>>,
+        mount_view_root_pid: u32,
+        selected_mount_id_unique: u64,
+        snapshot_digest_id: u64,
+        has_known_route: bool,
+    ) -> Result<Self> {
+        ensure!(
+            mount_view_root_pid > 0 && selected_mount_id_unique > 0,
+            IdentityStateSnafu {
+                reason: "known mount route has no live view or unique mount",
+            }
+        );
+        Ok(Self {
+            prefixes: vec![prefix],
+            mount_view_root_pid,
+            selected_mount_id_unique,
+            snapshot_digest_id,
+            has_known_route,
+        })
+    }
+
+    fn merge(
+        &mut self,
+        prefix: Vec<Vec<u8>>,
+        mount_view_root_pid: u32,
+        selected_mount_id_unique: u64,
+        snapshot_digest_id: u64,
+        has_known_route: bool,
+    ) -> Result<()> {
+        ensure!(
+            self.mount_view_root_pid == mount_view_root_pid && selected_mount_id_unique > 0,
+            IdentityStateSnafu {
+                reason: "one mount source has unequal live security views",
+            }
+        );
+        ensure!(
+            self.snapshot_digest_id == 0
+                || snapshot_digest_id == 0
+                || self.snapshot_digest_id == snapshot_digest_id,
+            IdentityStateSnafu {
+                reason: "one mount source has unequal topology snapshots",
+            }
+        );
+        self.prefixes.push(prefix);
+        self.selected_mount_id_unique = self.selected_mount_id_unique.min(selected_mount_id_unique);
+        self.snapshot_digest_id = self.snapshot_digest_id.max(snapshot_digest_id);
+        self.has_known_route |= has_known_route;
+        Ok(())
+    }
+}
+
+impl PathTables {
+    fn add_mount_namespace_guard(
+        &mut self,
+        mount_namespace_inode: u32,
+        topology_generation: u64,
+    ) -> Result<()> {
+        let key = mount_namespace_inode.to_ne_bytes();
+        let view = MountSecurityViewStateV1 {
+            topology_generation,
+            snapshot_digest_id: 0,
+            pending_mutations: 0,
+            state: MountTopologyStateV1::Dirty,
+            reserved: [0; 7],
+            transition_version: 1,
+        };
+        insert_exact(&mut self.mount_views, &key, view.as_bytes())?;
+        insert_exact(
+            &mut self.mount_epochs,
+            &key,
+            &topology_generation.to_ne_bytes(),
+        )?;
+        insert_exact(&mut self.mount_locks, &key, &0_u32.to_ne_bytes())?;
+        Ok(())
+    }
+
+    fn add_mount_namespace_guards(&mut self, objects: &[&ExactFileObjectConfig]) -> Result<()> {
+        for object in objects {
+            self.add_mount_namespace_guard(
+                object.mount_namespace_inode,
+                object.mount_topology_generation,
+            )?;
+        }
+        Ok(())
+    }
 }
 
 impl LoweredGeneration {
@@ -4983,7 +5006,9 @@ impl LoweredGeneration {
                     .iter()
                     .map(|cell| cell.key.object_selector.clone()),
             )
-            .filter(|id| !id.starts_with("PATH:"))
+            .filter(|id| {
+                !id.starts_with("PATH:") && !id.starts_with(LINUX_CAPABILITY_SELECTOR_PREFIX)
+            })
             .collect::<BTreeSet<_>>()
             .into_iter()
             .enumerate()
@@ -4997,14 +5022,38 @@ impl LoweredGeneration {
         handles
     }
 
+    fn linux_capability(cell: &mithril_control::CompiledDecisionCellV1) -> Result<Option<u32>> {
+        let Some(value) = cell
+            .key
+            .object_selector
+            .strip_prefix(LINUX_CAPABILITY_SELECTOR_PREFIX)
+        else {
+            return Ok(None);
+        };
+        let capability = value.parse::<u32>().map_err(|error| {
+            IdentityStateSnafu {
+                reason: format!("invalid compiled Linux capability `{value}`: {error}"),
+            }
+            .build()
+        })?;
+        ensure!(
+            capability <= 40,
+            IdentityStateSnafu {
+                reason: format!("unsupported compiled Linux capability `{capability}`"),
+            }
+        );
+        Ok(Some(capability))
+    }
+
     fn lower_path_tables(
         artifact: &ProfileCandidateArtifactV1,
         binding: &WorkloadBindingConfig,
         objects: &[&ExactFileObjectConfig],
+        measured_mount_routes: &[MeasuredMountRouteV1],
         composite_handles: &BTreeMap<String, u64>,
+        role_handles: &BTreeMap<String, u32>,
     ) -> Result<PathTables> {
         let mut patterns = Vec::new();
-        let mut decoded = BTreeMap::new();
         for selector in &artifact.policy_document.path_selectors {
             let components = selector
                 .target
@@ -5017,13 +5066,6 @@ impl LoweredGeneration {
                 physical_result_id: format!("CLASS:{}", selector.object_class_id),
                 overrides_rule_ids: Vec::new(),
             });
-            if let Some(components) = selector
-                .target
-                .exact_components(artifact.header.profile_id.as_str())
-                .context(PolicySnafu)?
-            {
-                decoded.insert(selector.kernel_handle(), components);
-            }
         }
         let path_tree_denies = artifact
             .policy_document
@@ -5047,25 +5089,131 @@ impl LoweredGeneration {
                     })
                     .collect::<Result<Vec<_>>>()?;
                 operations.sort_unstable();
+                let components = PathSelectorTargetV1::Path {
+                    path_pattern: floor.path.clone(),
+                }
+                .pattern_components(artifact.header.profile_id.as_str())
+                .context(PolicySnafu)?;
                 Ok(PathTreeDenyPatternV1 {
-                    components: canonical_path_components(
-                        artifact.header.profile_id.as_str(),
-                        &floor.canonical_path,
-                    )
-                    .context(PolicySnafu)?,
+                    role_id: floor.role_id.clone(),
+                    components,
                     operations,
                 })
             })
             .collect::<Result<Vec<_>>>()?;
+        let mut route_plans = BTreeMap::<MountRouteIdentity, MountRoutePlan>::new();
+        for measured in measured_mount_routes {
+            ensure!(
+                measured.binding_id == binding.binding_id
+                    && measured.mount_topology_generation > 0
+                    && measured.route.mount_namespace_inode > 0
+                    && measured.route.root_inode > 0,
+                IdentityStateSnafu {
+                    reason: "known mount route differs from its workload binding",
+                }
+            );
+            let identity = MountRouteIdentity {
+                mount_namespace_inode: measured.route.mount_namespace_inode,
+                filesystem_device: measured.route.filesystem_device,
+                root_inode: measured.route.root_inode,
+                topology_generation: measured.mount_topology_generation,
+            };
+            match route_plans.entry(identity) {
+                std::collections::btree_map::Entry::Vacant(entry) => {
+                    entry.insert(MountRoutePlan::new(
+                        measured.route.mountpoint_components.clone(),
+                        measured.mount_view_root_pid,
+                        measured.route.selected_mount_id_unique,
+                        measured.route.mount_snapshot_digest_id,
+                        true,
+                    )?);
+                }
+                std::collections::btree_map::Entry::Occupied(mut entry) => {
+                    entry.get_mut().merge(
+                        measured.route.mountpoint_components.clone(),
+                        measured.mount_view_root_pid,
+                        measured.route.selected_mount_id_unique,
+                        measured.route.mount_snapshot_digest_id,
+                        true,
+                    )?;
+                }
+            }
+        }
+        for object in objects {
+            let components = object
+                .canonical_component_hex
+                .iter()
+                .map(|component| {
+                    hex::decode(component).map_err(|error| {
+                        IdentityStateSnafu {
+                            reason: format!(
+                                "measured canonical path component is invalid: {error}"
+                            ),
+                        }
+                        .build()
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let prefix_len = components
+                .len()
+                .checked_sub(usize::from(object.mount_relative_component_count))
+                .ok_or_else(|| {
+                    IdentityStateSnafu {
+                        reason: "mount-relative path count exceeds the canonical path".to_owned(),
+                    }
+                    .build()
+                })?;
+            let identity = MountRouteIdentity {
+                mount_namespace_inode: object.mount_namespace_inode,
+                filesystem_device: object.mount_root_filesystem_device,
+                root_inode: object.mount_root_inode,
+                topology_generation: object.mount_topology_generation,
+            };
+            match route_plans.entry(identity) {
+                std::collections::btree_map::Entry::Vacant(entry) => {
+                    entry.insert(MountRoutePlan::new(
+                        components[..prefix_len].to_vec(),
+                        object.mount_view_root_pid,
+                        object.selected_mount_id_unique,
+                        object.mount_snapshot_digest_id,
+                        false,
+                    )?);
+                }
+                std::collections::btree_map::Entry::Occupied(mut entry) => {
+                    entry.get_mut().merge(
+                        components[..prefix_len].to_vec(),
+                        object.mount_view_root_pid,
+                        object.selected_mount_id_unique,
+                        object.mount_snapshot_digest_id,
+                        false,
+                    )?;
+                }
+            }
+        }
         let graph = CanonicalPathGraphV1::compile_with_path_tree_denies_and_precedence(
             artifact.header.profile_id.as_str(),
             &patterns,
             &path_tree_denies,
             artifact.policy_document.path_pattern_precedence,
         )
-        .context(PolicySnafu)?
-        .determinize(artifact.header.profile_id.as_str())
         .context(PolicySnafu)?;
+        let graph = graph
+            .determinize(artifact.header.profile_id.as_str())
+            .context(PolicySnafu)?;
+        let mut route_states = BTreeMap::new();
+        for (identity, plan) in &route_plans {
+            if let Some(states) = GraphPrefixStates::compile(&graph, &plan.prefixes)? {
+                route_states.insert(*identity, states);
+            } else if plan.has_known_route {
+                route_states.insert(
+                    *identity,
+                    GraphPrefixStates {
+                        ids: [0; MAX_CANONICAL_ROUTE_STATES_V1],
+                        count: 0,
+                    },
+                );
+            }
+        }
         let mut tables = PathTables {
             mount_views: BTreeMap::new(),
             mount_epochs: BTreeMap::new(),
@@ -5074,6 +5222,7 @@ impl LoweredGeneration {
             exact: BTreeMap::new(),
             wildcards: BTreeMap::new(),
             terminals: BTreeMap::new(),
+            path_tree_denials: BTreeMap::new(),
             reconciliation: Vec::new(),
         };
         for transition in &graph.exact_transitions {
@@ -5134,7 +5283,6 @@ impl LoweredGeneration {
                 rule_numeric_id: rule_handles[&terminal.rule_id],
                 exact_object_required: u8::from(selector.requires_exact_object()),
                 reserved: [0; 3],
-                path_tree_deny_operation_mask: 0,
             };
             ensure!(
                 terminal_values.insert(terminal.state_id, value).is_none(),
@@ -5142,12 +5290,6 @@ impl LoweredGeneration {
                     reason: "deterministic path state has multiple exact terminals",
                 }
             );
-        }
-        for floor in &graph.path_tree_deny_floors {
-            terminal_values
-                .entry(floor.state_id)
-                .or_default()
-                .path_tree_deny_operation_mask |= floor.operation_mask;
         }
         for (state_id, value) in terminal_values {
             let key = PathGraphStateKeyV1 {
@@ -5157,69 +5299,83 @@ impl LoweredGeneration {
             };
             insert_exact(&mut tables.terminals, key.as_bytes(), value.as_bytes())?;
         }
-        let binding_id = parse_id("binding_id", &binding.binding_id)?;
-        for object in objects {
-            let components = &decoded[&object.exact_object_key_id];
-            let prefix_len = components
-                .len()
-                .checked_sub(usize::from(object.mount_relative_component_count))
-                .ok_or_else(|| {
-                    IdentityStateSnafu {
-                        reason: "mount-relative path count exceeds the canonical path".to_owned(),
-                    }
-                    .build()
-                })?;
-            let graph_prefix_state_id =
-                graph
-                    .state_after(&components[..prefix_len])
-                    .ok_or_else(|| {
-                        IdentityStateSnafu {
-                            reason: "canonical mount prefix is absent from its path graph"
-                                .to_owned(),
-                        }
-                        .build()
-                    })?;
-            let view_map_key = object.mount_namespace_inode.to_ne_bytes();
-            let view = MountSecurityViewStateV1 {
-                topology_generation: object.mount_topology_generation,
-                snapshot_digest_id: 0,
-                pending_mutations: 0,
-                state: MountTopologyStateV1::Dirty,
-                reserved: [0; 7],
-                transition_version: 1,
+        for floor in &graph.path_tree_deny_floors {
+            let active_role_id = *role_handles.get(&floor.role_id).ok_or_else(|| {
+                IdentityStateSnafu {
+                    reason: format!("path-tree denial has unknown role `{}`", floor.role_id),
+                }
+                .build()
+            })?;
+            let key = PathTreeDenyKeyV1 {
+                profile_generation_ref_id: binding.active_profile_generation_ref_id,
+                state_id: floor.state_id,
+                active_role_id,
             };
-            insert_exact(&mut tables.mount_views, &view_map_key, view.as_bytes())?;
             insert_exact(
-                &mut tables.mount_epochs,
-                &view_map_key,
-                &object.mount_topology_generation.to_ne_bytes(),
+                &mut tables.path_tree_denials,
+                key.as_bytes(),
+                &floor.operation_mask.to_ne_bytes(),
             )?;
-            insert_exact(&mut tables.mount_locks, &view_map_key, &0_u32.to_ne_bytes())?;
+        }
+        tables.add_mount_namespace_guards(objects)?;
+        let binding_id = parse_id("binding_id", &binding.binding_id)?;
+        for (identity, graph_prefix_states) in &route_states {
+            let plan = &route_plans[identity];
+            tables.add_mount_namespace_guard(
+                identity.mount_namespace_inode,
+                identity.topology_generation,
+            )?;
             let root_key = CanonicalMountRootKeyV1 {
                 profile_generation_ref_id: binding.active_profile_generation_ref_id,
-                mount_namespace_inode: object.mount_namespace_inode,
+                mount_namespace_inode: identity.mount_namespace_inode,
                 binding_id,
-                topology_generation: object.mount_topology_generation,
-                filesystem_device: object.mount_root_filesystem_device,
-                root_inode: object.mount_root_inode,
+                topology_generation: if plan.has_known_route {
+                    0
+                } else {
+                    identity.topology_generation
+                },
+                filesystem_device: identity.filesystem_device,
+                root_inode: identity.root_inode,
             };
-            let root = CanonicalMountRootV1 {
-                selected_mount_id_unique: object.selected_mount_id_unique,
-                snapshot_digest_id: object.mount_snapshot_digest_id,
-                graph_prefix_state_id,
-                reserved: 0,
-            };
+            let root = graph_prefix_states
+                .mount_root(plan.selected_mount_id_unique, plan.snapshot_digest_id);
             insert_exact(
                 &mut tables.mount_roots,
                 root_key.as_bytes(),
                 root.as_bytes(),
             )?;
+        }
+        for object in objects {
+            let components = object
+                .canonical_component_hex
+                .iter()
+                .map(|component| {
+                    hex::decode(component).map_err(|error| {
+                        IdentityStateSnafu {
+                            reason: format!(
+                                "measured canonical path component is invalid: {error}"
+                            ),
+                        }
+                        .build()
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let identity = MountRouteIdentity {
+                mount_namespace_inode: object.mount_namespace_inode,
+                topology_generation: object.mount_topology_generation,
+                filesystem_device: object.mount_root_filesystem_device,
+                root_inode: object.mount_root_inode,
+            };
+            ensure!(
+                route_states.contains_key(&identity),
+                IdentityStateSnafu {
+                    reason: "canonical mount prefix is absent from its path graph",
+                }
+            );
             tables.reconciliation.push(MountRootReconciliation {
                 mount_namespace_inode: object.mount_namespace_inode,
-                binding_id,
                 configured: (*object).clone(),
-                canonical_path: canonical_path(components),
-                graph_prefix_state_id,
+                canonical_path: canonical_path(&components),
             });
         }
         Ok(tables)
@@ -5373,26 +5529,28 @@ mod tests {
 
     use ed25519_dalek::SigningKey;
     use erebor_interceptor_abi::{
-        BindingLifecycleStateV1, EffectDecisionKeyV1, EffectDefaultKeyV1, EntryAdmissionRuleKeyV1,
-        EntryAdmissionRuleV1, ExactFileObjectKeyV1, ExactObjectBindingStateV1,
-        ExactObjectBindingV1, Id128V1, KernelEffectFamilyV1, KernelEffectOperationV1,
-        PathGraphStateKeyV1, PathGraphTerminalV1, PathGraphTransitionKeyV1, PendingExecStateV1,
-        PhysicalDecisionKindV1, PhysicalDecisionV1, PolicyGenerationModeV1,
+        BindingLifecycleStateV1, CanonicalMountRootV1, EffectDecisionKeyV1, EffectDefaultKeyV1,
+        EntryAdmissionRuleKeyV1, EntryAdmissionRuleV1, ExactFileObjectKeyV1,
+        ExactObjectBindingStateV1, ExactObjectBindingV1, Id128V1, KernelEffectFamilyV1,
+        KernelEffectOperationV1, PathGraphStateKeyV1, PathGraphTerminalV1,
+        PathGraphTransitionKeyV1, PathTreeDenyKeyV1, PendingExecStateV1, PhysicalDecisionKindV1,
+        PhysicalDecisionV1, PolicyGenerationModeV1,
     };
     use mithril_control::{
         lower_kubernetes_policy, policy_custom_resource, EffectFamilyV1,
         FileExceptionGrantTemplateV1, LocalObjectSelectorV1, ObjectClassifierSelectorV1,
         PathSelectorTargetV1, PathSelectorV1, PathTreeDenyFloorV1, PolicyCompiler,
-        PolicyDispositionV1, PolicyDocumentV1, ProfileCandidateArtifactV1, ProfileModeV1,
-        ProfileSealRequestV1, RegistryDigestsV1, RuleMatchV1, WorkloadProtectionPolicySpec,
+        PolicyDocumentV1, ProfileCandidateArtifactV1, ProfileModeV1, ProfileSealRequestV1,
+        RegistryDigestsV1, RuleMatchV1, WorkloadProtectionPolicySpec,
     };
     use zerocopy::{FromBytes as _, IntoBytes as _, TryFromBytes as _};
 
     use super::{
         add_binding_activation, ensure_active_generation_unchanged, ensure_committed_generation,
         ensure_map_capacity, entry_admission_path_selector_ids, exception_counter_is_consistent,
-        generation_retirement_needs_tombstone, parse_id, pending_exec_retains_generation_authority,
-        same_exact_file, LoweredGeneration, ProfileActivation,
+        generation_retirement_needs_tombstone, handles, parse_id,
+        pending_exec_retains_generation_authority, same_exact_file, LoweredGeneration,
+        MeasuredMountRouteV1, ProfileActivation,
     };
     use crate::error::IdentityStateSnafu;
     use crate::{
@@ -5688,6 +5846,9 @@ mod tests {
             100,
         )?;
         assert_eq!(generation.entry_admissions.len(), 6);
+        assert!(!generation.mount_views.is_empty());
+        assert_eq!(generation.mount_views.len(), generation.mount_epochs.len());
+        assert_eq!(generation.mount_views.len(), generation.mount_locks.len());
         let rows = generation
             .entry_admissions
             .iter()
@@ -5733,6 +5894,66 @@ mod tests {
         assert_eq!(generation.administrative_plans.len(), 1);
         assert_ne!(generation.administrative_plans[0].admitted_entry_rule_id, 0);
         assert!(generation.administrative_required);
+        Ok(())
+    }
+
+    #[test]
+    fn exact_linux_capability_uses_the_existing_effect_default_map() -> crate::Result<()> {
+        let (mut artifact, binding) = entry_roles_artifact()?;
+        let objects = entry_role_objects(&artifact, &binding)?;
+        let mut capability = artifact.compiled_profile.compiled_cells[0].clone();
+        capability.key.role_id = "application".to_owned();
+        capability.key.effect_family = EffectFamilyV1::Privilege;
+        capability.key.operation_id = "CAPABILITY".to_owned();
+        capability.key.object_selector = "SECURITY:LINUX_CAPABILITY:21".to_owned();
+        capability.physical_result = mithril_control::CompiledPhysicalResultV1::AllowEffect;
+        capability.errno = None;
+        let capability_state = capability.key.process_state_id.clone();
+        let capability_lifecycle = capability.key.binding_lifecycle;
+        artifact.compiled_profile.compiled_cells.push(capability);
+
+        let generation = LoweredGeneration::for_binding(
+            &artifact,
+            &binding,
+            &objects,
+            Id128V1::new(1, 2),
+            Id128V1::new(3, 4),
+            3,
+            1_800_000_000_000_000_000,
+            100,
+        )?;
+        let application_role = handles(
+            artifact
+                .policy_document
+                .roles
+                .iter()
+                .map(|role| role.role_id.as_str()),
+        )["application"];
+        let process_state = handles(
+            artifact
+                .policy_document
+                .process_state_definitions
+                .iter()
+                .map(|state| state.process_state_id.as_str()),
+        )[&capability_state];
+        let expected_key = EffectDefaultKeyV1 {
+            profile_generation_ref_id: binding.active_profile_generation_ref_id,
+            active_role_id: application_role,
+            effect_family: KernelEffectFamilyV1::Privilege as u16,
+            operation: KernelEffectOperationV1::Capability as u16,
+            composite_atom_id: 22,
+            process_state_vector_id: process_state,
+            binding_lifecycle_state: super::lifecycle(capability_lifecycle),
+            reserved_tail: [0; 3],
+        };
+        assert!(generation.defaults.iter().any(|(key, value)| {
+            key == expected_key.as_bytes()
+                && PhysicalDecisionV1::try_read_from_bytes(value)
+                    .is_ok_and(|decision| decision.decision == PhysicalDecisionKindV1::Allow)
+        }));
+        assert!(LoweredGeneration::composite_handles(&artifact)
+            .keys()
+            .all(|selector| !selector.starts_with("SECURITY:LINUX_CAPABILITY:")));
         Ok(())
     }
 
@@ -6162,29 +6383,191 @@ mod tests {
             .policy_document
             .path_tree_deny_floors
             .push(PathTreeDenyFloorV1 {
-                schema_version: 1,
                 rule_id: "secret-tree-deny".to_owned(),
-                canonical_path: "/var/run/secrets".to_owned(),
-                recursive: true,
-                effect_families: vec![EffectFamilyV1::File],
+                role_id: "converter".to_owned(),
+                path: "/var/*/secrets".to_owned(),
                 operation_ids: ["CREATE", "LINK", "OPEN_READ"].map(str::to_owned).to_vec(),
-                requested_disposition: PolicyDispositionV1::Deny,
-                exception_ids: Vec::new(),
             });
         let composite_handles = LoweredGeneration::composite_handles(&artifact);
-        let tables =
-            LoweredGeneration::lower_path_tables(&artifact, &binding, &[], &composite_handles)?;
+        let role_handles = handles(
+            artifact
+                .policy_document
+                .roles
+                .iter()
+                .map(|role| role.role_id.as_str()),
+        );
+        let tables = LoweredGeneration::lower_path_tables(
+            &artifact,
+            &binding,
+            &[],
+            &[],
+            &composite_handles,
+            &role_handles,
+        )?;
         let open_read_mask = 1_u64 << KernelEffectOperationV1::OpenRead as u16;
 
         assert!(tables.mount_roots.is_empty());
         assert!(tables.reconciliation.is_empty());
         assert!(!tables.exact.is_empty());
-        assert!(tables.terminals.values().any(|value| {
-            PathGraphTerminalV1::read_from_bytes(value).is_ok_and(|terminal| {
-                terminal.composite_atom_id == 0
-                    && terminal.path_tree_deny_operation_mask & open_read_mask != 0
+        assert!(tables.terminals.values().all(|value| {
+            PathGraphTerminalV1::read_from_bytes(value)
+                .is_ok_and(|terminal| terminal.composite_atom_id != 0)
+        }));
+        assert!(tables.path_tree_denials.iter().any(|(key, value)| {
+            let Ok(mask) = <[u8; 8]>::try_from(value.as_slice()).map(u64::from_ne_bytes) else {
+                return false;
+            };
+            PathTreeDenyKeyV1::read_from_bytes(key).is_ok_and(|key| {
+                key.active_role_id == role_handles["converter"] && mask & open_read_mask != 0
             })
         }));
+        Ok(())
+    }
+
+    #[test]
+    fn known_mount_route_is_independent_of_kubernetes_mount_order() -> crate::Result<()> {
+        let (mut artifact, binding, object) = exact_artifact(ProfileModeV1::Protect)?;
+        artifact
+            .policy_document
+            .path_tree_deny_floors
+            .push(PathTreeDenyFloorV1 {
+                rule_id: "secret-tree-deny".to_owned(),
+                role_id: "converter".to_owned(),
+                path: "/home/secret".to_owned(),
+                operation_ids: vec!["OPEN_READ".to_owned()],
+            });
+        let route = |mountpoint_components: Vec<Vec<u8>>| MeasuredMountRouteV1 {
+            binding_id: binding.binding_id.clone(),
+            mount_view_root_pid: 10,
+            mount_topology_generation: 1,
+            route: crate::exact_object::LiveMountRootRouteV1 {
+                mount_namespace_inode: 7,
+                mountpoint_components,
+                filesystem_device: 8,
+                root_inode: 9,
+                selected_mount_id_unique: 12,
+                mount_snapshot_digest_id: 13,
+            },
+        };
+        let protected = route(vec![b"home".to_vec(), b"secret".to_vec()]);
+        let alias = route(vec![b"home".to_vec(), b"attack".to_vec()]);
+        let mut unrelated = route(vec![b"dev".to_vec()]);
+        unrelated.route.filesystem_device = 10;
+        unrelated.route.root_inode = 11;
+        unrelated.route.selected_mount_id_unique = 14;
+        unrelated.route.mount_snapshot_digest_id = 15;
+        let baseline = LoweredGeneration::for_binding(
+            &artifact,
+            &binding,
+            std::slice::from_ref(&object),
+            Id128V1::new(1, 2),
+            Id128V1::new(3, 4),
+            3,
+            1_800_000_000_000_000_000,
+            100,
+        )?;
+        let routed = LoweredGeneration::for_binding_with_mount_routes(
+            &artifact,
+            &binding,
+            std::slice::from_ref(&object),
+            &[protected.clone(), alias.clone(), unrelated.clone()],
+            Id128V1::new(1, 2),
+            Id128V1::new(3, 4),
+            3,
+            1_800_000_000_000_000_000,
+            100,
+        )?;
+        let composite_handles = LoweredGeneration::composite_handles(&artifact);
+        let role_handles = handles(
+            artifact
+                .policy_document
+                .roles
+                .iter()
+                .map(|role| role.role_id.as_str()),
+        );
+        let first = LoweredGeneration::lower_path_tables(
+            &artifact,
+            &binding,
+            &[],
+            &[protected.clone(), alias.clone(), unrelated.clone()],
+            &composite_handles,
+            &role_handles,
+        )?;
+        let second = LoweredGeneration::lower_path_tables(
+            &artifact,
+            &binding,
+            &[],
+            &[unrelated, alias, protected],
+            &composite_handles,
+            &role_handles,
+        )?;
+
+        assert_eq!(baseline.descriptor, routed.descriptor);
+        assert_eq!(baseline.path_exact, routed.path_exact);
+        assert_eq!(baseline.path_wildcards, routed.path_wildcards);
+        assert_eq!(baseline.path_terminals, routed.path_terminals);
+        assert_eq!(baseline.path_tree_denials, routed.path_tree_denials);
+        assert_eq!(first.mount_roots, second.mount_roots);
+        assert_eq!(first.mount_roots.len(), 2);
+        let roots = first
+            .mount_roots
+            .values()
+            .filter_map(|value| CanonicalMountRootV1::read_from_bytes(value).ok())
+            .collect::<Vec<_>>();
+        let root = roots
+            .iter()
+            .find(|root| root.graph_prefix_state_count > 0)
+            .copied()
+            .ok_or_else(|| {
+                IdentityStateSnafu {
+                    reason: "known mount route test has no route row".to_owned(),
+                }
+                .build()
+            })?;
+        assert!(roots.iter().any(|root| {
+            root.selected_mount_id_unique == 14 && root.graph_prefix_state_count == 0
+        }));
+        let open_read_mask = 1_u64 << KernelEffectOperationV1::OpenRead as u16;
+        assert!(first.path_tree_denials.iter().any(|(key, value)| {
+            let Ok(mask) = <[u8; 8]>::try_from(value.as_slice()).map(u64::from_ne_bytes) else {
+                return false;
+            };
+            PathTreeDenyKeyV1::read_from_bytes(key).is_ok_and(|key| {
+                root.graph_prefix_state_ids[..root.graph_prefix_state_count as usize]
+                    .contains(&key.state_id)
+                    && key.active_role_id == role_handles["converter"]
+                    && mask & open_read_mask != 0
+            })
+        }));
+        Ok(())
+    }
+
+    #[test]
+    fn mount_namespace_guard_does_not_create_an_exact_reconciliation_root() -> crate::Result<()> {
+        let (artifact, binding, object) = exact_artifact(ProfileModeV1::Protect)?;
+        let composite_handles = LoweredGeneration::composite_handles(&artifact);
+        let role_handles = handles(
+            artifact
+                .policy_document
+                .roles
+                .iter()
+                .map(|role| role.role_id.as_str()),
+        );
+        let mut tables = LoweredGeneration::lower_path_tables(
+            &artifact,
+            &binding,
+            &[],
+            &[],
+            &composite_handles,
+            &role_handles,
+        )?;
+        tables.add_mount_namespace_guards(&[&object])?;
+
+        assert_eq!(tables.mount_views.len(), 1);
+        assert_eq!(tables.mount_epochs.len(), 1);
+        assert_eq!(tables.mount_locks.len(), 1);
+        assert!(tables.mount_roots.is_empty());
+        assert!(tables.reconciliation.is_empty());
         Ok(())
     }
 
@@ -6195,18 +6578,27 @@ mod tests {
             .policy_document
             .path_tree_deny_floors
             .push(PathTreeDenyFloorV1 {
-                schema_version: 1,
                 rule_id: "secret-tree-deny".to_owned(),
-                canonical_path: "/var/run/secrets".to_owned(),
-                recursive: true,
-                effect_families: vec![EffectFamilyV1::File],
+                role_id: "converter".to_owned(),
+                path: "/var/**/secrets".to_owned(),
                 operation_ids: vec!["OPEN_READ".to_owned()],
-                requested_disposition: PolicyDispositionV1::Deny,
-                exception_ids: Vec::new(),
             });
         let composite_handles = LoweredGeneration::composite_handles(&artifact);
-        let first =
-            LoweredGeneration::lower_path_tables(&artifact, &binding, &[], &composite_handles)?;
+        let role_handles = handles(
+            artifact
+                .policy_document
+                .roles
+                .iter()
+                .map(|role| role.role_id.as_str()),
+        );
+        let first = LoweredGeneration::lower_path_tables(
+            &artifact,
+            &binding,
+            &[],
+            &[],
+            &composite_handles,
+            &role_handles,
+        )?;
         let second_binding = WorkloadBindingConfig {
             active_profile_generation_ref_id: 2,
             ..binding
@@ -6215,7 +6607,9 @@ mod tests {
             &artifact,
             &second_binding,
             &[],
+            &[],
             &composite_handles,
+            &role_handles,
         )?;
 
         assert!(first.exact.keys().all(|key| {
@@ -6232,6 +6626,14 @@ mod tests {
         }));
         assert!(second.terminals.keys().all(|key| {
             PathGraphStateKeyV1::read_from_bytes(key)
+                .is_ok_and(|key| key.profile_generation_ref_id == 2)
+        }));
+        assert!(first.path_tree_denials.keys().all(|key| {
+            PathTreeDenyKeyV1::read_from_bytes(key)
+                .is_ok_and(|key| key.profile_generation_ref_id == 1)
+        }));
+        assert!(second.path_tree_denials.keys().all(|key| {
+            PathTreeDenyKeyV1::read_from_bytes(key)
                 .is_ok_and(|key| key.profile_generation_ref_id == 2)
         }));
         assert!(first

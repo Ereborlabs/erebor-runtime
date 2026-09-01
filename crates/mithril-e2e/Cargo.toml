@@ -43,6 +43,7 @@ kube.workspace = true
 prost.workspace = true
 rcgen = "0.13.2"
 reqwest.workspace = true
+serde-saphyr.workspace = true
 tempfile = "3.23.0"
 tokio.workspace = true
 tokio-stream.workspace = true

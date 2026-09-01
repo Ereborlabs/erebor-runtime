@@ -693,14 +693,10 @@ pub enum EffectFamilyV1 {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct PathTreeDenyFloorV1 {
-    pub schema_version: u32,
     pub rule_id: String,
-    pub canonical_path: String,
-    pub recursive: bool,
-    pub effect_families: Vec<EffectFamilyV1>,
+    pub role_id: String,
+    pub path: String,
     pub operation_ids: Vec<String>,
-    pub requested_disposition: PolicyDispositionV1,
-    pub exception_ids: Vec<String>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, JsonSchema)]

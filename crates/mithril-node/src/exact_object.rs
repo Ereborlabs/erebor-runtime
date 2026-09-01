@@ -7,7 +7,6 @@ use std::io::{Read as _, Seek as _, SeekFrom};
 use std::os::unix::ffi::{OsStrExt as _, OsStringExt as _};
 use std::os::unix::fs::MetadataExt as _;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
 
 use erebor_interceptor::KernelHost;
 use erebor_interceptor_abi::{
@@ -23,23 +22,18 @@ use crate::error::{IdentityStateSnafu, InterceptorSnafu, IoSnafu, JsonSnafu};
 use crate::{ExactDeviceConfig, ExactDeviceType, ExactFileObjectConfig, Result};
 
 const STATX_MNT_ID_UNIQUE: u32 = 0x0000_4000;
+const STATX_MNT_ID: u32 = 0x0000_1000;
 const MAXIMUM_OCI_CONFIG_BYTES: u64 = 1_048_576;
 
 pub struct ExactFileObjectResolver;
 
 pub(crate) struct ExactFileObjectView {
     root_pid: u32,
-    _process: File,
+    process: File,
     mount_namespace: File,
+    mountinfo: File,
     root: File,
-    mountinfo: Mutex<File>,
-}
-
-pub(crate) struct OciEntryFileObjectView {
-    root_pid: u32,
-    _process: File,
-    mount_namespace: File,
-    root: File,
+    namespace_root_path: Option<PathBuf>,
 }
 
 #[derive(Deserialize)]
@@ -70,6 +64,74 @@ pub(crate) struct LiveExactFileObjectV1 {
     pub mount_root_inode: u64,
     pub selected_mount_id_unique: u64,
     pub mount_snapshot_digest_id: u64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct LiveMountRootRouteV1 {
+    pub mount_namespace_inode: u32,
+    pub mountpoint_components: Vec<Vec<u8>>,
+    pub filesystem_device: u32,
+    pub root_inode: u64,
+    pub selected_mount_id_unique: u64,
+    pub mount_snapshot_digest_id: u64,
+}
+
+impl LiveMountRootRouteV1 {
+    fn from_mounts(
+        mounts: &[LiveMount],
+        mount_namespace_inode: u32,
+        mount_snapshot_digest_id: u64,
+    ) -> Result<Vec<Self>> {
+        let mut routes = Vec::new();
+        for mount in mounts {
+            let selected_mount_id_unique = mounts
+                .iter()
+                .filter(|candidate| {
+                    candidate.filesystem_device == mount.filesystem_device
+                        && candidate.inode == mount.inode
+                })
+                .map(|candidate| candidate.mount_id_unique)
+                .min()
+                .ok_or_else(|| {
+                    IdentityStateSnafu {
+                        reason: "mount route has no represented source root".to_owned(),
+                    }
+                    .build()
+                })?;
+            let represented_paths = mounts
+                .iter()
+                .filter(|source| {
+                    source.filesystem_device == mount.filesystem_device
+                        && mount.root.starts_with(&source.root)
+                })
+                .map(|source| {
+                    mount
+                        .root
+                        .strip_prefix(&source.root)
+                        .map(|relative| source.mountpoint.join(relative))
+                        .map_err(|error| {
+                            IdentityStateSnafu {
+                                reason: format!(
+                                    "mount route is outside its represented source: {error}"
+                                ),
+                            }
+                            .build()
+                        })
+                })
+                .collect::<Result<BTreeSet<_>>>()?;
+            for represented_path in represented_paths {
+                routes.push(Self {
+                    mount_namespace_inode,
+                    mountpoint_components: path_components(&represented_path)?,
+                    filesystem_device: mount.filesystem_device,
+                    root_inode: mount.inode,
+                    selected_mount_id_unique,
+                    mount_snapshot_digest_id,
+                });
+            }
+        }
+        Ok(routes)
+    }
 }
 
 impl ExactFileObjectResolver {
@@ -106,8 +168,8 @@ impl ExactFileObjectView {
             path: &process_path,
         })?;
         let mount_namespace = open_process_file(&process, root_pid, "ns/mnt")?;
-        let root = open_process_file(&process, root_pid, "root")?;
         let mountinfo = open_process_file(&process, root_pid, "mountinfo")?;
+        let root = open_process_file(&process, root_pid, "root")?;
         let final_mount_namespace = open_process_file(&process, root_pid, "ns/mnt")?;
         let final_root = open_process_file(&process, root_pid, "root")?;
         ensure!(
@@ -130,10 +192,11 @@ impl ExactFileObjectView {
         );
         Ok(Self {
             root_pid,
-            _process: process,
+            process,
             mount_namespace,
+            mountinfo,
             root,
-            mountinfo: Mutex::new(mountinfo),
+            namespace_root_path: None,
         })
     }
 
@@ -279,6 +342,25 @@ impl ExactFileObjectView {
         );
         let file = self.open_path(path)?;
         self.inspect_file(path, &file, None)
+    }
+
+    pub(crate) fn mount_root_routes(&self) -> Result<Vec<LiveMountRootRouteV1>> {
+        let first = self.read_mountinfo()?;
+        let entries = self.mount_entries(&first)?;
+        let mounts = entries
+            .iter()
+            .map(|entry| LiveMount::read(&self.root, entry))
+            .collect::<Result<Vec<_>>>()?;
+        let second = self.read_mountinfo()?;
+        ensure!(
+            first == second,
+            IdentityStateSnafu {
+                reason: "mount topology changed while its route snapshot was built",
+            }
+        );
+        let snapshot_digest_id = MountInfoSnapshot::digest(&first)?;
+        let mount_namespace_inode = self.mount_namespace_inode()?;
+        LiveMountRootRouteV1::from_mounts(&mounts, mount_namespace_inode, snapshot_digest_id)
     }
 
     pub(crate) fn try_inspect(
@@ -439,18 +521,92 @@ impl ExactFileObjectView {
     }
 
     fn read_mountinfo(&self) -> Result<Vec<u8>> {
-        let mut file = self.mountinfo.lock().map_err(|_| {
-            IdentityStateSnafu {
-                reason: "held mountinfo lock is poisoned".to_owned(),
+        let path = PathBuf::from(format!("held /proc/{}/mountinfo", self.root_pid));
+        let read = |file: &File| {
+            let mut file = file;
+            file.seek(SeekFrom::Start(0))
+                .context(IoSnafu { path: &path })?;
+            let mut source = Vec::new();
+            file.read_to_end(&mut source)
+                .context(IoSnafu { path: &path })?;
+            Ok(source)
+        };
+        match open_process_file(&self.process, self.root_pid, "mountinfo") {
+            Ok(file) => read(&file),
+            Err(crate::Error::Io { source, .. })
+                if source.kind() == std::io::ErrorKind::NotFound
+                    || source.raw_os_error() == Some(rustix::io::Errno::SRCH.raw_os_error()) =>
+            {
+                read(&self.mountinfo)
             }
-            .build()
-        })?;
-        read_mountinfo_file(&mut file, self.root_pid)
+            Err(error) => Err(error),
+        }
+    }
+
+    #[cfg(feature = "test-support")]
+    pub(crate) fn retained_mountinfo_is_readable_for_test(&self) -> Result<bool> {
+        Ok(!parse_mountinfo(&self.read_mountinfo()?)?.is_empty())
+    }
+
+    fn mount_entries(&self, source: &[u8]) -> Result<Vec<MountInfoEntry>> {
+        let entries = parse_mountinfo(source)?;
+        let Some(namespace_root_path) = &self.namespace_root_path else {
+            return Ok(entries);
+        };
+        let root_mount_id = MountInfoEntry::mount_id_for(&self.root)?;
+        Self::rebase_mount_entries(&entries, namespace_root_path, root_mount_id)
+    }
+
+    fn rebase_mount_entries(
+        entries: &[MountInfoEntry],
+        namespace_root_path: &Path,
+        root_mount_id: u32,
+    ) -> Result<Vec<MountInfoEntry>> {
+        let root_mount = entries
+            .iter()
+            .find(|entry| entry.mount_id == root_mount_id)
+            .ok_or_else(|| {
+                IdentityStateSnafu {
+                    reason: "OCI root mount is absent from the held mountinfo view".to_owned(),
+                }
+                .build()
+            })?;
+        let relative_root = namespace_root_path
+            .strip_prefix(&root_mount.mountpoint)
+            .map_err(|error| {
+                IdentityStateSnafu {
+                    reason: format!("OCI root is outside its mountinfo entry: {error}"),
+                }
+                .build()
+            })?;
+        let mut rebased = vec![MountInfoEntry {
+            mount_id: root_mount.mount_id,
+            parent_mount_id: root_mount.mount_id,
+            root: root_mount.root.join(relative_root),
+            mountpoint: PathBuf::from("/"),
+            device: root_mount.device.clone(),
+        }];
+        for entry in entries {
+            if entry.mount_id == root_mount_id {
+                continue;
+            }
+            let Ok(relative) = entry.mountpoint.strip_prefix(namespace_root_path) else {
+                continue;
+            };
+            rebased.push(MountInfoEntry {
+                mount_id: entry.mount_id,
+                parent_mount_id: entry.parent_mount_id,
+                root: entry.root.clone(),
+                mountpoint: Path::new("/").join(relative),
+                device: entry.device.clone(),
+            });
+        }
+        Ok(rebased)
     }
 }
 
-impl OciEntryFileObjectView {
-    pub(crate) fn acquire(root_pid: u32, bundle: &Path) -> Result<Self> {
+impl ExactFileObjectView {
+    pub(crate) fn acquire_oci(root_pid: u32, bundle: &Path) -> Result<Self> {
         ensure!(
             root_pid > 0 && clean_absolute_path(bundle),
             IdentityStateSnafu {
@@ -462,6 +618,7 @@ impl OciEntryFileObjectView {
             path: &process_path,
         })?;
         let mount_namespace = open_process_file(&process, root_pid, "ns/mnt")?;
+        let mountinfo = open_process_file(&process, root_pid, "mountinfo")?;
         let process_root = open_process_file(&process, root_pid, "root")?;
         let bundle_directory = openat2(
             &process_root,
@@ -503,6 +660,11 @@ impl OciEntryFileObjectView {
                 reason: "OCI runtime root path is not clean and bounded",
             }
         );
+        let namespace_root_path = if config.root.path.is_absolute() {
+            config.root.path.clone()
+        } else {
+            bundle.join(&config.root.path)
+        };
         let open_root = || {
             let (directory, flags) = if config.root.path.is_absolute() {
                 (
@@ -562,9 +724,11 @@ impl OciEntryFileObjectView {
         );
         Ok(Self {
             root_pid,
-            _process: process,
+            process,
             mount_namespace,
+            mountinfo,
             root,
+            namespace_root_path: Some(namespace_root_path),
         })
     }
 
@@ -684,22 +848,6 @@ impl OciEntryFileObjectView {
             mount_view_root_pid: self.root_pid,
         }))
     }
-
-    fn mount_namespace_inode(&self) -> Result<u32> {
-        self.mount_namespace
-            .metadata()
-            .context(IoSnafu {
-                path: Path::new("held OCI mount namespace"),
-            })?
-            .ino()
-            .try_into()
-            .map_err(|error| {
-                IdentityStateSnafu {
-                    reason: format!("mount namespace inode exceeds its Linux u32 ABI: {error}"),
-                }
-                .build()
-            })
-    }
 }
 
 fn clean_absolute_path(path: &Path) -> bool {
@@ -766,9 +914,26 @@ struct MountInfoEntry {
 }
 
 impl MountInfoSnapshot {
+    fn digest(source: &[u8]) -> Result<u64> {
+        let digest = Sha256::digest(source);
+        let snapshot_digest_id = u64::from_le_bytes(digest[..8].try_into().map_err(|error| {
+            IdentityStateSnafu {
+                reason: format!("mount snapshot digest conversion failed: {error}"),
+            }
+            .build()
+        })?);
+        ensure!(
+            snapshot_digest_id > 0,
+            IdentityStateSnafu {
+                reason: "mount snapshot produced the reserved zero digest handle",
+            }
+        );
+        Ok(snapshot_digest_id)
+    }
+
     fn read(view: &ExactFileObjectView, target: &Path) -> Result<Self> {
         let first = view.read_mountinfo()?;
-        let entries = parse_mountinfo(&first)?;
+        let entries = view.mount_entries(&first)?;
         let entered = entries
             .iter()
             .filter(|entry| target.starts_with(&entry.mountpoint))
@@ -785,7 +950,7 @@ impl MountInfoSnapshot {
         let relevant_entries = relevant_mount_entries(&entries, entered.mount_id)?;
         let mounts = relevant_entries
             .iter()
-            .map(|entry| live_mount(view, entry))
+            .map(|entry| LiveMount::read(&view.root, entry))
             .collect::<Result<Vec<_>>>()?;
         let entered = mounts
             .iter()
@@ -821,19 +986,7 @@ impl MountInfoSnapshot {
                 reason: "mount topology changed while its security snapshot was built",
             }
         );
-        let digest = Sha256::digest(&first);
-        let snapshot_digest_id = u64::from_le_bytes(digest[..8].try_into().map_err(|error| {
-            IdentityStateSnafu {
-                reason: format!("mount snapshot digest conversion failed: {error}"),
-            }
-            .build()
-        })?);
-        ensure!(
-            snapshot_digest_id > 0,
-            IdentityStateSnafu {
-                reason: "mount snapshot produced the reserved zero digest handle",
-            }
-        );
+        let snapshot_digest_id = Self::digest(&first)?;
         Ok(Self {
             entered_mount_id: entered.mount_id,
             canonical_components,
@@ -900,44 +1053,77 @@ struct LiveMount {
     mount_id_unique: u64,
 }
 
-fn live_mount(view: &ExactFileObjectView, entry: &MountInfoEntry) -> Result<LiveMount> {
-    let file = view.open_path(&entry.mountpoint)?;
-    let unique_mount = StatxFlags::from_bits_retain(STATX_MNT_ID_UNIQUE);
-    let status = statx(
-        &file,
-        "",
-        AtFlags::EMPTY_PATH,
-        StatxFlags::BASIC_STATS | unique_mount,
-    )
-    .map_err(std::io::Error::from)
-    .context(IoSnafu {
-        path: &entry.mountpoint,
-    })?;
-    ensure!(
-        status.stx_mask & STATX_MNT_ID_UNIQUE != 0 && status.stx_mnt_id > 0 && status.stx_ino > 0,
-        IdentityStateSnafu {
-            reason: "mount root lacks a unique mount ID or inode",
-        }
-    );
-    Ok(LiveMount {
-        mount_id: entry.mount_id,
-        parent_mount_id: entry.parent_mount_id,
-        root: entry.root.clone(),
-        mountpoint: entry.mountpoint.clone(),
-        filesystem_device: encoded_device(status.stx_dev_major, status.stx_dev_minor)?,
-        inode: status.stx_ino,
-        mount_id_unique: status.stx_mnt_id,
-    })
+impl MountInfoEntry {
+    fn mount_id_for(file: &File) -> Result<u32> {
+        let mount_id = StatxFlags::from_bits_retain(STATX_MNT_ID);
+        let status = statx(
+            file,
+            "",
+            AtFlags::EMPTY_PATH,
+            StatxFlags::BASIC_STATS | mount_id,
+        )
+        .map_err(std::io::Error::from)
+        .context(IoSnafu {
+            path: Path::new("held OCI root"),
+        })?;
+        ensure!(
+            status.stx_mask & STATX_MNT_ID != 0 && status.stx_mnt_id > 0,
+            IdentityStateSnafu {
+                reason: "OCI root lacks a mountinfo-compatible mount ID",
+            }
+        );
+        status.stx_mnt_id.try_into().map_err(|error| {
+            IdentityStateSnafu {
+                reason: format!("OCI root mount ID exceeds the mountinfo ABI: {error}"),
+            }
+            .build()
+        })
+    }
 }
 
-fn read_mountinfo_file(file: &mut File, root_pid: u32) -> Result<Vec<u8>> {
-    let path = PathBuf::from(format!("held /proc/{root_pid}/mountinfo"));
-    file.seek(SeekFrom::Start(0))
-        .context(IoSnafu { path: &path })?;
-    let mut source = Vec::new();
-    file.read_to_end(&mut source)
-        .context(IoSnafu { path: &path })?;
-    Ok(source)
+impl LiveMount {
+    fn read(root: &File, entry: &MountInfoEntry) -> Result<Self> {
+        let file = openat2(
+            root,
+            &entry.mountpoint,
+            OFlags::RDONLY | OFlags::CLOEXEC,
+            Mode::empty(),
+            ResolveFlags::IN_ROOT,
+        )
+        .map(File::from)
+        .map_err(std::io::Error::from)
+        .context(IoSnafu {
+            path: &entry.mountpoint,
+        })?;
+        let unique_mount = StatxFlags::from_bits_retain(STATX_MNT_ID_UNIQUE);
+        let status = statx(
+            &file,
+            "",
+            AtFlags::EMPTY_PATH,
+            StatxFlags::BASIC_STATS | unique_mount,
+        )
+        .map_err(std::io::Error::from)
+        .context(IoSnafu {
+            path: &entry.mountpoint,
+        })?;
+        ensure!(
+            status.stx_mask & STATX_MNT_ID_UNIQUE != 0
+                && status.stx_mnt_id > 0
+                && status.stx_ino > 0,
+            IdentityStateSnafu {
+                reason: "mount root lacks a unique mount ID or inode",
+            }
+        );
+        Ok(Self {
+            mount_id: entry.mount_id,
+            parent_mount_id: entry.parent_mount_id,
+            root: entry.root.clone(),
+            mountpoint: entry.mountpoint.clone(),
+            filesystem_device: encoded_device(status.stx_dev_major, status.stx_dev_minor)?,
+            inode: status.stx_ino,
+            mount_id_unique: status.stx_mnt_id,
+        })
+    }
 }
 
 fn open_process_file(process: &File, root_pid: u32, entry: &str) -> Result<File> {
@@ -1254,14 +1440,16 @@ fn path_components(path: &Path) -> Result<Vec<Vec<u8>>> {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
     use std::fs;
     use std::path::{Path, PathBuf};
+    use std::process::Command;
 
     use snafu::ResultExt as _;
 
     use super::{
         canonicalize_mount_path, parse_mountinfo, relevant_mount_entries, unescape_mountinfo,
-        ExactFileObjectView, LiveMount, OciEntryFileObjectView,
+        ExactFileObjectView, LiveMount, LiveMountRootRouteV1, MountInfoEntry,
     };
     use crate::error::IoSnafu;
 
@@ -1275,7 +1463,7 @@ mod tests {
         let config = bundle.path().join("config.json");
         fs::write(&config, br#"{"root":{"path":"rootfs"}}"#).context(IoSnafu { path: &config })?;
 
-        let view = OciEntryFileObjectView::acquire(std::process::id(), bundle.path())?;
+        let view = ExactFileObjectView::acquire_oci(std::process::id(), bundle.path())?;
 
         assert!(view.mount_namespace_inode()? > 0);
         assert!(view.root.metadata().is_ok_and(|metadata| metadata.is_dir()));
@@ -1291,7 +1479,82 @@ mod tests {
         fs::write(&config, br#"{"root":{"path":"../rootfs"}}"#)
             .context(IoSnafu { path: &config })?;
 
-        assert!(OciEntryFileObjectView::acquire(std::process::id(), bundle.path()).is_err());
+        assert!(ExactFileObjectView::acquire_oci(std::process::id(), bundle.path()).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn oci_entry_view_rebases_mounts_to_container_paths() -> crate::Result<()> {
+        let entries = vec![
+            MountInfoEntry {
+                mount_id: 1,
+                parent_mount_id: 1,
+                root: PathBuf::from("/"),
+                mountpoint: PathBuf::from("/"),
+                device: "8:1".to_owned(),
+            },
+            MountInfoEntry {
+                mount_id: 10,
+                parent_mount_id: 1,
+                root: PathBuf::from("/var/lib/containers/rootfs"),
+                mountpoint: PathBuf::from("/run/container/rootfs"),
+                device: "8:1".to_owned(),
+            },
+            MountInfoEntry {
+                mount_id: 11,
+                parent_mount_id: 10,
+                root: PathBuf::from("/"),
+                mountpoint: PathBuf::from("/run/container/rootfs/home/secret"),
+                device: "0:42".to_owned(),
+            },
+            MountInfoEntry {
+                mount_id: 12,
+                parent_mount_id: 10,
+                root: PathBuf::from("/models"),
+                mountpoint: PathBuf::from("/run/container/rootfs/home/attack"),
+                device: "0:42".to_owned(),
+            },
+            MountInfoEntry {
+                mount_id: 13,
+                parent_mount_id: 1,
+                root: PathBuf::from("/"),
+                mountpoint: PathBuf::from("/unrelated"),
+                device: "0:43".to_owned(),
+            },
+        ];
+
+        let rebased = ExactFileObjectView::rebase_mount_entries(
+            &entries,
+            Path::new("/run/container/rootfs"),
+            10,
+        )?;
+
+        assert_eq!(
+            rebased,
+            vec![
+                MountInfoEntry {
+                    mount_id: 10,
+                    parent_mount_id: 10,
+                    root: PathBuf::from("/var/lib/containers/rootfs"),
+                    mountpoint: PathBuf::from("/"),
+                    device: "8:1".to_owned(),
+                },
+                MountInfoEntry {
+                    mount_id: 11,
+                    parent_mount_id: 10,
+                    root: PathBuf::from("/"),
+                    mountpoint: PathBuf::from("/home/secret"),
+                    device: "0:42".to_owned(),
+                },
+                MountInfoEntry {
+                    mount_id: 12,
+                    parent_mount_id: 10,
+                    root: PathBuf::from("/models"),
+                    mountpoint: PathBuf::from("/home/attack"),
+                    device: "0:42".to_owned(),
+                },
+            ]
+        );
         Ok(())
     }
 
@@ -1305,6 +1568,27 @@ mod tests {
             .open_path(Path::new("/"))?
             .metadata()
             .is_ok_and(|metadata| metadata.is_dir()));
+        Ok(())
+    }
+
+    #[test]
+    fn retained_mount_view_reads_mountinfo_after_source_exit() -> crate::Result<()> {
+        let mut child = Command::new("/bin/sleep")
+            .arg("30")
+            .spawn()
+            .context(IoSnafu {
+                path: Path::new("/bin/sleep"),
+            })?;
+        let child_pid = child.id();
+        let view = ExactFileObjectView::acquire(child_pid);
+        let _ = child.kill();
+        let _ = child.wait();
+        let view = view?;
+
+        assert!(!PathBuf::from(format!("/proc/{child_pid}")).exists());
+        assert!(view.mount_namespace_inode()? > 0);
+        assert!(!parse_mountinfo(&view.read_mountinfo()?)?.is_empty());
+        assert!(!parse_mountinfo(&view.read_mountinfo()?)?.is_empty());
         Ok(())
     }
 
@@ -1414,6 +1698,76 @@ mod tests {
             ["mnt", "data", "models", "model.bin"].map(|component| component.as_bytes().to_vec())
         );
         assert_eq!(result.first_selected_mount_id_unique, 41);
+        Ok(())
+    }
+
+    #[test]
+    fn mount_routes_include_inherited_source_paths_for_kubernetes_submounts() -> crate::Result<()> {
+        let mounts = vec![
+            LiveMount {
+                mount_id: 1,
+                parent_mount_id: 1,
+                root: PathBuf::from("/"),
+                mountpoint: PathBuf::from("/"),
+                filesystem_device: 1,
+                inode: 1,
+                mount_id_unique: 1,
+            },
+            LiveMount {
+                mount_id: 5,
+                parent_mount_id: 1,
+                root: PathBuf::from("/"),
+                mountpoint: PathBuf::from("/home/secret"),
+                filesystem_device: 42,
+                inode: 2,
+                mount_id_unique: 41,
+            },
+            LiveMount {
+                mount_id: 9,
+                parent_mount_id: 1,
+                root: PathBuf::from("/models"),
+                mountpoint: PathBuf::from("/home/kubelet-attack"),
+                filesystem_device: 42,
+                inode: 3,
+                mount_id_unique: 92,
+            },
+            LiveMount {
+                mount_id: 10,
+                parent_mount_id: 1,
+                root: PathBuf::from("/models"),
+                mountpoint: PathBuf::from("/home/kubelet-attack-newer"),
+                filesystem_device: 42,
+                inode: 3,
+                mount_id_unique: 93,
+            },
+        ];
+
+        let routes = LiveMountRootRouteV1::from_mounts(&mounts, 7, 11)?;
+        let model_paths = routes
+            .iter()
+            .filter(|route| route.filesystem_device == 42 && route.root_inode == 3)
+            .map(|route| route.mountpoint_components.clone())
+            .collect::<BTreeSet<_>>();
+
+        assert_eq!(
+            model_paths,
+            vec![
+                vec!["home", "secret", "models"],
+                vec!["home", "kubelet-attack"],
+                vec!["home", "kubelet-attack-newer"],
+            ]
+            .into_iter()
+            .map(|path| {
+                path.into_iter()
+                    .map(|component| component.as_bytes().to_vec())
+                    .collect::<Vec<_>>()
+            })
+            .collect()
+        );
+        assert!(routes
+            .iter()
+            .filter(|route| route.filesystem_device == 42 && route.root_inode == 3)
+            .all(|route| route.selected_mount_id_unique == 92));
         Ok(())
     }
 

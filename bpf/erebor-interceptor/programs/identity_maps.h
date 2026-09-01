@@ -134,12 +134,9 @@ struct canonical_mount_path_walk_state_v1 {
     __u64 current_dentry_address;
     __u64 next_mount_address;
     __u64 next_dentry_address;
-    __u64 component_name_address;
+    __u64 read_address;
     __u64 selected_mount_address;
     __u64 selected_mount_id_unique;
-    __u64 selected_mount_namespace_address;
-    __u64 selected_mount_root_address;
-    __u64 live_selected_mount_id_unique;
     __u64 namespace_event;
     __u64 namespace_root_mount_id_unique;
     __u64 first_selected_mount_id_unique;
@@ -147,6 +144,8 @@ struct canonical_mount_path_walk_state_v1 {
     __u32 component_length;
     __u32 reached_walk_root;
     __u32 failed;
+    __u32 source_ancestry_started;
+    __u32 reserved;
 };
 
 struct canonical_path_view_v1 {
@@ -220,6 +219,10 @@ struct identity_scratch_v1 {
     path_graph_transition_key_v1 path_transition_key;
     path_graph_state_key_v1 path_state_key;
     path_graph_terminal_v1 path_terminal;
+    path_tree_deny_key_v1 path_tree_deny_key;
+    canonical_mount_root_key_v1 canonical_mount_root_key;
+    canonical_mount_root_v1 canonical_mount_root;
+    __u64 path_tree_deny_operation_mask;
     __u64 mount_topology_generation;
     __u64 mount_transition_version;
     struct canonical_mount_cache_key_v1 mount_cache_key;
@@ -736,6 +739,13 @@ struct {
     __type(key, path_graph_state_key_v1);
     __type(value, path_graph_terminal_v1);
 } path_graph_terminals SEC(".maps");
+
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, 4096);
+    __type(key, path_tree_deny_key_v1);
+    __type(value, __u64);
+} path_tree_denials SEC(".maps");
 
 struct {
     __uint(type, BPF_MAP_TYPE_TASK_STORAGE);

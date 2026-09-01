@@ -52,15 +52,38 @@ The known-path routing amendment separates Kubernetes baseline mounts from
 later bind mounts. Node records the compiled path prefix for a known mount
 root in the authenticated initial container mount snapshot. BPF uses that
 route without mount-age selection. If no route exists on the source dentry
-ancestry, BPF uses the oldest unique mount as the canonical fallback. A dirty,
-missing, or unresolved route and fallback cannot allow an effect.
+ancestry, BPF uses the oldest unique mount as the canonical fallback. A
+concurrent, missing, or unresolved route and fallback cannot allow an effect.
 
 Route discovery does not create or change a policy generation. Control
-compiles the path graph before container admission. When Node holds the
-initial container PID, it uses the existing inode-measurement stage to publish
-dynamic, binding-scoped routes that reference that graph. It does not rewrite
-the graph, change its digest, or advance the active-generation handle. A new
+compiles the path graph once before container admission. When Node holds the
+initial container PID, its existing inode-measurement stage resolves each
+represented source path to a state in that graph. Node then writes only
+dynamic, binding-scoped route rows. It does not compile another graph, change
+the generation digest, or advance the active-generation handle. The same
+generation owns the provisional and completed container binding. A new
 generation is necessary only for a new signed policy candidate.
+
+The held `createRuntime` task has not changed to the container root. Node must
+not use `/proc/<pid>/root` for that admission snapshot. It opens the root path
+from the OCI bundle through the held task mount namespace. It also rebases the
+bundle mountpoints to container paths before it resolves graph states. Node
+publishes these entry-time route rows for the same signed generation. Node
+does not rebuild these rows after the task starts.
+
+BPF reconstructs the current mount topology during each file or executable
+decision. The mount hooks update a synchronous mutation guard before a
+namespace-visible change. BPF reads the live namespace event and mount tree,
+uses an admitted route before the oldest-mount fallback, and rechecks the
+guard before it applies the decision. A concurrent, missing, or unresolved
+topology denies under strict policy. A ring-buffer event records evidence. It
+does not wake an authorization owner or complete the decision.
+
+One source inode can have more than one known path. Its dynamic route stores
+up to 16 deduplicated state IDs from the existing graph. BPF advances all
+stored states and combines their role-specific denial masks. Any applicable
+denial wins. Node refuses binding activation if one source needs more than 16
+states. It does not create a graph state to combine them.
 
 ## Goal And Release Boundary
 
@@ -286,7 +309,7 @@ the named phase file contains a matching deliverable and proof.
 | Ch. 12 compiler, signatures, activation, rollback | 0, 3, 4, 6, 6.2 | deterministic bytes; source provenance; inactive readback; one CAS; retirement recovery |
 | Ch. 13 one local decision and atomic state | 0, 2-5 | Rust/BPF lookup golden; task-first and contention tests |
 | Ch. 14 mechanism boundaries and deferred Seccomp | 0, 1, 3-5, 12 | hook/capability matrix; Seccomp remains absent unless Phase 12 gate passes |
-| Ch. 15 mounts, known-root path routes, oldest-mount fallback, exact objects | 0, 3, 4, 6.2 | Kubernetes baseline-submount order fixture; later bind-alias fixture; DIRTY topology races; object revalidation |
+| Ch. 15 mounts, known-root path routes, oldest-mount fallback, exact objects | 0, 3, 4, 6.2 | Kubernetes baseline-submount order fixture; later bind-alias fixture; synchronous topology races; object revalidation |
 | Ch. 16 exec images and executable memory | 0, 3, 4 | exec chain, loader, memfd, mmap/mprotect, immutable-image fixtures |
 | Ch. 17 files, credentials, delegated I/O | 0, 3, 4, 5 | token rotation, proc-fd, fd pass, remote delegate fixtures |
 | Ch. 18 IPC, native authority, persistent objects | 2-5 | directional relationship, shared mapping, async unsupported tests |

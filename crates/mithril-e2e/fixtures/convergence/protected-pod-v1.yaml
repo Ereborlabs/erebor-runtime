@@ -14,12 +14,61 @@ spec:
     - name: converter
       image: docker.io/library/busybox:1.36.1@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662
       imagePullPolicy: IfNotPresent
+      securityContext:
+        appArmorProfile:
+          type: Unconfined
+        capabilities:
+          add: [SYS_ADMIN]
       command:
         - /bin/sh
         - -ec
         - >-
           touch /var/lib/mithril-convergence/MITHRIL_CONVERGENCE_POD.started;
           if [ MITHRIL_CONVERGENCE_POD = protected ]; then
+          mkdir -p /home/attack;
+          if mount --bind /home/secret /home/attack;
+          then echo MOUNT_READY >
+          /var/lib/mithril-convergence/MITHRIL_CONVERGENCE_POD.path-tree-mount-result;
+          else echo MOUNT_FAILED >
+          /var/lib/mithril-convergence/MITHRIL_CONVERGENCE_POD.path-tree-mount-result;
+          fi;
+          if cat /home/kubelet-attack/secret >/dev/null 2>&1;
+          then echo PATH_TREE_ALLOWED >
+          /var/lib/mithril-convergence/MITHRIL_CONVERGENCE_POD.path-tree-subpath-result;
+          else echo PATH_TREE_DENIED >
+          /var/lib/mithril-convergence/MITHRIL_CONVERGENCE_POD.path-tree-subpath-result;
+          fi;
+          if cat /home/kubelet-attack-newer/secret >/dev/null 2>&1;
+          then echo PATH_TREE_ALLOWED >
+          /var/lib/mithril-convergence/MITHRIL_CONVERGENCE_POD.path-tree-subpath-newer-result;
+          else echo PATH_TREE_DENIED >
+          /var/lib/mithril-convergence/MITHRIL_CONVERGENCE_POD.path-tree-subpath-newer-result;
+          fi;
+          if cat /home/attack/models/secret >/dev/null 2>&1;
+          then echo PATH_TREE_ALLOWED >
+          /var/lib/mithril-convergence/MITHRIL_CONVERGENCE_POD.path-tree-bind-result;
+          else echo PATH_TREE_DENIED >
+          /var/lib/mithril-convergence/MITHRIL_CONVERGENCE_POD.path-tree-bind-result;
+          fi;
+          if cat /home/alice/secrets/models/secret >/dev/null 2>&1;
+          then echo PATH_TREE_ALLOWED >
+          /var/lib/mithril-convergence/MITHRIL_CONVERGENCE_POD.path-tree-wildcard-result;
+          else echo PATH_TREE_DENIED >
+          /var/lib/mithril-convergence/MITHRIL_CONVERGENCE_POD.path-tree-wildcard-result;
+          fi;
+          if cat /srv/team/blue/secrets/models/secret >/dev/null 2>&1;
+          then echo PATH_TREE_ALLOWED >
+          /var/lib/mithril-convergence/MITHRIL_CONVERGENCE_POD.path-tree-recursive-wildcard-result;
+          else echo PATH_TREE_DENIED >
+          /var/lib/mithril-convergence/MITHRIL_CONVERGENCE_POD.path-tree-recursive-wildcard-result;
+          fi;
+          if cat /var/lib/mithril-convergence/MITHRIL_CONVERGENCE_POD.lifecycle-ready
+          >/dev/null 2>&1;
+          then echo CONTROL_ALLOWED >
+          /var/lib/mithril-convergence/MITHRIL_CONVERGENCE_POD.path-tree-control-result;
+          else echo CONTROL_DENIED >
+          /var/lib/mithril-convergence/MITHRIL_CONVERGENCE_POD.path-tree-control-result;
+          fi;
           if ( /usr/bin/env /bin/sleep 0 );
           then echo APPLICATION_DEFAULT_ALLOWED >
           /var/lib/mithril-convergence/MITHRIL_CONVERGENCE_POD.prepared-result;
@@ -76,9 +125,10 @@ spec:
               - of=/var/lib/mithril-convergence/MITHRIL_CONVERGENCE_POD.prestop-observed
       startupProbe:
         exec:
-          command:
-            - /bin/cat
-            - /var/lib/mithril-convergence/MITHRIL_CONVERGENCE_POD.lifecycle-ready
+            command:
+              - /bin/cat
+              - /var/lib/mithril-convergence/MITHRIL_CONVERGENCE_POD.lifecycle-ready
+              - /home/alice/secrets/models/secret
         periodSeconds: 10
         timeoutSeconds: 1
         failureThreshold: 30
@@ -104,8 +154,29 @@ spec:
       volumeMounts:
         - name: fixture
           mountPath: /var/lib/mithril-convergence
+        - name: path-tree
+          mountPath: /home/kubelet-attack
+          subPath: models
+          readOnly: true
+        - name: path-tree
+          mountPath: /home/secret
+          readOnly: true
+        - name: path-tree
+          mountPath: /home/kubelet-attack-newer
+          subPath: models
+          readOnly: true
+        - name: path-tree
+          mountPath: /home/alice/secrets
+          readOnly: true
+        - name: path-tree
+          mountPath: /srv/team/blue/secrets
+          readOnly: true
   volumes:
     - name: fixture
       hostPath:
         path: /var/lib/mithril-convergence/markers
+        type: Directory
+    - name: path-tree
+      hostPath:
+        path: /var/lib/mithril-convergence/path-tree
         type: Directory

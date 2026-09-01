@@ -2179,9 +2179,9 @@ impl NodeChassis {
                     reason: error.to_string(),
                 };
             }
-            if let Err(error) = policy.reconcile_mount_views(host) {
+            if let Err(error) = policy.reconcile_policy_lifecycle(host) {
                 return ReconciliationOutcome::IdentityUnhealthy {
-                    owner: "mount view",
+                    owner: "policy lifecycle",
                     reason: error.to_string(),
                 };
             }

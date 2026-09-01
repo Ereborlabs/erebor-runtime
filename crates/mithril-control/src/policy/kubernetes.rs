@@ -18,11 +18,12 @@ use super::{
     IpcRelationshipRuleV1, KubernetesWorkloadIdentityV1, LabelOperatorV1, LabelRequirementV1,
     LocalEffectMatchV1, LocalObjectSelectorV1, LocalSubjectBindingV1, NetworkPolicyV1,
     NetworkPortRangeV1, NetworkProtocolV1, ObjectClassifierBindingV1, ObjectClassifierSelectorV1,
-    OperationResultAuthorityV1, PathSelectorV1, PolicyDispositionV1, PolicyDocumentV1,
-    PolicyMetadataV1, ProcessStateDefinitionV1, ProfileCandidateArtifactV1, ProfileModeV1,
-    ProofIntegrityV1, ProofQualityPredicateV1, ProtectedUniverseV1, RemoteSubjectBindingV1,
-    RoleDefinitionV1, RolloutV1, RootClassificationV1, RuleMatchV1, SeverityV1, SourceAuthorityV1,
-    TemporalCoverageV1, UnknownClassifierResultV1, WorkloadSelectorV1,
+    OperationResultAuthorityV1, PathSelectorTargetV1, PathSelectorV1, PathTreeDenyFloorV1,
+    PolicyDispositionV1, PolicyDocumentV1, PolicyMetadataV1, ProcessStateDefinitionV1,
+    ProfileCandidateArtifactV1, ProfileModeV1, ProofIntegrityV1, ProofQualityPredicateV1,
+    ProtectedUniverseV1, RemoteSubjectBindingV1, RoleDefinitionV1, RolloutV1, RootClassificationV1,
+    RuleMatchV1, SeverityV1, SourceAuthorityV1, TemporalCoverageV1, UnknownClassifierResultV1,
+    WorkloadSelectorV1,
 };
 use crate::error::{InvalidConfigurationSnafu, PolicySignatureSnafu, PolicyValidationSnafu};
 use crate::Result;
@@ -218,13 +219,28 @@ pub struct KubernetesRolePolicyV1 {
     pub name: String,
     #[schemars(length(max = 1024))]
     pub files: Vec<FileRuleV1>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[schemars(length(max = 1024))]
+    pub path_tree_denials: Vec<PathTreeDenialV1>,
     #[schemars(length(max = 1024))]
     pub execution: Vec<ExecutionRuleV1>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[schemars(length(max = 1024))]
+    pub capabilities: Vec<LinuxCapabilityRuleV1>,
     pub network: KubernetesNetworkRulesV1,
     #[schemars(length(max = 1024))]
     pub process_control: Vec<ProcessControlRuleV1>,
     #[schemars(length(max = 1024))]
     pub unix_streams: Vec<UnixStreamRelationshipV1>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct PathTreeDenialV1 {
+    pub name: String,
+    pub path: String,
+    #[schemars(length(min = 1, max = 16))]
+    pub operations: Vec<KubernetesFileOperationV1>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
@@ -279,6 +295,70 @@ pub enum KubernetesExecutionOperationV1 {
 pub enum KubernetesRuleActionV1 {
     Allow,
     Deny,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct LinuxCapabilityRuleV1 {
+    pub name: String,
+    #[schemars(length(min = 1, max = 41))]
+    pub capabilities: Vec<LinuxCapabilityV1>,
+    pub action: KubernetesRuleActionV1,
+}
+
+#[repr(u32)]
+#[derive(
+    Clone, Copy, Debug, Deserialize, Eq, JsonSchema, Ord, PartialEq, PartialOrd, Serialize,
+)]
+pub enum LinuxCapabilityV1 {
+    Chown = 0,
+    DacOverride = 1,
+    DacReadSearch = 2,
+    Fowner = 3,
+    Fsetid = 4,
+    Kill = 5,
+    Setgid = 6,
+    Setuid = 7,
+    Setpcap = 8,
+    LinuxImmutable = 9,
+    NetBindService = 10,
+    NetBroadcast = 11,
+    NetAdmin = 12,
+    NetRaw = 13,
+    IpcLock = 14,
+    IpcOwner = 15,
+    SysModule = 16,
+    SysRawio = 17,
+    SysChroot = 18,
+    SysPtrace = 19,
+    SysPacct = 20,
+    SysAdmin = 21,
+    SysBoot = 22,
+    SysNice = 23,
+    SysResource = 24,
+    SysTime = 25,
+    SysTtyConfig = 26,
+    Mknod = 27,
+    Lease = 28,
+    AuditWrite = 29,
+    AuditControl = 30,
+    Setfcap = 31,
+    MacOverride = 32,
+    MacAdmin = 33,
+    Syslog = 34,
+    WakeAlarm = 35,
+    BlockSuspend = 36,
+    AuditRead = 37,
+    Perfmon = 38,
+    Bpf = 39,
+    CheckpointRestore = 40,
+}
+
+impl LinuxCapabilityV1 {
+    #[must_use]
+    pub const fn kernel_id(self) -> u32 {
+        self as u32
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
@@ -926,6 +1006,7 @@ pub fn lower_kubernetes_policy(
     let mut path_selectors = Vec::new();
     let mut path_selector_ids = BTreeMap::<(String, bool), String>::new();
     let mut rules = Vec::new();
+    let mut path_tree_deny_floors = Vec::new();
     let mut effect_family_defaults = Vec::new();
     let mut destination_policies = Vec::new();
     let mut ipc_relationship_rules = Vec::new();
@@ -976,6 +1057,22 @@ pub fn lower_kubernetes_policy(
             ));
             file_rule_actions.insert(file.name.clone(), (file.action, file.operations.clone()));
         }
+        path_tree_deny_floors.extend(role.path_tree_denials.iter().map(|denial| {
+            PathTreeDenyFloorV1 {
+                rule_id: denial.name.clone(),
+                role_id: role.name.clone(),
+                path: denial.path.clone(),
+                operation_ids: sorted_unique(
+                    denial
+                        .operations
+                        .iter()
+                        .copied()
+                        .map(KubernetesFileOperationV1::internal_name)
+                        .map(str::to_owned)
+                        .collect(),
+                ),
+            }
+        }));
         for execution in &role.execution {
             let selector_id = path_selector_id(
                 &mut path_selectors,
@@ -1000,6 +1097,25 @@ pub fn lower_kubernetes_policy(
                     path_selector_ids: vec![selector_id],
                 },
                 execution.action,
+            ));
+        }
+        for capability in &role.capabilities {
+            rules.push(local_rule(
+                capability.name.clone(),
+                subject.clone(),
+                EffectFamilyV1::Privilege,
+                vec!["CAPABILITY".to_owned()],
+                LocalObjectSelectorV1::SecurityObjects {
+                    security_object_ids: vec!["LINUX_CAPABILITY".to_owned()],
+                    target_selector_ids: sorted_unique(
+                        capability
+                            .capabilities
+                            .iter()
+                            .map(|capability| capability.kernel_id().to_string())
+                            .collect(),
+                    ),
+                },
+                capability.action,
             ));
         }
         let socket_actions = role
@@ -1259,7 +1375,7 @@ pub fn lower_kubernetes_policy(
         classifier_bindings: path_classifier_bindings,
         path_selectors,
         network_policy,
-        path_tree_deny_floors: Vec::new(),
+        path_tree_deny_floors,
         path_pattern_precedence: Default::default(),
         roles: role_definitions,
         entry_role_assignments,
@@ -1403,6 +1519,26 @@ fn validate_public_policy(spec: &WorkloadProtectionPolicySpec, policy_id: &str) 
                 }
             );
         }
+        for rule in &role.path_tree_denials {
+            ensure!(
+                names.insert(rule.name.as_str())
+                    && PathSelectorTargetV1::Path {
+                        path_pattern: rule.path.clone(),
+                    }
+                    .pattern_components(policy_id)
+                    .is_ok()
+                    && !rule.operations.is_empty()
+                    && all_distinct(&rule.operations),
+                PolicyValidationSnafu {
+                    policy_id,
+                    code: "CFG_KUBERNETES_PATH_TREE_DENIAL",
+                    reason: format!(
+                        "path-tree denial `{}` is duplicate, invalid, or has duplicate operations",
+                        rule.name
+                    ),
+                }
+            );
+        }
         for rule in &role.execution {
             validate_path_rule(
                 policy_id,
@@ -1419,6 +1555,21 @@ fn validate_public_policy(spec: &WorkloadProtectionPolicySpec, policy_id: &str) 
                     code: "CFG_KUBERNETES_EXECUTION_RULE",
                     reason: format!(
                         "execution rule `{}` has duplicate or empty operations",
+                        rule.name
+                    ),
+                }
+            );
+        }
+        for rule in &role.capabilities {
+            ensure!(
+                names.insert(rule.name.as_str())
+                    && !rule.capabilities.is_empty()
+                    && all_distinct(&rule.capabilities),
+                PolicyValidationSnafu {
+                    policy_id,
+                    code: "CFG_KUBERNETES_CAPABILITY_RULE",
+                    reason: format!(
+                        "capability rule `{}` is duplicate, empty, or has duplicate capabilities",
                         rule.name
                     ),
                 }

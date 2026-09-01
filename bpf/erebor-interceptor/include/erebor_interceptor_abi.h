@@ -51,6 +51,8 @@ typedef __s32 int32_t;
 
 #define CANONICAL_COMPONENT_STORAGE_BYTES_V1 256
 
+#define MAX_CANONICAL_ROUTE_STATES_V1 16
+
 enum binding_lifecycle_state_v1
 #if __STDC_VERSION__ >= 202311L
   : uint8_t
@@ -970,7 +972,8 @@ typedef struct canonical_mount_root_key_v1 {
 typedef struct canonical_mount_root_v1 {
   uint64_t selected_mount_id_unique;
   uint64_t snapshot_digest_id;
-  uint32_t graph_prefix_state_id;
+  uint32_t graph_prefix_state_ids[MAX_CANONICAL_ROUTE_STATES_V1];
+  uint32_t graph_prefix_state_count;
   uint32_t reserved;
 } canonical_mount_root_v1;
 
@@ -1706,7 +1709,6 @@ typedef struct path_graph_terminal_v1 {
   uint32_t rule_numeric_id;
   uint8_t exact_object_required;
   uint8_t reserved[3];
-  uint64_t path_tree_deny_operation_mask;
 } path_graph_terminal_v1;
 
 typedef struct path_graph_transition_key_v1 {
@@ -1720,6 +1722,12 @@ typedef struct path_graph_transition_v1 {
   uint32_t next_state_id;
   uint32_t reserved;
 } path_graph_transition_v1;
+
+typedef struct path_tree_deny_key_v1 {
+  uint64_t profile_generation_ref_id;
+  uint32_t state_id;
+  uint32_t active_role_id;
+} path_tree_deny_key_v1;
 
 typedef struct profile_generation_descriptor_v1 {
   struct id128_v1 node_boot_id;

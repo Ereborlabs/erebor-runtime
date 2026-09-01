@@ -4,11 +4,13 @@ Status: Current implementation guide. The source implements the separate
 `WorkloadProtectionPolicy` and `WorkloadProtectionException` APIs. Automated
 tests cover their closed schemas, lowering, reconciliation, delivery,
 retirement, restart, and node-session boundaries. The complete automated
-two-node physical fixture passed on the current source. It proves the
-`PreparedContainer` trust boundary, exact admitted-entry default, independent
-entry roles, bounded exception lifecycle, restart recovery, and physical Node
-epoch changes. The independent manual and failure and outage matrices remain
-unproved.
+two-node physical fixture passed for its recorded source state. The current
+working tree also passes the paired lightweight and Kubernetes known-route
+case. These results prove the `PreparedContainer` trust boundary, exact
+admitted-entry default, independent entry roles, bounded exception lifecycle,
+restart recovery, physical Node epoch changes, and synchronous BPF path
+reconstruction for the paired route case. The current complete two-node rerun
+and the failure and outage matrices remain unproved.
 
 Plan: [Control Policy And Evidence Convergence](./phase-6-2-control-policy-and-evidence-convergence.md)
 
@@ -94,6 +96,8 @@ the exact admitted entry identity stored in the binding.
 | Trust generation and acknowledgement | `TrustBundleOwner` | `ControlStore` transaction | Trust generation and boot-bound acknowledgement records | Rotation, revocation, restart, and current-trust gating tests |
 | Node policy, exception, transfer, and cleanup state | `NodePolicyDeliveryOwner` | `NodePolicyDeliveryOwner` | Node state directory | Incremental transfer, complete desired inventory, exact readback, restart, session retirement, and stale-profile cleanup tests |
 | Active node generation and BPF maps | `NodePolicyGenerationOwner` and existing activation path | `mithril-node` | Node-local inactive generation and active-pointer compare-and-swap | Readback, probe, pointer, and retained-generation tests |
+| Entry-time known-source routes | Held OCI admission and `NodePolicyGenerationOwner` | `mithril-node` until publication; BPF reads only after publication | Binding-scoped `canonical_mount_roots` rows in the active generation | Route-order unit test and paired lightweight and Kubernetes route case |
+| Post-start live mount topology | Current BPF file or executable hook chain | BPF mutation hooks and path resolver | Live kernel mount namespace, namespace event, mutation epoch, pending count, and BPF mount cache | Paired route case, including one later in-container bind |
 | Runtime admission request | `mithril-oci-hook` and `RuntimeAdmissionClient` | `RuntimeAdmissionServer` | Root-owned mode-0600 Unix socket | Stock-state parser, active-owner, unavailable endpoint, convergence hold, and timeout tests |
 | Staged runtime facts | First `createRuntime` request | `WorkloadBindingOwner` | Bounded node memory only; no kernel authority | Missing, expiry, changed-head, changed-cgroup, and no-PID-authority tests |
 | Runtime container binding | `ScheduledRuntimeBindingV1` and node binding owner | Node binding owner | BPF cgroup and task maps plus node delivery state | Exact signed target, policy identity, CRI match, distinct lifetime, and reuse-rejection tests |
@@ -168,9 +172,12 @@ sequenceDiagram
     Node->>Kernel: Stage, read back, probe, and activate
     Runtime->>Node: Held initial PID and OCI state
     Node->>Node: Verify CRI and signed target identity
-    Node->>Kernel: Publish exact cgroup and task binding
+    Node->>Kernel: Publish exact binding and entry-time source routes
     Node-->>Runtime: Allow after active readback
     Node-->>Rollout: Boot-bound acknowledgement
+    Runtime->>Kernel: File or executable effect after start
+    Kernel->>Kernel: Rebuild and verify one live mount topology
+    Kernel-->>Runtime: Apply route-first policy before effect
 ```
 
 The admission owner reads the live DaemonSet for each Node, Pod, and binding
@@ -202,6 +209,14 @@ The node checks the tenant, trust generation, signature, source digest,
 candidate digest, artifact digests, issuer sequence, distribution sequence,
 target, expiry, capabilities, and predecessor. A delayed acknowledgement
 cannot change a newer candidate or a different boot session.
+
+At held entry admission, Node opens the OCI bundle root through the held mount
+namespace. Node rebases container mountpoints and installs existing graph-prefix
+states for known source roots. Node does not rebuild these routes after start.
+For each later file or executable decision, BPF snapshots the global mutation
+guard, reads the live namespace event and mount tree, uses an admitted route
+before the oldest-mount fallback, and rechecks the guard. A race or unresolved
+path denies. The observation ring records evidence only.
 
 ## Exception Convergence Flow
 
@@ -535,10 +550,11 @@ The node image contains `mithril-node` and `mithril-oci-hook`. A chart-owned
 host installer publishes each path by atomic same-directory rename. It installs
 the binary and two ordered `createRuntime` hook documents. Cleanup removes the
 fact stage before the preparation hook and the binary. Adjacent ownership
-markers bind the three exact paths to the Helm release. Disable and uninstall
-remove only matching owned paths. A bounded pre-delete cleanup Job waits for
-selected-node cleanup before it deletes the cleanup DaemonSet. Foreign or
-unmarked files fail closed and stay in place.
+markers bind the three exact paths to the Helm release. Setting hook
+installation to false removes only matching owned paths during the next node
+rollout. Ordinary Helm uninstall leaves hooks and pinned BPF state on the host.
+Only the independently signed node decommission flow can remove both. Foreign
+or unmarked files fail closed and stay in place.
 
 CRI-O can consume the standard hook directory. Containerd needs the stock Node
 Resource Interface hook-injector. The chart does not patch the container
@@ -571,6 +587,9 @@ flowchart LR
 | `execution_set_bindings` | `u64 cgroup ID -> ExecutionSetBindingStateV1` | Node binding owner | Task lifecycle and prepared-container programs update exact transitions | Node recovery and effect gates | Pinned for the exact runtime cgroup lifetime |
 | `binding_activation_targets` | `BindingActivationTargetKeyV1 -> ExecutionSetBindingStateV1` | Node binding owner | None | Node recovery and runtime gate | Pinned until the exact binding and generation retire |
 | `pending_execs` | `u64 task cookie -> PendingExecV1` | None | Exec LSM and tracepoint programs update exact exec states | BPF effect and exec programs, node generation retirement, and node inspection | Pinned terminal evidence can outlive policy authority; only an in-flight state retains generation authority |
+| `canonical_mount_roots` | `CanonicalMountRootKeyV1 -> CanonicalMountRootV1` | Node held-entry admission | None | BPF known-route walker | Pinned binding-scoped rows retire with the binding or generation; entry-time rows use topology generation zero |
+| `canonical_mount_cache` and `canonical_mount_cache_states` | Private live namespace, event, root-dentry, and selected-mount state | None | BPF path resolver | BPF path resolver | Pinned bounded caches; a stale, missing, or full row cannot allow |
+| `mount_global_mutation_epoch` and `mount_global_pending_mutations` | Native-endian zero `u32 -> u64` | Node initializes the rows | BPF mount hooks | BPF synchronous path stability checks | Pinned for the kernel-owner lifetime |
 | `exception_runtime_states` | `ExceptionRuntimeStateKeyV1 -> ExceptionRuntimeStateV1` | Node exception owner | Effect gate consumes uses under the map value lock | Node recovery and exception gate | Pinned until the instance is terminal and durable receipts permit cleanup |
 | `exception_handle_bindings` | `ExceptionHandleBindingKeyV1 -> ExceptionHandleBindingV1` | Node policy and exception owners | None | Exception gate and recovery | Pinned for the exact compiled handle and active instance |
 | `exception_use_receipts` | Receipt identity -> bounded use receipt | Node exception receipt owner | Effect gate emits use receipts | Node receipt recovery | Pinned until the durable exception WAL records the receipt |
@@ -581,7 +600,7 @@ flowchart LR
 | Runtime effect gate | Existing file, network, IPC, process, device, privilege, and mount LSM hooks | Reads the exact binding, entry, generation, and deadline. It writes no runtime-object authority. | The exact prepared entry can finish setup. All other protected actors use normal policy or receive the configured denial. |
 | Exec evaluation | `lsm/bprm_check_security` | Reads the active signed policy. Writes the pending exec and reserves the exact task only for a policy-permitted exec. | A runtime-internal policy miss stays `PREPARED`. A policy-permitted exec can continue as `EXEC_PENDING`. |
 | Exec completion | `tracepoint/sched/sched_process_exec` and exec syscall exit tracepoints | Commits `ACTIVE` after a successful exec or restores `PREPARED` after a pre-commit failure. | `ACTIVE` closes prepared-runtime trust. A corrupt or expired transition stays fail-closed. |
-| Active application effect | Existing file, network, IPC, process, device, privilege, mount, exec, and io_uring hooks | Resolves explicit signed decisions and the stored admitted entry identity. | An explicit matching Deny blocks before the default. An applicable exception can authorize that Deny. A missing decision allows only for the exact admitted entry. |
+| Active application effect | Existing file, network, IPC, process, device, privilege, mount, exec, and io_uring hooks | Resolves explicit signed decisions and the stored admitted entry identity. File and executable hooks rebuild and verify the live mount topology synchronously. | An explicit matching Deny blocks before the default. An applicable exception can authorize that Deny. A missing decision allows only for the exact admitted entry. An unresolved path denies. |
 | Binding retirement | `raw_tracepoint/cgroup_release` | Changes a non-active prepared state to `EXPIRED` and clears the exec cookie. | The released cgroup cannot start or continue prepared-runtime work. |
 
 A bpffs pin keeps a map or link alive after the loader process exits. A
@@ -670,6 +689,7 @@ and coverage messages remain the Phase 6 types.
 | Signed scheduling authority, exact policy and runtime identity, immutable two-hook stage matching, held-TGID publication, distinct container lifetime, active socket ownership, convergence hold, unavailable endpoint, and timeout denial | [Runtime admission and binding tests](../../../crates/mithril-node/src/identity/binding.rs) |
 | OCI state parsing, cgroup-v2 path parsing, fact-only first hook, and held-PID second hook | [OCI adapter tests](../../../crates/mithril-node/src/bin/mithril_oci_hook.rs) |
 | Direct-runc PREPARED-to-ACTIVE transition, owner restart, terminal exec-failure evidence, generation retirement, independent roles, external-entry denial, and cleanup | [Runc entry-role VM probe](../../../crates/mithril-e2e/src/effect/runc.rs) |
+| Known-route selection before mount age, both Kubernetes mount orders, later in-container bind, wildcard denials, synchronous control allow, and exact evidence parsing | [Runc entry-role VM probe](../../../crates/mithril-e2e/src/effect/runc.rs) and [protected-start lane](../../../crates/mithril-e2e/harness/vm/two-node-convergence.sh) |
 | Fresh protected Pod, exact target and runtime binding, sole shell entry selector, later BusyBox applet default, explicit matching Deny, direct CRI external-entry denial, and retained-cluster resource replacement | [Protected-start lane](../../../crates/mithril-e2e/harness/vm/two-node-convergence.sh) |
 | Webhook TLS, rules, deadlines, health probes, DaemonSet identity and hook inputs, and least-privilege RBAC | [Helm render test](../../../packaging/mithril/helm/tests/verify.sh) |
 | Exact two-node target, task lifetime, Node UID replacement, host epoch, selector lifecycle, exception target retirement, desired-inventory cleanup, and no-root inspection | [Physical fixture](../../../crates/mithril-e2e/harness/vm/two-node-convergence.sh) |
@@ -694,6 +714,21 @@ Manual example behavior checks passed.
 rtk env MITHRIL_VM_REUSE_IMAGES=false crates/mithril-e2e/harness/vm/two-node-convergence.sh --reuse-environment /tmp/mithril-phase-6-2-full-convergence-reuse51-inventory-retry-20260828/retained-environment.json --output-directory /tmp/mithril-phase-6-2-full-convergence-reuse52-terminal-retirement-20260828
 Two-node Kubernetes policy convergence passed.
 ```
+
+The current known-route lightweight case passed in retained VM
+`mithril-runtime-qualification-3504827`. Its evidence is
+`/var/tmp/mithril-runtime-qualification-3504827/runc-entry-roles-oci66`.
+It denied both Kubernetes mount orders, the later in-container bind,
+`/home/*/secrets`, and `/srv/**/secrets`. It allowed the unrelated control path
+and the other role. It also passed owner restart and pinned-program upgrade.
+
+The paired current-source Kubernetes protected-start case passed with
+`--protected-start-only --reuse-environment`. Its evidence is
+`/tmp/mithril-route-synchronous-parser-fixed-20260901`. The marker oracle
+recorded the same five denials and `CONTROL_ALLOWED`. The protected Pod stayed
+Ready with zero restarts. The capture contained nine application-role
+`PATH_TREE_POLICY_DENY` records. The structured parser accepts
+`kernel_result=-13` in the final field.
 
 The direct-runc entry-role VM probe also passed with runc 1.3.4. Its result
 records libc and the ELF loader as root-filesystem dependencies that are absent
@@ -726,13 +761,17 @@ do not replace the physical fixture or manual run.
 
 ## Verification Limits
 
-The complete automated two-node fixture passed. It covered exact target,
-runtime task, exception target retirement, desired-inventory cleanup, restart,
-fresh-root activation, same-name Node UID replacement, DaemonSet exclusion and
-re-entry, and a host boot and label-epoch change. Its final fresh Node Pods were
-ready with zero container restarts and one Control connection each. The result
-is
+The recorded complete automated two-node fixture passed for its recorded
+source state. It covered exact target, runtime task, exception target
+retirement, desired-inventory cleanup, restart, fresh-root activation,
+same-name Node UID replacement, DaemonSet exclusion and re-entry, and a host
+boot and label-epoch change. Its final fresh Node Pods were ready with zero
+container restarts and one Control connection each. The result is
 `/tmp/mithril-phase-6-2-full-convergence-reuse52-terminal-retirement-20260828`.
+
+The current working tree passed the focused paired route case. It did not rerun
+the complete two-node sequence. The two retained Kubernetes VMs and the
+lightweight VM remain available. No verification step destroyed them.
 
 The direct lane and Kubernetes fixture close the previous stock-runtime
 regression without a runtime-specific operation list, dependency allow rules,
@@ -759,6 +798,9 @@ not present.
 - [ ] Trace one candidate through bounded chunks and exact node digest readback.
 - [ ] Trace node activation through inactive state, probes, and one pointer compare-and-swap.
 - [ ] Trace one held OCI PID through CRI verification and exact cgroup publication.
+- [ ] Trace the held entry-time view into one `canonical_mount_roots` row.
+- [ ] Trace one later bind through the BPF mutation guard and live mount scan.
+- [ ] Confirm that no ring-buffer consumer can complete a path decision.
 - [ ] Verify that the binding readback contains the exact held host TGID.
 - [ ] Trace `PREPARED` through a runtime-internal exec that does not satisfy policy.
 - [ ] Trace a policy-approved exec through `EXEC_PENDING` to `ACTIVE`.
@@ -783,10 +825,11 @@ not present.
 
 ## Source State
 
-This guide covers source commits `1168593`, `28bfd85`, `8f0dc33`, and
-`aa3d2e5` on the current phase branch. These commits add executable lightweight
-checks, direct-runc owner-restart proof, changed-inventory retry, and terminal
-pending-exec retirement. Reviewers must compare the guide with the checked-out
-source. The physical verification limits above remain part of the result.
+This guide covers the working tree based on `63ffb57328ab` on 2026-09-01. The
+working tree adds the known-route source policy, held-entry route publication,
+synchronous BPF topology reconstruction, paired lightweight condition, and
+paired Kubernetes evidence capture. Reviewers must compare this guide with the
+checked-out source. The physical verification limits above remain part of the
+result.
 
 Completion of this work does not authorize the next phase.

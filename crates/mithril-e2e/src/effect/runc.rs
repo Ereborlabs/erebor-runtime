@@ -10,19 +10,18 @@ use std::time::{Duration, Instant};
 
 use erebor_interceptor::{KernelHost, KernelHostConfig, KernelHostOwner};
 use erebor_interceptor_abi::{
-    EntryAdmissionRuleKeyV1, EntryAdmissionRuleV1, ExecGuardStateV1, Id128V1, KernelEffectFamilyV1,
-    KernelEffectOperationV1, PendingExecStateV1, PendingExecV1, ProcessSecurityStateV1,
-    TaskCoordinateStateV1,
+    CanonicalMountRootKeyV1, CanonicalMountRootV1, EntryAdmissionRuleKeyV1, EntryAdmissionRuleV1,
+    ExecGuardStateV1, Id128V1, KernelEffectFamilyV1, KernelEffectOperationV1, PendingExecStateV1,
+    PendingExecV1, ProcessSecurityStateV1, TaskCoordinateStateV1,
 };
+use erebor_runtime_ipc::v1::MithrilEffectObservation;
 use mithril_control::{
-    lower_kubernetes_policy, policy_custom_resource, EffectFamilyV1, PathTreeDenyFloorV1,
-    PolicyDispositionV1, WorkloadProtectionPolicySpec,
+    lower_kubernetes_policy, policy_custom_resource, WorkloadProtectionPolicySpec,
 };
 use mithril_node::{
     EffectObservationStore, NativeIdentityInspector, NativeSecurityStateOwner,
     NativeTaskSnapshotV1, NodePolicyGenerationOwner, WorkloadBindingOwner,
 };
-use rustix::process::{pidfd_open, pidfd_send_signal, Pid, PidfdFlags, Signal};
 use serde::Serialize;
 use serde_json::json;
 use sha2::{Digest as _, Sha256};
@@ -31,7 +30,7 @@ use zerocopy::{IntoBytes as _, TryFromBytes as _};
 
 use super::support::{
     effect_binding_with_identity, effect_node_config, wait_for_application_default_effect,
-    wait_for_path_exec_effect, wait_for_reason, ExternalMountNamespace,
+    wait_for_reason, ExternalMountNamespace,
 };
 use super::{
     sign_generation_artifact, EffectTestRunner, NEXT_PROFILE_GENERATION_REF_ID,
@@ -60,7 +59,12 @@ pub struct RuncEntryRoleRuntimeProbeV1 {
     pub held_runtime_admission_reconciled: bool,
     pub application_exec_transition_event_driven: bool,
     pub kubernetes_subpath_alias_path_tree_denied: bool,
+    pub newer_kubernetes_subpath_alias_path_tree_denied: bool,
+    pub container_bind_mount_succeeded: bool,
     pub container_bind_alias_path_tree_denied: bool,
+    pub single_wildcard_path_tree_denied: bool,
+    pub recursive_wildcard_path_tree_denied: bool,
+    pub other_role_path_tree_allowed: bool,
     pub path_tree_control_allowed: bool,
     pub application_admitted_entry_rule_id: u32,
     pub independent_entries: Vec<RuncEntryRoleProbeV1>,
@@ -70,6 +74,7 @@ pub struct RuncEntryRoleRuntimeProbeV1 {
     pub live_replacement_preserved_running_application: bool,
     pub live_replacement_entries_use_new_generation: bool,
     pub node_owner_restart_preserved_running_application: bool,
+    pub retained_mount_views_survived_source_exit: bool,
     pub kernel_upgrade_preserved_map_ids: bool,
     pub kernel_upgrade_preserved_link_pins: bool,
     pub kernel_upgrade_replaced_changed_programs: bool,
@@ -971,25 +976,25 @@ impl RuncContainer {
         Ok(true)
     }
 
-    fn prepare_preexisting_path_tree_aliases(&self, host_pid: u32, rootfs: &Path) -> Result<()> {
+    fn prepare_path_tree_aliases(&self, host_pid: u32, rootfs: &Path) -> Result<()> {
         let source_root = rootfs.join("home/secret");
-        let source_directory = source_root.join("models");
-        let source_file = source_directory.join("secret");
-        let kubernetes_alias_directory = rootfs.join("home/kubelet-attack");
-        let kubernetes_alias = kubernetes_alias_directory.join("secret");
+        let source_file = source_root.join("models/secret");
+        let kubernetes_alias = rootfs.join("home/kubelet-attack/secret");
+        let newer_kubernetes_alias = rootfs.join("home/kubelet-attack-newer/secret");
         let container_alias = rootfs.join("home/attack");
+        let single_wildcard_file = rootfs.join("home/alice/secrets/secret");
+        let recursive_wildcard_file = rootfs.join("srv/team/blue/secrets/secret");
         let mount_namespace = ExternalMountNamespace::acquire(host_pid)?;
-        mount_namespace.create_dir_all(&kubernetes_alias_directory)?;
         mount_namespace.create_dir_all(&container_alias)?;
-        mount_namespace.create_dir_all(&source_directory)?;
-        mount_namespace.create_file(&source_file)?;
-        mount_namespace.create_file(&kubernetes_alias)?;
-        mount_namespace.bind_mount(&source_file, &kubernetes_alias)?;
-        mount_namespace.bind_mount(&source_root, &container_alias)?;
         ensure!(
-            mount_namespace.read_file(&kubernetes_alias)?.is_empty()
+            mount_namespace.read_file(&source_file)?.is_empty()
+                && mount_namespace.read_file(&kubernetes_alias)?.is_empty()
                 && mount_namespace
-                    .read_file(&container_alias.join("models/secret"))?
+                    .read_file(&newer_kubernetes_alias)?
+                    .is_empty()
+                && mount_namespace.read_file(&single_wildcard_file)?.is_empty()
+                && mount_namespace
+                    .read_file(&recursive_wildcard_file)?
                     .is_empty(),
             InvalidInputSnafu {
                 path: &source_root,
@@ -1232,7 +1237,6 @@ impl EffectTestRunner {
         lease_path: &Path,
         runc_path: &Path,
         workload_path: &Path,
-        prestart_hook: &Path,
         retained_bpf_object: &Path,
     ) -> Result<RuncEntryRoleRuntimeProbeV1> {
         for path in [pin_root, lease_path] {
@@ -1244,7 +1248,7 @@ impl EffectTestRunner {
                 }
             );
         }
-        for path in [runc_path, workload_path, prestart_hook, retained_bpf_object] {
+        for path in [runc_path, workload_path, retained_bpf_object] {
             ensure!(
                 path.is_absolute() && path.exists(),
                 InvalidInputSnafu {
@@ -1253,6 +1257,9 @@ impl EffectTestRunner {
                 }
             );
         }
+        let oci_stage_hook = std::env::current_exe().context(IoSnafu {
+            path: Path::new("the current Mithril effect-test executable"),
+        })?;
 
         fs::create_dir_all(output_directory).context(IoSnafu {
             path: output_directory,
@@ -1273,12 +1280,24 @@ impl EffectTestRunner {
 
         let bundle = fixture_root.join("bundle");
         let rootfs = bundle.join("rootfs");
+        let role_directory = fixture_root.join("runtime-markers");
         let request_directory = fixture_root.join("prestart-requests");
         let state_root = fixture_root.join("runc-state");
         // Keep the runtime streams outside the disposable bundle so a failed probe is diagnosable.
         let stdout_path = output_directory.join("runc-entry-role.stdout");
         let stderr_path = output_directory.join("runc-entry-role.stderr");
         fs::create_dir_all(rootfs.join("bin")).context(IoSnafu { path: &rootfs })?;
+        let path_tree_source = fixture_root.join("path-tree");
+        let path_tree_models = path_tree_source.join("models");
+        fs::create_dir_all(&path_tree_models).context(IoSnafu {
+            path: &path_tree_source,
+        })?;
+        fs::File::create(path_tree_models.join("secret")).context(IoSnafu {
+            path: &path_tree_source,
+        })?;
+        fs::File::create(path_tree_source.join("secret")).context(IoSnafu {
+            path: &path_tree_source,
+        })?;
         fs::create_dir(&request_directory).context(IoSnafu {
             path: &request_directory,
         })?;
@@ -1288,7 +1307,8 @@ impl EffectTestRunner {
             },
         )?;
         fs::create_dir(&state_root).context(IoSnafu { path: &state_root })?;
-        let dynamic_loader_paths = prepare_entry_role_root(&rootfs, workload_path)?;
+        let dynamic_loader_paths =
+            prepare_entry_role_root(&rootfs, workload_path, &role_directory)?;
 
         run_checked(
             Command::new(runc_path).args(["spec", "--bundle", bundle.to_string_lossy().as_ref()]),
@@ -1312,10 +1332,28 @@ impl EffectTestRunner {
         config["process"]["terminal"] = json!(false);
         config["process"]["cwd"] = json!("/");
         config["process"]["env"] = json!(["PATH=/bin"]);
+        config["process"]["noNewPrivileges"] = json!(false);
+        config["process"]["capabilities"] = json!({
+            "bounding": ["CAP_SYS_ADMIN"],
+            "effective": ["CAP_SYS_ADMIN"],
+            "permitted": ["CAP_SYS_ADMIN"]
+        });
         config["process"]["args"] = json!([
             "/bin/sh",
             "-c",
-            "true 2>/dev/null </run/mithril-entry-roles/application.denied || true; if true 2>/dev/null </home/kubelet-attack/secret; then echo PATH_TREE_ALLOWED >/run/mithril-entry-roles/kubernetes-subpath.result; else echo PATH_TREE_DENIED >/run/mithril-entry-roles/kubernetes-subpath.result; fi; if true 2>/dev/null </home/attack/models/secret; then echo PATH_TREE_ALLOWED >/run/mithril-entry-roles/container-bind.result; else echo PATH_TREE_DENIED >/run/mithril-entry-roles/container-bind.result; fi; if true </run/mithril-entry-roles/control.allowed; then echo CONTROL_ALLOWED >/run/mithril-entry-roles/path-tree-control.result; else echo CONTROL_DENIED >/run/mithril-entry-roles/path-tree-control.result; fi; while [ ! -e /run/mithril-entry-roles/release ]; do /bin/sleep 1; done"
+            concat!(
+                "echo CONTAINER_ROOT_READY >/run/mithril-entry-roles/container-root-ready; while [ ! -e /run/mithril-entry-roles/effects-ready ]; do /bin/sleep 1; done; ",
+                "true 2>/dev/null </run/mithril-entry-roles/application.denied || true; ",
+                "if /bin/mount --bind /home/secret /home/attack 2>/run/mithril-entry-roles/container-bind-mount.stderr; then mithril_mount_result=MOUNT_READY; else mithril_mount_result=MOUNT_FAILED; fi; ",
+                "echo \"$mithril_mount_result\" >/run/mithril-entry-roles/container-bind-mount.result; ",
+                "if /bin/cat /home/kubelet-attack/secret >/dev/null 2>&1; then echo PATH_TREE_ALLOWED >/run/mithril-entry-roles/kubernetes-subpath.result; else echo PATH_TREE_DENIED >/run/mithril-entry-roles/kubernetes-subpath.result; fi; ",
+                "if /bin/cat /home/kubelet-attack-newer/secret >/dev/null 2>&1; then echo PATH_TREE_ALLOWED >/run/mithril-entry-roles/kubernetes-subpath-newer.result; else echo PATH_TREE_DENIED >/run/mithril-entry-roles/kubernetes-subpath-newer.result; fi; ",
+                "if /bin/cat /home/attack/models/secret >/dev/null 2>&1; then echo PATH_TREE_ALLOWED >/run/mithril-entry-roles/container-bind.result; else echo PATH_TREE_DENIED >/run/mithril-entry-roles/container-bind.result; fi; ",
+                "if /bin/cat /home/alice/secrets/secret >/dev/null 2>&1; then echo PATH_TREE_ALLOWED >/run/mithril-entry-roles/single-wildcard.result; else echo PATH_TREE_DENIED >/run/mithril-entry-roles/single-wildcard.result; fi; ",
+                "if /bin/cat /srv/team/blue/secrets/secret >/dev/null 2>&1; then echo PATH_TREE_ALLOWED >/run/mithril-entry-roles/recursive-wildcard.result; else echo PATH_TREE_DENIED >/run/mithril-entry-roles/recursive-wildcard.result; fi; ",
+                "if /bin/cat /run/mithril-entry-roles/control.allowed >/dev/null 2>&1; then echo CONTROL_ALLOWED >/run/mithril-entry-roles/path-tree-control.result; else echo CONTROL_DENIED >/run/mithril-entry-roles/path-tree-control.result; fi; ",
+                "while [ ! -e /run/mithril-entry-roles/release ]; do /bin/sleep 1; done"
+            )
         ]);
         config["root"]["path"] = json!("rootfs");
         config["root"]["readonly"] = json!(false);
@@ -1324,26 +1362,53 @@ impl EffectTestRunner {
             "io.kubernetes.cri.container-type": "container",
             "io.kubernetes.cri.container-id": container_id,
         });
-        config["hooks"]["prestart"] = json!([{
-            "path": prestart_hook,
-            "args": [prestart_hook, "prestart", request_directory],
+        config["hooks"]["createRuntime"] = json!([{
+            "path": oci_stage_hook,
+            "args": [
+                oci_stage_hook,
+                "oci-stage-fixture",
+                "--stage", "createRuntime",
+                "--request-directory", request_directory
+            ],
             "timeout": 30,
         }]);
-        config["mounts"]
-            .as_array_mut()
-            .ok_or_else(|| {
-                InvalidInputSnafu {
-                    path: &config_path,
-                    reason: "the generated runc spec has no mount array",
-                }
-                .build()
-            })?
-            .push(json!({
-                "destination": "/home/secret",
-                "type": "tmpfs",
-                "source": "tmpfs",
-                "options": ["nosuid", "nodev", "mode=0755"]
+        config["hooks"]["createContainer"] = json!([{
+            "path": oci_stage_hook,
+            "args": [
+                oci_stage_hook,
+                "oci-stage-fixture",
+                "--stage", "createContainer",
+                "--request-directory", request_directory
+            ],
+            "timeout": 30,
+        }]);
+        let mounts = config["mounts"].as_array_mut().ok_or_else(|| {
+            InvalidInputSnafu {
+                path: &config_path,
+                reason: "the generated runc spec has no mount array",
+            }
+            .build()
+        })?;
+        mounts.push(json!({
+            "destination": "/run/mithril-entry-roles",
+            "type": "bind",
+            "source": role_directory,
+            "options": ["rbind", "rprivate", "rw"]
+        }));
+        for (destination, source) in [
+            ("/home/kubelet-attack", path_tree_models.as_path()),
+            ("/home/secret", path_tree_source.as_path()),
+            ("/home/kubelet-attack-newer", path_tree_models.as_path()),
+            ("/home/alice/secrets", path_tree_source.as_path()),
+            ("/srv/team/blue/secrets", path_tree_source.as_path()),
+        ] {
+            mounts.push(json!({
+                "destination": destination,
+                "type": "bind",
+                "source": source,
+                "options": ["rbind", "rprivate", "ro"]
             }));
+        }
         fs::write(
             &config_path,
             serde_json::to_vec_pretty(&config).context(JsonSnafu { path: &config_path })?,
@@ -1371,8 +1436,8 @@ impl EffectTestRunner {
             cgroup_path: cgroup_path.clone(),
         };
 
-        let request_path = request_directory.join(format!("{container_id}.json"));
-        wait_for_path(&request_path, true, "the direct runc prestart request")?;
+        let request_path = request_directory.join(format!("{container_id}.createRuntime.json"));
+        wait_for_path(&request_path, true, "the direct runc createRuntime request")?;
         let request: serde_json::Value =
             serde_json::from_slice(&fs::read(&request_path).context(IoSnafu {
                 path: &request_path,
@@ -1382,7 +1447,7 @@ impl EffectTestRunner {
             })?;
         fs::copy(
             &request_path,
-            output_directory.join("runc-entry-role-request.json"),
+            output_directory.join("runc-entry-role-create-runtime-request.json"),
         )
         .context(IoSnafu {
             path: &request_path,
@@ -1395,7 +1460,7 @@ impl EffectTestRunner {
             .ok_or_else(|| {
                 InvalidInputSnafu {
                     path: &request_path,
-                    reason: "the direct runc prestart request has no valid PID",
+                    reason: "the direct runc createRuntime request has no valid PID",
                 }
                 .build()
             })?;
@@ -1425,7 +1490,7 @@ impl EffectTestRunner {
             .ok_or_else(|| {
                 InvalidInputSnafu {
                     path: &request_path,
-                    reason: "the direct runc prestart request has no cgroup",
+                    reason: "the direct runc createRuntime request has no cgroup",
                 }
                 .build()
             })?;
@@ -1436,9 +1501,6 @@ impl EffectTestRunner {
                 reason: format!("direct runc used unexpected cgroup `{observed_cgroup}`"),
             }
         );
-        container.prepare_preexisting_path_tree_aliases(initial_pid, &rootfs)?;
-        signal_process(initial_pid, Signal::STOP)?;
-
         let (boot_id, node_boot_id) = boot_identity()?;
         let retained_bpf_sha256 = DigestV1::of(fs::read(retained_bpf_object).context(IoSnafu {
             path: retained_bpf_object,
@@ -1502,35 +1564,37 @@ impl EffectTestRunner {
             1,
         )
         .context(NodeSnafu)?;
-        let staged_entry_rules = host
-            .map_keys("entry_admission_rules")
-            .context(InterceptorSnafu)?
-            .into_iter()
-            .map(|key| {
-                host.lookup_map("entry_admission_rules", &key)
-                    .context(InterceptorSnafu)?
-                    .and_then(|value| EntryAdmissionRuleV1::try_read_from_bytes(&value).ok())
-                    .ok_or_else(|| {
-                        InvalidInputSnafu {
-                            path: pin_root,
-                            reason: "the prepared application entry rule has invalid ABI",
-                        }
-                        .build()
-                    })
-            })
-            .collect::<Result<Vec<_>>>()?;
+        let read_entry_rules = |host: &KernelHost| {
+            host.map_keys("entry_admission_rules")
+                .context(InterceptorSnafu)?
+                .into_iter()
+                .map(|key| {
+                    host.lookup_map("entry_admission_rules", &key)
+                        .context(InterceptorSnafu)?
+                        .and_then(|value| EntryAdmissionRuleV1::try_read_from_bytes(&value).ok())
+                        .ok_or_else(|| {
+                            InvalidInputSnafu {
+                                path: pin_root,
+                                reason: "the prepared application entry rule has invalid ABI",
+                            }
+                            .build()
+                        })
+                })
+                .collect::<Result<Vec<_>>>()
+        };
+        let provisional_entry_rules = read_entry_rules(&host)?;
         ensure!(
-            staged_entry_rules.len() == 7
-                && staged_entry_rules
+            provisional_entry_rules.len() == 7
+                && provisional_entry_rules
                     .iter()
                     .any(|rule| rule.target_role_id == policy.initial_role_id)
-                && staged_entry_rules
+                && provisional_entry_rules
                     .iter()
                     .all(|rule| rule.exact_object_key_id == 0),
             InvalidInputSnafu {
                 path: pin_root,
                 reason: format!(
-                    "prepared application entry staging is invalid: {staged_entry_rules:?}"
+                    "provisional application entry staging is invalid: {provisional_entry_rules:?}"
                 ),
             }
         );
@@ -1573,20 +1637,78 @@ impl EffectTestRunner {
                 reason: "the held direct runc task is not in PREPARED state",
             }
         );
+
         let observations = EffectObservationStore::default();
+        let physical_effect_capture = EffectObservationStore::new(65_536);
         let sink = observations.clone();
+        let capture = physical_effect_capture.clone();
         let reader = host
             .effect_observation_reader(move |bytes| {
                 sink.record_bytes(bytes);
+                capture.record_bytes(bytes);
                 0
             })
             .context(InterceptorSnafu)?;
         let marker = observations.cursor();
-
-        signal_process(initial_pid, Signal::CONT)?;
         fs::write(
-            request_directory.join(format!("{container_id}.release")),
+            request_directory.join(format!("{container_id}.createRuntime.release")),
             format!("accepted:{initial_pid}"),
+        )
+        .context(IoSnafu {
+            path: &request_directory,
+        })?;
+        let create_container_request =
+            request_directory.join(format!("{container_id}.createContainer.json"));
+        wait_for_path(
+            &create_container_request,
+            true,
+            "the direct runc createContainer request",
+        )?;
+        fs::copy(
+            &create_container_request,
+            output_directory.join("runc-entry-role-create-container-request.json"),
+        )
+        .context(IoSnafu {
+            path: &create_container_request,
+        })?;
+        container.prepare_path_tree_aliases(initial_pid, &rootfs)?;
+        container.record_mountinfo(initial_pid, output_directory)?;
+        policy_owner
+            .reconcile_cri_exact_bindings_for_oci_entries_for_test(
+                &node_config,
+                &mut host,
+                &bindings,
+                &binding.binding_id,
+                initial_pid,
+                &bundle,
+            )
+            .context(NodeSnafu)?;
+        fs::write(
+            output_directory.join("runc-entry-role-canonical-mount-roots.txt"),
+            canonical_mount_route_summary(&host)?,
+        )
+        .context(IoSnafu {
+            path: output_directory,
+        })?;
+        let staged_entry_rules = read_entry_rules(&host)?;
+        ensure!(
+            staged_entry_rules.len() == 7
+                && staged_entry_rules
+                    .iter()
+                    .any(|rule| rule.target_role_id == policy.initial_role_id)
+                && staged_entry_rules
+                    .iter()
+                    .all(|rule| rule.exact_object_key_id != 0),
+            InvalidInputSnafu {
+                path: pin_root,
+                reason: format!(
+                    "prepared application entry staging is invalid: {staged_entry_rules:?}"
+                ),
+            }
+        );
+        fs::write(
+            request_directory.join(format!("{container_id}.createContainer.release")),
+            b"accepted",
         )
         .context(IoSnafu {
             path: &request_directory,
@@ -1599,71 +1721,426 @@ impl EffectTestRunner {
             initial_pid,
             output_directory,
         )?;
-        container.record_mountinfo(initial_pid, output_directory)?;
+        wait_for_reason(
+            &reader,
+            &observations,
+            marker,
+            "PREPARED_RUNTIME_INFRASTRUCTURE",
+        )?;
+        let container_root_ready = role_directory.join("container-root-ready");
+        wait_for_path(
+            &container_root_ready,
+            true,
+            "the live container-root readiness marker",
+        )?;
+        let overlap_marker = observations.cursor();
+        let poststart_overlap_pid = fixture_root.join("poststart-overlap.pid");
+        let poststart_overlap_stdout = output_directory.join("poststart-overlap.stdout");
+        let poststart_overlap_stderr = output_directory.join("poststart-overlap.stderr");
+        let mut poststart_overlap = container.spawn_exec(
+            "/bin/cp",
+            &[
+                "/run/mithril-entry-roles/control.allowed",
+                "/run/mithril-entry-roles/poststart-overlap.fifo",
+                "/run/mithril-entry-roles/poststart-overlap-output",
+            ],
+            &poststart_overlap_pid,
+            &poststart_overlap_stdout,
+            &poststart_overlap_stderr,
+        )?;
+        let poststart_overlap_host_pid =
+            wait_for_pid_file(&poststart_overlap_pid, &mut poststart_overlap)?.ok_or_else(
+                || {
+                    InvalidInputSnafu {
+                        path: &poststart_overlap_stderr,
+                        reason: "the overlapping PostStart entry exited before publishing its PID",
+                    }
+                    .build()
+                },
+            )?;
+        wait_for_task_snapshot(
+            &inspector,
+            poststart_overlap_host_pid,
+            &mut poststart_overlap,
+            &reader,
+            &observations,
+            overlap_marker,
+            &poststart_overlap_stderr,
+        )?;
+        let startup_overlap_pid = fixture_root.join("startup-overlap.pid");
+        let startup_overlap_stdout = output_directory.join("startup-overlap.stdout");
+        let startup_overlap_stderr = output_directory.join("startup-overlap.stderr");
+        let mut startup_overlap = container.spawn_exec(
+            "/bin/cat",
+            &[
+                "/run/mithril-entry-roles/control.allowed",
+                "/home/alice/secrets/models/secret",
+                "/run/mithril-entry-roles/startup-overlap.fifo",
+            ],
+            &startup_overlap_pid,
+            &startup_overlap_stdout,
+            &startup_overlap_stderr,
+        )?;
+        let startup_overlap_host_pid =
+            wait_for_pid_file(&startup_overlap_pid, &mut startup_overlap)?.ok_or_else(|| {
+                InvalidInputSnafu {
+                    path: &startup_overlap_stderr,
+                    reason: "the overlapping StartupProbe entry exited before publishing its PID",
+                }
+                .build()
+            })?;
+        wait_for_task_snapshot(
+            &inspector,
+            startup_overlap_host_pid,
+            &mut startup_overlap,
+            &reader,
+            &observations,
+            overlap_marker,
+            &startup_overlap_stderr,
+        )?;
+        let mount_change_sequence = observations.mount_change_sequence();
+        fs::write(role_directory.join("effects-ready"), b"ready\n").context(IoSnafu {
+            path: &role_directory,
+        })?;
+        let mount_event_deadline = Instant::now() + WAIT_LIMIT;
+        while observations.mount_change_sequence() <= mount_change_sequence
+            && Instant::now() < mount_event_deadline
+        {
+            reader
+                .poll(Duration::from_millis(10))
+                .context(InterceptorSnafu)?;
+        }
+        ensure!(
+            observations.mount_change_sequence() > mount_change_sequence,
+            InvalidInputSnafu {
+                path: &rootfs,
+                reason: "the successful container bind mount did not publish a mount event",
+            }
+        );
+        let path_tree_control_result = role_directory.join("path-tree-control.result");
+        wait_for_path(
+            &path_tree_control_result,
+            true,
+            "the application control result after the mount change",
+        )?;
+        let path_tree_control = fs::read_to_string(&path_tree_control_result).context(IoSnafu {
+            path: &path_tree_control_result,
+        })?;
+        ensure!(
+            path_tree_control.trim() == "CONTROL_ALLOWED",
+            InvalidInputSnafu {
+                path: &path_tree_control_result,
+                reason: format!(
+                    "the synchronous BPF mount rebuild denied the application control read: effects={:?}",
+                    recent_effect_summary(&observations, marker),
+                ),
+            }
+        );
+        fs::write(role_directory.join("poststart-overlap.fifo"), b"release\n").context(
+            IoSnafu {
+                path: &role_directory,
+            },
+        )?;
+        fs::write(role_directory.join("startup-overlap.fifo"), b"release\n").context(IoSnafu {
+            path: &role_directory,
+        })?;
+        ensure!(
+            wait_for_child(&mut poststart_overlap)?.success()
+                && wait_for_child(&mut startup_overlap)?.success(),
+            InvalidInputSnafu {
+                path: &role_directory,
+                reason: "an overlapping Kubernetes entry failed",
+            }
+        );
+        let concurrent_entry_marker = observations.cursor();
+        let concurrent_pid_path = fixture_root.join("poststart-during-mount-reconciliation.pid");
+        let concurrent_stdout =
+            output_directory.join("runc-entry-poststart-during-mount-reconciliation.stdout");
+        let concurrent_stderr =
+            output_directory.join("runc-entry-poststart-during-mount-reconciliation.stderr");
+        let concurrent_output = role_directory.join("poststart-during-mount-reconciliation-output");
+        let concurrent_result = concurrent_output.join("control.allowed");
+        let concurrent_release = role_directory.join("poststart-overlap.fifo");
+        let mut concurrent_poststart = container.spawn_exec(
+            "/bin/cp",
+            &[
+                "/run/mithril-entry-roles/control.allowed",
+                "/run/mithril-entry-roles/poststart.denied",
+                "/run/mithril-entry-roles/poststart-overlap.fifo",
+                "/run/mithril-entry-roles/poststart-during-mount-reconciliation-output",
+            ],
+            &concurrent_pid_path,
+            &concurrent_stdout,
+            &concurrent_stderr,
+        )?;
+        let concurrent_host_pid = wait_for_pid_file(
+            &concurrent_pid_path,
+            &mut concurrent_poststart,
+        )?
+        .ok_or_else(|| {
+            InvalidInputSnafu {
+                path: &concurrent_stderr,
+                reason: format!(
+                    "the declared PostStart entry exited while the mount view was dirty: stderr={}, effects={:?}",
+                    fs::read_to_string(&concurrent_stderr)
+                        .unwrap_or_default()
+                        .trim(),
+                    recent_effect_summary(&observations, concurrent_entry_marker),
+                ),
+            }
+            .build()
+        })?;
+        let concurrent_result_deadline = Instant::now() + WAIT_LIMIT;
+        while !concurrent_result.exists() {
+            if let Some(status) = concurrent_poststart.try_wait().context(IoSnafu {
+                path: &concurrent_stderr,
+            })? {
+                ensure!(
+                    false,
+                    InvalidInputSnafu {
+                        path: &concurrent_stderr,
+                        reason: format!(
+                            "the declared PostStart entry exited before its control read after the mount change: status={status}, stderr={}, effects={:?}",
+                            fs::read_to_string(&concurrent_stderr)
+                                .unwrap_or_default()
+                                .trim(),
+                            recent_effect_summary(&observations, concurrent_entry_marker),
+                        ),
+                    }
+                );
+            }
+            ensure!(
+                Instant::now() < concurrent_result_deadline,
+                InvalidInputSnafu {
+                    path: &concurrent_result,
+                    reason: "the declared PostStart control read did not complete after the mount change",
+                }
+            );
+            reader
+                .poll(Duration::from_millis(5))
+                .context(InterceptorSnafu)?;
+        }
+        let concurrent_control_result = fs::read_to_string(&concurrent_result)
+            .context(IoSnafu {
+                path: &concurrent_result,
+            })?
+            .trim()
+            .to_owned();
+        ensure!(
+            concurrent_control_result == "allowed",
+            InvalidInputSnafu {
+                path: &concurrent_result,
+                reason: format!(
+                    "the declared PostStart control read was denied while the mount view was dirty: effects={:?}",
+                    recent_effect_summary(&observations, concurrent_entry_marker),
+                ),
+            }
+        );
+        let concurrent_snapshot = wait_for_task_snapshot(
+            &inspector,
+            concurrent_host_pid,
+            &mut concurrent_poststart,
+            &reader,
+            &observations,
+            concurrent_entry_marker,
+            &concurrent_stderr,
+        )?;
+        fs::write(&concurrent_release, b"release\n").context(IoSnafu {
+            path: &concurrent_release,
+        })?;
+        let concurrent_status = wait_for_child(&mut concurrent_poststart)?;
+        reader
+            .poll(Duration::from_millis(100))
+            .context(InterceptorSnafu)?;
+        let concurrent_role_id = policy.role_ids["poststart"];
+        let concurrent_policy_deny = wait_for_entry_policy_deny(
+            &reader,
+            &observations,
+            concurrent_entry_marker,
+            concurrent_role_id,
+            concurrent_snapshot.admitted_entry_rule_id,
+        )?;
+        ensure!(
+            concurrent_status.code() == Some(1)
+                && concurrent_snapshot.profile_generation_ref_id == PROFILE_GENERATION_REF_ID
+                && concurrent_snapshot.active_role_id == concurrent_role_id
+                && concurrent_snapshot.admitted_entry_rule_id > 0
+                && concurrent_policy_deny,
+            InvalidInputSnafu {
+                path: &concurrent_stderr,
+                reason: format!(
+                    "the declared PostStart entry did not survive the mount change: status={concurrent_status}, snapshot={concurrent_snapshot:?}, stderr={}",
+                    fs::read_to_string(&concurrent_stderr)
+                        .unwrap_or_default()
+                        .trim(),
+                ),
+            }
+        );
         wait_for_reason(&reader, &observations, marker, "PATH_TREE_POLICY_DENY")?;
-        let kubernetes_subpath_result =
-            rootfs.join("run/mithril-entry-roles/kubernetes-subpath.result");
-        let container_bind_result = rootfs.join("run/mithril-entry-roles/container-bind.result");
-        let path_tree_control_result =
-            rootfs.join("run/mithril-entry-roles/path-tree-control.result");
-        wait_for_path(
-            &kubernetes_subpath_result,
-            true,
-            "the Kubernetes subPath denial result",
-        )?;
-        wait_for_path(
-            &container_bind_result,
-            true,
-            "the in-container bind denial result",
-        )?;
+        let kubernetes_subpath_result = role_directory.join("kubernetes-subpath.result");
+        let newer_kubernetes_subpath_result =
+            role_directory.join("kubernetes-subpath-newer.result");
+        let container_bind_mount_result = role_directory.join("container-bind-mount.result");
+        let container_bind_result = role_directory.join("container-bind.result");
+        let single_wildcard_result = role_directory.join("single-wildcard.result");
+        let recursive_wildcard_result = role_directory.join("recursive-wildcard.result");
+        for (result, description) in [
+            (
+                &container_bind_mount_result,
+                "the in-container bind-mount result",
+            ),
+            (
+                &kubernetes_subpath_result,
+                "the older Kubernetes subPath denial result",
+            ),
+            (
+                &newer_kubernetes_subpath_result,
+                "the newer Kubernetes subPath denial result",
+            ),
+            (
+                &container_bind_result,
+                "the in-container bind denial result",
+            ),
+            (&single_wildcard_result, "the single-wildcard denial result"),
+            (
+                &recursive_wildcard_result,
+                "the recursive-wildcard denial result",
+            ),
+        ] {
+            wait_for_path(result, true, description)?;
+        }
         wait_for_path(
             &path_tree_control_result,
             true,
             "the path-tree allowed-control result",
         )?;
+        let kubernetes_subpath =
+            fs::read_to_string(&kubernetes_subpath_result).context(IoSnafu {
+                path: &kubernetes_subpath_result,
+            })?;
+        let newer_kubernetes_subpath = fs::read_to_string(&newer_kubernetes_subpath_result)
+            .context(IoSnafu {
+                path: &newer_kubernetes_subpath_result,
+            })?;
+        let container_bind_mount =
+            fs::read_to_string(&container_bind_mount_result).context(IoSnafu {
+                path: &container_bind_mount_result,
+            })?;
+        let container_bind_mount_stderr =
+            fs::read_to_string(role_directory.join("container-bind-mount.stderr"))
+                .unwrap_or_default();
+        let container_bind = fs::read_to_string(&container_bind_result).context(IoSnafu {
+            path: &container_bind_result,
+        })?;
+        let single_wildcard = fs::read_to_string(&single_wildcard_result).context(IoSnafu {
+            path: &single_wildcard_result,
+        })?;
+        let recursive_wildcard =
+            fs::read_to_string(&recursive_wildcard_result).context(IoSnafu {
+                path: &recursive_wildcard_result,
+            })?;
+        let path_tree_control = fs::read_to_string(&path_tree_control_result).context(IoSnafu {
+            path: &path_tree_control_result,
+        })?;
         ensure!(
-            fs::read_to_string(&kubernetes_subpath_result)
-                .context(IoSnafu {
-                    path: &kubernetes_subpath_result,
-                })?
-                .trim()
-                == "PATH_TREE_DENIED"
-                && fs::read_to_string(&container_bind_result)
-                    .context(IoSnafu {
-                        path: &container_bind_result,
-                    })?
-                    .trim()
-                    == "PATH_TREE_DENIED"
-                && fs::read_to_string(&path_tree_control_result)
-                    .context(IoSnafu {
-                        path: &path_tree_control_result,
-                    })?
-                    .trim()
-                    == "CONTROL_ALLOWED",
+            container_bind_mount.trim() == "MOUNT_READY"
+                && kubernetes_subpath.trim() == "PATH_TREE_DENIED"
+                && newer_kubernetes_subpath.trim() == "PATH_TREE_DENIED"
+                && container_bind.trim() == "PATH_TREE_DENIED"
+                && single_wildcard.trim() == "PATH_TREE_DENIED"
+                && recursive_wildcard.trim() == "PATH_TREE_DENIED"
+                && path_tree_control.trim() == "CONTROL_ALLOWED",
             InvalidInputSnafu {
                 path: &kubernetes_subpath_result,
-                reason: "the direct runc path-tree aliases and allowed control did not all pass",
+                reason: format!(
+                    "the direct runc path-tree results differ: container_bind_mount={container_bind_mount:?}, mount_stderr={container_bind_mount_stderr:?}, older_kubernetes_subpath={kubernetes_subpath:?}, newer_kubernetes_subpath={newer_kubernetes_subpath:?}, container_bind={container_bind:?}, single_wildcard={single_wildcard:?}, recursive_wildcard={recursive_wildcard:?}, control={path_tree_control:?}, relevant_effects={:?}",
+                    observations
+                        .recent_since(marker)
+                        .iter()
+                        .filter(|event| {
+                            event.effect_family
+                                == u32::from(KernelEffectFamilyV1::File as u16)
+                                || event.effect_family
+                                    == u32::from(KernelEffectFamilyV1::Privilege as u16)
+                                || event.effect_family
+                                    == u32::from(KernelEffectFamilyV1::Mount as u16)
+                        })
+                        .map(|event| (
+                            event.reason.as_str(),
+                            event.effect_family,
+                            event.operation,
+                            event.operation_argument,
+                            event.physical_result.as_str(),
+                            event.configured_errno,
+                            event.kernel_result,
+                            event.composite_atom_id,
+                        ))
+                        .collect::<Vec<_>>()
+                ),
             }
         );
         reader
             .poll(Duration::from_millis(100))
             .context(InterceptorSnafu)?;
+        let effect_window_churn_marker = observations.cursor();
+        let effect_window_churn_pid = fixture_root.join("effect-window-churn.pid");
+        let effect_window_churn_stdout = output_directory.join("effect-window-churn.stdout");
+        let effect_window_churn_stderr = output_directory.join("effect-window-churn.stderr");
+        let effect_window_churn_arguments = vec!["/run/mithril-entry-roles/control.allowed"; 1_200];
+        let mut effect_window_churn = container.spawn_exec(
+            "/bin/cat",
+            &effect_window_churn_arguments,
+            &effect_window_churn_pid,
+            &effect_window_churn_stdout,
+            &effect_window_churn_stderr,
+        )?;
+        let effect_window_churn_status = wait_for_child(&mut effect_window_churn)?;
+        let effect_window_churn_deadline = Instant::now() + WAIT_LIMIT;
+        while observations
+            .cursor()
+            .saturating_sub(effect_window_churn_marker)
+            < 1_024
+            && Instant::now() < effect_window_churn_deadline
+        {
+            reader
+                .poll(Duration::from_millis(25))
+                .context(InterceptorSnafu)?;
+        }
         ensure!(
-            observations
-                .recent_since(marker)
-                .iter()
-                .filter(|event| {
-                    event.reason == "PATH_TREE_POLICY_DENY"
-                        && event.effect_family == u32::from(KernelEffectFamilyV1::File as u16)
-                        && event.operation == u32::from(KernelEffectOperationV1::OpenRead as u16)
-                        && event.exact_object_key_id == 0
-                        && event.kernel_result == -13
-                })
-                .count()
-                >= 2,
+            effect_window_churn_status.success()
+                && observations
+                    .cursor()
+                    .saturating_sub(effect_window_churn_marker)
+                    >= 1_024,
+            InvalidInputSnafu {
+                path: &effect_window_churn_stderr,
+                reason: format!(
+                    "the direct runc fixture did not fill the Node-sized recent effect window: status={effect_window_churn_status}, observed={}",
+                    observations
+                        .cursor()
+                        .saturating_sub(effect_window_churn_marker)
+                ),
+            }
+        );
+        let recent_path_tree_effect_count = observations
+            .recent_since(marker)
+            .iter()
+            .map(physical_effect_line)
+            .filter(|line| physical_path_tree_effect_line_matches(line, policy.initial_role_id))
+            .count();
+        let captured_path_tree_effect_count = physical_effect_capture
+            .recent_since(marker)
+            .iter()
+            .map(physical_effect_line)
+            .filter(|line| physical_path_tree_effect_line_matches(line, policy.initial_role_id))
+            .count();
+        ensure!(
+            recent_path_tree_effect_count == 0 && captured_path_tree_effect_count >= 5,
             InvalidInputSnafu {
                 path: &kubernetes_subpath_result,
-                reason: "the direct runc aliases did not produce two physical path-tree denials",
+                reason: format!(
+                    "the direct runc pre-effect capture did not preserve five physical path-tree denials after recent-window eviction: recent={recent_path_tree_effect_count}, captured={captured_path_tree_effect_count}"
+                ),
             }
         );
         let active = inspector
@@ -1693,9 +2170,6 @@ impl EffectTestRunner {
             .verify_exec_transition_event_path(
                 &mut host, &identity, &inspector, &active, pin_root,
             )?;
-        policy_owner
-            .reconcile_cri_exact_bindings(&node_config, &mut host, &bindings)
-            .context(NodeSnafu)?;
         let entry_admission_proofs = host
             .map_keys("entry_admission_rules")
             .context(InterceptorSnafu)?
@@ -1759,19 +2233,6 @@ impl EffectTestRunner {
             }
         );
 
-        wait_for_reason(
-            &reader,
-            &observations,
-            marker,
-            "PREPARED_RUNTIME_INFRASTRUCTURE",
-        )?;
-        wait_for_path_exec_effect(
-            &reader,
-            &observations,
-            marker,
-            "EXACT_POLICY_ALLOW",
-            KernelEffectOperationV1::Execute,
-        )?;
         let application_entry_exact_object_enforced =
             exact_entry_rule_ids.contains(&active.admitted_entry_rule_id);
         ensure!(
@@ -2013,6 +2474,15 @@ impl EffectTestRunner {
                 ),
             }
         );
+        ensure!(
+            restarted_policy_owner
+                .reconcile_policy_lifecycle(&mut host)
+                .context(NodeSnafu)?,
+            InvalidInputSnafu {
+                path: pin_root,
+                reason: "node-owner restart did not reconcile policy lifecycle state",
+            }
+        );
         let active_after_node_owner_restart = inspector
             .snapshot(initial_pid)
             .context(NodeSnafu)?
@@ -2033,6 +2503,8 @@ impl EffectTestRunner {
             }
         );
         let mut independent_entries = Vec::new();
+        let mut other_role_path_tree_allowed = false;
+        let application_control_host = role_directory.join("application.denied");
         for (name, declaration_name, executable) in [
             ("poststart", "poststart", "/bin/cp"),
             ("poststart-repeat", "poststart", "/bin/cp"),
@@ -2042,15 +2514,40 @@ impl EffectTestRunner {
             ("liveness", "liveness", "/bin/wc"),
         ] {
             let entry_marker = observations.cursor();
+            let entry_mount_sequence = observations.mount_change_sequence();
             let pid_path = fixture_root.join(format!("{name}.pid"));
             let entry_stdout = output_directory.join(format!("runc-entry-{name}.stdout"));
             let entry_stderr = output_directory.join(format!("runc-entry-{name}.stderr"));
-            let command = format!(
-                "true 2>/dev/null </run/mithril-entry-roles/{declaration_name}.denied || true; true </run/mithril-entry-roles/application.denied && /bin/sleep 2"
-            );
+            let control_output_name = format!("{name}-control-output");
+            let control_output_host = role_directory.join(&control_output_name);
+            if executable == "/bin/cp" {
+                fs::create_dir(&control_output_host).context(IoSnafu {
+                    path: &control_output_host,
+                })?;
+            }
+            let control_output = format!("/run/mithril-entry-roles/{control_output_name}");
+            let application_control = "/run/mithril-entry-roles/application.denied";
+            let control_arguments = match executable {
+                "/bin/cp" => vec![application_control.to_owned(), control_output.clone()],
+                "/bin/dd" => vec![
+                    format!("if={application_control}"),
+                    format!("of={control_output}"),
+                ],
+                "/bin/cat" => vec![
+                    "/home/alice/secrets/secret".to_owned(),
+                    application_control.to_owned(),
+                ],
+                "/bin/grep" => vec!["application".to_owned(), application_control.to_owned()],
+                "/bin/wc" => vec![application_control.to_owned()],
+                _ => unreachable!("the entry fixture has one of five BusyBox applets"),
+            };
+            let control_argument_refs = control_arguments
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>();
             let mut child = container.spawn_exec(
                 executable,
-                &["-c", command.as_str()],
+                &control_argument_refs,
                 &pid_path,
                 &entry_stdout,
                 &entry_stderr,
@@ -2066,8 +2563,9 @@ impl EffectTestRunner {
                     InvalidInputSnafu {
                         path: &entry_stderr,
                         reason: format!(
-                            "entry `{name}` exited before publishing its host PID: stderr={}, effects={:?}",
+                            "entry `{name}` exited before publishing its host PID: stderr={}, mount_sequence={entry_mount_sequence}->{}, effects={:?}",
                             fs::read_to_string(&entry_stderr).unwrap_or_default().trim(),
+                            observations.mount_change_sequence(),
                             recent_effect_summary(&observations, entry_marker)
                         ),
                     }
@@ -2082,8 +2580,49 @@ impl EffectTestRunner {
                 &observations,
                 entry_marker,
                 &entry_stderr,
-            )?;
+            )
+            .map_err(|error| {
+                InvalidInputSnafu {
+                    path: &entry_stderr,
+                    reason: format!(
+                        "entry `{name}` mount sequence changed from {entry_mount_sequence} to {} while admission failed: {error}",
+                        observations.mount_change_sequence(),
+                    ),
+                }
+                .build()
+            })?;
+            fs::write(&application_control_host, b"application\n").context(IoSnafu {
+                path: &application_control_host,
+            })?;
             let status = wait_for_child(&mut child)?;
+            if name == "startup" {
+                other_role_path_tree_allowed = status.success();
+            }
+            let deny_pid_path = fixture_root.join(format!("{name}-deny.pid"));
+            let deny_stdout = output_directory.join(format!("runc-entry-{name}-deny.stdout"));
+            let deny_stderr = output_directory.join(format!("runc-entry-{name}-deny.stderr"));
+            let denied_path = format!("/run/mithril-entry-roles/{declaration_name}.denied");
+            let deny_output = format!("/run/mithril-entry-roles/{name}-deny-output");
+            let deny_arguments = match executable {
+                "/bin/cp" => vec![denied_path.clone(), deny_output.clone()],
+                "/bin/dd" => vec![format!("if={denied_path}"), format!("of={deny_output}")],
+                "/bin/cat" => vec![denied_path.clone()],
+                "/bin/grep" => vec!["denied".to_owned(), denied_path.clone()],
+                "/bin/wc" => vec![denied_path.clone()],
+                _ => unreachable!("the entry fixture has one of five BusyBox applets"),
+            };
+            let deny_argument_refs = deny_arguments
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>();
+            let mut denied_child = container.spawn_exec(
+                executable,
+                &deny_argument_refs,
+                &deny_pid_path,
+                &deny_stdout,
+                &deny_stderr,
+            )?;
+            let denied_status = wait_for_child(&mut denied_child)?;
             reader
                 .poll(Duration::from_millis(100))
                 .context(InterceptorSnafu)?;
@@ -2099,6 +2638,7 @@ impl EffectTestRunner {
                 replacement_exact_entry_rule_ids.contains(&snapshot.admitted_entry_rule_id);
             ensure!(
                 status.success()
+                    && !denied_status.success()
                     && snapshot.profile_generation_ref_id == NEXT_PROFILE_GENERATION_REF_ID
                     && snapshot.active_role_id == expected_role_id
                     && snapshot.admitted_entry_rule_id > 0
@@ -2127,6 +2667,13 @@ impl EffectTestRunner {
                 application_policy_not_inherited: true,
             });
         }
+        ensure!(
+            other_role_path_tree_allowed,
+            InvalidInputSnafu {
+                path: &role_directory,
+                reason: "the application path-tree denial affected the startup role",
+            }
+        );
         let role_ids = independent_entries
             .iter()
             .map(|entry| entry.active_role_id)
@@ -2366,8 +2913,9 @@ impl EffectTestRunner {
                 ),
             }
         );
-        fs::write(rootfs.join("run/mithril-entry-roles/release"), b"release\n")
-            .context(IoSnafu { path: &rootfs })?;
+        fs::write(role_directory.join("release"), b"release\n").context(IoSnafu {
+            path: &role_directory,
+        })?;
 
         let status = wait_for_child(container.child.as_mut().ok_or_else(|| {
             InvalidInputSnafu {
@@ -2394,6 +2942,22 @@ impl EffectTestRunner {
                         ))
                         .collect::<Vec<_>>()
                 ),
+            }
+        );
+        let initial_proc = PathBuf::from(format!("/proc/{initial_pid}"));
+        wait_for_path(
+            &initial_proc,
+            false,
+            "the direct runc initial process to exit",
+        )?;
+        let retained_mount_views_survived_source_exit = restarted_policy_owner
+            .retained_mount_views_are_readable_for_test()
+            .context(NodeSnafu)?;
+        ensure!(
+            retained_mount_views_survived_source_exit,
+            InvalidInputSnafu {
+                path: &initial_proc,
+                reason: "a retained mount view depended on its exited source process",
             }
         );
         container.cleanup()?;
@@ -2480,7 +3044,7 @@ impl EffectTestRunner {
         })?;
 
         Ok(RuncEntryRoleRuntimeProbeV1 {
-            schema_version: 16,
+            schema_version: 21,
             runc_version: runc_version.lines().next().unwrap_or_default().to_owned(),
             initial_host_pid: initial_pid,
             prepared_state_before_exec,
@@ -2492,7 +3056,12 @@ impl EffectTestRunner {
             held_runtime_admission_reconciled: true,
             application_exec_transition_event_driven,
             kubernetes_subpath_alias_path_tree_denied: true,
+            newer_kubernetes_subpath_alias_path_tree_denied: true,
+            container_bind_mount_succeeded: true,
             container_bind_alias_path_tree_denied: true,
+            single_wildcard_path_tree_denied: true,
+            recursive_wildcard_path_tree_denied: true,
+            other_role_path_tree_allowed,
             path_tree_control_allowed: true,
             application_admitted_entry_rule_id: active.admitted_entry_rule_id,
             independent_entries,
@@ -2502,6 +3071,7 @@ impl EffectTestRunner {
             live_replacement_preserved_running_application,
             live_replacement_entries_use_new_generation,
             node_owner_restart_preserved_running_application,
+            retained_mount_views_survived_source_exit,
             kernel_upgrade_preserved_map_ids,
             kernel_upgrade_preserved_link_pins,
             kernel_upgrade_replaced_changed_programs,
@@ -2543,23 +3113,13 @@ impl EffectTestRunner {
             policy_custom_resource("direct-entry-roles", "default", spec).context(PolicySnafu)?;
         resource.metadata.uid = Some("30000000-0000-4000-8000-000000000001".to_owned());
         resource.metadata.generation = Some(1);
-        let mut document = lower_kubernetes_policy(
+        let document = lower_kubernetes_policy(
             &resource,
             "10000000-0000-4000-8000-000000000001",
             "10000000-0000-4000-8000-000000000002",
             "10000000-0000-4000-8000-000000000003",
         )
         .context(PolicySnafu)?;
-        document.path_tree_deny_floors.push(PathTreeDenyFloorV1 {
-            schema_version: 1,
-            rule_id: "deny-model-tree".to_owned(),
-            canonical_path: "/home/secret".to_owned(),
-            recursive: true,
-            effect_families: vec![EffectFamilyV1::File],
-            operation_ids: vec!["OPEN_READ".to_owned()],
-            requested_disposition: PolicyDispositionV1::Deny,
-            exception_ids: Vec::new(),
-        });
         ensure!(
             dynamic_loader_paths.iter().all(|dependency| {
                 document
@@ -2622,55 +3182,70 @@ impl EffectTestRunner {
     }
 }
 
-fn prepare_entry_role_root(rootfs: &Path, workload_path: &Path) -> Result<Vec<String>> {
-    let executables = [
-        (Path::new("/bin/sh"), rootfs.join("bin/sh")),
-        (workload_path, rootfs.join("bin/sleep")),
-    ];
+fn prepare_entry_role_root(
+    rootfs: &Path,
+    workload_path: &Path,
+    role_directory: &Path,
+) -> Result<Vec<String>> {
+    let executable = rootfs.join("bin/busybox");
+    fs::copy(workload_path, &executable).context(IoSnafu {
+        path: workload_path,
+    })?;
     let mut dependencies = BTreeSet::new();
-    for (source, destination) in &executables {
-        fs::copy(source, destination).context(IoSnafu { path: source })?;
-        let output = Command::new("ldd").arg(source).output().context(IoSnafu {
-            path: Path::new("ldd"),
-        })?;
-        ensure!(
-            output.status.success(),
-            CommandSnafu {
-                program: "ldd".to_owned(),
-                reason: String::from_utf8_lossy(&output.stderr).trim().to_owned(),
-            }
-        );
-        dependencies.extend(
-            String::from_utf8_lossy(&output.stdout)
-                .lines()
-                .filter_map(ldd_dependency_path),
-        );
-    }
-    ensure!(
-        !dependencies.is_empty(),
-        InvalidInputSnafu {
-            path: workload_path,
-            reason: "the direct runc entry-role workload must use a dynamic loader",
+    for executable in [workload_path, Path::new("/bin/true")] {
+        let output = Command::new("ldd")
+            .arg(executable)
+            .output()
+            .context(IoSnafu {
+                path: Path::new("ldd"),
+            })?;
+        if output.status.success() {
+            dependencies.extend(
+                String::from_utf8_lossy(&output.stdout)
+                    .lines()
+                    .filter_map(ldd_dependency_path),
+            );
+        } else {
+            ensure!(
+                String::from_utf8_lossy(&output.stderr).contains("not a dynamic executable"),
+                CommandSnafu {
+                    program: "ldd".to_owned(),
+                    reason: String::from_utf8_lossy(&output.stderr).trim().to_owned(),
+                }
+            );
         }
-    );
-    for entry in ["cp", "dd", "cat", "grep", "wc"] {
+    }
+    for entry in ["sh", "mount", "sleep", "cp", "dd", "cat", "grep", "wc"] {
         let destination = rootfs.join("bin").join(entry);
-        fs::hard_link(rootfs.join("bin/sh"), &destination)
+        std::os::unix::fs::symlink("busybox", &destination)
             .context(IoSnafu { path: &destination })?;
     }
     IdentityTestRunner::materialize_post_ponr_execfail(&rootfs.join("bin/post-ponr-execfail"))?;
-    let role_directory = rootfs.join("run/mithril-entry-roles");
-    fs::create_dir_all(&role_directory).context(IoSnafu {
-        path: &role_directory,
+    fs::create_dir_all(rootfs.join("run/mithril-entry-roles")).context(IoSnafu { path: rootfs })?;
+    fs::create_dir(role_directory).context(IoSnafu {
+        path: role_directory,
     })?;
-    for role in [
-        "application",
-        "poststart",
-        "prestop",
-        "startup",
-        "readiness",
-        "liveness",
-    ] {
+    fs::create_dir(role_directory.join("poststart-overlap-output")).context(IoSnafu {
+        path: role_directory,
+    })?;
+    fs::create_dir(role_directory.join("poststart-during-mount-reconciliation-output")).context(
+        IoSnafu {
+            path: role_directory,
+        },
+    )?;
+    for name in ["poststart-overlap.fifo", "startup-overlap.fifo"] {
+        let path = role_directory.join(name);
+        run_checked(
+            Command::new("/usr/bin/mkfifo").arg(&path),
+            Path::new("/usr/bin/mkfifo"),
+        )?;
+    }
+    let application_denied = role_directory.join("application.denied");
+    run_checked(
+        Command::new("/usr/bin/mkfifo").arg(&application_denied),
+        Path::new("/usr/bin/mkfifo"),
+    )?;
+    for role in ["poststart", "prestop", "startup", "readiness", "liveness"] {
         let path = role_directory.join(format!("{role}.denied"));
         fs::write(&path, format!("{role}\n")).context(IoSnafu { path: &path })?;
     }
@@ -2727,35 +3302,6 @@ fn command_text(command: &mut Command, program: &Path) -> Result<String> {
         }
     );
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
-}
-
-fn signal_process(host_pid: u32, signal: Signal) -> Result<()> {
-    let raw_pid = i32::try_from(host_pid).map_err(|error| {
-        InvalidInputSnafu {
-            path: PathBuf::from(format!("/proc/{host_pid}")),
-            reason: format!("host PID is invalid: {error}"),
-        }
-        .build()
-    })?;
-    let pid = Pid::from_raw(raw_pid).ok_or_else(|| {
-        InvalidInputSnafu {
-            path: PathBuf::from(format!("/proc/{host_pid}")),
-            reason: "host PID zero cannot identify a task",
-        }
-        .build()
-    })?;
-    let pidfd = pidfd_open(pid, PidfdFlags::empty())
-        .map_err(std::io::Error::from)
-        .context(IoSnafu {
-            path: PathBuf::from(format!("/proc/{host_pid}")),
-        })?;
-    pidfd_send_signal(&pidfd, signal).map_err(|error| {
-        InvalidInputSnafu {
-            path: PathBuf::from(format!("/proc/{host_pid}")),
-            reason: format!("send {signal:?} to held task: {error}"),
-        }
-        .build()
-    })
 }
 
 fn wait_for_path(path: &Path, exists: bool, name: &str) -> Result<()> {
@@ -2841,6 +3387,95 @@ fn recent_effect_summary(observations: &EffectObservationStore, marker: u64) -> 
             )
         })
         .collect()
+}
+
+fn physical_effect_line(event: &MithrilEffectObservation) -> String {
+    format!(
+        "active_role_id={} family={} operation={} reason={} exact_object_key_id={} kernel_result={}",
+        event.active_role_id,
+        event.effect_family,
+        event.operation,
+        event.reason,
+        event.exact_object_key_id,
+        event.kernel_result,
+    )
+}
+
+fn physical_path_tree_effect_line_matches(line: &str, active_role_id: u32) -> bool {
+    let mut observed_role = None;
+    let mut family = None;
+    let mut operation = None;
+    let mut reason = None;
+    let mut exact_object_key_id = None;
+    let mut kernel_result = None;
+    for field in line.split_whitespace() {
+        let Some((name, value)) = field.split_once('=') else {
+            continue;
+        };
+        match name {
+            "active_role_id" => observed_role = value.parse::<u32>().ok(),
+            "family" => family = value.parse::<u32>().ok(),
+            "operation" => operation = value.parse::<u32>().ok(),
+            "reason" => reason = Some(value),
+            "exact_object_key_id" => exact_object_key_id = value.parse::<u64>().ok(),
+            "kernel_result" => kernel_result = value.parse::<i32>().ok(),
+            _ => {}
+        }
+    }
+    observed_role == Some(active_role_id)
+        && family == Some(u32::from(KernelEffectFamilyV1::File as u16))
+        && operation == Some(u32::from(KernelEffectOperationV1::OpenRead as u16))
+        && reason == Some("PATH_TREE_POLICY_DENY")
+        && exact_object_key_id == Some(0)
+        && kernel_result == Some(-13)
+}
+
+fn canonical_mount_route_summary(host: &KernelHost) -> Result<String> {
+    let mut rows = Vec::new();
+    for key_bytes in host
+        .map_keys("canonical_mount_roots")
+        .context(InterceptorSnafu)?
+    {
+        let key = CanonicalMountRootKeyV1::try_read_from_bytes(&key_bytes).map_err(|error| {
+            InvalidInputSnafu {
+                path: Path::new("canonical_mount_roots"),
+                reason: format!("a route key has invalid ABI: {error}"),
+            }
+            .build()
+        })?;
+        let value_bytes = host
+            .lookup_map("canonical_mount_roots", &key_bytes)
+            .context(InterceptorSnafu)?
+            .ok_or_else(|| {
+                InvalidInputSnafu {
+                    path: Path::new("canonical_mount_roots"),
+                    reason: "a listed route has no value".to_owned(),
+                }
+                .build()
+            })?;
+        let value = CanonicalMountRootV1::try_read_from_bytes(&value_bytes).map_err(|error| {
+            InvalidInputSnafu {
+                path: Path::new("canonical_mount_roots"),
+                reason: format!("a route value has invalid ABI: {error}"),
+            }
+            .build()
+        })?;
+        let count = usize::try_from(value.graph_prefix_state_count)
+            .unwrap_or(usize::MAX)
+            .min(value.graph_prefix_state_ids.len());
+        rows.push(format!(
+            "generation={} namespace={} binding={:?} device={} inode={} selected_mount={} states={:?}",
+            key.topology_generation,
+            key.mount_namespace_inode,
+            key.binding_id,
+            key.filesystem_device,
+            key.root_inode,
+            value.selected_mount_id_unique,
+            &value.graph_prefix_state_ids[..count],
+        ));
+    }
+    rows.sort();
+    Ok(format!("{}\n", rows.join("\n")))
 }
 
 fn wait_for_pid_file(path: &Path, child: &mut Child) -> Result<Option<u32>> {

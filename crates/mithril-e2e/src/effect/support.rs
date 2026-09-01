@@ -646,10 +646,6 @@ impl ExternalMountNamespace {
         self.run(["mkdir", "-p", "--"], [path])
     }
 
-    pub(super) fn create_file(&self, path: &Path) -> Result<()> {
-        self.run(["touch", "--"], [path])
-    }
-
     pub(super) fn read_file(&self, path: &Path) -> Result<Vec<u8>> {
         Ok(self.output(["cat", "--"], [path])?.stdout)
     }

@@ -257,6 +257,85 @@
                     "items": {
                       "maxProperties": 4096,
                       "properties": {
+                        "capabilities": {
+                          "items": {
+                            "maxProperties": 4096,
+                            "properties": {
+                              "action": {
+                                "enum": [
+                                  "Allow",
+                                  "Deny"
+                                ],
+                                "maxLength": 4096,
+                                "type": "string"
+                              },
+                              "capabilities": {
+                                "items": {
+                                  "enum": [
+                                    "Chown",
+                                    "DacOverride",
+                                    "DacReadSearch",
+                                    "Fowner",
+                                    "Fsetid",
+                                    "Kill",
+                                    "Setgid",
+                                    "Setuid",
+                                    "Setpcap",
+                                    "LinuxImmutable",
+                                    "NetBindService",
+                                    "NetBroadcast",
+                                    "NetAdmin",
+                                    "NetRaw",
+                                    "IpcLock",
+                                    "IpcOwner",
+                                    "SysModule",
+                                    "SysRawio",
+                                    "SysChroot",
+                                    "SysPtrace",
+                                    "SysPacct",
+                                    "SysAdmin",
+                                    "SysBoot",
+                                    "SysNice",
+                                    "SysResource",
+                                    "SysTime",
+                                    "SysTtyConfig",
+                                    "Mknod",
+                                    "Lease",
+                                    "AuditWrite",
+                                    "AuditControl",
+                                    "Setfcap",
+                                    "MacOverride",
+                                    "MacAdmin",
+                                    "Syslog",
+                                    "WakeAlarm",
+                                    "BlockSuspend",
+                                    "AuditRead",
+                                    "Perfmon",
+                                    "Bpf",
+                                    "CheckpointRestore"
+                                  ],
+                                  "maxLength": 4096,
+                                  "type": "string"
+                                },
+                                "maxItems": 41,
+                                "minItems": 1,
+                                "type": "array"
+                              },
+                              "name": {
+                                "maxLength": 4096,
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "action",
+                              "capabilities",
+                              "name"
+                            ],
+                            "type": "object"
+                          },
+                          "maxItems": 1024,
+                          "type": "array"
+                        },
                         "execution": {
                           "items": {
                             "maxProperties": 4096,
@@ -510,6 +589,51 @@
                             "socketControls"
                           ],
                           "type": "object"
+                        },
+                        "pathTreeDenials": {
+                          "items": {
+                            "maxProperties": 4096,
+                            "properties": {
+                              "name": {
+                                "maxLength": 4096,
+                                "type": "string"
+                              },
+                              "operations": {
+                                "items": {
+                                  "enum": [
+                                    "OpenRead",
+                                    "OpenWrite",
+                                    "Read",
+                                    "Write",
+                                    "MmapRead",
+                                    "MmapWrite",
+                                    "Create",
+                                    "SetAttributes",
+                                    "Unlink",
+                                    "Link",
+                                    "Rename"
+                                  ],
+                                  "maxLength": 4096,
+                                  "type": "string"
+                                },
+                                "maxItems": 16,
+                                "minItems": 1,
+                                "type": "array"
+                              },
+                              "path": {
+                                "maxLength": 4096,
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "name",
+                              "operations",
+                              "path"
+                            ],
+                            "type": "object"
+                          },
+                          "maxItems": 1024,
+                          "type": "array"
                         },
                         "processControl": {
                           "items": {

@@ -1,8 +1,5 @@
 use super::super::compiler::CompiledOperationV1;
-use super::super::{
-    path::canonical_path_components, source::*, source_proof::ProofQualityPredicateV1,
-    source_response::*,
-};
+use super::super::{source::*, source_proof::ProofQualityPredicateV1, source_response::*};
 use super::value::PolicyValue;
 use super::{Validate, ValidationIssue, ValidationResult};
 
@@ -233,17 +230,15 @@ impl Validate for FindingSpecV1 {
 impl Validate for PathTreeDenyFloorV1 {
     fn validate(&self) -> ValidationResult {
         PolicyValue::LocalId(&self.rule_id).validate()?;
-        canonical_path_components("<validation>", &self.canonical_path).map_err(|error| {
-            ValidationIssue {
-                code: "CFG_PATH_TREE_DENY",
-                reason: error.to_string(),
-            }
+        PolicyValue::LocalId(&self.role_id).validate()?;
+        PathSelectorTargetV1::Path {
+            path_pattern: self.path.clone(),
+        }
+        .pattern_components("<validation>")
+        .map_err(|error| ValidationIssue {
+            code: "CFG_PATH_TREE_DENY",
+            reason: error.to_string(),
         })?;
-        let shape = self.schema_version == 1
-            && self.recursive
-            && self.requested_disposition == PolicyDispositionV1::Deny
-            && self.exception_ids.is_empty()
-            && self.effect_families == [EffectFamilyV1::File];
         let operations = !self.operation_ids.is_empty()
             && ordered_unique(&self.operation_ids)
             && self
@@ -251,10 +246,10 @@ impl Validate for PathTreeDenyFloorV1 {
                 .iter()
                 .all(|operation| EffectFamilyV1::File.accepts(operation));
         require!(
-            shape && operations,
+            operations,
             "CFG_PATH_TREE_DENY",
             format!(
-                "path-tree rule `{}` is not an exact recursive FILE DENY",
+                "path-tree rule `{}` is not a role-scoped recursive file denial",
                 self.rule_id
             )
         );

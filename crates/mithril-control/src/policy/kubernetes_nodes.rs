@@ -673,7 +673,8 @@ mod tests {
     }
 
     #[test]
-    fn decommission_exec_requires_exact_quarantine_readback_and_completion_cleans_projection() {
+    fn decommission_exec_requires_exact_quarantine_readback_and_completion_cleans_projection(
+    ) -> std::result::Result<(), Box<dyn std::error::Error>> {
         let session = KubernetesNodeSessionV1 {
             node_id: "enrolled-node-a".to_owned(),
             kubernetes_node_name: "node-a".to_owned(),
@@ -700,7 +701,11 @@ mod tests {
                 session.label_epoch.to_string(),
             ),
         ]));
-        quarantined.spec.as_mut().unwrap().taints = Some(vec![Taint {
+        let spec = quarantined
+            .spec
+            .as_mut()
+            .ok_or_else(|| std::io::Error::other("the node fixture must contain a spec"))?;
+        spec.taints = Some(vec![Taint {
             effect: "NoSchedule".to_owned(),
             key: KUBERNETES_NOT_READY_TAINT.to_owned(),
             time_added: None,
@@ -711,7 +716,11 @@ mod tests {
         let mut wrong_boot = session.clone();
         wrong_boot.node_boot_id = vec![8; 16];
         assert!(!node_has_decommission_quarantine(&quarantined, &wrong_boot));
-        quarantined.spec.as_mut().unwrap().taints = None;
+        let spec = quarantined
+            .spec
+            .as_mut()
+            .ok_or_else(|| std::io::Error::other("the node fixture must contain a spec"))?;
+        spec.taints = None;
         assert!(!node_has_decommission_quarantine(&quarantined, &session));
 
         let cleanup = node_decommission_cleanup_patch(&quarantined);
@@ -724,6 +733,7 @@ mod tests {
         ] {
             assert_eq!(cleanup.pointer(path), Some(&serde_json::Value::Null));
         }
+        Ok(())
     }
 
     #[test]
