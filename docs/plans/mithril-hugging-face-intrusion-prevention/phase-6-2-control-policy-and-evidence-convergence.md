@@ -775,6 +775,13 @@ binding, profile generation, topology generation, mount namespace, filesystem
 device, root inode, and compiled path prefix. This record tells BPF which path
 to use. It does not use the mount's creation order as policy authority.
 
+The path graph is immutable generation content before this snapshot starts.
+The snapshot stage publishes only dynamic, binding-scoped inode routes that
+reference existing graph states. It does not rebuild the graph, change the
+generation digest, or activate a second policy generation. The provisional
+entry-measurement pass and the completed exact-object pass use the same policy
+generation. A new generation is reserved only for a new signed candidate.
+
 For an initial Kubernetes submount, Node follows the source dentry ancestry
 and records the inherited source path. For example, if the source root is
 mounted at `/home/secret` and `source/models` is also mounted at

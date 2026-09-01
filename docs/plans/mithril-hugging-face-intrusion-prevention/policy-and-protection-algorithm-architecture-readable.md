@@ -2783,6 +2783,14 @@ and graph-matching approach. The presentation is design evidence, not public
 implementation source; its slides 16-21 are bound here to the supplied PDF SHA-256
 `81dca098d1ed96e19fd89b48b78be63c504f9f52f9f25b662e4a94c14a5209f6`.
 
+Control compiles the component graph once into immutable generation rows.
+When Node holds the initial container PID, it opens existing source dentries
+through the held container root and publishes dynamic inode routes for that
+binding. Each route references existing graph states. This stage does not add
+graph states, change the generation digest, or activate another generation.
+The provisional entry-measurement pass and the completed exact-object pass
+remain two activation steps inside one policy generation.
+
 | Design part | Meta presentation contributes | Mithril retains or adds | Combined result |
 | --- | --- | --- | --- |
 | Canonical path reconstruction | Enumerate one root mount namespace, index `mount-root dentry -> mounts`, select the oldest (`lowest mnt_id_unique`) mount for an unresolved dentry, then cross through that selected mount's parent mountpoint | A verified `MountSecurityViewV1` supplies Node routes for known mount roots. A route is keyed by the binding, profile generation, topology generation, mount namespace, filesystem device, and root inode. It stores the compiled graph prefix. | BPF uses a known route without mount-age selection. The oldest unique mount remains the fallback for an unknown route and prevents a later bind alias from selecting its target spelling. |
@@ -2795,6 +2803,7 @@ Mithril's compiler and hot path therefore use this single bounded algorithm:
 1. Compile the finite set of path patterns, wildcard components, and terminal
    dispositions into one bounded component-state graph. It is not a sequence
    of unbounded string comparisons or a whole-path hash table.
+   Container creation cannot modify this graph or its generation digest.
 2. From the target dentry, extract a bounded leaf-to-root vector of component
    byte views. The Meta design budgets up to 255 components of up to 255 bytes;
    Mithril's supported platform profile fixes and measures its own lower or
@@ -2856,6 +2865,11 @@ state zero and provides the same result for paths that do not cross another
 mount. A future child uses its existing ancestor route. Node also records a
 continuation at each initial Kubernetes submount that crosses into another
 source tree.
+
+Node publishes these routes during the held-initial-PID inode stage. Route
+rows are dynamic state owned by the container binding. They do not form a new
+policy candidate and do not require a second generation. A policy replacement
+uses a new generation only when its signed candidate changes.
 
 This rule protects a location. It does not make pathname spelling a positive
 identity. A separate exact-object rule is still required to allow a file, to

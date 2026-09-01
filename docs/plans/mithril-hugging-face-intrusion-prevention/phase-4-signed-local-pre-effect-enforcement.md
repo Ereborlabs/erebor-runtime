@@ -66,6 +66,12 @@ the source dentry ancestry, use the oldest unique mount as the canonical
 fallback. Treat all mounts in the initial Kubernetes container snapshot as one
 baseline. Their creation order does not select policy authority.
 
+Compile the path graph once as immutable generation content. The held-initial-
+PID inode stage publishes route rows as dynamic binding state in that same
+generation. Route publication must not add graph states, change the generation
+digest, or allocate a second generation. Completion of provisional entry and
+exact-object measurement also stays in the same generation.
+
 ### D4.4 — IPC and process-control enforcement
 
 Enforce directional Unix/local-channel relationships and process-control
@@ -262,7 +268,10 @@ submount order case. It does not change the earlier physical result.
 
 ```text
 Node holds the authenticated initial container mount snapshot
-  -> Node records one path-graph prefix for each known mount-root source
+  -> the policy generation already contains the complete immutable path graph
+  -> Node measures existing source dentries through the held container root
+  -> Node publishes dynamic inode routes that reference existing graph states
+  -> the active policy generation and its digest do not change
   -> a Kubernetes submount inherits the known source path
   -> Kubernetes mount creation order does not select the route
 
@@ -284,6 +293,11 @@ same result when the path does not cross another mount. A future child uses
 the route on its known ancestor. If more than one known path applies to one
 source root, Node retains all applicable denial continuations and any denial
 wins.
+
+This route publication is part of container binding, not policy compilation.
+It does not require a second policy generation. A later signed policy
+replacement can use a new generation, but container creation cannot use
+generation replacement to publish inode routes.
 
 The paired lightweight and Kubernetes tests must use both Kubernetes mount
 orders. They must also complete a later in-container bind mount. Both source

@@ -55,6 +55,13 @@ route without mount-age selection. If no route exists on the source dentry
 ancestry, BPF uses the oldest unique mount as the canonical fallback. A dirty,
 missing, or unresolved route and fallback cannot allow an effect.
 
+Route discovery does not create or change a policy generation. Control
+compiles the path graph before container admission. When Node holds the
+initial container PID, it uses the existing inode-measurement stage to publish
+dynamic, binding-scoped routes that reference that graph. It does not rewrite
+the graph, change its digest, or advance the active-generation handle. A new
+generation is necessary only for a new signed policy candidate.
+
 ## Goal And Release Boundary
 
 Build Mithril as an owned Linux/Kubernetes prevention, evidence, causality,
