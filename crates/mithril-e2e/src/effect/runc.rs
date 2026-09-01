@@ -74,6 +74,7 @@ pub struct RuncEntryRoleRuntimeProbeV1 {
     pub live_replacement_preserved_running_application: bool,
     pub live_replacement_entries_use_new_generation: bool,
     pub node_owner_restart_preserved_running_application: bool,
+    pub prestop_retained_during_runtime_inventory_omission: bool,
     pub retained_mount_views_survived_source_exit: bool,
     pub kernel_upgrade_preserved_map_ids: bool,
     pub kernel_upgrade_preserved_link_pins: bool,
@@ -2504,6 +2505,7 @@ impl EffectTestRunner {
         );
         let mut independent_entries = Vec::new();
         let mut other_role_path_tree_allowed = false;
+        let mut prestop_retained_during_runtime_inventory_omission = false;
         let application_control_host = role_directory.join("application.denied");
         for (name, declaration_name, executable) in [
             ("poststart", "poststart", "/bin/cp"),
@@ -2513,6 +2515,20 @@ impl EffectTestRunner {
             ("readiness", "readiness", "/bin/grep"),
             ("liveness", "liveness", "/bin/wc"),
         ] {
+            if name == "prestop" {
+                let runtime_inventory_absence_proves_retirement = restarted_bindings
+                    .runtime_inventory_absence_proves_retirement_for_test(
+                        &replacement_binding.binding_id,
+                    )
+                    .context(NodeSnafu)?;
+                if runtime_inventory_absence_proves_retirement {
+                    restarted_bindings
+                        .retire_binding_id_for_test(&host, &replacement_binding.binding_id)
+                        .context(NodeSnafu)?;
+                } else {
+                    prestop_retained_during_runtime_inventory_omission = true;
+                }
+            }
             let entry_marker = observations.cursor();
             let entry_mount_sequence = observations.mount_change_sequence();
             let pid_path = fixture_root.join(format!("{name}.pid"));
@@ -3044,7 +3060,7 @@ impl EffectTestRunner {
         })?;
 
         Ok(RuncEntryRoleRuntimeProbeV1 {
-            schema_version: 21,
+            schema_version: 22,
             runc_version: runc_version.lines().next().unwrap_or_default().to_owned(),
             initial_host_pid: initial_pid,
             prepared_state_before_exec,
@@ -3071,6 +3087,7 @@ impl EffectTestRunner {
             live_replacement_preserved_running_application,
             live_replacement_entries_use_new_generation,
             node_owner_restart_preserved_running_application,
+            prestop_retained_during_runtime_inventory_omission,
             retained_mount_views_survived_source_exit,
             kernel_upgrade_preserved_map_ids,
             kernel_upgrade_preserved_link_pins,

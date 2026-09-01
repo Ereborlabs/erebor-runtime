@@ -3,7 +3,7 @@ use std::fs::{self, File};
 use std::mem::size_of;
 use std::os::fd::AsRawFd as _;
 use std::os::unix::fs::MetadataExt as _;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use erebor_interceptor::{KernelHost, MapInsertResult};
@@ -258,6 +258,46 @@ impl PublishedBinding {
             }),
         }
     }
+
+    fn runtime_inventory_absence_proves_retirement(&self) -> Result<bool> {
+        if !self.live_runtime_cgroup_exists()? {
+            return Ok(true);
+        }
+        Ok(!live_cgroup_population(&self.root_cgroup_path)?.unwrap_or_default())
+    }
+}
+
+fn live_cgroup_population(path: &Path) -> Result<Option<bool>> {
+    let events_path = path.join("cgroup.events");
+    let events = match fs::read_to_string(&events_path) {
+        Ok(events) => events,
+        Err(source) if source.kind() == std::io::ErrorKind::NotFound => {
+            return match fs::metadata(path) {
+                Ok(_) => Err(source).context(IoSnafu { path: events_path }),
+                Err(source) if source.kind() == std::io::ErrorKind::NotFound => Ok(None),
+                Err(source) => Err(source).context(IoSnafu {
+                    path: path.to_path_buf(),
+                }),
+            };
+        }
+        Err(source) => return Err(source).context(IoSnafu { path: events_path }),
+    };
+    let populated = events
+        .lines()
+        .filter_map(|line| line.split_once(' '))
+        .filter(|(name, _value)| *name == "populated")
+        .map(|(_name, value)| value)
+        .collect::<Vec<_>>();
+    ensure!(
+        populated.len() == 1 && matches!(populated[0], "0" | "1"),
+        IdentityStateSnafu {
+            reason: format!(
+                "live cgroup `{}` has invalid population state",
+                path.display()
+            ),
+        }
+    );
+    Ok(Some(populated[0] == "1"))
 }
 
 pub struct WorkloadBindingOwner {
@@ -543,6 +583,15 @@ impl WorkloadBindingOwner {
             self.retire_owned_root(host, root)?;
         }
         Ok(())
+    }
+
+    #[cfg(feature = "test-support")]
+    pub fn retire_binding_id_for_test(
+        &mut self,
+        host: &KernelHost,
+        binding_id: &str,
+    ) -> Result<()> {
+        self.retire_binding_id(host, binding_id)
     }
 
     pub(crate) fn retire_profile_bindings(
@@ -1730,7 +1779,7 @@ impl WorkloadBindingOwner {
             .into_iter()
             .map(|identity| (identity.full_container_id.clone(), identity))
             .collect();
-        let mut retired_binding_ids = Self::retired_configured_binding_ids(configured, &observed);
+        let mut retired_binding_ids = self.retired_configured_binding_ids(configured, &observed)?;
         let plan = self.plan_runtime_reconciliation(observed)?;
         retired_binding_ids.extend(plan.retired_binding_ids.iter().cloned());
         for root_id in plan.missing_root_ids {
@@ -1795,7 +1844,9 @@ impl WorkloadBindingOwner {
                 continue;
             };
             let Some(current) = observed.remove(&binding.spec.container_id) else {
-                plan.retire_binding(root_id, binding);
+                if binding.runtime_inventory_absence_proves_retirement()? {
+                    plan.retire_binding(root_id, binding);
+                }
                 continue;
             };
             if !binding.live_runtime_cgroup_exists()? {
@@ -1829,19 +1880,51 @@ impl WorkloadBindingOwner {
         Ok(plan)
     }
 
+    #[cfg(feature = "test-support")]
+    pub fn runtime_inventory_absence_proves_retirement_for_test(
+        &self,
+        binding_id: &str,
+    ) -> Result<bool> {
+        let binding = self
+            .bindings
+            .values()
+            .find(|binding| binding.spec.binding_id == binding_id)
+            .context(IdentityStateSnafu {
+                reason: "runtime absence probe has no matching binding",
+            })?;
+        binding.runtime_inventory_absence_proves_retirement()
+    }
+
     fn retired_configured_binding_ids(
+        &self,
         configured: &[WorkloadBindingConfig],
         observed: &BTreeMap<String, RuntimeContainerIdentity>,
-    ) -> BTreeSet<String> {
-        configured
-            .iter()
-            .filter(|binding| {
-                binding.scheduled_binding_authority_id.is_some()
-                    && binding.root_cgroup_path.is_some()
-                    && !observed.contains_key(&binding.container_id)
-            })
-            .map(|binding| binding.binding_id.clone())
-            .collect()
+    ) -> Result<BTreeSet<String>> {
+        let mut retired = BTreeSet::new();
+        for binding in configured.iter().filter(|binding| {
+            binding.scheduled_binding_authority_id.is_some()
+                && binding.root_cgroup_path.is_some()
+                && !observed.contains_key(&binding.container_id)
+        }) {
+            let absence_proven = if let Some(published) = self
+                .bindings
+                .values()
+                .find(|published| published.spec.binding_id == binding.binding_id)
+            {
+                published.runtime_inventory_absence_proves_retirement()?
+            } else {
+                !live_cgroup_population(binding.root_cgroup_path.as_deref().context(
+                    IdentityStateSnafu {
+                        reason: "resolved runtime binding lost its cgroup path",
+                    },
+                )?)?
+                .unwrap_or_default()
+            };
+            if absence_proven {
+                retired.insert(binding.binding_id.clone());
+            }
+        }
+        Ok(retired)
     }
 
     #[must_use]
@@ -2686,6 +2769,8 @@ mod tests {
         let root = temporary.path().join("workload");
         fs::create_dir(&root).context(IoSnafu { path: &root })?;
         fs::write(root.join("cgroup.procs"), "").context(IoSnafu { path: &root })?;
+        fs::write(root.join("cgroup.events"), "populated 1\nfrozen 0\n")
+            .context(IoSnafu { path: &root })?;
         let mut owner = WorkloadBindingOwner::at(temporary.path(), Id128V1::new(1, 2), 3)?;
         let mut configured = spec(&root);
         configured.scheduled_binding_authority_id =
@@ -2743,7 +2828,15 @@ mod tests {
             .runtime_identity = Some(running.clone());
         assert_eq!(owner.exact_object_binding_targets().count(), 1);
 
+        let plan = owner.plan_runtime_reconciliation(BTreeMap::new())?;
+        assert!(plan.missing_root_ids.is_empty());
+        assert!(plan.retired_binding_ids.is_empty());
+        assert!(owner
+            .retired_configured_binding_ids(&[configured.clone()], &BTreeMap::new())?
+            .is_empty());
+
         fs::remove_file(root.join("cgroup.procs")).context(IoSnafu { path: &root })?;
+        fs::remove_file(root.join("cgroup.events")).context(IoSnafu { path: &root })?;
         fs::remove_dir(&root).context(IoSnafu { path: &root })?;
         let stale_observed = BTreeMap::from([(running.full_container_id.clone(), running.clone())]);
         let plan = owner.plan_runtime_reconciliation(stale_observed)?;
@@ -2761,10 +2854,7 @@ mod tests {
         assert!(plan.updates.is_empty());
 
         assert_eq!(
-            WorkloadBindingOwner::retired_configured_binding_ids(
-                &[configured.clone()],
-                &BTreeMap::new(),
-            ),
+            owner.retired_configured_binding_ids(&[configured.clone()], &BTreeMap::new(),)?,
             BTreeSet::from([configured.binding_id])
         );
         Ok(())
