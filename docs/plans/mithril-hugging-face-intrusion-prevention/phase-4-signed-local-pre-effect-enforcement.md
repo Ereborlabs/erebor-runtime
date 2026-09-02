@@ -114,8 +114,13 @@ claim. Administrative approval is the first workflow that creates one. A later
 approved agent request for a tool such as Bash must create the same slot and
 must not add another BPF admission mechanism.
 At syscall entry, BPF can record a bounded argv candidate from mutable user
-memory. This candidate is not authority. At the deny-capable
-`bprm_check_security` hook, BPF must match the candidate, resolved executable,
+memory. This candidate is not authority. At the exec-file open that Linux uses
+to build `linux_binprm`, BPF can provisionally allow only the same task when
+its `ARGUMENTS_MATCHED` candidate, armed slot, resolved executable, restricted
+external root, live binding, generation, and deadline all match. This preflight
+does not change the slot, consume an exception, install a role, or allow a file
+operation. At the deny-capable `bprm_check_security` hook, BPF must match the
+candidate, resolved executable,
 live binding, generation, deadline, and restricted external root before it
 atomically changes the slot from `ARMED` to `RESERVED`. Reservation grants no
 role. If the selected compiled action consumes a bounded exception, BPF also
@@ -132,11 +137,12 @@ critical tamper observation. The node persists and reports that observation.
 It does not make the match decision.
 
 Declared PostStart, PreStop, startup, readiness, and liveness probe entries must
-use the same provisional capture, pre-PONR reservation, kernel-owned argv
-verification, successful-exec confirmation, fail-closed response, and tamper
-evidence. A declared probe remains reusable, but each probe invocation creates
-a new task-bound execution approval slot from that declaration. The slot is
-consumed once; the probe declaration is not consumed.
+use the same provisional capture, exact exec-file preflight, pre-PONR
+reservation, kernel-owned argv verification, successful-exec confirmation,
+fail-closed response, and tamper evidence. A declared probe remains reusable,
+but each probe invocation creates a new task-bound execution approval slot from
+that declaration. The slot is consumed once; the probe declaration is not
+consumed.
 `claim_slot_id` remains optional outside that path. Mithril Control's
 `AdministrativeApprovalOwner` owns authenticated human approval, the explicit
 next-matching-root risk acceptance, Kubernetes admission credential, and

@@ -234,6 +234,7 @@ Scheduler submits the Pod binding
   -> an exec that matches exactly one declared additional entry installs only that entry's role
   -> the administrative workflow lowers its approval into one generic execution approval slot
   -> syscall-entry BPF records an untrusted bounded argv candidate for that slot
+  -> the exact matching task can pass only the exec-file open that builds its bprm; the slot stays armed and grants no role
   -> at the deny-capable bprm hook, BPF matches the candidate and resolved executable and atomically reserves the slot
   -> the reservation consumes any selected bounded exception under the claim-slot receipt but grants no role
   -> the normal exec-chain policy remains active
@@ -1182,7 +1183,8 @@ created in this phase.
   `kubectl exec`, direct `crictl exec`, cgroup-entering task, failed exec, and
   ambiguous entry match must remain fail-closed.
 - Approved administrative exec tests must prove that syscall-entry argv is
-  provisional, that the deny-capable hook reserves one slot without granting a
+  provisional, that an exact exec-file preflight grants no role and leaves the
+  slot armed, that the deny-capable hook reserves one slot without granting a
   role, that the reservation consumes any selected bounded exception under the
   claim-slot receipt, and that both late hooks match complete kernel-owned argv.
   They must prove final one-use slot consumption, installation of only
@@ -1192,9 +1194,10 @@ created in this phase.
   role, consume or corrupt the reservation, queue `SIGKILL` before user mode,
   and emit critical tamper evidence.
 - PostStart, PreStop, startup, readiness, and liveness probe tests must use the
-  same provisional capture, reservation, copied-argv verification,
-  successful-image verification, and tamper response. Each invocation must
-  have a distinct task-bound transaction. The declared probe remains reusable.
+  same provisional capture, exact exec-file preflight, reservation, copied-argv
+  verification, successful-image verification, and tamper response. Each
+  invocation must have a distinct task-bound transaction. The declared probe
+  remains reusable.
 - Decommission tests must prove signature and target validation, durable
   one-use nonce consumption, live-binding refusal, restart recovery, owned-path
   cleanup, containerd restart and configuration readback, BPF absence readback,

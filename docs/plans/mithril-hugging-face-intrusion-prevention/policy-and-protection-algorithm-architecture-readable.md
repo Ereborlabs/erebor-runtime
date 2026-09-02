@@ -845,17 +845,21 @@ administrator entered, including a command such as `bash`. Before approval,
 the node resolves that command in the target container's mount view, working
 directory, and effective `PATH`; the browser displays the resolved path and
 executable identity. Syscall-entry BPF records a bounded argv candidate from
-mutable user memory. This candidate is not authority. At the deny-capable
-`bprm_check_security` hook, BPF matches the candidate and exact executable, then
-atomically changes the slot from `ARMED` to `RESERVED`. If the compiled action
-selects a bounded exception, this deny-capable path atomically consumes that
-exception under the slot's `claim_slot_id`. The task stays in its restricted
-role. At `security_bprm_committing_creds`, BPF compares the complete copied
-kernel-owned argv with the reservation. At `sched_process_exec`, BPF compares
-the successful process image argv again. Only an exact final match can consume
-the slot and install the administrative role. The total argv limit is 4096
-bytes. Missing, truncated, changed, or over-limit input does not match. There
-is no argv or executable-content hash.
+mutable user memory. This candidate is not authority. At the exec-file open
+that builds `linux_binprm`, BPF can provisionally allow only the same task when
+the candidate, armed slot, exact executable, restricted external root, binding,
+generation, and deadline all match. The slot stays `ARMED` and this preflight
+grants no role, exception use, or file permission. At the deny-capable
+`bprm_check_security` hook, BPF matches the same facts, then atomically changes
+the slot from `ARMED` to `RESERVED`. If the compiled action selects a bounded
+exception, this deny-capable path atomically consumes that exception under the
+slot's `claim_slot_id`. The task stays in its restricted role. At
+`security_bprm_committing_creds`, BPF compares the complete copied kernel-owned
+argv with the reservation. At `sched_process_exec`, BPF compares the successful
+process image argv again. Only an exact final match can consume the slot and
+install the administrative role. The total argv limit is 4096 bytes. Missing,
+truncated, changed, or over-limit input does not match. There is no argv or
+executable-content hash.
 
 A late mismatch or read failure occurs after the exec point of no return. BPF
 cannot roll back that exec. It must leave the task without the approved role,
@@ -875,6 +879,7 @@ non-external or application task:
   keep existing lineage; never inspect the slot
 
 restricted external root with exact live match:
+  pass only its exact exec-file open; keep ARMED and grant no role
   ARMED -> RESERVED at the deny-capable bprm hook
   consume any selected bounded exception under the claim-slot receipt
   keep the restricted role while exec is pending
@@ -935,12 +940,13 @@ Without explicit cluster and administrator acceptance, the stronger role is
 unavailable.
 
 PostStart, PreStop, startup, readiness, and liveness probe entries use the same
-four-stage transaction. Their syscall-entry argv is provisional. Their
-deny-capable `bprm` step reserves one task-bound entry attempt. The two late
-hooks verify copied and installed argv before the probe role activates. A late
-mismatch uses the same fail-closed response and critical evidence. A declared
-probe is reusable, so the successful transaction consumes only its per-task
-attempt. It does not consume the reusable declaration.
+transaction. Their syscall-entry argv is provisional. Their exact exec-file
+preflight grants no role. Their deny-capable `bprm` step reserves one task-bound
+entry attempt. The two late hooks verify copied and installed argv before the
+probe role activates. A late mismatch uses the same fail-closed response and
+critical evidence. A declared probe is reusable, so the successful transaction
+consumes only its per-task attempt. It does not consume the reusable
+declaration.
 
 ##### Node/runtime bypass
 
@@ -7130,6 +7136,7 @@ webhook checks approval and PodExecOptions
   -> node installs and reads back ARMED slot
   -> webhook returns allowed
   -> syscall entry records an untrusted bounded argv candidate
+  -> exact exec-file preflight passes only the kernel open that builds bprm; slot stays ARMED
   -> at the deny-capable bprm hook, BPF matches binding + candidate + executable + generation + deadline
   -> atomic ARMED -> RESERVED; approved role stays pending and inactive
   -> consume any selected bounded exception under the claim-slot receipt
@@ -7144,7 +7151,8 @@ Declared PostStart, PreStop, startup, readiness, and liveness probes use this
 same transaction. A reusable probe declaration authorizes the node to create a
 fresh task-bound execution approval slot for each invocation. Successful exec
 consumes that slot once but does not consume the declaration. The same slot
-shape, argv checks, late tamper response, and role activation apply.
+shape, exec-file preflight, argv checks, late tamper response, and role
+activation apply.
 
 If exec or the role switch fails, the task gets no approved role and the slot
 stays consumed or corrupt. It never returns to `ARMED`. A late mismatch or read
