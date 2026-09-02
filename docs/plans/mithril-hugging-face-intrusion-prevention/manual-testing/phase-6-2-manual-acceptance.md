@@ -319,7 +319,7 @@ run.
 | Prepared container | Only the exact binding and initial runtime entry use the prepared state before one deadline. Runtime-created objects receive no authority. The first policy-approved application exec activates normal workload enforcement. |
 | Independent entry roles | The application, every declared lifecycle or exec-probe entry, and the approved administrative entry install only their referenced roles. No role inherits or unions the application role. |
 | External entry | An unmatched ordinary `kubectl exec`, direct `crictl exec`, or cgroup-entering task keeps the external or fail-closed role and denies before effect. |
-| Administrative entry | Only the signed one-use administrative slot installs the administrative role. An applicable exception can authorize only its exact compiled Deny. |
+| Administrative entry | The signed administrative workflow creates one generic execution approval slot. Only its exact successful exec installs the administrative role. An applicable exception can authorize only its exact compiled Deny. |
 | Gate failure | The runtime reports start failure at the bounded hook deadline and no application marker runs |
 | Helm deletion | The containerd default-runtime gate and pinned BPF state remain on both nodes; the exact hostile process does not write its marker |
 | Mithril recovery | Only the exact Mithril recovery command and security-sensitive OCI shape start without the node socket; a changed field rejects; no executable digest grants or denies recovery |

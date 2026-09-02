@@ -2084,8 +2084,8 @@ loader has the file descriptor; it does not invent map contents.
 
 | Map(s) | Filled by | Read or changed by | Plain meaning |
 | --- | --- | --- | --- |
-| `approved_exec_slots`, `approved_exec_arguments` | The node administrative owner calls `AuthorizationProofOwner` after a typed Control arm request | Exec path consumes one matching slot; exec path reads bounded argument bytes | One exact next-match administrative authority. It is not a command-string allow list. |
-| `pending_administrative_matches` | Exec entry path | BPRM/exec completion path | Short-lived bridge from verified syscall argv to the BPRM transaction. |
+| `execution_approval_slots`, `execution_approval_arguments` | An authorized node workflow calls `AuthorizationProofOwner`; administrative exec is the first issuer | Exec path reserves and consumes one matching slot; exec path reads bounded argument bytes | One exact next-match execution authority. It is not a command-string allow list. |
+| `pending_execution_approvals` | Exec entry path | BPRM/exec completion path | Short-lived bridge from provisional syscall argv through kernel-owned argv verification and successful exec. |
 
 ### 4. Signed policy, exact file, and mount state
 
@@ -2147,9 +2147,9 @@ the active handle and immutable generation keys.
 | `pending_execs` | `u64 task_cookie` → `PendingExecV1` | None | Exec syscall and BPRM transaction | Exec and effect families | Pin-root lifetime; one in-flight exec transaction |
 | `image_provenance` | `Id128V1` → `ImageProvenanceV1` | None | Root and exec commit/rollback | Exec, effect, exit, inspector | Pin-root lifetime; execution reference lifetime |
 | `process_execution_instances` | `Id128V1` → `ProcessExecutionInstanceV1` | None | Root and exec commit/rollback | Exec, effect, exit, inspector | Pin-root lifetime; execution reference lifetime |
-| `approved_exec_slots` | `ApprovedExecSlotKeyV1` → `ApprovedExecSlotV1` | `AuthorizationProofOwner` | Exec path changes or consumes a matching slot | Authorization owner and exec path | Pin-root lifetime; one approved slot lifetime |
-| `approved_exec_arguments` | `ApprovedExecArgumentKeyV1` → `u8` | `AuthorizationProofOwner` | None | Authorization owner and exec argument matcher | Pin-root lifetime; removed with its slot |
-| `pending_administrative_matches` | `u64 task_cookie` → `PendingAdministrativeMatchV1` | None | Exec entry, BPRM, completion, and exit | Exec path | Pin-root lifetime; one in-flight administrative match |
+| `execution_approval_slots` | `ExecutionApprovalSlotKeyV1` → `ExecutionApprovalSlotV1` | `AuthorizationProofOwner` | Exec path changes or consumes a matching slot | Authorization owner and exec path | Pin-root lifetime; one execution approval slot lifetime |
+| `execution_approval_arguments` | `ExecutionApprovalArgumentKeyV1` → `u8` | `AuthorizationProofOwner` | None | Authorization owner and exec argument matcher | Pin-root lifetime; removed with its slot |
+| `pending_execution_approvals` | `u64 task_cookie` → `PendingExecutionApprovalV1` | None | Exec entry, BPRM, committing-creds, completion, and exit | Exec path | Pin-root lifetime; one in-flight execution approval |
 | `task_reference_tombstones` | `u64 task_cookie` → `TaskReferenceTombstoneV1` | None | Birth, rollback, and exit | Exit and reconciliation | Pin-root lifetime; used once for exact reference release |
 | `profile_generation_descriptors` | `u64 generation_ref` → `ProfileGenerationDescriptorV1` | `NodePolicyGenerationOwner` | None | Effect gate and recovery | Pin-root lifetime; immutable active generation until policy cleanup |
 | `active_profile_generations` | `Id128V1 profile_id` → `u64 generation_ref` | `NodePolicyGenerationOwner` | None | Binding activation and new-root generation admission | Pin-root lifetime; one future-root handle for one profile |
@@ -2290,7 +2290,7 @@ cannot fit.
 `reconcile_generation_retirement` moves an inactive non-current generation to
 `RETIRING`. It waits for task and asynchronous references, ring and request
 state, process and authority state, tombstones, pending execs, pending
-administrative matches, and armed administrative slots to clear. It then marks
+execution approvals and armed execution approval slots to clear. It then marks
 the generation `TOMBSTONED` and deletes generation-keyed policy rows and its
 descriptor. This is an implemented source owner. The current evidence does not
 contain the complete crash, restart, and concurrent-holder retirement matrix.
@@ -2420,7 +2420,7 @@ sequenceDiagram
     end
     U->>B: Linux presents the first executable candidate
     B->>M: create pending exec state and add the candidate
-    B->>M: validate and consume an administrative slot, if one matched
+    B->>M: reserve an execution approval slot, if one matched
     U->>B: Linux presents an interpreter or auxiliary candidate
     B->>M: append the candidate, up to the fixed limit
     U->>C: Linux reaches the credential-commit boundary

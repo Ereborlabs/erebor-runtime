@@ -103,13 +103,16 @@ namespace/mount/pivot, ptrace/process-vm/pidfd, BPF/perf/module/keyring,
 proc/sysctl, io_uring, and protection of Mithril links/maps/config/binary. Each
 advertised operation has a qualified pre-effect hook and physical oracle.
 
-### D4.6 — Bounded exceptions and administrative exec
+### D4.6 — Bounded exceptions and execution approval slots
 
 Implement exact, signed, expiring exceptions with `maximum_uses`. Consumption
 is atomic in the matching BPF rule/map entry; a nonmatching rule/program cannot
-consume or reuse it. Implement the approved one-use administrative exec path,
-including resolved executable object, full argv match, deadline, slot
-consumption, normal exec-chain policy, and accepted next-match race disclosure.
+consume or reuse it. An execution approval slot is the generic kernel primitive
+for one approved exec attempt. It binds the resolved executable object, full
+argv, live binding, generation, deadline, target role, and optional exception
+claim. Administrative approval is the first workflow that creates one. A later
+approved agent request for a tool such as Bash must create the same slot and
+must not add another BPF admission mechanism.
 At syscall entry, BPF can record a bounded argv candidate from mutable user
 memory. This candidate is not authority. At the deny-capable
 `bprm_check_security` hook, BPF must match the candidate, resolved executable,
@@ -122,7 +125,7 @@ and denies the exec. At `security_bprm_committing_creds`, BPF compares the
 complete copied kernel-owned argv with the reserved candidate. At
 `sched_process_exec`, BPF compares the successful process image argv again.
 Only an exact final match can change `RESERVED` to `CONSUMED` and install the
-administrative role. A mismatch, read failure, incomplete input, or failed exec
+slot's target role. A mismatch, read failure, incomplete input, or failed exec
 consumes or corrupts the already-spent reservation, grants no role, keeps the
 task fail-closed, queues `SIGKILL` before user-mode execution, and emits a
 critical tamper observation. The node persists and reports that observation.
@@ -131,8 +134,9 @@ It does not make the match decision.
 Declared PostStart, PreStop, startup, readiness, and liveness probe entries must
 use the same provisional capture, pre-PONR reservation, kernel-owned argv
 verification, successful-exec confirmation, fail-closed response, and tamper
-evidence. A declared probe remains reusable. Each probe invocation uses a new
-task-bound exec transaction instead of a one-use administrative slot.
+evidence. A declared probe remains reusable, but each probe invocation creates
+a new task-bound execution approval slot from that declaration. The slot is
+consumed once; the probe declaration is not consumed.
 `claim_slot_id` remains optional outside that path. Mithril Control's
 `AdministrativeApprovalOwner` owns authenticated human approval, the explicit
 next-matching-root risk acceptance, Kubernetes admission credential, and

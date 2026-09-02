@@ -6188,8 +6188,8 @@ The remaining intentionally non-struct names have explicit status:
 | `AuthorityDomainStateV1` | Native-family monotonic restriction and response state; it never joins independent roots |
 | `PendingExecV1` | One bounded script/binfmt/ELF-loader exec attempt through commit or failure |
 | `ExternalRootClassificationV1` | Exact conservative result for an independent protected root and any qualified purpose evidence |
-| `AdministrativeArgvV1` / `BoundedAdministrativeArgvV1` | Rust and fixed BPF views of exact approved raw arguments |
-| `PendingAdministrativeMatchV1` | Task/exec-attempt-local proof that one administrative slot matched and was consumed |
+| `AdministrativeArgvV1` / `BoundedExecutionApprovalArgvV1` | Administrative-workflow and generic fixed BPF views of exact approved raw arguments |
+| `PendingExecutionApprovalV1` | Task/exec-attempt-local proof that one execution approval slot was reserved, verified, and consumed |
 | `SignedIntentV1` | Canonical signed authorization envelope for a capability-gated intent body |
 | `EntryKindV1` | Closed root class: initial, native, external-unknown, restore-unknown, and qualified registered purpose. Probe/lifecycle/admin is legal only when an existing interface proves it. |
 | `EntryClassificationV1` | Exact or conservative classification, candidate set, proof, and ambiguity result |
@@ -6230,7 +6230,7 @@ The remaining intentionally non-struct names have explicit status:
 | `RuntimeEntryBodyV1` | Optional body for a qualified existing integration that supplies a real authorization and unique request/task identity; unused for ordinary stock roots |
 | `AdministrativeExecBodyV1` / `ApprovedAdministrativeExecV1` | Exact Mithril-issued approval checked at Kubernetes admission; stream flags remain admission facts and are not a Linux-task match |
 | `ResolvedAdministrativeExecutableV1` | User-approved command name plus the exact executable object resolved in the target container view |
-| `ApprovedExecSlotKeyV1` / `ApprovedExecSlotV1` | Fixed one-use node/BPF slot keyed by live cgroup binding; it records the explicitly accepted next-match race |
+| `ExecutionApprovalSlotKeyV1` / `ExecutionApprovalSlotV1` | Generic one-use node/BPF exec slot keyed by live cgroup binding; administrative approval is one issuer and the slot records the explicitly accepted next-match race |
 | `KubeletExecutionRequestV1` | **Rejected no-patch design.** Stock kubelet/CRI supplies no such signed probe/lifecycle request. |
 | `ExactRequestIdentityV1` | Stable request/attempt/issuer identity used for replay and graph joins |
 | `KernelClaimTombstoneV1` | Pinned consumed/rejected fact only for a real Mithril-owned one-use authorization; not required for stock external-root classification |
@@ -6983,6 +6983,11 @@ approval UI displays `bash -> <resolved path>` and the exact executable object.
 BPF later checks only the live task, its verified cgroup binding, the complete
 kernel-owned exec argument image, and that resolved executable identity.
 
+The node lowers every approved one-exec authorization into the same generic
+execution approval slot. Administrative approval is the first issuer. A later
+approved agent request for a tool such as Bash must use this slot and the same
+BPF transaction. It must not introduce an agent-specific exec gate.
+
 `ApprovedAdministrativeExecV1` is not a second wire format. Its exact alias is:
 
 ```text
@@ -6996,27 +7001,27 @@ Appendix A.10 defines its signed bytes. The node lowers that approval into this
 fixed BPF ABI:
 
 ```text
-ApprovedExecSlotKeyV1 {
+ExecutionApprovalSlotKeyV1 {
   node_boot_id: Id128
   cgroup_binding_id: Id128
 }
 
-ApprovedExecSlotV1 {
+ExecutionApprovalSlotV1 {
   proof_id: Id128
   claim_slot_id: Id128
   cgroup_binding_nonce: Id128
   container_generation: nonzero u64
-  expected_argv: BoundedAdministrativeArgvV1
+  expected_argv: BoundedExecutionApprovalArgvV1
   resolved_executable_object_key_id: nonzero u64
   resolved_executable_object_generation: nonzero u64
-  approved_role_numeric_id: nonzero u32
+  target_role_numeric_id: nonzero u32
   profile_generation_ref_id: nonzero u64
   exception_numeric_handle: 0 | ExceptionNumericHandleV1
     // zero means no ExceptionV1 consumption
   expected_root_class: u8, exactly EXTERNAL_RUNTIME_ROOT
   deadline_boottime_ns: u64
   state: atomic u32, 1 ARMED | 2 CONSUMED | 3 EXPIRED |
-                     4 CANCELLED | 5 CORRUPT
+                     4 CANCELLED | 5 CORRUPT | 6 RESERVED | 7 TAMPERED
   transition_version: nonzero u64
 }
 
@@ -7032,12 +7037,13 @@ ResolvedAdministrativeExecutableV1 {
   executable_object: FileObjectIdentityV1
 }
 
-PendingAdministrativeMatchV1 {
+PendingExecutionApprovalV1 {
   task_cookie: nonzero u64
   exec_attempt_sequence: nonzero u64
   proof_id: Id128
   claim_slot_id: Id128
-  state: ARGUMENTS_MATCHED | SLOT_CONSUMED
+  state: ARGUMENTS_MATCHED | SLOT_RESERVED | KERNEL_ARGV_VERIFIED |
+         SLOT_CONSUMED | TAMPERED
 }
 ```
 
@@ -7066,7 +7072,7 @@ AdministrativeArgvV1 {
   total_argument_bytes: 1..4096
 }
 
-BoundedAdministrativeArgvV1 {
+BoundedExecutionApprovalArgvV1 {
   argument_count: u16, 1..256
   argument_lengths[256]: u16
   argument_bytes[4096]: u8
@@ -7102,7 +7108,7 @@ the short-lived authorization and BPF slot. Do not emit it as normal telemetry
 or copy it into the WAL. Remove it after durable consumption, cancellation, or
 expiry.
 
-Create `PendingAdministrativeMatchV1` from the provisional syscall-entry match.
+Create `PendingExecutionApprovalV1` from the provisional syscall-entry match.
 Bind it to the current exec attempt. Only its `KERNEL_ARGV_VERIFIED` state can
 reach final consumption. Failure, task exit, a changed attempt, a missing
 record, or mismatch consumes or corrupts the reservation and never restores it
@@ -7115,7 +7121,7 @@ argv and installed process argv verify that reservation at the two late hooks.
 BPF must not fall back to an executable-only match or activate a role from the
 provisional candidate.
 
-The one-use transition is intentionally simple:
+The one-use execution approval transition is intentionally simple:
 
 ```text
 webhook checks approval and PodExecOptions
@@ -7133,6 +7139,12 @@ webhook checks approval and PodExecOptions
   -> atomic RESERVED -> CONSUMED and task switches to the approved role
   -> every later effect still uses normal role policy
 ```
+
+Declared PostStart, PreStop, startup, readiness, and liveness probes use this
+same transaction. A reusable probe declaration authorizes the node to create a
+fresh task-bound execution approval slot for each invocation. Successful exec
+consumes that slot once but does not consume the declaration. The same slot
+shape, argv checks, late tamper response, and role activation apply.
 
 If exec or the role switch fails, the task gets no approved role and the slot
 stays consumed or corrupt. It never returns to `ARMED`. A late mismatch or read
@@ -8717,9 +8729,9 @@ denial or failed physical operation does not refund it because safe rollback
 cannot prove that no effect occurred.
 
 For an approved administrative exec, only the winner of the existing
-`ApprovedExecSlotV1` `ARMED -> CONSUMED` transition may claim the exception
+`ExecutionApprovalSlotV1` `ARMED -> RESERVED` transition may claim the exception
 receipt. If the exception is then expired or exhausted, the exec remains
-denied and the administrative slot remains consumed. Any map-capacity,
+denied and the execution approval slot remains spent. Any map-capacity,
 lookup, lock, receipt-finalization, or readback failure denies and sets
 reconciliation-required state; it never grants an extra use. Pinned state and
 receipts are authoritative across daemon restart. The WAL restores them before

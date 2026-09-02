@@ -232,15 +232,16 @@ Scheduler submits the Pod binding
   -> the application entry installs only applicationEntry.role
   -> every later independent root starts with externalRole and no admitted-entry default
   -> an exec that matches exactly one declared additional entry installs only that entry's role
-  -> syscall-entry BPF records an untrusted bounded argv candidate for an administrative exec
-  -> at the deny-capable bprm hook, BPF matches the candidate and resolved executable and atomically reserves the one-use slot
+  -> the administrative workflow lowers its approval into one generic execution approval slot
+  -> syscall-entry BPF records an untrusted bounded argv candidate for that slot
+  -> at the deny-capable bprm hook, BPF matches the candidate and resolved executable and atomically reserves the slot
   -> the reservation consumes any selected bounded exception under the claim-slot receipt but grants no role
   -> the normal exec-chain policy remains active
   -> committing-creds BPF verifies the complete copied kernel-owned argv against the reservation
   -> successful-exec BPF verifies the installed process image argv again
-  -> an exact final match consumes the slot and installs only administrativeEntry.role
+  -> an exact final match consumes the slot and installs only its target role
   -> a late mismatch or read failure grants no role, consumes or corrupts the reservation, queues SIGKILL before user mode, and emits critical tamper evidence
-  -> declared lifecycle and health-probe entries use the same per-exec verification transaction without a one-use administrative slot
+  -> each declared lifecycle or health-probe invocation uses the same transaction with a fresh execution approval slot derived from its reusable declaration
   -> an unmatched or multiply matched external exec remains fail-closed
   -> explicit matching Deny decisions run before the admitted-entry default
   -> an applicable exception can authorize an explicitly denied action
@@ -374,10 +375,10 @@ Each entry installs only its referenced role. Roles do not inherit, union, or
 fall back to the application role. A native descendant keeps the role of its
 creator entry. The external role is the pre-admission and unmatched-entry
 role. It never receives the admitted-entry default, and its execution rules
-cannot admit an external exec. Only a declared entry match or the approved
-administrative slot can admit that exec. The administrative role is installed
-only after the existing signed one-use administrative slot matches and is
-consumed.
+cannot admit an external exec. Only a declared entry match or a matching
+execution approval slot can admit that exec. The administrative workflow
+creates one such slot, and the administrative role is installed only after the
+slot matches and is consumed.
 
 Stock CRI does not prove that a matching exec is a PostStart, PreStop, or
 probe request. The closed `kind` records the policy declaration. Kernel
